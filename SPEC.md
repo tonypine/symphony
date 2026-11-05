@@ -4601,8 +4601,19 @@ Scoped Linear tool extension contract:
   description unchanged. It MUST refuse, with nothing recorded, a test holding a ` › ` or ` > `
   separator (a check name), `QA`, a step the walkthrough lacks, a step its author ended with
   `Proved by: QA`, and a test that fails the comments' secret scan; the read-only reviewer and QA
-  scopes MUST NOT advertise or execute it. The QA journey MUST read a step's proof from the
-  description's `Proved by:` line and from the recorded `evidence` events, the latest event winning. `linear_update_issue_summary`
+  scopes MUST NOT advertise or execute it. The QA journey, the QA pre-check and the QA
+  selection MUST read a step's proof from the recorded `evidence` events only, the latest event of a
+  step winning, and never from the description; the pre-check's steps come from the events alone.
+  The description's `Proved by:` lines MUST be a projection of those events, rendered between
+  `<!-- symphony:proofs:start -->` and `<!-- symphony:proofs:end -->` at the end of the walkthrough in
+  the same pass as the Decisions section. The workpad's `### Plan` and `### Validation` MUST be
+  rendered from the run's `step.*` events between their own markers, leaving every other byte of the
+  workpad as it is, again after each such event whether the step runner or the agent's
+  `ticket_record` records it, one projection of a ticket at a time; an agent's own write of the
+  workpad MUST take the same per-ticket turn and carry the projected sections, so neither write
+  replaces the other's newer text; the summary block's changelog
+  MUST carry a line per `attempt.pushed` and `verdict.recorded` event, written when the event is
+  recorded. `linear_update_issue_summary`
   MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and
   `<!-- symphony:summary:end -->`. It accepts only a one-line `status`, an optional `links` object
   (`review_brief`, the URL of the review brief comment, and `artifacts`, a list of `label` and

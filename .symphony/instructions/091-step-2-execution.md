@@ -15,14 +15,14 @@ In this repository, a QA pass of the Director has two environments: the committe
     - Add newly discovered items in the appropriate section.
     - Keep parent/child structure intact as scope evolves.
     - Update the workpad immediately after each meaningful milestone (for example: reproduction complete, code change landed, validation run, review feedback addressed).
-    - Never leave completed work unchecked in the plan.
-    - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
+{% unless run.step_runner %}    - Never leave completed work unchecked in the plan.
+{% endunless %}    - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
     - Record your work on the ticket's history as you go, with `ticket_record`: `step.completed` for each delegated step of the step list when you end it (its `outcome`: `passed`, `failed` with the step it `returns_to`, or `skipped` with a `reason`), `evidence` for every screenshot or output you attach (the files as `artifacts`, a `caption` saying what it shows), and a `note` for a choice a later run should know. The Director's timeline shows these events as the run works.
 {% if run.step_runner %}5.  Leave the checks to the step list.
     - This run follows a step list: once you end the `code` step, Symphony runs the build, the checks and the tests itself, with your session closed. A step that fails brings the run back to `code` with its output: fix what it names and end the step again.
     - Do not run the build, the format, specs or lint checks, the tests, the coverage check or the Swift build and tests yourself, and never the full suite or Dialyzer: write the code, commit it, record what you changed, and end the turn. CI is the gate for the full suite, the 100% coverage report and Dialyzer.
     - Execute every ticket-provided `Validation`/`Test Plan`/`Testing` requirement that is not a check the step list runs (a preview to read, a fixture to render); treat unmet items as incomplete work.
-    - You may make temporary local proof edits to validate assumptions; revert every one before you commit, and document them in the workpad `Validation`/`Notes` sections.
+    - You may make temporary local proof edits to validate assumptions; revert every one before you commit, and document them in the workpad `Notes`.
 {% else %}5.  Run validation/tests required for the scope.
     - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
@@ -64,8 +64,9 @@ In this repository, a QA pass of the Director has two environments: the committe
       - When a view can't be rendered offscreen, or the ticket wants the running app, leave the screenshots to the QA pass, which runs the app on the QA VM, and say so in the workpad.
 9.  Merge latest `origin/main` into branch and resolve conflicts{% if run.step_runner %} during the `code` step, before you end it, so the step list's checks run on the merge{% else %}, and rerun checks{% endif %}.
 10. Update the workpad comment with final checklist status and validation notes.
-    - Mark completed plan/acceptance/validation checklist items as checked.
-    - Add final handoff notes (commit + validation summary) in the same workpad comment.
+{% if run.step_runner %}    - Mark completed acceptance checklist items as checked; Symphony keeps `Plan` and `Validation` current from the steps.
+{% else %}    - Mark completed plan/acceptance/validation checklist items as checked.
+{% endif %}    - Add final handoff notes (commit + validation summary) in the same workpad comment.
     - Do not include PR URL in the workpad comment; keep PR linkage on the issue via attachment/link fields.
     - Add a short `### Confusions` section at the bottom when any part of task execution was unclear/confusing, with concise bullets.
     - Do not post any additional completion summary comment.
@@ -73,7 +74,7 @@ In this repository, a QA pass of the Director has two environments: the committe
     - Read the PR `Manual QA Plan` comment (when present) and use it to sharpen UI/runtime test coverage for the current change.
     - Run the full PR feedback sweep protocol.
     - Confirm every required ticket-provided validation/test-plan item is explicitly marked complete in the workpad.
-    - Re-open and refresh the workpad before the handoff so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
+    - Re-open and refresh the workpad before the handoff so {% if run.step_runner %}`Acceptance Criteria` and `Notes` exactly match{% else %}`Plan`, `Acceptance Criteria`, and `Validation` exactly match{% endif %} completed work.
 12. Then hand off: push the branch and open the PR (or update it). That push is the handoff signal; Symphony moves the ticket to `Code Review` itself.
     - Do not ask for `Code Review` (or `QA`, `Merging`) with `linear_update_state`: it is refused, because those states are the handoff's and the verdicts' to enter.
     - A run that ends without pushing its head and opening its PR never advances: the ticket stays where it is and the run is retried.

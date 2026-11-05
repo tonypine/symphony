@@ -20,6 +20,7 @@ defmodule SymphonyElixir.Workpad do
   }
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
+  alias SymphonyElixir.Workpad.Projection
 
   @in_progress_state "In Progress"
   @todo_state "todo"
@@ -119,6 +120,7 @@ defmodule SymphonyElixir.Workpad do
     lines =
       body
       |> to_string_body()
+      |> Projection.strip_markers()
       |> String.split(~r/\R/)
       |> Enum.drop_while(&(String.trim(&1) == ""))
 
@@ -180,6 +182,45 @@ defmodule SymphonyElixir.Workpad do
         nil -> {:ok, :ok}
         comment -> replace_workpad(owned_context(context, comment), heading, comment, opts)
       end
+    end
+  end
+
+  @doc """
+  Rewrites the ticket's workpad comment on Linear with `fun`, which gets its body and returns the
+  new one: Symphony's own sections of it (`SymphonyElixir.Workpad.Projection`). A body `fun` leaves
+  as it is is not written, and a ticket with no workpad yet is `:ok`. The read and the write wait
+  out a rate limit or a dropped connection, as the bootstrap does.
+  """
+  @spec rewrite(Issue.t(), (String.t() -> String.t()), keyword()) :: :ok | {:error, term()}
+  def rewrite(%Issue{} = issue, fun, opts) when is_function(fun, 1) do
+    rewrite = fn -> rewrite_with(issue, fun, opts) end
+
+    case with_linear_retry(rewrite, "projecting the workpad for #{issue_context(issue)}", opts) do
+      {:ok, result} -> result
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp rewrite_with(issue, fun, opts) do
+    context = %{issue: issue, workspace: ""}
+
+    with {:ok, comments} <- AgentTools.Linear.get_comments(context, @comment_limit, linear_opts(opts)) do
+      case find_workpad_comment(comments) do
+        nil -> {:ok, :ok}
+        comment -> write_rewritten(owned_context(context, comment), comment, fun, opts)
+      end
+    end
+  end
+
+  defp write_rewritten(context, comment, fun, opts) do
+    body = comment |> comment_body() |> normalize_existing_comment_body()
+
+    case fun.(body) do
+      ^body ->
+        {:ok, :ok}
+
+      updated ->
+        with {:ok, _response} <- AgentTools.Linear.update_comment(context, Map.get(comment, "id"), updated, linear_opts(opts)), do: {:ok, :ok}
     end
   end
 
@@ -367,11 +408,13 @@ defmodule SymphonyElixir.Workpad do
     |> PromptSafety.unescape_comment_body()
   end
 
-  defp workpad_body?(body) when is_binary(body) do
+  @doc "Whether `body` is a workpad comment's: it carries a workpad heading (`AgentLabels.known_workpad_markers/0`)."
+  @spec workpad_body?(term()) :: boolean()
+  def workpad_body?(body) when is_binary(body) do
     Enum.any?(AgentLabels.known_workpad_markers(), &String.contains?(body, &1))
   end
 
-  defp workpad_body?(_body), do: false
+  def workpad_body?(_body), do: false
 
   defp agent_workpad_heading(%{agent: %{kind: kind}}), do: AgentLabels.workpad_heading(kind)
   defp agent_workpad_heading(_settings), do: AgentLabels.workpad_heading(nil)

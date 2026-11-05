@@ -9,7 +9,9 @@ defmodule SymphonyElixir.PhaseSteps do
   (`SymphonyElixir.AgentEnv`'s allow-list), plus the changed files of the workspace
   (`SYMPHONY_CHANGED_ELIXIR_FILES`, `SYMPHONY_CHANGED_TEST_FILES`,
   `SYMPHONY_CHANGED_SWIFT_TEST_FILTER`). It records `step.started` and `step.completed` on the
-  ticket's ledger (`SymphonyElixir.TicketEvents`), the output kept as a `step_output` artifact.
+  ticket's ledger (`SymphonyElixir.TicketEvents`), the output kept as a `step_output` artifact, and
+  each step event it records is projected into the workpad's Plan and Validation
+  (`SymphonyElixir.Workpad.Projection`).
 
   The outcome picks the next step (`run_machine_steps/3`):
 
@@ -49,6 +51,7 @@ defmodule SymphonyElixir.PhaseSteps do
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.HumanActions.PlainWords
+  alias SymphonyElixir.Workpad.Projection
 
   @output_max_bytes 512 * 1024
   @prompt_output_bytes 12_000
@@ -700,9 +703,11 @@ defmodule SymphonyElixir.PhaseSteps do
 
   defp step_payload(%Step{id: id, title: title, mode: mode}), do: %{step_id: id, title: title, mode: mode}
 
+  # A step event changes the workpad's Plan and Validation, which are rendered from them
+  # (`SymphonyElixir.Workpad.Projection`), in a task of their own.
   defp record(context, type, payload, artifacts) do
     case TicketEvents.record(context.repo_key, context.issue_id, type, payload, run_id: Map.get(context, :run_id), artifacts: artifacts) do
-      {:ok, _event} -> :ok
+      {:ok, _event} -> if type in ["step.started", "step.completed"], do: Projection.project_later({:ticket, context.repo_key, context.issue_id}, steps: Map.get(context, :steps))
       {:error, reason} -> Logger.warning("Step runner could not record #{type} for #{ticket_name(context)}: #{inspect(reason)}")
     end
 

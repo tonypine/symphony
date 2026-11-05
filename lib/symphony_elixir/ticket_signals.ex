@@ -28,6 +28,7 @@ defmodule SymphonyElixir.TicketSignals do
   require Logger
 
   alias SymphonyElixir.{Config, Orchestrator, PlanBrief, Questions, RunStore, TicketEvents, TicketState}
+  alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @phase_signals ["claim", "ci fix return", "review verdict", "merge settled", "restart", "deprioritized"]
@@ -299,8 +300,14 @@ defmodule SymphonyElixir.TicketSignals do
 
   # A handoff's attempt number counts the ticket's earlier pushes; a second emission for one head is
   # the same event (its key), so the number it would carry is never stored.
+  # A push and a verdict each add a line to the summary block's changelog, which the projector's
+  # description pass renders from them (`SymphonyElixir.IssueSummary.put_changelog/2`).
   defp record_mapped(repo_key, issue_id, {"attempt.pushed", payload, opts}) do
-    record_event(repo_key, issue_id, "attempt.pushed", Map.put(payload, :attempt, attempts(issue_id) + 1), opts)
+    repo_key |> record_event(issue_id, "attempt.pushed", Map.put(payload, :attempt, attempts(issue_id) + 1), opts) |> project_changelog(repo_key, issue_id)
+  end
+
+  defp record_mapped(repo_key, issue_id, {"verdict.recorded" = type, payload, opts}) do
+    repo_key |> record_event(issue_id, type, payload, opts) |> project_changelog(repo_key, issue_id)
   end
 
   # A move changes what dispatch may start (a merge settled unblocks the next ticket of a chain), so
@@ -313,6 +320,12 @@ defmodule SymphonyElixir.TicketSignals do
 
   defp record_mapped(repo_key, issue_id, {type, payload, opts}), do: record_event(repo_key, issue_id, type, payload, opts)
   defp record_mapped(_repo_key, _issue_id, :mirrored), do: :ok
+
+  # The projection's own failure is logged and retried by the projector; the record's result stands.
+  defp project_changelog(recorded, repo_key, issue_id) do
+    _ = Projector.project_now({:ticket, repo_key, issue_id})
+    recorded
+  end
 
   defp withdraw_lapsed(repo_key, issue_id, event) do
     case lapse(repo_key, issue_id, event) do

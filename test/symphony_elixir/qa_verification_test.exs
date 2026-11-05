@@ -229,6 +229,29 @@ defmodule SymphonyElixir.QaVerificationTest do
     {dir, String.trim(head)}
   end
 
+  # A workspace whose head tracks `test/check_test.exs`, the test the pre-check tests' proofs name.
+  defp named_workspace! do
+    {dir, _head} = git_workspace!()
+    File.mkdir_p!(Path.join(dir, "test"))
+    File.write!(Path.join(dir, "test/check_test.exs"), "test \"it checks\" do\nend\n")
+    {_out, 0} = System.cmd("git", ["add", "."], cd: dir)
+    {_out, 0} = System.cmd("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "test"], cd: dir)
+    {head, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: dir)
+    {dir, String.trim(head)}
+  end
+
+  # The implementer's proof of walkthrough step `step`, as `linear_record_walkthrough_proofs` records it.
+  defp record_proof!(step, test) do
+    payload = %{caption: "step #{step}", proof: %{step: step, test: test}}
+    {:ok, _event} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "evidence", payload, actor: {:agent, "run-1", "implementation"})
+  end
+
+  # An empty store, but for the open pull request every QA ticket here has.
+  defp clear_store! do
+    :ok = RunStore.clear()
+    :ok = TicketPullRequest.put(@repo_key, @issue_id, %{pr_url: @pr_url})
+  end
+
   defp run(workspace, opts, state \\ "QA") do
     QaVerification.run(
       issue(state),
@@ -317,39 +340,41 @@ defmodule SymphonyElixir.QaVerificationTest do
                QaVerification.journey(issue(), "make-all")
     end
 
-    test "carries the walkthrough's steps with the proof each names" do
+    test "carries the walkthrough's steps, each QA's while no event proves it: a description's `Proved by:` line proves nothing" do
+      :ok = RunStore.clear()
+
       description = """
       ## User walkthrough
 
       1. Run `symphony check` → it passes. Proved by: `make-all` › `test/mix/tasks/check_test.exs`
-      2. Read the output → it reads well.
+      2. Read the output → it reads well. Proved by: `test/mix/tasks/check_test.exs`
 
       ## Acceptance criteria
 
       - It works.
       """
 
-      assert %{
-               steps: [
-                 %{number: 1, proof: %{by: :test, check: "make-all", test: "test/mix/tasks/check_test.exs"}},
-                 %{number: 2, proof: %{by: :qa}}
-               ]
-             } = QaVerification.journey(issue("QA", %{description: description}), "make-all")
+      assert %{steps: [%{number: 1, proof: %{by: :qa}, text: first}, %{number: 2, proof: %{by: :qa}}]} =
+               QaVerification.journey(issue("QA", %{description: description}), "make-all")
+
+      assert first == "Run `symphony check` → it passes. Proved by: `make-all` › `test/mix/tasks/check_test.exs`"
 
       assert %{steps: []} = QaVerification.journey(issue("QA", %{description: "## Acceptance criteria\n\n- It works.\n"}), "make-all")
       assert %{steps: []} = QaVerification.journey(issue("QA", %{description: nil}), "make-all")
     end
 
     test "without the repo's proof check every step is QA's to walk" do
-      description = "## User walkthrough\n\n1. Run it. Proved by: `make-all` › `test/mix/tasks/check_test.exs`\n2. Read it. Proved by: test/x_test.exs\n"
+      :ok = RunStore.clear()
+      record_proof!(1, "test/x_test.exs")
+      description = "## User walkthrough\n\n1. Run it.\n2. Read it.\n"
 
       assert %{steps: [%{number: 1, proof: %{by: :qa}}, %{number: 2, proof: %{by: :qa}}]} =
                QaVerification.journey(issue("QA", %{description: description}), nil)
     end
 
-    test "reads the proofs recorded as evidence events on top of the description's, the latest a step's" do
+    test "reads the proofs recorded as evidence events, the latest a step's" do
       :ok = RunStore.clear()
-      description = "## User walkthrough\n\n1. Run it. Proved by: `test/a_test.exs`\n2. Read it.\n3. Look at it.\n"
+      description = "## User walkthrough\n\n1. Run it.\n2. Read it.\n3. Look at it.\n"
       implementation = [actor: {:agent, "run-1", "implementation"}]
 
       for payload <- [
@@ -372,15 +397,8 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert %{steps: [%{proof: %{by: :qa}}, %{proof: %{by: :qa}}, %{proof: %{by: :qa}}]} =
                QaVerification.journey(issue("QA", %{description: description}), nil)
 
-      assert %{steps: [%{proof: %{by: :test, test: "test/a_test.exs"}} | _rest]} =
-               QaVerification.journey(issue("QA", %{id: nil, description: description}), "make-all")
-    end
-
-    test "a test alone is a test the repo's proof check runs" do
-      description = "## User walkthrough\n\n1. Run it. Proved by: `test/mix/tasks/check_test.exs`\n"
-
-      assert %{steps: [%{proof: %{by: :test, check: "make-all", test: "test/mix/tasks/check_test.exs"}}]} =
-               QaVerification.journey(issue("QA", %{description: description}), "make-all")
+      journey = QaVerification.journey(issue("QA", %{id: nil, description: description}), "make-all")
+      assert %{steps: [%{proof: %{by: :qa}} | _rest]} = journey
     end
 
     test "a step that quotes a proof line in its prose is QA's to walk, its text whole" do
@@ -390,6 +408,8 @@ defmodule SymphonyElixir.QaVerificationTest do
       1. Let Symphony pick it up. Expected: two steps now end with `Proved by: <test path>` and the third is unchanged.
       2. Write a step ending with `Proved by: ci › test/x_test.exs` in the Symphony repo. Expected: the pre-check fails it.
       """
+
+      :ok = RunStore.clear()
 
       assert %{steps: [%{number: 1, text: first, proof: %{by: :qa}}, %{number: 2, text: second, proof: %{by: :qa}}]} =
                QaVerification.journey(issue("QA", %{description: description}), "make-all")
@@ -1707,15 +1727,17 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
 
     test "a pre-check that finds the named check never ran on a conflicting head is blocked on CI" do
-      {workspace, head} = git_workspace!()
+      clear_store!()
+      {workspace, head} = named_workspace!()
       watch_head!(head, %{mergeable: :dirty})
+      record_proof!(1, "test/check_test.exs")
 
       gh = fn
         ["pr", "view", @pr_url, "--json", _fields], _opts -> {Jason.encode!(%{"url" => @pr_url, "headRefOid" => head, "statusCheckRollup" => []}), 0}
         ["api" | _endpoint], _opts -> {Jason.encode!(%{"workflow_runs" => []}), 0}
       end
 
-      description = "## User walkthrough\n\n1. Run `symphony check` → it passes. Proved by: `make-all`\n"
+      description = "## User walkthrough\n\n1. Run `symphony check` → it passes.\n"
 
       capture_log(fn ->
         assert :ok =
@@ -1779,9 +1801,16 @@ defmodule SymphonyElixir.QaVerificationTest do
     @named_walkthrough """
     ## User walkthrough
 
-    1. Run `symphony check` → it passes. Proved by: `make-all`
+    1. Run `symphony check` → it passes.
     2. Open the dashboard → it looks right. Proved by: QA
     """
+
+    # Step 1's proof is an event, as the implementer records it; the description names none.
+    setup do
+      clear_store!()
+      record_proof!(1, "test/check_test.exs")
+      :ok
+    end
 
     defp run_named(workspace, description, opts) do
       QaVerification.run(
@@ -1810,12 +1839,18 @@ defmodule SymphonyElixir.QaVerificationTest do
       end
     end
 
+    # The third case's proof names a test the checkout lacks; its walkthrough has the one step.
+    defp record_missing!(test) do
+      record_proof!(1, test)
+      "## User walkthrough\n\n1. Run it.\n"
+    end
+
     defp make_all(status, conclusion) do
       %{"name" => "make-all", "workflowName" => "make-all", "status" => status, "conclusion" => conclusion, "detailsUrl" => @run_url}
     end
 
     test "a passed check decides a pass whose only walked step is unprovable here" do
-      {workspace, head} = git_workspace!()
+      {workspace, head} = named_workspace!()
 
       steps = [%{name: "Open the dashboard", status: "unprovable", details: "the app's playbook is not in this pass", evidence: []}]
       blocked = %{verdict: :blocked, summary: "", steps: steps, findings: [], reason: "the app is not in this pass"}
@@ -1829,7 +1864,7 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
 
     test "a passed check is confirmed before the agent: the prompt says not to walk it and the report links it" do
-      {workspace, head} = git_workspace!()
+      {workspace, head} = named_workspace!()
 
       assert :ok = run_named(workspace, @named_walkthrough, gh_runner: gh(head, [make_all("COMPLETED", "SUCCESS")]))
 
@@ -1839,22 +1874,26 @@ defmodule SymphonyElixir.QaVerificationTest do
       prompt = QaAgent.prompt(job, nil)
       assert prompt =~ "Symphony confirmed every step a named\nautomated test proves before you started"
       assert prompt =~ "Do not walk those steps and do not read their checks again."
-      assert prompt =~ "- 1. Run `symphony check` → it passes. Proved by: `make-all`: pass, `make-all` passed on `#{String.slice(head, 0, 12)}` (#{@run_url})\n"
-      assert prompt =~ "Steps to walk (`Proved by: QA`, or no proof named):\n- 2. Open the dashboard → it looks right.\n"
+
+      assert prompt =~
+               "- 1. Run `symphony check` → it passes. Proved by: `make-all` › test/check_test.exs: pass, `make-all` passed on `#{String.slice(head, 0, 12)}` and `test/check_test.exs` is in the checkout (#{@run_url})\n"
+
+      assert prompt =~ "Steps to walk (`Proved by: QA`, or no proof named):\n- 2. Open the dashboard → it looks right. Proved by: QA\n"
       refute prompt =~ "gh run list --commit"
 
       assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
       assert_received {:memory_tracker_comment, @issue_id, report}
       assert report =~ "### Pre-checks"
-      assert report =~ "- **pass** step 1 (Proved by: `make-all`): `make-all` passed on `#{String.slice(head, 0, 12)}` (#{@run_url})"
+      assert report =~ "- **pass** step 1 (Proved by: `make-all` › test/check_test.exs): `make-all` passed on `#{String.slice(head, 0, 12)}` and `test/check_test.exs` is in the checkout (#{@run_url})"
       assert [%{outcome: "pass", head_sha: ^head}] = verdicts()
     end
 
-    test "a ticket without Proved by: lines reads no check and QA walks every step" do
-      {workspace, _head} = git_workspace!()
+    test "a ticket whose steps no event proves reads no check and QA walks every step" do
+      clear_store!()
+      {workspace, _head} = named_workspace!()
       unused = fn args, _opts -> flunk("gh should not run: #{inspect(args)}") end
 
-      assert :ok = run_named(workspace, "## User walkthrough\n\n1. Run `symphony check`.\n", gh_runner: unused)
+      assert :ok = run_named(workspace, "## User walkthrough\n\n1. Run `symphony check`. Proved by: `test/check_test.exs`\n", gh_runner: unused)
 
       assert_received {:qa_agent_run, job, %Schema{}}
       assert job.proofs == []
@@ -1868,10 +1907,11 @@ defmodule SymphonyElixir.QaVerificationTest do
       for {checks, description, expected} <- [
             {[make_all("COMPLETED", "FAILURE")], @named_walkthrough, "`make-all` failed on"},
             {[], @named_walkthrough, "`make-all` did not run on"},
-            {[make_all("COMPLETED", "SUCCESS")], "## User walkthrough\n\n1. Run it. Proved by: `make-all` › the QA pre-check's test file\n", "`the QA pre-check's test file` is not in the checkout"}
+            {[make_all("COMPLETED", "SUCCESS")], "the QA pre-check's test file", "`the QA pre-check's test file` is not in the checkout"}
           ] do
         RunStore.delete_ticket_state(@issue_id)
-        {workspace, head} = git_workspace!()
+        {workspace, head} = named_workspace!()
+        description = if description == @named_walkthrough, do: description, else: record_missing!(description)
 
         # Each case is a pass of its own: the report renders the findings that pass recorded.
         assert :ok = run_named(workspace, description, gh_runner: gh(head, checks), run_id: "run-pre-check-#{System.unique_integer([:positive])}")
@@ -1880,28 +1920,28 @@ defmodule SymphonyElixir.QaVerificationTest do
         assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
         assert_received {:memory_tracker_comment, @issue_id, report}
         assert report =~ "**Verdict:** fail → Rework"
-        assert report =~ "### Pre-checks\n\n- **fail** step 1 (Proved by: `make-all`"
-        assert report =~ "### Findings\n\n- Step 1 (Proved by: `make-all`"
+        assert report =~ "### Pre-checks\n\n- **fail** step 1 (Proved by: `make-all` › "
+        assert report =~ "### Findings\n\n- Step 1 (Proved by: `make-all` › "
         assert report =~ expected
         assert [%{outcome: "fail", head_sha: ^head}] = verdicts()
       end
     end
 
-    test "a step naming another repo's check fails before any QA session, naming this repo's proof check" do
-      {workspace, head} = git_workspace!()
+    test "a description's `Proved by:` line naming another repo's check proves nothing: the pre-check reads the events" do
+      clear_store!()
+      {workspace, _head} = named_workspace!()
+      unused = fn args, _opts -> flunk("gh should not run: #{inspect(args)}") end
       description = "## User walkthrough\n\n1. Run it. Proved by: ci › test/x_test.exs\n2. Open the dashboard → it looks right.\n"
 
-      assert :ok = run_named(workspace, description, gh_runner: gh(head, [make_all("COMPLETED", "SUCCESS")]))
+      assert :ok = run_named(workspace, description, gh_runner: unused)
 
-      refute_received {:qa_agent_run, _, _}
-      assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
-      assert_received {:memory_tracker_comment, @issue_id, report}
-      assert report =~ "- **fail** step 1 (Proved by: `ci` › test/x_test.exs)"
-      assert report =~ "this repo's proof check is `make-all` (`proof_check` in WORKFLOW.md)"
+      assert_received {:qa_agent_run, job, %Schema{}}
+      assert job.proofs == []
+      assert Enum.map(job.journey.steps, & &1.proof) == [%{by: :qa}, %{by: :qa}]
     end
 
     test "a repo without a proof check reads no check: QA walks every step" do
-      {workspace, _head} = git_workspace!()
+      {workspace, _head} = named_workspace!()
       unused = fn args, _opts -> flunk("gh should not run: #{inspect(args)}") end
 
       assert :ok = run_named(workspace, @named_walkthrough, gh_runner: unused, settings: settings!())
@@ -1913,7 +1953,7 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
 
     test "a check still running waits for CI, then reports blocked past the wait's limit" do
-      {workspace, head} = git_workspace!()
+      {workspace, head} = named_workspace!()
       runner = gh(head, [make_all("IN_PROGRESS", nil)])
 
       log =
@@ -1941,12 +1981,12 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert_received {:memory_tracker_comment, @issue_id, report}
       assert report =~ "**Verdict:** blocked → QA (blocked, retrying)"
       assert report =~ "Reason: the named checks were still running after 61 minutes of waiting: step 1: `make-all` is still running on"
-      assert report =~ "- **pending** step 1 (Proved by: `make-all`)"
+      assert report =~ "- **pending** step 1 (Proved by: `make-all` › test/check_test.exs)"
       assert [%{outcome: "blocked", head_sha: ^head}] = verdicts()
     end
 
     test "CI the pre-check cannot read blocks the pass" do
-      {workspace, head} = git_workspace!()
+      {workspace, head} = named_workspace!()
       refused = fn _args, _opts -> {"HTTP 502", 1} end
 
       assert :ok = run_named(workspace, @named_walkthrough, gh_runner: refused)
@@ -1958,7 +1998,7 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
 
     test "a pass with no playbook that applies is blocked and keeps the pre-check lines" do
-      {workspace, head} = git_workspace!()
+      {workspace, head} = named_workspace!()
 
       runner = gh(head, [make_all("COMPLETED", "SUCCESS")])
       assert :ok = run_named(workspace, @named_walkthrough, gh_runner: runner, qa_policy: NoPlaybookPolicy)
@@ -1973,6 +2013,13 @@ defmodule SymphonyElixir.QaVerificationTest do
   # branch into the PR after the approve. `origin` is a bare repo holding the PR head where GitHub
   # keeps it, `refs/pull/816/head`.
   describe "the workspace synced to the PR head" do
+    # The walkthrough's step 1 is proved by an event, so each run reads CI on the PR head first.
+    setup do
+      clear_store!()
+      record_proof!(1, "test/check_test.exs")
+      :ok
+    end
+
     defp git!(args, dir) do
       {output, 0} = System.cmd("git", args, cd: dir, stderr_to_stdout: true)
       String.trim(output)
@@ -1982,7 +2029,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
     # A workspace at `head` whose PR head on `origin` is one commit ahead of it, `pr_head`.
     defp behind_pr_workspace! do
-      {workspace, head} = git_workspace!()
+      {workspace, head} = named_workspace!()
       origin = workspace <> "-origin.git"
       git!(["init", "-q", "--bare", origin], workspace)
       on_exit(fn -> File.rm_rf(origin) end)
@@ -2175,7 +2222,7 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
 
     test "a moved head the workspace cannot be synced to blocks the run with the reason" do
-      {workspace, head} = git_workspace!()
+      {workspace, head} = named_workspace!()
       elsewhere = String.duplicate("e", 40)
       runner = gh(elsewhere, [make_all("COMPLETED", "SUCCESS")])
 

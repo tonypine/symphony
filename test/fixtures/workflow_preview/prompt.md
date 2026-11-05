@@ -255,9 +255,9 @@ What a red head, a conflict or a closed PR does in each state is decided by one 
 2.  If arriving from `Todo`, do not delay on additional status transitions: the issue should already be `In Progress` before this step begins.
 3.  Immediately reconcile the workpad before new edits:
     - Check off items that are already done.
-    - Expand/fix the plan so it is comprehensive for current scope.
-    - Ensure `Acceptance Criteria` and `Validation` are current and still make sense for the task.
-4.  Start work by writing/updating a hierarchical plan in the workpad comment.
+    - Ensure `Acceptance Criteria` is current and still makes sense for the task.
+    - Symphony writes the workpad's `Plan` and `Validation` from the run's steps: the step list with each step's outcome and time, and each machine step's command, result and output link. Write neither, and leave the markers around them as they are; Symphony rewrites both as the steps end.
+4.  Start work by writing your approach in the workpad `Notes`: the parts of the change, the tests you plan and which walkthrough step each proves.
     - If the ticket asks you to split the work into sub-tickets, create each one with `linear_create_subissue` (see `Splitting work and out-of-scope improvements` below) and record their identifiers in the workpad `Notes`. They land as children of this issue: in `Backlog` for a plan ticket, otherwise in `Todo` with this issue blocked by them.
     - If the work is clearly too large for one PR and the ticket has no `plan` label, say so in the workpad `Confusions` so a person can set the label from the ticket page in the Director; do not split it unasked.
 5.  Ensure the workpad includes a compact environment stamp at the top as a code fence line:
@@ -269,7 +269,7 @@ What a red head, a conflict or a closed PR does in each state is decided by one 
       When the ticket has a `## User walkthrough` section, copy its numbered steps and expected results into that criterion verbatim, with any `Proved by:` line a step has.
     - Each walkthrough step is proved in one place, and you name it: plan an automated test in this PR for every step code can drive, and write in the plan which test covers which step. Once the test exists, record it on the step (Step 2 says how). A step ending in `Proved by: <test>` (or the older `Proved by: <check> › <test>`) is met by that named test passing on the PR head; the repo's `proof_check` in WORKFLOW.md is the check that runs a `Proved by: <test>`. A step ending in `Proved by: QA`, or one no test covers, is walked by QA. When this run writes a walkthrough (a sub-ticket, a follow-up), write plain steps that name no test and no check, as `Splitting work and out-of-scope improvements` says.
     - If changes touch app files or app behavior, add explicit app-specific flow checks to `Acceptance Criteria` in the workpad (for example: launch path, changed interaction path, and expected result path).
-    - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` and `Validation` sections as required checkboxes (no optional downgrade).
+    - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` as required checkboxes (no optional downgrade).
     - If the ticket adds a `symphony.yml` setting, the plan includes its control in the macOS app: in the same PR (add the control, list the key in `SettingsUIManifest.keyPaths`, extend the line editor and its tests), or in a sub-ticket filed with `linear_create_subissue` that the parent's epic review checks and has a `## User walkthrough` for the new control. `mix settings.ui_coverage` fails CI for a setting with neither a control nor an exemption. Never add an exemption yourself: `config/settings_ui_exempt.yml` is agent-protected. If the setting should have no control, say so in the workpad `Confusions` and leave the exemption to a person. See `docs/configuration.md#settings-in-the-macos-app`.
     - If the work needs a change to an agent-protected file (`WORKFLOW.md`, `symphony.yml`, `.agents/skills` and the other paths the sandbox write-protects), plan to ask for it before the handoff push: one `linear_request_human_action` with an option whose `unlocks` names the paths and whose label says in plain words what it allows (`Allow this ticket to change the workflow settings file`). The person's pick grants the paths for this ticket: the next run may write them, and the PR may land with them. The shared guides' real folder is `.agents/skills`, also reached as `.claude/skills` and `.codex/skills`: a grant on any of the three names covers all of them and the files their links point at (`priv/skills`). Never ask the person to type a path or a grant, and never answer the request yourself.
 7.  Run a principal-style review of the plan and refine it in the comment.
@@ -721,14 +721,13 @@ In this repository, a QA pass of the Director has two environments: the committe
     - Add newly discovered items in the appropriate section.
     - Keep parent/child structure intact as scope evolves.
     - Update the workpad immediately after each meaningful milestone (for example: reproduction complete, code change landed, validation run, review feedback addressed).
-    - Never leave completed work unchecked in the plan.
     - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
     - Record your work on the ticket's history as you go, with `ticket_record`: `step.completed` for each delegated step of the step list when you end it (its `outcome`: `passed`, `failed` with the step it `returns_to`, or `skipped` with a `reason`), `evidence` for every screenshot or output you attach (the files as `artifacts`, a `caption` saying what it shows), and a `note` for a choice a later run should know. The Director's timeline shows these events as the run works.
 5.  Leave the checks to the step list.
     - This run follows a step list: once you end the `code` step, Symphony runs the build, the checks and the tests itself, with your session closed. A step that fails brings the run back to `code` with its output: fix what it names and end the step again.
     - Do not run the build, the format, specs or lint checks, the tests, the coverage check or the Swift build and tests yourself, and never the full suite or Dialyzer: write the code, commit it, record what you changed, and end the turn. CI is the gate for the full suite, the 100% coverage report and Dialyzer.
     - Execute every ticket-provided `Validation`/`Test Plan`/`Testing` requirement that is not a check the step list runs (a preview to read, a fixture to render); treat unmet items as incomplete work.
-    - You may make temporary local proof edits to validate assumptions; revert every one before you commit, and document them in the workpad `Validation`/`Notes` sections.
+    - You may make temporary local proof edits to validate assumptions; revert every one before you commit, and document them in the workpad `Notes`.
 6.  Re-check all acceptance criteria and close any gaps.
     - When the ticket has a `## User walkthrough`, record the proof of every step an automated test in this PR covers, before the handoff push: call `linear_record_walkthrough_proofs` with each step's number and its test. It records each proof as an `evidence` event with `proof` (the step and the test) on the ticket's history and leaves the description as it is. Name the test as the code has it: its file path, or a test or scenario name as written. Name only tests in this PR, and never a check name: the repo's `proof_check` in WORKFLOW.md is the check that runs them, and the tool refuses a ` › ` separator. Leave a step no test covers as it is, for QA; the tool refuses a step its author marked `Proved by: QA`. The QA pre-check then confirms each named test on the PR head, and QA links its result instead of walking the step.
 7.  The `handoff` step pushes. When the step list reaches it, the build, checks and tests passed on your changes.
@@ -749,7 +748,7 @@ In this repository, a QA pass of the Director has two environments: the committe
       - When a view can't be rendered offscreen, or the ticket wants the running app, leave the screenshots to the QA pass, which runs the app on the QA VM, and say so in the workpad.
 9.  Merge latest `origin/main` into branch and resolve conflicts during the `code` step, before you end it, so the step list's checks run on the merge.
 10. Update the workpad comment with final checklist status and validation notes.
-    - Mark completed plan/acceptance/validation checklist items as checked.
+    - Mark completed acceptance checklist items as checked; Symphony keeps `Plan` and `Validation` current from the steps.
     - Add final handoff notes (commit + validation summary) in the same workpad comment.
     - Do not include PR URL in the workpad comment; keep PR linkage on the issue via attachment/link fields.
     - Add a short `### Confusions` section at the bottom when any part of task execution was unclear/confusing, with concise bullets.
@@ -758,7 +757,7 @@ In this repository, a QA pass of the Director has two environments: the committe
     - Read the PR `Manual QA Plan` comment (when present) and use it to sharpen UI/runtime test coverage for the current change.
     - Run the full PR feedback sweep protocol.
     - Confirm every required ticket-provided validation/test-plan item is explicitly marked complete in the workpad.
-    - Re-open and refresh the workpad before the handoff so `Plan`, `Acceptance Criteria`, and `Validation` exactly match completed work.
+    - Re-open and refresh the workpad before the handoff so `Acceptance Criteria` and `Notes` exactly match completed work.
 12. Then hand off: push the branch and open the PR (or update it). That push is the handoff signal; Symphony moves the ticket to `Code Review` itself.
     - Do not ask for `Code Review` (or `QA`, `Merging`) with `linear_update_state`: it is refused, because those states are the handoff's and the verdicts' to enter.
     - A run that ends without pushing its head and opening its PR never advances: the ticket stays where it is and the run is retried.
@@ -804,7 +803,7 @@ Apply this whenever a ticket adds or changes a screen or pane.
 3. Before planning, read every prior QA report and the workpad's superseded attempts, and list the findings by class (clipped, truncated, mechanism broken, state missing) in the workpad, with the head each was found on.
    - Read the open findings first with `ticket_events` and `open_findings: true`: each comes with its state (open, resolved awaiting QA, or reopened), its class and its screenshots, so the plan starts from what is still open rather than from the reports alone.
    - If the same class fails for the second time on this ticket, do not push a third attempt of the same kind. Ask the person with `linear_request_human_action`: the finding history in `why` (what QA found each time, in plain words), the ways forward as its options (for a layout, two layouts to choose from), and stop. The person answers in the Inbox, by an option or in their own words, and the next run reads the answer in the Decisions section.
-4. Keep the single workpad comment; extend its `Plan`, `Acceptance Criteria` and `Validation` with what the verdict adds instead of superseding what is there.
+4. Keep the single workpad comment; extend its `Acceptance Criteria` and `Notes` with what the verdict adds instead of superseding what is there (Symphony writes `Plan` and `Validation` from the run's steps).
 5. Push the changes to the same branch. That push is the handoff: it moves the ticket to `Code Review` for a review of the new head. Do not ask for the state by hand.
 6. `Restart` is the full reset — close the pull request, a fresh branch from main, the prior attempt superseded in the workpad. It is a person's move from the Director app; an agent can neither request nor perform it. If you judge that the approach itself is wrong, say so plainly in the workpad and ask for a person with `linear_request_human_action` rather than starting over on your own.
 

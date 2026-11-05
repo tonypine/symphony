@@ -172,6 +172,88 @@ defmodule SymphonyElixir.IssueSummaryTest do
     end
   end
 
+  describe "the changelog from the ticket's pushes and verdicts" do
+    alias SymphonyElixir.TicketEvents
+    alias SymphonyElixir.TicketEvents.Event
+
+    defp event(type, at, payload), do: %Event{type: type, at: at, payload: payload}
+
+    defp history do
+      [
+        event("attempt.pushed", ~U[2026-11-03 10:00:00Z], %{head: "abc1234def", attempt: 1, intent: "handoff"}),
+        event("note", ~U[2026-11-03 11:00:00Z], %{text: "not a changelog line"}),
+        event("verdict.recorded", ~U[2026-11-04 09:00:00Z], %{kind: "code_review", outcome: "approve", head: "abc1234def"}),
+        event("verdict.recorded", ~U[2026-11-05 09:00:00Z], %{"kind" => "qa", "outcome" => "fail **now**"})
+      ]
+    end
+
+    test "renders one dated line per push and verdict, in plain words" do
+      assert IssueSummary.event_entries(history()) == [
+               "- 2026-11-03: Attempt 1 pushed (abc1234)",
+               "- 2026-11-04: Code Review verdict: approve (abc1234)",
+               "- 2026-11-05: QA verdict: fail now"
+             ]
+
+      assert IssueSummary.event_entries([event("verdict.recorded", ~U[2026-11-05 09:00:00Z], %{kind: "pre_merge_check"}), event("attempt.pushed", ~U[2026-11-05 09:00:00Z], %{})]) ==
+               ["- 2026-11-05: Pre Merge Check verdict", "- 2026-11-05: Attempt pushed"]
+
+      assert IssueSummary.event_entries([event("verdict.recorded", ~U[2026-11-05 09:00:00Z], %{}), %{type: "attempt.pushed"}]) == ["- 2026-11-05: Review verdict"]
+
+      assert IssueSummary.event_entries([event("verdict.recorded", ~U[2026-11-05 09:00:00Z], %{kind: "code_review", outcome: "request_changes"})]) ==
+               ["- 2026-11-05: Code Review verdict: request changes"]
+    end
+
+    test "put/4 writes the lines with the run's entry, newest day first" do
+      {:ok, description} = IssueSummary.put("Intro.", summary!(%{"changelog_entry" => "Opened the PR"}), ~D[2026-11-04], history())
+
+      assert description =~
+               "**Changelog:**\n\n- 2026-11-05: QA verdict: fail now\n- 2026-11-04: Code Review verdict: approve (abc1234)\n- 2026-11-04: Opened the PR\n- 2026-11-03: Attempt 1 pushed (abc1234)\n\n" <>
+                 @finish
+
+      {:ok, again} = IssueSummary.put(description, summary!(%{"changelog_entry" => "Answered review"}), ~D[2026-11-05], history())
+      assert again =~ "**Changelog:**\n\n- 2026-11-05: Answered review\n- 2026-11-05: QA verdict: fail now\n- 2026-11-04: Code Review verdict"
+      assert length(String.split(again, "Attempt 1 pushed")) == 2
+    end
+
+    test "put_changelog/2 adds the lines the block lacks, once, and leaves every other byte" do
+      {:ok, description} = IssueSummary.put("Intro.", summary!(%{"changelog_entry" => "Started"}), ~D[2026-11-02])
+      projected = IssueSummary.put_changelog(description, history())
+
+      assert projected ==
+               String.replace(
+                 description,
+                 "- 2026-11-02: Started",
+                 "- 2026-11-05: QA verdict: fail now\n- 2026-11-04: Code Review verdict: approve (abc1234)\n- 2026-11-03: Attempt 1 pushed (abc1234)\n- 2026-11-02: Started"
+               )
+
+      assert IssueSummary.put_changelog(projected, history()) == projected
+
+      # Linear stores the entries as `*` items: they are found by their text, and the block stays as Linear has it.
+      linear = String.replace(projected, "\n- 20", "\n* 20")
+      assert IssueSummary.put_changelog(linear, history()) == linear
+    end
+
+    test "put_changelog/2 keeps the newest entries and leaves a description without a block alone" do
+      {:ok, description} = IssueSummary.put("", summary!(), ~D[2026-11-01])
+      many = for day <- 1..25, do: event("attempt.pushed", DateTime.new!(Date.new!(2026, 10, day), ~T[10:00:00]), %{attempt: day})
+
+      assert description |> IssueSummary.put_changelog(many) |> String.split("\n") |> Enum.count(&String.starts_with?(&1, "- 20")) == 20
+      undated = String.replace(description, "- 2026-11-01: Started", "- Started, no date")
+      assert undated |> IssueSummary.put_changelog(history()) |> String.ends_with?("- 2026-11-03: Attempt 1 pushed (abc1234)\n- Started, no date\n\n" <> @finish)
+      assert IssueSummary.put_changelog("No block.", history()) == "No block."
+      assert IssueSummary.put_changelog("#{@start}\nno changelog\n#{@finish}", history()) == "#{@start}\nno changelog\n#{@finish}"
+      assert IssueSummary.put_changelog(nil, history()) == nil
+    end
+
+    test "history/1 reads the ticket's pushes and verdicts from the store" do
+      issue_id = "issue-summary-#{System.unique_integer([:positive])}"
+      {:ok, _event} = TicketEvents.record("repo-a", issue_id, "attempt.pushed", %{head: "abc1234def", attempt: 1}, [])
+      {:ok, _event} = TicketEvents.record("repo-a", issue_id, "note", %{text: "skipped"}, [])
+
+      assert [%Event{type: "attempt.pushed"}] = IssueSummary.history(issue_id)
+    end
+  end
+
   defp rendered do
     {:ok, block} = IssueSummary.put("", summary!(), ~D[2026-10-06])
     block

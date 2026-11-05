@@ -191,23 +191,45 @@ defmodule SymphonyElixir.QaAgent.Selection do
 
   @doc """
   Whether a `macos_app` playbook's `live` server runs for this change, and why: the diff touches
-  one of the server's `paths` and the ticket's `## User walkthrough` mentions one of its
-  `walkthrough_mentions` (any walkthrough when it lists none). A `qa:live` label makes it run and a
-  `qa:fixture` label never does, whatever the diff; `qa:fixture` wins over `qa:live`.
+  one of the server's `paths` and a `## User walkthrough` step QA walks mentions one of its
+  `walkthrough_mentions` (any such step when it lists none). A step the implementer proved with a
+  test, recorded as an `evidence` event and run by the repo's `proof_check`, is not QA's to walk,
+  so it never asks for the server; the proofs are read from the ticket's events, never from the
+  description. A `qa:live` label makes it run and a `qa:fixture` label never does, whatever the
+  diff; `qa:fixture` wins over `qa:live`.
   """
-  @spec live(Issue.t(), PlaybookSettings.live_server(), [String.t()]) :: {boolean(), String.t()}
-  def live(%Issue{} = issue, live_server, changed_paths) when is_list(changed_paths) do
+  @spec live(Issue.t(), PlaybookSettings.live_server(), [String.t()], String.t() | nil) :: {boolean(), String.t()}
+  def live(%Issue{} = issue, live_server, changed_paths, proof_check \\ nil) when is_list(changed_paths) do
     labels = issue |> Issue.label_names() |> Enum.map(&normalize_label/1)
-    section = Walkthrough.section(issue.description)
+    section = walked_section(issue, proof_check)
 
     cond do
       @fixture_label in labels -> {false, "the issue has the `#{@fixture_label}` label"}
       @live_label in labels -> {true, "the issue has the `#{@live_label}` label"}
       not server_change?(live_server, changed_paths) -> {false, "the PR changes none of the server's paths"}
       is_nil(section) -> {false, "the ticket has no `## User walkthrough`"}
+      section == "" -> {false, "a test recorded on the ticket proves every `## User walkthrough` step"}
       not mentions?(section, live_server.walkthrough_mentions) -> {false, "no `## User walkthrough` step names #{words(live_server)}"}
       true -> {true, "the PR changes the server and " <> walkthrough_note(live_server)}
     end
+  end
+
+  # The walkthrough's text QA walks: its steps no recorded proof covers (all of it when it has no
+  # numbered step); "" when a proof covers every step, nil without a walkthrough.
+  defp walked_section(issue, proof_check) do
+    case Walkthrough.section(issue.description) do
+      nil -> nil
+      section -> walked_steps(section, Walkthrough.steps(section), issue, proof_check)
+    end
+  end
+
+  defp walked_steps(section, [], _issue, _proof_check), do: section
+
+  defp walked_steps(_section, steps, issue, proof_check) do
+    steps
+    |> Walkthrough.with_recorded_proofs(Walkthrough.recorded_proofs(issue.id), proof_check)
+    |> Enum.reject(&Walkthrough.named_test?/1)
+    |> Enum.map_join("\n", & &1.text)
   end
 
   defp server_change?(live_server, paths),

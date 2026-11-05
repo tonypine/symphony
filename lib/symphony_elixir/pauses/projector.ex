@@ -10,7 +10,11 @@ defmodule SymphonyElixir.Pauses.Projector do
     * `Blocked` while the pause has a reason that is not a question: a ticket, a person or the
       environment. A `:build` reason, the wait for a Symphony update (`SymphonyElixir.UpdateHold`),
       shows no label, as it showed none before the projector;
-    * the Decisions section's entries (`Decisions.render_from_questions/1`) and their hash;
+    * the Decisions section's entries (`Decisions.render_from_questions/1`) and the walkthrough's
+      proofs recorded as `evidence` events (`SymphonyElixir.Walkthrough.proofs_of/1`), with their
+      hash: the description pass writes both, the proofs as the walkthrough's `Proved by:` block
+      (`Walkthrough.put_proofs/2`), and merges the summary block's push and verdict lines
+      (`SymphonyElixir.IssueSummary.put_changelog/2`) while it holds the description;
     * per question a request comment shows in Linear (asked with `request: true`, as
       `SymphonyElixir.DecisionRequest.ask/4` asks it; one asked before questions said, once its
       comment was projected), the `## Decision needed:` comment
@@ -39,7 +43,8 @@ defmodule SymphonyElixir.Pauses.Projector do
   back as the record says.
 
   `project_now/2` is called by `Pauses` and `Questions` after each write that changed the record,
-  and by `Decisions.record/3` once a decision is stored.
+  by `Decisions.record/3` once a decision is stored, and by `linear_record_walkthrough_proofs` once
+  its proofs are recorded.
 
   The projector is the only writer of its two labels (`labels/0`), which
   `SymphonyElixir.MachineLabels` keeps machine-only. It owns the Decisions section and the request
@@ -53,8 +58,9 @@ defmodule SymphonyElixir.Pauses.Projector do
 
   require Logger
 
-  alias SymphonyElixir.{DecisionRequest, Decisions, RunStore, TicketSignals, TicketState, Tracker}
+  alias SymphonyElixir.{DecisionRequest, Decisions, IssueSummary, RunStore, TicketSignals, TicketState, Tracker}
   alias SymphonyElixir.HumanActions.Request
+  alias SymphonyElixir.Walkthrough
 
   @blocked "Blocked"
   @question_label "Needs Decision"
@@ -78,7 +84,14 @@ defmodule SymphonyElixir.Pauses.Projector do
         }
 
   @typedoc "What Linear should show for a record: its machine labels, the section's entries and their hash, and the questions' comments."
-  @type desired :: %{labels: [String.t()], entries: [Decisions.entry()], section: String.t() | nil, comments: [comment()]}
+  @type desired :: %{
+          labels: [String.t()],
+          entries: [Decisions.entry()],
+          proofs: [Walkthrough.recorded()],
+          changelog: [String.t()],
+          section: String.t() | nil,
+          comments: [comment()]
+        }
 
   @typedoc """
   `tracker:` (default `SymphonyElixir.Tracker`), `store:` (default `SymphonyElixir.RunStore`),
@@ -102,11 +115,12 @@ defmodule SymphonyElixir.Pauses.Projector do
 
   @doc """
   What Linear should show for `record`: its labels, sorted (`Needs Decision` while a question is
-  open, `Blocked` while a reason other than a question or an update's wait pauses it), and the
-  Decisions section's entries with their hash (nil when there are none). Pure.
+  open, `Blocked` while a reason other than a question or an update's wait pauses it), the
+  Decisions section's entries and the walkthrough proofs among the ticket's `events`, with their
+  hash (nil when there are neither). Pure.
   """
-  @spec desired(map()) :: desired()
-  def desired(record) do
+  @spec desired(map(), [map()]) :: desired()
+  def desired(record, events \\ []) do
     record = TicketState.normalize(record)
     reasons = (record.pause && record.pause.reasons) || []
 
@@ -120,7 +134,11 @@ defmodule SymphonyElixir.Pauses.Projector do
       |> Enum.sort()
 
     entries = Decisions.render_from_questions(record)
-    %{labels: labels, entries: entries, section: hash(entries), comments: comments(record)}
+    proofs = Walkthrough.proofs_of(events)
+    changelog = IssueSummary.event_entries(events)
+
+    %{labels: labels, entries: entries, proofs: proofs, changelog: changelog, comments: comments(record)}
+    |> Map.put(:section, hash(entries, proofs, changelog))
   end
 
   # A question a request comment shows in Linear: one asked with `request: true`; one asked before
@@ -181,11 +199,12 @@ defmodule SymphonyElixir.Pauses.Projector do
   def apply(record, opts \\ []) do
     record = TicketState.normalize(record)
     tracker = Keyword.get(opts, :tracker, Tracker)
-    desired = desired(record)
+    events = history(record.issue_id)
+    desired = desired(record, events)
     last = last_applied(record, opts)
 
     {labels, label_errors} = apply_labels(tracker, record.issue_id, last.labels, desired.labels)
-    {section, section_errors} = apply_section(tracker, record.issue_id, last.section, desired)
+    {section, section_errors} = apply_section(tracker, record.issue_id, last.section, desired, events)
     {comments, comment_errors} = apply_comments(tracker, record.issue_id, last.comments, desired.comments)
     remember(record, %{labels: labels, section: section, comments: comments}, Keyword.get(opts, :store, RunStore))
 
@@ -246,11 +265,16 @@ defmodule SymphonyElixir.Pauses.Projector do
     end
   end
 
-  defp apply_section(_tracker, _issue_id, last, %{section: section}) when section in [nil, last], do: {last, []}
+  # The events the description pass renders: the proofs, and the pushes and verdicts of the summary
+  # block's changelog. A store that cannot be read has none.
+  defp history(issue_id), do: issue_id |> RunStore.list_ticket_events(types: ["evidence", "attempt.pushed", "verdict.recorded"]) |> List.wrap() |> Enum.filter(&is_struct/1)
 
-  defp apply_section(tracker, issue_id, last, %{entries: entries, section: section}) do
+  defp apply_section(_tracker, _issue_id, last, %{section: section}, _events) when section in [nil, last], do: {last, []}
+
+  defp apply_section(tracker, issue_id, last, %{entries: entries, proofs: proofs, section: section}, events) do
     with {:ok, description} <- call(fn -> tracker.fetch_issue_description(issue_id) end),
          {:ok, updated} <- Decisions.put(description, entries),
+         updated = updated |> Walkthrough.put_proofs(proofs) |> IssueSummary.put_changelog(events),
          :ok <- write_description(tracker, issue_id, description || "", updated) do
       {section, []}
     else
@@ -381,11 +405,18 @@ defmodule SymphonyElixir.Pauses.Projector do
     Enum.filter(@labels, &MapSet.member?(observed, String.downcase(&1)))
   end
 
-  defp hash([]), do: nil
+  # The Decisions entries alone hash as they did before proofs were projected, so a ticket with no
+  # proof is not written again.
+  # A description with no push or verdict line keeps the hash it had before the changelog was
+  # projected, so no ticket's description is written again for it.
+  defp hash([], [], []), do: nil
+  defp hash(entries, [], []), do: digest(entries)
+  defp hash(entries, proofs, []), do: digest({entries, proofs})
+  defp hash(entries, proofs, changelog), do: digest({entries, proofs, changelog})
 
-  defp hash(entries) do
+  defp digest(term) do
     :sha256
-    |> :crypto.hash(:erlang.term_to_binary(entries, [:deterministic]))
+    |> :crypto.hash(:erlang.term_to_binary(term, [:deterministic]))
     |> Base.encode16(case: :lower)
     |> binary_part(0, 16)
   end

@@ -1535,3 +1535,41 @@ defmodule SymphonyElixir.TestSupport do
     "  #{name}: |\n#{indented}"
   end
 end
+
+defmodule SymphonyElixir.TestSupport.ProofSteps do
+  @moduledoc """
+  Walkthrough steps with proofs, written as a test reads best: `1. Do it. Proved by: <spec>` lines,
+  where `<spec>` is `QA`, a test the `proof_check` runs, `<check> › <test>`, or the `proof_check`'s
+  own name. Symphony reads a step's proof from the ticket's `evidence` events only
+  (`SymphonyElixir.Walkthrough.proof_steps/2`); the QA pre-check and the QA prompt take steps of
+  this shape, and these tests build them from text.
+  """
+
+  alias SymphonyElixir.Walkthrough
+
+  @separator ~r/\s*(?:›|\s>\s)\s*/u
+
+  @spec steps(String.t(), String.t() | nil) :: [Walkthrough.step()]
+  def steps(text, proof_check) do
+    for step <- Walkthrough.steps(text) do
+      case Regex.run(~r/\A(.*)\s*Proved by:\s*(.*?)\.?\s*\z/su, step.text) do
+        [_all, rest, spec] -> %{step | text: String.trim(rest), proof: proof(spec |> String.replace("`", "") |> String.replace(~r/\s+/, " ") |> String.trim(), proof_check)}
+        nil -> step
+      end
+    end
+  end
+
+  defp proof(spec, proof_check) do
+    cond do
+      is_nil(proof_check) or spec == "" or (not Regex.match?(@separator, spec) and Regex.match?(~r/^qa(?:$|\s*[(:,;]|\s+[-–—]\s)/iu, spec)) -> %{by: :qa}
+      match?([_check, _test], Regex.split(@separator, spec, parts: 2)) -> two_part(spec)
+      String.downcase(spec) == String.downcase(proof_check) -> %{by: :test, check: proof_check, test: nil}
+      true -> %{by: :test, check: proof_check, test: spec}
+    end
+  end
+
+  defp two_part(spec) do
+    [check, test] = Regex.split(@separator, spec, parts: 2)
+    %{by: :test, check: String.trim(check), test: if(String.trim(test) == "", do: nil, else: String.trim(test))}
+  end
+end
