@@ -13,10 +13,12 @@ defmodule SymphonyElixir.AgentRunnerTest do
     # in each turn does what the test's script says (`:walk_agent_script`, called with the turn's
     # number, prompt and options); by default it records the delegated step the prompt names as
     # passed, as an agent does through `ticket_record`.
-    def start_session(_workspace, _opts) do
+    def start_session(_workspace, opts) do
       count = Application.get_env(:symphony_elixir, :walk_agent_sessions, 0) + 1
       Application.put_env(:symphony_elixir, :walk_agent_sessions, count)
-      send(Application.fetch_env!(:symphony_elixir, :walk_agent_recipient), {:session_started, count})
+      recipient = Application.fetch_env!(:symphony_elixir, :walk_agent_recipient)
+      send(recipient, {:session_started, count})
+      send(recipient, {:session_unlocks, count, Keyword.get(opts, :unlocked_paths)})
       {:ok, %{session: count}}
     end
 
@@ -293,6 +295,37 @@ defmodule SymphonyElixir.AgentRunnerTest do
     assert :ok = Task.await(task, 10_000)
 
     assert step_events() |> Enum.map(& &1.run_id) |> Enum.uniq() == [@run_id]
+  end
+
+  test "a protected-path request the agent asks mid-step resumes the step in a session that may write the path the answer unlocks", ctx do
+    ctx = Map.put(ctx, :orchestrator, self())
+
+    request = %{
+      layout_request()
+      | title: "Change the workflow settings",
+        options: [
+          %{label: "Allow this ticket to change the workflow settings file", effect: "The run changes it.", recommended: true, unlocks: ["WORKFLOW.md"]},
+          %{label: "Keep it as it is", effect: "The run leaves it."}
+        ]
+    }
+
+    Application.put_env(:symphony_elixir, :walk_agent_script, fn
+      1, _prompt, _opts -> {:ok, _question} = Questions.ask(@ticket, request, asked_by: %{kind: :run, name: "The run"}, request: true)
+      count, prompt, opts -> WalkAgent.record_step(count, prompt, opts)
+    end)
+
+    task = start_run(ctx, [], in_progress_for(5))
+
+    assert_receive {:session_unlocks, 1, []}, 5_000
+    assert_receive {:run_step, @issue_id, {:answer_wanted, runner, %{id: "code"}, question_id}}, 5_000
+    {:ok, _answered} = Questions.answer(@ticket, question_id, "1")
+    send(runner, {:run_step_turn, @issue_id})
+
+    assert_receive {:session_unlocks, 2, ["WORKFLOW.md"]}, 5_000
+    assert_receive {:turn, 2, 2, resumed}
+    assert resumed =~ "Protected paths unlocked for this run:"
+    assert resumed =~ "`WORKFLOW.md`"
+    Task.shutdown(task, :brutal_kill)
   end
 
   test "a paused step whose question is withdrawn (Cancel), or that has no orchestrator to wait with, ends the run", ctx do

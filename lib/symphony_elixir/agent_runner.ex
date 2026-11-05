@@ -1325,9 +1325,13 @@ defmodule SymphonyElixir.AgentRunner do
   defp resume_at(agent_module, run_context, %{mode: "machine"} = step, _question, turn_number, max_turns),
     do: run_machine_steps(agent_module, nil, run_context, step, turn_number, max_turns)
 
+  # The answer may grant a protected path (an option with `unlocks`, such as a protected-path
+  # request the agent asked mid-step), so the resumed session claims the ticket's grants again and
+  # its sandbox, tools and prompt get them, as a run's first session does.
   defp resume_at(agent_module, %{walk: walk} = run_context, step, question, turn_number, max_turns) do
     notes = if question, do: %{resume: question}, else: %{}
-    run_context = %{run_context | walk: %{walk | step: step, carry: nil, notes: notes}}
+    opts = put_path_unlocks(run_context.opts, run_context.issue)
+    run_context = %{run_context | opts: opts, walk: %{walk | step: step, carry: nil, notes: notes}}
     run_context = if question && is_binary(walk.session_id), do: Map.put(run_context, :resume_session_id, walk.session_id), else: run_context
     start_turn_session(agent_module, run_context, turn_number + 1, max_turns)
   end
