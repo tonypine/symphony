@@ -314,8 +314,12 @@ defmodule SymphonyElixir.PullRequestPage do
 
   defp ticket_history(issue_id, opts) do
     case Keyword.get(opts, :ticket_state, &RunStore.get_ticket_state/1).(issue_id) do
-      %{} -> %{verdicts: TicketState.verdicts(%{issue_id: issue_id}), signals: TicketState.signals(%{issue_id: issue_id})}
-      _none_or_error -> nil
+      %{} ->
+        ticket = %{issue_id: issue_id}
+        %{verdicts: TicketState.verdicts(ticket), signals: TicketState.signals(ticket)}
+
+      _none_or_error ->
+        nil
     end
   end
 

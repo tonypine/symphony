@@ -361,7 +361,11 @@ defmodule SymphonyElixir.TestSupport do
 
   def put_verdict(repo_key, issue_id, kind, head_sha, outcome, details \\ %{}, at \\ nil) do
     at = at || DateTime.utc_now()
-    update_record!(repo_key, issue_id, &SymphonyElixir.TicketState.record_verdict(&1, kind, head_sha, outcome, at, details))
+
+    update_record!(repo_key, issue_id, fn record ->
+      SymphonyElixir.TicketState.record_verdict(record, kind, head_sha, outcome, at, details)
+    end)
+
     {type, payload, opts} = SymphonyElixir.TicketSignals.verdict_event(kind, outcome, head_sha, details: details)
     record_event!(repo_key, issue_id, type, payload, opts, at)
   end

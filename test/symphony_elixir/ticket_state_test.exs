@@ -1297,7 +1297,8 @@ defmodule SymphonyElixir.TicketStateViewsTest do
   defp dispatch(run_id, state, head) do
     dispatch = %{kind: :implementation, run_id: run_id, state: state, head: head}
     :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, dispatch)
-    TicketSignals.record_event(@repo_key, @issue_id, "run.started", %{run_id: run_id, run_kind: "implementation", state: state, head: head}, run_id: run_id)
+    payload = %{run_id: run_id, run_kind: "implementation", state: state, head: head}
+    TicketSignals.record_event(@repo_key, @issue_id, "run.started", payload, run_id: run_id)
   end
 
   defp ended(run_id, attrs) do
