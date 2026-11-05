@@ -433,6 +433,13 @@ on the held ticket, or on a blocker that needs no app update (a docs-only or `WO
 to release it at `Done`. Blockers merged in other repositories, and every blocker when Symphony runs
 from a checkout, release their tickets at `Done`.
 
+The label does not opt out of one wait: while the running build is behind `main` on the files the
+prompt rendering must agree with (the prompt builder, the workflow loader, the instruction
+assembly), every ticket of Symphony's own repository waits for the build that has them ("Holding
+for the v0.0.1.839 build: the instructions on main need it"), since its instructions come from
+`main` and would not render on the running build. The first poll after the app updates releases
+them.
+
 ### `workspaces`
 
 Workspace root, population defaults, attachments, and cleanup.

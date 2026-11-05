@@ -3485,6 +3485,19 @@ An issue is dispatch-eligible only if all are true:
     checkout (no sha), and the `skip-update-hold` label on the held issue or on the blocker release
     the issue at once. A lookup that fails holds no new issue, and leaves a reason already set
     until the lookup answers.
+  - Every polled issue of the running build's own repository, in any active phase and whatever
+    its labels (`skip-update-hold` included), is not dispatched while the build is behind the
+    repo's base branch on a file the prompt rendering must agree with (the prompt builder, the
+    workflow loader, the instruction assembly): the instructions are read from the base branch, the
+    renderer and its variables come from the build. The poll compares the build's commit with the
+    base branch on GitHub and puts a `:build` reason on each issue's pause (`waits_on: {commit:
+    <the base branch's head>}`, set by the rule "Instructions update hold"): "Holding for the
+    v0.0.1.839 build: the instructions on main need it" once that commit's release run is known,
+    "Holding for the build of 1a2b3c4: ..." before. Its `blocked` entry has `kind: "app_update"`,
+    and the gate gives the same line. The first poll on a build that is not behind clears it, and
+    the issue dispatches in that poll. A compare that fails changes nothing. A run whose first
+    prompt fails to render while the build is behind ends in that hold, with no retry and no failed
+    attempt; on a current build the failure is a plain failure.
 - Parent rule passes:
   - A plan parent is an issue with the `plan` label, or `breakdown`, the label's older name
     (case-insensitive); both are accepted, and the run kind keeps the name `breakdown`.

@@ -10,7 +10,8 @@ defmodule SymphonyElixir.Pauses do
     * `:ticket` - another ticket reaching a terminal state (`waits_on: %{identifier: "TP-12"}`, a
       ticket's identifier as Linear writes it);
     * `:build` - a Symphony build containing a fix (`waits_on: %{version: "0.0.1.731"}`, a release's
-      version, or `%{pull_request: 448}`);
+      version, `%{pull_request: 448}`, or `%{commit: sha}`, a commit on the base branch the running
+      build must include);
     * `:person` - the Director (`waits_on: %{action: "unblock" | "restart"}`);
     * `:environment` - a named condition (`waits_on: %{condition: name}`).
 
@@ -84,6 +85,7 @@ defmodule SymphonyElixir.Pauses do
   # The only names a reason's default line shows: a ticket's identifier and a release's version.
   @identifier ~r/\A[A-Z][A-Z0-9]*-\d+\z/
   @version ~r/\A\d+(\.\d+)+\z/
+  @commit ~r/\A[0-9a-f]{7,40}\z/
   # The menu bar app's reason for an update's pause (`ControlAction.updatePauseReason`).
   @update_reason ~r/\Aupdating to v(\d+(?:\.\d+)+)\z/
   @dispatch_kinds [:person, :build]
@@ -663,6 +665,7 @@ defmodule SymphonyElixir.Pauses do
   defp waits_on(:ticket, waits_on), do: matching(waits_on, :identifier, @identifier)
   defp waits_on(:environment, waits_on), do: one(waits_on, :condition)
   defp waits_on(:build, %{pull_request: number}) when is_integer(number) and number > 0, do: %{pull_request: number}
+  defp waits_on(:build, %{commit: commit}), do: matching(%{commit: commit}, :commit, @commit)
   defp waits_on(:build, waits_on), do: matching(waits_on, :version, @version)
   defp waits_on(:person, %{action: action}) when is_atom(action), do: waits_on(:person, %{action: Atom.to_string(action)})
   defp waits_on(:person, %{action: action}) when action in @person_actions, do: %{action: action}
@@ -688,6 +691,7 @@ defmodule SymphonyElixir.Pauses do
   defp default_text(:ticket, %{identifier: identifier}), do: "Waiting for #{identifier} to finish"
   defp default_text(:build, %{version: version}), do: "Waiting for Symphony version #{version}, which has the fix"
   defp default_text(:build, %{pull_request: _number}), do: "Waiting for a Symphony build with the fix"
+  defp default_text(:build, %{commit: commit}), do: "Waiting for a Symphony build that includes #{String.slice(commit, 0, 7)}"
   defp default_text(:person, %{action: action}), do: "Waiting for you to #{action} it"
   defp default_text(:environment, _waits_on), do: "Waiting for the environment to be ready"
 

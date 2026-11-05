@@ -26,6 +26,7 @@ defmodule SymphonyElixir.Orchestrator do
     Handoff,
     IdlePark,
     Initiatives,
+    InstructionsHold,
     Notifications,
     Pauses,
     PlanComments,
@@ -1028,6 +1029,25 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # The run's instructions failed to render while the running build is behind its base branch on the
+  # files the rendering must agree with (`SymphonyElixir.InstructionsHold`): a known state, not a
+  # failure. The ticket is held for the build that has them, with no retry and no failed attempt;
+  # the poll that finds the build current releases it and dispatches it. A hold the store can't
+  # write leaves the run a plain failure.
+  defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:instructions_behind, %{} = behind} = reason) do
+    repo_key = running_entry_repo_key(running_entry) || sole_repo_key()
+
+    case InstructionsHold.hold(repo_key, %{id: issue_id, identifier: running_entry.identifier}, behind) do
+      :ok ->
+        persist_run_completion(running_entry, "waiting_for_update", agent_exit_reason_summary(reason))
+        Logger.info("Agent task for issue_id=#{issue_id} session_id=#{session_id} could not render its instructions on a build behind main; holding for the update")
+        release_issue_claim(state, issue_id)
+
+      {:error, _reason} ->
+        handle_failed_agent_exit(state, issue_id, running_entry, session_id, reason)
+    end
+  end
+
   defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, reason) do
     handle_failed_agent_exit(state, issue_id, running_entry, session_id, reason)
   end
@@ -1271,6 +1291,10 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp agent_exit_reason_summary({:model_api_unreachable, info}) do
     "model API unreachable (#{Map.get(info, :error)})"
+  end
+
+  defp agent_exit_reason_summary({:instructions_behind, %{commit: commit} = behind}) do
+    "#{InstructionsHold.line(commit)} (#{Map.get(behind, :error) || "the instructions did not render"})"
   end
 
   defp agent_exit_reason_summary({:linear_unavailable, reason}) do
@@ -1648,6 +1672,9 @@ defmodule SymphonyElixir.Orchestrator do
     {_changed, cache} = sweep_dependencies(repo_name, issues, terminal_states, cache)
     build = BuildInfo.current()
     cache = UpdateHold.resolve(issues, build, cache, terminal_states, repo_key: repo_name)
+    # Every ticket of the build's repository waits while the build is behind its base branch on the
+    # files the prompt rendering must agree with, `skip-update-hold` or not.
+    _behind = InstructionsHold.resolve(issues, repo_name, build: build)
     # The release build of each fix a held ticket waits on: rerun when GitHub had no machine for it.
     :ok = ReleaseBuild.watch(issues, build, cache, repo_name, [])
     cache
@@ -4454,6 +4481,7 @@ defmodule SymphonyElixir.Orchestrator do
       is_nil(repo_key) -> "it has no repo key and several repos are configured, so its pause can't be read"
       paused?(repo_key, issue) -> pause_reason(repo_key, issue)
       waiting_on_sub_issues?(issue, terminal_states) -> "waiting on its sub-tickets"
+      reason = instructions_hold_reason(repo_key, issue) -> reason
       reason = update_hold_reason(repo_key, issue, state.update_hold_cache) -> reason
       replan_pending?(issue, state) -> "its plan waits to be replaced before it runs again"
       true -> nil
@@ -4484,6 +4512,15 @@ defmodule SymphonyElixir.Orchestrator do
     case UpdateHold.reasons(repo_key, issue_id) do
       [] -> nil
       reasons -> issue |> UpdateHold.lines(reasons, cache) |> Enum.join("; ")
+    end
+  end
+
+  # A ticket held while the running build is behind its base branch on the files the prompt
+  # rendering must agree with (`SymphonyElixir.InstructionsHold`), whatever its labels.
+  defp instructions_hold_reason(repo_key, %Issue{id: issue_id}) do
+    case InstructionsHold.reasons(repo_key, issue_id) do
+      [] -> nil
+      reasons -> reasons |> InstructionsHold.lines() |> Enum.join("; ")
     end
   end
 
@@ -4606,7 +4643,26 @@ defmodule SymphonyElixir.Orchestrator do
         }
       end
 
-    blocked = Enum.sort_by(blocked ++ fix_ticket_held ++ update_blocked, & &1.identifier)
+    update_held = MapSet.new(update_blocked, & &1.issue_id)
+
+    instructions_held =
+      for %Issue{} = issue <- issues,
+          not Issue.blocked?(issue, terminal_states),
+          not MapSet.member?(update_held, issue.id),
+          (reasons = InstructionsHold.reasons(hold_repo_key(issue), issue.id)) != [] do
+        %{
+          issue_id: issue.id,
+          identifier: issue.identifier,
+          title: issue.title,
+          state: issue.state,
+          kind: :app_update,
+          reason: reasons |> InstructionsHold.lines() |> Enum.join("; "),
+          build_line: Enum.find_value(reasons, &ReleaseBuild.line(&1.waits_on.commit, nil)),
+          blockers: []
+        }
+      end
+
+    blocked = Enum.sort_by(blocked ++ fix_ticket_held ++ update_blocked ++ instructions_held, & &1.identifier)
     %{state | blocked: blocked}
   end
 
