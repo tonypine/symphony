@@ -1446,12 +1446,23 @@ struct OutputState: View {
         Group {
             switch text {
             case let .loaded(body):
-                ScrollView([.vertical, .horizontal]) {
-                    Text(body.isEmpty ? " " : body)
-                        .font(.system(.callout, design: .monospaced))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .topLeading)
-                        .padding(DesignTokens.Space.s3)
+                let log = Text(body.isEmpty ? " " : body)
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding(DesignTokens.Space.s3)
+                Group {
+                    if offscreenSnapshot {
+                        // ImageRenderer draws no scroll view's content, so the snapshot shows the text as it opens.
+                        log.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
+                    } else {
+                        // A scroll view centres content smaller than itself; at least its size, the text starts at the
+                        // top-left like a log and scrolls once it is longer or wider.
+                        GeometryReader { box in
+                            ScrollView([.vertical, .horizontal]) {
+                                log.frame(minWidth: box.size.width, minHeight: box.size.height, alignment: .topLeading)
+                            }
+                        }
+                    }
                 }
                 .background(DesignTokens.Surface.raised.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.mark))
                 .accessibilityLabel("\(output.label) text")
