@@ -3301,9 +3301,17 @@ it, checking it, testing it and handing it off. Each kind under `phases` (a run 
 its default list; a `symphony.yml` with no `phases` key follows every default. `symphony workflow
 preview` prints the list a run will follow above its prompt (`--kind` names the run kind, default
 `implementation`), so a change to the list shows in the next preview. The step runner that drives
-the list (TP-1393) and the Director's editor for it, a Phases group in Settings (TP-1392), follow
-this ticket; until the runner lands, a run is still one agent session and the list is what the
-preview shows.
+the list (TP-1393) follows; until it lands, a run is still one agent session and the list is what
+the preview shows.
+
+The Director edits the lists in Settings › Phases: pick a run kind, then reorder its steps (drag, or
+the arrow buttons), add or remove one, set its title, id, kind, command or prompt, timeout, the step
+it returns to on failure and its no-result limit, or reset the kind to its default list (which
+removes `phases.<kind>` from the file). A step the rules below refuse says why on its row and is not
+saved. Under the list, a preview shows the list as `symphony workflow preview` prints it. Save checks
+the file with `symphony check` first and rewrites only the kind's `steps:` block, as an indented
+list; a block it can't read (an anchor, a folded `>` prompt) is reported with its line, to change by
+hand.
 
 The default `implementation` list (decision 2 of TP-1085):
 

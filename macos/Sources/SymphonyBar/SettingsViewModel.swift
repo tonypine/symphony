@@ -96,6 +96,12 @@ final class SettingsViewModel: ObservableObject {
     @Published var riskRules = RiskRuleSettings()
     /// Why `symphony check` rejected the changed risk rule settings, shown above Save.
     @Published private(set) var riskRulesError: String?
+    /// `phases.<kind>.steps` in the configured symphony.yml: the step list each run kind follows.
+    @Published var phases = PhaseSettings()
+    /// The run kind whose list the Phases group shows.
+    @Published var phaseKind: PhaseKind = .implementation
+    /// Why the step lists weren't saved: a step the rules refuse, or `symphony check`'s reason.
+    @Published private(set) var phasesError: String?
     /// Today's tokens from Symphony's latest state, nil while it isn't answering.
     @Published var budget: StateSnapshot.Budget?
     /// Why this copy can't install updates with Development mode on or off, nil when it can.
@@ -223,6 +229,10 @@ final class SettingsViewModel: ObservableObject {
     /// these is written.
     private var loadedRiskRules: RiskRuleSettings?
 
+    /// The step lists read from symphony.yml, or nil when they couldn't be read. Only the kinds that changed from
+    /// these are written.
+    private var loadedPhases: PhaseSettings?
+
     /// The pending or running `symphony check` on the changed token limits.
     private var tokenLimitsCheck: Task<Void, Never>?
 
@@ -270,6 +280,7 @@ final class SettingsViewModel: ObservableObject {
         loadWorkflowStates()
         loadTicketPatternsBuiltIn()
         loadRiskRules()
+        loadPhases()
         loadTimeouts()
         loadGitHubUpdates()
         loadLinearWebhooks()
@@ -439,6 +450,24 @@ final class SettingsViewModel: ObservableObject {
             loadedRiskRules = rules
         } catch {
             configFileError = "Could not read the risk rules from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
+    /// The Phases editor is off until a symphony.yml has been read, and while Save checks it.
+    var canEditPhases: Bool { loadedPhases != nil && !isSaving }
+
+    /// What is wrong with the shown kind's list, by the rules Symphony loads it with.
+    var phaseValidation: PhaseValidation { PhaseValidation.check(phases[phaseKind].steps) }
+
+    private func loadPhases() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let read = try SymphonyConfigFile(path: path).readPhaseSettings()
+            phases = read
+            loadedPhases = read
+        } catch {
+            configFileError = "Could not read the step lists from symphony.yml: \(error.localizedDescription)"
         }
     }
 
@@ -749,10 +778,18 @@ final class SettingsViewModel: ObservableObject {
         riskRulesError = nil
         let rules = riskRules
         let loadedRules = loadedRiskRules.flatMap { $0 != rules ? $0 : nil }
+        phasesError = nil
+        let newPhases = phases
+        let oldPhases = loadedPhases.flatMap { $0 != newPhases ? $0 : nil }
+        if oldPhases != nil, let kind = PhaseKind.allCases.first(where: { !PhaseValidation.check(newPhases[$0].steps).isValid }) {
+            phaseKind = kind
+            phasesError = "The \(kind.title) step list has a step that can't be saved, so nothing was saved; see Phases."
+            return
+        }
 
         guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil || oldUpdates != nil || oldWebhooks != nil
             || oldLoopLimits != nil || oldDispatch != nil || oldLedger != nil || oldQAPlaybook != nil || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil
-            || builtInPatternsChanged || loadedRules != nil else {
+            || builtInPatternsChanged || loadedRules != nil || oldPhases != nil else {
             if saveRest(settings, secrets) { onSaved() }
             return
         }
@@ -800,6 +837,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, let loadedRules {
                 saved = await saveRiskRules(rules, from: loadedRules, settings: settings, secrets: secrets)
+            }
+            if saved, let oldPhases {
+                saved = await savePhases(newPhases, from: oldPhases, settings: settings, secrets: secrets)
             }
             isSaving = false
             if saved && saveRest(settings, secrets) { onSaved() }
@@ -1202,6 +1242,32 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedRiskRules = rules
+        return true
+    }
+
+    /// Writes the step lists that changed to symphony.yml once `symphony check` passes on the result.
+    private func savePhases(
+        _ new: PhaseSettings,
+        from old: PhaseSettings,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writePhaseSettings(new, from: old) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the step lists to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            phasesError = "symphony check rejected the step lists, so nothing was saved: " + ConfigCheck.reasonFirst(message)
+            return false
+        }
+        configFileError = nil
+        loadedPhases = new
         return true
     }
 

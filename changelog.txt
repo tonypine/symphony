@@ -6,6 +6,9 @@ list the commit subjects since the previous release (see `docs/releasing.md`).
 
 ## Unreleased
 
+- The Director's Settings gains a Phases group: each run kind's step list, reordered, added
+  to, removed from, edited or reset to its default, with a preview of the list the next run
+  follows; a step Symphony would refuse says why on its row and isn't saved.
 - `symphony.yml` gains `phases.<kind>.steps`, the step list a run follows, with the
   default implementation list when the key is absent (no migration: nothing is renamed);
   `symphony workflow preview --kind` prints it above the prompt.

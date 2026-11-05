@@ -8,7 +8,7 @@ import Foundation
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
 /// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `DispatchSettings`, `LedgerSettings`,
-/// `LinearWebhookSettings`, `BuiltInTicketPatterns`, `RiskRuleSettings`, `QAHostTools`, `MacAppQAPlaybook`) write is
+/// `LinearWebhookSettings`, `BuiltInTicketPatterns`, `RiskRuleSettings`, `QAHostTools`, `MacAppQAPlaybook`, `PhaseSettings`) write is
 /// here, and that the rest are `writtenBySymphony`. Keep one string literal per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
@@ -59,6 +59,15 @@ public enum SettingsUIManifest {
         "linear.reconcile_interval_ms",
         "linear.webhooks.enabled",
         "linear.webhooks.secret",
+        "phases.breakdown.steps",
+        "phases.ci_fix.steps",
+        "phases.code_review.steps",
+        "phases.epic_review.steps",
+        "phases.implementation.steps",
+        "phases.landing.steps",
+        "phases.qa.steps",
+        "phases.review_feedback.steps",
+        "phases.rework.steps",
         "repositories[].acceptance_gate.escalate.ticket_patterns_builtin",
         "repositories[].acceptance_gate.mode",
         "repositories[].agent.effort",

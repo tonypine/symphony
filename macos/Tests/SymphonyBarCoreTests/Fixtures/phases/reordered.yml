@@ -1,0 +1,36 @@
+phases:
+  implementation:
+    steps:
+      - id: code
+        title: Write the code
+        mode: delegated
+      - id: build
+        title: Build
+        mode: machine
+        command:
+          - run: cd macos && swift build
+            when: macos_changed
+          - run: mix compile --warnings-as-errors
+            when: elixir_changed
+        timeout_ms: 900000
+        on_fail: code
+      - id: tests
+        title: Tests and coverage
+        mode: machine
+        command:
+          - run: mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed
+            when: elixir_changed
+          - run: cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER"
+            when: macos_changed
+        timeout_ms: 1800000
+        on_fail: code
+      - id: checks
+        title: Format, specs and credo
+        mode: machine
+        when: elixir_changed
+        command: mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES
+        timeout_ms: 600000
+        on_fail: code
+      - id: handoff
+        title: "Hand off: push and open the pull request"
+        mode: delegated
