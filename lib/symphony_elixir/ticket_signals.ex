@@ -232,7 +232,7 @@ defmodule SymphonyElixir.TicketSignals do
       nothing are `:mirrored`.
     * Any other signal is a machine `note` rendered from its name and details.
   """
-  @spec event(String.t(), map()) :: mapping()
+  @spec event(String.t(), term()) :: mapping()
   def event(name, details) when is_map(details), do: map_signal(name, details)
   def event(name, _details), do: map_signal(name, %{})
 
