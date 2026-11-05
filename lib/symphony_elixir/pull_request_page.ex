@@ -353,10 +353,7 @@ defmodule SymphonyElixir.PullRequestPage do
     end
   end
 
-  defp reason(_verdict, _history), do: nil
-
   defp after?(%DateTime{} = a, %DateTime{} = b), do: DateTime.compare(a, b) == :gt
-  defp after?(_a, _b), do: false
 
   defp detail(details, key), do: Map.get(details, key) || Map.get(details, Atom.to_string(key))
 

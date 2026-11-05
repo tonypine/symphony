@@ -317,6 +317,7 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert length(TicketEvents.query(@issue_id)) == 50
       assert length(TicketEvents.query(@issue_id, limit: 500)) == 200
       assert length(TicketEvents.query(@issue_id, limit: :all)) == 201
+      assert length(TicketEvents.query(@issue_id, limit: "many")) == 50
     end
 
     test "passes a store error through" do
