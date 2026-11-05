@@ -205,7 +205,7 @@ defmodule SymphonyElixir.TicketSignals do
   when empty). A `:mirrored` signal is a machine `note` rendered from its name and details, as an
   unmapped one is.
   """
-  @spec signal_event(String.t(), map()) :: {String.t(), map(), keyword()}
+  @spec signal_event(String.t(), term()) :: {String.t(), map(), keyword()}
   def signal_event(name, details) do
     {type, payload, opts} =
       case event(name, details) do
