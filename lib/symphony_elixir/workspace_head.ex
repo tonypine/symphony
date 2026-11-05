@@ -39,17 +39,20 @@ defmodule SymphonyElixir.WorkspaceHead do
 
   def unpushed_head(_workspace, _worker_host), do: nil
 
+  @type progress :: %{unpushed_commits: non_neg_integer(), changed_files: non_neg_integer()}
+
   @doc """
   What the workspace holds that no remote has: the commits on `HEAD` no remote-tracking branch has
   (`unpushed_commits`, 0 for a checkout with no commit yet) and the files git does not ignore that
   differ from `HEAD` (`changed_files`, untracked ones included). Nil for an SSH worker's workspace or
   a directory that is not a checkout of its own. Reads local refs only, so it makes no network call.
   """
-  @spec progress(Path.t() | nil, String.t() | nil) :: %{unpushed_commits: non_neg_integer(), changed_files: non_neg_integer()} | nil
+  @spec progress(Path.t() | nil, String.t() | nil) :: progress() | nil
   def progress(workspace, nil) when is_binary(workspace) do
     with true <- toplevel?(workspace),
          {status, 0} <- git(workspace, ["status", "--porcelain=v1", "--untracked-files=all"]) do
-      %{unpushed_commits: unpushed_commits(workspace), changed_files: status |> String.split("\n", trim: true) |> length()}
+      changed_files = status |> String.split("\n", trim: true) |> length()
+      %{unpushed_commits: unpushed_commits(workspace), changed_files: changed_files}
     else
       _unreadable -> nil
     end

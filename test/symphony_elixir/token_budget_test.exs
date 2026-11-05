@@ -3,7 +3,14 @@ defmodule SymphonyElixir.TokenBudgetTest do
 
   alias SymphonyElixir.{DispatchLoop, Pauses, Questions, RunStore, TicketState, TokenBudget}
 
-  @facts %{name: "MT-40", total_tokens: 100_008_209, limit: 100_000_000, pushed: false, unpushed_commits: 1, changed_files: 58}
+  @facts %{
+    name: "MT-40",
+    total_tokens: 100_008_209,
+    limit: 100_000_000,
+    pushed: false,
+    unpushed_commits: 1,
+    changed_files: 58
+  }
 
   test "compact/1 writes a token count in a few characters" do
     assert TokenBudget.compact(950) == "950"
@@ -26,9 +33,16 @@ defmodule SymphonyElixir.TokenBudgetTest do
     assert attrs.title == "MT-40 spent its token budget"
     assert attrs.why =~ "The last run spent 100M tokens, past the limit of 100M tokens a ticket's run may spend."
     assert attrs.why =~ "It pushed nothing to a pull request; its workspace keeps 1 commit not pushed and 58 files changed but not committed."
-    assert [%{label: "Give it another budget", recommended: true}, %{label: "Start it over from main"}, %{label: "Keep it paused"}] = attrs.options
 
-    pushed = TokenBudget.question_attrs(%{@facts | total_tokens: nil, pushed: true, unpushed_commits: 2, changed_files: 1})
+    assert [
+             %{label: "Give it another budget", recommended: true},
+             %{label: "Start it over from main"},
+             %{label: "Keep it paused"}
+           ] = attrs.options
+
+    pushed =
+      TokenBudget.question_attrs(%{@facts | total_tokens: nil, pushed: true, unpushed_commits: 2, changed_files: 1})
+
     assert pushed.why =~ "The last run reached the limit of 100M tokens a ticket's run may spend."
     assert pushed.why =~ "Its pull request has the work it pushed; its workspace keeps 2 commits not pushed and 1 file changed but not committed."
 

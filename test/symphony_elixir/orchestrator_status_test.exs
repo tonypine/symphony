@@ -3572,7 +3572,14 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     spent_at = DateTime.add(DateTime.utc_now(), -3_600, :second)
 
     # Given another budget: a newer run started after the spent one.
-    assert :ok = put_budget_exhausted_run(%{run_id: "run-spent-rerun", issue_id: "issue-spent-rerun", issue_identifier: "MT-RERUN", total_tokens: 12, started_at: spent_at})
+    assert :ok =
+             put_budget_exhausted_run(%{
+               run_id: "run-spent-rerun",
+               issue_id: "issue-spent-rerun",
+               issue_identifier: "MT-RERUN",
+               total_tokens: 12,
+               started_at: spent_at
+             })
 
     assert :ok =
              RunStore.put_run(%{
@@ -3586,14 +3593,29 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
              })
 
     # Answered, its next run not started yet.
-    assert :ok = put_budget_exhausted_run(%{run_id: "run-spent-answered", issue_id: "issue-spent-answered", issue_identifier: "MT-ANSWERED", total_tokens: 12, started_at: spent_at})
+    assert :ok =
+             put_budget_exhausted_run(%{
+               run_id: "run-spent-answered",
+               issue_id: "issue-spent-answered",
+               issue_identifier: "MT-ANSWERED",
+               total_tokens: 12,
+               started_at: spent_at
+             })
+
     ticket = {:ticket, Config.repo_key!(), "issue-spent-answered"}
     facts = %{name: "MT-ANSWERED", total_tokens: 12, limit: 10, pushed: true, unpushed_commits: nil, changed_files: nil}
     assert {:ok, question} = SymphonyElixir.TokenBudget.ask(ticket, facts)
     assert {:ok, _answered} = Questions.answer(ticket, question.id, "Give it another budget")
 
     # Still unsettled: spent, newest, and its question unanswered.
-    assert :ok = put_budget_exhausted_run(%{run_id: "run-spent-open", issue_id: "issue-spent-open", issue_identifier: "MT-OPEN", total_tokens: 12, started_at: spent_at})
+    assert :ok =
+             put_budget_exhausted_run(%{
+               run_id: "run-spent-open",
+               issue_id: "issue-spent-open",
+               issue_identifier: "MT-OPEN",
+               total_tokens: 12,
+               started_at: spent_at
+             })
 
     on_exit(fn -> RunStore.clear() end)
 
