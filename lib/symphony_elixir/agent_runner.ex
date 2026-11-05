@@ -37,6 +37,7 @@ defmodule SymphonyElixir.AgentRunner do
     PromptBuilder,
     PrReviewPoller,
     PrWatch,
+    PrWatch.HeadSync,
     QaVerification,
     Questions,
     RunKind,
@@ -2105,6 +2106,42 @@ defmodule SymphonyElixir.AgentRunner do
   # its PR head is green, that is its outcome, so it hands the PR back instead of being parked
   # (`hand_off_green_fix/3`). Any other idle run is parked.
   defp end_idle_run(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
+    case await_pr_head(issue, run_context) do
+      {:lagging, ^head} ->
+        Logger.info("Not parking #{issue_context(issue)}; waiting for GitHub to pick up its pushed head #{head} on its PR")
+        :continue
+
+      _in_sync_or_not_pushed ->
+        end_idle_run_on_pr_head(issue, run_context)
+    end
+  end
+
+  # A head the run pushed that GitHub has not attached to the PR yet is progress the PR can't show
+  # (TP-1422): the branch is ahead of the PR head, so the run waits for GitHub, nudging the PR after
+  # a minute (`PrWatch.HeadSync`), instead of reading the PR's older head as "no new commit".
+  # Only an idle run gets here, and a turn counts as idle only with a readable HEAD.
+  defp await_pr_head(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
+    case ticket_pr_url(issue, run_context.opts) do
+      pr_url when is_binary(pr_url) ->
+        target = %{
+          repo_key: run_repo_key(issue, run_context.opts),
+          issue_id: issue.id,
+          pr_url: pr_url,
+          head: head,
+          workspace: run_context.workspace,
+          worker_host: run_context.worker_host,
+          run_id: Keyword.get(run_context.opts, :run_id)
+        }
+
+        github = Keyword.get(run_context.opts, :github, PullRequest)
+        HeadSync.await(target, Keyword.put_new(Keyword.get(run_context.opts, :head_sync, []), :github, github))
+
+      nil ->
+        :unknown
+    end
+  end
+
+  defp end_idle_run_on_pr_head(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
     ci_status = pushed_head_ci_status(issue, run_context)
     ci_action = ci_action(ci_status)
     green_fix = if ci_action == :success, do: green_fix(issue, ci_status, run_context)

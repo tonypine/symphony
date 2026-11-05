@@ -874,6 +874,54 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
   end
 
+  describe "a run whose pushed head GitHub has not attached to its PR yet (TP-1422)" do
+    # TP-1420: the branch was at the run's fix, the PR still showed the older red head for twelve
+    # minutes, and the idle park read that as "no new commit".
+    @stale_red {:ok, %{commit_sha: "sha-dirty", head_ref_name: "auto/TP-337", base_ref_name: "main", checks: [%{name: "make-all", status: "COMPLETED", conclusion: "FAILURE"}]}}
+    @picked_up {:ok, %{commit_sha: "sha-fixed", head_ref_name: "auto/TP-337", base_ref_name: "main", checks: [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]}}
+
+    setup do
+      :ok = put_pending_conflict()
+    end
+
+    defp branch_at(tip), do: [head_sync: [branch_tip_reader: fn _workspace, nil, "auto/TP-337" -> tip end, wait_ms: 0]]
+
+    test "waits for GitHub instead of parking while the PR head lags the branch it pushed" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, @stale_red)
+
+      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], max_turns: 5, runner_opts: branch_at("sha-fixed")) end)
+
+      assert turns() == 5
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      refute log =~ "Parking"
+      assert log =~ "Not parking issue_id=issue-progress issue_identifier=TP-337; waiting for GitHub to pick up its pushed head sha-fixed on its PR"
+
+      assert ["Waiting for GitHub to pick up sha-fixe: the branch is at it, but PR #337 still shows sha-dirt"] =
+               "issue-progress" |> SymphonyElixir.TicketEvents.query(types: ["note"]) |> Enum.map(& &1.payload.text) |> Enum.filter(&(&1 =~ "GitHub"))
+    end
+
+    test "once GitHub picks the head up, hands off with CI running on it, as any pushed head" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:by_turn, [@stale_red, @stale_red, @stale_red, @picked_up]})
+
+      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], max_turns: 6, runner_opts: branch_at("sha-fixed")) end)
+
+      assert turns() == 4
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert log =~ "waiting for GitHub to pick up its pushed head sha-fixed"
+      assert log =~ "CI is running on issue_id=issue-progress issue_identifier=TP-337's pushed head sha-fixed on its PR; moving to Code Review"
+    end
+
+    test "still parks when the branch is not at the run's head either: the PR is right, the head is not pushed" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, @stale_red)
+
+      capture_log(fn -> run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], max_turns: 5, runner_opts: branch_at("sha-dirty")) end)
+
+      assert turns() == 3
+      assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+    end
+  end
+
   describe "a CI-fix run that pushes nothing" do
     # TP-656: the red check was a flake (also red on main), and its rerun on the PR head passed.
     @green_checks [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"}]
