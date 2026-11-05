@@ -29,6 +29,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   require Schema.Linear
   require Schema.Notifications
   require Schema.Observability
+  require Schema.Phases
   require Schema.Poller
   require Schema.Polling
   require Schema.PrReview
@@ -50,7 +51,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
                                 "the ticket on a Needs Decision hold, and a plan waits in `issues.states.plan_review`"
   @allowed_keys ~w(
     agent auto_review code_review dashboard dependency_audit dispatch github human_actions issue_gate issues ledger linear notifications
-    poller pull_requests
+    phases poller pull_requests
     repositories tickets verification watchdog workers workspaces
   )
 
@@ -79,6 +80,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   # The keys each section of symphony.yml accepts, by dotted path; `repositories[]` is an item of
   # the `repositories` list. A key that is itself a path here is a nested section. The parser
   # rejects any other key, and `operator_key_paths/0` lists the leaves.
+  @phase_sections Map.new(Schema.Phases.kinds(), &{"phases." <> &1, ~w(steps)})
   @operator_sections %{
     "issues" => ~w(provider poll_interval_ms linear memory states),
     "issues.memory" => ~w(issues_file),
@@ -127,8 +129,11 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "human_actions" => ~w(enabled interval_ms min_update_interval_ms),
     "ledger" => ~w(artifact_max_bytes prompt_brief_enabled prompt_brief_max_tokens),
     "dispatch" => ~w(source shadow_window),
+    # A run kind's step list (`Schema.Phases`); each kind holds one setting, its `steps` list.
+    "phases" => Schema.Phases.kinds(),
     "dashboard" => ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size)
   }
+  @operator_sections Map.merge(@operator_sections, @phase_sections)
 
   # `auto_review.playbooks` is a free-form map of playbook kinds, one setting; these keys under it
   # have a control in the app too (`SymphonyElixir.QaAgent.PlaybookSettings` checks them).
@@ -476,6 +481,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     embeds_one(:human_actions, Schema.HumanActions, on_replace: :update, defaults_to_struct: true)
     embeds_one(:ledger, Schema.Ledger, on_replace: :update, defaults_to_struct: true)
     embeds_one(:dispatch, Schema.Dispatch, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:phases, Schema.Phases, on_replace: :update, defaults_to_struct: true)
     embeds_many(:repos, Repo, on_replace: :delete)
   end
 
@@ -724,6 +730,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     |> cast_embed(:human_actions, with: &Schema.HumanActions.changeset/2)
     |> cast_embed(:ledger, with: &Schema.Ledger.changeset/2)
     |> cast_embed(:dispatch, with: &Schema.Dispatch.changeset/2)
+    |> cast_embed(:phases, with: &Schema.Phases.changeset/2)
     |> Schema.validate_profile_command_flags()
     |> cast_embed(:repos, with: &Repo.changeset/2, required: true)
     |> validate_length(:repos, min: 1)
@@ -772,7 +779,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, dashboard} <- normalize_dashboard(Map.get(config, "dashboard", %{})),
          {:ok, human_actions} <- normalize_human_actions(Map.get(config, "human_actions", %{})),
          {:ok, ledger} <- normalize_ledger(Map.get(config, "ledger", %{})),
-         {:ok, dispatch} <- normalize_dispatch(Map.get(config, "dispatch", %{})) do
+         {:ok, dispatch} <- normalize_dispatch(Map.get(config, "dispatch", %{})),
+         {:ok, phases} <- normalize_phases(Map.get(config, "phases", %{})) do
       workspace = merge_section(workspace, "sandbox", Map.get(agent_config, "workspace_sandbox"))
 
       {:ok,
@@ -797,7 +805,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("notifications", Map.get(config, "notifications"))
        |> maybe_put("human_actions", human_actions)
        |> maybe_put("ledger", ledger)
-       |> maybe_put("dispatch", dispatch)}
+       |> maybe_put("dispatch", dispatch)
+       |> maybe_put("phases", phases)}
     end
   end
 
@@ -1366,6 +1375,35 @@ defmodule SymphonyElixir.Config.SystemSchema do
          :ok <- reject_unknown_section_keys(config, section_keys("dispatch"), "dispatch") do
       {:ok, config}
     end
+  end
+
+  # Each kind under `phases` holds its `steps` list; `Schema.Phases` checks the steps themselves.
+  defp normalize_phases(config) do
+    with {:ok, config} <- section_map(config, "phases"),
+         :ok <- reject_unknown_section_keys(config, section_keys("phases"), "phases") do
+      Enum.reduce_while(config, {:ok, %{}}, &normalize_phase/2)
+    end
+  end
+
+  defp normalize_phase({kind, phase}, {:ok, phases}) do
+    path = "phases." <> kind
+
+    with {:ok, phase} <- section_map(phase, path),
+         :ok <- reject_unknown_section_keys(phase, section_keys(path), path),
+         :ok <- phase_steps(Map.fetch(phase, "steps"), path) do
+      {:cont, {:ok, Map.put(phases, kind, phase)}}
+    else
+      error -> {:halt, error}
+    end
+  end
+
+  defp phase_steps(:error, path),
+    do: {:error, {:invalid_symphony_config, "`#{path}.steps` is required; remove `#{path}` to follow the default list"}}
+
+  defp phase_steps({:ok, steps}, path) do
+    if is_list(steps) and Enum.all?(steps, &is_map/1),
+      do: :ok,
+      else: {:error, {:invalid_symphony_config, "`#{path}.steps` must be a list of steps, each an object"}}
   end
 
   defp normalize_dashboard(config) do

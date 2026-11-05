@@ -6,6 +6,9 @@ list the commit subjects since the previous release (see `docs/releasing.md`).
 
 ## Unreleased
 
+- `symphony.yml` gains `phases.<kind>.steps`, the step list a run follows, with the
+  default implementation list when the key is absent (no migration: nothing is renamed);
+  `symphony workflow preview --kind` prints it above the prompt.
 - Symphony.app runs the plain mix release from its bundle; Burrito, Zig and the
   Xcode SDK shim are gone from the build.
 

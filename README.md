@@ -420,7 +420,13 @@ instruction files next to that `WORKFLOW.md` (`.symphony/instructions/` by defau
 ./bin/symphony workflow preview --file path/to/WORKFLOW.md
 ./bin/symphony workflow preview --agent claude        # default: codex
 ./bin/symphony workflow preview --repo my-repo        # that repo's settings
+./bin/symphony workflow preview --kind rework         # default: implementation
 ```
+
+The preview opens with the step list the run kind follows (`phases.<kind>.steps` in `symphony.yml`,
+else the kind's default list; see [`phases`](docs/configuration.md#phases)): each step's id, title,
+mode, commands or prompt, and the step a failure returns to. A list `symphony.yml` gets wrong is
+reported as it is at load, naming the step.
 
 With `--repo`, the preview renders the prompt with that configured repo's settings.
 

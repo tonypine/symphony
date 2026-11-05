@@ -2,6 +2,8 @@
 # Tip: run `symphony workflow preview` to see the fully assembled prompt — managed
 # context, expanded `{% render %}` partials, and sample issue values — exactly as the
 # agent receives it. This comment lives in front matter so it never renders.
+# The preview lists the run's steps first: `phases.<kind>.steps` in symphony.yml, or the
+# default list when the file has no `phases` key (docs/configuration.md#phases).
 hooks:
   after_create: |
     # Runs .githooks/pre-push on every push. The setting lands in the shared repo config,

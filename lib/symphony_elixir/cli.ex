@@ -322,7 +322,7 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  @workflow_preview_usage "Usage: symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude] [--repo REPO_KEY]"
+  @workflow_preview_usage "Usage: symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude] [--repo REPO_KEY] [--kind RUN_KIND]"
 
   defp evaluate_workflow(["preview" | preview_args]), do: dispatch_workflow_preview(preview_args)
 
@@ -330,10 +330,11 @@ defmodule SymphonyElixir.CLI do
     do: {:error, @workflow_preview_usage}
 
   defp dispatch_workflow_preview(args) do
-    case OptionParser.parse(args, strict: [file: :string, agent: :string, repo: :string]) do
+    case OptionParser.parse(args, strict: [file: :string, agent: :string, repo: :string, kind: :string]) do
       {opts, [], []} ->
+        # The step list above the prompt is an implementation run's unless `--kind` names another.
         render_opts =
-          []
+          [run_kind: Keyword.get(opts, :kind, "implementation")]
           |> maybe_put(:file, Keyword.get(opts, :file))
           |> maybe_put(:agent_kind, Keyword.get(opts, :agent))
           |> maybe_put(:repo_key, Keyword.get(opts, :repo))
@@ -521,7 +522,7 @@ defmodule SymphonyElixir.CLI do
       "       symphony [--config <path-to-symphony.yml>] [--state-root <path>] [--logs-root <path>] [--host <host>|unix:<socket>] [--port <port>] [--qa-seed <dir>]\n" <>
       "       symphony pr <url-or-number> [--intent \"address review comments\"]\n" <>
       "       symphony run <issue-identifier> [--config <path-to-symphony.yml>] [--timeout <duration>] [--no-retry] [--state-root <path>] [--logs-root <path>]\n" <>
-      "       symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude]"
+      "       symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude] [--repo REPO_KEY] [--kind RUN_KIND]"
   end
 
   defp check_usage_message do
