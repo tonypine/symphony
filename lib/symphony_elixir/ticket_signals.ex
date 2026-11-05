@@ -7,10 +7,14 @@ defmodule SymphonyElixir.TicketSignals do
   and swallowed, so it can never change a transition, a board move or a label. The ledger lives in
   `SymphonyElixir.RunStore` and its shape in `SymphonyElixir.TicketState`.
 
-  Each signal also records the event `event/2` maps it to (dual-write: the signals ledger stays the
-  source of truth until readers move over). A signal written next to a pause or a decision request
-  maps to none: `SymphonyElixir.Pauses` records the `pause.*` events for the same change, and
-  `SymphonyElixir.Questions` the `question.*` events, so each fact is one event.
+  Each signal also records the event `signal_event/2` makes of it (dual-write: the signals ledger
+  stays the source of truth until readers move over): the event `event/2` maps it to, carrying the
+  signal's name (`signal`) and the details it was recorded with (`signal_details`), enough to
+  rebuild the ledger's entry from the event. A signal written next to a pause or a decision request
+  (`:mirrored`: `SymphonyElixir.Pauses` records the `pause.*` events for the same change, and
+  `SymphonyElixir.Questions` the `question.*` events) is a machine `note` naming it, since its readers
+  (the CI wait, the merge confirmation, an escalation, the idle park) need it on the event stream
+  too. A verdict's `verdict.recorded` carries the verdict's `details` the same way.
 
   A signal that maps to `phase.entered` is a move, so it also asks the orchestrator for a cycle on
   the ticket's repo at once (`SymphonyElixir.Orchestrator.request_refresh/2`), and writes the phase it
@@ -60,19 +64,41 @@ defmodule SymphonyElixir.TicketSignals do
   @type mapping :: {String.t(), map(), keyword()} | :mirrored
 
   @doc """
-  Appends `name` with `details` to the ticket's signals ledger, then records the event the signal
-  maps to (`event/2`). No-ops when the ticket carries no repo key, so a move made outside a
+  Appends `name` with `details` to the ticket's signals ledger, then records the signal's event
+  (`signal_event/2`). No-ops when the ticket carries no repo key, so a move made outside a
   configured repo records nothing rather than failing.
   """
   @spec record(String.t() | nil, String.t() | nil, String.t(), map()) :: :ok
   def record(repo_key, issue_id, name, details) when is_binary(repo_key) and is_binary(issue_id) do
     case RunStore.record_ticket_signal(repo_key, issue_id, name, details) do
-      :ok -> record_mapped(repo_key, issue_id, event(name, details))
+      :ok -> record_mapped(repo_key, issue_id, signal_event(name, details))
       error -> log_error(error, "record #{name} signal")
     end
   end
 
   def record(_repo_key, _issue_id, _name, _details), do: :ok
+
+  @doc """
+  Records the signal `name` with `details` as `record/4` does, in the ticket's signals ledger and as
+  its event (`signal_event/2`), and says whether the ledger kept it: `:ok`, or the store's
+  `{:error, reason}`, for a writer that must not act unless its signal is kept
+  (`SymphonyElixir.EpicReview.CiRerun` never reruns a commit's CI twice). The ledger alone decides
+  the result, since its readers decide what was done: the event is written only once the ledger kept
+  the signal, and an event the store refuses then is logged and swallowed, as `record/4` does, so a
+  signal on the ledger is never reported as not kept. For a signal that is no move: a
+  `phase.entered` written here asks no cycle and writes no phase.
+  """
+  @spec record_kept(String.t() | nil, String.t() | nil, String.t(), map()) :: :ok | {:error, term()}
+  def record_kept(repo_key, issue_id, name, details) do
+    with :ok <- RunStore.record_ticket_signal(repo_key, issue_id, name, details) do
+      {type, payload, opts} = signal_event(name, details)
+
+      case TicketEvents.record(repo_key, issue_id, type, payload, opts) do
+        {:ok, _event} -> :ok
+        {:error, reason} -> log_error({:error, reason}, "record the #{type} event of the #{name} signal on issue_id=#{issue_id}")
+      end
+    end
+  end
 
   @doc """
   Writes `phase` as the record's phase (`TicketState.put_phase/4`), owned by Symphony
@@ -145,7 +171,8 @@ defmodule SymphonyElixir.TicketSignals do
 
   @doc """
   Records a verdict of `kind` with `outcome`, bound to the `head_sha` it judged and carrying
-  `details`, on the ticket's record, then its `verdict.recorded` event, in the kind's phase. No-ops
+  `details`, on the ticket's record, then its `verdict.recorded` event carrying the same `details`, in
+  the kind's phase. No-ops
   when the ticket carries no repo key. Verdicts are never collapsed: two inconclusive verdicts on
   one head are two events, as the reviewer counts them.
 
@@ -157,7 +184,7 @@ defmodule SymphonyElixir.TicketSignals do
   def record_verdict(repo_key, issue_id, kind, head_sha, outcome, details \\ %{}, opts \\ []) do
     if is_binary(repo_key) and is_binary(issue_id) do
       case RunStore.record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details) do
-        :ok -> record_mapped(repo_key, issue_id, verdict_event(kind, outcome, head_sha, opts))
+        :ok -> record_mapped(repo_key, issue_id, verdict_event(kind, outcome, head_sha, [details: details] ++ opts))
         error -> log_error(error, "record #{kind} verdict")
       end
     else
@@ -167,12 +194,31 @@ defmodule SymphonyElixir.TicketSignals do
 
   @doc """
   The `verdict.recorded` event `record_verdict/7` records for a verdict of `kind` with `outcome` on
-  `head_sha`, in the run `opts`' `run_id:` names, or in none, with `opts`' `reason:` as its summary.
+  `head_sha`, in the run `opts`' `run_id:` names, or in none, with `opts`' `reason:` as its summary
+  and `opts`' `details:` (a map, left out when empty) as the details it carries.
   """
-  @spec verdict_event(String.t(), String.t() | nil, String.t() | nil, keyword()) :: mapping()
+  @spec verdict_event(String.t(), String.t() | nil, String.t() | nil, keyword()) :: {String.t(), map(), keyword()}
   def verdict_event(kind, outcome, head_sha, opts \\ []) do
     {type, payload, event_opts} = verdict(kind, outcome, head_sha, nil, Keyword.get(opts, :run_id))
-    {type, compact(Map.put(payload, :reason, string(Keyword.get(opts, :reason)))), event_opts}
+    payload = Map.merge(payload, %{reason: string(Keyword.get(opts, :reason)), details: details_map(Keyword.get(opts, :details))})
+    {type, compact(payload), event_opts}
+  end
+
+  @doc """
+  The event a signal `name` with `details` is recorded as: the event `event/2` maps it to, its
+  payload carrying `signal` (the name) and `signal_details` (`details` as JSON-safe data, left out
+  when empty). A `:mirrored` signal is a machine `note` rendered from its name and details, as an
+  unmapped one is.
+  """
+  @spec signal_event(String.t(), term()) :: {String.t(), map(), keyword()}
+  def signal_event(name, details) do
+    {type, payload, opts} =
+      case event(name, details) do
+        :mirrored -> note(name, if(is_map(details), do: details, else: %{}))
+        mapping -> mapping
+      end
+
+    {type, compact(Map.merge(payload, %{signal: name, signal_details: details_map(details)})), opts}
   end
 
   @doc """
@@ -191,7 +237,7 @@ defmodule SymphonyElixir.TicketSignals do
       nothing are `:mirrored`.
     * Any other signal is a machine `note` rendered from its name and details.
   """
-  @spec event(String.t(), map()) :: mapping()
+  @spec event(String.t(), term()) :: mapping()
   def event(name, details) when is_map(details), do: map_signal(name, details)
   def event(name, _details), do: map_signal(name, %{})
 
@@ -319,7 +365,6 @@ defmodule SymphonyElixir.TicketSignals do
   end
 
   defp record_mapped(repo_key, issue_id, {type, payload, opts}), do: record_event(repo_key, issue_id, type, payload, opts)
-  defp record_mapped(_repo_key, _issue_id, :mirrored), do: :ok
 
   # The projection's own failure is logged and retried by the projector; the record's result stands.
   defp project_changelog(recorded, repo_key, issue_id) do
@@ -391,6 +436,20 @@ defmodule SymphonyElixir.TicketSignals do
 
   defp compact(payload), do: payload |> Enum.reject(fn {_key, value} -> is_nil(value) or blank?(value) end) |> Map.new()
   defp blank?(value), do: is_binary(value) and String.trim(value) == ""
+
+  # Details are left out of an event when there are none. An event's payload is served as JSON, so a
+  # tuple in them is kept as a list, a struct other than a time as a map, and a pid, a reference, a
+  # port or a function as its inspected text.
+  defp details_map(details) when is_map(details) and map_size(details) > 0, do: jsonable(details)
+  defp details_map(_details), do: nil
+
+  defp jsonable(%module{} = time) when module in [DateTime, Date, NaiveDateTime, Time], do: time
+  defp jsonable(%_{} = struct), do: struct |> Map.from_struct() |> jsonable()
+  defp jsonable(map) when is_map(map), do: Map.new(map, fn {key, value} -> {key, jsonable(value)} end)
+  defp jsonable(list) when is_list(list), do: Enum.map(list, &jsonable/1)
+  defp jsonable(tuple) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> jsonable()
+  defp jsonable(value) when is_pid(value) or is_reference(value) or is_function(value) or is_port(value), do: inspect(value)
+  defp jsonable(value), do: value
   defp compact_opts(opts), do: Enum.reject(opts, fn {_key, value} -> is_nil(value) end)
 
   defp normalize(text) when is_binary(text) do

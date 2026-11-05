@@ -71,8 +71,11 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     refute Map.has_key?(record, :holds)
     assert [%{name: "dispatch_loop", details: %{kind: "implementation", count: 4, window_ms: 600_000}} | _rest] = record.signals
 
-    # The question and the pause it holds the ticket on: the `dispatch_loop` signal next to them is mirrored.
-    assert [{"question.asked", %{question_id: ^question_id}}, {"pause.set", _pause}] = ticket_events(@repo_key, @issue_id)
+    # The question and the pause it holds the ticket on, then the `dispatch_loop` signal next to them, a note naming it.
+    assert [{"question.asked", %{question_id: ^question_id}}, {"pause.set", _pause}, {"note", %{signal: "dispatch_loop", text: note}}] =
+             ticket_events(@repo_key, @issue_id, ["question.asked", "pause.set", "note"])
+
+    assert note =~ "(dispatch_loop)"
 
     # The Inbox, and `/api/v1/state`'s `waiting_on_you` built from it, lists the ticket by its question.
     item = Item.from_question(TicketState.normalize(record), question)

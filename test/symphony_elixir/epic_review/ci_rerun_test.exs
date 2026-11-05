@@ -12,9 +12,10 @@ defmodule SymphonyElixir.EpicReview.CiRerunTest do
   @other_sha "beef0011223344556677889900aabbccddeeff00"
   @runs "https://github.com/acme/app/actions/runs"
 
+  # The record and the ticket's events both start empty.
   setup do
-    RunStore.delete_ticket_state(@issue_id)
-    on_exit(fn -> RunStore.delete_ticket_state(@issue_id) end)
+    :ok = RunStore.clear()
+    on_exit(fn -> RunStore.clear() end)
     :ok
   end
 
@@ -79,6 +80,67 @@ defmodule SymphonyElixir.EpicReview.CiRerunTest do
 
     assert reruns() == []
     assert log =~ "Epic review did not rerun the failed CI on feed00112233: it could not record the rerun"
+  end
+
+  test "a rerun of red CI records its signal on the record and as a note naming ci_rerun and the commit, before it reruns" do
+    assert {:wait, [%{id: "701"}]} = check([ci_run("701", "FAILURE")])
+
+    assert [%{details: %{sha: @sha, runs: [%{id: "701"}]}}] = signals("ci_rerun")
+
+    assert [{"note", rerun}, {"note", wait}] = ticket_events(@repo_key, @issue_id)
+    assert rerun.text == "Symphony reran the failed CI · sha #{@sha} (ci_rerun)"
+    assert %{signal: "ci_rerun", signal_details: %{sha: @sha, runs: [%{id: "701", jobs: ["verify"], tests: ["TestFlaky"]}]}} = rerun
+    assert %{signal: "ci_wait_started", signal_details: %{sha: @sha}} = wait
+    assert [%{type: "note", actor: %{kind: :machine}} | _rest] = RunStore.list_ticket_events(@issue_id, [])
+
+    # The next review finds the rerun recorded: the commit is never rerun again.
+    assert {:proceed, %{name: :ci_rerun}} = check([ci_run("701", "FAILURE")])
+    assert [["run", "rerun", "701" | _rest]] = reruns()
+  end
+
+  test "a rerun the record refuses is not made" do
+    log = capture_log(fn -> assert {:proceed, nil} = check([ci_run("701", "FAILURE")], [], @sha, nil) end)
+
+    assert reruns() == []
+    assert log =~ "Epic review did not rerun the failed CI on feed00112233: it could not record the rerun"
+  end
+
+  test "a rerun whose note the event store refuses after the record kept it is still made, once" do
+    log =
+      capture_log(fn ->
+        {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_only)
+
+        try do
+          assert {:wait, [%{id: "701"}]} = check([ci_run("701", "FAILURE")])
+        after
+          {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_write)
+        end
+      end)
+
+    assert log =~ "Failed to record the note event of the ci_rerun signal"
+    assert [%{details: %{sha: @sha}}] = signals("ci_rerun")
+    assert [["run", "rerun", "701" | _rest]] = reruns()
+
+    # The ledger holds the rerun, so the next review never reruns the commit again.
+    assert {:proceed, %{name: :ci_rerun}} = check([ci_run("701", "FAILURE")])
+    assert reruns() == []
+  end
+
+  test "a cancelled run's rerun whose note the event store refuses is still made and counted" do
+    cancelled = [ci_run("701", "CANCELLED")]
+
+    capture_log(fn ->
+      {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_only)
+
+      try do
+        assert {:wait, [%{id: "701"}]} = check(cancelled)
+      after
+        {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_write)
+      end
+    end)
+
+    assert [%{details: %{run: "701"}}] = signals("ci_cancel_rerun")
+    assert [["run", "rerun", "701" | _rest]] = reruns()
   end
 
   test "a rerun gh refuses proceeds naming it, and the commit is not rerun again" do
@@ -148,6 +210,11 @@ defmodule SymphonyElixir.EpicReview.CiRerunTest do
     assert log =~ "Epic review reran the cancelled CI on feed00112233: macos (#{@runs}/701); GitHub cancelled it, which is no failure"
     assert reruns() == [["run", "rerun", "701", "--failed", "-R", "acme/app"]]
     assert [%{details: %{sha: @sha, run: "701", workflow: "macos"}}] = signals("ci_cancel_rerun")
+
+    assert [{"note", %{text: text, signal: "ci_cancel_rerun", signal_details: %{sha: @sha, run: "701", workflow: "macos"}}}] =
+             ticket_events(@repo_key, @issue_id, "note") |> Enum.filter(&match?({"note", %{signal: "ci_cancel_rerun"}}, &1))
+
+    assert text =~ "(ci_cancel_rerun)"
     assert [%{details: %{sha: @sha}}] = signals("ci_wait_started")
     assert signals("ci_rerun") == []
 
