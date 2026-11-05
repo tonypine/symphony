@@ -877,8 +877,20 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   describe "a run whose pushed head GitHub has not attached to its PR yet (TP-1422)" do
     # TP-1420: the branch was at the run's fix, the PR still showed the older red head for twelve
     # minutes, and the idle park read that as "no new commit".
-    @stale_red {:ok, %{commit_sha: "sha-dirty", head_ref_name: "auto/TP-337", base_ref_name: "main", checks: [%{name: "make-all", status: "COMPLETED", conclusion: "FAILURE"}]}}
-    @picked_up {:ok, %{commit_sha: "sha-fixed", head_ref_name: "auto/TP-337", base_ref_name: "main", checks: [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]}}
+    @stale_red {:ok,
+                %{
+                  commit_sha: "sha-dirty",
+                  head_ref_name: "auto/TP-337",
+                  base_ref_name: "main",
+                  checks: [%{name: "make-all", status: "COMPLETED", conclusion: "FAILURE"}]
+                }}
+    @picked_up {:ok,
+                %{
+                  commit_sha: "sha-fixed",
+                  head_ref_name: "auto/TP-337",
+                  base_ref_name: "main",
+                  checks: [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]
+                }}
 
     setup do
       :ok = put_pending_conflict()
@@ -896,14 +908,20 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute log =~ "Parking"
       assert log =~ "Not parking issue_id=issue-progress issue_identifier=TP-337; waiting for GitHub to pick up its pushed head sha-fixed on its PR"
 
+      notes = "issue-progress" |> SymphonyElixir.TicketEvents.query(types: ["note"]) |> Enum.map(& &1.payload.text)
+
       assert ["Waiting for GitHub to pick up sha-fixe: the branch is at it, but PR #337 still shows sha-dirt"] =
-               "issue-progress" |> SymphonyElixir.TicketEvents.query(types: ["note"]) |> Enum.map(& &1.payload.text) |> Enum.filter(&(&1 =~ "GitHub"))
+               Enum.filter(notes, &(&1 =~ "GitHub"))
     end
 
     test "once GitHub picks the head up, hands off with CI running on it, as any pushed head" do
-      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:by_turn, [@stale_red, @stale_red, @stale_red, @picked_up]})
+      by_turn = {:by_turn, [@stale_red, @stale_red, @stale_red, @picked_up]}
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, by_turn)
 
-      log = capture_log(fn -> run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], max_turns: 6, runner_opts: branch_at("sha-fixed")) end)
+      log =
+        capture_log(fn ->
+          run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], handoff: "sha-fixed", max_turns: 6, runner_opts: branch_at("sha-fixed"))
+        end)
 
       assert turns() == 4
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
