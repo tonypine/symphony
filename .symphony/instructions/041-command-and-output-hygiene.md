@@ -5,7 +5,13 @@
   `write_stdin` polling; if a command is still running, wait at least 30
   seconds before polling again unless there is a specific reason to expect
   immediate failure output.
-- Split checks by cost, not by kind. CI is the gate: it runs the full test
+{% if run.step_runner %}- Checks are the step list's, not yours. This run follows a step list: after
+  your turn Symphony runs the build, the checks and the tests itself, with your
+  session closed, and a step that fails brings the run back to the step it
+  names with its output. Run none of them: write the code, record what you
+  changed, and end the turn. CI is the gate for the full suite, the 100%
+  coverage report and Dialyzer, and they never run locally either.
+{% else %}- Split checks by cost, not by kind. CI is the gate: it runs the full test
   suite, the 100% coverage report and Dialyzer on every push.
   - Cheap checks run locally, in any phase: `mix format --check-formatted`,
     `mix compile --warnings-as-errors`, `mix specs.check`,
@@ -29,7 +35,7 @@
     here.
   - Use `make test-profile`, `make coverage-profile`, or `make dialyzer-profile`
     only when a ticket asks you to optimize slow tests or gate behavior.
-- In sandboxed Elixir runs, `mix` commands (and `make all`) need no Hex
+{% endif %}- In sandboxed Elixir runs, `mix` commands (and `make all`) need no Hex
   install or env overrides. Symphony passes the host's `MIX_HOME` and
   `MIX_ARCHIVES` to the agent so Hex and Rebar resolve, and points `HEX_HOME`,
   `ELIXIR_MAKE_CACHE_DIR` and Dialyzer's core PLTs at a cache folder your
@@ -39,7 +45,7 @@
   concurrent runs never write to it: use it directly for scratch files, without
   ad-hoc subfolders to avoid collisions. Symphony removes it when the run
   succeeds.
-- In the Claude sandbox, build and test a Swift package (`macos/`) with
+{% unless run.step_runner %}- In the Claude sandbox, build and test a Swift package (`macos/`) with
   `swift build --disable-sandbox --build-system native` and
   `swift test --disable-sandbox --build-system native`.
   `--disable-sandbox` skips SwiftPM's own `sandbox-exec`, which can't nest
@@ -50,15 +56,15 @@
   warnings about `~/Library/org.swift.swiftpm` caches and the
   `--build-system native` deprecation. Plain `swiftc` still needs
   `-module-cache-path <workspace dir>`.
-- Never run CPU, memory or disk load generators or stress tools on the host:
+{% endunless %}- Never run CPU, memory or disk load generators or stress tools on the host:
   no `yes`, busy loops (one per core or otherwise), `stress`, or parallel test
   floods. The machine is shared with other agent runs, QA passes and workspace
   hooks; load slows all of them, and Symphony starts your process tree at a
   lower CPU priority anyway. To reproduce a timing flake, make the race
   deterministic instead: inject the delay or the message order, use the
   injectable clock, and add explicit synchronisation (wait on a message or a
-  monitor, not a sleep). Then prove it stable with
-  `mix test <file>:<line> --repeat-until-failure N` on the targeted test only.
+  monitor, not a sleep). Then prove it stable with a repeated run
+  (`--repeat-until-failure N`) of the targeted test only.
 - Don't leave background processes running: stop any server or watcher before
   ending the turn. When the run ends, Symphony kills only the agent's own
   process group. A detached process escapes it: it is reparented to launchd in

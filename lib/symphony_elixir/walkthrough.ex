@@ -99,6 +99,42 @@ defmodule SymphonyElixir.Walkthrough do
     end
   end
 
+  @doc """
+  Checks the implementer's `proofs` against `description`'s `## User walkthrough` as
+  `record_proofs/2` would write them, and returns them as `%{step: number, test: test}` (the test
+  trimmed) without writing anything: the proofs are recorded as `evidence` events on the ticket's
+  history (`SymphonyElixir.AgentTools.Linear.record_walkthrough_proofs/3`), and the description
+  stays as it is. Refused as `record_proofs/2` refuses them.
+  """
+  @spec check_proofs(String.t() | nil, term()) ::
+          {:ok, [%{step: pos_integer(), test: String.t()}]} | {:error, {:invalid_walkthrough_proof, String.t()}}
+  def check_proofs(description, proofs) do
+    with {:ok, entries} <- proof_entries(proofs),
+         {:ok, _description} <- record_proofs(description, proofs) do
+      {:ok, Enum.map(entries, fn {number, test} -> %{step: number, test: test} end)}
+    end
+  end
+
+  @doc """
+  `steps` with the proofs recorded as events laid over them: each `%{step: number, test: test}` in
+  `recorded` (oldest first, so a later proof of a step wins) makes that step `Proved by: <test>`,
+  run by `proof_check`. With no `proof_check` every step stays QA's, as `steps/2` reads them.
+  """
+  @spec with_recorded_proofs([step()], [%{step: pos_integer(), test: String.t()}], String.t() | nil) :: [step()]
+  def with_recorded_proofs(steps, recorded, proof_check) do
+    case blank_to_nil(String.trim(proof_check || "")) do
+      nil ->
+        steps
+
+      check ->
+        latest = Map.new(recorded, &{&1.step, &1.test})
+        Enum.map(steps, &recorded_proof(&1, Map.get(latest, &1.number), check))
+    end
+  end
+
+  defp recorded_proof(step, nil, _check), do: step
+  defp recorded_proof(step, test, check), do: %{step | proof: %{by: :test, check: check, test: test}}
+
   defp proof_entries([_proof | _rest] = proofs) do
     with {:ok, entries} <- reduce_ok(proofs, [], &prepend_entry/2), do: {:ok, Enum.reverse(entries)}
   end

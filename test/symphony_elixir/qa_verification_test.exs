@@ -347,6 +347,35 @@ defmodule SymphonyElixir.QaVerificationTest do
                QaVerification.journey(issue("QA", %{description: description}), nil)
     end
 
+    test "reads the proofs recorded as evidence events on top of the description's, the latest a step's" do
+      :ok = RunStore.clear()
+      description = "## User walkthrough\n\n1. Run it. Proved by: `test/a_test.exs`\n2. Read it.\n3. Look at it.\n"
+      implementation = [actor: {:agent, "run-1", "implementation"}]
+
+      for payload <- [
+            %{caption: "step 2", proof: %{step: 2, test: "test/b_test.exs"}},
+            %{caption: "a screenshot"},
+            %{caption: "step 1", proof: %{step: 1, test: "test/c_test.exs"}},
+            %{caption: "step 2 again", proof: %{step: 2, test: "test/d_test.exs"}}
+          ] do
+        {:ok, _event} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "evidence", payload, implementation)
+      end
+
+      assert %{
+               steps: [
+                 %{number: 1, proof: %{by: :test, check: "make-all", test: "test/c_test.exs"}},
+                 %{number: 2, proof: %{by: :test, check: "make-all", test: "test/d_test.exs"}},
+                 %{number: 3, proof: %{by: :qa}}
+               ]
+             } = QaVerification.journey(issue("QA", %{description: description}), "make-all")
+
+      assert %{steps: [%{proof: %{by: :qa}}, %{proof: %{by: :qa}}, %{proof: %{by: :qa}}]} =
+               QaVerification.journey(issue("QA", %{description: description}), nil)
+
+      assert %{steps: [%{proof: %{by: :test, test: "test/a_test.exs"}} | _rest]} =
+               QaVerification.journey(issue("QA", %{id: nil, description: description}), "make-all")
+    end
+
     test "a test alone is a test the repo's proof check runs" do
       description = "## User walkthrough\n\n1. Run it. Proved by: `test/mix/tasks/check_test.exs`\n"
 

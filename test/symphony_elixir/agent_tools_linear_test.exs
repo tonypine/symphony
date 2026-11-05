@@ -2213,15 +2213,20 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       end
     end
 
-    test "a failed write is the tool's error" do
+    test "a proof the walkthrough refuses records nothing, and an event the ledger refuses is the tool's error" do
       client = fn query, _variables, _opts ->
         if query =~ "SymphonyAgentIssueDescription",
           do: {:ok, %{"data" => %{"issue" => %{"id" => "issue-current", "description" => "## User walkthrough\n\n1. Do it."}}}},
-          else: {:ok, %{"data" => %{"issueUpdate" => %{"success" => false}}}}
+          else: flunk("the proofs must not edit the description")
       end
 
+      context = %{issue_id: "issue-current"}
+      missing = %{"proofs" => [%{"step" => 2, "test" => "test/x_test.exs"}]}
+      opts = [linear_client: client]
+      assert {:error, {:invalid_walkthrough_proof, "the walkthrough has no step 2"}} = Linear.record_walkthrough_proofs(context, missing, opts)
+
       attrs = %{"proofs" => [%{"step" => 1, "test" => "test/x_test.exs"}]}
-      assert {:error, _reason} = Linear.record_walkthrough_proofs(%{issue_id: "issue-current"}, attrs, linear_client: client)
+      assert {:error, {:ticket_ledger, %{"reason" => "no_ticket"}}} = Linear.record_walkthrough_proofs(context, attrs, opts)
     end
   end
 

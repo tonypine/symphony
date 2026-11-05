@@ -12,6 +12,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.AgentSandboxConfig
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.AgentTools.SecretScanner
+  alias SymphonyElixir.AgentTools.TicketLedger
   alias SymphonyElixir.CiFix
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
@@ -1974,11 +1975,13 @@ defmodule SymphonyElixir.AgentTools.Linear do
   end
 
   @doc """
-  Records which test proves each walkthrough step the implementer covered: each named step of the
-  current issue's `## User walkthrough` ends with `Proved by: <test>` (`SymphonyElixir.Walkthrough.record_proofs/2`).
-  The description is read right before the write, and every byte outside those steps' proof lines
-  stays as it is. A test naming a check, a step the walkthrough lacks, and a step its author marked
-  `Proved by: QA` are refused before the write; a test holding a secret pattern before any Linear call.
+  Records which test proves each walkthrough step the implementer covered: one `evidence` event
+  per step on the current ticket's history, with `proof` (the step and the test), through
+  `SymphonyElixir.AgentTools.TicketLedger.record/2`, so Symphony fills the run, phase and head. The
+  description is only read: the proofs are checked against its `## User walkthrough`
+  (`SymphonyElixir.Walkthrough.check_proofs/2`) and it stays as it is. A test naming a check, a step
+  the walkthrough lacks, and a step its author marked `Proved by: QA` are refused before anything is
+  recorded; a test holding a secret pattern before any Linear call.
   """
   @spec record_walkthrough_proofs(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def record_walkthrough_proofs(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1988,13 +1991,25 @@ defmodule SymphonyElixir.AgentTools.Linear do
          :ok <- SecretScanner.reject_fields_if_secret_pattern(proof_secret_fields(proofs), context, "linear_record_walkthrough_proofs", opts),
          {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
-         {:ok, description} <- Walkthrough.record_proofs(issue["description"], proofs),
-         variables = %{id: issue_id, description: description},
-         {:ok, response} <- graphql(@update_issue_description_mutation, variables, opts),
-         {:ok, response} <- check_mutation_success(response, "issueUpdate") do
-      {:ok, %{"issue" => get_in(response, ["data", "issueUpdate", "issue"]), "steps" => Enum.map(proofs, & &1["step"])}}
+         {:ok, entries} <- Walkthrough.check_proofs(issue["description"], proofs),
+         {:ok, events} <- record_proof_events(context, entries) do
+      {:ok, %{"events" => events, "steps" => Enum.map(entries, & &1.step)}}
     end
   end
+
+  defp record_proof_events(context, entries) do
+    Enum.reduce_while(entries, {:ok, []}, fn %{step: step, test: test}, {:ok, events} ->
+      payload = %{"caption" => proof_caption(step, test), "proof" => %{"step" => step, "test" => test}}
+
+      case TicketLedger.record(context, %{"type" => "evidence", "payload" => payload}) do
+        {:ok, %{"event" => event}} -> {:cont, {:ok, events ++ [event]}}
+        {:error, _reason} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  @proof_caption_test_max 400
+  defp proof_caption(step, test), do: "Walkthrough step #{step} is proved by #{String.slice(test, 0, @proof_caption_test_max)}"
 
   defp proof_secret_fields(proofs) do
     for %{"test" => test} when is_binary(test) <- List.wrap(proofs), do: {:test, test}

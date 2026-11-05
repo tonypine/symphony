@@ -13,7 +13,10 @@ defmodule SymphonyElixir.WorkflowPreview do
 
   With `:run_kind`, the preview opens with the step list a run of that kind follows
   (`symphony.yml`'s `phases.<kind>.steps`, else the kind's default list, `Config.Schema.Phases`):
-  each step's id, title and mode, its commands or prompt, and the step a failure returns to.
+  each step's id, title and mode, its commands or prompt, and the step a failure returns to. The
+  prompt below it is that kind's: its managed context says what the run records with the ticket
+  tools, and a kind whose list runs the checks gets the instructions that leave them to it
+  (`PromptBuilder.prompt_run/1`).
   """
 
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Workflow}
@@ -39,10 +42,11 @@ defmodule SymphonyElixir.WorkflowPreview do
     file = Keyword.get(opts, :file, @default_file)
     agent_kind = Keyword.get(opts, :agent_kind, @default_agent_kind)
     repo_key = Keyword.get(opts, :repo_key)
+    run_kind = Keyword.get(opts, :run_kind)
 
-    with {:ok, steps} <- render_steps(Keyword.get(opts, :run_kind)),
+    with {:ok, steps} <- render_steps(run_kind),
          {:ok, workflow} <- load_workflow(file),
-         {:ok, prompt} <- render_workflow(workflow, agent_kind, repo_key) do
+         {:ok, prompt} <- render_workflow(workflow, agent_kind, repo_key, run_kind) do
       {:ok, steps <> prompt}
     end
   end
@@ -266,7 +270,7 @@ defmodule SymphonyElixir.WorkflowPreview do
     }
   end
 
-  defp render_workflow(workflow, agent_kind, repo_key) do
+  defp render_workflow(workflow, agent_kind, repo_key, run_kind) do
     prompt =
       PromptBuilder.build_prompt(
         sample_issue(),
@@ -274,7 +278,8 @@ defmodule SymphonyElixir.WorkflowPreview do
           workflow: workflow,
           prompt_mode: :issue,
           agent_kind: agent_kind,
-          repo_key: repo_key
+          repo_key: repo_key,
+          run_kind: run_kind
         ] ++ sample_ledger_opts()
       )
 

@@ -3,6 +3,8 @@ defmodule SymphonyElixir.WorkflowPreviewStepsTest do
   # read from `symphony.yml`'s `phases.<kind>.steps` as Symphony loads it.
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Config.Schema.Phases
+  alias SymphonyElixir.TestSupport.Snapshot
   alias SymphonyElixir.WorkflowPreview
 
   setup do
@@ -47,6 +49,23 @@ defmodule SymphonyElixir.WorkflowPreviewStepsTest do
     assert steps =~ "   - when macos/ changed: `cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"`\n"
     assert steps =~ "5. `handoff` Hand off: push and open the pull request · delegated\n"
     assert prompt =~ "Symphony runtime context:"
+  end
+
+  test "every run kind's preview names both ticket tools and what that kind records; only the step list's run is told to run no checks",
+       %{workflow: workflow} do
+    sections =
+      Enum.map_join(Phases.kinds(), "\n", fn kind ->
+        [_steps, prompt] = workflow |> preview!(kind) |> String.split("\n---\n\n", parts: 2)
+        [_before, section] = String.split(prompt, "\n\nTicket tools:\n\n", parts: 2)
+        [section | _rest] = String.split(section, "\n\n", parts: 2)
+        assert section =~ "`ticket_events` reads this ticket's history", kind
+        assert section =~ "`ticket_record` adds an event to it", kind
+        "## #{kind}\n\n#{section}\n"
+      end)
+
+    Snapshot.assert_snapshot!(Path.join("workflow_preview", "ticket_tools.md"), sections)
+    assert sections =~ "## implementation\n\n" <> "- `ticket_events`"
+    assert [_one] = Regex.scan(~r/This run follows a step list: Symphony runs its build, checks and tests itself/, sections)
   end
 
   test "removing a step from symphony.yml changes the next preview", %{workflow: workflow} do

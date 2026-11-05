@@ -1348,6 +1348,18 @@ defmodule SymphonyElixir.QaAgentTest do
       refute prompt =~ "Journeys to verify"
     end
 
+    test "every QA prompt records evidence per walkthrough step, with its environment, before the verdict, which stays the verdict tool's" do
+      flat = job() |> QaAgent.prompt(nil) |> String.replace(~r/\s+/, " ")
+
+      assert flat =~
+               "Record what you proved on the ticket's history before the verdict, with the `ticket_record` tool: one `evidence` event for each walkthrough step you walked"
+
+      assert flat =~ "the environment you proved it in (the committed fixtures or the live server"
+      assert flat =~ "The verdict is not an event you record: the `qa_verdict` tool records it, and `ticket_record` refuses one."
+      [evidence, verdict] = Enum.map(["one `evidence` event for each walkthrough step", "Your last act is to record the verdict"], &(:binary.match(flat, &1) |> elem(0)))
+      assert evidence < verdict
+    end
+
     test "every QA prompt forbids starting an emulator or simulator and blocks device steps without the android_app playbook" do
       parent = issue(%{id: "issue-parent", identifier: "TP-243", title: "Parent", description: "- [ ] parent criterion"})
       verification = issue(%{id: "issue-fv", identifier: "TP-910", title: "Final verification: Parent", description: "- [ ] child criterion"})

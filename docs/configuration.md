@@ -1395,8 +1395,9 @@ what any of them waits on, except on one another.
 - the person writing the ticket describes the user's flow in plain steps, each with `Expected:`,
   and names no test and no check;
 - the implementer, who writes the tests, ends each step a test of the PR covers with
-  `Proved by: <test>`, through the `linear_record_walkthrough_proofs` tool, which edits only those
-  steps' proof lines in the description and refuses a check name;
+  `Proved by: <test>`, through the `linear_record_walkthrough_proofs` tool, which records each proof
+  as an `evidence` event on the ticket's history, leaves the description as it is, and refuses a
+  check name (QA reads a step's proof from its `Proved by:` line and from those events);
 - the repo names the check that runs its tests, `proof_check` in its WORKFLOW.md front matter (this
   repository: `make-all`), and Symphony confirms every named test on the PR head before QA.
 

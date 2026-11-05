@@ -17,7 +17,13 @@ In this repository, a QA pass of the Director has two environments: the committe
     - Update the workpad immediately after each meaningful milestone (for example: reproduction complete, code change landed, validation run, review feedback addressed).
     - Never leave completed work unchecked in the plan.
     - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
-5.  Run validation/tests required for the scope.
+    - Record your work on the ticket's history as you go, with `ticket_record`: `step.completed` for each delegated step of the step list when you end it (its `outcome`: `passed`, `failed` with the step it `returns_to`, or `skipped` with a `reason`), `evidence` for every screenshot or output you attach (the files as `artifacts`, a `caption` saying what it shows), and a `note` for a choice a later run should know. The Director's timeline shows these events as the run works.
+{% if run.step_runner %}5.  Leave the checks to the step list.
+    - This run follows a step list: once you end the `code` step, Symphony runs the build, the checks and the tests itself, with your session closed. A step that fails brings the run back to `code` with its output: fix what it names and end the step again.
+    - Do not run the build, the format, specs or lint checks, the tests, the coverage check or the Swift build and tests yourself, and never the full suite or Dialyzer: write the code, commit it, record what you changed, and end the turn. CI is the gate for the full suite, the 100% coverage report and Dialyzer.
+    - Execute every ticket-provided `Validation`/`Test Plan`/`Testing` requirement that is not a check the step list runs (a preview to read, a fixture to render); treat unmet items as incomplete work.
+    - You may make temporary local proof edits to validate assumptions; revert every one before you commit, and document them in the workpad `Validation`/`Notes` sections.
+{% else %}5.  Run validation/tests required for the scope.
     - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
     - Run the cheap, targeted checks from `Command and output hygiene`, not the full suite: CI runs the full test suite, coverage and Dialyzer.
@@ -26,9 +32,12 @@ In this repository, a QA pass of the Director has two environments: the committe
     - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.
     - Revert every temporary proof edit before commit/push.
     - Document these temporary proof steps and outcomes in the workpad `Validation`/`Notes` sections so reviewers can follow the evidence.
-6.  Re-check all acceptance criteria and close any gaps.
-    - When the ticket has a `## User walkthrough`, record the proof of every step an automated test in this PR covers, before the handoff push: call `linear_record_walkthrough_proofs` with each step's number and its test, and Symphony ends that step in the ticket description with `Proved by: <test>`. Name the test as the code has it: its file path, or a test or scenario name as written. Name only tests in this PR, and never a check name: the repo's `proof_check` in WORKFLOW.md is the check that runs them, and the tool refuses a ` › ` separator. Leave a step no test covers as it is, for QA; the tool refuses a step its author marked `Proved by: QA`. The QA pre-check then confirms each named test on the PR head, and QA links its result instead of walking the step.
-7.  Before every `git push` attempt, run the targeted pre-push checks for your scope and confirm they pass; if one fails, address it and rerun until green.
+{% endif %}6.  Re-check all acceptance criteria and close any gaps.
+    - When the ticket has a `## User walkthrough`, record the proof of every step an automated test in this PR covers, before the handoff push: call `linear_record_walkthrough_proofs` with each step's number and its test. It records each proof as an `evidence` event with `proof` (the step and the test) on the ticket's history and leaves the description as it is. Name the test as the code has it: its file path, or a test or scenario name as written. Name only tests in this PR, and never a check name: the repo's `proof_check` in WORKFLOW.md is the check that runs them, and the tool refuses a ` › ` separator. Leave a step no test covers as it is, for QA; the tool refuses a step its author marked `Proved by: QA`. The QA pre-check then confirms each named test on the PR head, and QA links its result instead of walking the step.
+{% if run.step_runner %}7.  The `handoff` step pushes. When the step list reaches it, the build, checks and tests passed on your changes.
+    - `github_push_branch` skips repo hooks, so when the push changes an Elixir file it needs the result of `.githooks/pre-push --head` for the commit it pushes. Run that command in your shell after your last commit: it records the result in `tmp/push-check`. The tool refuses the push when the result is missing, is for another commit, or names a failed check; fix what it names, commit, run the command again and push. Never use `git push --no-verify`.
+    - After committing and before pushing, run `git diff origin/main..HEAD` and review it for stray debug statements, hardcoded test values, temporary proof edits, unintended files outside the ticket's scope, and incomplete hunks. Only push after this review is clean, and record `diff reviewed — clean` and the step list's results in the workpad.
+{% else %}7.  Before every `git push` attempt, run the targeted pre-push checks for your scope and confirm they pass; if one fails, address it and rerun until green.
     - Targeted pre-push checks: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix specs.check`, `mix credo --strict <changed files>`, `mix cover.changed`, `mix settings.ui_coverage`, and every new or changed test file plus the test files of the modules you changed.
     - Do not run `make all`, `make check`, `make coverage`, the full `mix test`, `mix test --stale` or Dialyzer before a push (see `Command and output hygiene` for the optional `make all` on shared infrastructure). CI is the gate for the full suite, the 100% coverage report and Dialyzer.
     - `git push` runs the repo's `.githooks/pre-push` hook, which reruns the format, compile and credo checks on the Elixir files the push changes and rejects the push when one fails. Never use `git push --no-verify`. When the hook fails, fix the issue it names (it prints the fixing command, such as `mix format`), commit, and push again.
@@ -40,7 +49,7 @@ In this repository, a QA pass of the Director has two environments: the committe
       - incomplete hunks, half-finished removals, or reverted-only placeholders.
     - Only push after this review is clean.
     - Record the targeted checks you ran with their results (for example `format, compile, specs, credo — clean; test/foo_test.exs test/bar_test.exs — 42 tests, 0 failures`) and `diff reviewed — clean` in the workpad before each push.
-8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
+{% endif %}8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
     - Ensure the GitHub PR has label `symphony` (add it if missing).
     - Ensure the PR body is reviewer-facing and follows `.github/pull_request_template.md`:
       - `## References` (required, bullets): only links that exist: the Linear ticket, design decision thread, design review, Loom. Drop a line rather than write "n/a",
@@ -53,7 +62,7 @@ In this repository, a QA pass of the Director has two environments: the committe
       - Never launch an app, an `NSApplication`, or a window on the host to get them, not even a throwaway harness. The host is the operator's desktop: windows and "quit unexpectedly" dialogs land on their screen. The agent sandbox also blocks the window server, so such a harness crashes inside AppKit instead of drawing.
       - Render SwiftUI views offscreen with `ImageRenderer` instead (no `NSApplication`, no window), write the PNG with ImageIO, and attach that. Compile it with plain `swiftc -module-cache-path <workspace dir>`.
       - When a view can't be rendered offscreen, or the ticket wants the running app, leave the screenshots to the QA pass, which runs the app on the QA VM, and say so in the workpad.
-9.  Merge latest `origin/main` into branch, resolve conflicts, and rerun checks.
+9.  Merge latest `origin/main` into branch and resolve conflicts{% if run.step_runner %} during the `code` step, before you end it, so the step list's checks run on the merge{% else %}, and rerun checks{% endif %}.
 10. Update the workpad comment with final checklist status and validation notes.
     - Mark completed plan/acceptance/validation checklist items as checked.
     - Add final handoff notes (commit + validation summary) in the same workpad comment.

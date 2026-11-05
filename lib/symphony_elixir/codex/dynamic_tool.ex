@@ -325,8 +325,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "linear_record_walkthrough_proofs",
       "description" =>
-        "Record which test of this PR proves each `## User walkthrough` step you covered with an automated test: each named step of the current issue's description " <>
-          "ends with `Proved by: <test>` (replacing a test proof it had); every other byte of the description is left as it is. " <>
+        "Record which test of this PR proves each `## User walkthrough` step you covered with an automated test: each named step gets an `evidence` event " <>
+          "on the ticket's history with `proof` (the step and the test; a later proof of a step replaces an earlier one), and the description is left as it is. " <>
           "Name the test as the code has it (its file path, or a test or scenario name as written), never a check: the repo's `proof_check` names that. " <>
           "Leave a step no test of this PR covers out, for QA; a step its author marked `Proved by: QA` is refused.",
       "inputSchema" => %{
