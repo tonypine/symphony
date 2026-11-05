@@ -6,9 +6,17 @@ defmodule SymphonyElixir.IdlePark.BackfillTest do
 
   @repo "repo-park"
 
+  # The ticket's signals are its events, which only clearing the store drops.
+  setup do
+    :ok = RunStore.clear()
+  end
+
   # TP-1248's record as the build before TP-1326 left it at 05:53Z: parked in Backlog by Symphony,
   # its park signal naming no phase, no question and no pause.
   defp old_park(repo_key \\ @repo, issue_id \\ "tp-1248", identifier \\ "TP-1248", overrides \\ %{}) do
+    {signals, overrides} =
+      Map.pop(overrides, :signals, [%{name: "blocked", details: %{to: "Backlog", reason: "idle_park"}, at: ~U[2026-10-31 05:53:00Z]}])
+
     record =
       Map.merge(
         %{
@@ -17,13 +25,13 @@ defmodule SymphonyElixir.IdlePark.BackfillTest do
           issue_identifier: identifier,
           phase: "Backlog",
           phase_owner: :symphony,
-          phase_at: ~U[2026-10-31 05:53:00Z],
-          signals: [%{name: "blocked", details: %{to: "Backlog", reason: "idle_park"}, at: ~U[2026-10-31 05:53:00Z]}]
+          phase_at: ~U[2026-10-31 05:53:00Z]
         },
         overrides
       )
 
     :ok = RunStore.put_ticket_state(record)
+    for signal <- signals, do: :ok = put_signal(repo_key, issue_id, signal.name, signal.details, signal.at)
     {:ticket, repo_key, issue_id}
   end
 

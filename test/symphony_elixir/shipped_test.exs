@@ -1,7 +1,18 @@
 defmodule SymphonyElixir.ShippedTest do
-  use ExUnit.Case, async: true
+  use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Shipped
+
+  setup do
+    :ok = RunStore.clear()
+  end
+
+  # A ticket's signals are its events: they are written to the store under its id, and the record
+  # names the ticket.
+  defp ticket_state(repo_key, issue_id, signals) do
+    for signal <- signals, do: :ok = put_signal(repo_key, issue_id, signal.name, signal.details, signal.at)
+    %{repo_key: repo_key, issue_id: issue_id}
+  end
 
   @now ~U[2026-10-13 12:00:00Z]
 
@@ -56,15 +67,11 @@ defmodule SymphonyElixir.ShippedTest do
     ]
 
     ticket_states = [
-      %{
-        repo_key: "web",
-        issue_id: "i3",
-        signals: [
-          %{name: "claim", details: %{from: "Todo"}, at: ~U[2026-10-10 12:00:00Z]},
-          %{name: "claim", details: %{from: "Rework"}, at: ~U[2026-10-11 12:00:00Z]},
-          %{name: "handoff", details: %{}, at: ~U[2026-10-09 12:00:00Z]}
-        ]
-      }
+      ticket_state("web", "i3", [
+        %{name: "claim", details: %{from: "Todo"}, at: ~U[2026-10-10 12:00:00Z]},
+        %{name: "claim", details: %{from: "Rework"}, at: ~U[2026-10-11 12:00:00Z]},
+        %{name: "handoff", details: %{}, at: ~U[2026-10-09 12:00:00Z]}
+      ])
     ]
 
     initiative = %{
@@ -120,7 +127,7 @@ defmodule SymphonyElixir.ShippedTest do
     ]
 
     claim = %{name: "claim", details: %{}, at: ~U[2026-10-13 10:30:00Z]}
-    claim_after_merge = [%{repo_key: "app", issue_id: "i9", signals: [claim]}]
+    claim_after_merge = [ticket_state("app", "i9", [claim])]
     no_runs = fn _repo_key, _issue_id -> {:error, :down} end
 
     assert {:ok, %{total: 2, tickets: [app1, other]}} =

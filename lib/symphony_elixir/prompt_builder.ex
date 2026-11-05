@@ -45,6 +45,9 @@ defmodule SymphonyElixir.PromptBuilder do
   # (failures land at the end of CI logs) so the compact prompt stays compact.
   @compact_ci_log_excerpt_bytes 4_000
   @ticket_state_limit 4_000
+  # The newest signals the ticket state section lists (`TicketState.recent_signals/2`), as many as
+  # the record kept in its own ledger.
+  @ticket_state_signals 50
   @open_pr_limit 10
   @open_pr_file_limit 15
   @go_on "Go on with the whole summary"
@@ -781,11 +784,12 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp ticket_state_section(ticket_state) when is_map(ticket_state) do
     state = TicketState.normalize(ticket_state)
+    signals = TicketState.recent_signals(state, @ticket_state_signals)
 
-    if ticket_state_empty?(state) do
+    if ticket_state_empty?(state, signals) do
       nil
     else
-      render_ticket_state(state, not Config.prompt_brief_enabled?())
+      render_ticket_state(state, signals, not Config.prompt_brief_enabled?())
     end
   end
 
@@ -793,13 +797,13 @@ defmodule SymphonyElixir.PromptBuilder do
 
   # Verdicts are deliberately not part of the section (only phase, pauses, CI and signals are
   # rendered), so they do not count as content here: a verdict-only record adds nothing.
-  defp ticket_state_empty?(state) do
-    state.phase == nil and TicketState.pause_reasons(state) == [] and state.ci_states == [] and state.signals == []
+  defp ticket_state_empty?(state, signals) do
+    state.phase == nil and TicketState.pause_reasons(state) == [] and state.ci_states == [] and signals == []
   end
 
   # With the ticket's history summary on, the summary holds the ticket's events, so the signals
   # are left out.
-  defp render_ticket_state(state, signals?) do
+  defp render_ticket_state(state, signals, signals?) do
     [
       "Ticket state:",
       "",
@@ -807,7 +811,7 @@ defmodule SymphonyElixir.PromptBuilder do
       "- Pauses: #{ticket_state_pauses(TicketState.pause_reasons(state))}",
       "- CI: #{ticket_state_ci(state.ci_states)}"
     ]
-    |> Kernel.++(ticket_state_signals(state.signals, signals?))
+    |> Kernel.++(ticket_state_signals(signals, signals?))
     |> Enum.join("\n")
   end
 

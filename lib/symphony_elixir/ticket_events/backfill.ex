@@ -7,13 +7,15 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
   and `dispatches`, and the last 14 days of `run_stopped` and `director_move` audit records, into the
   events the live writes record for them:
 
-    * A signal goes through `SymphonyElixir.TicketSignals.event/2`, the live mapping. A signal live
-      writes leave to a pause or a question (`:mirrored`: a held `blocked`, `dispatch_loop`,
-      `ci_wait`, a held `handoff_missing`, `unblocked`, a `decision requested` and a review's merge
-      confirmation or escalation) is no event: the holds and decision requests they stood beside
-      are retired, and the pauses and questions record their own (`SymphonyElixir.Pauses.Backfill`).
-      A Decide that moved nothing is no event either: its answer comes from `decisions`.
-    * A verdict is `verdict.recorded`, a dispatch `run.started` and, once it ended, `run.ended`.
+    * A signal goes through `SymphonyElixir.TicketSignals.signal_event/2`, the live mapping, with
+      its name and details, so the record's view of its signals (`SymphonyElixir.TicketState.signals/1`)
+      reads what the snapshot held. A signal live writes record next to a pause or a question (a
+      held `blocked`, `dispatch_loop`, `ci_wait`, a held `handoff_missing`, `unblocked`, a
+      `decision requested`, a review's merge confirmation or escalation, a Decide that moved
+      nothing) is a machine `note` naming it, as live; the pauses and questions record their own
+      events (`SymphonyElixir.Pauses.Backfill`).
+    * A verdict is `verdict.recorded` with its details, a dispatch `run.started` and, once it
+      ended, `run.ended`.
     * A stop is the Director's `person.action` `stop`, and an Inbox move the action that names it, as
       the live writes record them; a Decide is none.
 
@@ -185,11 +187,11 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
   # The snapshot's entries as `%{at, source, hash, mapping}`, each mapping an event's type, payload
   # and options (or nil for an entry that is no event), the ones without a timestamp left out.
   defp entries(record, audit) do
-    signals = for signal <- record.signals, do: entry(signal.at, "signal", signal, signal_mapping(signal))
+    signals = for signal <- record.signals, do: entry(signal.at, "signal", signal, TicketSignals.signal_event(signal.name, signal.details))
 
     verdicts =
       for verdict <- record.verdicts do
-        entry(verdict.recorded_at, "verdict", verdict, TicketSignals.verdict_event(verdict.kind, verdict.outcome, verdict.head_sha))
+        entry(verdict.recorded_at, "verdict", verdict, TicketSignals.verdict_event(verdict.kind, verdict.outcome, verdict.head_sha, details: verdict.details))
       end
 
     dispatches = Enum.flat_map(record.dispatches, &dispatch_entries/1)
@@ -203,13 +205,6 @@ defmodule SymphonyElixir.TicketEvents.Backfill do
   end
 
   defp entry(at, source, term, mapping), do: %{at: at, source: source, hash: hash(term), mapping: mapping}
-
-  defp signal_mapping(%{name: name, details: details}) do
-    case TicketSignals.event(name, details) do
-      :mirrored -> nil
-      mapping -> mapping
-    end
-  end
 
   defp dispatch_entries(%{run_id: run_id} = dispatch) when is_binary(run_id) do
     started = {"run.started", compact(%{run_id: run_id, run_kind: dispatch.kind, state: dispatch.state, head: dispatch.head}), compact_opts(phase: dispatch.state, run_id: run_id)}

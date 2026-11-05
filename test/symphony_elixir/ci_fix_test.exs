@@ -142,7 +142,7 @@ defmodule SymphonyElixir.CiFixTest do
 
   describe "carry_verdict/5" do
     test "re-binds a Code Review approve to the head the mechanical repair left" do
-      assert :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "code_review", "old-head", "approve")
+      assert :ok = put_verdict(@repo_key, @issue_id, "code_review", "old-head", "approve")
 
       assert :ok = CiFix.carry_verdict(@repo_key, @issue_id, "Code Review", "new-head", designed_settings())
 
@@ -150,7 +150,7 @@ defmodule SymphonyElixir.CiFixTest do
     end
 
     test "re-binds a QA pass to the head the mechanical repair left" do
-      assert :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "old-head", "pass")
+      assert :ok = put_verdict(@repo_key, @issue_id, "qa", "old-head", "pass")
 
       assert :ok = CiFix.carry_verdict(@repo_key, @issue_id, "QA", "new-head", designed_settings())
 
@@ -167,8 +167,8 @@ defmodule SymphonyElixir.CiFixTest do
     end
 
     test "carries nothing when the newest verdict is not a carrying one" do
-      assert :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "code_review", "old-head", "approve")
-      assert :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "code_review", "old-head", "request_changes")
+      assert :ok = put_verdict(@repo_key, @issue_id, "code_review", "old-head", "approve")
+      assert :ok = put_verdict(@repo_key, @issue_id, "code_review", "old-head", "request_changes")
 
       assert :ok = CiFix.carry_verdict(@repo_key, @issue_id, "Code Review", "new-head", designed_settings())
 
@@ -183,7 +183,7 @@ defmodule SymphonyElixir.CiFixTest do
 
   describe "CodeReview.carry_verdict/3" do
     test "re-records the newest approve against the new head" do
-      assert :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "code_review", "old-head", "approve")
+      assert :ok = put_verdict(@repo_key, @issue_id, "code_review", "old-head", "approve")
 
       assert :ok = CodeReview.carry_verdict(@repo_key, @issue_id, "new-head")
 
@@ -193,12 +193,12 @@ defmodule SymphonyElixir.CiFixTest do
     test "is a no-op with no verdict, a non-approve newest verdict, or no head" do
       assert :ok = CodeReview.carry_verdict(@repo_key, @issue_id, "new-head")
 
-      assert :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "code_review", "old-head", "request_changes")
+      assert :ok = put_verdict(@repo_key, @issue_id, "code_review", "old-head", "request_changes")
       assert :ok = CodeReview.carry_verdict(@repo_key, @issue_id, "new-head")
 
       assert [%{head_sha: "old-head", outcome: "request_changes"} | _] = Handoff.verdicts(@repo_key, @issue_id, "code_review")
 
-      assert :ok = RunStore.record_ticket_verdict(@repo_key, "issue-no-head", "code_review", "old-head", "approve")
+      assert :ok = put_verdict(@repo_key, "issue-no-head", "code_review", "old-head", "approve")
       assert :ok = CodeReview.carry_verdict(@repo_key, "issue-no-head", nil)
     end
   end

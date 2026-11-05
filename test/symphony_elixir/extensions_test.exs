@@ -1354,26 +1354,25 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert json_response(get(build_conn(), "/api/v1/MT-MISSING"), 404)["error"]["code"] == "issue_not_found"
   end
 
-  test "phoenix observability api serves a ticket's code review and qa verdicts, newest first" do
+  test "phoenix observability api serves a ticket's code review and qa verdicts, newest first, read from its events" do
     reviewed = ~U[2026-10-12 09:00:00Z]
     passed = ~U[2026-10-12 10:00:00Z]
 
-    record =
-      "default"
-      |> TicketState.new("issue-http", %{issue_identifier: "MT-HTTP"})
-      |> TicketState.record_verdict("code_review", "abc123", "approve", reviewed)
-      |> TicketState.record_verdict("ci_fix", "abc123", "mechanical", reviewed)
-      |> TicketState.record_verdict("qa", "abc123", "fail", passed)
-
-    gone =
-      "default"
-      |> TicketState.new("issue-gone", %{issue_identifier: "MT-GONE"})
-      |> TicketState.record_verdict("code_review", nil, "rework", reviewed)
-
+    :ok = RunStore.clear()
+    record = TicketState.new("default", "issue-http", %{issue_identifier: "MT-HTTP"})
+    gone = TicketState.new("default", "issue-gone", %{issue_identifier: "MT-GONE"})
     retry = TicketState.new("other", "retry-elsewhere", %{issue_identifier: "MT-RETRY"})
-    retry = TicketState.record_verdict(retry, "qa", "def456", "pass", passed)
 
     for ticket <- [record, gone, retry], do: assert(:ok = RunStore.put_ticket_state(ticket))
+
+    # The verdicts are `verdict.recorded` events: a CI Fix verdict, and one a signal carries (a CI
+    # Fix run's `fix verdict`), are not the ticket's Code Review or QA verdicts.
+    :ok = put_verdict("default", "issue-http", "code_review", "abc123", "approve", %{}, reviewed)
+    :ok = put_verdict("default", "issue-http", "ci_fix", "abc123", "mechanical", %{}, reviewed)
+    :ok = put_signal("default", "issue-http", "fix verdict", %{outcome: "approve", head: "abc123"}, DateTime.add(passed, 60))
+    :ok = put_verdict("default", "issue-http", "qa", "abc123", "fail", %{}, passed)
+    :ok = put_verdict("default", "issue-gone", "code_review", nil, "rework", %{}, reviewed)
+    :ok = put_verdict("other", "retry-elsewhere", "qa", "def456", "pass", %{}, passed)
 
     on_exit(fn ->
       RunStore.delete_ticket_state("issue-http")

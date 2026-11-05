@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.TicketEvents.BackfillTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{AuditLog, TicketEvents}
+  alias SymphonyElixir.{AuditLog, TicketEvents, TicketState}
   alias SymphonyElixir.TicketEvents.Backfill
 
   @repo_key "repo-a"
@@ -70,7 +70,7 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       audit!(audit, %{event_type: "run_stopped", repo_key: @repo_key, issue_id: "issue-unknown"}, at(18))
       audit!(audit, %{event_type: "run_stopped", repo_key: @repo_key}, at(18))
 
-      log = capture_log(fn -> assert {:ok, %{tickets: 1, events: 14}} = Backfill.run(now: @now, audit_log: audit) end)
+      log = capture_log(fn -> assert {:ok, %{tickets: 1, events: 20}} = Backfill.run(now: @now, audit_log: audit) end)
       assert log =~ "Skipped a backfilled verdict.recorded event"
 
       events = events()
@@ -78,6 +78,12 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert Enum.map(events, & &1.type) == [
                "phase.entered",
                "attempt.pushed",
+               "note",
+               "note",
+               "note",
+               "note",
+               "note",
+               "note",
                "note",
                "verdict.recorded",
                "run.started",
@@ -95,15 +101,22 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert events |> Enum.map(& &1.at) |> Enum.chunk_every(2, 1, :discard) |> Enum.all?(fn [a, b] -> DateTime.compare(a, b) != :gt end)
       assert Enum.all?(events, &String.starts_with?(&1.idempotency, "backfill:"))
       assert Enum.all?(events, &is_binary(&1.summary.title))
-      assert Enum.map(events, & &1.seq) == Enum.to_list(1..14)
+      assert Enum.map(events, & &1.seq) == Enum.to_list(1..20)
 
-      [entered, pushed, waiting, verdict | runs] = events
+      [entered, pushed, blocked, unblocked, loop, waiting, review, decide, requested, verdict | runs] = events
       [started, ended, started2, ended2, ended3, started4, stop, rework, unblock, note] = runs
 
       assert %{at: at1, phase: "In Progress", payload: %{to: "In Progress", from: "Todo", signal: "claim"}} = entered
       assert at1 == at(1)
       assert %{payload: %{head: "aaa1111", attempt: 1, pr_url: "https://github.com/acme/app/pull/1"}, head_sha: "aaa1111"} = pushed
-      assert waiting.payload.text =~ "Waiting for CI"
+      assert %{text: "Waiting for CI · sha aaa1111 (ci_wait_started)", signal: "ci_wait_started", signal_details: %{sha: "aaa1111"}} = waiting.payload
+
+      # A signal a pause or a question mirrors live is a machine note naming it, as live.
+      for {note, name} <- [{blocked, "blocked"}, {unblocked, "unblocked"}, {loop, "dispatch_loop"}, {review, "code_review"}, {decide, "decision returned"}, {requested, "decision requested"}] do
+        assert %{actor: %{kind: :machine}, payload: %{signal: ^name, text: text}} = note
+        assert text =~ "(#{name})"
+      end
+
       assert %{phase: "QA", payload: %{kind: "qa", outcome: "pass", head: "aaa1111"}} = verdict
       assert %{run_id: "run-1", phase: "In Progress", payload: %{run_kind: "implementation", run_number: 1, state: "In Progress"}} = started
       assert %{run_id: "run-1", payload: %{exit: "handoff", run_number: 1, duration_ms: 60_000, head: "aaa1111"}} = ended
@@ -117,12 +130,70 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert unblock.payload == %{action: "unblock", from: "QA", to: "QA"}
       assert %{at: @now, idempotency: "backfill:note:history", payload: %{text: "History before 2026-10-20 12:00 UTC was backfilled from the ticket's snapshot"}} = note
 
+      # The record's views read what its snapshot held.
+      record = RunStore.get_ticket_state(@issue_id)
+
+      assert Enum.map(TicketState.signals(record), &{&1.name, &1.details}) == [
+               {"decision requested", %{hold: "needs_decision", reason: 42}},
+               {"decision returned", %{move: "decide", from: "QA", to: "QA"}},
+               {"code_review", %{signal: "merge_confirmation", reason: "ready to merge"}},
+               {"ci_wait_started", %{sha: "aaa1111"}},
+               {"dispatch_loop", %{kind: "implementation", count: 3, window_ms: 1_000}},
+               {"unblocked", %{by: :operator}},
+               {"blocked", %{reason: "waiting on TP-1", held: true}},
+               {"handoff", %{head: "aaa1111", pr_url: "https://github.com/acme/app/pull/1"}},
+               {"claim", %{from: "Todo", to: "In Progress"}}
+             ]
+
+      assert Enum.map(TicketState.signals(record), & &1.at) == Enum.map([10, 9, 8, 7, 6, 5, 4, 2, 1], &at/1)
+      assert [%{kind: "qa", head_sha: "aaa1111", outcome: "pass", details: %{}}] = TicketState.verdicts(record)
+
+      assert [
+               %{run_id: "run-4", kind: "qa", state: "QA", outcome: nil},
+               %{run_id: "run-2", outcome: %{exit: "ended"}},
+               %{run_id: "run-1", kind: "implementation", outcome: %{exit: "handoff", head: "aaa1111"}}
+             ] = TicketState.dispatches(record)
+
       assert {:ok, %{tickets: 0, events: 0}} = Backfill.run(now: @now, audit_log: audit)
       assert RunStore.get_marker(Backfill.marker()) == @now
 
       Process.put(:ignore_marker, true)
       assert {:ok, %{tickets: 0, events: 0}} = Backfill.run(now: DateTime.add(@now, 1, :day), audit_log: audit, store: Store)
       assert events() == events
+    end
+
+    test "each view over a backfilled ticket's events equals the field its record still keeps", %{audit: audit} do
+      # A record as epic 1 found it, each list newest first as the live writers kept it: verdicts
+      # before the runs they ended the count of, every entry timed.
+      put_ticket(%{
+        phase: "QA",
+        signals: [
+          signal(12, "ci_wait_started", %{sha: "bbb2222"}),
+          signal(11, "code_review", %{signal: "code_review_approve", reason: "Looks right.", to: "QA"}),
+          signal(10, "handoff", %{head: "bbb2222", pr_url: "https://github.com/acme/app/pull/1"}),
+          signal(6, "decision requested", %{question: true, reason: "pick a layout"}),
+          signal(5, "handoff", %{to: "Code Review", move: true}),
+          signal(4, "handoff", %{head: "aaa1111", pr_url: "https://github.com/acme/app/pull/1"}),
+          signal(1, "claim", %{from: "Todo", to: "In Progress"})
+        ],
+        verdicts: [
+          %{kind: "code_review", head_sha: "aaa1111", outcome: "request_changes", recorded_at: at(3), details: %{reason: "A test is missing."}},
+          %{kind: "qa", head_sha: "aaa0000", outcome: "fail", recorded_at: at(2), details: %{}}
+        ],
+        dispatches: [
+          %{kind: "code_review", run_id: "run-3", state: "Code Review", head: "bbb2222", at: at(13), outcome: nil},
+          %{kind: "rework", run_id: "run-2", state: "Rework", head: "aaa1111", at: at(8), outcome: %{exit: "ended normally", head: "bbb2222", at: at(9)}},
+          %{kind: "rework", run_id: "run-1", state: "Rework", head: "aaa1111", at: at(6), outcome: %{exit: "failed (:boom)", head: "aaa1111", at: at(7)}}
+        ]
+      })
+
+      assert {:ok, %{tickets: 1}} = Backfill.run(now: @now, audit_log: audit)
+
+      record = TicketState.normalize(RunStore.get_ticket_state(@issue_id))
+      assert TicketState.signals(record) == record.signals
+      assert TicketState.recent_signals(record, 3) == Enum.take(record.signals, 3)
+      assert TicketState.verdicts(record) == record.verdicts
+      assert TicketState.dispatches(record) == record.dispatches
     end
 
     test "a ticket without a record yields nothing", %{audit: audit} do
@@ -169,7 +240,7 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
       assert c3_at == at(30)
     end
 
-    test "a hold's or a decision request's signal is no event, and the record's decisions are still the Director's answers", %{audit: audit} do
+    test "a hold's or a decision request's signal is a note naming it, and the record's decisions are still the Director's answers", %{audit: audit} do
       put_ticket(%{
         signals: [
           signal(1, "decision requested", %{question: true, reason: :dependency_source_requires_approval}),
@@ -180,11 +251,19 @@ defmodule SymphonyElixir.TicketEvents.BackfillTest do
         decisions: [decision("c-1", ~D[2026-10-17], "Keep the old copy")]
       })
 
-      assert {:ok, %{tickets: 1, events: 2}} = Backfill.run(now: @now, audit_log: audit)
+      assert {:ok, %{tickets: 1, events: 6}} = Backfill.run(now: @now, audit_log: audit)
 
-      assert Enum.map(events(), & &1.type) == ["decision.recorded", "note"]
+      assert Enum.map(events(), & &1.type) == ["decision.recorded", "note", "note", "note", "note", "note"]
       assert events(types: ["hold.set", "hold.cleared", "decision.requested"]) == []
-      assert [%{payload: %{text: "History before " <> _}}] = events(types: ["note"])
+
+      assert [
+               %{payload: %{signal: "decision requested"}},
+               %{payload: %{signal: "blocked"}},
+               %{payload: %{signal: "unblocked"}},
+               %{payload: %{signal: "qa"}},
+               %{payload: %{text: "History before " <> _}}
+             ] = events(types: ["note"])
+
       assert TicketEvents.query(@issue_id, open_decisions: true) == []
     end
 

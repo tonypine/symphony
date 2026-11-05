@@ -262,7 +262,7 @@ defmodule SymphonyElixir.CodeReviewTest do
       {workspace, head} = git_workspace!()
 
       # A mechanical repair pushed this head; the lane re-binds the approval it carries to it.
-      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "code_review", "the-repaired-head", "approve")
+      :ok = put_verdict(@repo_key, @issue_id, "code_review", "the-repaired-head", "approve")
       assert :ok = CiFix.carry_verdict(@repo_key, @issue_id, "Code Review", head, designed_settings())
 
       assert :ok = run(workspace, settings: designed_settings())

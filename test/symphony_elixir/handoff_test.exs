@@ -8,10 +8,9 @@ defmodule SymphonyElixir.HandoffTest do
   @repo_key "repo-handoff"
   @issue_id "issue-handoff"
 
+  # The ticket's signals and verdicts are its events, which only clearing the store drops.
   setup do
-    RunStore.delete_ticket_state(@issue_id)
-    on_exit(fn -> RunStore.delete_ticket_state(@issue_id) end)
-    :ok
+    :ok = RunStore.clear()
   end
 
   defp settings!(attrs) do
@@ -70,15 +69,15 @@ defmodule SymphonyElixir.HandoffTest do
       # The runner records its own completed move as a `handoff` marked `move: true`. On an SSH
       # worker the workspace HEAD reads nil, so such a record is head-less and would otherwise count
       # for every head; only a tool hook's real emission may open the gate.
-      assert :ok = RunStore.record_ticket_signal(@repo_key, @issue_id, "handoff", %{to: "Code Review", move: true})
+      assert :ok = put_signal(@repo_key, @issue_id, "handoff", %{to: "Code Review", move: true})
       refute Handoff.emitted?(@repo_key, @issue_id, "abc123")
       refute Handoff.emitted?(@repo_key, @issue_id, nil)
 
       # Not even when it names the head being checked, or when recorded under string keys.
-      assert :ok = RunStore.record_ticket_signal(@repo_key, @issue_id, "handoff", %{head: "abc123", move: true})
+      assert :ok = put_signal(@repo_key, @issue_id, "handoff", %{head: "abc123", move: true})
       refute Handoff.emitted?(@repo_key, @issue_id, "abc123")
 
-      assert :ok = RunStore.record_ticket_signal(@repo_key, @issue_id, "handoff", %{"head" => "abc123", "move" => true})
+      assert :ok = put_signal(@repo_key, @issue_id, "handoff", %{"head" => "abc123", "move" => true})
       refute Handoff.emitted?(@repo_key, @issue_id, "abc123")
 
       # A real emission still opens it.
@@ -87,11 +86,11 @@ defmodule SymphonyElixir.HandoffTest do
     end
 
     test "only the handoff signal counts, and only for its own head" do
-      assert :ok = RunStore.record_ticket_signal(@repo_key, @issue_id, "code_review", %{signal: "approve"})
+      assert :ok = put_signal(@repo_key, @issue_id, "code_review", %{signal: "approve"})
       refute Handoff.emitted?(@repo_key, @issue_id, "abc123")
 
       # A recorded head that is not a string never matches.
-      assert :ok = RunStore.record_ticket_signal(@repo_key, @issue_id, "handoff", %{head: 5})
+      assert :ok = put_signal(@repo_key, @issue_id, "handoff", %{head: 5})
       refute Handoff.emitted?(@repo_key, @issue_id, "abc123")
     end
 
@@ -126,8 +125,8 @@ defmodule SymphonyElixir.HandoffTest do
       Handoff.emit(@repo_key, @issue_id, %{head: "abc"})
       assert [%{name: "handoff", details: %{head: "abc"}}] = Handoff.signals(@repo_key, @issue_id)
 
-      assert :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "code_review", "abc", "approve")
-      assert :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "abc", "pass")
+      assert :ok = put_verdict(@repo_key, @issue_id, "code_review", "abc", "approve")
+      assert :ok = put_verdict(@repo_key, @issue_id, "qa", "abc", "pass")
 
       assert [%{kind: "code_review", head_sha: "abc", outcome: "approve"}] =
                Handoff.verdicts(@repo_key, @issue_id, "code_review")

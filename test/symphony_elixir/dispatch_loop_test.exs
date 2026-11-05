@@ -143,7 +143,7 @@ defmodule SymphonyElixir.DispatchLoopTest do
   # each phase starts on another state or PR head, and verdicts end the count.
   describe "the designed machine's flows" do
     setup do
-      %{record: TicketState.new("symphony", "issue-flow")}
+      %{record: []}
     end
 
     test "the happy path", %{record: record} do
@@ -216,13 +216,20 @@ defmodule SymphonyElixir.DispatchLoopTest do
       end
     end
 
-    defp step(record, {:dispatch, kind, state, head}, now) do
-      case DispatchLoop.check(TicketState.dispatches(record), %{kind: kind, state: state, head: head}, @limits, now) do
-        :ok -> {:ok, TicketState.record_dispatch(record, %{kind: kind, run_id: "run-#{now}", state: state, head: head}, now)}
+    # The ticket's events, oldest first: the dispatch loop reads its runs from them (`TicketState.dispatches_in/1`).
+    defp step(events, {:dispatch, kind, state, head}, now) do
+      case DispatchLoop.check(TicketState.dispatches_in(events), %{kind: kind, state: state, head: head}, @limits, now) do
+        :ok -> {:ok, events ++ [event("run.started", %{run_id: "run-#{now}", run_kind: to_string(kind), state: state, head: head}, now)]}
         {:loop, loop} -> {:loop, loop}
       end
     end
 
-    defp step(record, {:verdict, kind, head, outcome}, now), do: {:ok, TicketState.record_verdict(record, kind, head, outcome, now)}
+    defp step(events, {:verdict, kind, head, outcome}, now), do: {:ok, events ++ [event("verdict.recorded", %{kind: kind, outcome: outcome, head: head}, now)]}
+
+    defp event(type, payload, at) do
+      payload = payload |> Enum.reject(fn {_key, value} -> is_nil(value) end) |> Map.new()
+      {:ok, event} = SymphonyElixir.TicketEvents.build("symphony", "issue-flow", type, payload, at: at)
+      event
+    end
   end
 end

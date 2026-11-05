@@ -1060,7 +1060,7 @@ defmodule SymphonyElixir.Orchestrator do
     record = TicketState.normalize(RunStore.get_ticket_state(issue_id))
     now = DateTime.utc_now()
 
-    case CiWait.since(record.signals, sha) do
+    case CiWait.since(TicketState.signals(record), sha) do
       nil ->
         record_ticket_signal(repo_key, issue_id, CiWait.start_signal(), %{sha: sha})
         :wait
@@ -5697,7 +5697,7 @@ defmodule SymphonyElixir.Orchestrator do
     kind = AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key).kind
     attempt = %{kind: kind, state: issue_state, head: pr_head(issue_id, repo_key)}
 
-    case DispatchLoop.check(record.dispatches, attempt, DispatchLoop.limits(Config.settings!().watchdog), DateTime.utc_now()) do
+    case DispatchLoop.check(TicketState.dispatches(record), attempt, DispatchLoop.limits(Config.settings!().watchdog), DateTime.utc_now()) do
       :ok -> :ok
       {:loop, loop} -> {:loop, loop, record}
     end
@@ -5710,7 +5710,7 @@ defmodule SymphonyElixir.Orchestrator do
   # the next dispatch finds the same loop and tries again; the question, still open, is not asked
   # twice.
   defp hold_dispatch_loop(%State{} = state, %Issue{id: issue_id} = issue, repo_key, loop, record) do
-    attrs = DispatchLoop.hold_attrs(loop, record.signals)
+    attrs = DispatchLoop.hold_attrs(loop, TicketState.signals(record))
     pause_on_question(repo_key, issue, DispatchLoop.question_attrs(loop, issue.identifier || issue_id), DispatchLoop.hold_type(), attrs.reason)
     Logger.error("Holding #{issue_context(issue)} instead of dispatching it again: #{attrs.reason}")
     record_ticket_signal(repo_key, issue_id, DispatchLoop.hold_type(), %{kind: loop.kind, count: loop.count, window_ms: loop.window_ms})

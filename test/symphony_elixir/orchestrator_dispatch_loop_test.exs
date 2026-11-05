@@ -40,8 +40,8 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     # The four runs the limit allows went by on the same state and PR head, each ending quietly.
     for n <- 1..4 do
       run = %{kind: :implementation, run_id: "run-#{n}", state: "In Progress", head: "sha-same"}
-      :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, run)
-      :ok = RunStore.record_ticket_dispatch_outcome(@repo_key, @issue_id, "run-#{n}", %{exit: "ended normally", head: "sha-same"})
+      :ok = put_dispatch(@repo_key, @issue_id, run)
+      :ok = put_dispatch_outcome(@repo_key, @issue_id, "run-#{n}", %{exit: "ended normally", head: "sha-same"})
     end
 
     log =
@@ -89,7 +89,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
 
     for n <- 1..4 do
       run = %{kind: :implementation, run_id: "run-#{n}", state: "In Progress", head: "sha-same"}
-      :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, run)
+      :ok = put_dispatch(@repo_key, @issue_id, run)
     end
 
     {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_only)
@@ -144,7 +144,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 600_000, dispatch_loop_runs: 1}
     )
 
-    :ok = RunStore.record_ticket_dispatch(@repo_key, @issue_id, %{kind: :implementation, run_id: "run-1", state: "In Progress"})
+    :ok = put_dispatch(@repo_key, @issue_id, %{kind: :implementation, run_id: "run-1", state: "In Progress"})
 
     log =
       capture_log(fn ->
@@ -455,8 +455,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
 
     test "a wait that lasted an hour holds the ticket, naming the commit and the workflows still running" do
       started = DateTime.add(DateTime.utc_now(), -61 * 60, :second)
-      signal = %{name: "ci_wait_started", details: %{sha: @sha}, at: started}
-      :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: @issue_id, signals: [signal]})
+      :ok = put_signal(@repo_key, @issue_id, "ci_wait_started", %{sha: @sha}, started)
       pid = start_orchestrator(:CiWaitHeld)
 
       log = send_down(pid, "run-1", "Epic Review", {:ci_pending, %{sha: @sha, runs: @runs}})
@@ -479,8 +478,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
 
     test "a pause the store fails to write leaves the wait running, so the next exit tries it again" do
       started = DateTime.add(DateTime.utc_now(), -61 * 60, :second)
-      signal = %{name: "ci_wait_started", details: %{sha: @sha}, at: started}
-      :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: @issue_id, signals: [signal]})
+      :ok = put_signal(@repo_key, @issue_id, "ci_wait_started", %{sha: @sha}, started)
       pid = start_orchestrator(:CiWaitHoldFailed)
 
       {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_index, :read_only)
@@ -505,8 +503,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
 
     test "a wait on a newer commit starts again from zero" do
       started = DateTime.add(DateTime.utc_now(), -61 * 60, :second)
-      signal = %{name: "ci_wait_started", details: %{sha: "older"}, at: started}
-      :ok = RunStore.put_ticket_state(%{repo_key: @repo_key, issue_id: @issue_id, signals: [signal]})
+      :ok = put_signal(@repo_key, @issue_id, "ci_wait_started", %{sha: "older"}, started)
       pid = start_orchestrator(:CiWaitNewCommit)
 
       send_down(pid, "run-1", "Epic Review", {:ci_pending, %{sha: @sha, runs: @runs}})

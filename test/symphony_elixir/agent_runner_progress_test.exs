@@ -1027,7 +1027,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       :ok = put_pending_ci_failure(approved: true)
       :ok = SymphonyElixir.CiFix.record_origin("default", "issue-progress", "Code Review")
       # The approval the lane carries, bound to the head the red one replaced.
-      :ok = RunStore.record_ticket_verdict("default", "issue-progress", "code_review", "sha-same", "approve")
+      :ok = put_verdict("default", "issue-progress", "code_review", "sha-same", "approve")
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-new", checks: @green_checks}})
 
       run_issue!("CI Fix", heads: ["sha-same", "sha-new"], max_turns: 6, repos: designed_repos())

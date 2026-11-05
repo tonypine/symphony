@@ -186,8 +186,8 @@ defmodule SymphonyElixir.PullRequestPage do
     reviews = pr_reviews(repo_key, opts)
     own_review = Enum.find(reviews, &(pull_request_number(Map.get(&1, :pr_url)) == number)) || %{}
     node = read_ticket(url, Map.get(own_review, :issue_identifier) || pull_request_ticket(pr), opts)
-    record = ticket_record((node && node["id"]) || Map.get(own_review, :issue_id), opts)
-    verdicts = verdicts(record, pr)
+    history = ticket_history((node && node["id"]) || Map.get(own_review, :issue_id), opts)
+    verdicts = verdicts(history, pr)
     code_review = Enum.filter(verdicts, &(&1.kind == "code_review"))
 
     %{
@@ -203,7 +203,7 @@ defmodule SymphonyElixir.PullRequestPage do
       last_pushed_at: nil,
       merged_at: nil,
       summary: nil,
-      review_history: Enum.map(verdicts, &history_entry(&1, record)),
+      review_history: Enum.map(verdicts, &history_entry(&1, history)),
       areas: [],
       health: %{
         checks: nil,
@@ -308,11 +308,13 @@ defmodule SymphonyElixir.PullRequestPage do
     end
   end
 
-  defp ticket_record(nil, _opts), do: nil
+  # The ticket's verdicts and signals, read from its events (`TicketState.verdicts/1`,
+  # `TicketState.signals/1`), for a ticket Symphony keeps a record of.
+  defp ticket_history(nil, _opts), do: nil
 
-  defp ticket_record(issue_id, opts) do
+  defp ticket_history(issue_id, opts) do
     case Keyword.get(opts, :ticket_state, &RunStore.get_ticket_state/1).(issue_id) do
-      %{} = record -> TicketState.normalize(record)
+      %{} -> %{verdicts: TicketState.verdicts(%{issue_id: issue_id}), signals: TicketState.signals(%{issue_id: issue_id})}
       _none_or_error -> nil
     end
   end
@@ -321,24 +323,24 @@ defmodule SymphonyElixir.PullRequestPage do
   # a head that isn't one of its commits judged another pull request of the ticket.
   defp verdicts(nil, _pr), do: []
 
-  defp verdicts(record, pr) do
+  defp verdicts(history, pr) do
     commits = if pr, do: MapSet.new(pr.commits)
 
-    record.verdicts
+    history.verdicts
     |> Enum.filter(&(&1.kind in @verdict_kinds and (commits == nil or &1.head_sha == nil or MapSet.member?(commits, &1.head_sha))))
     |> Enum.reverse()
   end
 
-  defp history_entry(verdict, record) do
-    %{at: iso8601(verdict.recorded_at), kind: verdict.kind, verdict: verdict.outcome, reason: reason(verdict, record)}
+  defp history_entry(verdict, history) do
+    %{at: iso8601(verdict.recorded_at), kind: verdict.kind, verdict: verdict.outcome, reason: reason(verdict, history)}
   end
 
   # A verdict's reason is in the signal of its kind the same run recorded right after it: the first
   # one at or after the verdict and before the next verdict of that kind.
-  defp reason(%{recorded_at: %DateTime{} = at, kind: kind}, record) do
-    next = record.verdicts |> Enum.filter(&(&1.kind == kind and after?(&1.recorded_at, at))) |> Enum.map(& &1.recorded_at) |> Enum.min(DateTime, fn -> nil end)
+  defp reason(%{recorded_at: %DateTime{} = at, kind: kind}, history) do
+    next = history.verdicts |> Enum.filter(&(&1.kind == kind and after?(&1.recorded_at, at))) |> Enum.map(& &1.recorded_at) |> Enum.min(DateTime, fn -> nil end)
 
-    record.signals
+    history.signals
     |> Enum.filter(&(&1.name == kind and match?(%DateTime{}, &1.at) and not after?(at, &1.at) and (next == nil or after?(next, &1.at))))
     |> Enum.min_by(& &1.at, DateTime, fn -> nil end)
     |> case do
@@ -347,7 +349,7 @@ defmodule SymphonyElixir.PullRequestPage do
     end
   end
 
-  defp reason(_verdict, _record), do: nil
+  defp reason(_verdict, _history), do: nil
 
   defp after?(%DateTime{} = a, %DateTime{} = b), do: DateTime.compare(a, b) == :gt
   defp after?(_a, _b), do: false

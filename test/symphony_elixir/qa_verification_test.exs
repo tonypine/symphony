@@ -581,7 +581,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       {workspace, head} = git_workspace!()
 
       # A mechanical repair pushed this head; the lane re-binds the pass it carries to it.
-      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "the-repaired-head", "pass")
+      :ok = put_verdict(@repo_key, @issue_id, "qa", "the-repaired-head", "pass")
       assert :ok = CiFix.carry_verdict(@repo_key, @issue_id, "QA", head, settings!())
 
       assert :ok = run(workspace, [])
@@ -2612,17 +2612,17 @@ defmodule SymphonyElixir.QaVerificationTest do
     test "re-binds the newest pass to the new head, and carries nothing otherwise" do
       assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, "new-head")
 
-      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "old-head", "fail")
+      :ok = put_verdict(@repo_key, @issue_id, "qa", "old-head", "fail")
       assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, "new-head")
       assert [%{head_sha: "old-head", outcome: "fail"}] = verdicts()
 
-      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "old-head", "pass")
+      :ok = put_verdict(@repo_key, @issue_id, "qa", "old-head", "pass")
       assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, nil)
       assert [%{head_sha: "old-head", outcome: "pass"} | _] = verdicts()
     end
 
     test "a carried pass names no run: no run gave it" do
-      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "old-head", "pass")
+      :ok = put_verdict(@repo_key, @issue_id, "qa", "old-head", "pass")
       assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, "new-head")
 
       assert [%{type: "verdict.recorded", run_id: nil, head_sha: "new-head", payload: %{outcome: "pass"}}] =

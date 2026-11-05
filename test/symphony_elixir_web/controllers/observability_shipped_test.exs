@@ -36,7 +36,7 @@ defmodule SymphonyElixirWeb.ObservabilityShippedTest do
         issue_completed_notified_at: now
       })
 
-    :ok = RunStore.record_ticket_signal(repo_key, "shipped-issue-1", "claim", %{from: "Todo", to: "In Progress"})
+    :ok = put_signal(repo_key, "shipped-issue-1", "claim", %{from: "Todo", to: "In Progress"})
 
     body = json_response(get(build_conn(), "/api/v1/shipped?days=2"), 200)
 
