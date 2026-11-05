@@ -198,6 +198,9 @@ defmodule SymphonyElixir.IssueSummaryTest do
                ["- 2026-11-05: Pre Merge Check verdict", "- 2026-11-05: Attempt pushed"]
 
       assert IssueSummary.event_entries([event("verdict.recorded", ~U[2026-11-05 09:00:00Z], %{}), %{type: "attempt.pushed"}]) == ["- 2026-11-05: Review verdict"]
+
+      assert IssueSummary.event_entries([event("verdict.recorded", ~U[2026-11-05 09:00:00Z], %{kind: "code_review", outcome: "request_changes"})]) ==
+               ["- 2026-11-05: Code Review verdict: request changes"]
     end
 
     test "put/4 writes the lines with the run's entry, newest day first" do

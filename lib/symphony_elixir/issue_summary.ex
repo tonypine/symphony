@@ -142,7 +142,7 @@ defmodule SymphonyElixir.IssueSummary do
     kind = field(payload, :kind)
     name = if is_binary(kind), do: Map.get_lazy(@kind_names, kind, fn -> kind |> String.split("_", trim: true) |> Enum.map_join(" ", &String.capitalize/1) end), else: "Review"
     outcome = field(payload, :outcome)
-    "#{name} verdict" <> if(is_binary(outcome), do: ": " <> outcome, else: "") <> head_suffix(payload)
+    "#{name} verdict" <> if(is_binary(outcome), do: ": " <> String.replace(outcome, "_", " "), else: "") <> head_suffix(payload)
   end
 
   defp head_suffix(payload) do
