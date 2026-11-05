@@ -20,7 +20,7 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
   and records no event.
   """
 
-  alias SymphonyElixir.{Artifacts, PathSafety, PhaseSteps, RunStore, TicketEvents, WorkspaceHead}
+  alias SymphonyElixir.{Artifacts, PathSafety, PhaseSteps, RunStore, TicketEvents, Workpad, WorkspaceHead}
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.TicketEvents.{Event, Types}
   alias SymphonyElixir.Workpad.Projection
@@ -166,6 +166,24 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
     do: Projection.project_later({:ticket, ticket.repo_key, ticket.issue_id}, [steps: PhaseSteps.steps(Phases.kind(run_kind))] ++ opts)
 
   defp project(_type, _ticket, _run_kind, _opts), do: :ok
+
+  @doc """
+  Writes the agent's comment `body` with `write` (`linear_update_comment`). A workpad body of the
+  current ticket is written under the workpad projection's lock, with Symphony's Plan and
+  Validation put in (`SymphonyElixir.Workpad.Projection.write_agent_body/4`), so a projection
+  started by a step event never writes the agent's newer Notes back to older ones. Any other body
+  is written as it is.
+  """
+  @spec write_comment(context(), term(), (term() -> result), keyword()) :: result when result: term()
+  def write_comment(context, body, write, opts \\ []) when is_function(write, 1) do
+    with true <- Workpad.workpad_body?(body),
+         {:ok, ticket} <- ticket(context) do
+      steps = PhaseSteps.steps(Phases.kind(Map.get(context, :run_kind)))
+      Projection.write_agent_body(ticket.issue_id, body, write, [steps: steps] ++ Keyword.take(opts, [:linear_client, :settings]))
+    else
+      _not_a_workpad_or_no_ticket -> write.(body)
+    end
+  end
 
   defp ticket(context) do
     issue = Map.get(context, :issue) || %{}

@@ -25,8 +25,9 @@ defmodule SymphonyElixir.Workpad.Projection do
 
   `project_now/2` writes the projection into the ticket's workpad on a Linear tracker, once per
   change, serialized per ticket so the last write carries the newest events; the step runner calls
-  `project_later/2` after each step event it records. A ticket with no step event, or no workpad
-  comment, is left as it is.
+  `project_later/2` after each step event it records. The agent's own writes to the workpad take
+  the same lock (`write_agent_body/4`), so neither overwrites the other. A ticket with no step
+  event, or no workpad comment, is left as it is.
   """
 
   require Logger
@@ -376,15 +377,38 @@ defmodule SymphonyElixir.Workpad.Projection do
   end
 
   defp project(issue_id, opts) do
+    case rendered(issue_id, opts) do
+      nil -> :ok
+      rendered -> Workpad.rewrite(%Issue{id: issue_id}, &put(&1, rendered), opts)
+    end
+  end
+
+  @doc """
+  Writes an agent's workpad `body` for `issue_id` with `write`, under the lock `project_now/2`
+  takes, with the Plan and Validation the ticket's step events render put into it (`put/2`). The
+  agent's write and a projection's read-then-write never interleave, so a projection never writes
+  back Notes older than the agent's, and the agent's write never brings back a stale Plan. A ticket
+  with no step event keeps `body` as it is.
+  """
+  @spec write_agent_body(String.t(), String.t(), (String.t() -> result), [opt()]) :: result when result: term()
+  def write_agent_body(issue_id, body, write, opts) when is_binary(issue_id) and is_binary(body) and is_function(write, 1) do
+    :global.trans(lock_id(issue_id), fn ->
+      case rendered(issue_id, opts) do
+        nil -> write.(body)
+        rendered -> write.(put(body, rendered))
+      end
+    end)
+  end
+
+  defp rendered(issue_id, opts) do
     case RunStore.list_ticket_events(issue_id, types: @step_types) do
       [_ | _] = events ->
         issue = %Issue{id: issue_id}
         link = Keyword.get(opts, :link, &Report.artifact_link(issue, &1, true, opts).url)
-        rendered = render(events, link, Keyword.get(opts, :steps))
-        Workpad.rewrite(issue, &put(&1, rendered), opts)
+        render(events, link, Keyword.get(opts, :steps))
 
       _none_or_unreadable ->
-        :ok
+        nil
     end
   end
 

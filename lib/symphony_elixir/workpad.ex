@@ -408,11 +408,13 @@ defmodule SymphonyElixir.Workpad do
     |> PromptSafety.unescape_comment_body()
   end
 
-  defp workpad_body?(body) when is_binary(body) do
+  @doc "Whether `body` is a workpad comment's: it carries a workpad heading (`AgentLabels.known_workpad_markers/0`)."
+  @spec workpad_body?(term()) :: boolean()
+  def workpad_body?(body) when is_binary(body) do
     Enum.any?(AgentLabels.known_workpad_markers(), &String.contains?(body, &1))
   end
 
-  defp workpad_body?(_body), do: false
+  def workpad_body?(_body), do: false
 
   defp agent_workpad_heading(%{agent: %{kind: kind}}), do: AgentLabels.workpad_heading(kind)
   defp agent_workpad_heading(_settings), do: AgentLabels.workpad_heading(nil)

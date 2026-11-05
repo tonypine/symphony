@@ -1389,7 +1389,9 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   end
 
   defp execute_linear_tool("linear_update_comment", context, args, opts) do
-    with {:ok, response} <- Linear.update_comment(context, Map.get(args, "comment_id"), Map.get(args, "body"), opts) do
+    write = &Linear.update_comment(context, Map.get(args, "comment_id"), &1, opts)
+
+    with {:ok, response} <- TicketLedger.write_comment(context, Map.get(args, "body"), write, opts) do
       {:ok, compact_comment_mutation_response(response, "commentUpdate", opts)}
     end
   end

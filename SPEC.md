@@ -4609,7 +4609,9 @@ Scoped Linear tool extension contract:
   the same pass as the Decisions section. The workpad's `### Plan` and `### Validation` MUST be
   rendered from the run's `step.*` events between their own markers, leaving every other byte of the
   workpad as it is, again after each such event whether the step runner or the agent's
-  `ticket_record` records it, one projection of a ticket at a time; the summary block's changelog
+  `ticket_record` records it, one projection of a ticket at a time; an agent's own write of the
+  workpad MUST take the same per-ticket turn and carry the projected sections, so neither write
+  replaces the other's newer text; the summary block's changelog
   MUST carry a line per `attempt.pushed` and `verdict.recorded` event, written when the event is
   recorded. `linear_update_issue_summary`
   MUST only write the Symphony summary block between `<!-- symphony:summary:start -->` and

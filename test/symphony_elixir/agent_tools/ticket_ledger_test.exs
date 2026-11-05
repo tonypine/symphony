@@ -1,11 +1,13 @@
 defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.AgentTools.TicketLedger
   alias SymphonyElixir.{Artifacts, Paths, TicketEvents, Workpad}
   alias SymphonyElixir.Codex.DynamicTool
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.TicketEvents.Types
+  alias SymphonyElixir.Workpad.Projection
   alias SymphonyElixirWeb.Presenter
 
   @repo_key "repo-a"
@@ -312,6 +314,71 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
 
       assert_receive {:updated, %{id: "comment-workpad", body: body}}, 5_000
       assert body =~ "- [x] Code: passed"
+    end
+
+    test "the agent's workpad write waits for a projection in flight, keeps its Notes and carries the current Plan", ctx do
+      write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "linear", tracker_api_token: "token", agent_kind: "claude")
+      settings = Config.settings!()
+      test = self()
+      bootstrap = Workpad.bootstrap_body("## Symphony Workpad", ctx.workspace)
+      workpad = %{"id" => "comment-workpad", "body" => bootstrap, "user" => %{"name" => "Symphony"}}
+      {:ok, registry} = CommentRegistry.start_link(seed_ids: ["comment-workpad"])
+
+      # The projection's read reports it entered and holds until released; every write is reported.
+      linear = fn query, variables, _opts ->
+        if String.contains?(query, "SymphonyAgentUpdateComment") do
+          send(test, {:updated, variables})
+          {:ok, %{"data" => %{"commentUpdate" => %{"id" => "comment-workpad", "success" => true}}}}
+        else
+          send(test, {:reading, self()})
+
+          receive do
+            :release -> {:ok, %{"data" => %{"issue" => %{"comments" => %{"nodes" => [workpad]}}}}}
+          end
+        end
+      end
+
+      record!("step.completed", %{step_id: "code", title: "Write the code", mode: "delegated", outcome: "passed"}, run_id: "run-1")
+      projection = Task.async(fn -> Projection.project_now({:ticket, @repo_key, @issue_id}, settings: settings, linear_client: linear) end)
+      assert_receive {:reading, reader}, 5_000
+
+      # The agent writes new Notes while the projection holds the comment it read.
+      agent_body = String.replace(bootstrap, "### Notes\n", "### Notes\n\n- the agent's newest note\n")
+      args = %{"comment_id" => "comment-workpad", "body" => agent_body}
+      agent = Task.async(fn -> DynamicTool.execute("linear_update_comment", args, session(ctx, linear_client: linear, comment_registry: registry)) end)
+      refute_receive {:updated, _variables}, 200
+
+      send(reader, :release)
+      assert :ok = Task.await(projection)
+      assert_receive {:updated, %{body: projected}}, 5_000
+      refute projected =~ "the agent's newest note"
+
+      assert %{"success" => true} = Task.await(agent)
+      assert_receive {:updated, %{body: written}}, 5_000
+      assert written =~ "- the agent's newest note"
+      assert written =~ ~r/^- \[x\] .+: passed/m
+    end
+
+    test "an agent's comment that is not a workpad, or one with no step event yet, is written as it is", ctx do
+      test = self()
+      {:ok, registry} = CommentRegistry.start_link(seed_ids: ["comment-1", "comment-workpad"])
+
+      linear = fn _query, variables, _opts ->
+        send(test, {:updated, variables})
+        {:ok, %{"data" => %{"commentUpdate" => %{"id" => variables.id, "success" => true}}}}
+      end
+
+      opts = session(ctx, linear_client: linear, comment_registry: registry)
+      bootstrap = Workpad.bootstrap_body("## Symphony Workpad", ctx.workspace)
+
+      for {id, body} <- [{"comment-1", "A plain note"}, {"comment-workpad", bootstrap}] do
+        assert %{"success" => true} = DynamicTool.execute("linear_update_comment", %{"comment_id" => id, "body" => body}, opts)
+        assert_receive {:updated, %{id: ^id, body: ^body}}
+      end
+
+      write = fn body -> {:written, body} end
+      assert TicketLedger.write_comment(%{issue: nil}, bootstrap, write) == {:written, bootstrap}
+      assert TicketLedger.write_comment(%{}, nil, write) == {:written, nil}
     end
 
     test "a session with no ticket is refused by both tools", ctx do
