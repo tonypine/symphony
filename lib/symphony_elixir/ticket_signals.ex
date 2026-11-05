@@ -80,19 +80,24 @@ defmodule SymphonyElixir.TicketSignals do
 
   @doc """
   Records the signal `name` with `details` as `record/4` does, in the ticket's signals ledger and as
-  its event (`signal_event/2`), and says whether both were kept: `:ok`, or the store's
+  its event (`signal_event/2`), and says whether the ledger kept it: `:ok`, or the store's
   `{:error, reason}`, for a writer that must not act unless its signal is kept
-  (`SymphonyElixir.EpicReview.CiRerun` never reruns a commit's CI twice). The event is written only
-  once the ledger kept the signal. For a signal that is no move: a `phase.entered` written here asks
-  no cycle and writes no phase.
+  (`SymphonyElixir.EpicReview.CiRerun` never reruns a commit's CI twice). The ledger alone decides
+  the result, since its readers decide what was done: the event is written only once the ledger kept
+  the signal, and an event the store refuses then is logged and swallowed, as `record/4` does, so a
+  signal on the ledger is never reported as not kept. For a signal that is no move: a
+  `phase.entered` written here asks no cycle and writes no phase.
   """
   @spec record_kept(String.t() | nil, String.t() | nil, String.t(), map()) :: :ok | {:error, term()}
   def record_kept(repo_key, issue_id, name, details) do
-    {type, payload, opts} = signal_event(name, details)
+    with :ok <- RunStore.record_ticket_signal(repo_key, issue_id, name, details) do
+      {type, payload, opts} = signal_event(name, details)
 
-    with :ok <- RunStore.record_ticket_signal(repo_key, issue_id, name, details),
-         {:ok, _event} <- TicketEvents.record(repo_key, issue_id, type, payload, opts),
-         do: :ok
+      case TicketEvents.record(repo_key, issue_id, type, payload, opts) do
+        {:ok, _event} -> :ok
+        {:error, reason} -> log_error({:error, reason}, "record the #{type} event of the #{name} signal on issue_id=#{issue_id}")
+      end
+    end
   end
 
   @doc """

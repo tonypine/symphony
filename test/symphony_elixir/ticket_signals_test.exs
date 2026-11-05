@@ -54,9 +54,11 @@ defmodule SymphonyElixir.TicketSignalsTest do
     assert {:error, _reason} = TicketSignals.record_kept("", "issue-3", "ci_rerun", %{sha: "abc123"})
     assert RunStore.list_ticket_events("issue-3", []) == []
 
-    # The record kept it and the event store refused it: not kept.
-    assert {:error, {:invalid_payload, _fields}} = TicketSignals.record_kept(@repo_key, "issue-4", "fix verdict", %{to: "Rework"})
+    # The record kept it and the event store refused it: kept, since the record decides; the refusal is logged.
+    log = ExUnit.CaptureLog.capture_log(fn -> assert :ok = TicketSignals.record_kept(@repo_key, "issue-4", "fix verdict", %{to: "Rework"}) end)
+    assert log =~ "Failed to record the verdict.recorded event of the fix verdict signal on issue_id=issue-4"
     assert %{signals: [%{name: "fix verdict"}]} = RunStore.get_ticket_state("issue-4")
+    assert RunStore.list_ticket_events("issue-4", []) == []
   end
 
   test "a pending projection is marked and cleared on a record only; a ticket with no record or no repo key, or a store failure, writes none" do

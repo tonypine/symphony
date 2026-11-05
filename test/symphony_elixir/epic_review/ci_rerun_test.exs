@@ -98,20 +98,49 @@ defmodule SymphonyElixir.EpicReview.CiRerunTest do
     assert [["run", "rerun", "701" | _rest]] = reruns()
   end
 
-  test "a rerun whose note the store refuses is not made" do
+  test "a rerun the record refuses is not made" do
+    log = capture_log(fn -> assert {:proceed, nil} = check([ci_run("701", "FAILURE")], [], @sha, nil) end)
+
+    assert reruns() == []
+    assert log =~ "Epic review did not rerun the failed CI on feed00112233: it could not record the rerun"
+  end
+
+  test "a rerun whose note the event store refuses after the record kept it is still made, once" do
     log =
       capture_log(fn ->
         {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_only)
 
         try do
-          assert {:proceed, nil} = check([ci_run("701", "FAILURE")])
+          assert {:wait, [%{id: "701"}]} = check([ci_run("701", "FAILURE")])
         after
           {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_write)
         end
       end)
 
+    assert log =~ "Failed to record the note event of the ci_rerun signal"
+    assert [%{details: %{sha: @sha}}] = signals("ci_rerun")
+    assert [["run", "rerun", "701" | _rest]] = reruns()
+
+    # The ledger holds the rerun, so the next review never reruns the commit again.
+    assert {:proceed, %{name: :ci_rerun}} = check([ci_run("701", "FAILURE")])
     assert reruns() == []
-    assert log =~ "Epic review did not rerun the failed CI on feed00112233: it could not record the rerun"
+  end
+
+  test "a cancelled run's rerun whose note the event store refuses is still made and counted" do
+    cancelled = [ci_run("701", "CANCELLED")]
+
+    capture_log(fn ->
+      {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_only)
+
+      try do
+        assert {:wait, [%{id: "701"}]} = check(cancelled)
+      after
+        {:atomic, :ok} = :mnesia.change_table_access_mode(:symphony_run_store_ticket_events, :read_write)
+      end
+    end)
+
+    assert [%{details: %{run: "701"}}] = signals("ci_cancel_rerun")
+    assert [["run", "rerun", "701" | _rest]] = reruns()
   end
 
   test "a rerun gh refuses proceeds naming it, and the commit is not rerun again" do
