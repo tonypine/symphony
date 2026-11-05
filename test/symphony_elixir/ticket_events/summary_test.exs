@@ -40,7 +40,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
        evidence: ["shot-1", "shot-2"],
        class_count: 3
      }, [], %{title: "QA found content clipped at laptop (1440×900): Activity with a job open", detail: "3rd finding of this class on this ticket · 2 screenshots"}},
-    {"finding.resolved", %{finding_id: "01FINDING", how: "Let the row wrap", head: "e051234"}, [], %{title: "Finding marked resolved", detail: "Let the row wrap"}},
+    {"finding.resolved", %{finding_id: "01FINDING", how: "Let the row wrap", head: "e051234abcdef"}, [], %{title: "Finding marked resolved", detail: "Let the row wrap · on e051234"}},
+    {"finding.confirmed", %{finding_id: "01FINDING", resolution: "01RESOLUTION", head: "f00ba12abcdef"}, [], %{title: "QA confirmed a finding fixed", detail: "on f00ba12"}},
     {"checklist.answered", %{item: "Dark mode checked?", answer: "Yes, both themes"}, [], %{title: "Checklist item answered", detail: "Dark mode checked?: Yes, both themes"}},
     {"ticket.cancelled", %{from: "Backlog", to: "Canceled", note: "superseded"}, [], %{title: "Cancelled from Backlog", detail: "superseded"}},
     {"ticket.moved", %{from: "Backlog", to: "In Progress", note: "its work is committed"}, [], %{title: "Moved to In Progress from Backlog", detail: "its work is committed"}},
@@ -186,6 +187,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       assert render("finding.recorded", Map.merge(base, %{class_count: 1, evidence: []})).detail == "1st finding of this class on this ticket"
       assert render("finding.recorded", Map.put(base, :class_count, 0)).detail == "The title ends mid-word"
       assert render("finding.recorded", base).title == "QA found text truncated"
+      assert Summary.render(%{event("finding.recorded", Map.put(base, :step, "Step 2"), []) | supersedes: "01RESOLUTION"}).title == "QA reopened text truncated: Step 2"
 
       unclassified = %{base | class: "unclassified"} |> Map.merge(%{severity: "unrated", step: "Step 2", viewport: "1400×900 pt"})
       assert render("finding.recorded", unclassified).title == "QA found a defect at 1400×900 pt: Step 2"

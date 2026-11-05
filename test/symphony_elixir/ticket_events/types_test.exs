@@ -6,7 +6,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
   @types ~w(
     phase.entered hold.set hold.cleared run.started run.started_by_person run.ended attempt.pushed verdict.recorded
     decision.requested decision.withdrawn decision.recorded person.action
-    step.started step.completed step.skipped evidence finding.recorded finding.resolved checklist.answered
+    step.started step.completed step.skipped evidence finding.recorded finding.resolved finding.confirmed checklist.answered
     ticket.cancelled ticket.moved drift.detected drift.reverted drift.revert_failed
     pause.set pause.reason_added pause.reason_cleared pause.cleared
     question.asked question.answered question.withdrawn question.reopened park.backfilled workspace.synced workspace.rebuilt workspace.removed note

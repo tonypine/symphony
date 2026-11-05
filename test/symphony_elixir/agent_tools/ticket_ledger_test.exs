@@ -74,12 +74,27 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
       fixed = record!("finding.recorded", %{class: "truncated", severity: "minor", description: "Title cut"}, qa ++ [head_sha: "aaa"])
       second = record!("finding.recorded", %{class: "mechanism", severity: "major", description: "Scroll broken"}, qa ++ [head_sha: "bbb"])
 
-      assert {true, %{"event" => %{"type" => "finding.resolved", "head_sha" => nil}}} =
-               call("ticket_record", %{"type" => "finding.resolved", "payload" => %{"finding_id" => fixed.id, "how" => "Wrapped the title"}}, session(ctx))
+      assert {true, %{"event" => %{"type" => "finding.resolved", "head_sha" => nil, "id" => resolution, "payload" => %{"head" => "ccc"}}}} =
+               call("ticket_record", %{"type" => "finding.resolved", "payload" => %{"finding_id" => fixed.id, "how" => "Wrapped the title", "head" => "ccc"}}, session(ctx))
 
       assert {true, %{"events" => events}} = call("ticket_events", %{"open_findings" => true}, session(ctx))
-      assert Enum.map(events, & &1["id"]) == [first.id, second.id]
-      assert Enum.map(events, & &1["head_sha"]) == ["aaa", "bbb"]
+      assert Enum.map(events, & &1["id"]) == [first.id, fixed.id, second.id]
+      assert Enum.map(events, & &1["head_sha"]) == ["aaa", "aaa", "bbb"]
+      assert Enum.map(events, & &1["finding"]["state"]) == ["open", "resolved_awaiting_qa", "open"]
+
+      assert %{"resolution" => ^resolution, "resolved_on" => "ccc", "reopened_by" => nil, "superseded" => nil, "confirmed_by" => nil} =
+               Enum.at(events, 1)["finding"]
+
+      # QA's next fail on the same step reopens it, pointing at the resolution it supersedes.
+      reopen = record!("finding.recorded", %{class: "truncated", severity: "minor", description: "Title still cut"}, qa ++ [supersedes: resolution])
+      assert {true, %{"events" => events}} = call("ticket_events", %{"open_findings" => true}, session(ctx))
+      assert Enum.map(events, & &1["id"]) == [first.id, fixed.id, second.id]
+      reopen_id = reopen.id
+      assert %{"state" => "reopened", "reopened_by" => ^reopen_id, "superseded" => ^resolution, "resolution" => nil} = Enum.at(events, 1)["finding"]
+
+      # The reopening reads as an event, not a finding of its own.
+      assert {true, %{"events" => all}} = call("ticket_events", %{"types" => ["finding.recorded"]}, session(ctx))
+      refute Map.has_key?(List.last(all), "finding")
 
       assert [%{"id" => id, "kind" => "screenshot", "label" => "clipped.png", "url" => url}] = hd(events)["artifacts"]
       assert id == shot.id
@@ -245,6 +260,19 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
 
       assert {false, %{"error" => %{"reason" => "unknown_finding", "schema" => _}}} =
                call("ticket_record", %{"type" => "finding.resolved", "payload" => %{"finding_id" => note.id, "how" => "x"}}, session(ctx))
+
+      finding = record!("finding.recorded", %{class: "clipped", severity: "major", description: "Cut"}, actor: {:agent, "qa-1", "qa"})
+
+      assert {false, %{"error" => %{"reason" => "no_head", "message" => message}}} =
+               call("ticket_record", %{"type" => "finding.resolved", "payload" => %{"finding_id" => finding.id, "how" => "x"}}, session(ctx))
+
+      assert message =~ "head"
+
+      assert {true, %{"event" => %{"id" => resolution}}} =
+               call("ticket_record", %{"type" => "finding.resolved", "payload" => %{"finding_id" => finding.id, "how" => "x", "head" => "abc"}}, session(ctx))
+
+      assert {false, %{"error" => %{"reason" => "already_resolved", "resolution" => ^resolution}}} =
+               call("ticket_record", %{"type" => "finding.resolved", "payload" => %{"finding_id" => finding.id, "how" => "again", "head" => "abc"}}, session(ctx))
 
       assert {false, %{"error" => %{"reason" => "unknown_parent"}}} =
                call("ticket_record", %{"type" => "note", "payload" => %{"text" => "x"}, "parent" => "01NOPE"}, session(ctx))

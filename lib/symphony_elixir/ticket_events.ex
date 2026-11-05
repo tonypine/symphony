@@ -8,9 +8,12 @@ defmodule SymphonyElixir.TicketEvents do
   writers its actor must be among. The stream is kept by `SymphonyElixir.RunStore`, which assigns
   each event the ticket's next `seq` and makes a second write with the same idempotency key a no-op.
 
-  A run is a sequence of events, not one event. A finding has a lifecycle: `finding.recorded`, then
-  `finding.resolved` by an agent, then confirmed or reopened by the next QA verdict, whose event
-  `supersedes` the resolution. A decision a person must make is `decision.requested`, then
+  A run is a sequence of events, not one event. A finding has a lifecycle (`findings/1`):
+  `finding.recorded` opens it; `finding.resolved` by an agent, with the head that fixes it, resolves
+  it, awaiting QA; the next QA verdict confirms it (a `pass`: `finding.confirmed` naming the
+  resolution) or reopens it (a `fail`: a `finding.recorded` whose `supersedes` names the resolution).
+  `record/5` refuses a resolution of a finding the ticket does not hold, or of one already resolved.
+  A decision a person must make is `decision.requested`, then
   `decision.recorded` when a person answers it or `decision.withdrawn` when it ends unanswered;
   both name the request in their payload's `request`. A question asked through the Question service
   (`SymphonyElixir.Questions`) is `question.asked`, ended by `question.answered` or
@@ -56,6 +59,33 @@ defmodule SymphonyElixir.TicketEvents do
   @request_types ["decision.requested", "question.asked"]
 
   @typedoc """
+  Where a finding stands (`findings/1`): `:open` (recorded, no resolution yet), `:resolved` (an
+  agent resolved it and no QA verdict has judged it yet), `:reopened` (an event superseded its
+  resolution), `:confirmed` (a QA pass confirmed its resolution).
+  """
+  @type finding_state :: :open | :resolved | :reopened | :confirmed
+
+  @typedoc """
+  A finding of `findings/1`: its `finding.recorded` event, its state, its standing resolution (nil
+  when open or reopened), the event that confirmed it, and the newest event that reopened it with
+  the resolution that event superseded.
+  """
+  @type finding :: %{
+          finding: Event.t(),
+          state: finding_state(),
+          resolution: Event.t() | nil,
+          confirmation: Event.t() | nil,
+          reopened_by: Event.t() | nil,
+          superseded: Event.t() | nil
+        }
+
+  @typedoc "Why `record/5` refuses a `finding.resolved`: see `check_resolution/3`."
+  @type resolution_error ::
+          {:unknown_finding, String.t()}
+          | {:finding_already_resolved, String.t(), String.t()}
+          | {:no_head, String.t()}
+
+  @typedoc """
   `query/3`'s options: `types:`, `since:` (exclusive, on `at`), `run_id:`, `open_findings:`,
   `open_decisions:` and `limit:` (default #{@default_limit}, at most #{@max_limit}).
   """
@@ -78,10 +108,16 @@ defmodule SymphonyElixir.TicketEvents do
   `GET /api/v1/stream`): its `repo_key`, `issue_id`, the ticket's `issue_identifier` when its record
   knows it, `event_id`, `type` and `at`. The notice is best-effort and never fails the write; a
   refused write or an idempotent no-op sends none.
+
+  A `finding.resolved` is refused, with the reason (`check_resolution/3`), when its `finding_id`
+  names no finding of the ticket or one already resolved, or when it carries no head: its payload's
+  `head`, else the `head_sha:` it is recorded on, which then fills the payload's `head`.
   """
-  @spec record(String.t(), String.t(), String.t(), map(), [record_opt()]) :: {:ok, Event.t()} | {:error, Types.error() | term()}
+  @spec record(String.t(), String.t(), String.t(), map(), [record_opt()]) ::
+          {:ok, Event.t()} | {:error, Types.error() | resolution_error() | term()}
   def record(repo_key, issue_id, type, payload, opts \\ []) do
     with {:ok, event} <- build(repo_key, issue_id, type, payload, opts),
+         :ok <- resolvable(event),
          {:ok, stored} <- RunStore.append_ticket_event(event) do
       # A no-op returns the event the ticket already held, which has another id than the one built.
       if stored.id == event.id, do: notify(stored)
@@ -116,7 +152,99 @@ defmodule SymphonyElixir.TicketEvents do
         payload: payload,
         artifacts: options.artifacts
       }
+      |> resolution_head()
       |> then(&{:ok, %{&1 | summary: Summary.render(&1)}})
+    end
+  end
+
+  # A resolution carries the head that fixes the finding: the one it names, else the one it is
+  # recorded on.
+  defp resolution_head(%Event{type: "finding.resolved", payload: payload, head_sha: head} = event) when is_binary(head) do
+    if is_binary(Map.get(payload, :head)), do: event, else: %{event | payload: Map.put(payload, :head, head)}
+  end
+
+  defp resolution_head(event), do: event
+
+  # A write with the idempotency key of an event the ticket holds is the no-op `record/5` promises,
+  # never a refusal.
+  defp resolvable(%Event{type: "finding.resolved", issue_id: issue_id, payload: payload, idempotency: key}) do
+    with events when is_list(events) <- RunStore.list_ticket_events(issue_id, []) do
+      if is_binary(key) and Enum.any?(events, &(&1.idempotency == key)),
+        do: :ok,
+        else: check_resolution(events, Map.get(payload, :finding_id), Map.get(payload, :head))
+    end
+  end
+
+  defp resolvable(_event), do: :ok
+
+  @doc """
+  Whether a `finding.resolved` naming `finding_id` with `head` may be recorded on a ticket holding
+  `events` (oldest first): `:ok` for a finding that is open or reopened (`findings/1`), else
+  `{:unknown_finding, id}` (no `finding.recorded` of the ticket has that id),
+  `{:finding_already_resolved, id, resolution_id}` (resolved, awaiting QA or confirmed) or
+  `{:no_head, id}` (no head says what fixes it).
+  """
+  @spec check_resolution([Event.t()], String.t() | nil, String.t() | nil) :: :ok | {:error, resolution_error()}
+  def check_resolution(events, finding_id, head) do
+    case Enum.find(findings(events), &(&1.finding.id == finding_id)) do
+      nil -> {:error, {:unknown_finding, finding_id}}
+      %{state: state, resolution: resolution} when state in [:resolved, :confirmed] -> {:error, {:finding_already_resolved, finding_id, resolution.id}}
+      _open when not is_binary(head) or head == "" -> {:error, {:no_head, finding_id}}
+      _open -> :ok
+    end
+  end
+
+  @doc """
+  Every finding of a ticket holding `events` (oldest first), in the order they were recorded, with
+  where it stands (`t:finding/0`). The events are read in order:
+
+    * a `finding.recorded` opens a finding, unless it supersedes a finding's standing resolution:
+      then it is that finding seen again, and reopens it;
+    * a `finding.resolved` naming an open or reopened finding resolves it;
+    * a `finding.confirmed` naming a finding's standing resolution confirms it;
+    * any other event superseding a finding's standing resolution reopens it.
+  """
+  @spec findings([Event.t()]) :: [finding()]
+  def findings(events) do
+    {order, by_id} = Enum.reduce(events, {[], %{}}, &finding_step/2)
+    order |> Enum.reverse() |> Enum.map(&Map.fetch!(by_id, &1))
+  end
+
+  defp finding_step(%Event{} = event, {order, by_id} = acc) do
+    case {event.type, reopens(by_id, event)} do
+      {_type, {:ok, id}} ->
+        {order, Map.update!(by_id, id, &%{&1 | state: :reopened, reopened_by: event, superseded: &1.resolution, resolution: nil, confirmation: nil})}
+
+      {"finding.recorded", :none} ->
+        entry = %{finding: event, state: :open, resolution: nil, confirmation: nil, reopened_by: nil, superseded: nil}
+        {[event.id | order], Map.put(by_id, event.id, entry)}
+
+      {"finding.resolved", :none} ->
+        update_finding(acc, Map.get(event.payload, :finding_id), &(&1.state in [:open, :reopened]), &%{&1 | state: :resolved, resolution: event})
+
+      {"finding.confirmed", :none} ->
+        resolution = Map.get(event.payload, :resolution)
+        update_finding(acc, Map.get(event.payload, :finding_id), &(&1.state == :resolved and &1.resolution.id == resolution), &%{&1 | state: :confirmed, confirmation: event})
+
+      _other ->
+        acc
+    end
+  end
+
+  # The finding whose standing resolution `event` supersedes.
+  defp reopens(_by_id, %Event{supersedes: nil}), do: :none
+
+  defp reopens(by_id, %Event{supersedes: superseded}) do
+    case Enum.find(by_id, fn {_id, entry} -> entry.resolution && entry.resolution.id == superseded end) do
+      {id, _entry} -> {:ok, id}
+      nil -> :none
+    end
+  end
+
+  defp update_finding({order, by_id} = acc, id, allowed?, update) do
+    case Map.fetch(by_id, id) do
+      {:ok, entry} -> if allowed?.(entry), do: {order, Map.put(by_id, id, update.(entry))}, else: acc
+      :error -> acc
     end
   end
 
@@ -124,8 +252,8 @@ defmodule SymphonyElixir.TicketEvents do
   The events of the ticket `issue_id`, oldest first by `at`, then `seq` (see
   `t:query_opt/0` for `opts`).
 
-  `open_findings: true` keeps the `finding.recorded` events no unsuperseded `finding.resolved`
-  names in `finding_id`; `open_decisions: true` keeps the `decision.requested` and `question.asked`
+  `open_findings: true` keeps the `finding.recorded` event of every finding QA has not confirmed
+  fixed (`findings/1`): open, resolved awaiting QA, or reopened; `open_decisions: true` keeps the `decision.requested` and `question.asked`
   events no `decision.recorded` or `decision.withdrawn` names in `request`, and, for a question, no
   `question.answered` or `question.withdrawn` names in `question_id` (both together keep either).
 
@@ -239,26 +367,24 @@ defmodule SymphonyElixir.TicketEvents do
 
     if findings? or decisions? do
       closed = closed_ids(events)
+      live = if findings?, do: live_findings(events), else: MapSet.new()
 
       Enum.filter(events, fn event ->
-        ((findings? and event.type == "finding.recorded") or (decisions? and event.type in @request_types)) and
-          not MapSet.member?(closed, event.id) and not answered_question?(closed, event)
+        (findings? and MapSet.member?(live, event.id)) or
+          (decisions? and event.type in @request_types and not MapSet.member?(closed, event.id) and not answered_question?(closed, event))
       end)
     else
       events
     end
   end
 
-  # The ids of the findings an unsuperseded resolution names and of the decision requests an answer
-  # or a withdrawal names, in the order they happened: a question the Director reopened since its
-  # answer is open again. Event ids are unique, so one set holds both.
+  # The ids of the findings QA has not confirmed fixed.
+  defp live_findings(events), do: for(%{state: state, finding: finding} <- findings(events), state != :confirmed, into: MapSet.new(), do: finding.id)
+
+  # The ids of the decision requests an answer or a withdrawal names, in the order they happened: a
+  # question the Director reopened since its answer is open again.
   defp closed_ids(events) do
-    superseded = events |> Enum.map(& &1.supersedes) |> MapSet.new()
-
     Enum.reduce(events, MapSet.new(), fn
-      %Event{type: "finding.resolved", id: id, payload: payload}, closed ->
-        if MapSet.member?(superseded, id), do: closed, else: MapSet.put(closed, Map.get(payload, :finding_id))
-
       %Event{type: type, payload: payload}, closed when type in ["decision.recorded", "decision.withdrawn"] ->
         MapSet.put(closed, Map.get(payload, :request))
 

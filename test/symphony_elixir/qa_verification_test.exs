@@ -2285,6 +2285,87 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute Map.has_key?(payload, :step)
     end
 
+    # A finding QA recorded, resolved by a rework run on `head`.
+    defp resolved_finding!(fields, head) do
+      payload = Map.merge(%{class: "unclassified", severity: "unrated", description: "The row is clipped."}, fields)
+      {:ok, finding} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "finding.recorded", payload, actor: {:agent, "run-qa-0", "qa"})
+
+      {:ok, resolution} =
+        SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "finding.resolved", %{finding_id: finding.id, how: "Let the row wrap"}, actor: {:agent, "run-rw", "rework"}, head_sha: head)
+
+      {finding, resolution}
+    end
+
+    defp finding_states do
+      @issue_id |> RunStore.list_ticket_events([]) |> SymphonyElixir.TicketEvents.findings() |> Map.new(&{&1.finding.id, &1})
+    end
+
+    test "a fail on the same step reopens the resolved finding, pointing at the resolution it supersedes" do
+      {workspace, head} = git_workspace!()
+      {finding, resolution} = resolved_finding!(%{step: "Step 2", viewport: "1400×900 pt"}, head)
+      {elsewhere, _other} = resolved_finding!(%{step: "Step 3"}, head)
+
+      details = [
+        %{line: "step 2: The row is still clipped.", step: "step 2", viewport: "1400×900 pt", evidence: []},
+        %{line: "Step 2: The row is clipped again.", step: "Step 2", viewport: "1400×900 pt", evidence: []},
+        %{line: "The header is clipped.", step: nil, viewport: nil, evidence: []}
+      ]
+
+      agent_result(%{verdict: :fail, summary: "Still clipped.", steps: [], findings: Enum.map(details, & &1.line), finding_details: details})
+
+      assert :ok = run(workspace, run_id: "run-qa-9")
+      assert :ok = run(workspace, run_id: "run-qa-9")
+
+      assert [_found, _elsewhere_found, reopen, second, header] = Enum.filter(events(), &(&1.type == "finding.recorded"))
+      assert reopen.supersedes == resolution.id
+      assert reopen.summary.title == "QA reopened a defect at 1400×900 pt: step 2"
+      # One report finding supersedes a resolution at most; a finding with no step matches none.
+      assert second.supersedes == nil
+      assert header.supersedes == nil
+
+      states = finding_states()
+      assert %{state: :reopened, reopened_by: %{id: reopen_id}, superseded: %{id: superseded}} = states[finding.id]
+      assert {reopen_id, superseded} == {reopen.id, resolution.id}
+      assert %{state: :resolved} = states[elsewhere.id]
+      assert [] == Enum.filter(events(), &(&1.type == "finding.confirmed"))
+    end
+
+    test "a fail matches the viewport too: the same step at another viewport is a new finding" do
+      {workspace, head} = git_workspace!()
+      {finding, _resolution} = resolved_finding!(%{step: "Step 2", viewport: "1400×900 pt"}, head)
+
+      details = [%{line: "Step 2: clipped.", step: "Step 2", viewport: "2560×1440 pt", evidence: []}]
+      agent_result(%{verdict: :fail, summary: "Clipped.", steps: [], findings: Enum.map(details, & &1.line), finding_details: details})
+
+      assert :ok = run(workspace, run_id: "run-qa-10")
+
+      assert %{state: :resolved} = finding_states()[finding.id]
+      assert [%{supersedes: nil}] = Enum.filter(events(), &(&1.type == "finding.recorded" and &1.run_id == "run-qa-10"))
+    end
+
+    test "a pass confirms every finding resolved and awaiting QA, by that verdict, once however often it is handled" do
+      {workspace, head} = git_workspace!()
+      {finding, resolution} = resolved_finding!(%{step: "Step 2"}, "0ld0ld0ld")
+      {on_head, on_head_resolution} = resolved_finding!(%{step: "Step 3"}, head)
+      {:ok, open} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "finding.recorded", %{class: "unclassified", severity: "unrated", description: "Open."}, actor: {:agent, "run-qa-0", "qa"})
+
+      agent_result(%{verdict: :pass, summary: "Fine.", steps: [], findings: []})
+      assert :ok = run(workspace, run_id: "run-qa-11")
+      assert :ok = run(workspace, run_id: "run-qa-11")
+
+      assert [first, second] = Enum.filter(events(), &(&1.type == "finding.confirmed"))
+      assert %{actor: %{kind: :machine}, run_id: "run-qa-11", head_sha: ^head, payload: payload} = first
+      assert %{finding_id: finding_id, resolution: resolution_id, head: ^head} = payload
+      assert {finding_id, resolution_id} == {finding.id, resolution.id}
+      assert second.payload.resolution == on_head_resolution.id
+      assert first.summary.title == "QA confirmed a finding fixed"
+
+      states = finding_states()
+      assert %{state: :confirmed, resolution: ^resolution} = states[finding.id]
+      assert %{state: :confirmed} = states[on_head.id]
+      assert %{state: :open} = states[open.id]
+    end
+
     test "a pass records its steps' evidence and the transcript, and no finding" do
       {workspace, _head} = git_workspace!()
 
