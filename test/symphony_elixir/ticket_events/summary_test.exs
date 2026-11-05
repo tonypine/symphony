@@ -263,6 +263,9 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     test "a checklist answer and an evidence without files" do
       assert render("checklist.answered", %{answer: "Yes"}).detail == "Yes"
       assert render("evidence", %{caption: "After"}) == %{title: "Evidence recorded", detail: "After"}
+      assert render("evidence", %{caption: "Step 2", artifacts: ["a"], environment: "live"}).title == "Evidence recorded with 1 file, on the live server"
+      assert render("evidence", %{caption: "Step 1", environment: "fixture"}).title == "Evidence recorded, on the fixtures"
+      assert render("evidence", %{caption: "Step 1", environment: "elsewhere"}).title == "Evidence recorded"
     end
   end
 

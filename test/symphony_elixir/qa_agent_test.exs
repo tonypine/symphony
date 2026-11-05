@@ -1355,6 +1355,8 @@ defmodule SymphonyElixir.QaAgentTest do
                "Record what you proved on the ticket's history before the verdict, with the `ticket_record` tool: one `evidence` event for each walkthrough step you walked"
 
       assert flat =~ "the environment you proved it in (the committed fixtures or the live server"
+      assert flat =~ "Name the same environment on the verdict's step (`environment`: `fixture` for the committed fixtures, `live` for the live server)"
+      assert flat =~ ~s("environment": "fixture" | "live",)
       assert flat =~ "The verdict is not an event you record: the `qa_verdict` tool records it, and `ticket_record` refuses one."
       [evidence, verdict] = Enum.map(["one `evidence` event for each walkthrough step", "Your last act is to record the verdict"], &(:binary.match(flat, &1) |> elem(0)))
       assert evidence < verdict

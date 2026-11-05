@@ -1873,7 +1873,8 @@ defmodule SymphonyElixir.QaVerificationTest do
         RunStore.delete_ticket_state(@issue_id)
         {workspace, head} = git_workspace!()
 
-        assert :ok = run_named(workspace, description, gh_runner: gh(head, checks))
+        # Each case is a pass of its own: the report renders the findings that pass recorded.
+        assert :ok = run_named(workspace, description, gh_runner: gh(head, checks), run_id: "run-pre-check-#{System.unique_integer([:positive])}")
 
         refute_received {:qa_agent_run, _, _}
         assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
@@ -2228,7 +2229,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       {workspace, head} = git_workspace!()
 
       steps = [
-        %{name: "Step 1", status: "fail", details: "blank", evidence: ["qa-evidence/home.png", "qa-evidence/detail.png"]},
+        %{name: "Step 1", status: "fail", details: "blank", environment: "live", evidence: ["qa-evidence/home.png", "qa-evidence/detail.png"]},
         %{name: "Step 2", status: "fail", details: "clipped", evidence: ["https://uploads.linear.app/qa/row.png", "https://ci.test/run/1"]},
         %{name: "Step 3", status: "pass", details: "fine", evidence: []}
       ]
@@ -2250,12 +2251,27 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert :ok = run(workspace, run_id: "run-qa-1")
       assert :ok = run(workspace, run_id: "run-qa-1")
 
-      [step_1, step_2, transcript, finding_1, finding_2, verdict, second_verdict] =
+      [step_1, step_2, step_3, transcript, finding_1, finding_2, verdict, second_verdict] =
         Enum.filter(events(), &(&1.type in ["evidence", "finding.recorded", "verdict.recorded"]))
 
       assert %{type: "evidence", payload: %{caption: "Step 1: fail", artifacts: [@home, @detail]}, artifacts: [@home, @detail]} = step_1
+      assert %{step: "Step 1", status: "fail", details: "blank", environment: "live"} = step_1.payload
+      refute Map.has_key?(step_1.payload, :links)
       assert %{type: "evidence", payload: %{caption: "Step 2: fail", artifacts: [@row]}, idempotency: "evidence:run-qa-1:2"} = step_2
+      assert %{step: "Step 2", links: ["https://ci.test/run/1"]} = step_2.payload
+      refute Map.has_key?(step_2.payload, :environment)
+      assert %{type: "evidence", artifacts: [], payload: %{caption: "Step 3: pass", step: "Step 3", status: "pass", details: "fine"}} = step_3
       assert %{type: "evidence", payload: %{caption: "QA session transcript"}, artifacts: [@transcript]} = transcript
+      refute Map.has_key?(transcript.payload, :step)
+
+      # The report renders the pass's events: each step with its environment and evidence, each
+      # finding with its state and its files (none uploaded here: the tracker is not Linear).
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "- **fail** Step 1 (proved on the live server; evidence: artifact `#{@home}`, artifact `#{@detail}`)"
+      assert report =~ "- **fail** Step 2 (evidence: artifact `#{@row}`, https://ci.test/run/1)"
+      assert report =~ "- **pass** Step 3\n"
+      assert report =~ "### Findings\n\n- #{hd(details).line} · **open** · evidence: artifact `#{@home}`"
+      assert report =~ "- step 2: The row is clipped. · **open** · evidence: artifact `#{@row}`"
 
       assert %{
                type: "finding.recorded",
@@ -2511,6 +2527,10 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert [%{type: "finding.recorded", artifacts: [id]}, %{type: "verdict.recorded"}] = ledger()
       assert stored!(id) == shot
       assert {:ok, %{projections: %{linear_url: "https://uploads.linear.app/qa/badge.png"}}} = SymphonyElixir.Artifacts.get(id)
+
+      # The report's finding links the screenshot the agent already uploaded.
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "· **open** · evidence: [badge.png](https://uploads.linear.app/qa/badge.png)"
     end
 
     test "a pass shows each step's evidence and keeps the QA session's transcript", %{settings: settings, projects: projects} do

@@ -446,7 +446,7 @@ defmodule SymphonyElixir.QaVerification do
 
   defp carry(issue, opts, settings, head) do
     Logger.info("QA carried the earlier pass for #{issue_label(issue)} head=#{head}; not verifying again")
-    publish_report(issue, opts, head, carried_outcome(), "Merging")
+    publish_report(issue, opts, head, carried_outcome(), "Merging", false)
 
     merge_entry(issue, opts, settings, :qa_pass, %{reason: "the earlier QA pass still covers this head", carried: true}, %{
       recommendation: "the earlier QA pass still covers this head; ready to merge",
@@ -470,7 +470,7 @@ defmodule SymphonyElixir.QaVerification do
   # or internal-only diff lands in `Merging` with the reason recorded, and no agent runs.
   defp skip(issue, opts, settings, head, reason) do
     record_verdict(issue, opts, head, "skip")
-    publish_report(issue, opts, head, %{verdict: :skip, reason: reason, steps: [], findings: []}, "Merging")
+    publish_report(issue, opts, head, %{verdict: :skip, reason: reason, steps: [], findings: []}, "Merging", false)
     Logger.info("Skipping QA for #{issue_label(issue)} head=#{head}: #{reason}")
 
     merge_entry(issue, opts, settings, :qa_skip, %{reason: reason}, %{
@@ -1000,14 +1000,27 @@ defmodule SymphonyElixir.QaVerification do
     end
   end
 
-  defp publish_report(issue, opts, head, outcome, target) do
-    report = Report.render(Map.merge(outcome, %{sha: head, target_state: target}))
+  # A pass's report renders its steps and findings from the events the pass just recorded
+  # (`record_pass_verdict/6`), with each file linked to its Linear upload (`Report.ledger/4`). A
+  # carried pass and a skip ran no pass, so theirs render the outcome alone.
+  defp publish_report(issue, opts, head, outcome, target, ledger? \\ true) do
+    outcome = Map.merge(outcome, %{sha: head, target_state: target})
+    report_opts = Keyword.take(opts, [:linear_client, :upload_client, :settings])
+    report = outcome |> Map.merge(pass_ledger(issue, opts, head, ledger?, report_opts)) |> Report.render()
 
     case Report.publish(issue, report, Keyword.take(opts, [:linear_client, :settings])) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Failed to publish the QA report for #{issue_label(issue)}: #{inspect(reason)}")
     end
   end
+
+  # A job with no repo key recorded no events (`record_pass_verdict/6`).
+  defp pass_ledger(issue, opts, head, true, report_opts) do
+    events = if is_binary(repo_key(issue, opts)), do: RunStore.list_ticket_events(issue.id, [])
+    if is_list(events), do: Report.ledger(issue, events, qa_run_id(issue, opts, head), report_opts), else: %{}
+  end
+
+  defp pass_ledger(_issue, _opts, _head, false, _report_opts), do: %{}
 
   # The step into `Merging`. With the repo's manual review `on`, the verdict pauses the ticket where
   # it is on a Needs Decision hold carrying the summary and waits for a person's confirmation
@@ -1078,25 +1091,47 @@ defmodule SymphonyElixir.QaVerification do
     record_verdict(issue, opts, head, verdict, details)
   end
 
+  # Every step is recorded, with its result, what QA saw, the environment it was proved in and its
+  # evidence: the files the pass kept as `artifacts`, any other entry (a CI run's URL) as `links`.
+  # The QA report renders its steps from these events (`Report.render/1`).
   defp record_evidence(repo_key, issue, run_id, outcome) do
     artifacts = Map.get(outcome, :artifacts)
 
     steps =
-      for %{evidence: [_ | _] = entries} = step <- Map.get(outcome, :steps, []),
-          do: {"#{step.name}: #{step.status}", resolved(artifacts, entries)}
+      for step <- Map.get(outcome, :steps, []) do
+        entries = Map.get(step, :evidence, [])
+        ids = resolved(artifacts, entries)
+
+        fields = %{
+          step: cut(step.name, 200),
+          status: step.status,
+          details: cut(Map.get(step, :details), 2_000),
+          environment: Map.get(step, :environment),
+          links: unresolved(artifacts, entries)
+        }
+
+        {"#{step.name}: #{step.status}", ids, fields}
+      end
 
     transcript =
       case artifacts do
-        %{transcript: id} when is_binary(id) -> [{"QA session transcript", [id]}]
+        %{transcript: id} when is_binary(id) -> [{"QA session transcript", [id], %{}}]
         _none -> []
       end
 
     (steps ++ transcript)
     |> Enum.with_index(1)
-    |> Enum.each(fn {{caption, ids}, n} ->
-      payload = %{caption: cut(caption, 500), artifacts: ids}
+    |> Enum.each(fn {{caption, ids, fields}, n} ->
+      payload = Map.merge(%{caption: cut(caption, 500), artifacts: ids}, fields)
       TicketSignals.record_event(repo_key, issue.id, "evidence", payload, pass_event_opts(run_id, "evidence:#{run_id}:#{n}", ids))
     end)
+  end
+
+  defp unresolved(artifacts, entries) do
+    case Enum.filter(entries, &is_nil(QaAgent.evidence_artifact(artifacts, &1))) do
+      [] -> nil
+      links -> links
+    end
   end
 
   # Each finding until the findings model classifies them (epic 4): `unclassified` and `unrated`,
