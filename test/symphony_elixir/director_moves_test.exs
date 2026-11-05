@@ -2075,7 +2075,9 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     test "a held answer naming another option keeps the ticket held, saying which", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
-      request = %{DispatchLoop.question_attrs(loop(), "MOT-40") | options: DispatchLoop.question_attrs(loop(), "MOT-40").options ++ [%{label: "Ask me later", effect: "Later.", recommended: false}]}
+      attrs = DispatchLoop.question_attrs(loop(), "MOT-40")
+      later = %{label: "Ask me later", effect: "Later.", recommended: false}
+      request = %{attrs | options: attrs.options ++ [later]}
       {:ok, question} = Questions.ask({:ticket, "repo-director", "pr"}, request)
 
       assert {:ok, %{move: "decide"}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Ask me later", opts)
