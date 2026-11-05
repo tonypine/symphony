@@ -1122,9 +1122,13 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert deciding("pr")
 
       {:ok, _answered} = Questions.answer({:ticket, "repo-director", "pr"}, id, "1")
-      # Still waiting on another request, the answered one is named and refused.
-      ask_decision(layout_request())
-      assert {:error, {:conflict, "MOT-40's question " <> _rest}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id}, opts)
+      # Still waiting on another request, the answered one is already decided: nothing is written.
+      layout = ask_decision(layout_request())
+
+      assert {:ok, %{already_decided: true, question_id: ^id, answer: "1", moved: false}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: picks(), question_id: id}, opts)
+
+      assert %{state: :open} = Questions.find({:ticket, "repo-director", "pr"}, layout.id)
     end
 
     test "a request comment whose row names a Question the record doesn't hold is refused, naming it", %{opts: opts} do
@@ -2112,11 +2116,12 @@ defmodule SymphonyElixir.DirectorMovesTest do
         assert String.starts_with?(why, said)
         assert {:ok, %{set_by: @director}} = Pauses.get({:ticket, "repo-director", "pr"})
         refute_received {:memory_tracker_comment, "pr", _body}
-      end
 
-      # The pause still waits on a person: Unblock lifts it.
-      assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
-      refute Pauses.paused?({:ticket, "repo-director", "pr"})
+        # The pause still waits on a person: Unblock lifts it.
+        assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+        assert_received {:memory_tracker_comment, "pr", "Unblocked by the Director" <> _rest}
+        refute Pauses.paused?({:ticket, "repo-director", "pr"})
+      end
     end
 
     test "a loop kept paused is lifted by Restart too", %{opts: opts} do
@@ -2145,6 +2150,14 @@ defmodule SymphonyElixir.DirectorMovesTest do
                DirectorMoves.answer_held_question("MOT-40", question.id, "1", opts)
 
       assert {:error, :issue_not_found} = DirectorMoves.answer_held_question("MOT-404", question.id, "1", opts)
+
+      # A withdrawn question is not already decided: it is refused, naming its state.
+      withdrawn = ask_and_hold("repo-director", loop())
+      {:ok, _withdrawn} = Questions.withdraw({:ticket, "repo-director", "pr"}, withdrawn.id, "The run started.")
+      refusal = "MOT-40's question #{withdrawn.id} is withdrawn, not open"
+      assert {:error, {:conflict, ^refusal}} = DirectorMoves.answer_held_question("MOT-40", withdrawn.id, "1", opts)
+      picks = [%{question: withdrawn.question, answer: "Run it again"}]
+      assert {:error, {:conflict, ^refusal}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks, question_id: withdrawn.id}, opts)
     end
   end
 
