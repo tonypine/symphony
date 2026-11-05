@@ -274,6 +274,8 @@ struct SettingsView: View {
 
                 RiskRulesSection(model: model)
 
+                PhasesSection(model: model)
+
                 Section {
                     TimeoutRow(title: "Git network timeout", minutes: $model.gitNetworkTimeoutMinutes)
                     Text("Stops a git fetch, pull, push or ls-remote that runs longer, so a remote that stops answering can't hold the repo.")
@@ -584,6 +586,9 @@ struct SettingsView: View {
                     CheckErrorText(message: error)
                 }
                 if let error = model.riskRulesError {
+                    CheckErrorText(message: error)
+                }
+                if let error = model.phasesError {
                     CheckErrorText(message: error)
                 }
                 if let loginItemError = model.loginItemError {
@@ -998,7 +1003,7 @@ private struct NotificationsSection: View {
     }
 }
 
-private struct SectionFooter: View {
+struct SectionFooter: View {
     let text: String
 
     init(_ text: String) {

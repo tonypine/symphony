@@ -123,6 +123,16 @@ final class SettingsUIManifestTests: XCTestCase {
         yaml = try record("setting the macOS app QA dev server", {
             try MacAppQAPlaybook.updating($0, from: MacAppQAPlaybook(), to: macAppQA)
         }, from: yaml)
+        var phases = PhaseSettings()
+        for kind in PhaseKind.allCases {
+            phases[kind] = PhaseSteps(steps: [PhaseStep(stepID: "work", mode: .delegated)], isDefault: false)
+        }
+        yaml = try record("setting every kind's step list", { try PhaseSettings.updating($0, from: PhaseSettings(), to: phases) }, from: yaml)
+        yaml = try record("resetting a step list to its default", {
+            var reset = phases
+            reset[.qa] = .defaults(for: .qa)
+            return try PhaseSettings.updating($0, from: phases, to: reset)
+        }, from: yaml)
         _ = try record("removing a repository", { try RepositoriesConfig.removing("api", from: $0) }, from: yaml)
 
         // The acceptance gate's retired mode keys still load, with a deprecation warning, until the schema drops
@@ -157,10 +167,12 @@ final class SettingsUIManifestTests: XCTestCase {
 
     // MARK: Helpers
 
-    /// Whether `path` is a listed key, a key under a listed free-form map (`agent.run_profiles.qa`), or a
-    /// section holding a listed key (`agent.limits`).
+    /// Whether `path` is a listed key, a key under a listed free-form map (`agent.run_profiles.qa`) or in an item of
+    /// a listed list (`phases.qa.steps[].id`), or a section holding a listed key (`agent.limits`).
     private func covers(_ path: String) -> Bool {
-        SettingsUIManifest.keyPaths.contains { $0 == path || path.hasPrefix($0 + ".") || $0.hasPrefix(path + ".") }
+        SettingsUIManifest.keyPaths.contains {
+            $0 == path || path.hasPrefix($0 + ".") || path.hasPrefix($0 + "[]") || $0.hasPrefix(path + ".")
+        }
     }
 
     /// The key paths of the lines `after` adds, removes or changes compared to `before`.

@@ -110,6 +110,23 @@ defmodule SymphonyElixir.WorkflowPreviewStepsTest do
     assert {:error, _message} = WorkflowPreview.render(file: workflow, run_kind: "deploy")
   end
 
+  # The Director's Settings › Phases writes these files (PhaseSettingsTests checks that it writes
+  # `reordered.yml` and draws each preview); Symphony must load them and preview the same lists.
+  @phase_fixtures "macos/Tests/SymphonyBarCoreTests/Fixtures/phases"
+
+  test "the default list previews as the Director's Phases preview draws it", %{workflow: workflow} do
+    [steps, _prompt] = String.split(preview!(workflow, "implementation"), "\n---\n\n", parts: 2)
+    assert steps == File.read!(Path.join(@phase_fixtures, "default.preview.txt"))
+  end
+
+  test "a list the Director saved, tests moved above checks, previews in the new order as the Director draws it", %{workflow: workflow} do
+    append_symphony_yml!(File.read!(Path.join(@phase_fixtures, "reordered.yml")))
+
+    [steps, _prompt] = String.split(preview!(workflow, "implementation"), "\n---\n\n", parts: 2)
+    assert steps == File.read!(Path.join(@phase_fixtures, "reordered.preview.txt"))
+    assert steps =~ ~r/3\. `tests`.*\n(.*\n)*4\. `checks`/
+  end
+
   test "the CLI previews an implementation run unless --kind names another", %{workflow: workflow} do
     output = preview_cli(["--file", workflow])
     assert output =~ "An implementation run follows these steps"
