@@ -785,18 +785,19 @@ repo poll that returns a ticket is its route: a ticket that moved to another Lin
 re-routed by that repo's poll, the same record moving with its questions, pause and events, and
 every other read (a delivery, a by-id read) keeps the repository the record has.
 
-Symphony 0.0.1.792 merged, once, the records a ticket was left with under more than one repository
-into its one record (`records_merged_v1` marker; an open question only another repository's
-record held was withdrawn with the cause `superseded_by_move`); its report (`records.merged`: when
-it ran, the tickets checked and merged, each merge's ticket and the repositories folded into it)
-stays with the marker and is shown in `GET /api/v1/state` under `records_merged`. The first start
-of the next release moves the store off the (repository, ticket) key for good: a store that still
-has that key must show the markers of the by-ticket index (`ticket_index_v1`) and of the merge, or
-the start is refused with a message naming the version to install first (0.0.1.792) and nothing is
-written; otherwise a ticket whose only record is still on the old key is written under its id,
-the events move onto the ticket (the record's repository's copy of an event first, each event once,
-a straggler numbered after the last), the old table is deleted and the step's marker
-(`ticket_pair_key_dropped_v1`) set, with the key's version marker `ticket_index_v2`.
+A store moves off the old (repository, ticket) key once, on the first start of a release that
+reads by ticket alone, from whichever release wrote it, so an upgrade needs no release in between.
+The records a ticket was left with under more than one repository are merged into its one record
+(`records_merged_v1` marker; an open question only another repository's record held is withdrawn
+with the cause `superseded_by_move`, and the reconciler makes Linear follow; a store Symphony
+0.0.1.792 already merged keeps that merge); the report (`records.merged`: when it ran, the tickets
+checked and merged, each merge's ticket and the repositories folded into it) stays with the marker
+and is shown in `GET /api/v1/state` under `records_merged`. A ticket whose only record is still on
+the old key is written under its id, the events move onto the ticket (the record's repository's
+copy of an event first, each event once, a straggler numbered after the last), the old table is
+deleted and the step's marker (`ticket_pair_key_dropped_v1`) set, with the key's version marker
+`ticket_index_v2`. A record from before the event stream keeps its signals, verdicts and dispatches
+through this move for the ledger's backfill to convert.
 
 The stream is read through `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events`
 (Section 13.8.2). Each event a write adds (not a backfilled one, an idempotent no-op or a refused

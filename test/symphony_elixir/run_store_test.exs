@@ -95,11 +95,9 @@ defmodule SymphonyElixir.RunStoreTest do
     end
   end
 
-  # TP-1339: a store must have run the merge release (0.0.1.792) before this one deletes the
-  # (repository, ticket) key. v0.0.1.784's store, as it is on disk, is refused with the version to
-  # install first; the same store once the merge release marked it boots, moves its record onto the
-  # ticket's id and deletes the old table.
-  test "a store from before the merge release is refused at boot with the version to install first; once merged it boots by ticket" do
+  # TP-1423: v0.0.1.784's store, as it is on disk, needs no release in between: it boots, moves its
+  # record onto the ticket's id and deletes the old table, with or without the merge release's marks.
+  test "a store from before or after the merge release boots by ticket" do
     original_run_store_dir = Application.fetch_env!(:symphony_elixir, :run_store_dir)
     old_dir = Path.join(System.tmp_dir!(), "symphony-784-run-store-#{System.unique_integer([:positive])}")
     trap_exit? = Process.flag(:trap_exit, true)
@@ -109,24 +107,22 @@ defmodule SymphonyElixir.RunStoreTest do
       :ok = Application.stop(:symphony_elixir)
       stop_run_store_for_test()
       stop_mnesia_for_test()
-      create_784_run_store_dir!(old_dir, record, [])
 
-      log = capture_log(fn -> assert {:error, {:store_not_merged, _message}} = RunStore.start_link(dir: old_dir) end)
-      assert log =~ "Install Symphony 0.0.1.792 first"
-      assert {:atomic, [_row]} = :mnesia.transaction(fn -> :mnesia.read(:symphony_run_store_ticket_states, {@repo_key, "issue-784"}) end)
+      for markers <- [[], ["ticket_index_v1", "records_merged_v1"]] do
+        create_784_run_store_dir!(old_dir, record, markers)
+        assert {:ok, _pid} = RunStore.start_link(dir: old_dir)
 
-      stop_mnesia_for_test()
-      create_784_run_store_dir!(old_dir, record, ["ticket_index_v1", "records_merged_v1"])
-      assert {:ok, _pid} = RunStore.start_link(dir: old_dir)
+        refute :symphony_run_store_ticket_states in :mnesia.system_info(:tables)
+        assert %{issue_identifier: "ACME-784", phase: "QA", repo_key: @repo_key} = RunStore.get_ticket_state("issue-784")
 
-      refute :symphony_run_store_ticket_states in :mnesia.system_info(:tables)
-      assert %{issue_identifier: "ACME-784", phase: "QA", repo_key: @repo_key} = RunStore.get_ticket_state("issue-784")
-
-      # A second boot finds nothing to move.
-      stop_run_store_for_test()
-      stop_mnesia_for_test()
-      assert {:ok, _pid} = RunStore.start_link(dir: old_dir)
-      assert %{phase: "QA"} = RunStore.get_ticket_state("issue-784")
+        # A second boot finds nothing to move.
+        stop_run_store_for_test()
+        stop_mnesia_for_test()
+        assert {:ok, _pid} = RunStore.start_link(dir: old_dir)
+        assert %{phase: "QA"} = RunStore.get_ticket_state("issue-784")
+        stop_run_store_for_test()
+        stop_mnesia_for_test()
+      end
     after
       stop_run_store_for_test()
       stop_mnesia_for_test()
