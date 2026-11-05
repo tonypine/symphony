@@ -449,6 +449,7 @@ struct TicketPageContent: View {
                     releasing: model.controlInFlight == .unblock(page.identifier)
                 ),
                 images: model.artifactImages,
+                texts: model.artifactTexts,
                 blockers: model.ticketBlockers,
                 addBlocker: model.addBlocker,
                 removeBlocker: model.removeBlocker,
@@ -477,6 +478,8 @@ struct TicketPageView: View {
     let actions: TicketPageActions
     /// The timeline's screenshots, read through the window's client.
     var images: ArtifactImages?
+    /// The timeline's text outputs (a step's output), read through the window's client.
+    var texts: ArtifactTexts?
     /// The Blocked by card, with its Add Blocker and each row's Remove.
     var blockers: TicketBlockersEditor?
     var addBlocker: (String?) -> Void = { _ in }
@@ -502,12 +505,14 @@ struct TicketPageView: View {
     @State private var folded = Set<String>()
     /// The screenshot shown full size.
     @State private var fullScreenshot: TicketScreenshot?
+    /// The text output shown in a sheet.
+    @State private var openedOutput: TicketOutput?
 
     var body: some View {
         ScrollView {
             TicketPageBody(
                 page: page, brief: brief, actions: actions, width: width, folded: $folded, images: images,
-                openScreenshot: { fullScreenshot = $0 }, blockers: blockers, addBlocker: addBlocker, removeBlocker: removeBlocker,
+                openScreenshot: { fullScreenshot = $0 }, openOutput: { openedOutput = $0 }, blockers: blockers, addBlocker: addBlocker, removeBlocker: removeBlocker,
                 priority: priority, setPriority: setPriority, labels: labels, setLabel: setLabel,
                 decisions: decisions, recordDecision: recordDecision
             )
@@ -526,6 +531,9 @@ struct TicketPageView: View {
         .sheet(item: $fullScreenshot) { shot in
             ScreenshotSheet(shot: shot, images: images, close: { fullScreenshot = nil })
         }
+        .sheet(item: $openedOutput) { output in
+            OutputSheet(output: output, texts: texts, close: { openedOutput = nil })
+        }
     }
 }
 
@@ -539,6 +547,7 @@ struct TicketPageBody: View {
     var folded: Binding<Set<String>> = .constant([])
     var images: ArtifactImages?
     var openScreenshot: (TicketScreenshot) -> Void = { _ in }
+    var openOutput: (TicketOutput) -> Void = { _ in }
     var blockers: TicketBlockersEditor?
     var addBlocker: (String?) -> Void = { _ in }
     var removeBlocker: (String) -> Void = { _ in }
@@ -580,7 +589,9 @@ struct TicketPageBody: View {
                         if page.timeline.isEmpty {
                             Text("No runs yet.").font(DesignTokens.TypeStyle.body.font).foregroundStyle(.secondary)
                         } else {
-                            RunTimeline(steps: page.timeline, folded: folded, images: images, openScreenshot: openScreenshot)
+                            RunTimeline(
+                                steps: page.timeline, folded: folded, images: images, openScreenshot: openScreenshot, openOutput: openOutput
+                            )
                         }
                     }
                 }
@@ -1034,6 +1045,7 @@ struct RunTimeline: View {
     var folded: Binding<Set<String>> = .constant([])
     var images: ArtifactImages?
     var openScreenshot: (TicketScreenshot) -> Void = { _ in }
+    var openOutput: (TicketOutput) -> Void = { _ in }
     /// Inside a run or under an event: the time sits at the line's end, so each level doesn't spend a column on it.
     var nested = false
 
@@ -1042,7 +1054,7 @@ struct RunTimeline: View {
             ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
                 TimelineRow(
                     step: step, first: index == 0, last: index == steps.count - 1, folded: folded, images: images,
-                    openScreenshot: openScreenshot, nested: nested
+                    openScreenshot: openScreenshot, openOutput: openOutput, nested: nested
                 )
             }
         }
@@ -1056,13 +1068,14 @@ private struct TimelineRow: View {
     let folded: Binding<Set<String>>
     let images: ArtifactImages?
     let openScreenshot: (TicketScreenshot) -> Void
+    let openOutput: (TicketOutput) -> Void
     let nested: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isFolded: Bool { step.runID.map(folded.wrappedValue.contains) ?? false }
 
-    /// A plain step reads as one element; a group, a step with screenshots or with replies keeps its controls.
-    private var isPlain: Bool { !step.isGroup && step.children.isEmpty && step.screenshots.isEmpty }
+    /// A plain step reads as one element; a group, a step with screenshots, outputs or replies keeps its controls.
+    private var isPlain: Bool { !step.isGroup && step.children.isEmpty && step.screenshots.isEmpty && step.outputs.isEmpty }
 
     var body: some View {
         let row = HStack(alignment: .top, spacing: nested ? DesignTokens.Space.s2 : DesignTokens.Space.s3) {
@@ -1115,8 +1128,15 @@ private struct TimelineRow: View {
                     ScreenshotThumbnails(shots: step.screenshots, images: images, open: openScreenshot)
                         .padding(.top, DesignTokens.Space.s1)
                 }
+                if !step.outputs.isEmpty {
+                    OutputLinks(outputs: step.outputs, open: openOutput)
+                        .padding(.top, DesignTokens.Space.s1)
+                }
                 if !step.children.isEmpty, !isFolded {
-                    RunTimeline(steps: step.children, folded: folded, images: images, openScreenshot: openScreenshot, nested: true)
+                    RunTimeline(
+                        steps: step.children, folded: folded, images: images, openScreenshot: openScreenshot, openOutput: openOutput,
+                        nested: true
+                    )
                         .padding(.top, DesignTokens.Space.s1)
                 }
             }
@@ -1344,6 +1364,129 @@ struct ScreenshotSheet: View {
         .frame(minWidth: 480, idealWidth: 1000, maxWidth: 1800, minHeight: 360, idealHeight: 680, maxHeight: 1300)
         .onExitCommand(perform: close)
     }
+}
+
+/// A step's text outputs by label, each opening its text; one Symphony no longer keeps reads as unavailable.
+private struct OutputLinks: View {
+    let outputs: [TicketOutput]
+    let open: (TicketOutput) -> Void
+
+    var body: some View {
+        WrappingStack(spacing: DesignTokens.Space.s2) {
+            ForEach(outputs) { output in
+                if output.available {
+                    Button { open(output) } label: {
+                        Label(output.label, systemImage: "doc.text")
+                            .font(DesignTokens.TypeStyle.callout.font)
+                    }
+                    .buttonStyle(.link)
+                    .help("Open \(output.label)")
+                    .accessibilityLabel(output.accessibilityLabel)
+                } else {
+                    Label(output.unavailableTitle, systemImage: "eye.slash")
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                        .help(TicketOutput.unavailableText)
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(output.unavailableAccessibilityLabel)
+                }
+            }
+        }
+    }
+}
+
+/// A step's output as text, over the window; Close or Esc closes it. It reads the text when it opens.
+struct OutputSheet: View {
+    let output: TicketOutput
+    let texts: ArtifactTexts?
+    let close: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                Text(output.label)
+                    .font(DesignTokens.TypeStyle.sentence.font)
+                    .textSelection(.enabled)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: DesignTokens.Space.s2)
+                Button("Close", action: close)
+                    .keyboardShortcut(.cancelAction)
+            }
+            if let texts {
+                OutputText(output: output, texts: texts)
+            } else {
+                OutputState(output: output, text: output.available ? .loading : .unavailable)
+            }
+        }
+        .padding(DesignTokens.Space.s5)
+        .frame(minWidth: 480, idealWidth: 900, maxWidth: 1600, minHeight: 320, idealHeight: 600, maxHeight: 1200)
+        .onExitCommand(perform: close)
+    }
+}
+
+/// The output's text as the window's cache holds it, read when it shows.
+private struct OutputText: View {
+    let output: TicketOutput
+    @ObservedObject var texts: ArtifactTexts
+
+    var body: some View {
+        OutputState(output: output, text: texts.text(output))
+            .onAppear { texts.load(output) }
+    }
+}
+
+/// The text itself, scrolling both ways and selectable; a quiet line while it reads; the unavailable line when Symphony
+/// no longer has it; a failed read's line.
+struct OutputState: View {
+    let output: TicketOutput
+    let text: ArtifactTexts.Text
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    var body: some View {
+        Group {
+            switch text {
+            case let .loaded(body):
+                let log = Text(body.isEmpty ? " " : body)
+                    .font(.system(.callout, design: .monospaced))
+                    .textSelection(.enabled)
+                    .padding(DesignTokens.Space.s3)
+                Group {
+                    if offscreenSnapshot {
+                        // ImageRenderer draws no scroll view's content, so the snapshot shows the text as it opens.
+                        log.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
+                    } else {
+                        // A scroll view centres content smaller than itself; at least its size, the text starts at the
+                        // top-left like a log and scrolls once it is longer or wider.
+                        GeometryReader { box in
+                            ScrollView([.vertical, .horizontal]) {
+                                log.frame(minWidth: box.size.width, minHeight: box.size.height, alignment: .topLeading)
+                            }
+                        }
+                    }
+                }
+                .background(DesignTokens.Surface.raised.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.mark))
+                .accessibilityLabel("\(output.label) text")
+            case .loading:
+                if offscreenSnapshot {
+                    Label("Reading \(output.label)…", systemImage: "doc.text").foregroundStyle(.secondary)
+                } else {
+                    ProgressView().controlSize(.small).accessibilityLabel("\(output.label), loading")
+                }
+            case .unavailable:
+                Label(output.unavailableTitle, systemImage: "eye.slash")
+                    .foregroundStyle(.secondary)
+                    .help(TicketOutput.unavailableText)
+            case .failed:
+                Label("\(output.label) couldn't be read. Open it again to retry.", systemImage: "exclamationmark.triangle")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: text.isLoaded ? .topLeading : .center)
+    }
+}
+
+private extension ArtifactTexts.Text {
+    var isLoaded: Bool { if case .loaded = self { true } else { false } }
 }
 
 /// Lays its views out in lines, left to right, starting a new line when the next one doesn't fit.

@@ -26,6 +26,33 @@ public struct TicketScreenshot: Equatable, Hashable, Identifiable {
     public static let unavailableTitle = "Screenshot unavailable"
 }
 
+/// A text file an event of the ticket's history carries (a machine step's output, a log, a report), as its row lists
+/// it: by its label, opening its text.
+public struct TicketOutput: Equatable, Hashable, Identifiable {
+    /// The artifact's id: the hash of its bytes, so the text behind it never changes.
+    public var id: String
+    public var label: String
+    /// Its bytes' path on Symphony's API, such as `api/v1/artifacts/<id>`.
+    public var path: String
+    /// False once Symphony no longer keeps the file.
+    public var available: Bool
+
+    public init(id: String, label: String, path: String, available: Bool) {
+        self.id = id
+        self.label = label
+        self.path = path
+        self.available = available
+    }
+
+    /// VoiceOver's word for its button: "Test output, opens its text".
+    public var accessibilityLabel: String { "\(label), opens its text" }
+    /// VoiceOver's word for the line that stands in for it.
+    public var unavailableAccessibilityLabel: String { "\(label) unavailable" }
+    /// The line that stands in for it: "Test output unavailable".
+    public var unavailableTitle: String { "\(label) unavailable" }
+    public static let unavailableText = "Symphony no longer keeps this file."
+}
+
 /// The ticket's history as Symphony's events feed serves it grouped by run
 /// (`GET /api/v1/repos/:repo_key/tickets/:issue_identifier/events?group=run`): the events a run holds sit in it, a
 /// reply under the event it answers. Pages merge into one history by run id and event id, and the history maps to the
@@ -52,12 +79,25 @@ public struct TicketEventsPayload: Equatable {
 
         var isImage: Bool { kind == "screenshot" || mime?.hasPrefix("image/") == true }
 
-        var screenshot: TicketScreenshot {
+        /// A file the row opens as text: a step's output, a log or a report, or any `text/*` file that isn't an image.
+        var isText: Bool { !isImage && (Self.textKinds.contains(kind ?? "") || mime?.hasPrefix("text/") == true) }
+
+        static let textKinds: Set<String> = ["step_output", "log", "report"]
+
+        private var path: String {
             let path = url.map { $0.hasPrefix("/") ? String($0.dropFirst()) : $0 }.flatMap { $0.isEmpty ? nil : $0 }
-            return TicketScreenshot(
-                id: id, label: label?.trimmingWhitespace().trimmedNonEmpty ?? "without a label",
-                path: path ?? "api/v1/artifacts/\(id)", available: available ?? true
+            return path ?? "api/v1/artifacts/\(id)"
+        }
+
+        var screenshot: TicketScreenshot {
+            TicketScreenshot(
+                id: id, label: label?.trimmingWhitespace().trimmedNonEmpty ?? "without a label", path: path, available: available ?? true
             )
+        }
+
+        var output: TicketOutput {
+            let fallback = kind == "step_output" ? "Step output" : "Output"
+            return TicketOutput(id: id, label: label?.trimmingWhitespace().trimmedNonEmpty ?? fallback, path: path, available: available ?? true)
         }
     }
 
@@ -298,18 +338,29 @@ public struct TicketEventsPayload: Equatable {
             id: "event-\(event.id)", time: at, timeText: event.at == nil ? "" : clock(at), title: title,
             result: eventResult(event), resultWord: nil, durationSeconds: nil, tokens: nil,
             detail: event.summary?.detail?.trimmedNonEmpty, children: children,
-            screenshots: event.artifacts.filter(\.isImage).map(\.screenshot)
+            screenshots: event.artifacts.filter(\.isImage).map(\.screenshot),
+            outputs: event.artifacts.filter(\.isText).map(\.output)
         )
     }
 
-    /// A finding failed, a verdict its outcome, a run's end its exit; anything else, a type the app doesn't know
-    /// included, is done.
+    /// A finding failed, a verdict its outcome, a run's end its exit, a step's end its outcome; anything else, a type
+    /// the app doesn't know included, is done.
     static func eventResult(_ event: Event) -> TicketPage.Step.Result {
         switch event.type {
         case "finding.recorded": return .failed
+        case "step.completed": return stepResult(event.payload.outcome)
         case "verdict.recorded": return event.payload.outcome.map { verdictState(kind: event.payload.kind, outcome: $0).0 } ?? .done
         case "run.ended": return exitState(event.payload.exit).0
         case "hold.set": return .stopped
+        default: return .done
+        }
+    }
+
+    /// How a step ended: failed, paused on a question (stopped), or done, when it passed or was skipped.
+    static func stepResult(_ outcome: String?) -> TicketPage.Step.Result {
+        switch outcome?.lowercased() {
+        case "failed": return .failed
+        case "paused": return .stopped
         default: return .done
         }
     }
@@ -672,6 +723,77 @@ public final class ArtifactImages: ObservableObject {
         loadedOrder.append(id)
         while loadedOrder.count > Self.capacity {
             images[loadedOrder.removeFirst()] = nil
+        }
+    }
+}
+
+// MARK: - Text outputs
+
+/// The text outputs the timeline opens, read through the window's API client and kept by artifact id: an id is the hash
+/// of its bytes, so what it names never changes.
+@MainActor
+public final class ArtifactTexts: ObservableObject {
+    public enum Text: Equatable {
+        case loading
+        case loaded(String)
+        /// Symphony no longer keeps it (`available: false`, a 404 or a 410).
+        case unavailable
+        /// It couldn't be read just now; opening it again reads it again.
+        case failed
+    }
+
+    public typealias Get = (_ path: String) async -> APIAnswer
+
+    /// How many texts it keeps; past that the oldest goes.
+    public static let capacity = 16
+
+    @Published public private(set) var texts: [String: Text] = [:]
+    private var loadedOrder: [String] = []
+    private let get: Get
+
+    public init(get: @escaping Get) {
+        self.get = get
+    }
+
+    /// What the sheet for `output` shows now.
+    public func text(_ output: TicketOutput) -> Text {
+        guard output.available else { return .unavailable }
+        return texts[output.id] ?? .loading
+    }
+
+    /// Reads `output` unless it is kept, being read, or unavailable.
+    @discardableResult
+    public func load(_ output: TicketOutput) -> Task<Void, Never>? {
+        guard output.available else { return nil }
+        switch texts[output.id] {
+        case .loading?, .loaded?, .unavailable?: return nil
+        case .failed?, nil: break
+        }
+        texts[output.id] = .loading
+        return Task {
+            let answer = await get(output.path)
+            store(Self.text(answer), for: output.id)
+        }
+    }
+
+    /// What an answer to an artifact's GET shows: its bytes as UTF-8 text, invalid sequences replaced.
+    nonisolated static func text(_ answer: APIAnswer) -> Text {
+        switch answer {
+        case let .answered(data, 200):
+            return .loaded(String(decoding: data, as: UTF8.self))
+        case .answered(_, 404), .answered(_, 410):
+            return .unavailable
+        case .answered, .unreachable:
+            return .failed
+        }
+    }
+
+    private func store(_ text: Text, for id: String) {
+        texts[id] = text
+        guard case .loaded = text else { return }
+        loadedOrder.append(id)
+        while loadedOrder.count > Self.capacity {
+            texts[loadedOrder.removeFirst()] = nil
         }
     }
 }

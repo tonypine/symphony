@@ -22,7 +22,13 @@ defmodule SymphonyElixir.QaSeed do
   - `runs`: finished runs (`issue`, `status`, `minutes_ago`, `runtime_seconds`, `total_tokens`), each
     with its transcript, a JSONL file of agent events (`transcript`, relative to the seed);
   - `pull_requests`: a ticket's open PR (`number`) and what the PR watcher read of its checks (`ci`:
-    `green`, `red` with its `failing_check`, or `pending`).
+    `green`, `red` with its `failing_check`, or `pending`);
+  - `events`: a ticket's ledger history (`SymphonyElixir.TicketEvents.record/5`), oldest first: each
+    with its `issue`, `type`, `payload`, `minutes_ago`, the `run_id` it belongs to and, for an agent's
+    event, `actor: "agent"` (of the run's `run_kind`, default implementation). An `output` names a
+    file relative to the seed (`file`, with its `label`), kept as the event's `step_output` artifact
+    (`SymphonyElixir.Artifacts.ingest/3`); `gone: true` removes its bytes from the store afterwards,
+    so the Director reads it as unavailable.
 
   It runs as a child of the application between the run store and the orchestrator, when the
   service was started with `--qa-seed <dir>`, so the orchestrator starts with the seeded runs and
@@ -34,7 +40,8 @@ defmodule SymphonyElixir.QaSeed do
 
   require Logger
 
-  alias SymphonyElixir.{DecisionRequest, Pauses, RunStore, SelfHeal, TicketObservation}
+  alias SymphonyElixir.{Artifacts, DecisionRequest, Pauses, RunStore, SelfHeal, TicketEvents, TicketObservation}
+  alias SymphonyElixir.Artifacts.Store
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.{TicketPullRequest, TicketSignals, Tracker}
 
@@ -79,7 +86,8 @@ defmodule SymphonyElixir.QaSeed do
          :ok <- each(Map.get(seed, "holds", []), &hold(repo_key, tracker, &1)),
          :ok <- each(Map.get(seed, "questions", []), &question(repo_key, tracker, &1)),
          :ok <- each(Map.get(seed, "runs", []), &run(dir, repo_key, tracker, now, &1)),
-         :ok <- each(Map.get(seed, "pull_requests", []), &pull_request(repo_key, tracker, now, &1)) do
+         :ok <- each(Map.get(seed, "pull_requests", []), &pull_request(repo_key, tracker, now, &1)),
+         :ok <- each(Map.get(seed, "events", []), &event(dir, repo_key, tracker, now, &1)) do
       Logger.info("QA seed loaded dir=#{dir} repo_key=#{repo_key} issues=#{length(issues)}")
     else
       {:error, reason} = error ->
@@ -233,6 +241,44 @@ defmodule SymphonyElixir.QaSeed do
       watch = %{facts: facts, pr_url: url, head_sha: head_sha(identifier), source: :poll, read_at: now, read_ci: ci}
       tagged(RunStore.put_ticket_pr_watch(repo_key, issue.id, identifier, watch), {:pr_watch, identifier})
     end
+  end
+
+  defp event(dir, repo_key, tracker, now, %{"issue" => identifier, "type" => type} = entry) do
+    with {:ok, issue} <- issue(tracker, identifier),
+         {:ok, artifacts} <- output(dir, repo_key, issue.id, entry) do
+      run_id = Map.get(entry, "run_id")
+      at = DateTime.add(now, -Map.get(entry, "minutes_ago", 0) * 60, :second)
+      opts = [run_id: run_id, at: at, artifacts: artifacts, actor: actor(entry, run_id)]
+
+      case TicketEvents.record(repo_key, issue.id, type, Map.get(entry, "payload", %{}), opts) do
+        {:ok, _event} -> :ok
+        {:error, reason} -> {:error, {{:event, identifier, type}, reason}}
+      end
+    end
+  end
+
+  defp actor(%{"actor" => "agent"} = entry, run_id), do: {:agent, run_id, Map.get(entry, "run_kind", "implementation")}
+  defp actor(_entry, _run_id), do: :machine
+
+  defp output(dir, repo_key, issue_id, %{"issue" => identifier, "output" => %{"file" => file} = output} = entry) do
+    meta = %{repo_key: repo_key, issue_id: issue_id, run_id: Map.get(entry, "run_id"), label: Map.get(output, "label"), kind: "step_output"}
+
+    case Artifacts.ingest(Path.expand(file, dir), meta, roots: [dir]) do
+      {:ok, artifact} ->
+        if Map.get(output, "gone") == true, do: gone(artifact.id)
+        {:ok, [artifact.id]}
+
+      {:error, reason} ->
+        {:error, {{:output, identifier, file}, reason}}
+    end
+  end
+
+  defp output(_dir, _repo_key, _issue_id, _entry), do: {:ok, []}
+
+  # The store no longer holds the bytes; the next read of its path marks the artifact expired.
+  defp gone(id) do
+    File.rm(Store.path(id))
+    Artifacts.path(id)
   end
 
   defp ci(identifier, value) do

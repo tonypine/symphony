@@ -1895,8 +1895,9 @@ a second pass fetches and compiles only what changed. `scripts/qa-server-start.s
 webhooks off and the control API on, and loads the seed in `priv/qa_seed/symphony/` with
 `--qa-seed` (`SymphonyElixir.QaSeed`). The seed holds tickets in each phase, a ticket on a
 Needs Decision hold with an open question, one on an access hold, a paused repository, a
-Symphony-wide pause, finished runs with transcripts, and PRs whose checks are green, red and
-pending. The seed is data, versioned with the fixtures. Nothing in that server reaches Linear or
+Symphony-wide pause, finished runs with transcripts, PRs whose checks are green, red and
+pending, and a step history on QA-105: a run whose tests failed back to writing the code with
+their output kept, whose build output is gone, and whose next attempt paused on a question. The seed is data, versioned with the fixtures. Nothing in that server reaches Linear or
 GitHub: the tracker is the seed's file, no Linear or GitHub token reaches it, and the `gh` on its
 PATH (`scripts/qa-server-gh.sh`) answers only for the seed's own pull requests. The tracker keeps
 the moves, requests and replies Symphony writes in its copy of the seed's issues, and the Inbox

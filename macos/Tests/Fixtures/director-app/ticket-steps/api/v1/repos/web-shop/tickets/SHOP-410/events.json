@@ -1,0 +1,347 @@
+{
+  "next_since": "2026-10-18T10:21:00.000000Z",
+  "timeline": [
+    {
+      "actor": {
+        "kind": "machine"
+      },
+      "artifacts": [],
+      "at": "2026-10-18T10:01:00.000000Z",
+      "children": [],
+      "head_sha": null,
+      "id": "st-01",
+      "idempotency": null,
+      "parent": null,
+      "payload": {
+        "from": "Todo",
+        "to": "In Progress"
+      },
+      "phase": "In Progress",
+      "run_id": null,
+      "seq": 1,
+      "summary": {
+        "detail": null,
+        "title": "Entered In Progress from Todo"
+      },
+      "supersedes": null,
+      "type": "phase.entered"
+    },
+    {
+      "ended_at": "2026-10-18T10:21:00.000000Z",
+      "events": [
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:02:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "st-02",
+          "idempotency": "run.started:run-impl-1",
+          "parent": null,
+          "payload": {
+            "head": "aaa1111",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation",
+            "run_number": 1
+          },
+          "phase": null,
+          "run_id": "run-impl-1",
+          "seq": 2,
+          "summary": {
+            "detail": "at aaa1111",
+            "title": "Implementation run 1 started"
+          },
+          "supersedes": null,
+          "type": "run.started"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:03:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "st-03",
+          "idempotency": null,
+          "parent": null,
+          "payload": {
+            "mode": "delegated",
+            "step_id": "code",
+            "title": "writing the code"
+          },
+          "phase": null,
+          "run_id": "run-impl-1",
+          "seq": 3,
+          "summary": {
+            "detail": "writing the code",
+            "title": "Step started"
+          },
+          "supersedes": null,
+          "type": "step.started"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:10:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "st-04",
+          "idempotency": null,
+          "parent": null,
+          "payload": {
+            "mode": "delegated",
+            "outcome": "passed",
+            "step_id": "code",
+            "title": "writing the code"
+          },
+          "phase": null,
+          "run_id": "run-impl-1",
+          "seq": 4,
+          "summary": {
+            "detail": "writing the code",
+            "title": "Step passed"
+          },
+          "supersedes": null,
+          "type": "step.completed"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:10:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "st-05",
+          "idempotency": null,
+          "parent": null,
+          "payload": {
+            "command": "mix compile --warnings-as-errors",
+            "mode": "machine",
+            "step_id": "build",
+            "title": "building"
+          },
+          "phase": null,
+          "run_id": "run-impl-1",
+          "seq": 5,
+          "summary": {
+            "detail": "mix compile --warnings-as-errors",
+            "title": "building started"
+          },
+          "supersedes": null,
+          "type": "step.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [
+            {
+              "available": false,
+              "id": "bc3e25843360f13e11e12e7a25c7434f8a1f83a48685669a5f21f26c4d694fe8",
+              "kind": "step_output",
+              "label": "Build output",
+              "mime": "text/plain",
+              "url": "/api/v1/artifacts/bc3e25843360f13e11e12e7a25c7434f8a1f83a48685669a5f21f26c4d694fe8"
+            }
+          ],
+          "at": "2026-10-18T10:12:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "st-06",
+          "idempotency": null,
+          "parent": null,
+          "payload": {
+            "duration_ms": 120000,
+            "mode": "machine",
+            "outcome": "passed",
+            "step_id": "build",
+            "title": "building"
+          },
+          "phase": null,
+          "run_id": "run-impl-1",
+          "seq": 6,
+          "summary": {
+            "detail": "output kept",
+            "title": "building passed in 2 min"
+          },
+          "supersedes": null,
+          "type": "step.completed"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:12:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "st-07",
+          "idempotency": null,
+          "parent": null,
+          "payload": {
+            "command": "mix test",
+            "mode": "machine",
+            "step_id": "tests",
+            "title": "tests"
+          },
+          "phase": null,
+          "run_id": "run-impl-1",
+          "seq": 7,
+          "summary": {
+            "detail": "mix test",
+            "title": "tests started"
+          },
+          "supersedes": null,
+          "type": "step.started"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [
+            {
+              "available": true,
+              "id": "2b6e3b53b1dbea0958f2c191d2001ebef2d53a2f6aada7b72f44ed91636736c8",
+              "kind": "step_output",
+              "label": "Test output",
+              "mime": "text/plain",
+              "url": "/api/v1/artifacts/2b6e3b53b1dbea0958f2c191d2001ebef2d53a2f6aada7b72f44ed91636736c8"
+            }
+          ],
+          "at": "2026-10-18T10:15:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "st-08",
+          "idempotency": null,
+          "parent": null,
+          "payload": {
+            "mode": "machine",
+            "outcome": "failed",
+            "returns_to": "code",
+            "returns_to_title": "writing the code",
+            "step_id": "tests",
+            "title": "tests"
+          },
+          "phase": null,
+          "run_id": "run-impl-1",
+          "seq": 8,
+          "summary": {
+            "detail": "output kept",
+            "title": "tests failed: back to writing the code"
+          },
+          "supersedes": null,
+          "type": "step.completed"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:15:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "st-09",
+          "idempotency": null,
+          "parent": null,
+          "payload": {
+            "mode": "delegated",
+            "step_id": "code",
+            "title": "writing the code"
+          },
+          "phase": null,
+          "run_id": "run-impl-1",
+          "seq": 9,
+          "summary": {
+            "detail": "writing the code",
+            "title": "Step started"
+          },
+          "supersedes": null,
+          "type": "step.started"
+        },
+        {
+          "actor": {
+            "kind": "agent",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:20:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "st-10",
+          "idempotency": null,
+          "parent": null,
+          "payload": {
+            "mode": "delegated",
+            "outcome": "paused",
+            "question_id": "question-1",
+            "step_id": "code",
+            "title": "writing the code"
+          },
+          "phase": null,
+          "run_id": "run-impl-1",
+          "seq": 10,
+          "summary": {
+            "detail": "writing the code",
+            "title": "Paused on your answer"
+          },
+          "supersedes": null,
+          "type": "step.completed"
+        },
+        {
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "at": "2026-10-18T10:21:00.000000Z",
+          "children": [],
+          "head_sha": null,
+          "id": "st-11",
+          "idempotency": "run.ended:run-impl-1",
+          "parent": null,
+          "payload": {
+            "duration_ms": 1140000,
+            "exit": "paused",
+            "run_id": "run-impl-1",
+            "run_kind": "implementation",
+            "run_number": 1
+          },
+          "phase": null,
+          "run_id": "run-impl-1",
+          "seq": 11,
+          "summary": {
+            "detail": "19 min",
+            "title": "Implementation run 1 ended: paused"
+          },
+          "supersedes": null,
+          "type": "run.ended"
+        }
+      ],
+      "exit": "paused",
+      "head": "aaa1111",
+      "kind": "run",
+      "run_id": "run-impl-1",
+      "run_kind": "implementation",
+      "run_number": 1,
+      "started_at": "2026-10-18T10:02:00.000000Z",
+      "status": "ended",
+      "summary": {
+        "detail": "19 min",
+        "title": "Implementation run 1 ended: paused"
+      },
+      "verdict": null
+    }
+  ]
+}

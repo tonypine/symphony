@@ -640,10 +640,10 @@ let ledgerNow = ISO8601DateFormatter().date(from: "2026-10-18T11:20:00Z")!
 /// shows it: the laptop viewport (1440) and the desktop one (2560).
 @MainActor
 func ledgerPage(
-    window: CGFloat, feed: Bool = true, note: TicketNoteComposer? = nil, repositoryPaused: Bool = false, blockers: TicketBlockersEditor? = nil,
+    window: CGFloat, api: URL = ledgerAPI, feed: Bool = true, note: TicketNoteComposer? = nil, repositoryPaused: Bool = false, blockers: TicketBlockersEditor? = nil,
     priority: TicketPriorityEditor? = nil, labels: TicketLabelsEditor? = nil, decisions: TicketDecisionsEditor? = nil
 ) -> some View {
-    let events = feed ? (try? Data(contentsOf: ledgerAPI.appendingPathComponent("repos/web-shop/tickets/SHOP-410/events.json"))).flatMap(TicketEventsPayload.decode) : nil
+    let events = feed ? (try? Data(contentsOf: api.appendingPathComponent("repos/web-shop/tickets/SHOP-410/events.json"))).flatMap(TicketEventsPayload.decode) : nil
     var page = TicketPage(
         identifier: "SHOP-410",
         sources: TicketPage.Sources(
@@ -663,6 +663,24 @@ func ledgerPage(
         TicketNoteBar(page: page, composer: note ?? TicketNoteComposer(), submit: {})
     }
     .frame(width: width)
+    .background(DesignTokens.Surface.content.color)
+}
+
+// A run's steps (TP-1413): SHOP-410 with a step history, its failed tests' output listed and its build's gone.
+let stepsAPI = here.appendingPathComponent("../Fixtures/director-app/ticket-steps/api/v1").standardizedFileURL
+
+/// The step output's sheet at its ideal size: the test output read, or one Symphony no longer keeps.
+@MainActor
+func outputSheet(gone: Bool) -> some View {
+    let id = "2b6e3b53b1dbea0958f2c191d2001ebef2d53a2f6aada7b72f44ed91636736c8"
+    let output = TicketOutput(id: id, label: gone ? "Build output" : "Test output", path: "api/v1/artifacts/\(id)", available: !gone)
+    let text = (try? String(contentsOf: stepsAPI.appendingPathComponent("artifacts/\(id).txt"), encoding: .utf8)) ?? ""
+    return VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+        Text(output.label).font(DesignTokens.TypeStyle.sentence.font)
+        OutputState(output: output, text: gone ? .unavailable : .loaded(text))
+    }
+    .padding(DesignTokens.Space.s5)
+    .frame(width: 900, height: 600)
     .background(DesignTokens.Surface.content.color)
 }
 
@@ -1009,6 +1027,12 @@ MainActor.assumeIsolated {
         render(pullRequestPage(.notFound), scheme, to: "pr-page-not-found-\(suffix).png")
         // The note field under a ticket's timeline (TP-1195): laptop and desktop, a refusal, an older Symphony, and a
         // ticket that hasn't run.
+        // A run's steps (TP-1413): the failed step failed with its output to open, the paused one stopped, the gone
+        // output unavailable; the output's sheet, read and gone.
+        render(ledgerPage(window: 1440, api: stepsAPI), scheme, to: "ticket-steps-laptop-\(suffix).png")
+        render(ledgerPage(window: 2560, api: stepsAPI), scheme, to: "ticket-steps-desktop-\(suffix).png")
+        render(outputSheet(gone: false), scheme, to: "ticket-step-output-\(suffix).png")
+        render(outputSheet(gone: true), scheme, to: "ticket-step-output-gone-\(suffix).png")
         render(ledgerPage(window: 1440), scheme, to: "ticket-note-laptop-\(suffix).png")
         render(ledgerPage(window: 2560), scheme, to: "ticket-note-desktop-\(suffix).png")
         let long = String(repeating: "Keep the run header visible. ", count: 160)

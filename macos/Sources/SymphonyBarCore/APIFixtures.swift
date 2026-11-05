@@ -2,7 +2,8 @@ import Foundation
 
 /// Symphony's local API served from files, for QA mode with `SYMPHONY_BAR_QA_API_FIXTURES=<dir>`: each GET reads
 /// `<dir>/<path>.json` (for example `api/v1/state.json`); without one it answers `<path>.png` or `<path>.jpg` with its
-/// image type (a screenshot's bytes), `<path>.410.json` with a 410 (a screenshot Symphony no longer keeps), and 404
+/// image type (a screenshot's bytes), `<path>.txt` as plain text (a step's output), `<path>.410.json` with a 410 (a
+/// file Symphony no longer keeps), and 404
 /// when there is none of them (the live channel, so the app reads after each state poll); each POST is
 /// appended to the request log as one JSON line and answered 200, with `<dir>/<path>.json` when there is one, or 409
 /// with `<path>.409.json` when only that is there (Symphony refusing the move). A POST
@@ -56,12 +57,13 @@ public struct APIFixtures: Equatable {
         return (fixture, response(url, statusCode: 200))
     }
 
-    /// The GET answer `<path>.png`, `<path>.jpg` or `<path>.410.json` gives next to `file` (`<path>.json`).
+    /// The GET answer `<path>.png`, `<path>.jpg`, `<path>.txt` or `<path>.410.json` gives next to `file` (`<path>.json`).
     func otherFixture(of file: URL) -> (data: Data, statusCode: Int, contentType: String)? {
         let stem = file.deletingPathExtension()
         let candidates = [
             (stem.appendingPathExtension("png"), 200, "image/png"),
             (stem.appendingPathExtension("jpg"), 200, "image/jpeg"),
+            (stem.appendingPathExtension("txt"), 200, "text/plain; charset=utf-8"),
             (stem.appendingPathExtension("410").appendingPathExtension("json"), 410, "application/json"),
         ]
         for (url, statusCode, contentType) in candidates {

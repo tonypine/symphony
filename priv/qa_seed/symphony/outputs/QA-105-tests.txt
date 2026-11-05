@@ -1,0 +1,11 @@
+..........F
+
+  1) test Undo brings the ticket back within ten seconds (SymphonyElixir.DirectorMovesTest)
+     test/symphony_elixir/director_moves_test.exs:212
+     Assertion with == failed
+     code:  assert state == "Rework"
+     left:  "In Progress"
+     right: "Rework"
+
+Finished in 4.2 seconds (0.00s async, 4.2s sync)
+11 tests, 1 failure
