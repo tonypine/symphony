@@ -11,7 +11,8 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   reviewer's `SymphonyElixir.ReviewAgent.Verdict` is: a verdict or step status in any case or a
   synonym (`PASS`, `Failed`, `block`), `findings` as a list, a single object or a single sentence,
   `steps` as a list or a single object, and `needs_person`/`needs_dev_server` as `true` or `"true"`.
-  A step's `unprovable` status says it needs what no playbook of the pass can give
+  A step's `environment` (`fixture`, `live`, or `fixtures`/`live server`) names where it was proved,
+  as the QA report and the step's ledger evidence carry it. A step's `unprovable` status says it needs what no playbook of the pass can give
   (`SymphonyElixir.QaVerification` then decides the pass from the other steps).
   A finding object (`step`, `viewport`, `expected`, `actual`, `evidence`) is rendered to the one
   line the QA report and the rework run read (`findings`); `finding_details` keeps, per finding and
@@ -40,6 +41,14 @@ defmodule SymphonyElixir.QaAgent.Verdict do
     "skipped" => "skipped",
     "skip" => "skipped",
     "unprovable" => "unprovable"
+  }
+
+  @environments %{
+    "fixture" => "fixture",
+    "fixtures" => "fixture",
+    "committed fixtures" => "fixture",
+    "live" => "live",
+    "live server" => "live"
   }
 
   @identifier_pattern ~r/\A[A-Za-z][A-Za-z0-9]*-\d+\z/
@@ -82,6 +91,11 @@ defmodule SymphonyElixir.QaAgent.Verdict do
       },
       "details" => %{"type" => "string", "description" => "The command and the relevant output, or what you saw."},
       "evidence" => @evidence_schema,
+      "environment" => %{
+        "type" => "string",
+        "enum" => ["fixture", "live"],
+        "description" => "Where you proved the step: fixture (the committed state fixtures) or live (Symphony's own server on the QA host)."
+      },
       "checklist" => %{"type" => "boolean", "description" => "Epic review: the step is one of the epic's checklist rows."},
       "gap" => %{"type" => "string", "description" => "Epic review: a short label for a failing step."},
       "blocked_by" => %{"type" => "array", "items" => %{"type" => "string"}, "description" => "Epic review: gap labels or sub-tickets it waits on."},
@@ -213,6 +227,7 @@ defmodule SymphonyElixir.QaAgent.Verdict do
       coerced =
         %{name: name, status: status, details: trimmed(Map.get(step, "details")) || "", evidence: step |> Map.get("evidence") |> List.wrap() |> string_list()}
         |> put_if(:checklist, true, Map.get(step, "checklist") == true)
+        |> put_environment(Map.get(step, "environment"))
         |> put_trimmed(:gap, Map.get(step, "gap"))
         |> put_trimmed(:defect, Map.get(step, "defect"))
 
@@ -226,6 +241,15 @@ defmodule SymphonyElixir.QaAgent.Verdict do
   end
 
   defp coerce_step(_step), do: :error
+
+  # The environment a step was proved in, as a word the report and the ledger read: anything else
+  # is left out.
+  defp put_environment(step, environment) do
+    case Map.fetch(@environments, word(environment)) do
+      {:ok, environment} -> Map.put(step, :environment, environment)
+      :error -> step
+    end
+  end
 
   defp coerce_findings(nil), do: {:ok, []}
   defp coerce_findings(finding) when is_map(finding) or is_binary(finding), do: coerce_findings([finding])
