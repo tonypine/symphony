@@ -153,7 +153,8 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary("step.skipped", payload, _event), do: {"Step skipped", [text(payload, :title)]}
 
   defp summary("evidence", payload, _event) do
-    {"Evidence recorded" <> suffix(" with ", plural(length(strings(field(payload, :artifacts))), "file")), [text(payload, :caption)]}
+    title = "Evidence recorded" <> suffix(" with ", plural(length(strings(field(payload, :artifacts))), "file"))
+    {title <> suffix(", ", environment(text(payload, :environment))), [text(payload, :caption)]}
   end
 
   defp summary("finding.recorded", payload, event) do
@@ -406,6 +407,10 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   defp prefixed(_word, nil), do: []
   defp prefixed(word, value), do: ["#{word} #{value}"]
+
+  defp environment("live"), do: "on the live server"
+  defp environment("fixture"), do: "on the fixtures"
+  defp environment(_environment), do: nil
 
   defp suffix(_separator, nil), do: ""
   defp suffix(separator, value), do: "#{separator}#{value}"

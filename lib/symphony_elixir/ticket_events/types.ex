@@ -39,6 +39,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `step.started`, `step.completed`, `evidence`, `checklist.answered` and `note` in any run. Every other type is the
   machine's or a person's (a question is asked through the question tool), and a legacy type is
   never an agent's. An `evidence` may carry a `proof`: the walkthrough step it proves and the test.
+  A QA pass's step evidence also names the step (`step`), its result (`status`), what QA saw
+  (`details`), the environment it was proved in (`environment`: `fixture` or `live`) and the
+  entries that name no kept file (`links`, a CI run's URL); the QA report renders its steps from
+  them (`SymphonyElixir.QaAgent.Report`).
 
   A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)
   and how it runs (`mode`): `machine` (a command Symphony runs, `command`), `orchestrated` (an agent
@@ -123,6 +127,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @person_actions ~w(stop move force unblock restart add_blocker remove_blocker set_priority add_label remove_label)
   @step_modes ~w(machine orchestrated delegated)
   @evidence {:any_of, [:string, {:list, :string}]}
+  # A QA step's result and the environment it was proved in (`fixture`: the committed state
+  # fixtures; `live`: Symphony's own server on the QA host), as a QA pass's step evidence carries them.
+  @evidence_statuses ~w(pass fail blocked skipped unprovable)
+  @environments ~w(fixture live)
   @tokens {:any_of, [:non_neg_integer, :map]}
   @signal [signal: :string]
   @drift [record_phase: :string, linear_phase: :string]
@@ -314,7 +322,15 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:agent],
       run_kinds: :any,
       required: [caption: {:string, 500}],
-      optional: [artifacts: {:list, :string}, proof: {:map, [step: :non_neg_integer, test: {:string, 500}]}],
+      optional: [
+        artifacts: {:list, :string},
+        proof: {:map, [step: :non_neg_integer, test: {:string, 500}]},
+        step: {:string, 200},
+        status: {:enum, @evidence_statuses},
+        details: {:string, 2_000},
+        environment: {:enum, @environments},
+        links: {:list, :string}
+      ],
       idempotency: :writer
     },
     "finding.recorded" => %{

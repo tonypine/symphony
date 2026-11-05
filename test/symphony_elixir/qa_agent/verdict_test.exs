@@ -77,7 +77,8 @@ defmodule SymphonyElixir.QaAgent.VerdictTest do
         "checklist" => true,
         "gap" => "Clipped pane",
         "defect" => " clip ",
-        "blocked_by" => "TP-1"
+        "blocked_by" => "TP-1",
+        "environment" => " Live Server "
       }
 
       assert {:ok, %{verdict: :fail, findings: [], steps: [coerced]}} = Verdict.from_map(%{"verdict" => "fail", "steps" => step})
@@ -90,8 +91,15 @@ defmodule SymphonyElixir.QaAgent.VerdictTest do
                checklist: true,
                gap: "Clipped pane",
                defect: "clip",
-               blocked_by: ["TP-1"]
+               blocked_by: ["TP-1"],
+               environment: "live"
              }
+
+      assert {:ok, %{steps: [%{environment: "fixture"}]}} =
+               Verdict.from_map(%{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "pass", "environment" => "fixtures"}]})
+
+      assert {:ok, %{steps: [unnamed]}} = Verdict.from_map(%{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "pass", "environment" => "staging"}]})
+      refute Map.has_key?(unnamed, :environment)
 
       assert {:ok, %{steps: [%{name: "a", status: "skipped", details: "", evidence: []}]}} =
                Verdict.from_map(%{"verdict" => "pass", "steps" => [%{"name" => "a", "status" => "SKIP"}]})
