@@ -30,9 +30,12 @@ defmodule SymphonyElixirWeb.ControlApiController do
   its question), and the optional `move` the decision directs. `decisions` takes a plan's `picks`,
   each with the `question_id` or the `request_comment_id` of the question it answers. Each pick of
   either is a `question` and its `answer` (an option's label), with an optional `text`: the person's
-  own words. A pick with `text` answers in those words, whatever its `answer`, as the Inbox's "Answer
-  in my own words…" does: the Question is answered with them and the decision on the ticket shows
-  them. A pick whose `answer` is the own-words option ("In my own words", "Answer in my own words…")
+  own words. A pick with `text` answers in those words, as the Inbox's "Answer in my own words…"
+  does: the Question is answered with them and the decision on the ticket shows them. An `answer`
+  naming one of the Question's options stays the pick: the option decides what the answer does
+  ("Run it again" runs the ticket again), and the words go with it. A decide on a Question already
+  answered answers 200 with `already_decided: true` and the recorded `answer` and `option`, and
+  changes nothing. A pick whose `answer` is the own-words option ("In my own words", "Answer in my own words…")
   without `text` is 422 and answers nothing. `move` takes
   `to`, any phase the repo's workflow names, and an optional `note`: a ticket of a configured
   repository Symphony has no record of yet is read from Linear and recorded first. It answers 409
@@ -427,12 +430,15 @@ defmodule SymphonyElixirWeb.ControlApiController do
   # A plan's pick also names the Question it answers or the request comment it goes under. A pick's
   # `text` is the person's own words: they are the answer, as the Inbox's write-in sends them, so
   # the Question service records them as the answer and the decision on the ticket shows them.
+  # Words given with an option's label (not the own-words option) keep that label as the pick's
+  # `option`: the option decides what the answer does ("Run it again" runs it), never the words.
   defp picks(picks) when is_list(picks) do
     for pick <- picks do
       answer = string_param(pick_field(pick, "answer"))
       text = string_param(pick_field(pick, "text"))
 
       %{question: string_param(pick_field(pick, "question")), answer: text || answer}
+      |> put_present(:option, if(text && answer && not own_words_option?(answer), do: answer))
       |> put_present(:question_id, string_param(pick_field(pick, "question_id")))
       |> put_present(:request_comment_id, string_param(pick_field(pick, "request_comment_id")))
       |> put_present(:own_words_missing, if(is_nil(text) and own_words_option?(answer), do: true))

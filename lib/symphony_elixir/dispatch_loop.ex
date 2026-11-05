@@ -149,10 +149,11 @@ defmodule SymphonyElixir.DispatchLoop do
 
   def answer_move(_question), do: :keep
 
-  @doc "The label of the option a `question_attrs/2` question answers for `move` (`:unblock` or `:restart`)."
-  @spec option_label(:unblock | :restart) :: String.t()
+  @doc "The label of the option a `question_attrs/2` question answers for `move` (`:unblock`, `:restart` or `:keep`)."
+  @spec option_label(:unblock | :restart | :keep) :: String.t()
   def option_label(:unblock), do: @run_again
   def option_label(:restart), do: @start_over
+  def option_label(:keep), do: @keep_paused
 
   defp request(title, why, name) do
     %{

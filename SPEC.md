@@ -6264,10 +6264,17 @@ Minimum endpoints:
     question_id, option, answered}`, `404` (`question_not_found`) when no such question is open,
     and `422` without `picks`.
   - A pick of `decide` or `decisions` may carry `text`, the person's own words: the pick then
-    answers in those words, whatever its `answer`, as the Inbox's "Answer in my own words…" does,
-    so the Question is answered with them and the decision on the ticket shows them. A pick whose
+    answers in those words, as the Inbox's "Answer in my own words…" does, so the Question is
+    answered with them and the decision on the ticket shows them. An `answer` naming one of the
+    Question's options stays the pick: the option decides what the answer does (a loop-guard
+    question's "Run it again" runs the ticket again), and the words go with it. A pick whose
     `answer` is the own-words option ("In my own words", "Answer in my own words…") without `text`
     answers `422` and answers nothing.
+  - One decision per Question: a `decide` on a Question already answered changes nothing and
+    answers `200` with `already_decided: true` and the recorded `answer` and `option`. An answer
+    that keeps a ticket held (a loop-guard question's "Keep it paused", or words) writes the kept
+    pause with the answer, so the ticket is never free to dispatch in between, and its text says
+    what the person did ("You kept it paused: …", "You answered in your own words: …").
   - A missing `issue_identifier`, `reason` or `picks`, or a `decide` with neither `question_id` nor
     `request_comment_id`, answers `422`, an
     unknown ticket `404`, and a
