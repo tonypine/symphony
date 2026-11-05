@@ -245,6 +245,12 @@ exemptions:
       - notifications.enabled
       - notifications.redact_titles
 
+  # phases
+  - reason: The step list each run kind follows. Its editor is the Phases group in Settings, planned next.
+    ticket: TP-1392
+    keys:
+      - phases.*
+
   # poller
   - reason: Linear polling backoff. No control in the app yet.
     keys:
