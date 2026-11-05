@@ -1823,6 +1823,8 @@ defmodule SymphonyElixirWeb.Presenter do
   # A run waiting out a Linear rate limit or outage has no new agent message to show.
   defp running_message(%{linear_wait_until: %DateTime{}}), do: "waiting for Linear"
   # A run walking its step list between agent turns (`SymphonyElixir.PhaseSteps`).
+  defp running_message(%{step: %{waiting: "answer", title: title}}), do: "paused on your answer at #{title}"
+  defp running_message(%{step: %{waiting: "ended"}}), do: "ending: the question its step waited on was withdrawn"
   defp running_message(%{step: %{waiting: "pause"}}), do: "waiting for Symphony's pause to lift before its next agent turn"
   defp running_message(%{step: %{waiting: "slot"}}), do: "waiting for a free slot for its next agent turn"
   defp running_message(%{step: %{mode: "machine", title: title}}), do: "running #{title}"

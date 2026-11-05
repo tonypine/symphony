@@ -302,7 +302,9 @@ defmodule SymphonyElixir.Questions do
       so does a question a request comment shows (`request: true`, the agent's
       `linear_request_human_action`: a protected-path authorization, a plan's choice): the run
       ended because it asked, and the question holds the ticket until it is answered or ends for
-      another reason (TP-1321);
+      another reason (TP-1321). So a question a run's step pauses on (`SymphonyElixir.PhaseSteps`)
+      outlives the run: the agent's question tool asks it as a request, and a machine step's is
+      asked by Symphony; its answer resumes the step, in the run or in the next one;
     * a merge settled and a terminal state end every question.
 
   A question no longer open lapses with nothing.

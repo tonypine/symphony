@@ -604,6 +604,15 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert %{"running" => [%{"last_message" => "waiting for Symphony's pause to lift before its next agent turn", "step" => %{"waiting" => "pause", "started_at" => nil}}]} =
              json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    # A step paused on a Question: no session, on its step, waiting for the person's answer.
+    :sys.replace_state(pid, &Keyword.put(&1, :snapshot, snapshot.(Map.put(waiting.("answer"), :question_id, "q-1"))))
+
+    assert %{"running" => [%{"session_id" => nil, "last_message" => "paused on your answer at Write the code", "step" => %{"waiting" => "answer", "question_id" => "q-1"}}]} =
+             json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    :sys.replace_state(pid, &Keyword.put(&1, :snapshot, snapshot.(waiting.("ended"))))
+    assert %{"running" => [%{"last_message" => "ending: the question its step waited on was withdrawn"}]} = json_response(get(build_conn(), "/api/v1/state"), 200)
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do

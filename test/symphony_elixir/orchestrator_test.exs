@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Pauses
+  alias SymphonyElixir.{Pauses, Questions}
 
   @active_states ["Todo", "In Progress", "Merging", "Rework"]
 
@@ -118,6 +118,84 @@ defmodule SymphonyElixir.OrchestratorTest do
     state = Orchestrator.run_watchdogs_for_test(state)
 
     assert Enum.sort(Map.keys(state.running)) == ["walk-1", "walk-2", "walk-3", "walk-4"]
+  end
+
+  describe "a step paused on a Question" do
+    setup do
+      :ok = RunStore.clear()
+      :ok
+    end
+
+    defp ask!(issue_id) do
+      request = %{
+        title: "Pick the settings layout",
+        question: "Which layout should the settings page use: one column or two?",
+        why: "The ticket shows both layouts. Only you can say which one it wants.",
+        if_unanswered: "The ticket stays paused on its code step.",
+        recommendation_reason: "One column matches the rest of the app.",
+        options: [%{label: "One column", effect: "The run builds one column.", recommended: true}, %{label: "Two columns", effect: "The run builds two."}]
+      }
+
+      {:ok, question} = Questions.ask({:ticket, "default", issue_id}, request, asked_by: %{kind: :run, name: "The run"}, request: true)
+      question
+    end
+
+    defp answer_wanted(question), do: {:answer_wanted, self(), %{id: "code", title: "Write the code", mode: "delegated"}, question.id}
+
+    test "holds no session and no slot, shows on its step as paused on the answer, and the answer gives it its turn at once" do
+      question = ask!("walk-1")
+      state = orchestrator_state(1) |> run(issue("walk-1", "TP-1", "In Progress"), session_id: "sess-1", agent_session: %{session: 1})
+
+      state = step(state, answer_wanted(question))
+      refute_received {:run_step_turn, "walk-1"}
+      assert Orchestrator.should_dispatch_issue_for_test(issue("todo-1", "TP-2", "Todo"), state)
+      assert %{session_id: nil, agent_session: nil} = state.running["walk-1"]
+      assert %{session_id: nil, step: %{id: "code", waiting: "answer", question_id: question_id}} = running_of(state, "walk-1")
+      assert question_id == question.id
+
+      # The watchdogs hold off: it waits on a person.
+      long_ago = DateTime.add(DateTime.utc_now(), -3_600, :second)
+      aged = state |> put_in([Access.key(:running), "walk-1", :last_event_at], long_ago) |> Orchestrator.run_watchdogs_for_test()
+      assert Map.has_key?(aged.running, "walk-1")
+
+      # A pause change that leaves it open changes nothing; the answer's gives it its turn.
+      {:noreply, state} = Orchestrator.handle_info({:ticket_record, "default", "walk-1", :changed, [:pause]}, state)
+      refute_received {:run_step_turn, "walk-1"}
+
+      {:ok, _answered} = Questions.answer({:ticket, "default", "walk-1"}, question.id, "Two columns")
+      {:noreply, state} = Orchestrator.handle_info({:ticket_record, "default", "walk-1", :changed, [:pause]}, state)
+      assert_received {:run_step_turn, "walk-1"}
+      assert %{step: %{waiting: nil}} = state.running["walk-1"]
+    end
+
+    test "an answer while Symphony is paused waits for the pause to lift, and one already given grants the turn at once" do
+      question = ask!("walk-1")
+      {:ok, _answered} = Questions.answer({:ticket, "default", "walk-1"}, question.id, "1")
+      {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("deploy window"))
+
+      state = orchestrator_state(1) |> run(issue("walk-1", "TP-1", "In Progress")) |> step(answer_wanted(question))
+      refute_received {:run_step_turn, "walk-1"}
+      assert %{step: %{waiting: "pause", question_id: nil}} = running_of(state, "walk-1")
+
+      {:ok, nil} = Pauses.clear(:symphony)
+      state = step(state, answer_wanted(question))
+      assert_received {:run_step_turn, "walk-1"}
+      assert %{step: %{waiting: nil}} = state.running["walk-1"]
+    end
+
+    test "a Question withdrawn (Cancel) ends the run, once" do
+      question = ask!("walk-1")
+      state = orchestrator_state(1) |> run(issue("walk-1", "TP-1", "In Progress")) |> step(answer_wanted(question))
+
+      {:ok, _withdrawn} = Questions.withdraw({:ticket, "default", "walk-1"}, question.id, "The ticket was cancelled.")
+      {:noreply, state} = Orchestrator.handle_info({:ticket_record, "default", "walk-1", :changed, [:pause]}, state)
+      assert_received {:run_step_question_ended, "walk-1"}
+      assert %{step: %{waiting: "ended"}} = running_of(state, "walk-1")
+
+      {:noreply, _state} = Orchestrator.handle_info({:ticket_record, "default", "walk-1", :changed, [:pause]}, state)
+      refute_received {:run_step_question_ended, "walk-1"}
+      refute_received {:run_step_turn, "walk-1"}
+    end
   end
 
   test "a step notice for a run that already ended changes nothing" do

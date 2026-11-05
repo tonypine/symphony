@@ -380,8 +380,11 @@ defmodule SymphonyElixir.Orchestrator do
   # decision of the PR watcher may start a run (`SymphonyElixir.PrWatch.Repo`: the reviewer, QA).
   # Both live in the store, so a dispatch cycle reads them with no Linear read, on either dispatch
   # source.
+  #
+  # An answer clears the pause of its Question, so a run whose step waits on it gets its turn at once
+  # (`grant_step_turns/1`).
   defp handle_info_message({:ticket_record, _repo_key, issue_id, :changed, [field]}, state) when field in [:pause, :pr_watch] do
-    {:noreply, state |> stop_blocked_start(issue_id) |> request_cycle()}
+    {:noreply, state |> stop_blocked_start(issue_id) |> grant_step_turns() |> request_cycle()}
   end
 
   # A reload of `symphony.yml` or a repository's workflow that changes what dispatch reads (a slot
@@ -734,8 +737,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp handle_info_message({:codex_worker_update, _issue_id, _update}, state), do: {:noreply, state}
 
   # A run walking its step list (`SymphonyElixir.PhaseSteps`) between agent turns: on a machine
-  # step its session ended and it holds no slot, so a cycle runs at once for the slot it freed; once
-  # the step list reaches an agent turn again, the run waits for a slot (`grant_step_turns/1`).
+  # step, or on a step paused on a Question, its session ended and it holds no slot, so a cycle runs
+  # at once for the slot it freed; once the step list reaches an agent turn again (or the Question is
+  # answered), the run waits for a slot (`grant_step_turns/1`).
   defp handle_info_message({:run_step, issue_id, notice}, %{running: running} = state) when is_binary(issue_id) do
     case Map.get(running, issue_id) do
       nil ->
@@ -749,6 +753,8 @@ defmodule SymphonyElixir.Orchestrator do
         case notice do
           {:machine, _step} -> {:noreply, request_cycle(state)}
           {:turn_wanted, _pid, _step} -> {:noreply, grant_step_turns(state)}
+          # A step paused on a Question frees the run's slot, and its answer may already be in.
+          {:answer_wanted, _pid, _step, _question_id} -> {:noreply, state |> grant_step_turns() |> request_cycle()}
         end
     end
   end
@@ -5134,17 +5140,43 @@ defmodule SymphonyElixir.Orchestrator do
     Map.put(running_entry, :step, Map.merge(step, %{waiting: :slot, waiter: pid, started_at: DateTime.utc_now()}))
   end
 
+  defp put_step(running_entry, {:answer_wanted, pid, step, question_id}) do
+    now = DateTime.utc_now()
+    step = Map.merge(step, %{waiting: :answer, waiter: pid, question_id: question_id, started_at: now})
+    Map.merge(running_entry, %{step: step, session_id: nil, agent_session: nil, last_event_at: now})
+  end
+
   # The runs waiting for the slot of their next agent turn get one, the longest waiting first, before
   # any ticket is dispatched: one while Symphony is paused waits for the pause to lift (decision 1 of
   # TP-1085; its machine steps still ran), one with no free slot for one to free. A forced run takes
-  # no slot, so only the pause holds it back.
+  # no slot, so only the pause holds it back. A run whose step paused on a Question waits for its
+  # answer first, read from the ticket's record (`SymphonyElixir.Questions`): once it is answered the
+  # run waits for a slot like any other; a Question withdrawn (Cancel) or gone ends the run.
   defp grant_step_turns(%State{running: running} = state) do
     paused? = operator_paused?(state)
 
     running
     |> Enum.filter(fn {_issue_id, entry} -> match?(%{step: %{waiting: waiting}} when not is_nil(waiting), entry) end)
     |> Enum.sort_by(fn {_issue_id, entry} -> entry.step.started_at end, DateTime)
-    |> Enum.reduce(state, fn {issue_id, entry}, state_acc -> grant_step_turn(state_acc, issue_id, entry, paused?) end)
+    |> Enum.reduce(state, fn
+      {issue_id, %{step: %{waiting: :answer}} = entry}, acc -> await_step_answer(acc, issue_id, entry, paused?)
+      {_issue_id, %{step: %{waiting: :ended}}}, acc -> acc
+      {issue_id, entry}, acc -> grant_step_turn(acc, issue_id, entry, paused?)
+    end)
+  end
+
+  defp await_step_answer(state, issue_id, %{step: step} = entry, paused?) do
+    case Questions.find({:ticket, running_entry_repo_key(entry) || state.repo_key, issue_id}, step.question_id) do
+      %{state: :answered} ->
+        grant_step_turn(state, issue_id, entry, paused?)
+
+      %{state: :open} ->
+        state
+
+      _withdrawn_or_gone ->
+        send(step.waiter, {:run_step_question_ended, issue_id})
+        put_running_entry(state, issue_id, put_in(entry, [:step, :waiting], :ended))
+    end
   end
 
   defp grant_step_turn(state, issue_id, entry, true), do: put_running_entry(state, issue_id, put_in(entry, [:step, :waiting], :pause))
@@ -7552,14 +7584,16 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # The step a walking run is on (`SymphonyElixir.PhaseSteps`): its id, title and mode, when a
-  # machine step started, and what its next agent turn waits for (`slot`, `pause`), else nil.
+  # machine step started, and what its next agent turn waits for (`answer` to the Question it names,
+  # then `slot` and `pause`; `ended` once that Question was withdrawn), else nil.
   defp snapshot_step(%{id: id} = step) do
     %{
       id: id,
       title: Map.get(step, :title),
       mode: Map.get(step, :mode),
       started_at: if(Map.get(step, :mode) == "machine", do: Map.get(step, :started_at)),
-      waiting: step |> Map.get(:waiting) |> then(&(&1 && Atom.to_string(&1)))
+      waiting: step |> Map.get(:waiting) |> then(&(&1 && Atom.to_string(&1))),
+      question_id: if(Map.get(step, :waiting) == :answer, do: Map.get(step, :question_id))
     }
   end
 

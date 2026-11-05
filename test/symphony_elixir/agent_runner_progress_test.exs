@@ -21,17 +21,20 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   defmodule ProgressAgent do
     # Coding-agent stand-in: every turn completes and is reported to the test, or, with
     # `:progress_api_unreachable` set, ends as Claude's turn does when it can't reach the model API.
-    # `:progress_turn_hook` runs with the turn's options, as a tool the agent calls would.
+    # `:progress_turn_hook` runs with the turn's options, as a tool the agent calls would. A turn on
+    # a delegated step of the run's step list records the step passed, as the prompt asks
+    # (`SymphonyElixir.PhaseSteps`).
     def start_session(_workspace, opts) do
       send(Application.fetch_env!(:symphony_elixir, :progress_agent_recipient), {:progress_session_started, opts})
       {:ok, %{}}
     end
 
-    def run_turn(_session, _prompt, _issue, opts) do
+    def run_turn(_session, prompt, issue, opts) do
       count = Application.get_env(:symphony_elixir, :progress_agent_turns, 0) + 1
       Application.put_env(:symphony_elixir, :progress_agent_turns, count)
       send(Application.fetch_env!(:symphony_elixir, :progress_agent_recipient), {:progress_turn, count})
       if hook = Application.get_env(:symphony_elixir, :progress_turn_hook), do: hook.(opts)
+      record_step(prompt, issue, opts)
 
       case Application.get_env(:symphony_elixir, :progress_api_unreachable) do
         %{} = info -> {:error, {:model_api_unreachable, info}}
@@ -40,6 +43,15 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
 
     def stop_session(_session), do: :ok
+
+    defp record_step(prompt, issue, opts) do
+      with [_match, id] <- Regex.run(~r/This turn is the `(\w+)` step/, prompt),
+           true <- prompt =~ "End this step by recording `step.completed`" do
+        run_id = Keyword.get(opts, :run_id) || "run-progress"
+        payload = %{step_id: id, title: id, mode: "delegated", outcome: "passed"}
+        SymphonyElixir.TicketEvents.record("default", issue.id, "step.completed", payload, actor: {:agent, run_id, "implementation"}, run_id: run_id)
+      end
+    end
   end
 
   defmodule ProgressGitHub do

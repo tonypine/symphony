@@ -105,6 +105,16 @@ defmodule SymphonyElixir.ConfigPhasesTest do
       assert [_, %Step{prompt: "Review the diff.", timeout_ms: 1_000, no_result_limit: 3, on_fail: "code", command: []}] = steps
     end
 
+    test "an orchestrated step carries the answer its agent gives, each field with its type" do
+      steps =
+        steps!([
+          code(),
+          %{"id" => "layout", "mode" => "orchestrated", "prompt" => "Pick a layout.", "answer" => %{"layout" => "string", "columns" => "number"}}
+        ])
+
+      assert [%Step{answer: %{}}, %Step{answer: %{"layout" => "string", "columns" => "number"}}] = steps
+    end
+
     test "a machine step may loop through a delegated step" do
       assert [_, _, _] = steps!([code(), machine("build", %{"on_fail" => "code"}), machine("tests", %{"on_fail" => "code"})])
     end
@@ -148,6 +158,18 @@ defmodule SymphonyElixir.ConfigPhasesTest do
 
       assert refused_steps([%{"id" => "code", "mode" => "delegated", "when" => "always"}]) =~
                "steps.when is only for a machine step; step `code` is delegated"
+
+      assert refused_steps([%{"id" => "code", "mode" => "delegated", "answer" => %{"layout" => "string"}}]) =~
+               "steps.answer is only for an orchestrated step; step `code` is delegated"
+    end
+
+    test "an answer field with a bad name or type" do
+      step = &%{"id" => "layout", "mode" => "orchestrated", "prompt" => "Pick.", "answer" => &1}
+
+      assert refused_steps([step.(%{"layout" => "text"})]) =~
+               "steps.answer field `layout` of step `layout` must be a lowercase name with a type: string, number, boolean, list, object"
+
+      assert refused_steps([step.(%{"Layout" => "string"})]) =~ "field `Layout` of step `layout`"
     end
 
     test "a missing or unknown mode, a missing or malformed id, and duplicate ids" do
@@ -202,6 +224,7 @@ defmodule SymphonyElixir.ConfigPhasesTest do
   test "the step model's modes and conditions" do
     assert Step.modes() == ~w(machine orchestrated delegated)
     assert Step.conditions() == ~w(always macos_changed elixir_changed)
+    assert Step.answer_types() == ~w(string number boolean list object)
     assert %Phase{steps: []} = %Phase{}
   end
 end

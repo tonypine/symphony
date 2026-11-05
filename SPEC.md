@@ -2777,9 +2777,16 @@ pass through a delegated step, and a machine step must have a command. `symphony
 prints the list a run kind follows above its prompt.
 
 The step runner (`SymphonyElixir.PhaseSteps`) walks the list for a run whose list holds a machine
-step. A delegated or orchestrated step is an agent turn; until the agent's own `step.completed`
-ends it (TP-1394), Symphony records its `step.started` as the turn starts and its `passed` as the
-turn ends. A machine step runs each command whose `when` holds in the ticket's workspace, through
+step. A delegated or orchestrated step is an agent turn, whose `step.started` Symphony records as the
+turn starts. A delegated step ends with the agent's own `step.completed` for it (`ticket_record`),
+read from the ledger once the turn ends: `passed` or `skipped` go to the next step, `failed` to the
+step it `returns_to`. A turn that ends without one is retried once in the same session with a
+reminder; a second one ends the step `failed` back to itself with a `note`, and the run ends: a step
+is never passed on Symphony's guess. An orchestrated step's prompt is its `prompt` and, when it has
+an `answer` schema, the file its agent writes its answer to as a JSON object; Symphony checks the
+answer against the schema, retries a miss once with the reason, then ends the step `failed` (to its
+`on_fail`, else itself) with a `note`. A good answer is recorded as a `note` and carried into the
+prompts of the run's later turns. A machine step runs each command whose `when` holds in the ticket's workspace, through
 the workspace hook runner, with the step's `timeout_ms` and the agent allow-list environment plus
 the changed files, and records `step.started` and `step.completed` with its output as a
 `step_output` artifact. `passed` goes to the next step; `failed` to its `on_fail`, the next turn's
@@ -2798,6 +2805,28 @@ and its next agent turn waits for the pause to lift (decision 1 of TP-1085). A f
 for the pause. `run.started` and `run.ended` frame the whole list, and `turn_count` counts agent
 turns. Past the last step the run goes on turn by turn in the same session, as a run with no list
 does.
+
+Any step may pause on a Question. A delegated or orchestrated step whose agent asked one through the
+question tool during its turn (an open Question a run asked since the step started) ends `paused`
+with the Question's id before any other rule reads the turn; so does a machine step at its
+no-result limit. The run stops its agent session and tells the orchestrator, which marks its running
+entry on the step waiting for the `answer` (`question_id`), with no session and no slot, and with
+neither watchdog's clock. The ticket's pause is the Question's own `question` reason, so the
+Director shows it waiting on the person and the Inbox lists the Question. The answer is the
+trigger: the change of the ticket's pause it makes reaches the orchestrator at once, which gives the
+run a slot as for any next turn (Symphony's pause still holds it back). Before resuming, the run
+reads the ticket's record, never Linear: the Question answered, the record's phase still the run's,
+and no other pause reason; otherwise the run ends. An agent step resumes on the same step in a new
+session, resuming the paused turn's conversation when the agent can (Claude's `--resume`), with the
+whole prompt and the question and the answer verbatim in it; its steps stay under the same run. A
+machine step goes on past the step ("Go on past it"), runs it again ("Run it again"), or hands an
+answer in the person's own words to the agent step its `on_fail` names. A Question withdrawn while
+the run waits (Cancel withdraws every open Question of a ticket it cancels, and stops the run) ends
+the run; Stop ends it as any run. A run that is gone when the answer comes (Symphony restarted)
+leaves the step to the ticket's next run: one whose ticket's last step event is a `step.completed`
+paused on a Question now answered starts at that step, with the question and the answer in its
+prompt. A Question a step paused on is not withdrawn when the run that asked ends: the agent's
+question tool asks it as a request (`request: true`), and a machine step's is asked by Symphony.
 
 ### 7.3 Transition Triggers
 
@@ -5013,9 +5042,11 @@ SHOULD return:
   the run's agent has waited on for more than a minute (`name`, `started_at`, `age_ms`), otherwise
   null; dashboards show such a run as waiting on that tool
 - each running row SHOULD include `step`: the step a run walking its step list is on (`id`,
-  `title`, `mode`, `started_at` of a machine step, and `waiting`: `slot` or `pause` while its next
-  agent turn waits for a slot or for Symphony's pause to lift), otherwise null; a run on a machine
-  step has `session_id: null`, and its `last_message` names the step or the wait
+  `title`, `mode`, `started_at` of a machine step, and `waiting`: `answer` while its step is paused
+  on the Question `question_id` names, `slot` or `pause` while its next agent turn waits for a slot
+  or for Symphony's pause to lift, `ended` once the Question it waited on was withdrawn), otherwise
+  null; a run on a machine step or paused on a Question has `session_id: null`, and its
+  `last_message` names the step or the wait
 - `watching` (list of recently completed issues now in non-active, non-terminal states)
 - each watching row SHOULD include issue identifier, current state, issue URL, last-run time, and
   final transcript replay metadata while the watch remains open
