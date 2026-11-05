@@ -269,6 +269,11 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert {:ok, %{artifacts: ["a1"]}} = evidence.(%{caption: "Before", artifacts: ["a1"]})
       assert {:error, {:invalid_payload, [:caption]}} = evidence.(%{caption: String.duplicate("c", 501)})
 
+      assert {:ok, %{step: "Step 2", status: "fail", environment: "live", links: ["https://ci.test/run/1"]}} =
+               evidence.(%{caption: "Step 2: fail", step: "Step 2", status: "fail", environment: "live", links: ["https://ci.test/run/1"]})
+
+      assert {:error, {:invalid_payload, [:environment]}} = evidence.(%{caption: "Step 2", environment: "staging"})
+
       assert {:ok, %{waits_on: %{type: "dependency"}}} = machine.("hold.set", %{kind: "blocked", waits_on: %{type: "dependency"}})
       assert {:error, {:invalid_payload, [:waits_on]}} = machine.("hold.set", %{kind: "blocked", waits_on: "TP-1"})
 
@@ -316,8 +321,15 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert %{optional: [%{name: "returns_to", required_when: %{field: "outcome", equals: "failed"}}, returns_to_title | _]} = Types.schema("step.completed")
       refute Map.has_key?(returns_to_title, :required_when)
 
-      assert %{optional: [%{name: "artifacts", type: "list", item: %{type: "string"}}, %{name: "proof", type: "map", fields: proof}]} =
-               Types.schema("evidence")
+      assert %{
+               optional: [
+                 %{name: "artifacts", type: "list", item: %{type: "string"}},
+                 %{name: "proof", type: "map", fields: proof} | step_fields
+               ]
+             } = Types.schema("evidence")
+
+      assert Enum.map(step_fields, & &1.name) == ~w(step status details environment links)
+      assert %{type: "enum", values: ~w(fixture live)} = Enum.find(step_fields, &(&1.name == "environment"))
 
       assert proof == [%{name: "step", type: "non_neg_integer"}, %{name: "test", type: "string", max: 500}]
       assert %{optional: [_head, %{name: "evidence", type: "any_of", of: [%{type: "string"}, %{type: "list"}]}]} = Types.schema("finding.resolved")

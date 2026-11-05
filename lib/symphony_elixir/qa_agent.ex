@@ -360,6 +360,8 @@ defmodule SymphonyElixir.QaAgent do
     (its number and a few words), what you saw, and the environment you proved it in (the committed
     fixtures or the live server, and the appearance and window size when they matter), with the
     step's screenshots or logs as `artifacts`. The Director's timeline shows each step's evidence.
+    Name the same environment on the verdict's step (`environment`: `fixture` for the committed
+    fixtures, `live` for the live server); the QA report shows it beside the step.
     The verdict is not an event you record: the `qa_verdict` tool records it, and `ticket_record`
     refuses one.
 
@@ -375,6 +377,7 @@ defmodule SymphonyElixir.QaAgent do
           "name": "<what you checked>",
           "status": "pass" | "fail" | "blocked" | "skipped"#{unprovable_status(job)},
           "details": "<command and the relevant output, or what you saw>",
+          "environment": "fixture" | "live",
           "evidence": ["<linear_attach_file URL or qa-evidence/ path>"]#{checklist_field(job)}
         }
       ],
