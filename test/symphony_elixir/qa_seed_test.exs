@@ -4,8 +4,8 @@ defmodule SymphonyElixir.QaSeedTest do
   import Plug.Conn
   import Plug.Test
 
-  alias SymphonyElixir.{Config, DirectorMoves, Inbox, Orchestrator, Pauses, PlanBrief, QaSeed, Questions}
-  alias SymphonyElixir.{RunStore, TicketPullRequest, Tracker, Workflow}
+  alias SymphonyElixir.{Artifacts, Config, DirectorMoves, Inbox, Orchestrator, Pauses, PlanBrief, QaSeed, Questions}
+  alias SymphonyElixir.{Paths, RunStore, TicketEvents, TicketPullRequest, Tracker, Workflow}
   alias SymphonyElixirWeb.ControlApiController
 
   # The restart's reset, which the QA server's `gh` stand-in answers for the seed's own PRs.
@@ -35,6 +35,8 @@ defmodule SymphonyElixir.QaSeedTest do
     )
 
     :ok = RunStore.clear()
+    # The seed keeps QA-105's step outputs in the artifact store.
+    on_exit(fn -> File.rm_rf(Paths.artifacts_dir()) end)
     repo_key = Config.repo_key!()
     on_exit(fn -> Application.delete_env(:symphony_elixir, :qa_seed_dir) end)
     %{repo_key: repo_key, dir: seed_copy(repo_key)}
@@ -82,6 +84,35 @@ defmodule SymphonyElixir.QaSeedTest do
     assert %{facts: %{ci: :red, failing_check: "make-all", phase: :rework, pr_number: 450}} = record(repo_key, "qa-seed-105").pr_watch
     assert %{facts: %{ci: :pending, phase: :qa}} = record(repo_key, "qa-seed-104").pr_watch
     assert %{facts: %{ci: :green, phase: :merging}} = record(repo_key, "qa-seed-107").pr_watch
+  end
+
+  test "Symphony's own seed gives QA-105 a run's step history, its test output kept and its build output gone", %{dir: dir} do
+    assert QaSeed.load(dir, now: @now) == :ok
+
+    events = TicketEvents.query("qa-seed-105", limit: 200)
+    steps = Enum.filter(events, &String.starts_with?(&1.type, "step."))
+
+    assert Enum.map(steps, & &1.summary.title) == [
+             "Step started",
+             "Step passed",
+             "building started",
+             "building passed in 2 min",
+             "tests started",
+             "tests failed: back to writing the code",
+             "Step started",
+             "Paused on your answer"
+           ]
+
+    assert Enum.all?(events, &(&1.run_id == "qa-seed-steps-QA-105"))
+    assert %{actor: %{kind: :agent, run_kind: "implementation"}} = hd(steps)
+    assert hd(events).at == DateTime.add(@now, -40 * 60, :second)
+
+    [build, tests] = for %{artifacts: [id]} <- steps, do: Artifacts.get(id) |> elem(1)
+    assert %{kind: "step_output", label: "Build output", expired: true} = build
+    assert {:error, :expired} = Artifacts.path(build.id)
+    assert %{kind: "step_output", label: "Test output", expired: false, mime: "text/plain", run_id: "qa-seed-steps-QA-105"} = tests
+    assert {:ok, path} = Artifacts.path(tests.id)
+    assert File.read!(path) == File.read!(Path.join(dir, "outputs/QA-105-tests.txt"))
   end
 
   test "the seeded server answers every move the Director makes, over the memory tracker", %{repo_key: repo_key, dir: dir} do
@@ -192,6 +223,13 @@ defmodule SymphonyElixir.QaSeedTest do
     assert {:error, {{:pull_request, "QA-103"}, {:unknown_ci, "amber"}}} = QaSeed.load(seed_copy(repo_key, unknown_ci))
 
     assert {:error, {:issue, "QA-999", :issue_not_found}} = QaSeed.load(seed_copy(repo_key, &Map.put(&1, "runs", [%{"issue" => "QA-999"}])))
+
+    no_output = &Map.put(&1, "events", [%{"issue" => "QA-105", "type" => "note", "payload" => %{"text" => "x"}, "output" => %{"file" => "outputs/none.txt"}}])
+    assert {:error, {{:output, "QA-105", "outputs/none.txt"}, _reason}} = QaSeed.load(seed_copy(repo_key, no_output))
+
+    bad_event = &Map.put(&1, "events", [%{"issue" => "QA-105", "type" => "step.completed", "payload" => %{}}])
+    assert {:error, {{:event, "QA-105", "step.completed"}, {:invalid_payload, _fields}}} = QaSeed.load(seed_copy(repo_key, bad_event))
+    assert {:error, {:issue, "QA-999", :issue_not_found}} = QaSeed.load(seed_copy(repo_key, &Map.put(&1, "events", [%{"issue" => "QA-999", "type" => "note"}])))
 
     bad_question = &Map.put(&1, "questions", [%{"issue" => "QA-108", "title" => "Too short"}])
     assert {:error, {:question, "QA-108", {:invalid_decision_request, _message}}} = QaSeed.load(seed_copy(repo_key, bad_question))

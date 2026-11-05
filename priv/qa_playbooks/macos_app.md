@@ -281,6 +281,17 @@ GitHub or Linear in QA:
   `macos/Tests/Fixtures/director-app/ticket-ledger-no-feed` (an older Symphony, no feed): the
   same ticket's timeline is today's, "Implementation run 1", "QA pass run 1" and "QA failed"
   with "on bbb2222", and the app doesn't crash.
+- **A run's steps (TP-1413):** pass `macos/Tests/Fixtures/director-app/ticket-steps` as
+  `api_fixtures` and open SHOP-410 from Tickets. Its timeline holds "Implementation run 1
+  paused" with the run's steps, as Symphony's server writes them: "Step passed" (writing the
+  code), "building passed in 2 min" with "Build output unavailable" under it (Symphony no longer
+  keeps that file), "tests failed: back to writing the code" with a red failed symbol and a "Test
+  output" link under it, and "Paused on your answer" with the stopped symbol. Click "Test
+  output": a sheet shows the test run's text in a monospaced, selectable block ("1 test, 1
+  failure" … "right: :failed"), and Esc closes it. VoiceOver reads the link as "Test output,
+  opens its text" and the unavailable line as "Build output unavailable". Walk it at 1440×900
+  and 2560×1440, light and dark: nothing clipped. On the live server the seed gives QA-105 the
+  same history, with its own test output to open and its build output gone.
 - **Ticket note (TP-1195):** with the same `ticket-ledger` fixture, SHOP-410's page has a
   one-line field pinned under the page, "Add a note for the next run"; it stays on screen
   however far the page scrolls. The fixture's feed already holds the Director's note, "Note by

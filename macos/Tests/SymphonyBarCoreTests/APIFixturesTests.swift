@@ -52,6 +52,7 @@ final class APIFixturesTests: XCTestCase {
         try png.write(to: artifacts.appendingPathComponent("a1.png"))
         try Data([0xFF, 0xD8, 0xFF]).write(to: artifacts.appendingPathComponent("b2.jpg"))
         try Data(#"{"error":{"code":"artifact_expired"}}"#.utf8).write(to: artifacts.appendingPathComponent("c3.410.json"))
+        try Data("1 test, 1 failure\n".utf8).write(to: artifacts.appendingPathComponent("f6.txt"))
         // A `.json` answers first, as for any other path.
         try Data(#"{"id":"d4"}"#.utf8).write(to: artifacts.appendingPathComponent("d4.json"))
         try png.write(to: artifacts.appendingPathComponent("d4.png"))
@@ -68,6 +69,10 @@ final class APIFixturesTests: XCTestCase {
         XCTAssertEqual(String(decoding: gone.0, as: UTF8.self), #"{"error":{"code":"artifact_expired"}}"#)
         XCTAssertEqual(fixtures.answer(request("api/v1/artifacts/d4")).1.value(forHTTPHeaderField: "Content-Type"), "application/json")
         XCTAssertEqual(fixtures.answer(request("api/v1/artifacts/e5")).1.statusCode, 404)
+        let output = fixtures.answer(request("api/v1/artifacts/f6"))
+        XCTAssertEqual(output.1.statusCode, 200)
+        XCTAssertEqual(output.1.value(forHTTPHeaderField: "Content-Type"), "text/plain; charset=utf-8")
+        XCTAssertEqual(String(decoding: output.0, as: UTF8.self), "1 test, 1 failure\n")
     }
 
     func testPostAnswersARefusalWith409WhenOnlyItsFileIsThere() throws {
