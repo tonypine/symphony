@@ -14,6 +14,10 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
   # The `?group=run` answer for the fixture ticket: the contract the app's timeline decodes.
   @fixture Path.expand("../../fixtures/api/ticket_events_feed.json", __DIR__)
   @png <<0x89, "PNG\r\n", 0x1A, "\n", 0, 0, 0, 13, "IHDR", 0, 0, 0, 1>>
+  # The Director's step-history fixture (TP-1413): the `?group=run` answer for the step ticket and
+  # its outputs, which the app's timeline and its QA pass read.
+  @steps_api Path.expand("../../../macos/Tests/Fixtures/director-app/ticket-steps/api/v1", __DIR__)
+  @test_output "1 test, 1 failure\n\n  1) test the timeline shows the failed step (TimelineTest)\n     Assertion with == failed\n     left:  :done\n     right: :failed\n"
 
   setup do
     :ok = RunStore.clear()
@@ -181,6 +185,36 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
       assert body == @fixture |> File.read!() |> Jason.decode!()
     end
 
+    test "the checked-in step fixture equals the answer for the step ticket, with its kept and its gone output", %{workspace: workspace} do
+      {kept, gone} = steps_ticket!(workspace)
+
+      body = json_response(get(build_conn(), @path <> "?group=run"), 200)
+      text = response(get(build_conn(), "/api/v1/artifacts/#{kept}"), 200)
+      # The 410's error, without the times the ingest stamps on the rest of its answer.
+      expired = Jason.encode!(%{"error" => json_response(get(build_conn(), "/api/v1/artifacts/#{gone}"), 410)["error"]})
+      events = Path.join(@steps_api, "repos/web-shop/tickets/SHOP-410/events.json")
+      kept_file = Path.join(@steps_api, "artifacts/#{kept}.txt")
+      gone_file = Path.join(@steps_api, "artifacts/#{gone}.410.json")
+
+      if System.get_env("SYMPHONY_WRITE_FIXTURES") == "1" do
+        File.mkdir_p!(Path.dirname(events))
+        File.mkdir_p!(Path.dirname(kept_file))
+        File.write!(events, [Jason.encode_to_iodata!(body, pretty: true), "\n"])
+        File.write!(kept_file, text)
+        File.write!(gone_file, expired)
+      end
+
+      assert body == events |> File.read!() |> Jason.decode!()
+      assert File.read!(kept_file) == @test_output
+      assert File.read!(gone_file) == expired
+
+      %{"events" => run_events} = run(body["timeline"], "run-impl-1")
+      titles = for %{"type" => "step." <> _} = event <- run_events, do: event["summary"]["title"]
+      assert "building passed in 2 min" in titles
+      assert "tests failed: back to writing the code" in titles
+      assert "Paused on your answer" in titles
+    end
+
     test "a ticket with 10,000 events answers one page in under 200 ms" do
       events =
         for n <- 1..10_000 do
@@ -335,6 +369,50 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
       end
 
     {:ok, _events} = RunStore.append_ticket_events(events)
+  end
+
+  # The step ticket: an implementation run whose agent wrote the code, whose build passed with an
+  # output Symphony no longer keeps, whose tests failed back to writing the code with their output
+  # kept, and whose next attempt paused on a question. Fixed ids, times and bytes, so its answer
+  # never changes. Returns the kept output's id and the gone one's.
+  defp steps_ticket!(workspace) do
+    [kept, gone] =
+      for {name, label, bytes} <- [{"tests.txt", "Test output", @test_output}, {"build.txt", "Build output", "Compiling 3 files (.ex)\nGenerated symphony app\n"}] do
+        path = Path.join(workspace, name)
+        File.write!(path, bytes)
+        meta = %{repo_key: @repo_key, issue_id: @issue_id, run_id: "run-impl-1", label: label, kind: "step_output"}
+        {:ok, artifact} = Artifacts.ingest(path, meta, roots: [workspace])
+        artifact.id
+      end
+
+    File.rm!(Store.path(gone))
+    {:error, :expired} = Artifacts.path(gone)
+    agent = {:agent, "run-impl-1", "implementation"}
+    code = %{step_id: "code", title: "writing the code", mode: "delegated"}
+    build = %{step_id: "build", title: "building", mode: "machine"}
+    tests = %{step_id: "tests", title: "tests", mode: "machine"}
+    failed = %{outcome: "failed", returns_to: "code", returns_to_title: "writing the code"}
+
+    events =
+      for {id, minute, type, payload, opts} <- [
+            {"st-01", 1, "phase.entered", %{to: "In Progress", from: "Todo"}, phase: "In Progress"},
+            {"st-02", 2, "run.started", %{run_id: "run-impl-1", run_kind: "implementation", run_number: 1, head: "aaa1111"}, run_id: "run-impl-1"},
+            {"st-03", 3, "step.started", code, actor: agent},
+            {"st-04", 10, "step.completed", Map.put(code, :outcome, "passed"), actor: agent},
+            {"st-05", 10, "step.started", Map.put(build, :command, "mix compile --warnings-as-errors"), run_id: "run-impl-1"},
+            {"st-06", 12, "step.completed", Map.merge(build, %{outcome: "passed", duration_ms: 120_000}), run_id: "run-impl-1", artifacts: [gone]},
+            {"st-07", 12, "step.started", Map.put(tests, :command, "mix test"), run_id: "run-impl-1"},
+            {"st-08", 15, "step.completed", Map.merge(tests, failed), run_id: "run-impl-1", artifacts: [kept]},
+            {"st-09", 15, "step.started", code, actor: agent},
+            {"st-10", 20, "step.completed", Map.merge(code, %{outcome: "paused", question_id: "question-1"}), actor: agent},
+            {"st-11", 21, "run.ended", %{run_id: "run-impl-1", run_kind: "implementation", run_number: 1, exit: "paused", duration_ms: 1_140_000}, run_id: "run-impl-1"}
+          ] do
+        {:ok, event} = TicketEvents.build(@repo_key, @issue_id, type, payload, Keyword.put(opts, :at, at(minute)))
+        %{event | id: id}
+      end
+
+    {:ok, _events} = RunStore.append_ticket_events(events)
+    {kept, gone}
   end
 
   defp at(minute), do: DateTime.add(@base, minute * 60, :second)

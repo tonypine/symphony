@@ -109,5 +109,143 @@
       "number": 452,
       "ci": "green"
     }
+  ],
+  "events": [
+    {
+      "issue": "QA-105",
+      "run_id": "qa-seed-steps-QA-105",
+      "minutes_ago": 40,
+      "type": "run.started",
+      "payload": {
+        "run_id": "qa-seed-steps-QA-105",
+        "run_kind": "implementation",
+        "run_number": 2,
+        "head": "5e1f0c2"
+      }
+    },
+    {
+      "issue": "QA-105",
+      "run_id": "qa-seed-steps-QA-105",
+      "minutes_ago": 39,
+      "type": "step.started",
+      "payload": {
+        "step_id": "code",
+        "title": "writing the code",
+        "mode": "delegated"
+      },
+      "actor": "agent"
+    },
+    {
+      "issue": "QA-105",
+      "run_id": "qa-seed-steps-QA-105",
+      "minutes_ago": 31,
+      "type": "step.completed",
+      "payload": {
+        "step_id": "code",
+        "title": "writing the code",
+        "mode": "delegated",
+        "outcome": "passed"
+      },
+      "actor": "agent"
+    },
+    {
+      "issue": "QA-105",
+      "run_id": "qa-seed-steps-QA-105",
+      "minutes_ago": 31,
+      "type": "step.started",
+      "payload": {
+        "step_id": "build",
+        "title": "building",
+        "mode": "machine",
+        "command": "mix compile --warnings-as-errors"
+      }
+    },
+    {
+      "issue": "QA-105",
+      "run_id": "qa-seed-steps-QA-105",
+      "minutes_ago": 29,
+      "type": "step.completed",
+      "payload": {
+        "step_id": "build",
+        "title": "building",
+        "mode": "machine",
+        "outcome": "passed",
+        "duration_ms": 120000
+      },
+      "output": {
+        "file": "outputs/QA-105-build.txt",
+        "label": "Build output",
+        "gone": true
+      }
+    },
+    {
+      "issue": "QA-105",
+      "run_id": "qa-seed-steps-QA-105",
+      "minutes_ago": 29,
+      "type": "step.started",
+      "payload": {
+        "step_id": "tests",
+        "title": "tests",
+        "mode": "machine",
+        "command": "mix test test/symphony_elixir/director_moves_test.exs"
+      }
+    },
+    {
+      "issue": "QA-105",
+      "run_id": "qa-seed-steps-QA-105",
+      "minutes_ago": 26,
+      "type": "step.completed",
+      "payload": {
+        "step_id": "tests",
+        "title": "tests",
+        "mode": "machine",
+        "outcome": "failed",
+        "returns_to": "code",
+        "returns_to_title": "writing the code"
+      },
+      "output": {
+        "file": "outputs/QA-105-tests.txt",
+        "label": "Test output"
+      }
+    },
+    {
+      "issue": "QA-105",
+      "run_id": "qa-seed-steps-QA-105",
+      "minutes_ago": 26,
+      "type": "step.started",
+      "payload": {
+        "step_id": "code",
+        "title": "writing the code",
+        "mode": "delegated"
+      },
+      "actor": "agent"
+    },
+    {
+      "issue": "QA-105",
+      "run_id": "qa-seed-steps-QA-105",
+      "minutes_ago": 20,
+      "type": "step.completed",
+      "payload": {
+        "step_id": "code",
+        "title": "writing the code",
+        "mode": "delegated",
+        "outcome": "paused",
+        "question_id": "qa-seed-question-QA-105"
+      },
+      "actor": "agent"
+    },
+    {
+      "issue": "QA-105",
+      "run_id": "qa-seed-steps-QA-105",
+      "minutes_ago": 19,
+      "type": "run.ended",
+      "payload": {
+        "run_id": "qa-seed-steps-QA-105",
+        "run_kind": "implementation",
+        "run_number": 2,
+        "exit": "paused",
+        "duration_ms": 1260000
+      }
+    }
   ]
 }

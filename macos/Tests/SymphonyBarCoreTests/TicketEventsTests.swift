@@ -338,6 +338,158 @@ final class TicketEventsTests: XCTestCase {
         XCTAssertNil(images.images["0"])
     }
 
+    // MARK: - A run's steps
+
+    /// The Director's step-history fixture (TP-1413), written by the Elixir controller test from Symphony's own events.
+    static func director(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/\(name)", isDirectory: true)
+    }
+
+    static func stepsPayload() throws -> TicketEventsPayload {
+        let feed = director("ticket-steps").appendingPathComponent("api/v1/repos/web-shop/tickets/SHOP-410/events.json")
+        return try XCTUnwrap(TicketEventsPayload.decode(Data(contentsOf: feed)))
+    }
+
+    func testTheStepFixtureReadsEachStepWithItsOutcomeAndItsOutputs() throws {
+        let run = try XCTUnwrap(steps(try Self.stepsPayload()).first { $0.runID == "run-impl-1" })
+
+        XCTAssertEqual(run.title, "Implementation run 1")
+        XCTAssertEqual(run.children.map(\.title), [
+            "Step started", "Step passed", "building started", "building passed in 2 min", "tests started",
+            "tests failed: back to writing the code", "Step started", "Paused on your answer",
+        ])
+        XCTAssertEqual(run.children.map(\.detail), [
+            "writing the code", "writing the code", "mix compile --warnings-as-errors", "output kept", "mix test", "output kept",
+            "writing the code", "writing the code",
+        ])
+        XCTAssertEqual(run.children.map(\.result), [.done, .done, .done, .done, .done, .failed, .done, .stopped])
+
+        let failed = run.children[5]
+        XCTAssertEqual(failed.outputs.map(\.label), ["Test output"])
+        XCTAssertEqual(failed.outputs.map(\.available), [true])
+        XCTAssertEqual(failed.outputs[0].path, "api/v1/artifacts/2b6e3b53b1dbea0958f2c191d2001ebef2d53a2f6aada7b72f44ed91636736c8")
+        XCTAssertEqual(failed.outputs[0].accessibilityLabel, "Test output, opens its text")
+        XCTAssertTrue(failed.screenshots.isEmpty)
+
+        let gone = try XCTUnwrap(run.children[3].outputs.first)
+        XCTAssertEqual(gone.label, "Build output")
+        XCTAssertFalse(gone.available)
+        XCTAssertEqual(gone.unavailableTitle, "Build output unavailable")
+        XCTAssertEqual(gone.unavailableAccessibilityLabel, "Build output unavailable")
+        XCTAssertEqual(run.children.flatMap(\.outputs).count, 2)
+    }
+
+    func testAStepsEndReadsItsOutcome() throws {
+        let outcomes: [(String, TicketPage.Step.Result)] = [
+            (#"{"outcome":"passed"}"#, .done), (#"{"outcome":"failed","returns_to":"code"}"#, .failed),
+            (#"{"outcome":"paused","question_id":"q"}"#, .stopped), (#"{"outcome":"skipped","reason":"no Swift change"}"#, .done),
+            (#"{"outcome":"FAILED"}"#, .failed), ("{}", .done), ("null", .done),
+        ]
+        let payload = try XCTUnwrap(TicketEventsPayload.decode(Data(Self.page(entries: outcomes.enumerated().map { index, outcome in
+            Self.event("s-\(index)", seq: index, type: "step.completed", at: "2026-10-18T09:00:00Z", title: "Step", payload: outcome.0)
+        }).utf8)))
+
+        XCTAssertEqual(steps(payload).map(\.result), outcomes.map(\.1))
+    }
+
+    func testAnEventsTextFilesAreItsOutputsAndItsImagesItsScreenshots() throws {
+        let artifacts = #"[{"id":"out","kind":"step_output"},{"id":"log","kind":"log","label":" Server log "},{"id":"rep","kind":"report","mime":"application/json"},{"id":"txt","kind":"file","mime":"text/markdown","url":"/api/v1/artifacts/txt"},{"id":"img","kind":"file","mime":"image/png"},{"id":"svg","kind":"screenshot","mime":"text/svg"},{"id":"bin","kind":"diff","mime":"application/octet-stream"},{"id":"old","kind":"step_output","available":false}]"#
+        let payload = try XCTUnwrap(TicketEventsPayload.decode(Data(Self.page(entries: [
+            Self.event("e-1", seq: 1, type: "step.completed", at: "2026-10-18T09:00:00Z", title: "tests failed", payload: #"{"outcome":"failed"}"#, artifacts: artifacts),
+        ]).utf8)))
+        let step = try XCTUnwrap(steps(payload).first)
+
+        XCTAssertEqual(step.outputs, [
+            TicketOutput(id: "out", label: "Step output", path: "api/v1/artifacts/out", available: true),
+            TicketOutput(id: "log", label: "Server log", path: "api/v1/artifacts/log", available: true),
+            TicketOutput(id: "rep", label: "Output", path: "api/v1/artifacts/rep", available: true),
+            TicketOutput(id: "txt", label: "Output", path: "api/v1/artifacts/txt", available: true),
+            TicketOutput(id: "old", label: "Step output", path: "api/v1/artifacts/old", available: false),
+        ])
+        XCTAssertEqual(step.screenshots.map(\.id), ["img", "svg"])
+    }
+
+    func testAnOutputLoadsOnceAsTextAndIsKeptByID() async {
+        var requests: [String] = []
+        let texts = ArtifactTexts(get: { @MainActor path in
+            requests.append(path)
+            return .answered(Data("1 test, 1 failure\n\u{FF}".utf8) + Data([0xFF]), statusCode: 200)
+        })
+        let output = TicketOutput(id: "a", label: "Test output", path: "api/v1/artifacts/a", available: true)
+
+        XCTAssertEqual(texts.text(output), .loading)
+        let load = texts.load(output)
+        XCTAssertNil(texts.load(output), "an output being read isn't read twice")
+        await load?.value
+        // Bytes that aren't UTF-8 read as the replacement character, never as nothing.
+        XCTAssertEqual(texts.text(output), .loaded("1 test, 1 failure\n\u{FF}\u{FFFD}"))
+        XCTAssertNil(texts.load(output))
+        XCTAssertEqual(requests, ["api/v1/artifacts/a"])
+    }
+
+    func testAnOutputSymphonyNoLongerKeepsIsUnavailableAndAFailedReadIsReadAgain() async {
+        let answers: [String: APIAnswer] = [
+            "gone": .answered(Data(), statusCode: 410), "missing": .answered(Data(), statusCode: 404),
+            "error": .answered(Data(), statusCode: 500), "down": .unreachable,
+        ]
+        var requests: [String] = []
+        let texts = ArtifactTexts(get: { @MainActor path in
+            requests.append(path)
+            return answers[path] ?? .unreachable
+        })
+        func output(_ id: String, available: Bool = true) -> TicketOutput {
+            TicketOutput(id: id, label: id, path: id, available: available)
+        }
+        let ids = ["gone", "missing", "error", "down"]
+
+        XCTAssertNil(texts.load(output("flagged", available: false)))
+        XCTAssertEqual(texts.text(output("flagged", available: false)), .unavailable)
+        for id in ids { await texts.load(output(id))?.value }
+        XCTAssertEqual(ids.map { texts.text(output($0)) }, [.unavailable, .unavailable, .failed, .failed])
+        for id in ids { await texts.load(output(id))?.value }
+        XCTAssertEqual(requests, ids + ["error", "down"])
+    }
+
+    func testKeepsAtMostItsCapacityOfTextsDroppingTheOldest() async {
+        let texts = ArtifactTexts(get: { _ in .answered(Data("ok".utf8), statusCode: 200) })
+        for index in 0 ... ArtifactTexts.capacity {
+            await texts.load(TicketOutput(id: "\(index)", label: "", path: "\(index)", available: true))?.value
+        }
+        XCTAssertEqual(texts.texts.count, ArtifactTexts.capacity)
+        XCTAssertNil(texts.texts["0"])
+    }
+
+    func testTheStepFixtureServesTheKeptOutputsTextAndTheGoneOnesAsUnavailable() async throws {
+        let root = uniqueTemporaryDirectory("ticket-steps")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fixtures = APIFixtures(directory: Self.director("ticket-steps"), requestLog: root.appendingPathComponent("requests.jsonl"))
+        let client = LiveAPIClient(fetch: LiveAPIClient.fetch(base: { APIFixtures.baseURL }, transport: fixtures.transport))
+
+        let reader = TicketEventsReader(get: { TicketEventsResult(await client.answer($0)) })
+        reader.follow(identifier: "SHOP-410", repoKey: "web-shop")
+        await reader.settle()
+        let events = try XCTUnwrap(reader.events)
+        XCTAssertEqual(events, try Self.stepsPayload())
+
+        let texts = ArtifactTexts(get: { await client.answer($0) })
+        let outputs = steps(events).flatMap(\.children).flatMap(\.outputs)
+        // The feed's own `available: false` reads nothing; asked anyway, the fixture's 410 says the same.
+        let gone = try XCTUnwrap(outputs.first { !$0.available })
+        var asked = gone
+        asked.available = true
+        for output in outputs + [asked] { await texts.load(output)?.value }
+        XCTAssertEqual(texts.text(gone), .unavailable)
+        XCTAssertEqual(texts.text(asked), .unavailable)
+        guard case let .loaded(text) = texts.text(try XCTUnwrap(outputs.first(where: \.available))) else {
+            return XCTFail("the test output didn't load")
+        }
+        XCTAssertTrue(text.hasPrefix("1 test, 1 failure\n"))
+        XCTAssertTrue(text.contains("right: :failed"))
+    }
+
     // MARK: - Helpers
 
     /// A 4×3 PNG.

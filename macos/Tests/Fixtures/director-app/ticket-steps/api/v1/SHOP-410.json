@@ -1,0 +1,33 @@
+{
+  "attempts": {
+    "current_retry_attempt": 0,
+    "restart_count": 0
+  },
+  "issue_id": "i-410",
+  "issue_identifier": "SHOP-410",
+  "last_error": null,
+  "logs": {
+    "codex_session_logs": []
+  },
+  "recent_events": [],
+  "repo_key": "web-shop",
+  "retry": null,
+  "running": null,
+  "status": "watching",
+  "tracked": {},
+  "verdicts": [
+    {
+      "head_sha": "bbb2222aa41",
+      "kind": "qa",
+      "outcome": "fail",
+      "recorded_at": "2026-10-18T10:45:00Z"
+    }
+  ],
+  "watching": {
+    "pull_request_url": "https://github.com/acme/web-shop/pull/512"
+  },
+  "workspace": {
+    "host": null,
+    "path": "/Users/director/symphony-workspaces/web-shop/SHOP-410"
+  }
+}

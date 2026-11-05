@@ -1,0 +1,2 @@
+Compiling 4 files (.ex)
+Generated symphony_elixir app

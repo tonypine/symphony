@@ -120,6 +120,8 @@ public struct TicketPage: Equatable {
         public var children: [Step] = []
         /// The screenshots the event carries.
         public var screenshots: [TicketScreenshot] = []
+        /// The text files the event carries: a step's output, a log, a report.
+        public var outputs: [TicketOutput] = []
 
         public var isGroup: Bool { runID != nil }
 
