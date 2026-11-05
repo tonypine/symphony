@@ -162,6 +162,64 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert_received {:memory_tracker_reply, "plan", "comment-8", _reply}
   end
 
+  test "decide answers in the person's own words when a pick carries text, refuses the own-words option without it, and leaves a plain option as it was (TP-1387)",
+       %{moves: moves} do
+    request = %{
+      title: "Choose the layout",
+      question: "Which layout should MOT-60 use?",
+      why: "It is asked.",
+      if_unanswered: "MOT-60 waits.",
+      recommendation_reason: "It is small.",
+      options: [%{label: "One column", effect: "One column.", recommended: true}, %{label: "Two columns", effect: "Two columns."}]
+    }
+
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{id: "plan", identifier: "MOT-30", title: "Plan an MVP", state: "Plan Review", labels: ["plan"], repo_key: "default"},
+      %Issue{id: "held", identifier: "MOT-60", title: "Needs a call", state: "In Progress", repo_key: "default"}
+    ])
+
+    :ok = SymphonyElixir.DecisionRequest.ask(%{id: "held", state: "In Progress", repo_key: "default"}, request, [])
+    [%{id: id}] = Questions.open({:ticket, "default", "held"})
+    project_comment("held", id, "comment-5")
+    params = %{"issue_identifier" => "MOT-60", "question_id" => id}
+
+    # The own-words option without its words is refused and answers nothing, on both moves.
+    for answer <- ["In my own words", "Answer in my own words…"], text <- [nil, "   "] do
+      pick = %{"question" => request.question, "answer" => answer} |> then(&if(text, do: Map.put(&1, "text", text), else: &1))
+
+      assert error(post(:decide, Map.put(params, "picks", [pick]), moves)) ==
+               {422, "invalid_request", "text is required: an answer in your own words carries the words in the pick's text"}
+    end
+
+    assert {422, "invalid_request", _message} =
+             error(post(:decisions, %{"issue_identifier" => "MOT-30", "picks" => [%{"question" => "Where?", "answer" => "In my own words"}]}, moves))
+
+    assert {422, "invalid_request", _message} = error(post(:decide, %{"question_id" => id, "picks" => [%{"question" => "Where?", "answer" => "In my own words"}]}, moves))
+    assert %{state: :open} = Questions.find({:ticket, "default", "held"}, id)
+    refute_received {:memory_tracker_reply, _issue_id, _parent, _body}
+
+    # With its words, the pick answers in them: the Question records them and the decision shows them.
+    words = "Take the second layout, but keep the run panel on the right."
+    pick = %{"question" => request.question, "answer" => "In my own words", "text" => words}
+    conn = post(:decide, Map.put(params, "picks", [pick]), moves)
+
+    assert conn.status == 200
+    assert %{state: :answered, answer: %{text: ^words, option: nil}} = Questions.find({:ticket, "default", "held"}, id)
+    assert_received {:memory_tracker_reply, "held", "comment-5", body}
+    assert body =~ words
+
+    # A plain option, with no text, is the option's answer as before.
+    :ok = SymphonyElixir.DecisionRequest.ask(%{id: "held", state: "In Progress", repo_key: "default"}, %{request | title: "Choose again"}, [])
+    [%{id: again}] = Questions.open({:ticket, "default", "held"})
+    project_comment("held", again, "comment-6")
+    conn = post(:decide, %{params | "question_id" => again} |> Map.put("picks", [%{"question" => request.question, "answer" => "Two columns"}]), moves)
+
+    assert conn.status == 200
+    assert %{state: :answered, answer: %{option: 2}} = Questions.find({:ticket, "default", "held"}, again)
+    assert_received {:memory_tracker_reply, "held", "comment-6", plain}
+    assert plain =~ "Two columns"
+  end
+
   test "Continue to QA on a Code Review escalation moves the ticket into QA; an unconfigured target is a 422 that keeps the question open", %{moves: moves} do
     held = %Issue{id: "held", identifier: "MOT-60", title: "Escalated", state: "Code Review", repo_key: "repo-api"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])

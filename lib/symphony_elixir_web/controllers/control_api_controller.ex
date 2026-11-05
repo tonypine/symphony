@@ -28,7 +28,12 @@ defmodule SymphonyElixirWeb.ControlApiController do
   moved between. `decide` answers a decision request: it takes the `picks`, the `question_id` they
   answer (the Inbox row's) or the `request_comment_id` of its request (still accepted, resolved to
   its question), and the optional `move` the decision directs. `decisions` takes a plan's `picks`,
-  each with the `question_id` or the `request_comment_id` of the question it answers. `move` takes
+  each with the `question_id` or the `request_comment_id` of the question it answers. Each pick of
+  either is a `question` and its `answer` (an option's label), with an optional `text`: the person's
+  own words. A pick with `text` answers in those words, whatever its `answer`, as the Inbox's "Answer
+  in my own words…" does: the Question is answered with them and the decision on the ticket shows
+  them. A pick whose `answer` is the own-words option ("In my own words", "Answer in my own words…")
+  without `text` is 422 and answers nothing. `move` takes
   `to`, any phase the repo's workflow names, and an optional `note`: a ticket of a configured
   repository Symphony has no record of yet is read from Linear and recorded first. It answers 409
   when the ticket is in no configured repository, that read fails, or `to` is not a phase of the
@@ -174,7 +179,9 @@ defmodule SymphonyElixirWeb.ControlApiController do
   def restart(conn, params), do: director_move(conn, :restart, params, %{reason: string_param(params["reason"])})
 
   @spec decisions(Conn.t(), map()) :: Conn.t()
-  def decisions(conn, params), do: director_move(conn, :decisions, params, %{picks: picks(params["picks"])})
+  def decisions(conn, params) do
+    with {:ok, picks} <- own_words_picks(conn, params["picks"]), do: director_move(conn, :decisions, params, %{picks: picks})
+  end
 
   @spec changes(Conn.t(), map()) :: Conn.t()
   def changes(conn, params), do: director_move(conn, :changes, params, %{reason: string_param(params["reason"])})
@@ -195,17 +202,28 @@ defmodule SymphonyElixirWeb.ControlApiController do
   # (`DirectorMoves.decide_subject/2`).
   @spec decide(Conn.t(), map()) :: Conn.t()
   def decide(conn, params) do
-    input = %{
-      picks: picks(params["picks"]),
-      question_id: string_param(params["question_id"]),
-      request_comment_id: string_param(params["request_comment_id"]),
-      move: string_param(params["move"])
-    }
+    with {:ok, picks} <- own_words_picks(conn, params["picks"]) do
+      input = %{
+        picks: picks,
+        question_id: string_param(params["question_id"]),
+        request_comment_id: string_param(params["request_comment_id"]),
+        move: string_param(params["move"])
+      }
 
-    case {string_param(params["issue_identifier"]), input.question_id} do
-      {nil, question_id} when is_binary(question_id) -> respond_subject_decide(conn, question_id, DirectorMoves.decide_subject(input, Map.get(conn.assigns, :director_moves, [])))
-      _ticket -> director_move(conn, :decide, params, input)
+      case {string_param(params["issue_identifier"]), input.question_id} do
+        {nil, question_id} when is_binary(question_id) -> respond_subject_decide(conn, question_id, DirectorMoves.decide_subject(input, Map.get(conn.assigns, :director_moves, [])))
+        _ticket -> director_move(conn, :decide, params, input)
+      end
     end
+  end
+
+  # The picks with each one's own words as its answer; an own-words pick without them is refused.
+  defp own_words_picks(conn, params_picks) do
+    picks = picks(params_picks)
+
+    if Enum.any?(picks || [], &Map.get(&1, :own_words_missing)),
+      do: error_response(conn, 422, "invalid_request", "text is required: an answer in your own words carries the words in the pick's text"),
+      else: {:ok, picks}
   end
 
   defp respond_subject_decide(conn, question_id, {:error, :question_not_found}),
@@ -406,16 +424,31 @@ defmodule SymphonyElixirWeb.ControlApiController do
     end
   end
 
-  # A plan's pick also names the Question it answers or the request comment it goes under.
+  # A plan's pick also names the Question it answers or the request comment it goes under. A pick's
+  # `text` is the person's own words: they are the answer, as the Inbox's write-in sends them, so
+  # the Question service records them as the answer and the decision on the ticket shows them.
   defp picks(picks) when is_list(picks) do
     for pick <- picks do
-      %{question: string_param(pick_field(pick, "question")), answer: string_param(pick_field(pick, "answer"))}
+      answer = string_param(pick_field(pick, "answer"))
+      text = string_param(pick_field(pick, "text"))
+
+      %{question: string_param(pick_field(pick, "question")), answer: text || answer}
       |> put_present(:question_id, string_param(pick_field(pick, "question_id")))
       |> put_present(:request_comment_id, string_param(pick_field(pick, "request_comment_id")))
+      |> put_present(:own_words_missing, if(is_nil(text) and own_words_option?(answer), do: true))
     end
   end
 
   defp picks(_picks), do: nil
+
+  # The own-words option, as the Inbox labels it ("Answer in my own words…") or a person names it
+  # ("In my own words").
+  defp own_words_option?(answer) when is_binary(answer) do
+    label = answer |> String.trim() |> String.trim_trailing("…") |> String.trim_trailing("...") |> String.downcase()
+    label in ["in my own words", "answer in my own words"]
+  end
+
+  defp own_words_option?(_answer), do: false
 
   defp put_present(pick, _key, nil), do: pick
   defp put_present(pick, key, value), do: Map.put(pick, key, value)
