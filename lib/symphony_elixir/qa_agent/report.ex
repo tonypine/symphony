@@ -321,10 +321,17 @@ defmodule SymphonyElixir.QaAgent.Report do
       |> Enum.flat_map(& &1.artifacts)
       |> Enum.uniq()
 
-    %{events: events, run_id: run_id, links: Map.new(ids, &{&1, link(issue, &1, upload?, opts)})}
+    %{events: events, run_id: run_id, links: Map.new(ids, &{&1, artifact_link(issue, &1, upload?, opts)})}
   end
 
-  defp link(issue, id, upload?, opts) do
+  @doc """
+  Where the artifact `id` is published (`t:link/0`): its `linear_url` projection when it has one;
+  else, with `upload?`, its URL once uploaded to `issue` on Linear (kept as its projection, so it
+  is uploaded once); else no URL. The QA report and the workpad's Validation
+  (`SymphonyElixir.Workpad.Projection`) link a file this way.
+  """
+  @spec artifact_link(Issue.t(), String.t(), boolean(), keyword()) :: link()
+  def artifact_link(issue, id, upload?, opts) do
     case Artifacts.get(id) do
       {:ok, %{projections: %{linear_url: url}} = artifact} when is_binary(url) -> %{label: artifact.label, url: url}
       {:ok, artifact} when upload? -> %{label: artifact.label, url: upload(issue, artifact, opts)}

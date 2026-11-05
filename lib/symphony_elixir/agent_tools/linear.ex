@@ -1955,7 +1955,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @doc """
   Writes the Symphony summary block at the end of the current issue's description: the status, the
   review brief and artifact links, and one new changelog entry dated today (UTC) on top of the
-  ones the block holds, capped. The description is read right before the write, and every byte
+  ones the block holds, with a line for each push and verdict on the ticket's history
+  (`IssueSummary.event_entries/1`), capped. The description is read right before the write, and every byte
   outside the block stays as it is, so a person's edit between runs survives. Fields holding a
   secret pattern are refused before any Linear call.
   """
@@ -1966,7 +1967,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          :ok <- SecretScanner.reject_fields_if_secret_pattern(summary_secret_fields(summary), context, "linear_update_issue_summary", opts),
          {:ok, body} <- graphql(@issue_description_query, %{id: issue_id}, opts),
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
-         {:ok, description} <- IssueSummary.put(issue["description"], summary, Keyword.get_lazy(opts, :today, &Date.utc_today/0)),
+         {:ok, description} <- IssueSummary.put(issue["description"], summary, Keyword.get_lazy(opts, :today, &Date.utc_today/0), IssueSummary.history(issue_id)),
          variables = %{id: issue_id, description: description},
          {:ok, response} <- graphql(@update_issue_description_mutation, variables, opts),
          {:ok, response} <- check_mutation_success(response, "issueUpdate") do
@@ -1978,8 +1979,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   Records which test proves each walkthrough step the implementer covered: one `evidence` event
   per step on the current ticket's history, with `proof` (the step and the test), through
   `SymphonyElixir.AgentTools.TicketLedger.record/2`, so Symphony fills the run, phase and head. The
-  description is only read: the proofs are checked against its `## User walkthrough`
-  (`SymphonyElixir.Walkthrough.check_proofs/2`) and it stays as it is. A test naming a check, a step
+  description is only read here: the proofs are checked against its `## User walkthrough`
+  (`SymphonyElixir.Walkthrough.check_proofs/2`), and the description's `Proved by:` block is then
+  rendered from the events by the projector's description pass. A test naming a check, a step
   the walkthrough lacks, and a step its author marked `Proved by: QA` are refused before anything is
   recorded; a test holding a secret pattern before any Linear call.
   """
@@ -1993,8 +1995,18 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, issue} <- fetch_path(body, ["data", "issue"], :issue_not_found),
          {:ok, entries} <- Walkthrough.check_proofs(issue["description"], proofs),
          {:ok, events} <- record_proof_events(context, entries) do
+      project_proofs(context, issue_id)
       {:ok, %{"events" => events, "steps" => Enum.map(entries, & &1.step)}}
     end
+  end
+
+  # The description's `Proved by:` block is rendered from the proof events, in the same pass as the
+  # Decisions section (`SymphonyElixir.Pauses.Projector`). The proofs are recorded already, so a
+  # projection that fails is retried by the reconciler and never fails the call.
+  # The ledger recorded them, so the session has the ticket's repo, as the ledger reads it.
+  defp project_proofs(context, issue_id) do
+    repo_key = Enum.find([Map.get(context, :repo_key), Map.get(Map.get(context, :issue) || %{}, :repo_key)], &(is_binary(&1) and &1 != ""))
+    Projector.project_now({:ticket, repo_key, issue_id})
   end
 
   defp record_proof_events(context, entries) do

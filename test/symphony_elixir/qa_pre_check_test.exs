@@ -2,7 +2,7 @@ defmodule SymphonyElixir.QaPreCheckTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.QaPreCheck
-  alias SymphonyElixir.Walkthrough
+  alias SymphonyElixir.TestSupport.ProofSteps
 
   @pr_url "https://github.com/acme/repo/pull/1040"
   @tried "tried as a describe plus a test name, a test name and a describe name"
@@ -91,7 +91,7 @@ defmodule SymphonyElixir.QaPreCheckTest do
     output
   end
 
-  defp steps(text), do: Walkthrough.steps(text, "make-all")
+  defp steps(text), do: ProofSteps.steps(text, "make-all")
 
   # Answers `gh pr view` with the head `head` and its `checks`, and the head's workflow runs with none.
   defp gh(head, checks) do

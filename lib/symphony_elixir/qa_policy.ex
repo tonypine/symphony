@@ -96,12 +96,12 @@ defmodule SymphonyElixir.QaPolicy do
   def decision(%Issue{} = issue, settings, paths) when is_list(paths) do
     case Selection.decide(issue, paths, settings.auto_review, Verification.selection_opts(settings)) do
       {:skip, reason} -> {:skip, reason}
-      {:run, playbooks} -> run(issue, playbooks, paths)
+      {:run, playbooks} -> run(issue, playbooks, paths, Map.get(settings, :proof_check))
     end
   end
 
-  defp run(issue, playbooks, paths) do
-    {playbooks, live_note} = mark_live(issue, playbooks, paths)
+  defp run(issue, playbooks, paths, proof_check) do
+    {playbooks, live_note} = mark_live(issue, playbooks, paths, proof_check)
 
     if nothing_on_screen?(issue, playbooks, paths) do
       {:run, Enum.map(playbooks, &scope_none/1),
@@ -113,10 +113,10 @@ defmodule SymphonyElixir.QaPolicy do
   end
 
   # Marks the `macos_app` playbook live when its `live` server should run, and says why in the reason.
-  defp mark_live(issue, playbooks, paths) do
+  defp mark_live(issue, playbooks, paths, proof_check) do
     Enum.map_reduce(playbooks, "", fn
       %{kind: "macos_app", live_server: live_server} = playbook, note ->
-        case Selection.live(issue, live_server, paths) do
+        case Selection.live(issue, live_server, paths, proof_check) do
           {true, why} -> {Map.merge(playbook, %{live: true, live_reason: why}), note <> "; the app gets a live server: " <> why}
           {false, why} -> {Map.put(playbook, :live_reason, why), note <> "; the app reads fixtures only: " <> why}
         end

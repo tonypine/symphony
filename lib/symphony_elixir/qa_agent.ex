@@ -685,7 +685,7 @@ defmodule SymphonyElixir.QaAgent do
     the check run's URL in `evidence`. Walk every step that says `Proved by: QA` or names no proof.
 
     Steps a named test proves (confirmed by Symphony, do not walk them):
-    #{Enum.map_join(proofs, "", &confirmed_line/1)}
+    #{Enum.map_join(proofs, "", &confirmed_line(&1, Map.get(journey, :steps, [])))}
     Steps to walk (`Proved by: QA`, or no proof named):
     #{step_lines(Enum.reject(Map.get(journey, :steps, []), &Walkthrough.named_test?/1), false)}\
     """
@@ -726,8 +726,11 @@ defmodule SymphonyElixir.QaAgent do
       "with `<owner>/<repo>` from `git remote get-url origin`."
   end
 
-  defp confirmed_line(%{step: step} = proof) do
-    "- #{step.number}. #{String.replace(step.text, ~r/\s+/, " ")} #{Walkthrough.proof_line(step)}: pass, #{QaPreCheck.linked(proof)}\n"
+  # The pre-check reads the proofs from events alone, so the step's text is the walkthrough's.
+  defp confirmed_line(%{step: step} = proof, steps) do
+    text = steps |> Enum.find_value(step.text, &(&1.number == step.number && &1.text)) |> String.replace(~r/\s+/, " ") |> String.trim()
+    words = Enum.join(Enum.reject([text, Walkthrough.proof_line(step)], &(&1 == "")), " ")
+    "- #{step.number}. #{words}: pass, #{QaPreCheck.linked(proof)}\n"
   end
 
   defp step_lines([], _proof?), do: "- none\n"

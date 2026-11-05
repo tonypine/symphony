@@ -162,7 +162,8 @@ defmodule SymphonyElixir.QaVerification do
 
   @doc """
   The journey context for `issue`: its `## User walkthrough` when it has one, with its steps and the
-  proof each names (`SymphonyElixir.Walkthrough`), else its acceptance criteria, else nothing but the
+  proof the implementer recorded for each as an `evidence` event (`SymphonyElixir.Walkthrough`),
+  else its acceptance criteria, else nothing but the
   instruction to derive them. The QA prompt renders this, so the run knows what to verify from the
   user's point of view and which steps a named test proves instead.
 
@@ -179,7 +180,7 @@ defmodule SymphonyElixir.QaVerification do
   defp journey_for(%Issue{description: description} = issue, proof_check, label) when is_binary(description) do
     cond do
       text = Walkthrough.section(description) ->
-        steps = text |> Walkthrough.steps(proof_check) |> Walkthrough.with_recorded_proofs(recorded_proofs(issue), proof_check)
+        steps = text |> Walkthrough.steps() |> Walkthrough.with_recorded_proofs(Walkthrough.recorded_proofs(issue.id), proof_check)
         %{source: "#{label}'s `## User walkthrough`", text: text, steps: steps}
 
       text = section(description, @acceptance_heading) ->
@@ -191,19 +192,6 @@ defmodule SymphonyElixir.QaVerification do
   end
 
   defp journey_for(_issue, _proof_check, label), do: %{source: "#{label}'s walkthrough and acceptance criteria", text: nil, steps: []}
-
-  # The proofs the implementer recorded as `evidence` events with `proof`
-  # (`linear_record_walkthrough_proofs`), oldest first; until TP-1397 projects them into the
-  # description's `Proved by:` lines, the journey reads them on top of the description's. A store
-  # that cannot be read has none: its `{:error, reason}` is no proof event.
-  defp recorded_proofs(%Issue{id: issue_id}) when is_binary(issue_id) do
-    issue_id |> TicketEvents.query(types: ["evidence"]) |> List.wrap() |> Enum.flat_map(&recorded_proof/1)
-  end
-
-  defp recorded_proofs(_issue), do: []
-
-  defp recorded_proof(%{payload: %{proof: %{step: step, test: test}}}) when is_integer(step) and is_binary(test), do: [%{step: step, test: test}]
-  defp recorded_proof(_event), do: []
 
   defp verify(issue, workspace, opts, settings) do
     case Keyword.get(opts, :worker_host) do
@@ -336,13 +324,14 @@ defmodule SymphonyElixir.QaVerification do
     end
   end
 
-  # The steps a named test proves are confirmed before the agent starts (`SymphonyElixir.QaPreCheck`):
+  # The steps a named test proves, read from the proof events alone and never from the description,
+  # are confirmed before the agent starts (`SymphonyElixir.QaPreCheck`):
   # a failed or missing proof fails the pass without an agent run, a check still running waits, and
   # the confirmed steps reach the agent and the report. A walkthrough without one runs as before.
   defp pre_check(issue, workspace, opts, settings, {head, pr_url}, playbooks) do
     pre_check_opts = [proof_check: settings.proof_check] ++ Keyword.take(opts, [:gh_runner, :git])
 
-    case QaPreCheck.run(journey(issue, settings.proof_check).steps, pr_url, head, workspace, pre_check_opts) do
+    case QaPreCheck.run(Walkthrough.proof_steps(Walkthrough.recorded_proofs(issue.id), settings.proof_check), pr_url, head, workspace, pre_check_opts) do
       :none -> run_agent(issue, workspace, opts, settings, head, playbooks, [])
       {:pass, results} -> run_agent(issue, workspace, opts, settings, head, playbooks, results)
       {:fail, results} -> fail(issue, opts, settings, head, pre_check_failed(results))

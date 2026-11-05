@@ -1154,7 +1154,7 @@ defmodule SymphonyElixir.QaAgentTest do
             journey: %{
               source: "the epic's acceptance criteria",
               text: "- [ ] The settings window opens",
-              steps: SymphonyElixir.Walkthrough.steps("1. Open the settings window. Proved by: `test/settings_test.exs`", "make-all")
+              steps: SymphonyElixir.TestSupport.ProofSteps.steps("1. Open the settings window. Proved by: `test/settings_test.exs`", "make-all")
             }
           }),
           nil
@@ -1313,7 +1313,7 @@ defmodule SymphonyElixir.QaAgentTest do
       journey = %{
         source: "the ticket's `## User walkthrough`",
         text: "1. Parse it. Proved by: `make-all`",
-        steps: SymphonyElixir.Walkthrough.steps("1. Parse it. Proved by: `make-all`", "make-all")
+        steps: SymphonyElixir.TestSupport.ProofSteps.steps("1. Parse it. Proved by: `make-all`", "make-all")
       }
 
       prompt = QaAgent.prompt(job(%{journey: journey}), nil)
@@ -1324,7 +1324,7 @@ defmodule SymphonyElixir.QaAgentTest do
 
     test "a walkthrough with no named-test step is walked whole, whatever its Proved by: lines say" do
       text = "1. Run `symphony check`. Proved by: test/check_test.exs"
-      journey = %{source: "the ticket's `## User walkthrough`", text: text, steps: SymphonyElixir.Walkthrough.steps(text, nil)}
+      journey = %{source: "the ticket's `## User walkthrough`", text: text, steps: SymphonyElixir.TestSupport.ProofSteps.steps(text, nil)}
       prompt = QaAgent.prompt(job(%{journey: journey}), nil)
 
       assert prompt =~ "No walkthrough step names a test that a check of this repo runs: walk every step, whatever its `Proved by:` line says."

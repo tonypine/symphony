@@ -1394,30 +1394,29 @@ what any of them waits on, except on one another.
 
 - the person writing the ticket describes the user's flow in plain steps, each with `Expected:`,
   and names no test and no check;
-- the implementer, who writes the tests, ends each step a test of the PR covers with
-  `Proved by: <test>`, through the `linear_record_walkthrough_proofs` tool, which records each proof
-  as an `evidence` event on the ticket's history, leaves the description as it is, and refuses a
-  check name (QA reads a step's proof from its `Proved by:` line and from those events);
+- the implementer, who writes the tests, records the test that proves each step a test of the PR
+  covers through the `linear_record_walkthrough_proofs` tool, which records each proof as an
+  `evidence` event on the ticket's history and refuses a check name, a step the walkthrough lacks
+  and a step its author ended with `Proved by: QA`;
 - the repo names the check that runs its tests, `proof_check` in its WORKFLOW.md front matter (this
   repository: `make-all`), and Symphony confirms every named test on the PR head before QA.
 
-A proof is the line at the end of a step:
+The ticket's history is the only source of a step's proof: nothing reads a `Proved by:` line from
+the description. A step an event proves is proved by that test (the latest event of the step
+wins), named as the code or `mix test` names it: a test file (`test/foo_test.exs`), a test or
+scenario name (`does X`), a describe plus a test name (`foo/1 does X`), or a file and a name
+(`test/foo_test.exs: does X`). QA does not walk it: Symphony's QA pre-check confirms it on the PR
+head before the agent starts (below), reading the steps from the events alone, and the agent links
+the result. QA walks every other step, and every step of a repo without `proof_check`.
 
-| Line | Proof | QA |
-| --- | --- | --- |
-| `Proved by: <test>` | the named automated test, run by the repo's `proof_check`, as the code or `mix test` names it: a test file (`test/foo_test.exs`), a test or scenario name (`does X`), a describe plus a test name (`foo/1 does X`), or a file and a name (`test/foo_test.exs: does X`, `test/foo_test.exs does X`); backticks, surrounding quotes and a `:line` are dropped, and the `proof_check`'s own name alone names the check without a test | does not walk the step: Symphony's QA pre-check confirms it on the PR head before the agent starts (below), and the agent links the result |
-| `Proved by: <check> › <test>` | the older form, still read: the GitHub check run (or workflow) the step names, then the test; a plain ` > ` works as the separator | as above |
-| `Proved by: QA` | the QA pass: a judgment by sight the author keeps for QA | walks the step |
-| no `Proved by:` line | read as `Proved by: QA` | walks the step |
-
-A `Proved by:` inside inline code (between backticks) is a quotation, not a proof: a step that
-describes proof lines quotes them, keeps its text whole, and is proved by its own last unquoted
-`Proved by:`, or is a QA step when it has none.
-
-A repo without `proof_check` has no named-test proofs: QA walks every step of its walkthroughs,
-whatever their `Proved by:` lines say. `SymphonyElixir.Walkthrough` parses the walkthrough into steps
-with their proof, and the QA prompt lists the steps to link and the steps to walk when the
-walkthrough names at least one test.
+Symphony shows the proofs in the description as a block it renders from the events, one
+`- Step 1 · Proved by: …` line per proved step between
+`<!-- symphony:proofs:start -->` and `<!-- symphony:proofs:end -->` at the end of the walkthrough,
+in the same pass as the Decisions section; the rest of the description stays as the person wrote
+it. A `Proved by: QA` the author wrote stays in their step's text and keeps an implementer's proof
+off that step. `SymphonyElixir.Walkthrough` reads the walkthrough into steps, and the QA prompt
+lists the steps to link and the steps to walk when an event proves at least one. The `macos_app`
+playbook's live server (`live.walkthrough_mentions`) is asked for only by a step QA walks.
 
 **The QA pre-check.** Before the QA agent starts, Symphony confirms each step a named test proves
 itself (`SymphonyElixir.QaPreCheck`), so whether a named test ran is never left to the agent reading

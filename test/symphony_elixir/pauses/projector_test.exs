@@ -213,6 +213,64 @@ defmodule SymphonyElixir.Pauses.ProjectorTest do
     end
   end
 
+  describe "the walkthrough's Proved by: block" do
+    @walkthrough "## User walkthrough\n\n1. Run it.\n2. Look at it. Proved by: QA\n\n## Acceptance criteria\n\n* Notes ship."
+
+    defp record_proof!(step, test) do
+      payload = %{caption: "step #{step}", proof: %{step: step, test: test}}
+      {:ok, _event} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "evidence", payload, actor: {:agent, "run-1", "implementation"})
+    end
+
+    test "is rendered from the proof events in the description pass, once, with the summary block's push and verdict lines" do
+      {:ok, summary} = SymphonyElixir.IssueSummary.new(%{"status" => "PR open", "changelog_entry" => "Opened the PR"})
+      {:ok, description} = SymphonyElixir.IssueSummary.put(@walkthrough, summary, ~D[2026-11-04])
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | description: description}])
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id))
+      {:ok, _event} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "attempt.pushed", %{head: "abc1234def", attempt: 1}, [])
+      record_proof!(1, "test/a_test.exs")
+
+      assert Projector.project_now(@ticket) == :ok
+
+      assert_received {:memory_tracker_description_update, @issue_id, written}
+      assert written =~ "1. Run it.\n2. Look at it. Proved by: QA\n\n#{SymphonyElixir.Walkthrough.proofs_start_marker()}"
+      assert written =~ "- Step 1 · Proved by: `test/a_test.exs`\n#{SymphonyElixir.Walkthrough.proofs_end_marker()}\n\n## Acceptance criteria"
+      assert written =~ ~r/- 20\d\d-\d\d-\d\d: Attempt 1 pushed \(abc1234\)\n/
+      assert stored().projected.section == Projector.desired(stored(), RunStore.list_ticket_events(@issue_id, types: ["evidence"])).section
+      refute stored().projected.section == Projector.desired(stored()).section
+
+      assert Projector.project_now(@ticket) == :ok
+      refute_received {:memory_tracker_description_update, _issue_id, _description}
+
+      record_proof!(1, "test/b_test.exs")
+      assert Projector.project_now(@ticket) == :ok
+      assert_received {:memory_tracker_description_update, @issue_id, rewritten}
+      assert rewritten == String.replace(written, "test/a_test.exs", "test/b_test.exs")
+    end
+
+    test "linear_record_walkthrough_proofs projects the block it recorded" do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue() | description: @walkthrough}])
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, @issue_id))
+
+      client = fn query, _variables, _opts ->
+        if query =~ "SymphonyAgentIssueDescription",
+          do: {:ok, %{"data" => %{"issue" => %{"id" => @issue_id, "description" => @walkthrough}}}},
+          else: flunk("the tool must not write the description itself")
+      end
+
+      issue = %Issue{id: @issue_id, identifier: "TP-817", repo_key: @repo_key}
+
+      SymphonyElixir.Codex.DynamicTool.execute("linear_record_walkthrough_proofs", %{"proofs" => [%{"step" => 1, "test" => "test/a_test.exs"}]},
+        issue: issue,
+        linear_client: client,
+        run_id: "run-1",
+        run_kind: "implementation"
+      )
+
+      assert_received {:memory_tracker_description_update, @issue_id, written}
+      assert written =~ "- Step 1 · Proved by: `test/a_test.exs`"
+    end
+  end
+
   describe "a write Linear refuses" do
     test "leaves the record right and the projection pending, and the next apply writes it" do
       Application.put_env(:symphony_elixir, :memory_tracker_add_issue_label_result, [{:error, :linear_down}])

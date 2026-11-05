@@ -9,7 +9,16 @@ defmodule SymphonyElixir.IssueSummary do
   to the rest of the description survive; only an empty heading Linear left right before it goes
   (`drop_empty_heading/1`). `strip/1` removes it, so a description read as
   requirements never carries Symphony's own summary.
+
+  The changelog also carries a line for each push and each verdict on the ticket's history
+  (`event_entries/1`, from `attempt.pushed` and `verdict.recorded`): `put/4` and `put_changelog/2`
+  merge them into the entries the block holds, each line once, newest day first, so the block reads
+  the same whoever wrote the last entry. A line is found again by its text after Linear rewrote
+  the list (`*` bullets), so it is never written twice.
   """
+
+  alias SymphonyElixir.RunStore
+  alias SymphonyElixir.TicketEvents.Event
 
   @start_marker "<!-- symphony:summary:start -->"
   @end_marker "<!-- symphony:summary:end -->"
@@ -24,6 +33,9 @@ defmodule SymphonyElixir.IssueSummary do
   # A heading with nothing in it at the end of a text: what Linear made of a marker line written
   # right above `---` (a setext heading), never a person's text.
   @empty_heading ~r/(^|\n)#+[ \t]*\s*\z/
+  @entry_date ~r/^- (\d{4}-\d{2}-\d{2})\b/
+  @event_types ["attempt.pushed", "verdict.recorded"]
+  @kind_names %{"qa" => "QA", "ci_fix" => "CI Fix", "code_review" => "Code Review", "epic_review" => "Epic Review"}
 
   @type artifact :: %{label: String.t(), url: String.t()}
   @type t :: %{status: String.t(), review_brief: String.t() | nil, artifacts: [artifact()], entry: String.t()}
@@ -65,20 +77,100 @@ defmodule SymphonyElixir.IssueSummary do
   changelog the block already holds, which keeps its newest #{@changelog_cap} entries. A start
   marker without an end marker is refused, since the block's end can't be told from a person's text.
   """
-  @spec put(String.t() | nil, t(), Date.t()) :: {:ok, String.t()} | {:error, :summary_block_unterminated}
-  def put(description, summary, %Date{} = date) do
+  @spec put(String.t() | nil, t(), Date.t(), [Event.t()]) :: {:ok, String.t()} | {:error, :summary_block_unterminated}
+  def put(description, summary, %Date{} = date, events \\ []) do
     description = description || ""
     entry = "- #{Date.to_iso8601(date)}: #{summary.entry}"
+    lines = event_entries(events)
 
     case split(description) do
       :none ->
-        {:ok, append(description, render(summary, [entry]))}
+        {:ok, append(description, render(summary, merge(lines, [entry])))}
 
       {:unterminated, _before} ->
         {:error, :summary_block_unterminated}
 
       {:block, before, block, rest} ->
-        {:ok, drop_empty_heading(before) <> render(summary, Enum.take([entry | changelog(block)], @changelog_cap)) <> rest}
+        {:ok, drop_empty_heading(before) <> render(summary, merge(lines, [entry | changelog(block)])) <> rest}
+    end
+  end
+
+  @doc """
+  Merges the changelog lines of `events` (`event_entries/1`) into the block `description` holds:
+  each line the block lacks is added, newest day first, and the block keeps its newest
+  #{@changelog_cap} entries. A description with no block, or one the lines leave as it is, comes
+  back unchanged, byte for byte; nothing outside the block's changelog is rewritten.
+  """
+  @spec put_changelog(String.t() | nil, [Event.t()]) :: String.t() | nil
+  def put_changelog(description, events) when is_binary(description) do
+    with {:block, before, block, rest} <- split(description),
+         [head, _entries] <- :binary.split(block, @changelog_label),
+         existing = changelog(block),
+         merged when merged != existing <- merge(event_entries(events), existing) do
+      before <> head <> @changelog_label <> "\n\n" <> Enum.join(merged, "\n") <> "\n\n" <> @end_marker <> rest
+    else
+      _unchanged -> description
+    end
+  end
+
+  def put_changelog(description, _events), do: description
+
+  @doc "The events of the ticket `issue_id` its changelog carries a line for, oldest first; none when the store cannot be read."
+  @spec history(String.t()) :: [Event.t()]
+  def history(issue_id) when is_binary(issue_id), do: issue_id |> RunStore.list_ticket_events(types: @event_types) |> List.wrap() |> Enum.filter(&match?(%Event{}, &1))
+
+  @doc """
+  The changelog lines of a ticket's `events`, oldest first: one per `attempt.pushed`
+  (`2026-11-05: Attempt 2 pushed (abc1234)`) and one per `verdict.recorded`
+  (`2026-11-05: Code Review verdict: approve (abc1234)`), dated by the day the event happened.
+  """
+  @spec event_entries([Event.t() | map()]) :: [String.t()]
+  def event_entries(events) when is_list(events), do: Enum.flat_map(events, &event_entry/1)
+
+  defp event_entry(%{type: type, at: %DateTime{} = at, payload: payload}) when type in @event_types and is_map(payload) do
+    ["- #{Date.to_iso8601(DateTime.to_date(at))}: " <> plain(event_text(type, payload))]
+  end
+
+  defp event_entry(_event), do: []
+
+  defp event_text("attempt.pushed", payload) do
+    attempt = field(payload, :attempt)
+    Enum.join(["Attempt", if(is_integer(attempt), do: Integer.to_string(attempt)), "pushed"] |> Enum.reject(&is_nil/1), " ") <> head_suffix(payload)
+  end
+
+  defp event_text("verdict.recorded", payload) do
+    kind = field(payload, :kind)
+    name = if is_binary(kind), do: Map.get_lazy(@kind_names, kind, fn -> kind |> String.split("_", trim: true) |> Enum.map_join(" ", &String.capitalize/1) end), else: "Review"
+    outcome = field(payload, :outcome)
+    "#{name} verdict" <> if(is_binary(outcome), do: ": " <> outcome, else: "") <> head_suffix(payload)
+  end
+
+  defp head_suffix(payload) do
+    case field(payload, :head) do
+      head when is_binary(head) and head != "" -> " (#{String.slice(head, 0, 7)})"
+      _none -> ""
+    end
+  end
+
+  defp field(payload, key), do: Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
+
+  # Only words, digits and plain punctuation: no markdown Linear would escape, so the line reads the
+  # same once Linear stored it.
+  defp plain(text), do: text |> String.replace(~r/[^\p{L}\p{N} .,:;()\/-]/u, "") |> one_line()
+
+  # The event lines the entries lack, put with them, newest day first: on one day an event line goes
+  # above the entries already there. The newest #{@changelog_cap} stay.
+  defp merge(lines, entries) do
+    case lines |> Enum.reject(&(&1 in entries)) |> Enum.uniq() |> Enum.reverse() do
+      [] -> Enum.take(entries, @changelog_cap)
+      missing -> (missing ++ entries) |> Enum.sort_by(&entry_date/1, :desc) |> Enum.take(@changelog_cap)
+    end
+  end
+
+  defp entry_date(entry) do
+    case Regex.run(@entry_date, entry) do
+      [_entry, date] -> date
+      nil -> ""
     end
   end
 
