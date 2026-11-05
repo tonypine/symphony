@@ -246,6 +246,12 @@ defmodule SymphonyElixir.QaVerificationTest do
     {:ok, _event} = SymphonyElixir.TicketEvents.record(@repo_key, @issue_id, "evidence", payload, actor: {:agent, "run-1", "implementation"})
   end
 
+  # An empty store, but for the open pull request every QA ticket here has.
+  defp clear_store! do
+    :ok = RunStore.clear()
+    :ok = TicketPullRequest.put(@repo_key, @issue_id, %{pr_url: @pr_url})
+  end
+
   defp run(workspace, opts, state \\ "QA") do
     QaVerification.run(
       issue(state),
@@ -1721,7 +1727,7 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
 
     test "a pre-check that finds the named check never ran on a conflicting head is blocked on CI" do
-      :ok = RunStore.clear()
+      clear_store!()
       {workspace, head} = named_workspace!()
       watch_head!(head, %{mergeable: :dirty})
       record_proof!(1, "test/check_test.exs")
@@ -1801,7 +1807,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
     # Step 1's proof is an event, as the implementer records it; the description names none.
     setup do
-      :ok = RunStore.clear()
+      clear_store!()
       record_proof!(1, "test/check_test.exs")
       :ok
     end
@@ -1868,19 +1874,22 @@ defmodule SymphonyElixir.QaVerificationTest do
       prompt = QaAgent.prompt(job, nil)
       assert prompt =~ "Symphony confirmed every step a named\nautomated test proves before you started"
       assert prompt =~ "Do not walk those steps and do not read their checks again."
-      assert prompt =~ "- 1. Run `symphony check` → it passes. Proved by: `make-all` › test/check_test.exs: pass, `make-all` passed on `#{String.slice(head, 0, 12)}` (#{@run_url})\n"
+
+      assert prompt =~
+               "- 1. Run `symphony check` → it passes. Proved by: `make-all` › test/check_test.exs: pass, `make-all` passed on `#{String.slice(head, 0, 12)}` and `test/check_test.exs` is in the checkout (#{@run_url})\n"
+
       assert prompt =~ "Steps to walk (`Proved by: QA`, or no proof named):\n- 2. Open the dashboard → it looks right. Proved by: QA\n"
       refute prompt =~ "gh run list --commit"
 
       assert_received {:memory_tracker_state_update, @issue_id, "Merging"}
       assert_received {:memory_tracker_comment, @issue_id, report}
       assert report =~ "### Pre-checks"
-      assert report =~ "- **pass** step 1 (Proved by: `make-all` › test/check_test.exs): `make-all` passed on `#{String.slice(head, 0, 12)}` (#{@run_url})"
+      assert report =~ "- **pass** step 1 (Proved by: `make-all` › test/check_test.exs): `make-all` passed on `#{String.slice(head, 0, 12)}` and `test/check_test.exs` is in the checkout (#{@run_url})"
       assert [%{outcome: "pass", head_sha: ^head}] = verdicts()
     end
 
     test "a ticket whose steps no event proves reads no check and QA walks every step" do
-      :ok = RunStore.clear()
+      clear_store!()
       {workspace, _head} = named_workspace!()
       unused = fn args, _opts -> flunk("gh should not run: #{inspect(args)}") end
 
@@ -1919,7 +1928,7 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
 
     test "a description's `Proved by:` line naming another repo's check proves nothing: the pre-check reads the events" do
-      :ok = RunStore.clear()
+      clear_store!()
       {workspace, _head} = named_workspace!()
       unused = fn args, _opts -> flunk("gh should not run: #{inspect(args)}") end
       description = "## User walkthrough\n\n1. Run it. Proved by: ci › test/x_test.exs\n2. Open the dashboard → it looks right.\n"
@@ -2004,6 +2013,13 @@ defmodule SymphonyElixir.QaVerificationTest do
   # branch into the PR after the approve. `origin` is a bare repo holding the PR head where GitHub
   # keeps it, `refs/pull/816/head`.
   describe "the workspace synced to the PR head" do
+    # The walkthrough's step 1 is proved by an event, so each run reads CI on the PR head first.
+    setup do
+      clear_store!()
+      record_proof!(1, "test/check_test.exs")
+      :ok
+    end
+
     defp git!(args, dir) do
       {output, 0} = System.cmd("git", args, cd: dir, stderr_to_stdout: true)
       String.trim(output)
@@ -2013,7 +2029,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
     # A workspace at `head` whose PR head on `origin` is one commit ahead of it, `pr_head`.
     defp behind_pr_workspace! do
-      {workspace, head} = git_workspace!()
+      {workspace, head} = named_workspace!()
       origin = workspace <> "-origin.git"
       git!(["init", "-q", "--bare", origin], workspace)
       on_exit(fn -> File.rm_rf(origin) end)
@@ -2206,7 +2222,7 @@ defmodule SymphonyElixir.QaVerificationTest do
     end
 
     test "a moved head the workspace cannot be synced to blocks the run with the reason" do
-      {workspace, head} = git_workspace!()
+      {workspace, head} = named_workspace!()
       elsewhere = String.duplicate("e", 40)
       runner = gh(elsewhere, [make_all("COMPLETED", "SUCCESS")])
 

@@ -1286,8 +1286,9 @@ defmodule SymphonyElixir.QaAgentTest do
       3. Click Save → saved.
       """
 
-      ticket = issue(%{description: description})
-      prompt = QaAgent.prompt(job(%{issue: ticket, journey: SymphonyElixir.QaVerification.journey(ticket, "make-all")}), nil)
+      section = SymphonyElixir.Walkthrough.section(description)
+      journey = %{source: "the ticket's `## User walkthrough`", text: section, steps: ProofSteps.steps(section, "make-all")}
+      prompt = QaAgent.prompt(job(%{issue: issue(%{description: description}), journey: journey}), nil)
       flat = String.replace(prompt, ~r/\s+/, " ")
 
       assert flat =~

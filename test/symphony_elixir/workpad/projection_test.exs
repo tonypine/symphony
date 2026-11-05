@@ -186,6 +186,10 @@ defmodule SymphonyElixir.Workpad.ProjectionTest do
       stray = "## Symphony Workpad\n\n<!-- symphony:workpad:plan:start --> old\n\n### Notes\n\n- mine\n"
       assert Projection.put(stray, %{plan: "### Plan\n\nnew", validation: nil}) =~ "<!-- symphony:workpad:plan:start:"
       assert Projection.put(stray, %{plan: "### Plan\n\nnew", validation: nil}) =~ "new\n<!-- symphony:workpad:plan:end -->\n\n### Notes\n\n- mine\n"
+
+      # A start marker on the body's last line, with no line break after it, ends at the body's end.
+      last = Projection.put("## Symphony Workpad\n\n### Notes\n\n- mine\n<!-- symphony:workpad:plan:start -->", %{plan: "### Plan\n\nnew", validation: nil})
+      assert last =~ ~r/\A## Symphony Workpad\n\n### Notes\n\n- mine\n<!-- symphony:workpad:plan:start:\w+ -->\n### Plan\n\nnew\n<!-- symphony:workpad:plan:end -->\z/
     end
 
     test "a workpad without the sections gets them before the next section there is, or at the end" do
@@ -258,7 +262,7 @@ defmodule SymphonyElixir.Workpad.ProjectionTest do
     test "writes the step events into the ticket's workpad once, leaving a person's comment alone", %{issue_id: issue_id} do
       settings = linear_settings!()
       record_steps!(issue_id)
-      comments = [workpad_comment(bootstrap()), %{"id" => "comment-human", "body" => "Looks good", "user" => %{"name" => "Reporter"}}]
+      comments = [workpad_comment(String.trim_trailing(bootstrap())), %{"id" => "comment-human", "body" => "Looks good", "user" => %{"name" => "Reporter"}}]
       opts = [settings: settings, linear_client: client(self(), comments), link: fn _id -> nil end, steps: @steps]
 
       assert :ok = Projection.project_now({:ticket, "repo-a", issue_id}, opts)
@@ -288,6 +292,7 @@ defmodule SymphonyElixir.Workpad.ProjectionTest do
 
       write_workflow_file!(Workflow.workflow_file_path(), agent_kind: "claude")
       assert :ok = Projection.project_now({:ticket, "repo-a", issue_id}, linear_client: unused)
+      assert :ok = Projection.project_now({:ticket, "repo-a", issue_id})
       assert :ok = Projection.project_now({:ticket, "repo-a", issue_id}, settings: %{}, linear_client: unused)
     end
 
