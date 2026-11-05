@@ -32,6 +32,7 @@ defmodule SymphonyElixir.AgentRunner do
     Notifications,
     PathUnlock,
     Pauses,
+    PhaseSteps,
     PromptBuilder,
     PrReviewPoller,
     PrWatch,
@@ -56,6 +57,9 @@ defmodule SymphonyElixir.AgentRunner do
   }
 
   @dev_server_pid_key {__MODULE__, :verification_dev_server_pid}
+  # The agent session the run holds now: a step walk stops it at a machine step and starts another
+  # for the next agent turn, so the run's `after` stops whichever one is current.
+  @session_key {__MODULE__, :agent_session}
   @idle_park_state "Backlog"
   @merging_state "Merging"
   # Consecutive turns with no new commit, no state change and no PR change that end the run.
@@ -771,10 +775,8 @@ defmodule SymphonyElixir.AgentRunner do
       |> put_path_unlocks(issue)
 
     with {:ok, agent_module} <- agent_module(opts),
-         {:ok, linear_comment_registry} <- ensure_comment_registry(opts, seed_ids),
-         {:ok, session} <-
-           start_agent_session(agent_module, workspace, worker_host, issue, Keyword.put(opts, :linear_comment_registry, linear_comment_registry)) do
-      send_agent_session_info(codex_update_recipient, issue, agent_module, session)
+         {:ok, linear_comment_registry} <- ensure_comment_registry(opts, seed_ids) do
+      opts = Keyword.put(opts, :linear_comment_registry, linear_comment_registry)
 
       # Capture pending rework context (reviewer comments, CI failure, PR
       # conflict) up front so every turn of the run sees the same snapshot as
@@ -782,7 +784,6 @@ defmodule SymphonyElixir.AgentRunner do
       # mid-run.
       run_opts =
         opts
-        |> Keyword.put(:linear_comment_registry, linear_comment_registry)
         |> put_reviewer_comments(issue)
         |> put_ci_failure(issue)
         |> put_pr_conflict(issue)
@@ -797,14 +798,52 @@ defmodule SymphonyElixir.AgentRunner do
         issue_state_fetcher: issue_state_fetcher,
         worker_host: worker_host,
         progress: initial_progress(workspace, worker_host, issue, run_opts),
-        dispatch_pr_url: ticket_pr_url(issue, run_opts)
+        dispatch_pr_url: ticket_pr_url(issue, run_opts),
+        walk: new_walk(Keyword.fetch!(opts, :run_profile))
       }
 
       try do
-        do_run_codex_turns(agent_module, session, run_context, 1, max_turns)
+        start_walk(agent_module, run_context, max_turns)
       after
-        agent_module.stop_session(session)
+        stop_current_session(agent_module)
       end
+    end
+  end
+
+  # A run of a kind whose step list holds a machine step walks it (`SymphonyElixir.PhaseSteps`):
+  # each delegated or orchestrated step is an agent turn, each machine step runs between turns with
+  # the session stopped and the slot free. Any other run is one agent session, turn after turn.
+  defp new_walk(%{kind: kind}) do
+    steps = PhaseSteps.steps(kind)
+    if PhaseSteps.walk?(steps), do: %{steps: steps, step: hd(steps), carry: nil, started_ms: nil}
+  end
+
+  defp new_walk(_profile), do: nil
+
+  # A list that opens on machine steps runs them before the first turn.
+  defp start_walk(agent_module, %{walk: %{step: step}} = run_context, max_turns) do
+    if PhaseSteps.machine?(step),
+      do: run_machine_steps(agent_module, nil, run_context, step, 0, max_turns),
+      else: start_turn_session(agent_module, run_context, 1, max_turns)
+  end
+
+  defp start_walk(agent_module, run_context, max_turns), do: start_turn_session(agent_module, run_context, 1, max_turns)
+
+  defp start_turn_session(agent_module, run_context, turn_number, max_turns) do
+    %{workspace: workspace, worker_host: worker_host, issue: issue, opts: opts} = run_context
+    recipient = run_context.codex_update_recipient
+
+    with {:ok, session} <- start_agent_session(agent_module, workspace, worker_host, issue, opts) do
+      Process.put(@session_key, session)
+      send_agent_session_info(recipient, issue, agent_module, session)
+      do_run_codex_turns(agent_module, session, Map.put(run_context, :fresh_session, true), turn_number, max_turns)
+    end
+  end
+
+  defp stop_current_session(agent_module) do
+    case Process.delete(@session_key) do
+      nil -> :ok
+      session -> agent_module.stop_session(session)
     end
   end
 
@@ -816,8 +855,9 @@ defmodule SymphonyElixir.AgentRunner do
       issue_state_fetcher: issue_state_fetcher
     } = run_context
 
-    prompt = build_turn_prompt(issue, opts, turn_number, max_turns)
+    prompt = walk_turn_prompt(run_context, turn_number, max_turns)
     audit_prompt_sent(issue, Keyword.get(opts, :run_id), prompt, turn_number, max_turns, agent_module, opts)
+    run_context = start_walk_turn(run_context)
 
     case run_agent_turn(agent_module, app_session, prompt, run_context) do
       {:ok, turn_session} ->
@@ -1040,10 +1080,124 @@ defmodule SymphonyElixir.AgentRunner do
   defp maybe_put_option(opts, _key, nil), do: opts
   defp maybe_put_option(opts, key, value), do: Keyword.put(opts, key, value)
 
+  defp continue_active_issue(agent_module, app_session, %{walk: %{} = walk} = run_context, refreshed_issue, turn_number, max_turns) do
+    PhaseSteps.record_turn_passed(walk.step, step_context(run_context), System.monotonic_time(:millisecond) - walk.started_ms)
+
+    case PhaseSteps.next(walk.steps, walk.step, :passed) do
+      {:ok, %{mode: "machine"} = step} ->
+        run_machine_steps(agent_module, app_session, run_context, step, turn_number, max_turns)
+
+      {:ok, step} ->
+        run_context = Map.delete(%{run_context | walk: %{walk | step: step, carry: nil}}, :fresh_session)
+        do_run_codex_turns(agent_module, app_session, run_context, turn_number + 1, max_turns)
+
+      # Past the last step the run goes on as one session does.
+      :end ->
+        run_context = %{run_context | walk: nil}
+        continue_active_issue(agent_module, app_session, run_context, refreshed_issue, turn_number, max_turns)
+    end
+  end
+
   defp continue_active_issue(agent_module, app_session, run_context, refreshed_issue, turn_number, max_turns) do
     Logger.info("Continuing agent run for #{issue_context(refreshed_issue)} after normal turn completion turn=#{turn_number}/#{max_turns}")
 
-    do_run_codex_turns(agent_module, app_session, run_context, turn_number + 1, max_turns)
+    do_run_codex_turns(agent_module, app_session, Map.delete(run_context, :fresh_session), turn_number + 1, max_turns)
+  end
+
+  # The machine steps from `step` on, run by Symphony. When one of them runs a command, the agent's
+  # session ends first and the orchestrator frees the run's slot (`{:run_step, ...}`); the next agent
+  # turn then waits for the orchestrator to give it a slot again (`await_turn/2`: never while
+  # Symphony is paused) and starts in a new session with the whole prompt.
+  defp run_machine_steps(agent_module, app_session, %{walk: walk} = run_context, step, turn_number, max_turns) do
+    context = step_context(run_context)
+    context = Map.put(context, :changes, PhaseSteps.changes(context))
+    frees_slot? = PhaseSteps.runs_anything?(walk.steps, step, context.changes)
+
+    if frees_slot?, do: stop_current_session(agent_module)
+
+    case PhaseSteps.run_machine_steps(walk.steps, step, Map.put(context, :on_step, &notify_step(run_context, &1))) do
+      {:turn, next_step, carry} ->
+        run_context = %{run_context | walk: %{walk | step: next_step, carry: carry}}
+        next_walk_turn(agent_module, app_session, run_context, frees_slot?, turn_number, max_turns)
+
+      {:paused, paused, question_id} ->
+        Logger.info("Step #{paused.id} of #{issue_context(run_context.issue)} paused on question #{question_id}; ending the run")
+        :ok
+
+      {:end, _carry} ->
+        Logger.info("Step list of #{issue_context(run_context.issue)} ended after its machine steps; ending the run")
+        :ok
+    end
+  end
+
+  defp next_walk_turn(agent_module, app_session, run_context, false, turn_number, max_turns) when not is_nil(app_session),
+    do: do_run_codex_turns(agent_module, app_session, Map.delete(run_context, :fresh_session), turn_number + 1, max_turns)
+
+  defp next_walk_turn(agent_module, _app_session, run_context, frees_slot?, turn_number, max_turns) do
+    with :ok <- if(frees_slot?, do: await_turn(run_context), else: :ok) do
+      start_turn_session(agent_module, run_context, turn_number + 1, max_turns)
+    end
+  end
+
+  # Asks the orchestrator for the next agent turn and waits for it: the orchestrator answers once a
+  # slot is free and Symphony isn't paused (decision 1 of TP-1085). A run with no orchestrator goes on.
+  defp await_turn(%{codex_update_recipient: recipient, issue: %Issue{id: issue_id}, walk: %{step: step}}) when is_pid(recipient) do
+    monitor = Process.monitor(recipient)
+    send(recipient, {:run_step, issue_id, {:turn_wanted, self(), %{id: step.id, title: step.title, mode: step.mode}}})
+
+    receive do
+      {:run_step_turn, ^issue_id} ->
+        Process.demonitor(monitor, [:flush])
+        :ok
+
+      {:DOWN, ^monitor, :process, _pid, reason} ->
+        {:error, {:orchestrator_down, reason}}
+    end
+  end
+
+  defp await_turn(_run_context), do: :ok
+
+  defp notify_step(%{codex_update_recipient: recipient, issue: %Issue{id: issue_id}}, {:started, step, deadline}) when is_pid(recipient) do
+    send(recipient, {:run_step, issue_id, {:machine, %{id: step.id, title: step.title, mode: step.mode, started_at: DateTime.utc_now(), deadline: deadline}}})
+  end
+
+  defp notify_step(_run_context, _notice), do: :ok
+
+  defp step_context(%{issue: issue, opts: opts, workspace: workspace, worker_host: worker_host}) do
+    repo_key = run_repo_key(issue, opts)
+
+    %{
+      repo_key: repo_key,
+      issue_id: issue.id,
+      identifier: issue.identifier,
+      phase: issue.state,
+      run_id: Keyword.get(opts, :run_id),
+      workspace: workspace,
+      worker_host: worker_host,
+      base_branch: Config.repo_base_branch(repo_key),
+      runner: Keyword.get(opts, :step_command_runner)
+    }
+    |> Map.reject(fn {key, value} -> key == :runner and is_nil(value) end)
+  end
+
+  # A walk's turn records its step's start; the whole prompt opens a new session.
+  defp start_walk_turn(%{walk: %{} = walk} = run_context) do
+    PhaseSteps.record_turn_started(walk.step, step_context(run_context))
+    %{run_context | walk: %{walk | started_ms: System.monotonic_time(:millisecond)}}
+  end
+
+  defp start_walk_turn(run_context), do: run_context
+
+  defp walk_turn_prompt(%{issue: issue, opts: opts} = run_context, turn_number, max_turns) do
+    prompt =
+      if Map.get(run_context, :fresh_session) == true,
+        do: build_turn_prompt(issue, opts, 1, max_turns),
+        else: build_turn_prompt(issue, opts, turn_number, max_turns)
+
+    case run_context do
+      %{walk: %{step: step, carry: carry}} -> prompt <> "\n\n" <> PhaseSteps.prompt_section(step, carry)
+      _one_session -> prompt
+    end
   end
 
   defp agent_module(opts) do

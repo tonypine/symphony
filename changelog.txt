@@ -6,6 +6,10 @@ list the commit subjects since the previous release (see `docs/releasing.md`).
 
 ## Unreleased
 
+- An implementation run walks its step list: Symphony runs the build, checks and tests itself
+  between agent turns, with the agent's session closed and its slot free for another ticket; a
+  failed step sends the run back to writing the code with the output, a step that hangs twice
+  asks a question in the Inbox, and machine steps still run while Symphony is paused.
 - The Director's Settings gains a Phases group: each run kind's step list, reordered, added
   to, removed from, edited or reset to its default, with a preview of the list the next run
   follows; a step Symphony would refuse says why on its row and isn't saved.

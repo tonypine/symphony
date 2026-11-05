@@ -586,6 +586,26 @@ defmodule SymphonyElixir.ExtensionsTest do
              json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
   end
 
+  test "phoenix observability api shows a run on a machine step with no session, and what its next turn waits for" do
+    building = %{id: "build", title: "Build", mode: "machine", started_at: ~U[2026-11-05 12:30:00.123Z], waiting: nil}
+    waiting = fn reason -> %{id: "code", title: "Write the code", mode: "delegated", started_at: nil, waiting: reason} end
+    orchestrator_name = Module.concat(__MODULE__, :StepApiOrchestrator)
+    snapshot = fn step -> update_in(static_snapshot().running, fn [running] -> [Map.merge(running, %{step: step, session_id: nil})] end) end
+    {:ok, pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot.(building))
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{"running" => [%{"session_id" => nil, "last_message" => "running Build", "step" => step}]} = json_response(get(build_conn(), "/api/v1/state"), 200)
+    assert step == %{"id" => "build", "title" => "Build", "mode" => "machine", "started_at" => "2026-11-05T12:30:00Z", "waiting" => nil}
+
+    :sys.replace_state(pid, &Keyword.put(&1, :snapshot, snapshot.(waiting.("slot"))))
+    assert %{"running" => [%{"last_message" => "waiting for a free slot for its next agent turn"}]} = json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    :sys.replace_state(pid, &Keyword.put(&1, :snapshot, snapshot.(waiting.("pause"))))
+
+    assert %{"running" => [%{"last_message" => "waiting for Symphony's pause to lift before its next agent turn", "step" => %{"waiting" => "pause", "started_at" => nil}}]} =
+             json_response(get(build_conn(), "/api/v1/state"), 200)
+  end
+
   test "phoenix observability api preserves state, issue, and refresh responses" do
     SymphonyElixir.TicketObservation.reset()
     Shadow.reset()
@@ -668,6 +688,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           "last_message" => "rendered",
           "linear_wait_until" => nil,
           "pending_tool" => nil,
+          "step" => nil,
           "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
           "last_event_at" => nil,
           "forced" => false,

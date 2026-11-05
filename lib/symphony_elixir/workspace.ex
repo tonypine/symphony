@@ -2380,6 +2380,26 @@ defmodule SymphonyElixir.Workspace do
   # mid-hook stops the hook too, rather than leave it running beside the
   # `after_create` the next run starts in the same workspace.
   defp run_hook_command(command, workspace, worker_host, env, timeout_ms) do
+    port_env = Enum.map(env ++ [no_gradle_daemon_env()], fn {key, value} -> {String.to_charlist(key), String.to_charlist(value)} end)
+    run_port_command(command, workspace, worker_host, {port_env, env}, timeout_ms)
+  end
+
+  @doc """
+  Runs a machine step's `command` (`SymphonyElixir.PhaseSteps`) in `workspace` the way a workspace
+  hook runs (a login shell, stopped with what it started at `timeout_ms`), with the environment an
+  agent child gets: `SymphonyElixir.AgentEnv`'s allow-list plus `env`, every other variable of
+  Symphony's own environment removed. On a worker host only `env` is exported. Returns the output
+  and exit status, `{:timeout, output}` once the timeout stopped it, or `{:error, reason}`.
+  """
+  @spec run_step_command(String.t(), Path.t(), worker_host(), %{optional(String.t()) => String.t()}, pos_integer()) ::
+          {:ok, {String.t(), integer()}} | {:timeout, String.t()} | {:error, term()}
+  def run_step_command(command, workspace, worker_host, env, timeout_ms)
+      when is_binary(command) and is_binary(workspace) and is_map(env) and is_integer(timeout_ms) do
+    port_env = SymphonyElixir.AgentEnv.build_with(env)
+    run_port_command(command, workspace, worker_host, {port_env, Enum.to_list(env)}, timeout_ms)
+  end
+
+  defp run_port_command(command, workspace, worker_host, env, timeout_ms) do
     owner = self()
 
     Task.async(fn ->
@@ -2392,7 +2412,8 @@ defmodule SymphonyElixir.Workspace do
     |> Task.await(:infinity)
   end
 
-  defp open_hook_port(command, workspace, nil, env) do
+  # `env` is the local port's list and the variables a remote shell exports.
+  defp open_hook_port(command, workspace, nil, {port_env, _exports}) do
     port_opts = [
       :binary,
       :exit_status,
@@ -2400,13 +2421,13 @@ defmodule SymphonyElixir.Workspace do
       :hide,
       args: ["-lc", command],
       cd: workspace,
-      env: Enum.map(env ++ [no_gradle_daemon_env()], fn {key, value} -> {String.to_charlist(key), String.to_charlist(value)} end)
+      env: port_env
     ]
 
     {:ok, Port.open({:spawn_executable, System.find_executable("sh") || "/bin/sh"}, port_opts)}
   end
 
-  defp open_hook_port(command, workspace, worker_host, env) when is_binary(worker_host) do
+  defp open_hook_port(command, workspace, worker_host, {_port_env, env}) when is_binary(worker_host) do
     script =
       env
       |> remote_env_assignments()
