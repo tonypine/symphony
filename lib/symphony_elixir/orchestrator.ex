@@ -733,6 +733,26 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_info_message({:codex_worker_update, _issue_id, _update}, state), do: {:noreply, state}
 
+  # A run walking its step list (`SymphonyElixir.PhaseSteps`) between agent turns: on a machine
+  # step its session ended and it holds no slot, so a cycle runs at once for the slot it freed; once
+  # the step list reaches an agent turn again, the run waits for a slot (`grant_step_turns/1`).
+  defp handle_info_message({:run_step, issue_id, notice}, %{running: running} = state) when is_binary(issue_id) do
+    case Map.get(running, issue_id) do
+      nil ->
+        {:noreply, state}
+
+      running_entry ->
+        state = put_running_entry(state, issue_id, put_step(running_entry, notice))
+        persist_running_entry(state.running[issue_id])
+        notify_dashboard()
+
+        case notice do
+          {:machine, _step} -> {:noreply, request_cycle(state)}
+          {:turn_wanted, _pid, _step} -> {:noreply, grant_step_turns(state)}
+        end
+    end
+  end
+
   defp handle_info_message({:retry_issue, issue_id, retry_token}, state) do
     result =
       cond do
@@ -810,7 +830,7 @@ defmodule SymphonyElixir.Orchestrator do
         # deferred while the run worked fires at once.
         PrWatch.poll_now()
         notify_dashboard()
-        {:noreply, redispatch_slot_waiting(state)}
+        {:noreply, state |> grant_step_turns() |> redispatch_slot_waiting()}
     end
   end
 
@@ -1677,6 +1697,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> remember_forced_issues(issues)
           |> put_blocked(issues)
           |> release_merging_ci_waits(issues)
+          |> grant_step_turns()
 
         if available_slots(state) > 0 or available_finishing_slots(state) > 0 or forced_pass_needed?(state, issues) do
           issues
@@ -2393,6 +2414,10 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc false
+  @spec run_watchdogs_for_test(State.t()) :: State.t()
+  def run_watchdogs_for_test(%State{} = state), do: state |> reconcile_stalled_running_issues() |> maybe_run_watchdog()
+
+  @doc false
   @spec apply_operator_stops_result_for_test(State.t(), [String.t()], term(), DateTime.t()) :: State.t()
   def apply_operator_stops_result_for_test(%State{} = state, stopped_ids, result, read_at \\ DateTime.utc_now()) when is_list(stopped_ids),
     do: state |> apply_operator_stops_result(stopped_ids, result, read_at) |> await_tracker_tasks()
@@ -2916,6 +2941,8 @@ defmodule SymphonyElixir.Orchestrator do
   # A workspace hook (`after_create` can take minutes) runs under its own timeout, so
   # while one runs the clock starts at its deadline, and once it has ended, at its end.
   defp first_turn_started_at(%{workspace_hook: %{deadline: %DateTime{} = deadline}}), do: deadline
+  defp first_turn_started_at(%{step: %{mode: "machine", deadline: %DateTime{} = deadline}}), do: deadline
+  defp first_turn_started_at(%{step: %{waiting: waiting}}) when not is_nil(waiting), do: nil
 
   defp first_turn_started_at(running_entry) when is_map(running_entry) do
     Map.get(running_entry, :last_event_at) || Map.get(running_entry, :started_at)
@@ -2974,6 +3001,10 @@ defmodule SymphonyElixir.Orchestrator do
   # So does the clock of a run waiting on one of Symphony's own tool calls: the agent shows no
   # activity until the call returns, at the latest when its timeout stops it.
   defp watchdog_clock_started_at(%{workspace_hook: %{deadline: %DateTime{} = deadline}}), do: deadline
+  # A machine step runs under its own timeout, and a run waiting for its next turn's slot waits on
+  # the orchestrator, so neither is stuck.
+  defp watchdog_clock_started_at(%{step: %{mode: "machine", deadline: %DateTime{} = deadline}}), do: deadline
+  defp watchdog_clock_started_at(%{step: %{waiting: waiting}}) when not is_nil(waiting), do: nil
 
   defp watchdog_clock_started_at(running_entry) do
     last_event_at = watchdog_last_event_at(running_entry)
@@ -5078,11 +5109,55 @@ defmodule SymphonyElixir.Orchestrator do
   defp blocker_label(blocker), do: Map.get(blocker, :identifier) || "an unknown issue"
 
   defp work_running_ids(running) when is_map(running) do
-    for {issue_id, entry} <- running, not finishing_entry?(entry), not forced_entry?(entry), do: issue_id
+    for {issue_id, entry} <- running,
+        not finishing_entry?(entry),
+        not forced_entry?(entry),
+        not slot_free_entry?(entry),
+        do: issue_id
   end
 
   defp available_finishing_slots(%State{running: running}) do
-    max(Config.settings!().agent.finishing_max - Enum.count(running, fn {_issue_id, entry} -> finishing_entry?(entry) end), 0)
+    max(Config.settings!().agent.finishing_max - Enum.count(running, fn {_issue_id, entry} -> finishing_entry?(entry) and not slot_free_entry?(entry) end), 0)
+  end
+
+  # A run on a machine step, or waiting for the slot of its next agent turn, holds no slot: its
+  # session ended at the step, and Symphony runs the step (`SymphonyElixir.PhaseSteps`).
+  defp slot_free_entry?(%{step: %{mode: "machine"}}), do: true
+  defp slot_free_entry?(%{step: %{waiting: waiting}}) when not is_nil(waiting), do: true
+  defp slot_free_entry?(_running_entry), do: false
+
+  defp put_step(running_entry, {:machine, step}) do
+    Map.merge(running_entry, %{step: Map.put(step, :waiting, nil), session_id: nil, agent_session: nil, last_event_at: DateTime.utc_now()})
+  end
+
+  defp put_step(running_entry, {:turn_wanted, pid, step}) do
+    Map.put(running_entry, :step, Map.merge(step, %{waiting: :slot, waiter: pid, started_at: DateTime.utc_now()}))
+  end
+
+  # The runs waiting for the slot of their next agent turn get one, the longest waiting first, before
+  # any ticket is dispatched: one while Symphony is paused waits for the pause to lift (decision 1 of
+  # TP-1085; its machine steps still ran), one with no free slot for one to free. A forced run takes
+  # no slot, so only the pause holds it back.
+  defp grant_step_turns(%State{running: running} = state) do
+    paused? = operator_paused?(state)
+
+    running
+    |> Enum.filter(fn {_issue_id, entry} -> match?(%{step: %{waiting: waiting}} when not is_nil(waiting), entry) end)
+    |> Enum.sort_by(fn {_issue_id, entry} -> entry.step.started_at end, DateTime)
+    |> Enum.reduce(state, fn {issue_id, entry}, state_acc -> grant_step_turn(state_acc, issue_id, entry, paused?) end)
+  end
+
+  defp grant_step_turn(state, issue_id, entry, true), do: put_running_entry(state, issue_id, put_in(entry, [:step, :waiting], :pause))
+
+  defp grant_step_turn(state, issue_id, entry, false) do
+    if forced_entry?(entry) or (available_slots(state) > 0 and state_slots_available?(entry.issue, state.running)) do
+      send(entry.step.waiter, {:run_step_turn, issue_id})
+      step = Map.drop(entry.step, [:waiter, :started_at]) |> Map.put(:waiting, nil)
+      notify_dashboard()
+      put_running_entry(state, issue_id, Map.merge(entry, %{step: step, last_event_at: DateTime.utc_now()}))
+    else
+      put_running_entry(state, issue_id, put_in(entry, [:step, :waiting], :slot))
+    end
   end
 
   defp state_slots_available?(%Issue{state: issue_state}, running) when is_map(running) do
@@ -5100,8 +5175,8 @@ defmodule SymphonyElixir.Orchestrator do
       {_id, %{forced: true}} ->
         false
 
-      {_id, %{issue: %Issue{state: state_name}}} ->
-        normalize_issue_state(state_name) == normalized_state
+      {_id, %{issue: %Issue{state: state_name}} = entry} ->
+        not slot_free_entry?(entry) and normalize_issue_state(state_name) == normalized_state
 
       _ ->
         false
@@ -7476,6 +7551,20 @@ defmodule SymphonyElixir.Orchestrator do
     :ok
   end
 
+  # The step a walking run is on (`SymphonyElixir.PhaseSteps`): its id, title and mode, when a
+  # machine step started, and what its next agent turn waits for (`slot`, `pause`), else nil.
+  defp snapshot_step(%{id: id} = step) do
+    %{
+      id: id,
+      title: Map.get(step, :title),
+      mode: Map.get(step, :mode),
+      started_at: if(Map.get(step, :mode) == "machine", do: Map.get(step, :started_at)),
+      waiting: step |> Map.get(:waiting) |> then(&(&1 && Atom.to_string(&1)))
+    }
+  end
+
+  defp snapshot_step(_none), do: nil
+
   defp running_entry_session_id(%{session_id: session_id}) when is_binary(session_id),
     do: session_id
 
@@ -8990,6 +9079,7 @@ defmodule SymphonyElixir.Orchestrator do
           forced: forced_entry?(metadata),
           linear_wait_until: active_linear_wait_until(metadata, now),
           pending_tool: pending_tool(metadata, now, pending_tool_report_after_ms),
+          step: snapshot_step(Map.get(metadata, :step)),
           runtime_seconds: running_seconds(metadata.started_at, now),
           connected: Connected.build(metadata.issue, Map.get(metadata, :linked))
         }

@@ -1024,6 +1024,7 @@ defmodule SymphonyElixirWeb.Presenter do
       last_message: running_message(entry),
       linear_wait_until: entry |> Map.get(:linear_wait_until) |> iso8601(),
       pending_tool: entry |> Map.get(:pending_tool) |> pending_tool_payload(),
+      step: entry |> Map.get(:step) |> step_payload(),
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(Map.get(entry, :last_event_at) || entry.last_codex_timestamp),
       forced: Map.get(entry, :forced, false),
@@ -1821,6 +1822,10 @@ defmodule SymphonyElixirWeb.Presenter do
 
   # A run waiting out a Linear rate limit or outage has no new agent message to show.
   defp running_message(%{linear_wait_until: %DateTime{}}), do: "waiting for Linear"
+  # A run walking its step list between agent turns (`SymphonyElixir.PhaseSteps`).
+  defp running_message(%{step: %{waiting: "pause"}}), do: "waiting for Symphony's pause to lift before its next agent turn"
+  defp running_message(%{step: %{waiting: "slot"}}), do: "waiting for a free slot for its next agent turn"
+  defp running_message(%{step: %{mode: "machine", title: title}}), do: "running #{title}"
   # Nor does a run waiting on one of Symphony's own tool calls.
   defp running_message(%{pending_tool: %{name: name, age_ms: age_ms}}), do: "waiting on #{name} for #{div(age_ms, 60_000)}m"
   defp running_message(running), do: summarize_message(running.last_codex_message)
@@ -1830,6 +1835,9 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp pending_tool_payload(_pending_tool), do: nil
+
+  defp step_payload(%{id: _id} = step), do: %{step | started_at: iso8601(step.started_at)}
+  defp step_payload(_step), do: nil
 
   defp summarize_message(nil), do: nil
   defp summarize_message(message), do: MessageHumanizer.humanize(message)

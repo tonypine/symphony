@@ -3366,8 +3366,13 @@ Each step has:
 - `command` (required for a `machine` step, refused on any other): one shell line, or a list of
   entries run in order, each a `run` line with an optional `when` (`always`, the default;
   `macos_changed`, when the change touches `macos/`; `elixir_changed`, when it touches Elixir
-  files). The step runner (TP-1393) gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES`, `SYMPHONY_CHANGED_TEST_FILES`
-  and `SYMPHONY_CHANGED_SWIFT_TEST_FILTER`, set to what the change touches.
+  files). The step runner gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES` (the Elixir files the
+  change touches that still exist), `SYMPHONY_CHANGED_TEST_FILES` (the changed test files and the
+  tests of the changed `lib/` files) and `SYMPHONY_CHANGED_SWIFT_TEST_FILTER` (the Swift test
+  targets of what changed under `macos/`, `.` for all), read against the merge-base with the
+  repository's base branch, uncommitted and untracked files included. The command runs in the
+  ticket's workspace in a login shell with the environment an agent gets (its allow-list; Symphony's
+  own secrets are removed), with the agent's session closed and its slot free.
 - `prompt` (required for an `orchestrated` step, refused on any other): the instructions of its
   agent turn.
 - `when` (a `machine` step only; default `always`): the step runs only when the change matches,

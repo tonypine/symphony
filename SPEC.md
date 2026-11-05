@@ -2776,6 +2776,29 @@ The list is validated at load: an `on_fail` must name a step in the list, a loop
 pass through a delegated step, and a machine step must have a command. `symphony workflow preview`
 prints the list a run kind follows above its prompt.
 
+The step runner (`SymphonyElixir.PhaseSteps`) walks the list for a run whose list holds a machine
+step. A delegated or orchestrated step is an agent turn; until the agent's own `step.completed`
+ends it (TP-1394), Symphony records its `step.started` as the turn starts and its `passed` as the
+turn ends. A machine step runs each command whose `when` holds in the ticket's workspace, through
+the workspace hook runner, with the step's `timeout_ms` and the agent allow-list environment plus
+the changed files, and records `step.started` and `step.completed` with its output as a
+`step_output` artifact. `passed` goes to the next step; `failed` to its `on_fail`, the next turn's
+prompt carrying the output; no result runs it again, up to `no_result_limit` in a row, then ends it
+`paused` on a Question (go on past it, run it again, or the person's own words) that pauses the
+ticket; a `when` that doesn't match the change skips it with the reason.
+
+When a machine step will run a command, the agent's session ends first and the run holds no slot:
+the orchestrator marks its running entry on the step (`session_id: nil`), counts it in no work,
+state or finishing slot and runs a cycle at once, so another ticket may dispatch. The machine
+step's own timeout replaces the stall and no-progress clocks while it runs. Once the list reaches an
+agent step again, the run asks the orchestrator for a turn and waits; the orchestrator gives it a
+free slot before any dispatch, at once and on every cycle, and starts its new session with the whole
+prompt. While Symphony is paused (dispatch only), a run between steps still runs its machine steps,
+and its next agent turn waits for the pause to lift (decision 1 of TP-1085). A forced run waits only
+for the pause. `run.started` and `run.ended` frame the whole list, and `turn_count` counts agent
+turns. Past the last step the run goes on turn by turn in the same session, as a run with no list
+does.
+
 ### 7.3 Transition Triggers
 
 - `Poll Tick`
@@ -4989,6 +5012,10 @@ SHOULD return:
 - each running row SHOULD include `pending_tool`: the oldest call of one of Symphony's own MCP tools
   the run's agent has waited on for more than a minute (`name`, `started_at`, `age_ms`), otherwise
   null; dashboards show such a run as waiting on that tool
+- each running row SHOULD include `step`: the step a run walking its step list is on (`id`,
+  `title`, `mode`, `started_at` of a machine step, and `waiting`: `slot` or `pause` while its next
+  agent turn waits for a slot or for Symphony's pause to lift), otherwise null; a run on a machine
+  step has `session_id: null`, and its `last_message` names the step or the wait
 - `watching` (list of recently completed issues now in non-active, non-terminal states)
 - each watching row SHOULD include issue identifier, current state, issue URL, last-run time, and
   final transcript replay metadata while the watch remains open

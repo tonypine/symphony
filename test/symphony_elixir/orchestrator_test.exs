@@ -1,0 +1,164 @@
+defmodule SymphonyElixir.OrchestratorTest do
+  use SymphonyElixir.TestSupport
+
+  alias SymphonyElixir.Pauses
+
+  @active_states ["Todo", "In Progress", "Merging", "Rework"]
+
+  setup do
+    test_root = Path.join(System.tmp_dir!(), "symphony-orchestrator-steps-#{System.unique_integer([:positive])}")
+    File.mkdir_p!(test_root)
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      tracker_active_states: @active_states,
+      tracker_terminal_states: ["Done", "Canceled"],
+      workspace_root: Path.join(test_root, "workspaces"),
+      max_concurrent_agents: 1,
+      agent_stall_timeout_ms: 1_000,
+      watchdog: %{enabled: true, tick_interval_ms: 60_000, no_progress_threshold_ms: 1_000},
+      quality_gate: %{enabled: false}
+    )
+
+    on_exit(fn ->
+      Pauses.clear(:symphony)
+      Application.delete_env(:symphony_elixir, :memory_tracker_issues)
+      File.rm_rf(test_root)
+    end)
+
+    :ok
+  end
+
+  @machine %{id: "build", title: "Build", mode: "machine"}
+
+  defp machine_notice, do: {:machine, Map.merge(@machine, %{started_at: DateTime.utc_now(), deadline: DateTime.add(DateTime.utc_now(), 600, :second)})}
+  defp turn_wanted, do: {:turn_wanted, self(), %{id: "code", title: "Write the code", mode: "delegated"}}
+
+  defp step(state, notice, issue_id \\ "walk-1") do
+    {:noreply, state} = Orchestrator.handle_info({:run_step, issue_id, notice}, state)
+    state
+  end
+
+  defp snapshot_of(state) do
+    {:reply, snapshot, _state} = Orchestrator.handle_call(:snapshot, {self(), make_ref()}, state)
+    snapshot
+  end
+
+  defp running_of(state, issue_id), do: state |> snapshot_of() |> Map.fetch!(:running) |> Enum.find(&(&1.issue_id == issue_id))
+
+  test "while a machine step runs the ticket is on that step with no session and its slot is free for another ticket" do
+    walking = issue("walk-1", "TP-1", "In Progress")
+    todo = issue("todo-1", "TP-2", "Todo")
+    state = run(orchestrator_state(1), walking, session_id: "sess-1", agent_session: %{session: 1})
+
+    refute Orchestrator.should_dispatch_issue_for_test(todo, state)
+
+    state = step(state, machine_notice())
+
+    assert Orchestrator.should_dispatch_issue_for_test(todo, state)
+    assert %{session_id: nil, agent_session: nil, step: %{id: "build", mode: "machine", waiting: nil}} = state.running["walk-1"]
+    assert %{session_id: nil, step: snapshot_step} = running_of(state, "walk-1")
+    assert %{id: "build", title: "Build", mode: "machine", started_at: %DateTime{}, waiting: nil} = snapshot_step
+    assert state.cycle_requested or is_reference(state.tick_timer_ref)
+  end
+
+  test "the next agent turn gets a slot at once when one is free, and waits for one when none is" do
+    state = orchestrator_state(1) |> run(issue("walk-1", "TP-1", "In Progress")) |> step(machine_notice())
+
+    granted = step(state, turn_wanted())
+    assert_received {:run_step_turn, "walk-1"}
+    assert %{step: %{id: "code", waiting: nil}} = granted.running["walk-1"]
+    refute Orchestrator.should_dispatch_issue_for_test(issue("todo-1", "TP-2", "Todo"), granted)
+
+    # Another ticket took the freed slot: the turn waits for it, and its watchdogs hold off.
+    waiting = state |> run(issue("other-1", "TP-3", "In Progress")) |> step(turn_wanted())
+    refute_received {:run_step_turn, "walk-1"}
+    assert %{step: %{waiting: "slot"}} = running_of(waiting, "walk-1")
+
+    # A forced run takes no slot, so it waits for no one.
+    forced = state |> run(issue("other-1", "TP-3", "In Progress")) |> put_in([Access.key(:running), "walk-1", :forced], true) |> step(turn_wanted())
+    assert_received {:run_step_turn, "walk-1"}
+    assert %{step: %{waiting: nil}} = forced.running["walk-1"]
+
+    # The slot frees: the waiting turn gets it before any dispatch.
+    freed = %{waiting | running: Map.delete(waiting.running, "other-1")} |> step(turn_wanted())
+    assert_received {:run_step_turn, "walk-1"}
+    assert %{step: %{waiting: nil}} = freed.running["walk-1"]
+  end
+
+  test "while Symphony is paused a run's next agent turn waits for the pause to lift" do
+    {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("deploy window"))
+    state = orchestrator_state(1) |> run(issue("walk-1", "TP-1", "In Progress")) |> step(machine_notice()) |> step(turn_wanted())
+
+    refute_received {:run_step_turn, "walk-1"}
+    assert %{step: %{waiting: "pause"}} = running_of(state, "walk-1")
+
+    {:ok, nil} = Pauses.clear(:symphony)
+    state = step(state, turn_wanted())
+    assert_received {:run_step_turn, "walk-1"}
+    assert %{step: %{waiting: nil}} = state.running["walk-1"]
+  end
+
+  test "neither watchdog stops a run on a machine step or waiting for its turn" do
+    long_ago = DateTime.add(DateTime.utc_now(), -3_600, :second)
+    building = {:machine, Map.merge(@machine, %{started_at: long_ago, deadline: DateTime.add(DateTime.utc_now(), 600, :second)})}
+
+    state =
+      orchestrator_state(3)
+      |> run(issue("walk-1", "TP-1", "In Progress"), last_codex_timestamp: long_ago, last_event_at: long_ago)
+      |> run(issue("walk-2", "TP-2", "In Progress"), last_codex_timestamp: long_ago, last_event_at: long_ago)
+      |> run(issue("walk-3", "TP-3", "In Progress"), last_event_at: long_ago, session_id: "sess-3")
+      |> run(issue("walk-4", "TP-4", "In Progress"), last_event_at: long_ago, session_id: "sess-4")
+      |> step(building, "walk-1")
+      |> put_in([Access.key(:running), "walk-1", :last_event_at], long_ago)
+      |> step(building, "walk-3")
+      |> put_in([Access.key(:running), "walk-3", :last_event_at], long_ago)
+      |> put_in([Access.key(:running), "walk-2", :step], %{id: "code", title: "Write the code", mode: "delegated", waiting: :slot, waiter: self(), started_at: long_ago})
+      |> put_in([Access.key(:running), "walk-4", :step], %{id: "code", title: "Write the code", mode: "delegated", waiting: :pause, waiter: self(), started_at: long_ago})
+
+    state = Orchestrator.run_watchdogs_for_test(state)
+
+    assert Enum.sort(Map.keys(state.running)) == ["walk-1", "walk-2", "walk-3", "walk-4"]
+  end
+
+  test "a step notice for a run that already ended changes nothing" do
+    state = orchestrator_state(1)
+    assert step(state, machine_notice(), "gone") == state
+  end
+
+  defp issue(id, identifier, state) do
+    %Issue{id: id, identifier: identifier, title: "Ticket #{identifier}", description: "Do it", state: state, priority: 3, labels: [], url: "https://example.org/#{identifier}"}
+  end
+
+  defp run(state, %Issue{} = issue, attrs \\ []) do
+    entry =
+      Map.merge(
+        %{
+          pid: self(),
+          ref: make_ref(),
+          identifier: issue.identifier,
+          issue: issue,
+          run_profile: %{kind: :implementation, model: nil, effort: nil, provider: "anthropic"},
+          session_id: nil,
+          turn_count: 1,
+          last_codex_message: nil,
+          last_codex_timestamp: nil,
+          last_codex_event: nil,
+          started_at: DateTime.utc_now()
+        },
+        Map.new(attrs)
+      )
+
+    %{state | running: Map.put(state.running, issue.id, entry), claimed: MapSet.put(state.claimed, issue.id)}
+  end
+
+  defp orchestrator_state(max_total) do
+    %Orchestrator.State{
+      repo_key: "default",
+      max_concurrent_agents: max_total,
+      running: %{},
+      claimed: MapSet.new(),
+      codex_totals: %{input_tokens: 0, output_tokens: 0, total_tokens: 0, seconds_running: 0},
+      retry_attempts: %{}
+    }
+  end
+end
