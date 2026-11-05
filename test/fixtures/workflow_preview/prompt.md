@@ -74,8 +74,9 @@ that act on the current ticket and take no ticket argument:
 its state: open, resolved awaiting QA, or reopened, and their screenshots), and
 `ticket_record(type, payload, artifacts?, parent?)` records one: a `note`,
 `evidence` (with an optional `proof`: the walkthrough step and the test that proves
-it), a step's `step.started`, `step.completed` or `step.skipped`, a
-`checklist.answered`, or a `finding.resolved` naming the open or reopened finding a
+it), a delegated step's `step.started` and `step.completed` (its `outcome`:
+`passed`, `failed` with the step it `returns_to`, `paused` on a question, or
+`skipped` with a `reason`), a `checklist.answered`, or a `finding.resolved` naming the open or reopened finding a
 fix closes, on the head that fixes it; a QA run also records `finding.recorded`. `artifacts` are files in the workspace or your
 `$TMPDIR`; Symphony fills the run, phase and head. Verdicts, moves, pauses and
 questions are Symphony's: `ticket_record` refuses them, with the list of what the run
@@ -1113,7 +1114,7 @@ Runs (3):
 - Rework run 1 (latest): running in Rework, at 4f1c2a9, started 2026-01-05T13:15:00Z
   - 2026-01-05T13:20:00Z Step started: Fix the clipped export dialog at the laptop viewport
   - 2026-01-05T13:40:00Z Evidence recorded with 1 file: The export dialog at 1440×900 after the fix (files: art_sample_1)
-  - 2026-01-05T13:45:00Z Step completed: Fix the clipped export dialog at the laptop viewport
+  - 2026-01-05T13:45:00Z Step passed: Fix the clipped export dialog at the laptop viewport
   - 2026-01-05T13:50:00Z Note added: The truncated labels come from a fixed column width; the next step makes it flexible.
 
 Other events, newest first (5):

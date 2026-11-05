@@ -26,9 +26,10 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"decision.recorded", %{answer: "Close it", request: "01REQUEST"}, [], %{title: "The Director decided", detail: "Close it"}},
     {"decision.withdrawn", %{title: "Close TP-612 as a duplicate", request: "01REQUEST"}, [], %{title: "Decision request withdrawn", detail: "Close TP-612 as a duplicate"}},
     {"person.action", %{action: "stop"}, [], %{title: "The Director stopped the run", detail: nil}},
-    {"step.started", %{title: "Open the Activity tab", mode: "orchestrated"}, [], %{title: "Step started", detail: "Open the Activity tab"}},
-    {"step.completed", %{title: "Open the Activity tab", mode: "delegated"}, [], %{title: "Step completed", detail: "Open the Activity tab"}},
-    {"step.skipped", %{title: "Open the Activity tab", mode: "output"}, [], %{title: "Step skipped", detail: "Open the Activity tab"}},
+    {"step.started", %{step_id: "build", title: "Build", mode: "machine", command: "mix compile --warnings-as-errors"}, [], %{title: "Build started", detail: "mix compile --warnings-as-errors"}},
+    {"step.completed",
+     Map.merge(%{step_id: "build", title: "Build", mode: "machine"}, %{outcome: "failed", returns_to: "code", returns_to_title: "writing the code"}) |> Map.put(:duration_ms, 240_000), ["out-1"],
+     %{title: "Build failed after 4 min: back to writing the code", detail: "output kept"}},
     {"evidence", %{caption: "The Activity tab after the fix", artifacts: ["a-1", "a-2"]}, [], %{title: "Evidence recorded with 2 files", detail: "The Activity tab after the fix"}},
     {"finding.recorded",
      %{
@@ -75,6 +76,11 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
 
   test "a fixture per catalog type renders the documented wording" do
     assert @fixtures |> Enum.map(&elem(&1, 0)) |> Enum.sort() == Types.catalog() |> Map.keys() |> Enum.sort()
+
+    # The step fixtures are payloads the catalog accepts from Symphony.
+    for {"step." <> _ = type, payload, _artifacts, _summary} <- @fixtures do
+      assert {:ok, _payload} = Types.validate(type, payload, :machine, nil), type
+    end
 
     for {type, payload, artifacts, summary} <- @fixtures do
       assert Summary.render(event(type, payload, artifacts)) == summary, type
@@ -260,13 +266,80 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     end
   end
 
+  describe "a step's line" do
+    @build %{step_id: "build", title: "Build", mode: "machine"}
+
+    test "one line per outcome" do
+      completed = fn attrs -> render("step.completed", Map.merge(@build, attrs)) end
+
+      assert completed.(%{title: "Tests", outcome: "passed", duration_ms: 125_000}) == %{title: "Tests passed in 2 min", detail: nil}
+      assert completed.(%{outcome: "passed"}) == %{title: "Build passed", detail: nil}
+      assert completed.(%{outcome: "paused", question_id: "q-1"}) == %{title: "Paused on your answer", detail: "Build"}
+      assert completed.(%{title: "Checks", outcome: "skipped", reason: "no Elixir changed"}) == %{title: "Checks skipped: no Elixir changed", detail: nil}
+      assert completed.(%{outcome: "failed", returns_to: "code", duration_ms: 45_000}) == %{title: "Build failed after 45 s: back to step code", detail: nil}
+      assert completed.(%{outcome: "failed"}) == %{title: "Build failed", detail: nil}
+    end
+
+    test "a delegated step's title and reason are the agent's words, so they stay in the detail" do
+      delegated = %{step_id: "code", title: "Writing the code", mode: "delegated"}
+
+      assert render("step.started", delegated) == %{title: "Step started", detail: "Writing the code"}
+      assert render("step.completed", Map.put(delegated, :outcome, "passed")) == %{title: "Step passed", detail: "Writing the code"}
+
+      assert render("step.completed", Map.merge(delegated, %{outcome: "skipped", reason: "nothing to change"})) ==
+               %{title: "Step skipped", detail: "Writing the code · nothing to change"}
+
+      assert render("step.completed", Map.merge(delegated, %{outcome: "failed", returns_to: "code", returns_to_title: "writing the code"})) ==
+               %{title: "Step failed: back to writing the code", detail: "Writing the code"}
+    end
+
+    test "a step stored before its outcome was recorded, and a stored step.skipped, still read" do
+      assert render("step.completed", %{title: "Open the Activity tab", mode: "orchestrated"}) == %{title: "Open the Activity tab completed", detail: nil}
+      assert render("step.completed", %{title: "Open the Activity tab", mode: "output"}) == %{title: "Step completed", detail: "Open the Activity tab"}
+      assert render("step.skipped", %{title: "Open the Activity tab", mode: "output"}) == %{title: "Step skipped", detail: "Open the Activity tab"}
+    end
+  end
+
+  describe "run_group/1" do
+    defp run_event(seq, type, payload), do: %Event{seq: seq, type: type, payload: payload, run_id: "run-1"}
+
+    @started %{run_id: "run-1", run_kind: "implementation", run_number: 2, state: "In Progress"}
+
+    test "while the run is under way, its line names the step it is on" do
+      started = run_event(1, "run.started", @started)
+      build = run_event(2, "step.started", Map.put(@build, :command, "mix compile"))
+      code = run_event(4, "step.started", %{step_id: "code", title: "Writing the code", mode: "delegated"})
+      failed = run_event(3, "step.completed", Map.merge(@build, %{outcome: "failed", returns_to: "code"}))
+      paused = run_event(5, "step.completed", %{step_id: "code", title: "Writing the code", mode: "delegated", outcome: "paused", question_id: "q-1"})
+
+      assert Summary.run_group([started]) == %{title: "Implementation run 2 started", detail: "in In Progress"}
+      assert Summary.run_group([started, build]) == %{title: "Implementation run 2 running: Build", detail: nil}
+      # Between steps the run reads as started.
+      assert Summary.run_group([started, build, failed]) == %{title: "Implementation run 2 started", detail: "in In Progress"}
+      assert Summary.run_group([started, build, failed, code]) == %{title: "Implementation run 2 running a step", detail: "Writing the code"}
+      assert Summary.run_group([started, build, failed, code, paused]) == %{title: "Implementation run 2 paused on your answer", detail: "Writing the code"}
+    end
+
+    test "once the run ended, its line is its end's; a run with neither reads nil" do
+      started = run_event(1, "run.started", @started)
+      build = run_event(2, "step.started", Map.put(@build, :command, "mix compile"))
+      ended = run_event(3, "run.ended", %{run_id: "run-1", run_kind: "implementation", run_number: 2, exit: "handoff"})
+
+      assert Summary.run_group([started, build, ended]) == %{title: "Implementation run 2 ended: handoff", detail: nil}
+      assert Summary.run_group([build]) == nil
+      assert Summary.run_group([]) == nil
+    end
+  end
+
   describe "bounds" do
     test "agent-supplied strings appear only in the detail, one line, cut at 200 characters with an ellipsis" do
       for {type, payload} <- [
             {"decision.requested", %{title: @long, question: @long}},
             {"decision.recorded", %{answer: @long}},
             {"decision.withdrawn", %{title: @long}},
-            {"step.started", %{title: @long, mode: "orchestrated"}},
+            {"step.started", %{step_id: "s", title: @long, mode: "delegated"}},
+            {"step.completed", %{step_id: "s", title: @long, mode: "delegated", outcome: "passed"}},
+            {"step.completed", %{step_id: "s", title: "Looking", mode: "delegated", outcome: "skipped", reason: @long}},
             {"evidence", %{caption: @long}},
             {"finding.resolved", %{finding_id: "f", how: @long}},
             {"checklist.answered", %{item: @long, answer: @long}},

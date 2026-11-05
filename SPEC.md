@@ -536,8 +536,8 @@ type does not allow, is refused. The types: `phase.entered`, `hold.set` and `hol
 `verdict.recorded` (machine only: an agent never records a verdict), `decision.requested`,
 `decision.recorded`, `decision.withdrawn` (legacy), `person.action` (`stop`, `move`, `force`, `unblock`,
 `restart`), `ticket.cancelled` (the Director's cancel, with its note), `ticket.moved` (the
-Director's free move into any phase, with its note), `step.started`,
-`step.completed`, `step.skipped`, `evidence`, `finding.recorded` (QA
+Director's free move into any phase, with its note), `step.started` and `step.completed` (the step
+model below), `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirmed a resolution),
 `checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
@@ -548,6 +548,20 @@ newest-known-head rule compared, the one that won and what it did), `workspace.r
 only: a workspace made again, why, the heads compared and the one it started on),
 `workspace.removed` (machine only: Symphony removed a ticket's workspace, for the age GC, a Stop, a
 terminal state or another cleanup) and `note`.
+
+A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)
+and its `mode`: `machine` (a `command` Symphony runs), `orchestrated` (an agent turn Symphony drives
+from a `prompt_ref`) or `delegated` (work the agent does and reports). Symphony records machine and
+orchestrated steps; an agent records only delegated ones. `step.completed` carries the `outcome`:
+`passed`; `failed`, which must name the step the run goes back to (`returns_to`, with its title in
+`returns_to_title`); `paused`, which must name the Question it waits on (`question_id`); `skipped`,
+which must say why (`reason`); and `duration_ms`. Each of those fields is refused on any other
+outcome. A machine step's output is an artifact of kind `step_output` on its `step.completed`, served
+like any other artifact. There is no `step.skipped`: a skip is `step.completed` with `outcome:
+skipped`. A `question.answered` naming the question a paused step waits on resumes that step. Each
+outcome renders one line ("Build failed after 4 min: back to writing the code", "Tests passed in 2
+min", "Paused on your answer", "Checks skipped: no Elixir changed"), and while a run is under way
+its group's line names the step it is on.
 
 Before a Code Review, QA or landing run, and a rework on a kept workspace, one rule
 (`SymphonyElixir.WorkspaceSync`) stands the workspace on the newest known head of the ticket's PR. It
@@ -781,7 +795,8 @@ same folder and renamed, so no reader sees a partial file. One metadata row per 
 durable run store:
 
 - `id`, `mime`, `bytes` (the size), `label`, `kind` (`screenshot`, `transcript`, `log`, `report`,
-  `diff` or `file`), `repo_key`, `issue_id`, `run_id` and `captured_at`: the first ingest's.
+  `diff`, `file` or `step_output`, a machine step's output), `repo_key`, `issue_id`, `run_id` and
+  `captured_at`: the first ingest's.
 - `references` (how many ingests) and `tickets` (every repo and issue that ingested the bytes).
 - `projections` (where the file was published: `linear_url`), `expired` and `expired_at`.
 

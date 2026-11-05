@@ -56,6 +56,40 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
       assert response(get(build_conn(), url), 200) == @png <> <<1>>
     end
 
+    test "a run that failed its build reads the failure with the step it went back to, its compiler output one click away and the next attempt below it",
+         %{workspace: workspace} do
+      output = Path.join(workspace, "build.log")
+      File.write!(output, "error: undefined function render/2\n")
+      {:ok, log} = Artifacts.ingest(output, %{repo_key: @repo_key, issue_id: @issue_id, run_id: "run-1", label: "Build output", kind: "step_output"}, roots: [workspace])
+      agent = {:agent, "run-1", "implementation"}
+      code = %{step_id: "code", title: "Writing the code", mode: "delegated"}
+      build = %{step_id: "build", title: "Build", mode: "machine"}
+
+      record!("run.started", %{run_id: "run-1", run_kind: "implementation", run_number: 1}, at(1), run_id: "run-1")
+      record!("step.started", code, at(2), actor: agent)
+      record!("step.completed", Map.put(code, :outcome, "passed"), at(10), actor: agent)
+      record!("step.started", Map.put(build, :command, "mix compile --warnings-as-errors"), at(10), run_id: "run-1")
+
+      record!("step.completed", Map.merge(build, %{outcome: "failed", returns_to: "code", returns_to_title: "writing the code", duration_ms: 240_000}), at(14),
+        run_id: "run-1",
+        artifacts: [log.id]
+      )
+
+      record!("step.started", code, at(14), actor: agent)
+
+      %{"timeline" => timeline} = json_response(get(build_conn(), @path <> "?group=run"), 200)
+      %{"summary" => line, "status" => "running", "events" => events} = run(timeline, "run-1")
+      steps = Enum.filter(events, &String.starts_with?(&1["type"], "step."))
+
+      assert Enum.map(steps, & &1["summary"]["title"]) == ["Step started", "Step passed", "Build started", "Build failed after 4 min: back to writing the code", "Step started"]
+      failed = Enum.at(steps, 3)
+      assert [%{"kind" => "step_output", "available" => true, "url" => url}] = failed["artifacts"]
+      assert response(get(build_conn(), url), 200) == "error: undefined function render/2\n"
+      # The next attempt is below the failure, and the run's line names the step it is on.
+      assert List.last(steps)["summary"]["detail"] == "Writing the code"
+      assert line == %{"title" => "Implementation run 1 running a step", "detail" => "Writing the code"}
+    end
+
     test "a QA run still under way says it is running", %{workspace: workspace} do
       fixture_ticket!(workspace)
 

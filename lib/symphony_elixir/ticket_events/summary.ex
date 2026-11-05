@@ -5,9 +5,12 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   The title says what happened, to what, in at most 120 characters. The detail is one line of at
   most 200 characters, cut with an ellipsis: the payload's free text, which an agent may have
-  written (a finding's description, a decision's question and answer, a step's title, a note), goes
-  there and never in the title. A QA finding's title is the exception the wording asks for: its
-  class, viewport and step, which the catalog bounds, say what QA found where.
+  written (a finding's description, a decision's question and answer, a delegated step's title and
+  reason, a note), goes there and never in the title. A QA finding's title is the exception the
+  wording asks for: its class, viewport and step, which the catalog bounds, say what QA found where.
+  A machine or orchestrated step's title and a skip's reason are Symphony's words (its step list),
+  so its line says them: "Build failed after 4 min: back to writing the code", "Tests passed in 2
+  min", "Paused on your answer", "Checks skipped: no Elixir changed".
 
   Numbers come from the payload only (`run_number`, `attempt`, `class_count`, `duration_ms`,
   `tokens`). An event of a type the catalog does not name, such as a legacy record, renders its type
@@ -26,7 +29,9 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   @type t :: %{title: String.t(), detail: String.t() | nil}
 
   @kind_names %{"qa" => "QA", "ci_fix" => "CI Fix", "pre_push_review" => "Pre-push Review"}
-  @step_verbs %{"step.started" => "started", "step.completed" => "completed", "step.skipped" => "skipped"}
+  # The step modes whose title is Symphony's words (the step list's), so a title may say it.
+  @symphony_steps ["machine", "orchestrated"]
+  @step_types ["step.started", "step.completed"]
 
   @doc """
   The summary of `event` (an `Event` or a stored record `Event.normalize/1` reads): its title and its
@@ -35,13 +40,52 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   @spec render(Event.t() | map()) :: t()
   def render(%Event{type: type, payload: payload} = event) when is_binary(type) do
     case summary(type, map_or_empty(payload), event) do
-      {title, detail} -> %{title: bound(title, @title_max), detail: detail |> join() |> bound(@detail_max)}
+      {title, detail} -> finish(title, detail)
       :unknown -> %{title: type, detail: nil}
     end
   end
 
   def render(%Event{}), do: %{title: "unknown event", detail: nil}
   def render(record) when is_map(record), do: record |> Event.normalize() |> render()
+
+  @doc """
+  The line of a run's group in the timeline, from the run's `run.started`, `run.ended` and step
+  events in the order they were written: once the run ended, its `run.ended`'s summary; while it
+  runs, the step it is on ("Implementation run 2 running: Build"), or the Question its newest step
+  paused on ("Implementation run 2 paused on your answer"); between steps, its `run.started`'s. Nil
+  for a run with neither a start nor an end.
+  """
+  @spec run_group([Event.t()]) :: t() | nil
+  def run_group(events) when is_list(events) do
+    started = Enum.find(events, &(&1.type == "run.started"))
+    ended = events |> Enum.filter(&(&1.type == "run.ended")) |> List.last()
+
+    cond do
+      ended -> render(ended)
+      started -> running(started, events |> Enum.filter(&(&1.type in @step_types)) |> List.last())
+      true -> nil
+    end
+  end
+
+  defp running(started, %Event{payload: %{} = step} = last) do
+    run = run_name(map_or_empty(started.payload))
+
+    cond do
+      last.type == "step.completed" and text(step, :outcome) == "paused" ->
+        finish("#{run} paused on your answer", [text(step, :title)])
+
+      last.type == "step.started" ->
+        {title, detail} = step_name(step, "#{run} running: ", "#{run} running a step")
+        finish(title, detail)
+
+      true ->
+        render(started)
+    end
+  end
+
+  defp running(started, _no_step), do: render(started)
+
+  defp finish(title, detail), do: %{title: bound(title, @title_max), detail: detail |> join() |> bound(@detail_max)}
 
   defp summary("phase.entered", payload, _event) do
     title = Enum.join(["Entered", text(payload, :to) || "a phase"] ++ prefixed("from", text(payload, :from)), " ")
@@ -94,7 +138,19 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {title, prefixed("from", text(payload, :from))}
   end
 
-  defp summary(type, payload, _event) when is_map_key(@step_verbs, type), do: {"Step #{@step_verbs[type]}", [text(payload, :title)]}
+  defp summary("step.started", payload, _event) do
+    {title, detail} = step_name(payload, "", "Step")
+    {title <> " started", detail ++ [text(payload, :command)]}
+  end
+
+  defp summary("step.completed", payload, event) do
+    output = if Map.get(event, :artifacts, []) != [], do: "output kept"
+    {title, detail} = step_outcome(text(payload, :outcome), payload)
+    {title, detail ++ [output]}
+  end
+
+  # A stored `step.skipped`, from before it was folded into `step.completed`.
+  defp summary("step.skipped", payload, _event), do: {"Step skipped", [text(payload, :title)]}
 
   defp summary("evidence", payload, _event) do
     {"Evidence recorded" <> suffix(" with ", plural(length(strings(field(payload, :artifacts))), "file")), [text(payload, :caption)]}
@@ -183,6 +239,47 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   defp summary("note", payload, _event), do: {"Note added", [text(payload, :text)]}
   defp summary(_type, _payload, _event), do: :unknown
+
+  # A step's outcome: "Build failed after 4 min: back to writing the code", "Tests passed in 2 min",
+  # "Paused on your answer", "Checks skipped: no Elixir changed". A delegated step's title and
+  # reason are the agent's words, so they go in the detail and the title says "Step".
+  defp step_outcome("passed", payload) do
+    {name, detail} = step_name(payload, "", "Step")
+    {name <> " passed" <> suffix(" in ", duration(count(payload, :duration_ms))), detail}
+  end
+
+  defp step_outcome("failed", payload) do
+    {name, detail} = step_name(payload, "", "Step")
+    back = text(payload, :returns_to_title) || prefixed_text("step", text(payload, :returns_to))
+    {name <> " failed" <> suffix(" after ", duration(count(payload, :duration_ms))) <> suffix(": back to ", back), detail}
+  end
+
+  defp step_outcome("paused", payload), do: {"Paused on your answer", [text(payload, :title)]}
+
+  defp step_outcome("skipped", payload) do
+    case step_name(payload, "", "Step") do
+      {name, []} -> {name <> " skipped" <> suffix(": ", text(payload, :reason)), []}
+      {name, detail} -> {name <> " skipped", detail ++ [text(payload, :reason)]}
+    end
+  end
+
+  # A step completed before its outcome was recorded.
+  defp step_outcome(_outcome, payload) do
+    {name, detail} = step_name(payload, "", "Step")
+    {name <> " completed", detail}
+  end
+
+  # The step's title in the title when Symphony's step list wrote it (after `prefix`), else
+  # `generic` with the title in the detail.
+  defp step_name(payload, prefix, generic) do
+    case {text(payload, :mode) in @symphony_steps, text(payload, :title)} do
+      {true, title} when is_binary(title) -> {prefix <> title, []}
+      {_delegated, title} -> {generic, [title]}
+    end
+  end
+
+  defp prefixed_text(_word, nil), do: nil
+  defp prefixed_text(word, value), do: "#{word} #{value}"
 
   # A reason's line as the rest of a title: "Waiting for your answer" reads "waiting for your
   # answer"; a line opening on a name ("TP-12 has to finish", "GitHub is down") keeps its capitals.

@@ -97,7 +97,7 @@ defmodule SymphonyElixir.WorkflowPreview do
     [
       {0, "phase.entered", %{to: "In Progress", from: "Todo"}, :machine},
       {1, "run.started", %{run_id: "run_sample_1", run_kind: "implementation", run_number: 1, state: "In Progress"}, :machine, "run_sample_1"},
-      {20, "step.completed", %{title: "Profile the export query", mode: "orchestrated"}, implementation},
+      {20, "step.completed", %{step_id: "profile", title: "Profile the export query", mode: "delegated", outcome: "passed"}, implementation},
       {25, "note", %{text: "The export spends most of its time writing rows one by one; batching them is the plan."}, implementation},
       {90, "run.ended", %{run_id: "run_sample_1", run_kind: "implementation", run_number: 1, exit: "success", head: head}, :machine, "run_sample_1"},
       {91, "attempt.pushed", %{head: head, attempt: 1, intent: "handoff"}, :machine},
@@ -119,9 +119,9 @@ defmodule SymphonyElixir.WorkflowPreview do
       {245, "decision.requested", %{title: "CSV header", question: "Should the export keep its CSV header row?"}, :machine},
       {250, "note", %{text: "The export button stays where it is: users know it there."}, director},
       {255, "run.started", %{run_id: "run_sample_3", run_kind: "rework", run_number: 1, state: "Rework", head: head}, :machine, "run_sample_3"},
-      {260, "step.started", %{title: "Fix the clipped export dialog at the laptop viewport", mode: "orchestrated"}, rework},
+      {260, "step.started", %{step_id: "code", title: "Fix the clipped export dialog at the laptop viewport", mode: "delegated"}, rework},
       {280, "evidence", %{caption: "The export dialog at 1440×900 after the fix", artifacts: ["art_sample_1"]}, rework, nil, ["art_sample_1"]},
-      {285, "step.completed", %{title: "Fix the clipped export dialog at the laptop viewport", mode: "orchestrated"}, rework},
+      {285, "step.completed", %{step_id: "code", title: "Fix the clipped export dialog at the laptop viewport", mode: "delegated", outcome: "passed"}, rework},
       {290, "note", %{text: "The truncated labels come from a fixed column width; the next step makes it flexible."}, rework}
     ])
     |> Enum.with_index(1)

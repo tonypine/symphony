@@ -57,8 +57,6 @@ defmodule SymphonyElixir.TicketEvents.Brief do
     "decision.recorded" => [:answer],
     "question.asked" => [:title, :question],
     "question.answered" => [:answer],
-    "step.started" => [:title],
-    "step.completed" => [:title],
     "step.skipped" => [:title]
   }
   @kind_names %{"qa" => "QA", "ci_fix" => "CI Fix", "pre_push_review" => "Pre-push Review"}

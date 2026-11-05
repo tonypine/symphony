@@ -67,7 +67,8 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
       %{
         "name" => "ticket_record",
         "description" =>
-          "Record an event on the current ticket's history. A run records `finding.resolved` (an open or reopened finding it fixed, by `finding_id`; Symphony fills the head that fixes it), `step.started`, `step.completed`, `step.skipped`, " <>
+          "Record an event on the current ticket's history. A run records `finding.resolved` (an open or reopened finding it fixed, by `finding_id`; Symphony fills the head that fixes it), " <>
+            "a delegated step's `step.started` and `step.completed` (`outcome` `passed`, `failed` with the step it `returns_to`, `paused` with the `question_id` it waits on, or `skipped` with a `reason`; Symphony records machine and orchestrated steps), " <>
             "`evidence` (with an optional `proof`: the walkthrough `step` number and the `test` that proves it), `checklist.answered` and `note`; a QA run also records `finding.recorded`. " <>
             "Verdicts, moves, pauses, questions and runs are Symphony's: ask a question with the question tool. " <>
             "`artifacts` are paths of files in the workspace or your $TMPDIR, kept with the event (a screenshot shows as a thumbnail in the Director); `parent` nests the event under another. " <>
@@ -212,6 +213,10 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
       {:error, {:invalid_payload, fields}} ->
         fields = Enum.map(fields, &to_string/1)
         refusal("invalid_payload", "The #{type} payload is not valid: #{Enum.join(fields, ", ")}.", type, nil, %{"fields" => fields})
+
+      # A value only Symphony records, such as a machine step's mode.
+      {:error, {:not_allowed, why}} ->
+        refusal("not_allowed", why <> ".", type)
     end
   end
 

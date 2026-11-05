@@ -281,9 +281,16 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
                call("ticket_record", %{"type" => "note", "payload" => %{"text" => "x"}, "parent" => 5}, session(ctx))
 
       assert {true, %{"event" => %{"parent" => parent}}} =
-               call("ticket_record", %{"type" => "step.started", "payload" => %{"title" => "Walk step 1", "mode" => "orchestrated"}, "parent" => note.id}, session(ctx))
+               call("ticket_record", %{"type" => "step.started", "payload" => %{"step_id" => "walk-1", "title" => "Walk step 1", "mode" => "delegated"}, "parent" => note.id}, session(ctx))
 
       assert parent == note.id
+
+      # Symphony records machine and orchestrated steps; a failed step names the step it returns to.
+      build = %{"step_id" => "build", "title" => "Build", "mode" => "machine", "command" => "mix compile"}
+      assert {false, %{"error" => %{"reason" => "not_allowed"}}} = call("ticket_record", %{"type" => "step.started", "payload" => build}, session(ctx))
+
+      failed = %{"step_id" => "walk-1", "title" => "Walk step 1", "mode" => "delegated", "outcome" => "failed"}
+      assert {false, %{"error" => %{"reason" => "invalid_payload"}}} = call("ticket_record", %{"type" => "step.completed", "payload" => failed}, session(ctx))
     end
 
     test "a session with no ticket is refused by both tools", ctx do
@@ -335,7 +342,7 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
     setup ctx do
       older = record!("note", %{text: "one"}, at: ~U[2026-11-01 10:00:00.000000Z], actor: {:agent, "run-a", "implementation"})
       newer = record!("note", %{text: "two"}, at: ~U[2026-11-02 10:00:00.000000Z], actor: {:agent, "run-b", "rework"})
-      step = record!("step.started", %{title: "Walk", mode: "orchestrated"}, at: ~U[2026-11-03 10:00:00.000000Z], actor: {:agent, "run-b", "rework"}, artifacts: ["missing-id"])
+      step = record!("step.started", %{step_id: "walk", title: "Walk", mode: "delegated"}, at: ~U[2026-11-03 10:00:00.000000Z], actor: {:agent, "run-b", "rework"}, artifacts: ["missing-id"])
       Map.merge(ctx, %{older: older, newer: newer, step: step})
     end
 

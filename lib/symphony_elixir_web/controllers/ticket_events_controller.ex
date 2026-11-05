@@ -32,7 +32,7 @@ defmodule SymphonyElixirWeb.TicketEventsController do
   alias SymphonyElixirWeb.Presenter
 
   # The events a run's header is read from.
-  @run_header_types ["run.started", "run.ended", "verdict.recorded"]
+  @run_header_types ["run.started", "run.ended", "verdict.recorded", "step.started", "step.completed"]
 
   @spec index(Conn.t(), map()) :: Conn.t()
   def index(conn, %{"repo_key" => repo_key, "issue_identifier" => issue_identifier} = params) do

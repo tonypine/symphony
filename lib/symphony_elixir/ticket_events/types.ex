@@ -10,12 +10,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
     * `:string` - a non-blank string; `{:string, max}` also bounds its length in characters.
     * `{:enum, values}` - one of `values`, given as a string or an atom, stored as a string.
     * `:non_neg_integer`, `:boolean`, `:map`, `{:list, :string}`, `:list`.
-    * `{:nullable, spec}` - `spec` or nil.
     * `{:any_of, specs}` - the first spec that accepts the value.
     * `{:map, fields}` - a map holding exactly `fields` (a keyword of specs, each required), its keys
       as atoms.
 
-  An optional field given as nil is left out, unless its spec is nullable. A field the type does
+  An optional field given as nil is left out. A field the type does
   not name is rejected. Every type a machine or a person writes also takes an optional `signal`, the
   legacy signal name it mirrors, so readers of the signals ledger can move over to events.
 
@@ -37,9 +36,23 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   An agent records through `ticket_record` (`SymphonyElixir.AgentTools.TicketLedger`) only the types
   `agent_types/1` lists for its run kind: `finding.recorded` in a QA run; `finding.resolved`,
-  `step.*`, `evidence`, `checklist.answered` and `note` in any run. Every other type is the
+  `step.started`, `step.completed`, `evidence`, `checklist.answered` and `note` in any run. Every other type is the
   machine's or a person's (a question is asked through the question tool), and a legacy type is
   never an agent's. An `evidence` may carry a `proof`: the walkthrough step it proves and the test.
+
+  A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)
+  and how it runs (`mode`): `machine` (a command Symphony runs, `command`), `orchestrated` (an agent
+  turn Symphony drives from a prompt, `prompt_ref`) or `delegated` (work the agent does and reports
+  itself). Symphony records the machine and orchestrated steps; an agent records only delegated
+  ones (`agent_values`). `step.completed` says how the step ended (`outcome`): `passed`; `failed`,
+  with the step the run goes back to (`returns_to`, and its title in `returns_to_title`); `paused`,
+  with the Question it waits on (`question_id`, from `SymphonyElixir.Questions`); or `skipped`, with
+  why (`reason`); and how long it took (`duration_ms`). Those fields are `conditional`: each is
+  required exactly when its outcome holds and refused otherwise, as `command` and `prompt_ref` are
+  by mode. A machine step's output is kept as an artifact of the `step_output` kind
+  (`SymphonyElixir.Artifacts`) on its `step.completed`. A skipped step is a `step.completed` with
+  `outcome: skipped`: there is no `step.skipped` type. A `question.answered` naming the question a
+  paused step waits on is what resumes that step.
 
   A person's cancel of a ticket Symphony owns is one `ticket.cancelled` (`SymphonyElixir.DirectorMoves`):
   the phase it left and the canceled state, the Director's note, whether a run was stopped and the
@@ -92,22 +105,23 @@ defmodule SymphonyElixir.TicketEvents.Types do
           | :map
           | :list
           | {:list, :string}
-          | {:nullable, field_spec()}
           | {:any_of, [field_spec()]}
           | {:map, keyword(field_spec())}
   @type idempotency_rule :: :writer | {:fields, [atom()]}
   @type entry :: %{
-          writers: [actor_kind()],
-          run_kinds: :any | [String.t()],
-          required: keyword(field_spec()),
-          optional: keyword(field_spec()),
-          idempotency: idempotency_rule()
+          required(:writers) => [actor_kind()],
+          required(:run_kinds) => :any | [String.t()],
+          required(:required) => keyword(field_spec()),
+          required(:optional) => keyword(field_spec()),
+          required(:idempotency) => idempotency_rule(),
+          optional(:conditional) => keyword({atom(), String.t()}),
+          optional(:agent_values) => keyword([String.t()])
         }
   @type error :: {:unknown_type, term()} | {:invalid_payload, [atom() | String.t()]} | {:not_allowed, String.t()}
 
   @verdict_kinds ~w(code_review qa ci_fix plan_review epic_review)
   @person_actions ~w(stop move force unblock restart add_blocker remove_blocker set_priority add_label remove_label)
-  @step_modes ~w(orchestrated delegated output)
+  @step_modes ~w(machine orchestrated delegated)
   @evidence {:any_of, [:string, {:list, :string}]}
   @tokens {:any_of, [:non_neg_integer, :map]}
   @signal [signal: :string]
@@ -125,13 +139,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
     idempotency: :writer
   }
 
-  @step %{
-    writers: [:agent],
-    run_kinds: :any,
-    required: [title: {:string, 200}, mode: {:enum, @step_modes}],
-    optional: [step_id: {:nullable, {:string, 200}}],
-    idempotency: :writer
-  }
+  @step_outcomes ~w(passed failed paused skipped)
+  @step [step_id: {:string, 200}, title: {:string, 200}, mode: {:enum, @step_modes}]
+  # An agent records only a delegated step; Symphony records the machine and orchestrated ones.
+  @agent_steps [mode: ["delegated"]]
 
   @legacy_types ["hold.set", "hold.cleared", "decision.requested", "decision.recorded", "decision.withdrawn"]
 
@@ -274,9 +285,31 @@ defmodule SymphonyElixir.TicketEvents.Types do
           @signal,
       idempotency: :writer
     },
-    "step.started" => @step,
-    "step.completed" => @step,
-    "step.skipped" => @step,
+    "step.started" => %{
+      writers: [:machine, :agent],
+      run_kinds: :any,
+      required: @step,
+      optional: [command: {:string, 2_000}, prompt_ref: {:string, 200}] ++ @signal,
+      conditional: [command: {:mode, "machine"}, prompt_ref: {:mode, "orchestrated"}],
+      agent_values: @agent_steps,
+      idempotency: :writer
+    },
+    "step.completed" => %{
+      writers: [:machine, :agent],
+      run_kinds: :any,
+      required: @step ++ [outcome: {:enum, @step_outcomes}],
+      optional:
+        [
+          returns_to: {:string, 200},
+          returns_to_title: {:string, 200},
+          question_id: :string,
+          reason: {:string, 300},
+          duration_ms: :non_neg_integer
+        ] ++ @signal,
+      conditional: [returns_to: {:outcome, "failed"}, question_id: {:outcome, "paused"}, reason: {:outcome, "skipped"}],
+      agent_values: @agent_steps,
+      idempotency: :writer
+    },
     "evidence" => %{
       writers: [:agent],
       run_kinds: :any,
@@ -436,24 +469,37 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @doc """
   The payload schema of `type` as plain data a tool can return: its `required` and `optional`
   fields, each `%{name, type}` with a `max` length, the enum `values`, the `item` spec of a list,
-  the `of` specs of a choice or the `fields` of a map. Nil for an unknown type. A field only the
-  machinery passes (`signal`) is left out.
+  the `of` specs of a choice or the `fields` of a map, and `required_when` (`%{field, equals}`) for
+  a field the type requires exactly when another field holds a value (and refuses otherwise). Nil
+  for an unknown type. A field only the machinery passes (`signal`) is left out.
   """
   @spec schema(term()) :: %{required: [map()], optional: [map()]} | nil
   def schema(type) do
     case fetch(type) do
-      {:ok, entry} -> %{required: describe_fields(entry.required), optional: entry.optional |> Keyword.delete(:signal) |> describe_fields()}
-      {:error, _reason} -> nil
+      {:ok, entry} ->
+        optional = entry.optional |> Keyword.delete(:signal) |> describe_fields(Map.get(entry, :conditional, []))
+        %{required: describe_fields(entry.required), optional: optional}
+
+      {:error, _reason} ->
+        nil
     end
   end
 
-  defp describe_fields(fields), do: Enum.map(fields, fn {name, spec} -> Map.put(describe(spec), :name, Atom.to_string(name)) end)
+  defp describe_fields(fields, conditional \\ []) do
+    Enum.map(fields, fn {name, spec} ->
+      described = Map.put(describe(spec), :name, Atom.to_string(name))
+
+      case Keyword.fetch(conditional, name) do
+        {:ok, {field, value}} -> Map.put(described, :required_when, %{field: Atom.to_string(field), equals: value})
+        :error -> described
+      end
+    end)
+  end
 
   defp describe(:string), do: %{type: "string"}
   defp describe({:string, max}), do: %{type: "string", max: max}
   defp describe({:enum, values}), do: %{type: "enum", values: values}
   defp describe({:list, spec}), do: %{type: "list", item: describe(spec)}
-  defp describe({:nullable, spec}), do: Map.put(describe(spec), :nullable, true)
   defp describe({:any_of, specs}), do: %{type: "any_of", of: Enum.map(specs, &describe/1)}
   defp describe({:map, fields}), do: %{type: "map", fields: describe_fields(fields)}
   defp describe(spec) when is_atom(spec), do: %{type: Atom.to_string(spec)}
@@ -467,10 +513,23 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @spec validate(term(), map() | term(), actor_kind(), String.t() | atom() | nil) :: {:ok, map()} | {:error, error()}
   def validate(type, payload, actor_kind, run_kind) do
     with {:ok, entry} <- fetch(type),
-         :ok <- allowed(type, entry, actor_kind, run_kind) do
-      validate_payload(entry, payload)
+         :ok <- allowed(type, entry, actor_kind, run_kind),
+         {:ok, normalized} <- validate_payload(entry, payload),
+         :ok <- agent_values(type, entry, normalized, actor_kind) do
+      {:ok, normalized}
     end
   end
+
+  # A value of a field only some writers may record: an agent records only a delegated step.
+  defp agent_values(type, entry, normalized, :agent) do
+    Enum.reduce_while(Map.get(entry, :agent_values, []), :ok, fn {field, values}, :ok ->
+      if Map.get(normalized, field) in values,
+        do: {:cont, :ok},
+        else: {:halt, {:error, {:not_allowed, "An agent records #{type} only with #{field} #{Enum.join(values, ", ")}; Symphony records the others"}}}
+    end)
+  end
+
+  defp agent_values(_type, _entry, _normalized, _actor_kind), do: :ok
 
   @doc """
   The idempotency key of an event of `type`: the writer's key when it passes one, else the key the
@@ -528,6 +587,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       Enum.reduce(entry.required, {%{}, []}, &check_required(&1, payload, &2))
 
     {normalized, invalid} = Enum.reduce(entry.optional, {normalized, invalid}, &check_optional(&1, payload, &2))
+    invalid = Enum.reduce(Map.get(entry, :conditional, []), invalid, &check_conditional(&1, normalized, &2))
 
     case Enum.reverse(invalid) ++ Enum.sort(unknown) do
       [] -> {:ok, normalized}
@@ -564,16 +624,29 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   defp check_optional({field, spec}, payload, acc) do
     case Map.fetch(payload, field) do
-      {:ok, nil} -> if match?({:nullable, _}, spec), do: put_checked({:ok, nil}, field, acc), else: acc
+      {:ok, nil} -> acc
       {:ok, value} -> put_checked(check(spec, value), field, acc)
       :error -> acc
+    end
+  end
+
+  # A conditional field is required exactly when its condition holds and refused otherwise: a step
+  # that failed names the step it returns to, and a step that passed names none. A condition on a
+  # field that is itself invalid is not judged.
+  defp check_conditional({field, {on, value}}, normalized, invalid) do
+    holds = Map.get(normalized, on) == value
+
+    cond do
+      not Map.has_key?(normalized, on) -> invalid
+      holds == Map.has_key?(normalized, field) -> invalid
+      field in invalid -> invalid
+      true -> [field | invalid]
     end
   end
 
   defp put_checked({:ok, value}, field, {normalized, invalid}), do: {Map.put(normalized, field, value), invalid}
   defp put_checked(:error, field, {normalized, invalid}), do: {normalized, [field | invalid]}
 
-  defp check({:nullable, spec}, value), do: check(spec, value)
   defp check(_spec, nil), do: {:ok, nil}
 
   defp check(:string, value) when is_binary(value), do: if(String.trim(value) == "", do: :error, else: {:ok, value})
