@@ -36,7 +36,8 @@ defmodule SymphonyElixir.AgentTools.GitHub do
           optional(:issue_id) => String.t() | nil,
           optional(:comment_registry) => pid() | nil,
           optional(:command_security) => map(),
-          optional(:workspace) => Path.t()
+          optional(:workspace) => Path.t(),
+          optional(atom()) => term()
         }
 
   @spec get_pull_request(context(), keyword()) :: {:ok, map()} | {:error, term()}
