@@ -103,7 +103,7 @@ A ticket's workspace follows its known state, not the end of a run.
   - the operator's Stop of a run;
   - the age GC of idle workspaces, which reclaims a workspace older than `max_age_days` but never one whose ticket has a run going, a retry due, or an open PR it is waiting on in a phase.
 
-A removal waits for the agent processes of a stopped run to exit, so a workspace is never removed under a live agent. A run that finds a directory git no longer lists as a worktree removes it and creates the worktree again.
+A removal waits for the agent processes of a stopped run to exit, so a workspace is never removed under a live agent. A removal that finds a directory git no longer lists as a worktree deletes it with the branch, so the next run gets a fresh worktree; a run that finds one fails and keeps it.
 
 The startup sweep of orphan folders (a folder no ticket, run or retry claims) follows `orphan_action`, which only logs by default.
 

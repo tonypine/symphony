@@ -449,12 +449,10 @@ defmodule SymphonyElixir.Workspace do
         "    exit 43",
         "  fi",
         "  registered=$(printf '%s\\n' \"$worktrees\" | awk '/^worktree / {print substr($0, 10)}' | grep -Fx \"$workspace\" || true)",
-        # A directory git no longer lists as a worktree is removed and created again (TP-1384).
         "  if [ -z \"$registered\" ]; then",
-        "    rm -rf \"$workspace\"",
+        "    echo \"workspace_not_registered_worktree: $workspace\"",
+        "    exit 42",
         "  fi",
-        "fi",
-        "if [ -d \"$workspace\" ]; then",
         "  if [ -n \"$reset_base_ref\" ]; then",
         "    reset_base_sha=$(symphony_git \"$repo\" rev-parse --verify --end-of-options \"$reset_base_ref^{commit}\")",
         remote_worktree_branch_owner_command(),
@@ -562,7 +560,7 @@ defmodule SymphonyElixir.Workspace do
   defp add_or_reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, siblings) do
     cond do
       File.dir?(workspace) ->
-        reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, siblings)
+        reuse_local_worktree(repo, workspace, branch, base_ref, siblings)
 
       File.exists?(workspace) ->
         File.rm_rf!(workspace)
@@ -573,23 +571,14 @@ defmodule SymphonyElixir.Workspace do
     end
   end
 
-  # A directory git no longer lists as a worktree is what a removal leaves when something kept
-  # writing in it while `git worktree remove` ran (TP-1384): nothing in it is the ticket's
-  # committed work, so it is removed and the worktree built again rather than failing every run.
-  # When git can't list the worktrees at all, the directory is kept and the run fails.
-  defp reuse_local_worktree(repo, workspace, branch, base_ref, create_base_ref, siblings) do
-    case worktree_registered(repo, workspace) do
-      {:ok, true} ->
+  defp reuse_local_worktree(repo, workspace, branch, base_ref, siblings) do
+    case registered_worktree?(repo, workspace) do
+      true ->
         with :ok <- reset_worktree_to_base_ref(repo, workspace, branch, base_ref, siblings) do
           {:ok, false}
         end
 
-      {:ok, false} ->
-        Logger.warning("Workspace is not a registered worktree; removing it and creating the worktree again repo=#{repo} workspace=#{workspace}")
-        File.rm_rf!(workspace)
-        add_local_worktree(repo, workspace, branch, create_base_ref, siblings)
-
-      :error ->
+      false ->
         {:error, {:workspace_not_registered_worktree, workspace}}
     end
   end

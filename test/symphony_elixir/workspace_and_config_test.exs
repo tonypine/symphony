@@ -1232,7 +1232,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     end
   end
 
-  test "worktree strategy rebuilds an existing directory that is not a registered worktree" do
+  test "worktree strategy rejects existing directories that are not registered worktrees" do
     test_root =
       Path.join(
         System.tmp_dir!(),
@@ -1246,7 +1246,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       create_primary_repo!(primary_repo)
       File.mkdir_p!(stale_workspace)
-      File.write!(Path.join(stale_workspace, "stale.txt"), "left by a removal under a live run\n")
+      File.write!(Path.join(stale_workspace, "stale.txt"), "manual directory\n")
 
       write_workflow_file!(Workflow.workflow_file_path(),
         workspace_root: workspace_root,
@@ -1257,17 +1257,11 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       assert {:ok, expected_workspace} = SymphonyElixir.PathSafety.canonicalize(stale_workspace)
 
-      log =
-        capture_log(fn ->
-          assert {:ok, ^expected_workspace} = Workspace.create_for_issue("MT-STALE")
-        end)
+      assert {:error, {:workspace_not_registered_worktree, ^expected_workspace}} =
+               Workspace.create_for_issue("MT-STALE")
 
-      assert log =~ "Workspace is not a registered worktree; removing it and creating the worktree again"
-      refute File.exists?(Path.join(stale_workspace, "stale.txt"))
-      assert File.exists?(Path.join(stale_workspace, ".git"))
-      assert git_branch_exists?(primary_repo, "auto/MT-STALE")
-      {worktrees, 0} = System.cmd("git", ["-C", primary_repo, "worktree", "list", "--porcelain"])
-      assert worktrees =~ "worktree #{expected_workspace}"
+      assert File.read!(Path.join(stale_workspace, "stale.txt")) == "manual directory\n"
+      refute git_branch_exists?(primary_repo, "auto/MT-STALE")
     after
       File.rm_rf(test_root)
     end
@@ -5244,7 +5238,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert trace =~ "auto/MT-SSH-WT"
       assert trace =~ "symphony_git \"$repo\" worktree remove --force"
       assert trace =~ "workspace_branch_delete_skipped"
-      refute trace =~ "workspace_not_registered_worktree"
+      # Only the dispatch refuses an unregistered directory; the removal deletes it.
+      assert length(String.split(trace, "workspace_not_registered_worktree")) == 2
       refute trace =~ "git clone"
     after
       File.rm_rf(test_root)

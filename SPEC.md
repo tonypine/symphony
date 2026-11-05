@@ -3927,9 +3927,7 @@ Algorithm summary:
    - Validate that repo route's primary clone is configured for the current host.
    - Fetch `origin` in that primary clone when `fetch_before_dispatch == true`.
    - Ensure the workspace is a registered git worktree for branch `auto/<issue.identifier>`,
-     creating it with `git worktree add` when absent. A directory at the path that git does not
-     list as a worktree is removed and the worktree created again; when git cannot list the
-     worktrees, the run fails with `workspace_not_registered_worktree` and the directory stays.
+     creating it with `git worktree add` when absent.
    - When the issue's attached PR is open, same-repo, and its head branch is the issue's own
      branch under an earlier team key (`auto/TON-218` for `TP-218`, after a Linear team-key
      rename), use that PR head branch instead and sync the worktree to `origin/<head>`, so the
