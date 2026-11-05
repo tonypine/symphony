@@ -2,8 +2,8 @@ defmodule SymphonyElixir.TicketMergeTest do
   # The one record of a ticket left under more than one repository (TP-1338, TP-1423).
   use ExUnit.Case, async: true
 
-  alias SymphonyElixir.{TicketMerge, TicketState}
   alias SymphonyElixir.TicketEvents.Event
+  alias SymphonyElixir.{TicketMerge, TicketState}
 
   @now ~U[2026-11-03 09:00:00.000000Z]
   @asked_old ~U[2026-10-20 10:00:00.000000Z]
@@ -95,7 +95,12 @@ defmodule SymphonyElixir.TicketMergeTest do
       TicketMerge.merge(
         @issue_id,
         [
-          entry("repo-a", %{observed_at: @asked_new, updated_at: @asked_old, questions: [same], pause: pause("repo-a", ["q-a"], @asked_old)}),
+          entry("repo-a", %{
+            observed_at: @asked_new,
+            updated_at: @asked_old,
+            questions: [same],
+            pause: pause("repo-a", ["q-a"], @asked_old)
+          }),
           "repo-b"
           |> entry(%{
             observed_at: @asked_old,
@@ -129,20 +134,54 @@ defmodule SymphonyElixir.TicketMergeTest do
     verdict = fn head, at -> %{kind: "code_review", head_sha: head, outcome: "approve", recorded_at: at, details: %{}} end
     dispatch = fn run_id, at -> %{kind: "implementation", state: "QA", head: nil, run_id: run_id, at: at, outcome: nil} end
 
-    old = %{signals: [signal.("old", @asked_old)], verdicts: [verdict.("old", @asked_old)], dispatches: [dispatch.("run-old", @asked_old)]}
-    new = %{signals: [signal.("new", @asked_new), signal.("old", @asked_old)], verdicts: [verdict.("new", @asked_new)], dispatches: []}
+    old = %{
+      signals: [signal.("old", @asked_old)],
+      verdicts: [verdict.("old", @asked_old)],
+      dispatches: [dispatch.("run-old", @asked_old)]
+    }
+
+    new = %{
+      signals: [signal.("new", @asked_new), signal.("old", @asked_old)],
+      verdicts: [verdict.("new", @asked_new)],
+      dispatches: []
+    }
 
     merge = TicketMerge.merge(@issue_id, [history_entry("repo-a", old), history_entry("repo-b", new)], @now)
 
-    assert %{signals: [%{details: %{head: "new"}}, %{details: %{head: "old"}}], verdicts: [%{head_sha: "new"}, %{head_sha: "old"}], dispatches: [%{run_id: "run-old"}]} =
-             TicketState.legacy_history(merge.record)
+    assert %{
+             signals: [%{details: %{head: "new"}}, %{details: %{head: "old"}}],
+             verdicts: [%{head_sha: "new"}, %{head_sha: "old"}],
+             dispatches: [%{run_id: "run-old"}]
+           } = TicketState.legacy_history(merge.record)
+  end
+
+  test "with no phase time on any record, the phase is the route's, wherever its repository sorts" do
+    for {route, moved_from} <- [{"repo-a", "repo-b"}, {"repo-b", "repo-a"}] do
+      merge =
+        TicketMerge.merge(
+          @issue_id,
+          Enum.sort_by(
+            [
+              entry(moved_from, %{phase: "In Progress", observed_at: @asked_old, updated_at: @asked_old}),
+              entry(route, %{phase: "QA", observed_at: @asked_new, updated_at: @asked_new})
+            ],
+            & &1.repo_key
+          ),
+          @now
+        )
+
+      assert %{repo_key: ^route, record: %{phase: "QA", phase_at: nil}} = merge
+    end
   end
 
   test "the report counts the merges and the questions they withdrew" do
     merge =
       TicketMerge.merge(
         @issue_id,
-        [entry("repo-a", %{issue_identifier: "ACME-1", questions: [question("q-1", "Move?", @asked_old)]}), entry("repo-b", %{issue_identifier: "ACME-1", observed_at: @asked_new})],
+        [
+          entry("repo-a", %{issue_identifier: "ACME-1", questions: [question("q-1", "Move?", @asked_old)]}),
+          entry("repo-b", %{issue_identifier: "ACME-1", observed_at: @asked_new})
+        ],
         @now
       )
 
@@ -166,7 +205,15 @@ defmodule SymphonyElixir.TicketMergeTest do
   end
 
   defp question(id, title, asked_at, state \\ :open) do
-    %{id: id, title: title, question: title, state: state, asked_at: asked_at, asked_by: %{kind: :symphony, name: "Symphony", run_id: nil}, options: []}
+    %{
+      id: id,
+      title: title,
+      question: title,
+      state: state,
+      asked_at: asked_at,
+      asked_by: %{kind: :symphony, name: "Symphony", run_id: nil},
+      options: []
+    }
   end
 
   defp pause(repo_key, question_ids, at) do

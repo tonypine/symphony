@@ -177,7 +177,10 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
         assert {@repo_key, %{phase: "QA"}} = index_row("issue-1")
         assert %DateTime{} = RunStore.get_marker("ticket_pair_key_dropped_v1")
         assert %DateTime{} = RunStore.get_marker(RunStore.records_merged_marker())
-        assert %{name: "records.merged", checked: 1, merged: 0, merges: [], withdrawn: 0} = RunStore.get_report(RunStore.records_merged_marker())
+
+        assert %{name: "records.merged", checked: 1, merged: 0, merges: [], withdrawn: 0} =
+                 RunStore.get_report(RunStore.records_merged_marker())
+
         :ok = RunStore.clear()
       end
     end
@@ -187,7 +190,9 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
       restart_run_store()
 
       refute @pair_table in :mnesia.system_info(:tables)
-      assert %{merged: 1, merges: [%{issue_id: "issue-1", folded: [_folded]}]} = RunStore.get_report(RunStore.records_merged_marker())
+
+      assert %{merged: 1, merges: [%{issue_id: "issue-1", folded: [_folded]}]} =
+               RunStore.get_report(RunStore.records_merged_marker())
     end
 
     test "a store the merge never ran on folds a moved ticket under its route, with its events, questions, artifact and history" do
@@ -199,14 +204,31 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
         |> Map.put(:legacy_history, %{signals: [%{name: "handoff", details: %{head: "old"}, at: at}], verdicts: [], dispatches: []})
 
       new = TicketState.new(@other_repo_key, "issue-1", %{issue_identifier: "ACME-1", phase: "QA", observed_at: @at, updated_at: @at})
-      :ok = RunStore.put_artifact(%{id: "art-1", repo_key: @repo_key, issue_id: "issue-1", tickets: [%{repo_key: @repo_key, issue_id: "issue-1"}]})
+
+      :ok =
+        RunStore.put_artifact(%{
+          id: "art-1",
+          repo_key: @repo_key,
+          issue_id: "issue-1",
+          tickets: [%{repo_key: @repo_key, issue_id: "issue-1"}]
+        })
+
       old_with_artifact = %{old_event("evt-old", @repo_key, "issue-1", 1, at) | artifacts: ["art-1", "art-gone"]}
 
-      merge_release_store!([{@repo_key, old}, {@other_repo_key, new}], [], [old_with_artifact, old_event("evt-new", @other_repo_key, "issue-1", 1, @at)], [])
+      new_event = old_event("evt-new", @other_repo_key, "issue-1", 1, @at)
+      merge_release_store!([{@repo_key, old}, {@other_repo_key, new}], [], [old_with_artifact, new_event], [])
       assert RunStore.contract_ticket_key() == :ok
 
       record = RunStore.get_ticket_state("issue-1")
-      assert %{repo_key: @other_repo_key, phase: "QA", event_seq: 3, questions: [%{id: "q-old", state: :withdrawn}], pending_projection: [%{type: :pause}]} = record
+
+      assert %{
+               repo_key: @other_repo_key,
+               phase: "QA",
+               event_seq: 3,
+               questions: [%{id: "q-old", state: :withdrawn}],
+               pending_projection: [%{type: :pause}]
+             } = record
+
       assert %{signals: [%{name: "handoff"}]} = TicketState.legacy_history(record)
 
       assert [%Event{id: "evt-old", seq: 1}, %Event{id: "evt-new", seq: 2}, %Event{type: "question.withdrawn", seq: 3, payload: %{cause: "superseded_by_move"}}] =
@@ -214,7 +236,12 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
 
       assert :mnesia.dirty_match_object({@events_table, {:_, :_}, :_, :_, :_, :_, :_, :_}) == []
       assert %{tickets: [%{repo_key: @repo_key}, %{repo_key: @other_repo_key}]} = RunStore.get_artifact("art-1")
-      assert %{merged: 1, withdrawn: 1, merges: [%{repo_key: @other_repo_key, folded: [@repo_key], issue_identifier: "ACME-1"}]} = RunStore.get_report(RunStore.records_merged_marker())
+
+      assert %{
+               merged: 1,
+               withdrawn: 1,
+               merges: [%{repo_key: @other_repo_key, folded: [@repo_key], issue_identifier: "ACME-1"}]
+             } = RunStore.get_report(RunStore.records_merged_marker())
     end
 
     test "a store the merge never ran on routes a ticket by its index" do
@@ -306,7 +333,15 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
   end
 
   defp question(id, title, asked_at) do
-    %{id: id, title: title, question: title, state: :open, asked_at: asked_at, asked_by: %{kind: :symphony, name: "Symphony", run_id: nil}, options: []}
+    %{
+      id: id,
+      title: title,
+      question: title,
+      state: :open,
+      asked_at: asked_at,
+      asked_by: %{kind: :symphony, name: "Symphony", run_id: nil},
+      options: []
+    }
   end
 
   defp keep_question(_questions, pause), do: {:write, %{}, pause, [], :kept}

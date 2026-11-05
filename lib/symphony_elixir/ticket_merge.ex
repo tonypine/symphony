@@ -77,7 +77,7 @@ defmodule SymphonyElixir.TicketMerge do
 
     record =
       newest
-      |> Map.merge(Map.take(Enum.max_by(records, &stamp(&1.phase_at)), [:phase, :phase_at, :phase_owner]))
+      |> Map.merge(Map.take(phased(entries, route), [:phase, :phase_at, :phase_owner]))
       |> Map.put(:pr_watch, Enum.max_by(records, &stamp(&1.pr_watch && &1.pr_watch.read_at)).pr_watch)
       |> Map.merge(Map.take(observed(records), observed_fields()))
       |> Map.merge(%{
@@ -126,6 +126,10 @@ defmodule SymphonyElixir.TicketMerge do
       nil -> entries |> Enum.max_by(&{stamp(&1.record.linear_updated_at), stamp(&1.record.observed_at), stamp(&1.record.updated_at)}) |> Map.fetch!(:repo_key)
     end
   end
+
+  # The record that last changed phase. A release before epic 1 kept no phase time, so with none to
+  # tell them apart the route's record speaks: the repository the ticket is on now.
+  defp phased(entries, route), do: Enum.max_by(entries, &{stamp(&1.record.phase_at), &1.repo_key == route}).record
 
   defp observed(records), do: Enum.max_by(records, &{stamp(&1.linear_updated_at), stamp(&1.observed_at)})
 

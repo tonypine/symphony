@@ -1609,7 +1609,12 @@ defmodule SymphonyElixir.RunStore do
   defp merge_ticket(issue_id, rows, indexed_repo_key, now) do
     entries =
       for {_table, _key, repo_key, ^issue_id, record} <- Enum.sort_by(rows, &elem(&1, 2)) do
-        %{repo_key: repo_key, record: TicketState.normalize(record), events: pair_key_events(repo_key, issue_id), indexed: repo_key == indexed_repo_key}
+        %{
+          repo_key: repo_key,
+          record: TicketState.normalize(record),
+          events: pair_key_events(repo_key, issue_id),
+          indexed: repo_key == indexed_repo_key
+        }
       end
 
     merge = TicketMerge.merge(issue_id, entries, now)

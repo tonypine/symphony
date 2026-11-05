@@ -24,6 +24,6 @@ end
 :ok = RunStore.put_ticket_state(%{repo_key: "other-repo", issue_id: "issue-5", issue_identifier: "ACME-5", phase: "QA", observed_at: ~U[2026-10-02 10:00:00Z]})
 :ok = RunStore.record_ticket_signal("other-repo", "issue-5", "handoff", %{head: "new"})
 :ok = RunStore.record_ticket_verdict("other-repo", "issue-5", "code_review", "new", "approve", %{})
-IO.inspect(length(RunStore.list_all_ticket_states()), label: "tickets written")
+IO.puts("tickets written: #{length(RunStore.list_all_ticket_states())}")
 GenServer.stop(RunStore)
 :mnesia.stop()
