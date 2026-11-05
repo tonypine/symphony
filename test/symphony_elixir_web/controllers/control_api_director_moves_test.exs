@@ -220,6 +220,36 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert plain =~ "Two columns"
   end
 
+  test "decide \"Run it again\" with words on a loop-guard question runs the ticket again, and a replay answers already_decided (TP-1417)",
+       %{moves: moves} do
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [
+      %Issue{id: "looped", identifier: "MOT-80", title: "Looping work", state: "In Progress", repo_key: "default"}
+    ])
+
+    ticket = {:ticket, "default", "looped"}
+    stop = %{kind: "implementation", count: 4, window_ms: 600_000, runs: []}
+    {:ok, question} = Questions.ask(ticket, SymphonyElixir.DispatchLoop.question_attrs(stop, "MOT-80"))
+    assert SymphonyElixir.Pauses.paused?(ticket)
+
+    pick = %{"question" => question.question, "answer" => "Run it again", "text" => "Go on, it was the network."}
+    params = %{"issue_identifier" => "MOT-80", "question_id" => question.id, "picks" => [pick]}
+
+    conn = post(:decide, params, moves)
+    assert conn.status == 200
+    assert %{"move" => "unblock"} = Jason.decode!(conn.resp_body)
+    assert %{state: :answered, answer: %{option: 1, text: "Go on, it was the network."}} = Questions.find(ticket, question.id)
+    refute SymphonyElixir.Pauses.paused?(ticket)
+
+    # The same decide again changes nothing and says what was decided.
+    conn = post(:decide, params, moves)
+    assert conn.status == 200
+
+    assert %{"move" => "decide", "already_decided" => true, "option" => "Run it again", "answer" => "Go on, it was the network.", "moved" => false} =
+             Jason.decode!(conn.resp_body)
+
+    refute SymphonyElixir.Pauses.paused?(ticket)
+  end
+
   test "Continue to QA on a Code Review escalation moves the ticket into QA; an unconfigured target is a 422 that keeps the question open", %{moves: moves} do
     held = %Issue{id: "held", identifier: "MOT-60", title: "Escalated", state: "Code Review", repo_key: "repo-api"}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])

@@ -194,9 +194,25 @@ defmodule SymphonyElixir.Questions do
   @typedoc """
   `answer/4`'s and `withdraw/4`'s options: `by:` (`t:actor/0`; default the Director for an answer,
   Symphony for a withdrawal), `scope:` (an answer's, default `:ticket`), `cause:` (a withdrawal's,
-  `t:cause/0`, which its `question.withdrawn` event records) and `at:` (default now).
+  `t:cause/0`, which its `question.withdrawn` event records) and `at:` (default now). An answer
+  also takes `option:` (the option picked, by its label or number, when the answer is given in
+  words with it) and `then_pause:` (the pause reason the answer leaves on the ticket, `t:then_pause/0`).
   """
-  @type end_opt :: {:by, map()} | {:scope, :run | :ticket | :always} | {:cause, cause()} | {:at, DateTime.t()}
+  @type end_opt ::
+          {:by, map()}
+          | {:scope, :run | :ticket | :always}
+          | {:cause, cause()}
+          | {:at, DateTime.t()}
+          | {:option, String.t()}
+          | {:then_pause, then_pause()}
+
+  @typedoc """
+  The pause an answer leaves on its ticket, read from the answered question: a reason
+  (`SymphonyElixir.Pauses` reason input), set by whoever answered in the same write that clears the
+  question's own reason, or nil for none. So a question whose answer keeps the ticket held never
+  frees it to dispatch in between.
+  """
+  @type then_pause :: (question() -> map() | nil)
 
   @typedoc """
   Why a question was withdrawn, as its `question.withdrawn` event records it: the ticket moved on
@@ -247,7 +263,10 @@ defmodule SymphonyElixir.Questions do
   @doc """
   Answers the open question `id` on `ticket` with `answer`: `"2"`, `"option 2"` or the second
   option's label (in any case and spacing) picks the second option; any other text is a free-text
-  answer, kept as given. Records `question.answered` and clears the question's pause reason.
+  answer, kept as given. `opts[:option]` names the option picked the same way when `answer` is the
+  person's words given with it (the control API's pick with its `text`): the option is the pick,
+  and the words are the answer's text. Records `question.answered` and clears the question's pause
+  reason; `opts[:then_pause]` puts the reason it returns in its place, in the same write.
   """
   @spec answer(subject(), String.t(), String.t(), [end_opt()]) :: {:ok, question()} | {:error, term()}
   def answer(subject, id, answer, opts \\ []) do
@@ -257,7 +276,8 @@ defmodule SymphonyElixir.Questions do
          {:ok, scope} <- scope(Keyword.get(opts, :scope, :ticket)),
          {:ok, at} <- at(opts) do
       given = %{text: text, option: nil, by: by, at: at, scope: scope}
-      update(subject, at, &answered(subject, &1, &2, id, given))
+      picking = {Keyword.get(opts, :option), Keyword.get(opts, :then_pause)}
+      update(subject, at, &answered(subject, &1, &2, id, given, picking))
     end
   end
 
@@ -567,9 +587,9 @@ defmodule SymphonyElixir.Questions do
   defp asked_key(question, true), do: "backfill:question.asked:#{question.id}"
   defp asked_key(_question, false), do: nil
 
-  defp answered(ticket, questions, pause, id, given) do
+  defp answered(ticket, questions, pause, id, given, {option, then_pause}) do
     with {:ok, question} <- open_question(questions, id) do
-      number = pick(question.options, given.text)
+      number = (is_binary(option) && pick(question.options, option)) || pick(question.options, given.text)
       question = %{question | state: :answered, answer: %{given | option: number}}
 
       payload = %{
@@ -583,9 +603,23 @@ defmodule SymphonyElixir.Questions do
       }
 
       event = {"question.answered", payload, [at: given.at, idempotency: answered_key(question)]}
-      write(ticket, question, event, unpaused(ticket, pause, id, given.by, given.at))
+      write(ticket, question, event, ticket |> unpaused(pause, id, given.by, given.at) |> then_paused(ticket, question, then_pause, given))
     end
   end
+
+  # The reason the answer leaves, added to the pause the answer cleared its own reason from.
+  defp then_paused({:ok, pause, events}, ticket, question, then_pause, given) when is_function(then_pause, 1) do
+    case then_pause.(question) do
+      nil ->
+        {:ok, pause, events}
+
+      reason ->
+        with {:ok, pause, added} <- Pauses.set_change(ticket, pause, reason, set_by: given.by, at: given.at),
+             do: {:ok, pause, events ++ added}
+    end
+  end
+
+  defp then_paused(change, _ticket, _question, _then_pause, _given), do: change
 
   defp withdrawn(ticket, questions, pause, id, {reason, cause}, by, at) do
     with {:ok, question} <- open_question(questions, id) do

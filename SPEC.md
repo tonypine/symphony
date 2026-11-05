@@ -3485,6 +3485,19 @@ An issue is dispatch-eligible only if all are true:
     checkout (no sha), and the `skip-update-hold` label on the held issue or on the blocker release
     the issue at once. A lookup that fails holds no new issue, and leaves a reason already set
     until the lookup answers.
+  - Every polled issue of the running build's own repository, in any active phase and whatever
+    its labels (`skip-update-hold` included), is not dispatched while the build is behind the
+    repo's base branch on a file the prompt rendering must agree with (the prompt builder, the
+    workflow loader, the instruction assembly): the instructions are read from the base branch, the
+    renderer and its variables come from the build. The poll compares the build's commit with the
+    base branch on GitHub and puts a `:build` reason on each issue's pause (`waits_on: {commit:
+    <the base branch's head>}`, set by the rule "Instructions update hold"): "Holding for the
+    v0.0.1.839 build: the instructions on main need it" once that commit's release run is known,
+    "Holding for the build of 1a2b3c4: ..." before. Its `blocked` entry has `kind: "app_update"`,
+    and the gate gives the same line. The first poll on a build that is not behind clears it, and
+    the issue dispatches in that poll. A compare that fails changes nothing. A run whose first
+    prompt fails to render while the build is behind ends in that hold, with no retry and no failed
+    attempt; on a current build the failure is a plain failure.
 - Parent rule passes:
   - A plan parent is an issue with the `plan` label, or `breakdown`, the label's older name
     (case-insensitive); both are accepted, and the run kind keeps the name `breakdown`.
@@ -6260,10 +6273,17 @@ Minimum endpoints:
     question_id, option, answered}`, `404` (`question_not_found`) when no such question is open,
     and `422` without `picks`.
   - A pick of `decide` or `decisions` may carry `text`, the person's own words: the pick then
-    answers in those words, whatever its `answer`, as the Inbox's "Answer in my own words…" does,
-    so the Question is answered with them and the decision on the ticket shows them. A pick whose
+    answers in those words, as the Inbox's "Answer in my own words…" does, so the Question is
+    answered with them and the decision on the ticket shows them. An `answer` naming one of the
+    Question's options stays the pick: the option decides what the answer does (a loop-guard
+    question's "Run it again" runs the ticket again), and the words go with it. A pick whose
     `answer` is the own-words option ("In my own words", "Answer in my own words…") without `text`
     answers `422` and answers nothing.
+  - One decision per Question: a `decide` on a Question already answered changes nothing and
+    answers `200` with `already_decided: true` and the recorded `answer` and `option`. An answer
+    that keeps a ticket held (a loop-guard question's "Keep it paused", or words) writes the kept
+    pause with the answer, so the ticket is never free to dispatch in between, and its text says
+    what the person did ("You kept it paused: …", "You answered in your own words: …").
   - A missing `issue_identifier`, `reason` or `picks`, or a `decide` with neither `question_id` nor
     `request_comment_id`, answers `422`, an
     unknown ticket `404`, and a

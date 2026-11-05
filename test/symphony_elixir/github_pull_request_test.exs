@@ -1319,6 +1319,34 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     end
   end
 
+  describe "compare_to_branch/4" do
+    test "reads how the branch stands to the commit, its changed files and the commits the commit lacks" do
+      runner = fn
+        ["api", "repos/acme/symphony/compare/b1...main", "--jq", _jq], _opts ->
+          {~s({"status":"ahead","total":2,"files":["lib/a.ex",null],"commits":["ABC1234",null,"def5678"]}\n), 0}
+
+        ["api", "--hostname", "ghe.example", "repos/acme/symphony/compare/b1...release%2F1", "--jq", _jq], _opts ->
+          {~s({"status":"identical","total":0,"files":[],"commits":[]}\n), 0}
+      end
+
+      assert PullRequest.compare_to_branch("acme/symphony", "b1", "main", gh_runner: runner) ==
+               {:ok, %{status: "ahead", files: ["lib/a.ex"], commits: ["abc1234", "def5678"], total_commits: 2}}
+
+      assert {:ok, %{status: "identical", commits: []}} = PullRequest.compare_to_branch("ghe.example/acme/symphony", "b1", "release/1", gh_runner: runner)
+    end
+
+    test "reports an unreadable compare or repository" do
+      output = fn output -> fn _args, _opts -> output end end
+
+      compare = fn repo, result -> PullRequest.compare_to_branch(repo, "b1", "main", gh_runner: output.(result)) end
+
+      assert {:error, :invalid_compare_payload} = compare.("acme/symphony", {~s({"status":1}), 0})
+      assert {:error, :invalid_compare_payload} = compare.("acme/symphony", {"not json", 0})
+      assert {:error, {:gh_failed, _args, 1, "Not Found"}} = compare.("acme/symphony", {"Not Found", 1})
+      assert {:error, :invalid_github_repo} = compare.("symphony", {"", 0})
+    end
+  end
+
   describe "fetch_diff/2" do
     test "reads the pull request's head and base branch, then counts the files the compare changes" do
       pr_url = "https://github.com/acme/symphony/pull/132"
