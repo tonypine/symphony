@@ -32,7 +32,8 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
           optional(:workspace) => Path.t() | nil,
           optional(:run_id) => String.t() | nil,
           optional(:run_kind) => String.t() | nil,
-          optional(:agent_tmp_dir) => Path.t() | nil
+          optional(:agent_tmp_dir) => Path.t() | nil,
+          optional(atom()) => term()
         }
 
   @typedoc ~s|A refusal: `{:ticket_ledger, %{"reason" => …, "message" => …}}`, with the type's `schema` when it has one.|
