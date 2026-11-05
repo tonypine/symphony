@@ -312,7 +312,7 @@ defmodule SymphonyElixir.QaAgent.Report do
   uploading it again. An upload that fails is logged and the file named by its artifact id.
   """
   @spec ledger(Issue.t(), [Event.t()], String.t(), keyword()) :: ledger()
-  def ledger(%Issue{} = issue, events, run_id, opts \\ []) when is_list(events) and is_binary(run_id) do
+  def ledger(%Issue{} = issue, events, run_id, opts) when is_list(events) and is_binary(run_id) do
     settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
     upload? = settings.tracker.kind == "linear"
 
