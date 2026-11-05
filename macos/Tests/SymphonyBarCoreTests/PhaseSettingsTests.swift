@@ -460,4 +460,196 @@ final class PhaseSettingsTests: XCTestCase {
         XCTAssertEqual(passed, .passed)
         XCTAssertEqual(try file.readPhaseSettings()[.implementation].steps.map(\.stepID), ["code", "build", "tests", "checks", "handoff"])
     }
+
+    // MARK: An orchestrated step's answer fields
+
+    private func orchestrated(answer: [AnswerField] = []) -> PhaseStep {
+        PhaseStep(stepID: "ask", mode: .orchestrated, prompt: "Pick a layout.", answer: answer)
+    }
+
+    // Walkthrough steps 1 and 2: a new orchestrated step has no fields; two added, saved and read back.
+    func testAnsweringFieldsAreAddedSavedAndReadBack() throws {
+        var step = orchestrated()
+        XCTAssertEqual(step.answer, [])
+        let first = step.addAnswerField()
+        step.addAnswerField()
+        XCTAssertEqual(step.answer.map(\.name), ["field", "field_2"])
+        XCTAssertEqual(step.answer.map(\.type), [.string, .string])
+        XCTAssertEqual(step.answer[0].id, first)
+        step.answer[0].name = "layout"
+        step.answer[1].name = "columns"
+        step.answer[1].type = .number
+
+        var new = PhaseSettings()
+        new[.qa] = PhaseSteps(steps: [step], isDefault: false)
+        XCTAssertTrue(PhaseValidation.check(new[.qa].steps).isValid)
+        let yaml = try PhaseSettings.updating("", from: PhaseSettings(), to: new)
+        XCTAssertEqual(
+            yaml,
+            "phases:\n  qa:\n    steps:\n      - id: ask\n        mode: orchestrated\n        prompt: Pick a layout.\n"
+                + "        answer: {layout: string, columns: number}\n"
+        )
+        let read = try PhaseSettings.values(in: yaml)
+        XCTAssertEqual(read[.qa], new[.qa])
+        XCTAssertEqual(
+            PhasePreview.text(kind: .qa, list: read[.qa]),
+            "## Steps\n\nA qa run follows these steps (symphony.yml, `phases.qa.steps`):\n\n"
+                + "1. `ask` ask · orchestrated · on failure ends the run\n   - prompt:\n     > Pick a layout.\n"
+                + "   - answer: `columns` number, `layout` string\n\n"
+        )
+    }
+
+    func testRemovingAndRetypingAnAnswerField() {
+        var step = orchestrated(answer: [AnswerField(name: "layout"), AnswerField(name: "columns", type: .number)])
+        let before = step
+        step.answer[0].type = .object
+        XCTAssertNotEqual(step, before)
+        step.removeAnswerField(step.answer[1].id)
+        XCTAssertEqual(step.answer, [AnswerField(name: "layout", type: .object)])
+        for type in AnswerType.allCases { XCTAssertFalse(type.title.isEmpty); XCTAssertEqual(type.id, type.rawValue) }
+        XCTAssertEqual(AnswerType.string.title, "Text")
+    }
+
+    // Walkthrough step 3: a name Symphony would refuse says why on its row, and the list can't be saved.
+    func testAnAnswerFieldSymphonyWouldRefuseSaysWhyOnItsRow() {
+        func reason(_ fields: [AnswerField]) -> String? {
+            let step = orchestrated(answer: fields)
+            return PhaseValidation.check([step]).reason(for: step)
+        }
+        XCTAssertEqual(
+            reason([AnswerField(name: "Layout")]),
+            "The answer field `Layout` must be lowercase letters, digits and underscores, starting with a letter."
+        )
+        XCTAssertEqual(
+            reason([AnswerField(name: "2nd")]),
+            "The answer field `2nd` must be lowercase letters, digits and underscores, starting with a letter."
+        )
+        XCTAssertEqual(reason([AnswerField(name: "")]), "Give each answer field a name.")
+        XCTAssertEqual(reason([AnswerField(name: "layout"), AnswerField(name: "layout", type: .list)]), "Two answer fields are named `layout`.")
+        XCTAssertNil(reason([AnswerField(name: "layout_2"), AnswerField(name: "columns", type: .number)]))
+
+        let fields = [AnswerField(name: "ok"), AnswerField(name: "Bad")]
+        XCTAssertNil(PhaseValidation.answerReason(for: fields[0], in: fields))
+        XCTAssertNotNil(PhaseValidation.answerReason(for: fields[1], in: fields))
+
+        // Only an orchestrated step takes an answer, so another kind's leftover fields are neither checked nor written.
+        let machine = PhaseStep(stepID: "build", mode: .machine, commands: [StepCommand(run: "make")], answer: [AnswerField(name: "Bad")])
+        XCTAssertTrue(PhaseValidation.check([machine]).isValid)
+        XCTAssertEqual(StepsWriter.lines([machine], indent: 0, step: 2), ["- id: build", "  mode: machine", "  command: make"])
+        var delegated = machine
+        delegated.mode = .delegated
+        XCTAssertEqual(StepsWriter.lines([delegated], indent: 0, step: 2), ["- id: build", "  mode: delegated"])
+    }
+
+    func testAnswerNamesYAMLWouldMisreadAreQuoted() throws {
+        let step = orchestrated(answer: [AnswerField(name: "yes", type: .boolean), AnswerField(name: "null", type: .list)])
+        let lines = StepsWriter.lines([step], indent: 0, step: 2)
+        XCTAssertEqual(lines.last, "  answer: {\"yes\": boolean, \"null\": list}")
+        var new = PhaseSettings()
+        new[.qa] = PhaseSteps(steps: [step], isDefault: false)
+        let yaml = try PhaseSettings.updating("", from: PhaseSettings(), to: new)
+        XCTAssertEqual(try PhaseSettings.values(in: yaml)[.qa].steps[0].answer, step.answer)
+    }
+
+    func testReadsAnAnswerAsAFlowMappingOrAnIndentedBlock() throws {
+        let yaml = """
+            phases:
+              qa:
+                steps:
+                  - id: flow
+                    mode: orchestrated
+                    prompt: p
+                    answer: {layout: 'string', "columns": number}  # the fields
+                  - id: block
+                    mode: orchestrated
+                    prompt: p
+                    answer:
+                      # what the agent says
+                      ok: boolean
+                      items: list  # each one
+
+                      details: object
+                  - id: none
+                    mode: orchestrated
+                    prompt: p
+                    answer: {}
+                  - id: nothing
+                    mode: orchestrated
+                    prompt: p
+                    answer:
+                  - id: other
+                    mode: delegated
+                    answer: {left: string}
+
+            """
+        let steps = try PhaseSettings.values(in: yaml)[.qa].steps
+        XCTAssertEqual(steps[0].answer, [AnswerField(name: "layout"), AnswerField(name: "columns", type: .number)])
+        XCTAssertEqual(
+            steps[1].answer,
+            [AnswerField(name: "ok", type: .boolean), AnswerField(name: "items", type: .list), AnswerField(name: "details", type: .object)]
+        )
+        XCTAssertEqual(steps[2].answer, [])
+        XCTAssertEqual(steps[3].answer, [])
+        XCTAssertEqual(steps[4].answer, [AnswerField(name: "left")])
+    }
+
+    func testAListReadWithAnAnswerAndSavedUnchangedKeepsItByteForByte() throws {
+        let yaml = """
+            phases:
+              qa:
+                steps:
+                  - id: ask
+                    mode: orchestrated
+                    prompt: Pick a layout.
+                    answer:
+                      layout: string   # odd spacing kept
+                      columns: number
+              implementation:
+                steps:
+                  - {id: code, mode: delegated}
+
+            """
+        let old = try PhaseSettings.values(in: yaml)
+        XCTAssertEqual(try PhaseSettings.updating(yaml, from: old, to: old), yaml)
+
+        // Another kind's change leaves the qa block as it is.
+        var new = old
+        new[.implementation].steps.append(PhaseStep(stepID: "handoff", mode: .delegated))
+        let saved = try PhaseSettings.updating(yaml, from: old, to: new)
+        XCTAssertTrue(saved.hasPrefix(yaml.components(separatedBy: "  implementation:")[0]))
+        XCTAssertEqual(try PhaseSettings.values(in: saved)[.qa], old[.qa])
+    }
+
+    func testAnAnswerTheEditorDoesntReadIsReportedWithItsLine() {
+        func error(_ answer: String) -> PhaseSettingsError? {
+            do {
+                _ = try PhaseSettings.values(in: "phases:\n  qa:\n    steps:\n      - id: ask\n        mode: orchestrated\n" + answer)
+                return nil
+            } catch {
+                return error as? PhaseSettingsError
+            }
+        }
+        XCTAssertEqual(
+            error("        answer: {layout: text}\n"),
+            .unsupported(line: 6, reason: "the answer field `layout` has the type `text`, not string, number, boolean, list or object")
+        )
+        XCTAssertEqual(
+            error("        answer:\n          layout:\n"),
+            .unsupported(line: 7, reason: "the answer field `layout` has the type ``, not string, number, boolean, list or object")
+        )
+        XCTAssertEqual(error("        answer: layout\n"), .unsupported(line: 6, reason: "`answer:` needs a field name and type on each line under it"))
+        XCTAssertEqual(
+            error("        answer: x\n          layout: string\n"),
+            .unsupported(line: 6, reason: "`answer:` needs a field name and type on each line under it")
+        )
+        XCTAssertEqual(
+            error("        answer: {layout: string}\n          more: number\n"),
+            .unsupported(line: 6, reason: "an `answer: {...}` must stay on one line")
+        )
+        XCTAssertEqual(
+            error("        answer:\n          layout: string\n            columns: number\n"),
+            .unsupported(line: 8, reason: "line up the answer's fields")
+        )
+        XCTAssertEqual(error("        answer:\n          layout\n"), .unsupported(line: 7, reason: "`layout` is not a `name: type` line"))
+    }
 }

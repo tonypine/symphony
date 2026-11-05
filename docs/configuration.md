@@ -3306,8 +3306,9 @@ the list (TP-1393) follows; until it lands, a run is still one agent session and
 the preview shows.
 
 The Director edits the lists in Settings › Phases: pick a run kind, then reorder its steps (drag, or
-the arrow buttons), add or remove one, set its title, id, kind, command or prompt, timeout, the step
-it returns to on failure and its no-result limit, or reset the kind to its default list (which
+the arrow buttons), add or remove one, set its title, id, kind, command or prompt, an orchestrated step's answer
+fields (each a name and a type, written as its `answer`), timeout, the step it returns to on failure
+and its no-result limit, or reset the kind to its default list (which
 removes `phases.<kind>` from the file). A step the rules below refuse says why on its row and is not
 saved. Under the list, a preview shows the list as `symphony workflow preview` prints it. Save checks
 the file with `symphony check` first and rewrites only the kind's `steps:` block, as an indented
