@@ -15,8 +15,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
       as atoms.
 
   An optional field given as nil is left out. A field the type does
-  not name is rejected. Every type a machine or a person writes also takes an optional `signal`, the
-  legacy signal name it mirrors, so readers of the signals ledger can move over to events.
+  not name is rejected. Every type a machine or a person writes, and `note`, also takes an optional
+  `signal`, the name of the signal it records (`SymphonyElixir.TicketSignals`), and
+  `signal_details`, the details the signal was recorded with, so readers of the signals ledger can
+  move over to events. A `verdict.recorded` also takes the `details` the verdict carries. A tool's
+  caller sees neither (`schema/1`).
 
   The idempotency rule names the payload fields a key is derived from when the writer passes none
   (`{:fields, fields}`, used only when every field is present); `:writer` dedupes only on a key the
@@ -132,7 +135,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @evidence_statuses ~w(pass fail blocked skipped unprovable)
   @environments ~w(fixture live)
   @tokens {:any_of, [:non_neg_integer, :map]}
-  @signal [signal: :string]
+  # The signal an event records (`SymphonyElixir.TicketSignals.signal_event/2`) and the details it
+  # was recorded with.
+  @signal [signal: :string, signal_details: :map]
   @drift [record_phase: :string, linear_phase: :string]
   @pause_reasons ~w(question ticket build person environment)
   # Where a pause's or a question's event came from when no live write recorded it: the backfill
@@ -221,7 +226,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [kind: {:enum, @verdict_kinds}, outcome: :string],
-      optional: [head: :string, reason: :string] ++ @signal,
+      optional: [head: :string, reason: :string, details: :map] ++ @signal,
       idempotency: :writer
     },
     "decision.requested" => %{
@@ -444,7 +449,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine, :agent, :person],
       run_kinds: :any,
       required: [text: {:string, 4_000}],
-      optional: [],
+      optional: @signal,
       idempotency: :writer
     }
   }
@@ -488,13 +493,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
   fields, each `%{name, type}` with a `max` length, the enum `values`, the `item` spec of a list,
   the `of` specs of a choice or the `fields` of a map, and `required_when` (`%{field, equals}`) for
   a field the type requires exactly when another field holds a value (and refuses otherwise). Nil
-  for an unknown type. A field only the machinery passes (`signal`) is left out.
+  for an unknown type. The fields only the machinery passes (`signal`, `signal_details`) are left out.
   """
   @spec schema(term()) :: %{required: [map()], optional: [map()]} | nil
   def schema(type) do
     case fetch(type) do
       {:ok, entry} ->
-        optional = entry.optional |> Keyword.delete(:signal) |> describe_fields(Map.get(entry, :conditional, []))
+        optional = entry.optional |> Keyword.drop(Keyword.keys(@signal)) |> describe_fields(Map.get(entry, :conditional, []))
         %{required: describe_fields(entry.required), optional: optional}
 
       {:error, _reason} ->
@@ -537,16 +542,24 @@ defmodule SymphonyElixir.TicketEvents.Types do
     end
   end
 
-  # A value of a field only some writers may record: an agent records only a delegated step.
+  # A value of a field only some writers may record: an agent records only a delegated step, and
+  # never the signal a machine's event records.
   defp agent_values(type, entry, normalized, :agent) do
+    case Enum.filter(Keyword.keys(@signal), &Map.has_key?(normalized, &1)) do
+      [] -> agent_field_values(type, entry, normalized)
+      fields -> {:error, {:invalid_payload, fields}}
+    end
+  end
+
+  defp agent_values(_type, _entry, _normalized, _actor_kind), do: :ok
+
+  defp agent_field_values(type, entry, normalized) do
     Enum.reduce_while(Map.get(entry, :agent_values, []), :ok, fn {field, values}, :ok ->
       if Map.get(normalized, field) in values,
         do: {:cont, :ok},
         else: {:halt, {:error, {:not_allowed, "An agent records #{type} only with #{field} #{Enum.join(values, ", ")}; Symphony records the others"}}}
     end)
   end
-
-  defp agent_values(_type, _entry, _normalized, _actor_kind), do: :ok
 
   @doc """
   The idempotency key of an event of `type`: the writer's key when it passes one, else the key the

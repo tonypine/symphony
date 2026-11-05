@@ -851,12 +851,16 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert [%{name: "unblocked", details: %{by: "the Director"}}] = RunStore.get_ticket_state("pr").signals
       assert [%{"move" => "unblock", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
 
-      # The pause's release, then the Director's unblock as a person action.
+      # The pause's release, then the Director's unblock as a person action; the `unblocked` signal
+      # is a note naming it.
+      {notes, events} = Enum.split_with(ticket_events("repo-director", "pr"), &match?({"note", _payload}, &1))
+      assert [{"note", %{signal: "unblocked"}}] = notes
+
       assert [
                {"pause.set", %{reason: "environment"}},
                {"pause.cleared", %{by: %{kind: :person, name: "Director"}}},
                {"person.action", %{action: "unblock", from: "In Progress", to: "In Progress"}}
-             ] = ticket_events("repo-director", "pr")
+             ] = events
 
       assert [%{actor: %{kind: :person, name: "the Director"}}] = RunStore.list_ticket_events("pr", types: ["person.action"])
     end
@@ -1404,7 +1408,9 @@ defmodule SymphonyElixir.DirectorMovesTest do
                %{type: "pause.set"},
                %{type: "question.answered", payload: %{question_id: question_id, answer: "Add the secrets", by: %{kind: :person, name: "Director"}}},
                %{type: "pause.cleared"}
-             ] = RunStore.list_ticket_events("pr", [])
+             ] = Enum.reject(RunStore.list_ticket_events("pr", []), &(&1.type == "note"))
+
+      assert [%{payload: %{signal: "decision returned"}}] = RunStore.list_ticket_events("pr", types: ["note"])
     end
 
     test "writes the answer into the description's Decisions section, so the next run reads it", %{opts: opts} do
@@ -1737,7 +1743,8 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute deciding("pr")
       assert [%{"move" => "decide", "from_state" => "In Progress", "to_state" => "In Progress"}] = audit_records()
       # Its answer is its one event: a Decide records no person action, even when its move was refused.
-      assert ["question.asked", "pause.set", "question.answered", "pause.cleared"] = Enum.map(ticket_events("repo-director", "pr"), &elem(&1, 0))
+      assert ["question.asked", "pause.set", "question.answered", "pause.cleared"] =
+               for({type, _payload} <- ticket_events("repo-director", "pr"), type != "note", do: type)
     after
       Application.delete_env(:symphony_elixir, :memory_tracker_update_issue_state_result)
     end

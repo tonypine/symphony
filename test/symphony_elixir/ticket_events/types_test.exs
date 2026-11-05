@@ -27,10 +27,29 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       end
     end
 
-    test "every type a machine or a person writes takes the legacy signal name it mirrors" do
-      for {type, entry} <- Types.catalog(), entry.writers != [:agent], type != "note" do
+    test "every type a machine or a person writes, and a note, takes the signal it records and the signal's details" do
+      for {type, entry} <- Types.catalog(), entry.writers != [:agent] do
         assert Keyword.has_key?(entry.optional, :signal), type
+        assert entry.optional[:signal_details] == :map, type
       end
+
+      assert Types.validate("note", %{text: "Waiting for CI (ci_wait)", signal: "ci_wait", signal_details: %{sha: "abc"}}, :machine, nil) ==
+               {:ok, %{text: "Waiting for CI (ci_wait)", signal: "ci_wait", signal_details: %{sha: "abc"}}}
+    end
+
+    test "a verdict carries the details it was given" do
+      assert Types.validate("verdict.recorded", %{kind: "qa", outcome: "blocked", details: %{reason: "no emulator"}}, :machine, nil) ==
+               {:ok, %{kind: "qa", outcome: "blocked", details: %{reason: "no emulator"}}}
+
+      assert Types.validate("verdict.recorded", %{kind: "qa", outcome: "blocked", details: "no emulator"}, :machine, nil) ==
+               {:error, {:invalid_payload, [:details]}}
+    end
+
+    test "an agent never records a signal: only the machinery's events carry one" do
+      assert Types.validate("note", %{text: "x", signal: "ci_rerun"}, :agent, "implementation") == {:error, {:invalid_payload, [:signal]}}
+
+      assert Types.validate("note", %{"text" => "x", "signal" => "ci_rerun", "signal_details" => %{}}, :agent, "implementation") ==
+               {:error, {:invalid_payload, [:signal, :signal_details]}}
     end
 
     test "the retired holds' and decision requests' types are legacy: still in the catalog, so history reads them" do
@@ -333,7 +352,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
       assert proof == [%{name: "step", type: "non_neg_integer"}, %{name: "test", type: "string", max: 500}]
       assert %{optional: [_head, %{name: "evidence", type: "any_of", of: [%{type: "string"}, %{type: "list"}]}]} = Types.schema("finding.resolved")
-      refute Enum.any?(Types.schema("phase.entered").optional, &(&1.name == "signal"))
+      refute Enum.any?(Types.schema("phase.entered").optional, &(&1.name in ["signal", "signal_details"]))
+      assert Types.schema("note").optional == []
       assert Types.schema("nope") == nil
     end
   end

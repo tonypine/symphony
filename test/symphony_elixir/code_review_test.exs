@@ -472,12 +472,15 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert [%{name: "code_review", details: %{signal: "code_review_escalate", reason: "touches protected files"}}] =
                SymphonyElixir.Handoff.signals(@repo_key, @issue_id)
 
-      # The verdict, then the escalation's request: the escalation signal is no phase move.
+      # The verdict, then the escalation's request: the escalation signal is no phase move, only a
+      # note naming it.
       assert [
                {"verdict.recorded", %{kind: "code_review", outcome: "block"}},
                {"question.asked", %{title: "Code Review escalated TP-815"}},
                {"pause.set", %{reason: "question"}}
-             ] = ticket_events(@repo_key, @issue_id)
+             ] = ticket_events(@repo_key, @issue_id, ["verdict.recorded", "question.asked", "pause.set", "phase.entered"])
+
+      assert [{"note", %{signal: "code_review", signal_details: %{signal: "code_review_escalate"}}}] = ticket_events(@repo_key, @issue_id, ["note"])
     end
 
     test "a reviewer block error pauses the ticket on a Needs Decision hold" do
