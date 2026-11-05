@@ -165,44 +165,73 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
       assert [%Event{id: "evt-orphan", seq: 4}] = RunStore.list_ticket_events("issue-orphan", [])
     end
 
-    test "a store from before the merge release is refused with the version to install first, and nothing is written" do
+    test "a store from before the merge release moves off the key at once and keeps the merge's marker and report" do
       record = TicketState.new(@repo_key, "issue-1", %{phase: "QA"})
 
       for markers <- [[], ["ticket_index_v1"]] do
         merge_release_store!([{@repo_key, record}], [], [], markers)
 
-        log = capture_log(fn -> assert {:error, {:store_not_merged, _message}} = RunStore.contract_ticket_key() end)
+        assert RunStore.contract_ticket_key() == :ok
 
-        assert log =~ "Install Symphony 0.0.1.792 first"
-        assert log =~ "records_merged_v1"
-        assert @pair_table in :mnesia.system_info(:tables)
-        assert index_row("issue-1") == nil
-        assert RunStore.get_marker("ticket_pair_key_dropped_v1") == nil
-        drop_pair_table()
+        refute @pair_table in :mnesia.system_info(:tables)
+        assert {@repo_key, %{phase: "QA"}} = index_row("issue-1")
+        assert %DateTime{} = RunStore.get_marker("ticket_pair_key_dropped_v1")
+        assert %DateTime{} = RunStore.get_marker(RunStore.records_merged_marker())
+        assert %{name: "records.merged", checked: 1, merged: 0, merges: [], withdrawn: 0} = RunStore.get_report(RunStore.records_merged_marker())
+        :ok = RunStore.clear()
       end
     end
 
-    test "a start on a store the merge never ran on stops with the version to install first" do
-      merge_release_store!([{@repo_key, TicketState.new(@repo_key, "issue-1")}], [], [], [])
-      stop_run_store()
+    test "a start on a store the merge never ran on merges it and answers" do
+      merge_release_store!([{@repo_key, TicketState.new(@repo_key, "issue-1")}, {@other_repo_key, TicketState.new(@other_repo_key, "issue-1")}], [], [], [])
+      restart_run_store()
 
-      log =
-        capture_log(fn ->
-          assert {:error, {:store_not_merged, message}} = GenServer.start(RunStore, [])
-          assert message =~ "Install Symphony 0.0.1.792 first"
-        end)
-
-      assert log =~ "0.0.1.792"
-      drop_pair_table()
-      :ok = start_run_store()
+      refute @pair_table in :mnesia.system_info(:tables)
+      assert %{merged: 1, merges: [%{issue_id: "issue-1", folded: [_folded]}]} = RunStore.get_report(RunStore.records_merged_marker())
     end
 
-    test "a ticket the merge left under two repositories with none its one record refuses the start" do
+    test "a store the merge never ran on folds a moved ticket under its route, with its events, questions, artifact and history" do
+      at = ~U[2026-10-20 10:00:00.000000Z]
+      old_question = question("q-old", "Move it?", at)
+
+      old =
+        TicketState.new(@repo_key, "issue-1", %{phase: "In Progress", observed_at: at, updated_at: at, questions: [old_question]})
+        |> Map.put(:legacy_history, %{signals: [%{name: "handoff", details: %{head: "old"}, at: at}], verdicts: [], dispatches: []})
+
+      new = TicketState.new(@other_repo_key, "issue-1", %{issue_identifier: "ACME-1", phase: "QA", observed_at: @at, updated_at: @at})
+      :ok = RunStore.put_artifact(%{id: "art-1", repo_key: @repo_key, issue_id: "issue-1", tickets: [%{repo_key: @repo_key, issue_id: "issue-1"}]})
+      old_with_artifact = %{old_event("evt-old", @repo_key, "issue-1", 1, at) | artifacts: ["art-1", "art-gone"]}
+
+      merge_release_store!([{@repo_key, old}, {@other_repo_key, new}], [], [old_with_artifact, old_event("evt-new", @other_repo_key, "issue-1", 1, @at)], [])
+      assert RunStore.contract_ticket_key() == :ok
+
+      record = RunStore.get_ticket_state("issue-1")
+      assert %{repo_key: @other_repo_key, phase: "QA", event_seq: 3, questions: [%{id: "q-old", state: :withdrawn}], pending_projection: [%{type: :pause}]} = record
+      assert %{signals: [%{name: "handoff"}]} = TicketState.legacy_history(record)
+
+      assert [%Event{id: "evt-old", seq: 1}, %Event{id: "evt-new", seq: 2}, %Event{type: "question.withdrawn", seq: 3, payload: %{cause: "superseded_by_move"}}] =
+               RunStore.list_ticket_events("issue-1", [])
+
+      assert :mnesia.dirty_match_object({@events_table, {:_, :_}, :_, :_, :_, :_, :_, :_}) == []
+      assert %{tickets: [%{repo_key: @repo_key}, %{repo_key: @other_repo_key}]} = RunStore.get_artifact("art-1")
+      assert %{merged: 1, withdrawn: 1, merges: [%{repo_key: @other_repo_key, folded: [@repo_key], issue_identifier: "ACME-1"}]} = RunStore.get_report(RunStore.records_merged_marker())
+    end
+
+    test "a store the merge never ran on routes a ticket by its index" do
+      indexed = TicketState.new(@repo_key, "issue-1", %{observed_at: ~U[2026-10-01 00:00:00Z]})
+      merge_release_store!([{@repo_key, indexed}, {@other_repo_key, TicketState.new(@other_repo_key, "issue-1", %{observed_at: @at})}], [indexed], [], ["ticket_index_v1"])
+
+      assert RunStore.contract_ticket_key() == :ok
+      assert {@repo_key, _record} = index_row("issue-1")
+    end
+
+    test "a ticket the merge left under two repositories with none its one record is merged, and the merge's report stays" do
       merge_release_store!([{@repo_key, TicketState.new(@repo_key, "issue-1")}, {@other_repo_key, TicketState.new(@other_repo_key, "issue-1")}], [], [])
 
-      assert {:error, {:store_not_merged, message}} = RunStore.contract_ticket_key()
-      assert message =~ "issue-1 still has records under several repositories"
-      assert @pair_table in :mnesia.system_info(:tables)
+      assert RunStore.contract_ticket_key() == :ok
+      assert {_repo_key, _record} = index_row("issue-1")
+      refute @pair_table in :mnesia.system_info(:tables)
+      assert RunStore.get_report(RunStore.records_merged_marker()) == nil
     end
 
     test "a table that does not load in time, or fails to, stops the start" do
@@ -274,6 +303,10 @@ defmodule SymphonyElixir.RunStore.TicketKeyTest do
       [{@index_table, ^issue_id, repo_key, record}] -> {repo_key, record}
       [] -> nil
     end
+  end
+
+  defp question(id, title, asked_at) do
+    %{id: id, title: title, question: title, state: :open, asked_at: asked_at, asked_by: %{kind: :symphony, name: "Symphony", run_id: nil}, options: []}
   end
 
   defp keep_question(_questions, pause), do: {:write, %{}, pause, [], :kept}
