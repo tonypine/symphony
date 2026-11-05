@@ -424,6 +424,49 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   end
 
   @typedoc """
+  GitHub's compare of a commit to a branch: how the branch stands to the commit (`"ahead"`,
+  `"behind"`, `"identical"` or `"diverged"`), the files the branch changed since their merge base,
+  the commits the branch has that the commit lacks (oldest first, at most 250), and how many there
+  are in all.
+  """
+  @type branch_compare :: %{status: String.t(), files: [String.t()], commits: [String.t()], total_commits: non_neg_integer()}
+
+  @doc """
+  GitHub's compare of commit `sha` to `branch` in `repo` (`owner/repo`, or `host/owner/repo` off
+  github.com), in one REST read (`repos/<owner>/<repo>/compare/<sha>...<branch>`).
+  """
+  @spec compare_to_branch(String.t(), String.t(), String.t(), keyword()) :: {:ok, branch_compare()} | {:error, term()}
+  def compare_to_branch(repo, sha, branch, opts \\ []) when is_binary(repo) and is_binary(sha) and is_binary(branch) do
+    jq = "{status: .status, total: .total_commits, files: [.files[]?.filename], commits: [.commits[]?.sha]}"
+
+    with {:ok, host, owner, name} <- split_repo(repo),
+         ref = URI.encode(branch, &URI.char_unreserved?/1),
+         {:ok, output} <- run_gh(github_api_args(host, "repos/#{owner}/#{name}/compare/#{sha}...#{ref}") ++ ["--jq", jq], opts),
+         {:ok, %{"status" => status, "total" => total, "files" => files, "commits" => commits}}
+         when is_binary(status) and is_integer(total) and is_list(files) and is_list(commits) <- Jason.decode(output) do
+      {:ok,
+       %{
+         status: status,
+         files: Enum.filter(files, &is_binary/1),
+         commits: for(commit when is_binary(commit) <- commits, do: String.downcase(commit)),
+         total_commits: total
+       }}
+    else
+      {:ok, _decoded} -> {:error, :invalid_compare_payload}
+      {:error, %Jason.DecodeError{}} -> {:error, :invalid_compare_payload}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp split_repo(repo) do
+    case String.split(repo, "/") do
+      [owner, name] -> {:ok, "github.com", owner, name}
+      [host, owner, name] -> {:ok, host, owner, name}
+      _other -> {:error, :invalid_github_repo}
+    end
+  end
+
+  @typedoc """
   GitHub's own view of a pull request's diff: its head, the head of its base branch, the base
   branch's name and how many files the compare of the base to the head changes.
   """
