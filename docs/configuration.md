@@ -30,6 +30,7 @@ Common optional sections:
 - `notifications`
 - `human_actions`
 - `ledger`
+- `phases`
 - `dispatch`
 - `verification`
 - `workers`
@@ -3290,6 +3291,97 @@ Unblocks [MOT-31](https://linear.app/acme/issue/MOT-31): clean pushes from your 
 ---
 _Symphony posts a new update when this list changes · list `b1712c40`_
 ```
+
+### `phases`
+
+The list of steps a run of each kind follows: for an implementation run, writing the code, building
+it, checking it, testing it and handing it off. Each kind under `phases` (a run kind:
+`implementation`, `rework`, `ci_fix`, `review_feedback`, `qa`, `code_review`, `landing`,
+`breakdown`, `epic_review`) holds one setting, its `steps` list. A kind the file doesn't set follows
+its default list; a `symphony.yml` with no `phases` key follows every default. `symphony workflow
+preview` prints the list a run will follow above its prompt (`--kind` names the run kind, default
+`implementation`), so a change to the list shows in the next preview. The step runner that drives
+the list (TP-1393) and the Director's editor for it, a Phases group in Settings (TP-1392), follow
+this ticket; until the runner lands, a run is still one agent session and the list is what the
+preview shows.
+
+The default `implementation` list (decision 2 of TP-1085):
+
+```yaml
+phases:
+  implementation:
+    steps:
+      - id: code
+        title: Write the code
+        mode: delegated
+      - id: build
+        title: Build
+        mode: machine
+        command:
+          - {run: cd macos && swift build, when: macos_changed}
+          - {run: mix compile --warnings-as-errors, when: elixir_changed}
+        timeout_ms: 900000
+        on_fail: code
+      - id: checks
+        title: Format, specs and credo
+        mode: machine
+        when: elixir_changed
+        command: mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES
+        timeout_ms: 600000
+        on_fail: code
+      - id: tests
+        title: Tests and coverage
+        mode: machine
+        command:
+          - {run: mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed, when: elixir_changed}
+          - {run: cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER", when: macos_changed}
+        timeout_ms: 1800000
+        on_fail: code
+      - id: handoff
+        title: "Hand off: push and open the pull request"
+        mode: delegated
+```
+
+Every other kind has no default list: its run is one agent session. A kind set to `steps: []`
+follows no list either.
+
+Each step has:
+
+- `id` (required): lowercase letters, digits and underscores, starting with a letter; unique in the
+  list. It is what `on_fail` names and what the ticket's history records (`step.started`,
+  `step.completed`).
+- `title` (default: the `id`): the step's name in the Director's timeline and the preview.
+- `mode` (required): `machine`, a shell command Symphony runs; `orchestrated`, an agent turn
+  Symphony starts from the step's `prompt`; or `delegated`, work the agent does in its session and
+  records itself (`ticket_record`).
+- `command` (required for a `machine` step, refused on any other): one shell line, or a list of
+  entries run in order, each a `run` line with an optional `when` (`always`, the default;
+  `macos_changed`, when the change touches `macos/`; `elixir_changed`, when it touches Elixir
+  files). The step runner (TP-1393) gives a machine step `SYMPHONY_CHANGED_ELIXIR_FILES`, `SYMPHONY_CHANGED_TEST_FILES`
+  and `SYMPHONY_CHANGED_SWIFT_TEST_FILTER`, set to what the change touches.
+- `prompt` (required for an `orchestrated` step, refused on any other): the instructions of its
+  agent turn.
+- `when` (a `machine` step only; default `always`): the step runs only when the change matches,
+  with the same values as a command's `when`; otherwise it is skipped.
+- `timeout_ms` (above 0; default 600000, ten minutes, for a machine step, and the agent's turn
+  timeout for the others): how long the step may run before it ends with no result.
+- `on_fail` (a step id in the list; none ends the run): the step a failure returns to, with the
+  failed step's output.
+- `no_result_limit` (above 0; default `2`, decision 3 of TP-1085): how many times in a row the step
+  may end with no result (its timeout) before the run pauses on a Question carrying the output and
+  the ways forward; it never runs again on its own past it.
+
+A list is refused when `symphony.yml` loads, with the step named: an `on_fail` that names a step not
+in the list, failures that can loop through steps none of which is delegated (`build` returning to
+`tests` returning to `build` would run the same commands again on the same code), a machine step
+with no command, an orchestrated step with no prompt, a `command`, `prompt` or `when` on a step of
+another mode, two steps with one id, an unknown key, and an unknown kind. A running Symphony keeps
+the list it last loaded until the edit is fixed (see `symphony check`).
+
+**Upgrading.** The key is new and nothing is renamed or removed: a `symphony.yml` without `phases`
+loads as before and follows the default list, so no migration is needed. A file that sets `phases`
+is refused by a build older than this one (an unknown key), so set it only once Symphony runs a
+build that has it.
 
 ## `WORKFLOW.md`
 

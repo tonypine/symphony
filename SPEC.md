@@ -2764,6 +2764,18 @@ A run attempt transitions through these phases:
 
 Distinct terminal reasons are important because retry logic and logs differ.
 
+A run of a kind with a step list (`phases.<kind>.steps` in `symphony.yml`, else the kind's
+default list; `docs/configuration.md#phases`) follows its steps in order: `machine` steps are
+commands Symphony runs, `orchestrated` steps agent turns Symphony starts from a prompt, and
+`delegated` steps work the agent does in its session and records itself. A failed step returns the
+run to the step its `on_fail` names, with its output; a step that ends with no result
+`no_result_limit` times in a row (default 2) pauses the run on a Question. The implementation
+default is `code` (delegated), `build`, `checks` and `tests` (machine, each returning to `code` on
+failure) and `handoff` (delegated); every other kind has none and its run is one agent session.
+The list is validated at load: an `on_fail` must name a step in the list, a loop of failures must
+pass through a delegated step, and a machine step must have a command. `symphony workflow preview`
+prints the list a run kind follows above its prompt.
+
 ### 7.3 Transition Triggers
 
 - `Poll Tick`

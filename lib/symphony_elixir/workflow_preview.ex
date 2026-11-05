@@ -10,21 +10,28 @@ defmodule SymphonyElixir.WorkflowPreview do
   With `ledger.prompt_brief_enabled` on, the sample ticket carries a sample record and ledger,
   whose summary `SymphonyElixir.TicketEvents.Brief.build/2` renders, so the preview shows the
   ticket history summary agents get; no store is read.
+
+  With `:run_kind`, the preview opens with the step list a run of that kind follows
+  (`symphony.yml`'s `phases.<kind>.steps`, else the kind's default list, `Config.Schema.Phases`):
+  each step's id, title and mode, its commands or prompt, and the step a failure returns to.
   """
 
   alias SymphonyElixir.{Config, Linear.Issue, PromptBuilder, Workflow}
+  alias SymphonyElixir.Config.Schema.Phases
+  alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.TicketEvents.{Brief, Event}
 
   @default_file "WORKFLOW.md"
   @default_agent_kind "codex"
 
-  @type render_opts :: [file: String.t(), agent_kind: String.t(), repo_key: String.t()]
+  @type render_opts :: [file: String.t(), agent_kind: String.t(), repo_key: String.t(), run_kind: String.t()]
 
   @doc """
   Renders the base-issue prompt for the workflow at `:file` (default `WORKFLOW.md`).
 
   Pass `[]` to render the default file. `:repo_key` names the configured repo the preview is for,
-  so the prompt renders with that repo's settings. Returns `{:ok, prompt}` or
+  so the prompt renders with that repo's settings. `:run_kind` (`implementation`, `rework`...) puts
+  the step list a run of that kind follows above the prompt. Returns `{:ok, prompt}` or
   `{:error, human_readable_message}`.
   """
   @spec render(render_opts()) :: {:ok, String.t()} | {:error, String.t()}
@@ -33,14 +40,103 @@ defmodule SymphonyElixir.WorkflowPreview do
     agent_kind = Keyword.get(opts, :agent_kind, @default_agent_kind)
     repo_key = Keyword.get(opts, :repo_key)
 
-    case Workflow.load(file) do
-      {:ok, workflow} ->
-        render_workflow(workflow, agent_kind, repo_key)
-
-      {:error, reason} ->
-        {:error, load_error_message(file, reason)}
+    with {:ok, steps} <- render_steps(Keyword.get(opts, :run_kind)),
+         {:ok, workflow} <- load_workflow(file),
+         {:ok, prompt} <- render_workflow(workflow, agent_kind, repo_key) do
+      {:ok, steps <> prompt}
     end
   end
+
+  defp load_workflow(file) do
+    case Workflow.load(file) do
+      {:ok, workflow} -> {:ok, workflow}
+      {:error, reason} -> {:error, load_error_message(file, reason)}
+    end
+  end
+
+  @doc """
+  The step list a run of `run_kind` follows, as the preview prints it above the prompt: `symphony.yml`'s
+  `phases.<kind>.steps`, the kind's default list when the file doesn't set it or doesn't exist, and an
+  error naming what the file gets wrong when it is refused. Nil renders nothing.
+  """
+  @spec render_steps(String.t() | nil) :: {:ok, String.t()} | {:error, String.t()}
+  def render_steps(nil), do: {:ok, ""}
+
+  def render_steps(run_kind) when is_binary(run_kind) do
+    with {:ok, kind} <- run_kind(run_kind),
+         {:ok, steps, source} <- phase_steps(kind) do
+      {:ok, steps_text(run_kind, steps, source) <> "\n---\n\n"}
+    end
+  end
+
+  defp run_kind(name) do
+    case Phases.kind(name) do
+      nil -> {:error, "Unknown run kind `#{name}`; one of: #{Enum.join(Phases.kinds(), ", ")}"}
+      kind -> {:ok, kind}
+    end
+  end
+
+  # The list the next run reads: the file's as Symphony loads it, so a list the file gets wrong is
+  # reported here as it is at load, naming the step.
+  defp phase_steps(kind) do
+    case Config.system() do
+      {:ok, system} ->
+        source = if Map.fetch!(system.phases, kind), do: "symphony.yml", else: "the default list"
+        {:ok, Phases.steps(system.phases, kind), source}
+
+      {:error, {:missing_symphony_file, _path, _reason}} ->
+        {:ok, Phases.default_steps(kind), "the default list"}
+
+      {:error, reason} ->
+        {:error, Config.format_error(reason)}
+    end
+  end
+
+  defp steps_text(run_kind, [], source) do
+    "## Steps\n\n#{article(run_kind)} #{run_kind} run follows no step list (#{source}): it is one agent session.\n"
+  end
+
+  defp steps_text(run_kind, steps, source) do
+    lines =
+      steps
+      |> Enum.with_index(1)
+      |> Enum.map_join(fn {step, n} -> step_text(step, n) end)
+
+    "## Steps\n\n#{article(run_kind)} #{run_kind} run follows these steps (#{source}, `phases.#{run_kind}.steps`):\n\n" <> lines <> "\n"
+  end
+
+  defp article(<<vowel, _rest::binary>>) when vowel in ~c"aeiou", do: "An"
+  defp article(_kind), do: "A"
+
+  defp step_text(%Step{} = step, n) do
+    facts = [step.mode, condition(step.when), timeout(step), on_fail(step)] |> Enum.reject(&is_nil/1) |> Enum.join(" · ")
+    "#{n}. `#{step.id}` #{step.title} · #{facts}\n" <> step_body(step)
+  end
+
+  defp step_body(%Step{mode: "machine", command: commands}) do
+    Enum.map_join(commands, fn command ->
+      prefix = if when_text = condition(command.when), do: when_text <> ": ", else: ""
+      "   - #{prefix}`#{command.run}`\n"
+    end)
+  end
+
+  defp step_body(%Step{mode: "orchestrated", prompt: prompt}) do
+    "   - prompt:\n" <> (prompt |> String.split("\n") |> Enum.map_join(&"     > #{&1}\n"))
+  end
+
+  defp step_body(%Step{}), do: ""
+
+  defp condition("macos_changed"), do: "when macos/ changed"
+  defp condition("elixir_changed"), do: "when Elixir files changed"
+  defp condition(_always), do: nil
+
+  defp timeout(%Step{timeout_ms: nil}), do: nil
+  defp timeout(%Step{timeout_ms: ms}) when rem(ms, 60_000) == 0, do: "times out after #{div(ms, 60_000)} min"
+  defp timeout(%Step{timeout_ms: ms}), do: "times out after #{ms} ms"
+
+  defp on_fail(%Step{on_fail: id}) when is_binary(id), do: "on failure returns to `#{id}`"
+  defp on_fail(%Step{mode: "delegated"}), do: nil
+  defp on_fail(%Step{}), do: "on failure ends the run"
 
   # `Workflow.load/1` reports a few distinct shapes; translate each into a
   # human-readable line since this is surfaced directly by the preview command.

@@ -2346,6 +2346,359 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Phases do
+    @moduledoc """
+    `symphony.yml`'s `phases` section: for a run kind (`phases.<kind>`, a `SymphonyElixir.RunKind`
+    name), the list of steps a run of that kind follows (`steps`). A step runs as a `machine` step (a
+    shell `command` Symphony runs), an `orchestrated` step (an agent turn Symphony starts from a
+    `prompt`) or a `delegated` step (work the agent does in its session and reports itself); the
+    step model is `SymphonyElixir.TicketEvents.Types`'s.
+
+    A kind the file doesn't set follows its default list (`default_steps/1`): the five steps of
+    decision 2 for `implementation` (`code`, `build`, `checks`, `tests`, `handoff`), none for every
+    other kind. A step list is refused at load, naming the step, when a step's `on_fail` names a step
+    not in the list, when failures can loop with no delegated step in the loop (the same commands
+    would run again with nothing changed), and when a machine step has no command.
+    """
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    alias SymphonyElixir.RunKind
+
+    @type t :: %__MODULE__{}
+
+    @primary_key false
+
+    # Every run kind `RunKind.classify/2` returns; the retired `close_out` never runs.
+    @kinds RunKind.kinds() -- [:close_out]
+    @kind_names Map.new(@kinds, &{Atom.to_string(&1), &1})
+
+    defmodule Step do
+      @moduledoc """
+      One step of a run's list: its `id` (what `on_fail` names), `title`, `mode`, the `command` of a
+      machine step or the `prompt` of an orchestrated one, how long it may run (`timeout_ms`), the
+      step a failure returns to (`on_fail`; none ends the run), how many times in a row it may end
+      with no result before the run pauses on a Question (`no_result_limit`, decision 3), and for a
+      machine step when it runs at all (`when`).
+
+      A machine step's `command` is a shell command, or a list of `{run, when}` entries run in
+      order, each only when its condition holds: `build` runs `swift build` when `macos/` changed
+      and `mix compile` when Elixir files did.
+      """
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @type t :: %__MODULE__{}
+
+      @primary_key false
+      @modes ~w(machine orchestrated delegated)
+      @conditions ~w(always macos_changed elixir_changed)
+      @keys ~w(id title mode command prompt timeout_ms on_fail no_result_limit when)
+      @id_format ~r/^[a-z][a-z0-9_]*$/
+      # A machine step that sets no timeout gets ten minutes; an agent turn has the agent's own.
+      @machine_timeout_ms 600_000
+
+      defmodule Command do
+        @moduledoc "One command of a machine step: the shell line it runs (`run`) and when (`when`)."
+        use Ecto.Schema
+        import Ecto.Changeset
+
+        @type t :: %__MODULE__{}
+
+        @primary_key false
+        @keys ~w(run when)
+
+        embedded_schema do
+          field(:run, :string)
+          field(:when, :string, default: "always")
+        end
+
+        @spec changeset(%__MODULE__{}, map(), String.t(), [String.t()]) :: Ecto.Changeset.t()
+        def changeset(schema, attrs, step, conditions) do
+          schema
+          |> cast(attrs, [:run, :when])
+          |> Step.reject_unknown_keys(attrs, @keys, step)
+          |> validate_required([:run], message: "of step `#{step}` has an entry with no command")
+          |> validate_inclusion(:when, conditions, message: "of step `#{step}` must be one of: #{Enum.join(conditions, ", ")}")
+        end
+      end
+
+      embedded_schema do
+        field(:id, :string)
+        field(:title, :string)
+        field(:mode, :string)
+        embeds_many(:command, Command, on_replace: :delete)
+        field(:prompt, :string)
+        field(:timeout_ms, :integer)
+        field(:on_fail, :string)
+        field(:no_result_limit, :integer, default: 2)
+        field(:when, :string, default: "always")
+      end
+
+      @doc "The modes a step runs in."
+      @spec modes() :: [String.t()]
+      def modes, do: @modes
+
+      @doc "The conditions a machine step, or one of its commands, runs under (`when`)."
+      @spec conditions() :: [String.t()]
+      def conditions, do: @conditions
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        attrs = command_entries(attrs)
+        step = step_name(attrs)
+
+        schema
+        |> cast(attrs, [:id, :title, :mode, :prompt, :timeout_ms, :on_fail, :no_result_limit, :when])
+        |> reject_unknown_keys(attrs, @keys, step)
+        |> validate_required([:id], message: "is required for every step")
+        |> validate_format(:id, @id_format, message: "`#{step}` must be lowercase letters, digits and underscores, starting with a letter")
+        |> validate_required([:mode], message: "is required for step `#{step}`")
+        |> validate_inclusion(:mode, @modes, message: "of step `#{step}` must be one of: #{Enum.join(@modes, ", ")}")
+        |> validate_inclusion(:when, @conditions, message: "of step `#{step}` must be one of: #{Enum.join(@conditions, ", ")}")
+        |> validate_number(:timeout_ms, greater_than: 0, message: "of step `#{step}` must be greater than 0")
+        |> validate_number(:no_result_limit, greater_than: 0, message: "of step `#{step}` must be greater than 0")
+        |> cast_embed(:command, with: &Command.changeset(&1, &2, step, @conditions))
+        |> validate_mode_fields(attrs, step)
+        |> default_title()
+        |> default_machine_timeout()
+      end
+
+      # A command written as one shell line is a list of one entry that always runs.
+      defp command_entries(%{"command" => command} = attrs) when is_binary(command),
+        do: Map.put(attrs, "command", [%{"run" => command}])
+
+      defp command_entries(attrs), do: attrs
+
+      defp step_name(%{"id" => id}) when is_binary(id) and id != "", do: id
+      defp step_name(_attrs), do: "(no id)"
+
+      @doc false
+      @spec reject_unknown_keys(Ecto.Changeset.t(), map(), [String.t()], String.t()) :: Ecto.Changeset.t()
+      def reject_unknown_keys(changeset, attrs, keys, step) do
+        case Enum.sort(Map.keys(attrs) -- keys) do
+          [] -> changeset
+          [key | _rest] -> add_error(changeset, :id, "step `#{step}` has an unknown key `#{key}`")
+        end
+      end
+
+      # A machine step runs a command, an orchestrated one a prompt; neither field, nor `when`, means
+      # anything on a step of another mode, so setting it there is refused rather than ignored.
+      defp validate_mode_fields(changeset, attrs, step) do
+        mode = get_field(changeset, :mode)
+
+        changeset
+        |> require_for_mode(mode, "machine", :command, get_field(changeset, :command) != [], step)
+        |> require_for_mode(mode, "orchestrated", :prompt, present?(get_field(changeset, :prompt)), step)
+        |> refuse_off_mode(mode, "machine", :when, Map.has_key?(attrs, "when"), step)
+      end
+
+      defp require_for_mode(changeset, mode, mode, field, false, step),
+        do: add_error(changeset, field, "is required for #{mode} step `#{step}`")
+
+      defp require_for_mode(changeset, mode, owner, field, true, step) when mode != owner and mode in @modes,
+        do: refuse_off_mode(changeset, mode, owner, field, true, step)
+
+      defp require_for_mode(changeset, _mode, _owner, _field, _set?, _step), do: changeset
+
+      defp refuse_off_mode(changeset, mode, owner, field, true, step) when mode != owner and mode in @modes,
+        do: add_error(changeset, field, "is only for #{if owner == "machine", do: "a", else: "an"} #{owner} step; step `#{step}` is #{mode}")
+
+      defp refuse_off_mode(changeset, _mode, _owner, _field, _set?, _step), do: changeset
+
+      defp present?(value), do: is_binary(value) and String.trim(value) != ""
+
+      defp default_title(changeset) do
+        if present?(get_field(changeset, :title)),
+          do: changeset,
+          else: put_change(changeset, :title, get_field(changeset, :id))
+      end
+
+      defp default_machine_timeout(changeset) do
+        if get_field(changeset, :mode) == "machine" and is_nil(get_field(changeset, :timeout_ms)),
+          do: put_change(changeset, :timeout_ms, @machine_timeout_ms),
+          else: changeset
+      end
+    end
+
+    defmodule Phase do
+      @moduledoc "One run kind's entry under `phases`: its step list (`steps`), checked as a whole."
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @type t :: %__MODULE__{}
+
+      @primary_key false
+
+      embedded_schema do
+        embeds_many(:steps, Step, on_replace: :delete)
+      end
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        changeset = schema |> cast(attrs, []) |> cast_embed(:steps, with: &Step.changeset/2)
+
+        if changeset.valid?,
+          do: validate_list(changeset, get_field(changeset, :steps)),
+          else: changeset
+      end
+
+      defp validate_list(changeset, steps) do
+        ids = Enum.map(steps, & &1.id)
+
+        with nil <- duplicate_id(ids),
+             nil <- unknown_on_fail(steps, ids),
+             nil <- loop_without_delegated(steps, ids) do
+          changeset
+        else
+          message -> add_error(changeset, :steps, message)
+        end
+      end
+
+      defp duplicate_id(ids) do
+        case ids -- Enum.uniq(ids) do
+          [] -> nil
+          [id | _rest] -> "has two steps with the id `#{id}`"
+        end
+      end
+
+      defp unknown_on_fail(steps, ids) do
+        Enum.find_value(steps, fn %Step{id: id, on_fail: on_fail} ->
+          if is_binary(on_fail) and on_fail not in ids,
+            do: "has no step `#{on_fail}`, which step `#{id}` returns to on failure"
+        end)
+      end
+
+      # A loop is a step that, passing on to the next step or returning to `on_fail`, can come back
+      # to itself. One with a delegated step in it lets the agent change something before the
+      # commands run again; one without would run the same commands again on the same code. So the
+      # check looks for a loop through the steps that are not delegated alone.
+      defp loop_without_delegated(steps, ids) do
+        undelegated = for %Step{mode: mode, id: id} <- steps, mode != "delegated", into: MapSet.new(), do: id
+
+        edges =
+          steps
+          |> Enum.with_index(1)
+          |> Map.new(fn {%Step{id: id, on_fail: on_fail}, next} ->
+            {id, Enum.filter([Enum.at(ids, next), on_fail], &MapSet.member?(undelegated, &1))}
+          end)
+
+        Enum.find_value(steps, fn %Step{id: id} ->
+          with true <- MapSet.member?(undelegated, id),
+               [_ | _] = loop <- walk(edges, id, [id], MapSet.new([id])) do
+            "loop #{Enum.map_join(loop, " → ", &"`#{&1}`")} has no delegated step, " <>
+              "so a failure would run the same commands again on the same code"
+          else
+            _no_loop -> nil
+          end
+        end)
+      end
+
+      defp walk(edges, start, [node | _rest] = path, seen) do
+        Enum.find_value(Map.fetch!(edges, node), fn
+          ^start ->
+            Enum.reverse([start | path])
+
+          next ->
+            if not MapSet.member?(seen, next), do: walk(edges, start, [next | path], MapSet.put(seen, next))
+        end)
+      end
+    end
+
+    embedded_schema do
+      for kind <- @kinds do
+        embeds_one(kind, Phase, on_replace: :update)
+      end
+    end
+
+    @doc "The run kinds `phases` takes a step list for, as `symphony.yml` names them."
+    @spec kinds() :: [String.t()]
+    def kinds, do: Enum.map(@kinds, &Atom.to_string/1)
+
+    @doc "The run kind a `phases` key names, or nil for a name that is not one."
+    @spec kind(String.t() | atom()) :: RunKind.t() | nil
+    def kind(kind) when kind in @kinds, do: kind
+    def kind(name) when is_binary(name), do: Map.get(@kind_names, name)
+    def kind(_other), do: nil
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      Enum.reduce(@kinds, cast(schema, attrs, []), fn kind, changeset -> cast_embed(changeset, kind, with: &Phase.changeset/2) end)
+    end
+
+    @doc """
+    The steps a run of `kind` follows: the file's `phases.<kind>.steps`, else the kind's default
+    list (`default_steps/1`).
+    """
+    @spec steps(t(), RunKind.t()) :: [Step.t()]
+    def steps(%__MODULE__{} = phases, kind) when kind in @kinds do
+      case Map.fetch!(phases, kind) do
+        %Phase{steps: steps} -> steps
+        nil -> default_steps(kind)
+      end
+    end
+
+    @doc """
+    A kind's default step list, for a `symphony.yml` that doesn't set `phases.<kind>` (decision 2 of
+    TP-1085): `implementation` writes the code (delegated), builds it (`swift build` when `macos/`
+    changed, `mix compile --warnings-as-errors` when Elixir files did), checks it (format, specs and
+    credo on the changed files), tests it (the changed test files and `mix cover.changed`, plus
+    `swift test` for the changed targets when `macos/` changed), each returning to `code` on
+    failure, then hands off (delegated). Every other kind has none: its run is one agent session.
+
+    The changed files come from the environment the step runner gives a machine step:
+    `SYMPHONY_CHANGED_ELIXIR_FILES`, `SYMPHONY_CHANGED_TEST_FILES` and
+    `SYMPHONY_CHANGED_SWIFT_TEST_FILTER`.
+    """
+    @spec default_steps(RunKind.t()) :: [Step.t()]
+    def default_steps(:implementation) do
+      %Phase{}
+      |> Phase.changeset(%{"steps" => default_implementation_steps()})
+      |> apply_action!(:validate)
+      |> Map.fetch!(:steps)
+    end
+
+    def default_steps(kind) when kind in @kinds, do: []
+
+    defp default_implementation_steps do
+      [
+        %{"id" => "code", "title" => "Write the code", "mode" => "delegated"},
+        %{
+          "id" => "build",
+          "title" => "Build",
+          "mode" => "machine",
+          "command" => [
+            %{"run" => "cd macos && swift build", "when" => "macos_changed"},
+            %{"run" => "mix compile --warnings-as-errors", "when" => "elixir_changed"}
+          ],
+          "timeout_ms" => 900_000,
+          "on_fail" => "code"
+        },
+        %{
+          "id" => "checks",
+          "title" => "Format, specs and credo",
+          "mode" => "machine",
+          "when" => "elixir_changed",
+          "command" => "mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES",
+          "timeout_ms" => 600_000,
+          "on_fail" => "code"
+        },
+        %{
+          "id" => "tests",
+          "title" => "Tests and coverage",
+          "mode" => "machine",
+          "command" => [
+            %{"run" => "mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed", "when" => "elixir_changed"},
+            %{"run" => "cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"", "when" => "macos_changed"}
+          ],
+          "timeout_ms" => 1_800_000,
+          "on_fail" => "code"
+        },
+        %{"id" => "handoff", "title" => "Hand off: push and open the pull request", "mode" => "delegated"}
+      ]
+    end
+  end
+
   defmodule Notifications do
     @moduledoc false
     use Ecto.Schema
