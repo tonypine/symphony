@@ -347,63 +347,39 @@ defmodule SymphonyElixir.TestSupport do
         do: {event.type, event.payload}
   end
 
-  # A ticket's signals, verdicts and dispatched runs are read from its events
-  # (`TicketState.signals/1`, `verdicts/1`, `dispatches/1`), while the record's own fields are still
-  # written. These write one both ways, as the live writers do (`TicketSignals.record/4`,
+  # A ticket's signals, verdicts and dispatched runs are its events (`TicketState.signals/1`,
+  # `verdicts/1`, `dispatches/1`). These record one as the live writers do (`TicketSignals.record/4`,
   # `TicketSignals.record_verdict/7`, the orchestrator's dispatch), at `at` (default now), with none
   # of their side effects: no phase written, no cycle asked, no projection.
   def put_signal(repo_key, issue_id, name, details, at \\ nil) do
-    at = at || DateTime.utc_now()
-    update_record!(repo_key, issue_id, &SymphonyElixir.TicketState.record_signal(&1, name, details, at))
     {type, payload, opts} = SymphonyElixir.TicketSignals.signal_event(name, details)
-    record_event!(repo_key, issue_id, type, payload, opts, at)
+    record_event!(repo_key, issue_id, type, payload, opts, at || DateTime.utc_now())
   end
 
   def put_verdict(repo_key, issue_id, kind, head_sha, outcome, details \\ %{}, at \\ nil) do
-    at = at || DateTime.utc_now()
-
-    update_record!(repo_key, issue_id, fn record ->
-      SymphonyElixir.TicketState.record_verdict(record, kind, head_sha, outcome, at, details)
-    end)
-
     {type, payload, opts} = SymphonyElixir.TicketSignals.verdict_event(kind, outcome, head_sha, details: details)
-    record_event!(repo_key, issue_id, type, payload, opts, at)
+    record_event!(repo_key, issue_id, type, payload, opts, at || DateTime.utc_now())
   end
 
   # A run Symphony dispatched: `attrs` names its `:kind`, `:run_id`, `:state` and `:head`.
   def put_dispatch(repo_key, issue_id, attrs, at \\ nil) do
-    at = at || DateTime.utc_now()
     attrs = Map.new(attrs)
     run_id = Map.get(attrs, :run_id) || "run-#{System.unique_integer([:positive])}"
-    attrs = attrs |> Map.put(:run_id, run_id) |> Map.put_new(:kind, :implementation)
-    update_record!(repo_key, issue_id, &SymphonyElixir.TicketState.record_dispatch(&1, attrs, at))
-    payload = %{run_id: run_id, run_kind: to_string(attrs.kind), state: Map.get(attrs, :state), head: Map.get(attrs, :head)}
-    record_event!(repo_key, issue_id, "run.started", payload, [run_id: run_id], at)
+    payload = %{run_id: run_id, run_kind: to_string(Map.get(attrs, :kind, :implementation)), state: Map.get(attrs, :state), head: Map.get(attrs, :head)}
+    record_event!(repo_key, issue_id, "run.started", payload, [run_id: run_id], at || DateTime.utc_now())
   end
 
   # How the run `run_id` ended: `attrs` names its `:exit` (default "ended normally") and `:head`,
   # or `counted: false`.
   def put_dispatch_outcome(repo_key, issue_id, run_id, attrs, at \\ nil) do
-    at = at || DateTime.utc_now()
     attrs = attrs |> Map.new() |> Map.put_new(:exit, "ended normally")
-    update_record!(repo_key, issue_id, &SymphonyElixir.TicketState.record_dispatch_outcome(&1, run_id, attrs, at))
     payload = %{run_id: run_id, exit: attrs.exit, head: Map.get(attrs, :head), counted: Map.get(attrs, :counted, true)}
-    record_event!(repo_key, issue_id, "run.ended", payload, [run_id: run_id], at)
+    record_event!(repo_key, issue_id, "run.ended", payload, [run_id: run_id], at || DateTime.utc_now())
   end
 
   def ticket_signals(issue_id), do: SymphonyElixir.TicketState.signals(%{issue_id: issue_id})
   def ticket_verdicts(issue_id), do: SymphonyElixir.TicketState.verdicts(%{issue_id: issue_id})
   def ticket_dispatches(issue_id), do: SymphonyElixir.TicketState.dispatches(%{issue_id: issue_id})
-
-  defp update_record!(repo_key, issue_id, change) do
-    record =
-      case SymphonyElixir.RunStore.get_ticket_state(issue_id) do
-        %{} = record -> record
-        nil -> SymphonyElixir.TicketState.new(repo_key, issue_id)
-      end
-
-    :ok = SymphonyElixir.RunStore.put_ticket_state(change.(record))
-  end
 
   defp record_event!(repo_key, issue_id, type, payload, opts, at) do
     payload = payload |> Enum.reject(fn {_key, value} -> is_nil(value) end) |> Map.new()

@@ -400,7 +400,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       review([parent], orchestrator_state())
 
       assert [%{name: "plan verdict", details: %{outcome: "approve", sub_issue: "MT-c1", to: "Todo"}}] =
-               RunStore.get_ticket_state("c1").signals
+               ticket_signals("c1")
     end
 
     test "records a deprioritized signal for each replaced sub-ticket" do
@@ -412,7 +412,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       review([parent], orchestrator_state())
 
       assert [%{name: "deprioritized", details: %{outcome: "changes", sub_issue: "MT-c1", to: "Canceled"}}] =
-               RunStore.get_ticket_state("c1").signals
+               ticket_signals("c1")
     end
 
     test "a team that spells it Cancelled leaves the replaced sub-ticket's record in Cancelled" do
@@ -429,7 +429,7 @@ defmodule SymphonyElixir.BreakdownReviewTest do
       assert_received {:memory_tracker_state_update, "c1", "Cancelled"}
       record = RunStore.get_ticket_state("c1")
       assert record.phase == "Cancelled"
-      assert [%{name: "deprioritized", details: %{to: "Cancelled"}}] = record.signals
+      assert [%{name: "deprioritized", details: %{to: "Cancelled"}}] = ticket_signals("c1")
       refute log =~ "Linear refused the move"
     end
 

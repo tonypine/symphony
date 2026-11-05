@@ -1062,7 +1062,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case CiWait.since(TicketState.signals(record), sha) do
       nil ->
-        record_ticket_signal(repo_key, issue_id, CiWait.start_signal(), %{sha: sha})
+        record_signal(repo_key, issue_id, CiWait.start_signal(), %{sha: sha})
         :wait
 
       since ->
@@ -1078,7 +1078,7 @@ defmodule SymphonyElixir.Orchestrator do
     case CiWait.pause(repo_key, issue_id, sha) do
       {:ok, _pause} ->
         Logger.error("Holding #{running_entry.identifier} instead of waiting longer for CI: #{CiWait.describe(info, since, DateTime.utc_now())}")
-        record_ticket_signal(repo_key, issue_id, CiWait.signal(), %{sha: sha})
+        record_signal(repo_key, issue_id, CiWait.signal(), %{sha: sha})
         release_issue_claim(state, issue_id)
 
       {:error, reason} ->
@@ -1208,7 +1208,7 @@ defmodule SymphonyElixir.Orchestrator do
       held when is_binary(held) ->
         Logger.warning("Setup block for #{running_entry.identifier}: #{component} — #{outcome.summary}; #{held} issue_id=#{issue_id}")
         emit_run_failed(running_entry, context.error, nil)
-        record_ticket_signal(context.repo_key, issue_id, "blocked", %{reason: outcome.summary, held: true})
+        record_signal(context.repo_key, issue_id, "blocked", %{reason: outcome.summary, held: true})
         release_issue_claim(state, issue_id)
 
       nil ->
@@ -1383,7 +1383,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp maybe_hold_blocked_issue(%State{} = state, _issue_id, _running_entry, _reason, _comment), do: state
 
   defp finish_blocked_hold(%State{} = state, %{issue_ids: [issue_id], issue: issue, reason: reason}, :ok) do
-    record_ticket_signal(issue, "blocked", %{reason: reason, held: true})
+    record_signal(issue, "blocked", %{reason: reason, held: true})
     release_issue_claim(state, issue_id)
   end
 
@@ -3843,7 +3843,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp close_finished_parent(%Issue{} = issue) do
     case SubIssueWait.close(issue, Tracker.adapter()) do
       :ok ->
-        record_ticket_signal(issue, "merge settled", %{sub_issues: length(issue.sub_issues)})
+        record_signal(issue, "merge settled", %{sub_issues: length(issue.sub_issues)})
 
       {:error, reason} ->
         Logger.warning("Failed to move an issue whose sub-issues are finished to Done; retrying next poll: #{issue_context(issue)} reason=#{inspect(reason)}")
@@ -3935,7 +3935,7 @@ defmodule SymphonyElixir.Orchestrator do
     case issue_repo_key(issue) do
       repo_key when is_binary(repo_key) ->
         details = %{outcome: breakdown_sub_issue_outcome(action), sub_issue: identifier, to: state}
-        record_ticket_signal(repo_key, sub_issue_id, breakdown_sub_issue_signal(action), details)
+        record_signal(repo_key, sub_issue_id, breakdown_sub_issue_signal(action), details)
 
       _repo_key ->
         :ok
@@ -4043,7 +4043,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case TransitionGuard.perform(issue_id, :plan_revise, ctx) do
       :ok ->
-        record_ticket_signal(issue, "plan verdict", %{outcome: "changes", to: to_state})
+        record_signal(issue, "plan verdict", %{outcome: "changes", to: to_state})
         Logger.info("Moved breakdown parent to #{to_state} to revise its plan from #{length(comments)} new comment(s): #{issue_context(issue)}")
         true
 
@@ -4152,7 +4152,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     case TransitionGuard.perform(issue_id, :plan_approve, %{settings: settings, repo_key: issue_repo_key(issue)}) do
       :ok ->
-        record_ticket_signal(issue, "plan verdict", %{outcome: "approve", to: waiting_state})
+        record_signal(issue, "plan verdict", %{outcome: "approve", to: waiting_state})
         Logger.info("Moved breakdown parent to #{waiting_state} while its sub-issues are open: #{issue_context(issue)}")
         true
 
@@ -5713,7 +5713,7 @@ defmodule SymphonyElixir.Orchestrator do
     attrs = DispatchLoop.hold_attrs(loop, TicketState.signals(record))
     pause_on_question(repo_key, issue, DispatchLoop.question_attrs(loop, issue.identifier || issue_id), DispatchLoop.hold_type(), attrs.reason)
     Logger.error("Holding #{issue_context(issue)} instead of dispatching it again: #{attrs.reason}")
-    record_ticket_signal(repo_key, issue_id, DispatchLoop.hold_type(), %{kind: loop.kind, count: loop.count, window_ms: loop.window_ms})
+    record_signal(repo_key, issue_id, DispatchLoop.hold_type(), %{kind: loop.kind, count: loop.count, window_ms: loop.window_ms})
     release_undispatched_claim(state, issue_id)
   end
 
@@ -5925,22 +5925,22 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # Every run started for a ticket is recorded in its store record, best effort, for the
-  # dispatch-loop guard. A PR run is an operator's explicit dispatch with no Linear ticket behind it.
+  # Every run started for a ticket is recorded as its `run.started` event, best effort, which the
+  # dispatch-loop guard reads (`TicketState.dispatches/1`). A PR run is an operator's explicit
+  # dispatch with no Linear ticket behind it.
   defp record_dispatch(_issue, _repo_key, _run_id, _run_profile, %{run_kind: :pr}), do: :ok
 
-  defp record_dispatch(%Issue{id: issue_id, state: issue_state}, repo_key, run_id, %{kind: kind}, _running_attrs) do
-    dispatch = %{kind: kind, run_id: run_id, state: issue_state, head: pr_head(issue_id, repo_key)}
+  defp record_dispatch(%Issue{id: issue_id, state: issue_state}, repo_key, run_id, %{kind: kind}, _running_attrs),
+    do:
+      record_run_started(repo_key, issue_id, %{
+        kind: kind,
+        run_id: run_id,
+        state: issue_state,
+        head: pr_head(issue_id, repo_key)
+      })
 
-    repo_key
-    |> RunStore.record_ticket_dispatch(issue_id, dispatch)
-    |> log_run_store_error("record the dispatch")
-
-    record_run_started(repo_key, issue_id, dispatch)
-  end
-
-  # The run's `run.started` event, next to its dispatch, keyed by its run id. Its number counts the
-  # ticket's earlier runs of the same kind.
+  # The run's `run.started` event, keyed by its run id. Its number counts the ticket's earlier runs
+  # of the same kind.
   defp record_run_started(repo_key, issue_id, %{kind: kind, run_id: run_id, state: issue_state, head: head}) do
     run_kind = to_string(kind)
     run_number = length(run_events(issue_id, "run.started", &(&1[:run_kind] == run_kind))) + 1
@@ -6067,38 +6067,18 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp record_stopped_run_ended(_state, _running_entry, _state_name), do: :ok
 
-  # How the run ended, for the dispatch-loop guard's hold reason: its exit and the PR head it left. A
-  # run stopped by a usage limit or an unreachable model API counts no attempt, and an epic review
-  # waiting for CI is not a loop (`SymphonyElixir.CiWait` bounds that wait), so both are dropped.
+  # How the run ended, as its `run.ended` event, which the dispatch-loop guard's hold reason reads
+  # (`TicketState.dispatches/1`): its exit and the PR head it left. A run stopped by a usage limit or
+  # an unreachable model API counts no attempt, and an epic review waiting for CI is not a loop
+  # (`SymphonyElixir.CiWait` bounds that wait), so the event says `counted: false` and the guard
+  # drops it.
   defp record_dispatch_outcome(%{run_id: run_id, issue: %Issue{id: issue_id}} = running_entry, reason) when is_binary(run_id) do
-    if pr_run_entry?(running_entry) do
-      :ok
-    else
-      repo_key = running_entry_repo_key(running_entry)
-
-      repo_key
-      |> RunStore.record_ticket_dispatch_outcome(issue_id, run_id, dispatch_outcome(reason, issue_id, repo_key))
-      |> log_run_store_error("record the end of the run")
-
-      record_run_ended(repo_key, issue_id, run_id, running_entry, reason)
-    end
+    if pr_run_entry?(running_entry),
+      do: :ok,
+      else: record_run_ended(running_entry_repo_key(running_entry), issue_id, run_id, running_entry, reason)
   end
 
   defp record_dispatch_outcome(_running_entry, _reason), do: :ok
-
-  defp dispatch_outcome(reason, issue_id, repo_key) do
-    if uncounted_exit?(reason), do: %{counted: false}, else: counted_dispatch_outcome(reason, issue_id, repo_key)
-  end
-
-  defp counted_dispatch_outcome(:normal, issue_id, repo_key), do: %{exit: "ended normally", head: pr_head(issue_id, repo_key)}
-
-  defp counted_dispatch_outcome({:budget_exhausted, _budget} = reason, issue_id, repo_key) do
-    head = pr_head(issue_id, repo_key)
-    %{exit: run_exit(reason, repo_key, issue_id, head), head: head}
-  end
-
-  defp counted_dispatch_outcome(reason, issue_id, repo_key),
-    do: %{exit: "failed (#{reason |> agent_exit_reason_summary() |> String.slice(0, 120)})", head: pr_head(issue_id, repo_key)}
 
   defp run_profile_log_fields(%{kind: kind, model: model, effort: effort}) do
     "run_kind=#{kind} model=#{model || "default"} effort=#{effort || "default"}"
@@ -6467,7 +6447,7 @@ defmodule SymphonyElixir.Orchestrator do
     pause_on_question(repo_key, issue, request, Handoff.missing_signal(), reason)
     Logger.warning("Holding #{issue_context(issue)}: #{reason}")
 
-    record_ticket_signal(issue, Handoff.missing_signal(), %{head: head, quiet_runs: quiet_runs, held: true})
+    record_signal(issue, Handoff.missing_signal(), %{head: head, quiet_runs: quiet_runs, held: true})
     {:noreply, release_issue_claim(state, issue_id)}
   end
 
@@ -8499,16 +8479,16 @@ defmodule SymphonyElixir.Orchestrator do
   # Every move the orchestrator makes is recorded in the ticket's signals ledger and its event stream
   # (`TicketSignals.record/4`), best effort: a store failure must never change a transition, the
   # board or a label.
-  defp record_ticket_signal(%Issue{id: issue_id} = issue, name, details) when is_binary(issue_id) do
+  defp record_signal(%Issue{id: issue_id} = issue, name, details) when is_binary(issue_id) do
     case issue_repo_key(issue) do
-      repo_key when is_binary(repo_key) -> record_ticket_signal(repo_key, issue_id, name, details)
+      repo_key when is_binary(repo_key) -> record_signal(repo_key, issue_id, name, details)
       _repo_key -> :ok
     end
   end
 
-  defp record_ticket_signal(_issue, _name, _details), do: :ok
+  defp record_signal(_issue, _name, _details), do: :ok
 
-  defp record_ticket_signal(repo_key, issue_id, name, details), do: TicketSignals.record(repo_key, issue_id, name, details)
+  defp record_signal(repo_key, issue_id, name, details), do: TicketSignals.record(repo_key, issue_id, name, details)
 
   @spec request_refresh() :: map() | :unavailable
   def request_refresh do
@@ -10787,7 +10767,7 @@ defmodule SymphonyElixir.Orchestrator do
     case ticket_ci_state(issue) do
       %{head_sha: head, status: status} ->
         unless latest_code_review_head_signal?(issue, head) do
-          record_ticket_signal(issue, "code_review_head_not_green", %{head: head, status: status})
+          record_signal(issue, "code_review_head_not_green", %{head: head, status: status})
         end
 
         head_status = if status == "", do: "unknown", else: status
@@ -10810,7 +10790,7 @@ defmodule SymphonyElixir.Orchestrator do
     case ticket_ci_state(issue) do
       %{head_sha: head, status: status} ->
         unless latest_head_signal?(issue, @qa_head_not_green_signal, head) do
-          record_ticket_signal(issue, @qa_head_not_green_signal, %{head: head, status: status})
+          record_signal(issue, @qa_head_not_green_signal, %{head: head, status: status})
         end
 
         head_status = if status == "", do: "unknown", else: status
@@ -10845,7 +10825,7 @@ defmodule SymphonyElixir.Orchestrator do
   # where it is: the state is returned unchanged, and turning `review_agent` on opens the gate.
   defp note_code_review_reviewer_disabled(%State{} = state, %Issue{} = issue) do
     unless code_review_reviewer_disabled_recorded?(issue) do
-      record_ticket_signal(issue, @code_review_reviewer_disabled_signal, %{})
+      record_signal(issue, @code_review_reviewer_disabled_signal, %{})
     end
 
     Logger.warning("Not dispatching the reviewer for #{issue_context(issue)}: code_review.enabled is false for its repo")

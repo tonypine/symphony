@@ -1,16 +1,14 @@
 defmodule SymphonyElixir.TicketSignals do
   @moduledoc """
-  Best-effort recording of the machine's transitions into a ticket's signals ledger, and into its
-  event stream (`SymphonyElixir.TicketEvents`).
+  Best-effort recording of the machine's transitions into a ticket's event stream
+  (`SymphonyElixir.TicketEvents`), the only place a signal or a verdict is kept.
 
   Every recording here is a side effect next to an already-decided move. A store failure is logged
-  and swallowed, so it can never change a transition, a board move or a label. The ledger lives in
-  `SymphonyElixir.RunStore` and its shape in `SymphonyElixir.TicketState`.
+  and swallowed, so it can never change a transition, a board move or a label.
 
-  Each signal also records the event `signal_event/2` makes of it (dual-write: the ledger is still
-  written, and every reader reads the events, `SymphonyElixir.TicketState.signals/1`): the event
-  `event/2` maps it to, carrying the signal's name (`signal`) and the details it was recorded with
-  (`signal_details`), enough to rebuild the ledger's entry from the event. A signal written next to
+  A signal is the event `signal_event/2` makes of it, which every reader reads back
+  (`SymphonyElixir.TicketState.signals/1`): the event `event/2` maps it to, carrying the signal's
+  name (`signal`) and the details it was recorded with (`signal_details`). A signal written next to
   a pause or a decision request
   (`:mirrored`: `SymphonyElixir.Pauses` records the `pause.*` events for the same change, and
   `SymphonyElixir.Questions` the `question.*` events) is a machine `note` naming it, since its readers
@@ -65,41 +63,30 @@ defmodule SymphonyElixir.TicketSignals do
   @type mapping :: {String.t(), map(), keyword()} | :mirrored
 
   @doc """
-  Appends `name` with `details` to the ticket's signals ledger, then records the signal's event
-  (`signal_event/2`). No-ops when the ticket carries no repo key, so a move made outside a
-  configured repo records nothing rather than failing.
+  Records the signal `name` with `details` as its event (`signal_event/2`). No-ops when the ticket
+  carries no repo key, so a move made outside a configured repo records nothing rather than
+  failing.
   """
   @spec record(String.t() | nil, String.t() | nil, String.t(), map()) :: :ok
-  def record(repo_key, issue_id, name, details) when is_binary(repo_key) and is_binary(issue_id) do
-    case RunStore.record_ticket_signal(repo_key, issue_id, name, details) do
-      :ok -> record_mapped(repo_key, issue_id, signal_event(name, details))
-      error -> log_error(error, "record #{name} signal")
-    end
-  end
+  def record(repo_key, issue_id, name, details) when is_binary(repo_key) and is_binary(issue_id),
+    do: record_mapped(repo_key, issue_id, signal_event(name, details))
 
   def record(_repo_key, _issue_id, _name, _details), do: :ok
 
   @doc """
-  Records the signal `name` with `details` as `record/4` does, in the ticket's signals ledger and as
-  its event (`signal_event/2`), and says whether the ledger kept it: `:ok`, or the store's
-  `{:error, reason}`, for a writer that must not act unless its signal is kept
-  (`SymphonyElixir.EpicReview.CiRerun` never reruns a commit's CI twice). The ledger alone decides
-  the result, since its readers decide what was done: the event is written only once the ledger kept
-  the signal, and an event the store refuses then is logged and swallowed, as `record/4` does, so a
-  signal on the ledger is never reported as not kept. For a signal that is no move: a
+  Records the signal `name` with `details` as its event (`signal_event/2`), as `record/4` does, and
+  says whether the store kept it: `:ok`, or the store's `{:error, reason}`, for a writer that must
+  not act unless its signal is kept (`SymphonyElixir.EpicReview.CiRerun` never reruns a commit's CI
+  twice). `{:error, :no_ticket}` without a repo key or an issue id. For a signal that is no move: a
   `phase.entered` written here asks no cycle and writes no phase.
   """
   @spec record_kept(String.t() | nil, String.t() | nil, String.t(), map()) :: :ok | {:error, term()}
-  def record_kept(repo_key, issue_id, name, details) do
-    with :ok <- RunStore.record_ticket_signal(repo_key, issue_id, name, details) do
-      {type, payload, opts} = signal_event(name, details)
-
-      case TicketEvents.record(repo_key, issue_id, type, payload, opts) do
-        {:ok, _event} -> :ok
-        {:error, reason} -> log_error({:error, reason}, "record the #{type} event of the #{name} signal on issue_id=#{issue_id}")
-      end
-    end
+  def record_kept(repo_key, issue_id, name, details) when is_binary(repo_key) and is_binary(issue_id) do
+    {type, payload, opts} = signal_event(name, details)
+    with {:ok, _event} <- TicketEvents.record(repo_key, issue_id, type, payload, opts), do: :ok
   end
+
+  def record_kept(_repo_key, _issue_id, _name, _details), do: {:error, :no_ticket}
 
   @doc """
   Writes `phase` as the record's phase (`TicketState.put_phase/4`), owned by Symphony
@@ -172,8 +159,8 @@ defmodule SymphonyElixir.TicketSignals do
 
   @doc """
   Records a verdict of `kind` with `outcome`, bound to the `head_sha` it judged and carrying
-  `details`, on the ticket's record, then its `verdict.recorded` event carrying the same `details`, in
-  the kind's phase. No-ops
+  `details`, as its `verdict.recorded` event carrying those `details`, in the kind's phase
+  (`SymphonyElixir.TicketState.verdicts/1` reads it back). No-ops
   when the ticket carries no repo key. Verdicts are never collapsed: two inconclusive verdicts on
   one head are two events, as the reviewer counts them.
 
@@ -183,14 +170,9 @@ defmodule SymphonyElixir.TicketSignals do
   """
   @spec record_verdict(id, id, String.t(), id, String.t(), map(), keyword()) :: :ok when id: String.t() | nil
   def record_verdict(repo_key, issue_id, kind, head_sha, outcome, details \\ %{}, opts \\ []) do
-    if is_binary(repo_key) and is_binary(issue_id) do
-      case RunStore.record_ticket_verdict(repo_key, issue_id, kind, head_sha, outcome, details) do
-        :ok -> record_mapped(repo_key, issue_id, verdict_event(kind, outcome, head_sha, [details: details] ++ opts))
-        error -> log_error(error, "record #{kind} verdict")
-      end
-    else
-      :ok
-    end
+    if is_binary(repo_key) and is_binary(issue_id),
+      do: record_mapped(repo_key, issue_id, verdict_event(kind, outcome, head_sha, [details: details] ++ opts)),
+      else: :ok
   end
 
   @doc """

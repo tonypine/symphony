@@ -558,21 +558,21 @@ defmodule SymphonyElixir.RunStoreTest do
 
     assert {:error, :ticket_state_not_found} = RunStore.update_ticket_state("issue-missing", %{phase: "Todo"})
 
-    assert :ok = RunStore.record_ticket_signal(@repo_key, "issue-1", "handoff", %{to: "Code Review"})
-    assert :ok = RunStore.record_ticket_signal(@repo_key, "issue-2", "blocked", %{reason: "tooling"})
-    assert :ok = RunStore.record_ticket_verdict(@repo_key, "issue-1", "qa", "abc123", "pass", %{model: "claude-opus"})
+    assert :ok = put_signal(@repo_key, "issue-1", "handoff", %{to: "Code Review"})
+    assert :ok = put_signal(@repo_key, "issue-2", "blocked", %{reason: "tooling"})
+    assert :ok = put_verdict(@repo_key, "issue-1", "qa", "abc123", "pass", %{model: "claude-opus"})
 
-    assert [%{name: "handoff", details: %{to: "Code Review"}}] = RunStore.get_ticket_state("issue-1").signals
-    assert [%{name: "blocked"}] = RunStore.get_ticket_state("issue-2").signals
-    assert [%{kind: "qa", head_sha: "abc123", outcome: "pass"}] = RunStore.get_ticket_state("issue-1").verdicts
+    assert [%{name: "handoff", details: %{to: "Code Review"}}] = ticket_signals("issue-1")
+    assert [%{name: "blocked"}] = ticket_signals("issue-2")
+    assert [%{kind: "qa", head_sha: "abc123", outcome: "pass"}] = ticket_verdicts("issue-1")
 
     restart_run_store()
 
     assert %{phase: "Merging"} = RunStore.get_ticket_state("issue-1")
-    assert [%{name: "handoff"}] = RunStore.get_ticket_state("issue-1").signals
+    assert [%{name: "handoff"}] = ticket_signals("issue-1")
 
     assert [%{kind: "qa", head_sha: "abc123", outcome: "pass", details: %{model: "claude-opus"}}] =
-             RunStore.get_ticket_state("issue-1").verdicts
+             ticket_verdicts("issue-1")
 
     # The ticket written under another repository is the same ticket: its one record, by its id.
     assert :ok = RunStore.put_ticket_state(TicketState.new(@other_repo_key, "issue-1", %{phase: "Done"}))
@@ -691,8 +691,6 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_ticket_state_record} = RunStore.update_ticket_state(nil, %{phase: "Todo"})
     assert {:error, :invalid_issue_id} = RunStore.delete_ticket_state(nil)
     assert {:error, :invalid_issue_id} = RunStore.get_ticket_state(nil)
-    assert {:error, :invalid_issue_id} = RunStore.record_ticket_signal(@repo_key, nil, "handoff", %{})
-    assert {:error, :invalid_issue_id} = RunStore.record_ticket_verdict(@repo_key, nil, "qa", nil, "pass")
   end
 
   test "marks a failed projection on a ticket's record and clears that mark only, across a restart" do
@@ -719,27 +717,19 @@ defmodule SymphonyElixir.RunStoreTest do
     assert {:error, :invalid_repo_key} = RunStore.clear_ticket_projection(nil, "issue-1", projected)
   end
 
-  test "records a ticket's dispatched runs and how they ended, and a verdict ends the count" do
-    assert :ok = RunStore.record_ticket_dispatch(@repo_key, "issue-1", %{kind: :rework, run_id: "run-1", state: "Rework", head: "a"})
-    assert :ok = RunStore.record_ticket_dispatch_outcome(@repo_key, "issue-1", "run-1", %{exit: "ended normally", head: "a"})
+  test "a ticket's dispatched runs and how they ended are its events, across a restart, and a verdict ends the count" do
+    assert :ok = put_dispatch(@repo_key, "issue-1", %{kind: :rework, run_id: "run-1", state: "Rework", head: "a"})
+    assert :ok = put_dispatch_outcome(@repo_key, "issue-1", "run-1", %{exit: "ended normally", head: "a"})
 
-    assert %{dispatches: [%{kind: "rework", run_id: "run-1", state: "Rework", head: "a", outcome: %{exit: "ended normally", head: "a"}}]} =
-             RunStore.get_ticket_state("issue-1")
+    assert [%{kind: "rework", run_id: "run-1", state: "Rework", head: "a", outcome: %{exit: "ended normally", head: "a"}}] =
+             ticket_dispatches("issue-1")
 
     restart_run_store()
-    assert %{dispatches: [%{run_id: "run-1"}]} = RunStore.get_ticket_state("issue-1")
+    assert [%{run_id: "run-1"}] = ticket_dispatches("issue-1")
+    refute Map.has_key?(RunStore.get_ticket_state("issue-1"), :dispatches)
 
-    assert :ok = RunStore.record_ticket_verdict(@repo_key, "issue-1", "qa", "a", "pass")
-    assert %{dispatches: []} = RunStore.get_ticket_state("issue-1")
-
-    # An issue with no record lists no run, and recording an end does not create the record.
-    assert :ok = RunStore.record_ticket_dispatch_outcome(@repo_key, "issue-missing", "run-1", %{exit: "ended normally"})
-    assert RunStore.get_ticket_state("issue-missing") == nil
-
-    assert {:error, :invalid_issue_id} = RunStore.record_ticket_dispatch(@repo_key, nil, %{})
-    assert {:error, :invalid_issue_id} = RunStore.record_ticket_dispatch_outcome(@repo_key, nil, "run-1", %{})
-    assert {:error, :invalid_repo_key} = RunStore.record_ticket_dispatch(nil, "issue-1", %{})
-    assert {:error, :invalid_repo_key} = RunStore.record_ticket_dispatch_outcome(nil, "issue-1", "run-1", %{})
+    assert :ok = put_verdict(@repo_key, "issue-1", "qa", "a", "pass")
+    assert ticket_dispatches("issue-1") == []
   end
 
   test "claims a path-unlock grant for one run only, across a restart" do

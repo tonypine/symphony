@@ -64,7 +64,7 @@ defmodule SymphonyElixir.OrchestratorPlanCommentsTest do
     act(state(), parent)
 
     assert [%{name: "plan verdict", details: %{outcome: "changes", to: "Rework"}}] =
-             RunStore.get_ticket_state("parent").signals
+             ticket_signals("parent")
   end
 
   test "a comment sends the parent through Rework and records the move as Symphony's own" do
