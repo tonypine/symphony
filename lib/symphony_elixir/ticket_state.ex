@@ -31,11 +31,14 @@ defmodule SymphonyElixir.TicketState do
   (`plan_brief`, `SymphonyElixir.PlanBrief`): the review brief, the sub-tickets and the open choices,
   with when they were read, and why the last capture failed (`plan_brief_error`, nil when it didn't).
 
+  Every reader of the ticket's verdicts, signals and dispatched runs reads them as views over its
+  event stream (`signals/1`, `recent_signals/2`, `verdicts/1`, `dispatches/1`), never from the
+  record's own `verdicts`, `signals` and `dispatches`. Those are still written next to the events
+  until the record drops them, and each view reads what its field holds.
+
   The record is persisted by `SymphonyElixir.RunStore`; this module owns its shape and the
-  operations that move it. It is inert by design: nothing dispatches on a record yet. It exists so
-  every later sub-ticket of the state-machine redesign reads and writes the ticket's state in one
-  place, and so the signals ledger can be injected into run prompts (see
-  `SymphonyElixir.PromptBuilder`).
+  operations that move it. It exists so the machinery reads and writes the ticket's state in one
+  place, and so the signals can be injected into run prompts (see `SymphonyElixir.PromptBuilder`).
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -44,12 +47,20 @@ defmodule SymphonyElixir.TicketState do
   alias SymphonyElixir.PrDecision
   alias SymphonyElixir.PrWatch.Attempts
   alias SymphonyElixir.Questions
+  alias SymphonyElixir.TicketEvents
+  alias SymphonyElixir.TicketEvents.Event
 
+  # The record's own `signals`, `verdicts` and `dispatches` keep only the newest entries; the views
+  # over the event stream (`signals/1`, `verdicts/1`, `dispatches/1`) are not bounded by them.
   @max_signals 50
   @max_verdicts 50
   @max_ci_states 20
   # The dispatch-loop limits are validated to at most this many runs (`Config.Schema.Watchdog`).
   @max_dispatches 50
+  # A verdict and a lifted pause reason are progress: the runs dispatched before them are no longer
+  # counted as a loop (`dispatches_in/1`).
+  @progress_types ["pause.reason_cleared", "pause.cleared"]
+  @dispatch_types ["run.started", "run.ended", "verdict.recorded" | @progress_types]
 
   @typedoc """
   A verdict record binds an outcome to the head SHA it judged. `details` is what the verdict
@@ -972,15 +983,141 @@ defmodule SymphonyElixir.TicketState do
     end
   end
 
-  @doc "The runs dispatched since the ticket last made progress, newest first."
-  @spec dispatches(t()) :: [dispatch()]
-  def dispatches(record), do: record |> normalize() |> Map.fetch!(:dispatches)
+  @doc """
+  The ticket's signals, newest first, read from its event stream (`signals_in/1`). A record whose
+  events can't be read has none.
+  """
+  @spec signals(map()) :: [signal()]
+  def signals(record), do: record |> events([]) |> signals_in()
 
-  @doc "The newest `limit` signals, newest first, for prompt injection."
-  @spec recent_signals(t(), non_neg_integer()) :: [signal()]
-  def recent_signals(record, limit \\ 10) when is_integer(limit) and limit >= 0 do
-    record |> normalize() |> Map.fetch!(:signals) |> Enum.take(limit)
+  @doc "The newest `limit` signals (`signals/1`), newest first, for prompt injection."
+  @spec recent_signals(map(), non_neg_integer()) :: [signal()]
+  def recent_signals(record, limit \\ 10) when is_integer(limit) and limit >= 0, do: record |> signals() |> Enum.take(limit)
+
+  @doc """
+  The signals `events` (oldest first) record, newest first: each event the machine or a person
+  wrote whose payload names a `signal`, with the details it was recorded with (`signal_details`)
+  and the event's time. An event recorded before signals carried their details reads them from its
+  payload: its own fields, and the move a handoff's `phase.entered` was.
+  """
+  @spec signals_in([Event.t()]) :: [signal()]
+  def signals_in(events) when is_list(events) do
+    events
+    |> Enum.flat_map(&signal_in/1)
+    |> Enum.reverse()
   end
+
+  @doc """
+  The ticket's verdicts, newest first, read from its event stream (`verdicts_in/1`). A record whose
+  events can't be read has none.
+  """
+  @spec verdicts(map()) :: [verdict()]
+  def verdicts(record), do: record |> events(types: ["verdict.recorded"]) |> verdicts_in()
+
+  @doc """
+  The verdicts `events` (oldest first) record, newest first: each machine `verdict.recorded` of a
+  verdict (`SymphonyElixir.TicketSignals.record_verdict/7`), bound to the head it judged, with the
+  details it carries (none for one recorded before verdicts carried them). A `verdict.recorded` a
+  signal records (`fix verdict`, a plan's `plan verdict`) is that signal's (`signals_in/1`), not a
+  verdict here.
+  """
+  @spec verdicts_in([Event.t()]) :: [verdict()]
+  def verdicts_in(events) when is_list(events) do
+    events
+    |> Enum.filter(&verdict_event?/1)
+    |> Enum.map(fn %Event{payload: payload, at: at} ->
+      %{
+        kind: map_string(payload, :kind) || "",
+        head_sha: map_string(payload, :head),
+        outcome: map_string(payload, :outcome) || "",
+        recorded_at: at,
+        details: map_or_empty(Map.get(payload, :details))
+      }
+    end)
+    |> Enum.reverse()
+  end
+
+  @doc """
+  The runs dispatched since the ticket last made progress, newest first, read from its event stream
+  (`dispatches_in/1`). A record whose events can't be read lists none, so a store error never stops
+  a dispatch.
+  """
+  @spec dispatches(map()) :: [dispatch()]
+  def dispatches(record), do: record |> events(types: @dispatch_types) |> dispatches_in()
+
+  @doc """
+  The runs `events` (oldest first) dispatched since the ticket last made progress, newest first, at
+  most #{@max_dispatches}: each `run.started`, with how its `run.ended` says it ended (its exit and
+  the PR head it left; nil while it runs). A run that ended `counted: false` (stopped by a usage
+  limit, say) is dropped, so it never counts towards a loop. A verdict (`verdicts_in/1`) and a lifted
+  pause reason (`pause.reason_cleared`, `pause.cleared`) are progress: the runs before them are not
+  listed.
+  """
+  @spec dispatches_in([Event.t()]) :: [dispatch()]
+  def dispatches_in(events) when is_list(events) do
+    events
+    |> Enum.reduce([], &dispatch_step/2)
+    |> Enum.take(@max_dispatches)
+  end
+
+  # A store that can't be read (`{:error, reason}`) reads as no events.
+  defp events(%{issue_id: issue_id}, opts) when is_binary(issue_id) do
+    events = TicketEvents.query(issue_id, [limit: :all] ++ opts)
+    if is_list(events), do: events, else: []
+  end
+
+  defp events(_record, _opts), do: []
+
+  defp signal_in(%Event{actor: %{kind: kind}, payload: %{signal: name} = payload, at: at} = event)
+       when kind in [:machine, :person] and is_binary(name) do
+    details =
+      case Map.get(payload, :signal_details) do
+        %{} = details -> details
+        _none -> legacy_details(event.type, payload)
+      end
+
+    [%{name: name, details: details, at: at}]
+  end
+
+  defp signal_in(_event), do: []
+
+  defp legacy_details(type, payload) do
+    details = Map.drop(payload, [:signal, :signal_details, :attempt])
+    if type == "phase.entered" and payload.signal == "handoff", do: Map.put(details, :move, true), else: details
+  end
+
+  defp verdict_event?(%Event{type: "verdict.recorded", actor: %{kind: :machine}, payload: payload}), do: not Map.has_key?(payload, :signal)
+  defp verdict_event?(_event), do: false
+
+  defp map_or_empty(%{} = map), do: map
+  defp map_or_empty(_value), do: %{}
+
+  defp dispatch_step(%Event{type: "run.started", payload: payload, at: at}, dispatches) do
+    dispatch = %{
+      kind: map_string(payload, :run_kind) || "",
+      run_id: map_string(payload, :run_id),
+      state: map_string(payload, :state),
+      head: map_string(payload, :head),
+      at: at,
+      outcome: nil
+    }
+
+    [dispatch | dispatches]
+  end
+
+  defp dispatch_step(%Event{type: "run.ended", payload: payload, at: at}, dispatches) do
+    run_id = map_string(payload, :run_id)
+
+    if Map.get(payload, :counted) == false,
+      do: Enum.reject(dispatches, &(&1.run_id == run_id)),
+      else: Enum.map(dispatches, &if(&1.run_id == run_id, do: %{&1 | outcome: dispatch_outcome(payload, at)}, else: &1))
+  end
+
+  defp dispatch_step(%Event{type: type} = event, dispatches) do
+    if verdict_event?(event) or type in @progress_types, do: [], else: dispatches
+  end
+
+  defp dispatch_outcome(payload, at), do: %{exit: map_string(payload, :exit) || "", head: map_string(payload, :head), at: at}
 
   defp normalize_pr_watch(%{facts: %PrDecision.Facts{} = facts} = watch) do
     %{

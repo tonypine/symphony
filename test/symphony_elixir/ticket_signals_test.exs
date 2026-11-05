@@ -93,8 +93,9 @@ defmodule SymphonyElixir.TicketSignalsTest do
              RunStore.get_ticket_state("issue-1")
 
     assert [%{payload: payload}] = RunStore.list_ticket_events("issue-1", [])
+    # An empty map, so an event without details is one recorded before signals carried theirs.
     assert payload.signal == "merge settled"
-    refute Map.has_key?(payload, :signal_details)
+    assert payload.signal_details == %{}
   end
 
   test "records a verdict bound to the head it judged" do
@@ -361,7 +362,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
 
         # Enough to rebuild the record's entry: the name and the details it was recorded with.
         assert payload.signal == name
-        assert Map.get(payload, :signal_details, %{}) == details, name
+        assert payload.signal_details == details, name
       end
     end
 
@@ -372,8 +373,7 @@ defmodule SymphonyElixir.TicketSignalsTest do
       assert {"note", %{text: "unblocked · by the Director (unblocked)", signal: "unblocked", signal_details: %{by: "the Director"}}, []} =
                TicketSignals.signal_event("unblocked", %{by: "the Director"})
 
-      assert {"note", %{text: "ci_wait (ci_wait)", signal: "ci_wait"} = payload, []} = TicketSignals.signal_event("ci_wait", :not_a_map)
-      refute Map.has_key?(payload, :signal_details)
+      assert {"note", %{text: "ci_wait (ci_wait)", signal: "ci_wait", signal_details: %{}}, []} = TicketSignals.signal_event("ci_wait", :not_a_map)
     end
 
     test "a phase move enters the state it names, in that phase" do

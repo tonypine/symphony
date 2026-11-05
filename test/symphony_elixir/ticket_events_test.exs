@@ -309,13 +309,15 @@ defmodule SymphonyElixir.TicketEventsTest do
       assert ^events = TicketEvents.query(@issue_id, limit: :all)
     end
 
-    test "returns at most 50 by default and 200 at most" do
+    test "returns at most 50 by default and 200 at most, and every event with limit: :all" do
       for n <- 1..201 do
         assert {:ok, _} = TicketEvents.record(@repo_key, @issue_id, "note", %{text: "n#{n}"}, at: DateTime.add(@at, n))
       end
 
       assert length(TicketEvents.query(@issue_id)) == 50
       assert length(TicketEvents.query(@issue_id, limit: 500)) == 200
+      assert length(TicketEvents.query(@issue_id, limit: :all)) == 201
+      assert length(TicketEvents.query(@issue_id, limit: "many")) == 50
     end
 
     test "passes a store error through" do

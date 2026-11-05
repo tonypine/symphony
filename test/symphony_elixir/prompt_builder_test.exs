@@ -957,6 +957,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
   describe "ticket state context" do
     setup do
+      :ok = RunStore.clear()
       write_workflow_file!(Workflow.workflow_file_path(), prompt: "Issue {{ issue.identifier }}")
       %{issue: %Issue{identifier: "MT-TS", title: "Ticket state", state: "In Progress"}}
     end
@@ -972,7 +973,8 @@ defmodule SymphonyElixir.PromptBuilderTest do
     end
 
     test "adds nothing for a record holding only verdicts", %{issue: issue} do
-      record = TicketState.new("r", "i") |> TicketState.record_verdict("review verdict", "sha", "approve")
+      :ok = put_verdict("r", "i", "code_review", "sha", "approve")
+      record = TicketState.new("r", "i")
 
       refute PromptBuilder.build_prompt(issue, ticket_state: record) =~ "Ticket state:"
     end
@@ -990,8 +992,9 @@ defmodule SymphonyElixir.PromptBuilderTest do
         TicketState.new("r", "i", %{phase: "In Progress"})
         |> TicketState.put_pause(%{subject: {:ticket, "r", "i"}, reasons: reasons}, at)
         |> TicketState.record_ci_state("abc123", "green", at)
-        |> TicketState.record_signal("handoff", %{to: "Code Review"}, at)
 
+      # The signals are the ticket's events.
+      :ok = put_signal("r", "i", "handoff", %{to: "Code Review"}, at)
       prompt = PromptBuilder.build_prompt(issue, ticket_state: record)
 
       assert prompt =~ "Ticket state:"
@@ -1013,10 +1016,18 @@ defmodule SymphonyElixir.PromptBuilderTest do
       assert prompt =~ "Recent signals:\n"
     end
 
+    test "a record holding only signals still renders its section", %{issue: issue} do
+      ledger!("prompt_brief_enabled: false")
+      :ok = put_signal("r", "i", "restart", %{})
+
+      assert PromptBuilder.build_prompt(issue, ticket_state: %{repo_key: "r", issue_id: "i"}) =~ "- Phase: unknown"
+    end
+
     test "renders a signal with no details without a trailing gap", %{issue: issue} do
       ledger!("prompt_brief_enabled: false")
       at = ~U[2026-10-04 00:23:15Z]
-      record = TicketState.new("r", "i", %{phase: "Todo"}) |> TicketState.record_signal("restart", %{}, at)
+      :ok = put_signal("r", "i", "restart", %{}, at)
+      record = TicketState.new("r", "i", %{phase: "Todo"})
 
       assert PromptBuilder.build_prompt(issue, ticket_state: record) =~ "- restart at #{at}"
     end
@@ -1035,9 +1046,8 @@ defmodule SymphonyElixir.PromptBuilderTest do
       write_workflow_file!(Workflow.workflow_file_path(), prompt: "Issue {{ issue.identifier }}")
       at = ~U[2026-10-22 10:00:00Z]
 
-      record =
-        TicketState.new("r", "i", %{phase: "QA", issue_identifier: "MT-LB"})
-        |> TicketState.record_signal("handoff", %{to: "Code Review"}, at)
+      :ok = put_signal("r", "i", "handoff", %{to: "Code Review"}, at)
+      record = TicketState.new("r", "i", %{phase: "QA", issue_identifier: "MT-LB"})
 
       %{issue: %Issue{identifier: "MT-LB", title: "Ledger", state: "QA"}, record: record, at: at}
     end

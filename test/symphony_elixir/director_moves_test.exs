@@ -259,7 +259,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
     test "answers a dispatch loop's question, so the ticket starts again with its count at zero", %{opts: opts} do
       github_activity(state: "OPEN")
       put_issues([restart_issue()])
-      :ok = RunStore.record_ticket_dispatch("repo-restart", "pr", %{kind: :rework, run_id: "run-1", state: "Rework"})
+      :ok = put_dispatch("repo-restart", "pr", %{kind: :rework, run_id: "run-1", state: "Rework"})
       {:ok, question} = Questions.ask({:ticket, "repo-restart", "pr"}, DispatchLoop.question_attrs(%{count: 4, window_ms: 600_000}, "MOT-40"))
 
       assert {:ok, %{to_state: "In Progress"}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
@@ -267,6 +267,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert %{state: :answered, answer: %{text: "Start it over from main"}} = Questions.find({:ticket, "repo-restart", "pr"}, question.id)
       refute Pauses.paused?({:ticket, "repo-restart", "pr"})
       assert RunStore.get_ticket_state("pr").dispatches == []
+      assert ticket_dispatches("pr") == []
     end
 
     test "lifts an operator's stop, so the ticket the Director stopped runs again from main", %{opts: opts} do
@@ -2052,13 +2053,14 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     test "answering \"Run it again\" is Unblock: the pause goes and the ticket continues in place", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
-      :ok = RunStore.record_ticket_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
+      :ok = put_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
       question = ask_and_hold("repo-director", loop())
 
       assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Run it again", opts)
 
       refute Pauses.paused?({:ticket, "repo-director", "pr"})
       assert RunStore.get_ticket_state("pr").dispatches == []
+      assert ticket_dispatches("pr") == []
       assert %{state: :answered, answer: %{option: 1, text: "Run it again", by: @director}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
     end
 
@@ -2242,7 +2244,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     test "the Inbox lists its question; Unblock moves it back to the phase it left, lifts the pause and dispatches it", %{opts: opts} do
       put_issues([%{pr("Backlog") | repo_key: "repo-director"}])
-      :ok = RunStore.record_ticket_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
+      :ok = put_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
       question = park("repo-director", "In Progress")
 
       assert %{kind: :action} = Item.from_question(TicketState.normalize(RunStore.get_ticket_state("pr")), question)
@@ -2252,6 +2254,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert_received {:memory_tracker_state_update, "pr", "In Progress"}
       assert %{phase: "In Progress", dispatches: []} = RunStore.get_ticket_state("pr")
+      assert ticket_dispatches("pr") == []
       assert %{state: :answered, answer: %{option: 1, text: "Run it again"}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
       assert {:ok, nil} = Pauses.get({:ticket, "repo-director", "pr"})
 
@@ -2417,7 +2420,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
     test "a Backlog ticket a park left moves to In Progress: its question is answered, it dispatches at once, nothing is reset", %{opts: opts} do
       owned("repo-director", "Backlog")
-      :ok = RunStore.record_ticket_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
+      :ok = put_dispatch("repo-director", "pr", %{kind: :implementation, run_id: "run-1", state: "In Progress"})
       question = park("repo-director", "In Progress")
       orchestrator = start_supervised!({FakeOrchestrator, self()})
 
@@ -2443,6 +2446,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute_received {:memory_tracker_comment, _id, _body}
 
       assert %{phase: "In Progress", phase_owner: :symphony, dispatches: []} = RunStore.get_ticket_state("pr")
+      assert ticket_dispatches("pr") == []
       assert %{state: :answered, answer: %{text: "Run it again"}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
       refute parked?("repo-director")
 

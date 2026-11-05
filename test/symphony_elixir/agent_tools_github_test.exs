@@ -2126,20 +2126,22 @@ defmodule SymphonyElixir.AgentTools.GitHubTest do
                  gh_runner: gh_runner
                )
 
-      assert [%{name: "handoff", details: details}] = Handoff.signals(repo_key, issue_id)
+      # The ledger outlives the deleted record, so the newest signal is the one just emitted.
+      assert [%{name: "handoff", details: details} | _] = Handoff.signals(repo_key, issue_id)
       assert details.head == nil
       assert Handoff.emitted?(repo_key, issue_id, "any-head-at-all")
 
       # A context whose issue map carries no id hands off under the context's own issue id.
-      RunStore.delete_ticket_state(issue_id)
+      bare_id = issue_id <> "-bare"
+      RunStore.delete_ticket_state(bare_id)
 
       bare =
         fixture.context
         |> Map.put(:issue, %{repo_key: repo_key})
-        |> Map.put(:issue_id, issue_id)
+        |> Map.put(:issue_id, bare_id)
 
       assert {:ok, _result} = GitHub.push_branch(bare, settings: %Schema{})
-      assert [%{name: "handoff", details: %{head: ^head}}] = Handoff.signals(repo_key, issue_id)
+      assert [%{name: "handoff", details: %{head: ^head}}] = Handoff.signals(repo_key, bare_id)
     after
       File.rm_rf(fixture.root)
       RunStore.delete_ticket_state(issue_id)

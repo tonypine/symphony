@@ -581,7 +581,7 @@ defmodule SymphonyElixir.QaVerificationTest do
       {workspace, head} = git_workspace!()
 
       # A mechanical repair pushed this head; the lane re-binds the pass it carries to it.
-      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "the-repaired-head", "pass")
+      :ok = put_verdict(@repo_key, @issue_id, "qa", "the-repaired-head", "pass")
       assert :ok = CiFix.carry_verdict(@repo_key, @issue_id, "QA", head, settings!())
 
       assert :ok = run(workspace, [])
@@ -1378,7 +1378,7 @@ defmodule SymphonyElixir.QaVerificationTest do
         capture_log(fn -> assert :ok = run_hub(workspace, result, app_repo_settings()) end)
 
         refute_received {:memory_tracker_state_update, @issue_id, "Merging"}
-        assert [%{outcome: "blocked"}] = verdicts()
+        assert [%{outcome: "blocked"} | _] = verdicts()
       end
     end
 
@@ -1526,13 +1526,19 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert decision.why =~ "nothing on screen to judge: the change touches no screen"
     end
 
-    test "is inconclusive without the launch, the build or a healthy check, naming what did not run" do
-      for {app_check, missing} <- [
-            {%{built: true, launched: false, checked: false}, "qa_launch_app, a healthy qa_check_app did not run"},
-            {%{built: true, launched: true, checked: false}, "a healthy qa_check_app did not run"},
-            {nil, "qa_build, qa_launch_app, a healthy qa_check_app did not run"}
-          ] do
-        RunStore.delete_ticket_state(@issue_id)
+    # One test for each case: the ledger outlives the deleted record, so a loop would read the
+    # earlier cases' verdicts.
+    for {app_check, missing} <- [
+          {%{built: true, launched: false, checked: false}, "qa_launch_app, a healthy qa_check_app did not run"},
+          {%{built: true, launched: true, checked: false}, "a healthy qa_check_app did not run"},
+          {nil, "qa_build, qa_launch_app, a healthy qa_check_app did not run"}
+        ] do
+      @app_check app_check
+      @missing missing
+
+      test "is inconclusive without the launch, the build or a healthy check, naming what did not run: #{missing}" do
+        app_check = @app_check
+        missing = @missing
         {workspace, head} = git_workspace!()
         Process.put(:qa_agent_result, scope_none_result(app_check))
 
@@ -1648,18 +1654,22 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert %{question: "QA ran TP-816 2 times on the same change without a pass or a fail. How should it continue?"} = deciding()
     end
 
-    test "a block the QA tools raise themselves goes to the self-heal lane" do
-      causes = [
-        {{:qa_worker, "qa_worker_unsafe"}, "worker_host"},
-        {{:qa_host_missing_tool, ["go"]}, "worker_host"},
-        {{:qa_host_tool_check_failed, "exit status 2"}, "worker_host"},
-        {{:qa_host_tunnel_failed, "ssh exited with status 255"}, "qa_environment"},
-        {{:qa_dev_server_failed, :health_timeout}, "dev_server"},
-        {{:qa_dev_server_failed, {:dev_server_exit, 1}, "FATAL"}, "dev_server"}
-      ]
+    # One test for each cause: the ledger outlives the deleted record, so a loop would count the
+    # earlier causes' attempts.
+    for {cause, component} <- [
+          {{:qa_worker, "qa_worker_unsafe"}, "worker_host"},
+          {{:qa_host_missing_tool, ["go"]}, "worker_host"},
+          {{:qa_host_tool_check_failed, "exit status 2"}, "worker_host"},
+          {{:qa_host_tunnel_failed, "ssh exited with status 255"}, "qa_environment"},
+          {{:qa_dev_server_failed, :health_timeout}, "dev_server"},
+          {{:qa_dev_server_failed, {:dev_server_exit, 1}, "FATAL"}, "dev_server"}
+        ] do
+      @cause cause
+      @component component
 
-      for {cause, component} <- causes do
-        RunStore.delete_ticket_state(@issue_id)
+      test "a block the QA tools raise themselves goes to the self-heal lane: #{inspect(cause)}" do
+        cause = @cause
+        component = @component
         {workspace, _head} = git_workspace!()
         Process.put(:qa_agent_result, blocked_cause(cause))
 
@@ -1722,7 +1732,7 @@ defmodule SymphonyElixir.QaVerificationTest do
         capture_log(fn -> assert :ok = run(workspace, []) end)
 
         refute_received {:memory_tracker_state_update, _, _}
-        assert [%{outcome: "blocked", details: %{component: "ci", reason: ^reason}}] = verdicts()
+        assert [%{outcome: "blocked", details: %{component: "ci", reason: ^reason}} | _] = verdicts()
       end
     end
 
@@ -1790,7 +1800,7 @@ defmodule SymphonyElixir.QaVerificationTest do
         capture_log(fn -> assert :ok = run(workspace, []) end)
 
         assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
-        assert [%{outcome: "fail", head_sha: ^head}] = verdicts()
+        assert [%{outcome: "fail", head_sha: ^head} | _] = verdicts()
       end
     end
   end
@@ -1923,7 +1933,7 @@ defmodule SymphonyElixir.QaVerificationTest do
         assert report =~ "### Pre-checks\n\n- **fail** step 1 (Proved by: `make-all` › "
         assert report =~ "### Findings\n\n- Step 1 (Proved by: `make-all` › "
         assert report =~ expected
-        assert [%{outcome: "fail", head_sha: ^head}] = verdicts()
+        assert [%{outcome: "fail", head_sha: ^head} | _] = verdicts()
       end
     end
 
@@ -2612,20 +2622,20 @@ defmodule SymphonyElixir.QaVerificationTest do
     test "re-binds the newest pass to the new head, and carries nothing otherwise" do
       assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, "new-head")
 
-      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "old-head", "fail")
+      :ok = put_verdict(@repo_key, @issue_id, "qa", "old-head", "fail")
       assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, "new-head")
       assert [%{head_sha: "old-head", outcome: "fail"}] = verdicts()
 
-      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "old-head", "pass")
+      :ok = put_verdict(@repo_key, @issue_id, "qa", "old-head", "pass")
       assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, nil)
       assert [%{head_sha: "old-head", outcome: "pass"} | _] = verdicts()
     end
 
     test "a carried pass names no run: no run gave it" do
-      :ok = RunStore.record_ticket_verdict(@repo_key, @issue_id, "qa", "old-head", "pass")
+      :ok = put_verdict(@repo_key, @issue_id, "qa", "old-head", "pass")
       assert :ok = QaVerification.carry_verdict(@repo_key, @issue_id, "new-head")
 
-      assert [%{type: "verdict.recorded", run_id: nil, head_sha: "new-head", payload: %{outcome: "pass"}}] =
+      assert [_old, %{type: "verdict.recorded", run_id: nil, head_sha: "new-head", payload: %{outcome: "pass"}}] =
                SymphonyElixir.TicketEvents.query(@issue_id, types: ["verdict.recorded"])
     end
   end

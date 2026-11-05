@@ -14,7 +14,7 @@ defmodule SymphonyElixir.TicketPullRequest.BackfillTest do
   test "seeds a backfill record from a CI check, a PR review or a handoff signal" do
     :ok = RunStore.put_ci_check(%{repo_key: @repo_key, issue_id: "issue-ci", pr_url: pr(1), branch: "auto/ACME-1"})
     :ok = RunStore.put_pr_review(%{repo_key: @repo_key, issue_id: "issue-review", pr_url: pr(2)})
-    :ok = RunStore.record_ticket_signal(@repo_key, "issue-handoff", "handoff", %{pr_url: pr(3), branch: "auto/ACME-3", head: "abc"})
+    :ok = put_signal(@repo_key, "issue-handoff", "handoff", %{pr_url: pr(3), branch: "auto/ACME-3", head: "abc"})
 
     log = capture_log(fn -> assert %{seeded: 3, kept: 0} = Backfill.run([@repo_key]) end)
 
@@ -41,11 +41,11 @@ defmodule SymphonyElixir.TicketPullRequest.BackfillTest do
     :ok = RunStore.put_ci_check(%{repo_key: @repo_key, issue_id: "issue-1", pr_url: pr(1)})
     :ok = RunStore.put_pr_review(%{repo_key: @repo_key, issue_id: "issue-1", pr_url: pr(11)})
     :ok = RunStore.put_pr_review(%{repo_key: @repo_key, issue_id: "issue-2", pr_url: pr(2)})
-    :ok = RunStore.record_ticket_signal(@repo_key, "issue-2", "handoff", %{pr_url: pr(12)})
-    :ok = RunStore.record_ticket_signal(@repo_key, "issue-3", "handoff", %{pr_url: pr(30)})
-    :ok = RunStore.record_ticket_signal(@repo_key, "issue-3", "handoff", %{pr_url: pr(3)})
-    :ok = RunStore.record_ticket_signal(@repo_key, "issue-3", "handoff", %{to: "Merging", move: true})
-    :ok = RunStore.record_ticket_signal(@repo_key, "issue-3", "claim", %{pr_url: pr(31)})
+    :ok = put_signal(@repo_key, "issue-2", "handoff", %{pr_url: pr(12)})
+    :ok = put_signal(@repo_key, "issue-3", "handoff", %{pr_url: pr(30)})
+    :ok = put_signal(@repo_key, "issue-3", "handoff", %{pr_url: pr(3)})
+    :ok = put_signal(@repo_key, "issue-3", "handoff", %{to: "Merging", move: true})
+    :ok = put_signal(@repo_key, "issue-3", "claim", %{pr_url: pr(31)})
 
     assert %{seeded: 3} = Backfill.run_repo(@repo_key)
 
@@ -57,7 +57,7 @@ defmodule SymphonyElixir.TicketPullRequest.BackfillTest do
   test "skips a PR the auto-merge lane landed, a ledger with no PR and another repo's records" do
     :ok = RunStore.put_pr_review(%{repo_key: @repo_key, issue_id: "issue-1", pr_url: pr(1), auto_merge: %{state: "merged"}})
     :ok = RunStore.put_pr_review(%{repo_key: @repo_key, issue_id: "issue-2", pr_url: nil})
-    :ok = RunStore.record_ticket_signal(@repo_key, "issue-3", "claim", %{from: "Todo"})
+    :ok = put_signal(@repo_key, "issue-3", "claim", %{from: "Todo"})
     :ok = RunStore.put_ci_check(%{repo_key: @other_repo_key, issue_id: "issue-4", pr_url: pr(4)})
 
     assert %{seeded: 0, kept: 0} = Backfill.run([@repo_key])

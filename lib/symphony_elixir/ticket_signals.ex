@@ -7,10 +7,11 @@ defmodule SymphonyElixir.TicketSignals do
   and swallowed, so it can never change a transition, a board move or a label. The ledger lives in
   `SymphonyElixir.RunStore` and its shape in `SymphonyElixir.TicketState`.
 
-  Each signal also records the event `signal_event/2` makes of it (dual-write: the signals ledger
-  stays the source of truth until readers move over): the event `event/2` maps it to, carrying the
-  signal's name (`signal`) and the details it was recorded with (`signal_details`), enough to
-  rebuild the ledger's entry from the event. A signal written next to a pause or a decision request
+  Each signal also records the event `signal_event/2` makes of it (dual-write: the ledger is still
+  written, and every reader reads the events, `SymphonyElixir.TicketState.signals/1`): the event
+  `event/2` maps it to, carrying the signal's name (`signal`) and the details it was recorded with
+  (`signal_details`), enough to rebuild the ledger's entry from the event. A signal written next to
+  a pause or a decision request
   (`:mirrored`: `SymphonyElixir.Pauses` records the `pause.*` events for the same change, and
   `SymphonyElixir.Questions` the `question.*` events) is a machine `note` naming it, since its readers
   (the CI wait, the merge confirmation, an escalation, the idle park) need it on the event stream
@@ -206,9 +207,10 @@ defmodule SymphonyElixir.TicketSignals do
 
   @doc """
   The event a signal `name` with `details` is recorded as: the event `event/2` maps it to, its
-  payload carrying `signal` (the name) and `signal_details` (`details` as JSON-safe data, left out
-  when empty). A `:mirrored` signal is a machine `note` rendered from its name and details, as an
-  unmapped one is.
+  payload carrying `signal` (the name) and `signal_details` (`details` as JSON-safe data, an empty
+  map when there are none, so an event without them is one recorded before signals carried their
+  details: `SymphonyElixir.TicketState.signals_in/1`). A `:mirrored` signal is a machine `note`
+  rendered from its name and details, as an unmapped one is.
   """
   @spec signal_event(String.t(), term()) :: {String.t(), map(), keyword()}
   def signal_event(name, details) do
@@ -218,7 +220,7 @@ defmodule SymphonyElixir.TicketSignals do
         mapping -> mapping
       end
 
-    {type, compact(Map.merge(payload, %{signal: name, signal_details: details_map(details)})), opts}
+    {type, compact(Map.merge(payload, %{signal: name, signal_details: details_map(details) || %{}})), opts}
   end
 
   @doc """

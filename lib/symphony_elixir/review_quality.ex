@@ -73,12 +73,12 @@ defmodule SymphonyElixir.ReviewQuality do
   # The ticket's verdicts and the Director's decisions, oldest first.
   defp events(record) do
     verdicts =
-      for %{kind: kind, outcome: outcome, recorded_at: %DateTime{} = at} <- record.verdicts,
+      for %{kind: kind, outcome: outcome, recorded_at: %DateTime{} = at} <- TicketState.verdicts(record),
           kind in [@review, @qa],
           do: %{kind: if(kind == @review, do: :review, else: :qa), outcome: outcome, at: at}
 
     decisions =
-      for %{name: @decision, details: details, at: %DateTime{} = at} <- record.signals,
+      for %{name: @decision, details: details, at: %DateTime{} = at} <- TicketState.signals(record),
           to = Map.get(details, :to) || Map.get(details, "to"),
           to in ["Merging", "Rework"],
           do: %{kind: :director, outcome: to, at: at}
