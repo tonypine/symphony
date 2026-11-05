@@ -1338,10 +1338,12 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     test "reports an unreadable compare or repository" do
       output = fn output -> fn _args, _opts -> output end end
 
-      assert {:error, :invalid_compare_payload} = PullRequest.compare_to_branch("acme/symphony", "b1", "main", gh_runner: output.({~s({"status":1}), 0}))
-      assert {:error, :invalid_compare_payload} = PullRequest.compare_to_branch("acme/symphony", "b1", "main", gh_runner: output.({"not json", 0}))
-      assert {:error, {:gh_failed, _args, 1, "Not Found"}} = PullRequest.compare_to_branch("acme/symphony", "b1", "main", gh_runner: output.({"Not Found", 1}))
-      assert {:error, :invalid_github_repo} = PullRequest.compare_to_branch("symphony", "b1", "main", gh_runner: output.({"", 0}))
+      compare = fn repo, result -> PullRequest.compare_to_branch(repo, "b1", "main", gh_runner: output.(result)) end
+
+      assert {:error, :invalid_compare_payload} = compare.("acme/symphony", {~s({"status":1}), 0})
+      assert {:error, :invalid_compare_payload} = compare.("acme/symphony", {"not json", 0})
+      assert {:error, {:gh_failed, _args, 1, "Not Found"}} = compare.("acme/symphony", {"Not Found", 1})
+      assert {:error, :invalid_github_repo} = compare.("symphony", {"", 0})
     end
   end
 

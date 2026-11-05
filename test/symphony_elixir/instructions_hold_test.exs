@@ -67,7 +67,7 @@ defmodule SymphonyElixir.InstructionsHoldTest do
       assert InstructionsHold.check("unknown", build: @build) == {:ok, nil}
 
       # The base branch is the configured repo's, `main` for a repo the configuration lacks.
-      compare = fn _repo, _sha, branch -> send(self(), {:branch, branch}) && {:ok, %{status: "identical", files: [], commits: [], total_commits: 0}} end
+      compare = fn _repo, _sha, branch -> send(self(), {:branch, branch}) && identical() end
       github_repo = fn _key -> "acme/symphony" end
       configured = Config.repos() |> elem(1) |> Enum.find(&(&1.name == @repo_key))
 
@@ -77,6 +77,21 @@ defmodule SymphonyElixir.InstructionsHoldTest do
 
       assert InstructionsHold.check("unknown", build: @build, github_repo: github_repo, compare: compare) == {:ok, nil}
       assert_received {:branch, "main"}
+    end
+
+    test "compares against a configured base branch, and with the defaults compares nothing for no repo key" do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        repos: [[key: "branched-repo", workflow: Workflow.workflow_file_path(), team: "Test", base_branch: "develop"]]
+      )
+
+      compare = fn _repo, _sha, branch -> send(self(), {:branch, branch}) && identical() end
+      github_repo = fn _key -> "acme/symphony" end
+
+      assert InstructionsHold.check("branched-repo", build: @build, github_repo: github_repo, compare: compare) == {:ok, nil}
+      assert_received {:branch, "develop"}
+
+      assert InstructionsHold.check(nil) == {:ok, nil}
+      assert InstructionsHold.resolve([], @repo_key) == {:ok, nil}
     end
 
     test "a failed compare is an error" do
@@ -93,17 +108,20 @@ defmodule SymphonyElixir.InstructionsHoldTest do
       assert log =~ "Holding for an app update: issue_id=a"
 
       for id <- ["a", "b"] do
-        assert [%{kind: :build, waits_on: %{commit: @main_sha}, set_by: @setter, text: text}] = InstructionsHold.reasons(@repo_key, id)
+        assert [%{kind: :build, waits_on: %{commit: @main_sha}, set_by: @setter, text: text}] =
+                 InstructionsHold.reasons(@repo_key, id)
+
         assert text == "Holding for the build of d20a8a8: the instructions on main need it"
       end
 
       # Still behind on the next poll, with a newer commit on main: the reason stays as it is.
-      newer = fn _repo, _sha, _branch -> {:ok, %{status: "ahead", files: ["lib/symphony_elixir/workflow.ex"], commits: [@main_sha, @newer_sha], total_commits: 2}} end
+      newer = fn _repo, _sha, _branch -> ahead(["lib/symphony_elixir/workflow.ex"], [@main_sha, @newer_sha], 2) end
       assert {:ok, %{commit: @newer_sha}} = resolve([labelled], newer)
       assert [%{waits_on: %{commit: @main_sha}}] = InstructionsHold.reasons(@repo_key, "a")
 
       # The app updates: the next poll clears every reason.
-      log = capture_log(fn -> assert {:ok, nil} = resolve([labelled, plain], fn _repo, _sha, _branch -> {:ok, %{status: "identical", files: [], commits: [], total_commits: 0}} end) end)
+      current = fn _repo, _sha, _branch -> identical() end
+      log = capture_log(fn -> assert {:ok, nil} = resolve([labelled, plain], current) end)
       assert log =~ "Released from the instructions update hold: issue_id=a"
       assert Pauses.get({:ticket, @repo_key, "a"}) == {:ok, nil}
       assert Pauses.get({:ticket, @repo_key, "b"}) == {:ok, nil}
@@ -113,7 +131,7 @@ defmodule SymphonyElixir.InstructionsHoldTest do
       issue = ticket("a")
       resolve([issue], ahead_on_renderer())
 
-      still_behind = fn _repo, _sha, _branch -> {:ok, %{status: "ahead", files: ["lib/symphony_elixir/prompt_builder.ex"], commits: [@newer_sha], total_commits: 1}} end
+      still_behind = fn _repo, _sha, _branch -> ahead(["lib/symphony_elixir/prompt_builder.ex"], [@newer_sha], 1) end
       resolve([issue], still_behind)
 
       assert [%{waits_on: %{commit: @newer_sha}}] = InstructionsHold.reasons(@repo_key, "a")
@@ -123,7 +141,7 @@ defmodule SymphonyElixir.InstructionsHoldTest do
       issue = ticket("a")
       resolve([issue], ahead_on_renderer())
 
-      cut_short = fn _repo, _sha, _branch -> {:ok, %{status: "ahead", files: ["lib/symphony_elixir/prompt_builder.ex"], commits: [@newer_sha], total_commits: 300}} end
+      cut_short = fn _repo, _sha, _branch -> ahead(["lib/symphony_elixir/prompt_builder.ex"], [@newer_sha], 300) end
       resolve([issue], cut_short)
 
       assert [%{waits_on: %{commit: @main_sha}}] = InstructionsHold.reasons(@repo_key, "a")
@@ -141,7 +159,7 @@ defmodule SymphonyElixir.InstructionsHoldTest do
     end
 
     test "a current build leaves a ticket without the hold untouched" do
-      assert {:ok, nil} = resolve([ticket("a")], fn _repo, _sha, _branch -> {:ok, %{status: "identical", files: [], commits: [], total_commits: 0}} end)
+      assert {:ok, nil} = resolve([ticket("a")], fn _repo, _sha, _branch -> identical() end)
       assert Pauses.get({:ticket, @repo_key, "a"}) == {:ok, nil}
     end
   end
@@ -192,13 +210,22 @@ defmodule SymphonyElixir.InstructionsHoldTest do
       line = "Holding for the build of d20a8a8: the instructions on main need it"
 
       assert state.blocked == [
-               %{issue_id: "held", identifier: "TP-1396", title: "QA report", state: "Todo", kind: :app_update, reason: line, build_line: nil, blockers: []}
+               %{
+                 issue_id: "held",
+                 identifier: "TP-1396",
+                 title: "QA report",
+                 state: "Todo",
+                 kind: :app_update,
+                 reason: line,
+                 build_line: nil,
+                 blockers: []
+               }
              ]
 
       skipped = Orchestrator.dispatch_chosen_issues_for_test([issue], state)
       assert skipped.dispatch_skipped["held"].reason == line
 
-      resolve([issue], fn _repo, _sha, _branch -> {:ok, %{status: "identical", files: [], commits: [], total_commits: 0}} end)
+      resolve([issue], fn _repo, _sha, _branch -> identical() end)
       state = Orchestrator.put_blocked_for_test(orchestrator_state(), [issue])
       assert state.blocked == []
       assert Orchestrator.should_dispatch_issue_for_test(issue, state)
@@ -213,7 +240,7 @@ defmodule SymphonyElixir.InstructionsHoldTest do
 
       capture_log(fn ->
         assert {:instructions_behind, %{commit: @main_sha, error: error}} =
-                 catch_exit(AgentRunner.build_first_turn_prompt(render_issue(), repo_key: @repo_key, instructions_check: check))
+                 catch_exit(first_turn_prompt(repo_key: @repo_key, instructions_check: check))
 
         assert error =~ "Undefined variable"
       end)
@@ -224,7 +251,7 @@ defmodule SymphonyElixir.InstructionsHoldTest do
 
       for result <- [{:ok, nil}, {:error, :github_down}] do
         assert_raise Solid.RenderError, fn ->
-          AgentRunner.build_first_turn_prompt(render_issue(), repo_key: @repo_key, instructions_check: fn _key -> result end)
+          first_turn_prompt(repo_key: @repo_key, instructions_check: fn _key -> result end)
         end
       end
 
@@ -235,7 +262,7 @@ defmodule SymphonyElixir.InstructionsHoldTest do
       end
 
       assert_raise RuntimeError, ~r/workflow_unavailable/, fn ->
-        AgentRunner.build_first_turn_prompt(render_issue(), workflow: {:error, :boom}, instructions_check: fn _key -> flunk("not a render error") end)
+        first_turn_prompt(workflow: {:error, :boom}, instructions_check: fn _key -> flunk("not a render error") end)
       end
     end
   end
@@ -300,13 +327,18 @@ defmodule SymphonyElixir.InstructionsHoldTest do
     %Issue{id: "render", identifier: "TP-1396", title: "Render", description: "", state: "In Progress", url: "https://example.org/TP-1396", labels: []}
   end
 
+  defp first_turn_prompt(opts), do: AgentRunner.build_first_turn_prompt(render_issue(), opts)
+
   defp resolve(issues, compare), do: InstructionsHold.resolve(issues, @repo_key, opts(compare: compare))
 
   defp opts(overrides) do
     Keyword.merge([build: @build, github_repo: fn @repo_key -> "acme/symphony" end, base_branch: fn @repo_key -> nil end], overrides)
   end
 
-  defp ahead(files), do: {:ok, %{status: "ahead", files: files, commits: ["aaaaaaa", @main_sha], total_commits: 2}}
+  defp ahead(files, commits \\ ["aaaaaaa", @main_sha], total \\ 2),
+    do: {:ok, %{status: "ahead", files: files, commits: commits, total_commits: total}}
+
+  defp identical, do: {:ok, %{status: "identical", files: [], commits: [], total_commits: 0}}
 
   defp ahead_on_renderer, do: fn _repo, _sha, _branch -> ahead(["lib/symphony_elixir/prompt_builder.ex"]) end
 

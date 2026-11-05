@@ -1484,35 +1484,6 @@ defmodule SymphonyElixir.AgentRunner do
     maybe_compact_codex_initial_prompt(prompt, issue, prompt_opts)
   end
 
-  # Instructions that fail to render while the running build is behind its base branch on the files
-  # the rendering must agree with were written for the build that has them: the run exits as
-  # `{:instructions_behind, behind}`, which the orchestrator holds for the update instead of retrying
-  # (`SymphonyElixir.InstructionsHold`). On a current build, or when the compare fails, the error
-  # stays the run's failure. `opts[:instructions_check]` replaces `InstructionsHold.check/1`.
-  defp render_prompt(issue, opts) do
-    PromptBuilder.build_prompt(issue, opts)
-  rescue
-    error ->
-      if render_error?(error) do
-        check = Keyword.get(opts, :instructions_check, &InstructionsHold.check/1)
-
-        case check.(Keyword.get(opts, :repo_key)) do
-          {:ok, %{commit: _commit} = behind} ->
-            Logger.warning("Instructions did not render on a build behind main for #{issue_context(issue)}: #{Exception.message(error)}")
-            exit({:instructions_behind, Map.put(behind, :error, error |> Exception.message() |> String.slice(0, 500))})
-
-          _current_or_unknown ->
-            reraise error, __STACKTRACE__
-        end
-      else
-        reraise error, __STACKTRACE__
-      end
-  end
-
-  defp render_error?(%Solid.RenderError{}), do: true
-  defp render_error?(%RuntimeError{message: "template_" <> _rest}), do: true
-  defp render_error?(_error), do: false
-
   defp build_turn_prompt(_issue, opts, turn_number, max_turns) do
     agent_name =
       opts
@@ -1530,6 +1501,36 @@ defmodule SymphonyElixir.AgentRunner do
     - Focus on the remaining ticket work and do not end the turn while the issue stays active unless you are truly blocked.
     """
   end
+
+  # Instructions that fail to render while the running build is behind its base branch on the files
+  # the rendering must agree with were written for the build that has them: the run exits as
+  # `{:instructions_behind, behind}`, which the orchestrator holds for the update instead of retrying
+  # (`SymphonyElixir.InstructionsHold`). On a current build, or when the compare fails, the error
+  # stays the run's failure. `opts[:instructions_check]` replaces `InstructionsHold.check/1`.
+  defp render_prompt(issue, opts) do
+    PromptBuilder.build_prompt(issue, opts)
+  rescue
+    error ->
+      if render_error?(error) do
+        check = Keyword.get(opts, :instructions_check, &InstructionsHold.check/1)
+
+        case check.(Keyword.get(opts, :repo_key)) do
+          {:ok, %{commit: _commit} = behind} ->
+            message = Exception.message(error)
+            Logger.warning("Instructions did not render on a build behind main for #{issue_context(issue)}: #{message}")
+            exit({:instructions_behind, Map.put(behind, :error, String.slice(message, 0, 500))})
+
+          _current_or_unknown ->
+            reraise error, __STACKTRACE__
+        end
+      else
+        reraise error, __STACKTRACE__
+      end
+  end
+
+  defp render_error?(%Solid.RenderError{}), do: true
+  defp render_error?(%RuntimeError{message: "template_" <> _rest}), do: true
+  defp render_error?(_error), do: false
 
   defp agent_kind_from_settings(%{agent: %{kind: kind}}), do: kind
   defp agent_kind_from_settings(_settings), do: nil

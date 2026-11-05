@@ -429,7 +429,12 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   the commits the branch has that the commit lacks (oldest first, at most 250), and how many there
   are in all.
   """
-  @type branch_compare :: %{status: String.t(), files: [String.t()], commits: [String.t()], total_commits: non_neg_integer()}
+  @type branch_compare :: %{
+          status: String.t(),
+          files: [String.t()],
+          commits: [String.t()],
+          total_commits: non_neg_integer()
+        }
 
   @doc """
   GitHub's compare of commit `sha` to `branch` in `repo` (`owner/repo`, or `host/owner/repo` off

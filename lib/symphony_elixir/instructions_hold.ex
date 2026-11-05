@@ -110,20 +110,25 @@ defmodule SymphonyElixir.InstructionsHold do
   """
   @spec resolve([Issue.t()], String.t() | nil, keyword()) :: {:ok, behind() | nil} | {:error, term()}
   def resolve(issues, repo_key, opts \\ []) do
-    tickets = for %Issue{id: issue_id} = issue when is_binary(issue_id) <- issues, do: {issue.repo_key || repo_key, issue}
+    tickets =
+      for %Issue{id: issue_id} = issue when is_binary(issue_id) <- issues,
+          do: {issue.repo_key || repo_key, issue}
 
     if tickets == [] do
       {:ok, nil}
     else
-      result = check(repo_key, opts)
-
-      case result do
-        {:ok, behind} -> Enum.each(tickets, fn {ticket_repo_key, issue} -> sync(ticket_repo_key, issue, behind) end)
-        {:error, reason} -> Logger.debug("Could not compare the running build with the base branch of #{repo_key}: #{inspect(reason)}")
-      end
-
-      result
+      repo_key |> check(opts) |> sync_tickets(tickets, repo_key)
     end
+  end
+
+  defp sync_tickets({:ok, behind} = result, tickets, _repo_key) do
+    Enum.each(tickets, fn {ticket_repo_key, issue} -> sync(ticket_repo_key, issue, behind) end)
+    result
+  end
+
+  defp sync_tickets({:error, reason} = result, _tickets, repo_key) do
+    Logger.debug("Could not compare the running build with the base branch of #{repo_key}: #{inspect(reason)}")
+    result
   end
 
   defp sync(repo_key, %Issue{id: issue_id} = issue, nil) do
@@ -230,9 +235,6 @@ defmodule SymphonyElixir.InstructionsHold do
   defp configured_branch(_repo), do: nil
 
   defp configured_repo(repo_key) do
-    case Config.repos() do
-      {:ok, repos} -> Enum.find(repos, &(&1.name == repo_key))
-      {:error, _reason} -> nil
-    end
+    with {:ok, repos} <- Config.repos(), do: Enum.find(repos, &(&1.name == repo_key))
   end
 end
