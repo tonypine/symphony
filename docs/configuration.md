@@ -3328,8 +3328,9 @@ How each step ends:
   question and ends the run; Stop works as for any run.
 
 The Director edits the lists in Settings › Phases: pick a run kind, then reorder its steps (drag, or
-the arrow buttons), add or remove one, set its title, id, kind, command or prompt, timeout, the step
-it returns to on failure and its no-result limit, or reset the kind to its default list (which
+the arrow buttons), add or remove one, set its title, id, kind, command or prompt, an orchestrated step's answer
+fields (each a name and a type, written as its `answer`), timeout, the step it returns to on failure
+and its no-result limit, or reset the kind to its default list (which
 removes `phases.<kind>` from the file). A step the rules below refuse says why on its row and is not
 saved. The editor has no control for an orchestrated step's `answer` yet: set it in the file by hand,
 and don't save that kind's list from Settings, which would drop it. Under the list, a preview shows the list as `symphony workflow preview` prints it. Save checks

@@ -118,6 +118,43 @@ public struct StepCommand: Identifiable, Equatable {
     }
 }
 
+/// The type of one field of an orchestrated step's answer, as `symphony.yml` names it.
+public enum AnswerType: String, CaseIterable, Identifiable {
+    case string
+    case number
+    case boolean
+    case list
+    case object
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .string: return "Text"
+        case .number: return "Number"
+        case .boolean: return "True or false"
+        case .list: return "List"
+        case .object: return "Object"
+        }
+    }
+}
+
+/// One field an orchestrated step's JSON answer must hold, with its type. `id` only keeps a SwiftUI row stable.
+public struct AnswerField: Identifiable, Equatable {
+    public let id = UUID()
+    public var name: String
+    public var type: AnswerType
+
+    public init(name: String, type: AnswerType = .string) {
+        self.name = name
+        self.type = type
+    }
+
+    public static func == (lhs: AnswerField, rhs: AnswerField) -> Bool {
+        lhs.name == rhs.name && lhs.type == rhs.type
+    }
+}
+
 /// One step of a run's list (`Config.Schema.Phases.Step`). `id` only keeps a SwiftUI row stable; `stepID` is the
 /// step's `id` in symphony.yml, the one `onFail` names. A nil field is missing from the file.
 public struct PhaseStep: Identifiable, Equatable {
@@ -127,6 +164,8 @@ public struct PhaseStep: Identifiable, Equatable {
     public var mode: StepMode
     public var commands: [StepCommand]
     public var prompt: String
+    /// An orchestrated step's answer fields, in the file's order; written only on an orchestrated step.
+    public var answer: [AnswerField]
     public var timeoutMs: Int?
     public var onFail: String?
     public var noResultLimit: Int?
@@ -141,6 +180,7 @@ public struct PhaseStep: Identifiable, Equatable {
         mode: StepMode,
         commands: [StepCommand] = [],
         prompt: String = "",
+        answer: [AnswerField] = [],
         timeoutMs: Int? = nil,
         onFail: String? = nil,
         noResultLimit: Int? = nil,
@@ -151,6 +191,7 @@ public struct PhaseStep: Identifiable, Equatable {
         self.mode = mode
         self.commands = commands
         self.prompt = prompt
+        self.answer = answer
         self.timeoutMs = timeoutMs
         self.onFail = onFail
         self.noResultLimit = noResultLimit
@@ -159,7 +200,7 @@ public struct PhaseStep: Identifiable, Equatable {
 
     public static func == (lhs: PhaseStep, rhs: PhaseStep) -> Bool {
         lhs.stepID == rhs.stepID && lhs.title == rhs.title && lhs.mode == rhs.mode && lhs.commands == rhs.commands
-            && lhs.prompt == rhs.prompt && lhs.timeoutMs == rhs.timeoutMs && lhs.onFail == rhs.onFail
+            && lhs.prompt == rhs.prompt && lhs.answer == rhs.answer && lhs.timeoutMs == rhs.timeoutMs && lhs.onFail == rhs.onFail
             && lhs.noResultLimit == rhs.noResultLimit && lhs.when == rhs.when
     }
 
@@ -178,6 +219,22 @@ public struct PhaseStep: Identifiable, Equatable {
     public var returnsTo: String? {
         guard let onFail = onFail?.trimmingWhitespace(), !onFail.isEmpty else { return nil }
         return onFail
+    }
+
+    /// Adds an answer field of type text, named `field` (or `field_2`, ...) so no other field has its name, and
+    /// returns its row id.
+    @discardableResult
+    public mutating func addAnswerField() -> UUID {
+        let names = Set(answer.map(\.name))
+        let name = (1...).lazy.map { $0 == 1 ? "field" : "field_\($0)" }.first { !names.contains($0) } ?? "field"
+        let field = AnswerField(name: name)
+        answer.append(field)
+        return field.id
+    }
+
+    /// Removes the answer field with row `id`.
+    public mutating func removeAnswerField(_ id: UUID) {
+        answer.removeAll { $0.id == id }
     }
 
     /// A new step for Add step: a machine step with an id no step in `steps` has.
@@ -327,6 +384,7 @@ public struct PhaseValidation: Equatable {
             }
         case .orchestrated:
             if step.prompt.trimmingWhitespace().isEmpty { return "An orchestrated step needs a prompt." }
+            if let reason = step.answer.lazy.compactMap({ answerReason(for: $0, in: step.answer) }).first { return reason }
         case .delegated:
             break
         }
@@ -335,6 +393,17 @@ public struct PhaseValidation: Equatable {
         if let target = step.returnsTo, !ids.contains(target) {
             return "Returns to `\(target)` on failure, but no step in this list has that id."
         }
+        return nil
+    }
+
+    /// Why Symphony would refuse `field` among an orchestrated step's answer `fields`, nil when it takes it.
+    public static func answerReason(for field: AnswerField, in fields: [AnswerField]) -> String? {
+        let name = field.name
+        if name.isEmpty { return "Give each answer field a name." }
+        if !isValidID(name) {
+            return "The answer field `\(name)` must be lowercase letters, digits and underscores, starting with a letter."
+        }
+        if fields.filter({ $0.name == name }).count > 1 { return "Two answer fields are named `\(name)`." }
         return nil
     }
 
@@ -394,10 +463,17 @@ public enum PhasePreview {
                 "   - " + (command.when.previewText.map { $0 + ": " } ?? "") + "`\(command.run)`\n"
             }.joined()
         case .orchestrated:
-            return "   - prompt:\n" + step.prompt.components(separatedBy: "\n").map { "     > \($0)\n" }.joined()
+            return "   - prompt:\n" + step.prompt.components(separatedBy: "\n").map { "     > \($0)\n" }.joined() + answer(step)
         case .delegated:
             return ""
         }
+    }
+
+    /// The answer's fields by name, the order Symphony keeps them in; nothing for a step with none.
+    private static func answer(_ step: PhaseStep) -> String {
+        guard !step.answer.isEmpty else { return "" }
+        let fields = step.answer.sorted { $0.name < $1.name }.map { "`\($0.name)` \($0.type.rawValue)" }
+        return "   - answer: " + fields.joined(separator: ", ") + "\n"
     }
 
     private static func timeout(_ step: PhaseStep) -> String? {
@@ -545,6 +621,9 @@ enum StepsWriter {
             }
         case .orchestrated:
             fields.append(contentsOf: prompt(item.prompt, step: step))
+            if !item.answer.isEmpty {
+                fields.append("answer: {" + item.answer.map { scalar($0.name) + ": " + $0.type.rawValue }.joined(separator: ", ") + "}")
+            }
         case .delegated:
             break
         }
@@ -615,7 +694,7 @@ struct StepsReader {
         let content: String
     }
 
-    static let stepKeys: Set<String> = ["id", "title", "mode", "command", "prompt", "timeout_ms", "on_fail", "no_result_limit", "when"]
+    static let stepKeys: Set<String> = ["id", "title", "mode", "command", "prompt", "answer", "timeout_ms", "on_fail", "no_result_limit", "when"]
 
     func steps(under key: Document.Key) throws -> [PhaseStep] {
         let value = ValueLine(key.rest).value
@@ -664,6 +743,7 @@ struct StepsReader {
             mode: mode,
             commands: try fields["command"].map { try commands($0.0, children: $0.1) } ?? [],
             prompt: try text("prompt") ?? "",
+            answer: try fields["answer"].map { try answer($0.0, children: $0.1) } ?? [],
             timeoutMs: try number("timeout_ms"),
             onFail: try text("on_fail"),
             noResultLimit: try number("no_result_limit"),
@@ -770,6 +850,43 @@ struct StepsReader {
             }
             guard let run else { throw unsupported(start, "a command has no `run` line") }
             return StepCommand(run: run, when: try condition(when, line: start))
+        }
+    }
+
+    /// An `answer:` value: a `{name: type, ...}` mapping on its line, or one `name: type` line per field indented
+    /// under it; nothing for a null or `{}`.
+    private func answer(_ line: Line, children: [Int]) throws -> [AnswerField] {
+        let (_, rest) = try split(line)
+        let value = rest.trimmingWhitespace()
+        let structural = children.filter { document.indent(at: $0) != nil }
+        let entries: [(key: String, value: String, line: Int)]
+        if value.hasPrefix("{") {
+            guard structural.isEmpty else { throw unsupported(line.index, "an `answer: {...}` must stay on one line") }
+            entries = try FlowMapping.parse(value, line: line.index).map { ($0.key, $0.value, line.index) }
+        } else if structural.isEmpty {
+            guard try Scalar.parse(value, line: line.index) == nil else {
+                throw unsupported(line.index, "`answer:` needs a field name and type on each line under it")
+            }
+            return []
+        } else {
+            guard value.isEmpty || value.hasPrefix("#") else {
+                throw unsupported(line.index, "`answer:` needs a field name and type on each line under it")
+            }
+            let indent = document.indent(at: structural[0])
+            entries = try structural.map { index in
+                guard document.indent(at: index) == indent else { throw unsupported(index, "line up the answer's fields") }
+                let content = document.lines[index].trimmingWhitespace()
+                guard let colon = content.range(of: ":") else { throw unsupported(index, "`\(content)` is not a `name: type` line") }
+                return (String(content[..<colon.lowerBound]), String(content[colon.upperBound...]), index)
+            }
+        }
+        return try entries.map { entry in
+            let name = try Scalar.parse(entry.key, line: entry.line) ?? ""
+            let typeText = try Scalar.parse(entry.value, line: entry.line) ?? ""
+            guard let type = AnswerType(rawValue: typeText) else {
+                throw unsupported(entry.line, "the answer field `\(name)` has the type `\(typeText)`, not string, number, boolean, list or object")
+            }
+            return AnswerField(name: name, type: type)
         }
     }
 

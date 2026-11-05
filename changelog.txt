@@ -11,6 +11,9 @@ list the commit subjects since the previous release (see `docs/releasing.md`).
   answer of a given shape (`answer` in `phases`), checked before it passes. A step that needs a
   person's answer pauses with no session and no slot, shows as a question in the Inbox, and the
   answer resumes the run on that step at once, under the same run.
+- Settings › Phases edits an orchestrated step's answer fields, each with a name and a type
+  (text, number, true or false, list, object): a bad name or a duplicate says why on its row
+  and isn't saved, saving writes the step's `answer`, and the preview lists the fields.
 - An implementation run walks its step list: Symphony runs the build, checks and tests itself
   between agent turns, with the agent's session closed and its slot free for another ticket; a
   failed step sends the run back to writing the code with the output, a step that hangs twice
