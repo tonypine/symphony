@@ -81,7 +81,11 @@ defmodule SymphonyElixir.DirectorMoves do
     with no such Question whose pause waits on the Question `question_id` that Unblock answers
     (`SymphonyElixir.Questions.held/1`: a dispatch loop's, a quiet handoff's, a park's, a block
     report's) is answered with the first pick, as `answer_held_question/4` says; any other is
-    refused.
+    refused. A pick's `:option` is the option it picked when its `:answer` is the person's own
+    words given with it: the option decides what the answer does, the words are its text. A
+    Decide naming a Question already answered is a no-op that says so: `already_decided: true`
+    with the recorded `answer` and `option`, never a second outcome (a replayed request, a second
+    tap).
 
   - `:move`: the free move. A ticket in a configured repository (one that routes to a repo key)
     goes to `:to`, whoever set its phase. A ticket Symphony has no record of yet (a Backlog ticket
@@ -197,6 +201,7 @@ defmodule SymphonyElixir.DirectorMoves do
   @type pick :: %{
           required(:question) => String.t(),
           required(:answer) => String.t(),
+          optional(:option) => String.t() | nil,
           optional(:question_id) => String.t() | nil,
           optional(:request_comment_id) => String.t() | nil
         }
@@ -376,30 +381,69 @@ defmodule SymphonyElixir.DirectorMoves do
   "Run it again" and "Unblock and run again" are `:unblock`, "Start it over from main" is
   `:restart`, its comment naming the question, and "Keep it paused" or an answer in the Director's
   own words leaves the ticket where it is, held: the answered question no longer pauses it, so a
-  reason the Director releases with Unblock does ("You kept it paused: …"; a loop's goes with a
-  Restart too, as its question would have). Takes the options of `move/4`.
+  reason the Director releases with Unblock does, written with the answer so the ticket is never
+  free to dispatch in between ("You kept it paused: …" for the pick, "You answered in your own
+  words: …" for words; a loop's goes with a Restart too, as its question would have).
+  `opts[:option]` names the option picked when `answer` is the Director's words given with it.
+  A question already answered is not answered again: the result says `already_decided: true`
+  with the recorded pick. Takes the options of `move/4`.
   """
   @spec answer_held_question(String.t(), String.t(), String.t(), keyword()) :: result()
   def answer_held_question(identifier, question_id, answer, opts) when is_binary(identifier) and is_binary(question_id) do
-    with {:ok, issue} <- fetch_issue(identifier), do: answer_and_act(issue, question_id, answer, opts)
+    with {:ok, issue} <- fetch_issue(identifier), do: answer_and_act(issue, question_id, answer, Keyword.get(opts, :option), opts)
   end
 
-  defp answer_and_act(issue, question_id, answer, opts) when is_binary(answer) do
-    with {:ok, question} <- answer_question(issue, question_id, answer) do
-      case held_answer_move(question) do
-        :unblock -> unblock(issue, opts, true)
-        :restart -> do_move(:restart, issue, %{reason: "You answered \"#{DispatchLoop.option_label(:restart)}\" to: #{question.title}"}, opts)
-        :keep -> keep_paused(issue, question, opts)
-      end
+  defp answer_and_act(issue, question_id, answer, option, opts) when is_binary(answer) do
+    case answer_question(issue, question_id, answer, option) do
+      {:ok, question} -> act_on_held_answer(issue, question, opts)
+      {:already_decided, question} -> already_decided(issue, question)
+      {:error, _reason} = error -> error
     end
   end
 
-  defp keep_paused(issue, question, opts) do
-    condition = if loop_question?(question), do: DispatchLoop.hold_type(), else: "block_report"
-    reason = %{kind: :environment, waits_on: %{condition: condition}, text: String.slice("You kept it paused: #{question.title}", 0, 300), releasable: true}
+  defp act_on_held_answer(issue, question, opts) do
+    case held_answer_move(question) do
+      :unblock -> unblock(issue, opts, true)
+      :restart -> do_move(:restart, issue, %{reason: "You answered \"#{DispatchLoop.option_label(:restart)}\" to: #{question.title}"}, opts)
+      :keep -> finish(:decide, issue, nil, nil, opts)
+    end
+  end
 
-    issue |> ticket() |> Pauses.set(reason, set_by: Pauses.director()) |> log_failed("Kept #{issue.identifier} paused but couldn't write its pause")
-    finish(:decide, issue, nil, nil, opts)
+  # The pause an answer that keeps the ticket held leaves, written with the answer itself
+  # (`SymphonyElixir.Questions.answer/4`'s `then_pause`): nil for one that runs it or restarts it.
+  defp kept_pause(question) do
+    if held_answer_move(question) == :keep, do: kept_reason(question)
+  end
+
+  defp kept_reason(question) do
+    condition = if loop_question?(question), do: DispatchLoop.hold_type(), else: "block_report"
+    %{kind: :environment, waits_on: %{condition: condition}, text: String.slice(kept_text(question), 0, 300), releasable: true}
+  end
+
+  # What the Director did, in their words: the option they picked, or that they answered in words.
+  defp kept_text(question) do
+    case picked_label(question) do
+      nil -> "You answered in your own words: #{question.title}"
+      label -> if label == DispatchLoop.option_label(:keep), do: "You kept it paused: #{question.title}", else: "You answered \"#{label}\": #{question.title}"
+    end
+  end
+
+  # A Decide on a Question already answered changes nothing and says what was decided.
+  defp already_decided(issue, question) do
+    answer = Map.get(question, :answer) || %{}
+
+    {:ok,
+     %{
+       move: "decide",
+       issue_id: issue.id,
+       issue_identifier: issue.identifier,
+       question_id: question.id,
+       already_decided: true,
+       answer: Map.get(answer, :text),
+       option: picked_label(question),
+       moved: false,
+       commented: false
+     }}
   end
 
   # A dispatch loop's or a quiet handoff's question, which Restart answers: one with its option.
@@ -417,10 +461,13 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp picked_label(_question), do: nil
 
-  defp answer_question(issue, question_id, answer) do
-    case Questions.answer({:ticket, issue.repo_key, issue.id}, question_id, answer, by: Pauses.director()) do
+  defp answer_question(issue, question_id, answer, option) do
+    ticket = ticket(issue)
+
+    case Questions.answer(ticket, question_id, answer, by: Pauses.director(), option: option, then_pause: &kept_pause/1) do
       {:ok, question} -> {:ok, question}
       {:error, :question_not_found} -> conflict("#{issue.identifier} has no question #{question_id}")
+      {:error, {:question_not_open, :answered}} -> {:already_decided, Questions.find(ticket, question_id)}
       {:error, {:question_not_open, state}} -> conflict("#{issue.identifier}'s question #{question_id} is #{state}, not open")
       {:error, reason} -> {:error, {:store, "couldn't answer the question on #{issue.identifier}: #{inspect(reason)}"}}
     end
@@ -776,6 +823,7 @@ defmodule SymphonyElixir.DirectorMoves do
     %{
       question: String.trim(pick.question),
       answer: String.trim(pick.answer),
+      option: blank_to_nil(Map.get(pick, :option)),
       question_id: question_id || row_question_id(issue, comment_id),
       request_comment_id: comment_id || (question_id && row_comment_id(issue, question_id))
     }
@@ -790,7 +838,7 @@ defmodule SymphonyElixir.DirectorMoves do
         {:cont, {:ok, done ++ [pick]}}
 
       pick, {:ok, done} ->
-        case answer_decision(issue, pick.question_id, pick.answer, false) do
+        case answer_decision(issue, pick.question_id, pick.answer, false, pick.option) do
           {:ok, nil} -> {:cont, {:ok, done ++ [%{pick | question_id: nil}]}}
           {:ok, _question} -> {:cont, {:ok, done ++ [pick]}}
           {:error, {:conflict, _message}} -> {:cont, {:ok, done ++ [pick]}}
@@ -1206,6 +1254,7 @@ defmodule SymphonyElixir.DirectorMoves do
   defp decide(%Issue{} = issue, input, opts) do
     case deciding(issue, input) do
       {:held, question} -> decide_held_question(issue, question, input, opts)
+      {:already_decided, question} -> already_decided(issue, question)
       %{} = question -> answer(issue, input, question, decide_target(input[:move], picked_move(question, input.picks)), opts)
       {:error, _reason} = error -> error
     end
@@ -1228,6 +1277,7 @@ defmodule SymphonyElixir.DirectorMoves do
     case Questions.find(ticket, id) do
       nil -> conflict("#{issue.identifier} has no question #{id}")
       %{state: :open} = question -> if unblock_question?(question), do: {:held, question}, else: question
+      %{state: :answered} = question -> {:already_decided, question}
       %{state: state} -> conflict("#{issue.identifier}'s question #{id} is #{state}, not open")
     end
   end
@@ -1240,8 +1290,8 @@ defmodule SymphonyElixir.DirectorMoves do
   # The Inbox answers a question Unblock answers (a dispatch loop's, a quiet handoff's, a park's, a
   # block report's) with Decide, as it answers any question: its first pick is the answer, and the
   # option it picked does what `answer_held_question/4` says.
-  defp decide_held_question(issue, question, %{picks: [%{answer: answer} | _picks]}, opts),
-    do: answer_and_act(issue, question.id, String.trim(answer), opts)
+  defp decide_held_question(issue, question, %{picks: [%{answer: answer} = pick | _picks]}, opts),
+    do: answer_and_act(issue, question.id, String.trim(answer), blank_to_nil(Map.get(pick, :option)), opts)
 
   # The move a decision makes: the Director's explicit move, else the one the Question or the picked
   # option carries (a merge confirmation's `Merging`, a Code Review escalation's QA state, QA's
@@ -1311,11 +1361,14 @@ defmodule SymphonyElixir.DirectorMoves do
   # waits on. A Question the record doesn't hold is refused, never answered as nothing.
   defp answer_deciding(issue, input, deciding, picks) do
     id = blank_to_nil(input[:question_id]) || row_question_id(issue, input[:request_comment_id]) || deciding.id
-    answer_decision(issue, id, Enum.map_join(picks, " / ", & &1.answer), true)
+    answer_decision(issue, id, Enum.map_join(picks, " / ", & &1.answer), true, picked_option(input.picks))
   end
 
-  defp answer_decision(issue, id, text, given?) do
-    case Questions.answer({:ticket, issue.repo_key, issue.id}, id, text, by: Pauses.director()) do
+  # The option one pick names beside its own words; nil for several picks or none named.
+  defp picked_option(picks), do: if(match?([_pick], picks), do: blank_to_nil(Map.get(hd(picks), :option)))
+
+  defp answer_decision(issue, id, text, given?, option) do
+    case Questions.answer({:ticket, issue.repo_key, issue.id}, id, text, by: Pauses.director(), option: option) do
       {:ok, question} -> {:ok, question}
       {:error, :question_not_found} when given? -> conflict("#{issue.identifier} has no question #{id}")
       {:error, :question_not_found} -> {:ok, nil}
@@ -1403,7 +1456,7 @@ defmodule SymphonyElixir.DirectorMoves do
   end
 
   defp picked_move(question, picks) do
-    answers = Enum.map(picks, & &1.answer)
+    answers = Enum.map(picks, &(blank_to_nil(Map.get(&1, :option)) || &1.answer))
 
     case MergeConfirmation.confirm_target(question) && MergeConfirmation.picked(question, answers) do
       {:ok, target} when is_binary(target) -> %{to: target}

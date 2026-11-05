@@ -1715,7 +1715,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:ok, %{moved: false}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks, question_id: "backfill-1"}, opts)
       assert %{state: :answered, answer: %{text: "Yes"}} = Questions.find(ticket, "backfill-1")
 
-      assert {:error, {:conflict, "MOT-40's question backfill-1 is answered, not open"}} =
+      assert {:ok, %{already_decided: true, answer: "Yes", option: nil, moved: false}} =
                DirectorMoves.move(:decide, "MOT-40", %{picks: picks, question_id: "backfill-1"}, opts)
     end
 
@@ -2051,6 +2051,37 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert %{state: :answered, answer: %{option: 1, text: "Run it again", by: @director}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
     end
 
+    test "\"Run it again\" with the Director's words is Unblock, its words kept, and a replayed Decide is already decided (TP-1417)",
+         %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      ticket = {:ticket, "repo-director", "pr"}
+      question = ask_and_hold("repo-director", loop())
+      words = "Go on, it was the network."
+      input = %{question_id: question.id, picks: [%{question: question.question, answer: words, option: "Run it again"}]}
+
+      assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:decide, "MOT-40", input, opts)
+      assert %{state: :answered, answer: %{option: 1, text: ^words}} = Questions.find(ticket, question.id)
+      refute Pauses.paused?(ticket)
+
+      # A second Decide on the answered question, whatever it picks, is a no-op that says so.
+      for again <- [input, %{input | picks: [%{question: question.question, answer: "Keep it paused"}]}] do
+        assert {:ok, %{move: "decide", already_decided: true, option: "Run it again", answer: ^words}} = DirectorMoves.move(:decide, "MOT-40", again, opts)
+        refute Pauses.paused?(ticket)
+      end
+
+      assert {:ok, %{already_decided: true}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Keep it paused", opts)
+      refute Pauses.paused?(ticket)
+    end
+
+    test "a held answer naming another option keeps the ticket held, saying which", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      request = %{DispatchLoop.question_attrs(loop(), "MOT-40") | options: DispatchLoop.question_attrs(loop(), "MOT-40").options ++ [%{label: "Ask me later", effect: "Later.", recommended: false}]}
+      {:ok, question} = Questions.ask({:ticket, "repo-director", "pr"}, request)
+
+      assert {:ok, %{move: "decide"}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Ask me later", opts)
+      assert [~s(You answered "Ask me later": ) <> _title] = Pauses.why({:ticket, "repo-director", "pr"})
+    end
+
     test "answering \"Start it over from main\" is Restart, its comment naming the question", %{opts: opts} do
       github_activity(state: "OPEN")
       put_issues([restart_issue()])
@@ -2069,13 +2100,15 @@ defmodule SymphonyElixir.DirectorMovesTest do
     test "answering \"Keep it paused\" or in the Director's own words leaves the ticket held", %{opts: opts} do
       put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
 
-      for answer <- ["Keep it paused", "Let me look first"] do
+      for {answer, said} <- [{"Keep it paused", "You kept it paused: "}, {"Let me look first", "You answered in your own words: "}] do
         question = ask_and_hold("repo-director", {:quiet_handoff, String.length(answer)})
 
         assert {:ok, %{move: "decide", moved: false, commented: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, answer, opts)
 
         assert %{state: :answered, answer: %{text: ^answer}} = Questions.find({:ticket, "repo-director", "pr"}, question.id)
-        assert ["You kept it paused: " <> _title] = Pauses.why({:ticket, "repo-director", "pr"})
+        assert [why] = Pauses.why({:ticket, "repo-director", "pr"})
+        assert String.starts_with?(why, said)
+        assert {:ok, %{set_by: @director}} = Pauses.get({:ticket, "repo-director", "pr"})
         refute_received {:memory_tracker_comment, "pr", _body}
       end
 
@@ -2105,8 +2138,10 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert message =~ "couldn't answer the question on MOT-40: :blank_answer"
 
       assert {:ok, _result} = DirectorMoves.answer_held_question("MOT-40", question.id, "Keep it paused", opts)
-      assert {:error, {:conflict, message}} = DirectorMoves.answer_held_question("MOT-40", question.id, "1", opts)
-      assert message == "MOT-40's question #{question.id} is answered, not open"
+
+      assert {:ok, %{already_decided: true, option: "Keep it paused", answer: "Keep it paused"}} =
+               DirectorMoves.answer_held_question("MOT-40", question.id, "1", opts)
+
       assert {:error, :issue_not_found} = DirectorMoves.answer_held_question("MOT-404", question.id, "1", opts)
     end
   end
