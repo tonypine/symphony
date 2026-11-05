@@ -3,7 +3,7 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
   alias SymphonyElixir.ClaudeCode.AppServer
   alias SymphonyElixir.Codex.MessageHumanizer
-  alias SymphonyElixir.{Pauses, RunStore}
+  alias SymphonyElixir.{Pauses, Questions, RunStore}
   alias SymphonyElixir.StatusDashboard.Renderer
   alias SymphonyElixir.Tracker.Memory, as: MemoryTracker
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -2130,9 +2130,27 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
 
     assert warning =~ "Issue token budget exhausted"
     assert warning =~ "issue_identifier=MT-BUDGET"
+    # The run's totals, not the last update's.
+    assert warning =~ "run_input_tokens=7"
+    assert warning =~ "run_output_tokens=5"
+    assert warning =~ "total_tokens=12 limit=10"
 
     final_state = get_orchestrator_state(pid)
-    assert MapSet.member?(final_state.budget_exhausted, issue_id)
+    # The question holds the ticket now (TP-1418): the set keeps only tickets not asked yet.
+    refute MapSet.member?(final_state.budget_exhausted, issue_id)
+    ticket = {:ticket, Config.repo_key!(), issue_id}
+    assert Pauses.why(ticket) == ["Its token budget is spent (10)"]
+
+    assert %{title: "MT-BUDGET spent its token budget", question: question_text, why: why, options: options} = Questions.held(ticket)
+    assert question_text =~ "give it another budget"
+    assert why =~ "The last run spent 12 tokens, past the limit of 10 tokens"
+    assert why =~ "It pushed nothing to a pull request."
+    assert Enum.map(options, & &1.label) == ["Give it another budget", "Start it over from main", "Keep it paused"]
+
+    assert [%{payload: %{exit: "token budget spent (12 tokens of a 10 limit)", budget_exhausted: budget}}] =
+             RunStore.list_ticket_events(issue_id, types: ["run.ended"])
+
+    assert %{limit: 10, tokens: %{total_tokens: 12, output_tokens: 5}} = budget
     refute Map.has_key?(final_state.retry_attempts, issue_id)
     refute MapSet.member?(final_state.claimed, issue_id)
     refute Orchestrator.should_dispatch_issue_for_test(issue, final_state)
@@ -3549,6 +3567,45 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     refute Orchestrator.should_dispatch_issue_for_test(issue, state)
   end
 
+  test "start-up holds no ticket whose spent run was given another budget or answered (TP-1418)" do
+    write_workflow_file!(Workflow.workflow_file_path(), max_tokens_per_issue: 10)
+    spent_at = DateTime.add(DateTime.utc_now(), -3_600, :second)
+
+    # Given another budget: a newer run started after the spent one.
+    assert :ok = put_budget_exhausted_run(%{run_id: "run-spent-rerun", issue_id: "issue-spent-rerun", issue_identifier: "MT-RERUN", total_tokens: 12, started_at: spent_at})
+
+    assert :ok =
+             RunStore.put_run(%{
+               repo_key: Config.repo_key!(),
+               run_id: "run-spent-rerun-2",
+               issue_id: "issue-spent-rerun",
+               issue_identifier: "MT-RERUN",
+               status: "success",
+               started_at: DateTime.add(spent_at, 600, :second),
+               tokens: %{total_tokens: 3}
+             })
+
+    # Answered, its next run not started yet.
+    assert :ok = put_budget_exhausted_run(%{run_id: "run-spent-answered", issue_id: "issue-spent-answered", issue_identifier: "MT-ANSWERED", total_tokens: 12, started_at: spent_at})
+    ticket = {:ticket, Config.repo_key!(), "issue-spent-answered"}
+    facts = %{name: "MT-ANSWERED", total_tokens: 12, limit: 10, pushed: true, unpushed_commits: nil, changed_files: nil}
+    assert {:ok, question} = SymphonyElixir.TokenBudget.ask(ticket, facts)
+    assert {:ok, _answered} = Questions.answer(ticket, question.id, "Give it another budget")
+
+    # Still unsettled: spent, newest, and its question unanswered.
+    assert :ok = put_budget_exhausted_run(%{run_id: "run-spent-open", issue_id: "issue-spent-open", issue_identifier: "MT-OPEN", total_tokens: 12, started_at: spent_at})
+
+    on_exit(fn -> RunStore.clear() end)
+
+    {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, :BudgetSettledOrchestrator))
+    on_exit(fn -> if Process.alive?(pid), do: stop_process(pid) end)
+
+    state = get_orchestrator_state(pid)
+    refute MapSet.member?(state.budget_exhausted, "issue-spent-rerun")
+    refute MapSet.member?(state.budget_exhausted, "issue-spent-answered")
+    assert MapSet.member?(state.budget_exhausted, "issue-spent-open")
+  end
+
   test "active state set includes the phase states, but never Plan Review" do
     write_workflow_file!(Workflow.workflow_file_path(),
       tracker_active_states: ["Todo", "In Progress"],
@@ -3663,11 +3720,17 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     runs = RunStore.list_all_runs(:all)
     expected_daily_used = runs |> Enum.filter(&(DateTime.to_date(&1.started_at) == Date.utc_today())) |> Enum.map(& &1.tokens.total_tokens) |> Enum.sum()
 
+    # Only an issue whose newest run is the spent one stays held (TP-1418): a newer run settled it.
+    newest = runs |> Enum.group_by(& &1.issue_id) |> Map.new(fn {issue_id, issue_runs} -> {issue_id, Enum.max_by(issue_runs, & &1.started_at, DateTime).run_id} end)
+
     expected_exhausted =
-      for %{status: "budget_exhausted", issue_id: issue_id, tokens: %{total_tokens: total}} <- runs, total >= 10, into: MapSet.new(), do: issue_id
+      for %{status: "budget_exhausted", issue_id: issue_id, run_id: run_id, tokens: %{total_tokens: total}} <- runs,
+          total >= 10,
+          newest[issue_id] == run_id,
+          into: MapSet.new(),
+          do: issue_id
 
     assert expected_daily_used > 0
-    assert MapSet.size(expected_exhausted) > 0
 
     # Written behind RunStore's back, so only a scan of the table can find it.
     raw_run = %{run_id: "run-raw", issue_id: "issue-raw", status: "budget_exhausted", started_at: midnight, tokens: %{total_tokens: 1_000}}

@@ -336,7 +336,8 @@ Fields:
 - `codex_rate_limits` (latest rate-limit snapshot from agent events)
 - `budget_day_started_on` (UTC date used for daily token budget accounting)
 - `budget_daily_used` (tokens counted toward the current UTC day budget)
-- `budget_exhausted` (set of issue IDs stopped by per-issue budget enforcement)
+- `budget_exhausted` (set of issue IDs stopped by per-issue budget enforcement whose question is
+  not asked yet; once asked, the ticket's pause holds it)
 
 #### 4.1.9 Durable Run Store
 
@@ -5199,10 +5200,22 @@ The Elixir implementation supports token budget limits under `agent` in `symphon
   - When configured, an active agent whose cumulative issue token total reaches the limit SHOULD be
     stopped without scheduling a retry.
   - The run SHOULD be recorded with an implementation-defined budget-exhausted status and enough
-    issue/session/token context for operators to understand why it stopped.
+    issue/session/token context for operators to understand why it stopped. The Elixir
+    implementation logs the run's totals (every token kind and its turns), and records the run's
+    `run.ended` event with the exit "token budget spent (100M tokens of a 100M limit)" and
+    `budget_exhausted` (the limit and the run's totals), which the summary changelog shows.
+  - The Elixir implementation pauses the ticket on a question to the Director (the Inbox), naming
+    the spend, the limit and what the run got done (its pull request, the commits and files its
+    workspace keeps), with the options "Give it another budget" (Unblock: the next pass starts one
+    more run with the same limit, with no restart and no settings change), "Start it over from main"
+    (Restart) and "Keep it paused"; an answer in words keeps it paused too. While it is open the
+    ticket's pause reads "Its token budget is spent (100M)". A question the store refuses is asked
+    again on each dispatch pass, and the ticket is not dispatched meanwhile.
   - The Elixir implementation rehydrates budget-exhausted status across restarts from durable runs
-    across every repo partition. It ignores persisted budget-exhausted records when the current
-    limit is raised above the recorded token total.
+    across every repo partition, and asks the question on the ticket's next dispatch pass. It
+    ignores persisted budget-exhausted records when the current limit is raised above the recorded
+    token total, when the issue has a newer run, or when a person answered the run's question since
+    it started.
 - `agent.max_tokens_per_day` (positive integer or null)
   - Default: `5000000`.
   - Explicit `null` disables the daily cap.

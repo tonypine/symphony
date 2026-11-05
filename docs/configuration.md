@@ -871,7 +871,10 @@ agent:
 - `limits.tokens_per_issue` (default `500000`) and `limits.tokens_per_day` (default `5000000`,
   UTC-aligned) are guardrails. Raise either to a larger positive integer, or set to `null` to
   disable.
-- The per-issue cap stops only the over-budget issue without retrying; the daily cap pauses new
+- The per-issue cap stops only the over-budget issue without retrying and asks the Director what
+  now in the Inbox: "Give it another budget" starts one more run with the same limit at once (no
+  restart, no settings change), "Start it over from main" restarts it, and "Keep it paused" (or an
+  answer in words) leaves it paused on "Its token budget is spent". The daily cap pauses new
   dispatch for the day while already-running agents continue. Forced tickets
   (`concurrency.force_label`) still dispatch past the daily cap, with a warning in the log.
 - Codex app-server and Claude stream-json usage events are normalized into uncached input, cached

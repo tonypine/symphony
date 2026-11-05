@@ -8,7 +8,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
   alias SymphonyElixir.Linear.Client
   alias SymphonyElixir.{Pauses, PlanComments, Questions, RunStore, SelfHeal, SubIssueWait}
   alias SymphonyElixir.PrWatch.Competitors
-  alias SymphonyElixir.{StateMachine, TicketSignals, TicketState, TicketStateReconciler}
+  alias SymphonyElixir.{StateMachine, TicketSignals, TicketState, TicketStateReconciler, TokenBudget}
 
   @waiting "Waiting on sub-tickets"
 
@@ -2158,6 +2158,59 @@ defmodule SymphonyElixir.DirectorMovesTest do
       assert {:error, {:conflict, ^refusal}} = DirectorMoves.answer_held_question("MOT-40", withdrawn.id, "1", opts)
       picks = [%{question: withdrawn.question, answer: "Run it again"}]
       assert {:error, {:conflict, ^refusal}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks, question_id: withdrawn.id}, opts)
+    end
+  end
+
+  describe "a run that spent its token budget (TP-1418)" do
+    defp budget_facts, do: %{name: "MOT-40", total_tokens: 100_008_209, limit: 100_000_000, pushed: false, unpushed_commits: 0, changed_files: 58}
+
+    defp ask_budget(repo_key) do
+      {:ok, question} = TokenBudget.ask({:ticket, repo_key, "pr"}, budget_facts())
+      question
+    end
+
+    test ~s(answering "Give it another budget" is Unblock: the pause goes and the ticket continues in place), %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      ticket = {:ticket, "repo-director", "pr"}
+      question = ask_budget("repo-director")
+
+      assert Pauses.why(ticket) == ["Its token budget is spent (100M)"]
+      assert Questions.held(ticket).id == question.id
+
+      assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Give it another budget", opts)
+
+      refute Pauses.paused?(ticket)
+      assert %{state: :answered, answer: %{option: 1, text: "Give it another budget", by: @director}} = Questions.find(ticket, question.id)
+    end
+
+    test "Unblock, the Inbox's Decide and a person's move answer it with Give it another budget", %{opts: opts} do
+      ticket = {:ticket, "repo-director", "pr"}
+
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      question = ask_budget("repo-director")
+      assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:unblock, "MOT-40", %{}, opts)
+      assert %{state: :answered, answer: %{text: "Give it another budget"}} = Questions.find(ticket, question.id)
+
+      question = ask_budget("repo-director")
+      picks = [%{question: question.question, answer: "Go on", option: "Give it another budget"}]
+      assert {:ok, %{move: "unblock"}} = DirectorMoves.move(:decide, "MOT-40", %{question_id: question.id, picks: picks}, opts)
+      assert %{state: :answered, answer: %{option: 1, text: "Go on"}} = Questions.find(ticket, question.id)
+      refute Pauses.paused?(ticket)
+    end
+
+    test ~s(answering "Keep it paused" leaves it held; "Start it over from main" restarts it), %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director"}])
+      question = ask_budget("repo-director")
+
+      assert {:ok, %{move: "decide"}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Keep it paused", opts)
+      assert ["You kept it paused: MOT-40 spent its token budget"] = Pauses.why({:ticket, "repo-director", "pr"})
+
+      github_activity(state: "OPEN")
+      put_issues([restart_issue()])
+      question = ask_budget("repo-restart")
+
+      assert {:ok, %{move: "restart", to_state: "In Progress"}} = DirectorMoves.answer_held_question("MOT-40", question.id, "Start it over from main", restart_opts(opts))
+      refute Pauses.paused?({:ticket, "repo-restart", "pr"})
     end
   end
 

@@ -203,6 +203,22 @@ defmodule SymphonyElixir.IssueSummaryTest do
                ["- 2026-11-05: Code Review verdict: request changes"]
     end
 
+    test "a run that spent its token budget has a line; any other run's end has none (TP-1418)" do
+      spent = %{run_number: 2, exit: "token budget spent", budget_exhausted: %{limit: 100_000_000, tokens: %{total_tokens: 100_008_209}}}
+      string_keyed = %{"exit" => "token budget spent", "budget_exhausted" => %{"limit" => 10, "tokens" => "unknown"}}
+
+      assert IssueSummary.event_entries([
+               event("run.ended", ~U[2026-11-05 11:41:00Z], spent),
+               event("run.ended", ~U[2026-11-05 12:00:00Z], %{run_number: 3, exit: "ended normally"}),
+               event("run.ended", ~U[2026-11-05 12:30:00Z], string_keyed)
+             ]) == [
+               "- 2026-11-05: Run 2 ended: token budget spent (100M tokens of a 100M limit)",
+               "- 2026-11-05: A run ended: token budget spent (a 10 limit)"
+             ]
+
+      assert "run.ended" in IssueSummary.event_types()
+    end
+
     test "put/4 writes the lines with the run's entry, newest day first" do
       {:ok, description} = IssueSummary.put("Intro.", summary!(%{"changelog_entry" => "Opened the PR"}), ~D[2026-11-04], history())
 

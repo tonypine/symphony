@@ -205,7 +205,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
           head: :string,
           unpushed_head: :string,
           counted: :boolean,
-          transcript: :string
+          transcript: :string,
+          budget_exhausted: :map
         ] ++ @signal,
       idempotency: {:fields, [:run_id]}
     },

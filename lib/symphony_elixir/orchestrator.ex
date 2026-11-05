@@ -56,6 +56,7 @@ defmodule SymphonyElixir.Orchestrator do
     TicketSignals,
     TicketState,
     TicketStateReconciler,
+    TokenBudget,
     Tracker,
     TransitionGuard,
     UpdateHold,
@@ -4180,6 +4181,8 @@ defmodule SymphonyElixir.Orchestrator do
         do: {Map.drop(previous_waiting, pass_ids), Map.drop(previous_skipped, pass_ids)},
         else: {%{}, %{}}
 
+    state = ask_spent_budgets(state, issues)
+
     {state, _hold} =
       issues
       |> sort_issues_for_dispatch()
@@ -5966,6 +5969,13 @@ defmodule SymphonyElixir.Orchestrator do
       counted: not uncounted_exit?(reason)
     }
 
+    # A run that spent its budget says so, with the limit and the run's totals.
+    payload =
+      case reason do
+        {:budget_exhausted, budget} -> Map.put(payload, :budget_exhausted, budget)
+        _other -> payload
+      end
+
     opts = [run_id: run_id, at: DateTime.utc_now()]
 
     case run_transcript(issue_id, run_id, running_entry) do
@@ -6026,6 +6036,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp run_exit({:usage_limited, _info}, _repo_key, _issue_id, _head), do: "usage limit"
   defp run_exit({:model_api_unreachable, _info}, _repo_key, _issue_id, _head), do: "model API unreachable"
   defp run_exit({:ci_pending, _info}, _repo_key, _issue_id, _head), do: "waiting for CI"
+  defp run_exit({:budget_exhausted, %{limit: limit, tokens: tokens}}, _repo_key, _issue_id, _head), do: TokenBudget.exit_text(tokens.total_tokens, limit)
 
   defp run_exit(reason, repo_key, issue_id, head) do
     cond do
@@ -6080,6 +6091,11 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp counted_dispatch_outcome(:normal, issue_id, repo_key), do: %{exit: "ended normally", head: pr_head(issue_id, repo_key)}
+
+  defp counted_dispatch_outcome({:budget_exhausted, _budget} = reason, issue_id, repo_key) do
+    head = pr_head(issue_id, repo_key)
+    %{exit: run_exit(reason, repo_key, issue_id, head), head: head}
+  end
 
   defp counted_dispatch_outcome(reason, issue_id, repo_key),
     do: %{exit: "failed (#{reason |> agent_exit_reason_summary() |> String.slice(0, 120)})", head: pr_head(issue_id, repo_key)}
@@ -7965,9 +7981,12 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # A spent run holds its ticket while it is still over the limit, is the ticket's newest run (one
+  # given another budget, or started over, has a newer run) and no person answered its question
+  # since it started (an answer whose run has not started yet).
   defp budget_exhausted_issue_id(%{status: "budget_exhausted", issue_id: issue_id} = run, limit)
        when is_binary(issue_id),
-       do: if(budget_exhausted_run_over_limit?(run, limit), do: [issue_id], else: [])
+       do: if(budget_exhausted_run_over_limit?(run, limit) and unsettled_spent_run?(run), do: [issue_id], else: [])
 
   defp budget_exhausted_issue_id(_run, _limit), do: []
 
@@ -7977,6 +7996,14 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp budget_exhausted_run_over_limit?(_run, _limit), do: true
+
+  defp unsettled_spent_run?(%{issue_id: issue_id} = run) do
+    newest = newest_run(Map.get(run, :repo_key), issue_id) || run
+    questions = TicketState.normalize(RunStore.get_ticket_state(issue_id)).questions
+    name = Map.get(run, :issue_identifier) || issue_id
+
+    Map.get(newest, :run_id) == Map.get(run, :run_id) and not TokenBudget.answered_since?(questions, name, Map.get(run, :started_at))
+  end
 
   defp run_total_tokens(%{tokens: %{total_tokens: total}}) when is_integer(total), do: max(total, 0)
   defp run_total_tokens(_run), do: 0
@@ -10928,12 +10955,18 @@ defmodule SymphonyElixir.Orchestrator do
         metadata: %{source: "orchestrator", scope: "issue", limit: limit}
       })
 
+      # The run's end goes on the ticket's history before the stop drops the task's DOWN, and what
+      # it got done is read from its workspace before anything else touches it.
+      record_dispatch_outcome(running_entry, {:budget_exhausted, %{limit: limit, tokens: run_tokens(running_entry)}})
+      facts = running_budget_facts(state, running_entry, issue_id, limit, total_tokens)
+
       state
       |> terminate_running_issue(issue_id, false,
         status: "budget_exhausted",
         error: "token budget exhausted: total_tokens=#{total_tokens} limit=#{limit}"
       )
       |> mark_budget_exhausted(issue_id)
+      |> ask_spent_budget(running_repo_key(state, running_entry), issue_id, facts)
     else
       state
     end
@@ -10941,20 +10974,89 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp enforce_issue_budget(state, _issue_id), do: state
 
+  defp running_budget_facts(state, running_entry, issue_id, limit, total_tokens) do
+    repo_key = running_repo_key(state, running_entry)
+    workspace = Map.get(running_entry, :workspace_path)
+    worker_host = Map.get(running_entry, :worker_host)
+    budget_facts(Map.get(running_entry, :identifier) || issue_id, total_tokens, limit, pr_head(issue_id, repo_key), workspace, worker_host)
+  end
+
+  defp budget_facts(name, total_tokens, limit, pr_head, workspace, worker_host) do
+    progress = WorkspaceHead.progress(workspace, worker_host) || %{}
+
+    %{
+      name: name,
+      total_tokens: total_tokens,
+      limit: limit,
+      pushed: is_binary(pr_head),
+      unpushed_commits: Map.get(progress, :unpushed_commits),
+      changed_files: Map.get(progress, :changed_files)
+    }
+  end
+
+  # A run that spent its budget pauses its ticket on a question (`SymphonyElixir.TokenBudget`): the
+  # pause holds it from then on, so it leaves `budget_exhausted`, which holds only the tickets whose
+  # question is not asked yet (the store refused it, or the start-up found the spent run). Each
+  # dispatch pass asks theirs again (`ask_spent_budgets/2`).
+  defp ask_spent_budget(%State{} = state, repo_key, issue_id, facts) do
+    case TokenBudget.ask({:ticket, repo_key, issue_id}, facts) do
+      {:ok, _question} ->
+        %{state | budget_exhausted: MapSet.delete(state.budget_exhausted, issue_id)}
+
+      {:error, reason} ->
+        Logger.warning("Failed to ask what now for issue_id=#{issue_id} issue_identifier=#{facts.name}, whose run spent its token budget; it stays held: #{inspect(reason)}")
+        state
+    end
+  end
+
+  # The candidates whose run spent its budget before their question was asked get it now, with the
+  # facts of their newest run, which is the one that spent it (`hydrate_budget_exhausted/1`).
+  # Without a limit there is nothing to name, and the next start-up frees them.
+  defp ask_spent_budgets(%State{budget_exhausted: spent} = state, issues) do
+    case Config.settings!().agent.max_tokens_per_issue do
+      limit when is_integer(limit) and limit > 0 ->
+        for %Issue{id: issue_id} = issue <- issues, MapSet.member?(spent, issue_id), reduce: state do
+          acc -> ask_spent_budget_of(acc, issue, limit)
+        end
+
+      _no_limit ->
+        state
+    end
+  end
+
+  defp ask_spent_budget_of(state, %Issue{id: issue_id} = issue, limit) do
+    repo_key = dispatch_repo_key(state, issue)
+    run = newest_run(repo_key, issue_id) || %{}
+    total = with %{total_tokens: total} when is_integer(total) <- Map.get(run, :tokens), do: total
+    facts = budget_facts(issue.identifier || issue_id, total, limit, pr_head(issue_id, repo_key), Map.get(run, :workspace_path), Map.get(run, :worker_host))
+    ask_spent_budget(state, repo_key, issue_id, facts)
+  end
+
+  defp newest_run(repo_key, issue_id) do
+    case RunStore.list_issue_runs(repo_key, issue_id) do
+      [run | _older] -> run
+      _none -> nil
+    end
+  end
+
   defp running_entry_total_tokens(running_entry) when is_map(running_entry) do
     entry_total_tokens(running_entry)
   end
 
   defp running_entry_total_tokens(_running_entry), do: 0
 
+  # The run's totals, every kind of token it spent and its turns, never the last update's.
   defp log_issue_budget_exhausted(issue_id, running_entry, limit, total_tokens) do
     identifier = Map.get(running_entry, :identifier, issue_id)
     session_id = running_entry_session_id(running_entry)
-    input_tokens = entry_uncached_input_tokens(running_entry)
-    output_tokens = entry_output_tokens(running_entry)
+    tokens = run_tokens(running_entry)
 
     Logger.warning(
-      "Issue token budget exhausted: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} uncached_input_tokens=#{input_tokens} output_tokens=#{output_tokens} total_tokens=#{total_tokens} limit=#{limit}; stopping active agent without retry"
+      "Issue token budget exhausted: issue_id=#{issue_id} issue_identifier=#{identifier} session_id=#{session_id} " <>
+        "run_input_tokens=#{tokens.input_tokens} run_uncached_input_tokens=#{tokens.uncached_input_tokens} " <>
+        "run_cached_input_tokens=#{tokens.cached_input_tokens} run_cache_creation_input_tokens=#{tokens.cache_creation_input_tokens} " <>
+        "run_output_tokens=#{tokens.output_tokens} turns=#{Map.get(running_entry, :turn_count, 0)} total_tokens=#{total_tokens} limit=#{limit}; " <>
+        "stopping active agent without retry and asking what now"
     )
   end
 

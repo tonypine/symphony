@@ -93,6 +93,40 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     assert log =~ "issue_identifier=MT-MED state=\"Todo\"; its token budget is spent"
   end
 
+  test "a ticket whose run spent its budget before its question was asked gets it on the pass and shows its pause (TP-1418)", ctx do
+    write_skipped_workflow!(ctx, max_tokens_per_issue: 100_000_000)
+    on_exit(fn -> RunStore.clear() end)
+    spent = issue("spent", "MT-SPENT", "In Progress")
+
+    {state, _log} = dispatch_with_log([spent], %{orchestrator_state() | budget_exhausted: MapSet.new(["spent"])})
+
+    assert state.running == %{}
+    refute MapSet.member?(state.budget_exhausted, "spent")
+    assert %{reason: "Its token budget is spent (100M)"} = state.dispatch_skipped["spent"]
+
+    assert %{title: "MT-SPENT spent its token budget", why: why, options: options} = Questions.held({:ticket, "default", "spent"})
+    assert why =~ "The last run reached the limit of 100M tokens a ticket's run may spend."
+    assert Enum.map(options, & &1.label) == ["Give it another budget", "Start it over from main", "Keep it paused"]
+
+    # The next pass asks nothing twice: the open question is the one held.
+    {_state, _log} = dispatch_with_log([spent], state)
+    assert length(Questions.open({:ticket, "default", "spent"})) == 1
+  end
+
+  test "a spent ticket whose question can't be asked stays held by its budget and is asked again on the next pass (TP-1418)", ctx do
+    write_skipped_workflow!(ctx, max_tokens_per_issue: 100_000_000)
+    on_exit(fn -> RunStore.clear() end)
+    # A title naming a branch is refused by the plain-words check, as a store that refuses would.
+    spent = issue("spent-refused", "auto/MT-1", "In Progress")
+
+    {state, log} = dispatch_with_log([spent], %{orchestrator_state() | budget_exhausted: MapSet.new(["spent-refused"])})
+
+    assert MapSet.member?(state.budget_exhausted, "spent-refused")
+    assert %{reason: "its token budget is spent (agent.max_tokens_per_issue)"} = state.dispatch_skipped["spent-refused"]
+    assert log =~ "Failed to ask what now for issue_id=spent-refused"
+    assert Questions.open({:ticket, "default", "spent-refused"}) == []
+  end
+
   test "each closed gate names itself" do
     state =
       orchestrator_state()

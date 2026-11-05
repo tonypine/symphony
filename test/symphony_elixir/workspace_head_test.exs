@@ -50,6 +50,28 @@ defmodule SymphonyElixir.WorkspaceHeadTest do
     assert WorkspaceHead.branch(workspace, nil) == nil
   end
 
+  test "progress/2 counts the commits no remote has and the files changed but not committed (TP-1418)", %{root: root, workspace: workspace} do
+    assert WorkspaceHead.progress(workspace, nil) == %{unpushed_commits: 0, changed_files: 0}
+
+    commit!(workspace, "fix.txt")
+    commit!(workspace, "more.txt")
+    File.write!(Path.join(workspace, "README.md"), "changed")
+    File.mkdir_p!(Path.join(workspace, "new"))
+    File.write!(Path.join([workspace, "new", "untracked.txt"]), "new")
+
+    assert WorkspaceHead.progress(workspace, nil) == %{unpushed_commits: 2, changed_files: 2}
+
+    # A checkout with no commit yet has none unpushed.
+    empty = Path.join(root, "empty")
+    git!(root, ["init", "-q", empty])
+    File.write!(Path.join(empty, "a.txt"), "a")
+    assert WorkspaceHead.progress(empty, nil) == %{unpushed_commits: 0, changed_files: 1}
+
+    assert WorkspaceHead.progress(workspace, "worker-1") == nil
+    assert WorkspaceHead.progress(Path.join(root, "missing"), nil) == nil
+    assert WorkspaceHead.progress(nil, nil) == nil
+  end
+
   test "an SSH worker's workspace is not read", %{source: source, workspace: workspace} do
     commit!(workspace, "fix.txt")
     assert WorkspaceHead.push_unpushed(workspace, "worker-1", source) == :nothing

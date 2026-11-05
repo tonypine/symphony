@@ -40,6 +40,33 @@ defmodule SymphonyElixir.WorkspaceHead do
   def unpushed_head(_workspace, _worker_host), do: nil
 
   @doc """
+  What the workspace holds that no remote has: the commits on `HEAD` no remote-tracking branch has
+  (`unpushed_commits`, 0 for a checkout with no commit yet) and the files git does not ignore that
+  differ from `HEAD` (`changed_files`, untracked ones included). Nil for an SSH worker's workspace or
+  a directory that is not a checkout of its own. Reads local refs only, so it makes no network call.
+  """
+  @spec progress(Path.t() | nil, String.t() | nil) :: %{unpushed_commits: non_neg_integer(), changed_files: non_neg_integer()} | nil
+  def progress(workspace, nil) when is_binary(workspace) do
+    with true <- toplevel?(workspace),
+         {status, 0} <- git(workspace, ["status", "--porcelain=v1", "--untracked-files=all"]) do
+      %{unpushed_commits: unpushed_commits(workspace), changed_files: status |> String.split("\n", trim: true) |> length()}
+    else
+      _unreadable -> nil
+    end
+  end
+
+  def progress(_workspace, _worker_host), do: nil
+
+  defp unpushed_commits(workspace) do
+    with {count, 0} <- git(workspace, ["rev-list", "--count", "HEAD", "--not", "--remotes"]),
+         {count, ""} <- Integer.parse(String.trim(count)) do
+      count
+    else
+      _no_commit -> 0
+    end
+  end
+
+  @doc """
   Pushes the workspace's current branch to `origin` when it has commits no remote has
   (`unpushed_head/2`), so a parked ticket's work is never only in its workspace. Returns `:pushed`
   with the branch, `:nothing` when there is nothing to push (or the workspace is an SSH worker's,
