@@ -1335,7 +1335,10 @@ defmodule SymphonyElixir.TicketStateViewsTest do
     for entry <- entries do
       entry
       |> Map.drop([:at, :recorded_at])
-      |> Map.replace_lazy(:outcome, &(&1 && Map.delete(&1, :at)))
+      |> Map.replace_lazy(:outcome, fn
+        %{} = outcome -> Map.delete(outcome, :at)
+        outcome -> outcome
+      end)
     end
   end
 end
