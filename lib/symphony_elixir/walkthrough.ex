@@ -13,9 +13,12 @@ defmodule SymphonyElixir.Walkthrough do
   The description shows the proofs as a projection Symphony renders from those events
   (`put_proofs/2`): one `Proved by:` line per proved step, between
   `<!-- symphony:proofs:start -->` and `<!-- symphony:proofs:end -->` at the end of the walkthrough
-  section. The block is found by its markers wherever it stands, since Linear rewrites the markdown
-  it stores, and every byte outside it stays as it is. `section/1` reads the walkthrough without
-  it.
+  section. The section ends at the next heading or at the next line opening with a Symphony marker
+  (the summary block or the Decisions section), since what follows that marker is Symphony's. The
+  block is found by its markers wherever it stands, since Linear rewrites the markdown it stores,
+  and every byte outside it stays as it is; only a block found inside another Symphony block moves,
+  to the end of the walkthrough, since that block's next write would erase it. `section/1` reads the
+  walkthrough without it.
 
   A step whose author wrote `Proved by: QA` asked QA to walk it: `check_proofs/2` refuses a proof for
   it. A `Proved by:` inside inline code (between backticks) is a quotation, not that request.
@@ -28,6 +31,10 @@ defmodule SymphonyElixir.Walkthrough do
 
   @heading ~r/^\s*\#{1,6}\s+User walkthrough\s*:?\s*$/i
   @any_heading ~r/^\s*\#{1,6}\s+\S/
+  # A line opening with a Symphony marker: the walkthrough never runs past it.
+  @symphony_marker ~r/^\s*<!--\s*symphony:/
+  # A line opening or closing a Symphony block, with the `## ` Linear may make of a marker line.
+  @block_marker ~r/^\s*(?:\#{1,6}\s*)?<!--\s*symphony:\w+:(start|end)\s*-->/m
   @step_start ~r/^ {0,3}(\d+)[.)]\s+(.*)$/
   @proved_by ~r/proved by:/i
   @backticks ~r/`+/
@@ -183,8 +190,9 @@ defmodule SymphonyElixir.Walkthrough do
   Renders the proofs `recorded` into `description` as the `Proved by:` block (see the moduledoc):
   one line per proved step, the latest proof of each, ordered by step number. The block is
   replaced where its markers stand, or placed at the end of the `## User walkthrough` section when
-  there is none; a repeated block is dropped. With no proof, or no walkthrough, no block is
-  written and one already there is removed. Every other byte stays as it is.
+  there is none or when it stands inside another Symphony block; a repeated block is dropped. With
+  no proof, or no walkthrough, no block is written and one already there is removed. Every other
+  byte stays as it is.
   """
   @spec put_proofs(String.t() | nil, [recorded()]) :: String.t()
   def put_proofs(description, recorded) do
@@ -193,9 +201,22 @@ defmodule SymphonyElixir.Walkthrough do
 
     case :binary.split(description, @proofs_start) do
       [_none] -> place_proofs(description, block)
-      [before, after_start] -> replace_proofs(before, after_start, block)
+      [before, after_start] -> put_found_proofs(description, before, after_start, block)
     end
   end
+
+  # A block inside the summary block or the Decisions section goes to the walkthrough's end, where
+  # their next write leaves it alone.
+  defp put_found_proofs(description, before, after_start, block) do
+    if inside_symphony_block?(before) do
+      description |> strip_proofs() |> place_proofs(block)
+    else
+      replace_proofs(before, after_start, block)
+    end
+  end
+
+  # Whether the last Symphony block marker in `text` opens a block.
+  defp inside_symphony_block?(text), do: @block_marker |> Regex.scan(text, capture: :all_but_first) |> List.last() == ["start"]
 
   defp proofs_block([]), do: nil
 
@@ -333,12 +354,14 @@ defmodule SymphonyElixir.Walkthrough do
   defp section_end(lines, heading) do
     lines
     |> Enum.drop(heading + 1)
-    |> Enum.find_index(&Regex.match?(@any_heading, &1))
+    |> Enum.find_index(&ends_section?/1)
     |> case do
       nil -> length(lines) - 1
       offset -> heading + offset
     end
   end
+
+  defp ends_section?(line), do: Regex.match?(@any_heading, line) or Regex.match?(@symphony_marker, line)
 
   defp split_trailing_blank(lines) do
     {blank, content} = lines |> Enum.reverse() |> Enum.split_while(&(String.trim(&1) == ""))
@@ -348,7 +371,7 @@ defmodule SymphonyElixir.Walkthrough do
   defp section_body(lines, index) do
     lines
     |> Enum.drop(index + 1)
-    |> Enum.take_while(&(not Regex.match?(@any_heading, &1)))
+    |> Enum.take_while(&(not ends_section?(&1)))
     |> Enum.join("\n")
     |> String.trim()
   end
