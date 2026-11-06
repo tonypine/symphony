@@ -73,13 +73,15 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
       "children" => %{"nodes" => children}
     }
 
+    issues = %{"nodes" => [plan], "pageInfo" => %{"hasNextPage" => false}}
+
     Initiatives.run_once(%{
       opts: [
         name: Initiatives,
         repos: fn -> {:ok, [%{name: @repo}]} end,
         settings_fun: fn _repo -> %Schema{} end,
         scope_filter: fn _repo -> {:ok, %{}} end,
-        linear_client: fn _query, _variables, _opts -> {:ok, %{"data" => %{"issues" => %{"nodes" => [plan], "pageInfo" => %{"hasNextPage" => false}}}}} end,
+        linear_client: fn _query, _variables, _opts -> {:ok, %{"data" => %{"issues" => issues}}} end,
         now: fn -> ~U[2026-11-06 12:00:00Z] end
       ]
     })
@@ -99,7 +101,8 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
 
     wait_on("id-MT-6", "MT-5", ~U[2026-11-01 11:00:00Z])
     wait_on("id-MT-6", "MT-20", ~U[2026-11-02 09:00:00Z])
-    {:ok, _pause} = Pauses.clear_reason({:ticket, @repo, "id-MT-6"}, %{kind: :ticket, waits_on: %{identifier: "MT-5"}}, at: @landed)
+    landed = %{kind: :ticket, waits_on: %{identifier: "MT-5"}}
+    {:ok, _pause} = Pauses.clear_reason({:ticket, @repo, "id-MT-6"}, landed, at: @landed)
     wait_on("id-MT-7", "MT-6", ~U[2026-11-01 11:00:00Z])
   end
 

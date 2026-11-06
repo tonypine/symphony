@@ -380,7 +380,7 @@ defmodule SymphonyElixirWeb.Presenter do
     tracked = Map.get(payload, :connected)
 
     if record || tracked do
-      ticket = record || %{issue_id: payload.issue_id, repo_key: payload.repo_key, issue_identifier: payload.issue_identifier}
+      ticket = record || Map.take(payload, [:issue_id, :repo_key, :issue_identifier])
       facts = ConnectedRead.facts(Map.values(ticket_state_records()), Situation.live_facts(snapshot))
       Map.put(payload, :connected, ConnectedRead.read(ticket, tracked, facts))
     else

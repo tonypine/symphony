@@ -97,7 +97,10 @@ defmodule SymphonyElixir.Connected.ReadTest do
 
       tracked = %{Connected.build(%{}, nil) | blocked_by: [%{identifier: "MT-3", title: "Polled", state: "Todo"}, %{identifier: "MT-4", title: nil, state: nil}]}
 
-      assert [%{identifier: "MT-3", title: "Polled", status: "open"}, %{identifier: "MT-4", state: nil, status: "open"}] = read("MT-2", tracked).blocked_by
+      assert [
+               %{identifier: "MT-3", title: "Polled", status: "open"},
+               %{identifier: "MT-4", state: nil, status: "open"}
+             ] = read("MT-2", tracked).blocked_by
     end
   end
 
@@ -127,7 +130,8 @@ defmodule SymphonyElixir.Connected.ReadTest do
       ticket("MT-3", "Todo")
       plan = initiative()
 
-      assert %{identifier: "MT-1", title: "The plan", done: 1, total: 2, incomplete: false, tickets: tickets} = read("MT-3", nil, [plan]).epic
+      epic = read("MT-3", nil, [plan]).epic
+      assert %{identifier: "MT-1", title: "The plan", done: 1, total: 2, incomplete: false, tickets: tickets} = epic
 
       assert tickets == [
                %{identifier: "MT-2", title: "Part MT-2", state: "Done", current: false, situation: nil},
@@ -141,8 +145,8 @@ defmodule SymphonyElixir.Connected.ReadTest do
     test "a plan the Initiatives don't hold comes from the parent's record, in creation order, without what was canceled" do
       parent = %{identifier: "MT-1", title: "The plan", done: 0, total: 9, children: []}
 
-      sub_issues =
-        for {identifier, state} <- [{"MT-5", "Todo"}, {"MT-2", "Done"}, {"MT-3", "Todo"}, {"MT-4", "Canceled"}], do: %{id: identifier, identifier: identifier, state: state}
+      states = [{"MT-5", "Todo"}, {"MT-2", "Done"}, {"MT-3", "Todo"}, {"MT-4", "Canceled"}]
+      sub_issues = for {identifier, state} <- states, do: %{id: identifier, identifier: identifier, state: state}
 
       ticket("MT-1", "Waiting on sub-tickets", %{sub_issues: sub_issues})
       ticket("MT-2", "Done", %{parent: parent, created_at: ~U[2026-11-01 10:00:00Z]})
@@ -162,7 +166,8 @@ defmodule SymphonyElixir.Connected.ReadTest do
       ticket("MT-2", "Todo", %{parent: parent})
       ticket("MT-3", "Todo")
 
-      assert %{parent: %{identifier: "MT-1"}, epic: %{identifier: "MT-1", title: "The plan", done: 2, total: 5, incomplete: false, tickets: []}} = read("MT-2")
+      assert %{parent: %{identifier: "MT-1"}, epic: epic} = read("MT-2")
+      assert %{identifier: "MT-1", title: "The plan", done: 2, total: 5, incomplete: false, tickets: []} = epic
       assert %{parent: nil, epic: nil} = read("MT-3")
     end
   end
