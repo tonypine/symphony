@@ -44,7 +44,7 @@ defmodule SymphonyElixir.PhaseSteps.Findings do
   @doc "The Question the step pauses on for `repeats`, on the ticket called `name`."
   @spec question(String.t(), [repeat(), ...]) :: map()
   def question(name, [_ | _] = repeats) do
-    labels = Enum.map_join(repeats, " and ", &PlainWords.scrub(&1.label))
+    labels = repeats |> Enum.map(&PlainWords.scrub(&1.label)) |> Enum.uniq() |> Enum.join(" and ")
 
     %{
       title: String.slice("#{name}: QA failed twice on #{labels}", 0, 120),
@@ -149,12 +149,18 @@ defmodule SymphonyElixir.PhaseSteps.Findings do
     [first, last] = Enum.take(failures, -2)
 
     if MapSet.member?(standing, last.id) and not Enum.any?(asked, &(DateTime.compare(&1, last.at) == :gt)),
-      do: [%{label: label(key), first: first, last: last}],
+      do: [%{label: label(key, last), first: first, last: last}],
       else: []
   end
 
   defp repeat(_key, _failures, _standing, _asked), do: []
 
-  defp label({:class, class}), do: class
-  defp label({:step, _step, _viewport}), do: "the same step"
+  defp label({:class, class}, _last), do: class
+
+  # The finding's own words, not the lowered match text: this is what the person reads.
+  defp label({:step, _step, _viewport}, %Event{payload: payload}) do
+    ["step " <> String.trim(payload.step), prefixed("at ", payload, :viewport)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map_join(" ", &String.trim/1)
+  end
 end

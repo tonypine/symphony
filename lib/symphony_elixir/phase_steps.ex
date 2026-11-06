@@ -341,12 +341,13 @@ defmodule SymphonyElixir.PhaseSteps do
   end
 
   defp read_findings(context) do
-    events = RunStore.list_ticket_events(context.issue_id, [])
-    answered = Questions.answered({:ticket, context.repo_key, context.issue_id})
+    with events when is_list(events) <- RunStore.list_ticket_events(context.issue_id, []) do
+      answered = Questions.answered({:ticket, context.repo_key, context.issue_id})
 
-    case Findings.read(if(is_list(events), do: events, else: []), answered) do
-      %{output: output, repeats: []} -> {:ok, {output, 0}}
-      %{output: output, repeats: repeats} -> {:ask, output, Findings.question(ticket_name(context), repeats)}
+      case Findings.read(events, answered) do
+        %{output: output, repeats: []} -> {:ok, {output, 0}}
+        %{output: output, repeats: repeats} -> {:ask, output, Findings.question(ticket_name(context), repeats)}
+      end
     end
   end
 

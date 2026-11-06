@@ -274,8 +274,51 @@ defmodule SymphonyElixir.PhaseStepsTest do
       fail_qa!("qa-3", "unclassified", "Same step again", %{step: " 3 ", viewport: "1440×900"})
 
       assert %{repeats: [repeat]} = read_findings()
-      assert repeat.label == "the same step"
-      assert Findings.question("TP-77", [repeat]).title == "TP-77: QA failed twice on the same step"
+      assert repeat.label == "step 3 at 1440×900"
+      assert Findings.question("TP-77", [repeat]).title == "TP-77: QA failed twice on step 3 at 1440×900"
+    end
+
+    test "two unclassified failures that came back say which step each is" do
+      fail_qa!("qa-1", "unclassified", "One", %{step: "3"})
+      fail_qa!("qa-2", "unclassified", "Two", %{step: "3"})
+      fail_qa!("qa-1", "unclassified", "Three", %{step: "5", viewport: "1440×900"})
+      fail_qa!("qa-2", "unclassified", "Four", %{step: "5", viewport: "1440×900"})
+
+      assert %{repeats: [_step_three, _step_five] = repeats} = read_findings()
+      request = Findings.question("TP-77", repeats)
+
+      assert DecisionRequest.check(request) == :ok
+      assert request.title == "TP-77: QA failed twice on step 3 and step 5 at 1440×900"
+      assert request.question =~ "twice on step 3 and step 5 at 1440×900."
+      assert request.why =~ "On step 3, QA found this first: One. Then it found this: Two."
+      assert request.why =~ "On step 5 at 1440×900, QA found this first: Three. Then it found this: Four."
+    end
+
+    test "two steps whose names read the same in plain words are said once" do
+      fail_qa!("qa-1", "unclassified", "One", %{step: "lib/a.ex"})
+      fail_qa!("qa-2", "unclassified", "Two", %{step: "lib/a.ex"})
+      fail_qa!("qa-1", "unclassified", "Three", %{step: "lib/b.ex"})
+      fail_qa!("qa-2", "unclassified", "Four", %{step: "lib/b.ex"})
+
+      assert %{repeats: [_first, _second] = repeats} = read_findings()
+      assert Findings.question("TP-77", repeats).title == "TP-77: QA failed twice on step a file"
+    end
+
+    test "a ledger it can't read fails the step and says so, rather than reporting no findings", ctx do
+      steps = Phases.default_steps(:rework)
+      context = context(ctx, %{}, %{issue_id: :not_a_ticket})
+
+      log =
+        capture_log(fn ->
+          assert {:turn, %Step{id: "code"}, %{step: %Step{id: "findings"}, output: output}} =
+                   PhaseSteps.run_machine_steps(steps, step(steps, "findings"), context)
+
+          assert output =~ "(could not run: :invalid_issue_id)"
+          refute output =~ "No open findings"
+        end)
+
+      assert log =~ "could not record step.completed"
+      assert Questions.open({:ticket, @repo_key, @issue_id}) == []
     end
 
     test "a finding QA reopened counts as failing again", _ctx do
