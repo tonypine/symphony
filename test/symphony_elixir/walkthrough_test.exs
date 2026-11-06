@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.WalkthroughTest do
   use ExUnit.Case, async: false
 
-  alias SymphonyElixir.{RunStore, TicketEvents, Walkthrough}
+  alias SymphonyElixir.{Decisions, IssueSummary, RunStore, TicketEvents, Walkthrough}
 
   @description """
   ## Goal
@@ -24,6 +24,8 @@ defmodule SymphonyElixir.WalkthroughTest do
 
   1. Check it on your own machine.
   """
+
+  @proofs [%{step: 1, test: "test/a_test.exs"}]
 
   describe "section/1" do
     test "returns the walkthrough's body up to the next heading" do
@@ -57,6 +59,16 @@ defmodule SymphonyElixir.WalkthroughTest do
 
       assert description =~ Walkthrough.proofs_start_marker()
       assert Walkthrough.section(description) == Walkthrough.section(@description)
+    end
+
+    test "stops at a Symphony marker, so a block that follows is no part of the last step" do
+      summary = summarized("## User walkthrough\n\n1. Do it.")
+      decisions = "## User walkthrough\n\n1. Do it.\n\n#{Decisions.start_marker()}\n### Decisions\n\n#{Decisions.end_marker()}\n"
+
+      assert Walkthrough.section(summary) == "1. Do it."
+      assert Walkthrough.section(decisions) == "1. Do it."
+      assert [%{text: "Do it."}] = summary |> Walkthrough.section() |> Walkthrough.steps()
+      assert Walkthrough.section(summarized("## User walkthrough\n")) == nil
     end
   end
 
@@ -245,5 +257,68 @@ defmodule SymphonyElixir.WalkthroughTest do
 
       assert Walkthrough.put_proofs(description, []) == "## User walkthrough\n\n1. Do it.\n\n## After release\n"
     end
+
+    test "stops at the summary block's marker, so writing the summary again keeps the proofs" do
+      walkthrough = "## User walkthrough\n\n1. Do it."
+      {block, description} = proofs_before_summary(walkthrough)
+
+      assert description == summarized(walkthrough <> "\n\n" <> block)
+      assert Walkthrough.put_proofs(description, @proofs) == description
+      assert Walkthrough.put_proofs(description, []) == summarized(walkthrough)
+
+      {:ok, summary} = IssueSummary.new(%{"status" => "PR open", "changelog_entry" => "Handed off"})
+      {:ok, rewritten} = IssueSummary.put(description, summary, ~D[2026-11-07])
+
+      assert rewritten =~ block
+      assert IssueSummary.strip(rewritten) == walkthrough <> "\n\n" <> block
+    end
+
+    test "stops at the Decisions section's marker" do
+      walkthrough = "## User walkthrough\n\n1. Do it."
+      decisions = Enum.join([Decisions.start_marker(), "### Decisions", "", Decisions.end_marker()], "\n")
+      description = Walkthrough.put_proofs(walkthrough <> "\n\n" <> decisions <> "\n", @proofs)
+
+      assert description == walkthrough <> "\n\n" <> proofs_block() <> "\n\n" <> decisions <> "\n"
+    end
+
+    test "moves a block already inside another Symphony block to the walkthrough's end" do
+      walkthrough = "## User walkthrough\n\n1. Do it."
+      {_block, healthy} = proofs_before_summary(walkthrough)
+      inside = String.replace(summarized(walkthrough), "### Symphony summary", proofs_block() <> "\n\n### Symphony summary")
+
+      assert Walkthrough.put_proofs(inside, @proofs) == healthy
+      assert Walkthrough.put_proofs(inside, []) == summarized(walkthrough)
+
+      # Linear may store a marker line as a heading; the block is still inside.
+      heading = String.replace(inside, IssueSummary.start_marker(), "## " <> IssueSummary.start_marker())
+      refute Walkthrough.put_proofs(heading, @proofs) =~ ~r/---\s+#{Walkthrough.proofs_start_marker()}/
+    end
+
+    test "leaves a block after another Symphony block where it stands" do
+      description = "#{Decisions.start_marker()}\n#{Decisions.end_marker()}\n\n## User walkthrough\n\n1. Do it.\n\n" <> proofs_block() <> "\n\nTail.\n"
+
+      assert Walkthrough.put_proofs(description, @proofs) == description
+    end
+  end
+
+  defp summarized(description) do
+    {:ok, summary} = IssueSummary.new(%{"status" => "PR open", "changelog_entry" => "Opened the PR"})
+    {:ok, summarized} = IssueSummary.put(description, summary, ~D[2026-11-06])
+    summarized
+  end
+
+  defp proofs_before_summary(walkthrough), do: {proofs_block(), Walkthrough.put_proofs(summarized(walkthrough), @proofs)}
+
+  defp proofs_block do
+    Enum.join(
+      [
+        Walkthrough.proofs_start_marker(),
+        "_Symphony shows here the test the implementer recorded for each step it proves; QA walks the others._",
+        "",
+        "- Step 1 · Proved by: `test/a_test.exs`",
+        Walkthrough.proofs_end_marker()
+      ],
+      "\n"
+    )
   end
 end

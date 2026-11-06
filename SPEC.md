@@ -4635,7 +4635,8 @@ Scoped Linear tool extension contract:
   step winning, and never from the description; the pre-check's steps come from the events alone.
   The description's `Proved by:` lines MUST be a projection of those events, rendered between
   `<!-- symphony:proofs:start -->` and `<!-- symphony:proofs:end -->` at the end of the walkthrough in
-  the same pass as the Decisions section. The workpad's `### Plan` and `### Validation` MUST be
+  the same pass as the Decisions section, the walkthrough ending at the next heading or at a line
+  opening with a Symphony marker, and never inside another Symphony block. The workpad's `### Plan` and `### Validation` MUST be
   rendered from the run's `step.*` events between their own markers, leaving every other byte of the
   workpad as it is, again after each such event whether the step runner or the agent's
   `ticket_record` records it, one projection of a ticket at a time; an agent's own write of the
