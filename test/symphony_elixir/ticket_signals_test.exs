@@ -394,8 +394,8 @@ defmodule SymphonyElixir.TicketSignalsTest do
       assert {"note", %{text: "claim (claim)"}, []} = TicketSignals.event("claim", %{})
       assert {"note", %{text: "brand_new (brand_new)"}, []} = TicketSignals.event("brand_new", :not_a_map)
 
-      assert {"note", %{text: "Code Review waits for a green head · head abc123 · status red (code_review_head_not_green)"}, []} =
-               TicketSignals.event("code_review_head_not_green", %{head: "abc123", status: :red, runs: [1], at: nil})
+      assert {"note", %{text: "Code Review waits on the PR watcher · head abc123 · reason the PR watcher (R24): Checks are running · status running (code_review_head_not_green)"}, []} =
+               TicketSignals.event("code_review_head_not_green", %{head: "abc123", status: :running, reason: "the PR watcher (R24): Checks are running", runs: [1], at: nil})
 
       assert {"note", %{text: text}, []} = TicketSignals.event("ci_wait_started", %{sha: String.duplicate("a", 5_000)})
       assert String.length(text) == 4_000

@@ -3232,7 +3232,8 @@ Rules:
   other failure, the head is green once its other checks passed. The reviewer and QA runs MUST
   dispatch only on a green head, whether the poll, a retry or
   the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`) dispatches
-  them; a held-back run records `code_review_head_not_green` or `qa_head_not_green` once per head. A
+  them; a held-back run records `code_review_head_not_green` or `qa_head_not_green`, with the PR watcher's
+  reason, once per head and reason. A
   QA `fail` or block on a head the PR watcher reads as red, missing a required check, or
   conflicting is recorded `blocked` with the component `ci` and leaves the ticket in `QA` for the
   watcher to route; it MUST NOT go to `Rework`. A red head in `Code Review`,

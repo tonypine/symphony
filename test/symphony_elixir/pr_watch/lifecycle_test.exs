@@ -145,7 +145,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
   defp issue(issue_id), do: %{Map.fetch!(World.get(:issues), issue_id) | repo_key: @repo_key}
 
   defp start!(opts \\ []) do
-    defaults = [repo_key: @repo_key, name: nil, auto: false, tracker: Tracker, github: GitHub, fetch: Fetch, interval_ms: 30_000, now: fn -> World.get(:now) end]
+    defaults = [repo_key: @repo_key, name: nil, auto: false, tracker: Tracker, github: GitHub, fetch: Fetch, interval_ms: 30_000, now: fn -> World.get(:now) end, follow_records: false]
     start_supervised!({Repo, Keyword.merge(defaults, opts)})
   end
 

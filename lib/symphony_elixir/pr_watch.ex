@@ -52,6 +52,18 @@ defmodule SymphonyElixir.PrWatch do
   def poll_now, do: Enum.each(running_watchers(), &Repo.poll_now/1)
 
   @doc """
+  Asks the watcher of `repo_key` to read the ticket's PR now, as a confirm read does, because
+  Symphony itself changed something its decision reads and no GitHub event will report it: a move,
+  or a run's end. A no-op without a watcher, or for a ticket it doesn't follow.
+  """
+  @spec read_ticket(String.t() | nil, String.t()) :: :ok
+  def read_ticket(repo_key, issue_id) when is_binary(repo_key) and repo_key != "" do
+    if Process.whereis(@registry), do: Repo.read_ticket(Repo.name(repo_key), issue_id), else: :ok
+  end
+
+  def read_ticket(_repo_key, _issue_id), do: :ok
+
+  @doc """
   Check Now: makes the watcher of `issue_identifier`'s repository read and decide at once, and
   returns the ticket's state record with the new decision. A ticket the watcher has no record of yet
   (it just entered a watched phase) is looked for after every running watcher ticks.

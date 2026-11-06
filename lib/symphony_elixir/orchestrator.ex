@@ -2537,6 +2537,10 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc false
+  @spec dispatch_refusal_for_test(Issue.t()) :: String.t()
+  def dispatch_refusal_for_test(%Issue{} = issue), do: dispatch_refusal(issue, terminal_state_set())
+
+  @doc false
   @spec dispatch_revalidated_issue_for_test(Issue.t(), boolean()) :: boolean()
   def dispatch_revalidated_issue_for_test(%Issue{} = issue, sticky_route?) when is_boolean(sticky_route?) do
     dispatch_revalidated_issue?(issue, terminal_state_set(), sticky_route?)
@@ -2833,6 +2837,10 @@ defmodule SymphonyElixir.Orchestrator do
           Keyword.get(opts, :status, "stopped"),
           Keyword.get(opts, :error, "agent stopped by orchestrator")
         )
+
+        # The run's end is written, and no DOWN will report it: the PR watcher reads the ticket now,
+        # so its "a run is working" decision doesn't stand until the next timed tick.
+        :ok = PrWatch.read_ticket(running_repo_key(state, running_entry), issue_id)
 
         if is_pid(pid) do
           terminate_task(pid)
@@ -5542,16 +5550,35 @@ defmodule SymphonyElixir.Orchestrator do
 
       {:skip, %Issue{} = refreshed_issue} ->
         Logger.info(
-          "Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} assigned_to_worker=#{refreshed_issue.assigned_to_worker} blocked_by=#{length(refreshed_issue.blocked_by)} sub_issues=#{length(refreshed_issue.sub_issues)}"
+          "Skipping stale dispatch after issue refresh: #{issue_context(refreshed_issue)} state=#{inspect(refreshed_issue.state)} assigned_to_worker=#{refreshed_issue.assigned_to_worker} blocked_by=#{length(refreshed_issue.blocked_by)} sub_issues=#{length(refreshed_issue.sub_issues)} refused_by=#{inspect(dispatch_refusal(refreshed_issue, terminal_states))}"
         )
 
         # A Code Review or QA ticket held back on its head records why, as the poll does.
         state
         |> note_blocked_flow_head(refreshed_issue)
         |> release_undispatched_claim(issue.id)
+        |> retry_refused_dispatch(attempt)
 
       {:error, reason} ->
         skip_dispatch_after_refresh_failure(state, issue, attempt, preferred_worker_host, repo_key, reason)
+    end
+  end
+
+  # A retry refused here has left the retry queue, and what refused it is usually a race with the
+  # finished run's teardown, so the next cycle judges the ticket again instead of leaving it to a
+  # timer. That cycle's own refusal asks for no other, so this never loops.
+  defp retry_refused_dispatch(%State{} = state, attempt) do
+    if retry_attempt?(attempt), do: request_cycle(state), else: state
+  end
+
+  # Which check of the revalidation refused the issue, for the log.
+  defp dispatch_refusal(%Issue{} = issue, terminal_states) do
+    cond do
+      not candidate_issue?(issue, active_state_set(), terminal_states) -> "candidate_issue?"
+      issue_held?(issue, terminal_states) -> "issue_held?"
+      code_review_reviewer_disabled?(issue) -> "flow_gated?: the reviewer is turned off"
+      reason = watch_gate_reason(issue) -> "flow_gated?: #{reason}"
+      true -> "unmoved_since?"
     end
   end
 
@@ -10800,71 +10827,40 @@ defmodule SymphonyElixir.Orchestrator do
   defp note_blocked_flow_head(%State{} = state, %Issue{} = issue) do
     cond do
       code_review_reviewer_disabled?(issue) -> note_code_review_reviewer_disabled(state, issue)
-      code_review_head_blocked?(issue) -> note_code_review_head(state, issue)
-      qa_head_blocked?(issue) -> note_qa_head(state, issue)
+      code_review_head_blocked?(issue) -> note_held_run(state, issue, "the reviewer", "code_review_head_not_green")
+      qa_head_blocked?(issue) -> note_held_run(state, issue, "QA", @qa_head_not_green_signal)
       true -> state
     end
   end
 
-  # Parks a Code Review ticket whose head is not green, recording why once per head so the ledger
-  # carries the no-dispatch event without repeating it on every poll tick. The ticket stays exactly
-  # where it is: the state is returned unchanged.
-  defp note_code_review_head(%State{} = state, %Issue{} = issue) do
-    case ticket_ci_state(issue) do
-      %{head_sha: head, status: status} ->
-        unless latest_code_review_head_signal?(issue, head) do
-          record_signal(issue, "code_review_head_not_green", %{head: head, status: status})
-        end
+  # Parks a Code Review or QA ticket the PR watcher's decision holds back, logging the watcher's own
+  # reason (the gate reads it, not the head's status: a green head can be held) and recording it once
+  # per head and reason, so the ledger carries the no-dispatch event without repeating it on every
+  # poll tick. The ticket stays exactly where it is: the state is returned unchanged, and the run is
+  # dispatched once the watcher's decision lets it.
+  defp note_held_run(%State{} = state, %Issue{} = issue, run, signal) do
+    reason = watch_gate_reason(issue)
 
-        head_status = if status == "", do: "unknown", else: status
-
-        Logger.info("Not dispatching the reviewer for #{issue_context(issue)}: its head is #{head_status}")
-
-      _none ->
-        :ok
+    with %{head_sha: head, status: status} <- ticket_ci_state(issue),
+         false <- latest_held_signal?(issue, signal, head, reason) do
+      record_signal(issue, signal, %{head: head, status: status, reason: reason})
     end
+
+    Logger.info("Not dispatching #{run} for #{issue_context(issue)}: #{reason}")
 
     state
   end
 
-  defp latest_code_review_head_signal?(issue, head), do: latest_head_signal?(issue, "code_review_head_not_green", head)
+  # Whether the newest signal on the ticket is `name` for the same head and reason.
+  defp latest_held_signal?(%Issue{id: issue_id}, name, head, reason) do
+    case RunStore.get_ticket_state(issue_id) do
+      %{} = record ->
+        match?([%{name: ^name, details: %{head: ^head, reason: ^reason}}], TicketState.recent_signals(record, 1))
 
-  # Parks a QA ticket whose head is not green, recording why once per head, exactly as a Code Review
-  # ticket is parked. The ticket stays where it is: the state is returned unchanged, and the run is
-  # dispatched once the poll's rollup read calls the head green.
-  defp note_qa_head(%State{} = state, %Issue{} = issue) do
-    case ticket_ci_state(issue) do
-      %{head_sha: head, status: status} ->
-        unless latest_head_signal?(issue, @qa_head_not_green_signal, head) do
-          record_signal(issue, @qa_head_not_green_signal, %{head: head, status: status})
-        end
-
-        head_status = if status == "", do: "unknown", else: status
-
-        Logger.info("Not dispatching QA for #{issue_context(issue)}: its head is #{head_status}")
-
-      _none ->
-        :ok
-    end
-
-    state
-  end
-
-  # Whether the newest signal on the ticket is `name` for the same head, so a no-dispatch event is
-  # recorded once per head rather than on every poll tick.
-  defp latest_head_signal?(%Issue{id: issue_id} = issue, name, head) when is_binary(issue_id) do
-    with repo_key when is_binary(repo_key) <- issue_repo_key(issue),
-         %{} = record <- RunStore.get_ticket_state(issue_id) do
-      case TicketState.recent_signals(record, 1) do
-        [%{name: ^name, details: details}] -> Map.get(details, :head) == head
-        _signals -> false
-      end
-    else
-      _none_or_error -> false
+      _none_or_error ->
+        false
     end
   end
-
-  defp latest_head_signal?(_issue, _name, _head), do: false
 
   # Parks a Code Review ticket whose repo has the reviewer off, recording why once so the ledger
   # carries the no-dispatch event without repeating it on every poll tick. The ticket stays exactly

@@ -261,7 +261,8 @@ defmodule SymphonyElixir.TransitionGuard do
   `{:error, {:unresolved_target, signal}}`, before Linear is asked.
   A move into `Merging` asks the PR and CI watcher to read now (`opts[:on_merging]` overrides it), so
   a PR that is already green merges at once instead of on the next timer, by when its head may be
-  behind.
+  behind. Any other move asks it to read that ticket's PR now (`opts[:on_moved]` overrides it): no
+  GitHub event reports a move Symphony made, and the dispatch gates read the watcher's decision.
 
   The record is written first: with `ctx.repo_key`, the ticket's record takes the target as its
   phase (`SymphonyElixir.TicketSignals.record_phase/3`) before Linear is asked, so Symphony's record
@@ -315,6 +316,8 @@ defmodule SymphonyElixir.TransitionGuard do
         :ok
 
       :ok ->
+        repo_key = Map.get(ctx, :repo_key)
+        Keyword.get(opts, :on_moved, &SymphonyElixir.PrWatch.read_ticket/2).(repo_key, issue_id)
         :ok
 
       {:error, :state_not_found} = error ->

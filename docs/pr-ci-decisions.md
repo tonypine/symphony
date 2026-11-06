@@ -333,6 +333,17 @@ opens:
 - **Review comments** to address in Code Review, QA or Merging (R13, D8): auto-merge goes off and
   the ticket goes back to In Progress on the same PR, where the run reads the comments.
 
+### Reads Symphony asks for itself
+
+No GitHub event reports a change Symphony makes, so it asks the watcher to read at once rather than
+leave the decision to the next timed tick. A move into `Merging` and a run's normal end make every
+watched PR read (`poll_now`). Any other move, and a run Symphony stopped, have that ticket's PR read
+(`read_ticket`), as a confirm read with no delay and only for a ticket the watcher follows. With
+`dispatch.source: record` a change of a ticket's phase, blockers or pause is also re-decided at once
+on the read the watcher holds; with `dispatch.source: poll` a change of its blockers or pause has its
+PR read. A dispatch held back on the decision logs the watcher's own reason and rule, and a retry
+that the dispatch refuses names the check that refused it and asks for another cycle.
+
 ### Silent waits
 
 Each tick also looks for a ticket that waits with nothing under way and no reason anybody can act

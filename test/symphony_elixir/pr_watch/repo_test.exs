@@ -201,6 +201,8 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
   defp registered_watchers, do: Registry.select(SymphonyElixir.Repo.Registry, [{{{:pr_watch, :"$1"}, :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
 
+  defp reporting_timer(test_pid), do: fn message, delay_ms -> send(test_pid, {:timer, message, delay_ms}) && make_ref() end
+
   defp flush do
     receive do
       _message -> flush()
@@ -1419,6 +1421,94 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
       assert watch(repo_key, "1") == before
       no_reads!()
+    end
+
+    test "TP-1163: a review's approval on a green PR: the run's end has the PR read at once, with no timed tick, and QA's dispatch announced",
+         %{repo_key: repo_key} do
+      record_source!()
+      issues!({:error, :linear_must_not_be_read})
+      observed!(repo_key, with_pr(repo_key, issue("1", "Code Review"), 1))
+      :ok = RunStore.put_run(%{repo_key: repo_key, run_id: "run-1", issue_id: "1", status: "running"})
+      # A timed tick an hour away: only the read the run's end asks for can answer in this test.
+      pid = start_repo!(repo_key, auto: true, interval_ms: 3_600_000, follow_records: true)
+      assert_receive {:read, _pr_url, _opts}
+      :sys.get_state(pid)
+      :ok = ObservabilityPubSub.subscribe_ticket_records()
+
+      # The reviewer approves while its run still works: the move alone leaves R9.
+      :ok = SymphonyElixir.TicketSignals.record_phase(repo_key, "1", "QA")
+      redecided!(pid)
+      assert %{stay: :qa, decision: %{rule: "R9"}} = watch(repo_key, "1")
+      assert dispatch_reason(repo_key, "1", "QA") =~ "the PR watcher (R9)"
+      flush()
+
+      :ok = RunStore.update_run(repo_key, "run-1", %{status: "completed"})
+      assert Repo.poll_now(pid) == :ok
+
+      assert_receive {:ticket_record, ^repo_key, "1", :changed, [:pr_watch]}, 1_000
+      assert_received {:read, "https://github.com/acme/app/pull/1", _opts}
+      assert %{stay: :qa, decision: %{kind: :dispatch}} = watch(repo_key, "1")
+      assert dispatch_reason(repo_key, "1", "QA") == nil
+    end
+
+    test "TP-1163: a rework run that pushed and ended has the PR read at once, and the reviewer then waits only on CI", %{repo_key: repo_key} do
+      record_source!()
+      issues!({:error, :linear_must_not_be_read})
+      observed!(repo_key, with_pr(repo_key, issue("1", "Code Review"), 1))
+      :ok = RunStore.put_run(%{repo_key: repo_key, run_id: "run-1", issue_id: "1", status: "running"})
+      test_pid = self()
+      pid = start_repo!(repo_key, timer: reporting_timer(test_pid))
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      assert %{decision: %{rule: "R9"}} = watch(repo_key, "1")
+      flush()
+
+      # The run's end is written, then the read is asked for: it comes with no delay, and CI is what it finds.
+      :ok = RunStore.update_run(repo_key, "run-1", %{status: "stopped"})
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{ci: :pending})}})
+      assert Repo.read_ticket(pid, "1") == :ok
+      assert_receive {:timer, :confirm, 0}
+      send(pid, :confirm)
+      :sys.get_state(pid)
+
+      assert_received {:read, "https://github.com/acme/app/pull/1", _opts}
+      refute match?(%{decision: %{rule: "R9"}}, watch(repo_key, "1"))
+      assert dispatch_reason(repo_key, "1", "Code Review") =~ "Checks"
+    end
+
+    test "TP-1163: a read Symphony asks for costs nothing for a ticket the watcher doesn't follow", %{repo_key: repo_key} do
+      record_source!()
+      issues!({:error, :linear_must_not_be_read})
+      test_pid = self()
+      pid = start_repo!(repo_key, timer: reporting_timer(test_pid))
+
+      assert Repo.read_ticket(pid, "never-seen") == :ok
+      :sys.get_state(pid)
+      refute_received {:timer, :confirm, _delay_ms}
+      no_reads!()
+
+      observed!(repo_key, with_pr(repo_key, issue("2", "Backlog"), 2))
+      assert Repo.read_ticket(pid, "2") == :ok
+      :sys.get_state(pid)
+      refute_received {:timer, :confirm, _delay_ms}
+      no_reads!()
+    end
+
+    test "TP-1163: under dispatch from the poll, a hold cleared has the PR read at once; a phase announced before Linear moved waits for the move's own read",
+         %{repo_key: repo_key} do
+      write_workflow_file!(Workflow.workflow_file_path())
+      Cache.clear()
+      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+      test_pid = self()
+      pid = start_repo!(repo_key, follow_records: true, timer: reporting_timer(test_pid))
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      flush()
+
+      :ok = SymphonyElixir.TicketSignals.record_phase(repo_key, "1", "QA")
+      :sys.get_state(pid)
+      refute_received {:timer, :confirm, _delay_ms}
+
+      {:ok, _pause} = SymphonyElixir.Pauses.set({:ticket, repo_key, "1"}, SymphonyElixir.Pauses.ticket_reason(:dependency, "TP-9"))
+      assert_receive {:timer, :confirm, 0}
     end
 
     test "TP-1223: a burst of changes to one ticket is one re-decision; a change after it is another", %{repo_key: repo_key} do

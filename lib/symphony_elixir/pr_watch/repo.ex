@@ -93,6 +93,11 @@ defmodule SymphonyElixir.PrWatch.Repo do
   (it just started, the PR changed, or a delivery made the read stale) has that one PR read, as a
   confirm read does. Changes that arrive while a re-decision is queued join it, so a burst is one
   re-decision. A change of any other field (a title, a priority) re-decides nothing.
+
+  With `dispatch.source: poll` a change of a ticket's blockers or pause has its PR read at once. A
+  phase change has it read too, once Linear holds the move: the same read a move or a run's end asks
+  for (`read_ticket/2`), a confirm read of a ticket the watcher follows, with no delay. A ticket it
+  doesn't follow costs no read.
   """
 
   use GenServer
@@ -209,6 +214,13 @@ defmodule SymphonyElixir.PrWatch.Repo do
     :ok
   end
 
+  @doc """
+  Asks the watcher to read one ticket's PR now, because Symphony changed something its decision
+  reads; a no-op when it isn't running or doesn't follow the ticket.
+  """
+  @spec read_ticket(GenServer.server(), String.t()) :: :ok
+  def read_ticket(server, issue_id), do: GenServer.cast(server, {:read_ticket, issue_id})
+
   @impl true
   def init(opts) do
     repo_key = Keyword.fetch!(opts, :repo_key)
@@ -279,6 +291,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
     {:noreply, state |> confirm(confirmed, confirm_delay_ms(delivery)) |> reread(pushed)}
   end
 
+  def handle_cast({:read_ticket, issue_id}, state), do: {:noreply, read_followed(state, issue_id)}
+
   def handle_cast({:reject, _reason, repo_url}, state) do
     if about_url?(state, repo_url, ticket_states(state)) do
       now = now(state)
@@ -309,9 +323,14 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   def handle_info({:ticket_record, repo_key, issue_id, :changed, fields}, %{repo_key: repo_key} = state) do
-    if Config.dispatch_source() == "record" and Enum.any?(fields, &(&1 in @decided_fields)),
-      do: {:noreply, redecide(state, issue_id)},
-      else: {:noreply, state}
+    cond do
+      not Enum.any?(fields, &(&1 in @decided_fields)) -> {:noreply, state}
+      Config.dispatch_source() == "record" -> {:noreply, redecide(state, issue_id)}
+      # Announced before Linear is asked, so a read now would find the old phase: the move's own
+      # `read_ticket/2` follows it.
+      :phase in fields -> {:noreply, state}
+      true -> {:noreply, read_followed(state, issue_id)}
+    end
   end
 
   def handle_info({:ticket_record, _repo_key, _issue_id, :changed, _fields}, state), do: {:noreply, state}
@@ -319,6 +338,17 @@ defmodule SymphonyElixir.PrWatch.Repo do
   def handle_info(:redecide, state) do
     {_reply, state} = tick(%{state | redecide: MapSet.new()}, {:only, state.redecide}, :record)
     {:noreply, state}
+  end
+
+  # A confirm read with no delay, of a ticket the watcher keeps a record of: a change Symphony made
+  # has no burst of deliveries to wait for. Its source reads `webhook`, as any scoped read's does.
+  defp read_followed(state, issue_id) do
+    with %{} = record <- store(state).get_ticket_state(issue_id),
+         %{} <- TicketState.pr_watch(record) do
+      confirm(state, [issue_id], 0)
+    else
+      _not_followed -> state
+    end
   end
 
   # One re-decision in flight: a change that arrives while one is queued joins it.
