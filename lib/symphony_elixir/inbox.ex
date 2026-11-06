@@ -16,7 +16,7 @@ defmodule SymphonyElixir.Inbox do
   its ticket sits (`context`), from the same records; it reads GitHub for the pull requests a row
   names only when the row changed since it last read them.
 
-  The second argument of `items/2` and `rows/1` names the Inbox: a name (the default, this module)
+  The second argument of `items/2` and `listing/2`, and the argument of `rows/1`, names the Inbox: a name (the default, this module)
   reads the run store, and a keyword list may give `:records` (a function returning the records),
   `:subject_questions` (a function returning the open Questions on subjects that are not tickets),
   `:name` and the options `SymphonyElixir.Inbox.References.resolve/3` takes.
@@ -54,7 +54,7 @@ defmodule SymphonyElixir.Inbox do
   `snapshot`), each row with its references and context, oldest first.
   """
   @spec listing(map(), inbox()) :: [Item.t()]
-  def listing(snapshot, inbox \\ __MODULE__) when is_map(snapshot) do
+  def listing(snapshot, inbox) when is_map(snapshot) do
     {records, opts} = read(inbox)
 
     items =
