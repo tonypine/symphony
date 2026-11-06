@@ -32,7 +32,18 @@ defmodule SymphonyElixir.DirectorBlockers do
 
   require Logger
 
-  alias SymphonyElixir.{AuditLog, Config, Orchestrator, Pauses, RunStore, StateMachine, TicketSignals, TicketState}
+  alias SymphonyElixir.{
+    AuditLog,
+    Config,
+    Orchestrator,
+    Pauses,
+    RunStore,
+    StateMachine,
+    TicketMoves,
+    TicketSignals,
+    TicketState
+  }
+
   alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.PrWatch.Competitors
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -110,7 +121,7 @@ defmodule SymphonyElixir.DirectorBlockers do
     name = String.trim(name)
 
     case Enum.find(records, &(&1.issue_id == name or same_identifier?(&1.issue_identifier, name))) do
-      nil -> {:error, {:conflict, "Symphony doesn't track #{name}, so it can't be linked as a blocker or be given one."}}
+      nil -> {:error, {:conflict, TicketMoves.untracked_reason(:blocker, name)}}
       record -> {:ok, record}
     end
   end

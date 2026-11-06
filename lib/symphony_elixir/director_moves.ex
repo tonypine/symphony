@@ -4,7 +4,8 @@ defmodule SymphonyElixir.DirectorMoves do
   (`POST /api/v1/control/<move>`, decision DD4 in `docs/design/director-app-screens.md`).
 
   Each move reads the ticket, refuses one the workflow doesn't allow from its current state
-  (`{:error, {:conflict, message}}`, a 409), posts its comment when it has one, makes the Linear
+  (`{:error, {:conflict, message}}`, a 409, with the reason `SymphonyElixir.TicketMoves` gives the
+  ticket read's `moves`), posts its comment when it has one, makes the Linear
   move, writes a `director_move` audit record and a `person.action` event on the ticket (a Decide's
   event is its `decision.recorded`), and answers with the states it moved between:
 
@@ -149,7 +150,6 @@ defmodule SymphonyElixir.DirectorMoves do
     PathUnlock,
     Pauses,
     PlanComments,
-    PlanReview,
     PrWatch,
     Questions,
     ReleaseBuild,
@@ -157,6 +157,7 @@ defmodule SymphonyElixir.DirectorMoves do
     RunStore,
     StateMachine,
     SubIssueWait,
+    TicketMoves,
     TicketObservation,
     TicketPullRequest,
     TicketSignals,
@@ -627,60 +628,31 @@ defmodule SymphonyElixir.DirectorMoves do
 
   # The state a move takes the ticket to (nil when it stays), or why the workflow doesn't allow it.
   defp target(:approve_plan, issue, settings) do
-    with :ok <- require_plan(issue, "approve_plan"),
-         :ok <- require_plan_review(issue, settings) do
-      case SubIssueWait.enabled?(settings) && SubIssueWait.state(settings) do
-        state when is_binary(state) -> {:ok, state}
-        _off -> conflict("the waiting state is turned off, so a plan can't be approved from the app")
-      end
-    end
+    with :ok <- guard(:approve_plan, issue), do: {:ok, SubIssueWait.state(settings)}
   end
 
-  defp target(:rework, issue, settings) do
-    with :ok <- require_plan_review(issue, settings), do: {:ok, @rework_state}
+  defp target(:rework, issue, _settings) do
+    with :ok <- guard(:rework, issue), do: {:ok, @rework_state}
   end
 
-  defp target(:restart, %Issue{state: state} = issue, settings) do
-    if Enum.any?(settings.tracker.terminal_states, &same_state?(&1, state)),
-      do: conflict("#{issue.identifier} is #{state}; only an open ticket can be restarted"),
-      else: {:ok, @in_progress_state}
+  defp target(:restart, issue, _settings) do
+    with :ok <- guard(:restart, issue), do: {:ok, @in_progress_state}
   end
 
   # The comment goes first, in place; `start_revision/6` then moves a plan under review to its revision.
-  defp target(move, issue, settings) when move in [:decisions, :changes] do
-    with :ok <- require_plan(issue, Atom.to_string(move)),
-         :ok <- require_plan_review(issue, settings),
-         do: {:ok, nil}
+  defp target(move, issue, _settings) when move in [:decisions, :changes] do
+    with :ok <- guard(move, issue), do: {:ok, nil}
   end
 
-  defp target(:backlog, %Issue{state: state} = issue, settings) do
-    cond do
-      same_state?(state, @backlog_state) -> conflict("#{issue.identifier} is already in Backlog")
-      Enum.any?(settings.tracker.terminal_states, &same_state?(&1, state)) -> conflict("#{issue.identifier} is #{state}; only an open ticket moves to Backlog")
-      true -> {:ok, @backlog_state}
-    end
+  defp target(:backlog, issue, _settings) do
+    with :ok <- guard(:backlog, issue), do: {:ok, @backlog_state}
   end
 
-  defp require_open(%Issue{state: state} = issue, settings) do
-    if Enum.any?(settings.tracker.terminal_states, &same_state?(&1, state)),
-      do: conflict("#{issue.identifier} is #{state}; only an open ticket can be cancelled"),
-      else: :ok
-  end
-
-  defp require_plan(issue, move) do
-    if Issue.breakdown?(issue), do: :ok, else: conflict("#{issue.identifier} is not a plan; #{move} is for a plan")
-  end
-
-  # The Director answers a plan a person is reviewing: one in `Plan Review`.
-  defp require_plan_review(%Issue{state: state} = issue, settings) do
-    case PlanReview.state(settings) do
-      plan_review when is_binary(plan_review) ->
-        if PlanReview.in_state?(state, settings),
-          do: :ok,
-          else: conflict("#{issue.identifier} is #{state || "in no state"}; the Director answers it only from #{plan_review}")
-
-      nil ->
-        conflict("the Plan Review state is turned off, so the Director can't answer #{issue.identifier} from the app")
+  # The one guard (`SymphonyElixir.TicketMoves`), which the ticket read's `moves` also answers from.
+  defp guard(move, issue) do
+    case TicketMoves.check(move, TicketMoves.issue_facts(issue)) do
+      :ok -> :ok
+      {:error, reason} -> conflict(reason)
     end
   end
 
@@ -908,7 +880,7 @@ defmodule SymphonyElixir.DirectorMoves do
   # otherwise stands on the record, marked for the reconciler to project, so the rest of the cancel
   # goes on: the run is stopped, the pull request closed, the questions, holds and pauses cleared.
   defp cancel(issue, note, opts) do
-    with :ok <- require_open(issue, Config.settings!()),
+    with :ok <- guard(:cancel, issue),
          {:ok, to_state} <- cancel_in_linear(issue) do
       stopped? = stop_run(issue, opts)
       closed = close_cancelled_pull_requests(issue, note, opts)
@@ -1035,7 +1007,7 @@ defmodule SymphonyElixir.DirectorMoves do
   # configured repository is refused. A record answers with its phase; a ticket with none yet is
   # read from Linear by id and observed first, so the move acts from a record like any other.
   defp require_tracked(%Issue{repo_key: nil} = issue, _opts),
-    do: conflict("#{issue.identifier} is in no repository Symphony is configured for, so Symphony doesn't track it")
+    do: conflict(TicketMoves.no_repository_reason(issue.identifier))
 
   defp require_tracked(issue, opts) do
     case Keyword.get(opts, :store, RunStore).get_ticket_state(issue.id) do
@@ -1145,12 +1117,12 @@ defmodule SymphonyElixir.DirectorMoves do
     held = Questions.held(ticket)
     landing? = Enum.any?(reasons, &Competitors.landing_reason?/1)
 
-    if answered? or landing? or held != nil or Enum.any?(reasons, & &1.releasable) do
+    if answered? or TicketMoves.unblockable?(reasons, held != nil) do
       if landing?, do: release_competitors(issue, opts)
       release = Keyword.get(opts, :release, &release/2)
       lift(issue, fn -> release.(ticket, held) end, opts)
     else
-      access_conflict(issue)
+      guard(:unblock, issue)
     end
   end
 
@@ -1217,8 +1189,6 @@ defmodule SymphonyElixir.DirectorMoves do
     end
   end
 
-  defp access_conflict(issue), do: {:error, {:conflict, "#{issue.identifier} has nothing a person can unblock"}}
-
   defp lift(issue, clear, opts), do: lift(issue, clear, unblock_comment(issue.identifier), nil, opts)
 
   defp lift(issue, clear, comment, to_state, opts) do
@@ -1273,7 +1243,7 @@ defmodule SymphonyElixir.DirectorMoves do
     ticket = ticket(issue)
 
     case blank_to_nil(input[:question_id]) do
-      nil -> Questions.deciding(ticket) || conflict("#{issue.identifier} is not waiting on a decision")
+      nil -> Questions.deciding(ticket) || guard(:answer, issue)
       id -> named_question(issue, ticket, String.trim(id))
     end
   end
@@ -1281,15 +1251,10 @@ defmodule SymphonyElixir.DirectorMoves do
   defp named_question(issue, ticket, id) do
     case Questions.find(ticket, id) do
       nil -> conflict("#{issue.identifier} has no question #{id}")
-      %{state: :open} = question -> if unblock_question?(question), do: {:held, question}, else: question
+      %{state: :open} = question -> if Questions.held_question?(question), do: {:held, question}, else: question
       %{state: :answered} = question -> {:already_decided, question}
       %{state: state} -> conflict("#{issue.identifier}'s question #{id} is #{state}, not open")
     end
-  end
-
-  defp unblock_question?(question) do
-    labels = [TransitionGuard.unblock_option() | DispatchLoop.unblock_labels()]
-    Enum.any?(question.options, &(&1.label in labels))
   end
 
   # The Inbox answers a question Unblock answers (a dispatch loop's, a quiet handoff's, a park's, a

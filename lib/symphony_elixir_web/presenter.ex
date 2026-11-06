@@ -23,9 +23,9 @@ defmodule SymphonyElixirWeb.Presenter do
     Sessions,
     Setup,
     Situation,
-    StartNow,
     StateMachine,
     StrayProcesses,
+    TicketMoves,
     TicketObservation,
     TicketState,
     URLUtils,
@@ -368,28 +368,27 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.put(:plan_brief, plan_brief_payload(record))
     |> Map.put(:situation, situation_payload(record || %{issue_id: payload.issue_id, repo_key: payload.repo_key}, Situation.live_facts(snapshot), nil))
     |> Map.merge(Lifecycle.read(payload.issue_id))
-    |> Map.merge(ticket_status(record, repository_pause, running?))
+    |> Map.merge(ticket_status(record, %{identifier: payload.issue_identifier, repo_key: payload.repo_key, repository_pause: repository_pause, running?: running?}))
   end
 
   # The one answer to "why is this ticket not moving", as the ticket payload and each ticket entry
   # of the state payload carry it: its pause (`pause_payload/1`, nil when it moves), the questions
-  # still waiting for an answer, whether its repository is paused, and whether Start now may start
-  # its run at once (`StartNow.payload/1`, the reason in the words the tooltip shows when it may not).
-  defp ticket_status(record, repository_pause, running?) do
+  # still waiting for an answer, whether its repository is paused, and each Director move with whether
+  # it may be made now (`SymphonyElixir.TicketMoves`, the reason in the words the tooltip shows when it
+  # may not). `start` is the move Start now, as the app has read it since before `moves`.
+  defp ticket_status(record, %{} = live) do
+    moves = moves_payload(record, Map.put(live, :symphony_pause, symphony_pause_reason()))
+
     %{
       pause: pause_payload(record),
       open_questions: open_questions_payload(record),
-      repository_paused: is_binary(repository_pause),
-      start:
-        StartNow.payload(%{
-          phase: record_phase(record),
-          symphony_pause: symphony_pause_reason(),
-          repository_pause: repository_pause,
-          open_question?: open_question?(record),
-          running?: running?
-        })
+      repository_paused: is_binary(live.repository_pause),
+      start: moves.start,
+      moves: moves
     }
   end
+
+  defp moves_payload(record, live), do: record |> TicketMoves.facts(live) |> TicketMoves.read()
 
   # A state payload entry with its ticket's status, read from the records the payload read once and
   # from the repositories' pauses in the snapshot. A ticket the snapshot lists among the running
@@ -399,12 +398,17 @@ defmodule SymphonyElixirWeb.Presenter do
     entry = with_record_repo_key(entry, record)
     repo_key = entry.repo_key
 
-    repository_pause =
-      Enum.find_value(repositories, fn repository ->
-        repository.repo_key == repo_key and not is_nil(repository.pause) and Pauses.repository_skip_reason(repository.pause)
-      end)
+    identifier = Map.get(entry, :issue_identifier) || Map.get(entry, :identifier) || entry.issue_id
+    repository_pause = repository_pause_in(repositories, repo_key)
 
-    Map.merge(entry, ticket_status(record, repository_pause, running?))
+    Map.merge(entry, ticket_status(record, %{identifier: identifier, repo_key: repo_key, repository_pause: repository_pause, running?: running?}))
+  end
+
+  # The line a repository's pause in the snapshot skips dispatch with; nil when it has none.
+  defp repository_pause_in(repositories, repo_key) do
+    Enum.find_value(repositories, fn repository ->
+      repository.repo_key == repo_key and not is_nil(repository.pause) and Pauses.repository_skip_reason(repository.pause)
+    end)
   end
 
   # The repository a ticket entry names is its one record's: the record's field is where the ticket
@@ -413,17 +417,6 @@ defmodule SymphonyElixirWeb.Presenter do
     do: %{entry | repo_key: repo_key}
 
   defp with_record_repo_key(entry, _record), do: entry
-
-  # The ticket's phase as its record holds it; a record the payload doesn't have holds none.
-  defp record_phase(record) when is_map(record), do: Map.get(record, :phase)
-
-  defp record_phase(_record), do: nil
-
-  # Whether a Question is still waiting for an answer on the ticket, as its record holds them.
-  defp open_question?(record) when is_map(record),
-    do: record |> Map.get(:questions) |> List.wrap() |> Enum.any?(&(&1.state == :open))
-
-  defp open_question?(_record), do: false
 
   # The line Symphony's pause skips dispatch with, as the state payload's `pause` reads it; nil
   # when no reason stops dispatch.
@@ -526,20 +519,29 @@ defmodule SymphonyElixirWeb.Presenter do
     watched = for {_issue_id, record} <- records, record.pr_watch, do: record
     live = Situation.live_facts(snapshot)
     all = Map.values(records)
+    pauses = %{repositories: Map.get(snapshot, :repositories, []), symphony_pause: symphony_pause_reason()}
 
     watched
     |> Enum.sort_by(&{&1.repo_key || "", &1.issue_identifier || &1.issue_id || ""})
-    |> Enum.map(&watched_issue_payload(&1, live, all))
+    |> Enum.map(&watched_issue_payload(&1, live, all, pauses))
   end
 
-  defp watched_issue_payload(record, live, records) do
+  defp watched_issue_payload(record, live, records, pauses) do
     Map.merge(
       %{
         issue_id: record.issue_id,
         identifier: record.issue_identifier,
         repo_key: record.repo_key,
         watch: WatchPayload.watch(record),
-        situation: situation_payload(record, live, records)
+        situation: situation_payload(record, live, records),
+        moves:
+          moves_payload(record, %{
+            identifier: record.issue_identifier || record.issue_id,
+            repo_key: record.repo_key,
+            symphony_pause: pauses.symphony_pause,
+            repository_pause: repository_pause_in(pauses.repositories, record.repo_key),
+            running?: Map.has_key?(live.running, record.issue_id)
+          })
       },
       Lifecycle.read(record.issue_id)
     )

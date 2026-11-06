@@ -9037,7 +9037,7 @@ defmodule SymphonyElixir.Orchestrator do
         {:reply, {:error, {:start_refused, reason}}, state}
 
       {:ok, nil} ->
-        {:reply, {:error, {:start_refused, "the ticket has no repository; it cannot be started"}}, state}
+        {:reply, {:error, {:start_refused, StartNow.no_repository_reason()}}, state}
 
       {:ok, repo_key} ->
         start_reply(state, issue, repo_key, note)

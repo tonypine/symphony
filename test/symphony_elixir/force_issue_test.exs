@@ -138,7 +138,7 @@ defmodule SymphonyElixir.ForceIssueTest do
 
     test "an unknown, closed or failing ticket gives a clear message and a non-zero exit" do
       assert {{:error, "MT-404 was not found in Linear"}, ""} = force(["MT-404"])
-      assert {{:error, "MT-4 is Done; only an open ticket can be forced"}, ""} = force(["MT-4"])
+      assert {{:error, "The ticket is done."}, ""} = force(["MT-4"])
       assert ticket_events(Config.repo_key!(), "id-4", "person.action") == []
 
       Application.put_env(:symphony_elixir, :memory_tracker_add_issue_label_result, {:error, :boom})

@@ -1512,6 +1512,10 @@ Fields:
   the answer names which; a ticket in the backlog is refused with "move it first". A ticket in
   the todo state is claimed (in progress) first. The run a person starts this way records one
   `run.started_by_person` event on the ticket, by the person with their note.
+- Implementations MAY carry each operator move on the ticket read with whether it is allowed now and
+  why not (this one has `moves`, `docs/control-api.md`). The read and the control call MUST judge the
+  ticket's state with one guard, so a move the read allows is not refused for that state and the
+  call's refusal is the read's reason, word for word.
 - `concurrency.forced_stale_after_hours` (positive integer)
   - Default: `72`.
   - How long an issue may stay forced before it counts as stale. A stale issue is reported as
