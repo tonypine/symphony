@@ -214,6 +214,77 @@ defmodule SymphonyElixir.AgentRunnerTest do
     assert skipped == ["build", "checks", "tests"]
   end
 
+  describe "work the agent committed" do
+    test "runs the machine steps when the repository names no base branch: they compare with main", ctx do
+      commit_on_a_branch!(ctx.workspace, "main")
+
+      assert_machine_steps_run(ctx)
+    end
+
+    test "runs the machine steps against the base branch the repository names", ctx do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: Path.dirname(ctx.workspace),
+        max_turns: 6,
+        repos: [
+          %{
+            "name" => "default",
+            "path" => Path.dirname(Workflow.workflow_file_path()),
+            "workflow" => Path.basename(Workflow.workflow_file_path()),
+            "team" => "Test",
+            "base_branch" => "develop"
+          }
+        ]
+      )
+
+      commit_on_a_branch!(ctx.workspace, "develop")
+
+      assert_machine_steps_run(ctx)
+    end
+  end
+
+  # A git workspace with `origin/<base>` and a branch off it that committed `lib/a.ex`, leaving
+  # nothing uncommitted: only the comparison with the base branch can find the change.
+  defp commit_on_a_branch!(workspace, base) do
+    git = fn args -> assert {_output, 0} = System.cmd("git", ["-C", workspace | args], stderr_to_stdout: true) end
+
+    git.(["init", "-q", "-b", base])
+    git.(["config", "user.email", "test@example.com"])
+    git.(["config", "user.name", "Test"])
+    File.write!(Path.join(workspace, "README.md"), "base")
+    git.(["add", "."])
+    git.(["commit", "-q", "-m", "base"])
+    git.(["update-ref", "refs/remotes/origin/#{base}", "HEAD"])
+    git.(["checkout", "-q", "-b", "auto/TP-900"])
+    File.mkdir_p!(Path.join(workspace, "lib"))
+    File.write!(Path.join(workspace, "lib/a.ex"), "changed")
+    git.(["add", "."])
+    git.(["commit", "-q", "-m", "work"])
+  end
+
+  # The run's own changed-files script runs for real, in the workspace and through the workspace's
+  # command runner with its environment; every other command passes and is told to the test.
+  defp assert_machine_steps_run(ctx) do
+    parent = self()
+
+    runner = fn command, env, timeout_ms ->
+      if command =~ "git merge-base" do
+        Workspace.run_step_command(command, ctx.workspace, nil, env, timeout_ms)
+      else
+        send(parent, {:step_command, command, env})
+        {:ok, {"", 0}}
+      end
+    end
+
+    task = start_run(ctx, [], in_progress_for(1), runner: runner)
+    assert :ok = Task.await(task, 10_000)
+
+    assert_received {:step_command, "mix compile --warnings-as-errors", %{"SYMPHONY_CHANGED_ELIXIR_FILES" => "lib/a.ex"}}
+
+    completed = for %{type: "step.completed", payload: payload} <- step_events(), do: {payload.step_id, payload.outcome}
+
+    assert completed == [{"code", "passed"}, {"build", "passed"}, {"checks", "passed"}, {"tests", "passed"}, {"handoff", "passed"}]
+  end
+
   test "a test that hangs twice pauses the run on a Question with no session; going on past it resumes the run at once", ctx do
     ctx = Map.put(ctx, :orchestrator, self())
     task = start_run(ctx, [{"mix test", [{:timeout, "hanging"}]}], in_progress_for(5))
