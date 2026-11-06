@@ -693,11 +693,13 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
 
     test "TP-1196: only the failed check's own run holds it, and any failed run still going holds the rerun of them all" do
       failed = check("specs", "FAILURE", run: 100, job: 1)
-      assert {:ok, %{red_kind: :failure}} = read({response(pull(rollup([failed, check("e2e", nil, run: 200, job: 2, workflow: "e2e")]))), 0}, %{runs: base_runs([])})
+      other_run_going = rollup([failed, check("e2e", nil, run: 200, job: 2, workflow: "e2e")])
+      assert {:ok, %{red_kind: :failure}} = read({response(pull(other_run_going)), 0}, %{runs: base_runs([])})
 
       other_failed = check("lint", "FAILURE", run: 200, job: 3, workflow: "lint")
       still_going = check("types", nil, run: 200, job: 4, workflow: "lint")
-      assert {:ok, %{red_kind: :run_in_progress}} = read({response(pull(rollup([failed, other_failed, still_going]))), 0})
+      both_failed = rollup([failed, other_failed, still_going])
+      assert {:ok, %{red_kind: :run_in_progress}} = read({response(pull(both_failed)), 0})
 
       # A check only a person clears stays the person's, and a required check that passed doesn't turn it green.
       protected = check("protected paths", "FAILURE", job: 5)
@@ -705,7 +707,8 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
 
       passed = check("ci", "SUCCESS", job: 7)
       required = [required_checks: %{"main" => ["ci"]}]
-      assert {:ok, %{ci: :red, red_kind: :run_in_progress}} = read({response(pull(rollup([passed, failed, check("e2e", nil, job: 8)]))), 0}, %{}, required)
+      head = rollup([passed, failed, check("e2e", nil, job: 8)])
+      assert {:ok, %{ci: :red, red_kind: :run_in_progress}} = read({response(pull(head)), 0}, %{}, required)
     end
 
     test "TP-1196: a check GitHub left open in a failed run that ended doesn't hold the failure back" do

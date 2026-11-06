@@ -364,7 +364,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     {workflows?, workflows} = workflows(pr_url, base_ref, checks, names, opts)
     ci = ci(checks, names, workflows?)
     failing = Enum.filter(checks, &(PullRequest.check_result(&1) == :failed))
-    {red_kind, base_red, comparisons} = red(elem(ci, 0), failing, PullRequest.failed_run_in_progress?(checks), known, base_ref, repo, opts)
+    in_progress? = PullRequest.failed_run_in_progress?(checks)
+    {red_kind, base_red, comparisons} = red(elem(ci, 0), failing, in_progress?, known, base_ref, repo, opts)
 
     %{
       pr_url: pr_url,
@@ -595,10 +596,13 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   # rerun, its failed log can't be read yet, and its other jobs may still fail. A failed check of a
   # run still going holds a real failure of a run that ended too, since the rerun takes them all.
   defp red(:red, failing, in_progress?, known, base_ref, repo, opts) do
+    real_failure? = not Enum.all?(failures(failing), &CiPoller.human_only_check?/1)
+
     cond do
       Enum.all?(failing, &CiPoller.human_only_check?/1) -> {:human_only, nil, %{}}
       Enum.all?(failing, &cancelled?/1) -> {:cancelled, nil, %{}}
-      not Enum.all?(failures(failing), &CiPoller.human_only_check?/1) -> if(in_progress?, do: {:run_in_progress, nil, %{}}, else: red_on_base(failing, base_ref, repo, opts))
+      real_failure? and in_progress? -> {:run_in_progress, nil, %{}}
+      real_failure? -> red_on_base(failing, base_ref, repo, opts)
       Enum.all?(failing, &(CiPoller.human_only_check?(&1) or not required?(&1, known))) -> {:human_only, nil, %{}}
       true -> {:cancelled, nil, %{}}
     end

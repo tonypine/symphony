@@ -330,7 +330,8 @@ defmodule SymphonyElixir.PrDecisionTest do
 
     test "TP-1196: a failed check in a run still going waits on CI in every phase with a PR, naming the check (R19b)" do
       for phase <- [:code_review, :qa, :rework, :ci_fix, :merging], rerun_done <- [false, true] do
-        action = decide(phase: phase, ci: :red, red_kind: :run_in_progress, failing_check: "coverage (4/4)", pr_number: 655, rerun_done: rerun_done, mergeable: :clean)
+        facts = [phase: phase, ci: :red, red_kind: :run_in_progress, failing_check: "coverage (4/4)", pr_number: 655]
+        action = decide(facts ++ [rerun_done: rerun_done, mergeable: :clean])
 
         assert %Action{rule: "R19b", kind: :wait, owner: :ci, clears_when: "the workflow run finishes", reason: reason} = action
         assert reason == "Checks are still running on PR #655's head, and the `coverage (4/4)` check already failed: Symphony acts once its workflow run finishes"
