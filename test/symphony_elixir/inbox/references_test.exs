@@ -324,6 +324,7 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
 
     test "TP-1204: the context says the review's state and the red check, side by side" do
       url = "https://github.com/tonypine/symphony/pull/448"
+
       context = fn facts ->
         own = ticket("TP-1", %{pr_watch: Map.put(watched(url), :facts, struct(SymphonyElixir.PrDecision.Facts, facts))})
         [resolved] = resolve([item("TP-1", action("x"))], [own], github(%{url => {:ok, pull_request(url, %{checks: "failed"})}}))
