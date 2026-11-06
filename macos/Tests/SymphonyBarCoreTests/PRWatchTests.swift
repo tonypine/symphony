@@ -421,6 +421,7 @@ final class PRWatchTests: XCTestCase {
         XCTAssertEqual(PRWatchCard.silentSentence(bound: nil), "nothing is running and nothing says why")
         XCTAssertEqual(PRWatchCard.silentSentence(bound: "ci.merging_wait_timeout_ms"), "CI has been running longer than the wait allows, and nothing says why")
         XCTAssertEqual(PRWatchCard.silentSentence(bound: "rate_limit_reset"), "GitHub's request limit should have reset by now, and nothing has read the PR since")
+        XCTAssertEqual(PRWatchCard.silentSentence(bound: "no_progress"), "its last runs changed nothing, so it stays paused until its PR changes or you answer")
     }
 
     // MARK: - The ticket page

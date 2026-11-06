@@ -54,7 +54,7 @@ public struct InboxPayload: Equatable {
     }
 }
 
-/// One thing that waits on the Director.
+/// One thing the Inbox lists: what waits on the Director, and the tickets waiting on CI, which ask nothing of them.
 public struct InboxItem: Equatable, Identifiable {
     /// What waits, in the order the Inbox groups them.
     public enum Kind: String, CaseIterable, Equatable {
@@ -64,6 +64,8 @@ public struct InboxItem: Equatable, Identifiable {
         case clarify
         /// A ticket an access hold pauses in place, waiting on an Unblock.
         case blocked
+        /// A CI Fix ticket waiting on its checks. It asks nothing: the checks report and it moves on by itself.
+        case waiting
 
         /// The group's heading in the list.
         public var groupTitle: String {
@@ -73,6 +75,7 @@ public struct InboxItem: Equatable, Identifiable {
             case .action: "Actions"
             case .clarify: "Clarify"
             case .blocked: "Blocked"
+            case .waiting: "Waiting on CI"
             }
         }
 
@@ -84,6 +87,7 @@ public struct InboxItem: Equatable, Identifiable {
             case .action: "Action"
             case .clarify: "Clarify"
             case .blocked: "Blocked"
+            case .waiting: "Waiting on CI"
             }
         }
 
@@ -95,6 +99,7 @@ public struct InboxItem: Equatable, Identifiable {
             case .action: "hand.raised"
             case .clarify: "questionmark.bubble"
             case .blocked: "hand.raised.slash"
+            case .waiting: "hourglass"
             }
         }
     }
@@ -145,6 +150,9 @@ public struct InboxItem: Equatable, Identifiable {
         self.references = references
         self.context = context
     }
+
+    /// False for a row that only shows what its ticket waits on: nothing about it waits on the Director.
+    public var waitsOnDirector: Bool { kind != .waiting }
 
     /// The row's age: "3 h 12 min"; nil when unknown.
     public var age: String? { waitingSeconds.map(Overview.duration) }
@@ -490,6 +498,11 @@ public struct InboxReview: Equatable {
             return pauseReasons.count == 1 ? first.line : "Paused for \(pauseReasons.count) reasons"
         }
 
+        /// What a ticket waiting on CI does next: it asks nothing of the Director.
+        public var waitLine: String {
+            clearingCondition.map { "It moves on by itself \($0)." } ?? "It moves on by itself."
+        }
+
         /// What the review says under the reasons: what each move does, or what clears the hold.
         public var nextLine: String {
             if stoppedByYou { return "Unblock runs it again where it stopped; Restart starts it over from main." }
@@ -753,7 +766,7 @@ public struct InboxList: Equatable {
     public var groups: [Group]
     /// Items the scope hides; the sidebar badge still counts them.
     public var hiddenCount: Int
-    /// Every item, whatever the scope: the sidebar badge's count.
+    /// Every item that waits on the Director, whatever the scope: the sidebar badge's count.
     public var totalCount: Int
 
     public init(items: [InboxItem], scope: OverviewScope = .all) {
@@ -771,7 +784,7 @@ public struct InboxList: Equatable {
             ].filter { !$0.items.isEmpty }
         }
         hiddenCount = items.count - shown.count
-        totalCount = items.count
+        totalCount = items.filter(\.waitsOnDirector).count
     }
 
     /// The items in list order, for ↑↓ and for moving to the next item.
@@ -834,6 +847,8 @@ public enum InboxAction: Equatable {
             return [item.url.map(InboxAction.editInLinear)].compactMap { $0 }
         case .blocked:
             return [linear].compactMap { $0 }
+        case .waiting:
+            return [item.review.pullRequest?.url.map(InboxAction.openPR), linear].compactMap { $0 }
         }
     }
 }

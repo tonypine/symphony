@@ -13,7 +13,8 @@ defmodule SymphonyElixir.Pauses do
       version, `%{pull_request: 448}`, or `%{commit: sha}`, a commit on the base branch the running
       build must include);
     * `:person` - the Director (`waits_on: %{action: "unblock" | "restart"}`);
-    * `:environment` - a named condition (`waits_on: %{condition: name}`).
+    * `:environment` - a named condition (`waits_on: %{condition: name}`), with what its writer read
+      when it set it when the condition depends on that (`head`, `earlier_head`, `ci`).
 
   Each reason has `text`, one line in plain words of at most 300 characters (a default per kind, or
   the writer's; a longer one is refused), `set_by` (`%{kind: :person | :run | :rule | :symphony,
@@ -663,13 +664,15 @@ defmodule SymphonyElixir.Pauses do
 
   defp waits_on(:question, waits_on), do: one(waits_on, :question_id)
   defp waits_on(:ticket, waits_on), do: matching(waits_on, :identifier, @identifier)
-  defp waits_on(:environment, waits_on), do: one(waits_on, :condition)
+  defp waits_on(:environment, waits_on), do: with(%{} = condition <- one(waits_on, :condition), do: Map.merge(condition, condition_read(waits_on)))
   defp waits_on(:build, %{pull_request: number}) when is_integer(number) and number > 0, do: %{pull_request: number}
   defp waits_on(:build, %{commit: commit}), do: matching(%{commit: commit}, :commit, @commit)
   defp waits_on(:build, waits_on), do: matching(waits_on, :version, @version)
   defp waits_on(:person, %{action: action}) when is_atom(action), do: waits_on(:person, %{action: Atom.to_string(action)})
   defp waits_on(:person, %{action: action}) when action in @person_actions, do: %{action: action}
   defp waits_on(:person, _waits_on), do: nil
+
+  defp condition_read(waits_on), do: for({field, value} when field in [:head, :earlier_head, :ci] and is_binary(value) <- waits_on, into: %{}, do: {field, value})
 
   defp one(waits_on, field) do
     if value = line(Map.get(waits_on, field)), do: %{field => value}

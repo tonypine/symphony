@@ -163,6 +163,10 @@ final class InboxMovesTests: XCTestCase {
     func testTheOtherKindsKeepTheirLinks() {
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.action)).buttons.map(\.command), [.link(.openInLinear(linear))])
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.clarify)).buttons.map(\.command), [.link(.editInLinear(linear))])
+        XCTAssertEqual(InboxToolbar.toolbar(for: item(.waiting)).buttons.map(\.command), [.link(.openInLinear(linear))])
+        XCTAssertEqual(InboxToolbar.toolbar(for: item(.waiting)).overflow, [])
+        // Return only follows the link: a ticket waiting on CI offers no move.
+        XCTAssertEqual(InboxToolbar.toolbar(for: item(.waiting)).defaultCommand, .link(.openInLinear(linear)))
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.blocked)).buttons.map(\.command), [.move(.unblock), .link(.openInLinear(linear))])
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.blocked)).defaultCommand, .move(.unblock))
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.blocked)).overflow, [.move(.restart)])

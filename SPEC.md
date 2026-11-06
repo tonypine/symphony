@@ -2718,25 +2718,29 @@ Important nuance:
   when the ticket continues.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no change to the
   workspace's uncommitted files (a turn that edits files without committing them made progress), no
-  issue state change and no newly attached PR MUST end the run, move the issue to
-  `Backlog` and post a comment saying why. This does not apply in `Merging`. Nor does it apply to
+  issue state change and no newly attached PR MUST end the run, hold the issue in the phase it is in
+  and post a comment saying why. The issue MUST NOT leave its phase for `Backlog`, so the PR and CI
+  watcher keeps watching it. This does not apply in `Merging`. Nor does it apply to
   a `Rework` run while the attached PR's head is the workspace `HEAD`, that `HEAD` differs from the
   one the run started on or from the head the `Rework` started from, and its checks are still
   running or have all passed. The run pushed that head and is waiting on its CI, so it MUST end and
   move to the post-PR state instead. This includes a `Rework` run whose CI failure stays pending
   until the run ends. Nor does it apply while the attached PR's head is the workspace `HEAD` and
   that head has checks still pending; such a run (one that started on that head) keeps
-  turning up to `agent.max_turns`. Nor does it apply, outside `Rework`, to a run started by
+  turning up to `agent.max_turns`, except in `CI Fix`: there the first idle turn with checks pending
+  on that head MUST end the run in a wait on CI (`{:ci_pending, info}`), which counts towards no
+  dispatch loop, and while the watcher's decision waits on those checks or reruns one no CI Fix run
+  MAY start. Nor does it apply, outside `Rework`, to a run started by
   a CI failure once the PR head is the workspace `HEAD` and all its checks have passed: the red
   check was a flake, so green CI is that run's outcome. Such a run MUST end and move the issue back
   to `Merging` (with a comment saying why, and the CI-fix auto-merge hold dropped so auto-merge
   turns on again) when the CI failure came from `Merging` and the PR head is still the commit that
-  failed, and to the post-PR state otherwise. A head that is still red, or has no checks, is parked as before.
+  failed, and to the post-PR state otherwise. A head that is still red, or has no checks, is held as before.
   The same holds for a run started by a merge conflict once GitHub reports the PR `MERGEABLE` and
   its head green: it moves back to `Merging` (with the conflict's auto-merge state dropped) when the
   conflict was found in `Merging` and the PR head is still the one that conflicted, and to the
   post-PR state otherwise. A PR that still conflicts, or whose mergeability GitHub has not computed
-  yet, is parked as before, even when a CI failure is pending too.
+  yet, is held as before, even when a CI failure is pending too.
   Nor does it apply while the branch on `origin` is at the workspace `HEAD` and the attached PR
   still shows an older head: GitHub has not attached the push yet, which is progress the PR can't
   show. The run waits for GitHub instead (up to two minutes per idle turn), nudges the PR with a
@@ -2747,19 +2751,20 @@ Important nuance:
   (`git add -A`, a `WIP: parked by Symphony` commit that skips the repo's hooks), then commits in
   the workspace that no remote has MUST be pushed to the workspace's branch on `origin` (only when every push URL of the workspace's `origin` is the source repo's),
   so a parked ticket's work is never only in its workspace; a push that fails is logged and the
-  park goes on. The park MUST write the ticket's record before Linear: the move into `Backlog`
-  (its `phase.entered`), then its question through the one decision path ("Run it again",
-  recommended; "Start it over from main"; "Leave it parked"), which pauses the ticket on it, then
-  the Linear move and the comment, which names the commit the park made and the branch it pushed,
-  or says nothing was committed or pushed. The park's move signal names the phase the ticket was parked
-  from. The park MUST finish even when the run is stopped partway through: the orchestrator stops
-  a run once the ticket's record leaves the active states, which the park's first write does. A run
-  the orchestrator stops that way MUST still record its `run.ended`. A move with no repo key, so no
-  record to write, MUST be logged at error with the key it tried. Unblock, or the
-  answer "Run it again", MUST move the ticket back to that phase with its workspace and branch as
-  they are, then lift the pause (which empties the counted runs) and dispatch it at once; "Start it
-  over from main" is Restart. A ticket parked before parks asked has no question: when its newest
-  move signal is the park's, Unblock moves it back the same way.
+  park goes on. The park MUST write the hold before Linear: a pause reason the Director may release,
+  which says why and keeps the PR's head and CI as the watcher last read them, then its question
+  through the one decision path ("Run it again", recommended; "Start it over from main"; "Keep it
+  paused"), then the comment, which names the commit the park made and the branch it pushed, or says
+  nothing was committed or pushed. The park MUST finish even when the run is stopped partway
+  through. The silent-wait report MUST list the held ticket with the reason and since when it is
+  held, including a ticket the watcher does not watch, such as a plan parent with no PR, until it is
+  terminal. A watcher read that shows a new PR head, or checks that reported green or red where they had
+  not, MUST lift the hold: its question is withdrawn and its reason cleared, and the ticket continues
+  in its phase, a green CI Fix ticket returning to its origin. Unblock, or the answer "Run it again",
+  MUST lift the pause (which empties the counted runs) and dispatch it at once; "Start it over from
+  main" is Restart. A ticket parked in `Backlog` by an earlier version keeps its way back: when its
+  newest move signal is the park's, Unblock moves it to the phase it was parked from, with its
+  workspace and branch as they are.
 - Once per start-up, in a task startup does not wait on, every ticket whose record Symphony put in
   `Backlog` (`phase_owner` Symphony) with the park's move signal as its newest, and whose pause holds
   no open question and no reason the Director may release, MUST be brought into the shape a park
@@ -5922,7 +5927,12 @@ Minimum endpoints:
     - No Linear request: the tickets come from the records. GitHub is read for an item's pull
       requests only when the item changed since its last read, kept by its question; a failed read is
       tried again after two minutes.
-  - `counts` has `total` and the number of items of each kind.
+  - A `CI Fix` ticket whose watcher decision waits on CI or reruns a check lists as a `waiting` item:
+    its `ask` and `review.reason` the decision's reason, `review.clearing_condition` what clears it
+    and `review.pull_request.url` its PR. It asks nothing of a person: the state API's
+    `waiting_on_you` leaves it out, and nothing counts it as waiting on the Director.
+  - `counts` has the number of items of each kind, and `total`, those that wait on the Director: every
+    kind but `waiting`.
   - When the orchestrator snapshot times out or is unavailable, return `200` with an `error` object
     in place of the list, as `/api/v1/state` does.
   - Suggested response shape:
@@ -5930,7 +5940,7 @@ Minimum endpoints:
     ```json
     {
       "generated_at": "2026-10-07T14:20:00Z",
-      "counts": {"total": 2, "plan": 1, "pr": 0, "action": 0, "clarify": 1, "blocked": 0},
+      "counts": {"total": 2, "plan": 1, "pr": 0, "action": 0, "clarify": 1, "blocked": 0, "waiting": 0},
       "items": [
         {
           "issue_id": "i-330",

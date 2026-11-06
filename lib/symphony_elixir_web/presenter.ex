@@ -233,8 +233,9 @@ defmodule SymphonyElixirWeb.Presenter do
   defp initiative_slot(_lanes, _issue_id), do: nil
 
   @doc """
-  Everything that waits on the Director (`SymphonyElixir.Inbox.items/2`), oldest first, with
-  counts by kind. Built from the tickets' records on this read: it makes no Linear request. Each
+  What the Inbox lists (`SymphonyElixir.Inbox.listing/2`), oldest first, with counts by kind: `total`
+  counts what waits on the Director, so a `waiting` row, which asks nothing, counts only under its
+  kind. Built from the tickets' records on this read: it makes no Linear request. Each
   item's `subject` says what it is asked on: `ticket`, or, for a Question with no ticket, `symphony`
   or `repository` (its `issue_id` and `identifier` null, its `title` naming Symphony or the
   repository).
@@ -246,12 +247,12 @@ defmodule SymphonyElixirWeb.Presenter do
 
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
       %{} = snapshot ->
-        items = Inbox.items(snapshot, inbox)
+        items = Inbox.listing(snapshot, inbox)
         by_kind = Enum.frequencies_by(items, &Atom.to_string(&1.kind))
 
         %{
           generated_at: generated_at,
-          counts: Map.new(~w(plan pr action clarify blocked), &{&1, Map.get(by_kind, &1, 0)}) |> Map.put("total", length(items)),
+          counts: Map.new(~w(plan pr action clarify blocked waiting), &{&1, Map.get(by_kind, &1, 0)}) |> Map.put("total", Enum.count(items, &Inbox.Item.on_director?/1)),
           items: Enum.map(items, &inbox_item_payload(&1, now))
         }
 

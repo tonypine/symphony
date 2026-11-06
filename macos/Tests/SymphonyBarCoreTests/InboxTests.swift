@@ -656,6 +656,34 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(InboxItem.Kind.blocked.word, "Blocked")
     }
 
+    func testATicketWaitingOnCIListsApartAndAsksNothing() throws {
+        let json = """
+        {"items": [{"issue_id": "i-7", "identifier": "TP-7", "kind": "waiting", "state": "CI Fix", "ask": "Checks are running on PR #7's head",
+          "waiting_seconds": 60, "review": {"reason": "Checks are running on PR #7's head", "clearing_condition": "when the checks report",
+          "pull_request": {"url": "https://github.com/acme/app/pull/7"}}}]}
+        """
+        let row = try XCTUnwrap(InboxPayload.decode(Data(json.utf8))?.items.first)
+        let pr = try XCTUnwrap(URL(string: "https://github.com/acme/app/pull/7"))
+
+        XCTAssertEqual(row.kind, .waiting)
+        XCTAssertFalse(row.waitsOnDirector)
+        XCTAssertFalse(row.isDecision)
+        XCTAssertEqual(row.kind.word, "Waiting on CI")
+        XCTAssertEqual(row.kind.symbol, "hourglass")
+        XCTAssertEqual(row.review.blocked?.waitLine, "It moves on by itself when the checks report.")
+        XCTAssertEqual(InboxAction.actions(for: row), [.openPR(pr)])
+        XCTAssertEqual(InboxToolbar.toolbar(for: row).buttons.map(\.command), [.link(.openPR(pr))])
+
+        // Listed last under its own heading, and left out of the count of what waits on the Director.
+        let list = InboxList(items: [row, item("P-1", .plan)])
+        XCTAssertEqual(list.groups.map(\.title), ["Plans", "Waiting on CI"])
+        XCTAssertEqual(list.totalCount, 1)
+
+        let brief = try XCTUnwrap(TicketPage.Brief(identifier: "TP-7", items: [row]))
+        XCTAssertEqual(brief.title, "What it waits on")
+        XCTAssertEqual(brief.paragraphs, ["Checks are running on PR #7's head"])
+    }
+
     func testAKindTurnedOffDoesntNotifyAndIsntOwedLater() {
         var notifier = InboxNotifier(remembered: [])
         var preferences = NotificationPreferences()
