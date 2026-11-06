@@ -121,6 +121,13 @@ final class InitiativesTests: XCTestCase {
         XCTAssertEqual(Initiative.Slot(status: "other").line, "other")
     }
 
+    func testOverviewLineSaysOnlyWhyAnInitiativeHoldsNoLane() {
+        let reason = "No sub-ticket Symphony can dispatch: priorities below Urgent. A-2 (Todo, priority High)"
+        XCTAssertEqual(Initiative.Slot(status: "yielded", reason: reason).overviewLine, "Gave up its lane: \(reason)")
+        XCTAssertNil(Initiative.Slot(status: "waiting", identifier: "A-2").overviewLine)
+        XCTAssertNil(Initiative.Slot(status: "queued").overviewLine)
+    }
+
     // MARK: - Decoding
 
     func testAnErrorOrABrokenPayloadIsNoList() {

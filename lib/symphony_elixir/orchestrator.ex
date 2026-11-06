@@ -839,16 +839,20 @@ defmodule SymphonyElixir.Orchestrator do
         # deferred while the run worked fires at once.
         PrWatch.poll_now()
         notify_dashboard()
-        {:noreply, state |> grant_step_turns() |> redispatch_slot_waiting()}
+        {:noreply, state |> grant_step_turns() |> cycle_after_run_end(issue_id)}
     end
   end
 
   # A slot just freed: run dispatch now rather than at the next poll when an issue is waiting for one.
-  defp redispatch_slot_waiting(%State{slot_waiting: waiting} = state) when map_size(waiting) > 0 do
-    if poll_tick_coalesced?(state, System.monotonic_time(:millisecond)), do: state, else: schedule_tick(state, 0)
+  # A run on a lane's path also plans the lanes again now: the run may have been the last thing on the
+  # epic's path Symphony could dispatch, and then the lane goes to the next epic on this event.
+  defp cycle_after_run_end(%State{} = state, issue_id) do
+    if map_size(state.slot_waiting) > 0 or EpicLanes.on_lane?(state.epic_lanes, issue_id) do
+      schedule_immediate_tick(state)
+    else
+      state
+    end
   end
-
-  defp redispatch_slot_waiting(%State{} = state), do: state
 
   # Runs a dispatch cycle at once, coalesced with the one in flight or already due. One in flight may
   # have read its candidates before the change that asked, so it is followed by another
@@ -4644,8 +4648,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   # Each active epic reserves a lane out of max_total, recomputed from the candidates every poll.
   defp put_epic_lanes(%State{} = state, issues) do
-    max_total = state.max_concurrent_agents || Config.settings!().agent.max_concurrent_agents
-    %{state | epic_lanes: EpicLanes.plan(issues, max_total, Config.settings!().agent.epic_lanes, terminal_state_set())}
+    settings = Config.settings!()
+    max_total = state.max_concurrent_agents || settings.agent.max_concurrent_agents
+    priority_gate = %{names: settings.tickets.priorities, allowed?: &lane_priority_allowed?(&1, state)}
+    %{state | epic_lanes: EpicLanes.plan(issues, max_total, settings.agent.epic_lanes, terminal_state_set(), priority_gate)}
+  end
+
+  # A lane is for an epic Symphony can work on: the dispatch filter decides, and a ticket with a run
+  # or a retry under way holds the lane however its priority reads, until that ends.
+  defp lane_priority_allowed?(%Issue{id: issue_id} = issue, %State{} = state) do
+    priority_allowed?(issue, state) or Map.has_key?(state.running, issue_id) or MapSet.member?(state.claimed, issue_id)
   end
 
   # Candidates held in any active phase by open blockers, held by self-heal on a fix ticket, or
