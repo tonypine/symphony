@@ -40,7 +40,7 @@ defmodule SymphonyElixirWeb.Presenter do
   alias SymphonyElixir.Pauses.Backfill, as: PauseBackfill
   alias SymphonyElixir.Repo.Status, as: RepoStatus
   alias SymphonyElixir.TicketEvents.{Event, Summary}
-  alias SymphonyElixirWeb.WatchPayload
+  alias SymphonyElixirWeb.{PullRequestPayload, WatchPayload}
 
   @empty_codex_totals %{
     input_tokens: 0,
@@ -358,7 +358,8 @@ defmodule SymphonyElixirWeb.Presenter do
 
   # What the ticket's record adds to its payload: its verdicts, the watcher's block, a plan's brief
   # (`SymphonyElixir.PlanBrief`), why it does not move (`ticket_status/2`), where it stands
-  # (`SymphonyElixir.Situation`) and where it has been (`SymphonyElixir.Lifecycle`).
+  # (`SymphonyElixir.Situation`), where it has been (`SymphonyElixir.Lifecycle`) and its pull request
+  # (`SymphonyElixirWeb.PullRequestPayload`).
   defp record_payload(payload, record, running?, snapshot) do
     repository_pause = if is_binary(payload.repo_key), do: repository_pause_reason(payload.repo_key), else: nil
 
@@ -368,6 +369,7 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.put(:plan_brief, plan_brief_payload(record))
     |> Map.put(:situation, situation_payload(record || %{issue_id: payload.issue_id, repo_key: payload.repo_key}, Situation.live_facts(snapshot), nil))
     |> Map.merge(Lifecycle.read(payload.issue_id))
+    |> Map.put(:pull_request, PullRequestPayload.read(record))
     |> Map.merge(ticket_status(record, %{identifier: payload.issue_identifier, repo_key: payload.repo_key, repository_pause: repository_pause, running?: running?}))
   end
 
@@ -534,6 +536,7 @@ defmodule SymphonyElixirWeb.Presenter do
         repo_key: record.repo_key,
         watch: WatchPayload.watch(record),
         situation: situation_payload(record, live, records),
+        pull_request: PullRequestPayload.read(record),
         moves:
           moves_payload(record, %{
             identifier: record.issue_identifier || record.issue_id,
