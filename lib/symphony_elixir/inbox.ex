@@ -7,7 +7,9 @@ defmodule SymphonyElixir.Inbox do
   orchestrator snapshot (`SymphonyElixir.Inbox.FromRecord`): a plan in `Plan Review` with its
   captured brief, each open Question, each pause the Director may release, and the quality gate's
   holds and skips; then each open Question on Symphony itself or on a configured repository
-  (`SymphonyElixir.Questions.open_on_subjects/0`), a row with no ticket. Nothing is polled or cached, and no read is sent to Linear: an answer, an Unblock
+  (`SymphonyElixir.Questions.open_on_subjects/0`), a row with no ticket. `listing/2`, which the Inbox
+  page reads, adds the tickets waiting in CI Fix on CI: they show there and ask nothing, so `items/2`,
+  what waits on the Director, leaves them out. Nothing is polled or cached, and no read is sent to Linear: an answer, an Unblock
   or a Stop shows on the very next read, and the Inbox answers while Linear is unreachable.
 
   `SymphonyElixir.Inbox.References` then adds what each row's text mentions (`references`) and where
@@ -40,11 +42,19 @@ defmodule SymphonyElixir.Inbox do
   def enabled?(_settings, _source), do: false
 
   @doc """
-  What waits on the Director now (`SymphonyElixir.Inbox.FromRecord.items/3` over the records and
-  `snapshot`), each row with its references and context, oldest first.
+  What waits on the Director now: `listing/2` without the rows that ask nothing of them.
   """
   @spec items(map(), inbox()) :: [Item.t()]
   def items(snapshot, inbox \\ __MODULE__) when is_map(snapshot) do
+    snapshot |> listing(inbox) |> Enum.filter(&Item.on_director?/1)
+  end
+
+  @doc """
+  What the Inbox page lists now (`SymphonyElixir.Inbox.FromRecord.items/3` over the records and
+  `snapshot`), each row with its references and context, oldest first.
+  """
+  @spec listing(map(), inbox()) :: [Item.t()]
+  def listing(snapshot, inbox \\ __MODULE__) when is_map(snapshot) do
     {records, opts} = read(inbox)
 
     items =
@@ -52,7 +62,7 @@ defmodule SymphonyElixir.Inbox do
       |> FromRecord.items(snapshot, Keyword.take(opts, [:settings_fun, :subject_questions]))
       |> References.resolve(records, opts)
 
-    live = %{running: FromRecord.working_ids(snapshot), you: MapSet.new(items, & &1.issue_id)}
+    live = %{running: FromRecord.working_ids(snapshot), you: items |> Enum.filter(&Item.on_director?/1) |> MapSet.new(& &1.issue_id)}
     Enum.map(items, &References.live(&1, live))
   end
 
@@ -64,7 +74,7 @@ defmodule SymphonyElixir.Inbox do
   @spec rows(inbox()) :: [Item.t()]
   def rows(inbox \\ __MODULE__) do
     {records, opts} = read(inbox)
-    FromRecord.items(records, %{}, Keyword.take(opts, [:settings_fun, :subject_questions]))
+    records |> FromRecord.items(%{}, Keyword.take(opts, [:settings_fun, :subject_questions])) |> Enum.filter(&Item.on_director?/1)
   end
 
   # The records and the options to read them with: each repository's settings are read once per

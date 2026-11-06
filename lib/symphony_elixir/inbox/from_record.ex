@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.Inbox.FromRecord do
   @moduledoc """
-  What waits on the Director, built from the tickets' records (`SymphonyElixir.TicketState`) and the
+  The Inbox's rows, built from the tickets' records (`SymphonyElixir.TicketState`) and the
   orchestrator snapshot instead of Linear: the same items `SymphonyElixir.Inbox.items/2` returns,
   without the `references` and `context` `SymphonyElixir.Inbox.References` reads from Linear.
 
@@ -10,7 +10,9 @@ defmodule SymphonyElixir.Inbox.FromRecord do
     whose open choices are its open Questions;
   - otherwise one `:action` item per open Question (`Item.from_question/2`), oldest first;
   - otherwise one `:blocked` item when its pause has a reason the Director may release
-    (`Item.from_pause/2`).
+    (`Item.from_pause/2`);
+  - otherwise one `:waiting` item when it waits in CI Fix on CI (`Item.from_ci_wait/1`), the one row
+    that asks nothing of the Director.
 
   A record whose rows raise lists nothing and is logged with its ticket; the other records still
   list.
@@ -90,7 +92,7 @@ defmodule SymphonyElixir.Inbox.FromRecord do
 
   defp questions_or_pause(record) do
     case Enum.filter(record.questions, &(&1.state == :open)) do
-      [] -> List.wrap(Item.from_pause(record, record.pause))
+      [] -> List.wrap(Item.from_pause(record, record.pause) || Item.from_ci_wait(record))
       open -> Enum.map(open, &Item.from_question(record, &1))
     end
   end

@@ -66,6 +66,17 @@ defmodule SymphonyElixir.CiFix do
   def in_state?(_state, _settings), do: false
 
   @doc """
+  Whether the watcher's `decision` on a ticket in the lane leaves nothing to repair yet: it waits on
+  CI (R23, R24) or reruns a check (R19, R22, U2). No run starts on it
+  (`SymphonyElixir.PrWatch.dispatch_reason/2`), and the Inbox lists the ticket as waiting on CI
+  (`SymphonyElixir.Inbox.Item.from_ci_wait/1`).
+  """
+  @spec waits_on_ci?(map() | nil) :: boolean()
+  def waits_on_ci?(%{kind: :wait, owner: :ci}), do: true
+  def waits_on_ci?(%{kind: :rerun_failed}), do: true
+  def waits_on_ci?(_decision), do: false
+
+  @doc """
   The edge that enters the lane from `origin_state`, with the origin to record on the ticket (the
   phase's *configured* name, so a repo that renames `Code Review` or `QA` still returns there).
 

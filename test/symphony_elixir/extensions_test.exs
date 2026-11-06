@@ -1908,6 +1908,23 @@ defmodule SymphonyElixir.ExtensionsTest do
     options: [%{label: "Add it", effect: "Releases sign again.", recommended: true}, %{label: "Drop signing", effect: "Unsigned builds."}]
   }
 
+  test "a CI Fix ticket waiting on CI lists on the inbox api and counts as waiting on no one (TP-1175)" do
+    decision = %{rule: "R24", kind: :wait, owner: :ci, reason: "Checks are running on PR #9's head", since: ~U[2026-11-06 09:00:00Z]}
+    watch = %{facts: struct(Facts, phase: :ci_fix), pr_url: "https://github.com/acme/app/pull/9", decision: decision}
+    waiting = "MT-WAIT" |> inbox_record(%{phase: "CI Fix"}) |> TicketState.put_pr_watch(watch)
+
+    orchestrator_name = Module.concat(__MODULE__, :WaitingInboxOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
+    inbox = record_inbox([waiting], pull_request: fn _url -> {:error, :not_read} end)
+    start_test_endpoint(orchestrator: orchestrator_name, inbox: inbox, snapshot_timeout_ms: 50)
+
+    assert %{"counts" => %{"total" => 0, "waiting" => 1}, "items" => [row]} = json_response(get(build_conn(), "/api/v1/inbox"), 200)
+    assert %{"kind" => "waiting", "identifier" => "MT-WAIT", "state" => "CI Fix", "waiting_since" => "2026-11-06T09:00:00Z"} = row
+    assert %{"clearing_condition" => "when the checks report", "pull_request" => %{"url" => "https://github.com/acme/app/pull/9"}} = row["review"]
+
+    assert %{"counts" => %{"waiting_on_you" => 0}, "waiting_on_you" => []} = json_response(get(build_conn(), "/api/v1/state"), 200)
+  end
+
   test "the inbox api answers from the records with no Linear reachable, and the state api counts the same rows" do
     # A Linear tracker whose endpoint answers nothing (`linear_tracker/1`: a closed port on 127.0.0.1).
     write_workflow_file!(Workflow.workflow_file_path(), linear_tracker())

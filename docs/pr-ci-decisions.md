@@ -142,7 +142,8 @@ instead (see [When CI keeps failing](#when-ci-keeps-failing)).
 While a `CI Fix` ticket's decision waits on CI (R23, R24) or reruns a check (R19, R22, U2), no CI Fix
 run starts: there is nothing to repair yet, and the next decision returns the ticket (R25) or sends
 a fix run (R14, R21). A CI Fix run already going that finds the head's checks running ends in that
-wait after its first idle turn.
+wait after its first idle turn. The Inbox lists the ticket under Waiting on CI meanwhile: the row asks
+nothing of a person, so it adds no badge and no notification, and it goes when the decision changes.
 
 A run that really makes no progress for two turns is held in its phase, never moved out of it: it
 stays watched, shows in the Inbox with its question and in `silent_waits` with its reason and age,

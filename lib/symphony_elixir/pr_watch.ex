@@ -198,8 +198,10 @@ defmodule SymphonyElixir.PrWatch do
 
   defp gated_phase(_state, _settings), do: nil
 
-  defp gate(:ci_fix, %{decision: %{kind: :wait, owner: :ci, reason: reason, rule: rule}}), do: "the PR watcher (#{rule}): #{reason}"
-  defp gate(:ci_fix, %{decision: %{kind: :rerun_failed, reason: reason, rule: rule}}), do: "the PR watcher (#{rule}): #{reason}"
+  defp gate(:ci_fix, %{decision: %{reason: reason, rule: rule} = decision}) do
+    if CiFix.waits_on_ci?(decision), do: "the PR watcher (#{rule}): #{reason}"
+  end
+
   defp gate(:ci_fix, _watch), do: nil
   defp gate(_phase, nil), do: "the PR watcher hasn't read its PR yet"
   defp gate(_phase, %{decision: nil}), do: "the PR watcher hasn't decided on its PR yet"

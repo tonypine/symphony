@@ -155,6 +155,9 @@ final class InboxMovesTests: XCTestCase {
     func testTheOtherKindsKeepTheirLinks() {
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.action)).buttons.map(\.command), [.link(.openInLinear(linear))])
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.clarify)).buttons.map(\.command), [.link(.editInLinear(linear))])
+        XCTAssertEqual(InboxToolbar.toolbar(for: item(.waiting)).buttons.map(\.command), [.link(.openInLinear(linear))])
+        XCTAssertEqual(InboxToolbar.toolbar(for: item(.waiting)).overflow, [])
+        XCTAssertNil(InboxToolbar.toolbar(for: item(.waiting)).defaultCommand)
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.blocked)).buttons.map(\.command), [.move(.unblock), .link(.openInLinear(linear))])
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.blocked)).defaultCommand, .move(.unblock))
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.blocked)).overflow, [.move(.restart)])

@@ -14,7 +14,10 @@ defmodule SymphonyElixir.Inbox.Item do
   - `:clarify`: a ticket the quality gate holds for clarification or skipped, with its score, its
     round and what the gate found;
   - `:blocked`: a ticket whose pause has a reason the Director may release (`SymphonyElixir.Pauses`),
-    with that reason and what clears it; the Director lifts it with `Unblock`.
+    with that reason and what clears it; the Director lifts it with `Unblock`;
+  - `:waiting`: a CI Fix ticket the watcher holds waiting on CI, with what it waits on and what clears
+    it. It is the one kind that asks nothing of the Director (`on_director?/1`): the checks report and
+    the ticket moves on by itself.
 
   A plan carries its `## Review brief` comment parsed (`SymphonyElixir.Inbox.ReviewBrief`) as
   `review.brief`, nil when it has none. Its questions are never read from the brief: the brief
@@ -31,14 +34,14 @@ defmodule SymphonyElixir.Inbox.Item do
   """
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{DecisionRequest, PlanBrief, TicketState}
+  alias SymphonyElixir.{CiFix, DecisionRequest, PlanBrief, TicketState}
   alias SymphonyElixir.HumanActions.{Collector, Waiting}
   alias SymphonyElixir.Inbox.ReviewBrief
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.MergeConfirmation
   alias SymphonyElixir.PlanReview
 
-  @type kind :: :action | :plan | :clarify | :blocked
+  @type kind :: :action | :plan | :clarify | :blocked | :waiting
   @type t :: %{
           required(:issue_id) => String.t() | nil,
           required(:identifier) => String.t() | nil,
@@ -223,6 +226,26 @@ defmodule SymphonyElixir.Inbox.Item do
   end
 
   def from_pause(_record, _pause), do: nil
+
+  @doc """
+  The `:waiting` item of `record` (a normalized `SymphonyElixir.TicketState`) in CI Fix whose watcher
+  decision waits on CI or reruns a check (`SymphonyElixir.CiFix.waits_on_ci?/1`), or nil otherwise:
+  the decision's reason, since when it stands, what clears it and the pull request.
+  """
+  @spec from_ci_wait(TicketState.t()) :: t() | nil
+  def from_ci_wait(%{pr_watch: %{facts: %{phase: :ci_fix}, decision: %{} = decision} = watch} = record) do
+    if CiFix.waits_on_ci?(decision) do
+      record
+      |> record_item(:waiting, decision.reason, decision[:since] || record.phase_at)
+      |> Map.put(:review, %{reason: decision.reason, clearing_condition: "when the checks report", pull_request: %{url: watch.pr_url}})
+    end
+  end
+
+  def from_ci_wait(_record), do: nil
+
+  @doc "Whether the item waits on the Director: every kind but `:waiting`, which only shows what the ticket waits on."
+  @spec on_director?(t()) :: boolean()
+  def on_director?(item), do: item.kind != :waiting
 
   defp record_item(record, kind, ask, waiting_since) do
     %{

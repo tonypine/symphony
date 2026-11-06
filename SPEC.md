@@ -5913,7 +5913,12 @@ Minimum endpoints:
     - No Linear request: the tickets come from the records. GitHub is read for an item's pull
       requests only when the item changed since its last read, kept by its question; a failed read is
       tried again after two minutes.
-  - `counts` has `total` and the number of items of each kind.
+  - A `CI Fix` ticket whose watcher decision waits on CI or reruns a check lists as a `waiting` item:
+    its `ask` and `review.reason` the decision's reason, `review.clearing_condition` what clears it
+    and `review.pull_request.url` its PR. It asks nothing of a person: the state API's
+    `waiting_on_you` leaves it out, and nothing counts it as waiting on the Director.
+  - `counts` has the number of items of each kind, and `total`, those that wait on the Director: every
+    kind but `waiting`.
   - When the orchestrator snapshot times out or is unavailable, return `200` with an `error` object
     in place of the list, as `/api/v1/state` does.
   - Suggested response shape:
@@ -5921,7 +5926,7 @@ Minimum endpoints:
     ```json
     {
       "generated_at": "2026-10-07T14:20:00Z",
-      "counts": {"total": 2, "plan": 1, "pr": 0, "action": 0, "clarify": 1, "blocked": 0},
+      "counts": {"total": 2, "plan": 1, "pr": 0, "action": 0, "clarify": 1, "blocked": 0, "waiting": 0},
       "items": [
         {
           "issue_id": "i-330",

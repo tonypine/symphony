@@ -366,6 +366,8 @@ struct InboxReviewBody: View {
                 if let clarify = item.review.clarify { ClarifyCards(clarify: clarify) }
             case .blocked:
                 if let blocked = item.review.blocked { BlockedCards(blocked: blocked) }
+            case .waiting:
+                if let wait = item.review.blocked { WaitingCard(wait: wait) }
             }
             if let context = ContextCard(item: item, now: now) {
                 ContextCardView(card: context, narrow: narrow)
@@ -1257,6 +1259,20 @@ private struct BlockedCards: View {
                     ChipText(text: line)
                 }
                 ChipText(text: blocked.nextLine, font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
+            }
+        }
+    }
+}
+
+/// A ticket waiting on CI: what it waits on, and that it moves on by itself. It offers no move.
+private struct WaitingCard: View {
+    let wait: InboxReview.Blocked
+
+    var body: some View {
+        Card(title: "What it waits on") {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                if let reason = wait.reason { ChipText(text: reason) }
+                ChipText(text: wait.waitLine, font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
             }
         }
     }

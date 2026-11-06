@@ -133,7 +133,7 @@ public struct InboxToolbar: Equatable {
             // The write-in picked with nothing in it has no answer to send.
             let blankWriteIn = action.isWriteIn(picks) && action.answer(picks) == nil
             return InboxToolbar(buttons: [move(.decide, enabled: !blankWriteIn)] + actionLinks, overflow: [.move(.sendToRework)])
-        case .clarify:
+        case .clarify, .waiting:
             return InboxToolbar(buttons: links, overflow: [])
         }
     }

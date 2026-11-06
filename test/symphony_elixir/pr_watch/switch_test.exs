@@ -8,7 +8,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{CiFix, Pauses, PrWatch, Questions, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{CiFix, Inbox, Pauses, PrWatch, Questions, TicketPullRequest, TicketState}
   alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.PrWatch.{Attempts, Competitors, Repo}
   alias SymphonyElixirWeb.WatchPayload
@@ -2007,6 +2007,32 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid)
       assert moves(issue_id) == ["QA"]
       assert CiFix.origin(issue_id) == nil
+    end
+
+    test "a CI Fix ticket whose checks run waits in the Inbox on CI, asking nothing, and goes back to review on its own when they go green (TP-1175)" do
+      issue_id = ticket!("1", "CI Fix", ci: :pending)
+      :ok = CiFix.record_origin(@repo_key, issue_id, "QA")
+      inbox = [
+        records: &RunStore.list_all_ticket_states/0,
+        settings_fun: fn _repo_key -> {:ok, Config.settings!()} end,
+        subject_questions: fn -> [] end,
+        github_repos: %{},
+        pull_request: fn _url -> {:error, :not_read} end
+      ]
+
+      pid = start!()
+
+      tick!(pid)
+      assert %{decision: %{rule: "R24"}} = watch(issue_id)
+      assert moves(issue_id) == []
+      assert [%{identifier: "TP-1", kind: :waiting, ask: "Checks are running" <> _rest}] = Inbox.listing(%{}, inbox)
+      assert Inbox.items(%{}, inbox) == []
+      assert Inbox.rows(inbox) == []
+
+      pr!("1", ci: :green)
+      tick!(pid)
+      assert moves(issue_id) == ["QA"]
+      assert Inbox.listing(%{}, inbox) == []
     end
 
     test "a ticket in CI Fix that entered it for its red head spends no second attempt on the run already sent" do
