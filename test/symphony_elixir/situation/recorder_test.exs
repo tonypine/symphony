@@ -129,6 +129,20 @@ defmodule SymphonyElixir.Situation.RecorderTest do
     assert Process.alive?(pid)
   end
 
+  test "a skip no rule is behind writes no change; a rule's skip on an idle ticket does" do
+    pid = start()
+    snapshot(pid)
+    assert kinds() == ["waiting_for_slot"]
+
+    skip = fn rule -> %{dispatch_skipped: [%{issue_id: @id, since: DateTime.utc_now(), reason: "a skip", rule: rule}]} end
+
+    snapshot(pid, skip.(nil))
+    assert kinds() == ["waiting_for_slot"]
+
+    snapshot(pid, skip.(:priority))
+    assert kinds() == ["waiting_for_slot", "paused_by_rule"]
+  end
+
   test "with no recorder running a notice is nothing" do
     assert Recorder.ticket_changed(@id, :no_recorder) == :ok
     assert Recorder.snapshot_published(%{}, :no_recorder) == :ok

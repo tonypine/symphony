@@ -59,7 +59,12 @@ Some tickets have no kind of their own in the design, and read the closest one:
   as its cause when it has one.
 - A plan in `Plan Review` reads `waiting_on_you`.
 - A parent in `Waiting on sub-tickets` reads `blocked_by_ticket` on its first open sub-ticket.
-- A ticket in `Backlog`, or one a dispatch gate passed over, reads `paused_by_rule`.
+- A ticket in `Backlog`, or one a rule passed over at dispatch (Symphony's or its repository's pause,
+  the usage limit, a spent token budget, the priority filter, a reviewer turned off), reads
+  `paused_by_rule`, unless a run works on it. Any other skip (a run on it, CI, its own pause) is told
+  by what it waits on.
+- A ticket waiting for a slot while Symphony is paused reads `paused_by_rule`.
+- A `Merging` ticket held until CI settles reads `waiting_for_ci`.
 
 ## The `situation.changed` event
 

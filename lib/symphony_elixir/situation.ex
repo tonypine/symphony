@@ -17,6 +17,12 @@ defmodule SymphonyElixir.Situation do
   its cause when it has one, since the next thing that moves it is a run taking a slot. A plan in
   `Plan Review` reads `waiting_on_you`, a parent in `Waiting on sub-tickets` `blocked_by_ticket` on
   its first open sub-ticket, and a ticket in `Backlog` `paused_by_rule`.
+
+  A dispatch skip reads `paused_by_rule` only when the orchestrator names the rule behind it (its
+  entry's `rule`); the others (a run already on it, CI, its own pause) are told by what they wait on.
+  A rule stops dispatch and nothing else, so a ticket a run works on is not paused by it. A Merging
+  ticket the orchestrator holds until CI settles shows among its slot waits (`ci_wait`) and reads
+  `waiting_for_ci`; any other slot wait reads `paused_by_rule` while Symphony's own pause lasts.
   """
 
   alias SymphonyElixir.{Config, PrDecision, RunStore, TicketEvents, TicketPullRequest, TicketState}
@@ -91,8 +97,7 @@ defmodule SymphonyElixir.Situation do
           slot_waiting: %{optional(String.t()) => map()},
           skipped: %{optional(String.t()) => map()},
           limit: pos_integer() | nil,
-          symphony_paused: boolean(),
-          paused_repositories: [String.t()],
+          symphony_pause: %{optional(:reason) => String.t() | nil, optional(:paused_at) => DateTime.t() | nil} | nil,
           max_tries: pos_integer(),
           terminal_states: [String.t()]
         }
@@ -115,11 +120,10 @@ defmodule SymphonyElixir.Situation do
     %{
       running: by_issue(snapshot, :running, &Map.take(&1, [:run_kind, :started_at, :step])),
       retrying: by_issue(snapshot, :retrying, &retry_facts(&1, now)),
-      slot_waiting: by_issue(snapshot, :slot_waiting, &Map.take(&1, [:since, :reason])),
-      skipped: by_issue(snapshot, :dispatch_skipped, &Map.take(&1, [:since, :reason, :repo_key])),
+      slot_waiting: by_issue(snapshot, :slot_waiting, &Map.take(&1, [:since, :reason, :ci_wait])),
+      skipped: by_issue(snapshot, :dispatch_skipped, &Map.take(&1, [:since, :reason, :rule])),
       limit: snapshot |> Map.get(:concurrency) |> max_total(),
-      symphony_paused: match?(%{paused: true}, Map.get(snapshot, :pause)),
-      paused_repositories: for(%{repo_key: repo_key, pause: %{}} <- Map.get(snapshot, :repositories, []), do: repo_key),
+      symphony_pause: snapshot |> Map.get(:pause) |> symphony_pause(),
       max_tries: settings.watchdog.dispatch_loop_runs,
       terminal_states: settings.tracker.terminal_states
     }
@@ -127,6 +131,9 @@ defmodule SymphonyElixir.Situation do
 
   defp max_total(%{max_total: max_total}), do: max_total
   defp max_total(_concurrency), do: nil
+
+  defp symphony_pause(%{paused: true} = pause), do: Map.take(pause, [:reason, :paused_at])
+  defp symphony_pause(_pause), do: nil
 
   defp by_issue(snapshot, list, facts), do: snapshot |> Map.get(list, []) |> Map.new(&{&1.issue_id, facts.(&1)})
 
@@ -145,9 +152,17 @@ defmodule SymphonyElixir.Situation do
     [live.running, live.retrying, live.slot_waiting, live.skipped]
     |> Enum.flat_map(&Map.keys/1)
     |> Map.new(fn issue_id ->
-      {issue_id, {Map.has_key?(live.running, issue_id), failure_retry?(Map.get(live.retrying, issue_id)), Map.has_key?(live.slot_waiting, issue_id), Map.has_key?(live.skipped, issue_id)}}
+      slot = slot_signature(Map.get(live.slot_waiting, issue_id), live)
+      rule = get_in(live.skipped, [issue_id, :rule])
+
+      {issue_id, {Map.has_key?(live.running, issue_id), failure_retry?(Map.get(live.retrying, issue_id)), slot, rule}}
     end)
   end
+
+  defp slot_signature(nil, _live), do: nil
+  defp slot_signature(%{ci_wait: true}, _live), do: :ci
+  defp slot_signature(_slot, %{symphony_pause: nil}), do: :slot
+  defp slot_signature(_slot, _live), do: :paused
 
   @doc """
   The situation of `record` for a read, from its ledger and `live`. `records` are the ticket records
@@ -234,6 +249,7 @@ defmodule SymphonyElixir.Situation do
   @spec compute(TicketState.t(), [Event.t()], live_facts(), phase_of()) :: t()
   def compute(record, events, live, phase_of \\ fn _identifier -> nil end) do
     issue_id = record.issue_id
+    running = Map.get(live.running, issue_id)
 
     ctx = %{
       record: record,
@@ -242,10 +258,10 @@ defmodule SymphonyElixir.Situation do
       phase_of: phase_of,
       reasons: reasons(record),
       phase: normalized(record.phase),
-      running: Map.get(live.running, issue_id),
+      running: running,
       retry: live.retrying |> Map.get(issue_id) |> failure_retry(),
       slot: Map.get(live.slot_waiting, issue_id),
-      skipped: Map.get(live.skipped, issue_id),
+      skipped: live.skipped |> Map.get(issue_id) |> rule_skip(running),
       facts: facts(record)
     }
 
@@ -260,6 +276,9 @@ defmodule SymphonyElixir.Situation do
   defp facts(%{pr_watch: %{facts: %PrDecision.Facts{} = facts}}), do: facts
   defp facts(_record), do: nil
 
+  defp rule_skip(%{rule: rule} = skip, nil) when not is_nil(rule), do: skip
+  defp rule_skip(_skip, _running), do: nil
+
   defp failure_retry(retry), do: if(failure_retry?(retry), do: retry)
 
   defp failure_retry?(%{delay_type: delay_type}), do: delay_type not in @quiet_retries
@@ -268,7 +287,7 @@ defmodule SymphonyElixir.Situation do
   defp holds?("waiting_on_you", ctx), do: open_questions(ctx) != [] or reason(ctx, :question) != nil or ctx.phase == "plan review"
   defp holds?("retrying", ctx), do: ctx.retry != nil
   defp holds?("blocked_by_ticket", ctx), do: reason(ctx, :ticket) != nil or open_sub_issue(ctx) != nil
-  defp holds?("paused_by_rule", ctx), do: rule_reason(ctx) != nil or ctx.phase == "backlog" or (ctx.skipped != nil and ctx.reasons == [])
+  defp holds?("paused_by_rule", ctx), do: rule_reason(ctx) != nil or ctx.phase == "backlog" or ctx.skipped != nil or pause_holds_slot?(ctx)
   defp holds?("waiting_for_ci", ctx), do: waiting_for_ci?(ctx)
   defp holds?("waiting_for_build", ctx), do: reason(ctx, :build) != nil
   defp holds?("waiting_for_slot", ctx), do: ctx.slot != nil
@@ -282,6 +301,9 @@ defmodule SymphonyElixir.Situation do
 
   defp rule_reason(ctx), do: Enum.find(ctx.reasons, &(&1.kind in [:person, :environment]))
 
+  defp pause_holds_slot?(%{slot: %{ci_wait: true}}), do: false
+  defp pause_holds_slot?(ctx), do: ctx.slot != nil and ctx.live.symphony_pause != nil
+
   defp open_sub_issue(%{phase: "waiting on sub-tickets"} = ctx) do
     terminal = Enum.map(ctx.live.terminal_states, &normalized/1)
     Enum.find(ctx.record.sub_issues, &(is_binary(&1.identifier) and normalized(&1.state) not in terminal))
@@ -291,6 +313,8 @@ defmodule SymphonyElixir.Situation do
 
   # A head handed off waits for its checks whatever else runs on the ticket; a run still writing the
   # next head on a ticket not yet handed off is working, not waiting.
+  defp waiting_for_ci?(%{slot: %{ci_wait: true}}), do: true
+
   defp waiting_for_ci?(%{facts: %{pr: pr, ci: :pending} = facts} = ctx) when pr in [:open, :draft],
     do: facts.phase in @handed_off or ctx.running == nil
 
@@ -332,12 +356,13 @@ defmodule SymphonyElixir.Situation do
     end
   end
 
-  defp situation("waiting_for_ci", %{facts: facts} = ctx) do
-    subject = if facts.pr_number, do: "PR ##{facts.pr_number}", else: "its PR"
+  defp situation("waiting_for_ci", ctx) do
+    number = pr_number(ctx)
+    subject = if number, do: "PR ##{number}", else: "its PR"
 
     base("waiting_for_ci", "Waiting for CI", "Checks are running on #{subject}.", "#{next_phase(ctx)} starts when they pass.", checks_started(ctx), %{
-      pr: facts.pr_number,
-      check: List.first(facts.missing_checks ++ facts.running_checks)
+      pr: number,
+      check: first_check(ctx.facts)
     })
   end
 
@@ -370,8 +395,8 @@ defmodule SymphonyElixir.Situation do
   end
 
   defp situation("done", ctx) do
-    at = ctx.record.phase_at
-    number = merged_number(ctx)
+    at = done_at(ctx)
+    number = pr_number(ctx)
 
     cause =
       case {number, at} do
@@ -478,38 +503,47 @@ defmodule SymphonyElixir.Situation do
     base("paused_by_rule", "Paused", "It is in Backlog.", "Starts when you move it to Todo.", ctx.record.phase_at)
   end
 
-  defp paused_without_reason(%{skipped: skipped} = ctx) do
-    next =
-      cond do
-        skipped[:repo_key] in ctx.live.paused_repositories -> "Starts when you resume the repository."
-        ctx.live.symphony_paused -> "Starts when you resume dispatch."
-        true -> "Starts when that clears."
-      end
-
-    base("paused_by_rule", "Paused", sentence(skipped[:reason] || "Dispatch passed over it"), next, skipped[:since])
+  defp paused_without_reason(%{skipped: %{} = skipped}) do
+    base("paused_by_rule", "Paused", (skipped[:reason] || "Dispatch passed over it") |> capitalized() |> sentence(), rule_lifts(skipped.rule), skipped[:since])
   end
+
+  defp paused_without_reason(%{live: %{symphony_pause: pause}}) do
+    cause = if pause[:reason], do: "Dispatch is paused: #{sentence(pause.reason)}", else: "Dispatch is paused."
+    base("paused_by_rule", "Paused", cause, rule_lifts(:symphony_pause), pause[:paused_at])
+  end
+
+  defp rule_lifts(:repository_pause), do: "Starts when you resume the repository."
+  defp rule_lifts(:symphony_pause), do: "Starts when you resume dispatch."
+  defp rule_lifts(_rule), do: "Starts when that clears."
+
+  defp first_check(%PrDecision.Facts{missing_checks: missing, running_checks: running}), do: List.first(missing ++ running)
+  defp first_check(nil), do: nil
 
   # The phase that starts when the checks pass: the one the ticket is in, once it was handed off; a
   # CI Fix returns where it came from.
+  defp next_phase(%{slot: %{ci_wait: true}}), do: "Merging"
   defp next_phase(%{facts: %{phase: :ci_fix}} = ctx), do: ctx.record.ci_fix_origin || "Code Review"
   defp next_phase(%{facts: %{phase: phase}} = ctx) when phase in @handed_off, do: ctx.record.phase || "Code Review"
   defp next_phase(_ctx), do: "Code Review"
 
   # The push of the head under check is when its checks started; a head no push of Symphony's
-  # recorded reads from when the watcher first decided to wait on it.
+  # recorded reads from when the watcher first decided to wait on it. A Merging hold the watcher has
+  # no read of reads from when the hold began.
+  defp checks_started(%{record: %{pr_watch: nil}, slot: slot}), do: slot[:since]
+
   defp checks_started(%{record: %{pr_watch: watch}} = ctx) do
     pushed =
       ctx.events
       |> Enum.filter(&(&1.type == "attempt.pushed" and Map.get(&1.payload, :head) == watch.head_sha))
       |> List.last()
 
-    (pushed && pushed.at) || (watch.decision || %{})[:since] || watch.read_at
+    (pushed && pushed.at) || (watch.decision || %{})[:since] || watch[:read_at]
   end
 
   defp runs_ahead(%{slot: slot, live: live}) do
     waiting_before =
       Enum.count(live.slot_waiting, fn {_issue_id, other} ->
-        match?(%DateTime{}, other[:since]) and match?(%DateTime{}, slot[:since]) and DateTime.compare(other.since, slot.since) == :lt
+        other[:ci_wait] != true and match?(%DateTime{}, other[:since]) and match?(%DateTime{}, slot[:since]) and DateTime.compare(other.since, slot.since) == :lt
       end)
 
     map_size(live.running) + waiting_before
@@ -562,9 +596,15 @@ defmodule SymphonyElixir.Situation do
   defp hand_off("ci_fix", ctx), do: "It hands back to #{ctx.record.ci_fix_origin || "Code Review"} when it pushes."
   defp hand_off(run_kind, _ctx), do: Map.get(@hand_off, run_kind, "It hands off when it ends.")
 
-  # The PR it merged as: the watcher's last read, else the push the ledger holds, else the ticket's
-  # pull request.
-  defp merged_number(ctx) do
+  # A ticket in Done merged when it got there, as a merged PR closes its ticket out at once. Before
+  # that the merge is known from the watcher's read of it, and the phase's time is only when the ticket
+  # entered Merging.
+  defp done_at(%{phase: "done"} = ctx), do: ctx.record.phase_at
+  defp done_at(%{record: %{pr_watch: watch}} = ctx), do: watch[:read_at] || ctx.record.phase_at
+
+  # The ticket's PR: the watcher's last read, else the push the ledger holds, else the ticket's pull
+  # request.
+  defp pr_number(ctx) do
     (ctx.facts && ctx.facts.pr_number) || pushed_pr_number(ctx.events) || recorded_pr_number(ctx.record)
   end
 
@@ -606,6 +646,11 @@ defmodule SymphonyElixir.Situation do
   defp sentence(text) do
     text = String.trim(text)
     if String.ends_with?(text, [".", "!", "?"]), do: text, else: text <> "."
+  end
+
+  defp capitalized(text) do
+    {first, rest} = String.split_at(text, 1)
+    String.upcase(first) <> rest
   end
 
   defp cut(text), do: if(String.length(text) > @max_cause, do: String.slice(text, 0, @max_cause - 1) <> "…", else: text)

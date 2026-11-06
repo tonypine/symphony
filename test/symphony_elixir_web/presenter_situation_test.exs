@@ -61,6 +61,14 @@ defmodule SymphonyElixirWeb.PresenterSituationTest do
     assert %{status: "untracked", pause: nil, watch: %{summary: "PR #741 open · CI running" <> _}} = payload
   end
 
+  test "a ticket the watcher holds back, listed as skipped, still reads as waiting for CI" do
+    waiting_for_ci()
+    skipped = %{issue_id: "ci", identifier: "MT-1", title: "MT-1", state: "Code Review", repo_key: "default", reason: "the PR watcher (R5): checks are running", rule: nil, since: @pushed}
+
+    assert {:ok, payload} = Presenter.issue_payload("MT-1", orchestrator(%{dispatch_skipped: [skipped]}), 1_000)
+    assert %{kind: "waiting_for_ci", cause: "Checks are running on PR #741."} = payload.situation
+  end
+
   test "reading a ticket does not write its event" do
     waiting_for_ci()
 

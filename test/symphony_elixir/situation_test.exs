@@ -25,8 +25,7 @@ defmodule SymphonyElixir.SituationTest do
         slot_waiting: %{},
         skipped: %{},
         limit: 4,
-        symphony_paused: false,
-        paused_repositories: [],
+        symphony_pause: nil,
         max_tries: 3,
         terminal_states: ["Done", "Canceled", "Duplicate"]
       },
@@ -261,20 +260,53 @@ defmodule SymphonyElixir.SituationTest do
       assert %{kind: "paused_by_rule", cause: "It is in Backlog.", next: "Starts when you move it to Todo."} = compute(record(%{phase: "Backlog"}))
     end
 
-    test "a dispatch gate says what passed it over" do
-      skipped = %{@id => %{since: @later, reason: "Dispatch is paused: Deploy freeze", repo_key: @repo}}
+    defp skip(reason, rule \\ nil), do: live(%{skipped: %{@id => %{since: @later, reason: reason, rule: rule}}})
 
-      assert %{kind: "paused_by_rule", cause: "Dispatch is paused: Deploy freeze.", next: "Starts when that clears.", since: @later} = compute(record(), [], live(%{skipped: skipped}))
-      assert compute(record(), [], live(%{skipped: skipped, symphony_paused: true})).next == "Starts when you resume dispatch."
-      assert compute(record(), [], live(%{skipped: skipped, paused_repositories: [@repo]})).next == "Starts when you resume the repository."
-      assert compute(record(), [], live(%{skipped: %{@id => %{}}})).cause == "Dispatch passed over it."
+    test "a rule's skip says what passed it over and what lifts it" do
+      assert %{kind: "paused_by_rule", cause: "Dispatch is paused: Deploy freeze.", next: "Starts when you resume dispatch.", since: @later} =
+               compute(record(), [], skip("Dispatch is paused: Deploy freeze", :symphony_pause))
+
+      assert compute(record(), [], skip("the repository is paused by you", :repository_pause)).next == "Starts when you resume the repository."
+
+      for rule <- [:usage_limit, :token_budget, :priority, :reviewer_off, :workspace_quota, :daily_budget, :no_repo_key, :not_assigned] do
+        assert %{kind: "paused_by_rule", next: "Starts when that clears."} = compute(record(), [], skip("a rule", rule))
+      end
+
+      assert compute(record(), [], live(%{skipped: %{@id => %{rule: :priority}}})).cause == "Dispatch passed over it."
     end
 
-    test "a gate does not hide the ticket's own pause" do
-      reasons = [%{kind: :build, waits_on: %{commit: "cedfe01"}, text: "Holding for a build"}]
-      skipped = %{@id => %{since: @later, reason: "Holding for a build"}}
+    test "a skip no rule is behind is told by what the ticket waits on" do
+      running = %{running: %{@id => %{run_kind: "implementation", started_at: @at}}}
 
-      assert compute(record(%{pause: pause(reasons)}), [], live(%{skipped: skipped})).kind == "waiting_for_build"
+      assert compute(record(), [], Map.merge(skip("already running"), running)).kind == "working"
+      assert compute(record(), [], skip("claimed by a retry or a Linear update in flight")).kind == "waiting_for_slot"
+
+      pending = record(%{phase: "Code Review", pr_watch: watch(%{})})
+      assert compute(pending, [], skip("the PR watcher (R27): The head is not green")).kind == "waiting_for_ci"
+      assert compute(record(%{phase: "Done"}), [], skip("Done is a terminal state")).kind == "done"
+      assert compute(record(%{phase: "Canceled"}), [], skip("Canceled is a terminal state")).kind == "cancelled"
+    end
+
+    test "a rule stops dispatch and nothing else: a ticket a run works on is working" do
+      facts = Map.merge(skip("the repository is paused by you", :repository_pause), %{running: %{@id => %{run_kind: "implementation", started_at: @at}}})
+
+      assert compute(record(), [], facts).kind == "working"
+    end
+
+    test "a rule's skip goes before the ticket's wait for a build, which it counts" do
+      reasons = [%{kind: :build, waits_on: %{commit: "cedfe01"}, text: "Holding for a build"}]
+
+      assert %{kind: "paused_by_rule", and_more: 1} = compute(record(%{pause: pause(reasons)}), [], skip("the repository is paused by you", :repository_pause))
+      assert compute(record(%{pause: pause(reasons)}), [], skip("Holding for a build")).kind == "waiting_for_build"
+    end
+
+    test "a slot wait under Symphony's pause is paused: no slot starts it" do
+      slot = %{slot_waiting: %{@id => %{since: @at, reason: "work slots full"}}}
+
+      assert %{kind: "paused_by_rule", cause: "Dispatch is paused: Deploy freeze.", next: "Starts when you resume dispatch.", since: @later} =
+               compute(record(), [], live(Map.put(slot, :symphony_pause, %{reason: "Deploy freeze", paused_at: @later})))
+
+      assert compute(record(), [], live(Map.put(slot, :symphony_pause, %{}))).cause == "Dispatch is paused."
     end
   end
 
@@ -303,6 +335,27 @@ defmodule SymphonyElixir.SituationTest do
       assert compute(record(%{phase: "CI Fix", ci_fix_origin: "Merging", pr_watch: watch(%{phase: :ci_fix})})).next == "Merging starts when they pass."
       assert compute(record(%{phase: "CI Fix", pr_watch: watch(%{phase: :ci_fix})})).next == "Code Review starts when they pass."
       assert compute(record(%{pr_watch: watch(%{phase: :in_progress})})).next == "Code Review starts when they pass."
+    end
+
+    test "a Merging hold until CI settles reads as it, from the hold when the watcher has no read" do
+      hold = live(%{slot_waiting: %{@id => %{since: @later, reason: "waiting for CI on abc1234", ci_wait: true}, "other" => %{since: @at, ci_wait: true}}})
+
+      assert %{
+               kind: "waiting_for_ci",
+               cause: "Checks are running on its PR.",
+               next: "Merging starts when they pass.",
+               since: @later,
+               waits_on: %{pr: nil, check: nil}
+             } = compute(record(%{phase: "Merging"}), [], hold)
+
+      pushed = event("attempt.pushed", %{head: "abc1234", pr_url: "https://github.com/o/r/pull/12"})
+      assert %{cause: "Checks are running on PR #12.", waits_on: %{pr: 12}} = compute(record(%{phase: "Merging"}), [pushed], hold)
+
+      read = record(%{phase: "Merging", pr_watch: watch(%{phase: :merging, ci: :green})})
+      assert %{kind: "waiting_for_ci", next: "Merging starts when they pass.", since: @later} = compute(read, [], hold)
+
+      paused = %{hold | symphony_pause: %{reason: "Deploy freeze"}}
+      assert compute(record(%{phase: "Merging"}), [], paused).kind == "waiting_for_ci"
     end
 
     test "a PR with no number yet is its PR" do
@@ -355,6 +408,12 @@ defmodule SymphonyElixir.SituationTest do
                since: @later,
                waits_on: %{slot: "work slots full"}
              } = compute(record(), [], slot_facts(%{running: running}))
+    end
+
+    test "a Merging hold is no run ahead" do
+      waiting = %{@id => %{since: @later}, "landing" => %{since: @at, ci_wait: true}}
+
+      assert compute(record(), [], slot_facts(%{slot_waiting: waiting})).cause == "No runs are ahead of it; Symphony runs four at a time."
     end
 
     test "a ticket that waited longer is ahead" do
@@ -444,6 +503,13 @@ defmodule SymphonyElixir.SituationTest do
       assert compute(record(%{phase: "Merging", pr_watch: watch(%{pr: :merged})})).kind == "done"
     end
 
+    test "before the phase says so, the merge's time is the watcher's read of it, not when it entered Merging" do
+      expected = "Merged as PR #741 at #{Situation.clock(@later)}."
+
+      assert %{cause: ^expected, since: @later} = compute(record(%{phase: "Merging", phase_at: @at, pr_watch: watch(%{pr: :merged})}))
+      assert %{since: @at} = compute(record(%{phase: "Merging", phase_at: @at, pr_watch: watch(%{pr: :merged}, %{read_at: nil})}))
+    end
+
     test "reads the PR from the ledger, else from the ticket's pull request" do
       pushed = event("attempt.pushed", %{head: "abc1234", pr_url: "https://github.com/o/r/pull/12"})
       done = record(%{phase: "Done"})
@@ -516,10 +582,9 @@ defmodule SymphonyElixir.SituationTest do
         running: [%{issue_id: "a", run_kind: "qa", started_at: @at, step: nil, transcript_buffer: ["large"]}],
         retrying: [%{issue_id: "b", attempt: 2, due_in_ms: 60_000, error: "boom", delay_type: nil}, %{issue_id: "c"}],
         slot_waiting: [%{issue_id: "d", since: @at, reason: "work slots full"}],
-        dispatch_skipped: [%{issue_id: "e", since: @at, reason: "gate", repo_key: @repo}],
+        dispatch_skipped: [%{issue_id: "e", since: @at, reason: "gate", rule: :priority, repo_key: @repo}],
         concurrency: %{max_total: 4},
-        pause: %{paused: true},
-        repositories: [%{repo_key: @repo, pause: %{}}, %{repo_key: "other", pause: nil}]
+        pause: %{paused: true, reason: "Deploy freeze", paused_at: @at, reasons: []}
       }
 
       facts = Situation.live_facts(snapshot, @at)
@@ -528,28 +593,34 @@ defmodule SymphonyElixir.SituationTest do
       assert facts.retrying["b"] == %{attempt: 2, error: "boom", delay_type: nil, due_at: ~U[2026-10-30 09:01:00.000Z]}
       assert facts.retrying["c"].due_at == nil
       assert facts.slot_waiting["d"].reason == "work slots full"
-      assert facts.skipped["e"].repo_key == @repo
-      assert %{limit: 4, symphony_paused: true, paused_repositories: [@repo]} = facts
+      assert facts.skipped["e"] == %{since: @at, reason: "gate", rule: :priority}
+      assert %{limit: 4, symphony_pause: %{reason: "Deploy freeze", paused_at: @at}} = facts
       assert facts.max_tries == 4
       assert "Done" in facts.terminal_states
     end
 
     test "a snapshot with the lists left out reads as nothing" do
-      assert %{running: map, limit: nil, symphony_paused: false, paused_repositories: []} = Situation.live_facts(%{})
+      assert %{running: map, limit: nil, symphony_pause: nil} = Situation.live_facts(%{})
       assert map == %{}
+      assert %{symphony_pause: nil} = Situation.live_facts(%{pause: %{paused: false, reason: nil}})
     end
 
     test "the signature says what decides a kind" do
       retrying = %{"b" => %{delay_type: :continuation}, "c" => %{delay_type: nil}}
-      facts = live(%{running: %{"a" => %{}}, retrying: retrying, slot_waiting: %{"d" => %{}}, skipped: %{"e" => %{}}})
+      slots = %{"d" => %{}, "f" => %{ci_wait: true}}
+      facts = live(%{running: %{"a" => %{}}, retrying: retrying, slot_waiting: slots, skipped: %{"e" => %{rule: :priority}, "g" => %{rule: nil}}})
 
       assert Situation.live_signature(facts) == %{
-               "a" => {true, false, false, false},
-               "b" => {false, false, false, false},
-               "c" => {false, true, false, false},
-               "d" => {false, false, true, false},
-               "e" => {false, false, false, true}
+               "a" => {true, false, nil, nil},
+               "b" => {false, false, nil, nil},
+               "c" => {false, true, nil, nil},
+               "d" => {false, false, :slot, nil},
+               "e" => {false, false, nil, :priority},
+               "f" => {false, false, :ci, nil},
+               "g" => {false, false, nil, nil}
              }
+
+      assert Situation.live_signature(%{facts | symphony_pause: %{}})["d"] == {false, false, :paused, nil}
     end
   end
 
