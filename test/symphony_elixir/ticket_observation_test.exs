@@ -3,9 +3,10 @@ defmodule SymphonyElixir.TicketObservationTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{AgentTools, Questions, TicketEvents, TicketObservation, TicketSignals, TicketState, TransitionGuard}
+  alias SymphonyElixir.{AgentTools, Questions, TicketEvents, TicketObservation, TicketSignals, TicketState}
   alias SymphonyElixir.Inbox.FromRecord
   alias SymphonyElixir.Situation.Recorder
+  alias SymphonyElixir.TransitionGuard
 
   @linear_at ~U[2026-10-29 09:00:00Z]
   @now ~U[2026-10-29 09:05:00Z]
