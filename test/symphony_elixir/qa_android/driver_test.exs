@@ -313,7 +313,8 @@ defmodule SymphonyElixir.QaAndroid.DriverTest do
     # The driver traps exits, so every adb port it opens sends an `:EXIT` when it closes.
     test "ignores the exit of a closed adb port", %{worktree: worktree} do
       driver = start_driver(worktree)
-      port = Port.open({:spawn_executable, System.find_executable("true")}, [])
+      # `cat` waits on stdin, so the port is still open here: `Port.close/1` raises once it is gone.
+      port = Port.open({:spawn_executable, System.find_executable("cat")}, [])
       Port.close(port)
 
       log =
