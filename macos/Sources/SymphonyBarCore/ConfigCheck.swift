@@ -16,6 +16,18 @@ extension ConfigCheckResult {
     }
 }
 
+/// What a build reads a settings file as once it has migrated it: `symphony check --migrate`.
+public struct ConfigMigrationCheck: Equatable {
+    public var result: ConfigCheckResult
+    /// What it moved, one line per key, such as "v0.0.1.691 renamed `a` to `b` in your settings".
+    public var notes: [String]
+
+    public init(result: ConfigCheckResult, notes: [String] = []) {
+        self.result = result
+        self.notes = notes
+    }
+}
+
 /// Runs `symphony check --config <symphony.yml>`, which loads the config and every repo's WORKFLOW.md the way
 /// Symphony does at boot, without starting it.
 public enum ConfigCheck {
@@ -38,6 +50,54 @@ public enum ConfigCheck {
         }
     }
 
+    /// `symphony check --migrate`'s subcommand words, which ask a build to read the file as it will once migrated.
+    public static let migrateSubcommand = ["check", "--migrate"]
+
+    /// Runs `launch`, built with `migrateSubcommand`, like `run`, and also returns what the check says it moved.
+    public static func runMigrating(_ launch: ChildLaunch, timeout: TimeInterval = timeout, log: Log? = nil) async -> ConfigMigrationCheck {
+        await withCheckedContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let (result, output) = execute(launch, timeout: timeout, log: log)
+                continuation.resume(returning: ConfigMigrationCheck(result: result, notes: migrationNotes(output)))
+            }
+        }
+    }
+
+    /// What a downloaded build says about symphony.yml before it installs. An app that isn't set up yet, with no
+    /// settings file or no Linear key, has nothing for the build to read and no Symphony to break, so its update goes
+    /// ahead; any other launch that can't be built fails. `launch` is built with `migrateSubcommand`.
+    public static func runForUpdate(
+        _ launch: Result<ChildLaunch, Error>,
+        configPath: String,
+        timeout: TimeInterval = timeout,
+        log: Log? = nil
+    ) async -> ConfigMigrationCheck {
+        switch launch {
+        case let .failure(error):
+            if let problem = error as? LaunchProblem, problem == .configPathMissing || problem == .linearAPIKeyMissing {
+                return ConfigMigrationCheck(result: .passed)
+            }
+            return ConfigMigrationCheck(result: .failed(error.localizedDescription))
+        case let .success(launch):
+            guard LocalFileChecker().isFile(atPath: configPath) else { return ConfigMigrationCheck(result: .passed) }
+            return await runMigrating(launch, timeout: timeout, log: log)
+        }
+    }
+
+    /// The notes of each `Migrated: ` line of the check's output.
+    public static func migrationNotes(_ output: String) -> [String] {
+        let prefix = "Migrated: "
+        return output.components(separatedBy: .newlines).compactMap { line in
+            line.hasPrefix(prefix) ? String(line.dropFirst(prefix.count)) : nil
+        }
+    }
+
+    /// The first key a check's message names: Symphony puts keys in backticks.
+    public static func refusedKey(_ message: String) -> String? {
+        let parts = message.components(separatedBy: "`")
+        return parts.count >= 3 && !parts[1].isEmpty ? parts[1] : nil
+    }
+
     /// In QA mode, writes each check's log entry to stderr, where the QA tools read the app's output, so a QA pass
     /// sees which Symphony checked: `symphony check` prints its version and commit first. Nil outside QA mode.
     public static func qaLog(_ qaMode: QAMode?) -> Log? {
@@ -52,6 +112,11 @@ public enum ConfigCheck {
     }
 
     static func runBlocking(_ launch: ChildLaunch, timeout: TimeInterval, log: Log? = nil) -> ConfigCheckResult {
+        execute(launch, timeout: timeout, log: log).0
+    }
+
+    /// The check's result and its combined output.
+    private static func execute(_ launch: ChildLaunch, timeout: TimeInterval, log: Log?) -> (ConfigCheckResult, String) {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: launch.executable)
         process.arguments = launch.arguments
@@ -67,7 +132,7 @@ public enum ConfigCheck {
         do {
             try process.run()
         } catch {
-            return .failed("Couldn't run symphony check: \(error.localizedDescription)")
+            return (.failed("Couldn't run symphony check: \(error.localizedDescription)"), "")
         }
 
         // Read while the check runs, so a full pipe can't block it.
@@ -81,13 +146,13 @@ public enum ConfigCheck {
         guard exited.wait(timeout: .now() + timeout) == .success else {
             process.terminate()
             exited.wait()
-            return .failed("symphony check took longer than \(Int(timeout)) seconds.")
+            return (.failed("symphony check took longer than \(Int(timeout)) seconds."), "")
         }
         // Something the check started may still hold the pipe open; don't wait on it for long.
         let text = readDone.wait(timeout: .now() + 5) == .success ? String(decoding: output.data, as: UTF8.self) : ""
         let status = process.terminationReason == .exit ? process.terminationStatus : -process.terminationStatus
         log?(logEntry(status: status, output: text))
-        return result(status: status, output: text)
+        return (result(status: status, output: text), text)
     }
 
     /// The result for an exit `status` (negative for the signal that killed the check) and its combined output.

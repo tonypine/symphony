@@ -113,14 +113,43 @@ final class SymphonyRunner {
 
     /// The `symphony check --config <symphony.yml>` that matches what Start would run, with the same environment,
     /// read off the main thread like Start.
-    func checkLaunch(completion: @escaping (Result<ChildLaunch, Error>) -> Void) {
+    func checkLaunch(
+        subcommand: [String] = ["check"],
+        completion: @escaping (Result<ChildLaunch, Error>) -> Void
+    ) {
         let settings = store.loadSettings()
         secrets.read { [weak self] secrets in
             guard let self else { return }
             completion(Result {
-                try self.launch(settings: settings, secrets: secrets.get(), subcommand: ["check"])
+                try self.launch(settings: settings, secrets: secrets.get(), subcommand: subcommand)
             })
         }
+    }
+
+    /// What the downloaded build whose embedded Symphony is at `binary` reads symphony.yml as once migrated. It leaves
+    /// the file alone and runs next to the running Symphony.
+    func updateCheck(binary: String) async -> ConfigMigrationCheck {
+        var settings = store.loadSettings()
+        // Updates are off in Development mode; this never runs a checkout.
+        settings.developmentMode = false
+        let launch: Result<ChildLaunch, Error> = await withCheckedContinuation { continuation in
+            secrets.read { [weak self] secrets in
+                guard let self else { return }
+                continuation.resume(returning: Result {
+                    try self.launch(
+                        settings: settings,
+                        secrets: secrets.get(),
+                        subcommand: ConfigCheck.migrateSubcommand,
+                        binary: binary
+                    )
+                })
+            }
+        }
+        return await ConfigCheck.runForUpdate(
+            launch,
+            configPath: settings.configPath.trimmingCharacters(in: .whitespacesAndNewlines),
+            log: ConfigCheck.qaLog(AppStores.current.qaMode)
+        )
     }
 
     /// The `symphony dashboard` script for Terminal, from the binary the running Symphony came from (or Start
@@ -139,12 +168,17 @@ final class SymphonyRunner {
         return min(max(store.loadSettings().restartTimeoutMinutes, range.lowerBound), range.upperBound)
     }
 
-    private func launch(settings: AppSettings, secrets: SecretSettings, subcommand: [String] = []) throws -> ChildLaunch {
+    private func launch(
+        settings: AppSettings,
+        secrets: SecretSettings,
+        subcommand: [String] = [],
+        binary: String? = nil
+    ) throws -> ChildLaunch {
         try ChildLaunchBuilder.build(
             settings: settings,
             secrets: secrets,
             baseEnvironment: AppStores.current.environment,
-            embeddedSymphonyPath: Self.embeddedSymphonyPath,
+            embeddedSymphonyPath: binary ?? Self.embeddedSymphonyPath,
             qaDriverAppPath: Self.qaDriverAppPath,
             subcommand: subcommand
         )

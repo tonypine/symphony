@@ -15,7 +15,7 @@ defmodule SymphonyElixir.ReleasePackageScriptTest do
   test "the release notes' install line names macOS 26 as the minimum", %{tmp: tmp} do
     app = Path.join(tmp, "Symphony.app")
     File.mkdir_p!(Path.join(app, "Contents/Resources"))
-    write_executable!(Path.join(app, "Contents/Resources/symphony"), "#!/bin/sh\n")
+    write_executable!(Path.join(app, "Contents/Resources/symphony"), ~s(#!/bin/sh\necho '[{"key":"old","to":"new","ticket":"TP-1","release":"0.0.1.1"}]'\n))
 
     # `ditto` is macOS-only; a stub that writes the zip keeps the test running on Linux CI.
     bin = Path.join(tmp, "bin")
@@ -45,6 +45,8 @@ defmodule SymphonyElixir.ReleasePackageScriptTest do
     env = [{"PATH", bin <> ":" <> System.get_env("PATH")}, {"MINISIGN_SECRET_KEY", nil}]
 
     assert {_output, 0} = System.cmd("sh", args, cd: @repo_root, env: env, stderr_to_stdout: true)
+
+    assert %{"settings_migrations" => [%{"key" => "old", "to" => "new"}]} = out |> Path.join("version.json") |> File.read!() |> Jason.decode!()
 
     notes = File.read!(Path.join(out, "release_notes.md"))
     assert notes =~ "Symphony.app runs on Apple silicon Macs with macOS 26 or later."

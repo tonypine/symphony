@@ -93,6 +93,13 @@ final class UpdateInstallerTests: XCTestCase {
         return downloader
     }
 
+    private let passingCheck: UpdateSettingsCheck = { _ in ConfigMigrationCheck(result: .passed) }
+
+    private final class AskedBinaries: @unchecked Sendable {
+        private(set) var binaries: [String] = []
+        func add(_ binary: String) { binaries.append(binary) }
+    }
+
     private func installer(
         downloader: StubUpdateDownloader,
         signatures: StubCodeSignatureChecker? = nil,
@@ -117,17 +124,54 @@ final class UpdateInstallerTests: XCTestCase {
         line: UInt = #line
     ) async {
         do {
-            let prepared = try await installer.prepare(release ?? self.release)
+            let prepared = try await installer.prepare(release ?? self.release, checkSettings: passingCheck)
             XCTFail("expected \(expected), prepared \(prepared)", file: file, line: line)
         } catch {
             XCTAssertEqual(error as? UpdateError, expected, file: file, line: line)
         }
     }
 
+    func testTheDownloadedBuildChecksTheSettingsAndItsNotesComeBack() async throws {
+        let asked = AskedBinaries()
+        let prepared = try await installer(downloader: downloader()).prepare(release) { binary in
+            asked.add(binary)
+            return ConfigMigrationCheck(result: .passed, notes: ["v0.0.1.43 renamed `a` to `b` in your settings"])
+        }
+
+        XCTAssertEqual(asked.binaries, [prepared.symphonyBinary], "the check runs the downloaded build, never the running one")
+        XCTAssertTrue(prepared.symphonyBinary.hasPrefix(root.appendingPathComponent("cache/updates").path))
+        XCTAssertEqual(prepared.settingsChanges, ["v0.0.1.43 renamed `a` to `b` in your settings"])
+    }
+
+    func testAFileTheNewBuildCantReadIsRefusedBeforeAnythingIsInstalled() async throws {
+        let message = "Config error in /ops/symphony.yml: unknown symphony.yml key `foo` Lines it can't read: 3 (`foo`)."
+        do {
+            _ = try await installer(downloader: downloader()).prepare(release) { _ in
+                ConfigMigrationCheck(result: .failed(message))
+            }
+            XCTFail("the update wasn't refused")
+        } catch {
+            XCTAssertEqual(error as? UpdateError, .settingsRefused(message))
+            let description = try XCTUnwrap(error.localizedDescription)
+            XCTAssertTrue(description.contains("3 (`foo`)"), description)
+            XCTAssertTrue(description.contains("this version keeps running"), description)
+        }
+    }
+
+    func testAnUnverifiedDownloadNeverRuns() async throws {
+        let asked = AskedBinaries()
+        let installer = try installer(downloader: downloader(checksum: String(repeating: "0", count: 64)))
+        _ = try? await installer.prepare(release) { binary in
+            asked.add(binary)
+            return ConfigMigrationCheck(result: .passed)
+        }
+        XCTAssertEqual(asked.binaries, [])
+    }
+
     func testPreparesAVerifiedUpdate() async throws {
         let installer = try installer(downloader: downloader())
 
-        let prepared = try await installer.prepare(release)
+        let prepared = try await installer.prepare(release, checkSettings: passingCheck)
 
         let staged = root.appendingPathComponent("cache/updates/0.0.1.43/app/Symphony.app")
         XCTAssertEqual(prepared.appURL.standardizedFileURL.path, staged.standardizedFileURL.path)
@@ -154,7 +198,7 @@ final class UpdateInstallerTests: XCTestCase {
         downloader.files[release.assets!.zip] = tampered
 
         do {
-            _ = try await installer(downloader: downloader).prepare(release)
+            _ = try await installer(downloader: downloader).prepare(release, checkSettings: passingCheck)
             XCTFail("a tampered zip was accepted")
         } catch let UpdateError.checksumMismatch(expected, _) {
             XCTAssertEqual(checksumFile(zip).prefix(64), Substring(expected))
@@ -237,7 +281,7 @@ final class UpdateInstallerTests: XCTestCase {
         let installer = try installer(downloader: downloader(zip: notZip, signature: signingKey.sign(notZip)))
 
         do {
-            _ = try await installer.prepare(release)
+            _ = try await installer.prepare(release, checkSettings: passingCheck)
             XCTFail("a non-zip was accepted")
         } catch {
             guard case .unzip = error as? UpdateError else { return XCTFail("expected an unzip error, got \(error)") }

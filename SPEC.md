@@ -7177,7 +7177,11 @@ infrastructure.
   configured repo `WORKFLOW.md` through the same validation the service runs at startup, without
   starting the runtime or contacting the tracker or GitHub. It exits `0` and prints
   `Config OK: <path>` when valid, and exits `1` with the error on stderr when the file is missing
-  or invalid. It first prints its build on stderr, `Symphony <version>` and the short commit in
+  or invalid. `symphony check --migrate` checks what the file reads as once migrated, on a hidden copy, leaving
+  the file alone, prints `Migrated: <note>` for each key it moved, and names every key it can't read
+  with its line. `symphony config migrate` rewrites the file in place with a backup beside it
+  (`<file>.before-v<version>`) and a comment naming the ticket, and the service and `symphony run` do
+  the same once at start, logging a note. It first prints its build on stderr, `Symphony <version>` and the short commit in
   parentheses when the build records one. For a `workflow_source: ref` repo it validates the `WORKFLOW.md` startup would use:
   the file committed on the base branch ref when it parses (as last fetched; `check` does not fetch
   or write the snapshot), otherwise the last good snapshot or the file on disk. Errors name the

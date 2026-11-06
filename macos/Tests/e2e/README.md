@@ -38,8 +38,9 @@ and checks what TP-272 used to leave to a person on the live app:
    press. N+1 passes its health check, starts Symphony and resumes dispatch, and notifies "Symphony updated
    to vN+1" with the change count. Its menu shows "Updated to vN+1 (K changes)", and choosing it opens N+1's
    release notes.
-9. **Automatic rollback** (TP-541's walkthrough, step 4): N is put back with a `symphony.yml` whose
-   `workspaces.repo` doesn't exist. N installs N+1 by itself, N+1's config check fails, and the helper puts N
+9. **Automatic rollback** (TP-541's walkthrough, step 4): N is put back and installs N+1 by itself. N+1's check
+   before the install passes, the test then removes `symphony.yml`'s `workspaces.repo`, N+1's check after the
+   relaunch fails, and the helper puts N
    back as `Symphony.app` and N+1 aside as `Symphony (rolled back).app`. N notifies "Symphony rolled back to
    vN", naming vN+1 and the failed check; its menu line "vN+1 was rolled back: symphony check failed: …"
    opens N+1's notes with the rollback steps; and its next check shows N+1 rolled back with Retry vN+1,
