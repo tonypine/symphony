@@ -98,7 +98,8 @@ defmodule SymphonyElixir.Lifecycle do
 
   # A repository may turn Code Review or QA off with an empty name: then no phase goes by it.
   defp phases(%{code_review: code_review, qa: qa, ci_fix: ci_fix}) do
-    stage_of = for {name, stage} <- [{code_review, "code_review"}, {qa, "qa"}], is_binary(name), into: @fixed_stage_of, do: {normalized(name), stage}
+    named_stages = [{code_review, "code_review"}, {qa, "qa"}]
+    stage_of = for {name, stage} <- named_stages, is_binary(name), into: @fixed_stage_of, do: {normalized(name), stage}
 
     %{stage_of: stage_of, ci_fix: normalized(ci_fix)}
   end
