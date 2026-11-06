@@ -5310,7 +5310,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp record_update_wait(_state, _issue_id, %{step: %{waiting: :pause}}), do: :ok
 
   defp record_update_wait(state, issue_id, %{step: step} = entry) do
-    case for(%{kind: :build, waits_on: %{version: version}} <- Pauses.dispatch_reasons(symphony_pause()), do: version) do
+    reasons = Pauses.dispatch_reasons(symphony_pause())
+
+    case for(%{kind: :build, waits_on: %{version: version}} <- reasons, do: version) do
       [version | _rest] -> record_signal(running_entry_repo_key(entry) || state.repo_key, issue_id, "update_wait", %{version: version, step: step.id})
       [] -> :ok
     end

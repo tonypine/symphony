@@ -110,7 +110,8 @@ defmodule SymphonyElixir.OrchestratorTest do
 
     test "the turn waits with no session, and the ticket says what holds it, once per hold" do
       {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("updating to v0.0.1.856"))
-      state = orchestrator_state(1) |> run(issue("walk-1", "TP-1", "In Progress"), session_id: "sess-1") |> step(machine_notice()) |> step(turn_wanted())
+      walked = issue("walk-1", "TP-1", "In Progress")
+      state = orchestrator_state(1) |> run(walked, session_id: "sess-1") |> step(machine_notice()) |> step(turn_wanted())
 
       refute_received {:run_step_turn, "walk-1"}
       assert %{session_id: nil, step: %{waiting: "pause"}} = running_of(state, "walk-1")
