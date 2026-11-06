@@ -110,36 +110,16 @@ defmodule SymphonyElixir.CLI do
 
   @spec evaluate([String.t()], deps()) ::
           :ok | :serve | {:halt, non_neg_integer()} | {:error, String.t()} | {:error, String.t(), non_neg_integer()}
-  def evaluate(args, deps \\ runtime_deps()) do
-    case args do
-      ["check" | check_args] ->
-        evaluate_check(check_args, deps)
-
-      ["config" | config_args] ->
-        evaluate_config(config_args, deps)
-
-      ["dashboard" | dashboard_args] ->
-        evaluate_dashboard(dashboard_args, deps)
-
-      ["force" | force_args] ->
-        evaluate_force(force_args, deps)
-
-      ["init" | init_args] ->
-        evaluate_init(init_args, deps)
-
-      ["pr" | pr_args] ->
-        dispatch_pr(pr_args)
-
-      ["run" | run_args] ->
-        evaluate_run(run_args, deps)
-
-      ["workflow" | workflow_args] ->
-        evaluate_workflow(workflow_args)
-
-      _args ->
-        evaluate_service(args, deps)
-    end
-  end
+  def evaluate(args, deps \\ runtime_deps())
+  def evaluate(["check" | check_args], deps), do: evaluate_check(check_args, deps)
+  def evaluate(["config" | config_args], deps), do: evaluate_config(config_args, deps)
+  def evaluate(["dashboard" | dashboard_args], deps), do: evaluate_dashboard(dashboard_args, deps)
+  def evaluate(["force" | force_args], deps), do: evaluate_force(force_args, deps)
+  def evaluate(["init" | init_args], deps), do: evaluate_init(init_args, deps)
+  def evaluate(["pr" | pr_args], _deps), do: dispatch_pr(pr_args)
+  def evaluate(["run" | run_args], deps), do: evaluate_run(run_args, deps)
+  def evaluate(["workflow" | workflow_args], _deps), do: evaluate_workflow(workflow_args)
+  def evaluate(args, deps), do: evaluate_service(args, deps)
 
   # The long-running commands: the OpenRouter QA stub, or Symphony itself.
   defp evaluate_service(["openrouter-stub" | stub_args], deps), do: evaluate_openrouter_stub(stub_args, deps)
@@ -207,13 +187,16 @@ defmodule SymphonyElixir.CLI do
         IO.puts(:stderr, build_line(BuildInfo.current()))
 
         with :ok <- set_symphony_config(opts, deps) do
-          path = symphony_config_path(opts)
-          if Keyword.get(opts, :migrate, false), do: check_migrated(path, deps), else: check_config(path, deps)
+          check_file(symphony_config_path(opts), opts, deps)
         end
 
       _ ->
         {:error, check_usage_message()}
     end
+  end
+
+  defp check_file(path, opts, deps) do
+    if Keyword.get(opts, :migrate, false), do: check_migrated(path, deps), else: check_config(path, deps)
   end
 
   # What a new build reads the file as once it has migrated it, without changing the file, so the
