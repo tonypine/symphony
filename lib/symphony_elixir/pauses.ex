@@ -664,7 +664,7 @@ defmodule SymphonyElixir.Pauses do
 
   defp waits_on(:question, waits_on), do: one(waits_on, :question_id)
   defp waits_on(:ticket, waits_on), do: matching(waits_on, :identifier, @identifier)
-  defp waits_on(:environment, waits_on), do: with(%{} = condition <- one(waits_on, :condition), do: Map.merge(condition, read(waits_on)))
+  defp waits_on(:environment, waits_on), do: with(%{} = condition <- one(waits_on, :condition), do: Map.merge(condition, condition_read(waits_on)))
   defp waits_on(:build, %{pull_request: number}) when is_integer(number) and number > 0, do: %{pull_request: number}
   defp waits_on(:build, %{commit: commit}), do: matching(%{commit: commit}, :commit, @commit)
   defp waits_on(:build, waits_on), do: matching(waits_on, :version, @version)
@@ -672,7 +672,7 @@ defmodule SymphonyElixir.Pauses do
   defp waits_on(:person, %{action: action}) when action in @person_actions, do: %{action: action}
   defp waits_on(:person, _waits_on), do: nil
 
-  defp read(waits_on), do: for({field, value} when field in [:head, :ci] and is_binary(value) <- waits_on, into: %{}, do: {field, value})
+  defp condition_read(waits_on), do: for({field, value} when field in [:head, :ci] and is_binary(value) <- waits_on, into: %{}, do: {field, value})
 
   defp one(waits_on, field) do
     if value = line(Map.get(waits_on, field)), do: %{field => value}
