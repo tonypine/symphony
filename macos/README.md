@@ -742,7 +742,7 @@ runs.
 
 ## Update
 
-When a newer release is out, the menu shows **Update available: vX (N changes)**. Choose **Update to vX**:
+When a newer release is out, the menu shows **Update available: vX (N changes)**, and when the release will change your settings file, a line under it says so: "Update to vX available; it renames one setting in your file, done for you". Choose **Update to vX**:
 the app downloads and verifies it, lets agent runs finish, swaps itself for the new version and relaunches,
 with Symphony running again. The steps are under [Install an update](#install-an-update). The relaunched
 app then [checks that Symphony is healthy](#health-check-and-automatic-rollback) on the new version and puts
@@ -825,10 +825,15 @@ reason "rolled back": the line reads **Update rolled back: vX**, and **Retry vX*
 3. **Unzip** it with `ditto` and check the new app: `codesign --verify --strict` passes, it is Symphony
    (same bundle identifier), its build is newer, and it is signed with the same certificate as the running
    app.
-4. **Drain Symphony** like [Restart](#restart), checking `symphony.yml` with the running Symphony: pause
+4. **Check `symphony.yml` with the new build**: `symphony check --migrate`, run from the download next to the
+   running Symphony, on a migrated copy, so your file stays as it is. The running build is never asked: it can't
+   know the new release's keys. A file the new build can't read or [migrate](../docs/configuration.md#renamed-keys-are-migrated)
+   is refused here, naming each key and its line. Nothing was touched: Symphony keeps running on this version, and
+   the release shows as "Update refused: vX" with **Retry vX**. No automatic mode downloads it again; edit the file
+   and choose Retry, or a newer release installs as usual.
+5. **Drain Symphony** like [Restart](#restart), without its check of `symphony.yml`: pause
    dispatch, wait for `0 running` (**Update Now Anyway** shows after the restart timeout, **Cancel Update**
-   stops waiting), then stop Symphony. A Symphony the app didn't start is left alone. Nothing runs the new
-   version's Symphony yet. The pause is a `build` reason carrying version X as a field (sent with the line
+   stops waiting), then stop Symphony. A Symphony the app didn't start is left alone. The pause is a `build` reason carrying version X as a field (sent with the line
    `updating to vX` a Symphony that reads no kind makes it from), not the menu's, in every update mode, so
    the Symphony window tells it from a pause you made without reading the version out of any text: the toolbar's dispatch control reads "Paused ·
    Updating to vX", and its popover says how many agent runs the update waits for and offers **Cancel
@@ -839,7 +844,7 @@ reason "rolled back": the line reads **Update rolled back: vX**, and **Retry vX*
    every repository is), and that Symphony updates and resumes dispatch when the runs end; the menu shows the
    same lines under its counts. A Symphony that predates the pause's reasons keeps the one line "Dispatch is
    paused since HH:MM: updating to vX." in the Overview and "Paused since HH:MM: …" in the menu.
-5. **Swap and relaunch:** the app starts a small helper (`Contents/Resources/update-helper.sh`, run from a
+6. **Swap and relaunch:** the app starts a small helper (`Contents/Resources/update-helper.sh`, run from a
    copy in the cache folder) and quits. Once the app has exited, the helper moves it to
    `Symphony (previous).app` next to it (replacing an older one), moves the new app into place, and opens
    it. If a move fails, it puts the old app back and opens that instead. The helper then waits up to 30
@@ -852,7 +857,7 @@ reason "rolled back": the line reads **Update rolled back: vX**, and **Retry vX*
    Every step of an update and a rollback, by the app (download, pause and drain, stop, hand-over, launch,
    health check, rollback) and by the helper (wait, swap, launch, rollback), is one timestamped line in
    `~/Library/Logs/symphony/update.log`, which is kept across updates (moved to `update.log.1` past 1 MB).
-6. **Bring Symphony back:** the relaunched app runs the [health check](#health-check-and-automatic-rollback):
+7. **Bring Symphony back:** the relaunched app runs the [health check](#health-check-and-automatic-rollback):
    it checks `symphony.yml` with its new embedded binary, starts Symphony from it, and, once it answers, resumes dispatch if the update paused it. A pause you
    made before the update stays. If the helper had to put the old app back, an alert says so.
 
@@ -875,8 +880,11 @@ To undo an update, see [Rollback](#rollback).
 After every update, by hand or automatic, the relaunched app checks that Symphony works on the new version.
 The line under the update items shows "Checking vX: …" while it does:
 
-1. **Config check:** `symphony check --config <symphony.yml>` with the new embedded binary must pass, so a
-   config error such as `workspaces.repo does not exist` is caught. Symphony starts only once it passes.
+1. **Config check:** `symphony check --migrate --config <symphony.yml>` with the new embedded binary must pass,
+   so a config error that appeared since the check before the install, such as `workspaces.repo does not exist`,
+   is caught. Symphony starts only once it passes, and rewrites the file itself when it starts: renamed keys get
+   their new name and a one-line comment naming the ticket, and the file as it was stays beside it as
+   `symphony.yml.before-v<version>`. The menu's Updated to vX line says what moved.
 2. **Answer:** when the app starts Symphony after the update (it ran before the update, or "Start Symphony
    when the app opens" is on), Symphony must answer on its control URL within 2 minutes of starting. If it
    doesn't, the app stops it and starts it once more, and a second miss fails the check. A Symphony that
@@ -1007,6 +1015,11 @@ In all automatic modes:
   [Updated to vX](#what-changed).
 
 ## Rollback
+
+A rollback also puts `symphony.yml` back as it was when the version it rolls back migrated it, since the version
+it restores can't read the new keys; the migrated file stays beside it as `symphony.yml.after-v<version>`. The
+release's menu line says why it was rolled back and what Retry does, for example "v0.0.1.691 can't read
+`pre_push_review` in your settings; Retry migrates it".
 
 Each update, and each install over an older version, keeps the version it replaced next to the app as
 `Symphony (previous).app`, for example `~/Applications/Symphony (previous).app`. Only one previous version is
@@ -1446,9 +1459,9 @@ touching the installed app.
   the download doesn't match what was published: check again later, or download the release by hand and
   verify it as in [docs/releasing.md](../docs/releasing.md). "the update's signer can't be checked" or "isn't
   signed with the same certificate" means this copy and the release are signed differently: install the
-  release with the [install script](#with-the-install-script). A `symphony.yml` error comes from the
-  running version's check; Symphony keeps running. A setting only the new version rejects shows up after the
-  relaunch, when the new Symphony fails to start: choose Open Logs.
+  release with the [install script](#with-the-install-script). A `symphony.yml` error comes from the new
+  version's check, before anything is installed, and names the keys and lines it can't read; Symphony keeps
+  running. Edit them and choose **Retry vX**.
 - **Restart Symphony says "Symphony wasn't restarted".** The `symphony.yml` check (or the pause) failed, and
   the old Symphony is still running. Fix what the message names, then check it from a terminal with
   `~/Applications/Symphony.app/Contents/Resources/symphony check --config <symphony.yml>`, or in Development mode

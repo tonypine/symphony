@@ -316,6 +316,8 @@ Symphony hasn't cloned yet passes with a warning, as Symphony clones it when it 
 ```bash
 ./bin/symphony check                       # checks ./symphony.yml
 ./bin/symphony check --config ./other.yml
+./bin/symphony check --migrate             # checks the file as it reads once migrated, leaving it alone
+./bin/symphony config migrate              # rewrites renamed keys in place, with a backup beside the file
 ```
 
 Watch a running Symphony's terminal dashboard from another terminal. It polls the control API at

@@ -366,11 +366,8 @@ final class RestartMachineTests: XCTestCase {
 
     func testUpdateDrainsThenStopsWithoutStarting() {
         var (machine, effects) = beginUpdate()
-        XCTAssertEqual(effects, [.checkConfig])
+        XCTAssertEqual(effects, [.send(.pause)], "the new build checked symphony.yml before the drain; the running one never does")
         XCTAssertEqual(machine.purpose, .update)
-        XCTAssertEqual(machine.menuLine, "Updating: checking symphony.yml…")
-
-        XCTAssertEqual(machine.handle(.configChecked(.passed), now: began), [.send(.pause)])
         XCTAssertEqual(machine.menuLine, "Updating: pausing dispatch…")
         XCTAssertEqual(machine.handle(.controlFinished(.pause, .done), now: began), [.pollNow])
         XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 2)), now: began), [])
@@ -392,18 +389,18 @@ final class RestartMachineTests: XCTestCase {
         for waiting in [[Event.polled(pausedPoll(running: 0))], [.polled(pausedPoll(running: 1)), .restartNow]] {
             var (machine, effects) = beginUpdate()
             var now = began
-            for event in [.configChecked(.passed), .controlFinished(.pause, .done)] + waiting + [.exited(.signaled(15))] {
+            for event in [.controlFinished(.pause, .done)] + waiting + [.exited(.signaled(15))] {
                 now = now.addingTimeInterval(runsTimeout)
                 effects += machine.handle(event, now: now)
             }
 
-            XCTAssertEqual(effects, [.checkConfig, .send(.pause), .pollNow, .stop, .stopped])
+            XCTAssertEqual(effects, [.send(.pause), .pollNow, .stop, .stopped])
         }
     }
 
     func testUpdateKeepsAPauseTheUserMade() {
-        var (machine, _) = beginUpdate(alreadyPaused: true)
-        XCTAssertEqual(machine.handle(.configChecked(.passed), now: began), [.pollNow])
+        var (machine, effects) = beginUpdate(alreadyPaused: true)
+        XCTAssertEqual(effects, [.pollNow])
         XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 0)), now: began), [.stop])
 
         XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped])
@@ -413,8 +410,8 @@ final class RestartMachineTests: XCTestCase {
     /// TP-435: the relaunched app resumes dispatch once the update's drain paused it, even when the user's pause
     /// was resumed before the drain's first poll.
     func testUpdatePausesAResumedDispatchAndHandsTheResumeOver() {
-        var (machine, _) = beginUpdate(alreadyPaused: true)
-        XCTAssertEqual(machine.handle(.configChecked(.passed), now: began), [.pollNow])
+        var (machine, effects) = beginUpdate(alreadyPaused: true)
+        XCTAssertEqual(effects, [.pollNow])
         XCTAssertEqual(machine.handle(.polled(dispatchingPoll(running: 1)), now: began), [.send(.pause)])
         XCTAssertEqual(machine.menuLine, "Updating: pausing dispatch…")
         XCTAssertEqual(machine.handle(.controlFinished(.pause, .done), now: began), [.pollNow])
@@ -433,18 +430,6 @@ final class RestartMachineTests: XCTestCase {
 
         XCTAssertEqual(machine.handle(.restartNow, now: began.addingTimeInterval(runsTimeout)), [.stop])
         XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped])
-    }
-
-    func testNewBinaryConfigErrorRefusesTheUpdate() {
-        var (machine, _) = beginUpdate()
-
-        let effects = machine.handle(.configChecked(.failed("Config error: unknown key")), now: began)
-
-        XCTAssertEqual(
-            effects,
-            [.alert(title: "Symphony wasn't updated", message: "Config error: unknown key\n\nSymphony keeps running.")]
-        )
-        XCTAssertFalse(machine.isRestarting)
     }
 
     func testSymphonyExitingDuringTheDrainCancelsTheUpdate() {
@@ -535,13 +520,6 @@ final class RestartMachineTests: XCTestCase {
 
     func testAutomaticUpdateFailuresShowNoAlert() {
         var (machine, _) = beginUpdate(purpose: .automaticUpdate)
-        XCTAssertEqual(machine.handle(.configChecked(.failed("Config error: unknown key")), now: began), [])
-        XCTAssertFalse(machine.isRestarting)
-        XCTAssertEqual(machine.menuLine, "Config error: unknown key")
-        XCTAssertFalse(machine.postponed)
-
-        (machine, _) = beginUpdate(purpose: .automaticUpdate)
-        _ = machine.handle(.configChecked(.passed), now: began)
         XCTAssertEqual(machine.handle(.controlFinished(.pause, .failed("HTTP 500")), now: began), [])
         XCTAssertEqual(machine.menuLine, "HTTP 500")
     }
@@ -576,9 +554,8 @@ final class RestartMachineTests: XCTestCase {
 
     func testOnReleaseUpdateWaitsWithoutGivingUpAndOffersUpdateNowAnyway() {
         var (machine, effects) = beginOnRelease()
-        XCTAssertEqual(effects, [.checkConfig])
+        XCTAssertEqual(effects, [.send(.pause)])
         XCTAssertEqual(machine.purpose, .update, "the manual update's purpose")
-        _ = machine.handle(.configChecked(.passed), now: began)
         _ = machine.handle(.controlFinished(.pause, .done), now: began)
         XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 1)), now: began), [])
         XCTAssertEqual(machine.menuLine(updatingTo: "0.0.1.42", now: began), "Updating to v0.0.1.42: waiting for 1 agent run…")
@@ -613,13 +590,13 @@ final class RestartMachineTests: XCTestCase {
 
     func testOnReleaseUpdateFailuresShowNoAlert() {
         var (machine, _) = beginOnRelease()
-        XCTAssertEqual(machine.handle(.configChecked(.failed("Config error: unknown key")), now: began), [])
-        XCTAssertEqual(machine.menuLine, "Config error: unknown key")
+        XCTAssertEqual(machine.handle(.controlFinished(.pause, .failed("HTTP 500")), now: began), [])
+        XCTAssertEqual(machine.menuLine, "HTTP 500")
 
         var manual = beginUpdate().0
         XCTAssertEqual(
-            manual.handle(.configChecked(.failed("Config error: unknown key")), now: began),
-            [.alert(title: RestartMachine.notUpdatedTitle, message: "Config error: unknown key\n\nSymphony keeps running.")],
+            manual.handle(.controlFinished(.pause, .failed("HTTP 500")), now: began),
+            [.alert(title: RestartMachine.notUpdatedTitle, message: "HTTP 500\n\nSymphony keeps running.")],
             "Update to vX still alerts"
         )
     }
@@ -661,10 +638,10 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertTrue(StatusMenu.isPause(pause))
         for purpose in [RestartMachine.Purpose.update, .automaticUpdate] {
             var machine = RestartMachine()
-            _ = machine.begin(alreadyPaused: false, purpose: purpose, updatingTo: "0.0.1.42", runsTimeout: runsTimeout, logPath: log, now: began)
+            let effects = machine.begin(alreadyPaused: false, purpose: purpose, updatingTo: "0.0.1.42", runsTimeout: runsTimeout, logPath: log, now: began)
             XCTAssertEqual(machine.updateVersion, "0.0.1.42")
             XCTAssertEqual(machine.pauseAction, pause)
-            XCTAssertEqual(machine.handle(.configChecked(.passed), now: began), [.send(pause)], "\(purpose)")
+            XCTAssertEqual(effects, [.send(pause)], "\(purpose)")
             XCTAssertEqual(machine.handle(.controlFinished(.pause, .done), now: began), [], "only the pause it sent answers it")
             XCTAssertEqual(machine.handle(.controlFinished(pause, .done), now: began), [.pollNow])
             XCTAssertTrue(machine.pausedByRestart)

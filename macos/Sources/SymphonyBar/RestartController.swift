@@ -31,8 +31,8 @@ final class RestartController {
         )
     }
 
-    /// Drains Symphony for an update like a restart, but stops it instead of starting it again. symphony.yml is
-    /// checked with the running Symphony, not the new one: see `RestartMachine`. `finished` is called once the
+    /// Drains Symphony for an update like a restart, but stops it instead of starting it again. The running Symphony
+    /// doesn't check symphony.yml: the new build did, before this. `finished` is called once the
     /// drain stops Symphony or ends early. `kind` decides how it waits for agent runs: see `UpdateKind`. Its pause
     /// names `version`, the version it installs.
     func drainForUpdate(

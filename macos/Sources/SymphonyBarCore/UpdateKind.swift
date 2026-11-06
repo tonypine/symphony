@@ -31,10 +31,10 @@ public enum UpdateKind: Equatable {
     public var announcesStart: Bool { self == .onRelease }
 
     /// The line under the update items after a failure before the swap. Automatically when released tries again at
-    /// the next check (S2f).
-    public func failureLine(_ reason: String) -> String {
+    /// the next check (S2f), unless `retries` is false: the release is pinned until you act.
+    public func failureLine(_ reason: String, retries: Bool = true) -> String {
         let line = "\(UpdateMenu.failedTitle): \(reason)"
-        guard self == .onRelease else { return line }
+        guard self == .onRelease, retries else { return line }
         let ended = line.hasSuffix(".") ? String(line.dropLast()) : line
         return ended + ". Trying again at the next check."
     }
@@ -44,7 +44,8 @@ public enum UpdateKind: Equatable {
         _ release: Release,
         fromBuild: Int,
         startSymphony: Bool,
-        resumeDispatch: Bool
+        resumeDispatch: Bool,
+        settingsChanges: [String] = []
     ) -> PendingUpdate {
         PendingUpdate(
             fromBuild: fromBuild,
@@ -53,7 +54,8 @@ public enum UpdateKind: Equatable {
             startSymphony: startSymphony,
             resumeDispatch: resumeDispatch,
             details: ReleaseDetails(release),
-            automatic: isAutomatic
+            automatic: isAutomatic,
+            settingsChanges: settingsChanges
         )
     }
 }

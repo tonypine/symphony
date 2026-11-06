@@ -15,6 +15,10 @@ defmodule SymphonyElixir.CLI do
     TerminalDashboard
   }
 
+  alias SymphonyElixir.Config.Migration
+
+  require Logger
+
   # Retained so existing scripts (Docker, ops runbooks) that still pass the long
   # flag keep parsing — its value is ignored.
   @acknowledgement_switch :i_understand_that_this_will_be_running_without_the_usual_guardrails
@@ -37,7 +41,8 @@ defmodule SymphonyElixir.CLI do
     state_root: :string,
     timeout: :string
   ]
-  @check_switches [config: :string]
+  @check_switches [config: :string, migrate: :boolean]
+  @config_migrate_switches [config: :string]
   @dashboard_switches [url: :string]
   @force_switches [clear: :boolean]
   @openrouter_stub_switches [port: :integer]
@@ -109,6 +114,9 @@ defmodule SymphonyElixir.CLI do
     case args do
       ["check" | check_args] ->
         evaluate_check(check_args, deps)
+
+      ["config" | config_args] ->
+        evaluate_config(config_args, deps)
 
       ["dashboard" | dashboard_args] ->
         evaluate_dashboard(dashboard_args, deps)
@@ -199,11 +207,96 @@ defmodule SymphonyElixir.CLI do
         IO.puts(:stderr, build_line(BuildInfo.current()))
 
         with :ok <- set_symphony_config(opts, deps) do
-          check_config(symphony_config_path(opts), deps)
+          path = symphony_config_path(opts)
+          if Keyword.get(opts, :migrate, false), do: check_migrated(path, deps), else: check_config(path, deps)
         end
 
       _ ->
         {:error, check_usage_message()}
+    end
+  end
+
+  # What a new build reads the file as once it has migrated it, without changing the file, so the
+  # menu bar app can ask a downloaded build before it installs it. Each `Migrated:` line is a note
+  # the app shows after the update; a refusal names every key the build can't read and its line.
+  defp check_migrated(path, deps) do
+    case Migration.migrated_copy(path) do
+      {:ok, :unchanged} ->
+        path |> check_config(deps) |> naming_refused_lines(path, path)
+
+      {:ok, copy, notes} ->
+        Enum.each(notes, &IO.puts("Migrated: #{&1}"))
+        :ok = deps.set_symphony_file_path.(copy)
+        result = copy |> check_copy(path, deps) |> naming_refused_lines(copy, path)
+        _ = File.rm(copy)
+        :ok = deps.set_symphony_file_path.(path)
+        result
+
+      {:error, reason} ->
+        {:error, "Config error in #{path}: #{Migration.format_error(reason)}"}
+    end
+  end
+
+  defp check_copy(copy, path, deps) do
+    case check_config(path, deps) do
+      {:error, message} -> {:error, String.replace(message, copy, path)}
+      result -> result
+    end
+  end
+
+  defp naming_refused_lines({:error, message}, checked, path), do: {:error, message <> Migration.refused_lines(checked, path)}
+  defp naming_refused_lines(result, _checked, _path), do: result
+
+  # `symphony config migrate` rewrites the file; `symphony config migrations` prints the table the
+  # release's `version.json` carries.
+  defp evaluate_config(["migrations"], _deps) do
+    IO.puts(Migration.migrations_json())
+    {:halt, 0}
+  end
+
+  defp evaluate_config(["migrate" | args], deps) do
+    case OptionParser.parse(args, strict: @config_migrate_switches) do
+      {opts, [], []} ->
+        with :ok <- set_symphony_config(opts, deps) do
+          config_migrate(symphony_config_path(opts))
+        end
+
+      _ ->
+        {:error, config_usage_message()}
+    end
+  end
+
+  defp evaluate_config(_args, _deps), do: {:error, config_usage_message()}
+
+  defp config_migrate(path) do
+    case Migration.migrate_file(path) do
+      {:ok, [], nil} ->
+        IO.puts("Nothing to migrate: #{path}")
+        {:halt, 0}
+
+      {:ok, notes, backup} ->
+        Enum.each(notes, &IO.puts("Migrated: #{&1}"))
+        IO.puts("Backup: #{backup}")
+        {:halt, 0}
+
+      {:error, reason} ->
+        {:error, "Config error in #{path}: #{Migration.format_error(reason)}"}
+    end
+  end
+
+  # Once, at start: the file holds the new keys from here on. The notes stay in the log.
+  defp migrate_at_start(opts) do
+    path = symphony_config_path(opts)
+
+    case Migration.migrate_file(path) do
+      {:ok, [], nil} ->
+        :ok
+
+      {:ok, notes, backup} ->
+        Enum.each(notes, &Logger.warning("symphony.yml migrated: #{&1}; the file as it was: #{backup}"))
+
+      {:error, reason} ->
+        {:error, "Config error in #{path}: #{Migration.format_error(reason)}"}
     end
   end
 
@@ -370,7 +463,7 @@ defmodule SymphonyElixir.CLI do
       :not_packaged ->
         :ok
 
-      [command | _args] = args when command in ["check", "dashboard", "force"] ->
+      [command | _args] = args when command in ["check", "config", "dashboard", "force"] ->
         args |> evaluate() |> halt()
 
       args ->
@@ -380,7 +473,7 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  # Only the service takes the node name; `check`, `dashboard` and `force` above run
+  # Only the service takes the node name; `check`, `config`, `dashboard` and `force` above run
   # undistributed so they work next to a running Symphony.
   defp configure_service(args) do
     with :ok <- configure(args), do: ReleaseNode.start(ReleaseNode.runtime_deps())
@@ -390,6 +483,7 @@ defmodule SymphonyElixir.CLI do
     case OptionParser.parse(args, strict: @service_switches) do
       {opts, [], []} ->
         with :ok <- set_symphony_config(opts, deps),
+             :ok <- migrate_at_start(opts),
              :ok <- maybe_set_state_root(opts, deps),
              :ok <- maybe_set_logs_root(opts, deps),
              :ok <- maybe_set_server_host(opts, deps),
@@ -444,6 +538,7 @@ defmodule SymphonyElixir.CLI do
     with :ok <- deps.set_state_root_from_env.(),
          :ok <- deps.set_logs_root_from_env.(),
          :ok <- set_symphony_config(opts, deps),
+         :ok <- migrate_at_start(opts),
          :ok <- maybe_set_state_root(opts, deps) do
       maybe_set_logs_root(opts, deps)
     else
@@ -515,7 +610,9 @@ defmodule SymphonyElixir.CLI do
   @spec usage_message() :: String.t()
   defp usage_message do
     "Usage: symphony init [--force]\n" <>
-      "       symphony check [--config <path-to-symphony.yml>]\n" <>
+      "       symphony check [--migrate] [--config <path-to-symphony.yml>]\n" <>
+      "       symphony config migrate [--config <path-to-symphony.yml>]\n" <>
+      "       symphony config migrations\n" <>
       "       symphony dashboard [--url <control-url>]\n" <>
       "       symphony force [--clear] <issue-identifier>\n" <>
       "       symphony openrouter-stub [--port <port>]\n" <>
@@ -526,7 +623,12 @@ defmodule SymphonyElixir.CLI do
   end
 
   defp check_usage_message do
-    "Usage: symphony check [--config <path-to-symphony.yml>]"
+    "Usage: symphony check [--migrate] [--config <path-to-symphony.yml>]"
+  end
+
+  defp config_usage_message do
+    "Usage: symphony config migrate [--config <path-to-symphony.yml>]\n" <>
+      "       symphony config migrations"
   end
 
   defp dashboard_usage_message do

@@ -72,7 +72,12 @@ defmodule SymphonyElixir.Config.LineEditor do
 
   defp get(document, path), do: Enum.reduce(path, document, fn key, value -> if is_map(value), do: Map.get(value, key, :missing), else: :missing end)
 
-  defp replace(file, text, mode) do
+  @doc """
+  Replaces the file with `text` by a rename, so the config watcher never reads half a file. The file
+  gets `mode`'s permissions.
+  """
+  @spec replace(Path.t(), String.t(), non_neg_integer()) :: :ok | {:error, File.posix()}
+  def replace(file, text, mode) do
     temporary = Path.join(Path.dirname(file), ".#{Path.basename(file)}.#{System.unique_integer([:positive])}")
 
     with :ok <- File.write(temporary, text),

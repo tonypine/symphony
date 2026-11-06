@@ -40,6 +40,22 @@ final class UpdateOutcomeTests: XCTestCase {
         XCTAssertEqual(LastUpdate(pending, installedAt: installedAt), update())
     }
 
+    func testTheUpdateSaysWhatItMovedInYourSettings() throws {
+        let note = "v0.0.1.43 renamed `a` to `b` in your settings"
+        let defaults = MemoryKeyValueStore()
+        let pending = PendingUpdateStore(defaults: defaults)
+        pending.save(PendingUpdate(fromBuild: 42, toBuild: 43, version: "0.0.1.43", startSymphony: true, resumeDispatch: true, settingsChanges: [note]))
+        let update = LastUpdate(try XCTUnwrap(pending.take()), installedAt: installedAt)
+        XCTAssertEqual(update.settingsChanges, [note], "carried across the relaunch")
+
+        let store = LastUpdateStore(defaults: defaults)
+        store.save(update)
+        XCTAssertEqual(store.load()?.settingsChanges, [note])
+
+        XCTAssertEqual(UpdateMenu.updatedLine(update), "Updated to v0.0.1.43; \(note)")
+        XCTAssertTrue(UpdateNotice.updated(update).body.hasPrefix("\(note). Choose Updated to v0.0.1.43"))
+    }
+
     func testTheLineShowsForSevenDaysOnTheUpdatedBuild() {
         XCTAssertEqual(LastUpdate.shownFor, 7 * 24 * 60 * 60)
         let update = update()

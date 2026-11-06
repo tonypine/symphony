@@ -2,6 +2,40 @@ import XCTest
 @testable import SymphonyBarCore
 
 final class ConfigCheckTests: XCTestCase {
+    func testMigrationNotesAreTheMigratedLines() {
+        let output = """
+            Symphony 0.0.1.700
+            Migrated: v0.0.1.691 renamed `a` to `b` in your settings
+            Config OK: /ops/symphony.yml
+            Migrated: v0.0.1.688 removed `c` from your settings: gone
+            """
+
+        XCTAssertEqual(
+            ConfigCheck.migrationNotes(output),
+            ["v0.0.1.691 renamed `a` to `b` in your settings", "v0.0.1.688 removed `c` from your settings: gone"]
+        )
+        XCTAssertEqual(ConfigCheck.migrationNotes("Config OK: /ops/symphony.yml\n"), [])
+    }
+
+    func testRefusedKeyIsTheFirstKeyTheMessageNames() {
+        XCTAssertEqual(ConfigCheck.refusedKey("Config error: `a` is not valid; use `b`"), "a")
+        XCTAssertNil(ConfigCheck.refusedKey("workspaces.repo does not exist"))
+        XCTAssertNil(ConfigCheck.refusedKey("an odd ` backtick"))
+    }
+
+    func testRunMigratingReturnsTheNotesAndTheResult() async throws {
+        let launch = ChildLaunch(
+            executable: "/bin/sh",
+            arguments: ["-c", "echo 'Migrated: v1 renamed `a` to `b` in your settings'; echo 'Config OK: x'"],
+            workingDirectory: "/tmp",
+            environment: [:]
+        )
+
+        let check = await ConfigCheck.runMigrating(launch)
+
+        XCTAssertEqual(check, ConfigMigrationCheck(result: .passed, notes: ["v1 renamed `a` to `b` in your settings"]))
+    }
+
     private func shell(_ script: String) -> ChildLaunch {
         ChildLaunch(
             executable: "/bin/sh",

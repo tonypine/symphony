@@ -133,6 +133,10 @@ shown=200
   fi
 } > "$out/release_notes.md"
 
+# The settings keys this build rewrites by itself, so the running app can say what an update changes
+# in your file before it downloads it.
+settings_migrations="$("$app/Contents/Resources/symphony" config migrations)"
+
 jq -n \
   --arg version "$version" \
   --argjson build "$build" \
@@ -143,6 +147,7 @@ jq -n \
   --arg zip "$zip_name" \
   --arg minisig "$minisig_name" \
   --argjson changes "$changes" \
+  --argjson settings_migrations "$settings_migrations" \
   '{
     version: $version,
     build: $build,
@@ -152,7 +157,8 @@ jq -n \
     signed: $signed,
     zip: $zip,
     minisig: (if $minisig == "" then null else $minisig end),
-    changes: $changes
+    changes: $changes,
+    settings_migrations: $settings_migrations
   }' > "$out/version.json"
 
 echo "Packaged $zip_name ($changes changes$since, signed=$signed, minisig=${minisig_name:-none})"

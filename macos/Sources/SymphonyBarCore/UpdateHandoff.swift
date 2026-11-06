@@ -57,6 +57,8 @@ public struct PendingUpdate: Equatable {
     public var details: ReleaseDetails
     /// The app installed it by itself, so the relaunched app posts a notification once it is healthy.
     public var automatic: Bool
+    /// What the new build moves in symphony.yml, for the menu line and the notice after the update.
+    public var settingsChanges: [String]
 
     public init(
         fromBuild: Int,
@@ -65,7 +67,8 @@ public struct PendingUpdate: Equatable {
         startSymphony: Bool,
         resumeDispatch: Bool,
         details: ReleaseDetails = ReleaseDetails(),
-        automatic: Bool = false
+        automatic: Bool = false,
+        settingsChanges: [String] = []
     ) {
         self.fromBuild = fromBuild
         self.toBuild = toBuild
@@ -74,6 +77,7 @@ public struct PendingUpdate: Equatable {
         self.resumeDispatch = resumeDispatch
         self.details = details
         self.automatic = automatic
+        self.settingsChanges = settingsChanges
     }
 
     /// False when the relaunched app is still the old build: the helper put it back.
@@ -100,6 +104,7 @@ public final class PendingUpdateStore {
             "startSymphony": pending.startSymphony,
             "resumeDispatch": pending.resumeDispatch,
             "automatic": pending.automatic,
+            "settingsChanges": pending.settingsChanges,
         ]
         defaults.set(values.merging(pending.details.storedValues) { first, _ in first }, forKey: Self.key)
     }
@@ -128,7 +133,8 @@ public final class PendingUpdateStore {
             startSymphony: startSymphony,
             resumeDispatch: resumeDispatch,
             details: ReleaseDetails(stored: values),
-            automatic: values["automatic"] as? Bool ?? false
+            automatic: values["automatic"] as? Bool ?? false,
+            settingsChanges: values["settingsChanges"] as? [String] ?? []
         )
     }
 }

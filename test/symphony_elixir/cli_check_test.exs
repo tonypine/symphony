@@ -2,6 +2,7 @@ defmodule SymphonyElixir.CLICheckTest do
   use ExUnit.Case
 
   import ExUnit.CaptureIO
+  import ExUnit.CaptureLog
 
   alias SymphonyElixir.CLI
   alias SymphonyElixir.Config
@@ -595,7 +596,7 @@ defmodule SymphonyElixir.CLICheckTest do
 
   test "rejects unexpected arguments with check usage" do
     assert {{:error, message}, ""} = check(["extra"])
-    assert message == "Usage: symphony check [--config <path-to-symphony.yml>]"
+    assert message == "Usage: symphony check [--migrate] [--config <path-to-symphony.yml>]"
 
     assert {{:error, ^message}, ""} = check(["--port", "4000"])
   end
@@ -622,6 +623,175 @@ defmodule SymphonyElixir.CLICheckTest do
     end
   end
 
+  describe "check --migrate" do
+    test "checks a migrated copy, says what moved and leaves the file alone", %{root: root} do
+      content = valid_symphony(root) <> "pre_push_review:\n  enabled: true\n  run_on: first_push\n"
+      path = write_symphony!(root, content)
+
+      {result, output} = check(["--migrate", "--config", path])
+
+      assert result == {:halt, 0}
+      assert output =~ "Migrated: v0.0.1.691 renamed `pre_push_review` to `code_review` in your settings\n"
+      assert output =~ "Config OK: #{path}\n"
+      assert File.read!(path) == content
+      assert Workflow.symphony_file_path() == path
+      assert File.ls!(resolved(root)) |> Enum.sort() == ["app", "symphony.yml"]
+    end
+
+    test "migrates a repository's run profile and the agent's", %{root: root} do
+      content =
+        valid_symphony(root)
+        |> String.replace("  command: codex app-server\n", """
+          command: codex app-server
+          run_profiles:
+            pre_push_review:
+              model: gpt-5
+        """)
+        |> String.replace("    default: true\n", """
+            default: true
+            agent:
+              run_profiles:
+                pre_push_review:
+                  model: gpt-5
+        """)
+
+      path = write_symphony!(root, content)
+
+      {result, output} = check(["--migrate", "--config", path])
+
+      assert result == {:halt, 0}
+      assert output =~ "`agent.run_profiles.pre_push_review` to `code_review`"
+      assert output =~ "`repositories[].agent.run_profiles.pre_push_review` to `code_review`"
+    end
+
+    test "passes a file with nothing to migrate as the plain check does", %{root: root} do
+      path = write_symphony!(root, valid_symphony(root))
+
+      assert check(["--migrate", "--config", path]) == {{:halt, 0}, "Config OK: #{path}\n"}
+    end
+
+    test "refuses what it can't migrate, naming every key and its line, and removes its copy", %{root: root} do
+      content = "pre_push_review:\n  enabled: true\n" <> valid_symphony(root) <> "tracker:\n  kind: linear\ndispatch: {max_concurrent: 3}\n"
+      path = write_symphony!(root, content)
+      tracker_line = content |> String.split("\n") |> Enum.find_index(&(&1 == "tracker:")) |> Kernel.+(1)
+
+      {{:error, message}, _output, _stderr} = check_io(["--migrate", "--config", path])
+
+      assert message =~ "Config error in #{path}: `"
+      assert message =~ "Lines it can't read: "
+      assert message =~ "`dispatch.max_concurrent`"
+      assert message =~ "#{tracker_line} (`tracker`)"
+      refute message =~ "pre_push_review"
+      refute message =~ ".migrate-"
+      assert File.read!(path) == content
+      assert File.ls!(resolved(root)) |> Enum.sort() == ["app", "symphony.yml"]
+    end
+
+    test "names the lines when nothing migrates too", %{root: root} do
+      content = valid_symphony(root) <> "tracker:\n  kind: linear\n"
+      path = write_symphony!(root, content)
+
+      {{:error, message}, _output, _stderr} = check_io(["--migrate", "--config", path])
+
+      assert message =~ "(`tracker`)"
+    end
+
+    test "refuses a migratable key that isn't on a line of its own", %{root: root} do
+      path = write_symphony!(root, valid_symphony(root) <> "ledger: {artifact_retention_days: 3}\n")
+
+      {{:error, message}, _output, _stderr} = check_io(["--migrate", "--config", path])
+
+      assert message =~ "Config error in #{path}: `ledger.artifact_retention_days` can't be rewritten"
+    end
+  end
+
+  describe "config" do
+    test "migrate rewrites the file, with a backup, and says so", %{root: root} do
+      path = write_symphony!(root, valid_symphony(root) <> "pre_push_review:\n  enabled: true\n")
+
+      {result, output, _stderr} = evaluate_io(["config", "migrate", "--config", path])
+
+      assert result == {:halt, 0}
+      assert output =~ "Migrated: v0.0.1.691 renamed `pre_push_review` to `code_review` in your settings\n"
+      assert output =~ "Backup: #{path}.before-v"
+      assert File.read!(path) =~ "\ncode_review:\n"
+      assert {{:halt, 0}, _output} = check(["--config", path])
+    end
+
+    test "migrate says when there is nothing to do", %{root: root} do
+      path = write_symphony!(root, valid_symphony(root))
+
+      assert {{:halt, 0}, "Nothing to migrate: " <> _rest, ""} = evaluate_io(["config", "migrate", "--config", path])
+    end
+
+    test "migrate reports what it can't rewrite and a missing file", %{root: root} do
+      path = write_symphony!(root, "ledger: {artifact_retention_days: 3}\n")
+
+      assert {{:error, message}, "", ""} = evaluate_io(["config", "migrate", "--config", path])
+      assert message =~ "Config error in #{path}: `ledger.artifact_retention_days` can't be rewritten"
+
+      missing = Path.join(resolved(root), "missing.yml")
+      assert {{:error, "Symphony config file not found: " <> _rest}, "", ""} = evaluate_io(["config", "migrate", "--config", missing])
+    end
+
+    test "migrations prints the table", _context do
+      {{:halt, 0}, output, ""} = evaluate_io(["config", "migrations"])
+
+      assert [%{"key" => "pre_push_review", "to" => "code_review"} | _rest] = Jason.decode!(output)
+    end
+
+    test "anything else prints its usage", _context do
+      for args <- [[], ["nope"], ["migrate", "--nope"], ["migrate", "extra"]] do
+        assert {{:error, "Usage: symphony config migrate" <> _rest}, "", ""} = evaluate_io(["config" | args])
+      end
+    end
+  end
+
+  describe "at start" do
+    @start_overrides [
+      set_state_root_from_env: &__MODULE__.ok/0,
+      set_logs_root_from_env: &__MODULE__.ok/0,
+      set_server_port_override: &__MODULE__.ok/1,
+      set_server_host_override: &__MODULE__.ok/1
+    ]
+
+    test "the service migrates the file once and logs a note", %{root: root} do
+      path = write_symphony!(root, valid_symphony(root) <> "pre_push_review:\n  enabled: true\n")
+
+      log =
+        capture_log(fn ->
+          assert CLI.configure(["--config", path], cli_deps(@start_overrides)) == :ok
+        end)
+
+      assert log =~ "symphony.yml migrated: v0.0.1.691 renamed `pre_push_review` to `code_review` in your settings"
+      assert log =~ "the file as it was: #{path}.before-v"
+      assert File.read!(path) =~ "\ncode_review:\n"
+
+      assert capture_log(fn -> assert CLI.configure(["--config", path], cli_deps(@start_overrides)) == :ok end) == "",
+             "once: the file has nothing left to move"
+    end
+
+    test "the service refuses a file it can't rewrite", %{root: root} do
+      path = write_symphony!(root, "ledger: {artifact_retention_days: 3}\n")
+
+      assert {:error, message} = CLI.configure(["--config", path], cli_deps(@start_overrides))
+      assert message =~ "Config error in #{path}: `ledger.artifact_retention_days` can't be rewritten"
+    end
+
+    test "symphony run migrates the file too", %{root: root} do
+      path = write_symphony!(root, "ledger: {artifact_retention_days: 3}\n")
+      deps = cli_deps(@start_overrides)
+
+      assert {{:error, message, 2}, "", ""} = evaluate_io(["run", "TP-1", "--config", path], deps)
+      assert message =~ "can't be rewritten"
+    end
+  end
+
+  @doc false
+  def ok, do: :ok
+  @doc false
+  def ok(_value), do: :ok
+
   defp check(args, overrides \\ []) do
     {result, output, _stderr} = check_io(args, overrides)
     {result, output}
@@ -629,35 +799,41 @@ defmodule SymphonyElixir.CLICheckTest do
 
   # Also returns what the check printed on stderr: the build line, then any error.
   defp check_io(args, overrides \\ []) do
-    parent = self()
-
-    deps =
-      %{
-        check_config: &Config.check_repo_workflows/0,
-        check_findings: &Config.check_findings/0,
-        file_regular?: &File.regular?/1,
-        init: fn _args -> flunk("init called") end,
-        set_symphony_file_path: &Workflow.set_symphony_file_path/1,
-        set_state_root: fn _path -> flunk("state root set") end,
-        set_state_root_from_env: fn -> flunk("state root env read") end,
-        set_logs_root: fn _path -> flunk("logs root set") end,
-        set_logs_root_from_env: fn -> flunk("logs root env read") end,
-        set_server_host_override: fn _host -> flunk("host set") end,
-        set_server_port_override: fn _port -> flunk("port set") end,
-        ensure_all_started: fn ->
-          send(parent, :runtime_started)
-          {:ok, []}
-        end,
-        run_one_shot: fn _identifier, _opts ->
-          send(parent, :runtime_started)
-          {:ok, %{}}
-        end
-      }
-      |> Map.merge(Map.new(overrides))
-
-    {{result, output}, stderr} = with_io(:stderr, fn -> with_io(fn -> CLI.evaluate(["check" | args], deps) end) end)
+    {result, output, stderr} = evaluate_io(["check" | args], cli_deps(overrides))
     refute_received :runtime_started
     {result, output, stderr}
+  end
+
+  defp evaluate_io(args, deps \\ cli_deps([])) do
+    {{result, output}, stderr} = with_io(:stderr, fn -> with_io(fn -> CLI.evaluate(args, deps) end) end)
+    {result, output, stderr}
+  end
+
+  defp cli_deps(overrides) do
+    parent = self()
+
+    %{
+      check_config: &Config.check_repo_workflows/0,
+      check_findings: &Config.check_findings/0,
+      file_regular?: &File.regular?/1,
+      init: fn _args -> flunk("init called") end,
+      set_symphony_file_path: &Workflow.set_symphony_file_path/1,
+      set_state_root: fn _path -> flunk("state root set") end,
+      set_state_root_from_env: fn -> flunk("state root env read") end,
+      set_logs_root: fn _path -> flunk("logs root set") end,
+      set_logs_root_from_env: fn -> flunk("logs root env read") end,
+      set_server_host_override: fn _host -> flunk("host set") end,
+      set_server_port_override: fn _port -> flunk("port set") end,
+      ensure_all_started: fn ->
+        send(parent, :runtime_started)
+        {:ok, []}
+      end,
+      run_one_shot: fn _identifier, _opts ->
+        send(parent, :runtime_started)
+        {:ok, %{}}
+      end
+    }
+    |> Map.merge(Map.new(overrides))
   end
 
   defp write_symphony!(root, content) do
