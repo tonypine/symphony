@@ -187,7 +187,7 @@ defmodule SymphonyElixir.QaDispatchTest do
       assert next.claimed == MapSet.new()
       assert is_integer(next.next_poll_due_at_ms)
       assert_receive {:tick, _token}
-      assert log =~ ~s(refused_by="flow_gated?: the PR watcher (R9): A run is working on the ticket")
+      assert log =~ ~s|refused_by="flow_gated?: the PR watcher (R9): A run is working on the ticket"|
 
       # The watcher's read turns the decision; the next cycle dispatches QA with nothing else to wait on.
       SymphonyElixir.PrWatchSupport.put_watch!(@designed_repo, @issue_id, head_sha: "abc123", decision: :dispatch)
