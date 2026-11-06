@@ -7,6 +7,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
 
   alias Plug.Conn
   alias SymphonyElixir.{Config, History, Inbox, Orchestrator, PullRequestPage, Quality, Shipped, StatusDashboard}
+  alias SymphonyElixir.Inbox.FromRecord
   alias SymphonyElixir.Learnings.Feed
   alias SymphonyElixirWeb.{Endpoint, Presenter}
 
@@ -94,7 +95,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   defp live do
     case Orchestrator.snapshot(orchestrator(), snapshot_timeout_ms()) do
       %{} = snapshot ->
-        %{running: snapshot |> Map.get(:running, []) |> MapSet.new(& &1.issue_id), you: snapshot |> Inbox.items(inbox()) |> MapSet.new(& &1.issue_id)}
+        %{running: FromRecord.working_ids(snapshot), you: snapshot |> Inbox.items(inbox()) |> MapSet.new(& &1.issue_id)}
 
       _unavailable ->
         %{running: MapSet.new(), you: MapSet.new()}
