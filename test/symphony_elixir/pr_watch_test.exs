@@ -43,6 +43,25 @@ defmodule SymphonyElixir.PrWatchTest do
       end
     end
 
+    test "a CI Fix run holds back while the watcher waits on CI or reruns a check, and starts on any other decision (TP-1175)" do
+      settings = Config.settings!()
+      ci_fix = issue("3", "CI Fix")
+
+      # No decision on it: the run starts, as with the watcher off.
+      assert PrWatch.dispatch_reason(ci_fix, settings) == nil
+
+      PrWatchSupport.put_watch!(@repo_key, "3", decision: %{rule: "R24", kind: :wait, owner: :ci, reason: "Checks are running on PR #3's head"})
+      assert PrWatch.dispatch_reason(ci_fix, settings) == "the PR watcher (R24): Checks are running on PR #3's head"
+
+      PrWatchSupport.put_watch!(@repo_key, "3", decision: %{rule: "R22", kind: :rerun_failed, reason: "specs failed: rerunning it once"})
+      assert PrWatch.dispatch_reason(ci_fix, settings) == "the PR watcher (R22): specs failed: rerunning it once"
+
+      for decision <- [%{rule: "R21", kind: :ci_fix, reason: "specs failed"}, %{rule: "R1", kind: :wait, owner: :github, reason: "GitHub's limit"}] do
+        PrWatchSupport.put_watch!(@repo_key, "3", decision: decision)
+        assert PrWatch.dispatch_reason(ci_fix, settings) == nil
+      end
+    end
+
     test "a Merging landing agent runs only when the watcher hands the PR to one, with auto-merge on" do
       settings = Config.settings!()
       merging = issue("2", "Merging")

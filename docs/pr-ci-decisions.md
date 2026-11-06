@@ -139,6 +139,16 @@ nothing follows, or one past its bound, is reported as a silent wait (see
 R18 and R19a ask a question. A conflict never does, and a check that keeps failing gets a fix ticket
 instead (see [When CI keeps failing](#when-ci-keeps-failing)).
 
+While a `CI Fix` ticket's decision waits on CI (R23, R24) or reruns a check (R19, R22, U2), no CI Fix
+run starts: there is nothing to repair yet, and the next decision returns the ticket (R25) or sends
+a fix run (R14, R21). A CI Fix run already going that finds the head's checks running ends in that
+wait after its first idle turn.
+
+A run that really makes no progress for two turns is held in its phase, never moved out of it: it
+stays watched, shows in the Inbox with its question and in `silent_waits` with its reason and age,
+and R4 waits. A read that shows a new head, or checks that reported green or red where they had
+not, lifts the hold.
+
 ## Where the facts come from
 
 The watcher reads them by polling, one watcher per repository whose pull requests are polled,

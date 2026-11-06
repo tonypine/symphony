@@ -317,6 +317,7 @@ public struct PRWatchCard: Equatable {
         switch bound {
         case "ci.merging_wait_timeout_ms": "CI has been running longer than the wait allows, and nothing says why"
         case "rate_limit_reset": "GitHub's request limit should have reset by now, and nothing has read the PR since"
+        case "no_progress": "its last runs changed nothing, so it stays paused until its PR changes or you answer"
         default: "nothing is running and nothing says why"
         }
     }

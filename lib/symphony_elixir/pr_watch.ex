@@ -16,7 +16,7 @@ defmodule SymphonyElixir.PrWatch do
 
   use Supervisor
 
-  alias SymphonyElixir.{Config, LandingOrder, RunStore, TicketState}
+  alias SymphonyElixir.{CiFix, Config, IdlePark, LandingOrder, RunStore, TicketState}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PrWatch.{Attempts, Competitors, Repo, SilentWait}
 
@@ -91,24 +91,39 @@ defmodule SymphonyElixir.PrWatch do
 
   @doc """
   Every watched ticket that waits silently (`SymphonyElixir.PrWatch.SilentWait`): its phase, since
-  when, the watcher's last rule, the bound that passed (nil when it is only quiet) and why.
+  when, the watcher's last rule, the bound that passed (nil when it is only quiet) and why. A ticket
+  an idle run held in its phase (`SymphonyElixir.IdlePark`) is listed too, with the hold's reason and
+  since when it is held: nothing is under way on it and it may wait on a person.
   """
   @spec silent_waits(keyword()) :: [map()]
   def silent_waits(opts \\ []) do
-    for %{pr_watch: %{silent: silent} = watch} = record <- records(opts), SilentWait.listed?(silent) do
-      %{
-        issue_id: record.issue_id,
-        issue_identifier: record.issue_identifier,
-        repo_key: record.repo_key,
-        phase: watch.stay || watch.facts.phase,
-        pr_url: watch.pr_url,
-        since: silent.since,
-        rule: watch.decision && watch.decision.rule,
-        bound: silent.bound,
-        reason: silent.reason
-      }
-    end
-    |> Enum.sort_by(&{DateTime.to_unix(&1.since, :microsecond), &1.issue_identifier || &1.issue_id || ""})
+    records = records(opts)
+
+    silent =
+      for %{pr_watch: %{silent: silent}} = record <- records, SilentWait.listed?(silent) do
+        silent_entry(record, silent.since, silent.bound, silent.reason)
+      end
+
+    held =
+      for record <- records, %{set_at: %DateTime{} = since, text: text} <- [IdlePark.reason(record)] do
+        silent_entry(record, since, IdlePark.silent_bound(), text)
+      end
+
+    Enum.sort_by(silent ++ held, &{DateTime.to_unix(&1.since, :microsecond), &1.issue_identifier || &1.issue_id || ""})
+  end
+
+  defp silent_entry(%{pr_watch: watch} = record, since, bound, reason) do
+    %{
+      issue_id: record.issue_id,
+      issue_identifier: record.issue_identifier,
+      repo_key: record.repo_key,
+      phase: watch.stay || watch.facts.phase,
+      pr_url: watch.pr_url,
+      since: since,
+      rule: watch.decision && watch.decision.rule,
+      bound: bound,
+      reason: reason
+    }
   end
 
   @doc """
@@ -146,7 +161,10 @@ defmodule SymphonyElixir.PrWatch do
   nil when it may. Only the phases whose run waits on the PR are gated: `Code Review` and `QA` run
   on a decision to `dispatch` (a green, conflict-free head), and `Merging`, with auto-merge on,
   runs only the landing agent the decision hands it to (`land_agent`); one with no PR waits for a
-  person's answer (R6). A ticket the watcher hasn't decided on yet waits for it.
+  person's answer (R6). A ticket the watcher hasn't decided on yet waits for it. `CI Fix` runs unless
+  the decision waits on CI or reruns a check (R19, R22, R23, R24, U2): with its checks still to report
+  there is nothing to repair yet, and the next decision returns the ticket (R25) or sends a fix run
+  (R14, R21). With no decision on it, a CI Fix run still starts.
   """
   @spec dispatch_reason(Issue.t(), map()) :: String.t() | nil
   def dispatch_reason(%Issue{} = issue, settings) do
@@ -160,6 +178,7 @@ defmodule SymphonyElixir.PrWatch do
     cond do
       same_state?(state, settings.tracker.code_review_state) -> :review
       same_state?(state, settings.tracker.qa_state) -> :review
+      CiFix.in_state?(state, settings) -> :ci_fix
       same_state?(state, "Merging") and SymphonyElixir.AutoMerge.enabled?(settings) -> :landing
       true -> nil
     end
@@ -167,6 +186,9 @@ defmodule SymphonyElixir.PrWatch do
 
   defp gated_phase(_state, _settings), do: nil
 
+  defp gate(:ci_fix, %{decision: %{kind: :wait, owner: :ci, reason: reason, rule: rule}}), do: "the PR watcher (#{rule}): #{reason}"
+  defp gate(:ci_fix, %{decision: %{kind: :rerun_failed, reason: reason, rule: rule}}), do: "the PR watcher (#{rule}): #{reason}"
+  defp gate(:ci_fix, _watch), do: nil
   defp gate(_phase, nil), do: "the PR watcher hasn't read its PR yet"
   defp gate(_phase, %{decision: nil}), do: "the PR watcher hasn't decided on its PR yet"
   defp gate(:review, %{decision: %{kind: :dispatch}}), do: nil

@@ -34,7 +34,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   A ticket waiting on its competitors (landing reasons on its pause) has its wait judged before
   deciding (`SymphonyElixir.PrWatch.Competitors.settle/5`), so a wait that ends lets the same tick
-  decide on the conflict. A ticket that leaves the watched set ends its wait.
+  decide on the conflict. A ticket that leaves the watched set ends its wait. A ticket an idle run
+  held in its phase stays watched, and a read that shows a new head or checks that reported lifts
+  the hold (`SymphonyElixir.IdlePark.settle/3`).
 
   Before deciding, the read is completed with what Symphony knows: the attempts
   (`SymphonyElixir.PrWatch.Attempts`), a rerun whose checks haven't reported yet (the head reads as
@@ -102,6 +104,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     CiState,
     Config,
     Decisions,
+    IdlePark,
     LandingOrder,
     PrDecision,
     ProtectedPathsGate,
@@ -992,6 +995,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
     if watch do
       watch = silence(watch, entry, previous, now, state, settings)
       store(state).put_ticket_pr_watch(state.repo_key, entry.issue.id, entry.issue.identifier, watch) |> log_write(entry)
+      # A hold an idle run set lifts on this read; the pause's change re-decides the ticket at once.
+      _ = IdlePark.settle({:ticket, state.repo_key, entry.issue.id}, entry.record, watch)
       announce_dispatch(watch, previous, entry, state)
       announce_situation(watch, previous, entry)
       watch

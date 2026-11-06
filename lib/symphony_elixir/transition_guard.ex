@@ -150,8 +150,6 @@ defmodule SymphonyElixir.TransitionGuard do
     %{signal: :review_rework, from: :any, to: "In Progress"},
     # A green fix run with nothing to push returns the issue to Merging.
     %{signal: :merge_ready, from: ["Rework", "In Progress"], to: "Merging"},
-    # An idle run is parked in Backlog.
-    %{signal: :idle_park, from: ["In Progress", "Rework"], to: "Backlog"},
     # A Director-app move (a person's decision); the target is the requested state.
     %{signal: :director_move, from: :any, to: :requested},
     # Every sub-issue is terminal: Done.
