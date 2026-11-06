@@ -82,7 +82,8 @@ defmodule SymphonyElixir.TicketMovesTest do
       refused(move, %{phase: "Canceled"}, "The ticket is cancelled.")
       refused(move, %{phase: "Cancelled"}, "The ticket is cancelled.")
       refused(move, %{phase: "Duplicate"}, "The ticket is duplicate.")
-      refused(move, %{phase: nil}, "The ticket is not one Symphony tracks.")
+      refused(move, %{phase: nil, recorded?: false}, "The ticket is not one Symphony tracks.")
+      allowed(move, %{phase: nil})
     end
   end
 
@@ -102,7 +103,8 @@ defmodule SymphonyElixir.TicketMovesTest do
     allowed(:force, %{})
     refused(:force, %{labels: [String.upcase(force_label)]}, "It is already forced.")
     refused(:force, %{phase: "Done"}, "The ticket is done.")
-    refused(:force, %{phase: nil}, "The ticket is not one Symphony tracks.")
+    refused(:force, %{phase: nil, recorded?: false}, "The ticket is not one Symphony tracks.")
+    allowed(:force, %{phase: nil})
 
     allowed(:unforce, %{labels: [force_label]})
     refused(:unforce, %{}, "It isn't forced.")
@@ -165,7 +167,8 @@ defmodule SymphonyElixir.TicketMovesTest do
     allowed(:backlog, %{})
     refused(:backlog, %{phase: " backlog "}, "MT-1 is already in Backlog")
     refused(:backlog, %{phase: "Done"}, "The ticket is done.")
-    refused(:backlog, %{phase: nil}, "The ticket is not one Symphony tracks.")
+    refused(:backlog, %{phase: nil, recorded?: false}, "The ticket is not one Symphony tracks.")
+    allowed(:backlog, %{phase: nil})
   end
 
   test "read carries every move, its reason when refused, and start in the shape the app reads" do
@@ -220,15 +223,15 @@ defmodule SymphonyElixir.TicketMovesTest do
     test "a stop is released by Unblock; a wait on a blocker is not" do
       :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: "stopped", issue_identifier: "MT-1", phase: "In Progress"})
       reason = %{kind: :environment, waits_on: %{condition: "stop"}, text: "Stopped", releasable: true}
-      {:ok, _pause} = Pauses.add_reason({:ticket, "default", "stopped"}, reason)
+      {:ok, _pause} = Pauses.set({:ticket, "default", "stopped"}, reason)
       assert %{unblockable?: true} = TicketMoves.facts(record_of("stopped"), live())
 
       :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: "waiting", issue_identifier: "MT-2", phase: "In Progress"})
-      {:ok, _pause} = Pauses.add_reason({:ticket, "default", "waiting"}, Pauses.ticket_reason(:dependency, "MT-3"))
+      {:ok, _pause} = Pauses.set({:ticket, "default", "waiting"}, Pauses.ticket_reason(:dependency, "MT-3"))
       assert %{unblockable?: false} = TicketMoves.facts(record_of("waiting"), live())
 
       :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: "landing", issue_identifier: "MT-4", phase: "In Progress"})
-      {:ok, _pause} = Pauses.add_reason({:ticket, "default", "landing"}, Pauses.ticket_reason(:landing, "MT-5"))
+      {:ok, _pause} = Pauses.set({:ticket, "default", "landing"}, Pauses.ticket_reason(:landing, "MT-5"))
       assert %{unblockable?: true} = TicketMoves.facts(record_of("landing"), live())
     end
 

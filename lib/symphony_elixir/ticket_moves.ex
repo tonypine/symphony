@@ -252,6 +252,9 @@ defmodule SymphonyElixir.TicketMoves do
   defp require_phase(%{phase: phase}) when is_binary(phase), do: :ok
   defp require_phase(_facts), do: {:error, @untracked}
 
+  # A ticket Symphony holds that Linear gave no state is open; only a ticket it holds nothing of isn't one it tracks.
+  defp require_open(%{phase: nil, recorded?: true}), do: :ok
+
   defp require_open(facts) do
     with :ok <- require_phase(facts) do
       if closed?(facts.phase), do: {:error, closed_reason(facts.phase)}, else: :ok
