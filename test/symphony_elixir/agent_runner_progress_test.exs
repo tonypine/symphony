@@ -164,6 +164,105 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       end
     end
 
+    test "a machine handoff step on a Rework head that never moved emits nothing and moves nothing" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+
+      assert :ok = run_machine_handoff!(step_runner(), heads: ["sha-old"])
+
+      assert_received :machine_push
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      refute Handoff.emitted?("default", "issue-progress", "sha-old")
+      assert RunStore.get_rework_base("default", "issue-progress") == "sha-old"
+    end
+
+    test "a machine handoff step with review comments pending emits nothing and moves nothing, in Rework or In Progress" do
+      for {state, list} <- [{"Rework", "rework"}, {"In Progress", "implementation"}] do
+        put_pending_review()
+        Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+
+        assert :ok = run_machine_handoff!(step_runner(pushes: "sha-new"), state: state, list: list)
+
+        assert_received :machine_push
+        refute_received {:memory_tracker_state_update, "issue-progress", _state}
+        refute Handoff.emitted?("default", "issue-progress", "sha-new")
+        Application.delete_env(:symphony_elixir, :progress_agent_turns)
+      end
+    end
+
+    test "an In Progress list's machine handoff step moves the ticket with nothing pending and the PR on its head" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+
+      assert :ok = run_machine_handoff!(step_runner(pushes: "sha-new"), state: "In Progress", list: "implementation")
+
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert_handoff_recorded("sha-new", "machine_handoff")
+    end
+
+    test "a hold raised while the machine handoff step ran keeps the ticket where it is" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+      ticket = {:ticket, "default", "issue-progress"}
+      hold = fn -> {:ok, _pause} = Pauses.add_reason(ticket, Pauses.ticket_reason(:dependency, "TP-12")) end
+
+      assert :ok = run_machine_handoff!(step_runner(pushes: "sha-new", on_push: hold))
+
+      assert_received :machine_push
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      refute Handoff.emitted?("default", "issue-progress", "sha-new")
+    end
+
+    test "a ticket moved to another phase while the machine handoff step ran stays there" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+      fetcher = refreshes([{:ok, [progress_issue("Rework")]}, {:ok, [progress_issue("Merging")]}])
+
+      assert :ok = run_machine_handoff!(step_runner(pushes: "sha-new"), issue_state_fetcher: fetcher)
+
+      assert_received :machine_push
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      refute Handoff.emitted?("default", "issue-progress", "sha-new")
+      assert RunStore.get_rework_base("default", "issue-progress") == nil
+    end
+
+    test "a ticket gone from the tracker while the machine handoff step ran moves nothing" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+      fetcher = refreshes([{:ok, [progress_issue("Rework")]}, {:ok, []}])
+
+      assert :ok = run_machine_handoff!(step_runner(pushes: "sha-new"), issue_state_fetcher: fetcher)
+
+      assert_received :machine_push
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      refute Handoff.emitted?("default", "issue-progress", "sha-new")
+    end
+
+    test "a failed read of the ticket after the machine handoff step fails the run" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+      fetcher = refreshes([{:ok, [progress_issue("Rework")]}, {:error, :boom}])
+
+      assert_raise RuntimeError, ~r/issue_state_refresh_failed/, fn ->
+        run_machine_handoff!(step_runner(pushes: "sha-new"), issue_state_fetcher: fetcher)
+      end
+
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+    end
+
+    test "going on past a machine handoff step that hung moves the ticket in the run that resumes it" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+      ticket = {:ticket, "default", "issue-progress"}
+
+      assert :ok = run_machine_handoff!(step_runner(hangs: true))
+
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      assert [%{id: question_id, step: "handoff"}] = Questions.open(ticket)
+
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-new"))
+      {:ok, _answered} = Questions.answer(ticket, question_id, "Go on past it")
+
+      assert :ok = run_machine_handoff!(step_runner())
+
+      assert turns() == 1
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert_handoff_recorded("sha-new", "machine_handoff")
+    end
+
     test "a pushed head an In Progress run left with no signal does not advance, on a pending rework signal" do
       :ok = put_pending_conflict()
       green = [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"}]
@@ -246,39 +345,77 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
     # A list whose last step is a machine `handoff`: the agent commits `sha-new` in the code turn, and
     # the step's command is the push.
-    defp run_machine_handoff!(runner) do
+    defp run_machine_handoff!(runner, opts \\ []) do
+      list = Keyword.get(opts, :list, "rework")
+
       steps = """
       phases:
-        rework:
+        #{list}:
           steps:
             - {id: code, title: Write the code, mode: delegated}
             - {id: handoff, title: Push, mode: machine, command: make push, on_fail: code}
       """
 
-      run_issue!("Rework",
-        heads: ["sha-old", "sha-new"],
-        repos: designed_repos(),
-        symphony_steps: steps,
-        runner_opts: [step_command_runner: runner, run_id: "run-progress"]
+      run_issue!(
+        Keyword.get(opts, :state, "Rework"),
+        [
+          heads: Keyword.get(opts, :heads, ["sha-old", "sha-new"]),
+          repos: designed_repos(),
+          symphony_steps: steps,
+          runner_opts: [step_command_runner: runner, run_id: "run-progress"]
+        ] ++ Keyword.take(opts, [:issue_state_fetcher])
       )
     end
 
-    # The step commands: the changed-files script reports an Elixir change, `make push` puts the PR on
-    # `:pushes` when given, and every other command passes.
+    # The step commands: the changed-files script reports an Elixir change, `make push` tells the test,
+    # runs `:on_push`, hangs with `:hangs` and puts the PR on `:pushes` when given, and every other
+    # command passes.
     defp step_runner(opts \\ []) do
+      parent = self()
+
       fn command, _env, _timeout_ms ->
         cond do
-          command =~ "git merge-base" ->
-            {:ok, {"M\tlib/app.ex\n", 0}}
-
-          command == "make push" and Keyword.has_key?(opts, :pushes) ->
-            Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status(opts[:pushes]))
-            {:ok, {"pushed", 0}}
-
-          true ->
-            {:ok, {"", 0}}
+          command =~ "git merge-base" -> {:ok, {"M\tlib/app.ex\n", 0}}
+          command == "make push" -> machine_push(parent, opts)
+          true -> {:ok, {"", 0}}
         end
       end
+    end
+
+    defp machine_push(parent, opts) do
+      send(parent, :machine_push)
+      if on_push = opts[:on_push], do: on_push.()
+      if pushed = opts[:pushes], do: Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status(pushed))
+      if opts[:hangs], do: {:timeout, "hanging"}, else: {:ok, {"pushed", 0}}
+    end
+
+    # The ticket as each read in turn finds it (the last one repeating).
+    defp refreshes(results) do
+      calls = :counters.new(1, [])
+
+      fn _ids ->
+        :counters.add(calls, 1, 1)
+        Enum.at(results, :counters.get(calls, 1) - 1) || List.last(results)
+      end
+    end
+
+    defp progress_issue(state) do
+      %Issue{id: "issue-progress", identifier: "TP-337", title: "Leave Rework", description: "Fix the PR", state: state, repo_key: "default"}
+    end
+
+    defp put_pending_review do
+      :ok =
+        RunStore.put_pr_review(%{
+          repo_key: "default",
+          issue_id: "issue-progress",
+          issue_identifier: "TP-337",
+          pr_url: @pr_url,
+          workspace_path: "/tmp",
+          status: "rework_requested",
+          pending_last_addressed_comment_id: "comment-337",
+          pending_reviewer_comments: [%{id: "comment-337", kind: "inline_comment", author: "Reviewer", body: "Rename this."}],
+          updated_at: ~U[2026-10-03 12:00:00Z]
+        })
     end
 
     defp assert_handoff_recorded(head, source) do

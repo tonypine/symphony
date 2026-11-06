@@ -1310,7 +1310,7 @@ defmodule SymphonyElixir.AgentRunner do
       {:go_on, _on_fail} ->
         case PhaseSteps.next(walk.steps, step, :passed) do
           {:ok, next_step} -> resume_at(agent_module, run_context, next_step, nil, turn_number, max_turns)
-          :end -> :ok
+          :end -> end_machine_walk(run_context, nil)
         end
 
       {:words, {:ok, %{mode: mode} = on_fail}} when mode != "machine" ->
@@ -1364,29 +1364,53 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   # A list that ends on a machine `handoff` step pushed with its own command, past the tool hooks, and
-  # no agent turn follows to reach the post-turn handoff. The run that pushed the head moves the ticket:
-  # with the workspace HEAD on the PR, the signal is recorded for it and the ticket moves. A step that
-  # failed (`carry`), another last step, or a head the PR does not show hands nothing off.
+  # no agent turn follows to reach the post-turn handoff. The run that pushed the head moves the ticket,
+  # by the rules a post-turn handoff follows. The step may have run long with the slot free, so the ticket
+  # is read again first. A step that failed (`carry`) or another last step hands nothing off.
   defp end_machine_walk(%{walk: %{steps: steps}, issue: issue} = run_context, nil) do
-    pr_url = ticket_pr_url(issue, run_context.opts)
-
     with %{id: "handoff"} <- List.last(steps),
-         true <- Handoff.origin?(issue.state) and is_binary(pr_url),
-         head when is_binary(head) <- read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts),
-         true <- pr_url_head?(pr_url, head, run_context) do
-      Handoff.emit(run_repo_key(issue, run_context.opts), issue.id, %{head: head, pr_url: pr_url, source: "machine_handoff"})
-      run_context = put_in(run_context.progress.head, head)
-
-      case move_to_post_pr_state(issue, post_pr_state(run_context), "after its handoff step", run_context) do
-        :ok -> forget_rework_base(issue, run_context.opts)
-        {:error, reason} -> {:error, {:machine_handoff_failed, reason}}
-      end
+         {:ok, [%Issue{} = refreshed_issue | _]} <- refresh_issue_state(issue, run_context.issue_state_fetcher, run_context.opts) do
+      hand_off_machine_head(refreshed_issue, run_context)
     else
+      {:error, reason} -> {:error, {:issue_state_refresh_failed, reason}}
       _no_handoff -> :ok
     end
   end
 
   defp end_machine_walk(_run_context, _failed_step), do: :ok
+
+  defp hand_off_machine_head(%Issue{} = issue, %{opts: opts} = run_context) do
+    head = read_workspace_head(run_context.workspace, run_context.worker_host, opts)
+    run_context = put_in(run_context.progress.head, head)
+
+    if machine_head_handed_off?(issue, run_context) do
+      Handoff.emit(run_repo_key(issue, opts), issue.id, %{head: head, pr_url: ticket_pr_url(issue, opts), source: "machine_handoff"})
+
+      case move_to_post_pr_state(issue, post_pr_state(run_context), "after its handoff step", run_context) do
+        :ok -> forget_rework_base(issue, opts)
+        {:error, reason} -> {:error, {:machine_handoff_failed, reason}}
+      end
+    else
+      forget_rework_base_outside_rework(issue, opts)
+    end
+  end
+
+  # A hold, or a person's move to another phase while the step ran, wins over the handoff.
+  defp machine_head_handed_off?(%Issue{} = issue, %{opts: opts} = run_context) do
+    Handoff.origin?(issue.state) and not waiting_on_hold?(issue, opts) and machine_head_finished?(issue, run_context)
+  end
+
+  # In `Rework` the head must have moved past where the Rework started, with nothing pending
+  # (`rework_finished?/2`); any other origin needs nothing pending and the PR on the head
+  # (`post_pr_quiet_continuation?/3`).
+  defp machine_head_finished?(%Issue{} = issue, %{opts: opts, progress: %{head: head}} = run_context) do
+    if rework_state?(issue.state) do
+      rework_finished?(issue, run_context)
+    else
+      is_binary(head) and attached_pr?(issue, opts) and no_pending_rework_signal?(issue, opts) and
+        pr_url_head?(ticket_pr_url(issue, opts), head, run_context)
+    end
+  end
 
   defp next_walk_turn(agent_module, app_session, run_context, false, turn_number, max_turns) when not is_nil(app_session),
     do: do_run_codex_turns(agent_module, app_session, Map.delete(run_context, :fresh_session), turn_number + 1, max_turns)

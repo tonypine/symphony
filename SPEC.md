@@ -3207,7 +3207,9 @@ Rules:
   quiet with its open PR already on its workspace HEAD has nothing to push, a finished Rework run
   may have pushed past the hooks, and a step list's machine `handoff` step pushes with its own
   command, so in each the runner, on seeing the PR on that HEAD, records the signal for that head and
-  hands off in the same run. A run that ends without it MUST record `handoff_missing`
+  hands off in the same run. A machine `handoff` step does so only on the ticket as it stands when the
+  step ends: not on a hold, still in the phase the run works, nothing pending, and in `Rework` the head
+  moved past the one the `Rework` started from. A run that ends without it MUST record `handoff_missing`
   and leave the ticket where it is for the retry machinery, which MUST back off its quiet runs and
   hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head. A
   ticket on a hold is not counted: it waits on the hold alone. Before the hold, Symphony asks a
