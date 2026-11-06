@@ -109,7 +109,7 @@ final class PRWatchTests: XCTestCase {
 
     func testWaitingForCISaysOnWhichHeadWhoActsNextAndBothFixAttemptCounts() throws {
         let card = try card([
-            "phase": "code_review", "rule": "R24", "action": "wait", "owner": "ci", "clears_when": "the checks finish",
+            "phase": "qa", "rule": "R24", "action": "wait", "owner": "ci", "clears_when": "the checks finish",
             "head": "9f8e7d6c5b4a", "since": "2026-10-16T12:00:00Z", "read_at": "2026-10-16T12:04:00Z", "source": "webhook",
             "reason": "Checks are running on PR #42's head",
             "actions": [
