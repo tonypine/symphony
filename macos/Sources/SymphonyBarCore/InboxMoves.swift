@@ -357,13 +357,15 @@ public struct ConsequenceSheet: Equatable, Identifiable {
             targetState = Self.waitingState
             happens = "Moves \(id) to \(Self.waitingState)" + Self.promotion(item.review.subTickets) + "."
             let open = item.review.questions.count
+            let written: String
             if let unapplied = item.review.unappliedAnswersWarning {
-                stays = "\(unapplied) Approving now approves the plan as written, without \(item.review.unappliedAnswers == 1 ? "it" : "them")."
+                written = "\(unapplied) Approving now approves the plan as written, without \(item.review.unappliedAnswers == 1 ? "it" : "them")."
             } else {
-                stays = open == 0
+                written = open == 0
                     ? "The plan stays as written. To change it, ask for changes instead."
                     : "The plan stays as written: \(open == 1 ? "its open question is" : "its \(open) open questions are") not answered. To have Symphony apply your answers first, choose Send Decisions instead."
             }
+            stays = item.review.unaskedChoicesWarning.map { "\($0) \(written)" } ?? written
         case .sendDecisions:
             title = "Send your answers on \(id)?"
             // Symphony moves a plan under review to Rework to revise it, and an approved plan stays: its answer says

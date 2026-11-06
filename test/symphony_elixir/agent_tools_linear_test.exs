@@ -2566,6 +2566,50 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       end
     end
 
+    test "a plan run asks all its choices, and one over the limit is recorded as not asked and pauses nothing more" do
+      :ok = SymphonyElixir.RunStore.clear()
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      issue = %Issue{id: "issue-24", identifier: "MOT-24", repo_key: "repo-a", state: "In Progress", labels: ["plan"]}
+      context = %{issue: issue, comment_registry: registry, run_id: "run-1"}
+      choice = &(@human_action |> Map.put("title", "Choice #{&1}") |> put_in(["decision", "question"], "Which way for choice #{&1}?"))
+
+      ask = fn number -> request_human_action(context, human_action_scope(), %{}, choice.(number)) end
+
+      for number <- 1..12 do
+        assert {:ok, %{"requested" => true}} = ask.(number)
+      end
+
+      assert length(SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-24"})) == 12
+
+      assert {:error, {:human_action_cap_reached, 12}} = ask.(13)
+      assert length(SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-24"})) == 12
+
+      assert [%{run_id: "run-1", payload: %{title: "Choice 13", question: "Which way for choice 13?", cap: 12}}] =
+               SymphonyElixir.RunStore.list_ticket_events("issue-24", types: ["question.not_asked"])
+    end
+
+    test "every other run kind keeps the limit of five, an epic parent's review too" do
+      for issue <- [
+            %Issue{id: "issue-24", repo_key: "repo-a", state: "In Progress"},
+            %Issue{id: "issue-24", repo_key: "repo-a", state: "Epic Review", labels: ["plan"], sub_issues: [%{id: "issue-25", identifier: "MOT-25", state: "Done"}]}
+          ] do
+        {:ok, registry} = Linear.CommentRegistry.start_link()
+        context = %{issue: issue, comment_registry: registry}
+        for _slot <- 1..5, do: Linear.CommentRegistry.reserve_human_action(registry, 5)
+        opts = human_action_opts(fn _query, _variables, _opts -> flunk("Linear should not be called") end)
+
+        assert {:error, {:human_action_cap_reached, 5}} = Linear.request_human_action(context, @human_action, opts)
+      end
+
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      for _slot <- 1..5, do: Linear.CommentRegistry.reserve_human_action(registry, 5)
+      opts = human_action_opts(fn _query, _variables, _opts -> flunk("Linear should not be called") end)
+
+      context = %{issue_id: "issue-24", comment_registry: registry}
+
+      assert {:error, {:human_action_cap_reached, 5}} = Linear.request_human_action(context, @human_action, opts)
+    end
+
     test "refuses code in a request, naming each token and its field, and posts nothing" do
       {:ok, registry} = Linear.CommentRegistry.start_link()
       context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}, comment_registry: registry}
