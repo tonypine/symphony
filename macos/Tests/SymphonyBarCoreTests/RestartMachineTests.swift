@@ -423,7 +423,6 @@ final class RestartMachineTests: XCTestCase {
 
     func testUpdateNowAnywayAfterTheTimeout() {
         var (machine, _) = beginUpdate()
-        _ = machine.handle(.configChecked(.passed), now: began)
         _ = machine.handle(.controlFinished(.pause, .done), now: began)
         _ = machine.handle(.polled(pausedPoll(running: 1)), now: began.addingTimeInterval(runsTimeout))
         XCTAssertTrue(machine.offersRestartNow)
@@ -434,7 +433,6 @@ final class RestartMachineTests: XCTestCase {
 
     func testSymphonyExitingDuringTheDrainCancelsTheUpdate() {
         var (machine, _) = beginUpdate()
-        _ = machine.handle(.configChecked(.passed), now: began)
 
         XCTAssertEqual(machine.handle(.exited(.exited(1)), now: began), [])
         XCTAssertFalse(machine.isRestarting)
@@ -446,7 +444,6 @@ final class RestartMachineTests: XCTestCase {
     /// An automatic update that paused dispatch and is waiting for agent runs.
     private func waitingAutomatic(alreadyPaused: Bool = false, runsTimeout: TimeInterval? = nil) -> RestartMachine {
         var (machine, _) = beginUpdate(alreadyPaused: alreadyPaused, purpose: .automaticUpdate, runsTimeout: runsTimeout)
-        _ = machine.handle(.configChecked(.passed), now: began)
         if !alreadyPaused { _ = machine.handle(.controlFinished(.pause, .done), now: began) }
         return machine
     }
@@ -579,7 +576,6 @@ final class RestartMachineTests: XCTestCase {
 
     func testOnReleaseUpdateCancelResumesTheDispatchItPaused() {
         var (machine, _) = beginOnRelease()
-        _ = machine.handle(.configChecked(.passed), now: began)
         _ = machine.handle(.controlFinished(.pause, .done), now: began)
         _ = machine.handle(.polled(pausedPoll(running: 1)), now: began)
 
@@ -603,8 +599,7 @@ final class RestartMachineTests: XCTestCase {
 
     func testTheUpdateLineNamesTheVersionOnlyWhileWaitingForRuns() {
         var (machine, _) = beginUpdate()
-        XCTAssertEqual(machine.menuLine(updatingTo: "0.0.1.42"), "Updating: checking symphony.yml…")
-        _ = machine.handle(.configChecked(.passed), now: began)
+        XCTAssertEqual(machine.menuLine(updatingTo: "0.0.1.42"), "Updating: pausing dispatch…")
         _ = machine.handle(.controlFinished(.pause, .done), now: began)
         XCTAssertEqual(machine.menuLine(updatingTo: "0.0.1.42"), "Updating: waiting for dispatch to pause…")
         _ = machine.handle(.polled(pausedPoll(running: 3)), now: began)
@@ -655,7 +650,6 @@ final class RestartMachineTests: XCTestCase {
     func testAnUpdatesFailedPauseStillSaysSymphonyKeepsRunning() {
         var machine = RestartMachine()
         _ = machine.begin(alreadyPaused: false, purpose: .update, updatingTo: "0.0.1.42", runsTimeout: runsTimeout, logPath: log, now: began)
-        _ = machine.handle(.configChecked(.passed), now: began)
 
         let effects = machine.handle(.controlFinished(machine.pauseAction, .failed("Couldn't pause Symphony: HTTP 500")), now: began)
 
