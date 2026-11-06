@@ -208,8 +208,17 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     end
 
     test "a Merging ticket held until CI settles waits for CI" do
-      wait = %{identifier: "MT-LANDING", title: "Land", repo_key: "default", pull_request_url: nil, commit_sha: "abc1234", since: DateTime.utc_now()}
-      state = Orchestrator.dispatch_chosen_issues_for_test([issue("landing", "MT-LANDING", "Merging")], %{orchestrator_state() | merging_ci_waits: %{"landing" => wait}})
+      wait = %{
+        identifier: "MT-LANDING",
+        title: "Land",
+        repo_key: "default",
+        pull_request_url: nil,
+        commit_sha: "abc1234",
+        since: DateTime.utc_now()
+      }
+
+      waiting = %{orchestrator_state() | merging_ci_waits: %{"landing" => wait}}
+      state = Orchestrator.dispatch_chosen_issues_for_test([issue("landing", "MT-LANDING", "Merging")], waiting)
 
       assert %{rule: nil} = state.dispatch_skipped["landing"]
       assert [%{issue_id: "landing", ci_wait: true}] = snapshot_of(state).slot_waiting
@@ -221,7 +230,6 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
 
       assert %{kind: "paused_by_rule", cause: "Its token budget is spent (agent.max_tokens_per_issue).", next: "Starts when that clears."} = situation(state, "spent", "Todo")
     end
-
   end
 
   test "a stopped ticket, and one paused on anything else, are skipped with their pause's text; an unpaused one runs" do

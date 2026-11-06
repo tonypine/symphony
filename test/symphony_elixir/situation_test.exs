@@ -268,7 +268,10 @@ defmodule SymphonyElixir.SituationTest do
 
       assert compute(record(), [], skip("the repository is paused by you", :repository_pause)).next == "Starts when you resume the repository."
 
-      for rule <- [:usage_limit, :token_budget, :priority, :reviewer_off, :workspace_quota, :daily_budget, :no_repo_key, :not_assigned] do
+      budgets = [:usage_limit, :token_budget, :workspace_quota, :daily_budget]
+      settings = [:priority, :reviewer_off, :no_repo_key, :not_assigned]
+
+      for rule <- budgets ++ settings do
         assert %{kind: "paused_by_rule", next: "Starts when that clears."} = compute(record(), [], skip("a rule", rule))
       end
 
@@ -338,7 +341,8 @@ defmodule SymphonyElixir.SituationTest do
     end
 
     test "a Merging hold until CI settles reads as it, from the hold when the watcher has no read" do
-      hold = live(%{slot_waiting: %{@id => %{since: @later, reason: "waiting for CI on abc1234", ci_wait: true}, "other" => %{since: @at, ci_wait: true}}})
+      own_hold = %{since: @later, reason: "waiting for CI on abc1234", ci_wait: true}
+      hold = live(%{slot_waiting: %{@id => own_hold, "other" => %{since: @at, ci_wait: true}}})
 
       assert %{
                kind: "waiting_for_ci",
@@ -506,8 +510,10 @@ defmodule SymphonyElixir.SituationTest do
     test "before the phase says so, the merge's time is the watcher's read of it, not when it entered Merging" do
       expected = "Merged as PR #741 at #{Situation.clock(@later)}."
 
-      assert %{cause: ^expected, since: @later} = compute(record(%{phase: "Merging", phase_at: @at, pr_watch: watch(%{pr: :merged})}))
-      assert %{since: @at} = compute(record(%{phase: "Merging", phase_at: @at, pr_watch: watch(%{pr: :merged}, %{read_at: nil})}))
+      merging = %{phase: "Merging", phase_at: @at}
+
+      assert %{cause: ^expected, since: @later} = compute(record(Map.put(merging, :pr_watch, watch(%{pr: :merged}))))
+      assert %{since: @at} = compute(record(Map.put(merging, :pr_watch, watch(%{pr: :merged}, %{read_at: nil}))))
     end
 
     test "reads the PR from the ledger, else from the ticket's pull request" do
@@ -608,7 +614,8 @@ defmodule SymphonyElixir.SituationTest do
     test "the signature says what decides a kind" do
       retrying = %{"b" => %{delay_type: :continuation}, "c" => %{delay_type: nil}}
       slots = %{"d" => %{}, "f" => %{ci_wait: true}}
-      facts = live(%{running: %{"a" => %{}}, retrying: retrying, slot_waiting: slots, skipped: %{"e" => %{rule: :priority}, "g" => %{rule: nil}}})
+      skipped = %{"e" => %{rule: :priority}, "g" => %{rule: nil}}
+      facts = live(%{running: %{"a" => %{}}, retrying: retrying, slot_waiting: slots, skipped: skipped})
 
       assert Situation.live_signature(facts) == %{
                "a" => {true, false, nil, nil},

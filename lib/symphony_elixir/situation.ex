@@ -357,7 +357,7 @@ defmodule SymphonyElixir.Situation do
   end
 
   defp situation("waiting_for_ci", ctx) do
-    number = pr_number(ctx)
+    number = ticket_pr_number(ctx)
     subject = if number, do: "PR ##{number}", else: "its PR"
 
     base("waiting_for_ci", "Waiting for CI", "Checks are running on #{subject}.", "#{next_phase(ctx)} starts when they pass.", checks_started(ctx), %{
@@ -396,7 +396,7 @@ defmodule SymphonyElixir.Situation do
 
   defp situation("done", ctx) do
     at = done_at(ctx)
-    number = pr_number(ctx)
+    number = ticket_pr_number(ctx)
 
     cause =
       case {number, at} do
@@ -604,7 +604,7 @@ defmodule SymphonyElixir.Situation do
 
   # The ticket's PR: the watcher's last read, else the push the ledger holds, else the ticket's pull
   # request.
-  defp pr_number(ctx) do
+  defp ticket_pr_number(ctx) do
     (ctx.facts && ctx.facts.pr_number) || pushed_pr_number(ctx.events) || recorded_pr_number(ctx.record)
   end
 

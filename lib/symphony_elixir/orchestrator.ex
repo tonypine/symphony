@@ -3748,7 +3748,9 @@ defmodule SymphonyElixir.Orchestrator do
     state =
       cond do
         operator_paused?(state) ->
-          state |> log_dispatch_pause() |> skip_paused_pass(issues, Pauses.dispatch_skip_reason(symphony_pause()), :symphony_pause)
+          state
+          |> log_dispatch_pause()
+          |> skip_paused_pass(issues, Pauses.dispatch_skip_reason(symphony_pause()), :symphony_pause)
 
         workspace_quota_paused?(state) ->
           state |> log_workspace_quota_pause() |> skip_paused_pass(issues, "new dispatch is paused: #{workspace_quota_error(state)}", :workspace_quota)
@@ -4458,8 +4460,9 @@ defmodule SymphonyElixir.Orchestrator do
 
   # The first closed dispatch gate (every one but the usage limit) as `{reason, rule}`, or nil when
   # all are open. `rule` names a gate that is a rule's pause, which a ticket read says as
-  # `paused_by_rule` (`SymphonyElixir.Situation`), and is nil for one that is no rule's. `/api/v1/state` lists it under `dispatch_skipped`, so no candidate is passed over
-  # in silence. An issue in any active phase waits until every blocker is terminal
+  # `paused_by_rule` (`SymphonyElixir.Situation`), and is nil for one that is no rule's.
+  # `/api/v1/state` lists it under `dispatch_skipped`, so no candidate is passed over in silence.
+  # An issue in any active phase waits until every blocker is terminal
   # (`Issue.blocked?/2`), a ticket with a hold waits for it to lift, and a `breakdown` parent waits
   # on its sub-issues (see `issue_held?/2`). The review flow parks a Code Review ticket whose repo has no reviewer
   # enabled, and a Code Review or QA ticket whose head is not green yet: the reviewer and
@@ -4475,7 +4478,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp pause_gate(%Issue{} = issue, %State{} = state, terminal_states) do
-    closed_gate(repository_pause_reason(issue), :repository_pause) || closed_gate(no_repo_key_reason(issue), :no_repo_key) ||
+    closed_gate(repository_pause_reason(issue), :repository_pause) ||
+      closed_gate(no_repo_key_reason(issue), :no_repo_key) ||
       closed_gate(hold_reason(issue, state, terminal_states), nil)
   end
 
@@ -4557,9 +4561,10 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp review_flow_reason(%Issue{id: issue_id} = issue, %State{merging_ci_waits: merging_ci_waits}) do
-    cond do
-      is_map_key(merging_ci_waits, issue_id) -> "held in Merging until CI settles on #{merging_ci_waits[issue_id].commit_sha}"
-      true -> watch_gate_reason(issue)
+    if is_map_key(merging_ci_waits, issue_id) do
+      "held in Merging until CI settles on #{merging_ci_waits[issue_id].commit_sha}"
+    else
+      watch_gate_reason(issue)
     end
   end
 
