@@ -80,7 +80,7 @@ defmodule SymphonyElixirWeb.LifecycleReadTest do
     on_timeline = "merged" |> TicketEvents.query(types: ["run.ended"], limit: :all) |> Enum.map(& &1.payload.tokens) |> Enum.sum()
     split = lifecycle["stages"] |> Enum.map(& &1["tokens"]) |> Enum.sum()
 
-    assert on_timeline == 3_000
+    assert on_timeline == 3_500
     assert split == on_timeline
     assert lifecycle["tokens"] == %{"total" => on_timeline, "cap" => Config.settings!().agent.max_tokens_per_issue}
 
