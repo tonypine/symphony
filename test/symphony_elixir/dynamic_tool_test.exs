@@ -1802,7 +1802,9 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       for _slot <- 1..5, do: CommentRegistry.reserve_human_action(registry, 5)
       response = DynamicTool.execute("linear_request_human_action", @request, opts)
-      assert %{"error" => %{"code" => "human_action_cap_reached", "cap" => 5}} = Jason.decode!(response["output"])
+      assert %{"error" => %{"code" => "human_action_cap_reached", "cap" => 5, "message" => message}} = Jason.decode!(response["output"])
+      assert message =~ "so this one was not asked"
+      assert message =~ "which ones were not asked and why"
     end
 
     test "refuses a question with a file name in it, then posts the rewritten request with what waits, trade-offs and why" do

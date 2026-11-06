@@ -1,0 +1,10 @@
+{
+  "commented": true,
+  "from_state": "QA",
+  "issue_id": "i-206",
+  "issue_identifier": "BIL-206",
+  "move": "decide",
+  "moved": true,
+  "to_state": "Merging",
+  "undo_window_ms": 10000
+}
