@@ -1409,7 +1409,7 @@ defmodule SymphonyElixir.AgentRunner do
       run_id: Keyword.get(opts, :run_id),
       workspace: workspace,
       worker_host: worker_host,
-      base_branch: Config.repo_base_branch(repo_key),
+      base_branch: Config.base_branch(repo_key),
       runner: Keyword.get(opts, :step_command_runner)
     }
     |> Map.reject(fn {key, value} -> key == :runner and is_nil(value) end)
