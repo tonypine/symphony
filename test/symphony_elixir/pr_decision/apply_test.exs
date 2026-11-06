@@ -282,6 +282,30 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       refute_received {:rerun_failed, _run_id, _opts}
     end
 
+    test "TP-1196: GitHub's \"already running\" is a wait on CI, not a failure: no warning, nothing spent, decided again" do
+      output = "run 11 cannot be rerun; This workflow is already running\n"
+      Process.put(:rerun_failed, {:error, {:gh_failed, ["run", "rerun", "11", "--failed"], 1, output}})
+      cancelled = read(failed_checks: [%{name: "specs", run_id: "11", job_id: 101, workflow_name: "ci", conclusion: "CANCELLED"}])
+
+      log =
+        capture_log(fn ->
+          for rule <- ["R22", "U2"] do
+            assert %{outcome: :recorded, applied: [], attempts: attempts, action: waiting} = Apply.apply(action(rule, :rerun_failed), ctx(:qa, read: cancelled))
+            assert attempts == Attempts.new()
+            assert %Action{rule: ^rule, kind: :wait, owner: :ci, clears_when: "the workflow run finishes"} = waiting
+          end
+        end)
+
+      refute log =~ "could not apply"
+
+      # Any other refusal is still a failure.
+      Process.put(:rerun_failed, {:error, {:gh_failed, ["run", "rerun", "11", "--failed"], 1, "HTTP 403: Forbidden"}})
+
+      capture_log(fn ->
+        assert %{outcome: {:error, {:rerun_failed, "11", {:gh_failed, _args, 1, _output}}}} = Apply.apply(action("R22", :rerun_failed), ctx(:qa))
+      end)
+    end
+
     test "a rerun GitHub refuses leaves the head to be decided again" do
       Process.put(:rerun_failed, {:error, :forbidden})
 

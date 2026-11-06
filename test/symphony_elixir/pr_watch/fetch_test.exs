@@ -673,6 +673,56 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       assert %Action{rule: "R19", kind: :wait} = @ticket |> Fetch.facts(read) |> PrDecision.decide()
     end
 
+    test "TP-1196: a failed check in a run still going waits for the run to finish, then is rerun once" do
+      running = rollup([check("coverage (4/4)", "FAILURE", job: 1), check("coverage (1/4)", nil, job: 2)])
+
+      assert {:ok, read} = read({response(pull(running)), 0})
+      assert %{ci: :red, red_kind: :run_in_progress, failing_check: "coverage (4/4)", running_checks: ["coverage (1/4)"], base_red: nil} = read
+      assert %{failure: nil} = Fetch.failure(read, nil, gh_runner: fn _args, _opts -> flunk("the log of a running run can't be read") end)
+
+      # Nothing on the base is read for it, and the watcher waits rather than rerunning it.
+      refute_received {:gh, ["run", "list" | _rest]}
+      assert %Action{rule: "R19b", kind: :wait, owner: :ci} = @ticket |> Fetch.facts(read) |> PrDecision.decide()
+
+      # The run ended red: the one rerun, as before.
+      ended = rollup([check("coverage (4/4)", "FAILURE", job: 1), check("coverage (1/4)", "SUCCESS", job: 2)])
+      assert {:ok, read} = read({response(pull(ended)), 0}, %{runs: base_runs([])})
+      assert %{ci: :red, red_kind: :failure, running_checks: []} = read
+      assert %Action{rule: "R22", kind: :rerun_failed} = @ticket |> Fetch.facts(read) |> PrDecision.decide()
+    end
+
+    test "TP-1196: only the failed check's own run holds it, and any failed run still going holds the rerun of them all" do
+      failed = check("specs", "FAILURE", run: 100, job: 1)
+      other_run_going = rollup([failed, check("e2e", nil, run: 200, job: 2, workflow: "e2e")])
+      assert {:ok, %{red_kind: :failure}} = read({response(pull(other_run_going)), 0}, %{runs: base_runs([])})
+
+      other_failed = check("lint", "FAILURE", run: 200, job: 3, workflow: "lint")
+      still_going = check("types", nil, run: 200, job: 4, workflow: "lint")
+      both_failed = rollup([failed, other_failed, still_going])
+      assert {:ok, %{red_kind: :run_in_progress}} = read({response(pull(both_failed)), 0})
+
+      # A check only a person clears stays the person's, and a required check that passed doesn't turn it green.
+      protected = check("protected paths", "FAILURE", job: 5)
+      assert {:ok, %{red_kind: :human_only}} = read({response(pull(rollup([protected, check("specs", nil, job: 6)]))), 0})
+
+      passed = check("ci", "SUCCESS", job: 7)
+      required = [required_checks: %{"main" => ["ci"]}]
+      head = rollup([passed, failed, check("e2e", nil, job: 8)])
+      assert {:ok, %{ci: :red, red_kind: :run_in_progress}} = read({response(pull(head)), 0}, %{}, required)
+    end
+
+    test "TP-1196: a check GitHub left open in a failed run that ended doesn't hold the failure back" do
+      head = rollup([check("specs", "FAILURE", job: 1), check("changes", nil, job: 2)])
+      endpoint = "repos/acme/app/actions/runs?head_sha=abc123&per_page=100"
+      run = %{"id" => 100, "status" => "completed", "conclusion" => "failure", "updated_at" => "2026-11-05T23:54:00Z"}
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, read} = read({response(pull(head)), 0}, %{endpoint => {Jason.encode!(%{"workflow_runs" => [run]}), 0}, runs: base_runs([])})
+        assert %{red_kind: :failure, failing_check: "specs", running_checks: [], stale_checks: [%{name: "changes"}]} = read
+        assert [%{name: "specs"}] = read.failed_checks
+      end)
+    end
+
     test "TP-1426: a check GitHub left in_progress with a conclusion proceeds to review" do
       changes = Map.merge(check("changes", "SUCCESS", job: 2), %{"status" => "IN_PROGRESS", "completedAt" => "2026-11-05T23:45:43Z"})
       assert {:ok, read} = read({response(pull(rollup([check("ci", "SUCCESS"), changes]))), 0})

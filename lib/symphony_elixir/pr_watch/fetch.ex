@@ -9,14 +9,15 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   the repository's default branch. Run through `gh api --include`, so the response's
   `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers come back with it. Four more reads happen
   only when needed: the head's workflow runs, for a head waiting on GitHub Actions checks with none
-  failed, since a check GitHub left unfinished in a run that passed counts as finished
-  (`PullRequest.close_stale_checks/2`); the checks the base branch requires, for a head with no
+  failed or with a failed check in a run that reads as still going, since a check GitHub left
+  unfinished in a run that ended counts as finished (`PullRequest.close_stale_checks/2`); the checks the base branch requires, for a head with no
   failed check or whose only failures are cancellations, beside a failed check only a person clears
   or not (unless the caller already knows them;
   `SymphonyElixir.PrWatch.Repo` keeps them 10 minutes per base); for a head with no check at all,
   whether the base branch has workflow files (kept the same way): without them the head has no CI
   (`ci: :none`, D2), with them it waits for its first check (`awaiting_checks`); and, for a red
-  head that is neither cancelled nor only a person's to clear, the base branch's latest workflow
+  head that is neither cancelled, nor only a person's to clear, nor waiting on a failed check's
+  still-running workflow run (`red_kind: :run_in_progress`), the base branch's latest workflow
   runs, to tell a check that is also red on the base: the job of the same name failed in its
   workflow's latest finished run there and, when the head's failed log names failing tests, every one
   of them failed in the base's job too (`base_red` names the base run, its commit and whether the
@@ -104,7 +105,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
           missing_checks: [String.t()],
           running_checks: [String.t()],
           stale_checks: [stale_check()],
-          red_kind: :failure | :cancelled | :human_only | :also_red_on_base,
+          red_kind: :failure | :cancelled | :human_only | :also_red_on_base | :run_in_progress,
           past_human_only: :green | :pending | nil,
           past_cancelled: :green | :pending | :required_missing | nil,
           base_red: Facts.base_red() | nil,
@@ -363,7 +364,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     {workflows?, workflows} = workflows(pr_url, base_ref, checks, names, opts)
     ci = ci(checks, names, workflows?)
     failing = Enum.filter(checks, &(PullRequest.check_result(&1) == :failed))
-    {red_kind, base_red, comparisons} = red(elem(ci, 0), failing, known, base_ref, repo, opts)
+    in_progress? = PullRequest.failed_run_in_progress?(checks)
+    {red_kind, base_red, comparisons} = red(elem(ci, 0), failing, in_progress?, known, base_ref, repo, opts)
 
     %{
       pr_url: pr_url,
@@ -590,17 +592,23 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   # failure is a check a person must clear is `:human_only` beside cancellations the base doesn't
   # require, which are set aside; beside a cancelled check the base requires, or when the required
   # checks couldn't be read, it is `:cancelled`, so R19 reruns the cancellation. Never `:failure`.
-  defp red(:red, failing, known, base_ref, repo, opts) do
+  # A real failure in a workflow run that is still going is `:run_in_progress`: GitHub refuses its
+  # rerun, its failed log can't be read yet, and its other jobs may still fail. A failed check of a
+  # run still going holds a real failure of a run that ended too, since the rerun takes them all.
+  defp red(:red, failing, in_progress?, known, base_ref, repo, opts) do
+    real_failure? = not Enum.all?(failures(failing), &CiPoller.human_only_check?/1)
+
     cond do
       Enum.all?(failing, &CiPoller.human_only_check?/1) -> {:human_only, nil, %{}}
       Enum.all?(failing, &cancelled?/1) -> {:cancelled, nil, %{}}
-      not Enum.all?(failures(failing), &CiPoller.human_only_check?/1) -> red_on_base(failing, base_ref, repo, opts)
+      real_failure? and in_progress? -> {:run_in_progress, nil, %{}}
+      real_failure? -> red_on_base(failing, base_ref, repo, opts)
       Enum.all?(failing, &(CiPoller.human_only_check?(&1) or not required?(&1, known))) -> {:human_only, nil, %{}}
       true -> {:cancelled, nil, %{}}
     end
   end
 
-  defp red(_ci, _failing, _known, _base_ref, _repo, _opts), do: {:failure, nil, %{}}
+  defp red(_ci, _failing, _in_progress?, _known, _base_ref, _repo, _opts), do: {:failure, nil, %{}}
 
   defp required?(check, known), do: not is_list(known) or check.name in known
 
@@ -612,7 +620,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
   # What a head red only on checks a person must clear reads as outside `Merging`: what its other
   # checks say, `:pending` while one runs or none has reported yet, else `:green`. A cancelled check
-  # beside them is one the base doesn't require (`red/6`), set aside.
+  # beside them is one the base doesn't require (`red/7`), set aside.
   defp past_human_only(:human_only, checks) do
     checks |> Enum.reject(&(CiPoller.human_only_check?(&1) or cancelled?(&1))) |> ci([], true) |> elem(0)
   end

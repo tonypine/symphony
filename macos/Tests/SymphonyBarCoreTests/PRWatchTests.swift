@@ -299,6 +299,12 @@ final class PRWatchTests: XCTestCase {
         let base = try card(["rule": "R23", "owner": "ci"], facts: ["ci": "red", "red_kind": "also_red_on_base", "failing_check": "test"])
         XCTAssertEqual(base.headline, "The test check is red on the base branch too: waiting for it to go green there")
         XCTAssertEqual(fact(base, "Checks"), "test failing, on the base branch too")
+        let stillGoing = try card(["rule": "R19b", "owner": "ci", "clears_when": "the workflow run finishes"],
+                                  facts: ["ci": "red", "red_kind": "run_in_progress", "failing_check": "coverage (4/4)"])
+        XCTAssertEqual(stillGoing.headline, "Checks are still running, and the coverage (4/4) check already failed: Symphony acts once its run finishes")
+        XCTAssertEqual(fact(stillGoing, "Checks"), "running; coverage (4/4) already failed")
+        XCTAssertEqual(try card(["rule": "R19b"], facts: [:]).headline, "Checks are still running, and a check already failed: Symphony acts once its run finishes")
+
         let unnamedBase = try card(["rule": "R23"], facts: ["base_ref": "release"])
         XCTAssertEqual(unnamedBase.headline, "A check is red on release too: waiting for it to go green there")
 

@@ -310,6 +310,31 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert PullRequest.check_result(pending) == :pending
   end
 
+  test "TP-1196: a failed check whose run reads as still going: the run is read, and an open check of a run that ended is closed, not failed" do
+    open = %{name: "e2e", status: "IN_PROGRESS", conclusion: nil, run_id: "9"}
+    failed = %{name: "ci", status: "COMPLETED", conclusion: "FAILURE", run_id: "9"}
+    other = %{name: "lint", status: "COMPLETED", conclusion: "FAILURE", run_id: "8"}
+    status = %{pr_url: "https://github.com/acme/app/pull/1", commit_sha: "abc", checks: [failed, open]}
+
+    assert PullRequest.failed_run_in_progress?([failed, open])
+    refute PullRequest.failed_run_in_progress?([failed, %{open | run_id: "7"}])
+    refute PullRequest.failed_run_in_progress?([other, %{failed | conclusion: "SUCCESS"}, open])
+    refute PullRequest.failed_run_in_progress?([%{failed | run_id: nil}, %{open | run_id: nil}])
+
+    runs = fn run -> [gh_runner: fn _args, _opts -> {Jason.encode!(%{"workflow_runs" => [run]}), 0} end] end
+    ended = %{"id" => 9, "status" => "completed", "conclusion" => "failure", "updated_at" => "2026-11-05T23:54:00Z"}
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert %{checks: [^failed, %{status: "COMPLETED", conclusion: "NEUTRAL", stale: true, stale_since: ~U[2026-11-05 23:54:00Z]} = closed]} =
+               PullRequest.close_stale_checks(status, runs.(ended))
+
+      assert PullRequest.check_result(closed) == :passed
+    end)
+
+    # A run still going leaves the check running.
+    assert PullRequest.close_stale_checks(status, runs.(%{ended | "status" => "in_progress", "conclusion" => nil})) == status
+  end
+
   test "TP-1426: close_stale_checks/2 closes a check open in a run that passed, reading the runs only when it can matter" do
     pr_url = "https://github.com/acme/app/pull/1"
     open = %{name: "changes", status: "IN_PROGRESS", conclusion: nil, run_id: "9"}
@@ -343,8 +368,9 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert log =~ "Could not read the workflow runs of a head waiting on its checks pr_url=#{pr_url} commit_sha=abc"
     flush_gh()
 
-    # Nothing open, a failure beside it, a check from outside GitHub Actions, or no head: no read.
-    for checks <- [[passed], [open, %{passed | conclusion: "FAILURE"}], [%{open | run_id: nil}]] do
+    # Nothing open, a failure in another run beside it, a check from outside GitHub Actions, or no
+    # head: no read.
+    for checks <- [[passed], [open, %{passed | conclusion: "FAILURE", run_id: "8"}], [%{open | run_id: nil}]] do
       input = status.(checks)
       assert PullRequest.close_stale_checks(input, gh_runner: runner.({"boom", 1})) == input
     end

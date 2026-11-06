@@ -11,7 +11,7 @@ defmodule SymphonyElixir.PrDecision.TableTest do
 
   test "lists every rule in precedence order, every fact and the waiting actions" do
     generated = Table.generated()
-    rows = for line <- String.split(generated, "\n"), [_, id] <- [Regex.run(~r/^\| (R\d+a?) \|/, line)], do: id
+    rows = for line <- String.split(generated, "\n"), [_, id] <- [Regex.run(~r/^\| (R\d+[a-z]?) \|/, line)], do: id
 
     assert rows == Enum.map(PrDecision.rules(), & &1.id)
     assert generated =~ "| R14a | Code Review, QA, Rework, CI Fix, Merging |"
