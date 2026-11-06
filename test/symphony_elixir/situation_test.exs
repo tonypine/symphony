@@ -38,7 +38,7 @@ defmodule SymphonyElixir.SituationTest do
   end
 
   defp watch(facts, overrides \\ %{}) do
-    Map.merge(%{facts: struct(Facts, Map.merge(%{phase: :code_review, ci: :pending, pr: :open, pr_number: 741}, facts)), head_sha: "abc1234", read_at: @later}, overrides)
+    Map.merge(%{facts: struct(Facts, Map.merge(%{phase: :qa, ci: :pending, pr: :open, pr_number: 741}, facts)), head_sha: "abc1234", read_at: @later}, overrides)
   end
 
   defp event(type, payload, overrides \\ %{}), do: struct(Event, Map.merge(%{type: type, payload: payload, at: @at}, overrides))
@@ -376,7 +376,16 @@ defmodule SymphonyElixir.SituationTest do
       facts = live(arrange("working"))
 
       assert compute(record(%{pr_watch: watch(%{phase: :in_progress})}), [], facts).kind == "working"
-      assert compute(record(%{pr_watch: watch(%{phase: :code_review})}), [], facts).kind == "waiting_for_ci"
+      assert compute(record(%{pr_watch: watch(%{phase: :qa})}), [], facts).kind == "waiting_for_ci"
+    end
+
+    test "TP-1204: a head Code Review has yet to judge waits for no check; an approved one waits, and QA comes next" do
+      refute compute(record(%{pr_watch: watch(%{phase: :code_review})})).kind == "waiting_for_ci"
+      refute compute(record(%{pr_watch: watch(%{phase: :code_review, ci: :red, red_kind: :run_in_progress})})).kind == "waiting_for_ci"
+
+      approved = compute(record(%{pr_watch: watch(%{phase: :code_review, review: :approved})}))
+      assert approved.kind == "waiting_for_ci"
+      assert approved.next == "QA starts when they pass."
     end
 
     test "a head that is not pending, or a PR that is not open, waits for nothing" do

@@ -1209,8 +1209,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
       |> cancel_stale_runs(read, state)
       |> restart_conflicts(entry)
 
-    ticket = Map.put(ticket, :review_comments, review_comments(entry, read, settings, now))
     head = read[:head_sha]
+    ticket = Map.merge(ticket, %{review_comments: review_comments(entry, read, settings, now), review: review(entry, head)})
     applied = if new_stay?, do: [], else: Enum.filter(previous.applied, &(&1.head_sha == head))
     {read, applied} = base_answer(read, applied, entry)
     {attempts, applied} = take_answer(attempts, applied, entry, read, now, state)
@@ -1325,6 +1325,17 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # The phase of the record's stay: the one a move put the ticket in, else the one it was read in.
   defp stay(%{stay: stay}) when is_atom(stay) and not is_nil(stay), do: stay
   defp stay(previous), do: previous.facts.phase
+
+  # Whether Code Review approved the head the read found: its newest verdict on that head. A new head
+  # has no verdict until a CI Fix carries the approval to it.
+  defp review(%{phase: :code_review, record: %{} = record}, head) when is_binary(head) do
+    case record |> TicketState.verdicts() |> Enum.find(&(&1.kind == "code_review" and &1.head_sha == head)) do
+      %{outcome: "approve"} -> :approved
+      _none_or_other -> :pending
+    end
+  end
+
+  defp review(_entry, _head), do: :pending
 
   defp decide(facts, entry) do
     {:ok, PrDecision.decide(facts)}

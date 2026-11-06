@@ -19,6 +19,11 @@ defmodule SymphonyElixir.PrDecision do
   store, the clock or config. Limits and timeouts arrive as facts. A guard names the values it
   matches rather than falling through, so a fact value no rule handles raises `NoRuleError` and
   fails the table test instead of parking a ticket.
+
+  A review reads the code, so CI gates the merge and not the review: in Code Review the CI rules (R17
+  to R24) stand back until the head is approved (`review: :approved`), and R27 dispatches the reviewer
+  on any clean PR. A verdict then decides: changes go to Rework whatever CI says, and an approval on a
+  red head stays in Code Review for those rules to apply CI's state.
   """
 
   alias SymphonyElixir.PrDecision.{Action, Facts}
@@ -342,15 +347,17 @@ defmodule SymphonyElixir.PrDecision do
       %{
         id: "R27",
         phases: [:code_review, :qa],
-        when: "Green, or no CI configured (counts as green), and not behind main with nothing ahead (the upkeep, U1, updates that one)",
-        then: "`dispatch` the reviewer or the QA agent",
+        when:
+          "Code Review with no approval on the head: a clean PR, whatever CI says (R17 to R24 apply after an approve). " <>
+            "QA, or an approved head: green, or no CI configured (counts as green). Either way not behind main with nothing ahead (the upkeep, U1, updates that one)",
+        then: "`dispatch` the reviewer or the QA agent; an approved head carries its approval on, with no second review",
         guard: &reviewable?/1,
         build: &dispatch/1
       },
       %{
         id: "R28",
         phases: [:code_review, :qa, :merging],
-        when: "The PR is behind main (in Code Review and QA: with no PR ahead sharing its files)",
+        when: "The PR is behind main (in Code Review and QA: with no PR ahead sharing its files), and, unless Code Review is yet to judge the head, not red",
         then: "a PR ahead shares its files: `wait` on `symphony`; otherwise `wait` on `symphony` while the upkeep (U1) updates the branch",
         guard: &behind_waiting?/1,
         build: &behind/1
@@ -411,7 +418,7 @@ defmodule SymphonyElixir.PrDecision do
   defp conflict_competed?(facts), do: conflict_exhausted?(facts) and facts.competing != []
   defp conflict_alone?(facts), do: conflict_exhausted?(facts) and facts.competing == []
   defp mergeable_unknown?(facts), do: not_red?(facts) and facts.mergeable == :unknown
-  defp required_missing?(facts), do: clean_pr?(facts) and facts.ci == :required_missing
+  defp required_missing?(facts), do: ci_decides?(facts) and facts.ci == :required_missing
   defp human_only_red?(facts), do: red?(facts, :human_only)
   defp cancelled_red?(facts), do: red?(facts, :cancelled) and facts.cancel_reruns < @max_cancel_reruns
   defp cancelled_again?(facts), do: red?(facts, :cancelled) and facts.cancel_reruns >= @max_cancel_reruns
@@ -425,12 +432,12 @@ defmodule SymphonyElixir.PrDecision do
   defp red_after_rerun?(facts), do: red?(facts, :failure) and facts.rerun_done == true
   defp red_first?(facts), do: red?(facts, :failure) and facts.rerun_done == false
   defp red_on_base?(facts), do: red?(facts, :also_red_on_base)
-  defp pending?(facts), do: clean_pr?(facts) and facts.ci == :pending
+  defp pending?(facts), do: ci_decides?(facts) and facts.ci == :pending
   defp green?(facts), do: clean_pr?(facts) and facts.ci in @green
-  defp reviewable?(facts), do: green?(facts) and not upkept?(facts)
+  defp reviewable?(facts), do: review_first?(facts) or (green?(facts) and not upkept?(facts))
   defp not_red?(facts), do: clean_pr?(facts) and facts.ci in [:pending | @green]
   defp behind?(facts), do: not_red?(facts) and facts.mergeable == :behind
-  defp behind_waiting?(facts), do: behind?(facts) and (facts.phase == :merging or facts.ahead == [])
+  defp behind_waiting?(facts), do: update_first?(facts) or (behind?(facts) and (facts.phase == :merging or facts.ahead == []))
   defp mergeable_now?(facts), do: green?(facts) and facts.mergeable in @mergeable_now
 
   defp armable?(facts) do
@@ -471,7 +478,14 @@ defmodule SymphonyElixir.PrDecision do
     idle_pr?(facts) and facts.mergeable in [:clean, :behind, :unstable, :blocked, :unknown]
   end
 
-  defp red?(facts, kind), do: clean_pr?(facts) and facts.ci == :red and facts.red_kind == kind
+  defp red?(facts, kind), do: ci_decides?(facts) and facts.ci == :red and facts.red_kind == kind
+
+  # Code Review has yet to judge this head, so CI's state decides nothing. A review waits only for the
+  # update the upkeep makes on this read (U1), which would leave it reading a head that is gone.
+  defp awaiting_review?(facts), do: clean_pr?(facts) and facts.phase == :code_review and facts.review == :pending
+  defp ci_decides?(facts), do: clean_pr?(facts) and not awaiting_review?(facts)
+  defp review_first?(facts), do: awaiting_review?(facts) and not stale_branch?(facts)
+  defp update_first?(facts), do: awaiting_review?(facts) and stale_branch?(facts)
   defp pending_mergeable?(facts), do: pending?(facts) and facts.mergeable in @mergeable_now
   defp blocked?(facts), do: not_red?(facts) and facts.mergeable == :blocked
   defp blocked_in_time?(facts), do: blocked?(facts) and facts.landing_timed_out == false
@@ -515,6 +529,10 @@ defmodule SymphonyElixir.PrDecision do
 
   defp closed_pr(facts), do: Action.new!("R8", :to_rework, reason: "#{subject(pr(facts))} was closed without merging")
 
+  defp wait_for_run(%{phase: :code_review, pr: pr} = facts) when pr in @with_pr do
+    wait("R9", "The reviewer is reading #{pr(facts)}; #{ci_words(facts)}", :agent, "the run ends")
+  end
+
   defp wait_for_run(_facts), do: wait("R9", "A run is working on the ticket", :agent, "the run ends")
   defp wait_for_ready(facts), do: wait("R10", "A person marked #{pr(facts)} as a draft", :person, "the PR is marked ready for review")
   defp back_to_code_review(facts), do: Action.new!("R11", :to_code_review, reason: "A person pushed to #{pr(facts)} while it was in Merging")
@@ -527,6 +545,12 @@ defmodule SymphonyElixir.PrDecision do
 
   defp dispatch_reason(%{phase: :in_progress}), do: {"R12", "The agent continues the PR"}
   defp dispatch_reason(%{phase: :rework}), do: {"R26", "The rework run continues the PR"}
+  defp dispatch_reason(%{phase: :code_review, review: :approved}), do: {"R27", "The head is green: Code Review's approval carries on, with no second review"}
+
+  defp dispatch_reason(%{phase: :code_review, ci: ci} = facts) when ci not in @green do
+    {"R27", "The reviewer reads #{pr(facts)} without waiting on CI; #{ci_words(facts)}, applied after the verdict"}
+  end
+
   defp dispatch_reason(%{ci: :none} = facts), do: {"R27", "#{no_ci(facts)}: counts as green, so #{reviewer(facts)} runs"}
 
   defp dispatch_reason(%{set_aside: [_ | _] = names} = facts) do
@@ -690,6 +714,14 @@ defmodule SymphonyElixir.PrDecision do
 
   defp pr(%{pr_number: number}) when is_integer(number), do: "PR ##{number}"
   defp pr(_facts), do: "the PR"
+
+  # CI's state, beside the review's.
+  defp ci_words(%{ci: :red, failing_check: check}) when is_binary(check), do: "CI red on `#{check}`"
+  defp ci_words(%{ci: :red}), do: "CI red"
+  defp ci_words(%{ci: :pending}), do: "checks still running"
+  defp ci_words(%{ci: :green}), do: "CI green"
+  defp ci_words(%{ci: :none}), do: "no CI on the head"
+  defp ci_words(%{ci: :required_missing}), do: "a required check has not reported"
 
   # What R23 compared on the base: the base's run and commit, and the failing tests or the name alone.
   defp base_compared(%{base_red: %{run_id: run_id, basis: basis} = red} = facts) do

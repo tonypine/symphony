@@ -18,6 +18,8 @@ public struct WatchBlock: Equatable {
         public var redKind: String?
         public var failingCheck: String?
         public var missingChecks: [String]
+        /// Code Review's judgement of the head: `pending` or `approved`.
+        public var review: String?
         /// `clean`, `behind`, `dirty`, `unstable`, `blocked` or `unknown`.
         public var mergeable: String?
         /// `off` or `armed`.
@@ -47,7 +49,8 @@ public struct WatchBlock: Equatable {
             failingCheck: String? = nil, missingChecks: [String] = [], mergeable: String? = nil, autoMerge: String? = nil,
             run: String? = nil, hold: String? = nil, github: String? = nil, githubResetAt: Date? = nil,
             headOrigin: String? = nil, baseRef: String? = nil, redAttempts: Int? = nil, maxRedAttempts: Int? = nil,
-            conflictAttempts: Int? = nil, sameFailureStreak: Int? = nil, fixFailures: [Failure] = [], protectedFiles: [String] = []
+            conflictAttempts: Int? = nil, sameFailureStreak: Int? = nil, fixFailures: [Failure] = [], protectedFiles: [String] = [],
+            review: String? = nil
         ) {
             self.pr = pr
             self.prNumber = prNumber
@@ -70,6 +73,7 @@ public struct WatchBlock: Equatable {
             self.sameFailureStreak = sameFailureStreak
             self.fixFailures = fixFailures
             self.protectedFiles = protectedFiles
+            self.review = review
         }
     }
 
@@ -268,7 +272,8 @@ public struct WatchBlock: Equatable {
                 redAttempts: facts?.redAttempts, maxRedAttempts: facts?.maxRedAttempts,
                 conflictAttempts: facts?.conflictAttempts, sameFailureStreak: facts?.sameFailureStreak,
                 fixFailures: (facts?.fixFailures ?? []).map { Failure(check: $0.check, error: $0.error, head: $0.headSha) },
-                protectedFiles: facts?.protectedFiles ?? []
+                protectedFiles: facts?.protectedFiles ?? [],
+                review: facts?.review
             ),
             actions: (payload.actions ?? []).map {
                 Action(rule: $0.rule, action: $0.action, head: $0.head, at: date($0.at), source: $0.source)
@@ -298,6 +303,7 @@ public struct WatchBlock: Equatable {
             let redKind: String?
             let failingCheck: String?
             let missingChecks: [String]?
+            let review: String?
             let mergeable: String?
             let autoMerge: String?
             let run: String?

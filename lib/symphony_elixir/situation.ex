@@ -315,6 +315,9 @@ defmodule SymphonyElixir.Situation do
   # next head on a ticket not yet handed off is working, not waiting.
   defp waiting_for_ci?(%{slot: %{ci_wait: true}}), do: true
 
+  # A head Code Review has yet to judge waits for no check: the review reads the code whatever CI says.
+  defp waiting_for_ci?(%{facts: %{phase: :code_review, review: :pending}}), do: false
+
   defp waiting_for_ci?(%{facts: %{pr: pr, ci: :pending} = facts} = ctx) when pr in [:open, :draft],
     do: facts.phase in @handed_off or ctx.running == nil
 
@@ -525,6 +528,7 @@ defmodule SymphonyElixir.Situation do
   # The phase that starts when the checks pass: the one the ticket is in, once it was handed off; a
   # CI Fix returns where it came from.
   defp next_phase(%{slot: %{ci_wait: true}}), do: "Merging"
+  defp next_phase(%{facts: %{phase: :code_review, review: :approved}}), do: "QA"
   defp next_phase(%{facts: %{phase: :ci_fix}} = ctx), do: ctx.record.ci_fix_origin || "Code Review"
   defp next_phase(%{facts: %{phase: phase}} = ctx) when phase in @handed_off, do: ctx.record.phase || "Code Review"
   defp next_phase(_ctx), do: "Code Review"

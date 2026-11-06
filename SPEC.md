@@ -3225,14 +3225,18 @@ Rules:
   again.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
   state. A failed check only a person clears (`protected paths`) does not make a head red: with no
-  other failure, the head is green once its other checks passed. The reviewer and QA runs MUST
-  dispatch only on a green head, whether the poll, a retry or
-  the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`) dispatches
-  them; a held-back run records `code_review_head_not_green` or `qa_head_not_green`, with the PR watcher's
-  reason, once per head and reason. A
+  other failure, the head is green once its other checks passed. A green CI gates the merge, not the
+  review: the reviewer run MUST dispatch on a conflict-free PR whatever CI says, and a CI failure
+  during it MUST NOT interrupt it. Its verdict applies CI's state: an approve on a head the PR
+  watcher reads as red MUST stay in `Code Review` with the approval recorded, go through the
+  watcher's rerun and `CI Fix`, and carry on once green with no second review; a rework verdict goes
+  to `Rework` whatever CI says. The QA run MUST dispatch only on a green head, whether the poll, a
+  retry or the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`)
+  dispatches it; a held-back run records `code_review_head_not_green` or `qa_head_not_green`, with
+  the PR watcher's reason, once per head and reason. A
   QA `fail` or block on a head the PR watcher reads as red, missing a required check, or
   conflicting is recorded `blocked` with the component `ci` and leaves the ticket in `QA` for the
-  watcher to route; it MUST NOT go to `Rework`. A red head in `Code Review`,
+  watcher to route; it MUST NOT go to `Rework`. A red head in `Code Review` once approved, in
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
   origin recorded, whether or not the PR also conflicts. A `Code Review` or `QA` ticket back from
   `CI Fix` on the same red head or the same conflict (a repair that pushed nothing) MUST enter

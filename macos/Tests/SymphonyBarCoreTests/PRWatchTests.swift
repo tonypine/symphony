@@ -291,7 +291,7 @@ final class PRWatchTests: XCTestCase {
     }
 
     func testTheOtherRowsSayWhatTheWatcherDoes() throws {
-        let run = try card(["rule": "R9", "action": "wait", "owner": "agent", "clears_when": "the run ends"], facts: ["run": "active"])
+        let run = try card(["phase": "qa", "rule": "R9", "action": "wait", "owner": "agent", "clears_when": "the run ends"], facts: ["run": "active"])
         XCTAssertEqual(run.headline, "A run is working on it")
         XCTAssertEqual(run.status, .working)
         XCTAssertEqual(run.next, "An agent acts next")
@@ -312,6 +312,21 @@ final class PRWatchTests: XCTestCase {
         XCTAssertEqual(fix.headline, "test failed on PR #42: CI Fix run 3 of 10")
         XCTAssertEqual(fix.word, "Fixing")
         XCTAssertEqual(try card(["action": "ci_fix", "reason": NSNull()], facts: [:]).headline, "Sent to CI Fix")
+
+        let reviewing = try card(["phase": "code_review", "rule": "R9", "owner": "agent"], facts: ["ci": "red", "failing_check": "macos build", "run": "active"])
+        XCTAssertEqual(reviewing.word, "Reviewing")
+        XCTAssertEqual(reviewing.headline, "Reviewing; CI red on macos build")
+        XCTAssertEqual(fact(reviewing, "Review"), "reviewing")
+        XCTAssertEqual(fact(reviewing, "Checks"), "macos build failing")
+        let reviewWords = [("pending", "checks still running"), ("green", "checks passing"), ("none", "no CI"), ("required_missing", "a required check has not reported")]
+        for (ci, words) in reviewWords {
+            XCTAssertEqual(try card(["phase": "code_review", "rule": "R9"], facts: ["ci": ci, "run": "active"]).headline, "Reviewing; \(words)")
+        }
+        XCTAssertEqual(try card(["phase": "code_review", "rule": "R9"], facts: ["ci": "red"]).headline, "Reviewing; CI red")
+        XCTAssertEqual(try card(["phase": "code_review", "rule": "R9"], facts: [:]).headline, "Reviewing")
+        XCTAssertEqual(fact(try card(["phase": "code_review", "rule": "R22"], facts: ["ci": "red", "review": "approved"]), "Review"), "approved; CI's state comes next")
+        XCTAssertEqual(fact(try card(["phase": "code_review", "rule": "R27"], facts: ["ci": "pending", "review": "pending"]), "Review"), "not started")
+        XCTAssertNil(fact(try card(["phase": "qa", "rule": "R27"], facts: ["ci": "green"]), "Review"))
 
         let dispatch = try card(["rule": "R27", "action": "dispatch", "owner": "symphony", "reason": "The head is green, so the reviewer runs"], facts: [:])
         XCTAssertEqual(dispatch.headline, "The head is green, so the reviewer runs")
