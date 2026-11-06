@@ -29,7 +29,7 @@ defmodule SymphonyElixir.DirectorRulings do
 
   require Logger
 
-  alias SymphonyElixir.{AuditLog, Decisions, Orchestrator, RunStore, TicketSignals, TicketState}
+  alias SymphonyElixir.{AuditLog, Decisions, Orchestrator, RunStore, TicketMoves, TicketSignals, TicketState}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @director {:person, "the Director"}
@@ -101,7 +101,7 @@ defmodule SymphonyElixir.DirectorRulings do
     name = String.trim(name)
 
     case Enum.find(records, &(&1.issue_id == name or same_identifier?(&1.issue_identifier, name))) do
-      nil -> {:error, {:conflict, "Symphony doesn't track #{name}, so it can't record a decision on it."}}
+      nil -> {:error, {:conflict, TicketMoves.untracked_reason(:ruling, name)}}
       record -> {:ok, record}
     end
   end

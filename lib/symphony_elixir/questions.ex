@@ -514,9 +514,13 @@ defmodule SymphonyElixir.Questions do
   Unblock option. The newest when there are several; nil when there is none.
   """
   @spec held(ticket()) :: question() | nil
-  def held(ticket) do
+  def held(ticket), do: ticket |> open() |> Enum.filter(&held_question?/1) |> List.last()
+
+  @doc "Whether the Director's Unblock answers `question`, known by its Unblock option."
+  @spec held_question?(question()) :: boolean()
+  def held_question?(question) do
     labels = [TransitionGuard.unblock_option() | DispatchLoop.unblock_labels()]
-    ticket |> open() |> Enum.filter(fn question -> Enum.any?(question.options, &(&1.label in labels)) end) |> List.last()
+    Enum.any?(question.options, &(&1.label in labels))
   end
 
   @doc """

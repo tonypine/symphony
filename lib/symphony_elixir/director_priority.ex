@@ -28,7 +28,7 @@ defmodule SymphonyElixir.DirectorPriority do
 
   require Logger
 
-  alias SymphonyElixir.{AuditLog, Orchestrator, RunStore, TicketSignals, TicketState}
+  alias SymphonyElixir.{AuditLog, Orchestrator, RunStore, TicketMoves, TicketSignals, TicketState}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @director {:person, "the Director"}
@@ -102,7 +102,7 @@ defmodule SymphonyElixir.DirectorPriority do
     name = String.trim(name)
 
     case Enum.find(records, &(&1.issue_id == name or same_identifier?(&1.issue_identifier, name))) do
-      nil -> {:error, {:conflict, "Symphony doesn't track #{name}, so it can't set its priority."}}
+      nil -> {:error, {:conflict, TicketMoves.untracked_reason(:priority, name)}}
       record -> {:ok, record}
     end
   end

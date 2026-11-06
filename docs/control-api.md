@@ -155,3 +155,63 @@ The phases the ticket went through, for the Phase path component and the timelin
 | `phases[].count` | How many `phase.entered` events name it, so a return from CI Fix counts. A second event naming the phase it is already in is no move. |
 | `phases[].time_ms` | Wall time in the phase, summed, up to now for the phase it is in. A terminal phase takes none. |
 | `moves` | Every move, oldest first, with its time. `from` is what the event says, else the phase before it; null on a first move that does not say. |
+
+## `moves`
+
+What the Director can do with the ticket now, each move saying why when it can't, so the app disables
+it with a tooltip and computes nothing. `SymphonyElixir.TicketMoves` answers from the record and what
+the orchestrator holds in memory, never from Linear, and the control call refuses with the same guard
+and the same words. The older `start` field is `moves.start`, with the same shape.
+
+```json
+{
+  "start": { "allowed": false, "reason": "A run is already working on it." },
+  "stop": { "allowed": true, "reason": null },
+  "move_to": { "allowed": true, "reason": null, "states": ["Backlog", "Todo", "Rework", "Done"] }
+}
+```
+
+| Field | What it holds |
+| --- | --- |
+| `allowed` | Whether the move may be made now. |
+| `reason` | Why it may not, in the app's words, verbatim as the call refuses; null when allowed. |
+| `states` | On `move_to` only: the phases the free move may name now, every phase of the workflow but the one the ticket is in; empty when refused. |
+
+| Move | Control call | Refused when | Example `reason` |
+| --- | --- | --- | --- |
+| `answer` | `/decide` with the `question_id` of one of `open_questions` | no Question is open | TP-1 is not waiting on a decision |
+| `start` | `/start` | Backlog, closed, its plan waits on a person, it waits on its sub-tickets, Symphony or the repository is paused, a Question is open, a run works on it | A run is already working on it. |
+| `stop` | `/stop` | no run works on it | No run is working. |
+| `restart` | `/restart` | closed, or no record | The ticket is done. |
+| `cancel` | `/cancel` | closed, or no record | The ticket is done. |
+| `move_to` | `/move` | in no repository, or no record | The ticket is not one Symphony tracks. |
+| `force` | `/force` | closed, already forced, or no record | It is already forced. |
+| `unforce` | `/force` with `clear` | not forced, or no record | It isn't forced. |
+| `unblock` | `/unblock` | nothing a person can release | TP-1 has nothing a person can unblock |
+| `note` | `/note` | no record | No ticket TP-1 in symphony |
+| `blocker` | `/blocker` | no record, or removed in Linear | Symphony doesn't track TP-1, so it can't be linked as a blocker or be given one. |
+| `priority` | `/priority` | no record, or removed in Linear | Symphony doesn't track TP-1, so it can't set its priority. |
+| `labels` | `/label` | no record, or removed in Linear | Symphony doesn't track TP-1, so it can't change its labels. |
+| `ruling` | `/decision` | no record, or removed in Linear | Symphony doesn't track TP-1, so it can't record a decision on it. |
+| `approve_plan` | `/approve_plan` | not a plan, not in Plan Review, or the waiting state is off | TP-1 is not a plan; approve_plan is for a plan |
+| `rework` | `/rework` | not in Plan Review | TP-1 is In Progress; the Director answers it only from Plan Review |
+| `decisions` | `/decisions` | not a plan, or not in Plan Review | TP-1 is not a plan; decisions is for a plan |
+| `changes` | `/changes` | not a plan, or not in Plan Review | TP-1 is not a plan; changes is for a plan |
+| `backlog` | `/backlog` | closed, already in Backlog, or no record | TP-1 is already in Backlog |
+
+A closed ticket's reason names its phase: `The ticket is done.`, `The ticket is cancelled.`
+
+What the read and the call each answer for:
+
+- A move the read allows is not refused for the ticket's state. A call may still fail on what no
+  record says: Linear refusing a write, a label or state the team doesn't have.
+- `stop`, `force` and `unforce` never refuse the state the read calls not allowed: the call answers
+  200 with nothing done (`stopped: false`, the label as it was). A closed ticket's `force` is refused.
+- A call refuses on its own argument, which is no fact of the ticket: a phase the workflow doesn't
+  name (`states` lists those it does), a blocker that is the ticket itself, already linked, finished
+  or making a cycle, a label already on or off, the priority it already has, a ruling already recorded,
+  a Question closed since. Empty input (`Write a note first.`) is the app's own.
+- A call judges the ticket as Linear last answered it where it reads Linear, the read as the record
+  holds it, so the two can part only while Linear lags a move.
+- `/undo` is no entry: the move it takes back answers with its `undo_window_ms`, and the app offers it
+  for that long.

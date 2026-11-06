@@ -85,7 +85,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   alias Plug.Conn
   alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorLabels, DirectorMoves, DirectorPriority, DirectorRulings}
   alias SymphonyElixir.Orchestrator
-  alias SymphonyElixir.{TicketEvents, TicketSignals}
+  alias SymphonyElixir.{TicketEvents, TicketMoves, TicketSignals}
   alias SymphonyElixir.TicketEvents.Types
   alias SymphonyElixirWeb.{Endpoint, Presenter, TicketEventsController}
 
@@ -254,7 +254,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
     else
       {:error, :missing_ticket} -> error_response(conn, 422, "invalid_request", "repo_key and issue_identifier are required")
       {:error, {:invalid_note, message}} -> error_response(conn, 400, "invalid_note", message)
-      {:error, :not_found} -> error_response(conn, 404, "ticket_not_found", "No ticket #{params["issue_identifier"]} in #{params["repo_key"]}")
+      {:error, :not_found} -> error_response(conn, 404, "ticket_not_found", TicketMoves.no_ticket_reason(params["issue_identifier"], params["repo_key"]))
     end
   end
 
@@ -481,8 +481,8 @@ defmodule SymphonyElixirWeb.ControlApiController do
   defp respond_force(conn, identifier, {:error, :issue_not_found}),
     do: error_response(conn, 404, "issue_not_found", "#{identifier} was not found in Linear")
 
-  defp respond_force(conn, identifier, {:error, {:issue_terminal, state}}),
-    do: error_response(conn, 422, "issue_terminal", "#{identifier} is #{state}; only an open ticket can be forced")
+  defp respond_force(conn, _identifier, {:error, {:issue_terminal, state}}),
+    do: error_response(conn, 422, "issue_terminal", TicketMoves.closed_reason(state))
 
   defp respond_force(conn, _identifier, {:error, {:label_not_found, label}}),
     do: error_response(conn, 422, "label_not_found", "Linear has no #{label} label; create it in Linear, then force again")
