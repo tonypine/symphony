@@ -820,6 +820,7 @@ defmodule SymphonyElixir.TestSupport do
           tracker_assignee: nil,
           tracker_active_states: ["Todo", "In Progress"],
           tracker_terminal_states: ["Closed", "Cancelled", "Canceled", "Duplicate", "Done"],
+          tracker_phase_names: nil,
           tickets: nil,
           poll_interval_ms: 30_000,
           poller: nil,
@@ -908,6 +909,7 @@ defmodule SymphonyElixir.TestSupport do
     tracker_assignee = Keyword.get(config, :tracker_assignee)
     tracker_active_states = Keyword.get(config, :tracker_active_states)
     tracker_terminal_states = Keyword.get(config, :tracker_terminal_states)
+    tracker_phase_names = Keyword.get(config, :tracker_phase_names)
     tickets = Keyword.get(config, :tickets)
     poll_interval_ms = Keyword.get(config, :poll_interval_ms)
     poller = Keyword.get(config, :poller)
@@ -989,6 +991,7 @@ defmodule SymphonyElixir.TestSupport do
           assignee: tracker_assignee,
           active_states: tracker_active_states,
           terminal_states: tracker_terminal_states,
+          phase_names: tracker_phase_names,
           interval_ms: poll_interval_ms
         }),
         poller && "poller: #{yaml_value(poller)}",
@@ -1128,6 +1131,9 @@ defmodule SymphonyElixir.TestSupport do
   defp plan_review_yaml({:ok, state}), do: "    plan_review: #{yaml_value(state)}"
   defp plan_review_yaml(:error), do: nil
 
+  defp phase_names_yaml(nil), do: nil
+  defp phase_names_yaml(names), do: Enum.map_join(names, "\n", fn {phase, name} -> "    #{phase}: #{yaml_value(name)}" end)
+
   defp issues_yaml(config) do
     [
       "issues:",
@@ -1145,7 +1151,8 @@ defmodule SymphonyElixir.TestSupport do
       "  states:",
       "    active: #{yaml_value(config.active_states)}",
       "    terminal: #{yaml_value(config.terminal_states)}",
-      plan_review_yaml(config.plan_review)
+      plan_review_yaml(config.plan_review),
+      phase_names_yaml(config.phase_names)
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join("\n")

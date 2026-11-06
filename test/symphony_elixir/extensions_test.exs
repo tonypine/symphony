@@ -1086,6 +1086,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "watch" => nil,
              "plan_brief" => nil,
              "situation" => issue_payload["situation"],
+             "lifecycle" => issue_payload["lifecycle"],
+             "phase_path" => issue_payload["phase_path"],
              "pause" => nil
            }
 
@@ -1127,6 +1129,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "watch" => nil,
              "plan_brief" => nil,
              "situation" => watching_payload["situation"],
+             "lifecycle" => watching_payload["lifecycle"],
+             "phase_path" => watching_payload["phase_path"],
              "pause" => nil
            }
 
