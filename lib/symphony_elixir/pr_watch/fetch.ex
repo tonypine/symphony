@@ -7,10 +7,12 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   auto-merge request and the head's check rollup. An open PR whose branch was deleted reads as
   closed. Its base is compared with the repo's `base_branch` when the caller names one, else with
   the repository's default branch. Run through `gh api --include`, so the response's
-  `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers come back with it. Three more reads happen
-  only when needed: the checks the base branch requires, for a head whose checks all passed or whose
-  only failures are cancellations, beside a failed check only a person clears or not (unless the
-  caller already knows them;
+  `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers come back with it. Four more reads happen
+  only when needed: the head's workflow runs, for a head waiting on GitHub Actions checks with none
+  failed, since a check GitHub left unfinished in a run that passed counts as finished
+  (`PullRequest.close_stale_checks/2`); the checks the base branch requires, for a head with no
+  failed check or whose only failures are cancellations, beside a failed check only a person clears
+  or not (unless the caller already knows them;
   `SymphonyElixir.PrWatch.Repo` keeps them 10 minutes per base); for a head with no check at all,
   whether the base branch has workflow files (kept the same way): without them the head has no CI
   (`ci: :none`, D2), with them it waits for its first check (`awaiting_checks`); and, for a red
@@ -100,6 +102,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
           no_ci: :not_configured | :not_reported,
           awaiting_checks: boolean(),
           missing_checks: [String.t()],
+          running_checks: [String.t()],
+          stale_checks: [stale_check()],
           red_kind: :failure | :cancelled | :human_only | :also_red_on_base,
           past_human_only: :green | :pending | nil,
           past_cancelled: :green | :pending | :required_missing | nil,
@@ -118,6 +122,9 @@ defmodule SymphonyElixir.PrWatch.Fetch do
           workflows: {String.t(), boolean()} | nil,
           comparisons: %{comparison_key() => Facts.base_basis() | :different}
         }
+
+  @typedoc "A check GitHub still reads as running though it finished, and since when it finished, when GitHub says."
+  @type stale_check :: %{name: String.t() | nil, since: DateTime.t() | nil}
 
   @typedoc "A comparison of failed logs: the head check's job (its details URL) and the base job's id."
   @type comparison_key :: {String.t() | nil, String.t() | nil}
@@ -183,7 +190,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     pr_facts =
       case read do
         nil -> %{pr: :missing}
-        read -> Map.take(read, [:pr, :pr_number, :base, :base_ref, :auto_merge, :ci, :no_ci, :missing_checks, :red_kind, :base_red, :failing_check, :set_aside, :mergeable])
+        read -> Map.take(read, [:pr, :pr_number, :base, :base_ref, :auto_merge, :ci, :no_ci, :missing_checks, :running_checks, :red_kind, :base_red, :failing_check, :set_aside, :mergeable])
       end
 
     ticket
@@ -324,6 +331,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       no_ci: :not_configured,
       awaiting_checks: false,
       missing_checks: [],
+      running_checks: [],
+      stale_checks: [],
       red_kind: :failure,
       past_human_only: nil,
       past_cancelled: nil,
@@ -348,7 +357,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     base_ref = pull["baseRefName"]
     base_branch = Keyword.get(opts, :base_branch) || get_in(repository, ["defaultBranchRef", "name"])
     head_sha = pull["headRefOid"]
-    checks = checks(pr_url, head_sha, pull)
+    checks = checks(pr_url, head_sha, pull, opts)
     {known, required} = required(pr_url, base_ref, checks, opts)
     names = known || []
     {workflows?, workflows} = workflows(pr_url, base_ref, checks, names, opts)
@@ -370,6 +379,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       no_ci: :not_configured,
       awaiting_checks: checks == [] and elem(ci, 0) == :pending,
       missing_checks: elem(ci, 1),
+      running_checks: for(check <- checks, PullRequest.check_result(check) == :pending, uniq: true, do: check.name),
+      stale_checks: for(%{stale: true} = check <- checks, do: %{name: check.name, since: check.stale_since}),
       red_kind: red_kind,
       past_human_only: past_human_only(red_kind, checks),
       past_cancelled: past_cancelled(red_kind, checks, known),
@@ -409,9 +420,9 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   defp mergeable(_mergeable, state) when state in ["BLOCKED", "DRAFT"], do: :blocked
   defp mergeable(_mergeable, _state), do: :unknown
 
-  # The rollup's nodes, in the shape `gh pr view --json statusCheckRollup` gives, normalised and
-  # without the checks of superseded runs.
-  defp checks(pr_url, head_sha, pull) do
+  # The rollup's nodes, in the shape `gh pr view --json statusCheckRollup` gives, normalised, without
+  # the checks of superseded runs and with the checks GitHub left open in a run that passed closed.
+  defp checks(pr_url, head_sha, pull, opts) do
     rollup =
       for node <- List.wrap(get_in(pull, ["commits", "nodes"])),
           context <- List.wrap(get_in(node, ["commit", "statusCheckRollup", "contexts", "nodes"])),
@@ -420,13 +431,15 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
     %{pr_url: pr_url, commit_sha: head_sha, checks: PullRequest.normalize_checks(rollup)}
     |> PullRequest.drop_superseded()
+    |> PullRequest.close_stale_checks(opts)
     |> Map.fetch!(:checks)
   end
 
-  # The required checks matter once nothing failed and nothing runs: then a required check that
-  # never reported is what keeps the head from green. They matter too when the only failures are
-  # cancellations: a cancelled check the base doesn't require is set aside once its reruns are spent
-  # (`past_cancelled`), and beside a failed check only a person clears it is set aside at once.
+  # The required checks matter once nothing failed: a head is green when they passed, whatever else
+  # still runs, and a required check that never reported is what keeps it from green once nothing
+  # runs. They matter too when the only failures are cancellations: a cancelled check the base
+  # doesn't require is set aside once its reruns are spent (`past_cancelled`), and beside a failed
+  # check only a person clears it is set aside at once.
   # `{names, read}`: `read` is `{base, names}` when they were read now rather than known; `names` is
   # nil when they couldn't be read.
   defp required(pr_url, base_ref, checks, opts) when is_binary(base_ref) do
@@ -453,10 +466,10 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   end
 
   defp required_matters?(checks) do
-    {failed, others} = Enum.split_with(checks, &(PullRequest.check_result(&1) == :failed))
+    failed = Enum.filter(checks, &(PullRequest.check_result(&1) == :failed))
 
     case failed do
-      [] -> Enum.all?(others, &(PullRequest.check_result(&1) == :passed))
+      [] -> true
       failed -> Enum.any?(failed, &cancelled?/1) and Enum.all?(failed, &(cancelled?(&1) or CiPoller.human_only_check?(&1)))
     end
   end
@@ -492,12 +505,22 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
     cond do
       :failed in results -> {:red, []}
-      :pending in results -> {:pending, []}
+      :pending in results -> if(required_passed?(checks, required), do: {:green, []}, else: {:pending, []})
       missing != [] -> {:required_missing, missing}
       checks == [] and workflows? -> {:pending, []}
       checks == [] -> {:none, []}
       true -> {:green, []}
     end
+  end
+
+  # Every check the base requires reported and passed: what still runs doesn't hold the head.
+  defp required_passed?(_checks, []), do: false
+
+  defp required_passed?(checks, required) do
+    Enum.all?(required, fn name ->
+      named = Enum.filter(checks, &(&1.name == name))
+      named != [] and Enum.all?(named, &(PullRequest.check_result(&1) == :passed))
+    end)
   end
 
   defp run_ids(checks), do: checks |> Enum.map(&Map.get(&1, :run_id)) |> Enum.filter(&(is_binary(&1) and &1 != "")) |> Enum.uniq()

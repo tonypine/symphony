@@ -192,7 +192,8 @@ defmodule SymphonyElixir.TicketState do
   red only on a check a person clears (R18), the protected paths its PR changes, read once per
   head; nil for any other head. `upkeep_failure` is the upkeep action GitHub refused on the last
   read (`SymphonyElixir.PrDecision.upkeep/1`: its rule, kind, head, the error and when), nil when
-  the read's upkeep had none.
+  the read's upkeep had none. `stale_checks_noted` names the checks of a head whose signal says
+  GitHub still reads them as running though they finished, so each is recorded once per head.
   """
   @type pr_watch :: %{
           facts: PrDecision.Facts.t(),
@@ -215,7 +216,8 @@ defmodule SymphonyElixir.TicketState do
           actions: [map()],
           silent: SymphonyElixir.PrWatch.SilentWait.t() | nil,
           protected_files: %{head_sha: String.t() | nil, paths: [String.t()]} | nil,
-          upkeep_failure: upkeep_failure() | nil
+          upkeep_failure: upkeep_failure() | nil,
+          stale_checks_noted: %{head_sha: String.t() | nil, names: [String.t()]} | nil
         }
 
   @typedoc """
@@ -1091,7 +1093,8 @@ defmodule SymphonyElixir.TicketState do
       actions: watch |> Map.get(:actions) |> maps() |> Enum.take(5),
       silent: normalize_silent(Map.get(watch, :silent)),
       protected_files: normalize_protected_files(Map.get(watch, :protected_files)),
-      upkeep_failure: normalize_upkeep_failure(Map.get(watch, :upkeep_failure))
+      upkeep_failure: normalize_upkeep_failure(Map.get(watch, :upkeep_failure)),
+      stale_checks_noted: Map.get(watch, :stale_checks_noted)
     }
   end
 

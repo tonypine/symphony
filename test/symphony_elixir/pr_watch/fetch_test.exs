@@ -62,6 +62,7 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
 
       case args do
         ["api", "--include" | _rest] -> graphql
+        ["api", "repos/acme/app/actions/runs?head_sha=" <> _rest = endpoint] -> Map.get(rest, endpoint, {~s({"workflow_runs":[]}), 0})
         ["api", endpoint] -> Map.fetch!(rest, endpoint)
         ["run", "list" | _rest] -> Map.fetch!(rest, :runs)
         ["run", "view", run_id, "--json", "headSha,jobs" | _rest] -> Map.fetch!(rest, {:jobs, run_id})
@@ -241,9 +242,9 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       assert {:ok, %{ci: :green, required: nil}} = read({response(pull()), 0}, %{}, required_checks: %{"main" => ["make all"]})
       refute_received {:gh, ["api", @rules]}
 
-      # Not read while a check runs or failed: they can't make the head green yet.
-      running = {response(pull(rollup([check("make all", nil)]))), 0}
-      assert {:ok, %{ci: :pending, required: nil}} = read(running, %{}, required_checks: %{})
+      # Not read while a check failed: they can't make the head green.
+      red = {response(pull(rollup([check("make all", "FAILURE")]))), 0}
+      assert {:ok, %{ci: :red, required: nil}} = read(red, %{runs: base_runs([])}, required_checks: %{})
       refute_received {:gh, ["api", @rules]}
 
       # A failed read waits on the checks that reported.
@@ -670,6 +671,67 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       assert %{ci: :red, red_kind: :cancelled, failed_checks: [%{name: "build", run_id: "300"}, %{name: "test", run_id: "300"}]} = read
       assert [%Action{rule: "U2", kind: :rerun_failed}] = @ticket |> Fetch.facts(read) |> PrDecision.upkeep()
       assert %Action{rule: "R19", kind: :wait} = @ticket |> Fetch.facts(read) |> PrDecision.decide()
+    end
+
+    test "TP-1426: a check GitHub left in_progress with a conclusion proceeds to review" do
+      changes = Map.merge(check("changes", "SUCCESS", job: 2), %{"status" => "IN_PROGRESS", "completedAt" => "2026-11-05T23:45:43Z"})
+      assert {:ok, read} = read({response(pull(rollup([check("ci", "SUCCESS"), changes]))), 0})
+
+      assert %{ci: :green, running_checks: [], stale_checks: [%{name: "changes", since: ~U[2026-11-05 23:45:43Z]}]} = read
+      assert %Action{kind: :dispatch} = @ticket |> Fetch.facts(read) |> PrDecision.decide()
+      refute_received {:gh, ["api", "repos/acme/app/actions/runs" <> _rest]}
+    end
+
+    test "TP-1426: the required checks decide a head still running others, which the facts name" do
+      head = rollup([check("ci", "SUCCESS"), check("e2e", nil, job: 2)])
+      required = [required_checks: %{"main" => ["ci"]}]
+
+      assert {:ok, read} = read({response(pull(head)), 0}, %{}, required)
+      assert %{ci: :green, running_checks: ["e2e"], stale_checks: []} = read
+      assert %Facts{ci: :green, running_checks: ["e2e"]} = facts = Fetch.facts(@ticket, read)
+      assert %Action{kind: :dispatch} = PrDecision.decide(facts)
+
+      # Read now when not known yet, and kept by the caller.
+      rest = %{
+        @rules => {Jason.encode!([%{"type" => "required_status_checks", "parameters" => %{"required_status_checks" => [%{"context" => "ci"}]}}]), 0},
+        @branch => {Jason.encode!(%{"protection" => %{}}), 0}
+      }
+
+      assert {:ok, %{ci: :green, required: {"main", ["ci"]}}} = read({response(pull(head)), 0}, rest, required_checks: %{})
+
+      # A required check still running, or one that never reported, holds the head.
+      both_required = [required_checks: %{"main" => ["ci", "e2e"]}]
+      assert {:ok, %{ci: :pending, running_checks: ["e2e"]}} = read({response(pull(head)), 0}, %{}, both_required)
+      assert {:ok, %{ci: :pending}} = read({response(pull(head)), 0}, %{}, required_checks: %{"main" => ["ci", "build"]})
+
+      # No required checks, or a read of them that fails: the head waits on every check.
+      assert {:ok, %{ci: :pending}} = read({response(pull(head)), 0})
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, %{ci: :pending}} = read({response(pull(head)), 0}, %{@rules => {"boom", 1}}, required_checks: %{})
+      end)
+
+      # A check the base doesn't require that fails still turns the head red.
+      failed = rollup([check("ci", "SUCCESS"), check("e2e", "FAILURE", job: 2)])
+      red_read = read({response(pull(failed)), 0}, %{runs: base_runs([])}, required)
+      assert {:ok, %{ci: :red, running_checks: []}} = red_read
+    end
+
+    test "TP-1426: a check still open in a run that passed counts as finished" do
+      head = rollup([check("ci", "SUCCESS"), check("changes", nil, job: 2)])
+      endpoint = "repos/acme/app/actions/runs?head_sha=abc123&per_page=100"
+      run = %{"id" => 100, "status" => "completed", "conclusion" => "success", "updated_at" => "2026-11-05T23:54:00Z"}
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, read} = read({response(pull(head)), 0}, %{endpoint => {Jason.encode!(%{"workflow_runs" => [run]}), 0}})
+        assert %{ci: :green, running_checks: [], stale_checks: [%{name: "changes", since: ~U[2026-11-05 23:54:00Z]}]} = read
+      end)
+
+      assert_received {:gh, ["api", ^endpoint]}
+
+      # A run still going leaves it running.
+      running = %{run | "status" => "in_progress", "conclusion" => nil}
+      assert {:ok, %{ci: :pending, stale_checks: []}} = read({response(pull(head)), 0}, %{endpoint => {Jason.encode!(%{"workflow_runs" => [running]}), 0}})
     end
 
     test "keeps the origin only in CI Fix, and reads a ticket without a PR as missing" do

@@ -55,7 +55,8 @@ defmodule SymphonyElixir.TicketSignals do
     "qa_head_not_green" => "QA waits for a green head",
     "qa_head_unreadable" => "QA could not read the workspace head",
     "ci_rerun" => "Symphony reran the failed CI",
-    "ci_flake" => "CI passed on Symphony's rerun, a flake"
+    "ci_flake" => "CI passed on Symphony's rerun, a flake",
+    "stale_check" => "GitHub still shows a check as running after it finished"
   }
   @note_max 4_000
 

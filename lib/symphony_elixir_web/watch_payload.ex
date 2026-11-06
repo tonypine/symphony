@@ -149,6 +149,7 @@ defmodule SymphonyElixirWeb.WatchPayload do
     [
       if(facts.pr_number && facts.pr != :missing, do: "PR ##{facts.pr_number} #{@pr_words[facts.pr]}", else: @pr_words[facts.pr]),
       if(read?, do: @ci_words[facts.ci]),
+      still_running(read?, facts),
       if(read?, do: @mergeable_words[facts.mergeable]),
       if(facts.auto_merge == :armed, do: "auto-merge on"),
       if(facts.run == :active, do: "run active"),
@@ -158,6 +159,17 @@ defmodule SymphonyElixirWeb.WatchPayload do
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" · ")
   end
+
+  # A green head can have checks its base doesn't require still running. A record written before
+  # this field was read has none.
+  defp still_running(true, %{ci: :green} = facts) do
+    case Map.get(facts, :running_checks, []) do
+      [] -> nil
+      names -> "still running: #{Enum.join(names, ", ")}"
+    end
+  end
+
+  defp still_running(_read?, _facts), do: nil
 
   defp facts(watch) do
     {github, reset_at} =
