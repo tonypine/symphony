@@ -4,7 +4,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
   `read/2` reads one pull request in one GraphQL query: its state, draft flag, base and the
   repository's default branch, head and whether its branch still exists, mergeability, merge state,
-  auto-merge request and the head's check rollup. An open PR whose branch was deleted reads as
+  auto-merge request, size, review decision and the head's check rollup. An open PR whose branch was deleted reads as
   closed. Its base is compared with the repo's `base_branch` when the caller names one, else with
   the repository's default branch. Run through `gh api --include`, so the response's
   `X-RateLimit-Remaining` and `X-RateLimit-Reset` headers come back with it. Four more reads happen
@@ -40,6 +40,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
   alias SymphonyElixir.{CiPoller, PrDecision.Facts, PrWatch}
   alias SymphonyElixir.GitHub.{FailedLog, PullRequest}
+  alias SymphonyElixir.PrWatch.Snapshot
 
   @base_runs_limit 30
   @log_lines 20
@@ -50,6 +51,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       defaultBranchRef { name }
       pullRequest(number: $number) {
         id number url title body state isDraft merged baseRefName baseRefOid headRefName headRefOid mergeable mergeStateStatus
+        changedFiles additions deletions reviewDecision
         headRef { name }
         autoMergeRequest { enabledAt }
         commits(last: 1) {
@@ -60,7 +62,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
                   nodes {
                     __typename
                     ... on CheckRun {
-                      name status conclusion detailsUrl completedAt
+                      name status conclusion detailsUrl startedAt completedAt
                       checkSuite { workflowRun { workflow { name } } }
                     }
                     ... on StatusContext { context state targetUrl createdAt }
@@ -84,7 +86,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
   @typedoc """
   One pull request as the watcher reads it, normalised. `failure/3` adds the red head's failure, and
-  the failed log when it read it.
+  the failed log when it read it. `pull_request` is what the ticket read serves of it
+  (`SymphonyElixir.PrWatch.Snapshot`), nil for a PR GitHub no longer has.
   """
   @type read :: %{
           optional(:failure) => Facts.failure() | nil,
@@ -121,7 +124,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
           rate_limit: rate_limit(),
           required: {String.t(), [String.t()]} | nil,
           workflows: {String.t(), boolean()} | nil,
-          comparisons: %{comparison_key() => Facts.base_basis() | :different}
+          comparisons: %{comparison_key() => Facts.base_basis() | :different},
+          pull_request: Snapshot.t() | nil
         }
 
   @typedoc "A check GitHub still reads as running though it finished, and since when it finished, when GitHub says."
@@ -351,7 +355,8 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       rate_limit: rate_limit,
       required: nil,
       workflows: nil,
-      comparisons: %{}
+      comparisons: %{},
+      pull_request: nil
     }
   end
 
@@ -368,7 +373,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     in_progress? = PullRequest.failed_run_in_progress?(checks)
     {red_kind, base_red, comparisons} = red(elem(ci, 0), failing, in_progress?, known, base_ref, repo, opts)
 
-    %{
+    read = %{
       pr_url: pr_url,
       pr_number: pull["number"],
       pr: pr_state(pull),
@@ -402,6 +407,15 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       workflows: workflows,
       comparisons: comparisons
     }
+
+    Map.put(read, :pull_request, Snapshot.build(read, pull, checks, known_required(known, base_ref, checks, opts)))
+  end
+
+  # The base's required checks as far as the watcher knows them, for the ticket read: a head they
+  # don't matter for wasn't read for them, so what the watcher keeps of the base says, nil when it
+  # keeps nothing.
+  defp known_required(known, base_ref, checks, opts) do
+    if required_matters?(checks), do: known, else: Map.get(Keyword.get(opts, :required_checks, %{}), base_ref)
   end
 
   defp pr_state(%{"merged" => true}), do: :merged

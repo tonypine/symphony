@@ -215,3 +215,90 @@ What the read and the call each answer for:
   holds it, so the two can part only while Linear lags a move.
 - `/undo` is no entry: the move it takes back answers with its `undo_window_ms`, and the app offers it
   for that long.
+
+## `pull_request`
+
+The ticket's pull request and its checks, for the Pull request panel (facts 9 and 10 of
+`docs/design/director-ticket-page.md`); null before the watcher has read one. It makes no GitHub read
+of its own: the PR and CI watcher keeps what its one read of the PR says
+(`SymphonyElixir.PrWatch.Snapshot`) on the ticket's record, so it changes on the watcher's triggers
+(a webhook delivery's confirm read, the timed poll, Check Now) and it stays once the watch ends: a
+merged ticket still reads its PR.
+
+```json
+{
+  "number": 741,
+  "url": "https://github.com/acme/app/pull/741",
+  "title": "TP-1244 The paused line on the ticket page",
+  "state": "open",
+  "draft": false,
+  "head_sha": "8b03e51c0ffee0123456789abcdef0123456789a",
+  "head_short": "8b03e51",
+  "base": "main",
+  "mergeable": "clean",
+  "behind_base": false,
+  "review_state": "changes_requested",
+  "review_rounds": 2,
+  "files_changed": 9,
+  "additions": 486,
+  "deletions": 52,
+  "checks": [
+    {
+      "workflow": "CI",
+      "checks": [
+        {
+          "name": "Tests",
+          "state": "failed",
+          "started_at": "2026-11-06T10:00:00Z",
+          "duration_ms": 372000,
+          "url": "https://github.com/acme/app/actions/runs/100/job/1",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "red_kind": "failure",
+  "next_action": {
+    "rule": "R22",
+    "action": "rerun_failed",
+    "reason": "Tests failed on PR #741: rerunning it once before CI Fix",
+    "owner": "symphony",
+    "clears_when": "the failed checks run again",
+    "since": "2026-11-06T10:06:30Z",
+    "outcome": "applied"
+  },
+  "read_at": "2026-11-06T10:06:30Z"
+}
+```
+
+| Field | What it holds |
+| --- | --- |
+| `state` | `open`, `merged` or `closed`. A PR Symphony saw close or merge after the last read says so. |
+| `draft` | Whether an open PR is a draft. |
+| `head_sha`, `head_short` | The head the read saw, in full and its first seven characters. |
+| `base` | The branch it merges into. |
+| `mergeable` | `clean`, `behind`, `dirty` (conflicts), `unstable`, `blocked` or `unknown`. |
+| `behind_base` | Whether GitHub reads it as behind its base (`mergeable` is `behind`). |
+| `review_state` | `merged` or `closed`, else GitHub's review decision (`approved`, `changes_requested`), else the newest Code Review verdict, else `open`. |
+| `review_rounds` | How many heads Code Review judged. |
+| `files_changed`, `additions`, `deletions` | The PR's size. |
+| `checks` | The head's checks grouped by workflow, in the order GitHub lists them. `workflow` is null for a status from outside GitHub Actions. |
+| `red_kind` | Why the head is red, as the watcher reads it: `failure`, `cancelled`, `human_only`, `also_red_on_base` or `run_in_progress` (`docs/pr-ci-decisions.md`); null when it isn't, or the watcher doesn't watch the ticket. |
+| `next_action` | What the watcher decided on its last read, with the `watch` block's words: `rule`, `action`, `reason`, `owner`, `clears_when`, `since`, `outcome`. Null without a decision, or when the watcher doesn't watch the ticket. |
+| `read_at` | When the watcher read it. |
+
+Each check is the newest run of that name in its workflow: the watcher's dedupe has already dropped
+superseded runs and earlier attempts, and a check every run of the workflow left cancelled is listed
+once.
+
+| Field | What it holds |
+| --- | --- |
+| `name` | The check. |
+| `state` | `passed` (also a neutral result), `failed`, `running`, `waiting`, `skipped` or `cancelled_no_machine`. |
+| `started_at` | When it started; null before it does. |
+| `duration_ms` | How long it took; null until it finishes. |
+| `url` | Its log. |
+| `required` | Whether the base branch requires it; null while the watcher doesn't know: it reads what a base requires only once a head has no real failure, and keeps it 10 minutes. |
+
+GitHub says only `CANCELLED` of a job that never got a machine, and the watcher treats every cancelled
+check that way (reruns it, spends no fix run), so `cancelled_no_machine` never reads as `failed`.

@@ -987,7 +987,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
         {:ok, read} ->
           entry
           |> decided(ticket, read, previous, now, state, settings)
-          |> Map.merge(%{pr_url: entry.pr_url, head_sha: read.head_sha, read_at: read_at, github: :ok, rate_limit: read.rate_limit})
+          |> Map.merge(%{pr_url: entry.pr_url, head_sha: read.head_sha, read_at: read_at, github: :ok, rate_limit: read.rate_limit, pull_request: snapshot(read, read_at)})
 
         nil ->
           entry
@@ -1028,6 +1028,11 @@ defmodule SymphonyElixir.PrWatch.Repo do
       watch
     end
   end
+
+  # What the ticket read serves of the PR, stamped with when it was read. The record keeps it past
+  # this watch (`TicketState.put_pr_watch/3`); a read without one leaves the one it holds.
+  defp snapshot(%{pull_request: %{} = pull_request}, read_at), do: Map.put(pull_request, :read_at, read_at)
+  defp snapshot(_read, _read_at), do: nil
 
   # GitHub still reads a check of this head as running after it finished: past a short grace, in
   # which GitHub normally closes it, the ticket's history names the check, once per head and check.

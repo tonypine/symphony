@@ -100,6 +100,71 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
     Fetch.read(@pr_url, Keyword.merge([gh_runner: runner(graphql, rest), required_checks: %{"main" => []}], opts))
   end
 
+  describe "read/2's pull request for the ticket read" do
+    defp timed(check), do: Map.merge(check, %{"startedAt" => "2026-11-06T10:00:00Z", "completedAt" => "2026-11-06T10:00:30Z"})
+
+    test "a green PR, with its size and review decision from the one query" do
+      pull = pull(Map.merge(rollup([timed(check("make all", "SUCCESS"))]), %{"title" => "TP-1 A change", "changedFiles" => 3, "additions" => 12, "deletions" => 4, "reviewDecision" => "APPROVED"}))
+
+      assert {:ok, %{pull_request: pull_request}} = read({response(pull), 0}, %{}, required_checks: %{"main" => ["make all"]})
+
+      assert %{
+               number: 42,
+               url: @pr_url,
+               title: "TP-1 A change",
+               state: "open",
+               head_sha: "abc123",
+               base: "main",
+               mergeable: "clean",
+               review_decision: "APPROVED",
+               files_changed: 3,
+               additions: 12,
+               deletions: 4,
+               checks: [%{workflow: "ci", name: "make all", state: "passed", duration_ms: 30_000, required: true, url: "https://github.com/acme/app/actions/runs/100/job/1"}]
+             } = pull_request
+
+      assert_received {:gh, ["api", "--include", "graphql", "-f", "query=" <> query | _rest]}
+      assert query =~ "changedFiles additions deletions reviewDecision"
+      assert query =~ "startedAt"
+    end
+
+    test "a red PR reads nothing more for it: the checks required are what the watcher keeps, unknown when it keeps none" do
+      red = {response(pull(rollup([check("make all", "FAILURE")]))), 0}
+      base = %{runs: base_runs([])}
+      kept = [required_checks: %{"main" => ["make all"]}]
+
+      assert {:ok, %{ci: :red, pull_request: %{checks: [required]}}} = read(red, base, kept)
+      assert %{state: "failed", required: true} = required
+      assert {:ok, %{ci: :red, pull_request: %{checks: [unknown]}}} = read(red, base, required_checks: %{})
+      assert %{state: "failed", required: nil} = unknown
+      refute_received {:gh, ["api", @rules]}
+    end
+
+    test "cancelled macOS checks read as lacking a machine, not as failed" do
+      cancelled = pull(rollup([check("make all", "SUCCESS"), check("Swift build", "CANCELLED", workflow: "macOS", run: 200, job: 7)]))
+
+      assert {:ok, %{ci: :red, red_kind: :cancelled, pull_request: %{checks: checks}}} = read({response(cancelled), 0})
+      assert [%{workflow: "ci", state: "passed"}, %{workflow: "macOS", name: "Swift build", state: "cancelled_no_machine"}] = checks
+    end
+
+    test "a superseded run is gone: each check is listed once with its newest state" do
+      superseded = pull(rollup([check("make all", "FAILURE", run: 100, job: 1), check("make all", "SUCCESS", run: 200, job: 2)]))
+
+      newest_log = "https://github.com/acme/app/actions/runs/200/job/2"
+      assert {:ok, %{ci: :green, pull_request: %{checks: [newest]}}} = read({response(superseded), 0})
+      assert %{name: "make all", state: "passed", url: ^newest_log} = newest
+
+      # Every run of the workflow cancelled keeps its checks in the watcher's read; the ticket read lists them once.
+      cancelled = pull(rollup([check("make all", "CANCELLED", run: 100, job: 1), check("make all", "CANCELLED", run: 200, job: 2)]))
+
+      assert {:ok, %{pull_request: %{checks: [%{name: "make all", state: "cancelled_no_machine", url: "https://github.com/acme/app/actions/runs/200/job/2"}]}}} = read({response(cancelled), 0})
+    end
+
+    test "a PR GitHub no longer has has none" do
+      assert {:ok, %{pr: :missing, pull_request: nil}} = read({response(nil), 0})
+    end
+  end
+
   describe "read/2" do
     test "reads a green, mergeable PR in one GraphQL query, with the rate limit GitHub reported" do
       assert {:ok, read} = read({response(pull()), 0})
