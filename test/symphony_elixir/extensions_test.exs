@@ -1085,8 +1085,11 @@ defmodule SymphonyElixir.ExtensionsTest do
              "verdicts" => [],
              "watch" => nil,
              "plan_brief" => nil,
+             "situation" => issue_payload["situation"],
              "pause" => nil
            }
+
+    assert issue_payload["situation"]["kind"] == "working"
 
     conn = get(build_conn(), "/api/v1/MT-RETRY")
 
@@ -1123,6 +1126,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "verdicts" => [],
              "watch" => nil,
              "plan_brief" => nil,
+             "situation" => watching_payload["situation"],
              "pause" => nil
            }
 

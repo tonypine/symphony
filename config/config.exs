@@ -52,6 +52,9 @@ if config_env() == :test do
     # section in place of the holds and the decision store. Its tests and the ones that prove its
     # gates turn it on; off here, the suites of the holds and the decisions keep their own writes.
     pause_projector: false,
+    # A ticket's situation event (`SymphonyElixir.Situation.Recorder`) would join the events each
+    # suite asserts; its own test starts it.
+    situation_recorder: false,
     # A move into `Plan Review` captures the plan's brief from Linear in a task
     # (`SymphonyElixir.PlanBrief`); in tests it would race the records a test asserts, so it runs
     # only where a test turns it on.

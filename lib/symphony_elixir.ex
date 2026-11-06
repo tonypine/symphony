@@ -108,6 +108,7 @@ defmodule SymphonyElixir.Application do
            verification_child_specs(system_config) ++
            [
              SymphonyElixir.Orchestrator,
+             situation_recorder_child_spec(),
              pr_review_child_spec(system_config),
              pr_watch_child_spec(system_config),
              SymphonyElixir.QaAndroid.Emulator,
@@ -197,6 +198,11 @@ defmodule SymphonyElixir.Application do
     if Enum.any?(repos, &pr_review_enabled_for_repo?/1) do
       SymphonyElixir.PrReviewPoller
     end
+  end
+
+  # Off in tests (`config/config.exs`): its events would join the ones each test asserts.
+  defp situation_recorder_child_spec do
+    if Application.get_env(:symphony_elixir, :situation_recorder, true), do: SymphonyElixir.Situation.Recorder
   end
 
   # The PR and CI watcher decides and acts on every CI and merge row; it watches the repos whose PRs

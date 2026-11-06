@@ -68,6 +68,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"workspace.rebuilt", %{reason: "missing_folder", branch: "auto/TP-1", winner: "pull_request", head: "bbb2222bbbb", pr_head: "bbb2222bbbb", branch_head: "aaa1111aaaa"}, [],
      %{title: "Workspace rebuilt on the PR head bbb2222", detail: "Its workspace folder was missing · PR bbb2222, branch aaa1111"}},
     {"workspace.removed", %{reason: "age_gc"}, [], %{title: "Workspace removed", detail: "The age GC reclaimed it"}},
+    {"situation.changed", %{from: "working", to: "waiting_for_ci", word: "Waiting for CI", cause: "Checks are running on PR #741."}, [],
+     %{title: "Waiting for CI", detail: "Checks are running on PR #741."}},
     {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}}
   ]
 

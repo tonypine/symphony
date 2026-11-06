@@ -21,6 +21,7 @@ defmodule SymphonyElixirWeb.Presenter do
     RunStore,
     Sessions,
     Setup,
+    Situation,
     StartNow,
     StateMachine,
     StrayProcesses,
@@ -115,7 +116,7 @@ defmodule SymphonyElixirWeb.Presenter do
           auto_merge: snapshot |> Map.get(:auto_merge, []) |> Enum.map(&auto_merge_payload/1),
           landing_waits: snapshot |> Map.get(:landing_waits, []) |> Enum.map(&landing_wait_payload/1),
           red_bases: PrWatch.red_bases(),
-          issues: watched_issues_payload(records),
+          issues: watched_issues_payload(records, snapshot),
           silent_waits: Enum.map(PrWatch.silent_waits(), &WatchPayload.silent_wait/1),
           rate_limit: WatchPayload.rate_limit(PrWatch.rate_limit()),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&(&1 |> slot_waiting_payload() |> status.())),
@@ -317,11 +318,11 @@ defmodule SymphonyElixirWeb.Presenter do
         waiting = waiting_entry(snapshot, issue_identifier)
 
         if is_nil(running) and is_nil(retry) and is_nil(watching) and is_nil(waiting) do
-          untracked_issue_payload(issue_identifier)
+          untracked_issue_payload(issue_identifier, snapshot)
         else
           payload = issue_payload_body(issue_identifier, running, retry, watching, waiting)
           record = ticket_state_record(payload.issue_id, issue_identifier)
-          {:ok, record_payload(with_record_repo_key(payload, record), record, not is_nil(running))}
+          {:ok, record_payload(with_record_repo_key(payload, record), record, not is_nil(running), snapshot)}
         end
 
       _ ->
@@ -339,7 +340,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   # A ticket Symphony no longer runs or watches is still served while its ticket state record
   # holds it, so the ticket page can show its Code Review and QA verdicts.
-  defp untracked_issue_payload(issue_identifier) do
+  defp untracked_issue_payload(issue_identifier, snapshot) do
     case ticket_state_by_identifier(issue_identifier) do
       nil ->
         {:error, :issue_not_found}
@@ -347,19 +348,23 @@ defmodule SymphonyElixirWeb.Presenter do
       record ->
         payload = issue_payload_body(issue_identifier, nil, nil, nil, nil)
 
-        {:ok, record_payload(%{payload | repo_key: record.repo_key, issue_id: record.issue_id}, record, false)}
+        payload = %{payload | repo_key: record.repo_key, issue_id: record.issue_id}
+
+        {:ok, record_payload(payload, record, false, snapshot)}
     end
   end
 
   # What the ticket's record adds to its payload: its verdicts, the watcher's block, a plan's brief
-  # (`SymphonyElixir.PlanBrief`) and why it does not move (`ticket_status/2`).
-  defp record_payload(payload, record, running?) do
+  # (`SymphonyElixir.PlanBrief`), why it does not move (`ticket_status/2`) and where it stands
+  # (`SymphonyElixir.Situation`).
+  defp record_payload(payload, record, running?, snapshot) do
     repository_pause = if is_binary(payload.repo_key), do: repository_pause_reason(payload.repo_key), else: nil
 
     payload
     |> Map.put(:verdicts, verdicts_payload(record))
     |> Map.put(:watch, WatchPayload.watch(record))
     |> Map.put(:plan_brief, plan_brief_payload(record))
+    |> Map.put(:situation, situation_payload(record || %{issue_id: payload.issue_id, repo_key: payload.repo_key}, Situation.live_facts(snapshot), nil))
     |> Map.merge(ticket_status(record, repository_pause, running?))
   end
 
@@ -514,17 +519,27 @@ defmodule SymphonyElixirWeb.Presenter do
 
   # The issues the PR and CI watcher watches, with the facts it last read of each one's PR, read
   # from the ticket state records so they are there right after a restart.
-  defp watched_issues_payload(records) do
+  defp watched_issues_payload(records, snapshot) do
     watched = for {_issue_id, record} <- records, record.pr_watch, do: record
+    live = Situation.live_facts(snapshot)
+    all = Map.values(records)
 
     watched
     |> Enum.sort_by(&{&1.repo_key || "", &1.issue_identifier || &1.issue_id || ""})
-    |> Enum.map(&watched_issue_payload/1)
+    |> Enum.map(&watched_issue_payload(&1, live, all))
   end
 
-  defp watched_issue_payload(record) do
-    %{issue_id: record.issue_id, identifier: record.issue_identifier, repo_key: record.repo_key, watch: WatchPayload.watch(record)}
+  defp watched_issue_payload(record, live, records) do
+    %{
+      issue_id: record.issue_id,
+      identifier: record.issue_identifier,
+      repo_key: record.repo_key,
+      watch: WatchPayload.watch(record),
+      situation: situation_payload(record, live, records)
+    }
   end
+
+  defp situation_payload(record, live, records), do: record |> Situation.read(live, records) |> Situation.payload()
 
   @doc """
   Check Now (`POST /api/v1/issues/:issue_identifier/watch/check`): the watcher reads and decides on

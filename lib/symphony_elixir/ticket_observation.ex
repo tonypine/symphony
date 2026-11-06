@@ -80,6 +80,7 @@ defmodule SymphonyElixir.TicketObservation do
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.PlanBrief
   alias SymphonyElixir.Routing.{PollScope, Resolver}
+  alias SymphonyElixir.Situation.Recorder, as: SituationRecorder
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @table __MODULE__
@@ -661,6 +662,12 @@ defmodule SymphonyElixir.TicketObservation do
   # made them dispatches from right after.
   defp announce({:ok, :updated} = written, {repo_key, issue_id, fields}, source) when source not in [:poll, :by_id] do
     :ok = ObservabilityPubSub.broadcast_ticket_record_changed(repo_key, issue_id, fields)
+    written
+  end
+
+  # Nothing else tells the situation recorder of what a read brought, such as a sub-ticket that ended.
+  defp announce({:ok, :updated} = written, {_repo_key, issue_id, _fields}, _source) do
+    SituationRecorder.ticket_changed(issue_id)
     written
   end
 

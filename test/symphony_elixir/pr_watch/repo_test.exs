@@ -2,8 +2,9 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.PrDecision.Facts
-  alias SymphonyElixir.{PrWatch, Questions, TicketObservation, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{PrWatch, Questions, TicketEvents, TicketObservation, TicketPullRequest, TicketState}
   alias SymphonyElixir.PrWatch.Repo
+  alias SymphonyElixir.Situation.Recorder
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @now ~U[2026-10-16 12:00:00Z]
@@ -565,6 +566,62 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert %{issue_identifier: "TP-1", pr_watch: nil} = RunStore.get_ticket_state("1")
     assert %{pr_watch: %{}} = RunStore.get_ticket_state("2")
     assert %{phase: "Todo", pr_watch: nil} = RunStore.get_ticket_state("9")
+  end
+
+  describe "the ticket's situation" do
+    setup %{repo_key: repo_key} do
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{ci: :pending})}})
+      %{issue: with_pr(repo_key, issue("1", "Code Review"), 1), recorder: start_supervised!(Recorder)}
+    end
+
+    test "a ticket that left the watched states with its CI pending gets the event of its new kind when the watcher drops its facts",
+         %{repo_key: repo_key, issue: issue, recorder: recorder} do
+      issues!([issue])
+      pid = start_repo!(repo_key)
+      assert {:ok, _summary} = Repo.poll(pid)
+      publish_snapshot(recorder)
+      assert situation_kinds() == ["waiting_for_ci"]
+
+      # Cancelled while its CI is pending, with no webhook to say the PR closed: the facts still hold it.
+      :ok = RunStore.update_ticket_state("1", %{phase: "Canceled"})
+
+      issues!([])
+      assert {:ok, %{watched: 0}} = Repo.poll(pid)
+      settle_recorder(recorder)
+
+      assert %{pr_watch: nil} = RunStore.get_ticket_state("1")
+      assert situation_kinds() == ["waiting_for_ci", "cancelled"]
+    end
+
+    test "a read that changes only the phase the facts were read in is a reason to compute it", %{repo_key: repo_key, issue: issue, recorder: recorder} do
+      issues!([%{issue | state: "Rework"}])
+      pid = start_repo!(repo_key)
+      assert {:ok, _summary} = Repo.poll(pid)
+      publish_snapshot(recorder, %{running: [%{issue_id: "1", run_kind: "rework", started_at: @now}]})
+      assert situation_kinds() == ["working"]
+
+      # Handed off with a run still on the ticket: the head now waits for its checks.
+      issues!([issue])
+      assert {:ok, _summary} = Repo.poll(pid)
+      settle_recorder(recorder)
+
+      assert situation_kinds() == ["working", "waiting_for_ci"]
+    end
+
+    defp publish_snapshot(recorder, overrides \\ %{}) do
+      Recorder.snapshot_published(Map.merge(%{running: [], retrying: [], slot_waiting: [], dispatch_skipped: []}, overrides))
+      settle_recorder(recorder)
+    end
+
+    # The notice in its mailbox, then the flush it queued behind it.
+    defp settle_recorder(recorder) do
+      :sys.get_state(recorder)
+      :sys.get_state(recorder)
+    end
+
+    defp situation_kinds do
+      for %{payload: payload} <- TicketEvents.query("1", types: ["situation.changed"], limit: :all), do: payload.to
+    end
   end
 
   test "holds, the CI Fix origin and an active run are read from Symphony's records", %{repo_key: repo_key} do

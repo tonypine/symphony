@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{CiWait, Pauses, Questions, RunStore, SelfHeal}
+  alias SymphonyElixir.{CiWait, Pauses, Questions, RunStore, SelfHeal, Situation, TicketState}
   alias SymphonyElixir.PrWatch.{Competitors, Sweep}
   alias SymphonyElixir.QaDriver.DevServerLease
 
@@ -73,6 +73,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
 
     assert state.running == %{}
     assert state.slot_waiting == %{}
+    assert %{rule: :priority} = state.dispatch_skipped["medium"]
 
     assert [
              %{issue_id: "medium", identifier: "MT-MED", state: "Todo", repo_key: "web", reason: "priority medium is not in tickets.priorities (urgent, high)", since: since},
@@ -176,8 +177,59 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
              "spent" => "its token budget is spent (agent.max_tokens_per_issue)"
            }
 
+    # Only a rule's gate names its rule: a ticket read says those as paused (`SymphonyElixir.Situation`).
+    assert Map.new(Enum.filter(state.dispatch_skipped, fn {_issue_id, entry} -> entry.rule end), fn {issue_id, entry} -> {issue_id, entry.rule} end) == %{
+             "unassigned" => :not_assigned,
+             "spent" => :token_budget
+           }
+
     # The ticket page shows a passed-over ticket's blockers from the entry (`SymphonyElixir.Connected`).
     assert %{blocked_by: [%{identifier: "MT-7", title: nil, state: "In Progress"}], parent: nil} = state.dispatch_skipped["blocked"].connected
+  end
+
+  describe "a ticket read of what dispatch skipped" do
+    defp situation(state, issue_id, phase, attrs \\ %{}) do
+      record = TicketState.normalize(Map.merge(%{repo_key: "default", issue_id: issue_id, issue_identifier: issue_id, phase: phase}, attrs))
+      Situation.compute(record, [], Situation.live_facts(snapshot_of(state)))
+    end
+
+    test "a running ticket's own skip leaves it working" do
+      running = issue("running", "MT-RUN", "In Progress")
+      state = Orchestrator.dispatch_chosen_issues_for_test([running], run(orchestrator_state(), running))
+
+      assert %{reason: "already running", rule: nil} = state.dispatch_skipped["running"]
+      assert situation(state, "running", "In Progress").kind == "working"
+    end
+
+    test "a claimed ticket is not paused" do
+      state = Orchestrator.dispatch_chosen_issues_for_test([issue("claimed", "MT-CLAIMED", "Todo")], %{orchestrator_state() | claimed: MapSet.new(["claimed"])})
+
+      assert situation(state, "claimed", "Todo").kind == "waiting_for_slot"
+    end
+
+    test "a Merging ticket held until CI settles waits for CI" do
+      wait = %{
+        identifier: "MT-LANDING",
+        title: "Land",
+        repo_key: "default",
+        pull_request_url: nil,
+        commit_sha: "abc1234",
+        since: DateTime.utc_now()
+      }
+
+      waiting = %{orchestrator_state() | merging_ci_waits: %{"landing" => wait}}
+      state = Orchestrator.dispatch_chosen_issues_for_test([issue("landing", "MT-LANDING", "Merging")], waiting)
+
+      assert %{rule: nil} = state.dispatch_skipped["landing"]
+      assert [%{issue_id: "landing", ci_wait: true}] = snapshot_of(state).slot_waiting
+      assert %{kind: "waiting_for_ci", next: "Merging starts when they pass."} = situation(state, "landing", "Merging")
+    end
+
+    test "a ticket a rule holds is paused" do
+      state = Orchestrator.dispatch_chosen_issues_for_test([issue("spent", "MT-SPENT", "Todo")], %{orchestrator_state() | budget_exhausted: MapSet.new(["spent"])})
+
+      assert %{kind: "paused_by_rule", cause: "Its token budget is spent (agent.max_tokens_per_issue).", next: "Starts when that clears."} = situation(state, "spent", "Todo")
+    end
   end
 
   test "a stopped ticket, and one paused on anything else, are skipped with their pause's text; an unpaused one runs" do
@@ -375,7 +427,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     {state, log} = dispatch_with_log([unkeyed], orchestrator_state())
 
     refute Map.has_key?(state.running, "unkeyed")
-    assert state.dispatch_skipped["unkeyed"].reason == "it has no repo key and several repos are configured, so its pause can't be read"
+    assert %{reason: "it has no repo key and several repos are configured, so its pause can't be read", rule: :no_repo_key} = state.dispatch_skipped["unkeyed"]
     refute log =~ "with no repo key;"
     refute Orchestrator.should_dispatch_issue_for_test(unkeyed, orchestrator_state())
     refute Orchestrator.dispatch_revalidated_issue_for_test(unkeyed, true)
@@ -400,7 +452,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     held = issue("held", "MT-HELD-2", "Todo")
     held_state = %{orchestrator_state() | usage_limits: %{{"anthropic", :all} => hold}}
     state = Orchestrator.dispatch_chosen_issues_for_test([held], held_state)
-    assert %{reason: "Claude 5-hour limit reached"} = state.dispatch_skipped["held"]
+    assert %{reason: "Claude 5-hour limit reached", rule: :usage_limit} = state.dispatch_skipped["held"]
 
     # Linear no longer returns the issue when dispatch reads it again.
     tracked([])
@@ -519,7 +571,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
              state.retry_attempts["held"]
 
     assert [%{attempt: 3, error: "agent exited: :boom", due_at: ^due_at}] = RunStore.list_retries(:all)
-    assert %{identifier: "MT-HELD", reason: "dispatch is paused by the operator: deploy window", since: %DateTime{}} = state.dispatch_skipped["held"]
+    assert %{identifier: "MT-HELD", reason: "dispatch is paused by the operator: deploy window", rule: :symphony_pause, since: %DateTime{}} = state.dispatch_skipped["held"]
 
     assert %{retrying: [], dispatch_skipped: [%{issue_id: "held", reason: "dispatch is paused by the operator: deploy window"}]} =
              Orchestrator.snapshot(pid, 5_000)
@@ -571,7 +623,7 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
       assert Map.has_key?(state.running, "own-todo")
       refute Map.has_key?(state.running, "hub-todo")
       at = Calendar.strftime(since, "%Y-%m-%d %H:%M UTC")
-      assert %{repo_key: "hub", reason: reason} = state.dispatch_skipped["hub-todo"]
+      assert %{repo_key: "hub", reason: reason, rule: :repository_pause} = state.dispatch_skipped["hub-todo"]
       assert reason == "the repository is paused by you since #{at}: #{@focus}"
       refute Orchestrator.should_dispatch_issue_for_test(hub, orchestrator_state())
 
