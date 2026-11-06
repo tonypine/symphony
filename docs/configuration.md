@@ -1422,7 +1422,8 @@ the result. QA walks every other step, and every step of a repo without `proof_c
 Symphony shows the proofs in the description as a block it renders from the events, one
 `- Step 1 · Proved by: …` line per proved step between
 `<!-- symphony:proofs:start -->` and `<!-- symphony:proofs:end -->` at the end of the walkthrough,
-in the same pass as the Decisions section; the rest of the description stays as the person wrote
+in the same pass as the Decisions section. The walkthrough ends at the next heading or at the
+summary block's or the Decisions section's marker, so a write of those blocks keeps the proofs; the rest of the description stays as the person wrote
 it. A `Proved by: QA` the author wrote stays in their step's text and keeps an implementer's proof
 off that step. `SymphonyElixir.Walkthrough` reads the walkthrough into steps, and the QA prompt
 lists the steps to link and the steps to walk when an event proves at least one. The `macos_app`
