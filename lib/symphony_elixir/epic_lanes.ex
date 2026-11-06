@@ -17,13 +17,15 @@ defmodule SymphonyElixir.EpicLanes do
   the next part starts there as soon as it is unblocked. An epic whose path only waits on people
   yields its lane to the next queued epic or the shared pool: every open ticket on the path is in
   review, not yet approved, a `breakdown` parent waiting on its own sub-tickets, or a ticket held by
-  open blockers in any active phase. Lanes are planned again on every poll, so the epic takes a lane back once a ticket
-  on its path can run.
+  open blockers in any active phase. So does an epic with nothing on its path Symphony could dispatch
+  under `tickets.priorities`: it is never given a lane, and the reason says so. Lanes are planned
+  again on every poll, so the epic takes a lane back once a ticket on its path can run.
 
   The slots left over form the shared pool, dispatched by priority then age as before; it also takes
   an epic's extra parallel tickets and the tickets of epics still waiting for a lane.
   """
 
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.PlanReview
 
@@ -65,13 +67,19 @@ defmodule SymphonyElixir.EpicLanes do
           optional(String.t()) => %{optional(:identifier) => String.t() | nil, optional(:state) => String.t() | nil}
         }
 
+  @typedoc """
+  `tickets.priorities` as dispatch applies it: the filter's priority `names`, and whether a fetched
+  ticket gets past it or is already under way (`allowed?`). Nil when nothing filters.
+  """
+  @type priority_gate :: %{names: [String.t()], allowed?: (Issue.t() -> boolean())} | nil
+
   @doc """
   Plans the lanes for one poll from the candidate issues. `epic_lanes` nil means every slot can be
   a lane; a value above `max_total` is capped there. Active epics with nothing on their path that
-  can run are `yielded` and take no lane.
+  can run, `priority_gate` included, are `yielded` and take no lane.
   """
-  @spec plan([Issue.t() | term()], non_neg_integer(), non_neg_integer() | nil, Enumerable.t(String.t())) :: t()
-  def plan(candidates, max_total, epic_lanes, terminal_states) when is_list(candidates) and is_integer(max_total) do
+  @spec plan([Issue.t() | term()], non_neg_integer(), non_neg_integer() | nil, Enumerable.t(String.t()), priority_gate()) :: t()
+  def plan(candidates, max_total, epic_lanes, terminal_states, priority_gate \\ nil) when is_list(candidates) and is_integer(max_total) do
     terminal_states = MapSet.new(terminal_states, &normalize_state/1)
     lane_count = min(epic_lanes || max_total, max_total)
 
@@ -82,13 +90,18 @@ defmodule SymphonyElixir.EpicLanes do
       |> Enum.filter(&active_epic?(&1, terminal_states))
       |> Enum.uniq_by(& &1.id)
       |> Enum.sort_by(&epic_sort_key/1)
-      |> Enum.map(&epic(&1, by_id, terminal_states))
+      |> Enum.map(&epic(&1, by_id, terminal_states, priority_gate))
       |> Enum.split_with(&is_nil(&1.yield_reason))
 
     {lanes, queued} = Enum.split(waiting, lane_count)
 
     %{max_total: max_total, shared: max_total - length(lanes), lanes: lanes, queued: queued, yielded: yielded}
   end
+
+  @doc "True when `issue_id` is on the path of an epic holding a lane in this plan."
+  @spec on_lane?(t() | nil, String.t()) :: boolean()
+  def on_lane?(nil, _issue_id), do: false
+  def on_lane?(%{lanes: lanes}, issue_id), do: Enum.any?(lanes, &Map.has_key?(&1.members, issue_id))
 
   @doc """
   The slot `issue_id` would use given the issue ids already running: the first free lane whose path
@@ -283,7 +296,7 @@ defmodule SymphonyElixir.EpicLanes do
 
   defp under_way?(_state, _terminal_states), do: false
 
-  defp epic(%Issue{} = issue, by_id, terminal_states) do
+  defp epic(%Issue{} = issue, by_id, terminal_states, priority_gate) do
     sub_issues =
       for %{id: id} = sub_issue <- issue.sub_issues, is_binary(id) do
         %{id: id, identifier: Map.get(sub_issue, :identifier), state: Map.get(sub_issue, :state)}
@@ -299,38 +312,60 @@ defmodule SymphonyElixir.EpicLanes do
       sub_issues: sub_issues,
       open_parts: Enum.filter(sub_issues, &under_way?(&1.state, terminal_states)),
       members: members,
-      yield_reason: yield_reason(members, by_id, terminal_states)
+      yield_reason: yield_reason(members, by_id, terminal_states, priority_gate)
     }
   end
 
   # Nil while a ticket on the path can run; otherwise each open ticket on it and what it waits on.
-  defp yield_reason(members, by_id, terminal_states) do
-    held = Enum.map(members, fn {id, member} -> {member, held_by(member, Map.get(by_id, id), terminal_states)} end)
+  defp yield_reason(members, by_id, terminal_states, priority_gate) do
+    held = Enum.map(members, fn {id, member} -> {member, held_by(member, Map.get(by_id, id), terminal_states, priority_gate)} end)
 
     if Enum.all?(held, &elem(&1, 1)) do
       waits =
         held
         |> Enum.sort_by(fn {member, _held_by} -> {member.depth, member.identifier || ""} end)
-        |> Enum.map_join(", ", fn {member, held_by} -> "#{member.identifier} (#{held_by})" end)
+        |> Enum.map_join(", ", fn {member, {_kind, held_by}} -> "#{member.identifier} (#{held_by})" end)
 
-      "Nothing on its path can run: " <> waits
+      if Enum.any?(held, &match?({_member, {:priority, _held_by}}, &1)) do
+        "No sub-ticket Symphony can dispatch: #{priorities_phrase(priority_gate.names)}. " <> waits
+      else
+        "Nothing on its path can run: " <> waits
+      end
     end
   end
 
   # What keeps a ticket on the path from running, or nil when Symphony can run it. A ticket Symphony
   # did not fetch is judged by its state alone. A blocked ticket's blockers are on the path too, so
-  # the lane stays while one of them can run.
-  defp held_by(member, issue, terminal_states) do
+  # the lane stays while one of them can run. The priority filter comes last: it is what the Director
+  # can change only for a ticket nothing else holds.
+  defp held_by(member, issue, terminal_states, priority_gate) do
     state = fetched_state(issue) || member.state
 
     cond do
-      not is_binary(state) -> "state unknown"
-      human_gated_state?(state) -> state
-      waiting_parent?(issue, terminal_states) -> "#{state}, waiting on its sub-tickets"
-      Issue.blocked?(issue, terminal_states) -> "#{state}, blocked by #{blocker_names(issue, terminal_states)}"
+      not is_binary(state) -> {:waits, "state unknown"}
+      human_gated_state?(state) -> {:waits, state}
+      waiting_parent?(issue, terminal_states) -> {:waits, "#{state}, waiting on its sub-tickets"}
+      Issue.blocked?(issue, terminal_states) -> {:waits, "#{state}, blocked by #{blocker_names(issue, terminal_states)}"}
+      filtered_out?(issue, priority_gate) -> {:priority, "#{state}, priority #{priority_label(issue.priority)}"}
       true -> nil
     end
   end
+
+  defp filtered_out?(%Issue{} = issue, %{allowed?: allowed?}), do: not allowed?.(issue)
+  defp filtered_out?(_issue, _priority_gate), do: false
+
+  # `[urgent]` and `[urgent, high]` read as a floor. A filter with a gap has none, so it is named as is.
+  defp priorities_phrase(names) do
+    ranks = names |> Enum.reject(&(&1 == "none")) |> Enum.map(&Schema.Tickets.priority_number/1) |> Enum.sort()
+
+    if ranks != [] and ranks == Enum.to_list(1..List.last(ranks)) do
+      "priorities below #{priority_label(List.last(ranks))}"
+    else
+      "priorities outside #{Enum.map_join(names, ", ", &String.capitalize/1)}"
+    end
+  end
+
+  defp priority_label(priority), do: Schema.Tickets.priority_names() |> Enum.at(priority || 0, "unknown") |> String.capitalize()
 
   defp fetched_state(%Issue{state: state}) when is_binary(state), do: state
   defp fetched_state(_not_fetched), do: nil

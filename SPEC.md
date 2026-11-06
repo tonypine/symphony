@@ -3741,7 +3741,9 @@ Epic lanes:
   approved and not finished (any state other than `Backlog`, `Triage` or a terminal state).
 - An active epic yields while nothing on its path can run: every open issue on the path is in
   `Plan Review`, `Backlog` or `Triage`, has no known state, is a plan parent waiting on its
-  sub-issues (outside `Rework`), or has open blockers in any active phase. A yielded epic takes no lane.
+  sub-issues (outside `Rework`), has open blockers in any active phase, or has a priority
+  `tickets.priorities` keeps from dispatching (unless the issue is forced, waits for a slot on a retry,
+  or has a run or a claim under way). A yielded epic takes no lane.
 - The other active epics are ordered by the parent's priority, then the parent's creation time. The
   first `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest
   wait for a lane. `epic_lanes` defaults to `max_concurrent_agents`.
@@ -3762,9 +3764,11 @@ Epic lanes:
 - The `epic_lanes` snapshot shows, for a running lane, the issue it runs and, when that is not one
   of the epic's own sub-issues, the issue it blocks or is a sub-issue of (`via`). Yielded epics
   follow the lanes with `status: "yielded"` and a `reason` naming each open issue on the path and
-  what it waits on.
+  what it waits on; when a priority holds one of them, the reason opens with
+  `No sub-ticket Symphony can dispatch: priorities below <lowest allowed>.`
 - Lanes are recomputed from the candidate issues on every poll tick, so a yielded epic takes a lane
-  again once an issue on its path can run.
+  again once an issue on its path can run. A move of an issue and the end of a run on a lane's path
+  each run a tick at once, so a lane whose epic has nothing left to dispatch is released on that event.
 
 ### 8.4 Retry and Backoff
 
