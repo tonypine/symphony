@@ -364,7 +364,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       put_issues([%{restart_issue() | state: "Done"}])
 
       assert {:error, {:conflict, message}} = DirectorMoves.move(:restart, "MOT-40", %{reason: "No"}, restart_opts(opts))
-      assert message == "MOT-40 is Done; only an open ticket can be restarted"
+      assert message == "The ticket is done."
       refute_received {:remove_workspaces, _identifier}
     end
 
@@ -697,7 +697,7 @@ defmodule SymphonyElixir.DirectorMovesTest do
       put_issues([pr("Backlog"), %{pr("Done") | id: "done", identifier: "MOT-41"}])
 
       assert {:error, {:conflict, "MOT-40 is already in Backlog"}} = DirectorMoves.move(:backlog, "MOT-40", %{}, opts)
-      assert {:error, {:conflict, "MOT-41 is Done; only an open ticket moves to Backlog"}} = DirectorMoves.move(:backlog, "MOT-41", %{}, opts)
+      assert {:error, {:conflict, "The ticket is done."}} = DirectorMoves.move(:backlog, "MOT-41", %{}, opts)
     end
   end
 
@@ -783,10 +783,20 @@ defmodule SymphonyElixir.DirectorMovesTest do
                RunStore.list_ticket_events("pr", types: ["ticket.cancelled"])
     end
 
+    test "a pull request GitHub gives no state is not taken for an open one", %{opts: opts} do
+      :ok = SymphonyElixir.TicketPullRequest.record_created("repo-cancel", "pr", @cancel_pr_url, "auto/MOT-40")
+      put_issues([cancel_issue("Code Review")])
+      Application.put_env(:symphony_elixir, :director_moves_test_activity, {:ok, %{pr_url: @cancel_pr_url}})
+
+      assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)
+      assert_received {:fetch_activity, @cancel_pr_url}
+      refute_received {:close_pr, _url}
+    end
+
     test "refuses a closed ticket, and a team with no canceled state leaves the record where it was", %{opts: opts} do
       put_issues([cancel_issue("Done"), %{cancel_issue("Canceled") | id: "gone", identifier: "MOT-41"}])
-      assert {:error, {:conflict, "MOT-40 is Done; only an open ticket can be cancelled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)
-      assert {:error, {:conflict, "MOT-41 is Canceled; only an open ticket can be cancelled"}} = DirectorMoves.move(:cancel, "MOT-41", %{}, opts)
+      assert {:error, {:conflict, "The ticket is done."}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)
+      assert {:error, {:conflict, "The ticket is cancelled."}} = DirectorMoves.move(:cancel, "MOT-41", %{}, opts)
 
       RunStore.delete_ticket_state("pr")
       :ok = TicketSignals.record_phase("repo-cancel", "pr", "QA")
