@@ -3242,7 +3242,11 @@ Rules:
   conflicting is recorded `blocked` with the component `ci` and leaves the ticket in `QA` for the
   watcher to route; it MUST NOT go to `Rework`. A red head in `Code Review` once approved, in
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
-  origin recorded, whether or not the PR also conflicts. A `Code Review` or `QA` ticket back from
+  origin recorded, whether or not the PR also conflicts. The exception is a `Rework` head Code
+  Review's changes verdict stands on: its code is about to change, so the watcher MUST NOT rerun its
+  checks, update its branch or send it to `CI Fix` for a red check, and the rework run goes ahead
+  whatever CI says. An approval held in `Code Review`, or through `CI Fix` back to it, MUST be carried
+  to the head an update of the branch made, with no second review. A `Code Review` or `QA` ticket back from
   `CI Fix` on the same red head or the same conflict (a repair that pushed nothing) MUST enter
   `CI Fix` again, until the fix attempts run out. Then neither asks a person: a red head gets a
   fix ticket for its failing check and a `Blocked` hold on it, and a conflict waits on the PRs

@@ -318,6 +318,9 @@ defmodule SymphonyElixir.Situation do
   # A head Code Review has yet to judge waits for no check: the review reads the code whatever CI says.
   defp waiting_for_ci?(%{facts: %{phase: :code_review, review: :pending}}), do: false
 
+  # Nor does a head a changes verdict stands on: the code is about to change, and the rework run is next.
+  defp waiting_for_ci?(%{facts: %{phase: :rework, review: :changes_requested}}), do: false
+
   defp waiting_for_ci?(%{facts: %{pr: pr, ci: :pending} = facts} = ctx) when pr in [:open, :draft],
     do: facts.phase in @handed_off or ctx.running == nil
 

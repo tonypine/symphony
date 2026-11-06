@@ -18,7 +18,7 @@ public struct WatchBlock: Equatable {
         public var redKind: String?
         public var failingCheck: String?
         public var missingChecks: [String]
-        /// Code Review's judgement of the head: `pending` or `approved`.
+        /// Code Review's judgement of the head: `pending` or `approved`, and in Rework `changes_requested`.
         public var review: String?
         /// `clean`, `behind`, `dirty`, `unstable`, `blocked` or `unknown`.
         public var mergeable: String?

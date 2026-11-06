@@ -2003,6 +2003,86 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert PrWatch.dispatch_reason(issue, Config.settings!()) == nil
     end
 
+    test "TP-1204: a changes verdict on a red head: no rerun and no CI Fix, the rework run goes, and its push gets the usual rules" do
+      issue_id = ticket!("1", "Rework", red())
+      :ok = put_verdict(@repo_key, issue_id, "code_review", "head-1-1", "request_changes")
+      pid = start!()
+
+      tick!(pid, 2)
+      assert %{facts: %{review: :changes_requested}, decision: %{rule: "R26", kind: :dispatch}} = watch(issue_id)
+      assert World.calls(:rerun) == []
+      assert moves(issue_id) == []
+
+      pr!("1", head_sha: "head-1-2")
+      tick!(pid)
+      assert %{facts: %{review: :pending}, decision: %{rule: "R22"}} = watch(issue_id)
+    end
+
+    test "TP-1204: the upkeep leaves a head a changes verdict stands on, and a Rework head with none it updates" do
+      changes = ticket!("1", "Rework", mergeable: :behind)
+      :ok = put_verdict(@repo_key, changes, "code_review", "head-1-1", "request_changes")
+      failed_qa = ticket!("2", "Rework", mergeable: :behind)
+      :ok = put_verdict(@repo_key, failed_qa, "code_review", "head-2-1", "approve")
+      pid = start!()
+
+      tick!(pid)
+      assert %{rule: "R26", kind: :dispatch} = decision(changes)
+      assert World.calls(:update_branch) == [{"https://github.com/acme/app/pull/2", "head-2-1"}]
+    end
+
+    defp code_review_verdicts(issue_id) do
+      for %{kind: "code_review"} = verdict <- issue_id |> RunStore.get_ticket_state() |> TicketState.verdicts(), do: {verdict.outcome, verdict.head_sha}
+    end
+
+    test "TP-1204: an approval waiting in Code Review survives the upkeep's update, and is not reviewed again" do
+      issue_id = ticket!("1", "Code Review", ci: :pending, mergeable: :behind)
+      :ok = put_verdict(@repo_key, issue_id, "code_review", "head-1-1", "approve")
+      pid = start!()
+
+      tick!(pid)
+      assert %{facts: %{review: :approved}, decision: %{rule: "R24"}} = watch(issue_id)
+      assert upkept(issue_id) == [{"U1", :update_branch, "head-1-1"}]
+
+      pr!("1", head_sha: "head-1-2", mergeable: :clean)
+      tick!(pid)
+      assert %{facts: %{review: :approved}, decision: %{rule: "R24"}} = watch(issue_id)
+      assert {"approve", "head-1-2"} in code_review_verdicts(issue_id)
+
+      pr!("1", ci: :green)
+      tick!(pid)
+      assert %{facts: %{review: :approved}, decision: %{rule: "R27", kind: :dispatch, reason: "The head is green: Code Review's approval carries on" <> _}} = watch(issue_id)
+    end
+
+    test "TP-1204: an approval held through CI Fix survives the update too" do
+      issue_id = ticket!("1", "CI Fix", ci: :pending, mergeable: :behind)
+      :ok = CiFix.record_origin(@repo_key, issue_id, "Code Review")
+      :ok = put_verdict(@repo_key, issue_id, "code_review", "head-1-1", "approve")
+      pid = start!()
+
+      tick!(pid)
+      pr!("1", head_sha: "head-1-2", mergeable: :clean)
+      tick!(pid)
+
+      assert {"approve", "head-1-2"} in code_review_verdicts(issue_id)
+    end
+
+    test "TP-1204: the update carries no approval the head it replaced did not have, and none outside Code Review" do
+      older = ticket!("1", "Code Review", ci: :pending, mergeable: :behind)
+      :ok = put_verdict(@repo_key, older, "code_review", "head-1-0", "approve")
+      in_qa = ticket!("2", "QA", ci: :pending, mergeable: :behind)
+      :ok = put_verdict(@repo_key, in_qa, "code_review", "head-2-1", "approve")
+      pid = start!()
+
+      tick!(pid)
+      pr!("1", head_sha: "head-1-2", mergeable: :clean)
+      pr!("2", head_sha: "head-2-2", mergeable: :clean)
+      tick!(pid)
+
+      assert %{facts: %{review: :pending}, decision: %{rule: "R27"}} = watch(older)
+      assert code_review_verdicts(older) == [{"approve", "head-1-0"}]
+      assert code_review_verdicts(in_qa) == [{"approve", "head-2-1"}]
+    end
+
     test "the orchestrator's 'waits for its head to go green' gate → R27: a QA run on a green head only" do
       issue_id = ticket!("1", "QA", ci: :pending)
       pid = start!()

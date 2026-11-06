@@ -389,6 +389,11 @@ defmodule SymphonyElixir.SituationTest do
       assert approved.next == "QA starts when they pass."
     end
 
+    test "TP-1204: a Rework head a changes verdict stands on waits for no check; one with none still waits" do
+      refute compute(record(%{pr_watch: watch(%{phase: :rework, review: :changes_requested})})).kind == "waiting_for_ci"
+      assert compute(record(%{pr_watch: watch(%{phase: :rework})})).kind == "waiting_for_ci"
+    end
+
     test "a head that is not pending, or a PR that is not open, waits for nothing" do
       assert compute(record(%{pr_watch: watch(%{ci: :green})})).kind == "waiting_for_slot"
       assert compute(record(%{pr_watch: watch(%{pr: :closed})})).kind == "waiting_for_slot"

@@ -48,7 +48,7 @@ Rework and CI Fix run agent work.
 
 | State | Owner | Waits on | Enters from | Exits to |
 |---|---|---|---|---|
-| **Rework** | Agent | Returned-for-changes work; continues the existing PR. Not from scratch | Code Review rework; QA fail; CI Fix (substantive); a conflict back after its fix runs with no PR competing; a PR closed without merging (D5); a return from a Needs Decision hold | Changes done → Code Review (re-review of the new head); for epic parents → Plan Review (revised plan); CI red or conflict → CI Fix |
+| **Rework** | Agent | Returned-for-changes work; continues the existing PR. Not from scratch | Code Review rework; QA fail; CI Fix (substantive); a conflict back after its fix runs with no PR competing; a PR closed without merging (D5); a return from a Needs Decision hold | Changes done → Code Review (re-review of the new head); for epic parents → Plan Review (revised plan); conflict, or CI red unless a changes verdict stands on the head → CI Fix |
 | **CI Fix** | Agent (mechanical lane) | Red checks or a merge conflict; minimal repair only | Any phase whose head goes red or whose PR conflicts with its base (Code Review, QA, Merging, Rework) | Fixed → origin state (returns where it came from; approvals carried forward); substantive → Rework; cannot fix → Rework or Needs Decision hold (needs access or a secret); a conflict back after its fix runs → paused on the competing PRs (Blocked), or Rework with none; still red at the backstop → paused on a fix ticket for CI (Blocked) |
 
 ## Epic path

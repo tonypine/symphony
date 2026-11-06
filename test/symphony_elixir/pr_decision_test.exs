@@ -168,10 +168,38 @@ defmodule SymphonyElixir.PrDecisionTest do
       end
     end
 
-    test "the review fact means nothing outside Code Review" do
+    test "the review fact means nothing outside Code Review and Rework" do
       assert decide(phase: :qa, ci: :pending, review: :pending).rule == "R24"
       assert decide(phase: :qa, ci: :pending, review: :approved).rule == "R24"
+    end
+
+    test "a Rework head no changes verdict stands on keeps the CI rules" do
       assert decide(phase: :rework, ci: :red, review: :pending).rule == "R22"
+      assert decide(phase: :rework, ci: :red, rerun_done: true, review: :pending).rule == "R21"
+      assert decide(phase: :rework, ci: :required_missing, review: :pending).rule == "R17"
+      assert [%Action{rule: "U1"}] = upkeep(phase: :rework, mergeable: :behind, ci: :green)
+      assert [%Action{rule: "U2"}] = upkeep(phase: :rework, ci: :red, red_kind: :cancelled, cancel_reruns: 1)
+    end
+
+    test "a changes verdict standing in Rework spends no CI work: R26 dispatches whatever CI says" do
+      changes = [phase: :rework, review: :changes_requested]
+
+      for ci <- @not_green ++ [[ci: :green], [ci: :none], [ci: :red, rerun_done: true], [ci: :red, red_attempts: 10, max_red_attempts: 10]],
+          mergeable <- [:clean, :behind, :unstable, :blocked, :unknown] do
+        facts = changes ++ [mergeable: mergeable] ++ ci
+        assert %Action{rule: "R26", kind: :dispatch} = decide(facts), inspect(facts)
+        assert upkeep(facts) == [], inspect(facts)
+      end
+
+      assert upkeep(changes ++ [ci: :red, red_kind: :cancelled, cancel_reruns: 1]) == []
+    end
+
+    test "a changes verdict leaves what is not CI's to the rules that act before it" do
+      changes = [phase: :rework, review: :changes_requested, ci: :red]
+
+      assert decide(changes ++ [run: :active]).rule == "R9"
+      assert decide(changes ++ [hold: :blocked]).rule == "R4"
+      assert %Action{rule: "R14", kind: :ci_fix} = decide(changes ++ [mergeable: :dirty])
     end
   end
 
