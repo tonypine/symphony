@@ -76,6 +76,7 @@ defmodule SymphonyElixir.Orchestrator do
   alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.QaDriver.DevServerLease
   alias SymphonyElixir.Routing.PollLog
+  alias SymphonyElixir.Situation.Recorder, as: SituationRecorder
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @continuation_retry_delay_ms 1_000
@@ -8823,6 +8824,7 @@ defmodule SymphonyElixir.Orchestrator do
       build_ms = System.monotonic_time(:millisecond) - monotonic_ms
       :ets.insert(@snapshot_table, [{@snapshot_key, snapshot, monotonic_ms, system_ms}, {@snapshot_timing_key, build_ms, parts_ms}])
       log_slow_snapshot_build(build_ms, parts_ms)
+      SituationRecorder.snapshot_published(snapshot)
     else
       _ -> :ok
     end

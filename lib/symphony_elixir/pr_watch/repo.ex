@@ -120,6 +120,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   alias SymphonyElixir.Linear.{Client, Issue}
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
   alias SymphonyElixir.PrWatch.{Attempts, Competitors, Fetch, Health, Ingest, Release, SilentWait}
+  alias SymphonyElixir.Situation.Recorder, as: SituationRecorder
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @registry SymphonyElixir.Repo.Registry
@@ -352,6 +353,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     watch = delivery |> Ingest.patch(watch) |> Map.merge(%{source: :webhook, delivered_at: now})
     result = store(state).put_ticket_pr_watch(state.repo_key, issue_id, identifier, watch)
     log_write(result, %{issue: %{id: issue_id, identifier: identifier}})
+    SituationRecorder.ticket_changed(issue_id)
     issue_id
   end
 
@@ -991,6 +993,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
       watch = silence(watch, entry, previous, now, state, settings)
       store(state).put_ticket_pr_watch(state.repo_key, entry.issue.id, entry.issue.identifier, watch) |> log_write(entry)
       announce_dispatch(watch, previous, entry, state)
+      announce_situation(watch, previous, entry)
       watch
     end
   end
@@ -1030,6 +1033,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   defp announce_dispatch(_watch, _previous, _entry, _state), do: :ok
+
+  # A ticket's situation reads the PR and its CI: a read that changed either is a reason to compute it.
+  defp announce_situation(%{facts: %{ci: ci, pr: pr}}, %{facts: %{ci: ci, pr: pr}}, _entry), do: :ok
+  defp announce_situation(_watch, _previous, entry), do: SituationRecorder.ticket_changed(entry.issue.id)
 
   # How and when the facts arrived: a re-decision keeps those of the read it decided on.
   defp arrived(:record, entry, previous, state, now) do

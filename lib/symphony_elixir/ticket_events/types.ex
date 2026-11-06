@@ -98,6 +98,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `run_ended` for a question that holds nothing), each naming the question by `question_id`, and `question.reopened` when the Director
   takes an answer back, after which the question is open again and its next answer is a new
   `question.answered`.
+
+  `situation.changed` is machinery-only: the ticket's situation (`SymphonyElixir.Situation`) took
+  another kind, with the old kind (`from`, none on the first), the new one (`to`), the pattern's
+  first words (`word`), its cause and since when it holds. A timeline reads how long each situation
+  lasted from these events, without parsing.
   """
 
   alias SymphonyElixir.RunKind
@@ -140,6 +145,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @signal [signal: :string, signal_details: :map]
   @drift [record_phase: :string, linear_phase: :string]
   @pause_reasons ~w(question ticket build person environment)
+  # `SymphonyElixir.Situation.kinds/0`, which reads the record and so may not be read here.
+  @situation_kinds ~w(waiting_on_you retrying blocked_by_ticket paused_by_rule waiting_for_ci waiting_for_build waiting_for_slot working done cancelled)
   # Where a pause's or a question's event came from when no live write recorded it: the backfill
   # from the holds and decisions (`SymphonyElixir.Pauses.Backfill`).
   @source {:enum, ~w(backfill)}
@@ -404,6 +411,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
       run_kinds: [],
       required: [cleared: :list],
       optional: [by: :map] ++ @signal,
+      idempotency: :writer
+    },
+    "situation.changed" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [to: {:enum, @situation_kinds}, word: {:string, 300}, cause: {:string, 300}],
+      optional: [from: {:enum, @situation_kinds}, since: :string] ++ @signal,
       idempotency: :writer
     },
     "park.backfilled" => %{

@@ -238,6 +238,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   defp summary("workspace.removed", payload, _event), do: {"Workspace removed", [removed_reason(text(payload, :reason))]}
 
+  defp summary("situation.changed", payload, _event), do: {text(payload, :word) || "Situation changed", [text(payload, :cause)]}
   defp summary("note", payload, _event), do: {"Note added", [text(payload, :text)]}
   defp summary(_type, _payload, _event), do: :unknown
 
@@ -307,7 +308,9 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     end
   end
 
-  defp run_name(payload) do
+  @doc "A run as a person reads it, from its event's payload: `Implementation run 2`, `Run` with no kind."
+  @spec run_name(map()) :: String.t()
+  def run_name(payload) do
     name = kind_name(text(payload, :run_kind))
     run = if name, do: "#{name} run", else: "Run"
     run <> suffix(" ", count(payload, :run_number))
