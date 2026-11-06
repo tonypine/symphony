@@ -42,9 +42,9 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
 
   # Each module that asks a Question directly, and what it asks.
   @question_sources %{
-    # A ticket parked in Backlog after turns with no new commit or state change
-    # (`SymphonyElixir.IdlePark.ask/4`, which the agent runner's park and the start-up backfill of
-    # an older park call): "<id> is parked: its last N turns changed nothing".
+    # A ticket held in its phase after turns with no new commit or state change
+    # (`SymphonyElixir.IdlePark.hold/5`, the agent runner's), and one an older build parked in
+    # Backlog (`SymphonyElixir.IdlePark.ask/4`, the start-up backfill's).
     "lib/symphony_elixir/idle_park.ex" => [:idle_park],
     # The dispatch-loop guard (`SymphonyElixir.DispatchLoop`) and the quiet handoff: "<id> ran N
     # times in M minutes without finishing" and "<id>'s last two runs ended without a handoff".
