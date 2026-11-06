@@ -2,6 +2,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
+  alias SymphonyElixir.IdlePark
   alias SymphonyElixir.Inbox.FromRecord
   alias SymphonyElixir.Inbox.Item
   alias SymphonyElixir.Linear.Client
@@ -480,6 +481,57 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
         for line <- said, do: assert(note =~ line)
         refute note =~ "Its work is on its branch"
       end
+    end
+
+    test "the park's own push lifts no hold: only a later head, or that head's checks reporting, does (TP-1175)" do
+      ticket = {:ticket, "default", "issue-progress"}
+      read = fn head, ci -> %{head_sha: head, facts: %{ci: ci}} end
+
+      # The park commits and pushes past the watcher's read: that read's CI is another head's.
+      record = park_after_read("sha-same", {:committed, "sha-wip"}, {:pushed, "auto/TP-337"})
+      assert %{waits_on: %{head: "sha-wip", earlier_head: "sha-same"} = waits_on} = IdlePark.reason(record)
+      refute Map.has_key?(waits_on, :ci)
+
+      assert IdlePark.settle(ticket, record, read.("sha-wip", :pending)) == :held
+      assert IdlePark.settle(ticket, record, read.("sha-same", :green)) == :held
+      assert IdlePark.settle(ticket, record, read.("sha-same", :red)) == :held
+      assert [%{id: question_id}] = Questions.open(ticket)
+
+      assert IdlePark.settle(ticket, record, read.("sha-further", :pending)) == :lifted
+      assert Questions.open(ticket) == []
+      assert %{state: :withdrawn} = Questions.find(ticket, question_id)
+      assert {:ok, nil} = Pauses.get(ticket)
+
+      # The head it pushed reporting lifts it too.
+      record = park_after_read("sha-same", {:committed, "sha-wip"}, {:pushed, "auto/TP-337"})
+      assert IdlePark.settle(ticket, record, read.("sha-wip", :green)) == :lifted
+
+      # Commits the agent left unpushed: the head the park pushed is the run's.
+      record = park_after_read("sha-earlier", :nothing, {:pushed, "auto/TP-337"})
+      assert %{waits_on: %{head: "sha-same", earlier_head: "sha-earlier"}} = IdlePark.reason(record)
+
+      # Nothing to push: the watcher's read is the head left, and its CI stands.
+      record = park_after_read("sha-same", :nothing, :nothing)
+      assert %{waits_on: %{head: "sha-same", ci: "green"} = waits_on} = IdlePark.reason(record)
+      refute Map.has_key?(waits_on, :earlier_head)
+      assert IdlePark.settle(ticket, record, read.("sha-same", :green)) == :held
+
+      # A push that failed left the PR as the watcher read it.
+      record = park_after_read("sha-same", {:committed, "sha-wip"}, {:error, :origin_mismatch})
+      assert %{waits_on: %{head: "sha-same", ci: "green"} = waits_on} = IdlePark.reason(record)
+      refute Map.has_key?(waits_on, :earlier_head)
+      assert IdlePark.settle(ticket, record, read.("sha-same", :red)) == :lifted
+    end
+
+    # The ticket's record once a run on head "sha-same" parked, the watcher's last read being
+    # `read_head` with green checks, and the park's commit and push answering as given.
+    defp park_after_read(read_head, committed, pushed) do
+      next_run()
+      withdraw_open_questions()
+      :ok = PrWatchSupport.put_watch!("default", "issue-progress", phase: :in_progress, head_sha: read_head, identifier: "TP-337")
+      runner_opts = [workspace_committer: fn _workspace, nil -> committed end, workspace_pusher: fn _workspace, nil, _source_repo -> pushed end]
+      capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, runner_opts: runner_opts) end)
+      TicketState.normalize(RunStore.get_ticket_state("issue-progress"))
     end
 
     test "a real workspace's uncommitted files are committed and its branch is on origin after the park" do

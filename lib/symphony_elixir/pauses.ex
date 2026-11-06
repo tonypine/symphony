@@ -14,7 +14,7 @@ defmodule SymphonyElixir.Pauses do
       build must include);
     * `:person` - the Director (`waits_on: %{action: "unblock" | "restart"}`);
     * `:environment` - a named condition (`waits_on: %{condition: name}`), with what its writer read
-      when it set it when the condition depends on that (`head`, `ci`).
+      when it set it when the condition depends on that (`head`, `earlier_head`, `ci`).
 
   Each reason has `text`, one line in plain words of at most 300 characters (a default per kind, or
   the writer's; a longer one is refused), `set_by` (`%{kind: :person | :run | :rule | :symphony,
@@ -672,7 +672,7 @@ defmodule SymphonyElixir.Pauses do
   defp waits_on(:person, %{action: action}) when action in @person_actions, do: %{action: action}
   defp waits_on(:person, _waits_on), do: nil
 
-  defp condition_read(waits_on), do: for({field, value} when field in [:head, :ci] and is_binary(value) <- waits_on, into: %{}, do: {field, value})
+  defp condition_read(waits_on), do: for({field, value} when field in [:head, :earlier_head, :ci] and is_binary(value) <- waits_on, into: %{}, do: {field, value})
 
   defp one(waits_on, field) do
     if value = line(Map.get(waits_on, field)), do: %{field => value}

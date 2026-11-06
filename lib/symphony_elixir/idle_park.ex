@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.IdlePark do
   @moduledoc """
   The park of an idle run: the agent runner holds a ticket whose last turns made no new commit and
-  no state change in the phase it is in (`SymphonyElixir.AgentRunner`, `hold/5`). It never leaves
+  no state change in the phase it is in (`SymphonyElixir.AgentRunner`, `hold/6`). It never leaves
   the phase, so the PR and CI watcher keeps watching it (TP-1175).
 
   A hold is a stop like a dispatch loop's (`SymphonyElixir.DispatchLoop`), so it asks its question
@@ -9,12 +9,12 @@ defmodule SymphonyElixir.IdlePark do
   (recommended), "Start it over from main" or "Keep it paused". The answer's option is Unblock,
   Restart or nothing (`SymphonyElixir.DispatchLoop.answer_move/1`). Beside the question the ticket's
   pause holds an `:environment` reason the Director may release (`reason/1`), which says why in plain
-  words and what the PR read when the hold was set: its head and its CI. The silent-wait report lists
-  it from that reason (`silent_bound/0`), with its age.
+  words and what the PR read when the hold was set: the head the park left and its CI. The silent-wait
+  report lists it from that reason (`silent_bound/0`), with its age.
 
-  The watcher lifts the hold when that changes (`settle/3`): the PR has a new head, or its checks
-  reported green or red where they had not. The ticket then continues in its phase, and a CI Fix
-  ticket whose head went green returns to where it came from.
+  The watcher lifts the hold when that changes (`settle/3`): the PR has a later head than the park
+  left, or its checks reported green or red where they had not. The ticket then continues in its
+  phase, and a CI Fix ticket whose head went green returns to where it came from.
 
   A ticket parked before TP-1175 sits in `Backlog`. Unblock moves it back to the phase it was
   parked from (`parked_from/2`), with its workspace and branch as they are, then answers its
@@ -87,11 +87,17 @@ defmodule SymphonyElixir.IdlePark do
   that says why and what the PR read (`watch`, the watcher's record, nil when it has none), and the
   hold's question (`hold_question_attrs/3`), which the Inbox lists. A question the store refuses is
   logged: the reason, which the Director releases with Unblock, holds the ticket on its own.
+
+  `left_head` is the head the park leaves on the branch, nil when it knows of none. A park can push,
+  so the watcher's record may be older than the branch: the reason then keeps `left_head` as its
+  `head`, the record's head as its `earlier_head` and no CI, so neither the park's own push nor a
+  late read of the older head lifts the hold (`settle/3`).
   """
-  @spec hold(Questions.ticket(), String.t(), String.t(), pos_integer(), watch() | nil) :: :ok
-  def hold({:ticket, _repo_key, _issue_id} = ticket, name, phase, turns, watch) when is_binary(name) and is_binary(phase) and is_integer(turns) do
+  @spec hold(Questions.ticket(), String.t(), String.t(), pos_integer(), watch() | nil, String.t() | nil) :: :ok
+  def hold({:ticket, _repo_key, _issue_id} = ticket, name, phase, turns, watch, left_head \\ nil) when is_binary(name) and is_binary(phase) and is_integer(turns) do
     text = "No progress: the last #{turns} turns in #{phase} made no new commit and no state change"
-    _ = Pauses.set(ticket, %{kind: :environment, waits_on: Map.put(read_at(watch), :condition, @signal_reason), text: String.slice(text, 0, 300), releasable: true})
+    waits_on = watch |> read_at() |> left_on(left_head) |> Map.put(:condition, @signal_reason)
+    _ = Pauses.set(ticket, %{kind: :environment, waits_on: waits_on, text: String.slice(text, 0, 300), releasable: true})
 
     case Questions.ask(ticket, hold_question_attrs(name, phase, turns)) do
       {:ok, _question} -> :ok
@@ -105,6 +111,12 @@ defmodule SymphonyElixir.IdlePark do
   # head that then reports lifts the hold.
   defp read_at(%{head_sha: head, facts: %{ci: ci}}) when is_binary(head) and is_atom(ci), do: %{head: head, ci: Atom.to_string(ci)}
   defp read_at(_watch), do: %{}
+
+  # The record's CI is of the record's head, so it holds only while that is the head left behind.
+  defp left_on(read, nil), do: read
+  defp left_on(%{head: left_head} = read, left_head), do: read
+  defp left_on(%{head: earlier_head}, left_head), do: %{head: left_head, earlier_head: earlier_head}
+  defp left_on(_no_read, left_head), do: %{head: left_head}
 
   @doc """
   The hold's reason on the ticket's `record`, or nil when it is not held. A reason an older park set
@@ -125,8 +137,10 @@ defmodule SymphonyElixir.IdlePark do
   Lifts the ticket's hold, by the rule, when the watcher's new read (`watch`) differs from what it
   read when the hold was set (`reason/1` on the `record` the tick started from): the PR has a new
   head, or its checks reported green or red where they had not. A running check changes nothing:
-  the hold stays until it reports. Withdraws the question and clears the reason, so the ticket
-  continues in its phase. `:lifted` or `:held`; a record with no hold is `:held`.
+  the hold stays until it reports. So does a read of the head the park pushed past (`hold/6`), whatever
+  its checks say: GitHub can show it for a while after the push (TP-1422). Withdraws the question and
+  clears the reason, so the ticket continues in its phase. `:lifted` or `:held`; a record with no hold
+  is `:held`.
   """
   @spec settle(Questions.ticket(), TicketState.t() | map() | nil, watch()) :: :lifted | :held
   def settle({:ticket, _repo_key, _issue_id} = ticket, record, watch) when is_map(watch) do
@@ -135,6 +149,8 @@ defmodule SymphonyElixir.IdlePark do
       nil -> :held
     end
   end
+
+  defp changed?(%{earlier_head: head}, %{head_sha: head}), do: false
 
   defp changed?(waits_on, %{head_sha: head, facts: %{ci: ci}}) when is_binary(head) do
     new_head?(Map.get(waits_on, :head), head) or (ci in [:green, :red] and Map.get(waits_on, :ci) != Atom.to_string(ci))

@@ -157,8 +157,9 @@ nothing of a person, so it adds no badge and no notification, and it goes when t
 
 A run that really makes no progress for two turns is held in its phase, never moved out of it: it
 stays watched, shows in the Inbox with its question and in `silent_waits` with its reason and age,
-and R4 waits. A read that shows a new head, or checks that reported green or red where they had
-not, lifts the hold.
+and R4 waits. A read that shows a head later than the one the park left, or checks that reported
+green or red where they had not, lifts the hold. The WIP commit a park pushes is the head it left, so
+that push lifts nothing, and neither does a late read of the head before it.
 
 ## Where the facts come from
 

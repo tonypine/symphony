@@ -2214,8 +2214,14 @@ defmodule SymphonyElixir.AgentRunner do
     forget_rework_base(issue, run_context.opts)
     committed = commit_parked_work(issue, run_context)
     pushed = push_parked_work(issue, run_context)
-    park_idle_issue(issue, {committed, pushed}, run_context.opts)
+    park_idle_issue(issue, {committed, pushed}, parked_head(committed, pushed, run_context), run_context.opts)
   end
+
+  # The head the park leaves on the branch, which the hold reads the PR against, so its own push is
+  # no new head. A push that failed changed nothing on origin, so it leaves none the watcher could read.
+  defp parked_head(_committed, {:error, _reason}, _run_context), do: nil
+  defp parked_head({:committed, sha}, _pushed, _run_context), do: sha
+  defp parked_head(_committed, _pushed, %{progress: %{head: head}}), do: head
 
   # A parked ticket's work is on origin, never only in its workspace: changes the agent left
   # uncommitted are committed on its branch (`WorkspaceHead.commit_worktree/2`), then commits it
@@ -2337,14 +2343,14 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp park_idle_issue(%Issue{} = issue, saved, opts) do
+  defp park_idle_issue(%Issue{} = issue, saved, left_head, opts) do
     Logger.warning(
       "Parking #{issue_context(issue)} where it is, in #{issue.state}, after #{@max_empty_turns} turns with no new commit, file change or state change" <>
         idle_park_pr_note(issue, opts)
     )
 
     repo_key = run_repo_key(issue, opts)
-    run_park(fn -> park_issue(issue, repo_key, saved, opts) end)
+    run_park(fn -> park_issue(issue, {repo_key, left_head}, saved, opts) end)
   end
 
   # The park is one unit the run's stop never cuts: a person can stop the run while Linear takes the
@@ -2364,9 +2370,9 @@ defmodule SymphonyElixir.AgentRunner do
   # The ticket keeps its phase (TP-1175): a hold, not a move, stops its runs, so the PR and CI watcher
   # keeps it and lifts the hold when its PR changes. The hold is written before Linear is asked, so a
   # note that fails leaves the ticket held.
-  defp park_issue(%Issue{id: issue_id} = issue, repo_key, saved, opts) do
+  defp park_issue(%Issue{id: issue_id} = issue, {repo_key, left_head}, saved, opts) do
     label = "parking #{issue_context(issue)} where it is"
-    :ok = IdlePark.hold({:ticket, repo_key, issue_id}, issue.identifier || issue_id, issue.state, @max_empty_turns, PrWatch.watch(issue_id))
+    :ok = IdlePark.hold({:ticket, repo_key, issue_id}, issue.identifier || issue_id, issue.state, @max_empty_turns, PrWatch.watch(issue_id), left_head)
 
     case with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note(issue.state, saved)) end, label, opts) do
       :ok -> :ok

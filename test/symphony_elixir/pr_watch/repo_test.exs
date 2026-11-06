@@ -835,6 +835,30 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       assert PrWatch.silent_waits(repo_key: repo_key) == []
     end
 
+    test "a hold whose park pushed a commit stays through the watcher's reads of that push and of the head before it, and a further head lifts it (TP-1175)",
+         %{repo_key: repo_key, pid: pid} do
+      ticket = {:ticket, repo_key, "1"}
+      issues!([repo_key |> with_pr(issue("1", "In Progress"), 1)])
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{ci: :green})}})
+      assert {:ok, _summary} = Repo.poll(pid)
+
+      # The park pushed "sha-wip" after the watcher read "sha-1".
+      :ok = IdlePark.hold(ticket, "TP-1", "In Progress", 2, watch(repo_key, "1"), "sha-wip")
+      assert [%{id: question_id}] = Questions.open(ticket)
+
+      for held_read <- [%{ci: :green}, %{ci: :pending, head_sha: "sha-wip"}] do
+        reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), held_read)}})
+        assert {:ok, _summary} = Repo.poll(pid)
+        assert %{decision: %{rule: "R4"}} = watch(repo_key, "1")
+        assert [%{id: ^question_id}] = Questions.open(ticket)
+      end
+
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{ci: :pending, head_sha: "sha-further"})}})
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{state: :withdrawn} = Questions.find(ticket, question_id)
+      assert {:ok, nil} = Pauses.get(ticket)
+    end
+
     test "a held ticket lifts on a new head, and a hold with no read or no question lifts when its checks report (TP-1175)",
          %{repo_key: repo_key, pid: pid} do
       ticket = {:ticket, repo_key, "1"}
