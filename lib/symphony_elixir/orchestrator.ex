@@ -1013,9 +1013,10 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # The epic review found CI still running on the commit it reviews (`SymphonyElixir.EpicReview`), or
-  # a QA pass or an idle CI Fix run did on the PR head. Nothing failed: the attempt stays, no `run_failed` goes out, the run counts towards no dispatch
-  # loop, and the review starts again once CI had a minute more to finish. The wait is bounded per
-  # commit (`SymphonyElixir.CiWait`): past the limit the ticket is held instead.
+  # a QA pass or an idle CI Fix run did on the PR head. Nothing failed: the attempt stays, no
+  # `run_failed` goes out, the run counts towards no dispatch loop, and the review starts again once
+  # CI had a minute more to finish. The wait is bounded per commit (`SymphonyElixir.CiWait`): past
+  # the limit the ticket is held instead.
   defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:ci_pending, %{} = info} = reason) do
     error = agent_exit_reason_summary(reason)
     persist_run_completion(running_entry, "waiting_for_ci", error)

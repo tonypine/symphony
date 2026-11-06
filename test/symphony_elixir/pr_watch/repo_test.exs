@@ -1,8 +1,18 @@
 defmodule SymphonyElixir.PrWatch.RepoTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.{
+    IdlePark,
+    Pauses,
+    PrWatch,
+    Questions,
+    TicketEvents,
+    TicketObservation,
+    TicketPullRequest,
+    TicketState
+  }
+
   alias SymphonyElixir.PrDecision.Facts
-  alias SymphonyElixir.{IdlePark, Pauses, PrWatch, Questions, TicketEvents, TicketObservation, TicketPullRequest, TicketState}
   alias SymphonyElixir.PrWatch.Repo
   alias SymphonyElixir.Situation.Recorder
   alias SymphonyElixirWeb.ObservabilityPubSub
