@@ -36,7 +36,9 @@ hooks:
 proof_check: make-all
 # `github_push_branch` pushes with repo hooks off, so it refuses a push that changes one of
 # `paths` until `command`, run by the agent in its sandbox, records a pass for that commit in
-# `result_file`. Symphony only reads the file; it never runs the command.
+# `result_file`. Symphony only reads the file; it never runs the command. The checks behind it stay
+# for CI and that push gate: agents no longer read them as their own checklist, since the step list
+# (`phases.<kind>.steps`, docs/configuration.md#phases) runs the build, the checks and the tests.
 push_check:
   command: .githooks/pre-push --head
   result_file: tmp/push-check

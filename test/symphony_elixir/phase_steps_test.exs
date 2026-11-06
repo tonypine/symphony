@@ -304,7 +304,6 @@ defmodule SymphonyElixir.PhaseStepsTest do
 
       assert {:turn, %Step{id: "code"}, nil} = run_findings(ctx)
 
-      Process.sleep(1)
       fail_qa!("qa-3", "clipped", "Three")
       assert {:paused, _step, next_question} = run_findings(ctx)
       assert next_question != question_id
