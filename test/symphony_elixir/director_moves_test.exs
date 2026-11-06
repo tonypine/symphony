@@ -783,6 +783,16 @@ defmodule SymphonyElixir.DirectorMovesTest do
                RunStore.list_ticket_events("pr", types: ["ticket.cancelled"])
     end
 
+    test "a pull request GitHub gives no state is not taken for an open one", %{opts: opts} do
+      :ok = SymphonyElixir.TicketPullRequest.record_created("repo-cancel", "pr", @cancel_pr_url, "auto/MOT-40")
+      put_issues([cancel_issue("Code Review")])
+      Application.put_env(:symphony_elixir, :director_moves_test_activity, {:ok, %{pr_url: @cancel_pr_url}})
+
+      assert {:ok, %{to_state: "Canceled"}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)
+      assert_received {:fetch_activity, @cancel_pr_url}
+      refute_received {:close_pr, _url}
+    end
+
     test "refuses a closed ticket, and a team with no canceled state leaves the record where it was", %{opts: opts} do
       put_issues([cancel_issue("Done"), %{cancel_issue("Canceled") | id: "gone", identifier: "MOT-41"}])
       assert {:error, {:conflict, "The ticket is done."}} = DirectorMoves.move(:cancel, "MOT-40", %{}, opts)
