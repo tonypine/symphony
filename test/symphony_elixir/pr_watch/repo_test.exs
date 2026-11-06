@@ -412,6 +412,28 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert watch(repo_key, "1") == before
   end
 
+  test "a read's pull request stays on the ticket's record, past a read that failed and past the watch", %{repo_key: repo_key} do
+    issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+    reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{pull_request: %{number: 1, url: pr_url(1), checks: []}})}})
+    pid = start_repo!(repo_key)
+
+    assert {:ok, _summary} = Repo.poll(pid)
+    assert %{pr_watch: %{}, pull_request: %{number: 1, read_at: @now}} = RunStore.get_ticket_state("1")
+
+    # Reads that bring none leave it as it was.
+    reads!(%{pr_url(1) => {:ok, read_of(pr_url(1))}})
+    assert {:ok, _summary} = Repo.poll(pid)
+    assert %{pull_request: %{number: 1}} = RunStore.get_ticket_state("1")
+
+    reads!(%{pr_url(1) => {:error, :offline}})
+    capture_log(fn -> assert {:ok, _summary} = Repo.poll(pid) end)
+    assert %{pull_request: %{number: 1}} = RunStore.get_ticket_state("1")
+
+    issues!([])
+    assert {:ok, _summary} = Repo.poll(pid)
+    assert %{pr_watch: nil, pull_request: %{number: 1}} = RunStore.get_ticket_state("1")
+  end
+
   test "never writes to Linear or GitHub, reading PRs with the real Fetch", %{repo_key: repo_key} do
     issues!([repo_key |> with_pr(issue("1", "Merging"), 1), repo_key |> with_pr(issue("2", "Code Review"), 2)])
 
