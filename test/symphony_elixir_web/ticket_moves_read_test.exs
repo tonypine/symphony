@@ -14,7 +14,23 @@ defmodule SymphonyElixirWeb.TicketMovesReadTest do
 
   # What goes through the control API here; `start`, `stop`, `force` and `unforce` need a running
   # orchestrator, and their words are proved in `start_issue_test.exs` and `force_issue_test.exs`.
-  @called_moves [:answer, :restart, :cancel, :move_to, :unblock, :note, :blocker, :priority, :labels, :ruling, :approve_plan, :rework, :decisions, :changes, :backlog]
+  @called_moves [
+    :answer,
+    :restart,
+    :cancel,
+    :move_to,
+    :unblock,
+    :note,
+    :blocker,
+    :priority,
+    :labels,
+    :ruling,
+    :approve_plan,
+    :rework,
+    :decisions,
+    :changes,
+    :backlog
+  ]
 
   defmodule SnapshotOrchestrator do
     use GenServer
@@ -71,9 +87,11 @@ defmodule SymphonyElixirWeb.TicketMovesReadTest do
 
   defp ticket!(phase, labels) do
     RunStore.delete_ticket_state(@id)
-    :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: @id, issue_identifier: @identifier, phase: phase, labels: labels})
+    record = %{repo_key: @repo, issue_id: @id, issue_identifier: @identifier, phase: phase, labels: labels}
+    :ok = RunStore.put_ticket_state(record)
     :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "other", issue_identifier: "MOT-9", phase: "Todo"})
-    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%Issue{id: @id, identifier: @identifier, title: "A ticket", state: phase, labels: labels, repo_key: @repo}])
+    issue = %Issue{id: @id, identifier: @identifier, title: "A ticket", state: phase, labels: labels, repo_key: @repo}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
   end
 
   defp watched!(issue_id, identifier) do

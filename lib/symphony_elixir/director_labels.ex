@@ -38,7 +38,17 @@ defmodule SymphonyElixir.DirectorLabels do
 
   require Logger
 
-  alias SymphonyElixir.{AuditLog, Config, MachineLabels, Orchestrator, RunStore, TicketMoves, TicketSignals, TicketState}
+  alias SymphonyElixir.{
+    AuditLog,
+    Config,
+    MachineLabels,
+    Orchestrator,
+    RunStore,
+    TicketMoves,
+    TicketSignals,
+    TicketState
+  }
+
   alias SymphonyElixir.Config.Escalate
   alias SymphonyElixirWeb.ObservabilityPubSub
 

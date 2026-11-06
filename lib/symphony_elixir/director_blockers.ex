@@ -32,7 +32,18 @@ defmodule SymphonyElixir.DirectorBlockers do
 
   require Logger
 
-  alias SymphonyElixir.{AuditLog, Config, Orchestrator, Pauses, RunStore, StateMachine, TicketMoves, TicketSignals, TicketState}
+  alias SymphonyElixir.{
+    AuditLog,
+    Config,
+    Orchestrator,
+    Pauses,
+    RunStore,
+    StateMachine,
+    TicketMoves,
+    TicketSignals,
+    TicketState
+  }
+
   alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.PrWatch.Competitors
   alias SymphonyElixirWeb.ObservabilityPubSub

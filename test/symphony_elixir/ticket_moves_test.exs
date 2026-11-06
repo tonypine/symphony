@@ -1,7 +1,18 @@
 defmodule SymphonyElixir.TicketMovesTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{DirectorMoves, IdlePark, Pauses, Questions, StartNow, SubIssueWait, TicketMoves, TicketSignals, TicketState, TransitionGuard}
+  alias SymphonyElixir.{
+    DirectorMoves,
+    IdlePark,
+    Pauses,
+    Questions,
+    StartNow,
+    SubIssueWait,
+    TicketMoves,
+    TicketSignals,
+    TicketState,
+    TransitionGuard
+  }
 
   @waiting "Waiting on sub-tickets"
 
@@ -137,7 +148,9 @@ defmodule SymphonyElixir.TicketMovesTest do
   end
 
   test "approve_plan is refused while the waiting state is turned off" do
-    capture_log(fn -> :disabled = SubIssueWait.check_tracker_state(Config.settings!(), [], tracker: MissingStateTracker) end)
+    capture_log(fn ->
+      :disabled = SubIssueWait.check_tracker_state(Config.settings!(), [], tracker: MissingStateTracker)
+    end)
 
     refused(:approve_plan, %{labels: ["plan"], phase: "Plan Review"}, "the waiting state is turned off, so a plan can't be approved from the app")
   end
@@ -165,8 +178,10 @@ defmodule SymphonyElixir.TicketMovesTest do
 
   describe "facts/2" do
     test "no record: nothing is known of the ticket but what the caller knows" do
-      assert %{phase: nil, recorded?: false, tracked?: false, labels: [], open_question?: false, unblockable?: false, running?: true, identifier: "MT-1"} =
-               TicketMoves.facts(nil, %{live() | running?: true})
+      facts = TicketMoves.facts(nil, %{live() | running?: true})
+
+      assert %{phase: nil, recorded?: false, tracked?: false, labels: [], identifier: "MT-1"} = facts
+      assert %{open_question?: false, unblockable?: false, running?: true} = facts
     end
 
     test "a record says its phase and labels, and a removed one is no longer tracked" do
@@ -204,7 +219,8 @@ defmodule SymphonyElixir.TicketMovesTest do
 
     test "a stop is released by Unblock; a wait on a blocker is not" do
       :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: "stopped", issue_identifier: "MT-1", phase: "In Progress"})
-      {:ok, _pause} = Pauses.add_reason({:ticket, "default", "stopped"}, %{kind: :environment, waits_on: %{condition: "stop"}, text: "Stopped", releasable: true})
+      reason = %{kind: :environment, waits_on: %{condition: "stop"}, text: "Stopped", releasable: true}
+      {:ok, _pause} = Pauses.add_reason({:ticket, "default", "stopped"}, reason)
       assert %{unblockable?: true} = TicketMoves.facts(record_of("stopped"), live())
 
       :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: "waiting", issue_identifier: "MT-2", phase: "In Progress"})
@@ -229,6 +245,9 @@ defmodule SymphonyElixir.TicketMovesTest do
   test "issue_facts/1 reads a ticket a call read" do
     issue = %Issue{id: "i", identifier: "MT-1", state: "Plan Review", labels: nil, repo_key: "default"}
 
-    assert %{identifier: "MT-1", phase: "Plan Review", labels: [], repo_key: "default", recorded?: true, tracked?: true} = TicketMoves.issue_facts(issue)
+    facts = TicketMoves.issue_facts(issue)
+
+    assert %{identifier: "MT-1", phase: "Plan Review", labels: [], repo_key: "default"} = facts
+    assert %{recorded?: true, tracked?: true} = facts
   end
 end
