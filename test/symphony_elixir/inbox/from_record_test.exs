@@ -153,6 +153,23 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
       assert Enum.map(kept, & &1.identifier) == ["SHOP-3", "SHOP-1", "SHOP-2", "SHOP-4"]
     end
 
+    test "a run whose step waits for the answer to its Question lists it; any other run of the ticket hides it", %{records: records} do
+      listed = fn step -> records |> items(%{running: [%{issue_id: "id-SHOP-2", step: step}]}) |> Enum.map(& &1.identifier) end
+
+      assert "SHOP-2" in listed.(%{waiting: "answer", question_id: "q-merge"})
+      refute "SHOP-2" in listed.(%{waiting: "slot", question_id: nil})
+      refute "SHOP-2" in listed.(%{waiting: nil, question_id: nil})
+      refute "SHOP-2" in listed.(nil)
+    end
+
+    test "working_ids/1 leaves out the runs waiting for an answer" do
+      running = [%{issue_id: "working"}, %{issue_id: "on-a-step", step: %{waiting: nil}}, %{issue_id: "paused", step: %{waiting: "answer"}}]
+      snapshot = %{running: running}
+
+      assert FromRecord.working_ids(snapshot) == MapSet.new(["working", "on-a-step"])
+      assert FromRecord.working_ids(%{}) == MapSet.new()
+    end
+
     test "a question of a ticket the orchestrator watches in the state it is listed in stays, as a stopped park's does", %{records: records} do
       [listed] = items(records) |> Enum.filter(&(&1.identifier == "SHOP-1"))
       watched = String.upcase(" #{listed.state} ")

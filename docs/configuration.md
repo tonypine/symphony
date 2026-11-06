@@ -3153,7 +3153,9 @@ each read from its own records of the tickets, with no Linear request: a plan in
 `issues.states.plan_review` with the brief Symphony read when it entered review, each open
 question, each pause a person may release, and the quality gate's holds and skips. An answer, an
 Unblock or a Stop shows on the very next read, and the list is served while Linear is
-unreachable. `polling.interval_ms` no longer paces it. Each entry has
+unreachable. A ticket a run is working on lists nothing, but a run whose step paused on a question
+is waiting, not working, so its question lists the moment the step pauses.
+`polling.interval_ms` no longer paces it. Each entry has
 `issue_identifier`, `repo_key`, `title`, `url`, `state`, `kind` (`action` for an open request,
 `plan` for a `plan` or `breakdown` parent in `Plan Review`; `clarify` for a quality gate hold or
 skip; `blocked` for a ticket an access hold pauses in place, with the reason the hold
