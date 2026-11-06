@@ -46,14 +46,13 @@ defmodule SymphonyElixir.Inbox do
   @spec items(map(), inbox()) :: [Item.t()]
   def items(snapshot, inbox \\ __MODULE__) when is_map(snapshot) do
     {records, opts} = read(inbox)
-    running_ids = snapshot |> Map.get(:running, []) |> MapSet.new(& &1.issue_id)
 
     items =
       records
       |> FromRecord.items(snapshot, Keyword.take(opts, [:settings_fun, :subject_questions]))
       |> References.resolve(records, opts)
 
-    live = %{running: running_ids, you: MapSet.new(items, & &1.issue_id)}
+    live = %{running: FromRecord.working_ids(snapshot), you: MapSet.new(items, & &1.issue_id)}
     Enum.map(items, &References.live(&1, live))
   end
 

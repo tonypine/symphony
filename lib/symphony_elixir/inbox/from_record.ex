@@ -20,7 +20,8 @@ defmodule SymphonyElixir.Inbox.FromRecord do
   (`Item.from_subject_question/2`).
 
   The quality gate's holds and skips in the snapshot add a `:clarify` item each
-  (`Item.from_quality_gate/1`) for a ticket nothing else lists. An item of a running ticket goes, so does one whose ticket the orchestrator saw leave the state it was listed
+  (`Item.from_quality_gate/1`) for a ticket nothing else lists. An item of a working ticket
+  (`working_ids/1`) goes, so does one whose ticket the orchestrator saw leave the state it was listed
   in (one it watches in that very state stays) (a `:blocked` one stays: the pause is what waits), each takes the state the orchestrator saw,
   and the list is sorted oldest first, an item with no known wait last.
 
@@ -46,18 +47,31 @@ defmodule SymphonyElixir.Inbox.FromRecord do
   @spec items([map()], map(), [opt()]) :: [Item.t()]
   def items(records, snapshot, opts \\ []) when is_list(records) and is_map(snapshot) do
     settings_fun = Keyword.get(opts, :settings_fun, &Config.settings_for_repo!/1)
-    running_ids = snapshot |> Map.get(:running, []) |> MapSet.new(& &1.issue_id)
+    working_ids = working_ids(snapshot)
     watched_states = snapshot |> Map.get(:watching, []) |> Map.new(&{&1.issue_id, &1.state})
 
     records
     |> Enum.map(&TicketState.normalize/1)
     |> Enum.filter(&is_binary(&1.issue_id))
     |> Enum.flat_map(&record_items(&1, settings_fun))
-    |> Enum.reject(&(MapSet.member?(running_ids, &1.issue_id) or left_review?(&1, watched_states, settings_fun)))
+    |> Enum.reject(&(MapSet.member?(working_ids, &1.issue_id) or left_review?(&1, watched_states, settings_fun)))
     |> Enum.map(&%{&1 | state: Map.get(watched_states, &1.issue_id, &1.state)})
     |> with_clarify(snapshot)
     |> Enum.concat(opts |> Keyword.get(:subject_questions, []) |> Enum.map(fn {subject, question} -> Item.from_subject_question(subject, question) end))
     |> Enum.sort_by(&{is_nil(&1.waiting_since), sort_key(&1.waiting_since), &1.identifier || ""})
+  end
+
+  @doc """
+  The tickets of `snapshot` a run is working on. A run whose step paused on a Question is not one:
+  it stays among the running so the answer resumes it at once, but it has no session and waits on the
+  Director (`SymphonyElixir.AgentRunner`, `step.waiting` is `"answer"`).
+  """
+  @spec working_ids(map()) :: MapSet.t(String.t())
+  def working_ids(snapshot) when is_map(snapshot) do
+    snapshot
+    |> Map.get(:running, [])
+    |> Enum.reject(&match?(%{step: %{waiting: "answer"}}, &1))
+    |> MapSet.new(& &1.issue_id)
   end
 
   # One ticket's record that cannot be read as rows lists nothing, and the others still list: the

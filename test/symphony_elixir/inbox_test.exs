@@ -278,6 +278,17 @@ defmodule SymphonyElixir.InboxTest do
       refute Map.has_key?(references["SHOP-11"], :facts)
     end
 
+    test "a run waiting for the answer to its Question is waiting on you, not running, in what mentions its ticket" do
+      waiting = record("shop", "SHOP-12", %{pause: pause("Waits on SHOP-13")})
+      paused = record("shop", "SHOP-13", %{pause: pause()})
+      snapshot = %{running: [%{issue_id: paused.issue_id, step: %{waiting: "answer"}}]}
+
+      rows = Inbox.items(snapshot, inbox([waiting, paused]))
+
+      assert %{"SHOP-13" => %{kind: "ticket", waiting_on: "you"}} = Enum.find(rows, &(&1.identifier == "SHOP-12")).references
+      assert Enum.any?(rows, &(&1.identifier == "SHOP-13"))
+    end
+
     test "reads GitHub for a row's pull requests only when the row changed since it last read them" do
       test_pid = self()
       watched = record("shop", "SHOP-20", %{pr_watch: %{facts: %SymphonyElixir.PrDecision.Facts{}, pr_url: "https://github.com/acme/shop/pull/20"}, pause: pause("Waits on #21")})

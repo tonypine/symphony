@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Pauses, Questions}
+  alias SymphonyElixir.{DirectorMoves, Inbox, Pauses, Questions, TicketState}
 
   @active_states ["Todo", "In Progress", "Merging", "Rework"]
 
@@ -126,7 +126,7 @@ defmodule SymphonyElixir.OrchestratorTest do
       :ok
     end
 
-    defp ask!(issue_id) do
+    defp ask!(issue_id, repo_key \\ "default") do
       request = %{
         title: "Pick the settings layout",
         question: "Which layout should the settings page use: one column or two?",
@@ -136,7 +136,7 @@ defmodule SymphonyElixir.OrchestratorTest do
         options: [%{label: "One column", effect: "The run builds one column.", recommended: true}, %{label: "Two columns", effect: "The run builds two."}]
       }
 
-      {:ok, question} = Questions.ask({:ticket, "default", issue_id}, request, asked_by: %{kind: :run, name: "The run"}, request: true)
+      {:ok, question} = Questions.ask({:ticket, repo_key, issue_id}, request, asked_by: %{kind: :run, name: "The run"}, request: true)
       question
     end
 
@@ -166,6 +166,40 @@ defmodule SymphonyElixir.OrchestratorTest do
       {:noreply, state} = Orchestrator.handle_info({:ticket_record, "default", "walk-1", :changed, [:pause]}, state)
       assert_received {:run_step_turn, "walk-1"}
       assert %{step: %{waiting: nil}} = state.running["walk-1"]
+    end
+
+    for {kind, step} <- [{"machine", %{id: "tests", title: "Tests and coverage", mode: "machine"}}, {"agent", %{id: "code", title: "Write the code", mode: "delegated"}}] do
+      test "a #{kind} step's Question lists in the Inbox the moment it pauses, as a question with no run does, and answering it there resumes the step" do
+        server = :"step_question_inbox_#{System.unique_integer([:positive])}"
+        start_supervised!({DirectorMoves, name: server})
+        walking = issue("walk-1", "TP-1", "In Progress")
+        repo_key = Config.repo_key!()
+        ticket = {:ticket, repo_key, "walk-1"}
+        inbox = [name: {:test, make_ref()}, github_repos: %{}, pull_request: fn url -> flunk("read #{url} from GitHub") end]
+
+        :ok = RunStore.put_ticket_state(TicketState.new(repo_key, "walk-1", %{issue_identifier: "TP-1", title: "Ticket TP-1", phase: "In Progress"}))
+        Application.put_env(:symphony_elixir, :memory_tracker_issues, [walking])
+        question = ask!("walk-1", repo_key)
+        state = %{orchestrator_state(1) | repo_key: repo_key} |> run(walking)
+
+        # The turn that asked it still runs: the ticket is working.
+        assert state |> snapshot_of() |> Inbox.items(inbox) == []
+
+        state = step(state, {:answer_wanted, self(), unquote(Macro.escape(step)), question.id})
+
+        assert [%{kind: :action, identifier: "TP-1", review: %{question_id: question_id}} = row] = state |> snapshot_of() |> Inbox.items(inbox)
+        assert question_id == question.id
+        assert row == %{running: []} |> Inbox.items(inbox) |> hd()
+        assert {:ok, %{reasons: [%{kind: :question}]}} = Pauses.get(ticket)
+
+        pick = [%{question: question.question, answer: "Two columns"}]
+        assert {:ok, %{move: "decide"}} = DirectorMoves.move(:decide, "TP-1", %{picks: pick, question_id: question.id}, server: server)
+        assert {:ok, nil} = Pauses.get(ticket)
+
+        {:noreply, state} = Orchestrator.handle_info({:ticket_record, repo_key, "walk-1", :changed, [:pause]}, state)
+        assert_received {:run_step_turn, "walk-1"}
+        assert state |> snapshot_of() |> Inbox.items(inbox) == []
+      end
     end
 
     test "an answer while Symphony is paused waits for the pause to lift, and one already given grants the turn at once" do
