@@ -8,7 +8,9 @@ defmodule SymphonyElixir.Handoff do
   pull-request tool hooks (`SymphonyElixir.AgentTools.GitHub`), recorded in the ticket's signals
   ledger bound to the head it handed off, and read back by the runner before it performs any move
   into `Code Review`. A run that stops quiet with its PR already on its workspace HEAD has nothing
-  to push, so the runner records the signal for that head itself and hands off. A run that ends
+  to push, a Rework run may have pushed past the hooks, and a list's machine `handoff` step pushes
+  with its own command: in each the runner sees the PR on that HEAD, records the signal for it itself
+  and hands off. A run that ends
   without it records a `handoff_missing` event and is left where it is, for the retry machinery
   to pick up; its quiet successors back off and, after two on the same head, the ticket is held
   `Blocked` with `handoff_missing`.
