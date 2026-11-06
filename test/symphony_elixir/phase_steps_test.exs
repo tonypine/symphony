@@ -6,6 +6,7 @@ defmodule SymphonyElixir.PhaseStepsTest do
   alias SymphonyElixir.{Artifacts, DecisionRequest, PhaseSteps, Questions, TicketEvents, TicketState}
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
+  alias SymphonyElixir.PhaseSteps.Findings
 
   @repo_key "default"
   @issue_id "issue-steps"
@@ -155,6 +156,210 @@ defmodule SymphonyElixir.PhaseStepsTest do
         end)
 
       assert log =~ "could not read the changed files"
+    end
+  end
+
+  describe "the findings step of a rework" do
+    defp fail_qa!(run_id, class, description, extra \\ %{}, opts \\ []) do
+      payload = Map.merge(%{class: class, severity: "major", description: description}, extra)
+      {:ok, event} = TicketEvents.record(@repo_key, @issue_id, "finding.recorded", payload, [actor: {:agent, run_id, "qa"}, run_id: run_id] ++ opts)
+      event
+    end
+
+    defp resolve!(finding) do
+      payload = %{finding_id: finding.id, how: "Fixed it", head: "abc1234"}
+      {:ok, event} = TicketEvents.record(@repo_key, @issue_id, "finding.resolved", payload, actor: {:agent, "rework-1", "rework"}, run_id: "rework-1")
+      event
+    end
+
+    defp run_findings(ctx) do
+      steps = Phases.default_steps(:rework)
+      PhaseSteps.run_machine_steps(steps, step(steps, "findings"), context(ctx, %{}))
+    end
+
+    defp read_findings do
+      answered = Questions.answered({:ticket, @repo_key, @issue_id})
+      @issue_id |> RunStore.list_ticket_events([]) |> Findings.read(answered)
+    end
+
+    test "with nothing repeated it passes on to the code step without a shell or giving up the slot", ctx do
+      fail_qa!("qa-1", "clipped", "The table is clipped")
+      steps = Phases.default_steps(:rework)
+
+      assert {:turn, %Step{id: "code"}, nil} = run_findings(ctx)
+
+      refute_received {:ran, _command, _env, _timeout}
+      refute_received {:notice, _notice}
+      refute PhaseSteps.runs_anything?(steps, step(steps, "findings"), @changed)
+      assert PhaseSteps.runs_anything?(steps, step(steps, "build"), @changed)
+
+      assert [%{payload: %{step_id: "findings", outcome: "passed"}, artifacts: [_output]}] = events("step.completed")
+    end
+
+    test "it writes the open findings by class, each with where it stands", _ctx do
+      assert read_findings().output == "No open findings.\n"
+
+      clipped = fail_qa!("qa-1", "clipped", "The table is clipped", %{viewport: "1440×900", step: "3"})
+      fail_qa!("qa-1", "clipped", "The header is clipped")
+      fail_qa!("qa-1", "state missing", "No empty state")
+      resolve!(clipped)
+
+      assert read_findings().output ==
+               """
+               Open findings by class (3):
+
+               clipped (2):
+               - resolved, awaiting QA, at 1440×900, step 3: The table is clipped
+               - open: The header is clipped
+
+               state missing (1):
+               - open: No empty state
+               """
+    end
+
+    test "the same class failed in two QA runs pauses on a Question with both findings, before any code", ctx do
+      fail_qa!("qa-1", "clipped", "The table is clipped at the right edge.")
+      fail_qa!("qa-2", "clipped", "The header is clipped at `lib/app.ex`")
+
+      assert {:paused, %Step{id: "findings"}, question_id} = run_findings(ctx)
+
+      refute_received {:ran, _command, _env, _timeout}
+      assert [%{payload: %{outcome: "paused", question_id: ^question_id}, artifacts: [_output]}] = events("step.completed")
+
+      assert [%{id: ^question_id, step: "findings", asked_by: %{kind: :symphony}} = question] = Questions.open({:ticket, @repo_key, @issue_id})
+      assert question.title == "TP-77: QA failed twice on clipped"
+      assert question.why =~ "QA found this first: The table is clipped at the right edge. Then it found this: The header is clipped at a file."
+      assert [%{label: "Try another approach", recommended?: true}, %{label: "Keep this approach"}] = question.options
+      assert [%{kind: :question}] = @issue_id |> RunStore.get_ticket_state() |> TicketState.pause_reasons() |> Enum.map(&Map.take(&1, [:kind]))
+    end
+
+    test "the Question meets the writing standard, and says every class that came back" do
+      fail_qa!("qa-1", "clipped", "One")
+      fail_qa!("qa-2", "clipped", "Two")
+      fail_qa!("qa-1", "truncated", "Three")
+      fail_qa!("qa-3", "truncated", "Four")
+
+      assert %{repeats: [_clipped, _truncated] = repeats} = read_findings()
+      request = Findings.question("TP-77", repeats)
+
+      assert DecisionRequest.check(request) == :ok
+      assert request.title == "TP-77: QA failed twice on clipped and truncated"
+    end
+
+    test "it only lists the last two failures of a class" do
+      fail_qa!("qa-1", "clipped", "One")
+      fail_qa!("qa-2", "clipped", "Two")
+      fail_qa!("qa-3", "clipped", "Three")
+
+      assert %{repeats: [%{label: "clipped", first: first, last: last}]} = read_findings()
+      assert %{payload: %{description: "Two"}} = first
+      assert %{payload: %{description: "Three"}} = last
+    end
+
+    test "two findings of one QA run, and two classes, are not the same failure twice" do
+      fail_qa!("qa-1", "clipped", "One")
+      fail_qa!("qa-1", "clipped", "Two")
+      fail_qa!("qa-2", "truncated", "Three")
+
+      assert read_findings().repeats == []
+    end
+
+    test "an unclassified finding repeats only on the same step and viewport" do
+      fail_qa!("qa-1", "unclassified", "No step named")
+      fail_qa!("qa-2", "unclassified", "No step named either")
+      fail_qa!("qa-1", "unclassified", "One step", %{step: "3", viewport: "1440×900"})
+      fail_qa!("qa-2", "unclassified", "Same step elsewhere", %{step: "3", viewport: "2560×1440"})
+      assert read_findings().repeats == []
+
+      fail_qa!("qa-3", "unclassified", "Same step again", %{step: " 3 ", viewport: "1440×900"})
+
+      assert %{repeats: [repeat]} = read_findings()
+      assert repeat.label == "step 3 at 1440×900"
+      assert Findings.question("TP-77", [repeat]).title == "TP-77: QA failed twice on step 3 at 1440×900"
+    end
+
+    test "two unclassified failures that came back say which step each is" do
+      fail_qa!("qa-1", "unclassified", "One", %{step: "3"})
+      fail_qa!("qa-2", "unclassified", "Two", %{step: "3"})
+      fail_qa!("qa-1", "unclassified", "Three", %{step: "5", viewport: "1440×900"})
+      fail_qa!("qa-2", "unclassified", "Four", %{step: "5", viewport: "1440×900"})
+
+      assert %{repeats: [_step_three, _step_five] = repeats} = read_findings()
+      request = Findings.question("TP-77", repeats)
+
+      assert DecisionRequest.check(request) == :ok
+      assert request.title == "TP-77: QA failed twice on step 3 and step 5 at 1440×900"
+      assert request.question =~ "twice on step 3 and step 5 at 1440×900."
+      assert request.why =~ "On step 3, QA found this first: One. Then it found this: Two."
+      assert request.why =~ "On step 5 at 1440×900, QA found this first: Three. Then it found this: Four."
+    end
+
+    test "two steps whose names read the same in plain words are said once" do
+      fail_qa!("qa-1", "unclassified", "One", %{step: "lib/a.ex"})
+      fail_qa!("qa-2", "unclassified", "Two", %{step: "lib/a.ex"})
+      fail_qa!("qa-1", "unclassified", "Three", %{step: "lib/b.ex"})
+      fail_qa!("qa-2", "unclassified", "Four", %{step: "lib/b.ex"})
+
+      assert %{repeats: [_first, _second] = repeats} = read_findings()
+      assert Findings.question("TP-77", repeats).title == "TP-77: QA failed twice on step a file"
+    end
+
+    test "a ledger it can't read fails the step and says so, rather than reporting no findings", ctx do
+      steps = Phases.default_steps(:rework)
+      context = context(ctx, %{}, %{issue_id: :not_a_ticket})
+
+      log =
+        capture_log(fn ->
+          assert {:turn, %Step{id: "code"}, %{step: %Step{id: "findings"}, output: output}} =
+                   PhaseSteps.run_machine_steps(steps, step(steps, "findings"), context)
+
+          assert output =~ "(could not run: :invalid_issue_id)"
+          refute output =~ "No open findings"
+        end)
+
+      assert log =~ "could not record step.completed"
+      assert Questions.open({:ticket, @repo_key, @issue_id}) == []
+    end
+
+    test "a finding QA reopened counts as failing again", _ctx do
+      finding = fail_qa!("qa-1", "unclassified", "The table is clipped", %{step: "3"})
+      resolution = resolve!(finding)
+      fail_qa!("qa-2", "unclassified", "The table is still clipped", %{step: "3"}, supersedes: resolution.id)
+
+      assert %{repeats: [%{first: %{id: first}, last: %{payload: %{description: "The table is still clipped"}}}]} = read_findings()
+      assert first == finding.id
+      assert read_findings().output =~ "- reopened, step 3: The table is clipped"
+    end
+
+    test "a repeat whose last finding is fixed asks nothing", _ctx do
+      fail_qa!("qa-1", "clipped", "One")
+      last = fail_qa!("qa-2", "clipped", "Two")
+      resolve!(last)
+
+      assert read_findings().repeats == []
+    end
+
+    test "an answered Question is not asked again, until QA fails the class once more", ctx do
+      ticket = {:ticket, @repo_key, @issue_id}
+      fail_qa!("qa-1", "clipped", "One")
+      fail_qa!("qa-2", "clipped", "Two")
+
+      assert {:paused, _step, question_id} = run_findings(ctx)
+      {:ok, _answered} = Questions.answer(ticket, question_id, "1")
+
+      assert {:turn, %Step{id: "code"}, nil} = run_findings(ctx)
+
+      fail_qa!("qa-3", "clipped", "Three")
+      assert {:paused, _step, next_question} = run_findings(ctx)
+      assert next_question != question_id
+    end
+
+    test "every answer goes to the agent step: an option or the person's own words" do
+      options = [%{label: "Try another approach"}, %{label: "Keep this approach"}]
+
+      assert PhaseSteps.machine_resume(%{answer: %{option: 1}, options: options}) == :words
+      assert PhaseSteps.machine_resume(%{answer: %{option: 2}, options: options}) == :words
+      assert PhaseSteps.machine_resume(%{answer: %{option: nil, text: "Use tabs"}, options: options}) == :words
     end
   end
 

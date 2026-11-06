@@ -13,6 +13,7 @@
 
 - `ticket_events` reads this ticket's history (Symphony's ledger) and `ticket_record` adds an event to it. Symphony fills the run, phase and head; verdicts, moves, pauses and questions are Symphony's, and `ticket_record` refuses them.
 - This rework run reads `ticket_events` with `open_findings: true` before it plans, records `finding.resolved` for each finding it fixes (Symphony fills the head that fixes it), `evidence` for every screenshot or output it attaches (the files as `artifacts`), `step.completed` for each delegated step and a walkthrough proof again as `evidence` with `proof` when it changes the test.
+- This run follows a step list: Symphony runs its build, checks and tests itself between turns and brings a failure back to the step it names, with the output. Run none of them yourself: write the code, record what you changed, and end the turn; the handoff step pushes.
 
 ## landing
 

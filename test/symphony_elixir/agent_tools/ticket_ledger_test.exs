@@ -313,7 +313,7 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
       assert {true, _event} = call("ticket_record", %{"type" => "step.completed", "payload" => code}, session(ctx, linear_client: linear))
 
       assert_receive {:updated, %{id: "comment-workpad", body: body}}, 5_000
-      assert body =~ "- [x] Code: passed"
+      assert body =~ "- [x] Write the code: passed"
     end
 
     test "the agent's workpad write waits for a projection in flight, keeps its Notes and carries the current Plan", ctx do

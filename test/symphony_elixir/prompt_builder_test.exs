@@ -895,13 +895,6 @@ defmodule SymphonyElixir.PromptBuilderTest do
     assert flat =~ "where it doesn't (`Table`, `NavigationSplitView`, `Form`), say so in the workpad and leave the sight check to QA"
 
     assert flat =~
-             "3. Before planning, read every prior QA report and the workpad's superseded attempts, and list the findings by class (clipped, truncated, mechanism broken, state missing)"
-
-    assert flat =~ "If the same class fails for the second time on this ticket, do not push a third attempt of the same kind."
-    assert flat =~ "Ask the person with `linear_request_human_action`: the finding history in `why`"
-    assert flat =~ "(for a layout, two layouts to choose from), and stop."
-
-    assert flat =~
              "Viewports (see `Visual work`) for the Director's `macos_app`: laptop 1440×900 pt `functional`, desktop 2560×1440 pt `optimize`."
   end
 
@@ -1291,7 +1284,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
   describe "the ticket tools paragraph" do
     @repo_workflow Path.expand("../../WORKFLOW.md", __DIR__)
-    # The checks the step list runs: an implementation prompt that walks it names none of them.
+    # The checks the step list runs: no prompt names one of them.
     @check_commands ["mix format", "mix compile", "mix specs.check", "mix credo", "mix test", "mix cover.changed", "swift build", "swift test"]
 
     defp tools_prompt(opts) do
@@ -1300,9 +1293,9 @@ defmodule SymphonyElixir.PromptBuilderTest do
       PromptBuilder.build_prompt(issue, [workflow: workflow, prompt_mode: :issue, agent_kind: "claude"] ++ opts)
     end
 
-    defp repo_prompt(run_kind) do
+    defp repo_prompt(run_kind, extra \\ []) do
       {:ok, workflow} = Workflow.load(@repo_workflow)
-      opts = [workflow: workflow, prompt_mode: :issue, agent_kind: "claude", run_kind: run_kind]
+      opts = [workflow: workflow, prompt_mode: :issue, agent_kind: "claude", run_kind: run_kind] ++ extra
       PromptBuilder.build_prompt(WorkflowPreview.sample_issue(), opts)
     end
 
@@ -1333,8 +1326,9 @@ defmodule SymphonyElixir.PromptBuilderTest do
     test "the run comes from the dispatch's profile, and only a run walking a step list is told the list runs the checks" do
       assert tools_prompt(run_profile: %{kind: :implementation}) =~ "Body for TOOLS-1 (implementation, true)"
       assert tools_prompt(run_profile: %{kind: :implementation}) =~ "This run follows a step list: Symphony runs its build, checks and tests itself"
-      assert tools_prompt(run_kind: :rework) =~ "Body for TOOLS-1 (rework, false)"
-      refute tools_prompt(run_kind: :rework) =~ "This run follows a step list"
+      assert tools_prompt(run_kind: :rework) =~ "Body for TOOLS-1 (rework, true)"
+      assert tools_prompt(run_kind: :ci_fix) =~ "Body for TOOLS-1 (ci_fix, false)"
+      refute tools_prompt(run_kind: :ci_fix) =~ "This run follows a step list"
       assert tools_prompt(run_kind: "implementation", step_runner: false) =~ "(implementation, false)"
       assert tools_prompt([]) =~ "Body for TOOLS-1 (, false)"
       assert tools_prompt([]) =~ "- A run records `step.completed` for each delegated step"
@@ -1359,10 +1353,14 @@ defmodule SymphonyElixir.PromptBuilderTest do
       refute prompt =~ "Ticket tools:"
     end
 
-    test "an implementation prompt that walks the step list names no check command; a rework prompt still runs its checks" do
-      implementation = repo_prompt("implementation")
+    test "no prompt of any kind names a check command, with a step list or without one" do
+      for kind <- RunKind.names(), extra <- [[], [step_runner: true], [step_runner: false]], command <- @check_commands do
+        refute repo_prompt(kind, extra) =~ command, "the #{kind} prompt (#{inspect(extra)}) names #{command}"
+      end
+    end
 
-      for command <- @check_commands, do: refute(implementation =~ command, "the implementation prompt names #{command}")
+    test "implementation and rework leave the checks to their step list" do
+      implementation = repo_prompt("implementation")
 
       assert implementation =~ "Leave the checks to the step list."
       assert implementation =~ "The `handoff` step pushes."
@@ -1370,10 +1368,20 @@ defmodule SymphonyElixir.PromptBuilderTest do
       assert implementation =~ "It records each proof as an `evidence` event with `proof` (the step and the test) on the ticket's history and leaves the description as it is."
 
       rework = repo_prompt("rework")
-      assert rework =~ "`mix format --check-formatted`"
-      assert rework =~ "Targeted pre-push checks:"
+      assert rework =~ "Leave the checks to the step list."
+      assert rework =~ "The `findings` step ran before this turn"
       assert rework =~ "Read the open findings first with `ticket_events` and `open_findings: true`"
       assert rework =~ "Record each finding you fix with `ticket_record` as `finding.resolved`"
+      assert rework =~ "when the step list reaches its `handoff` step"
+      refute rework =~ "do not push a third attempt"
+    end
+
+    test "a run with no step list still reads the open findings and leaves the slow checks to CI" do
+      rework = repo_prompt("rework", step_runner: false)
+
+      assert rework =~ "Before planning, read the open findings with `ticket_events` and `open_findings: true`"
+      assert rework =~ "a run with no step list runs the test it is\n  fixing and the push check"
+      refute rework =~ "The `findings` step ran before this turn"
     end
   end
 end

@@ -2355,8 +2355,8 @@ defmodule SymphonyElixir.Config.Schema do
     step model is `SymphonyElixir.TicketEvents.Types`'s.
 
     A kind the file doesn't set follows its default list (`default_steps/1`): the five steps of
-    decision 2 for `implementation` (`code`, `build`, `checks`, `tests`, `handoff`), none for every
-    other kind. A step list is refused at load, naming the step, when a step's `on_fail` names a step
+    decision 2 for `implementation` (`code`, `build`, `checks`, `tests`, `handoff`), the same with
+    `findings` before them for `rework`, none for every other kind. A step list is refused at load, naming the step, when a step's `on_fail` names a step
     not in the list, when failures can loop with no delegated step in the loop (the same commands
     would run again with nothing changed), and when a machine step has no command.
     """
@@ -2372,6 +2372,7 @@ defmodule SymphonyElixir.Config.Schema do
     # Every run kind `RunKind.classify/2` returns; the retired `close_out` never runs.
     @kinds RunKind.kinds() -- [:close_out]
     @kind_names Map.new(@kinds, &{Atom.to_string(&1), &1})
+    @findings_command "symphony:findings"
 
     defmodule Step do
       @moduledoc """
@@ -2646,6 +2647,13 @@ defmodule SymphonyElixir.Config.Schema do
     end
 
     @doc """
+    The machine step command Symphony runs itself rather than in a shell: it reads the open findings
+    by class from the ticket's ledger (`SymphonyElixir.PhaseSteps.Findings`).
+    """
+    @spec findings_command() :: String.t()
+    def findings_command, do: @findings_command
+
+    @doc """
     The steps a run of `kind` follows: the file's `phases.<kind>.steps`, else the kind's default
     list (`default_steps/1`).
     """
@@ -2663,21 +2671,36 @@ defmodule SymphonyElixir.Config.Schema do
     changed, `mix compile --warnings-as-errors` when Elixir files did), checks it (format, specs and
     credo on the changed files), tests it (the changed test files and `mix cover.changed`, plus
     `swift test` for the changed targets when `macos/` changed), each returning to `code` on
-    failure, then hands off (delegated). Every other kind has none: its run is one agent session.
+    failure, then hands off (delegated). `rework` reads the open findings first (`findings`, machine),
+    which pauses on a Question when a failure came back, then follows the same steps. Every other
+    kind has none: its run is one agent session.
 
     The changed files come from the environment the step runner gives a machine step:
     `SYMPHONY_CHANGED_ELIXIR_FILES`, `SYMPHONY_CHANGED_TEST_FILES` and
     `SYMPHONY_CHANGED_SWIFT_TEST_FILTER`.
     """
     @spec default_steps(RunKind.t()) :: [Step.t()]
-    def default_steps(:implementation) do
+    def default_steps(:implementation), do: default_list(default_implementation_steps())
+    def default_steps(:rework), do: default_list([default_findings_step() | default_implementation_steps()])
+    def default_steps(kind) when kind in @kinds, do: []
+
+    defp default_list(steps) do
       %Phase{}
-      |> Phase.changeset(%{"steps" => default_implementation_steps()})
+      |> Phase.changeset(%{"steps" => steps})
       |> apply_action!(:validate)
       |> Map.fetch!(:steps)
     end
 
-    def default_steps(kind) when kind in @kinds, do: []
+    defp default_findings_step do
+      %{
+        "id" => "findings",
+        "title" => "Read the open findings",
+        "mode" => "machine",
+        "command" => @findings_command,
+        "timeout_ms" => 60_000,
+        "on_fail" => "code"
+      }
+    end
 
     defp default_implementation_steps do
       [

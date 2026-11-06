@@ -43,6 +43,6 @@
     - all known callers of those functions, using grep/search results where applicable,
     - existing test coverage for the affected code,
     - estimated blast radius (`narrow`, `moderate`, or `wide`) with justification.
-    - new branches and error/edge paths introduced by the change, and the exact test that will exercise each. The repo enforces a 100% coverage threshold in CI; an unexercised branch will fail the CI `coverage report` job, so plan the test now{% if run.step_runner %} (the step list's tests step checks the changed modules' coverage){% else %} and check it before push with `mix cover.changed`{% endif %}. If a path is genuinely unreachable from tests (boundary I/O shim), call it out here and plan to extend `mix.exs` `test_coverage` `ignore_modules` rather than skipping the gate.
+    - new branches and error/edge paths introduced by the change, and the exact test that will exercise each. The repo enforces a 100% coverage threshold in CI; an unexercised branch will fail the CI `coverage report` job, so plan the test now{% if run.step_runner %} (the step list's tests step checks the changed modules' coverage){% endif %}. If a path is genuinely unreachable from tests (boundary I/O shim), call it out here and plan to extend `mix.exs` `test_coverage` `ignore_modules` rather than skipping the gate.
     - Do not write the first code edit until this analysis is recorded.
 11. Compact context and proceed to execution.

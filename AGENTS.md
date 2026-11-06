@@ -56,6 +56,12 @@ runs the whole suite in a fresh workspace) or Dialyzer locally;
 `make all` is an optional extra for changes to shared infrastructure (config schema, orchestrator
 core). A coverage gap CI reports is fixed like any other red check.
 
+In the Claude sandbox, build and test the Swift package (`macos/`) with
+`swift build --disable-sandbox --build-system native` and
+`swift test --disable-sandbox --build-system native`. `--disable-sandbox` skips SwiftPM's own
+`sandbox-exec`, which can't nest inside the agent sandbox; `--build-system native` keeps `TMPDIR` for
+the link step. Plain `swiftc` needs `-module-cache-path <workspace dir>`.
+
 To profile slow validation work before optimizing tests, use:
 
 ```bash

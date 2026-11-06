@@ -26,6 +26,11 @@ defmodule SymphonyElixir.PhaseSteps do
   - a step whose `when`, or every command's, does not match the changed files is `skipped`, with
     the reason.
 
+  One command is Symphony's own and runs in this process, not in a shell: the findings command
+  (`Phases.findings_command/0`, `SymphonyElixir.PhaseSteps.Findings`) keeps the open findings by class
+  as the step's output and, when a failure came back, ends the step `paused` on a Question before
+  any code is written. A step that runs only that holds on to the run's slot.
+
   A delegated or orchestrated step is an agent turn the agent runner starts
   (`SymphonyElixir.AgentRunner`): this module says which step comes next (`next/3`), what the turn's
   prompt says of its step (`prompt_section/3`), records the step's start (`record_turn_started/2`)
@@ -51,6 +56,7 @@ defmodule SymphonyElixir.PhaseSteps do
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.HumanActions.PlainWords
+  alias SymphonyElixir.PhaseSteps.Findings
   alias SymphonyElixir.Workpad.Projection
 
   @output_max_bytes 512 * 1024
@@ -240,8 +246,10 @@ defmodule SymphonyElixir.PhaseSteps do
     steps
     |> Enum.drop_while(&(&1.id != id))
     |> Enum.take_while(&machine?/1)
-    |> Enum.any?(&(skip_reason(&1, changes) == nil))
+    |> Enum.any?(&(skip_reason(&1, changes) == nil and shell_command?(&1, changes)))
   end
+
+  defp shell_command?(step, changes), do: Enum.any?(commands(step, changes), &(&1 != Phases.findings_command()))
 
   @doc """
   Runs the machine steps of `steps` from `step` on (see the moduledoc) and returns where the run
@@ -300,10 +308,10 @@ defmodule SymphonyElixir.PhaseSteps do
     deadline = DateTime.add(DateTime.utc_now(), step.timeout_ms, :millisecond)
 
     record(context, "step.started", Map.put(step_payload(step), :command, String.slice(Enum.join(commands, " && "), 0, @command_max)), [])
-    notify(context, {:started, step, deadline})
+    if shell_command?(step, context.changes), do: notify(context, {:started, step, deadline})
 
     result = run_commands(commands, context, step_env(context.changes), started_ms + step.timeout_ms, [])
-    notify(context, {:finished, step})
+    if shell_command?(step, context.changes), do: notify(context, {:finished, step})
 
     duration_ms = System.monotonic_time(:millisecond) - started_ms
     complete(result, step, context, attempt, duration_ms)
@@ -315,11 +323,31 @@ defmodule SymphonyElixir.PhaseSteps do
     output = [output, "$ ", command, "\n"]
     remaining_ms = max(deadline_ms - System.monotonic_time(:millisecond), 1)
 
-    case runner(context).(command, env, remaining_ms) do
+    case run_command(command, context, env, remaining_ms) do
       {:ok, {text, 0}} -> run_commands(rest, context, env, deadline_ms, [output, text])
+      {:ask, text, request} -> {{:ask, request}, [output, text]}
       {:ok, {text, status}} -> {:failed, [output, text, "\n(exit status #{status})\n"]}
       {:timeout, text} -> {:no_result, [output, text, "\n(stopped: no result before the step's timeout)\n"]}
       {:error, reason} -> {:failed, [output, "(could not run: #{inspect(reason)})\n"]}
+    end
+  end
+
+  defp run_command(command, context, env, timeout_ms) do
+    if command == Phases.findings_command() do
+      read_findings(context)
+    else
+      runner(context).(command, env, timeout_ms)
+    end
+  end
+
+  defp read_findings(context) do
+    with events when is_list(events) <- RunStore.list_ticket_events(context.issue_id, []) do
+      answered = Questions.answered({:ticket, context.repo_key, context.issue_id})
+
+      case Findings.read(events, answered) do
+        %{output: output, repeats: []} -> {:ok, {output, 0}}
+        %{output: output, repeats: repeats} -> {:ask, output, Findings.question(ticket_name(context), repeats)}
+      end
     end
   end
 
@@ -342,7 +370,10 @@ defmodule SymphonyElixir.PhaseSteps do
         {:again, output}
 
       :no_result ->
-        pause(step, context, output, timed, artifacts)
+        pause(question(step, context, output), step, context, output, timed, artifacts)
+
+      {:ask, request} ->
+        pause(request, step, context, output, timed, artifacts)
     end
   end
 
@@ -353,12 +384,13 @@ defmodule SymphonyElixir.PhaseSteps do
     end
   end
 
-  # At the no-result cap the step asks the person; a Question the store refuses fails the step to
-  # its `on_fail` instead, so the run never runs it a third time on its own.
-  defp pause(step, context, output, timed, artifacts) do
+  # At the no-result cap, or on a failure that came back, the step asks the person; a Question the
+  # store refuses fails the step to its `on_fail` instead, so the run never runs it a third time on
+  # its own.
+  defp pause(request, step, context, output, timed, artifacts) do
     ticket = {:ticket, context.repo_key, context.issue_id}
 
-    case Questions.ask(ticket, question(step, context, output),
+    case Questions.ask(ticket, request,
            asked_by: %{kind: :symphony, name: @asker_name, run_id: Map.get(context, :run_id)},
            step: step.id,
            asked_in: Map.get(context, :phase)
@@ -652,15 +684,16 @@ defmodule SymphonyElixir.PhaseSteps do
   end
 
   @doc """
-  What the answer to a machine step's no-result Question (`question/3`) says to do: go on past the
-  step (`:go_on`), run it again (`:again`), or, in the person's own words, hand them to the agent
-  step it returns to on failure (`:words`).
+  What the answer to a machine step's Question says to do. On a no-result Question (`question/3`):
+  go on past the step (`:go_on`), run it again (`:again`), or, in the person's own words, hand them
+  to the agent step it returns to on failure (`:words`). Every answer to the findings step's Question
+  (`Findings.question/2`) goes to that agent step (`:words`).
   """
   @spec machine_resume(Questions.question()) :: :go_on | :again | :words
   def machine_resume(%{answer: %{option: number}, options: options}) when is_integer(number) do
     case Enum.at(options, number - 1) do
       %{label: @go_on} -> :go_on
-      _again -> :again
+      _again -> if Findings.asked_here?(%{options: options}), do: :words, else: :again
     end
   end
 

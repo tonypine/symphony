@@ -26,7 +26,7 @@ In this repository, a QA pass of the Director has two environments: the committe
 {% else %}5.  Run validation/tests required for the scope.
     - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
-    - Run the cheap, targeted checks from `Command and output hygiene`, not the full suite: CI runs the full test suite, coverage and Dialyzer.
+    - Leave the full test suite, coverage and Dialyzer to CI (see `Command and output hygiene`).
     - For long-running validation, use long waits and sparse polling so progress-only terminal output does not create many tiny transcript events.
     - Keep terminal output fed back into the model small: preserve failing command, exit code, and the most relevant error lines; summarize successful or repetitive output instead of pasting complete logs.
     - You may make temporary local proof edits to validate assumptions (for example: tweak a local build input for `make`, or hardcode a UI account / response path) when this increases confidence.
@@ -37,10 +37,9 @@ In this repository, a QA pass of the Director has two environments: the committe
 {% if run.step_runner %}7.  The `handoff` step pushes. When the step list reaches it, the build, checks and tests passed on your changes.
     - `github_push_branch` skips repo hooks, so when the push changes an Elixir file it needs the result of `.githooks/pre-push --head` for the commit it pushes. Run that command in your shell after your last commit: it records the result in `tmp/push-check`. The tool refuses the push when the result is missing, is for another commit, or names a failed check; fix what it names, commit, run the command again and push. Never use `git push --no-verify`.
     - After committing and before pushing, run `git diff origin/main..HEAD` and review it for stray debug statements, hardcoded test values, temporary proof edits, unintended files outside the ticket's scope, and incomplete hunks. Only push after this review is clean, and record `diff reviewed — clean` and the step list's results in the workpad.
-{% else %}7.  Before every `git push` attempt, run the targeted pre-push checks for your scope and confirm they pass; if one fails, address it and rerun until green.
-    - Targeted pre-push checks: `mix format --check-formatted`, `mix compile --warnings-as-errors`, `mix specs.check`, `mix credo --strict <changed files>`, `mix cover.changed`, `mix settings.ui_coverage`, and every new or changed test file plus the test files of the modules you changed.
-    - Do not run `make all`, `make check`, `make coverage`, the full `mix test`, `mix test --stale` or Dialyzer before a push (see `Command and output hygiene` for the optional `make all` on shared infrastructure). CI is the gate for the full suite, the 100% coverage report and Dialyzer.
-    - `git push` runs the repo's `.githooks/pre-push` hook, which reruns the format, compile and credo checks on the Elixir files the push changes and rejects the push when one fails. Never use `git push --no-verify`. When the hook fails, fix the issue it names (it prints the fixing command, such as `mix format`), commit, and push again.
+{% else %}7.  Before every `git push` attempt, confirm the push check passes; if it fails, address it and rerun until green.
+    - CI is the gate for the full suite, the 100% coverage report and Dialyzer; they never run locally.
+    - `git push` runs the repo's `.githooks/pre-push` hook, which reruns the format, compile and credo checks on the Elixir files the push changes and rejects the push when one fails. Never use `git push --no-verify`. When the hook fails, fix the issue it names (it prints the fixing command), commit, and push again.
     - `github_push_branch` skips repo hooks, so when the push changes an Elixir file it needs the result of `.githooks/pre-push --head` for the commit it pushes. Run that command in your shell after your last commit: it runs the same checks in your sandbox and records the result in `tmp/push-check`. The tool refuses the push when the result is missing, is for another commit, or names a failed check; fix what it names, commit, run the command again and push. A push that changes no Elixir file needs no result.
     - If a prior push's CI checks are still failing, follow the `CI failure triage protocol` before re-pushing. A CI coverage gap is a red check like any other: add tests that exercise the missing branches, or extend `mix.exs` `test_coverage` `ignore_modules` only for genuinely untestable I/O shims.
     - After staging/committing changes and before pushing, run `git diff origin/main..HEAD` to review committed-only diff for:
@@ -48,7 +47,7 @@ In this repository, a QA pass of the Director has two environments: the committe
       - unintended file changes outside the ticket's scope,
       - incomplete hunks, half-finished removals, or reverted-only placeholders.
     - Only push after this review is clean.
-    - Record the targeted checks you ran with their results (for example `format, compile, specs, credo — clean; test/foo_test.exs test/bar_test.exs — 42 tests, 0 failures`) and `diff reviewed — clean` in the workpad before each push.
+    - Record the push check's result and `diff reviewed — clean` in the workpad before each push.
 {% endif %}8.  Attach PR URL to the issue (prefer attachment; use the workpad comment only if attachment is unavailable).
     - Ensure the GitHub PR has label `symphony` (add it if missing).
     - Ensure the PR body is reviewer-facing and follows `.github/pull_request_template.md`:

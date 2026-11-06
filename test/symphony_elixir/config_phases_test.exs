@@ -60,6 +60,16 @@ defmodule SymphonyElixir.ConfigPhasesTest do
       assert Enum.all?(steps, &(&1.no_result_limit == 2))
     end
 
+    test "rework reads the open findings first, then follows the implementation list" do
+      assert [findings | rest] = Phases.default_steps(:rework)
+      assert %Step{id: "findings", mode: "machine", on_fail: "code", timeout_ms: 60_000} = findings
+
+      assert [%Command{run: "symphony:findings", when: "always"}] = findings.command
+      assert Phases.findings_command() == "symphony:findings"
+      assert Enum.map(rest, & &1.id) == ["code", "build", "checks", "tests", "handoff"]
+      assert rest == Phases.default_steps(:implementation)
+    end
+
     test "every other kind has none, and a kind the file doesn't set keeps its default" do
       assert {:ok, system} = parse(%{"rework" => %{"steps" => [code()]}})
 

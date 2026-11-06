@@ -295,11 +295,30 @@ public struct PhaseSteps: Equatable {
 }
 
 /// The default step lists, as `Config.Schema.Phases.default_steps/1` gives them (decision 2 of TP-1085):
-/// `implementation` writes, builds, checks, tests and hands off; every other kind has none.
+/// `implementation` writes, builds, checks, tests and hands off; `rework` reads the open findings first; every
+/// other kind has none.
 public enum PhaseDefaults {
     public static func steps(for kind: PhaseKind) -> [PhaseStep] {
-        guard kind == .implementation else { return [] }
-        return [
+        switch kind {
+        case .implementation:
+            return implementation
+        case .rework:
+            let findings = PhaseStep(
+                stepID: "findings",
+                title: "Read the open findings",
+                mode: .machine,
+                commands: [StepCommand(run: "symphony:findings")],
+                timeoutMs: 60_000,
+                onFail: "code"
+            )
+            return [findings] + implementation
+        default:
+            return []
+        }
+    }
+
+    private static var implementation: [PhaseStep] {
+        [
             PhaseStep(stepID: "code", title: "Write the code", mode: .delegated),
             PhaseStep(
                 stepID: "build",

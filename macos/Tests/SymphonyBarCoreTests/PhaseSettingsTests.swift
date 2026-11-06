@@ -222,6 +222,21 @@ final class PhaseSettingsTests: XCTestCase {
         XCTAssertEqual(settings[.rework], .defaults(for: .rework))
     }
 
+    func testTheReworkDefaultReadsTheFindingsFirst() {
+        let steps = PhaseDefaults.steps(for: .rework)
+        XCTAssertEqual(steps.map(\.stepID), ["findings", "code", "build", "checks", "tests", "handoff"])
+        XCTAssertEqual(steps[0], PhaseStep(
+            stepID: "findings",
+            title: "Read the open findings",
+            mode: .machine,
+            commands: [StepCommand(run: "symphony:findings")],
+            timeoutMs: 60_000,
+            onFail: "code"
+        ))
+        XCTAssertEqual(Array(steps.dropFirst()), defaults)
+        XCTAssertEqual(PhaseDefaults.steps(for: .qa), [])
+    }
+
     func testReadsAKeepAndAStripPrompt() throws {
         let yaml = """
             phases:

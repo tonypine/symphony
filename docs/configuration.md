@@ -3308,7 +3308,7 @@ _Symphony posts a new update when this list changes · list `b1712c40`_
 ### `phases`
 
 The list of steps a run of each kind follows: for an implementation run, writing the code, building
-it, checking it, testing it and handing it off. Each kind under `phases` (a run kind:
+it, checking it, testing it and handing it off; for a rework run, reading the open findings first. Each kind under `phases` (a run kind:
 `implementation`, `rework`, `ci_fix`, `review_feedback`, `qa`, `code_review`, `landing`,
 `breakdown`, `epic_review`) holds one setting, its `steps` list. A kind the file doesn't set follows
 its default list; a `symphony.yml` with no `phases` key follows every default. `symphony workflow
@@ -3386,6 +3386,32 @@ phases:
         mode: delegated
 ```
 
+The default `rework` list is the same steps with `findings` before them:
+
+```yaml
+phases:
+  rework:
+    steps:
+      - id: findings
+        title: Read the open findings
+        mode: machine
+        command: symphony:findings
+        timeout_ms: 60000
+        on_fail: code
+      # code, build, checks, tests and handoff, as in the implementation list
+```
+
+`symphony:findings` is a command Symphony runs itself, not in a shell, while the run keeps its slot.
+It keeps the open findings by class from the ticket's history as the step's output. When QA failed
+the ticket on the same class in two QA runs (for a finding QA left `unclassified`, on the same step
+at the same viewport), the last of those findings is still open and no answer to this question came
+since, the step ends `paused` on a Question before any code is written: it lists both findings and
+offers "Try another approach" or "Keep this approach". Every answer, an option or the person's own
+words, goes to the `code` step, in its prompt. A later QA failure of the same class asks again.
+
+Agents run none of the commands in these lists: the prompts name no check command, and a run with no
+step list leaves them to CI, apart from the test it is fixing and the push check.
+
 Every other kind has no default list: its run is one agent session. A kind set to `steps: []`
 follows no list either.
 
@@ -3431,7 +3457,9 @@ step of another mode, an `answer` field with a malformed name or an unknown type
 the list it last loaded until the edit is fixed (see `symphony check`).
 
 **Upgrading.** The key is new and nothing is renamed or removed: a `symphony.yml` without `phases`
-loads as before and follows the default list, so no migration is needed. A file that sets `phases`
+loads as before and follows the default lists, so no migration is needed; a rework run follows the
+step list from the build that adds its default, and `phases: {rework: {steps: []}}` keeps it one
+agent session. A file that sets `phases`
 is refused by a build older than this one (an unknown key), so set it only once Symphony runs a
 build that has it. The same holds for a step's `answer`, which a build older than TP-1394 refuses.
 

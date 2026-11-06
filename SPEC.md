@@ -2797,7 +2797,10 @@ commands Symphony runs, `orchestrated` steps agent turns Symphony starts from a 
 run to the step its `on_fail` names, with its output; a step that ends with no result
 `no_result_limit` times in a row (default 2) pauses the run on a Question. The implementation
 default is `code` (delegated), `build`, `checks` and `tests` (machine, each returning to `code` on
-failure) and `handoff` (delegated); every other kind has none and its run is one agent session.
+failure) and `handoff` (delegated). The rework default puts `findings` (machine) before them: it
+keeps the open findings by class as its output and, when the same class failed QA in two QA runs,
+ends `paused` on a Question listing both findings before any code is written. Every other kind has
+none and its run is one agent session.
 The list is validated at load: an `on_fail` must name a step in the list, a loop of failures must
 pass through a delegated step, and a machine step must have a command. `symphony workflow preview`
 prints the list a run kind follows above its prompt.
