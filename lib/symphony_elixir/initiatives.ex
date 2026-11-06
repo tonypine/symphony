@@ -20,6 +20,7 @@ defmodule SymphonyElixir.Initiatives do
   require Logger
 
   alias SymphonyElixir.{Config, Inbox}
+  alias SymphonyElixir.Inbox.FromRecord
   alias SymphonyElixir.Initiatives.Initiative
   alias SymphonyElixir.Linear.{Client, Usage}
 
@@ -97,7 +98,7 @@ defmodule SymphonyElixir.Initiatives do
   """
   @spec list(map(), GenServer.name(), GenServer.name(), (String.t() -> term())) :: [map()]
   def list(snapshot, server \\ __MODULE__, inbox \\ Inbox, settings_fun \\ &repo_settings/1) when is_map(snapshot) do
-    running = snapshot |> Map.get(:running, []) |> MapSet.new(& &1.issue_id)
+    running = FromRecord.working_ids(snapshot)
     you = snapshot |> Inbox.items(inbox) |> MapSet.new(& &1.issue_id)
 
     server

@@ -280,6 +280,11 @@ defmodule SymphonyElixir.InitiativesTest do
       snapshot = %{running: [%{issue_id: "id-BIL-2"}]}
 
       assert [%{counts: %{"working" => 1, "queued" => 1}}] = Initiatives.list(snapshot, name, {:test, make_ref()}, fn "billing" -> settings() end)
+
+      # A run paused on a Question is not working: it waits for the answer.
+      paused = %{running: [%{issue_id: "id-BIL-2", step: %{waiting: "answer"}}]}
+      assert [%{counts: %{"working" => 0}}] = Initiatives.list(paused, name, {:test, make_ref()}, fn "billing" -> settings() end)
+
       assert [%{counts: %{"working" => 0}}] = Initiatives.list(%{}, name, {:test, make_ref()})
       assert Initiatives.list(%{}, {:test, make_ref()}) == []
       assert Initiatives.read?(Module.concat(__MODULE__, :NotStarted))
