@@ -76,6 +76,7 @@ defmodule SymphonyElixirWeb.Presenter do
           phases: StateMachine.phases(Config.settings!()),
           counts: %{
             running: length(snapshot.running),
+            between_turns: Enum.count(snapshot.running, &between_turns?/1),
             watching: length(Map.get(snapshot, :watching, [])),
             conflicts: length(Map.get(snapshot, :conflicts, [])),
             retrying: length(snapshot.retrying),
@@ -1052,6 +1053,7 @@ defmodule SymphonyElixirWeb.Presenter do
       linear_wait_until: entry |> Map.get(:linear_wait_until) |> iso8601(),
       pending_tool: entry |> Map.get(:pending_tool) |> pending_tool_payload(),
       step: entry |> Map.get(:step) |> step_payload(),
+      between_turns: between_turns?(entry),
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(Map.get(entry, :last_event_at) || entry.last_codex_timestamp),
       forced: Map.get(entry, :forced, false),
@@ -1846,6 +1848,11 @@ defmodule SymphonyElixirWeb.Presenter do
   defp repo_key_matches?(entry, repo_key), do: Map.get(entry, :repo_key) == repo_key
 
   defp current_repo_key, do: Config.repo_key_or_nil()
+
+  # A run holding no agent session and running nothing until its next turn: Symphony can stop with
+  # it there, and a run on a machine step or one ending finishes by itself first.
+  defp between_turns?(%{step: %{waiting: waiting}}) when waiting in ["slot", "pause", "answer"], do: true
+  defp between_turns?(_entry), do: false
 
   # A run waiting out a Linear rate limit or outage has no new agent message to show.
   defp running_message(%{linear_wait_until: %DateTime{}}), do: "waiting for Linear"

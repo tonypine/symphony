@@ -98,6 +98,47 @@ defmodule SymphonyElixir.OrchestratorTest do
     assert %{step: %{waiting: nil}} = state.running["walk-1"]
   end
 
+  describe "an update's pause and a run between turns" do
+    setup do
+      :ok = RunStore.clear()
+      :ok
+    end
+
+    defp update_waits(issue_id) do
+      for %{type: "note", payload: %{signal: "update_wait"} = payload} <- RunStore.list_ticket_events(issue_id, []), do: payload
+    end
+
+    test "the turn waits with no session, and the ticket says what holds it, once per hold" do
+      {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("updating to v0.0.1.856"))
+      state = orchestrator_state(1) |> run(issue("walk-1", "TP-1", "In Progress"), session_id: "sess-1") |> step(machine_notice()) |> step(turn_wanted())
+
+      refute_received {:run_step_turn, "walk-1"}
+      assert %{session_id: nil, step: %{waiting: "pause"}} = running_of(state, "walk-1")
+
+      assert [%{text: text, signal_details: %{version: "0.0.1.856", step: "code"}}] = update_waits("walk-1")
+      assert text =~ "Its next agent turn waits for the update"
+
+      # Every later cycle holds the same turn: one signal for the hold.
+      {:noreply, state} = Orchestrator.handle_info({:ticket_record, "default", "walk-1", :changed, [:pause]}, state)
+      assert %{step: %{waiting: "pause"}} = running_of(state, "walk-1")
+      assert [_one] = update_waits("walk-1")
+
+      # The update called off, the run goes on.
+      {:ok, nil} = Pauses.clear(:symphony)
+      {:noreply, state} = Orchestrator.handle_info({:ticket_record, "default", "walk-1", :changed, [:pause]}, state)
+      assert_received {:run_step_turn, "walk-1"}
+      assert %{step: %{waiting: nil}} = state.running["walk-1"]
+    end
+
+    test "a pause of the Director's records no update on the ticket" do
+      {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("deploy window"))
+      state = orchestrator_state(1) |> run(issue("walk-1", "TP-1", "In Progress")) |> step(machine_notice()) |> step(turn_wanted())
+
+      assert %{step: %{waiting: "pause"}} = running_of(state, "walk-1")
+      assert update_waits("walk-1") == []
+    end
+  end
+
   test "neither watchdog stops a run on a machine step or waiting for its turn" do
     long_ago = DateTime.add(DateTime.utc_now(), -3_600, :second)
     building = {:machine, Map.merge(@machine, %{started_at: long_ago, deadline: DateTime.add(DateTime.utc_now(), 600, :second)})}

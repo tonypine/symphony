@@ -5288,7 +5288,10 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp grant_step_turn(state, issue_id, entry, true), do: put_running_entry(state, issue_id, put_in(entry, [:step, :waiting], :pause))
+  defp grant_step_turn(state, issue_id, entry, true) do
+    record_update_wait(state, issue_id, entry)
+    put_running_entry(state, issue_id, put_in(entry, [:step, :waiting], :pause))
+  end
 
   defp grant_step_turn(state, issue_id, entry, false) do
     if forced_entry?(entry) or (available_slots(state) > 0 and state_slots_available?(entry.issue, state.running)) do
@@ -5298,6 +5301,18 @@ defmodule SymphonyElixir.Orchestrator do
       put_running_entry(state, issue_id, Map.merge(entry, %{step: step, last_event_at: DateTime.utc_now()}))
     else
       put_running_entry(state, issue_id, put_in(entry, [:step, :waiting], :slot))
+    end
+  end
+
+  # A run an update's pause starts holding says so on its ticket, once per hold: it has no session
+  # while the update drains, and the Director would show only a long run. The drain does not wait
+  # for it (`counts.between_turns` of `/api/v1/state`), and its next run starts its list again.
+  defp record_update_wait(_state, _issue_id, %{step: %{waiting: :pause}}), do: :ok
+
+  defp record_update_wait(state, issue_id, %{step: step} = entry) do
+    case for(%{kind: :build, waits_on: %{version: version}} <- Pauses.dispatch_reasons(symphony_pause()), do: version) do
+      [version | _rest] -> record_signal(running_entry_repo_key(entry) || state.repo_key, issue_id, "update_wait", %{version: version, step: step.id})
+      [] -> :ok
     end
   end
 

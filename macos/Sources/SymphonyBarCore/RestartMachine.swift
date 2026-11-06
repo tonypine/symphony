@@ -2,7 +2,8 @@ import Foundation
 
 /// The steps of a graceful restart, kept free of AppKit so they can be unit tested: check symphony.yml, pause
 /// dispatch, wait until no agent run is active, stop, start, wait until Symphony answers, then resume dispatch
-/// if the restart paused it. Events go in; the effects the app must carry out come back. An update drains the same
+/// if the restart paused it. A run between agent turns isn't active: its next turn waits for the pause, so waiting
+/// for it would never end, and its ticket's next run takes it up after the restart. Events go in; the effects the app must carry out come back. An update drains the same
 /// way but stops there, so the app can swap itself for the new version. The update never runs the new version's
 /// Symphony: running it deletes older versions' unpacked releases, including the one the running Symphony loads
 /// its modules from, so the new one only runs once the relaunched app starts it.
@@ -263,11 +264,11 @@ public struct RestartMachine: Equatable {
         if case let .state(snapshot) = poll {
             if snapshot.pause != nil {
                 // A poll that shows dispatch paused was taken after the pause, so its count can't grow any more.
-                guard snapshot.running > 0 else {
+                guard snapshot.activeRuns > 0 else {
                     enter(.stopping, now: now)
                     return [.stop]
                 }
-                phase = .waitingForRuns(running: snapshot.running)
+                phase = .waitingForRuns(running: snapshot.activeRuns)
                 if purpose == .automaticUpdate, now.timeIntervalSince(phaseStart) >= runsTimeout {
                     return postpone(now: now)
                 }
