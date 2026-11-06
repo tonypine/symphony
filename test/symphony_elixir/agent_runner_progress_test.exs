@@ -529,7 +529,11 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       next_run()
       withdraw_open_questions()
       :ok = PrWatchSupport.put_watch!("default", "issue-progress", phase: :in_progress, head_sha: read_head, identifier: "TP-337")
-      runner_opts = [workspace_committer: fn _workspace, nil -> committed end, workspace_pusher: fn _workspace, nil, _source_repo -> pushed end]
+      runner_opts = [
+        workspace_committer: fn _workspace, nil -> committed end,
+        workspace_pusher: fn _workspace, nil, _source_repo -> pushed end
+      ]
+
       capture_log(fn -> run_issue!("In Progress", heads: ["sha-same"], pr_url: nil, max_turns: 5, runner_opts: runner_opts) end)
       TicketState.normalize(RunStore.get_ticket_state("issue-progress"))
     end
