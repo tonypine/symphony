@@ -417,7 +417,6 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp with_record_repo_key(entry, _record), do: entry
 
-  # Whether a Question is still waiting for an answer on the ticket, as its record holds them.
   # The line Symphony's pause skips dispatch with, as the state payload's `pause` reads it; nil
   # when no reason stops dispatch.
   defp symphony_pause_reason do
