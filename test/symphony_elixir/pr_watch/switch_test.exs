@@ -2031,7 +2031,8 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     end
 
     defp code_review_verdicts(issue_id) do
-      for %{kind: "code_review"} = verdict <- issue_id |> RunStore.get_ticket_state() |> TicketState.verdicts(), do: {verdict.outcome, verdict.head_sha}
+      verdicts = issue_id |> RunStore.get_ticket_state() |> TicketState.verdicts()
+      for %{kind: "code_review"} = verdict <- verdicts, do: {verdict.outcome, verdict.head_sha}
     end
 
     test "TP-1204: an approval waiting in Code Review survives the upkeep's update, and is not reviewed again" do

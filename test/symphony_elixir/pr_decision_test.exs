@@ -184,7 +184,9 @@ defmodule SymphonyElixir.PrDecisionTest do
     test "a changes verdict standing in Rework spends no CI work: R26 dispatches whatever CI says" do
       changes = [phase: :rework, review: :changes_requested]
 
-      for ci <- @not_green ++ [[ci: :green], [ci: :none], [ci: :red, rerun_done: true], [ci: :red, red_attempts: 10, max_red_attempts: 10]],
+      exhausted = [ci: :red, red_attempts: 10, max_red_attempts: 10]
+
+      for ci <- @not_green ++ [[ci: :green], [ci: :none], [ci: :red, rerun_done: true], exhausted],
           mergeable <- [:clean, :behind, :unstable, :blocked, :unknown] do
         facts = changes ++ [mergeable: mergeable] ++ ci
         assert %Action{rule: "R26", kind: :dispatch} = decide(facts), inspect(facts)
