@@ -220,7 +220,7 @@ final class InboxTests: XCTestCase {
     }
 
     func testTheBadgeTheMenuTheTileAndTheInboxAgreeOnTheCount() throws {
-        for name in ["inbox", "inbox-empty", "inbox-decision", "inbox-paused"] {
+        for name in ["inbox", "inbox-empty", "inbox-decision", "inbox-paused", "inbox-unasked-choices"] {
             let inbox = try payload(name)
             let stateData = try Data(contentsOf: fixture(name).appendingPathComponent("state.json"))
             let state = try XCTUnwrap(OverviewState.decode(stateData))
@@ -238,6 +238,23 @@ final class InboxTests: XCTestCase {
             XCTAssertEqual(StatusMenu.waitingMenu(status).tickets.map(\.identifier), Array(inbox.items.map(\.identifier).prefix(5)), name)
         }
         XCTAssertTrue(InboxList(items: try payload("inbox-empty").items).isEmpty)
+    }
+
+    func testTheUnaskedChoicesFixtureShowsTheWarningOnItsPlanAndTheApproveSheet() throws {
+        let inbox = try payload("inbox-unasked-choices")
+        let plan = try XCTUnwrap(inbox.items.first { $0.identifier == "SHOP-330" })
+        let warning = try XCTUnwrap(plan.review.unaskedChoicesWarning)
+        XCTAssertEqual(plan.review.unaskedChoices.count, 4)
+        XCTAssertTrue(warning.hasPrefix("4 choices not asked: the planning run reached its limit of questions."))
+
+        let stays = ConsequenceSheet(move: .approvePlan, item: plan).stays
+        XCTAssertTrue(stays.hasPrefix(warning))
+        for title in plan.review.unaskedChoices {
+            XCTAssertTrue(warning.contains(title), title)
+        }
+        // Only the plan carries it, and the plain `inbox` fixture stays without.
+        XCTAssertEqual(inbox.items.filter { $0.review.unaskedChoicesWarning != nil }.map(\.identifier), ["SHOP-330"])
+        XCTAssertTrue(try payload("inbox").items.allSatisfy { $0.review.unaskedChoicesWarning == nil })
     }
 
     func testTheMenuAndItsNotificationCallARequestWithOptionsADecisionAsTheInboxDoes() throws {

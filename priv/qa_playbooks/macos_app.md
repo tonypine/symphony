@@ -265,6 +265,15 @@ GitHub or Linear in QA:
   and clicking the `.png` one reveals it in Finder instead of picking the option. Open TP-892
   from the Inbox: its **Your decision** card shows the same `index.html` link. Walk it at
   1440×900, light and dark: the link stays readable and nothing on the cards is clipped.
+- **Unasked choices on a plan (TP-1197):** pass
+  `macos/Tests/Fixtures/director-app/inbox-unasked-choices` as `api_fixtures`. It is `inbox` with
+  four choices SHOP-330's plan run could not ask, each with a long title. In the Inbox, SHOP-330's
+  page shows, above its questions, an orange triangle and "4 choices not asked: the planning run
+  reached its limit of questions. Not asked: …" with all four titles; the triangle is orange and
+  the text stays the primary colour. Choose Approve Plan…: the sheet says the same, then "The plan
+  stays as written: its 2 open questions are not answered." The other Inbox items carry no such
+  line. Walk it at 1440×900, light and dark: every title is readable and nothing on the page or the
+  sheet is clipped.
 - **Ticket timeline (TP-1193):** pass `macos/Tests/Fixtures/director-app/ticket-ledger` as
   `api_fixtures` and open SHOP-410 from Tickets (Code Review & QA). Its clock is 2026-10-18 11:20
   UTC. It serves the ticket's events feed and no live channel, so the page reads the feed after
