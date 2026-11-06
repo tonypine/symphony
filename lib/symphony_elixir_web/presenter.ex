@@ -348,7 +348,9 @@ defmodule SymphonyElixirWeb.Presenter do
       record ->
         payload = issue_payload_body(issue_identifier, nil, nil, nil, nil)
 
-        {:ok, record_payload(%{payload | repo_key: record.repo_key, issue_id: record.issue_id}, record, false, snapshot)}
+        payload = %{payload | repo_key: record.repo_key, issue_id: record.issue_id}
+
+        {:ok, record_payload(payload, record, false, snapshot)}
     end
   end
 

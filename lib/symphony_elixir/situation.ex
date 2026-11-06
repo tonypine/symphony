@@ -70,7 +70,14 @@ defmodule SymphonyElixir.Situation do
           waits_on: map() | nil,
           and_more: non_neg_integer(),
           step: %{id: String.t(), title: String.t() | nil} | nil,
-          run: %{id: String.t() | nil, kind: String.t() | nil, number: non_neg_integer() | nil, label: String.t()} | nil,
+          run:
+            %{
+              id: String.t() | nil,
+              kind: String.t() | nil,
+              number: non_neg_integer() | nil,
+              label: String.t()
+            }
+            | nil,
           retry: %{try: pos_integer(), of: pos_integer() | nil, at: DateTime.t() | nil} | nil
         }
 
@@ -213,7 +220,8 @@ defmodule SymphonyElixir.Situation do
   @doc "A time as a situation's sentences say it: the hour and minute on this host's clock."
   @spec clock(DateTime.t()) :: String.t()
   def clock(%DateTime{} = at) do
-    {_date, {hour, minute, _second}} = at |> DateTime.to_naive() |> NaiveDateTime.to_erl() |> :calendar.universal_time_to_local_time()
+    universal = at |> DateTime.to_naive() |> NaiveDateTime.to_erl()
+    {_date, {hour, minute, _second}} = :calendar.universal_time_to_local_time(universal)
     "#{pad(hour)}:#{pad(minute)}"
   end
 
@@ -388,7 +396,18 @@ defmodule SymphonyElixir.Situation do
   end
 
   defp base(kind, word, cause, next, since, waits_on \\ nil) do
-    %{kind: kind, word: word, cause: cause, next: next, since: since, waits_on: waits_on, and_more: 0, step: nil, run: nil, retry: nil}
+    %{
+      kind: kind,
+      word: word,
+      cause: cause,
+      next: next,
+      since: since,
+      waits_on: waits_on,
+      and_more: 0,
+      step: nil,
+      run: nil,
+      retry: nil
+    }
   end
 
   # The pause's reasons the situation does not already name, and a cause within what the event keeps.

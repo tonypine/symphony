@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.SituationTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.{Pauses, Questions, Situation, TicketEvents, TicketPullRequest, TicketState, TransitionGuard}
+  alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.TicketEvents.{Event, Types}
 
   @repo "default"
@@ -65,12 +65,13 @@ defmodule SymphonyElixir.SituationTest do
   defp arrange("retrying"), do: %{retrying: %{@id => %{attempt: 1, error: "the agent hit its usage limit", delay_type: :usage_limit, due_at: @later}}}
 
   defp arrange("blocked_by_ticket") do
-    {:ok, _pause} = Pauses.add_reason({:ticket, @repo, @id}, Pauses.ticket_reason(:dependency, "TP-9"), at: @at)
+    {:ok, _pause} = Pauses.set({:ticket, @repo, @id}, Pauses.ticket_reason(:dependency, "TP-9"), at: @at)
     %{}
   end
 
   defp arrange("paused_by_rule") do
-    {:ok, _pause} = Pauses.add_reason({:ticket, @repo, @id}, %{kind: :person, waits_on: %{action: "unblock"}, text: "Deploy freeze", releasable: true}, at: @at)
+    reason = %{kind: :person, waits_on: %{action: "unblock"}, text: "Deploy freeze", releasable: true}
+    {:ok, _pause} = Pauses.set({:ticket, @repo, @id}, reason, at: @at)
     %{}
   end
 
@@ -80,7 +81,8 @@ defmodule SymphonyElixir.SituationTest do
   end
 
   defp arrange("waiting_for_build") do
-    {:ok, _pause} = Pauses.add_reason({:ticket, @repo, @id}, %{kind: :build, waits_on: %{commit: "cedfe01"}, text: "Holding for the build of cedfe01"}, at: @at)
+    reason = %{kind: :build, waits_on: %{commit: "cedfe01"}, text: "Holding for the build of cedfe01"}
+    {:ok, _pause} = Pauses.set({:ticket, @repo, @id}, reason, at: @at)
     %{}
   end
 
@@ -165,7 +167,9 @@ defmodule SymphonyElixir.SituationTest do
     test "a question reason with no open question reads its line" do
       reasons = [%{kind: :question, waits_on: %{question_id: "q-9"}, text: "Waiting for your answer"}]
 
-      assert %{kind: "waiting_on_you", cause: "Waiting for your answer.", waits_on: %{question_id: "q-9"}, and_more: 0} = compute(record(%{pause: pause(reasons)}))
+      situation = compute(record(%{pause: pause(reasons)}))
+
+      assert %{kind: "waiting_on_you", cause: "Waiting for your answer.", waits_on: %{question_id: "q-9"}, and_more: 0} = situation
     end
 
     test "a plan in review waits on the person" do
@@ -242,7 +246,9 @@ defmodule SymphonyElixir.SituationTest do
     test "reads the reason and what lifts it" do
       reasons = [%{kind: :person, waits_on: %{action: "unblock"}, text: "Deploy freeze"}]
 
-      assert %{word: "Paused", cause: "Deploy freeze.", next: "Starts when you unblock it.", since: @at, waits_on: %{action: "unblock"}} = compute(record(%{pause: pause(reasons)}))
+      situation = compute(record(%{pause: pause(reasons)}))
+
+      assert %{word: "Paused", cause: "Deploy freeze.", next: "Starts when you unblock it.", since: @at, waits_on: %{action: "unblock"}} = situation
     end
 
     test "an environment's reason clears by itself" do
@@ -402,7 +408,8 @@ defmodule SymphonyElixir.SituationTest do
     end
 
     test "takes the step the orchestrator holds when the ledger names none" do
-      running = live(%{running: %{@id => %{run_kind: "implementation", started_at: @at, step: %{id: "build", title: "Build", started_at: @later}}}})
+      step = %{id: "build", title: "Build", started_at: @later}
+      running = live(%{running: %{@id => %{run_kind: "implementation", started_at: @at, step: step}}})
 
       assert %{word: "Working on the build step", since: @later, step: %{id: "build", title: "Build"}} = compute(record(), [], running)
     end
@@ -411,7 +418,9 @@ defmodule SymphonyElixir.SituationTest do
       ended = event("run.ended", %{run_id: "run-3", exit: "normal"})
       running = live(%{running: %{@id => %{run_kind: nil, started_at: @at}}})
 
-      assert %{cause: "Run is working on it.", next: "It hands off when it ends.", run: %{id: nil, number: nil, label: "Run"}} = compute(record(), [started(), ended], running)
+      situation = compute(record(), [started(), ended], running)
+
+      assert %{cause: "Run is working on it.", next: "It hands off when it ends.", run: %{id: nil, number: nil, label: "Run"}} = situation
     end
 
     test "a CI Fix hands back where it came from" do
@@ -426,7 +435,9 @@ defmodule SymphonyElixir.SituationTest do
     test "says the PR and the time" do
       expected = "Merged as PR #741 at #{Situation.clock(@at)}."
 
-      assert %{word: "Shipped", cause: ^expected, next: nil, since: @at} = compute(record(%{phase: "Done", pr_watch: watch(%{pr: :merged})}))
+      done = record(%{phase: "Done", pr_watch: watch(%{pr: :merged})})
+
+      assert %{word: "Shipped", cause: ^expected, next: nil, since: @at} = compute(done)
     end
 
     test "a merged PR is done before the phase says so" do
@@ -445,6 +456,7 @@ defmodule SymphonyElixir.SituationTest do
 
     test "without a PR or a time it says what it knows" do
       assert compute(record(%{phase: "Done"})).cause == "It is done."
+      assert compute(record(%{phase: "Done"}), [event("attempt.pushed", %{head: "abc1234"})]).cause == "It is done."
       assert compute(record(%{phase: "Done", phase_at: nil, pr_watch: watch(%{pr: :merged})})).cause == "Merged as PR #741."
       assert compute(record(%{phase: "Done", issue_id: nil})).cause == "It is done."
     end
@@ -452,7 +464,8 @@ defmodule SymphonyElixir.SituationTest do
 
   describe "cancelled" do
     test "says who cancelled it and the PR it closed" do
-      cancel = event("ticket.cancelled", %{from: "QA", to: "Canceled", pull_requests_closed: ["https://github.com/o/r/pull/812"]}, %{actor: %{kind: :person, name: "Director"}, at: @later})
+      payload = %{from: "QA", to: "Canceled", pull_requests_closed: ["https://github.com/o/r/pull/812"]}
+      cancel = event("ticket.cancelled", payload, %{actor: %{kind: :person, name: "Director"}, at: @later})
 
       assert %{word: "Cancelled", cause: "You cancelled it; PR #812 was closed.", next: nil, since: @later} = compute(record(%{phase: "Canceled"}), [cancel])
     end
@@ -486,7 +499,8 @@ defmodule SymphonyElixir.SituationTest do
 
     assert %{since: "2026-10-30T09:00:00Z", retry: %{at: "2026-10-30T10:00:00Z"}} = record() |> compute([], facts) |> Situation.payload()
     assert %{since: nil, retry: nil} = record(%{phase_at: nil}) |> compute() |> Situation.payload()
-    assert %{retry: %{at: nil}} = record() |> compute([], live(%{retrying: %{@id => %{attempt: 0, error: nil, delay_type: nil, due_at: nil}}})) |> Situation.payload()
+    no_time = live(%{retrying: %{@id => %{attempt: 0, error: nil, delay_type: nil, due_at: nil}}})
+    assert %{retry: %{at: nil}} = record() |> compute([], no_time) |> Situation.payload()
   end
 
   test "clock says the hour and minute on this host's clock" do
@@ -511,7 +525,7 @@ defmodule SymphonyElixir.SituationTest do
       facts = Situation.live_facts(snapshot, @at)
 
       assert facts.running == %{"a" => %{run_kind: "qa", started_at: @at, step: nil}}
-      assert facts.retrying["b"] == %{attempt: 2, error: "boom", delay_type: nil, due_at: ~U[2026-10-30 09:01:00Z]}
+      assert facts.retrying["b"] == %{attempt: 2, error: "boom", delay_type: nil, due_at: ~U[2026-10-30 09:01:00.000Z]}
       assert facts.retrying["c"].due_at == nil
       assert facts.slot_waiting["d"].reason == "work slots full"
       assert facts.skipped["e"].repo_key == @repo
@@ -526,7 +540,8 @@ defmodule SymphonyElixir.SituationTest do
     end
 
     test "the signature says what decides a kind" do
-      facts = live(%{running: %{"a" => %{}}, retrying: %{"b" => %{delay_type: :continuation}, "c" => %{delay_type: nil}}, slot_waiting: %{"d" => %{}}, skipped: %{"e" => %{}}})
+      retrying = %{"b" => %{delay_type: :continuation}, "c" => %{delay_type: nil}}
+      facts = live(%{running: %{"a" => %{}}, retrying: retrying, slot_waiting: %{"d" => %{}}, skipped: %{"e" => %{}}})
 
       assert Situation.live_signature(facts) == %{
                "a" => {true, false, false, false},

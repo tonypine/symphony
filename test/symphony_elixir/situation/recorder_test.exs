@@ -3,9 +3,9 @@ defmodule SymphonyElixir.Situation.RecorderTest do
 
   import ExUnit.CaptureLog
 
+  alias SymphonyElixir.{Pauses, TicketEvents}
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.Situation.Recorder
-  alias SymphonyElixir.{Pauses, TicketEvents}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @repo "default"
@@ -59,7 +59,7 @@ defmodule SymphonyElixir.Situation.RecorderTest do
     pid = start()
     snapshot(pid)
 
-    {:ok, _pause} = Pauses.add_reason({:ticket, @repo, @id}, Pauses.ticket_reason(:dependency, "TP-9"), at: @at)
+    {:ok, _pause} = Pauses.set({:ticket, @repo, @id}, Pauses.ticket_reason(:dependency, "TP-9"), at: @at)
     settle(pid)
 
     assert kinds() == ["waiting_for_slot", "blocked_by_ticket"]
@@ -87,7 +87,8 @@ defmodule SymphonyElixir.Situation.RecorderTest do
     pid = start()
     snapshot(pid)
 
-    :ok = RunStore.put_ticket_pr_watch(@repo, @id, "TP-1", %{facts: %Facts{phase: :code_review, ci: :pending, pr: :open, pr_number: 741}})
+    facts = %Facts{phase: :code_review, ci: :pending, pr: :open, pr_number: 741}
+    :ok = RunStore.put_ticket_pr_watch(@repo, @id, "TP-1", %{facts: facts})
     Recorder.ticket_changed(@id, pid)
     settle(pid)
 
@@ -112,7 +113,8 @@ defmodule SymphonyElixir.Situation.RecorderTest do
     snapshot(pid)
     step = %{id: String.duplicate("x", 400), title: "Long"}
 
-    log = capture_log(fn -> snapshot(pid, %{running: [%{issue_id: @id, run_kind: "qa", started_at: @at, step: step}]}) end)
+    run = %{issue_id: @id, run_kind: "qa", started_at: @at, step: step}
+    log = capture_log(fn -> snapshot(pid, %{running: [run]}) end)
 
     assert log =~ "situation not recorded: issue_id=#{@id} issue_identifier=TP-1"
     assert Process.alive?(pid)

@@ -35,7 +35,8 @@ defmodule SymphonyElixirWeb.PresenterSituationTest do
 
   defp waiting_for_ci(issue_id \\ "ci", identifier \\ "MT-1") do
     :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: issue_id, issue_identifier: identifier, phase: "Code Review"})
-    :ok = RunStore.put_ticket_pr_watch("default", issue_id, identifier, %{facts: %Facts{phase: :code_review, ci: :pending, pr: :open, pr_number: 741}, head_sha: "abc1234"})
+    facts = %Facts{phase: :code_review, ci: :pending, pr: :open, pr_number: 741}
+    :ok = RunStore.put_ticket_pr_watch("default", issue_id, identifier, %{facts: facts, head_sha: "abc1234"})
     {:ok, _event} = TicketEvents.record("default", issue_id, "attempt.pushed", %{head: "abc1234"}, at: @pushed)
   end
 
