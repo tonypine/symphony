@@ -96,7 +96,8 @@ defmodule SymphonyElixirWeb.PullRequestReadTest do
     pull_request = Map.put(read.pull_request, :read_at, ~U[2026-11-06 10:03:00Z])
 
     :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: issue_id, issue_identifier: identifier, phase: "Code Review"})
-    :ok = RunStore.put_ticket_pr_watch(@repo, issue_id, identifier, %{facts: facts, head_sha: read.head_sha, decision: decision, pull_request: pull_request})
+    watch = %{facts: facts, head_sha: read.head_sha, decision: decision, pull_request: pull_request}
+    :ok = RunStore.put_ticket_pr_watch(@repo, issue_id, identifier, watch)
   end
 
   defp ticket_read(identifier), do: build_conn() |> get("/api/v1/#{identifier}") |> json_response(200)

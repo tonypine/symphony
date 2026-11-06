@@ -8,8 +8,8 @@ defmodule SymphonyElixirWeb.PullRequestPayload do
   (`SymphonyElixir.TicketPullRequest`).
   """
 
-  alias SymphonyElixir.{TicketPullRequest, TicketState}
   alias SymphonyElixir.Inbox.References
+  alias SymphonyElixir.{TicketPullRequest, TicketState}
   alias SymphonyElixirWeb.WatchPayload
 
   @head_short 7

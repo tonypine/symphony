@@ -129,10 +129,14 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
     end
 
     test "a red PR reads nothing more for it: the checks required are what the watcher keeps, unknown when it keeps none" do
-      red = pull(rollup([check("make all", "FAILURE")]))
+      red = {response(pull(rollup([check("make all", "FAILURE")]))), 0}
+      base = %{runs: base_runs([])}
+      kept = [required_checks: %{"main" => ["make all"]}]
 
-      assert {:ok, %{ci: :red, pull_request: %{checks: [%{state: "failed", required: true}]}}} = read({response(red), 0}, %{runs: base_runs([])}, required_checks: %{"main" => ["make all"]})
-      assert {:ok, %{ci: :red, pull_request: %{checks: [%{state: "failed", required: nil}]}}} = read({response(red), 0}, %{runs: base_runs([])}, required_checks: %{})
+      assert {:ok, %{ci: :red, pull_request: %{checks: [required]}}} = read(red, base, kept)
+      assert %{state: "failed", required: true} = required
+      assert {:ok, %{ci: :red, pull_request: %{checks: [unknown]}}} = read(red, base, required_checks: %{})
+      assert %{state: "failed", required: nil} = unknown
       refute_received {:gh, ["api", @rules]}
     end
 
@@ -146,7 +150,9 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
     test "a superseded run is gone: each check is listed once with its newest state" do
       superseded = pull(rollup([check("make all", "FAILURE", run: 100, job: 1), check("make all", "SUCCESS", run: 200, job: 2)]))
 
-      assert {:ok, %{ci: :green, pull_request: %{checks: [%{name: "make all", state: "passed", url: "https://github.com/acme/app/actions/runs/200/job/2"}]}}} = read({response(superseded), 0})
+      newest_log = "https://github.com/acme/app/actions/runs/200/job/2"
+      assert {:ok, %{ci: :green, pull_request: %{checks: [newest]}}} = read({response(superseded), 0})
+      assert %{name: "make all", state: "passed", url: ^newest_log} = newest
 
       # Every run of the workflow cancelled keeps its checks in the watcher's read; the ticket read lists them once.
       cancelled = pull(rollup([check("make all", "CANCELLED", run: 100, job: 1), check("make all", "CANCELLED", run: 200, job: 2)]))
