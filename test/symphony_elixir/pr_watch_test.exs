@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.PrWatchTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Pauses, PrWatch, PrWatchSupport, TicketPullRequest}
+  alias SymphonyElixir.{IdlePark, Pauses, PrWatch, PrWatchSupport, TicketPullRequest, TicketState}
   alias SymphonyElixir.PrWatch.{Attempts, Competitors, Repo}
 
   @repo_key "default"
@@ -18,6 +18,47 @@ defmodule SymphonyElixir.PrWatchTest do
   end
 
   defp issue(id, state), do: %Issue{id: id, identifier: "TP-#{id}", title: "Ticket", state: state, repo_key: @repo_key}
+
+  describe "silent_waits/1 for a held ticket with no watcher record (TP-1175)" do
+    defp held_without_watch!(repo_key, id, phase) do
+      attrs = %{issue_identifier: "TP-#{id}", phase: phase}
+      :ok = RunStore.put_ticket_state(TicketState.new(repo_key, id, attrs))
+      :ok = IdlePark.hold({:ticket, repo_key, id}, "TP-#{id}", phase || "In Progress", 2, nil)
+    end
+
+    test "a held plan parent with no PR is listed with its phase, the reason and since when" do
+      held_without_watch!(@repo_key, "7", "In Progress")
+
+      assert [
+               %{
+                 issue_id: "7",
+                 issue_identifier: "TP-7",
+                 repo_key: @repo_key,
+                 phase: "in_progress",
+                 pr_url: nil,
+                 rule: nil,
+                 bound: "no_progress",
+                 since: %DateTime{},
+                 reason: "No progress: the last 2 turns in In Progress" <> _rest
+               }
+             ] = PrWatch.silent_waits(repo_key: @repo_key)
+    end
+
+    test "a record with no phase is listed with none, and an unknown repository's terminal states don't hide it" do
+      held_without_watch!(@repo_key, "8", nil)
+      assert [%{issue_identifier: "TP-8", phase: nil}] = PrWatch.silent_waits(repo_key: @repo_key)
+
+      held_without_watch!("no-such-repo", "9", "Done")
+      assert [%{issue_identifier: "TP-9", phase: "done"}] = PrWatch.silent_waits(repo_key: "no-such-repo")
+    end
+
+    test "a ticket closed while it was held is not listed, and neither is one with no hold" do
+      held_without_watch!(@repo_key, "10", "Done")
+      :ok = RunStore.put_ticket_state(TicketState.new(@repo_key, "11", %{issue_identifier: "TP-11", phase: "In Progress"}))
+
+      assert PrWatch.silent_waits(repo_key: @repo_key) == []
+    end
+  end
 
   describe "dispatch_reason/2" do
     test "a Code Review or QA run starts only on the watcher's decision to dispatch" do

@@ -2753,7 +2753,8 @@ Important nuance:
   paused"), then the comment, which names the commit the park made and the branch it pushed, or says
   nothing was committed or pushed. The park MUST finish even when the run is stopped partway
   through. The silent-wait report MUST list the held ticket with the reason and since when it is
-  held. A watcher read that shows a new PR head, or checks that reported green or red where they had
+  held, including a ticket the watcher does not watch, such as a plan parent with no PR, until it is
+  terminal. A watcher read that shows a new PR head, or checks that reported green or red where they had
   not, MUST lift the hold: its question is withdrawn and its reason cleared, and the ticket continues
   in its phase, a green CI Fix ticket returning to its origin. Unblock, or the answer "Run it again",
   MUST lift the pause (which empties the counted runs) and dispatch it at once; "Start it over from
