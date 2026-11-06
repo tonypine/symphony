@@ -135,6 +135,119 @@ defmodule SymphonyElixir.QaDispatchTest do
       assert [%{details: %{head: "abc123", status: "red"}}] = head_signals(@designed_repo)
     end
 
+    test "a green head the watcher still holds back shows the watcher's reason, never the head's status" do
+      # The reviewer's run is just ending: the head is green, and the watcher's last decision is R9.
+      assert {:ok, :changed} = RunStore.record_ci_state(@designed_repo, @issue_id, "abc123", "green", DateTime.utc_now())
+      working = %{rule: "R9", kind: :wait, reason: "A run is working on the ticket"}
+      SymphonyElixir.PrWatchSupport.put_watch!(@designed_repo, @issue_id, head_sha: "abc123", decision: working)
+      qa_ticket = issue(@designed_repo, "QA")
+
+      log = capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state()) end)
+
+      assert log =~ "Not dispatching QA for"
+      assert log =~ ": the PR watcher (R9): A run is working on the ticket"
+      refute log =~ "its head is"
+      assert [%{details: %{head: "abc123", status: "green", reason: "the PR watcher (R9): A run is working on the ticket"}}] = head_signals(@designed_repo)
+
+      # The same reason on the same head is not recorded again; a new reason is.
+      capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state()) end)
+      assert length(head_signals(@designed_repo)) == 1
+
+      checks = %{rule: "R24", kind: :wait, reason: "Checks are running"}
+      SymphonyElixir.PrWatchSupport.put_watch!(@designed_repo, @issue_id, head_sha: "abc123", decision: checks)
+      capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state()) end)
+      assert length(head_signals(@designed_repo)) == 2
+    end
+
+    test "a ticket the watcher hasn't read shows that, with no signal, as it has no head to record" do
+      log = capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([issue(@designed_repo, "QA")], state()) end)
+
+      assert log =~ ": the PR watcher hasn't read its PR yet"
+      assert head_signals(@designed_repo) == []
+    end
+
+    test "a retry the watcher's stale decision refuses names the check and asks for the next cycle, and the new decision dispatches" do
+      working = %{rule: "R9", kind: :wait, reason: "A run is working on the ticket"}
+      SymphonyElixir.PrWatchSupport.put_watch!(@designed_repo, @issue_id, head_sha: "abc123", decision: working)
+      qa_ticket = issue(@designed_repo, "QA")
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [qa_ticket])
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_issues) end)
+
+      retrying = %{retry_state() | claimed: MapSet.new([@issue_id])}
+      metadata = %{identifier: "TP-816", continuation: true, repo_key: @designed_repo}
+
+      log =
+        capture_log(fn ->
+          fetcher = fn _ids -> {:ok, [qa_ticket]} end
+          assert {:noreply, next} = Orchestrator.handle_retry_issue_for_test(retrying, @issue_id, 1, metadata, fetcher)
+          send(self(), {:state, next})
+        end)
+
+      assert_received {:state, next}
+      assert next.claimed == MapSet.new()
+      assert is_integer(next.next_poll_due_at_ms)
+      assert_receive {:tick, _token}
+      assert log =~ ~s(refused_by="flow_gated?: the PR watcher (R9): A run is working on the ticket")
+
+      # The watcher's read turns the decision; the next cycle dispatches QA with nothing else to wait on.
+      SymphonyElixir.PrWatchSupport.put_watch!(@designed_repo, @issue_id, head_sha: "abc123", decision: :dispatch)
+      assert Orchestrator.should_dispatch_issue_for_test(qa_ticket, next)
+    end
+
+    test "a refusal outside a retry asks for no further cycle, so a refused cycle never loops" do
+      SymphonyElixir.PrWatchSupport.put_watch!(@designed_repo, @issue_id, head_sha: "abc123", decision: :dispatch)
+      qa_ticket = issue(@designed_repo, "QA")
+      refresh = %{ids: MapSet.new([@issue_id]), result: {:ok, [%{qa_ticket | state: "Backlog"}]}}
+
+      log =
+        capture_log(fn ->
+          send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], %{retry_state() | dispatch_refresh: refresh})})
+        end)
+
+      assert log =~ ~s(refused_by="candidate_issue?")
+      assert_received {:state, next}
+      assert next.next_poll_due_at_ms == nil
+      refute_receive {:tick, _token}, 50
+    end
+
+    test "a refused dispatch names the check that refused it" do
+      refusal = &Orchestrator.dispatch_refusal_for_test/1
+      ticket = issue(@designed_repo, "QA")
+
+      assert refusal.(%{ticket | state: "Backlog"}) == "candidate_issue?"
+      assert refusal.(%{ticket | assigned_to_worker: false}) == "candidate_issue?"
+      assert refusal.(ticket) == "flow_gated?: the PR watcher hasn't read its PR yet"
+
+      SymphonyElixir.PrWatchSupport.put_watch!(@designed_repo, @issue_id, head_sha: "abc123", decision: :dispatch)
+      assert refusal.(ticket) == "unmoved_since?"
+
+      {:ok, _pause} = SymphonyElixir.Pauses.set({:ticket, @designed_repo, @issue_id}, SymphonyElixir.Pauses.ticket_reason(:dependency, "TP-9"))
+      assert refusal.(ticket) == "issue_held?"
+    end
+
+    test "a run Symphony stops has its PR read at once, once its end is written" do
+      {:ok, _owner} = Registry.register(SymphonyElixir.Repo.Registry, {:pr_watch, @designed_repo}, nil)
+      agent = spawn(fn -> Process.sleep(:infinity) end)
+      on_exit(fn -> Process.exit(agent, :kill) end)
+
+      running = %{
+        @issue_id => %{
+          pid: agent,
+          ref: nil,
+          identifier: "TP-816",
+          repo_key: @designed_repo,
+          issue: issue(@designed_repo, "QA"),
+          started_at: DateTime.add(DateTime.utc_now(), -300, :second)
+        }
+      }
+
+      stopping = %{retry_state() | running: running, claimed: MapSet.new([@issue_id])}
+      next = Orchestrator.reconcile_issue_states_for_test([issue(@designed_repo, "Backlog")], stopping)
+
+      refute Map.has_key?(next.running, @issue_id)
+      assert_receive {:"$gen_cast", {:read_ticket, @issue_id}}
+    end
+
     test "the continuation into QA on a green head is not held by the gate" do
       record_ci!(@designed_repo, "abc123", "green")
       qa_ticket = issue(@designed_repo, "QA")
