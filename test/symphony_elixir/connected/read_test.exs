@@ -170,6 +170,19 @@ defmodule SymphonyElixir.Connected.ReadTest do
       assert %{identifier: "MT-1", title: "The plan", done: 2, total: 5, incomplete: false, tickets: []} = epic
       assert %{parent: nil, epic: nil} = read("MT-3")
     end
+
+    test "a parent only the orchestrator holds gives the epic too, from its record when it has one" do
+      ticket("MT-1", "Waiting on sub-tickets", %{sub_issues: [%{id: "MT-3", identifier: "MT-3", state: "Todo"}, %{id: "MT-4", identifier: "MT-4", state: "Done"}]})
+      ticket("MT-3", "Todo")
+      ticket("MT-9", "Todo")
+
+      known = %{Connected.build(%{}, nil) | parent: %{identifier: "MT-1", title: "The plan", done: 0, total: 9, children: []}}
+      unknown = %{Connected.build(%{}, nil) | parent: %{identifier: "MT-8", title: "Not recorded", done: 1, total: 3, children: ["completed"]}}
+
+      assert %{parent: %{identifier: "MT-1"}, epic: %{identifier: "MT-1", done: 1, total: 2, tickets: tickets}} = read("MT-3", known)
+      assert %{identifier: "MT-3", current: true} = Enum.find(tickets, & &1.current)
+      assert %{parent: %{identifier: "MT-8"}, epic: %{identifier: "MT-8", done: 1, total: 3, incomplete: false, tickets: []}} = read("MT-9", unknown)
+    end
   end
 
   describe "the tickets it holds up" do
@@ -179,9 +192,17 @@ defmodule SymphonyElixir.Connected.ReadTest do
       ticket("MT-4", "Todo", %{title: "Linked too", blockers: [%{id: "MT-2", identifier: "MT-2", state: "In Progress"}]})
       ticket("MT-5", "Done", %{blockers: [%{id: "MT-2", identifier: "MT-2", state: "In Progress"}]})
       ticket("MT-6", "Todo", %{blockers: [%{id: "MT-2", identifier: "MT-2", state: "Done"}]})
+      ticket("MT-8", "Done", %{title: "Ended since the run read it"})
       wait_on("MT-3", "MT-2")
 
-      tracked = %{Connected.build(%{}, nil) | blocks: [%{identifier: "MT-4", title: nil, state: nil}, %{identifier: "MT-7", title: "Unknown", state: "Todo"}]}
+      links = [
+        %{identifier: "MT-4", title: nil, state: nil},
+        %{identifier: "MT-7", title: "Unknown", state: "Todo"},
+        %{identifier: "MT-8", title: nil, state: "Todo"},
+        %{identifier: "MT-9", title: "No record, ended", state: "Done"}
+      ]
+
+      tracked = %{Connected.build(%{}, nil) | blocks: links}
 
       assert read("MT-2", tracked).blocks == [
                %{identifier: "MT-4", title: "Linked too", state: "Todo", situation: "waiting_for_slot"},

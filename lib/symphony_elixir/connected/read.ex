@@ -9,14 +9,14 @@ defmodule SymphonyElixir.Connected.Read do
       (`SymphonyElixir.Initiatives`) answers when it holds the plan, so the two count the same. A plan
       it does not hold (long done, not labelled a plan, or before its first read after a start) comes
       from the parent's record: its sub-issues in creation order, or only the parent's own count when
-      Symphony has no record of it.
+      Symphony has no record of it. The parent is the one `parent` reads.
     * `blocked_by`: every blocker ever linked, each `open` or `resolved` with the time it resolved. The
       record's `blockers` keep only the open ones, for dispatch; the history comes from the ledger,
       from the pause events of the dependency reasons. A cleared reason whose blocker is still open
       and no longer linked was unlinked, not resolved, and leaves the list. A reason still set reads
       `open` even once its blocker landed: the ticket is still held, waiting for an app update.
     * `blocks`: the links the run read, and the tickets whose records name this one as an open
-      blocker, each with its situation kind.
+      blocker, each with its situation kind. A ticket that ended holds nothing up.
 
   It reads the ledgers and the records and never Linear, and a read writes nothing.
   """
@@ -89,10 +89,11 @@ defmodule SymphonyElixir.Connected.Read do
   defp shape(record, tracked, context) do
     own = Connected.build(record, nil)
     base = tracked || own
+    parent = base.parent || record.parent
 
     %{
-      parent: base.parent || record.parent,
-      epic: epic(record, context),
+      parent: parent,
+      epic: epic(%{record | parent: parent}, context),
       sub_tickets: known(base.sub_tickets, context),
       blocked_by: blocked_by(record, base.blocked_by ++ own.blocked_by, context),
       blocks: blocks(record, base.blocks, context),
@@ -241,7 +242,9 @@ defmodule SymphonyElixir.Connected.Read do
   ## The tickets it holds up
 
   defp blocks(record, links, context) do
-    (known(links, context) ++ holding(record.issue_identifier, context)) |> Enum.uniq_by(& &1.identifier)
+    open_links = links |> known(context) |> Enum.reject(&terminal?(&1.state, context))
+
+    Enum.uniq_by(open_links ++ holding(record.issue_identifier, context), & &1.identifier)
   end
 
   defp holding(nil, _context), do: []

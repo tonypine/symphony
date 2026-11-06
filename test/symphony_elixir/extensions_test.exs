@@ -1457,7 +1457,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "total" => 3,
                "children" => ["completed", "started", "unstarted"]
              },
-             "epic" => nil,
+             "epic" => %{"identifier" => "MT-EPIC", "title" => "Ship the peek", "done" => 1, "total" => 3, "incomplete" => false, "tickets" => []},
              "sub_tickets" => [%{"identifier" => "MT-SUB", "title" => nil, "state" => "Todo"}],
              "blocked_by" => [%{"identifier" => "MT-BLOCKER", "title" => nil, "state" => "In Progress", "status" => "open", "resolved_at" => nil}],
              "blocks" => [%{"identifier" => "MT-NEXT", "title" => "Downstream", "state" => "Todo", "situation" => nil}],
