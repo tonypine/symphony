@@ -62,7 +62,7 @@ defmodule SymphonyElixirWeb.PresenterTicketStatusTest do
 
     # The ticket payload tells the app whether Start now may start it, with the reason in the
     # tooltip's words when it may not; the answer leaves with the Question.
-    assert %{allowed: false, reason: "a Question is waiting for an answer"} = payload.start
+    assert %{allowed: false, reason: "It waits on your answer first."} = payload.start
 
     {:ok, _answered} = Questions.answer(ticket, question.id, "1")
 
@@ -157,7 +157,7 @@ defmodule SymphonyElixirWeb.PresenterTicketStatusTest do
 
     # Every state-payload entry carries the same `start` the endpoint refuses with: a ticket a
     # Question holds, a paused repository, and a waiting ticket free to start.
-    assert %{start: %{allowed: false, reason: "a Question is waiting for an answer"}} = running_entry
+    assert %{start: %{allowed: false, reason: "It waits on your answer first."}} = running_entry
     assert [%{start: %{allowed: false, reason: repository_reason}}] = payload.watching
     assert repository_reason =~ "the repository is paused by you"
     assert %{start: %{allowed: true, reason: nil}} = skipped_entry

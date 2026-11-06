@@ -38,7 +38,7 @@ defmodule SymphonyElixir.DirectorLabels do
 
   require Logger
 
-  alias SymphonyElixir.{AuditLog, Config, MachineLabels, Orchestrator, RunStore, TicketSignals, TicketState}
+  alias SymphonyElixir.{AuditLog, Config, MachineLabels, Orchestrator, RunStore, TicketMoves, TicketSignals, TicketState}
   alias SymphonyElixir.Config.Escalate
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -131,7 +131,7 @@ defmodule SymphonyElixir.DirectorLabels do
     name = String.trim(name)
 
     case Enum.find(records, &(&1.issue_id == name or same_identifier?(&1.issue_identifier, name))) do
-      nil -> {:error, {:conflict, "Symphony doesn't track #{name}, so it can't change its labels."}}
+      nil -> {:error, {:conflict, TicketMoves.untracked_reason(:labels, name)}}
       record -> {:ok, record}
     end
   end
