@@ -522,7 +522,8 @@ final class InboxTests: XCTestCase {
           {"identifier": "X-4", "kind": "clarify", "review": {"held": false, "found": "Empty."}},
           {"identifier": "X-5", "kind": "plan", "review": {"brief": {"format": "parsed",
             "moves": [{"move": "approve"}], "what_to_review": [{"links": [{"url": "https://example.com/a"}]}]}, "sub_tickets": [{"title": "no id"}],
-            "decisions": [{"question": "Q?", "options": [{"label": "A"}, {"effect": "no label"}]}, {}], "unapplied_answers": 2}},
+            "decisions": [{"question": "Q?", "options": [{"label": "A"}, {"effect": "no label"}]}, {}], "unapplied_answers": 2,
+            "unasked_choices": ["Which export format", "Who may export"]}},
           {"identifier": "X-6", "kind": "action", "review": {"comment_id": "c-6", "options": [{"label": "Merge", "recommended": true}], "confirm": "Merging"}}
         ]}
         """
@@ -547,6 +548,15 @@ final class InboxTests: XCTestCase {
         XCTAssertNil(inbox.items[0].review.unappliedAnswersWarning)
         XCTAssertEqual(
             InboxReview(unappliedAnswers: 1).unappliedAnswersWarning, "1 answer not yet applied: Symphony hasn't revised the plan from it yet."
+        )
+        XCTAssertEqual(
+            inbox.items[3].review.unaskedChoicesWarning,
+            "2 choices not asked: the planning run reached its limit of questions. Not asked: Which export format; Who may export."
+        )
+        XCTAssertNil(inbox.items[0].review.unaskedChoicesWarning)
+        XCTAssertEqual(
+            InboxReview(unaskedChoices: ["Who may export"]).unaskedChoicesWarning,
+            "1 choice not asked: the planning run reached its limit of questions. Not asked: Who may export."
         )
         XCTAssertEqual(inbox.items[3].review.questions[0].options.map(\.label), ["A"])
         XCTAssertNil(inbox.items[3].review.decisions[0].initialPick)

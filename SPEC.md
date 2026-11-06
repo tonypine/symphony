@@ -546,7 +546,8 @@ model below), `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirmed a resolution),
 `checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
-`question.asked`, `question.answered`, `question.withdrawn`, `question.reopened`, `park.backfilled`
+`question.asked`, `question.answered`, `question.withdrawn`, `question.reopened`, `question.not_asked`
+(machine only: a request refused at the run's limit of requests), `park.backfilled`
 (machine only: an older park brought up to date at start-up, with what it was given),
 `workspace.synced` (machine only: before a review, QA, landing or rework run, the heads the
 newest-known-head rule compared, the one that won and what it did), `workspace.rebuilt` (machine
@@ -4683,8 +4684,11 @@ Scoped Linear tool extension contract:
   NOT be posted again. A request whose title or question a person already answered (the Decisions
   section, or an answered request under the issue) MUST NOT be posted: the result carries the
   recorded answer, which the run applies. Requests
-  MUST be capped per run (the Elixir cap is 5) and refused when the run has no state to count
-  against, or when the issue's repository turned human actions off. The read-only reviewer scope
+  MUST be capped per run (the Elixir cap is 5, and 12 on a plan run, the `breakdown` run kind, which
+  asks every choice its plan leaves open in one run) and refused when the run has no state to count
+  against, or when the issue's repository turned human actions off. A request refused for the cap is
+  recorded on the ticket as `question.not_asked` with its title and question, asks nothing and pauses
+  nothing. The read-only reviewer scope
   MUST NOT advertise or execute it.
 - `linear_withdraw_human_action` MUST only act on the current issue and MUST accept only a
   non-blank `reason` and an optional `title`. The reason MUST pass the same secret scan as comments
@@ -5874,7 +5878,9 @@ Minimum endpoints:
       `parsed`; a brief without a `**What to review:**` line comes as `{"format": "raw",
       "markdown": ...}`; null without a brief, `sub_tickets` (`identifier`, `title`, `url`,
       `state`) in landing order, and `unapplied_answers`: how many of the plan's requests a person
-      answered since the plan last moved into `Plan Review`, which no revision has applied yet.
+      answered since the plan last moved into `Plan Review`, which no revision has applied yet,
+      and `unasked_choices`: the titles of the choices its latest run could not ask because it
+      reached its limit of requests (`question.not_asked`), without those a later request asked.
     - `action`: `title`, `question`, `why`, `if_unanswered`, `unblocks`, `steps`, `options`
       (`label`, `effect`, `recommended`, `tradeoffs`: `kind` and `text`), `recommendation_reason`
       and `requested_at`.
@@ -5933,7 +5939,8 @@ Minimum endpoints:
           "review": {
             "brief": {"format": "parsed", "headline": "Approve the saved-searches plan.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": []},
             "sub_tickets": [],
-            "unapplied_answers": 0
+            "unapplied_answers": 0,
+            "unasked_choices": []
           }
         },
         {

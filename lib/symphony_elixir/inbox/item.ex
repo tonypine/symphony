@@ -20,7 +20,9 @@ defmodule SymphonyElixir.Inbox.Item do
   `review.brief`, nil when it has none. Its questions are never read from the brief: the brief
   links to the requests, and `review.decisions` lists them. `review.unapplied_answers` counts the
   answers given since the plan last came back to `Plan Review`, which no revision has applied yet:
-  the Inbox warns before such a plan is approved.
+  the Inbox warns before such a plan is approved. `review.unasked_choices` lists the titles of the
+  choices its latest run could not ask because it reached its limit of requests
+  (`SymphonyElixir.TicketState.unasked_choices/1`), so a plan with some is not shown as fully asked.
 
   `from_question/2`, `from_plan_brief/2` and `from_pause/2` build the items from the ticket's record
   (`SymphonyElixir.TicketState`): an open Question (`SymphonyElixir.Questions`), the plan's brief
@@ -182,7 +184,8 @@ defmodule SymphonyElixir.Inbox.Item do
   (label `plan` or `breakdown`) in `settings`' `Plan Review` with a captured brief
   (`SymphonyElixir.PlanBrief`). Its choices are the record's open Questions with options, oldest
   first, then the captured choices whose Question the record does not hold; its unapplied answers
-  are the record's answers given since the plan entered its phase.
+  are the record's answers given since the plan entered its phase, and its unasked choices the ones
+  its latest run reached the limit of requests before asking.
   """
   @spec from_plan_brief(TicketState.t(), Schema.t()) :: t() | nil
   def from_plan_brief(record, settings) do
@@ -197,7 +200,8 @@ defmodule SymphonyElixir.Inbox.Item do
         brief: plan.brief,
         sub_tickets: plan.sub_tickets,
         decisions: plan_choices(record, open, plan.choices),
-        unapplied_answers: Enum.count(record.questions, &answered_since?(&1, record.phase_at))
+        unapplied_answers: Enum.count(record.questions, &answered_since?(&1, record.phase_at)),
+        unasked_choices: TicketState.unasked_choices(record)
       })
     else
       _not_a_plan -> nil
