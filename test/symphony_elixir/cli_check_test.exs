@@ -603,7 +603,7 @@ defmodule SymphonyElixir.CLICheckTest do
 
   test "lists check in the service usage" do
     assert {:error, message} = CLI.evaluate(["--bogus"])
-    assert message =~ "symphony check [--config <path-to-symphony.yml>]"
+    assert message =~ "symphony check [--migrate] [--config <path-to-symphony.yml>]"
   end
 
   describe "Config.format_error/1" do
@@ -623,9 +623,12 @@ defmodule SymphonyElixir.CLICheckTest do
     end
   end
 
+  # A reviewer block as the file carried it before the rename: one the new build can run.
+  @pre_push_review "pre_push_review:\n  enabled: true\n  runtime: codex\n  command: codex app-server\n"
+
   describe "check --migrate" do
     test "checks a migrated copy, says what moved and leaves the file alone", %{root: root} do
-      content = valid_symphony(root) <> "pre_push_review:\n  enabled: true\n  run_on: first_push\n"
+      content = valid_symphony(root) <> @pre_push_review <> "  run_on: first_push\n"
       path = write_symphony!(root, content)
 
       {result, output} = check(["--migrate", "--config", path])
@@ -677,7 +680,7 @@ defmodule SymphonyElixir.CLICheckTest do
 
       {{:error, message}, _output, _stderr} = check_io(["--migrate", "--config", path])
 
-      assert message =~ "Config error in #{path}: `"
+      assert message =~ "Config error in #{path}: "
       assert message =~ "Lines it can't read: "
       assert message =~ "`dispatch.max_concurrent`"
       assert message =~ "#{tracker_line} (`tracker`)"
@@ -707,7 +710,7 @@ defmodule SymphonyElixir.CLICheckTest do
 
   describe "config" do
     test "migrate rewrites the file, with a backup, and says so", %{root: root} do
-      path = write_symphony!(root, valid_symphony(root) <> "pre_push_review:\n  enabled: true\n")
+      path = write_symphony!(root, valid_symphony(root) <> @pre_push_review)
 
       {result, output, _stderr} = evaluate_io(["config", "migrate", "--config", path])
 
