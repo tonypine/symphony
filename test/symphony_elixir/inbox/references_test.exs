@@ -403,6 +403,28 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
     end
   end
 
+  describe "facts/1" do
+    test "reads a Linear node's state and the blockers still open" do
+      blocker = fn identifier, type -> %{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"type" => type}}} end
+
+      node = %{
+        "id" => "i",
+        "state" => %{"name" => "Todo", "type" => "unstarted"},
+        "inverseRelations" => %{
+          "nodes" => [
+            blocker.("TP-1", "started"),
+            blocker.("TP-2", "completed"),
+            blocker.("TP-3", "canceled"),
+            %{"type" => "related", "issue" => %{"identifier" => "TP-4", "state" => %{"type" => "started"}}}
+          ]
+        }
+      }
+
+      assert References.facts(node) == %{issue_id: "i", state: "Todo", state_type: "unstarted", open_blockers: ["TP-1"]}
+      assert References.facts(%{}) == %{issue_id: nil, state: nil, state_type: nil, open_blockers: []}
+    end
+  end
+
   describe "live/2" do
     defp live_reference(facts), do: %{references: %{"X-1" => %{kind: "ticket", waiting_on: nil, facts: Map.merge(%{issue_id: "i", state: "Todo", state_type: "unstarted", open_blockers: []}, facts)}}}
 
