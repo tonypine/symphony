@@ -61,6 +61,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
      %{title: "You answered: Wait for the release", detail: "Ship TP-12 today"}},
     {"question.withdrawn", %{question_id: "q-1", title: "Ship TP-12 today", reason: "TP-12 was cancelled"}, [], %{title: "Question withdrawn: TP-12 was cancelled", detail: "Ship TP-12 today"}},
     {"question.reopened", %{question_id: "q-1", title: "Ship TP-12 today"}, [], %{title: "You took back your answer: Ship TP-12 today", detail: nil}},
+    {"question.not_asked", %{title: "Who may export", question: "Who may export the report?", cap: 12}, [],
+     %{title: "Not asked, the run reached its limit of questions: Who may export", detail: "Who may export the report?"}},
     {"park.backfilled", %{added: ["question", "push"], question_id: "q-1", branch: "auto/TP-1248"}, [],
      %{title: "Park brought up to date at start-up", detail: "asked you whether to run it again · pushed its work to auto/TP-1248"}},
     {"workspace.synced", %{workspace_head: "aaa1111aaaa", pr_head: "bbb2222bbbb", winner: "pull_request", action: "reset", head: "bbb2222bbbb", run_kind: "qa"}, [],
