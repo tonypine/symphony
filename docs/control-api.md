@@ -155,3 +155,150 @@ The phases the ticket went through, for the Phase path component and the timelin
 | `phases[].count` | How many `phase.entered` events name it, so a return from CI Fix counts. A second event naming the phase it is already in is no move. |
 | `phases[].time_ms` | Wall time in the phase, summed, up to now for the phase it is in. A terminal phase takes none. |
 | `moves` | Every move, oldest first, with its time. `from` is what the event says, else the phase before it; null on a first move that does not say. |
+
+## `moves`
+
+What the Director can do with the ticket now, each move saying why when it can't, so the app disables
+it with a tooltip and computes nothing. `SymphonyElixir.TicketMoves` answers from the record and what
+the orchestrator holds in memory, never from Linear, and the control call refuses with the same guard
+and the same words. The older `start` field is `moves.start`, with the same shape.
+
+```json
+{
+  "start": { "allowed": false, "reason": "A run is already working on it." },
+  "stop": { "allowed": true, "reason": null },
+  "move_to": { "allowed": true, "reason": null, "states": ["Backlog", "Todo", "Rework", "Done"] }
+}
+```
+
+| Field | What it holds |
+| --- | --- |
+| `allowed` | Whether the move may be made now. |
+| `reason` | Why it may not, in the app's words, verbatim as the call refuses; null when allowed. |
+| `states` | On `move_to` only: the phases the free move may name now, every phase of the workflow but the one the ticket is in; empty when refused. |
+
+| Move | Control call | Refused when | Example `reason` |
+| --- | --- | --- | --- |
+| `answer` | `/decide` with the `question_id` of one of `open_questions` | no Question is open | TP-1 is not waiting on a decision |
+| `start` | `/start` | Backlog, closed, its plan waits on a person, it waits on its sub-tickets, Symphony or the repository is paused, a Question is open, a run works on it | A run is already working on it. |
+| `stop` | `/stop` | no run works on it | No run is working. |
+| `restart` | `/restart` | closed, or no record | The ticket is done. |
+| `cancel` | `/cancel` | closed, or no record | The ticket is done. |
+| `move_to` | `/move` | in no repository, or no record | The ticket is not one Symphony tracks. |
+| `force` | `/force` | closed, already forced, or no record | It is already forced. |
+| `unforce` | `/force` with `clear` | not forced, or no record | It isn't forced. |
+| `unblock` | `/unblock` | nothing a person can release | TP-1 has nothing a person can unblock |
+| `note` | `/note` | no record | No ticket TP-1 in symphony |
+| `blocker` | `/blocker` | no record, or removed in Linear | Symphony doesn't track TP-1, so it can't be linked as a blocker or be given one. |
+| `priority` | `/priority` | no record, or removed in Linear | Symphony doesn't track TP-1, so it can't set its priority. |
+| `labels` | `/label` | no record, or removed in Linear | Symphony doesn't track TP-1, so it can't change its labels. |
+| `ruling` | `/decision` | no record, or removed in Linear | Symphony doesn't track TP-1, so it can't record a decision on it. |
+| `approve_plan` | `/approve_plan` | not a plan, not in Plan Review, or the waiting state is off | TP-1 is not a plan; approve_plan is for a plan |
+| `rework` | `/rework` | not in Plan Review | TP-1 is In Progress; the Director answers it only from Plan Review |
+| `decisions` | `/decisions` | not a plan, or not in Plan Review | TP-1 is not a plan; decisions is for a plan |
+| `changes` | `/changes` | not a plan, or not in Plan Review | TP-1 is not a plan; changes is for a plan |
+| `backlog` | `/backlog` | closed, already in Backlog, or no record | TP-1 is already in Backlog |
+
+A closed ticket's reason names its phase: `The ticket is done.`, `The ticket is cancelled.`
+
+What the read and the call each answer for:
+
+- A move the read allows is not refused for the ticket's state. A call may still fail on what no
+  record says: Linear refusing a write, a label or state the team doesn't have.
+- `stop`, `force` and `unforce` never refuse the state the read calls not allowed: the call answers
+  200 with nothing done (`stopped: false`, the label as it was). A closed ticket's `force` is refused.
+- A call refuses on its own argument, which is no fact of the ticket: a phase the workflow doesn't
+  name (`states` lists those it does), a blocker that is the ticket itself, already linked, finished
+  or making a cycle, a label already on or off, the priority it already has, a ruling already recorded,
+  a Question closed since. Empty input (`Write a note first.`) is the app's own.
+- A call judges the ticket as Linear last answered it where it reads Linear, the read as the record
+  holds it, so the two can part only while Linear lags a move.
+- `/undo` is no entry: the move it takes back answers with its `undo_window_ms`, and the app offers it
+  for that long.
+
+## `pull_request`
+
+The ticket's pull request and its checks, for the Pull request panel (facts 9 and 10 of
+`docs/design/director-ticket-page.md`); null before the watcher has read one. It makes no GitHub read
+of its own: the PR and CI watcher keeps what its one read of the PR says
+(`SymphonyElixir.PrWatch.Snapshot`) on the ticket's record, so it changes on the watcher's triggers
+(a webhook delivery's confirm read, the timed poll, Check Now) and it stays once the watch ends: a
+merged ticket still reads its PR.
+
+```json
+{
+  "number": 741,
+  "url": "https://github.com/acme/app/pull/741",
+  "title": "TP-1244 The paused line on the ticket page",
+  "state": "open",
+  "draft": false,
+  "head_sha": "8b03e51c0ffee0123456789abcdef0123456789a",
+  "head_short": "8b03e51",
+  "base": "main",
+  "mergeable": "clean",
+  "behind_base": false,
+  "review_state": "changes_requested",
+  "review_rounds": 2,
+  "files_changed": 9,
+  "additions": 486,
+  "deletions": 52,
+  "checks": [
+    {
+      "workflow": "CI",
+      "checks": [
+        {
+          "name": "Tests",
+          "state": "failed",
+          "started_at": "2026-11-06T10:00:00Z",
+          "duration_ms": 372000,
+          "url": "https://github.com/acme/app/actions/runs/100/job/1",
+          "required": true
+        }
+      ]
+    }
+  ],
+  "red_kind": "failure",
+  "next_action": {
+    "rule": "R22",
+    "action": "rerun_failed",
+    "reason": "Tests failed on PR #741: rerunning it once before CI Fix",
+    "owner": "symphony",
+    "clears_when": "the failed checks run again",
+    "since": "2026-11-06T10:06:30Z",
+    "outcome": "applied"
+  },
+  "read_at": "2026-11-06T10:06:30Z"
+}
+```
+
+| Field | What it holds |
+| --- | --- |
+| `state` | `open`, `merged` or `closed`. A PR Symphony saw close or merge after the last read says so. |
+| `draft` | Whether an open PR is a draft. |
+| `head_sha`, `head_short` | The head the read saw, in full and its first seven characters. |
+| `base` | The branch it merges into. |
+| `mergeable` | `clean`, `behind`, `dirty` (conflicts), `unstable`, `blocked` or `unknown`. |
+| `behind_base` | Whether GitHub reads it as behind its base (`mergeable` is `behind`). |
+| `review_state` | `merged` or `closed`, else GitHub's review decision (`approved`, `changes_requested`), else the newest Code Review verdict, else `open`. |
+| `review_rounds` | How many heads Code Review judged. |
+| `files_changed`, `additions`, `deletions` | The PR's size. |
+| `checks` | The head's checks grouped by workflow, in the order GitHub lists them. `workflow` is null for a status from outside GitHub Actions. |
+| `red_kind` | Why the head is red, as the watcher reads it: `failure`, `cancelled`, `human_only`, `also_red_on_base` or `run_in_progress` (`docs/pr-ci-decisions.md`); null when it isn't, or the watcher doesn't watch the ticket. |
+| `next_action` | What the watcher decided on its last read, with the `watch` block's words: `rule`, `action`, `reason`, `owner`, `clears_when`, `since`, `outcome`. Null without a decision, or when the watcher doesn't watch the ticket. |
+| `read_at` | When the watcher read it. |
+
+Each check is the newest run of that name in its workflow: the watcher's dedupe has already dropped
+superseded runs and earlier attempts, and a check every run of the workflow left cancelled is listed
+once.
+
+| Field | What it holds |
+| --- | --- |
+| `name` | The check. |
+| `state` | `passed` (also a neutral result), `failed`, `running`, `waiting`, `skipped` or `cancelled_no_machine`. |
+| `started_at` | When it started; null before it does. |
+| `duration_ms` | How long it took; null until it finishes. |
+| `url` | Its log. |
+| `required` | Whether the base branch requires it; null while the watcher doesn't know: it reads what a base requires only once a head has no real failure, and keeps it 10 minutes. |
+
+GitHub says only `CANCELLED` of a job that never got a machine, and the watcher treats every cancelled
+check that way (reruns it, spends no fix run), so `cancelled_no_machine` never reads as `failed`.

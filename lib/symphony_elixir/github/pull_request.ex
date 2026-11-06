@@ -54,6 +54,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           optional(:run_id) => String.t() | nil,
           optional(:run_attempt) => pos_integer() | nil,
           optional(:job_id) => pos_integer() | nil,
+          optional(:started_at) => DateTime.t() | nil,
           optional(:completed_at) => DateTime.t() | nil,
           optional(:stale) => boolean(),
           optional(:stale_since) => DateTime.t() | nil
@@ -1650,6 +1651,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       run_id: run_id_from_details_url(details_url),
       run_attempt: details_url_number(details_url, ~r{/actions/runs/\d+/attempts/(\d+)}),
       job_id: details_url_number(details_url, ~r{/actions/runs/\d+/job/(\d+)}),
+      started_at: set_time(check, "startedAt") || set_time(check, "createdAt"),
       completed_at: parse_datetime(Map.get(check, "completedAt") || Map.get(check, "updatedAt"))
     }
     |> close_concluded(check)
@@ -1676,8 +1678,10 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   end
 
   # `gh pr view` writes the zero time for a check that hasn't completed; GraphQL writes null.
-  defp concluded_at(check) do
-    case parse_datetime(Map.get(check, "completedAt")) do
+  defp concluded_at(check), do: set_time(check, "completedAt")
+
+  defp set_time(check, key) do
+    case parse_datetime(Map.get(check, key)) do
       %DateTime{year: year} = at when year > 1 -> at
       _unset -> nil
     end
