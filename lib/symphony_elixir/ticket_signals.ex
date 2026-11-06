@@ -48,6 +48,7 @@ defmodule SymphonyElixir.TicketSignals do
   }
   @notes %{
     "ci_wait_started" => "Waiting for CI",
+    "update_wait" => "Its next agent turn waits for the update",
     "handoff_missing" => "The run ended without its handoff",
     "code_review_carried" => "Code Review carried its approval to a new head",
     "code_review_reviewer_disabled" => "Code Review's reviewer is turned off",

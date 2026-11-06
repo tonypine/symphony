@@ -41,6 +41,27 @@ final class StateSnapshotTests: XCTestCase {
         ),
     ]
 
+    func testRunsBetweenTurnsAreNotActive() throws {
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: recordedState()) as? [String: Any])
+        object["counts"] = ["running": 3, "between_turns": 2, "retrying": 0]
+        guard case let .state(snapshot) = SymphonyState.poll(data: try JSONSerialization.data(withJSONObject: object), statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertEqual(snapshot.running, 3)
+        XCTAssertEqual(snapshot.betweenTurns, 2)
+        XCTAssertEqual(snapshot.activeRuns, 1)
+    }
+
+    func testASymphonyThatPredatesBetweenTurnsCountsEveryRunActive() throws {
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: recordedState()) as? [String: Any])
+        object["counts"] = ["running": 2, "retrying": 0]
+        guard case let .state(snapshot) = SymphonyState.poll(data: try JSONSerialization.data(withJSONObject: object), statusCode: 200) else {
+            return XCTFail("expected a state")
+        }
+        XCTAssertEqual(snapshot.betweenTurns, 0)
+        XCTAssertEqual(snapshot.activeRuns, 2)
+    }
+
     func testDecodesTheRecordedState() throws {
         XCTAssertEqual(
             SymphonyState.poll(data: try recordedState(), statusCode: 200),
