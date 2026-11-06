@@ -40,21 +40,15 @@ defmodule SymphonyElixirWeb.WatchPayload do
   @spec watch(TicketState.t() | nil) :: map() | nil
   def watch(%{pr_watch: %{} = watch}) do
     decision = watch.decision || %{}
-    {owner, clears_when} = next_step(decision)
 
-    %{
+    decision
+    |> decision_fields()
+    |> Map.merge(%{
       phase: name(watch.stay || watch.facts.phase),
       head: watch.head_sha,
       pr_url: watch.pr_url,
       source: name(watch.source),
       read_at: iso8601(watch.read_at),
-      rule: decision[:rule],
-      action: name(decision[:kind]),
-      reason: decision[:reason],
-      owner: name(owner),
-      clears_when: clears_when,
-      since: iso8601(decision[:since]),
-      outcome: name(decision[:outcome]),
       summary: summary(watch),
       facts: facts(watch),
       actions: Enum.map(watch.actions, &action/1),
@@ -63,10 +57,33 @@ defmodule SymphonyElixirWeb.WatchPayload do
       applied: watch.applied,
       links: watch.links,
       waits_on: waits_on(watch)
-    }
+    })
   end
 
   def watch(_record), do: nil
+
+  @doc """
+  What the watcher will do next on the ticket's PR, as the `watch` block says it: the rule, the
+  action, its reason, who acts next (`owner`), what clears it (`clears_when`), since when it stands
+  and its `outcome`. Nil without a decision.
+  """
+  @spec next_action(TicketState.pr_watch() | nil) :: map() | nil
+  def next_action(%{decision: %{} = decision}), do: decision_fields(decision)
+  def next_action(_watch), do: nil
+
+  defp decision_fields(decision) do
+    {owner, clears_when} = next_step(decision)
+
+    %{
+      rule: decision[:rule],
+      action: name(decision[:kind]),
+      reason: decision[:reason],
+      owner: name(owner),
+      clears_when: clears_when,
+      since: iso8601(decision[:since]),
+      outcome: name(decision[:outcome])
+    }
+  end
 
   @doc "An entry of `silent_waits` (`SymphonyElixir.PrWatch.silent_waits/1`)."
   @spec silent_wait(map()) :: map()

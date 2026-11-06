@@ -8,7 +8,8 @@ defmodule SymphonyElixir.TicketState do
   `:symphony` for a move of Symphony's or the Director's, `:external` for an observation of Linear),
   and the decisions a person recorded
   on it (`SymphonyElixir.Decisions`), which the description's Decisions section projects, and
-  the PR and CI watcher's fact record (`pr_watch`, written by `SymphonyElixir.PrWatch.Repo`), and
+  the PR and CI watcher's fact record (`pr_watch`, written by `SymphonyElixir.PrWatch.Repo`) and what
+  it last read of the PR for the ticket read (`pull_request`, kept once the watch ends), and
   the sequence number of the last event in its event stream (`event_seq`, `SymphonyElixir.TicketEvents`),
   and what the last observation of the ticket in Linear found (`observe/4`): its title, description,
   team, project, labels, priority, assignee, open blockers and sub-issues (each by id, identifier and
@@ -278,6 +279,7 @@ defmodule SymphonyElixir.TicketState do
           path_unlocks: [path_unlock()],
           decisions: [decision()],
           pr_watch: pr_watch() | nil,
+          pull_request: SymphonyElixir.PrWatch.Snapshot.t() | nil,
           event_seq: non_neg_integer(),
           title: String.t() | nil,
           description: String.t() | nil,
@@ -365,6 +367,7 @@ defmodule SymphonyElixir.TicketState do
       path_unlocks: normalize_path_unlocks(Map.get(record, :path_unlocks)),
       decisions: normalize_decisions(Map.get(record, :decisions)),
       pr_watch: normalize_pr_watch(Map.get(record, :pr_watch)),
+      pull_request: normalize_pull_request(Map.get(record, :pull_request)),
       event_seq: normalize_event_seq(Map.get(record, :event_seq)),
       title: map_string(record, :title),
       description: text(Map.get(record, :description)),
@@ -409,6 +412,7 @@ defmodule SymphonyElixir.TicketState do
       path_unlocks: [],
       decisions: [],
       pr_watch: nil,
+      pull_request: nil,
       event_seq: 0,
       title: nil,
       description: nil,
@@ -716,13 +720,16 @@ defmodule SymphonyElixir.TicketState do
 
   @doc """
   Sets the watcher's fact record (`t:pr_watch/0`); nil clears it, as when the ticket leaves the
-  watched phases. A record whose `facts` is not a `PrDecision.Facts` struct reads as nil.
+  watched phases. A record whose `facts` is not a `PrDecision.Facts` struct reads as nil. A record
+  carrying `pull_request` (`SymphonyElixir.PrWatch.Snapshot`) leaves it on the ticket's record, where
+  it outlives the watch: a merged ticket still reads its PR.
   """
   @spec put_pr_watch(t(), map() | nil, DateTime.t()) :: t()
   def put_pr_watch(record, pr_watch, at \\ DateTime.utc_now()) do
     record
     |> normalize()
     |> Map.put(:pr_watch, normalize_pr_watch(pr_watch))
+    |> keep_pull_request(pr_watch)
     |> Map.put(:updated_at, at)
   end
 
@@ -1120,6 +1127,12 @@ defmodule SymphonyElixir.TicketState do
   end
 
   defp normalize_pr_watch(_watch), do: nil
+
+  defp keep_pull_request(record, %{pull_request: %{} = pull_request}), do: Map.put(record, :pull_request, pull_request)
+  defp keep_pull_request(record, _watch), do: record
+
+  defp normalize_pull_request(%{} = pull_request), do: pull_request
+  defp normalize_pull_request(_pull_request), do: nil
 
   defp normalize_protected_files(%{paths: paths} = files) when is_list(paths),
     do: %{head_sha: map_string(files, :head_sha), paths: Enum.filter(paths, &is_binary/1)}

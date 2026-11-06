@@ -1517,6 +1517,9 @@ Fields:
   why not (this one has `moves`, `docs/control-api.md`). The read and the control call MUST judge the
   ticket's state with one guard, so a move the read allows is not refused for that state and the
   call's refusal is the read's reason, word for word.
+- Implementations MAY carry the ticket's pull request and its checks on the ticket read (this one has
+  `pull_request`, `docs/control-api.md`). That read MUST come from what the PR watcher already read,
+  and MUST NOT add a read of GitHub.
 - `concurrency.forced_stale_after_hours` (positive integer)
   - Default: `72`.
   - How long an issue may stay forced before it counts as stale. A stale issue is reported as
