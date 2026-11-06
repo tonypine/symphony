@@ -87,7 +87,7 @@ defmodule SymphonyElixir.Situation.RecorderTest do
     pid = start()
     snapshot(pid)
 
-    facts = %Facts{phase: :code_review, ci: :pending, pr: :open, pr_number: 741}
+    facts = %Facts{phase: :qa, ci: :pending, pr: :open, pr_number: 741}
     :ok = RunStore.put_ticket_pr_watch(@repo, @id, "TP-1", %{facts: facts})
     Recorder.ticket_changed(@id, pid)
     settle(pid)

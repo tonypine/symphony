@@ -13,8 +13,25 @@ upkeep is deferred and fires on the read that sees the run end (the orchestrator
 to read at once when a run ends). The landing order stays: a PR with a PR ahead of it that changes
 the same files is not updated until that one lands or leaves the race. A Code Review approval
 survives the update: merging main in leaves the diff against main as it was, and a red merged head
-takes the usual red paths. A GitHub merge queue may later do the final update for `Merging`; the
-between-runs upkeep of the earlier phases stays useful under one.
+takes the usual red paths. An approval still in Code Review, or held for it through CI Fix, is carried
+to the head the update made, so that head is not reviewed again. A GitHub merge queue may later do
+the final update for `Merging`; the between-runs upkeep of the earlier phases stays useful under one.
+
+A green CI gates the merge, not the review. In Code Review the CI rules (R17 to R24) stand back until
+the head is approved (`review` is `approved`), so R27 dispatches the reviewer on any clean PR, with
+checks running or red, and a head that turns red during the review only records the fact (R9). The
+verdict then applies CI's state: changes go to Rework whatever CI says, and an approve on a green or
+running head goes to QA, whose rules need green. An approve on a head the watcher reads as red stays
+in Code Review with the approval recorded, so the CI rules act: R22's rerun, then R21's CI Fix, and
+back through R25 with the approval carried. R27 then carries the approval on with no second review.
+A head that turned red after the watcher's last read goes to QA, and QA's own rules send it to CI Fix.
+
+A changes verdict means the code is about to change, so no CI work is spent on that head. While the
+verdict stands on the head (`review` is `changes_requested`, read in Rework), the CI rules (R17 to R23)
+and the upkeep (U1, U2) stand back and R26 dispatches the rework run whatever CI says: no rerun, no CI
+Fix, no update of the branch. CI runs again on the push that run makes, and from that head on the usual
+rules apply. So does a Rework head no changes verdict stands on, such as one QA failed. A conflict still
+goes through its own rules (R14), since no check can run on a PR that conflicts.
 
 A workflow run counts by its newest attempt only. A run with a check still queued or running is
 pending, even when an earlier attempt's checks were cancelled: a rerun waiting for a runner reads
@@ -41,12 +58,12 @@ the decision is recorded as a wait on CI, and the next read decides again.
 
 ## Upkeep
 
-Checked first on every read of a PR, by poll or by a delivery. Every upkeep rule that matches acts, and none stops the chain: the flow rule below still decides on the same read, from the same facts. Upkeep never waits on a hold or a flow wait, only on a run: while one is active it is deferred, and it fires on the read that sees the run end.
+Checked first on every read of a PR, by poll or by a delivery. Every upkeep rule that matches acts, and none stops the chain: the flow rule below still decides on the same read, from the same facts. Upkeep never waits on a hold or a flow wait, only on a run, and spends nothing on a head a changes verdict stands on: while a run is active it is deferred, and it fires on the read that sees the run end.
 
 | Rule | Phases | When | Then |
 | --- | --- | --- | --- |
-| U1 | all | The PR is behind main, no run is active, no PR ahead in the landing order shares its files, and the head is not red on a failure or a cancelled run; whatever the flow rule (a hold, a question, a CI or competitor wait) | `update_branch`, once per head; a conflict GitHub reports goes to the conflict rules on the next read |
-| U2 | Code Review, QA, Rework, CI Fix, Merging | Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running, that run rerun fewer than 2 times on the head, and no run is active; whatever the flow rule | `rerun_failed` each new cancellation, no attempt spent |
+| U1 | all | The PR is behind main, no run is active, no PR ahead in the landing order shares its files, the head is not red on a failure or a cancelled run, and no changes verdict stands on it; whatever the flow rule (a hold, a question, a CI or competitor wait) | `update_branch`, once per head; a conflict GitHub reports goes to the conflict rules on the next read |
+| U2 | Code Review, QA, Rework, CI Fix, Merging | Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running, that run rerun fewer than 2 times on the head, no run is active, and no changes verdict stands on the head; whatever the flow rule | `rerun_failed` each new cancellation, no attempt spent |
 
 ## Rules
 
@@ -83,9 +100,9 @@ The flow decision: the first rule that matches decides what happens to the ticke
 | R23 | Code Review, QA, Rework, CI Fix, Merging | Red, and the same check is red on the base branch | `wait` on `ci` until the base goes green |
 | R24 | Code Review, QA, CI Fix | Checks are running on the head | `wait` on `ci` |
 | R25 | CI Fix | Green (or no CI) and conflict-free | `return_to_origin`, approvals carried forward |
-| R26 | Rework | Not red, not conflicting, no run | `dispatch` the rework run |
-| R27 | Code Review, QA | Green, or no CI configured (counts as green), and not behind main with nothing ahead (the upkeep, U1, updates that one) | `dispatch` the reviewer or the QA agent |
-| R28 | Code Review, QA, Merging | The PR is behind main (in Code Review and QA: with no PR ahead sharing its files) | a PR ahead shares its files: `wait` on `symphony`; otherwise `wait` on `symphony` while the upkeep (U1) updates the branch |
+| R26 | Rework | Not red, or a changes verdict stands on the head whatever CI says (R17 to R23 stand back); not conflicting, no run | `dispatch` the rework run |
+| R27 | Code Review, QA | Code Review with no approval on the head: a clean PR, whatever CI says (R17 to R24 apply after an approve). QA, or an approved head: green, or no CI configured (counts as green). Either way not behind main with nothing ahead (the upkeep, U1, updates that one) | `dispatch` the reviewer or the QA agent; an approved head carries its approval on, with no second review |
+| R28 | Code Review, QA, Merging | The PR is behind main (in Code Review and QA: with no PR ahead sharing its files), and, unless Code Review is yet to judge the head, not red | a PR ahead shares its files: `wait` on `symphony`; otherwise `wait` on `symphony` while the upkeep (U1) updates the branch |
 | R29 | Merging | Green (or no CI) and mergeable now | `merge_now`, the ticket closed out in the same step |
 | R30 | Merging | Auto-merge off, and checks running or branch protection still blocking | `arm` auto-merge |
 | R31 | Merging | Branch protection blocked the merge past the merge wait | `land_agent` |
@@ -107,6 +124,8 @@ Each fact a rule decides on, the values the table test enumerates, and when the 
 | `base` | `ok`, `changed` | `pr` is `open` or `draft` |
 | `head_origin` | `symphony`, `person` | `pr` is `open` or `draft` |
 | `review_comments` | `none`, `unaddressed` | `pr` is `open` or `draft` |
+| `review` | `pending`, `approved` | `phase` is `code_review` and `pr` is `open` or `draft` |
+| `review` | `pending`, `changes_requested` | `phase` is `rework` and `pr` is `open` or `draft` |
 | `ci` | `pending`, `green`, `none`, `red`, `required_missing` | `pr` is `open` or `draft` |
 | `red_kind` | `failure`, `cancelled`, `human_only`, `also_red_on_base`, `run_in_progress` | `ci` is `red` |
 | `cancel_reruns` | `1`, `2` | `ci` is `red` and `red_kind` is `cancelled` |

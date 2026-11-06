@@ -20,6 +20,18 @@ defmodule SymphonyElixir.PrWatchTest do
   defp issue(id, state), do: %Issue{id: id, identifier: "TP-#{id}", title: "Ticket", state: state, repo_key: @repo_key}
 
   describe "dispatch_reason/2" do
+    test "red_on?/3 reads the watcher's newest read of that head" do
+      PrWatchSupport.put_watch!(@repo_key, "1", head_sha: "sha-1", facts: %{ci: :red})
+
+      assert PrWatch.red_on?("1", "sha-1")
+      refute PrWatch.red_on?("1", "sha-0")
+      refute PrWatch.red_on?("1", nil)
+      refute PrWatch.red_on?("unwatched", "sha-1")
+
+      PrWatchSupport.put_watch!(@repo_key, "1", head_sha: "sha-1", facts: %{ci: :pending})
+      refute PrWatch.red_on?("1", "sha-1")
+    end
+
     test "a Code Review or QA run starts only on the watcher's decision to dispatch" do
       settings = Config.settings!()
 

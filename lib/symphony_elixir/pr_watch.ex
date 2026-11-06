@@ -156,7 +156,7 @@ defmodule SymphonyElixir.PrWatch do
   @doc """
   Why the orchestrator must not start a run for `issue` now, from the watcher's decision on it, or
   nil when it may. Only the phases whose run waits on the PR are gated: `Code Review` and `QA` run
-  on a decision to `dispatch` (a green, conflict-free head), and `Merging`, with auto-merge on,
+  on a decision to `dispatch` (a conflict-free PR, whose head QA also needs green), and `Merging`, with auto-merge on,
   runs only the landing agent the decision hands it to (`land_agent`); one with no PR waits for a
   person's answer (R6). A ticket the watcher hasn't decided on yet waits for it.
   """
@@ -184,6 +184,15 @@ defmodule SymphonyElixir.PrWatch do
   defp gate(:review, %{decision: %{kind: :dispatch}}), do: nil
   defp gate(:landing, %{decision: %{kind: :land_agent}}), do: nil
   defp gate(_phase, %{decision: %{reason: reason, rule: rule}}), do: "the PR watcher (#{rule}): #{reason}"
+
+  @doc """
+  Whether the watcher's newest read of the issue's PR found `head` red. A record of another head, or
+  no record, says nothing about it.
+  """
+  @spec red_on?(String.t() | nil, String.t() | nil, keyword()) :: boolean()
+  def red_on?(issue_id, head, opts \\ []) do
+    is_binary(head) and match?(%{head_sha: ^head, facts: %{ci: :red}}, watch(issue_id, opts))
+  end
 
   @doc """
   The red head's failure a CI Fix run was sent for, as its prompt renders it (the failed checks,

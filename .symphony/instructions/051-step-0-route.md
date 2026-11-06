@@ -7,7 +7,7 @@
    - `Todo` -> immediately move to `In Progress`, then ensure bootstrap workpad comment exists (create if missing), then start execution flow.
      - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
    - `In Progress` -> continue execution flow from current scratchpad comment.
-   - `Code Review` -> the reviewer agent judges the PR on its green head; do not change the issue or PR, stop and wait for the verdict.
+   - `Code Review` -> the reviewer agent judges the PR on its head, whatever CI says; do not change the issue or PR, stop and wait for the verdict.
    - `QA` -> a QA agent walks the change's user journeys end to end; do not change the issue or PR, stop and wait for the verdict.
    - `CI Fix` -> run the mechanical lane in the `CI failure triage protocol`: fix the red check at its cause on the same branch (never a rerun), `Rework` when the repair is substantive, or a request for a person when no change can fix it.
    - `Plan Review` -> a person reviews the plan; do nothing and stop.

@@ -105,6 +105,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     AutoMerge,
     CiFix,
     CiState,
+    CodeReview,
     Config,
     Decisions,
     LandingOrder,
@@ -1214,8 +1215,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
       |> cancel_stale_runs(read, state)
       |> restart_conflicts(entry)
 
-    ticket = Map.put(ticket, :review_comments, review_comments(entry, read, settings, now))
     head = read[:head_sha]
+    carried? = approval_carried?(entry, ticket, prior, head, state)
+    ticket = Map.merge(ticket, %{review_comments: review_comments(entry, read, settings, now), review: review(entry, head, carried?)})
     applied = if new_stay?, do: [], else: Enum.filter(previous.applied, &(&1.head_sha == head))
     {read, applied} = base_answer(read, applied, entry)
     {attempts, applied} = take_answer(attempts, applied, entry, read, now, state)
@@ -1330,6 +1332,39 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # The phase of the record's stay: the one a move put the ticket in, else the one it was read in.
   defp stay(%{stay: stay}) when is_atom(stay) and not is_nil(stay), do: stay
   defp stay(previous), do: previous.facts.phase
+
+  # Code Review's judgement of the head the read found, from its newest verdict on that head: in Code
+  # Review whether it approved, in Rework whether its changes verdict stands. A new head has no verdict
+  # until a CI Fix or the upkeep's update carries the approval to it.
+  defp review(%{phase: :code_review}, _head, true), do: :approved
+
+  defp review(%{phase: phase, record: %{} = record}, head, _carried?) when phase in [:code_review, :rework] and is_binary(head) do
+    review_of(phase, code_review_verdict(record, head))
+  end
+
+  defp review(_entry, _head, _carried?), do: :pending
+
+  defp review_of(:code_review, %{outcome: "approve"}), do: :approved
+  defp review_of(:rework, %{outcome: "request_changes"}), do: :changes_requested
+  defp review_of(_phase, _verdict), do: :pending
+
+  defp code_review_verdict(record, head), do: record |> TicketState.verdicts() |> Enum.find(&(&1.kind == "code_review" and &1.head_sha == head))
+
+  # The upkeep (U1) merged main into a head Code Review approved: the diff against main is as it was, so
+  # the approval carries to the head the update made, and no second review runs. Only the head the
+  # update moved past counts, and only with no run that could have pushed the new one.
+  defp approval_carried?(%{record: %{} = record} = entry, %{run: :none} = ticket, %{updated_from: stale}, head, state)
+       when is_binary(stale) and is_binary(head) and head != stale do
+    carried? = approval_held?(ticket) and match?(%{outcome: "approve"}, code_review_verdict(record, stale))
+    if carried?, do: CodeReview.carry_verdict(state.repo_key, entry.issue.id, head)
+    carried?
+  end
+
+  defp approval_carried?(_entry, _ticket, _prior, _head, _state), do: false
+
+  defp approval_held?(%{phase: :code_review}), do: true
+  defp approval_held?(%{phase: :ci_fix, origin: :code_review}), do: true
+  defp approval_held?(_ticket), do: false
 
   defp decide(facts, entry) do
     {:ok, PrDecision.decide(facts)}

@@ -178,6 +178,10 @@ public struct PRWatchCard: Equatable {
             status = .problem
             word = "Sent to Rework"
             headline = "The conflict with main came back after \(Self.maxConflictAttempts) fix runs and no PR competes: conflict sent to Rework"
+        } else if watch.phase == "code_review", ["open", "draft"].contains(facts.pr ?? ""), facts.run == "active" || watch.rule == "R9" {
+            status = .working
+            word = "Reviewing"
+            headline = "Reviewing" + (Self.ciBeside(facts).map { "; \($0)" } ?? "")
         } else if facts.run == "active" || watch.rule == "R9" {
             status = .working
             word = "Working"
@@ -234,6 +238,7 @@ public struct PRWatchCard: Equatable {
             rows.append(Fact(label: "Head", value: Self.short(head) + (facts.headOrigin == "person" ? " · pushed by a person" : ""), help: head))
         }
         if ["open", "draft"].contains(facts.pr ?? "") {
+            if let review = Self.reviewWords(watch) { rows.append(Fact(label: "Review", value: review)) }
             if let checks = Self.checksWords(facts) { rows.append(Fact(label: "Checks", value: checks)) }
             if let merge = Self.mergeWords(facts) { rows.append(Fact(label: "Merge", value: merge)) }
         }
@@ -364,6 +369,25 @@ public struct PRWatchCard: Equatable {
         case "close_out": "Closed out the merged PR"
         case let other?: Overview.phaseName(other)
         case nil: "Acted"
+        }
+    }
+
+    /// Code Review's state, a fact of its own beside the checks: a review doesn't wait on CI.
+    private static func reviewWords(_ watch: WatchBlock) -> String? {
+        guard watch.phase == "code_review" else { return nil }
+        if watch.facts.run == "active" { return "reviewing" }
+        return watch.facts.review == "approved" ? "approved; CI's state comes next" : "not started"
+    }
+
+    /// CI's state in the words that follow "Reviewing; ".
+    private static func ciBeside(_ facts: WatchBlock.Facts) -> String? {
+        switch facts.ci {
+        case "pending": return "checks still running"
+        case "green": return "checks passing"
+        case "none": return "no CI"
+        case "required_missing": return "a required check has not reported"
+        case "red": return facts.failingCheck.map { "CI red on \($0)" } ?? "CI red"
+        default: return nil
         }
     }
 
