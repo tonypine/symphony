@@ -821,7 +821,8 @@ defmodule SymphonyElixir.TicketStateTest do
             actions: [%{rule: "R1"}, :junk, %{rule: "R2"}, %{rule: "R3"}, %{rule: "R4"}, %{rule: "R5"}, %{rule: "R6"}],
             silent: %{since: @at, ticks: 2, bound: " ", reason: "quiet", extra: 1},
             protected_files: %{head_sha: "abc", paths: ["WORKFLOW.md", :junk]},
-            upkeep_failure: %{rule: "U1", kind: :update_branch, head_sha: "abc", error: ":forbidden", at: @at, extra: 1}
+            upkeep_failure: %{rule: "U1", kind: :update_branch, head_sha: "abc", error: ":forbidden", at: @at, extra: 1},
+            stale_checks_noted: %{head_sha: "abc", names: ["changes"]}
           },
           @at
         )
@@ -857,7 +858,8 @@ defmodule SymphonyElixir.TicketStateTest do
                actions: [%{rule: "R1"}, %{rule: "R2"}, %{rule: "R3"}, %{rule: "R4"}, %{rule: "R5"}],
                silent: %{since: @at, ticks: 2, bound: nil, reason: "quiet"},
                protected_files: %{head_sha: "abc", paths: ["WORKFLOW.md"]},
-               upkeep_failure: %{rule: "U1", kind: :update_branch, head_sha: "abc", error: ":forbidden", at: @at}
+               upkeep_failure: %{rule: "U1", kind: :update_branch, head_sha: "abc", error: ":forbidden", at: @at},
+               stale_checks_noted: %{head_sha: "abc", names: ["changes"]}
              }
 
       assert TicketState.normalize(record) == record
@@ -884,7 +886,8 @@ defmodule SymphonyElixir.TicketStateTest do
                actions: [],
                silent: nil,
                protected_files: nil,
-               upkeep_failure: nil
+               upkeep_failure: nil,
+               stale_checks_noted: nil
              } =
                TicketState.pr_watch(sparse)
 

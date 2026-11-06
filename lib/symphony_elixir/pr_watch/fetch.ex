@@ -437,8 +437,9 @@ defmodule SymphonyElixir.PrWatch.Fetch do
 
   # The required checks matter once nothing failed: a head is green when they passed, whatever else
   # still runs, and a required check that never reported is what keeps it from green once nothing
-  # runs. They matter too when the only failures are cancellations: a cancelled check the base doesn't require is set aside once its reruns are spent
-  # (`past_cancelled`), and beside a failed check only a person clears it is set aside at once.
+  # runs. They matter too when the only failures are cancellations: a cancelled check the base
+  # doesn't require is set aside once its reruns are spent (`past_cancelled`), and beside a failed
+  # check only a person clears it is set aside at once.
   # `{names, read}`: `read` is `{base, names}` when they were read now rather than known; `names` is
   # nil when they couldn't be read.
   defp required(pr_url, base_ref, checks, opts) when is_binary(base_ref) do

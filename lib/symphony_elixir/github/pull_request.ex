@@ -77,7 +77,12 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           checks: [ci_check()]
         }
 
-  @type head_run :: %{id: String.t() | nil, status: String.t() | nil, conclusion: String.t() | nil, updated_at: DateTime.t() | nil}
+  @type head_run :: %{
+          id: String.t() | nil,
+          status: String.t() | nil,
+          conclusion: String.t() | nil,
+          updated_at: DateTime.t() | nil
+        }
 
   @type review :: %{
           optional(:id) => String.t() | nil,
@@ -1454,7 +1459,12 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   end
 
   defp normalize_head_run(run) do
-    %{id: normalize_id(run["id"]), status: upcase(run["status"]), conclusion: upcase(run["conclusion"]), updated_at: parse_datetime(run["updated_at"])}
+    %{
+      id: normalize_id(run["id"]),
+      status: upcase(run["status"]),
+      conclusion: upcase(run["conclusion"]),
+      updated_at: parse_datetime(run["updated_at"])
+    }
   end
 
   defp view_pr(pr_url, opts) do

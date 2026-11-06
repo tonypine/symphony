@@ -1005,7 +1005,13 @@ defmodule SymphonyElixir.PrWatch.Repo do
         _other_head -> []
       end
 
-    due = for %{name: name, since: since} <- stale, name not in noted, past_stale_grace?(since, now), uniq: true, do: name
+    due =
+      for %{name: name, since: since} <- stale,
+          name not in noted,
+          past_stale_grace?(since, now),
+          uniq: true,
+          do: name
+
     Enum.each(due, &TicketSignals.record(state.repo_key, entry.issue.id, "stale_check", %{check: &1, head: head}))
     %{head_sha: head, names: noted ++ due}
   end

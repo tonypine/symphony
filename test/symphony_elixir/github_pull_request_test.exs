@@ -292,7 +292,8 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert PullRequest.check_result(failed) == :failed
 
     # A completion time alone: it finished and has nothing to say.
-    assert %{status: "COMPLETED", conclusion: "NEUTRAL", stale: true} = neutral = normalize.(%{"name" => "x", "status" => "IN_PROGRESS", "conclusion" => "", "completedAt" => concluded_at})
+    open_check = %{"name" => "x", "status" => "IN_PROGRESS", "conclusion" => "", "completedAt" => concluded_at}
+    assert %{status: "COMPLETED", conclusion: "NEUTRAL", stale: true} = neutral = normalize.(open_check)
     assert PullRequest.check_result(neutral) == :passed
 
     # A check still running: gh's zero time and an empty conclusion, or null for both.

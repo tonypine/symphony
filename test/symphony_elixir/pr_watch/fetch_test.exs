@@ -700,7 +700,8 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       assert {:ok, %{ci: :green, required: {"main", ["ci"]}}} = read({response(pull(head)), 0}, rest, required_checks: %{})
 
       # A required check still running, or one that never reported, holds the head.
-      assert {:ok, %{ci: :pending, running_checks: ["e2e"]}} = read({response(pull(head)), 0}, %{}, required_checks: %{"main" => ["ci", "e2e"]})
+      both_required = [required_checks: %{"main" => ["ci", "e2e"]}]
+      assert {:ok, %{ci: :pending, running_checks: ["e2e"]}} = read({response(pull(head)), 0}, %{}, both_required)
       assert {:ok, %{ci: :pending}} = read({response(pull(head)), 0}, %{}, required_checks: %{"main" => ["ci", "build"]})
 
       # No required checks, or a read of them that fails: the head waits on every check.
@@ -712,7 +713,8 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
 
       # A check the base doesn't require that fails still turns the head red.
       failed = rollup([check("ci", "SUCCESS"), check("e2e", "FAILURE", job: 2)])
-      assert {:ok, %{ci: :red, running_checks: []}} = read({response(pull(failed)), 0}, %{runs: base_runs([])}, required)
+      red_read = read({response(pull(failed)), 0}, %{runs: base_runs([])}, required)
+      assert {:ok, %{ci: :red, running_checks: []}} = red_read
     end
 
     test "TP-1426: a check still open in a run that passed counts as finished" do

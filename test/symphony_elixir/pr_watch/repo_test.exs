@@ -871,9 +871,14 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     test "the ticket's history names it past the grace, once per head and check", %{repo_key: repo_key} do
       issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
       url = pr_url(1)
-      recent = DateTime.add(DateTime.utc_now(), -30, :second)
-      long_ago = DateTime.add(DateTime.utc_now(), -600, :second)
-      notes = fn -> for %{payload: %{text: "GitHub still shows" <> _rest = text}} <- RunStore.list_ticket_events("1", types: ["note"]), do: text end
+      recent = DateTime.add(@now, -30, :second)
+      long_ago = DateTime.add(@now, -600, :second)
+
+      notes = fn ->
+        for %{payload: %{text: "GitHub still shows" <> _rest = text}} <- RunStore.list_ticket_events("1", types: ["note"]),
+            do: text
+      end
+
       stale = fn head, checks -> {:ok, read_of(url, %{head_sha: head, stale_checks: checks})} end
 
       pid = start_repo!(repo_key)
