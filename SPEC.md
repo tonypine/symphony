@@ -546,7 +546,8 @@ model below), `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirmed a resolution),
 `checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
-`question.asked`, `question.answered`, `question.withdrawn`, `question.reopened`, `park.backfilled`
+`question.asked`, `question.answered`, `question.withdrawn`, `question.reopened`, `question.not_asked`
+(machine only: a request refused at the run's limit of requests), `park.backfilled`
 (machine only: an older park brought up to date at start-up, with what it was given),
 `workspace.synced` (machine only: before a review, QA, landing or rework run, the heads the
 newest-known-head rule compared, the one that won and what it did), `workspace.rebuilt` (machine
@@ -4695,8 +4696,11 @@ Scoped Linear tool extension contract:
   NOT be posted again. A request whose title or question a person already answered (the Decisions
   section, or an answered request under the issue) MUST NOT be posted: the result carries the
   recorded answer, which the run applies. Requests
-  MUST be capped per run (the Elixir cap is 5) and refused when the run has no state to count
-  against, or when the issue's repository turned human actions off. The read-only reviewer scope
+  MUST be capped per run (the Elixir cap is 5, and 12 on a plan run, the `breakdown` run kind, which
+  asks every choice its plan leaves open in one run) and refused when the run has no state to count
+  against, or when the issue's repository turned human actions off. A request refused for the cap is
+  recorded on the ticket as `question.not_asked` with its title and question, asks nothing and pauses
+  nothing. The read-only reviewer scope
   MUST NOT advertise or execute it.
 - `linear_withdraw_human_action` MUST only act on the current issue and MUST accept only a
   non-blank `reason` and an optional `title`. The reason MUST pass the same secret scan as comments
@@ -5886,7 +5890,9 @@ Minimum endpoints:
       `parsed`; a brief without a `**What to review:**` line comes as `{"format": "raw",
       "markdown": ...}`; null without a brief, `sub_tickets` (`identifier`, `title`, `url`,
       `state`) in landing order, and `unapplied_answers`: how many of the plan's requests a person
-      answered since the plan last moved into `Plan Review`, which no revision has applied yet.
+      answered since the plan last moved into `Plan Review`, which no revision has applied yet,
+      and `unasked_choices`: the titles of the choices its latest run could not ask because it
+      reached its limit of requests (`question.not_asked`), without those a later request asked.
     - `action`: `title`, `question`, `why`, `if_unanswered`, `unblocks`, `steps`, `options`
       (`label`, `effect`, `recommended`, `tradeoffs`: `kind` and `text`), `recommendation_reason`
       and `requested_at`.
@@ -5950,7 +5956,8 @@ Minimum endpoints:
           "review": {
             "brief": {"format": "parsed", "headline": "Approve the saved-searches plan.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": []},
             "sub_tickets": [],
-            "unapplied_answers": 0
+            "unapplied_answers": 0,
+            "unasked_choices": []
           }
         },
         {
@@ -6103,13 +6110,17 @@ Minimum endpoints:
     still waiting for an answer: `id`, `title`, `asked_by`, `asked_at`, `confirm`) and
     `repository_paused`. A pause or question change records a ticket event, so the live channel
     (`/api/v1/stream`) sends that ticket's notice once it commits.
-  - A running, watched, slot-waiting or passed-over issue MAY carry `connected`: where it sits
-    among the others, from what the orchestrator already holds (no tracker read per request).
-    `parent` (`identifier`, `title`, `done`, `total`, `children` state types in landing order, or
-    null), and `sub_tickets`, `blocked_by`, `blocks`, `related`, each `identifier`, `title` and
-    `state`. Blockers and sub-tickets come from the poll (`title` null); the parent and the
-    `blocks` and `related` links come from the run's enrichment read at dispatch. An untracked
-    issue has no `connected`.
+  - An issue with a ticket state record or that the orchestrator tracks carries `connected`: where it
+    sits among the others, from the records, the ledgers, what the orchestrator holds and the cached
+    Initiatives (no tracker read per request). `parent` (`identifier`, `title`, `done`, `total`,
+    `children` state types in landing order, or null), `epic` (`identifier`, `title`, `done`, `total`,
+    `incomplete`, and `tickets` in chain order, each with its `situation` kind and whether it is
+    `current`, or null; the same count as `/api/v1/initiatives`), and `sub_tickets`, `blocked_by`,
+    `blocks`, `related`, each `identifier`, `title` and `state`. `blocked_by` lists every blocker ever
+    linked, each with `status` (`open` or `resolved`) and `resolved_at`, from the ledger's dependency
+    pause events; the record's `blockers` keep only the open ones, for dispatch. `blocks` also holds
+    the tickets whose records name this one as an open blocker, each with its `situation` kind.
+    `docs/control-api.md` documents the shape.
   - `verdicts` lists the ticket's Code Review and QA verdicts from its ticket state record, newest
     first: `kind` (`code_review` or `qa`), `outcome`, the `head_sha` judged and `recorded_at`. It
     reads no Linear. A ticket Symphony no longer runs or watches still resolves here, with

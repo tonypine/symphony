@@ -597,6 +597,10 @@ Which plan run this is:
    Decisions. Write each one as the standard says, starting the question from what
    the person is doing when the choice matters. Never write a question only into a
    comment or the brief: a question the Inbox does not list is never answered.
+   Raise them all in the same turn: a plan run's limit of requests is higher than other
+   runs', so that it can. When the tool still refuses one for the limit, Symphony
+   records it and the Inbox shows the plan with that choice not asked; name each one
+   under `Decisions needed` in the brief, with why it was not asked.
 5. Record the plan and the sub-ticket identifiers in the workpad `Notes`. Leave the
    review brief (see `Review brief`): one brief for the whole plan, linking every
    artifact, listing every sub-ticket and linking each request step 4 raised, with the
@@ -834,7 +838,8 @@ a plan handed off to `Plan Review`, and a `linear_request_human_action` decision
   link each request the plan run raised for a choice it leaves open under
   `Decisions needed`, so the person reviews everything at once. The brief links the
   requests and never restates them: the person answers each one in the Inbox, by an
-  option or in their own words.
+  option or in their own words. A choice the run could not ask because it reached its
+  limit of requests is named there too, as not asked, with why.
 - A PR's brief links the PR and says what to check: the behaviour to try, the user
   journeys QA should walk, and the parts that carry the risk.
 - Next to the brief, update the summary block at the end of the issue description

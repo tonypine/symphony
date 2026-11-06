@@ -302,6 +302,8 @@ defmodule SymphonyElixir.PlaybookTest do
     assert flat =~ "link every artifact (each document or artifact comment, the HTML screens), list every sub-ticket"
     assert flat =~ "link each request the plan run raised for a choice it leaves open under `Decisions needed`"
     assert flat =~ "Ask each choice the plan leaves open with `linear_request_human_action`, one request per choice, before the handoff"
+    assert flat =~ "Raise them all in the same turn"
+    assert flat =~ "name each one under `Decisions needed` in the brief, with why it was not asked"
 
     # Plan to Plan Review: the plan run, a resumed plan and a re-plan.
     assert flat =~

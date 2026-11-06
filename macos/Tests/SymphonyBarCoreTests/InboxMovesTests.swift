@@ -66,6 +66,14 @@ final class InboxMovesTests: XCTestCase {
         )
         one.review.unappliedAnswers = 1
         XCTAssertTrue(ConsequenceSheet(move: .approvePlan, item: one).stays.hasSuffix("as written, without it."))
+
+        // Choices the plan run could not ask: the sheet says so before approving.
+        one.review.unappliedAnswers = 0
+        one.review.unaskedChoices = ["Who may export"]
+        XCTAssertEqual(
+            ConsequenceSheet(move: .approvePlan, item: one).stays,
+            "1 choice not asked: the planning run reached its limit of questions. Not asked: Who may export. The plan stays as written. To change it, ask for changes instead."
+        )
     }
 
     func testAskForChangesKeepsTheSubTicketsAndRejectPlanSaysWhichItCancels() throws {

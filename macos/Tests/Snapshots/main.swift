@@ -632,6 +632,31 @@ func planUnapplied() -> some View {
     return review(plan, width: 640)
 }
 
+/// SHOP-330 of the `inbox-unasked-choices` fixture: choices its plan run could not ask.
+@MainActor
+func unaskedPlan() -> InboxItem {
+    let api = here.appendingPathComponent("../Fixtures/director-app/inbox-unasked-choices/api/v1/inbox.json").standardizedFileURL
+    guard let plan = InboxPayload.decode(try! Data(contentsOf: api))?.items.first(where: { $0.identifier == "SHOP-330" }) else {
+        fatalError("SHOP-330 is missing from \(api.path)")
+    }
+    return plan
+}
+
+/// The plan's page: the warning says which choices were not asked, and the plan never reads as fully asked.
+@MainActor
+func planUnasked() -> some View {
+    review(unaskedPlan(), width: 640)
+}
+
+/// The Approve sheet of the same plan, which says the same before the plan is approved.
+@MainActor
+func planUnaskedApprove() -> some View {
+    ConsequenceSheetView(
+        sheet: ConsequenceSheet(move: .approvePlan, item: unaskedPlan()), working: false, error: nil, cancel: {}, confirm: { _ in }
+    )
+    .background(DesignTokens.Surface.content.color)
+}
+
 // The ticket ledger's fixture (TP-1193, TP-1195): SHOP-410 with its events feed, and against an older Symphony without.
 let ledgerAPI = here.appendingPathComponent("../Fixtures/director-app/ticket-ledger/api/v1").standardizedFileURL
 let ledgerNow = ISO8601DateFormatter().date(from: "2026-10-18T11:20:00Z")!
@@ -959,6 +984,8 @@ MainActor.assumeIsolated {
         render(ticketPage(), scheme, to: "ticket-page-chips-\(suffix).png")
         render(planQuestions(), scheme, to: "plan-questions-\(suffix).png")
         render(planUnapplied(), scheme, to: "plan-unapplied-\(suffix).png")
+        render(planUnasked(), scheme, to: "plan-unasked-\(suffix).png")
+        render(planUnaskedApprove(), scheme, to: "plan-unasked-approve-\(suffix).png")
         // The PR and CI watcher (TP-946): S15's states, S16 and S17.
         for (identifier, name) in [("TP-701", "ci"), ("TP-704", "competing"), ("TP-707", "fix-ticket"), ("TP-703", "on-hold"), ("TP-709", "pr-closed")] {
             render(watchPage(identifier), scheme, to: "pr-watch-\(name)-\(suffix).png")
