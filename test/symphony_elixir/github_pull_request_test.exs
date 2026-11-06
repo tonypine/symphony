@@ -263,7 +263,7 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     # The failed jobs of run 987 are being rerun: they left the rollup, and the run's new attempt is queued.
     rerunning = {Jason.encode!(%{"workflow_runs" => [%{"id" => 987, "status" => "queued", "conclusion" => nil}, "ignored"]}), 0}
     assert {:ok, status} = PullRequest.fetch_ci_status(pr_url, gh_runner: runner.(rerunning))
-    assert status.workflow_runs == [%{id: "987", status: "QUEUED", conclusion: nil}]
+    assert status.workflow_runs == [%{id: "987", status: "QUEUED", conclusion: nil, updated_at: nil}]
     assert CiPoller.ci_action(status) == :pending
 
     finished = {Jason.encode!(%{"workflow_runs" => [%{"id" => 987, "status" => "completed", "conclusion" => "success"}]}), 0}
@@ -274,6 +274,84 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
 
     assert {:error, {:gh_failed, ["api", ^runs_endpoint], 1, "HTTP 502"}} =
              PullRequest.fetch_ci_status(pr_url, gh_runner: runner.({"HTTP 502", 1}))
+  end
+
+  test "TP-1426: a check run that says how or when it ended is finished, whatever its status says" do
+    concluded_at = "2026-11-05T23:45:43Z"
+    normalize = fn check -> [check] |> PullRequest.normalize_checks() |> hd() end
+
+    # GitHub left `changes` in_progress with a conclusion and a completion time.
+    stuck = %{"name" => "changes", "status" => "in_progress", "conclusion" => "success", "completedAt" => concluded_at}
+    assert %{status: "COMPLETED", conclusion: "success", stale: true, stale_since: ~U[2026-11-05 23:45:43Z]} = closed = normalize.(stuck)
+    assert PullRequest.check_result(closed) == :passed
+    assert CiPoller.ci_action(%{checks: [closed]}) == :success
+    assert PullRequest.checks_outcome([closed]) == "passed"
+
+    # The conclusion decides: one that failed is red, and no completion time is needed.
+    assert %{status: "COMPLETED", stale: true, stale_since: nil} = failed = normalize.(%{"name" => "x", "status" => "IN_PROGRESS", "conclusion" => "FAILURE"})
+    assert PullRequest.check_result(failed) == :failed
+
+    # A completion time alone: it finished and has nothing to say.
+    open_check = %{"name" => "x", "status" => "IN_PROGRESS", "conclusion" => "", "completedAt" => concluded_at}
+    assert %{status: "COMPLETED", conclusion: "NEUTRAL", stale: true} = neutral = normalize.(open_check)
+    assert PullRequest.check_result(neutral) == :passed
+
+    # A check still running: gh's zero time and an empty conclusion, or null for both.
+    for running <- [%{"conclusion" => "", "completedAt" => "0001-01-01T00:00:00Z"}, %{"conclusion" => nil, "completedAt" => nil}] do
+      check = normalize.(Map.merge(%{"name" => "x", "status" => "IN_PROGRESS"}, running))
+      assert PullRequest.check_result(check) == :pending
+      refute Map.has_key?(check, :stale)
+    end
+
+    # A finished check and a status context are left as they are.
+    refute Map.has_key?(normalize.(%{"name" => "x", "status" => "COMPLETED", "conclusion" => "SUCCESS", "completedAt" => concluded_at}), :stale)
+    assert %{status: "PENDING"} = pending = normalize.(%{"context" => "ext", "state" => "PENDING"})
+    refute Map.has_key?(pending, :stale)
+    assert PullRequest.check_result(pending) == :pending
+  end
+
+  test "TP-1426: close_stale_checks/2 closes a check open in a run that passed, reading the runs only when it can matter" do
+    pr_url = "https://github.com/acme/app/pull/1"
+    open = %{name: "changes", status: "IN_PROGRESS", conclusion: nil, run_id: "9"}
+    passed = %{name: "ci", status: "COMPLETED", conclusion: "SUCCESS", run_id: "9"}
+    status = fn checks -> %{pr_url: pr_url, commit_sha: "abc", checks: checks} end
+    test_pid = self()
+
+    runner = fn response ->
+      fn args, _opts ->
+        send(test_pid, {:gh, args})
+        response
+      end
+    end
+
+    run = %{"id" => 9, "status" => "completed", "conclusion" => "success", "updated_at" => "2026-11-05T23:54:00Z"}
+
+    ExUnit.CaptureLog.capture_log(fn ->
+      assert %{checks: [%{conclusion: "SUCCESS"}, %{status: "COMPLETED", conclusion: "SUCCESS", stale: true, stale_since: ~U[2026-11-05 23:54:00Z]}]} =
+               PullRequest.close_stale_checks(status.([passed, open]), gh_runner: runner.({Jason.encode!(%{"workflow_runs" => [run]}), 0}))
+    end)
+
+    assert_received {:gh, ["api", "repos/acme/app/actions/runs?head_sha=abc&per_page=100"]}
+
+    # A read that fails leaves the check open, and says so.
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        input = status.([passed, open])
+        assert PullRequest.close_stale_checks(input, gh_runner: runner.({"boom", 1})) == input
+      end)
+
+    assert log =~ "Could not read the workflow runs of a head waiting on its checks pr_url=#{pr_url} commit_sha=abc"
+    flush_gh()
+
+    # Nothing open, a failure beside it, a check from outside GitHub Actions, or no head: no read.
+    for checks <- [[passed], [open, %{passed | conclusion: "FAILURE"}], [%{open | run_id: nil}]] do
+      input = status.(checks)
+      assert PullRequest.close_stale_checks(input, gh_runner: runner.({"boom", 1})) == input
+    end
+
+    no_head = %{status.([open]) | commit_sha: nil}
+    assert PullRequest.close_stale_checks(no_head, gh_runner: runner.({"boom", 1})) == no_head
+    refute_received {:gh, _args}
   end
 
   test "fetch_ci_status reads a check left in progress in a completed workflow run as finished" do
@@ -1520,5 +1598,13 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     assert PullRequest.checks_outcome([%{status: "COMPLETED", conclusion: "SUCCESS"}, %{status: "COMPLETED", conclusion: "SKIPPED"}]) == "passed"
     assert PullRequest.checks_outcome([%{status: "COMPLETED", conclusion: "SUCCESS"}, %{status: "QUEUED", conclusion: nil}]) == "pending"
     assert PullRequest.checks_outcome([%{status: "COMPLETED", conclusion: "FAILURE"}, %{status: "QUEUED", conclusion: nil}]) == "failed"
+  end
+
+  defp flush_gh do
+    receive do
+      {:gh, _args} -> flush_gh()
+    after
+      0 -> :ok
+    end
   end
 end

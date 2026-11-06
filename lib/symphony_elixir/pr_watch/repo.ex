@@ -110,6 +110,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     RunStore,
     TicketObservation,
     TicketPullRequest,
+    TicketSignals,
     TicketState,
     Tracker
   }
@@ -126,6 +127,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   @rework_state "Rework"
   @merging_state "Merging"
   @required_checks_ttl_ms 10 * 60_000
+  @stale_check_grace_ms 2 * 60_000
   @max_backoff_ms 5 * 60_000
   @max_rate_limit_wait_ms 60 * 60_000
   @no_fix %{ci_failure: nil, pr_conflict: nil}
@@ -976,7 +978,8 @@ defmodule SymphonyElixir.PrWatch.Repo do
           links: Map.get(watch, :links, entry.links),
           delivered_at: carried(previous, :delivered_at, nil),
           read_ci: watch.facts.ci,
-          base_ref: base_ref(read, previous)
+          base_ref: base_ref(read, previous),
+          stale_checks_noted: note_stale_checks(read, previous, entry, now, state)
         })
         |> settled(previous)
         |> tap(&log_decision(&1, previous, entry, state))
@@ -991,6 +994,32 @@ defmodule SymphonyElixir.PrWatch.Repo do
       watch
     end
   end
+
+  # GitHub still reads a check of this head as running after it finished: past a short grace, in
+  # which GitHub normally closes it, the ticket's history names the check, once per head and check.
+  # The record keeps which were noted.
+  defp note_stale_checks({:ok, %{head_sha: head, stale_checks: stale}}, previous, entry, now, state) do
+    noted =
+      case carried(previous, :stale_checks_noted, nil) do
+        %{head_sha: ^head, names: names} -> names
+        _other_head -> []
+      end
+
+    due =
+      for %{name: name, since: since} <- stale,
+          name not in noted,
+          past_stale_grace?(since, now),
+          uniq: true,
+          do: name
+
+    Enum.each(due, &TicketSignals.record(state.repo_key, entry.issue.id, "stale_check", %{check: &1, head: head}))
+    %{head_sha: head, names: noted ++ due}
+  end
+
+  defp note_stale_checks(_read, previous, _entry, _now, _state), do: carried(previous, :stale_checks_noted, nil)
+
+  defp past_stale_grace?(nil, _now), do: true
+  defp past_stale_grace?(since, now), do: DateTime.diff(now, since, :millisecond) > @stale_check_grace_ms
 
   # A new decision that a run starts (the reviewer, QA, a CI Fix run) is the orchestrator's to act
   # on: the record's change is announced once written, so it runs a dispatch cycle at once rather

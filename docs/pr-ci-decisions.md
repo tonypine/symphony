@@ -20,6 +20,14 @@ A workflow run counts by its newest attempt only. A run with a check still queue
 pending, even when an earlier attempt's checks were cancelled: a rerun waiting for a runner reads
 as checks running (R24, or R32 in Merging), never as a cancelled run, so U2 never reruns it.
 
+A check that says how or when it ended is finished, whatever its status says, and so is one still
+open in a workflow run that passed: GitHub can leave a check `in_progress` after it concluded. Past a
+two-minute grace, the ticket's history records a `stale_check` note naming the check, once per head
+and check. A base branch that requires checks decides green by them: the head is green once each one
+reported and passed, and the checks it doesn't require that still run hold nothing. They stay in the
+watch summary (`still running: …`), and one that fails later turns the head red as usual. A base
+branch that requires none waits on every check, and so does a read of its required checks that fails.
+
 <!-- BEGIN mix pr_decision.table: generated from SymphonyElixir.PrDecision.rules/0, do not edit by hand -->
 
 ## Upkeep

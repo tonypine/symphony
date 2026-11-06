@@ -87,6 +87,13 @@ defmodule SymphonyElixirWeb.WatchPayloadTest do
     assert summary.([pr: :missing, pr_number: 42], %{}) == "no PR"
     assert summary.([pr: :merged], %{}) == "merged"
 
+    # A check the base doesn't require still runs on a green head: the summary names it.
+    assert summary.([pr: :open, pr_number: 42, ci: :green, running_checks: ["e2e", "docs"], mergeable: :clean], %{}) ==
+             "PR #42 open · CI green · still running: e2e, docs · no conflict"
+
+    assert summary.([pr: :open, pr_number: 42, ci: :green, mergeable: :clean], %{}) == "PR #42 open · CI green · no conflict"
+    assert summary.([pr: :open, pr_number: 42, ci: :pending, running_checks: ["e2e"], mergeable: :clean], %{}) == "PR #42 open · CI running · no conflict"
+
     busy = [pr: :draft, pr_number: 7, ci: :red, mergeable: :dirty, auto_merge: :armed, run: :active, hold: :blocked]
 
     assert summary.(busy, %{github: {:rate_limited, nil}}) ==

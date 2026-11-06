@@ -867,6 +867,50 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     end
   end
 
+  describe "a check GitHub left running after it finished (TP-1426)" do
+    test "the ticket's history names it past the grace, once per head and check", %{repo_key: repo_key} do
+      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+      url = pr_url(1)
+      recent = DateTime.add(@now, -30, :second)
+      long_ago = DateTime.add(@now, -600, :second)
+
+      notes = fn ->
+        for %{payload: %{text: "GitHub still shows" <> _rest = text}} <- RunStore.list_ticket_events("1", types: ["note"]),
+            do: text
+      end
+
+      stale = fn head, checks -> {:ok, read_of(url, %{head_sha: head, stale_checks: checks})} end
+
+      pid = start_repo!(repo_key)
+
+      # Within the grace: GitHub normally closes it, so nothing is recorded.
+      reads!(%{url => stale.("sha-1", [%{name: "changes", since: recent}])})
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      assert notes.() == []
+      assert %{stale_checks_noted: %{head_sha: "sha-1", names: []}} = watch(repo_key, "1")
+
+      # Past it, one note names the check, and the next read adds none.
+      reads!(%{url => stale.("sha-1", [%{name: "changes", since: long_ago}])})
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      assert [note] = notes.()
+      assert note =~ "check changes"
+      assert note =~ "head sha-1"
+      assert note =~ "(stale_check)"
+      assert %{stale_checks_noted: %{head_sha: "sha-1", names: ["changes"]}} = watch(repo_key, "1")
+
+      # A new head notes it again, at once when GitHub gave no time.
+      reads!(%{url => stale.("sha-2", [%{name: "changes", since: nil}])})
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      assert length(notes.()) == 2
+
+      # A read that says nothing of them keeps what the record holds.
+      reads!(%{url => {:ok, read_of(url, %{head_sha: "sha-2"})}})
+      assert {:ok, %{watched: 1}} = Repo.poll(pid)
+      assert %{stale_checks_noted: %{head_sha: "sha-2", names: ["changes"]}} = watch(repo_key, "1")
+    end
+  end
+
   describe "dispatch.source: record" do
     setup do
       on_exit(&Client.reset_viewer_cache_for_test/0)
