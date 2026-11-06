@@ -179,9 +179,12 @@ defmodule SymphonyElixir.Connected.ReadTest do
       known = %{Connected.build(%{}, nil) | parent: %{identifier: "MT-1", title: "The plan", done: 0, total: 9, children: []}}
       unknown = %{Connected.build(%{}, nil) | parent: %{identifier: "MT-8", title: "Not recorded", done: 1, total: 3, children: ["completed"]}}
 
-      assert %{parent: %{identifier: "MT-1"}, epic: %{identifier: "MT-1", done: 1, total: 2, tickets: tickets}} = read("MT-3", known)
+      assert %{parent: %{identifier: "MT-1"}, epic: recorded} = read("MT-3", known)
+      assert %{identifier: "MT-1", done: 1, total: 2, tickets: tickets} = recorded
       assert %{identifier: "MT-3", current: true} = Enum.find(tickets, & &1.current)
-      assert %{parent: %{identifier: "MT-8"}, epic: %{identifier: "MT-8", done: 1, total: 3, incomplete: false, tickets: []}} = read("MT-9", unknown)
+
+      assert %{parent: %{identifier: "MT-8"}, epic: own} = read("MT-9", unknown)
+      assert %{identifier: "MT-8", done: 1, total: 3, incomplete: false, tickets: []} = own
     end
   end
 
