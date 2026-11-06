@@ -71,7 +71,7 @@ defmodule SymphonyElixirWeb.LifecycleReadTest do
 
     assert [
              %{"id" => "coding", "state" => "passed", "visits" => 1, "time_ms" => 1_800_000, "tokens" => 2_000},
-             %{"id" => "code_review", "state" => "passed", "visits" => 2, "time_ms" => 3_000_000, "tokens" => 1_200},
+             %{"id" => "code_review", "state" => "passed", "visits" => 2, "time_ms" => 1_800_000, "tokens" => 1_200},
              %{"id" => "qa", "state" => "passed", "visits" => 1, "time_ms" => 1_200_000, "tokens" => 300},
              %{"id" => "merging", "state" => "passed", "visits" => 1, "time_ms" => 3_600_000, "tokens" => 0},
              %{"id" => "done", "state" => "passed", "visits" => 1, "time_ms" => 0, "tokens" => 0}
