@@ -33,6 +33,7 @@ defmodule SymphonyElixirWeb.Presenter do
   }
 
   alias SymphonyElixir.Codex.MessageHumanizer
+  alias SymphonyElixir.Connected.Read, as: ConnectedRead
   alias SymphonyElixir.Dispatch.Shadow, as: DispatchShadow
   alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
   alias SymphonyElixir.Linear.Webhook, as: LinearWebhook
@@ -358,7 +359,8 @@ defmodule SymphonyElixirWeb.Presenter do
   # What the ticket's record adds to its payload: its verdicts, the watcher's block, a plan's brief
   # (`SymphonyElixir.PlanBrief`), why it does not move (`ticket_status/2`), where it stands
   # (`SymphonyElixir.Situation`), where it has been (`SymphonyElixir.Lifecycle`) and its pull request
-  # (`SymphonyElixirWeb.PullRequestPayload`).
+  # (`SymphonyElixirWeb.PullRequestPayload`), and where it sits among the others
+  # (`SymphonyElixir.Connected.Read`).
   defp record_payload(payload, record, running?, snapshot) do
     repository_pause = if is_binary(payload.repo_key), do: repository_pause_reason(payload.repo_key), else: nil
 
@@ -369,7 +371,21 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.put(:situation, situation_payload(record || %{issue_id: payload.issue_id, repo_key: payload.repo_key}, Situation.live_facts(snapshot), nil))
     |> Map.merge(Lifecycle.read(payload.issue_id))
     |> Map.put(:pull_request, PullRequestPayload.read(record))
+    |> complete_connected(record, snapshot)
     |> Map.merge(ticket_status(record, %{identifier: payload.issue_identifier, repo_key: payload.repo_key, repository_pause: repository_pause, running?: running?}))
+  end
+
+  # A ticket with neither a record nor what the orchestrator holds of it has no `connected`.
+  defp complete_connected(payload, record, snapshot) do
+    tracked = Map.get(payload, :connected)
+
+    if record || tracked do
+      ticket = record || Map.take(payload, [:issue_id, :repo_key, :issue_identifier])
+      facts = ConnectedRead.facts(Map.values(ticket_state_records()), Situation.live_facts(snapshot))
+      Map.put(payload, :connected, ConnectedRead.read(ticket, tracked, facts))
+    else
+      payload
+    end
   end
 
   # The one answer to "why is this ticket not moving", as the ticket payload and each ticket entry
@@ -522,9 +538,19 @@ defmodule SymphonyElixirWeb.Presenter do
     all = Map.values(records)
     pauses = %{repositories: Map.get(snapshot, :repositories, []), symphony_pause: symphony_pause_reason()}
 
-    watched
-    |> Enum.sort_by(&{&1.repo_key || "", &1.issue_identifier || &1.issue_id || ""})
-    |> Enum.map(&watched_issue_payload(&1, live, all, pauses))
+    watched = Enum.sort_by(watched, &{&1.repo_key || "", &1.issue_identifier || &1.issue_id || ""})
+    tracked = tracked_connected(snapshot)
+    connected = watched |> Enum.map(&{&1, Map.get(tracked, &1.issue_id)}) |> ConnectedRead.read_all(ConnectedRead.facts(all, live))
+
+    Enum.zip_with(watched, connected, &Map.put(watched_issue_payload(&1, live, all, pauses), :connected, &2))
+  end
+
+  # What the orchestrator holds of each ticket's connections, by ticket.
+  defp tracked_connected(snapshot) do
+    for list <- [:dispatch_skipped, :slot_waiting, :watching, :running],
+        %{issue_id: issue_id, connected: %{} = connected} <- Map.get(snapshot, list, []),
+        into: %{},
+        do: {issue_id, connected}
   end
 
   defp watched_issue_payload(record, live, records, pauses) do
