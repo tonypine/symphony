@@ -47,7 +47,9 @@ defmodule SymphonyElixir.Lifecycle do
           },
           phase_path: %{
             current: String.t() | nil,
-            phases: [%{phase: String.t(), count: pos_integer(), time_ms: non_neg_integer(), first_entered_at: String.t()}],
+            phases: [
+              %{phase: String.t(), count: pos_integer(), time_ms: non_neg_integer(), first_entered_at: String.t()}
+            ],
             moves: [%{from: String.t() | nil, to: String.t(), at: String.t()}]
           }
         }
@@ -127,7 +129,10 @@ defmodule SymphonyElixir.Lifecycle do
   # Each ended run with its stage, its tokens and how long it ran. A run still working is not here
   # yet. A run whose start the ledger lacks counts at its end.
   defp runs(events, moves) do
-    started = for %Event{type: "run.started", payload: %{run_id: run_id}, at: %DateTime{} = at} <- events, into: %{}, do: {run_id, at}
+    started =
+      for %Event{type: "run.started", payload: %{run_id: run_id}, at: %DateTime{} = at} <- events, into: %{} do
+        {run_id, at}
+      end
 
     for %Event{type: "run.ended", payload: %{run_id: run_id} = payload, at: %DateTime{} = ended_at} <- events do
       started_at = Map.get(started, run_id, ended_at)

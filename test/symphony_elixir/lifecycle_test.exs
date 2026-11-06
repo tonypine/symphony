@@ -89,10 +89,34 @@ defmodule SymphonyElixir.LifecycleTest do
       assert result.lifecycle.current == nil
 
       assert result.lifecycle.stages == [
-               %{id: "coding", name: "Coding", state: "passed", visits: 1, time_ms: 39 * @minute, agent_time_ms: 38 * @minute, tokens: 2_400_000},
+               %{
+                 id: "coding",
+                 name: "Coding",
+                 state: "passed",
+                 visits: 1,
+                 time_ms: 39 * @minute,
+                 agent_time_ms: 38 * @minute,
+                 tokens: 2_400_000
+               },
                # Each Code Review, the CI Fix and the two Reworks: 9 + 10 + 17 + 20 + 14 + 62 + 13 min.
-               %{id: "code_review", name: "Code Review", state: "passed", visits: 4, time_ms: 145 * @minute, agent_time_ms: 71 * @minute, tokens: 4_300_000},
-               %{id: "qa", name: "QA", state: "passed", visits: 2, time_ms: 38 * @minute, agent_time_ms: 36 * @minute, tokens: 1_900_000},
+               %{
+                 id: "code_review",
+                 name: "Code Review",
+                 state: "passed",
+                 visits: 4,
+                 time_ms: 145 * @minute,
+                 agent_time_ms: 71 * @minute,
+                 tokens: 4_300_000
+               },
+               %{
+                 id: "qa",
+                 name: "QA",
+                 state: "passed",
+                 visits: 2,
+                 time_ms: 38 * @minute,
+                 agent_time_ms: 36 * @minute,
+                 tokens: 1_900_000
+               },
                %{id: "merging", name: "Merging", state: "passed", visits: 1, time_ms: 120 * @minute, agent_time_ms: 0, tokens: 0},
                %{id: "done", name: "Done", state: "passed", visits: 1, time_ms: 0, agent_time_ms: 0, tokens: 0}
              ]

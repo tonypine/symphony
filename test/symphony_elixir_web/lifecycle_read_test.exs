@@ -91,7 +91,8 @@ defmodule SymphonyElixirWeb.LifecycleReadTest do
 
   test "each of the state's issues carries the same lifecycle and phase path" do
     :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "watched", issue_identifier: "MT-2", phase: "Rework"})
-    :ok = RunStore.put_ticket_pr_watch(@repo, "watched", "MT-2", %{facts: %Facts{phase: :rework, ci: :pending, pr: :open, pr_number: 741}, head_sha: "abc1234"})
+    facts = %Facts{phase: :rework, ci: :pending, pr: :open, pr_number: 741}
+    :ok = RunStore.put_ticket_pr_watch(@repo, "watched", "MT-2", %{facts: facts, head_sha: "abc1234"})
     moved("watched", ~U[2026-10-30 10:00:00Z], "In Progress", "Code Review")
     moved("watched", ~U[2026-10-30 10:30:00Z], "Code Review", "Rework")
 
