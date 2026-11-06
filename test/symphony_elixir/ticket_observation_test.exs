@@ -3,8 +3,9 @@ defmodule SymphonyElixir.TicketObservationTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{AgentTools, Questions, TicketObservation, TicketSignals, TicketState, TransitionGuard}
+  alias SymphonyElixir.{AgentTools, Questions, TicketEvents, TicketObservation, TicketSignals, TicketState, TransitionGuard}
   alias SymphonyElixir.Inbox.FromRecord
+  alias SymphonyElixir.Situation.Recorder
 
   @linear_at ~U[2026-10-29 09:00:00Z]
   @now ~U[2026-10-29 09:05:00Z]
@@ -339,6 +340,31 @@ defmodule SymphonyElixir.TicketObservationTest do
     {:ok, :updated} = TicketObservation.observe(repo_key, linear_issue(), now: @now, source: :watcher)
     assert_received {:ticket_record, ^repo_key, "issue-observed", :changed, fields}
     assert :phase in fields and :title in fields and :blockers in fields
+  end
+
+  test "a read of Linear that changes the record, which announces nothing, is a reason to compute the ticket's situation", %{repo_key: repo_key} do
+    waiting = linear_issue(%{state: "Waiting on sub-tickets", blocked_by: []})
+    {:ok, :updated} = TicketObservation.observe(repo_key, waiting, now: @now)
+
+    recorder = start_supervised!(Recorder)
+    Recorder.snapshot_published(%{running: [], retrying: [], slot_waiting: [], dispatch_skipped: []})
+    settle_recorder(recorder)
+    assert situation_kinds() == ["blocked_by_ticket"]
+
+    ended = %{waiting | sub_issues: [%{id: "issue-c", identifier: "ACME-8", state: "Done"}]}
+    {:ok, :updated} = TicketObservation.observe(repo_key, ended, now: @now)
+    settle_recorder(recorder)
+    assert situation_kinds() == ["blocked_by_ticket", "waiting_for_slot"]
+  end
+
+  # The notice in its mailbox, then the flush it queued behind it.
+  defp settle_recorder(recorder) do
+    :sys.get_state(recorder)
+    :sys.get_state(recorder)
+  end
+
+  defp situation_kinds do
+    for %{payload: payload} <- TicketEvents.query("issue-observed", types: ["situation.changed"], limit: :all), do: payload.to
   end
 
   describe "the comparison with the webhook" do

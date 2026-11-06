@@ -7,7 +7,9 @@ defmodule SymphonyElixir.Situation.Recorder do
 
     * an event on the ticket's ledger (`ObservabilityPubSub.subscribe_ticket_events/0`), but its own;
     * a change of the ticket's record (`ObservabilityPubSub.subscribe_ticket_records/0`);
-    * the PR and CI watcher's read of a new CI state or PR state (`ticket_changed/2`);
+    * the PR and CI watcher's read of a new CI state, PR state or phase, and its drop of the facts of
+      a ticket it no longer watches (`ticket_changed/2`);
+    * a read of Linear that changed the record, which announces nothing else (`ticket_changed/2`);
     * each snapshot the orchestrator publishes (`snapshot_published/2`), for the runs, retries and
       slot waits it holds in memory: only the tickets whose facts changed are computed again;
     * its own start: every ticket not yet ended is computed once, from the first snapshot.

@@ -1034,8 +1034,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
 
   defp announce_dispatch(_watch, _previous, _entry, _state), do: :ok
 
-  # A ticket's situation reads the PR and its CI: a read that changed either is a reason to compute it.
-  defp announce_situation(%{facts: %{ci: ci, pr: pr}}, %{facts: %{ci: ci, pr: pr}}, _entry), do: :ok
+  # A ticket's situation reads the PR, its CI and the phase they were read in: a read that changed any
+  # of them is a reason to compute it.
+  defp announce_situation(%{facts: %{ci: ci, pr: pr, phase: phase}}, %{facts: %{ci: ci, pr: pr, phase: phase}}, _entry), do: :ok
   defp announce_situation(_watch, _previous, entry), do: SituationRecorder.ticket_changed(entry.issue.id)
 
   # How and when the facts arrived: a re-decision keeps those of the read it decided on.
@@ -1600,6 +1601,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
       Competitors.leave(state.repo_key, record, [store: store(state)] ++ Keyword.take(state.opts, [:tracker, :linker]))
       result = store(state).put_ticket_pr_watch(state.repo_key, issue_id, record.issue_identifier, nil)
       log_write(result, %{issue: %{id: issue_id, identifier: record.issue_identifier}})
+      SituationRecorder.ticket_changed(issue_id)
     end
   end
 
