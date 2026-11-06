@@ -285,7 +285,9 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
     end
 
     test "a rerun of its check lists too, from the phase's time when the decision keeps none" do
-      assert [%{kind: :waiting, waiting_since: ~U[2026-11-06 08:00:00Z]}] = items([waiting_record(:ci_fix, %{rule: "U2", kind: :rerun_failed, reason: "A cancelled run was rerun"})])
+      decision = %{rule: "U2", kind: :rerun_failed, reason: "A cancelled run was rerun"}
+
+      assert [%{kind: :waiting, waiting_since: ~U[2026-11-06 08:00:00Z]}] = items([waiting_record(:ci_fix, decision)])
     end
 
     test "lists nothing in another phase, on another decision, or with no decision" do

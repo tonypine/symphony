@@ -33,8 +33,8 @@ defmodule SymphonyElixir.Inbox.Item do
   Linear comment for an answer.
   """
 
-  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{CiFix, DecisionRequest, PlanBrief, TicketState}
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{Collector, Waiting}
   alias SymphonyElixir.Inbox.ReviewBrief
   alias SymphonyElixir.Linear.Issue
