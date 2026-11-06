@@ -14,7 +14,7 @@ public struct WatchBlock: Equatable {
         public var ci: String?
         /// `not_configured` or `not_reported`: why a head reads as having no CI.
         public var noCI: String?
-        /// `failure`, `cancelled`, `human_only` or `also_red_on_base`.
+        /// `failure`, `cancelled`, `human_only`, `also_red_on_base` or `run_in_progress`.
         public var redKind: String?
         public var failingCheck: String?
         public var missingChecks: [String]

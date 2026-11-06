@@ -341,16 +341,19 @@ defmodule SymphonyElixir.GitHub.PullRequest do
 
   @doc """
   Closes the checks of `ci_status` (`:pr_url`, `:commit_sha`, `:checks`) that still read unfinished
-  in a workflow run that completed with a passing conclusion (`resolve_stale_checks/2`). It reads
-  the head's runs only for a head waiting on GitHub Actions checks with none failed; a read that
-  fails leaves the checks as they are, and the next read tries again.
+  in a workflow run that completed with a passing conclusion (`resolve_stale_checks/2`), or in a
+  completed run with a failed check, where they count as finished without having failed, so they
+  can't hold that run's failure back forever. It reads the head's runs only for a head waiting on
+  GitHub Actions checks with none failed, or with a failed check in a run that reads as still going
+  (`failed_run_in_progress?/1`); a read that fails leaves the checks as they are, and the next read
+  tries again.
   """
   @spec close_stale_checks(map(), keyword()) :: map()
   def close_stale_checks(%{pr_url: pr_url, commit_sha: sha, checks: checks} = ci_status, opts) when is_list(checks) do
-    with true <- is_binary(sha) and Enum.any?(checks, &unfinished_check?/1) and actions_rollup_without_failure?(checks),
+    with true <- is_binary(sha) and stale_checks_possible?(checks),
          {:ok, host, owner, repo, _number} <- parse_github_pr_url(pr_url, opts),
          {:ok, runs} <- list_head_runs({host, owner, repo}, sha, opts) do
-      resolve_stale_checks(ci_status, runs)
+      ci_status |> resolve_stale_checks(runs) |> resolve_failed_run_checks(runs)
     else
       {:error, reason} ->
         Logger.warning("Could not read the workflow runs of a head waiting on its checks pr_url=#{pr_url} commit_sha=#{sha} reason=#{inspect(reason)}")
@@ -359,6 +362,24 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       _no_read ->
         ci_status
     end
+  end
+
+  @doc """
+  Whether a workflow run with a failed check still has a check queued or running. GitHub refuses to
+  rerun a run until it ends, and until then its other jobs may fail too.
+  """
+  @spec failed_run_in_progress?([ci_check()]) :: boolean()
+  def failed_run_in_progress?(checks) when is_list(checks) do
+    failed = failed_run_ids(checks)
+    Enum.any?(checks, &(unfinished_check?(&1) and Map.get(&1, :run_id) in failed))
+  end
+
+  defp stale_checks_possible?(checks) do
+    (Enum.any?(checks, &unfinished_check?/1) and actions_rollup_without_failure?(checks)) or failed_run_in_progress?(checks)
+  end
+
+  defp failed_run_ids(checks) do
+    for check <- checks, is_binary(Map.get(check, :run_id)), check_result(check) == :failed, into: MapSet.new(), do: Map.get(check, :run_id)
   end
 
   @doc """
@@ -1436,6 +1457,15 @@ defmodule SymphonyElixir.GitHub.PullRequest do
     else
       _not_stale -> check
     end
+  end
+
+  # A check GitHub left open in a completed run with a failed check: the run can't end while one of
+  # its jobs runs, so it is finished, and nothing says it failed.
+  defp resolve_failed_run_checks(%{checks: checks} = ci_status, runs) do
+    failed = failed_run_ids(checks)
+    finished = for %{id: id, status: "COMPLETED"} = run <- runs, id in failed, into: %{}, do: {id, %{run | conclusion: "NEUTRAL"}}
+
+    %{ci_status | checks: Enum.map(checks, &resolve_stale_check(&1, finished, ci_status))}
   end
 
   defp passing_check?(check), do: upcase(Map.get(check, :conclusion)) in @passing_check_conclusions

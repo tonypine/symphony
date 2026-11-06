@@ -326,6 +326,12 @@ defmodule SymphonyElixir.SituationTest do
              } = compute(record(%{phase: "Code Review", pr_watch: watch(%{missing_checks: ["Tests"]})}), [pushed])
     end
 
+    test "TP-1196: a failed check in a run still going reads as waiting for CI" do
+      still_going = watch(%{ci: :red, red_kind: :run_in_progress, failing_check: "coverage (4/4)", running_checks: ["coverage (1/4)"]})
+
+      assert %{kind: "waiting_for_ci", waits_on: %{pr: 741, check: "coverage (1/4)"}} = compute(record(%{phase: "Code Review", pr_watch: still_going}))
+    end
+
     test "reads from the watcher when no push names the head" do
       decided = watch(%{}, %{decision: %{since: @at}})
 

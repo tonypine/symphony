@@ -800,6 +800,15 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       assert line =~ ~s(phase=qa since=2026-10-16T12:00:00Z rule=none bound=none reason="the watcher has no decision on it")
     end
 
+    test "TP-1196: a failed check in a run still going waits on CI, and the CI label says running", %{repo_key: repo_key, pid: pid} do
+      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{ci: :red, red_kind: :run_in_progress, failing_check: "coverage (4/4)"})}})
+
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{decision: %{rule: "R19b", owner: :ci}, facts: %Facts{ci: :red, failing_check: "coverage (4/4)"}} = watch(repo_key, "1")
+      assert_received {:label_set, "1", "CI running"}
+    end
+
     test "a silent ticket leaves once a wait is recorded on it", %{repo_key: repo_key, clock: clock, pid: pid} do
       issues!([repo_key |> with_pr(issue("1", "Rework"), 1)])
       assert {:ok, _summary} = Repo.poll(pid)

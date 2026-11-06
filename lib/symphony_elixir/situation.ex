@@ -318,6 +318,9 @@ defmodule SymphonyElixir.Situation do
   defp waiting_for_ci?(%{facts: %{pr: pr, ci: :pending} = facts} = ctx) when pr in [:open, :draft],
     do: facts.phase in @handed_off or ctx.running == nil
 
+  defp waiting_for_ci?(%{facts: %{pr: pr, ci: :red, red_kind: :run_in_progress} = facts} = ctx) when pr in [:open, :draft],
+    do: facts.phase in @handed_off or ctx.running == nil
+
   defp waiting_for_ci?(_ctx), do: false
 
   defp situation("waiting_on_you", ctx) do

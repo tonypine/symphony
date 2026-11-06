@@ -28,6 +28,15 @@ reported and passed, and the checks it doesn't require that still run hold nothi
 watch summary (`still running: …`), and one that fails later turns the head red as usual. A base
 branch that requires none waits on every check, and so does a read of its required checks that fails.
 
+A failed check in a workflow run that is still going is not acted on until that run finishes (R19b):
+GitHub refuses to rerun a run in progress, and its other jobs may still fail. The head stays out of
+review and landing, its card says the checks are still running and names the check that already
+failed, and its CI label reads running. When the run ends red, R22's one rerun and then CI Fix follow
+as usual. A check GitHub left open in a run that completed counts as finished without having failed,
+so it can't hold the run's failure back. Should GitHub still answer "already running" to a rerun (a
+job it hadn't created when the head was read), nothing is logged as a failure and nothing is spent:
+the decision is recorded as a wait on CI, and the next read decides again.
+
 <!-- BEGIN mix pr_decision.table: generated from SymphonyElixir.PrDecision.rules/0, do not edit by hand -->
 
 ## Upkeep
@@ -67,6 +76,7 @@ The flow decision: the first rule that matches decides what happens to the ticke
 | R18 | Code Review, QA, Rework, CI Fix, Merging | Only a check a person must clear is red (`protected paths`) | `decision`: allow the change (the option unlocks the protected paths the PR changes for the ticket), or drop the change in Rework |
 | R19 | Code Review, QA, Rework, CI Fix, Merging | Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running, and that run was rerun fewer than 2 times on the head | `wait` on `ci`: the upkeep (U2) reruns each new cancellation, no attempt spent |
 | R19a | Code Review, QA, Rework, CI Fix, Merging | Red only because a workflow run was cancelled again after 2 reruns on the head | `decision`: keep retrying it, or wait |
+| R19b | Code Review, QA, Rework, CI Fix, Merging | Red, and a workflow run with a failed check still has a check queued or running | `wait` on `ci` until the run finishes: GitHub refuses a rerun before that |
 | R20 | Code Review, QA, Rework, CI Fix, Merging | Red, and the same failure 3 fix runs in a row or `red_attempts` at `max_red_attempts` | `file_fix_ticket` for the failing check, waiting on `symphony` until it is terminal |
 | R21 | Code Review, QA, Rework, CI Fix, Merging | Red after a rerun | `ci_fix` for the red head, back to the phase it came from |
 | R22 | Code Review, QA, Rework, CI Fix, Merging | Red, not rerun yet | `rerun_failed` once |
@@ -98,7 +108,7 @@ Each fact a rule decides on, the values the table test enumerates, and when the 
 | `head_origin` | `symphony`, `person` | `pr` is `open` or `draft` |
 | `review_comments` | `none`, `unaddressed` | `pr` is `open` or `draft` |
 | `ci` | `pending`, `green`, `none`, `red`, `required_missing` | `pr` is `open` or `draft` |
-| `red_kind` | `failure`, `cancelled`, `human_only`, `also_red_on_base` | `ci` is `red` |
+| `red_kind` | `failure`, `cancelled`, `human_only`, `also_red_on_base`, `run_in_progress` | `ci` is `red` |
 | `cancel_reruns` | `1`, `2` | `ci` is `red` and `red_kind` is `cancelled` |
 | `rerun_done` | `false`, `true` | `ci` is `red` and `red_kind` is `failure` |
 | `red_attempts` | `9`, `10` | `ci` is `red` and `red_kind` is `failure` |
@@ -127,7 +137,7 @@ and since when it stands.
 | Owner | Who acts next | The wait ends when |
 | --- | --- | --- |
 | `agent` | A run that is working, or the agent that opens the PR (R5, R8, R9) | The run ends, or the PR is opened |
-| `ci` | GitHub Actions running the head's checks, or the base branch's (R19, R23, R24, R32) | The checks report, or the base goes green |
+| `ci` | GitHub Actions running the head's checks, or the base branch's (R19, R19b, R23, R24, R32) | The checks report, or the base goes green |
 | `github` | GitHub itself: its rate limit, a mergeability it hasn't computed, branch protection (R1, R16, R33) | The limit resets, GitHub computes it, or the merge wait passes |
 | `person` | A person: a Needs Decision hold, a draft PR, a question the watcher asked (R4, R6, R7, R10, R17, R18, R19a) | The decision is recorded, or the PR is marked ready |
 | `symphony` | Symphony itself: a Blocked hold, a fix ticket it filed, a competing PR it waits on (R4, R14a, R15, R20, R28) | The fix ticket or the competitors are done, and the hold clears by itself |
