@@ -10,6 +10,7 @@ defmodule SymphonyElixirWeb.Presenter do
     ForcedStatus,
     Inbox,
     Initiatives,
+    Lifecycle,
     Orchestrator,
     Pauses,
     PlanBrief,
@@ -355,8 +356,8 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   # What the ticket's record adds to its payload: its verdicts, the watcher's block, a plan's brief
-  # (`SymphonyElixir.PlanBrief`), why it does not move (`ticket_status/2`) and where it stands
-  # (`SymphonyElixir.Situation`).
+  # (`SymphonyElixir.PlanBrief`), why it does not move (`ticket_status/2`), where it stands
+  # (`SymphonyElixir.Situation`) and where it has been (`SymphonyElixir.Lifecycle`).
   defp record_payload(payload, record, running?, snapshot) do
     repository_pause = if is_binary(payload.repo_key), do: repository_pause_reason(payload.repo_key), else: nil
 
@@ -365,6 +366,7 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.put(:watch, WatchPayload.watch(record))
     |> Map.put(:plan_brief, plan_brief_payload(record))
     |> Map.put(:situation, situation_payload(record || %{issue_id: payload.issue_id, repo_key: payload.repo_key}, Situation.live_facts(snapshot), nil))
+    |> Map.merge(Lifecycle.read(payload.issue_id))
     |> Map.merge(ticket_status(record, repository_pause, running?))
   end
 
@@ -530,13 +532,16 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp watched_issue_payload(record, live, records) do
-    %{
-      issue_id: record.issue_id,
-      identifier: record.issue_identifier,
-      repo_key: record.repo_key,
-      watch: WatchPayload.watch(record),
-      situation: situation_payload(record, live, records)
-    }
+    Map.merge(
+      %{
+        issue_id: record.issue_id,
+        identifier: record.issue_identifier,
+        repo_key: record.repo_key,
+        watch: WatchPayload.watch(record),
+        situation: situation_payload(record, live, records)
+      },
+      Lifecycle.read(record.issue_id)
+    )
   end
 
   defp situation_payload(record, live, records), do: record |> Situation.read(live, records) |> Situation.payload()
