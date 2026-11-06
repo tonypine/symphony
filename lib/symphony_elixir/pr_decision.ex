@@ -283,6 +283,14 @@ defmodule SymphonyElixir.PrDecision do
         build: &ask_about_cancelled/1
       },
       %{
+        id: "R19b",
+        phases: @pr_phases,
+        when: "Red, and a workflow run with a failed check still has a check queued or running",
+        then: "`wait` on `ci` until the run finishes: GitHub refuses a rerun before that",
+        guard: &red_run_in_progress?/1,
+        build: &wait_for_failed_run/1
+      },
+      %{
         id: "R20",
         phases: @pr_phases,
         when: "Red, and the same failure #{@max_same_failures} fix runs in a row or `red_attempts` at `max_red_attempts`",
@@ -407,6 +415,7 @@ defmodule SymphonyElixir.PrDecision do
   defp human_only_red?(facts), do: red?(facts, :human_only)
   defp cancelled_red?(facts), do: red?(facts, :cancelled) and facts.cancel_reruns < @max_cancel_reruns
   defp cancelled_again?(facts), do: red?(facts, :cancelled) and facts.cancel_reruns >= @max_cancel_reruns
+  defp red_run_in_progress?(facts), do: red?(facts, :run_in_progress)
 
   defp red_backstop?(facts) do
     repeating? = facts.same_failure_streak >= @max_same_failures
@@ -600,6 +609,10 @@ defmodule SymphonyElixir.PrDecision do
       "Keep retrying",
       "Wait"
     ])
+  end
+
+  defp wait_for_failed_run(facts) do
+    wait("R19b", "Checks are still running on #{pr(facts)}'s head, and #{check(facts)} already failed: Symphony acts once its workflow run finishes", :ci, "the workflow run finishes")
   end
 
   defp file_fix_ticket(facts) do

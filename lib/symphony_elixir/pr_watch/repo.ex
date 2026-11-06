@@ -1575,7 +1575,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     status =
       case ci do
         ci when ci in [:green, :none] -> "green"
-        :red -> "red"
+        :red -> if(facts.red_kind == :run_in_progress, do: "running", else: "red")
         _running -> "running"
       end
 

@@ -462,6 +462,21 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     refute_received {:gh, ["api", "repos/acme/app/contents/.github/workflows?ref=main"]}
   end
 
+  test "a newest-release read that fails doesn't count as a failed tick", %{repo_key: repo_key} do
+    issues!([])
+    test_pid = self()
+
+    gh_runner = fn args, _opts ->
+      send(test_pid, {:gh, args})
+      {"gh: Bad credentials (HTTP 401)", 1}
+    end
+
+    pid = start_repo!(repo_key, app_release: true, gh_runner: gh_runner)
+
+    assert {:ok, %{errors: 0}} = Repo.poll(pid)
+    assert_received {:gh, ["api", "--include", "repos/tonypine/symphony/releases/latest"]}
+  end
+
   test "a rate-limited read backs off until the reset and marks the tickets it didn't read", %{repo_key: repo_key} do
     reset_at = DateTime.add(@now, 600, :second)
     issues!([repo_key |> with_pr(issue("1", "Code Review"), 1), repo_key |> with_pr(issue("2", "QA"), 2)])
@@ -859,6 +874,15 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       advance!(clock, 25_000)
       assert [line] = tick_logged!(pid)
       assert line =~ ~s(phase=qa since=2026-10-16T12:00:00Z rule=none bound=none reason="the watcher has no decision on it")
+    end
+
+    test "TP-1196: a failed check in a run still going waits on CI, and the CI label says running", %{repo_key: repo_key, pid: pid} do
+      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{ci: :red, red_kind: :run_in_progress, failing_check: "coverage (4/4)"})}})
+
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{decision: %{rule: "R19b", owner: :ci}, facts: %Facts{ci: :red, failing_check: "coverage (4/4)"}} = watch(repo_key, "1")
+      assert_received {:label_set, "1", "CI running"}
     end
 
     test "a silent ticket leaves once a wait is recorded on it", %{repo_key: repo_key, clock: clock, pid: pid} do

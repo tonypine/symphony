@@ -86,7 +86,7 @@ defmodule SymphonyElixir.PrDecisionTest do
 
     test "rule ids are unique and each rule names its phases and a line for the docs" do
       assert Enum.uniq(@ids) == @ids
-      assert length(@ids) == 36
+      assert length(@ids) == 37
 
       for rule <- PrDecision.rules() do
         assert rule.phases != [] and rule.phases -- Facts.phases() == []
@@ -326,6 +326,20 @@ defmodule SymphonyElixir.PrDecisionTest do
       assert %Action{rule: "R19", kind: :wait, owner: :ci} = red(red_kind: :cancelled)
       assert [%Action{rule: "U2", kind: :rerun_failed}] = upkeep(phase: :code_review, ci: :red, red_kind: :cancelled)
       assert %Action{rule: "R23", kind: :wait, owner: :ci} = red(red_kind: :also_red_on_base)
+    end
+
+    test "TP-1196: a failed check in a run still going waits on CI in every phase with a PR, naming the check (R19b)" do
+      for phase <- [:code_review, :qa, :rework, :ci_fix, :merging], rerun_done <- [false, true] do
+        facts = [phase: phase, ci: :red, red_kind: :run_in_progress, failing_check: "coverage (4/4)", pr_number: 655]
+        action = decide(facts ++ [rerun_done: rerun_done, mergeable: :clean])
+
+        assert %Action{rule: "R19b", kind: :wait, owner: :ci, clears_when: "the workflow run finishes", reason: reason} = action
+        assert reason == "Checks are still running on PR #655's head, and the `coverage (4/4)` check already failed: Symphony acts once its workflow run finishes"
+      end
+
+      # Neither the backstop nor the count of fix runs bears on it, and the branch isn't updated under it.
+      assert %Action{rule: "R19b"} = red(red_kind: :run_in_progress, red_attempts: 10, same_failure_streak: 3)
+      assert upkeep(phase: :code_review, ci: :red, red_kind: :run_in_progress, mergeable: :behind) == []
     end
 
     test "a cancelled run is rerun twice on a head, spending nothing, then a person is asked (R19, R19a)" do

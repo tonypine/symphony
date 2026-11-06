@@ -185,6 +185,10 @@ public struct PRWatchCard: Equatable {
         } else if watch.owner == "ci", ["R24", "R32"].contains(watch.rule ?? "") || facts.ci == "pending" {
             headline = "Waiting for CI" + (watch.head.map { " on \(Self.short($0))" } ?? "")
             waitingOn = "CI"
+        } else if watch.rule == "R19b" {
+            let check = facts.failingCheck.map { "the \($0) check" } ?? "a check"
+            headline = "Checks are still running, and \(check) already failed: Symphony acts once its run finishes"
+            waitingOn = "CI"
         } else if watch.rule == "R23" {
             let check = facts.failingCheck.map { "The \($0) check" } ?? "A check"
             headline = "\(check) is red on \(facts.baseRef ?? "the base branch") too: waiting for it to go green there"
@@ -376,6 +380,7 @@ public struct PRWatchCard: Equatable {
             case "cancelled": return "\(check) cancelled"
             case "human_only": return "\(check) failed; only a person clears it"
             case "also_red_on_base": return "\(check) failing, on the base branch too"
+            case "run_in_progress": return "running; \(check) already failed"
             default: return "\(check) failing"
             }
         default: return nil

@@ -14,7 +14,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
   update-branch or a fix-ticket filing. A cancelled run's rerun (U2) is the exception: it is kept
   per cancellation instead (`SymphonyElixir.PrWatch.Attempts.new_cancellations/2`), so a second
   workflow cancelled on the head, or a rerun GitHub cancelled again, is rerun too. An action that
-  fails is not recorded, so the next tick decides again from fresh facts.
+  fails is not recorded, so the next tick decides again from fresh facts. So is a rerun GitHub
+  refuses because the workflow run is still going, which is the wrong moment rather than a failure:
+  it is recorded as a wait on CI, with no warning.
 
   The actions:
 
@@ -115,7 +117,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   @in_progress_state "In Progress"
 
   # The CI rows (`pull_requests.checks`).
-  @ci_rules ["R17", "R19", "R19a", "R20", "R21", "R22", "U2"]
+  @ci_rules ["R17", "R19", "R19a", "R19b", "R20", "R21", "R22", "U2"]
   # The landing rows, and a conflict in `Merging` (`pull_requests.auto_merge`).
   @landing_rules ["R3", "R29", "R30", "R31"]
   @conflict_rules ["R14", "R14a", "R15", "R15a"]
@@ -260,6 +262,15 @@ defmodule SymphonyElixir.PrDecision.Apply do
       moved_to: Map.get(changes, :moved_to),
       outcome: :applied
     }
+  end
+
+  # GitHub said the run is still going, though the read saw nothing unfinished: a job it hadn't
+  # created yet. Nothing was done and nothing failed, so the next read decides again.
+  defp finish({:run_in_progress, run_id}, action, ctx) do
+    Logger.info("PR watch waits for workflow run #{run_id} to finish before #{action.rule} issue_id=#{ctx.issue.id} issue_identifier=#{ctx.issue.identifier} pr_url=#{pr_url(ctx)}")
+
+    reason = "A failed check's workflow run is still going on #{pr_name(ctx)}: Symphony reruns it once it finishes"
+    recorded(Action.new!(action.rule, :wait, reason: reason, owner: :ci, clears_when: "the workflow run finishes"), ctx)
   end
 
   defp finish({:error, reason}, action, ctx) do
@@ -502,10 +513,16 @@ defmodule SymphonyElixir.PrDecision.Apply do
     Enum.reduce_while(run_ids, :ok, fn run_id, :ok ->
       case github.rerun_failed(run_id, gh_opts(ctx)) do
         :ok -> {:cont, :ok}
-        {:error, reason} -> {:halt, {:error, {:rerun_failed, run_id, reason}}}
+        {:error, reason} -> {:halt, rerun_refused(run_id, reason)}
       end
     end)
   end
+
+  defp rerun_refused(run_id, {:gh_failed, _args, _status, output} = reason) when is_binary(output) do
+    if output =~ "already running", do: {:run_in_progress, run_id}, else: {:error, {:rerun_failed, run_id, reason}}
+  end
+
+  defp rerun_refused(run_id, reason), do: {:error, {:rerun_failed, run_id, reason}}
 
   # What the CI Fix run reads: the failed checks with their log for a red head, the conflict for a
   # conflicting one. The read already carries the log when it read it this tick.
