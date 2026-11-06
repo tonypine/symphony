@@ -4,7 +4,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.ConnTest
 
   alias Mix.Tasks.Symphony.Audit
-  alias SymphonyElixir.{AuditLog, RetiredStates, StrayProcesses, TicketState}
+  alias SymphonyElixir.{AuditLog, RetiredStates, StrayProcesses, TicketMoves, TicketState}
   alias SymphonyElixir.Dispatch.Shadow
   alias SymphonyElixir.Inbox.ReviewBrief
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
@@ -680,7 +680,8 @@ defmodule SymphonyElixir.ExtensionsTest do
           "pause" => nil,
           "open_questions" => [],
           "repository_paused" => false,
-          "start" => %{"allowed" => false, "reason" => "the ticket is not one Symphony tracks"},
+          "start" => %{"allowed" => false, "reason" => "The ticket is not one Symphony tracks."},
+          "moves" => untracked_moves("MT-HTTP", true),
           "title" => nil,
           "state" => "In Progress",
           "url" => "https://linear.app/example/issue/MT-HTTP",
@@ -728,7 +729,8 @@ defmodule SymphonyElixir.ExtensionsTest do
           "pause" => nil,
           "open_questions" => [],
           "repository_paused" => false,
-          "start" => %{"allowed" => false, "reason" => "the ticket is not one Symphony tracks"},
+          "start" => %{"allowed" => false, "reason" => "The ticket is not one Symphony tracks."},
+          "moves" => untracked_moves("MT-WATCH", false),
           "title" => nil,
           "state" => "In Review",
           "url" => "https://linear.app/example/issue/MT-WATCH",
@@ -748,7 +750,8 @@ defmodule SymphonyElixir.ExtensionsTest do
           "pause" => nil,
           "open_questions" => [],
           "repository_paused" => false,
-          "start" => %{"allowed" => false, "reason" => "the ticket is not one Symphony tracks"},
+          "start" => %{"allowed" => false, "reason" => "The ticket is not one Symphony tracks."},
+          "moves" => untracked_moves("MT-RETRY", false),
           "title" => nil,
           "attempt" => 2,
           "due_at" => state_payload["retrying"] |> List.first() |> Map.fetch!("due_at"),
@@ -889,7 +892,8 @@ defmodule SymphonyElixir.ExtensionsTest do
           "pause" => nil,
           "open_questions" => [],
           "repository_paused" => false,
-          "start" => %{"allowed" => false, "reason" => "the ticket is not one Symphony tracks"},
+          "start" => %{"allowed" => false, "reason" => "The ticket is not one Symphony tracks."},
+          "moves" => untracked_moves("MT-WAIT", false),
           "repo_key" => "default",
           "title" => "Waiting",
           "state" => "Todo",
@@ -906,7 +910,8 @@ defmodule SymphonyElixir.ExtensionsTest do
           "pause" => nil,
           "open_questions" => [],
           "repository_paused" => false,
-          "start" => %{"allowed" => false, "reason" => "the ticket is not one Symphony tracks"},
+          "start" => %{"allowed" => false, "reason" => "The ticket is not one Symphony tracks."},
+          "moves" => untracked_moves("MT-SKIP", false),
           "repo_key" => "default",
           "title" => "Skipped",
           "state" => "Todo",
@@ -1045,7 +1050,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "issue_identifier" => "MT-HTTP",
              "repo_key" => "default",
              "repository_paused" => false,
-             "start" => %{"allowed" => false, "reason" => "the ticket is not one Symphony tracks"},
+             "start" => %{"allowed" => false, "reason" => "The ticket is not one Symphony tracks."},
+             "moves" => untracked_moves("MT-HTTP", true),
              "open_questions" => [],
              "issue_id" => "issue-http",
              "status" => "running",
@@ -1105,7 +1111,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              "issue_identifier" => "MT-WATCH",
              "repo_key" => "default",
              "repository_paused" => false,
-             "start" => %{"allowed" => false, "reason" => "the ticket is not one Symphony tracks"},
+             "start" => %{"allowed" => false, "reason" => "The ticket is not one Symphony tracks."},
+             "moves" => untracked_moves("MT-WATCH", false),
              "open_questions" => [],
              "issue_id" => "issue-watch",
              "status" => "watching",
@@ -3216,5 +3223,14 @@ defmodule SymphonyElixir.ExtensionsTest do
       _pid ->
         nil
     end
+  end
+
+  # The `moves` of a ticket with no record: nothing is known of it but whether a run works on it.
+  defp untracked_moves(identifier, running?) do
+    nil
+    |> TicketMoves.facts(%{identifier: identifier, repo_key: "default", symphony_pause: nil, repository_pause: nil, running?: running?})
+    |> TicketMoves.read()
+    |> Jason.encode!()
+    |> Jason.decode!()
   end
 end
