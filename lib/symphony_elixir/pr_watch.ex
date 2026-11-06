@@ -190,10 +190,9 @@ defmodule SymphonyElixir.PrWatch do
   no record, says nothing about it.
   """
   @spec red_on?(String.t() | nil, String.t() | nil, keyword()) :: boolean()
-  def red_on?(issue_id, head, opts \\ [])
-
-  def red_on?(issue_id, head, opts) when is_binary(head), do: match?(%{head_sha: ^head, facts: %{ci: :red}}, watch(issue_id, opts))
-  def red_on?(_issue_id, _head, _opts), do: false
+  def red_on?(issue_id, head, opts \\ []) do
+    is_binary(head) and match?(%{head_sha: ^head, facts: %{ci: :red}}, watch(issue_id, opts))
+  end
 
   @doc """
   The red head's failure a CI Fix run was sent for, as its prompt renders it (the failed checks,
