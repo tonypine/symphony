@@ -78,7 +78,13 @@ defmodule SymphonyElixir.EpicLanes do
   a lane; a value above `max_total` is capped there. Active epics with nothing on their path that
   can run, `priority_gate` included, are `yielded` and take no lane.
   """
-  @spec plan([Issue.t() | term()], non_neg_integer(), non_neg_integer() | nil, Enumerable.t(String.t()), priority_gate()) :: t()
+  @spec plan(
+          [Issue.t() | term()],
+          non_neg_integer(),
+          non_neg_integer() | nil,
+          Enumerable.t(String.t()),
+          priority_gate()
+        ) :: t()
   def plan(candidates, max_total, epic_lanes, terminal_states, priority_gate \\ nil) when is_list(candidates) and is_integer(max_total) do
     terminal_states = MapSet.new(terminal_states, &normalize_state/1)
     lane_count = min(epic_lanes || max_total, max_total)
