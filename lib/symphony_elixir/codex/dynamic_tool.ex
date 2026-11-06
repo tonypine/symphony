@@ -1946,7 +1946,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "error" => %{
         "code" => "human_action_cap_reached",
-        "message" => "This run already requested #{cap} human actions, the per-run limit, so this one was not asked. Symphony recorded it on the ticket's history, and a plan's Inbox shows it as not asked. Say in the review brief or the blocker comment which ones were not asked and why.",
+        "message" =>
+          "This run already requested #{cap} human actions, the per-run limit, so this one was not asked. Symphony recorded it on the ticket's history, and a plan's Inbox shows it as not asked. Say in the review brief or the blocker comment which ones were not asked and why.",
         "cap" => cap
       }
     }
