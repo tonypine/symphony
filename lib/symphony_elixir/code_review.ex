@@ -165,7 +165,8 @@ defmodule SymphonyElixir.CodeReview do
   # A dispatch first performs what an earlier one recorded for this head, before it reviews afresh:
   # a deepening an earlier version recorded and never routed is routed (`route_deepened/5`), and a
   # carried approve — a mechanical CI Fix re-bound it to the head the repair left, or it was given on a
-  # head that was red and has since gone green — is applied without a review (`carried_approval/3`). Only when neither holds does the reviewer run.
+  # head that was red and has since gone green — is applied without a review (`carried_approval/3`).
+  # Only when neither holds does the reviewer run.
   defp review(issue, workspace, opts, settings) do
     cond do
       decided_escalation?(issue, workspace, opts, settings) ->

@@ -70,7 +70,8 @@ defmodule SymphonyElixir.PrDecisionTest do
 
     test "a clean PR with no approval on its head is dispatched to the reviewer, whatever CI says" do
       for ci <- [[ci: :green], [ci: :none]] ++ @not_green do
-        assert %Action{rule: "R27", kind: :dispatch, args: %{phase: :code_review}} = decide([phase: :code_review] ++ ci), inspect(ci)
+        action = decide([phase: :code_review] ++ ci)
+        assert %Action{rule: "R27", kind: :dispatch, args: %{phase: :code_review}} = action, inspect(ci)
       end
 
       assert decide(phase: :code_review, ci: :pending).reason == "The reviewer reads PR #42 without waiting on CI; checks still running, applied after the verdict"
@@ -107,7 +108,10 @@ defmodule SymphonyElixir.PrDecisionTest do
 
         assert %Action{rule: "R24"} = decide(facts ++ [ci: :pending])
         assert %Action{rule: "R22"} = decide(facts ++ [ci: :red])
-        assert %Action{rule: "R21", kind: :ci_fix, args: %{origin: ^phase, cause: :red}} = decide(facts ++ [ci: :red, rerun_done: true])
+
+        assert %Action{rule: "R21", kind: :ci_fix, args: %{origin: ^phase, cause: :red}} =
+                 decide(facts ++ [ci: :red, rerun_done: true])
+
         assert %Action{rule: "R20"} = decide(facts ++ [ci: :red, red_attempts: 10])
         assert %Action{rule: "R17"} = decide(facts ++ [ci: :required_missing, missing_checks: ["build"]])
         assert %Action{rule: "R23"} = decide(facts ++ [ci: :red, red_kind: :also_red_on_base])
@@ -115,7 +119,8 @@ defmodule SymphonyElixir.PrDecisionTest do
     end
 
     test "CI Fix returns an approved head to Code Review, which carries the approval on once green" do
-      assert %Action{rule: "R25", kind: :return_to_origin, args: %{origin: :code_review}} = decide(phase: :ci_fix, origin: :code_review)
+      assert %Action{rule: "R25", kind: :return_to_origin, args: %{origin: :code_review}} =
+               decide(phase: :ci_fix, origin: :code_review)
 
       assert %Action{rule: "R27", kind: :dispatch, reason: "The head is green: Code Review's approval carries on, with no second review"} =
                decide(phase: :code_review, review: :approved)
@@ -124,14 +129,24 @@ defmodule SymphonyElixir.PrDecisionTest do
     end
 
     test "a conflict still comes first: a review needs a clean PR" do
-      assert %Action{rule: "R14", kind: :ci_fix, args: %{cause: :conflict}} = decide(phase: :code_review, mergeable: :dirty, ci: :pending)
+      assert %Action{rule: "R14", kind: :ci_fix, args: %{cause: :conflict}} =
+               decide(phase: :code_review, mergeable: :dirty, ci: :pending)
+
       assert %Action{rule: "R10"} = decide(phase: :code_review, pr: :draft, ci: :pending)
       assert %Action{rule: "R13"} = decide(phase: :code_review, review_comments: :unaddressed, ci: :red)
     end
 
     test "a review waits only for the update the upkeep makes on the same read" do
       # U1 updates the branch on this read: reading the old head would be wasted.
-      for ci <- [[ci: :green], [ci: :pending], [ci: :required_missing], [ci: :red, red_kind: :human_only], [ci: :red, red_kind: :also_red_on_base]] do
+      updated_first = [
+        [ci: :green],
+        [ci: :pending],
+        [ci: :required_missing],
+        [ci: :red, red_kind: :human_only],
+        [ci: :red, red_kind: :also_red_on_base]
+      ]
+
+      for ci <- updated_first do
         facts = [phase: :code_review, mergeable: :behind] ++ ci
         assert [%Action{rule: "U1"}] = upkeep(facts), inspect(ci)
         assert %Action{rule: "R28", kind: :wait, owner: :symphony} = decide(facts), inspect(ci)
@@ -142,7 +157,8 @@ defmodule SymphonyElixir.PrDecisionTest do
         assert %Action{rule: "R27", kind: :dispatch} = decide([phase: :code_review, mergeable: :behind] ++ ci), inspect(ci)
       end
 
-      assert %Action{rule: "R27", kind: :dispatch} = decide(phase: :code_review, mergeable: :behind, ahead: [@tp948], ci: :red)
+      assert %Action{rule: "R27", kind: :dispatch} =
+               decide(phase: :code_review, mergeable: :behind, ahead: [@tp948], ci: :red)
     end
 
     test "QA is never dispatched, and Merging never arms auto-merge, on a red head" do
@@ -435,7 +451,15 @@ defmodule SymphonyElixir.PrDecisionTest do
 
     test "TP-1196: a failed check in a run still going waits on CI in every phase with a PR, naming the check (R19b)" do
       for phase <- [:code_review, :qa, :rework, :ci_fix, :merging], rerun_done <- [false, true] do
-        facts = [phase: phase, review: :approved, ci: :red, red_kind: :run_in_progress, failing_check: "coverage (4/4)", pr_number: 655]
+        facts = [
+          phase: phase,
+          review: :approved,
+          ci: :red,
+          red_kind: :run_in_progress,
+          failing_check: "coverage (4/4)",
+          pr_number: 655
+        ]
+
         action = decide(facts ++ [rerun_done: rerun_done, mergeable: :clean])
 
         assert %Action{rule: "R19b", kind: :wait, owner: :ci, clears_when: "the workflow run finishes", reason: reason} = action

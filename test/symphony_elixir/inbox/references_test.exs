@@ -331,8 +331,12 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
         resolved.context.pull_request
       end
 
-      assert %{review: "reviewing", failing_check: "macos build", checks: "failed"} = context.(%{phase: :code_review, run: :active, ci: :red, failing_check: "macos build"})
-      assert %{review: "approved", failing_check: "macos build"} = context.(%{phase: :code_review, review: :approved, ci: :red, failing_check: "macos build"})
+      assert %{review: "reviewing", failing_check: "macos build", checks: "failed"} =
+               context.(%{phase: :code_review, run: :active, ci: :red, failing_check: "macos build"})
+
+      assert %{review: "approved", failing_check: "macos build"} =
+               context.(%{phase: :code_review, review: :approved, ci: :red, failing_check: "macos build"})
+
       assert %{review: nil, failing_check: nil} = context.(%{phase: :code_review, ci: :pending})
       assert %{review: nil, failing_check: "test"} = context.(%{phase: :qa, run: :active, ci: :red, failing_check: "test"})
     end

@@ -99,6 +99,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
   """
   @type domain :: {atom(), [term()]} | {atom(), [term()], [{atom(), [term()]}]}
 
+  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct phase: :in_progress,
             origin: nil,
             github: :ok,

@@ -381,7 +381,8 @@ defmodule SymphonyElixir.SituationTest do
 
     test "TP-1204: a head Code Review has yet to judge waits for no check; an approved one waits, and QA comes next" do
       refute compute(record(%{pr_watch: watch(%{phase: :code_review})})).kind == "waiting_for_ci"
-      refute compute(record(%{pr_watch: watch(%{phase: :code_review, ci: :red, red_kind: :run_in_progress})})).kind == "waiting_for_ci"
+      red_in_a_run = watch(%{phase: :code_review, ci: :red, red_kind: :run_in_progress})
+      refute compute(record(%{pr_watch: red_in_a_run})).kind == "waiting_for_ci"
 
       approved = compute(record(%{pr_watch: watch(%{phase: :code_review, review: :approved})}))
       assert approved.kind == "waiting_for_ci"

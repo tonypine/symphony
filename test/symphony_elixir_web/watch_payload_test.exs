@@ -100,8 +100,9 @@ defmodule SymphonyElixirWeb.WatchPayloadTest do
              "PR #7 a draft · CI red · conflicts with the base · auto-merge on · run active · Blocked hold · GitHub rate limited"
 
     # TP-1204: the review's state, beside CI's.
-    assert summary.([phase: :code_review, pr: :open, pr_number: 42, ci: :red, run: :active, mergeable: :clean], %{}) == "PR #42 open · CI red · no conflict · reviewing"
-    assert summary.([phase: :code_review, review: :approved, pr: :open, pr_number: 42, ci: :red, mergeable: :clean], %{}) == "PR #42 open · CI red · no conflict · approved"
+    red_head = [phase: :code_review, pr: :open, pr_number: 42, ci: :red, mergeable: :clean]
+    assert summary.(red_head ++ [run: :active], %{}) == "PR #42 open · CI red · no conflict · reviewing"
+    assert summary.(red_head ++ [review: :approved], %{}) == "PR #42 open · CI red · no conflict · approved"
 
     # No decision yet, nor a phase from a move.
     assert %{rule: nil, action: nil, owner: nil, since: nil, phase: "qa", actions: [], silent: nil, facts: %{"github" => "rate_limited"}} =
