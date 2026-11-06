@@ -1322,7 +1322,7 @@ Review-comment options are ignored when `enabled` is not `true`. CI failure disp
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
 affect CI escalation. A head whose only failed check is `protected paths` is not red: it gets no
 flaky re-run, no CI-fix run and no escalation, and uses no fix attempt, and it reads as its other
-checks, so the reviewer and QA run once they passed. Only a person clears that check, by a decision
+checks, so QA runs once they passed. Only a person clears that check, by a decision
 that allows the change (an option whose `unlocks` grants the protected paths the PR changes; a
 grant on a folder reached under several names, such as the shared skills in `.agents/skills` and
 their `.claude/skills` and `.codex/skills` links, covers it under every name), and

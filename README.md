@@ -136,7 +136,7 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
   `linear_withdraw_human_action`; see `human_actions` in
   [docs/configuration.md](docs/configuration.md).
 - **Code Review** — a read-only reviewer agent (`code_review` in `symphony.yml`) judges each pull
-  request's diff against the ticket once its head is green; see
+  request's diff against the ticket as soon as the PR is open, whatever CI says; see
   [`code_review`](docs/configuration.md#code_review).
 - **QA** — the `QA` state's agent uses each PR the way a user would, with
   built-in playbooks for CLIs (`cli`), web apps in a headless browser (`web`), macOS apps through
