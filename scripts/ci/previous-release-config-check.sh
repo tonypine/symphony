@@ -34,5 +34,10 @@ for repo in $(sed -n 's|^[[:space:]]*repo:[[:space:]]*~/\([^[:space:]#]*\).*|\1|
   git init -q "$home/$repo"
 done
 
+# The escript runs on the Erlang on PATH, found here with the real HOME: a version manager's shims
+# may not resolve under a fresh one.
+PATH="$(erl -noshell -eval 'io:put_chars(code:root_dir()), halt().')/bin:$PATH"
+export PATH
+
 echo "Checking symphony.yml from $tag"
 HOME="$home" "$binary" check --migrate --config "$PWD/$config"
