@@ -302,3 +302,64 @@ once.
 
 GitHub says only `CANCELLED` of a job that never got a machine, and the watcher treats every cancelled
 check that way (reruns it, spends no fix run), so `cancelled_no_machine` never reads as `failed`.
+
+## `connected`
+
+Where the ticket sits among the others, for the Connected panel (facts 15, 16 and 21 of
+`docs/design/director-ticket-page.md`). A ticket with a record, or one the orchestrator tracks, has it;
+it reads the records, the ledgers, what the orchestrator holds and the cached Initiatives, never Linear
+(`SymphonyElixir.Connected.Read`).
+
+| Field | What it holds |
+| --- | --- |
+| `epic` | The plan the ticket is part of, below; null when it has none, and on a plan ticket itself. |
+| `parent` | The parent as the run's read saw it: `identifier`, `title`, `done`, `total` and `children`, the sub-tickets' state types. Null before a read gave it. |
+| `sub_tickets` | The ticket's own sub-tickets: `identifier`, `title` and `state`. |
+| `blocked_by` | Every blocker ever linked, below. |
+| `blocks` | The tickets it holds up, below. |
+| `related` | The related links of a tracked ticket: `identifier`, `title` and `state`. A ticket the orchestrator no longer tracks has none: its record does not keep them. |
+
+A `title` and a `state` come from the other ticket's record when Symphony has one, otherwise from the
+link, where each may be null.
+
+### `epic`
+
+| Field | What it holds |
+| --- | --- |
+| `identifier`, `title` | The plan ticket. |
+| `done`, `total` | Its progress: sub-tickets completed, of all of them but the canceled ones. It equals the same plan's count on `GET /api/v1/initiatives`, which reads the same cache. |
+| `incomplete` | Whether Linear had more sub-tickets than the read returned, as on the Initiatives. |
+| `tickets` | The sub-tickets in chain order: `identifier`, `title`, `state`, `situation` (the kind of its `situation`, null without a record) and `current`, true on this ticket. |
+
+A plan the Initiatives don't hold (done more than 7 days ago, without the `plan` label, or right after a
+start, before their first read) comes from the parent's record: its sub-issues in creation order,
+counted by state, where `Done` is done and any other terminal state leaves it out. With no record of the
+parent, `done` and `total` are the parent's own and `tickets` is empty.
+
+### `blocked_by`
+
+Each entry is one blocker, in the order they were first linked:
+
+| Field | What it holds |
+| --- | --- |
+| `identifier`, `title`, `state` | The blocker. |
+| `status` | `open` or `resolved`. |
+| `resolved_at` | When it resolved: the time its dependency reason left the pause; null while `open`, and on a blocker that was already done when it was linked. |
+
+It comes from the ledger: a dependency reason's `pause.set` or `pause.reason_added` opens the blocker, and
+`pause.reason_cleared` or `pause.cleared` resolves it. The record's `blockers` keep holding only the open
+ones, for dispatch, so a Done blocker stays here and the page can strike it through. Three cases go beyond
+the events:
+
+- A link the ticket has with no reason (it was linked while no active phase held the ticket) reads `open`
+  until its blocker ends.
+- A reason still set reads `open` even when its blocker landed: the ticket still waits, for the app to
+  include it.
+- A reason cleared while its blocker is still open and no longer linked was unlinked, not resolved, and the
+  entry leaves the list.
+
+### `blocks`
+
+The links the run read and the tickets whose records name this one as an open blocker: `identifier`,
+`title`, `state` and `situation`, the kind of the held ticket's `situation`, null without a record. A ticket
+that ended holds nothing up.

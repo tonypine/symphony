@@ -39,6 +39,10 @@ defmodule SymphonyElixir.ConnectedTest do
     assert Connected.build(%{identifier: "MT-2"}, nil) == %{parent: nil, sub_tickets: [], blocked_by: [], blocks: [], related: []}
   end
 
+  test "build reads a ticket's record, which keeps its blockers as blockers" do
+    assert %{blocked_by: [%{identifier: "MT-3", title: nil, state: "Todo"}]} = Connected.build(%{identifier: "MT-2", blockers: [%{id: "b", identifier: "MT-3", state: "Todo"}]}, nil)
+  end
+
   test "linked keeps an enriched issue's parent and links" do
     links = [%{relation: "blocks", identifier: "MT-5", title: "Next", state: "Todo"}]
 
