@@ -14,16 +14,18 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
   @repo "default"
   @landed ~U[2026-11-05 15:22:00Z]
 
-  defmodule IdleOrchestrator do
+  # Idle until a test gives it what it tracks.
+  defmodule SnapshotOrchestrator do
     use GenServer
 
     def start_link(name), do: GenServer.start_link(__MODULE__, nil, name: name)
 
     @impl true
-    def init(nil), do: {:ok, nil}
+    def init(nil), do: {:ok, %{running: [], retrying: [], rate_limits: nil}}
 
     @impl true
-    def handle_call(:snapshot, _from, state), do: {:reply, %{running: [], retrying: [], rate_limits: nil}, state}
+    def handle_call(:snapshot, _from, snapshot), do: {:reply, snapshot, snapshot}
+    def handle_call({:track, tracked}, _from, snapshot), do: {:reply, :ok, Map.merge(snapshot, tracked)}
   end
 
   setup do
@@ -37,7 +39,7 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
 
     write_workflow_file!(Workflow.workflow_file_path())
     orchestrator = Module.concat(__MODULE__, "Orchestrator#{System.unique_integer([:positive])}")
-    start_supervised!(%{id: IdleOrchestrator, start: {IdleOrchestrator, :start_link, [orchestrator]}})
+    start_supervised!(%{id: SnapshotOrchestrator, start: {SnapshotOrchestrator, :start_link, [orchestrator]}})
 
     endpoint_config =
       :symphony_elixir
@@ -46,7 +48,7 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
 
     Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
     start_supervised!({SymphonyElixirWeb.Endpoint, []})
-    :ok
+    %{orchestrator: orchestrator}
   end
 
   # Eight sub-tickets in a chain, the first four done and the fifth, MT-6, this ticket.
@@ -108,6 +110,53 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
 
   defp read(identifier), do: build_conn() |> get("/api/v1/#{identifier}") |> json_response(200)
 
+  defp watched(id, identifier) do
+    ticket(id, identifier, "Code Review")
+    facts = %Facts{phase: :code_review, ci: :pending, pr: :open, pr_number: 741}
+    :ok = RunStore.put_ticket_pr_watch(@repo, id, identifier, %{facts: facts, head_sha: "abc1234"})
+  end
+
+  defp tracked_links(held_up, related) do
+    %{
+      parent: nil,
+      sub_tickets: [],
+      blocked_by: [],
+      blocks: [%{identifier: held_up, title: "Held up", state: "Todo"}],
+      related: [%{identifier: related, title: "Related", state: "Todo"}]
+    }
+  end
+
+  defp running_entry(id, identifier, connected) do
+    %{
+      issue_id: id,
+      repo_key: @repo,
+      identifier: identifier,
+      state: "Code Review",
+      session_id: "thread-#{identifier}",
+      last_codex_message: nil,
+      last_codex_event: :notification,
+      last_codex_timestamp: nil,
+      started_at: DateTime.utc_now(),
+      connected: connected
+    }
+  end
+
+  defp watching_entry(id, identifier, connected) do
+    %{
+      issue_id: id,
+      repo_key: @repo,
+      identifier: identifier,
+      state: "Code Review",
+      url: "https://linear.app/example/issue/#{identifier}",
+      pull_request_url: "https://github.com/example/repo/pull/741",
+      last_ran_at: DateTime.utc_now(),
+      seconds_since_last_run: 0,
+      connected: connected
+    }
+  end
+
+  defp identifiers(tickets), do: Enum.map(tickets, & &1["identifier"])
+
   test "a ticket in a chain reads 4 of 8 done with itself current, and the blocker that landed with when" do
     read_the_plan()
     ticket_in_a_chain()
@@ -149,5 +198,41 @@ defmodule SymphonyElixirWeb.ConnectedReadTest do
     assert %{"issues" => [issue]} = build_conn() |> get("/api/v1/state") |> json_response(200)
 
     assert issue["connected"] == read("MT-6")["connected"]
+  end
+
+  test "the state's issues carry what the orchestrator holds, as the ticket read does", %{orchestrator: orchestrator} do
+    watched("id-MT-30", "MT-30")
+    watched("id-MT-31", "MT-31")
+    watched("id-MT-32", "MT-32")
+
+    :ok =
+      GenServer.call(
+        orchestrator,
+        {:track,
+         %{
+           running: [
+             running_entry("id-MT-30", "MT-30", tracked_links("MT-40", "MT-41")),
+             running_entry("id-MT-31", "MT-31", nil)
+           ],
+           watching: [
+             watching_entry("id-MT-30", "MT-30", tracked_links("MT-50", "MT-51")),
+             watching_entry("id-MT-31", "MT-31", tracked_links("MT-60", "MT-61"))
+           ]
+         }}
+      )
+
+    assert %{"issues" => issues} = build_conn() |> get("/api/v1/state") |> json_response(200)
+    assert ["MT-30", "MT-31", "MT-32"] = Enum.map(issues, & &1["identifier"])
+    [running_wins, nil_ignored, nothing_held] = Enum.map(issues, & &1["connected"])
+
+    assert identifiers(running_wins["blocks"]) == ["MT-40"]
+    assert identifiers(running_wins["related"]) == ["MT-41"]
+    assert identifiers(nil_ignored["blocks"]) == ["MT-60"]
+    assert identifiers(nil_ignored["related"]) == ["MT-61"]
+    assert %{"blocks" => [], "related" => []} = nothing_held
+
+    assert running_wins == read("MT-30")["connected"]
+    assert nil_ignored == read("MT-31")["connected"]
+    assert nothing_held == read("MT-32")["connected"]
   end
 end
