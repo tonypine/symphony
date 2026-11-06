@@ -2012,6 +2012,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     test "a CI Fix ticket whose checks run waits in the Inbox on CI, asking nothing, and goes back to review on its own when they go green (TP-1175)" do
       issue_id = ticket!("1", "CI Fix", ci: :pending)
       :ok = CiFix.record_origin(@repo_key, issue_id, "QA")
+
       inbox = [
         records: &RunStore.list_all_ticket_states/0,
         settings_fun: fn _repo_key -> {:ok, Config.settings!()} end,
