@@ -1425,7 +1425,7 @@ defmodule SymphonyElixir.ExtensionsTest do
     assert json_response(get(build_conn(), "/api/v1/MT-MISSING"), 404)["error"]["code"] == "issue_not_found"
   end
 
-  test "phoenix observability api serves a tracked ticket's connected tickets, an untracked one none" do
+  test "phoenix observability api serves a tracked ticket's connected tickets, and a ticket with no record and nothing tracked none" do
     connected = %{
       parent: %{identifier: "MT-EPIC", title: "Ship the peek", done: 1, total: 3, children: ["completed", "started", "unstarted"]},
       sub_tickets: [%{identifier: "MT-SUB", title: nil, state: "Todo"}],
@@ -1457,9 +1457,10 @@ defmodule SymphonyElixir.ExtensionsTest do
                "total" => 3,
                "children" => ["completed", "started", "unstarted"]
              },
+             "epic" => nil,
              "sub_tickets" => [%{"identifier" => "MT-SUB", "title" => nil, "state" => "Todo"}],
-             "blocked_by" => [%{"identifier" => "MT-BLOCKER", "title" => nil, "state" => "In Progress"}],
-             "blocks" => [%{"identifier" => "MT-NEXT", "title" => "Downstream", "state" => "Todo"}],
+             "blocked_by" => [%{"identifier" => "MT-BLOCKER", "title" => nil, "state" => "In Progress", "status" => "open", "resolved_at" => nil}],
+             "blocks" => [%{"identifier" => "MT-NEXT", "title" => "Downstream", "state" => "Todo", "situation" => nil}],
              "related" => [%{"identifier" => "MT-REL", "title" => "Context", "state" => "Done"}]
            }
 
@@ -1468,7 +1469,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     refute Map.has_key?(json_response(get(build_conn(), "/api/v1/MT-RETRY"), 200), "connected")
     assert %{"status" => "untracked"} = untracked = json_response(get(build_conn(), "/api/v1/MT-GONE"), 200)
-    refute Map.has_key?(untracked, "connected")
+    assert %{"parent" => nil, "epic" => nil, "sub_tickets" => [], "blocked_by" => [], "blocks" => [], "related" => []} = untracked["connected"]
   end
 
   test "phoenix observability api exposes filtered quality runs and session reports" do
