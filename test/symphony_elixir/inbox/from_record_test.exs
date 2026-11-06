@@ -232,6 +232,17 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
       assert unasked.() == ["Who may export", "Which export format"]
     end
 
+    test "a withdrawn Question does not count as asked, unless its title was asked again", %{plan: plan} do
+      [asked] = plan.questions
+      withdrawn = %{asked | id: "withdrawn", state: :withdrawn, withdrawn: %{reason: "Restarted", at: asked.asked_at}}
+      unasked = fn questions -> Item.from_plan_brief(%{plan | questions: questions}, settings()).review.unasked_choices end
+
+      {:ok, _event} = TicketEvents.record(@repo_key, plan.issue_id, "question.not_asked", %{title: asked.title, question: asked.question, cap: 12})
+
+      assert unasked.([withdrawn]) == [asked.title]
+      assert unasked.([withdrawn, asked]) == []
+    end
+
     test "asks from the brief's first review line, its raw markdown, or to approve the plan", %{plan: plan} do
       brief = plan.plan_brief.brief
       ask = fn brief -> Item.from_plan_brief(put_in(plan.plan_brief.brief, brief), settings()).ask end

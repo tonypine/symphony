@@ -929,12 +929,13 @@ defmodule SymphonyElixir.TicketState do
   @doc """
   The titles of the choices the ticket's latest run was refused for reaching its limit of requests
   (`question.not_asked`), in the order refused, read from its event stream: an earlier run's refusals
-  are that run's, and a choice the record holds a Question of was asked after all. A record whose
-  events can't be read has none.
+  are that run's, and a choice the record holds an open or answered Question of was asked after all.
+  A withdrawn Question asks nothing any more, so its title stays listed. A record whose events can't
+  be read has none.
   """
   @spec unasked_choices(map()) :: [String.t()]
   def unasked_choices(record) do
-    asked = record |> Map.get(:questions, []) |> MapSet.new(& &1.title)
+    asked = record |> Map.get(:questions, []) |> Enum.reject(&(&1.state == :withdrawn)) |> MapSet.new(& &1.title)
 
     record
     |> events(types: ["run.started", "question.not_asked"])
