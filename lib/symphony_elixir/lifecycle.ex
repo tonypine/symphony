@@ -226,6 +226,5 @@ defmodule SymphonyElixir.Lifecycle do
 
   defp iso8601(at), do: at |> DateTime.truncate(:second) |> DateTime.to_iso8601()
 
-  defp normalized(value) when is_binary(value), do: value |> String.trim() |> String.downcase()
-  defp normalized(_value), do: nil
+  defp normalized(value), do: value |> String.trim() |> String.downcase()
 end
