@@ -336,6 +336,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
         withdraw_open_questions()
         since = DateTime.utc_now()
         :ok = setup.()
+        :ok = put_record_phase(state)
 
         capture_log(fn -> run_issue!(state, [heads: ["sha-same"], max_turns: 5] ++ run_opts) end)
 
@@ -369,6 +370,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     test "a run stopped mid-park leaves the park to finish: the hold and the note" do
       # A person can stop the run mid-park. A slow Linear note gives the stop time to land.
       :ok = red_ci_failure()
+      :ok = put_record_phase("CI Fix")
       Application.put_env(:symphony_elixir, :memory_tracker_create_comment_sleep_ms, 300)
       :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
       test_pid = self()
@@ -407,10 +409,16 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, conflicting_head})
     end
 
+    # The phase a read of the ticket writes on its record before a run starts: the park must leave it.
+    defp put_record_phase(state) do
+      record = RunStore.get_ticket_state("issue-progress") || TicketState.new("default", "issue-progress")
+      record |> TicketState.put_phase(state) |> RunStore.put_ticket_state()
+    end
+
     defp assert_parked_on_record(from_state, kind, since) do
       ticket = {:ticket, "default", "issue-progress"}
       record = TicketState.normalize(RunStore.get_ticket_state("issue-progress"))
-      refute record.phase == "Backlog", "#{kind}: the record is in #{inspect(record.phase)}"
+      assert record.phase == from_state, "#{kind}: the record is in #{inspect(record.phase)}"
 
       title = "TP-337 is paused in #{from_state}: its last 2 turns changed nothing"
       assert [%{title: ^title} = question] = Questions.open(ticket)
