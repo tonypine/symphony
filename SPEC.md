@@ -6097,13 +6097,17 @@ Minimum endpoints:
     still waiting for an answer: `id`, `title`, `asked_by`, `asked_at`, `confirm`) and
     `repository_paused`. A pause or question change records a ticket event, so the live channel
     (`/api/v1/stream`) sends that ticket's notice once it commits.
-  - A running, watched, slot-waiting or passed-over issue MAY carry `connected`: where it sits
-    among the others, from what the orchestrator already holds (no tracker read per request).
-    `parent` (`identifier`, `title`, `done`, `total`, `children` state types in landing order, or
-    null), and `sub_tickets`, `blocked_by`, `blocks`, `related`, each `identifier`, `title` and
-    `state`. Blockers and sub-tickets come from the poll (`title` null); the parent and the
-    `blocks` and `related` links come from the run's enrichment read at dispatch. An untracked
-    issue has no `connected`.
+  - An issue with a ticket state record or that the orchestrator tracks carries `connected`: where it
+    sits among the others, from the records, the ledgers, what the orchestrator holds and the cached
+    Initiatives (no tracker read per request). `parent` (`identifier`, `title`, `done`, `total`,
+    `children` state types in landing order, or null), `epic` (`identifier`, `title`, `done`, `total`,
+    `incomplete`, and `tickets` in chain order, each with its `situation` kind and whether it is
+    `current`, or null; the same count as `/api/v1/initiatives`), and `sub_tickets`, `blocked_by`,
+    `blocks`, `related`, each `identifier`, `title` and `state`. `blocked_by` lists every blocker ever
+    linked, each with `status` (`open` or `resolved`) and `resolved_at`, from the ledger's dependency
+    pause events; the record's `blockers` keep only the open ones, for dispatch. `blocks` also holds
+    the tickets whose records name this one as an open blocker, each with its `situation` kind.
+    `docs/control-api.md` documents the shape.
   - `verdicts` lists the ticket's Code Review and QA verdicts from its ticket state record, newest
     first: `kind` (`code_review` or `qa`), `outcome`, the `head_sha` judged and `recorded_at`. It
     reads no Linear. A ticket Symphony no longer runs or watches still resolves here, with
