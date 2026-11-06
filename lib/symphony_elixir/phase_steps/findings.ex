@@ -84,7 +84,11 @@ defmodule SymphonyElixir.PhaseSteps.Findings do
         "No open findings.\n"
 
       open ->
-        groups = open |> Enum.group_by(&class(&1.finding)) |> Enum.sort_by(fn {name, group} -> {-length(group), name} end)
+        groups =
+          open
+          |> Enum.group_by(&class(&1.finding))
+          |> Enum.sort_by(fn {name, group} -> {-length(group), name} end)
+
         Enum.join(["Open findings by class (#{length(open)}):" | Enum.flat_map(groups, &group_lines/1)], "\n") <> "\n"
     end
   end

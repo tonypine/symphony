@@ -61,7 +61,8 @@ defmodule SymphonyElixir.ConfigPhasesTest do
     end
 
     test "rework reads the open findings first, then follows the implementation list" do
-      assert [%Step{id: "findings", mode: "machine", on_fail: "code", timeout_ms: 60_000} = findings | rest] = Phases.default_steps(:rework)
+      assert [findings | rest] = Phases.default_steps(:rework)
+      assert %Step{id: "findings", mode: "machine", on_fail: "code", timeout_ms: 60_000} = findings
 
       assert [%Command{run: "symphony:findings", when: "always"}] = findings.command
       assert Phases.findings_command() == "symphony:findings"

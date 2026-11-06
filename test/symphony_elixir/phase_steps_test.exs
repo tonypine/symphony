@@ -251,7 +251,9 @@ defmodule SymphonyElixir.PhaseStepsTest do
       fail_qa!("qa-2", "clipped", "Two")
       fail_qa!("qa-3", "clipped", "Three")
 
-      assert %{repeats: [%{label: "clipped", first: %{payload: %{description: "Two"}}, last: %{payload: %{description: "Three"}}}]} = read_findings()
+      assert %{repeats: [%{label: "clipped", first: first, last: last}]} = read_findings()
+      assert %{payload: %{description: "Two"}} = first
+      assert %{payload: %{description: "Three"}} = last
     end
 
     test "two findings of one QA run, and two classes, are not the same failure twice" do

@@ -333,7 +333,11 @@ defmodule SymphonyElixir.PhaseSteps do
   end
 
   defp run_command(command, context, env, timeout_ms) do
-    if command == Phases.findings_command(), do: read_findings(context), else: runner(context).(command, env, timeout_ms)
+    if command == Phases.findings_command() do
+      read_findings(context)
+    else
+      runner(context).(command, env, timeout_ms)
+    end
   end
 
   defp read_findings(context) do
