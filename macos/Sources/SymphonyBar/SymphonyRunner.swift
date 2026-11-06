@@ -145,12 +145,11 @@ final class SymphonyRunner {
                 })
             }
         }
-        switch launch {
-        case let .success(launch):
-            return await ConfigCheck.runMigrating(launch, log: ConfigCheck.qaLog(AppStores.current.qaMode))
-        case let .failure(error):
-            return ConfigMigrationCheck(result: .failed(error.localizedDescription))
-        }
+        return await ConfigCheck.runForUpdate(
+            launch,
+            configPath: settings.configPath.trimmingCharacters(in: .whitespacesAndNewlines),
+            log: ConfigCheck.qaLog(AppStores.current.qaMode)
+        )
     }
 
     /// The `symphony dashboard` script for Terminal, from the binary the running Symphony came from (or Start

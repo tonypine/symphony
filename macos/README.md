@@ -830,7 +830,8 @@ reason "rolled back": the line reads **Update rolled back: vX**, and **Retry vX*
    know the new release's keys. A file the new build can't read or [migrate](../docs/configuration.md#renamed-keys-are-migrated)
    is refused here, naming each key and its line. Nothing was touched: Symphony keeps running on this version, and
    the release shows as "Update refused: vX" with **Retry vX**. No automatic mode downloads it again; edit the file
-   and choose Retry, or a newer release installs as usual.
+   and choose Retry, or a newer release installs as usual. An app that isn't set up yet, with no settings file or
+   no Linear key, has nothing to check, and its update goes ahead.
 5. **Drain Symphony** like [Restart](#restart), without its check of `symphony.yml`: pause
    dispatch, wait for `0 running` (**Update Now Anyway** shows after the restart timeout, **Cancel Update**
    stops waiting), then stop Symphony. A Symphony the app didn't start is left alone. The pause is a `build` reason carrying version X as a field (sent with the line

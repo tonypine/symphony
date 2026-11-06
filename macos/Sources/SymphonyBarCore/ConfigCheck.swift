@@ -63,6 +63,27 @@ public enum ConfigCheck {
         }
     }
 
+    /// What a downloaded build says about symphony.yml before it installs. An app that isn't set up yet, with no
+    /// settings file or no Linear key, has nothing for the build to read and no Symphony to break, so its update goes
+    /// ahead; any other launch that can't be built fails. `launch` is built with `migrateSubcommand`.
+    public static func runForUpdate(
+        _ launch: Result<ChildLaunch, Error>,
+        configPath: String,
+        timeout: TimeInterval = timeout,
+        log: Log? = nil
+    ) async -> ConfigMigrationCheck {
+        switch launch {
+        case let .failure(error):
+            if let problem = error as? LaunchProblem, problem == .configPathMissing || problem == .linearAPIKeyMissing {
+                return ConfigMigrationCheck(result: .passed)
+            }
+            return ConfigMigrationCheck(result: .failed(error.localizedDescription))
+        case let .success(launch):
+            guard LocalFileChecker().isFile(atPath: configPath) else { return ConfigMigrationCheck(result: .passed) }
+            return await runMigrating(launch, timeout: timeout, log: log)
+        }
+    }
+
     /// The notes of each `Migrated: ` line of the check's output.
     public static func migrationNotes(_ output: String) -> [String] {
         let prefix = "Migrated: "

@@ -36,6 +36,36 @@ final class ConfigCheckTests: XCTestCase {
         XCTAssertEqual(check, ConfigMigrationCheck(result: .passed, notes: ["v1 renamed `a` to `b` in your settings"]))
     }
 
+    func testAnUpdateGoesAheadWhenTheAppIsNotSetUpYet() async {
+        for problem in [LaunchProblem.configPathMissing, .linearAPIKeyMissing] {
+            let check = await ConfigCheck.runForUpdate(.failure(problem), configPath: "")
+
+            XCTAssertEqual(check, ConfigMigrationCheck(result: .passed))
+        }
+    }
+
+    func testAnUpdateGoesAheadWithoutRunningTheCheckWhenTheSettingsFileIsMissing() async {
+        let check = await ConfigCheck.runForUpdate(.success(shell("exit 1")), configPath: "/no/such/symphony.yml")
+
+        XCTAssertEqual(check, ConfigMigrationCheck(result: .passed))
+    }
+
+    func testAnUpdateFailsOnAnyOtherLaunchProblem() async {
+        let check = await ConfigCheck.runForUpdate(.failure(LaunchProblem.embeddedSymphonyMissing), configPath: "/ops/symphony.yml")
+
+        XCTAssertEqual(check, ConfigMigrationCheck(result: .failed(LaunchProblem.embeddedSymphonyMissing.message)))
+    }
+
+    func testAnUpdateAsksTheBuildWhenTheSettingsFileIsThere() async throws {
+        let config = FileManager.default.temporaryDirectory.appendingPathComponent("symphony-\(UUID().uuidString).yml")
+        try Data().write(to: config)
+        defer { try? FileManager.default.removeItem(at: config) }
+
+        let check = await ConfigCheck.runForUpdate(.success(shell("echo '`a` is not valid'; exit 1")), configPath: config.path)
+
+        XCTAssertEqual(check.result, .failed("`a` is not valid"))
+    }
+
     private func shell(_ script: String) -> ChildLaunch {
         ChildLaunch(
             executable: "/bin/sh",
