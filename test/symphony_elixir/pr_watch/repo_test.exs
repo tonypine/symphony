@@ -618,11 +618,11 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       assert %{facts: %Facts{review: :pending}, decision: %{rule: "R27"}} = watch(repo_key, "1")
     end
 
-    test "a verdict on the head says nothing in another phase", %{repo_key: repo_key} do
+    test "a verdict on the head says nothing in another phase", %{repo_key: repo_key, pid: pid} do
       approved_on!(repo_key, "sha-1")
       issues!([with_pr(repo_key, issue("1", "QA"), 1)])
 
-      assert {:ok, _summary} = Repo.poll(start_repo!(repo_key))
+      assert {:ok, _summary} = Repo.poll(pid)
       assert %{facts: %Facts{phase: :qa, review: :pending}, decision: %{rule: "R22"}} = watch(repo_key, "1")
     end
   end

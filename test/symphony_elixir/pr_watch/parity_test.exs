@@ -85,9 +85,9 @@ defmodule SymphonyElixir.PrWatch.ParityTest do
     end
   end
 
-  test "a check_run failure delivery moves a Code Review ticket to CI Fix within one confirm read; with deliveries off, within one poll interval" do
+  test "a check_run failure delivery moves a QA ticket to CI Fix within one confirm read; with deliveries off, within one poll interval" do
     fixture = %{
-      tickets: [{"1", "Code Review", red()}],
+      tickets: [{"1", "QA", red()}],
       steps: [{:github, [check_failed("1", "head-1-1")], []}]
     }
 

@@ -822,7 +822,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
     test "a check the base doesn't require, cancelled again after its reruns, is set aside instead of holding the ticket" do
       install = %{name: "install script", run_id: "22", job_id: 2, workflow_name: "macos", conclusion: "CANCELLED"}
       names = ["specs", "install script"]
-      issue_id = ticket!("1", "Code Review", cancelled([install], names) ++ [past_cancelled: :green])
+      issue_id = ticket!("1", "QA", cancelled([install], names) ++ [past_cancelled: :green])
       pid = start!()
 
       for job <- [3, 4] do
@@ -1444,7 +1444,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
       test "an update-branch GitHub #{answer} that never moves the head is a silent wait two poll intervals later" do
         World.update(:update_result, fn _ok -> @update_result end)
-        issue_id = ticket!("1", "Code Review", mergeable: :behind)
+        issue_id = ticket!("1", "QA", mergeable: :behind)
         pid = start!()
 
         # The read that updates the branch is the watcher acting: no silence.

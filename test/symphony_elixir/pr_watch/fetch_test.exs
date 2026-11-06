@@ -637,6 +637,8 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
 
   describe "facts/2" do
     @ticket %{phase: :code_review, origin: :qa, hold: :none, run: :none, max_red_attempts: 3, ahead: []}
+    # CI's state decides in Code Review once the head is approved.
+    @approved Map.put(@ticket, :review, :approved)
 
     test "builds the facts from the ticket and its PR's read" do
       assert {:ok, read} = read({response(pull(%{"mergeStateStatus" => "BEHIND"})), 0})
@@ -662,15 +664,15 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       assert %{ci: :pending, failed_checks: [], run_ids: ["100", "300"]} = read
 
       assert %Action{rule: "R24", kind: :wait, owner: :ci, reason: "Checks are running on PR #42's head"} =
-               @ticket |> Fetch.facts(read) |> PrDecision.decide()
+               @approved |> Fetch.facts(read) |> PrDecision.decide()
 
       # Once attempt 2's every check was cancelled too, with nothing queued, the upkeep (U2) reruns
       # the run once and R19 waits for it.
       attempt_2 = [check("build", "CANCELLED", run: 300, job: 3, workflow: "macos"), check("test", "CANCELLED", run: 300, job: 4, workflow: "macos")]
       assert {:ok, read} = read({response(pull(rollup([check("make all", "SUCCESS") | attempt_1] ++ attempt_2))), 0})
       assert %{ci: :red, red_kind: :cancelled, failed_checks: [%{name: "build", run_id: "300"}, %{name: "test", run_id: "300"}]} = read
-      assert [%Action{rule: "U2", kind: :rerun_failed}] = @ticket |> Fetch.facts(read) |> PrDecision.upkeep()
-      assert %Action{rule: "R19", kind: :wait} = @ticket |> Fetch.facts(read) |> PrDecision.decide()
+      assert [%Action{rule: "U2", kind: :rerun_failed}] = @approved |> Fetch.facts(read) |> PrDecision.upkeep()
+      assert %Action{rule: "R19", kind: :wait} = @approved |> Fetch.facts(read) |> PrDecision.decide()
     end
 
     test "TP-1196: a failed check in a run still going waits for the run to finish, then is rerun once" do
@@ -682,13 +684,13 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
 
       # Nothing on the base is read for it, and the watcher waits rather than rerunning it.
       refute_received {:gh, ["run", "list" | _rest]}
-      assert %Action{rule: "R19b", kind: :wait, owner: :ci} = @ticket |> Fetch.facts(read) |> PrDecision.decide()
+      assert %Action{rule: "R19b", kind: :wait, owner: :ci} = @approved |> Fetch.facts(read) |> PrDecision.decide()
 
       # The run ended red: the one rerun, as before.
       ended = rollup([check("coverage (4/4)", "FAILURE", job: 1), check("coverage (1/4)", "SUCCESS", job: 2)])
       assert {:ok, read} = read({response(pull(ended)), 0}, %{runs: base_runs([])})
       assert %{ci: :red, red_kind: :failure, running_checks: []} = read
-      assert %Action{rule: "R22", kind: :rerun_failed} = @ticket |> Fetch.facts(read) |> PrDecision.decide()
+      assert %Action{rule: "R22", kind: :rerun_failed} = @approved |> Fetch.facts(read) |> PrDecision.decide()
     end
 
     test "TP-1196: only the failed check's own run holds it, and any failed run still going holds the rerun of them all" do

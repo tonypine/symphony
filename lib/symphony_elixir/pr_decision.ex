@@ -60,6 +60,7 @@ defmodule SymphonyElixir.PrDecision do
   @reviewed [:code_review, :qa, :merging]
   @with_pr [:open, :draft]
   @green [:green, :none]
+  @ci_states [:pending, :red, :required_missing | @green]
   @mergeable_now [:clean, :unstable]
 
   @phase_names %{
@@ -482,7 +483,7 @@ defmodule SymphonyElixir.PrDecision do
 
   # Code Review has yet to judge this head, so CI's state decides nothing. A review waits only for the
   # update the upkeep makes on this read (U1), which would leave it reading a head that is gone.
-  defp awaiting_review?(facts), do: clean_pr?(facts) and facts.phase == :code_review and facts.review == :pending
+  defp awaiting_review?(facts), do: clean_pr?(facts) and facts.phase == :code_review and facts.review == :pending and facts.ci in @ci_states
   defp ci_decides?(facts), do: clean_pr?(facts) and not awaiting_review?(facts)
   defp review_first?(facts), do: awaiting_review?(facts) and not stale_branch?(facts)
   defp update_first?(facts), do: awaiting_review?(facts) and stale_branch?(facts)
@@ -529,7 +530,7 @@ defmodule SymphonyElixir.PrDecision do
 
   defp closed_pr(facts), do: Action.new!("R8", :to_rework, reason: "#{subject(pr(facts))} was closed without merging")
 
-  defp wait_for_run(%{phase: :code_review, pr: pr} = facts) when pr in @with_pr do
+  defp wait_for_run(%{phase: :code_review, pr: pr, ci: ci} = facts) when pr in @with_pr and ci in @ci_states do
     wait("R9", "The reviewer is reading #{pr(facts)}; #{ci_words(facts)}", :agent, "the run ends")
   end
 
