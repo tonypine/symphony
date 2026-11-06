@@ -48,23 +48,26 @@ defmodule SymphonyElixir.RetiredStates do
   Logs each ticket in a retired state, records the report for the dashboard and
   returns the tickets. `opts[:log]` is `:all` (the default, at startup) or `:new` (a refresh: only
   the tickets the last report did not list). `opts[:tracker]` overrides the tracker (tests, a
-  fake); `opts[:now_ms]` the clock. A tracker that can't be read is logged as a warning, reports nothing
-  and keeps the last report's tickets, but counts as a check so the next one waits the interval.
+  fake); `opts[:now_ms]` the clock; `opts[:record]` the key the report is recorded under (a test's
+  own, which no running orchestrator's poll writes). A tracker that can't be read is logged as a
+  warning, reports nothing and keeps the last report's tickets, but counts as a check so the next
+  one waits the interval.
   """
   @spec report(keyword()) :: [map()]
   def report(opts \\ []) do
     tracker = Keyword.get(opts, :tracker, Tracker)
     now_ms = Keyword.get_lazy(opts, :now_ms, fn -> System.monotonic_time(:millisecond) end)
+    key = record_key(opts)
 
     case tracker.fetch_issues_by_states(states()) do
       {:ok, issues} ->
-        issues |> to_log(Keyword.get(opts, :log, :all)) |> Enum.each(&log_straggler/1)
-        record(issues, tracker, now_ms)
+        issues |> to_log(Keyword.get(opts, :log, :all), key) |> Enum.each(&log_straggler/1)
+        record(issues, tracker, now_ms, key)
         issues
 
       {:error, reason} ->
         Logger.warning("Could not check for tickets left in a retired state (#{Enum.join(states(), ", ")}): #{inspect(reason)}")
-        :persistent_term.put(@cache_key, %{drain_report() | checked_at_ms: now_ms})
+        :persistent_term.put(key, %{drain_report(key) | checked_at_ms: now_ms})
         []
     end
   end
@@ -74,7 +77,7 @@ defmodule SymphonyElixir.RetiredStates do
   def refresh_if_due(opts \\ []) do
     now_ms = Keyword.get_lazy(opts, :now_ms, fn -> System.monotonic_time(:millisecond) end)
 
-    case drain_report() do
+    case drain_report(record_key(opts)) do
       %{checked_at_ms: checked} when is_integer(checked) and now_ms - checked < @refresh_interval_ms ->
         :ok
 
@@ -85,13 +88,13 @@ defmodule SymphonyElixir.RetiredStates do
   end
 
   @doc "The last recorded report: the stragglers, the latest landings and when it was checked."
-  @spec drain_report() :: drain()
-  def drain_report, do: :persistent_term.get(@cache_key, %{stragglers: [], landed: [], checked_at_ms: nil})
+  @spec drain_report(term()) :: drain()
+  def drain_report(key \\ @cache_key), do: :persistent_term.get(key, %{stragglers: [], landed: [], checked_at_ms: nil})
 
   @doc false
-  @spec reset_for_test() :: :ok
-  def reset_for_test do
-    :persistent_term.erase(@cache_key)
+  @spec reset_for_test(term()) :: :ok
+  def reset_for_test(key \\ @cache_key) do
+    :persistent_term.erase(key)
     :ok
   end
 
@@ -123,21 +126,23 @@ defmodule SymphonyElixir.RetiredStates do
     end
   end
 
-  defp to_log(issues, :all), do: issues
+  defp record_key(opts), do: Keyword.get(opts, :record, @cache_key)
 
-  defp to_log(issues, :new) do
-    known = MapSet.new(drain_report().stragglers, & &1.id)
+  defp to_log(issues, :all, _key), do: issues
+
+  defp to_log(issues, :new, key) do
+    known = MapSet.new(drain_report(key).stragglers, & &1.id)
     Enum.reject(issues, &MapSet.member?(known, Map.get(&1, :id)))
   end
 
-  defp record(issues, tracker, now_ms) do
-    previous = drain_report()
+  defp record(issues, tracker, now_ms, key) do
+    previous = drain_report(key)
     stragglers = Enum.map(issues, &straggler/1)
     current_ids = MapSet.new(stragglers, & &1.id)
     left = Enum.reject(previous.stragglers, &MapSet.member?(current_ids, &1.id))
     landed = Enum.take(landings(left, tracker) ++ previous.landed, @landed_limit)
 
-    :persistent_term.put(@cache_key, %{stragglers: stragglers, landed: landed, checked_at_ms: now_ms})
+    :persistent_term.put(key, %{stragglers: stragglers, landed: landed, checked_at_ms: now_ms})
   end
 
   defp straggler(issue) do
