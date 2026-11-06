@@ -29,7 +29,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.Pauses.Projector
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.Questions
+  alias SymphonyElixir.RunKind
   alias SymphonyElixir.SensitivePath
+  alias SymphonyElixir.TicketEvents
   alias SymphonyElixir.TicketSignals
   alias SymphonyElixir.Tracker
   alias SymphonyElixir.TransitionGuard
@@ -56,6 +58,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   @project_update_healths ["onTrack", "atRisk", "offTrack"]
   # Requests for a human are deduplicated by title, so this only bounds a run that loops.
   @human_action_cap_per_run 5
+  # A plan run asks every choice its plan leaves open in one run: the next run starts only after the
+  # person answered. The cap stops a run asking dozens, not a plan with eight real choices.
+  @human_action_cap_per_plan_run 12
   @human_action_max_tradeoffs 3
   # Documents hold a ticket's long-lived artifacts, edited over several runs; this bounds a run that loops.
   @document_cap_per_run 10
@@ -1312,7 +1317,9 @@ defmodule SymphonyElixir.AgentTools.Linear do
   result carries the recorded answer, which the run applies. Every field is
   refused when it holds a secret pattern, and when it holds code the Director does not read
   (`SymphonyElixir.HumanActions.PlainWords`): the error names each token and its field. At most
-  #{@human_action_cap_per_run} per run.
+  #{@human_action_cap_per_run} per run, #{@human_action_cap_per_plan_run} on a plan run. A request over
+  the limit is not asked: it is recorded on the ticket as `question.not_asked`, which the plan's Inbox
+  item lists (`SymphonyElixir.TicketState.unasked_choices/1`).
   """
   @spec request_human_action(context(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def request_human_action(context, attrs, opts \\ []) when is_map(attrs) do
@@ -1322,7 +1329,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
          {:ok, request} <- validate_human_action(attrs),
          :ok <- reject_human_action_secrets(request, context, opts),
          {:ok, settings} <- human_actions_settings(context, opts),
-         :ok <- CommentRegistry.reserve_human_action(registry, @human_action_cap_per_run) do
+         :ok <- reserve_human_action(registry, context, issue_id, request, settings) do
       case post_human_action(issue_id, issue_repo_key(context), request, settings, opts) do
         {:ok, %{"requested" => true}} = result ->
           CommentRegistry.record_human_action_request(registry)
@@ -1340,6 +1347,26 @@ defmodule SymphonyElixir.AgentTools.Linear do
       end
     end
   end
+
+  defp reserve_human_action(registry, context, issue_id, request, settings) do
+    with {:error, {:human_action_cap_reached, cap}} = refused <-
+           CommentRegistry.reserve_human_action(registry, human_action_cap(context, settings)) do
+      payload = %{title: request.title, question: request.question, cap: cap}
+      _ = TicketEvents.record(issue_repo_key(context), issue_id, "question.not_asked", payload, run_id: Map.get(context, :run_id))
+      refused
+    end
+  end
+
+  # By the run's kind as the issue classifies it, not the session's: a Codex session's tools are not
+  # told their run kind.
+  defp human_action_cap(%{issue: %Issue{} = issue}, settings) do
+    case RunKind.classify(issue, settings: settings, terminal_states: settings.tracker.terminal_states) do
+      :breakdown -> @human_action_cap_per_plan_run
+      _other -> @human_action_cap_per_run
+    end
+  end
+
+  defp human_action_cap(_context, _settings), do: @human_action_cap_per_run
 
   defp validate_human_action(attrs) do
     %{"title" => title, "why" => why, "decision" => decision, "unblocks" => unblocks, "if_unanswered" => if_unanswered} =
