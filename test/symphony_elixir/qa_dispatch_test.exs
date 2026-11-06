@@ -201,7 +201,8 @@ defmodule SymphonyElixir.QaDispatchTest do
 
       log =
         capture_log(fn ->
-          send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], %{retry_state() | dispatch_refresh: refresh})})
+          state = %{retry_state() | dispatch_refresh: refresh}
+          send(self(), {:state, Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state)})
         end)
 
       assert log =~ ~s(refused_by="candidate_issue?")

@@ -318,7 +318,8 @@ defmodule SymphonyElixir.TransitionGuard do
         :ok
 
       :ok ->
-        Keyword.get(opts, :on_moved, &SymphonyElixir.PrWatch.read_ticket/2).(Map.get(ctx, :repo_key), issue_id)
+        repo_key = Map.get(ctx, :repo_key)
+        Keyword.get(opts, :on_moved, &SymphonyElixir.PrWatch.read_ticket/2).(repo_key, issue_id)
         :ok
 
       {:error, :state_not_found} = error ->

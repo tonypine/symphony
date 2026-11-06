@@ -386,7 +386,11 @@ defmodule SymphonyElixir.TransitionGuardTest do
 
     test "asks the PR watcher to read the ticket's PR once it moved anywhere else" do
       test_pid = self()
-      opts = [tracker: FakeTracker, on_moved: fn repo_key, issue_id -> send(test_pid, {:read, repo_key, issue_id}) end, on_merging: fn -> :ok end]
+      opts = [
+        tracker: FakeTracker,
+        on_moved: fn repo_key, issue_id -> send(test_pid, {:read, repo_key, issue_id}) end,
+        on_merging: fn -> :ok end
+      ]
 
       assert :ok = TransitionGuard.perform("issue-11", :director_move, %{target: "QA", repo_key: nil}, opts)
       assert_received {:read, nil, "issue-11"}

@@ -10854,8 +10854,11 @@ defmodule SymphonyElixir.Orchestrator do
   # Whether the newest signal on the ticket is `name` for the same head and reason.
   defp latest_held_signal?(%Issue{id: issue_id}, name, head, reason) do
     case RunStore.get_ticket_state(issue_id) do
-      %{} = record -> match?([%{name: ^name, details: %{head: ^head, reason: ^reason}}], TicketState.recent_signals(record, 1))
-      _none_or_error -> false
+      %{} = record ->
+        match?([%{name: ^name, details: %{head: ^head, reason: ^reason}}], TicketState.recent_signals(record, 1))
+
+      _none_or_error ->
+        false
     end
   end
 

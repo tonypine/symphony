@@ -201,6 +201,8 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
   defp registered_watchers, do: Registry.select(SymphonyElixir.Repo.Registry, [{{{:pr_watch, :"$1"}, :"$2", :_}, [], [{{:"$1", :"$2"}}]}])
 
+  defp reporting_timer(test_pid), do: fn message, delay_ms -> send(test_pid, {:timer, message, delay_ms}) && make_ref() end
+
   defp flush do
     receive do
       _message -> flush()
@@ -1404,7 +1406,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       observed!(repo_key, with_pr(repo_key, issue("1", "Code Review"), 1))
       :ok = RunStore.put_run(%{repo_key: repo_key, run_id: "run-1", issue_id: "1", status: "running"})
       test_pid = self()
-      pid = start_repo!(repo_key, timer: fn message, delay_ms -> send(test_pid, {:timer, message, delay_ms}) && make_ref() end)
+      pid = start_repo!(repo_key, timer: reporting_timer(test_pid))
       assert {:ok, %{watched: 1}} = Repo.poll(pid)
       assert %{decision: %{rule: "R9"}} = watch(repo_key, "1")
       flush()
@@ -1426,7 +1428,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       record_source!()
       issues!({:error, :linear_must_not_be_read})
       test_pid = self()
-      pid = start_repo!(repo_key, timer: fn message, delay_ms -> send(test_pid, {:timer, message, delay_ms}) && make_ref() end)
+      pid = start_repo!(repo_key, timer: reporting_timer(test_pid))
 
       assert Repo.read_ticket(pid, "never-seen") == :ok
       :sys.get_state(pid)
@@ -1446,7 +1448,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       Cache.clear()
       issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
       test_pid = self()
-      pid = start_repo!(repo_key, follow_records: true, timer: fn message, delay_ms -> send(test_pid, {:timer, message, delay_ms}) && make_ref() end)
+      pid = start_repo!(repo_key, follow_records: true, timer: reporting_timer(test_pid))
       assert {:ok, %{watched: 1}} = Repo.poll(pid)
       flush()
 
