@@ -2,6 +2,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
+  alias SymphonyElixir.Handoff
   alias SymphonyElixir.Inbox.FromRecord
   alias SymphonyElixir.Inbox.Item
   alias SymphonyElixir.Linear.Client
@@ -106,13 +107,74 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]
     end
 
-    test "a run that ends quietly with a PR open does not advance" do
-      assert_raise RuntimeError, ~r/rework_handoff_failed.*handoff_signal_missing/, fn ->
-        run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos())
+    test "a Rework run whose head reached its PR past the tool hooks records the signal and moves to Code Review" do
+      assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos())
+
+      assert turns() == 1
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert_signal("handoff", %{to: "Code Review", reason: "after rework", head: "sha-rework", move: true})
+      assert_handoff_recorded("sha-rework", "pushed_pr_head")
+      refute missing_handoff_recorded?()
+    end
+
+    test "a Rework run whose handoff step pushed the head ends in Code Review, with no retry" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:by_turn, [pr_status("sha-old"), pr_status("sha-new")]})
+
+      assert :ok =
+               run_issue!("Rework",
+                 heads: ["sha-old", "sha-new"],
+                 repos: designed_repos(),
+                 runner_opts: [step_command_runner: step_runner(), run_id: "run-progress"]
+               )
+
+      assert turns() == 2
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert_handoff_recorded("sha-new", "pushed_pr_head")
+      refute missing_handoff_recorded?()
+      assert RunStore.get_rework_base("default", "issue-progress") == nil
+    end
+
+    test "a list's machine handoff step records the signal for the head it pushed and moves the ticket in the same run" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+
+      assert :ok = run_machine_handoff!(step_runner(pushes: "sha-new"))
+
+      assert turns() == 1
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert_signal("handoff", %{to: "Code Review", reason: "after its handoff step", head: "sha-new", move: true})
+      assert_handoff_recorded("sha-new", "machine_handoff")
+      assert RunStore.get_rework_base("default", "issue-progress") == nil
+    end
+
+    test "a machine handoff step that left the PR on another head moves nothing" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+
+      assert :ok = run_machine_handoff!(step_runner())
+
+      refute_received {:memory_tracker_state_update, "issue-progress", _state}
+      refute Handoff.emitted?("default", "issue-progress", "sha-new")
+    end
+
+    test "a failed move after a machine handoff step fails the run" do
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
+      Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, {:error, :boom})
+
+      assert_raise RuntimeError, ~r/machine_handoff_failed/, fn ->
+        run_machine_handoff!(step_runner(pushes: "sha-new"))
+      end
+    end
+
+    test "a pushed head an In Progress run left with no signal does not advance, on a pending rework signal" do
+      :ok = put_pending_conflict()
+      green = [%{name: "make-all", status: "COMPLETED", conclusion: "SUCCESS"}]
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-fixed", checks: green}})
+
+      assert_raise RuntimeError, ~r/pushed_head_handoff_failed.*handoff_signal_missing/, fn ->
+        run_issue!("In Progress", heads: ["sha-dirty", "sha-fixed"], repos: designed_repos())
       end
 
       refute_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
-      assert_signal("handoff_missing", %{to: "Code Review", reason: "after rework"})
+      assert missing_handoff_recorded?()
     end
 
     test "the explicit handoff signal moves the ticket to Code Review" do
@@ -124,14 +186,13 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert_signal("handoff", %{to: "Code Review", reason: "after rework", head: "sha-rework", move: true})
     end
 
-    test "a signal for another head does not advance this run" do
+    test "a signal for another head does not stand in for this head's own" do
       assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-other", branch: "auto/TP-337"})
 
-      assert_raise RuntimeError, ~r/rework_handoff_failed.*handoff_signal_missing/, fn ->
-        run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos())
-      end
+      assert :ok = run_issue!("Rework", heads: ["sha-old", "sha-rework"], repos: designed_repos())
 
-      refute_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert_handoff_recorded("sha-rework", "pushed_pr_head")
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
     end
 
     test "an In Progress run whose PR is already on its head hands off to Code Review after one quiet turn" do
@@ -162,7 +223,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       end
     end
 
-    test "an earlier run's own move record does not advance a later head" do
+    test "an earlier run's own move record does not stand in for a later head's signal" do
       # First cycle: a real handoff signal advances the ticket to Code Review, and the run records
       # its own move in the ledger.
       assert :ok = SymphonyElixir.Handoff.emit("default", "issue-progress", %{head: "sha-rework", branch: "auto/TP-337"})
@@ -170,18 +231,62 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
 
       assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
 
-      # Second cycle: a later Rework run pushes a new head to the PR and emits no signal of its own.
-      # The earlier run's move record is bound to the earlier head, so it must not stand in for this
-      # run's signal.
+      # Second cycle: a later Rework run pushes a new head to the PR through no tool hook. The earlier
+      # run's move record is bound to the earlier head, so the runner records this head's own signal.
       next_run()
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-new", checks: []}})
+      refute Handoff.emitted?("default", "issue-progress", "sha-new")
 
-      assert_raise RuntimeError, ~r/rework_handoff_failed.*handoff_signal_missing/, fn ->
-        run_issue!("Rework", heads: ["sha-rework", "sha-new"], repos: designed_repos())
-      end
+      assert :ok = run_issue!("Rework", heads: ["sha-rework", "sha-new"], repos: designed_repos())
 
-      refute_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert_handoff_recorded("sha-new", "pushed_pr_head")
     end
+
+    defp pr_status(head), do: {:ok, %{commit_sha: head, checks: []}}
+
+    # A list whose last step is a machine `handoff`: the agent commits `sha-new` in the code turn, and
+    # the step's command is the push.
+    defp run_machine_handoff!(runner) do
+      steps = """
+      phases:
+        rework:
+          steps:
+            - {id: code, title: Write the code, mode: delegated}
+            - {id: handoff, title: Push, mode: machine, command: make push, on_fail: code}
+      """
+
+      run_issue!("Rework",
+        heads: ["sha-old", "sha-new"],
+        repos: designed_repos(),
+        symphony_steps: steps,
+        runner_opts: [step_command_runner: runner, run_id: "run-progress"]
+      )
+    end
+
+    # The step commands: the changed-files script reports an Elixir change, `make push` puts the PR on
+    # `:pushes` when given, and every other command passes.
+    defp step_runner(opts \\ []) do
+      fn command, _env, _timeout_ms ->
+        cond do
+          command =~ "git merge-base" ->
+            {:ok, {"M\tlib/app.ex\n", 0}}
+
+          command == "make push" and Keyword.has_key?(opts, :pushes) ->
+            Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status(opts[:pushes]))
+            {:ok, {"pushed", 0}}
+
+          true ->
+            {:ok, {"", 0}}
+        end
+      end
+    end
+
+    defp assert_handoff_recorded(head, source) do
+      signals = ticket_signals("issue-progress")
+      assert Enum.any?(signals, &match?(%{name: "handoff", details: %{head: ^head, source: ^source}}, &1))
+    end
+
+    defp missing_handoff_recorded?, do: "issue-progress" |> ticket_signals() |> Enum.any?(&(&1.name == "handoff_missing"))
   end
 
   test "a re-dispatched Rework run whose rework an earlier run pushed moves on after one empty turn" do
@@ -1460,6 +1565,8 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       review_agent: if(reviewer?, do: %{enabled: true, kind: "codex", command: "reviewer app-server"})
     )
 
+    if steps = Keyword.get(opts, :symphony_steps), do: append_symphony_steps!(steps)
+
     issue =
       Keyword.get(opts, :issue, %Issue{
         id: "issue-progress",
@@ -1488,6 +1595,16 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     after
       File.rm_rf(test_root)
     end
+  end
+
+  defp append_symphony_steps!(yaml) do
+    path = Workflow.symphony_file_path()
+    tmp = "#{path}.tmp-#{System.unique_integer([:positive])}"
+    File.write!(tmp, File.read!(path) <> "\n" <> yaml)
+    File.touch!(tmp, System.os_time(:second) + 2)
+    File.rename!(tmp, path)
+    SymphonyElixir.Config.Cache.clear()
+    SymphonyElixir.TestSupport.settle_config_cache!([path])
   end
 
   # The newest signal recorded for the run's issue, asserting its name and details.

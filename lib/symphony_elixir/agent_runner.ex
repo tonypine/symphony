@@ -1357,11 +1357,36 @@ defmodule SymphonyElixir.AgentRunner do
       {:paused, paused, question_id} ->
         pause_walk(agent_module, run_context, paused, question_id, turn_number, max_turns)
 
-      {:end, _carry} ->
+      {:end, carry} ->
         Logger.info("Step list of #{issue_context(run_context.issue)} ended after its machine steps; ending the run")
-        :ok
+        end_machine_walk(run_context, carry)
     end
   end
+
+  # A list that ends on a machine `handoff` step pushed with its own command, past the tool hooks, and
+  # no agent turn follows to reach the post-turn handoff. The run that pushed the head moves the ticket:
+  # with the workspace HEAD on the PR, the signal is recorded for it and the ticket moves. A step that
+  # failed (`carry`), another last step, or a head the PR does not show hands nothing off.
+  defp end_machine_walk(%{walk: %{steps: steps}, issue: issue} = run_context, nil) do
+    pr_url = ticket_pr_url(issue, run_context.opts)
+
+    with %{id: "handoff"} <- List.last(steps),
+         true <- Handoff.origin?(issue.state) and is_binary(pr_url),
+         head when is_binary(head) <- read_workspace_head(run_context.workspace, run_context.worker_host, run_context.opts),
+         true <- pr_url_head?(pr_url, head, run_context) do
+      Handoff.emit(run_repo_key(issue, run_context.opts), issue.id, %{head: head, pr_url: pr_url, source: "machine_handoff"})
+      run_context = put_in(run_context.progress.head, head)
+
+      case move_to_post_pr_state(issue, post_pr_state(run_context), "after its handoff step", run_context) do
+        :ok -> forget_rework_base(issue, run_context.opts)
+        {:error, reason} -> {:error, {:machine_handoff_failed, reason}}
+      end
+    else
+      _no_handoff -> :ok
+    end
+  end
+
+  defp end_machine_walk(_run_context, _failed_step), do: :ok
 
   defp next_walk_turn(agent_module, app_session, run_context, false, turn_number, max_turns) when not is_nil(app_session),
     do: do_run_codex_turns(agent_module, app_session, Map.delete(run_context, :fresh_session), turn_number + 1, max_turns)
@@ -1936,9 +1961,17 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp hand_off_finished_rework(%Issue{} = issue, run_context) do
+  # `rework_finished?/2` already read the workspace HEAD as the PR's head, so the rework is on its PR
+  # however it got there. A push outside the tool hooks (a shell push, a step's own command) emits no
+  # signal, and the run would fail and retry on a head with nothing left to push, so the signal is
+  # recorded for the head here, as `hand_off_quiet_pr_head/3` does outside Rework.
+  defp hand_off_finished_rework(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
     post_pr_state = post_pr_state(run_context)
     Logger.info("Rework for #{issue_context(issue)} is pushed to its PR with no rework signal pending; moving to #{post_pr_state}")
+
+    if not handoff_emitted?(issue, run_context) do
+      Handoff.emit(run_repo_key(issue, run_context.opts), issue.id, %{head: head, pr_url: ticket_pr_url(issue, run_context.opts), source: "pushed_pr_head"})
+    end
 
     case move_to_post_pr_state(issue, post_pr_state, "after rework", run_context) do
       :ok ->
