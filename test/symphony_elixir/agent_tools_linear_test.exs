@@ -2573,13 +2573,15 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       context = %{issue: issue, comment_registry: registry, run_id: "run-1"}
       choice = &(@human_action |> Map.put("title", "Choice #{&1}") |> put_in(["decision", "question"], "Which way for choice #{&1}?"))
 
+      ask = fn number -> request_human_action(context, human_action_scope(), %{}, choice.(number)) end
+
       for number <- 1..12 do
-        assert {:ok, %{"requested" => true}} = request_human_action(context, human_action_scope(), %{}, choice.(number))
+        assert {:ok, %{"requested" => true}} = ask.(number)
       end
 
       assert length(SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-24"})) == 12
 
-      assert {:error, {:human_action_cap_reached, 12}} = request_human_action(context, human_action_scope(), %{}, choice.(13))
+      assert {:error, {:human_action_cap_reached, 12}} = ask.(13)
       assert length(SymphonyElixir.Questions.open({:ticket, "repo-a", "issue-24"})) == 12
 
       assert [%{run_id: "run-1", payload: %{title: "Choice 13", question: "Which way for choice 13?", cap: 12}}] =
@@ -2603,7 +2605,9 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       for _slot <- 1..5, do: Linear.CommentRegistry.reserve_human_action(registry, 5)
       opts = human_action_opts(fn _query, _variables, _opts -> flunk("Linear should not be called") end)
 
-      assert {:error, {:human_action_cap_reached, 5}} = Linear.request_human_action(%{issue_id: "issue-24", comment_registry: registry}, @human_action, opts)
+      context = %{issue_id: "issue-24", comment_registry: registry}
+
+      assert {:error, {:human_action_cap_reached, 5}} = Linear.request_human_action(context, @human_action, opts)
     end
 
     test "refuses code in a request, naming each token and its field, and posts nothing" do
