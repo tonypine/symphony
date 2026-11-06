@@ -121,6 +121,20 @@ defmodule SymphonyElixir.CodeReviewDispatchTest do
       # Recorded once for the ticket: the reason is the repo's config, not the head.
       assert [%{name: "code_review_reviewer_disabled"}] = reviewer_disabled_signals(@designed_repo)
       assert head_signals(@designed_repo) == []
+      assert Orchestrator.dispatch_refusal_for_test(review_ticket) == "flow_gated?: the reviewer is turned off"
+    end
+
+    test "a head the watcher holds back shows the watcher's reason, never the head's status" do
+      assert {:ok, :changed} = RunStore.record_ci_state(@designed_repo, @issue_id, "abc123", "green", DateTime.utc_now())
+      working = %{rule: "R9", kind: :wait, reason: "A run is working on the ticket"}
+      SymphonyElixir.PrWatchSupport.put_watch!(@designed_repo, @issue_id, head_sha: "abc123", decision: working)
+
+      log = capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([issue(@designed_repo, "Code Review")], state()) end)
+
+      assert log =~ "Not dispatching the reviewer for"
+      assert log =~ ": the PR watcher (R9): A run is working on the ticket"
+      refute log =~ "its head is"
+      assert [%{details: %{reason: "the PR watcher (R9): A run is working on the ticket"}}] = head_signals(@designed_repo)
     end
 
     test "a retry on a red head starts no reviewer run" do
