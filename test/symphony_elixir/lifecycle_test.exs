@@ -8,7 +8,13 @@ defmodule SymphonyElixir.LifecycleTest do
   @id "issue-1"
   @minute 60_000
   @shipped_at ~U[2026-10-30 21:30:00Z]
-  @facts %{now: @shipped_at, terminal_states: ["Done", "Canceled"], token_cap: 8_000_000}
+  @facts %{
+    now: @shipped_at,
+    terminal_states: ["Done", "Canceled"],
+    token_cap: 8_000_000,
+    phase_names: %{code_review: "Code Review", qa: "QA", ci_fix: "CI Fix"}
+  }
+  @renamed %{code_review: "In Review", qa: "Testing", ci_fix: "Repair"}
 
   # TP-1244's life, as `docs/design/prototypes/ticket-page/fixtures.js` holds it: its phase moves and
   # its runs, with their times and tokens.
@@ -276,6 +282,63 @@ defmodule SymphonyElixir.LifecycleTest do
 
       assert [%{from: "Backlog", to: "Todo"}, %{from: "Todo", to: "In Progress"}] = Lifecycle.compute(events, @facts).phase_path.moves
       assert [%{from: nil}] = Lifecycle.compute([entered("2026-10-30T10:00", "Todo")], @facts).phase_path.moves
+    end
+  end
+
+  describe "a repository's own phase names" do
+    setup do
+      %{facts: %{@facts | now: at("2026-10-30T12:30"), phase_names: @renamed}}
+    end
+
+    test "a renamed Code Review, QA and CI Fix keep their stage, visits, time and tokens", %{facts: facts} do
+      events = [
+        entered("2026-10-30T10:00", "In Progress"),
+        entered("2026-10-30T11:00", "In Review"),
+        started("2026-10-30T11:05", "r1"),
+        ended("2026-10-30T11:20", "r1", tokens: 100),
+        entered("2026-10-30T11:30", "Repair"),
+        started("2026-10-30T11:31", "r2"),
+        ended("2026-10-30T11:40", "r2", tokens: 10),
+        entered("2026-10-30T11:45", "In Review"),
+        entered("2026-10-30T12:00", "Testing"),
+        started("2026-10-30T12:05", "r3"),
+        ended("2026-10-30T12:10", "r3", tokens: 1)
+      ]
+
+      result = Lifecycle.compute(events, facts)
+
+      assert result.lifecycle.current == "qa"
+      assert visits(result) == [1, 2, 1, 0, 0]
+      assert %{time_ms: 3_600_000, tokens: 0} = stages(result)["coding"]
+      assert %{name: "Code Review", time_ms: 3_600_000, tokens: 110} = stages(result)["code_review"]
+      assert %{name: "QA", time_ms: 1_800_000, tokens: 1} = stages(result)["qa"]
+    end
+
+    test "a ticket in a renamed CI Fix reads the stage it interrupted as current", %{facts: facts} do
+      result = Lifecycle.compute(moved([{"10:00", "In Progress"}, {"11:00", "In Review"}, {"11:30", "Repair"}]), facts)
+
+      assert result.lifecycle.current == "code_review"
+      assert %{state: "current", visits: 2, time_ms: 5_400_000} = stages(result)["code_review"]
+    end
+
+    test "a name matches whatever its case" do
+      facts = %{@facts | phase_names: %{@renamed | code_review: " In Review "}}
+
+      assert Lifecycle.compute(moved([{"10:00", "in review"}]), facts).lifecycle.current == "code_review"
+    end
+
+    test "the default names mean nothing once they are renamed", %{facts: facts} do
+      result = Lifecycle.compute(moved([{"10:00", "Code Review"}]), facts)
+
+      assert result.lifecycle.current == nil
+      assert visits(result) == [0, 0, 0, 0, 0]
+    end
+
+    test "a phase turned off with an empty name holds no phase, and Rework still serves Code Review" do
+      facts = %{@facts | phase_names: %{code_review: nil, qa: nil, ci_fix: "CI Fix"}}
+
+      assert Lifecycle.compute(moved([{"10:00", "QA"}]), facts).lifecycle.current == nil
+      assert Lifecycle.compute(moved([{"10:00", "Rework"}]), facts).lifecycle.current == "code_review"
     end
   end
 

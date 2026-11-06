@@ -89,6 +89,28 @@ defmodule SymphonyElixirWeb.LifecycleReadTest do
     assert %{"from" => "Todo", "to" => "In Progress", "at" => "2026-10-30T10:00:00Z"} = List.first(phase_path["moves"])
   end
 
+  test "the read goes by the phase names the repository configures" do
+    write_workflow_file!(Workflow.workflow_file_path(), tracker_phase_names: %{code_review: "In Review", qa: "Testing", ci_fix: "Repair"})
+    :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "renamed", issue_identifier: "MT-3", phase: "Repair"})
+
+    moved("renamed", ~U[2026-10-30 10:00:00Z], "Todo", "In Progress")
+    moved("renamed", ~U[2026-10-30 10:30:00Z], "In Progress", "In Review")
+    ran("renamed", "r1", "code_review", ~U[2026-10-30 10:31:00Z], ~U[2026-10-30 10:40:00Z], 500)
+    moved("renamed", ~U[2026-10-30 10:40:00Z], "In Review", "Testing")
+    ran("renamed", "r2", "qa", ~U[2026-10-30 10:41:00Z], ~U[2026-10-30 10:50:00Z], 300)
+    moved("renamed", ~U[2026-10-30 10:50:00Z], "Testing", "Repair")
+
+    assert %{"lifecycle" => %{"current" => "qa"} = lifecycle, "phase_path" => %{"current" => "Repair"}} = read("MT-3")
+
+    assert [
+             %{"id" => "coding", "visits" => 1, "tokens" => 0},
+             %{"id" => "code_review", "state" => "passed", "visits" => 1, "time_ms" => 600_000, "tokens" => 500},
+             %{"id" => "qa", "state" => "current", "visits" => 2, "tokens" => 300},
+             %{"id" => "merging", "visits" => 0},
+             %{"id" => "done", "visits" => 0}
+           ] = lifecycle["stages"]
+  end
+
   test "each of the state's issues carries the same lifecycle and phase path" do
     :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "watched", issue_identifier: "MT-2", phase: "Rework"})
     facts = %Facts{phase: :rework, ci: :pending, pr: :open, pr_number: 741}

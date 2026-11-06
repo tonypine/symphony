@@ -18,15 +18,17 @@ defmodule SymphonyElixir.Lifecycle do
   stage when it ends. A run that started outside any stage (a first run starts before its move out of
   Todo, a plan run never enters one) counts in Coding, so the stages' tokens always add up to the
   total.
+
+  Code Review, QA and CI Fix go by the names the repository configures for them
+  (`issues.states.code_review`, `qa` and `ci_fix`); the other phases' names are fixed.
   """
 
-  alias SymphonyElixir.{Config, TicketEvents}
+  alias SymphonyElixir.{CiFix, Config, TicketEvents}
   alias SymphonyElixir.TicketEvents.Event
 
   @stages [{"coding", "Coding"}, {"code_review", "Code Review"}, {"qa", "QA"}, {"merging", "Merging"}, {"done", "Done"}]
-  @stage_of %{"in progress" => "coding", "code review" => "code_review", "rework" => "code_review", "qa" => "qa", "merging" => "merging", "done" => "done"}
-  @ci_fix "ci fix"
   @rework "rework"
+  @fixed_stage_of %{"in progress" => "coding", @rework => "code_review", "merging" => "merging", "done" => "done"}
   @outside_any_stage "coding"
 
   @type stage :: %{
@@ -55,11 +57,17 @@ defmodule SymphonyElixir.Lifecycle do
         }
 
   @typedoc "What `compute/2` needs beside the ledger."
-  @type facts :: %{now: DateTime.t(), terminal_states: [String.t()], token_cap: non_neg_integer() | nil}
+  @type facts :: %{
+          now: DateTime.t(),
+          terminal_states: [String.t()],
+          token_cap: non_neg_integer() | nil,
+          phase_names: %{code_review: String.t() | nil, qa: String.t() | nil, ci_fix: String.t()}
+        }
 
   @doc """
   The lifecycle and the phase path of ticket `issue_id`, from its ledger and the configured token cap
-  (`agent.max_tokens_per_issue`) and terminal states. A ledger that cannot be read reads as empty.
+  (`agent.max_tokens_per_issue`), terminal states and phase names. A ledger that cannot be read reads
+  as empty.
   """
   @spec read(String.t() | nil, DateTime.t()) :: t()
   def read(issue_id, now \\ DateTime.utc_now()) do
@@ -68,7 +76,12 @@ defmodule SymphonyElixir.Lifecycle do
     issue_id
     |> TicketEvents.query(limit: :all)
     |> List.wrap()
-    |> compute(%{now: now, terminal_states: settings.tracker.terminal_states, token_cap: settings.agent.max_tokens_per_issue})
+    |> compute(%{
+      now: now,
+      terminal_states: settings.tracker.terminal_states,
+      token_cap: settings.agent.max_tokens_per_issue,
+      phase_names: %{code_review: settings.tracker.code_review_state, qa: settings.tracker.qa_state, ci_fix: CiFix.state(settings)}
+    })
   end
 
   @doc """
@@ -76,16 +89,23 @@ defmodule SymphonyElixir.Lifecycle do
   is in counts its time up to `now`, unless it is a terminal one, which takes no time.
   """
   @spec compute([Event.t() | term()], facts()) :: t()
-  def compute(events, %{now: now, terminal_states: terminal_states, token_cap: token_cap}) do
-    moves = moves(events, now, Enum.map(terminal_states, &normalized/1))
+  def compute(events, %{now: now, terminal_states: terminal_states, token_cap: token_cap, phase_names: phase_names}) do
+    moves = moves(events, now, Enum.map(terminal_states, &normalized/1), phases(phase_names))
     runs = runs(events, moves)
 
     %{lifecycle: lifecycle(moves, runs, token_cap), phase_path: phase_path(moves)}
   end
 
+  # A repository may turn Code Review or QA off with an empty name: then no phase goes by it.
+  defp phases(%{code_review: code_review, qa: qa, ci_fix: ci_fix}) do
+    stage_of = for {name, stage} <- [{code_review, "code_review"}, {qa, "qa"}], is_binary(name), into: @fixed_stage_of, do: {normalized(name), stage}
+
+    %{stage_of: stage_of, ci_fix: normalized(ci_fix)}
+  end
+
   # Each move into a phase, with the stage it counts for, whether it opens a visit of that stage and
   # how long the ticket stayed. A second event naming the phase the ticket is already in is no move.
-  defp moves(events, now, terminal_states) do
+  defp moves(events, now, terminal_states, phases) do
     entered = for %Event{type: "phase.entered", payload: %{to: to} = payload, at: %DateTime{} = at} <- events, do: %{to: to, from: Map.get(payload, :from), at: at}
     entered = Enum.dedup_by(entered, & &1.to)
     ends = entered |> Enum.drop(1) |> Enum.map(& &1.at)
@@ -95,14 +115,14 @@ defmodule SymphonyElixir.Lifecycle do
       |> Enum.zip(ends ++ [nil])
       |> Enum.map_reduce({nil, nil}, fn {move, next_at}, {previous_phase, previous_stage} ->
         phase = normalized(move.to)
-        stage = stage_of(phase, previous_stage)
+        stage = stage_of(phase, previous_stage, phases)
 
         {%{
            to: move.to,
            from: move.from || previous_phase,
            at: move.at,
            stage: stage,
-           opens_visit?: opens_visit?(stage, phase, previous_stage, previous_phase),
+           opens_visit?: opens_visit?(stage, phase, previous_stage, previous_phase, phases.ci_fix),
            time_ms: time_ms(move.at, next_at || end_of_last(move.at, phase, now, terminal_states))
          }, {move.to, stage}}
       end)
@@ -111,16 +131,16 @@ defmodule SymphonyElixir.Lifecycle do
   end
 
   # CI Fix serves the stage it interrupted; before any stage it can only be repairing the coding.
-  defp stage_of(@ci_fix, previous_stage), do: previous_stage || @outside_any_stage
-  defp stage_of(phase, _previous_stage), do: Map.get(@stage_of, phase)
+  defp stage_of(ci_fix, previous_stage, %{ci_fix: ci_fix}), do: previous_stage || @outside_any_stage
+  defp stage_of(phase, _previous_stage, %{stage_of: stage_of}), do: Map.get(stage_of, phase)
 
-  defp opens_visit?(nil, _phase, _previous_stage, _previous_phase), do: false
-  defp opens_visit?(stage, _phase, previous_stage, _previous_phase) when stage != previous_stage, do: true
+  defp opens_visit?(nil, _phase, _previous_stage, _previous_phase, _ci_fix), do: false
+  defp opens_visit?(stage, _phase, previous_stage, _previous_phase, _ci_fix) when stage != previous_stage, do: true
 
-  defp opens_visit?(_stage, phase, _previous_stage, previous_phase) when phase in [@ci_fix, @rework],
-    do: normalized(previous_phase) != @ci_fix
+  defp opens_visit?(_stage, phase, _previous_stage, previous_phase, ci_fix) when phase in [ci_fix, @rework],
+    do: normalized(previous_phase) != ci_fix
 
-  defp opens_visit?(_stage, _phase, _previous_stage, _previous_phase), do: false
+  defp opens_visit?(_stage, _phase, _previous_stage, _previous_phase, _ci_fix), do: false
 
   defp end_of_last(at, phase, now, terminal_states), do: if(phase in terminal_states, do: at, else: now)
 

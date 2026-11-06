@@ -119,6 +119,11 @@ Code Review. A run that started outside any stage counts in Coding: a first run 
 its move out of Todo, and a plan run or an epic review never enters a stage. A run still working joins
 the numbers when it ends.
 
+Code Review, QA and CI Fix go by the names the repository configures (`issues.states.code_review`,
+`qa` and `ci_fix`); In Progress, Rework, Merging and Done are fixed. A stage's `id` and `name` stay the
+same under a renamed phase, and `phase_path` shows the phase's own name. An event naming a phase by a
+name it no longer has counts as a phase outside the stages.
+
 A phase outside the stages (Backlog, Todo, Plan Review, Waiting on sub-tickets, Epic Review, a
 cancelled ticket's) adds to no stage. With nothing current, the stages up to the last one entered
 read `passed` or `skipped`.
