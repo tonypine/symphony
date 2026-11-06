@@ -8,6 +8,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   alias SymphonyElixir.GitHub.{CommentMarker, Hosts}
 
   @passing_check_conclusions ["SUCCESS", "NEUTRAL", "SKIPPED"]
+  @finished_check_statuses ["COMPLETED", "SUCCESS", "FAILURE", "ERROR"]
 
   @type comment :: %{
           optional(:id) => String.t() | nil,
@@ -54,7 +55,8 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           optional(:run_attempt) => pos_integer() | nil,
           optional(:job_id) => pos_integer() | nil,
           optional(:completed_at) => DateTime.t() | nil,
-          optional(:stale) => boolean()
+          optional(:stale) => boolean(),
+          optional(:stale_since) => DateTime.t() | nil
         }
 
   @type ci_status :: %{
@@ -75,7 +77,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
           checks: [ci_check()]
         }
 
-  @type head_run :: %{id: String.t() | nil, status: String.t() | nil, conclusion: String.t() | nil}
+  @type head_run :: %{id: String.t() | nil, status: String.t() | nil, conclusion: String.t() | nil, updated_at: DateTime.t() | nil}
 
   @type review :: %{
           optional(:id) => String.t() | nil,
@@ -331,6 +333,28 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   """
   @spec drop_superseded(map()) :: map()
   def drop_superseded(%{checks: checks} = ci_status) when is_list(checks), do: drop_superseded_checks(ci_status)
+
+  @doc """
+  Closes the checks of `ci_status` (`:pr_url`, `:commit_sha`, `:checks`) that still read unfinished
+  in a workflow run that completed with a passing conclusion (`resolve_stale_checks/2`). It reads
+  the head's runs only for a head waiting on GitHub Actions checks with none failed; a read that
+  fails leaves the checks as they are, and the next read tries again.
+  """
+  @spec close_stale_checks(map(), keyword()) :: map()
+  def close_stale_checks(%{pr_url: pr_url, commit_sha: sha, checks: checks} = ci_status, opts) when is_list(checks) do
+    with true <- is_binary(sha) and Enum.any?(checks, &unfinished_check?/1) and actions_rollup_without_failure?(checks),
+         {:ok, host, owner, repo, _number} <- parse_github_pr_url(pr_url, opts),
+         {:ok, runs} <- list_head_runs({host, owner, repo}, sha, opts) do
+      resolve_stale_checks(ci_status, runs)
+    else
+      {:error, reason} ->
+        Logger.warning("Could not read the workflow runs of a head waiting on its checks pr_url=#{pr_url} commit_sha=#{sha} reason=#{inspect(reason)}")
+        ci_status
+
+      _no_read ->
+        ci_status
+    end
+  end
 
   @doc """
   The host, owner, repository and number of a GitHub pull request URL, or `:error` when `pr_url`
@@ -1389,10 +1413,10 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   # run that failed leaves its unfinished checks as they are; the next read has their conclusion.
   defp resolve_stale_checks(ci_status, runs) do
     passed_runs =
-      for %{id: id, status: "COMPLETED", conclusion: conclusion} <- runs,
+      for %{id: id, status: "COMPLETED", conclusion: conclusion} = run <- runs,
           conclusion in @passing_check_conclusions,
           into: %{},
-          do: {id, conclusion}
+          do: {id, run}
 
     Map.update!(ci_status, :checks, fn checks ->
       Enum.map(checks, &resolve_stale_check(&1, passed_runs, ci_status))
@@ -1401,9 +1425,9 @@ defmodule SymphonyElixir.GitHub.PullRequest do
 
   defp resolve_stale_check(check, passed_runs, ci_status) do
     with true <- unfinished_check?(check),
-         {:ok, conclusion} <- Map.fetch(passed_runs, Map.get(check, :run_id)) do
+         {:ok, run} <- Map.fetch(passed_runs, Map.get(check, :run_id)) do
       Logger.info("Ignoring stale check #{Map.get(check, :name)} in completed run #{Map.get(check, :run_id)} pr_url=#{ci_status.pr_url} commit_sha=#{ci_status.commit_sha}")
-      Map.merge(check, %{status: "COMPLETED", conclusion: conclusion, stale: true})
+      Map.merge(check, %{status: "COMPLETED", conclusion: run.conclusion, stale: true, stale_since: Map.get(run, :updated_at)})
     else
       _not_stale -> check
     end
@@ -1412,7 +1436,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   defp passing_check?(check), do: upcase(Map.get(check, :conclusion)) in @passing_check_conclusions
 
   defp unfinished_check?(check) do
-    upcase(Map.get(check, :status)) not in ["COMPLETED", "SUCCESS", "FAILURE", "ERROR"] or upcase(Map.get(check, :conclusion)) in [nil, ""]
+    upcase(Map.get(check, :status)) not in @finished_check_statuses or upcase(Map.get(check, :conclusion)) in [nil, ""]
   end
 
   defp list_head_runs({host, owner, repo}, sha, opts) do
@@ -1430,7 +1454,7 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   end
 
   defp normalize_head_run(run) do
-    %{id: normalize_id(run["id"]), status: upcase(run["status"]), conclusion: upcase(run["conclusion"])}
+    %{id: normalize_id(run["id"]), status: upcase(run["status"]), conclusion: upcase(run["conclusion"]), updated_at: parse_datetime(run["updated_at"])}
   end
 
   defp view_pr(pr_url, opts) do
@@ -1588,9 +1612,36 @@ defmodule SymphonyElixir.GitHub.PullRequest do
       job_id: details_url_number(details_url, ~r{/actions/runs/\d+/job/(\d+)}),
       completed_at: parse_datetime(Map.get(check, "completedAt") || Map.get(check, "updatedAt"))
     }
+    |> close_concluded(check)
   end
 
   defp normalize_status_check(_check), do: %{}
+
+  # GitHub can leave a check run's status `in_progress` after the run concluded: it has a conclusion
+  # or a completion time, and the status never flips. A check that says how or when it ended is
+  # finished, whatever its status says, so no reader of the checks takes it for one still running. A
+  # completion time with no conclusion reads as neutral: it finished and has nothing to say. A status
+  # context has no `status` of its own and is left as it is.
+  defp close_concluded(normalized, check) do
+    status = upcase(Map.get(check, "status"))
+    conclusion = upcase(Map.get(check, "conclusion"))
+    concluded_at = concluded_at(check)
+
+    cond do
+      is_nil(status) or status in @finished_check_statuses -> normalized
+      conclusion not in [nil, ""] -> Map.merge(normalized, %{status: "COMPLETED", stale: true, stale_since: concluded_at})
+      concluded_at -> Map.merge(normalized, %{status: "COMPLETED", conclusion: "NEUTRAL", stale: true, stale_since: concluded_at})
+      true -> normalized
+    end
+  end
+
+  # `gh pr view` writes the zero time for a check that hasn't completed; GraphQL writes null.
+  defp concluded_at(check) do
+    case parse_datetime(Map.get(check, "completedAt")) do
+      %DateTime{year: year} = at when year > 1 -> at
+      _unset -> nil
+    end
+  end
 
   defp run_id_from_details_url(url) when is_binary(url) do
     case Regex.run(~r{/actions/runs/(\d+)}, url) do

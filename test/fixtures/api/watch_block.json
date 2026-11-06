@@ -63,6 +63,7 @@
     "rerun_done": false,
     "review_comments": "none",
     "run": "none",
+    "running_checks": [],
     "same_failure_streak": 0,
     "set_aside": [],
     "source": "poll"
