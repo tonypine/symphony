@@ -1603,7 +1603,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     File.write!(tmp, File.read!(path) <> "\n" <> yaml)
     File.touch!(tmp, System.os_time(:second) + 2)
     File.rename!(tmp, path)
-    SymphonyElixir.Config.Cache.clear()
+    Cache.clear()
     SymphonyElixir.TestSupport.settle_config_cache!([path])
   end
 
