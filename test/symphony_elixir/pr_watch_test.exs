@@ -276,6 +276,22 @@ defmodule SymphonyElixir.PrWatchTest do
     assert PrWatch.red_bases(run_store: FailingStore) == []
   end
 
+  test "read_ticket/2 is a no-op with no repository key or no watcher of it" do
+    assert PrWatch.read_ticket(nil, "1") == :ok
+    assert PrWatch.read_ticket("", "1") == :ok
+    assert PrWatch.read_ticket("no-such-repo", "1") == :ok
+  end
+
+  test "read_ticket/2 asks the repository's watcher only" do
+    {:ok, _owner} = Registry.register(SymphonyElixir.Repo.Registry, {:pr_watch, "read-ticket-test"}, nil)
+
+    assert PrWatch.read_ticket("read-ticket-test", "1") == :ok
+    assert_receive {:"$gen_cast", {:read_ticket, "1"}}
+
+    assert PrWatch.read_ticket("read-ticket-other", "2") == :ok
+    refute_receive {:"$gen_cast", {:read_ticket, "2"}}, 10
+  end
+
   test "poll_now/0 asks every running watcher to tick, and is a no-op without one" do
     assert PrWatch.poll_now() == :ok
 

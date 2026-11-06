@@ -384,6 +384,26 @@ defmodule SymphonyElixir.TransitionGuardTest do
       refute_received :polled
     end
 
+    test "asks the PR watcher to read the ticket's PR once it moved anywhere else" do
+      test_pid = self()
+
+      opts = [
+        tracker: FakeTracker,
+        on_moved: fn repo_key, issue_id -> send(test_pid, {:read, repo_key, issue_id}) end,
+        on_merging: fn -> :ok end
+      ]
+
+      assert :ok = TransitionGuard.perform("issue-11", :director_move, %{target: "QA", repo_key: nil}, opts)
+      assert_received {:read, nil, "issue-11"}
+
+      assert :ok = TransitionGuard.perform("issue-12", :director_move, %{target: "Merging"}, opts)
+      refute_received {:read, _repo_key, "issue-12"}
+
+      Process.put(:transition_guard_tracker_result, {:error, :rate_limited})
+      assert {:error, :rate_limited} = TransitionGuard.perform("issue-13", :director_move, %{target: "QA"}, opts)
+      refute_received {:read, _repo_key, "issue-13"}
+    end
+
     test "polls the running PR poller by default after a move into Merging" do
       assert :ok = TransitionGuard.perform("issue-7", :director_move, %{target: "Merging"}, tracker: FakeTracker)
       assert_received {:moved, "issue-7", "Merging"}

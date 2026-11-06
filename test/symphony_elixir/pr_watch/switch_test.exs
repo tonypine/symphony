@@ -237,7 +237,10 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       fixer: Fixer,
       linker: Linker,
       interval_ms: 30_000,
-      now: fn -> now() end
+      now: fn -> now() end,
+      # Each test reads by its own `tick!`: a hold the watcher itself clears would have it read again,
+      # racing the test's assertions on the decision.
+      follow_records: false
     ]
 
     start_supervised!({Repo, Keyword.merge(defaults, opts)})

@@ -100,6 +100,13 @@ defmodule SymphonyElixir.PrWatch.SweepTest do
       assert Sweep.classify(held.("unknown")) == {:skipped, "no rule"}
     end
 
+    test "a reviewer or QA run held back names the watcher's reason, and takes its rule from it" do
+      assert Sweep.classify("Not dispatching QA for issue_id=a1 issue_identifier=TP-1: the PR watcher (R9): A run is working on the ticket") == {:skipped, "R9"}
+
+      assert Sweep.classify("Not dispatching the reviewer for issue_id=a1 issue_identifier=TP-1: the PR watcher hasn't read its PR yet") ==
+               Sweep.classify("Skipping dispatch: the PR watcher hasn't read its PR yet")
+    end
+
     test "a silent wait maps to the watcher's last rule; one with none is no rule" do
       silent = "pr_watch.silent_wait issue_id=a1 issue_identifier=TP-1 repo_key=s phase=qa since=2026-10-15T10:00:00Z"
 
