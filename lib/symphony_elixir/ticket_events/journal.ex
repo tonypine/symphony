@@ -151,6 +151,7 @@ defmodule SymphonyElixir.TicketEvents.Journal do
   defp setter(%{kind: kind} = setter) when kind in [:rule, :person, :run, "rule", "person", "run"],
     do: %{kind: to_string(kind), name: string(Map.get(setter, :name))}
 
+  defp setter(%{"kind" => kind} = setter), do: setter(%{kind: kind, name: Map.get(setter, "name")})
   defp setter(_setter), do: nil
 
   defp entry(event, records, context) do

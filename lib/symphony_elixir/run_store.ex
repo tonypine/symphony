@@ -845,8 +845,7 @@ defmodule SymphonyElixir.RunStore do
   def list_all_ticket_events(opts \\ []) when is_list(opts) do
     with :ok <- ensure_started() do
       transaction(fn ->
-        @ticket_events_table
-        |> :mnesia.foldl(&journal_event_row/2, [])
+        :mnesia.foldl(&journal_event_row/2, [], @ticket_events_table)
         |> filter_ticket_events(opts)
       end)
     end

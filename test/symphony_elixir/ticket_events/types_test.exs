@@ -13,6 +13,11 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
   )
 
   describe "catalog/0" do
+    test "a rule action names one of the actions a rule may take" do
+      assert "paused" in Types.rule_actions()
+      assert "lifted_pause" in Types.rule_actions()
+    end
+
     test "has every type, each with a schema, a writer list, run kinds and an idempotency rule" do
       catalog = Types.catalog()
 

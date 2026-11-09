@@ -1,10 +1,11 @@
 defmodule SymphonyElixirWeb.JournalReadTest do
   use SymphonyElixir.TestSupport
 
-  import Plug.Test
+  import Phoenix.ConnTest, only: [build_conn: 0, get: 2, post: 2]
 
   alias SymphonyElixir.{RuleActions, TicketEvents}
-  alias SymphonyElixirWeb.Router
+
+  @endpoint SymphonyElixirWeb.Endpoint
 
   @repo "fixture"
   @morning "2026-11-09T06:00:00Z"
@@ -13,6 +14,14 @@ defmodule SymphonyElixirWeb.JournalReadTest do
     write_workflow_file!(Workflow.workflow_file_path())
     :ok = RunStore.clear()
     on_exit(fn -> RunStore.clear() end)
+
+    endpoint_config =
+      :symphony_elixir
+      |> Application.get_env(SymphonyElixirWeb.Endpoint, [])
+      |> Keyword.merge(server: false, secret_key_base: String.duplicate("s", 64))
+
+    Application.put_env(:symphony_elixir, SymphonyElixirWeb.Endpoint, endpoint_config)
+    start_supervised!({SymphonyElixirWeb.Endpoint, []})
     :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "child", issue_identifier: "FIX-2", title: "A sub-ticket", phase: "In Progress"})
     :ok
   end
@@ -20,7 +29,7 @@ defmodule SymphonyElixirWeb.JournalReadTest do
   defp at(hour), do: DateTime.new!(~D[2026-11-09], Time.new!(hour, 0, 0))
 
   defp get_events(query) do
-    conn = :get |> conn("/api/v1/events?" <> URI.encode_query(query)) |> Router.call(Router.init([]))
+    conn = get(build_conn(), "/api/v1/events?" <> URI.encode_query(query))
     {conn.status, Jason.decode!(conn.resp_body)}
   end
 
@@ -70,12 +79,12 @@ defmodule SymphonyElixirWeb.JournalReadTest do
           {"classes", "classes must be a comma-separated list"},
           {"limit", "limit must be a positive integer"}
         ] do
-      conn = :get |> conn("/api/v1/events?#{param}[]=x") |> Router.call(Router.init([]))
+      conn = get(build_conn(), "/api/v1/events?#{param}[]=x")
       assert conn.status == 400
       assert Jason.decode!(conn.resp_body)["error"]["message"] == message
     end
 
-    conn = :post |> conn("/api/v1/events", "") |> Router.call(Router.init([]))
+    conn = post(build_conn(), "/api/v1/events")
     assert conn.status == 405
   end
 end

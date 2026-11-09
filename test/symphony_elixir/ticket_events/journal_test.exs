@@ -144,6 +144,8 @@ defmodule SymphonyElixir.TicketEvents.JournalTest do
     :ok = RunStore.delete_ticket_state("ghost")
 
     assert [%{ticket: %{repo_key: @repo, identifier: nil, title: nil}}] = read!(notable: false).entries
+    assert read!(notable: false, epic: "FIX-1").entries == []
+    assert {:ok, %{entries: [_note], next_until: nil}} = Journal.read()
     assert Journal.class("legacy.signal") == "other"
     assert "rule" in Journal.classes()
     refute "other" in Journal.classes()

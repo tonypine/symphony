@@ -21,12 +21,14 @@ defmodule SymphonyElixir.RuleActionsTest do
     long = String.duplicate("x", 600)
     assert :ok = RuleActions.record(@repo, @issue_id, "Self-heal", "filed_ticket", long, filed: "TP-9", head: "abc1234", at: @at)
     assert :ok = RuleActions.record(@repo, @issue_id, "Idle park", "parked", "  ")
+    assert :ok = RuleActions.record(@repo, @issue_id, "Loop guard", "paused", nil)
 
-    assert [first, second] = rule_actions()
+    assert [first, second, third] = rule_actions()
     assert first.at == @at
     assert first.payload == %{rule: "Self-heal", action: "filed_ticket", text: String.duplicate("x", 500), filed: "TP-9", head: "abc1234"}
     assert first.summary.title == "Self-heal filed TP-9"
     assert second.payload == %{rule: "Idle park", action: "parked"}
+    assert third.payload == %{rule: "Loop guard", action: "paused"}
   end
 
   test "record/6 logs a refusal and never fails the rule, and needs a ticket" do
