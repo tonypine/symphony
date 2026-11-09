@@ -8,7 +8,7 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
   alias SymphonyElixir.Inbox
   alias SymphonyElixir.Inbox.{FromRecord, Item}
   alias SymphonyElixir.Linear.Client
-  alias SymphonyElixir.{Pauses, PlanBrief, TicketState}
+  alias SymphonyElixir.{Pauses, PlanBrief, TicketEvents, TicketState}
 
   @repo_key "inbox-from-record"
   @fixture "test/fixtures/inbox/situation.exs"
@@ -213,6 +213,37 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
 
       record = %{plan | questions: questions, plan_brief: %{plan.plan_brief | choices: [choice, legacy]}}
       assert %{review: %{unapplied_answers: 1, decisions: [%{title: "A choice asked before questions"}]}} = Item.from_plan_brief(record, settings())
+    end
+
+    test "lists the choices its latest run could not ask, without those asked since or refused to an earlier run", %{plan: plan} do
+      [asked] = plan.questions
+      not_asked = fn title -> {:ok, _event} = TicketEvents.record(@repo_key, plan.issue_id, "question.not_asked", %{title: title, question: "#{title}?", cap: 12}) end
+      unasked = fn -> Item.from_plan_brief(plan, settings()).review.unasked_choices end
+
+      assert unasked.() == []
+
+      not_asked.("From the run before")
+      assert unasked.() == ["From the run before"]
+
+      {:ok, _event} = TicketEvents.record(@repo_key, plan.issue_id, "run.started", %{run_id: "run-2", run_kind: "breakdown"})
+      assert unasked.() == []
+
+      Enum.each(["Who may export", "Who may export", asked.title, "Which export format"], not_asked)
+      assert unasked.() == ["Who may export", "Which export format"]
+    end
+
+    test "a withdrawn Question does not count as asked, unless its title was asked again", %{plan: plan} do
+      [asked] = plan.questions
+      withdrawn = %{asked | id: "withdrawn", state: :withdrawn, withdrawn: %{reason: "Restarted", at: asked.asked_at}}
+
+      unasked = fn questions ->
+        Item.from_plan_brief(%{plan | questions: questions}, settings()).review.unasked_choices
+      end
+
+      {:ok, _event} = TicketEvents.record(@repo_key, plan.issue_id, "question.not_asked", %{title: asked.title, question: asked.question, cap: 12})
+
+      assert unasked.([withdrawn]) == [asked.title]
+      assert unasked.([withdrawn, asked]) == []
     end
 
     test "asks from the brief's first review line, its raw markdown, or to approve the plan", %{plan: plan} do

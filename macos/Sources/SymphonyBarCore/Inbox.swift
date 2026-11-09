@@ -212,12 +212,14 @@ public struct InboxReview: Equatable {
     public var questions: [Action]
     /// A plan's answers given since it last came back to review: no revision has applied them yet.
     public var unappliedAnswers: Int
+    /// The titles of the choices a plan's latest run could not ask because it reached its limit of questions.
+    public var unaskedChoices: [String]
     public var clarify: Clarify?
     public var blocked: Blocked?
 
     public init(
         brief: Brief? = nil, subTickets: [SubTicket] = [], pullRequest: PullRequest? = nil, action: Action? = nil, questions: [Action] = [],
-        unappliedAnswers: Int = 0, clarify: Clarify? = nil, blocked: Blocked? = nil
+        unappliedAnswers: Int = 0, unaskedChoices: [String] = [], clarify: Clarify? = nil, blocked: Blocked? = nil
     ) {
         self.brief = brief
         self.subTickets = subTickets
@@ -225,6 +227,7 @@ public struct InboxReview: Equatable {
         self.action = action
         self.questions = questions
         self.unappliedAnswers = unappliedAnswers
+        self.unaskedChoices = unaskedChoices
         self.clarify = clarify
         self.blocked = blocked
     }
@@ -237,6 +240,14 @@ public struct InboxReview: Equatable {
         case 1: "1 answer not yet applied: Symphony hasn't revised the plan from it yet."
         default: "\(unappliedAnswers) answers not yet applied: Symphony hasn't revised the plan from them yet."
         }
+    }
+
+    /// The warning a plan with unasked choices carries, so it never reads as fully asked. Nil when every choice was
+    /// asked.
+    public var unaskedChoicesWarning: String? {
+        guard !unaskedChoices.isEmpty else { return nil }
+        let count = unaskedChoices.count == 1 ? "1 choice" : "\(unaskedChoices.count) choices"
+        return "\(count) not asked: the planning run reached its limit of questions. Not asked: \(unaskedChoices.joined(separator: "; "))."
     }
 
     /// The brief in its parts, or as text when it didn't parse.
@@ -596,6 +607,7 @@ public struct InboxReview: Equatable {
         /// A plan's questions.
         let decisions: [RequestPayload]?
         let unappliedAnswers: Int?
+        let unaskedChoices: [String]?
         // An action.
         let title: String?
         let question: String?
@@ -669,6 +681,7 @@ public struct InboxReview: Equatable {
                 )
             },
             unappliedAnswers: payload.unappliedAnswers ?? 0,
+            unaskedChoices: payload.unaskedChoices ?? [],
             clarify: payload.held.map { held in
                 Clarify(
                     held: held,
