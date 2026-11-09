@@ -112,6 +112,20 @@ case SymphonyElixir.LeftoverProcesses.Table.read() do
   _denied -> ExUnit.configure(exclude: [:process_table | Keyword.get(ExUnit.configuration(), :exclude, [])])
 end
 
+# Tests that read another process's environment with `ps eww` need it to show environments, which
+# some sandboxes deny even where `ps` itself runs. The probe reads this VM's own environment.
+process_environment_readable? =
+  try do
+    {output, status} = System.cmd("/bin/ps", ["eww", "-o", "command=", "-p", System.pid()], stderr_to_stdout: true)
+    status == 0 and output =~ " PATH="
+  rescue
+    _denied -> false
+  end
+
+unless process_environment_readable? do
+  ExUnit.configure(exclude: [:process_environment | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
 # Tests that start the real `claude` binary run only with `--only real_claude`, so no default run
 # (CI's, `mix cover.changed`'s) depends on whether or which `claude` is installed.
 ExUnit.configure(exclude: [:real_claude | Keyword.get(ExUnit.configuration(), :exclude, [])])
