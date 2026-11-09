@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.PromptBuilderTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{DecisionRequest, Decisions, RunKind, TicketEvents, TicketState, WorkflowPreview}
+  alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.{DecisionRequest, Decisions, Marks, RunKind, TicketEvents, TicketState, WorkflowPreview}
   alias SymphonyElixir.TicketEvents.Brief
 
   test "prompt builder uses PR prompt branch for PR runs" do
@@ -1079,7 +1080,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
       note_id = note.id
       assert [%{type: "note.read", actor: %{kind: :machine}, payload: %{note_id: ^note_id, run_id: "run-1"}}] = TicketEvents.query("i", types: ["note.read"])
-      assert %{read_by: %{run_id: "run-1"}} = "i" |> TicketEvents.query(limit: :all) |> SymphonyElixir.Marks.note()
+      assert %{read_by: %{run_id: "run-1"}} = "i" |> TicketEvents.query(limit: :all) |> Marks.note()
     end
 
     # A Codex prompt over the stdio soft limit is sent as the compact prompt, which carries the
@@ -1089,7 +1090,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
       :ok = RunStore.update_ticket_state("i", %{phase: "QA"})
 
       {:ok, settings} =
-        SymphonyElixir.Config.Schema.parse(%{agent: %{kind: "codex", command: "codex app-server", codex_stdio_prompt_soft_limit: 1}})
+        Schema.parse(%{agent: %{kind: "codex", command: "codex app-server", codex_stdio_prompt_soft_limit: 1}})
 
       prompt = AgentRunner.build_first_turn_prompt(issue, settings: settings, ticket_state: record, run_id: "run-codex")
 
