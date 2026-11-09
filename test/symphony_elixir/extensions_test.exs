@@ -4,7 +4,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.ConnTest
 
   alias Mix.Tasks.Symphony.Audit
-  alias SymphonyElixir.{AuditLog, RetiredStates, StrayProcesses, TicketMoves, TicketState}
+  alias SymphonyElixir.{AuditLog, RetiredStates, StrayProcesses, TicketEvents, TicketMoves, TicketState}
   alias SymphonyElixir.Dispatch.Shadow
   alias SymphonyElixir.Inbox.ReviewBrief
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
@@ -460,6 +460,29 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert %{"running" => %{"last_message" => "waiting for Linear", "linear_wait_until" => "2026-10-04T12:30:00Z"}} =
              json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
+  end
+
+  test "phoenix observability api's ticket read says the step a live run is on and its newest lines" do
+    {:ok, started} =
+      TicketEvents.record("default", "issue-http", "step.started", %{step_id: "code", title: "Write the code", mode: "delegated"}, run_id: "run-http")
+
+    later = DateTime.add(started.at, 1, :second)
+
+    buffer =
+      :queue.from_list([
+        %{event: :agent_text, timestamp: later, payload: %{params: %{msg: %{content: "Reading the module."}}}},
+        %{event: :tool_use, timestamp: later, payload: %{params: %{tool: "Bash"}}}
+      ])
+
+    snapshot = update_in(static_snapshot().running, fn [running] -> [Map.merge(running, %{run_id: "run-http", transcript_buffer: buffer})] end)
+    orchestrator_name = Module.concat(__MODULE__, :RunNowApiOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{"running" => %{"current_step" => %{"id" => "code", "title" => "Write the code", "mode" => "delegated"}, "recent_lines" => lines}} =
+             json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
+
+    assert [%{"kind" => "say", "text" => "Reading the module."}, %{"kind" => "tool", "text" => "Bash"}] = lines
   end
 
   test "phoenix observability api lists the watched issues with the facts read of their PRs" do
@@ -1075,6 +1098,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              },
              "attempts" => %{"restart_count" => 0, "current_retry_attempt" => 0},
              "running" => %{
+               "current_step" => nil,
+               "recent_lines" => [],
                "repo_key" => "default",
                "worker_host" => nil,
                "workspace_path" => nil,

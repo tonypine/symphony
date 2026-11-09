@@ -9221,6 +9221,7 @@ defmodule SymphonyElixir.Orchestrator do
       |> Enum.map(fn {issue_id, metadata} ->
         %{
           issue_id: issue_id,
+          run_id: Map.get(metadata, :run_id),
           repo_key: Map.get(metadata, :repo_key),
           run_kind: Map.get(metadata, :run_kind) || Map.get(metadata.issue, :run_kind),
           run_profile: Map.get(metadata, :run_profile),

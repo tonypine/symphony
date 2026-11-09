@@ -363,3 +363,31 @@ the events:
 The links the run read and the tickets whose records name this one as an open blocker: `identifier`,
 `title`, `state` and `situation`, the kind of the held ticket's `situation`, null without a record. A ticket
 that ended holds nothing up.
+
+## `running`
+
+The live run, null when none is. Beside the run's session, workspace and tokens, it says what the run is
+doing now, for the run in place on the ticket page (facts 4, 8 and 13 of
+`docs/design/director-ticket-page.md`; `SymphonyElixir.PhaseSteps.Transcript`):
+
+| Field | What it holds |
+| --- | --- |
+| `current_step` | The step the run started and has not ended, from its `step.started` on the ledger: `id`, `title`, `mode` and `started_at`. Null between steps and on a run with no step list. |
+| `recent_lines` | The newest lines of that step, oldest first and at most 20, from the session stream the orchestrator buffers for the run (the transcript window reads the same stream and is unchanged). Each is a line as below; a tool line carries only the tool's name, since the stream holds no arguments. Empty when `current_step` is null. |
+
+Once a step ends, its whole slice of the session transcript is a `transcript` artifact on its
+`step.completed`, served by `GET /api/v1/artifacts/:id` like any other, so the Director's timeline unfolds
+the step from the ledger. It is JSON lines (`text/x-ndjson`), one object a line:
+
+| Field | What it holds |
+| --- | --- |
+| `kind` | `say` (what the agent said), `tool` (a call: the tool's name and its arguments summarised, the command, path, pattern or query when it has one, else its input as JSON) or `result` (what the call returned, summarised). |
+| `text` | The line, its whitespace folded and bounded: 4,000 characters for what the agent said, 300 for a call's arguments, 500 for a result. |
+| `at` | When the entry was written; absent when the transcript gave no time. |
+| `duration_ms` | On a result, how long its call took. |
+| `failed` | `true` on a result whose call failed. |
+
+A step's slice holds the lines of every turn it ran (a retry adds to them), cut only at whole entries, so a
+session's slices concatenated are the lines of its whole transcript. A machine step has no slice, a turn that
+said nothing leaves none, and a session Symphony reads no transcript of (Codex's, or one on another host)
+has none.

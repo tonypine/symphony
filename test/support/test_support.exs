@@ -193,9 +193,15 @@ defmodule SymphonyElixir.TestSupport do
   defp config_cache_entry_current?(key, stat) do
     case :persistent_term.get(key, nil) do
       nil -> true
-      entry -> not entry.stale? and entry.stamp == {stat.mtime, stat.size, stat.type}
+      entry -> entry_stamp_current?(entry, {stat.mtime, stat.size, stat.type})
     end
   end
+
+  # A stale entry is the file on disk when it rejected exactly that file: a background reader that
+  # loaded the old file just before the rewrite then read the rejected one, which is the state a
+  # rejected rewrite should leave.
+  defp entry_stamp_current?(%{stale?: true, failed_stamp: failed}, stamp), do: failed == stamp
+  defp entry_stamp_current?(%{stale?: false, stamp: entry}, stamp), do: entry == stamp
 
   # Waits until `fun` returns a truthy value and returns it, trying again every few milliseconds. A
   # test waits on the state it asserts this way, never on a fixed sleep; the bound only ends a wait
