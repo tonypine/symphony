@@ -11,6 +11,7 @@
       "head_sha": null,
       "id": "st-01",
       "idempotency": null,
+      "new": true,
       "parent": null,
       "payload": {
         "from": "Todo",
@@ -39,6 +40,7 @@
           "head_sha": null,
           "id": "st-02",
           "idempotency": "run.started:run-impl-1",
+          "new": true,
           "parent": null,
           "payload": {
             "head": "aaa1111",
@@ -68,6 +70,7 @@
           "head_sha": null,
           "id": "st-03",
           "idempotency": null,
+          "new": true,
           "parent": null,
           "payload": {
             "mode": "delegated",
@@ -96,6 +99,7 @@
           "head_sha": null,
           "id": "st-04",
           "idempotency": null,
+          "new": true,
           "parent": null,
           "payload": {
             "mode": "delegated",
@@ -123,6 +127,7 @@
           "head_sha": null,
           "id": "st-05",
           "idempotency": null,
+          "new": true,
           "parent": null,
           "payload": {
             "command": "mix compile --warnings-as-errors",
@@ -159,6 +164,7 @@
           "head_sha": null,
           "id": "st-06",
           "idempotency": null,
+          "new": true,
           "parent": null,
           "payload": {
             "duration_ms": 120000,
@@ -187,6 +193,7 @@
           "head_sha": null,
           "id": "st-07",
           "idempotency": null,
+          "new": true,
           "parent": null,
           "payload": {
             "command": "mix test",
@@ -223,6 +230,7 @@
           "head_sha": null,
           "id": "st-08",
           "idempotency": null,
+          "new": true,
           "parent": null,
           "payload": {
             "mode": "machine",
@@ -254,6 +262,7 @@
           "head_sha": null,
           "id": "st-09",
           "idempotency": null,
+          "new": true,
           "parent": null,
           "payload": {
             "mode": "delegated",
@@ -282,6 +291,7 @@
           "head_sha": null,
           "id": "st-10",
           "idempotency": null,
+          "new": true,
           "parent": null,
           "payload": {
             "mode": "delegated",
@@ -310,6 +320,7 @@
           "head_sha": null,
           "id": "st-11",
           "idempotency": "run.ended:run-impl-1",
+          "new": true,
           "parent": null,
           "payload": {
             "duration_ms": 1140000,

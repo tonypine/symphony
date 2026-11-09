@@ -1065,6 +1065,23 @@ defmodule SymphonyElixir.PromptBuilderTest do
       end
     end
 
+    test "a run's prompt that carries the Director's note records that run read it, once", %{issue: issue, record: record, at: at} do
+      {:ok, note} = TicketEvents.record("r", "i", "note", %{text: "Keep the button."}, actor: {:person, "the Director"}, at: at)
+      :ok = RunStore.update_ticket_state("i", %{phase: "QA"})
+
+      # The workflow preview's summary and a prompt with no run read nothing.
+      PromptBuilder.build_prompt(issue, ticket_state: record)
+      PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-preview", ticket_ledger: %{text: "sample", tokens: 1})
+      assert TicketEvents.query("i", types: ["note.read"]) == []
+
+      assert PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1") =~ "Keep the button."
+      PromptBuilder.build_compact_prompt(issue, ticket_state: record, run_id: "run-2")
+
+      note_id = note.id
+      assert [%{type: "note.read", actor: %{kind: :machine}, payload: %{note_id: ^note_id, run_id: "run-1"}}] = TicketEvents.query("i", types: ["note.read"])
+      assert %{read_by: %{run_id: "run-1"}} = "i" |> TicketEvents.query(limit: :all) |> SymphonyElixir.Marks.note()
+    end
+
     test "is not rendered when no ticket state is passed", %{issue: issue} do
       refute PromptBuilder.build_prompt(issue) =~ "Ticket history"
       refute PromptBuilder.build_prompt(issue, ticket_state: nil) =~ "Ticket history"

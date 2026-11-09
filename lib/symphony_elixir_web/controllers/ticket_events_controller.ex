@@ -18,6 +18,10 @@ defmodule SymphonyElixirWeb.TicketEventsController do
   run's header as it is now, and a run whose events span two pages shows on each with that page's
   events; a client merges them by `run_id`.
 
+  Every event of either shape carries `new`: whether it is later than when the person last looked
+  at the ticket (`SymphonyElixir.Marks`, set by `POST /api/v1/control/looked`), true on a ticket they
+  never looked at.
+
   The identifier resolves through the ticket's record (`SymphonyElixir.TicketState`): a ticket
   with none is 404. An unknown type, a `since` that is not an ISO 8601 timestamp, a `limit` that
   is not a positive integer or a `group` other than `run` is 400. Like the other reads of
@@ -27,7 +31,7 @@ defmodule SymphonyElixirWeb.TicketEventsController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.{RunStore, TicketEvents, TicketState}
+  alias SymphonyElixir.{Marks, RunStore, TicketEvents, TicketState}
   alias SymphonyElixir.TicketEvents.Types
   alias SymphonyElixirWeb.Presenter
 
@@ -114,12 +118,13 @@ defmodule SymphonyElixirWeb.TicketEventsController do
   defp group("run"), do: {:ok, :run}
   defp group(_value), do: {:error, {:invalid, "group must be run"}}
 
-  defp page_json(record, events, nil), do: %{events: Presenter.ticket_events_json(record.repo_key, record.issue_id, events)}
+  defp page_json(record, events, nil),
+    do: %{events: Presenter.ticket_events_json(record.repo_key, record.issue_id, events, looked_at: Marks.looked_at(record))}
 
   # A store error on the history read raises, as the page's own read does.
   defp page_json(record, events, :run) do
     history = RunStore.list_ticket_events(record.issue_id, types: @run_header_types)
-    %{timeline: Presenter.ticket_timeline_json(record.repo_key, record.issue_id, events, history)}
+    %{timeline: Presenter.ticket_timeline_json(record.repo_key, record.issue_id, events, history, looked_at: Marks.looked_at(record))}
   end
 
   defp next_since([], since), do: since && DateTime.to_iso8601(since)

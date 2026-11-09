@@ -553,7 +553,8 @@ runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirme
 newest-known-head rule compared, the one that won and what it did), `workspace.rebuilt` (machine
 only: a workspace made again, why, the heads compared and the one it started on),
 `workspace.removed` (machine only: Symphony removed a ticket's workspace, for the age GC, a Stop, a
-terminal state or another cleanup) and `note`.
+terminal state or another cleanup), `note.read` (machine only: the first run whose prompt carried a
+person's note, keyed by the note) and `note`.
 
 A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)
 and its `mode`: `machine` (a `command` Symphony runs), `orchestrated` (an agent turn Symphony drives
@@ -6298,6 +6299,19 @@ Minimum endpoints:
     `repo_key` or `issue_identifier` is `422`. None of them writes an event or an audit record.
     Unlike a stop's event, the note is the request: an answer other than `200` means it wasn't
     written.
+  - The ticket read's `note` is the newest note a person left, with `read_by`: the first run whose
+    prompt carried it (the summary holds every note), from a machine `note.read` event keyed by the
+    note. A newer note replaces it, unread until a run reads it.
+
+- `POST /api/v1/control/looked` (OPTIONAL)
+  - Marks that the person looked at a ticket now: `issue_identifier` and an optional `repo_key`. The
+    mark is written on the ticket's state record, keyed by person (one today, the Director); it is a
+    view mark, not history, so no event records it. Answers `200` with `issue_identifier`,
+    `looked_at` and `new_since_looked` (`0`); a ticket with no record is `404` `ticket_not_found`
+    and a request without `issue_identifier` is `422`.
+  - The ticket read carries `looked_at` and `new_since_looked`, the count of the ticket's events
+    later than the mark, and each event of the events feed carries `new`. Before the person ever
+    looked, every event is new.
 
 - `POST /api/v1/control/<move>` (the Director's moves, OPTIONAL)
   - The Mac app's Inbox makes the Director's Linear moves through Symphony, which holds the Linear

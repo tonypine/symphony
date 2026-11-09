@@ -49,6 +49,12 @@ defmodule SymphonyElixirWeb.ControlApiController do
   and writes nothing; a ticket Symphony has no record of is 404. Unlike a stop's event, the note is
   the request: the answer says whether it was written.
 
+  `looked` marks that the person looked at a ticket now (`SymphonyElixir.Marks`): it takes
+  `issue_identifier` and an optional `repo_key`, writes the mark on the ticket's record (a view mark,
+  so no ledger event) and answers 200 with `issue_identifier`, `looked_at` and `new_since_looked`,
+  which is 0 from then on until a newer event. A ticket with no record is 404 and a request without
+  `issue_identifier` is 422.
+
   `blocker` adds or removes a blocked-by link from the ticket page (`SymphonyElixir.DirectorBlockers`):
   it takes `issue_identifier`, `blocker` (the ticket that blocks it) and `action` (`add` or
   `remove`), and answers 200 with the ticket's blockers after the change, 409 with the reason the
@@ -85,7 +91,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   alias Plug.Conn
   alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorLabels, DirectorMoves, DirectorPriority, DirectorRulings}
   alias SymphonyElixir.Orchestrator
-  alias SymphonyElixir.{TicketEvents, TicketMoves, TicketSignals}
+  alias SymphonyElixir.{Marks, TicketEvents, TicketMoves, TicketSignals}
   alias SymphonyElixir.TicketEvents.Types
   alias SymphonyElixirWeb.{Endpoint, Presenter, TicketEventsController}
 
@@ -254,6 +260,17 @@ defmodule SymphonyElixirWeb.ControlApiController do
     else
       {:error, :missing_ticket} -> error_response(conn, 422, "invalid_request", "repo_key and issue_identifier are required")
       {:error, {:invalid_note, message}} -> error_response(conn, 400, "invalid_note", message)
+      {:error, :not_found} -> error_response(conn, 404, "ticket_not_found", TicketMoves.no_ticket_reason(params["issue_identifier"], params["repo_key"]))
+    end
+  end
+
+  @spec looked(Conn.t(), map()) :: Conn.t()
+  def looked(conn, params) do
+    with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
+         {:ok, %{record: record, looked_at: looked_at}} <- Marks.look(identifier, string_param(params["repo_key"])) do
+      json(conn, %{issue_identifier: record.issue_identifier, looked_at: DateTime.to_iso8601(looked_at), new_since_looked: 0})
+    else
+      {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
       {:error, :not_found} -> error_response(conn, 404, "ticket_not_found", TicketMoves.no_ticket_reason(params["issue_identifier"], params["repo_key"]))
     end
   end

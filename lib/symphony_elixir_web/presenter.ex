@@ -11,6 +11,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Inbox,
     Initiatives,
     Lifecycle,
+    Marks,
     Orchestrator,
     Pauses,
     PlanBrief,
@@ -25,6 +26,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Situation,
     StateMachine,
     StrayProcesses,
+    TicketEvents,
     TicketMoves,
     TicketObservation,
     TicketState,
@@ -361,8 +363,9 @@ defmodule SymphonyElixirWeb.Presenter do
   # What the ticket's record adds to its payload: its verdicts, the watcher's block, a plan's brief
   # (`SymphonyElixir.PlanBrief`), why it does not move (`ticket_status/2`), where it stands
   # (`SymphonyElixir.Situation`), where it has been (`SymphonyElixir.Lifecycle`) and its pull request
-  # (`SymphonyElixirWeb.PullRequestPayload`), and where it sits among the others
-  # (`SymphonyElixir.Connected.Read`).
+  # (`SymphonyElixirWeb.PullRequestPayload`), where it sits among the others
+  # (`SymphonyElixir.Connected.Read`), and its marks: since the person last looked and the note for
+  # the next run (`SymphonyElixir.Marks`).
   defp record_payload(payload, record, running?, snapshot) do
     repository_pause = if is_binary(payload.repo_key), do: repository_pause_reason(payload.repo_key), else: nil
 
@@ -372,10 +375,14 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.put(:plan_brief, plan_brief_payload(record))
     |> Map.put(:situation, situation_payload(record || %{issue_id: payload.issue_id, repo_key: payload.repo_key}, Situation.live_facts(snapshot), nil))
     |> Map.merge(Lifecycle.read(payload.issue_id))
+    |> Map.merge(Marks.read(record, ticket_events(payload.issue_id)))
     |> Map.put(:pull_request, PullRequestPayload.read(record))
     |> complete_connected(record, snapshot)
     |> Map.merge(ticket_status(record, %{identifier: payload.issue_identifier, repo_key: payload.repo_key, repository_pause: repository_pause, running?: running?}))
   end
+
+  # Every event of the ticket, oldest first; none for a ticket with no id or a store that can't be read.
+  defp ticket_events(issue_id), do: issue_id |> TicketEvents.query(limit: :all) |> List.wrap() |> Enum.filter(&is_struct(&1, Event))
 
   # A ticket with neither a record nor what the orchestrator holds of it has no `connected`.
   defp complete_connected(payload, record, snapshot) do
@@ -642,11 +649,15 @@ defmodule SymphonyElixirWeb.Presenter do
   relative to the server) serves the bytes: false for an artifact the store marks expired, and for
   an id the store doesn't know, whose other fields are null. The page's artifacts are read in one
   `SymphonyElixir.Artifacts.list/1` call.
+
+  `opts[:looked_at]`, when given (nil when the person never looked), adds `new` to each event: whether
+  it is later than that mark (`SymphonyElixir.Marks.new?/2`).
   """
-  @spec ticket_events_json(String.t(), String.t(), [Event.t()]) :: [map()]
-  def ticket_events_json(repo_key, issue_id, events) do
+  @spec ticket_events_json(String.t(), String.t(), [Event.t()], keyword()) :: [map()]
+  def ticket_events_json(repo_key, issue_id, events, opts \\ []) do
     artifacts = ticket_artifacts(repo_key, issue_id, events)
-    Enum.map(events, &ticket_event_json(&1, artifacts))
+    mark = event_mark(opts)
+    Enum.map(events, &ticket_event_json(&1, artifacts, mark))
   end
 
   @doc """
@@ -661,10 +672,10 @@ defmodule SymphonyElixirWeb.Presenter do
   first), not from the page: `status` is `running` until its `run.ended`, then `ended`, `verdict` is
   the newest verdict naming the run (`{kind, outcome, head, at}`), else null, and `summary` is the
   run's line (`SymphonyElixir.TicketEvents.Summary.run_group/1`), which names the step a running run
-  is on.
+  is on. `opts[:looked_at]` adds `new` to each event, as `ticket_events_json/4`'s does.
   """
-  @spec ticket_timeline_json(String.t(), String.t(), [Event.t()], [Event.t()]) :: [map()]
-  def ticket_timeline_json(repo_key, issue_id, events, history) do
+  @spec ticket_timeline_json(String.t(), String.t(), [Event.t()], [Event.t()], keyword()) :: [map()]
+  def ticket_timeline_json(repo_key, issue_id, events, history, opts \\ []) do
     runs = run_headers(history)
 
     {placed, _seen} =
@@ -675,6 +686,7 @@ defmodule SymphonyElixirWeb.Presenter do
     timeline = %{
       artifacts: ticket_artifacts(repo_key, issue_id, events),
       runs: runs,
+      mark: event_mark(opts),
       members: Enum.group_by(placed, &elem(&1, 1), &elem(&1, 0))
     }
 
@@ -699,7 +711,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp timeline_entry({:event, event}, timeline) do
     event
-    |> ticket_event_json(timeline.artifacts)
+    |> ticket_event_json(timeline.artifacts, timeline.mark)
     |> Map.put(:children, timeline_members({:event, event.id}, timeline))
   end
 
@@ -763,7 +775,23 @@ defmodule SymphonyElixirWeb.Presenter do
       else: %{}
   end
 
-  defp ticket_event_json(%Event{} = event, artifacts) do
+  defp event_mark(opts) do
+    case Keyword.fetch(opts, :looked_at) do
+      {:ok, looked_at} -> {:looked, looked_at}
+      :error -> :none
+    end
+  end
+
+  defp ticket_event_json(%Event{} = event, artifacts, mark) do
+    event
+    |> ticket_event_fields(artifacts)
+    |> put_new_mark(event, mark)
+  end
+
+  defp put_new_mark(json, _event, :none), do: json
+  defp put_new_mark(json, event, {:looked, looked_at}), do: Map.put(json, :new, Marks.new?(event, looked_at))
+
+  defp ticket_event_fields(%Event{} = event, artifacts) do
     %{
       id: event.id,
       seq: event.seq,
