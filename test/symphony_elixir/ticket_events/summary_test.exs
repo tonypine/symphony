@@ -72,7 +72,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"workspace.removed", %{reason: "age_gc"}, [], %{title: "Workspace removed", detail: "The age GC reclaimed it"}},
     {"situation.changed", %{from: "working", to: "waiting_for_ci", word: "Waiting for CI", cause: "Checks are running on PR #741."}, [],
      %{title: "Waiting for CI", detail: "Checks are running on PR #741."}},
-    {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}}
+    {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}},
+    {"note.read", %{note_id: "evt-1", run_id: "run-4"}, [], %{title: "Note read by a run", detail: "run-4"}}
   ]
 
   defp event(type, payload, artifacts \\ []), do: %Event{type: type, payload: payload, artifacts: artifacts}

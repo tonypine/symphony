@@ -364,6 +364,32 @@ The links the run read and the tickets whose records name this one as an open bl
 `title`, `state` and `situation`, the kind of the held ticket's `situation`, null without a record. A ticket
 that ended holds nothing up.
 
+## Marks
+
+What is new since the person last looked, and the note for the next run (facts 6 and 18 of
+`docs/design/director-ticket-page.md`; `SymphonyElixir.Marks`):
+
+| Field | What it holds |
+| --- | --- |
+| `looked_at` | When the person last looked at the ticket, set by `POST /api/v1/control/looked`; null when they never did. |
+| `new_since_looked` | How many of the ticket's events are later than `looked_at`; every event when it is null. |
+| `note` | The note for the next run, null when no person left one: the newest `note` event a person wrote, as `id`, `text`, `at` (when it was set), `by` and `read_by`. |
+| `note.read_by` | The first run whose prompt carried the note, as `run_id` and `at`; null until a run read it. A newer note replaces the note, and its `read_by` starts null again. |
+
+`POST /api/v1/control/looked` takes `issue_identifier` and an optional `repo_key`, and needs the control
+token. It writes the mark on the ticket's record, keyed by person (the Director, the one person the token
+names today). It is a view mark, not history: no ledger event records it. It answers `200`
+`{"issue_identifier", "looked_at", "new_since_looked": 0}`, `404` `ticket_not_found` for a ticket with no
+record (also when the record goes before the mark is written), `502` `store_error` when the store refuses
+the write, and `422` without `issue_identifier`.
+
+Each event of the events feed (`GET /api/v1/repos/:repo_key/tickets/:issue_identifier/events`, with or
+without `group=run`) carries `new`: `true` when it is later than the mark, or the person never looked.
+
+A run reads the note when the prompt it builds carries the ticket's history summary, which holds every
+note in full. Symphony then records a machine `note.read` event naming the note (`note_id`) and the run
+(`run_id`), keyed by the note, so only the first read is kept. A preview of the prompt records nothing.
+
 ## `running`
 
 The live run, null when none is. Beside the run's session, workspace and tokens, it says what the run is

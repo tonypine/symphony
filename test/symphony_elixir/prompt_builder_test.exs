@@ -1,7 +1,8 @@
 defmodule SymphonyElixir.PromptBuilderTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{DecisionRequest, Decisions, RunKind, TicketEvents, TicketState, WorkflowPreview}
+  alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.{DecisionRequest, Decisions, Marks, RunKind, TicketEvents, TicketState, WorkflowPreview}
   alias SymphonyElixir.TicketEvents.Brief
 
   test "prompt builder uses PR prompt branch for PR runs" do
@@ -1063,6 +1064,40 @@ defmodule SymphonyElixir.PromptBuilderTest do
         assert history =~ "- 2026-10-22T10:01:00Z Blocked hold set: tooling"
         assert history =~ "</ticket_ledger>"
       end
+    end
+
+    test "a run's prompt that carries the Director's note records that run read it, once", %{issue: issue, record: record, at: at} do
+      {:ok, note} = TicketEvents.record("r", "i", "note", %{text: "Keep the button."}, actor: {:person, "the Director"}, at: at)
+      :ok = RunStore.update_ticket_state("i", %{phase: "QA"})
+
+      # The workflow preview's summary and a prompt with no run read nothing.
+      PromptBuilder.build_prompt(issue, ticket_state: record)
+      PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-preview", ticket_ledger: %{text: "sample", tokens: 1})
+      assert TicketEvents.query("i", types: ["note.read"]) == []
+
+      assert PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1") =~ "Keep the button."
+      PromptBuilder.build_compact_prompt(issue, ticket_state: record, run_id: "run-2")
+
+      note_id = note.id
+      assert [%{type: "note.read", actor: %{kind: :machine}, payload: %{note_id: ^note_id, run_id: "run-1"}}] = TicketEvents.query("i", types: ["note.read"])
+      assert %{read_by: %{run_id: "run-1"}} = "i" |> TicketEvents.query(limit: :all) |> Marks.note()
+    end
+
+    # A Codex prompt over the stdio soft limit is sent as the compact prompt, which carries the
+    # summary too: the run that is sent it has read the note, and the read names that run.
+    test "a Codex run sent the compact prompt carries the note and records its read", %{issue: issue, record: record, at: at} do
+      {:ok, note} = TicketEvents.record("r", "i", "note", %{text: "Keep the button."}, actor: {:person, "the Director"}, at: at)
+      :ok = RunStore.update_ticket_state("i", %{phase: "QA"})
+
+      {:ok, settings} =
+        Schema.parse(%{agent: %{kind: "codex", command: "codex app-server", codex_stdio_prompt_soft_limit: 1}})
+
+      prompt = AgentRunner.build_first_turn_prompt(issue, settings: settings, ticket_state: record, run_id: "run-codex")
+
+      assert prompt =~ "You are working on Linear ticket `MT-LB`."
+      assert prompt =~ "Keep the button."
+      note_id = note.id
+      assert [%{type: "note.read", payload: %{note_id: ^note_id, run_id: "run-codex"}}] = TicketEvents.query("i", types: ["note.read"])
     end
 
     test "is not rendered when no ticket state is passed", %{issue: issue} do

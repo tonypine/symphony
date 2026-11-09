@@ -1133,6 +1133,9 @@ defmodule SymphonyElixir.ExtensionsTest do
              "situation" => issue_payload["situation"],
              "lifecycle" => issue_payload["lifecycle"],
              "phase_path" => issue_payload["phase_path"],
+             "looked_at" => nil,
+             "new_since_looked" => issue_payload["new_since_looked"],
+             "note" => nil,
              "pull_request" => nil,
              "pause" => nil
            }
@@ -1178,6 +1181,9 @@ defmodule SymphonyElixir.ExtensionsTest do
              "situation" => watching_payload["situation"],
              "lifecycle" => watching_payload["lifecycle"],
              "phase_path" => watching_payload["phase_path"],
+             "looked_at" => nil,
+             "new_since_looked" => watching_payload["new_since_looked"],
+             "note" => nil,
              "pull_request" => nil,
              "pause" => nil
            }
