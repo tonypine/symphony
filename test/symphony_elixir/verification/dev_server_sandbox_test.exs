@@ -595,6 +595,9 @@ defmodule SymphonyElixir.Verification.DevServerSandboxTest do
       refute File.exists?(marker)
     end
 
+    # It reads the other process's environment with `ps` from outside the sandbox first, which an
+    # agent run's own sandbox denies.
+    @tag :process_table
     test "a command can't read the environment of a process outside the sandbox, or signal it", %{workspace: workspace, tmp_dir: tmp_dir, home: home} do
       profile = DevServerSandbox.profile(workspace, [workspace, tmp_dir], [], home: home, socket_dir: tmp_dir)
       secret = "symphony-secret-#{System.unique_integer([:positive])}"
