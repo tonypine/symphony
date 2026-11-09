@@ -13,6 +13,22 @@ defmodule SymphonyElixir.TicketEventsTest do
     :ok = RunStore.clear()
   end
 
+  describe "attach_artifacts/2" do
+    test "puts files on an event the ticket holds, once each, and tells the live channel; nothing else changes" do
+      {:ok, event} = TicketEvents.record(@repo_key, @issue_id, "note", %{text: "x"}, artifacts: ["a1"])
+      {:ok, other} = TicketEvents.record(@repo_key, @issue_id, "note", %{text: "y"})
+      :ok = ObservabilityPubSub.subscribe_ticket_events()
+
+      assert :ok = TicketEvents.attach_artifacts(event, ["a1", "a2"])
+      event_id = event.id
+      assert_receive {:ticket_event, %{event_id: ^event_id}}
+
+      assert [%{seq: 1, artifacts: ["a1", "a2"], payload: %{text: "x"}}, %{artifacts: []}] = TicketEvents.query(@issue_id) |> Enum.sort_by(& &1.seq)
+      assert :ok = RunStore.attach_ticket_event_artifacts(@issue_id, 99, ["a3"])
+      assert other.seq == 2
+    end
+  end
+
   describe "record/5" do
     test "a second verdict with the same idempotency key returns the first event and writes nothing" do
       payload = %{kind: "qa", outcome: "pass", head: "abc"}

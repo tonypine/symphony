@@ -312,6 +312,18 @@ defmodule SymphonyElixir.TicketEvents do
     })
   end
 
+  @doc """
+  Puts `artifact_ids` on `event`, which the ticket already holds, and sends the live channel's notice
+  of it. It is how a step the agent ended mid-turn gets its transcript, which exists only once the
+  turn is over; nothing else about the event changes.
+  """
+  @spec attach_artifacts(Event.t(), [String.t()]) :: :ok | {:error, term()}
+  def attach_artifacts(%Event{} = event, artifact_ids) when is_list(artifact_ids) do
+    with :ok <- RunStore.attach_ticket_event_artifacts(event.issue_id, event.seq, artifact_ids) do
+      notify(event)
+    end
+  end
+
   defp issue_identifier(issue_id) do
     case RunStore.get_ticket_state(issue_id) do
       %{issue_identifier: identifier} when is_binary(identifier) -> identifier
