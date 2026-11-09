@@ -727,7 +727,8 @@ runs. The line under the status shows each step:
    check fails, an alert and a menu line show its error, and Symphony keeps running untouched.
 2. **Pause dispatch,** unless it is already paused. The restart remembers whether it paused it.
 3. **Wait for agent runs:** the menu shows "Waiting for N agent runs…" until a poll shows dispatch paused and
-   `0 running`. If a poll shows dispatch running again (it was resumed just before the restart, or while it
+   no run active. A run between two agent turns doesn't count: its next turn waits for the pause, and its ticket's
+   next run takes it up after the restart. If a poll shows dispatch running again (it was resumed just before the restart, or while it
    waits, from the dashboard for example), the restart pauses it again and then resumes it afterwards.
    After the restart timeout (Settings, 30 minutes by default) **Restart Now Anyway** also shows;
    it stops Symphony and the runs still active. **Cancel Restart** stops waiting and resumes dispatch if the
