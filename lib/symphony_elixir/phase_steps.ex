@@ -11,7 +11,8 @@ defmodule SymphonyElixir.PhaseSteps do
   `SYMPHONY_CHANGED_SWIFT_TEST_FILTER`). It records `step.started` and `step.completed` on the
   ticket's ledger (`SymphonyElixir.TicketEvents`), the output kept as a `step_output` artifact, and
   each step event it records is projected into the workpad's Plan and Validation
-  (`SymphonyElixir.Workpad.Projection`).
+  (`SymphonyElixir.Workpad.Projection`). A machine step has no agent session, so its output is all of
+  its record.
 
   The outcome picks the next step (`run_machine_steps/3`):
 
@@ -48,6 +49,12 @@ defmodule SymphonyElixir.PhaseSteps do
     prompt (`resume_section/1`). A machine step paused at its no-result cap resumes as its answer
     says (`machine_resume/1`). A run that is gone by then leaves the next run to resume the step
     (`resume_point/2`).
+
+  Either agent step's `step.completed` carries its slice of the session transcript as a `transcript`
+  artifact (`SymphonyElixir.PhaseSteps.Transcript`): the lines of the turns it ran, which the agent
+  runner hands over as `transcript_lines`. Symphony's own record of the step's end carries them as it
+  is written; an end the agent recorded mid-turn gets them once the turn is over
+  (`keep_agent_transcript/3`).
   """
 
   require Logger
@@ -56,7 +63,7 @@ defmodule SymphonyElixir.PhaseSteps do
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.HumanActions.PlainWords
-  alias SymphonyElixir.PhaseSteps.Findings
+  alias SymphonyElixir.PhaseSteps.{Findings, Transcript}
   alias SymphonyElixir.Workpad.Projection
 
   @output_max_bytes 512 * 1024
@@ -89,8 +96,9 @@ defmodule SymphonyElixir.PhaseSteps do
   @typedoc """
   What a machine step runs for: the ticket (`repo_key`, `issue_id`, `identifier`, `phase`), the run
   (`run_id`), the workspace and its host, the changed files (`changes/1`), the command runner
-  (`runner`, default the workspace's), the options its output is kept with (`artifact_opts`) and who
-  hears the step start and end (`on_step`).
+  (`runner`, default the workspace's), the options its output is kept with (`artifact_opts`), who
+  hears the step start and end (`on_step`) and, on an agent step, the lines of its turns so far
+  (`transcript_lines`).
   """
   @type context :: %{
           required(:repo_key) => String.t(),
@@ -105,7 +113,8 @@ defmodule SymphonyElixir.PhaseSteps do
           optional(:steps) => [Step.t()],
           optional(:runner) => (String.t(), map(), pos_integer() -> runner_result()),
           optional(:artifact_opts) => [Artifacts.ingest_opt()],
-          optional(:on_step) => (notice() -> term())
+          optional(:on_step) => (notice() -> term()),
+          optional(:transcript_lines) => [Transcript.line()]
         }
 
   @type runner_result :: {:ok, {String.t(), integer()}} | {:timeout, String.t()} | {:error, term()}
@@ -565,6 +574,10 @@ defmodule SymphonyElixir.PhaseSteps do
   """
   @spec agent_outcome(Step.t(), context(), DateTime.t()) :: outcome()
   def agent_outcome(%Step{id: id}, context, %DateTime{} = since) do
+    id |> agent_completion(context, since) |> outcome()
+  end
+
+  defp agent_completion(id, context, since) do
     opts = [types: ["step.completed"], since: DateTime.add(since, -1, :microsecond), limit: 200]
     opts = if run_id = Map.get(context, :run_id), do: Keyword.put(opts, :run_id, run_id), else: opts
 
@@ -573,8 +586,24 @@ defmodule SymphonyElixir.PhaseSteps do
     events
     |> Enum.filter(&(&1.actor.kind == :agent and &1.payload.step_id == id))
     |> List.last()
-    |> outcome()
   end
+
+  @doc """
+  Puts the step's `transcript_lines` on the `step.completed` the agent recorded for `step` since
+  `since`, once its turn is over. No such event, or no lines, leaves the ledger as it is.
+  """
+  @spec keep_agent_transcript(Step.t(), context(), DateTime.t()) :: :ok
+  def keep_agent_transcript(%Step{id: id} = step, context, %DateTime{} = since) do
+    with %TicketEvents.Event{} = event <- agent_completion(id, context, since),
+         [_ | _] = artifacts <- transcript_artifact(step, context) do
+      event |> TicketEvents.attach_artifacts(artifacts) |> attach_logged(id, context)
+    end
+
+    :ok
+  end
+
+  defp attach_logged(result, id, context),
+    do: with({:error, reason} <- result, do: Logger.warning("Step runner could not put the transcript of #{id} on its end for #{ticket_name(context)}: #{inspect(reason)}"))
 
   defp outcome(nil), do: :none
   defp outcome(%{payload: %{outcome: "passed"}}), do: {:passed, nil}
@@ -720,7 +749,7 @@ defmodule SymphonyElixir.PhaseSteps do
         _other -> fields
       end
 
-    record(context, "step.completed", step_payload(step) |> Map.merge(fields) |> Map.put(:duration_ms, duration_ms), [])
+    record(context, "step.completed", step_payload(step) |> Map.merge(fields) |> Map.put(:duration_ms, duration_ms), transcript_artifact(step, context))
   end
 
   defp title_of(context, id) do
@@ -747,19 +776,29 @@ defmodule SymphonyElixir.PhaseSteps do
     :ok
   end
 
-  defp output_artifact(output, step, context) do
-    path = Path.join(System.tmp_dir!(), "symphony-step-#{step.id}-#{System.unique_integer([:positive])}.log")
-    meta = %{repo_key: context.repo_key, issue_id: context.issue_id, run_id: Map.get(context, :run_id), kind: "step_output", label: "#{step.title} output"}
+  defp output_artifact(output, step, context), do: keep_artifact(output, ".log", "step_output", "output", step, context)
+
+  # A turn that said nothing has no slice to keep.
+  defp transcript_artifact(step, context) do
+    case Map.get(context, :transcript_lines, []) do
+      [] -> []
+      lines -> keep_artifact(Transcript.encode(lines), ".ndjson", "transcript", "transcript", step, context)
+    end
+  end
+
+  defp keep_artifact(bytes, extension, kind, name, step, context) do
+    path = Path.join(System.tmp_dir!(), "symphony-step-#{step.id}-#{System.unique_integer([:positive])}#{extension}")
+    meta = %{repo_key: context.repo_key, issue_id: context.issue_id, run_id: Map.get(context, :run_id), kind: kind, label: "#{step.title} #{name}"}
 
     try do
-      File.write!(path, output)
+      File.write!(path, bytes)
 
       case Artifacts.ingest(path, meta, Map.get(context, :artifact_opts, [])) do
         {:ok, %{id: id}} ->
           [id]
 
         {:error, reason} ->
-          Logger.warning("Step runner could not keep the output of #{step.id} for #{ticket_name(context)}: #{inspect(reason)}")
+          Logger.warning("Step runner could not keep the #{name} of #{step.id} for #{ticket_name(context)}: #{inspect(reason)}")
           []
       end
     after
