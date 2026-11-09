@@ -37,6 +37,8 @@ defmodule SymphonyElixir.AgentSandboxConfig do
 
     * `WORKFLOW.md`, `symphony.yml`, `symphony.local.yml`
     * `.git`, `mise.toml`, `.tool-versions`
+    * `.github` (CI workflows and actions, `CODEOWNERS`, dependabot): CI decides what merges, what
+      the app is built from and whether the protected-paths check runs at all
     * project-local `.claude/{settings.json,settings.local.json,CLAUDE.md,agents,commands,hooks}`
       and user-scope `~/.claude/{CLAUDE.md,settings.json,settings.local.json,agents,commands,`
       `hooks,plugins,skills}` plus `~/.mcp.json` (auto-loaded on next Claude Code session;
@@ -53,7 +55,12 @@ defmodule SymphonyElixir.AgentSandboxConfig do
 
   A person can lift one of the workspace paths for one run of one ticket
   (`SymphonyElixir.PathUnlock`): each builder takes the run's `unlocked_paths` and leaves just
-  those out. A path outside `workspace_protected_paths/0` is never lifted.
+  those out. A path outside `workspace_protected_paths/0` is never lifted. In a folder whose files
+  are granted one by one (`.github`, `file_grant_folders/0`) a grant may also name one path in it
+  (`.github/workflows/make-all.yml`), which lifts only that path: the folder leaves the plain list
+  and, in a local workspace, everything else in it is denied by name (`workspace_deny_write_paths/2`),
+  while the push tools and the merge gate accept a change to that path alone
+  (`granted_sub_paths/1`).
 
   Some protected folders are reached under more than one name: the shared skills live in
   `.agents/skills`, and `.claude/skills` and `.codex/skills` are symlinks to it (`aliases/0`). The
@@ -133,6 +140,8 @@ defmodule SymphonyElixir.AgentSandboxConfig do
     "./.git",
     "./mise.toml",
     "./.tool-versions",
+    # CI decides what merges and how the app is built, and runs the protected-paths check itself.
+    "./.github",
     # Only a person exempts a symphony.yml setting from having a control in the macOS app.
     "./config/settings_ui_exempt.yml",
     "~/.zshrc",
@@ -157,6 +166,9 @@ defmodule SymphonyElixir.AgentSandboxConfig do
 
   # Each protected real folder, relative to the workspace root, and the symlinks that reach it.
   @aliases %{".agents/skills" => [".claude/skills", ".codex/skills"]}
+
+  # Protected folders a grant may lift one path of, rather than the whole folder.
+  @file_grant_folders [".github"]
 
   # Relative to a git dir. The agent writes objects and refs there to commit, but these change
   # what git runs, the agent's and Symphony's host-side git alike: config (filter drivers,
@@ -205,16 +217,119 @@ defmodule SymphonyElixir.AgentSandboxConfig do
   @spec deny_write_paths([String.t()]) :: [String.t()]
   def deny_write_paths(unlocked_paths \\ []) do
     unlocked = unlocked_entries(unlocked_paths)
-    Enum.reject(@deny_write_paths, &(&1 in unlocked))
+    partly = for folder <- partly_unlocked_folders(unlocked_paths), do: "./" <> folder
+    Enum.reject(@deny_write_paths, &(&1 in unlocked or &1 in partly))
   end
 
   @doc """
   The write-protected paths inside a workspace, relative to its root, without `.git` and without
-  the paths in `unlocked_paths`.
+  the paths in `unlocked_paths`. A folder only one path of which is unlocked (`granted_sub_paths/1`)
+  stays on the list.
   """
   @spec workspace_protected_paths([String.t()]) :: [String.t()]
   def workspace_protected_paths(unlocked_paths \\ []) do
-    for "./" <> path <- deny_write_paths(unlocked_paths), path != ".git", do: path
+    unlocked = unlocked_entries(unlocked_paths)
+    for "./" <> path = entry <- @deny_write_paths, path != ".git", entry not in unlocked, do: path
+  end
+
+  @doc "The protected folders a grant may lift one path of (`.github`), relative to the workspace root."
+  @spec file_grant_folders() :: [String.t()]
+  def file_grant_folders, do: @file_grant_folders
+
+  @doc """
+  Whether a grant may name `path`: a workspace-protected path (`workspace_protected_paths/0`, an
+  alias named by its real folder), or a path inside a folder whose files are granted one by one
+  (`file_grant_folders/0`), such as `.github/workflows/make-all.yml`. A path with an empty, `.` or
+  `..` segment, or a glob, names nothing.
+  """
+  @spec grantable?(String.t() | term()) :: boolean()
+  def grantable?(path) when is_binary(path) do
+    path = real_path(path)
+    path in workspace_protected_paths() or file_grant_folder(path) != nil
+  end
+
+  def grantable?(_path), do: false
+
+  @doc """
+  The paths in `unlocked_paths` that name one path inside a folder whose files are granted one by
+  one (`file_grant_folders/0`), each once and without a leading `./`, unless the whole folder is
+  unlocked too. A change to one of them, or to a file under it, passes the push tools and the
+  merge gate; the rest of the folder stays protected.
+  """
+  @spec granted_sub_paths([String.t()] | term()) :: [String.t()]
+  def granted_sub_paths(unlocked_paths) do
+    unlocked = unlocked_entries(unlocked_paths)
+
+    for path <- normalize_sandbox_paths(unlocked_paths),
+        path = real_path(path),
+        folder = file_grant_folder(path),
+        folder != nil,
+        ("./" <> folder) not in unlocked,
+        uniq: true,
+        do: path
+  end
+
+  @doc "Whether `file` is, or sits in, one of `sub_paths` (`granted_sub_paths/1`)."
+  @spec granted_sub_path?(String.t(), [String.t()]) :: boolean()
+  def granted_sub_path?(file, sub_paths), do: Enum.any?(sub_paths, &(file == &1 or String.starts_with?(file, &1 <> "/")))
+
+  defp partly_unlocked_folders(unlocked_paths),
+    do: unlocked_paths |> granted_sub_paths() |> Enum.map(&file_grant_folder/1) |> Enum.uniq()
+
+  # The folder whose files are granted one by one that `path` sits strictly in, or nil.
+  defp file_grant_folder(path) do
+    segments = String.split(path, "/")
+
+    if Enum.any?(segments, &(&1 in ["", ".", ".."] or String.contains?(&1, "*"))),
+      do: nil,
+      else: Enum.find(@file_grant_folders, &String.starts_with?(path, &1 <> "/"))
+  end
+
+  @doc """
+  The workspace paths a local run's sandbox denies on top of the plain list (`deny_write_paths/1`),
+  relative to the workspace root: the files a symlink in a protected path points at
+  (`workspace_link_targets/2`), and, for a folder only some paths of which `unlocked_paths` grants
+  (`granted_sub_paths/1`), everything else in it on disk: for `.github/workflows/make-all.yml`, the
+  other files in `.github/workflows` and the other entries of `.github`. A granted path that doesn't
+  exist yet may be created, and so may another new file beside it; the push tools still refuse
+  that one.
+  """
+  @spec workspace_deny_write_paths(Path.t(), [String.t()]) :: [String.t()]
+  def workspace_deny_write_paths(workspace, unlocked_paths \\ []) do
+    granted = granted_sub_paths(unlocked_paths)
+
+    rest =
+      for folder <- partly_unlocked_folders(unlocked_paths),
+          path <- ungranted_entries(workspace, folder, granted),
+          do: path
+
+    workspace_link_targets(workspace, unlocked_paths) ++ rest
+  end
+
+  # The entries of `dir` on disk that hold no granted path, and the same inside each one that holds
+  # one without being granted itself.
+  defp ungranted_entries(workspace, dir, granted) do
+    case File.ls(Path.join(workspace, dir)) do
+      {:ok, names} ->
+        names
+        |> Enum.sort()
+        |> Enum.flat_map(fn name ->
+          path = Path.join(dir, name)
+
+          cond do
+            path in granted -> []
+            Enum.any?(granted, &String.starts_with?(&1, path <> "/")) -> ungranted_entries(workspace, path, granted)
+            true -> [path]
+          end
+        end)
+
+      # A file where a granted path needs a folder: deny it rather than leave it writable.
+      {:error, :enotdir} ->
+        [dir]
+
+      {:error, _missing} ->
+        []
+    end
   end
 
   @doc """

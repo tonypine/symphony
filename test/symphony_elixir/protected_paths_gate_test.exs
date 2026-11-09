@@ -45,6 +45,33 @@ defmodule SymphonyElixir.ProtectedPathsGateTest do
              {:blocked, "protected paths failed and no decision on the ticket unlocks .agents/skills/push/SKILL.md"}
   end
 
+  describe "a grant of one CI workflow" do
+    setup %{repo: repo} do
+      base = commit!(repo, %{".github/workflows/make-all.yml" => "v1\n", ".github/workflows/protected-paths.yml" => "v1\n"})
+      %{base: base, grant: issue(["Unlock .github/workflows/make-all.yml for ACME-1049"])}
+    end
+
+    test "lets exactly that file through", %{repo: repo, base: base, grant: grant} do
+      head = commit!(repo, %{".github/workflows/make-all.yml" => "v2\n", "lib/app.ex" => "v2\n"})
+      assert ProtectedPathsGate.check(@failed, pr(repo, head, base), grant) == :ok
+
+      both = commit!(repo, %{".github/workflows/protected-paths.yml" => "agent turns the check off\n", ".github/CODEOWNERS" => "* @agent\n"})
+
+      assert ProtectedPathsGate.check(@failed, pr(repo, both, base), grant) ==
+               {:blocked, "protected paths failed and no decision on the ticket unlocks .github/CODEOWNERS, .github/workflows/protected-paths.yml"}
+    end
+
+    test "a changed workflow is named by its own file, so the question about it unlocks no other", %{repo: repo, base: base} do
+      head = commit!(repo, %{".github/workflows/make-all.yml" => "v2\n", "WORKFLOW.md" => "v2\n"})
+      assert ProtectedPathsGate.changed_entries(pr(repo, head, base)) == {:ok, [".github/workflows/make-all.yml", "WORKFLOW.md"]}
+    end
+
+    test "a grant of the whole folder lets every file in it through", %{repo: repo, base: base} do
+      head = commit!(repo, %{".github/workflows/make-all.yml" => "v2\n", ".github/workflows/protected-paths.yml" => "v2\n"})
+      assert ProtectedPathsGate.check(@failed, pr(repo, head, base), issue(["Unlock .github for ACME-1049"])) == :ok
+    end
+  end
+
   test "a PR whose changes can't be read is held back", %{repo: repo, base: base} do
     grant = issue(["Unlock WORKFLOW.md for ACME-1049"])
 

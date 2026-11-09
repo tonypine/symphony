@@ -13,7 +13,9 @@ defmodule SymphonyElixir.AgentTools.ProtectedPaths do
   request, covers that.
 
   A path a person's decision unlocked for the current run (`SymphonyElixir.PathUnlock`) is left
-  out, so that run can sync and push its change to it.
+  out, so that run can sync and push its change to it. A grant of one path in a folder whose files
+  are granted one by one (`.github/workflows/make-all.yml`) leaves out that path alone: a change to
+  any other file in `.github` is still reported.
   """
 
   alias SymphonyElixir.AgentSandboxConfig
@@ -28,10 +30,12 @@ defmodule SymphonyElixir.AgentTools.ProtectedPaths do
   @spec verify(String.t(), String.t(), String.t() | nil, git_runner(), [String.t()]) ::
           :ok | {:error, {:protected_paths_changed, [String.t()]}} | {:error, term()}
   def verify(base_sha, head, remote_sha, run_git, unlocked_paths \\ []) do
+    sub_paths = AgentSandboxConfig.granted_sub_paths(unlocked_paths)
+
     with {:ok, paths} <- protected_paths([base_sha, head], run_git, unlocked_paths),
          {:ok, changed} <- changed_files(run_git, paths, ["#{base_sha}...#{head}"]),
          {:ok, changed} <- drop_pushed(changed, paths, head, remote_sha, run_git) do
-      case changed do
+      case Enum.reject(changed, &AgentSandboxConfig.granted_sub_path?(&1, sub_paths)) do
         [] -> :ok
         files -> {:error, {:protected_paths_changed, files}}
       end
@@ -43,7 +47,9 @@ defmodule SymphonyElixir.AgentTools.ProtectedPaths do
   files as `verify/5` reports them, fall under: the entry a file is or sits in, and for a file a
   symlink in a protected path points at, the entry that holds the symlink in `revisions`' trees.
   An entry reached through an alias (`.claude/skills`) is named by its real folder
-  (`AgentSandboxConfig.real_path/1`), once. A grant of these entries covers the files.
+  (`AgentSandboxConfig.real_path/1`), once. A file in a folder whose files are granted one by one
+  (`.github`, `AgentSandboxConfig.file_grant_folders/0`) is named by itself, so a grant covers that
+  file and no other. A grant of these entries covers the files.
   """
   @spec entries([String.t()], [String.t()], git_runner()) :: {:ok, [String.t()]} | {:error, term()}
   def entries(files, revisions, run_git) do
@@ -51,8 +57,13 @@ defmodule SymphonyElixir.AgentTools.ProtectedPaths do
     {direct, linked} = Enum.split_with(files, &under(&1, protected))
 
     with {:ok, linking} <- linking_entries(linked, protected, list_links(revisions, run_git)) do
-      {:ok, (Enum.map(direct, &under(&1, protected)) ++ linking) |> Enum.map(&AgentSandboxConfig.real_path/1) |> Enum.uniq()}
+      {:ok, (Enum.map(direct, &entry(&1, protected)) ++ linking) |> Enum.map(&AgentSandboxConfig.real_path/1) |> Enum.uniq()}
     end
+  end
+
+  defp entry(file, protected) do
+    entry = under(file, protected)
+    if entry in AgentSandboxConfig.file_grant_folders() and entry != file, do: file, else: entry
   end
 
   defp under(file, paths), do: Enum.find(paths, &(file == &1 or String.starts_with?(file, &1 <> "/")))

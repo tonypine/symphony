@@ -4214,8 +4214,11 @@ Current Elixir sandbox behavior:
   agent never makes macOS ask the operator to let Symphony access them.
 - Shared write denies protect workflow and runtime guardrail files such as `WORKFLOW.md`,
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
-  `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and
-  macOS launch agent roots.
+  `.tool-versions`, `.github` (CI workflows, actions, `CODEOWNERS`, dependabot),
+  `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and macOS launch agent
+  roots. A person's grant MAY name one path inside `.github` (`.github/workflows/make-all.yml`),
+  which unlocks that path alone: the rest of `.github` stays protected in the run's sandbox, the
+  push tools and the merge gate.
 - The instruction files a `WORKFLOW.md` playbook line pulls in (`.symphony/instructions/` by
   default, Section 5.5) are not write-protected: they are read only from the workflow's source,
   so an agent's edit reaches a run only through a merged pull request. Their placement and the
