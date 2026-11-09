@@ -553,7 +553,8 @@ runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirme
 newest-known-head rule compared, the one that won and what it did), `workspace.rebuilt` (machine
 only: a workspace made again, why, the heads compared and the one it started on),
 `workspace.removed` (machine only: Symphony removed a ticket's workspace, for the age GC, a Stop, a
-terminal state or another cleanup) and `note`.
+terminal state or another cleanup), `note.read` (machine only: the first run whose prompt carried a
+person's note, keyed by the note) and `note`.
 
 A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)
 and its `mode`: `machine` (a `command` Symphony runs), `orchestrated` (an agent turn Symphony drives
@@ -563,7 +564,12 @@ orchestrated steps; an agent records only delegated ones. `step.completed` carri
 `returns_to_title`); `paused`, which must name the Question it waits on (`question_id`); `skipped`,
 which must say why (`reason`); and `duration_ms`. Each of those fields is refused on any other
 outcome. A machine step's output is an artifact of kind `step_output` on its `step.completed`, served
-like any other artifact. There is no `step.skipped`: a skip is `step.completed` with `outcome:
+like any other artifact. An agent step's `step.completed` carries the step's slice of the session
+transcript as a `transcript` artifact (`.ndjson`, one line per entry: what the agent said, each tool
+call with its arguments summarised, each result summarised with its duration), cut at whole entries
+so a session's slices concatenated are its whole transcript; an end the agent recorded mid-turn gets
+it once the turn is over. While a run is live, the ticket read's `running` says the step it is on
+(`current_step`) and that step's newest lines from the session stream (`recent_lines`, at most 20). There is no `step.skipped`: a skip is `step.completed` with `outcome:
 skipped`. A `question.answered` naming the question a paused step waits on resumes that step. Each
 outcome renders one line ("Build failed after 4 min: back to writing the code", "Tests passed in 2
 min", "Paused on your answer", "Checks skipped: no Elixir changed"), and while a run is under way
@@ -2844,7 +2850,11 @@ agent step again, the run asks the orchestrator for a turn and waits; the orches
 free slot before any dispatch, at once and on every cycle, and starts its new session with the whole
 prompt. While Symphony is paused (dispatch only), a run between steps still runs its machine steps,
 and its next agent turn waits for the pause to lift (decision 1 of TP-1085). A forced run waits only
-for the pause. `run.started` and `run.ended` frame the whole list, and `turn_count` counts agent
+for the pause. A run held by an update's pause records an `update_wait` signal on its ticket, with the
+version and the step. A drain waits for no run between turns (`between_turns` in Section 13.4's
+state): the pause holds its next turn, so the wait would never end, and it has no session to lose.
+Symphony stops with it there. After the restart the ticket's next run starts the list again in the
+same workspace, or resumes on the answer of a Question its step paused on. `run.started` and `run.ended` frame the whole list, and `turn_count` counts agent
 turns. Past the last step the run goes on turn by turn in the same session, as a run with no list
 does.
 
@@ -3209,8 +3219,12 @@ Rules:
   `In Progress` from `Rework`, `Code Review`, `QA` or `Merging` MUST be refused as a `Restart`.
 - **Explicit handoff.** `In Progress` and `Rework` advance to `Code Review` only on the handoff
   signal the push and pull-request tool hooks record against the pushed head. A run that stops
-  quiet with its open PR already on its workspace HEAD has nothing to push, so the runner records
-  the signal for that head and hands off. A run that ends without it MUST record `handoff_missing`
+  quiet with its open PR already on its workspace HEAD has nothing to push, a finished Rework run
+  may have pushed past the hooks, and a step list's machine `handoff` step pushes with its own
+  command, so in each the runner, on seeing the PR on that HEAD, records the signal for that head and
+  hands off in the same run. A machine `handoff` step does so only on the ticket as it stands when the
+  step ends: not on a hold, still in the phase the run works, nothing pending, and in `Rework` the head
+  moved past the one the `Rework` started from. A run that ends without it MUST record `handoff_missing`
   and leave the ticket where it is for the retry machinery, which MUST back off its quiet runs and
   hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head. A
   ticket on a hold is not counted: it waits on the hold alone. Before the hold, Symphony asks a
@@ -4215,8 +4229,11 @@ Current Elixir sandbox behavior:
   agent never makes macOS ask the operator to let Symphony access them.
 - Shared write denies protect workflow and runtime guardrail files such as `WORKFLOW.md`,
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
-  `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and
-  macOS launch agent roots.
+  `.tool-versions`, `.github` (CI workflows, actions, `CODEOWNERS`, dependabot),
+  `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and macOS launch agent
+  roots. A person's grant MAY name one path inside `.github` (`.github/workflows/make-all.yml`),
+  which unlocks that path alone: the rest of `.github` stays protected in the run's sandbox, the
+  push tools and the merge gate.
 - The instruction files a `WORKFLOW.md` playbook line pulls in (`.symphony/instructions/` by
   default, Section 5.5) are not write-protected: they are read only from the workflow's source,
   so an agent's edit reaches a run only through a merged pull request. Their placement and the
@@ -5119,6 +5136,10 @@ SHOULD return:
   or for Symphony's pause to lift, `ended` once the Question it waited on was withdrawn), otherwise
   null; a run on a machine step or paused on a Question has `session_id: null`, and its
   `last_message` names the step or the wait
+- each running row SHOULD include `between_turns`: true while `step.waiting` is `slot`, `pause` or
+  `answer`, when the run has no agent session and nothing of it is running; `counts.between_turns`
+  counts those rows, so a drain waits for `counts.running` less `counts.between_turns` runs. A run on
+  a machine step, or one ending, is not between turns: it finishes by itself
 - `watching` (list of recently completed issues now in non-active, non-terminal states)
 - each watching row SHOULD include issue identifier, current state, issue URL, last-run time, and
   final transcript replay metadata while the watch remains open
@@ -5400,6 +5421,7 @@ Minimum endpoints:
       "uptime_seconds": 5025,
       "counts": {
         "running": 2,
+        "between_turns": 0,
         "watching": 1,
         "conflicts": 0,
         "retrying": 1,
@@ -6294,6 +6316,20 @@ Minimum endpoints:
     `repo_key` or `issue_identifier` is `422`. None of them writes an event or an audit record.
     Unlike a stop's event, the note is the request: an answer other than `200` means it wasn't
     written.
+  - The ticket read's `note` is the newest note a person left, with `read_by`: the first run whose
+    prompt carried it (the summary holds every note), from a machine `note.read` event keyed by the
+    note. A newer note replaces it, unread until a run reads it.
+
+- `POST /api/v1/control/looked` (OPTIONAL)
+  - Marks that the person looked at a ticket now: `issue_identifier` and an optional `repo_key`. The
+    mark is written on the ticket's state record, keyed by person (one today, the Director); it is a
+    view mark, not history, so no event records it. Answers `200` with `issue_identifier`,
+    `looked_at` and `new_since_looked` (`0`); a ticket with no record is `404` `ticket_not_found`
+    (also when the record goes before the mark is written), a write the store refuses is `502`
+    `store_error`, and a request without `issue_identifier` is `422`.
+  - The ticket read carries `looked_at` and `new_since_looked`, the count of the ticket's events
+    later than the mark, and each event of the events feed carries `new`. Before the person ever
+    looked, every event is new.
 
 - `POST /api/v1/control/<move>` (the Director's moves, OPTIONAL)
   - The Mac app's Inbox makes the Director's Linear moves through Symphony, which holds the Linear

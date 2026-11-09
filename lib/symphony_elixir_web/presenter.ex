@@ -11,6 +11,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Inbox,
     Initiatives,
     Lifecycle,
+    Marks,
     Orchestrator,
     Pauses,
     PlanBrief,
@@ -25,6 +26,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Situation,
     StateMachine,
     StrayProcesses,
+    TicketEvents,
     TicketMoves,
     TicketObservation,
     TicketState,
@@ -39,6 +41,7 @@ defmodule SymphonyElixirWeb.Presenter do
   alias SymphonyElixir.Linear.Webhook, as: LinearWebhook
   alias SymphonyElixir.Linear.Webhook.Deliveries, as: LinearWebhookDeliveries
   alias SymphonyElixir.Pauses.Backfill, as: PauseBackfill
+  alias SymphonyElixir.PhaseSteps.Transcript
   alias SymphonyElixir.Repo.Status, as: RepoStatus
   alias SymphonyElixir.TicketEvents.{Event, Summary}
   alias SymphonyElixirWeb.{PullRequestPayload, WatchPayload}
@@ -77,6 +80,7 @@ defmodule SymphonyElixirWeb.Presenter do
           phases: StateMachine.phases(Config.settings!()),
           counts: %{
             running: length(snapshot.running),
+            between_turns: Enum.count(snapshot.running, &between_turns?/1),
             watching: length(Map.get(snapshot, :watching, [])),
             conflicts: length(Map.get(snapshot, :conflicts, [])),
             retrying: length(snapshot.retrying),
@@ -360,8 +364,9 @@ defmodule SymphonyElixirWeb.Presenter do
   # What the ticket's record adds to its payload: its verdicts, the watcher's block, a plan's brief
   # (`SymphonyElixir.PlanBrief`), why it does not move (`ticket_status/2`), where it stands
   # (`SymphonyElixir.Situation`), where it has been (`SymphonyElixir.Lifecycle`) and its pull request
-  # (`SymphonyElixirWeb.PullRequestPayload`), and where it sits among the others
-  # (`SymphonyElixir.Connected.Read`).
+  # (`SymphonyElixirWeb.PullRequestPayload`), where it sits among the others
+  # (`SymphonyElixir.Connected.Read`), and its marks: since the person last looked and the note for
+  # the next run (`SymphonyElixir.Marks`).
   defp record_payload(payload, record, running?, snapshot) do
     repository_pause = if is_binary(payload.repo_key), do: repository_pause_reason(payload.repo_key), else: nil
 
@@ -371,10 +376,14 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.put(:plan_brief, plan_brief_payload(record))
     |> Map.put(:situation, situation_payload(record || %{issue_id: payload.issue_id, repo_key: payload.repo_key}, Situation.live_facts(snapshot), nil))
     |> Map.merge(Lifecycle.read(payload.issue_id))
+    |> Map.merge(Marks.read(record, ticket_events(payload.issue_id)))
     |> Map.put(:pull_request, PullRequestPayload.read(record))
     |> complete_connected(record, snapshot)
     |> Map.merge(ticket_status(record, %{identifier: payload.issue_identifier, repo_key: payload.repo_key, repository_pause: repository_pause, running?: running?}))
   end
+
+  # Every event of the ticket, oldest first; none for a ticket with no id or a store that can't be read.
+  defp ticket_events(issue_id), do: issue_id |> TicketEvents.query(limit: :all) |> List.wrap() |> Enum.filter(&is_struct(&1, Event))
 
   # A ticket with neither a record nor what the orchestrator holds of it has no `connected`.
   defp complete_connected(payload, record, snapshot) do
@@ -641,11 +650,15 @@ defmodule SymphonyElixirWeb.Presenter do
   relative to the server) serves the bytes: false for an artifact the store marks expired, and for
   an id the store doesn't know, whose other fields are null. The page's artifacts are read in one
   `SymphonyElixir.Artifacts.list/1` call.
+
+  `opts[:looked_at]`, when given (nil when the person never looked), adds `new` to each event: whether
+  it is later than that mark (`SymphonyElixir.Marks.new?/2`).
   """
-  @spec ticket_events_json(String.t(), String.t(), [Event.t()]) :: [map()]
-  def ticket_events_json(repo_key, issue_id, events) do
+  @spec ticket_events_json(String.t(), String.t(), [Event.t()], keyword()) :: [map()]
+  def ticket_events_json(repo_key, issue_id, events, opts \\ []) do
     artifacts = ticket_artifacts(repo_key, issue_id, events)
-    Enum.map(events, &ticket_event_json(&1, artifacts))
+    mark = event_mark(opts)
+    Enum.map(events, &ticket_event_json(&1, artifacts, mark))
   end
 
   @doc """
@@ -660,10 +673,10 @@ defmodule SymphonyElixirWeb.Presenter do
   first), not from the page: `status` is `running` until its `run.ended`, then `ended`, `verdict` is
   the newest verdict naming the run (`{kind, outcome, head, at}`), else null, and `summary` is the
   run's line (`SymphonyElixir.TicketEvents.Summary.run_group/1`), which names the step a running run
-  is on.
+  is on. `opts[:looked_at]` adds `new` to each event, as `ticket_events_json/4`'s does.
   """
-  @spec ticket_timeline_json(String.t(), String.t(), [Event.t()], [Event.t()]) :: [map()]
-  def ticket_timeline_json(repo_key, issue_id, events, history) do
+  @spec ticket_timeline_json(String.t(), String.t(), [Event.t()], [Event.t()], keyword()) :: [map()]
+  def ticket_timeline_json(repo_key, issue_id, events, history, opts \\ []) do
     runs = run_headers(history)
 
     {placed, _seen} =
@@ -674,6 +687,7 @@ defmodule SymphonyElixirWeb.Presenter do
     timeline = %{
       artifacts: ticket_artifacts(repo_key, issue_id, events),
       runs: runs,
+      mark: event_mark(opts),
       members: Enum.group_by(placed, &elem(&1, 1), &elem(&1, 0))
     }
 
@@ -698,7 +712,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp timeline_entry({:event, event}, timeline) do
     event
-    |> ticket_event_json(timeline.artifacts)
+    |> ticket_event_json(timeline.artifacts, timeline.mark)
     |> Map.put(:children, timeline_members({:event, event.id}, timeline))
   end
 
@@ -762,7 +776,23 @@ defmodule SymphonyElixirWeb.Presenter do
       else: %{}
   end
 
-  defp ticket_event_json(%Event{} = event, artifacts) do
+  defp event_mark(opts) do
+    case Keyword.fetch(opts, :looked_at) do
+      {:ok, looked_at} -> {:looked, looked_at}
+      :error -> :none
+    end
+  end
+
+  defp ticket_event_json(%Event{} = event, artifacts, mark) do
+    event
+    |> ticket_event_fields(artifacts)
+    |> put_new_mark(event, mark)
+  end
+
+  defp put_new_mark(json, _event, :none), do: json
+  defp put_new_mark(json, event, {:looked, looked_at}), do: Map.put(json, :new, Marks.new?(event, looked_at))
+
+  defp ticket_event_fields(%Event{} = event, artifacts) do
     %{
       id: event.id,
       seq: event.seq,
@@ -1079,6 +1109,7 @@ defmodule SymphonyElixirWeb.Presenter do
       linear_wait_until: entry |> Map.get(:linear_wait_until) |> iso8601(),
       pending_tool: entry |> Map.get(:pending_tool) |> pending_tool_payload(),
       step: entry |> Map.get(:step) |> step_payload(),
+      between_turns: between_turns?(entry),
       started_at: iso8601(entry.started_at),
       last_event_at: iso8601(Map.get(entry, :last_event_at) || entry.last_codex_timestamp),
       forced: Map.get(entry, :forced, false),
@@ -1211,7 +1242,10 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp running_issue_payload(running) do
-    %{
+    running
+    |> Map.get(:issue_id)
+    |> Transcript.run_now(Map.get(running, :run_id), buffered_transcript_events(running))
+    |> Map.merge(%{
       repo_key: Map.get(running, :repo_key),
       worker_host: Map.get(running, :worker_host),
       workspace_path: Map.get(running, :workspace_path),
@@ -1233,7 +1267,7 @@ defmodule SymphonyElixirWeb.Presenter do
         output_tokens: entry_output_tokens(running),
         total_tokens: entry_total_tokens(running)
       }
-    }
+    })
   end
 
   defp retry_issue_payload(retry) do
@@ -1873,6 +1907,11 @@ defmodule SymphonyElixirWeb.Presenter do
   defp repo_key_matches?(entry, repo_key), do: Map.get(entry, :repo_key) == repo_key
 
   defp current_repo_key, do: Config.repo_key_or_nil()
+
+  # A run holding no agent session and running nothing until its next turn: Symphony can stop with
+  # it there, and a run on a machine step or one ending finishes by itself first.
+  defp between_turns?(%{step: %{waiting: waiting}}) when waiting in ["slot", "pause", "answer"], do: true
+  defp between_turns?(_entry), do: false
 
   # A run waiting out a Linear rate limit or outage has no new agent message to show.
   defp running_message(%{linear_wait_until: %DateTime{}}), do: "waiting for Linear"

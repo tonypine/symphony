@@ -363,3 +363,57 @@ the events:
 The links the run read and the tickets whose records name this one as an open blocker: `identifier`,
 `title`, `state` and `situation`, the kind of the held ticket's `situation`, null without a record. A ticket
 that ended holds nothing up.
+
+## Marks
+
+What is new since the person last looked, and the note for the next run (facts 6 and 18 of
+`docs/design/director-ticket-page.md`; `SymphonyElixir.Marks`):
+
+| Field | What it holds |
+| --- | --- |
+| `looked_at` | When the person last looked at the ticket, set by `POST /api/v1/control/looked`; null when they never did. |
+| `new_since_looked` | How many of the ticket's events are later than `looked_at`; every event when it is null. |
+| `note` | The note for the next run, null when no person left one: the newest `note` event a person wrote, as `id`, `text`, `at` (when it was set), `by` and `read_by`. |
+| `note.read_by` | The first run whose prompt carried the note, as `run_id` and `at`; null until a run read it. A newer note replaces the note, and its `read_by` starts null again. |
+
+`POST /api/v1/control/looked` takes `issue_identifier` and an optional `repo_key`, and needs the control
+token. It writes the mark on the ticket's record, keyed by person (the Director, the one person the token
+names today). It is a view mark, not history: no ledger event records it. It answers `200`
+`{"issue_identifier", "looked_at", "new_since_looked": 0}`, `404` `ticket_not_found` for a ticket with no
+record (also when the record goes before the mark is written), `502` `store_error` when the store refuses
+the write, and `422` without `issue_identifier`.
+
+Each event of the events feed (`GET /api/v1/repos/:repo_key/tickets/:issue_identifier/events`, with or
+without `group=run`) carries `new`: `true` when it is later than the mark, or the person never looked.
+
+A run reads the note when the prompt it builds carries the ticket's history summary, which holds every
+note in full. Symphony then records a machine `note.read` event naming the note (`note_id`) and the run
+(`run_id`), keyed by the note, so only the first read is kept. A preview of the prompt records nothing.
+
+## `running`
+
+The live run, null when none is. Beside the run's session, workspace and tokens, it says what the run is
+doing now, for the run in place on the ticket page (facts 4, 8 and 13 of
+`docs/design/director-ticket-page.md`; `SymphonyElixir.PhaseSteps.Transcript`):
+
+| Field | What it holds |
+| --- | --- |
+| `current_step` | The step the run started and has not ended, from its `step.started` on the ledger: `id`, `title`, `mode` and `started_at`. Null between steps and on a run with no step list. |
+| `recent_lines` | The newest lines of that step, oldest first and at most 20, from the session stream the orchestrator buffers for the run (the transcript window reads the same stream and is unchanged). Each is a line as below; a tool line carries only the tool's name, since the stream holds no arguments. Empty when `current_step` is null. |
+
+Once a step ends, its whole slice of the session transcript is a `transcript` artifact on its
+`step.completed`, served by `GET /api/v1/artifacts/:id` like any other, so the Director's timeline unfolds
+the step from the ledger. It is JSON lines (`text/x-ndjson`), one object a line:
+
+| Field | What it holds |
+| --- | --- |
+| `kind` | `say` (what the agent said), `tool` (a call: the tool's name and its arguments summarised, the command, path, pattern or query when it has one, else its input as JSON) or `result` (what the call returned, summarised). |
+| `text` | The line, its whitespace folded and bounded: 4,000 characters for what the agent said, 300 for a call's arguments, 500 for a result. |
+| `at` | When the entry was written; absent when the transcript gave no time. |
+| `duration_ms` | On a result, how long its call took. |
+| `failed` | `true` on a result whose call failed. |
+
+A step's slice holds the lines of every turn it ran (a retry adds to them), cut only at whole entries, so a
+session's slices concatenated are the lines of its whole transcript. A machine step has no slice, a turn that
+said nothing leaves none, and a session Symphony reads no transcript of (Codex's, or one on another host)
+has none.

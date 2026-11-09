@@ -241,6 +241,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
   defp summary("situation.changed", payload, _event), do: {text(payload, :word) || "Situation changed", [text(payload, :cause)]}
   defp summary("note", payload, _event), do: {"Note added", [text(payload, :text)]}
+  defp summary("note.read", payload, _event), do: {"Note read by a run", [text(payload, :run_id)]}
   defp summary(_type, _payload, _event), do: :unknown
 
   # A step's outcome: "Build failed after 4 min: back to writing the code", "Tests passed in 2 min",

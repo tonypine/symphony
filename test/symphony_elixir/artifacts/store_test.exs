@@ -80,6 +80,11 @@ defmodule SymphonyElixir.Artifacts.StoreTest do
       assert Store.sniff(~s({"type":"user"}), "run.jsonl") == "application/x-ndjson"
     end
 
+    test "an .ndjson file, a step's transcript slice, is JSON lines read as text" do
+      assert Store.sniff(~s({"kind":"say","text":"Hi"}\n), "step.ndjson") == "text/x-ndjson"
+      assert Store.sniff("not json\n", "step.ndjson") == "application/octet-stream"
+    end
+
     test "a .jsonl file whose first line is not a JSON object is octet-stream" do
       assert Store.sniff(~s([1, 2]\n), "run.jsonl") == "application/octet-stream"
       assert Store.sniff("not json\n{}", "run.jsonl") == "application/octet-stream"

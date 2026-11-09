@@ -57,7 +57,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   why (`reason`); and how long it took (`duration_ms`). Those fields are `conditional`: each is
   required exactly when its outcome holds and refused otherwise, as `command` and `prompt_ref` are
   by mode. A machine step's output is kept as an artifact of the `step_output` kind
-  (`SymphonyElixir.Artifacts`) on its `step.completed`. A skipped step is a `step.completed` with
+  (`SymphonyElixir.Artifacts`) on its `step.completed`; an agent step's slice of the session
+  transcript is a `transcript` artifact on its `step.completed` (`SymphonyElixir.PhaseSteps.Transcript`).
+  A skipped step is a `step.completed` with
   `outcome: skipped`: there is no `step.skipped` type. A `question.answered` naming the question a
   paused step waits on is what resumes that step.
 
@@ -105,6 +107,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
   another kind, with the old kind (`from`, none on the first), the new one (`to`), the pattern's
   first words (`word`), its cause and since when it holds. A timeline reads how long each situation
   lasted from these events, without parsing.
+
+  `note.read` is machinery-only: the first run whose prompt carried a person's note (`note_id`, the
+  `note` event's id) read it (`run_id`), keyed by the note so only the first read is kept
+  (`SymphonyElixir.Marks`).
   """
 
   alias SymphonyElixir.RunKind
@@ -467,6 +473,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
       required: [reason: {:enum, ~w(age_gc stop terminal cleanup)}],
       optional: @signal,
       idempotency: :writer
+    },
+    "note.read" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [note_id: :string, run_id: :string],
+      optional: @signal,
+      idempotency: {:fields, [:note_id]}
     },
     "note" => %{
       writers: [:machine, :agent, :person],

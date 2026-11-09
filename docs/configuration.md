@@ -1504,8 +1504,8 @@ real key (a real model list, a real run) are manual: a person runs them by hand,
 model, outside QA.
 
 An agent cannot change the agent-protected paths (`WORKFLOW.md`, `symphony.yml`, `.agents/skills`, the
-project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`,
-`config/settings_ui_exempt.yml`): its sandbox denies the
+project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`, `.github` (CI
+workflows and actions, `CODEOWNERS`, dependabot), `config/settings_ui_exempt.yml`): its sandbox denies the
 writes and the `protected-paths` CI job fails a PR whose own commits touch them. The executor hands
 a criterion that only such a change can meet to a person, in a sub-issue or a follow-up ticket
 named in its workpad. The PR QA prompt lists these paths, and the agent marks such a handed-off
@@ -3401,6 +3401,13 @@ phases:
         on_fail: code
       # code, build, checks, tests and handoff, as in the implementation list
 ```
+
+A list may instead end on a machine step with the id `handoff`, whose command pushes the branch. Once
+it passes, or a person answers its question with "Go on past it", with the workspace HEAD on the
+ticket's PR, Symphony records the handoff for that head and moves the ticket to `Code Review` in the
+same run. Nothing moves when the PR doesn't show that head, the ticket got a hold or left its phase
+while the step ran, a review comment, red check or conflict is pending, or a `Rework` head hasn't moved
+past the one the `Rework` started from.
 
 `symphony:findings` is a command Symphony runs itself, not in a shell, while the run keeps its slot.
 It keeps the open findings by class from the ticket's history as the step's output. When QA failed
