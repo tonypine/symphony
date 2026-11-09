@@ -176,7 +176,8 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     end
 
     test "a machine handoff step with review comments pending emits nothing and moves nothing, in Rework or In Progress" do
-      for {state, list} <- [{"Rework", "rework"}, {"In Progress", "implementation"}] do
+      # In Progress, the pending comments make the run a `review_feedback` one, so its list sits there.
+      for {state, list} <- [{"Rework", "rework"}, {"In Progress", "review_feedback"}] do
         put_pending_review()
         Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
 
@@ -201,7 +202,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     test "a hold raised while the machine handoff step ran keeps the ticket where it is" do
       Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
       ticket = {:ticket, "default", "issue-progress"}
-      hold = fn -> {:ok, _pause} = Pauses.add_reason(ticket, Pauses.ticket_reason(:dependency, "TP-12")) end
+      hold = fn -> {:ok, _pause} = Pauses.set(ticket, Pauses.ticket_reason(:dependency, "TP-12")) end
 
       assert :ok = run_machine_handoff!(step_runner(pushes: "sha-new", on_push: hold))
 
