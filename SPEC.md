@@ -563,7 +563,12 @@ orchestrated steps; an agent records only delegated ones. `step.completed` carri
 `returns_to_title`); `paused`, which must name the Question it waits on (`question_id`); `skipped`,
 which must say why (`reason`); and `duration_ms`. Each of those fields is refused on any other
 outcome. A machine step's output is an artifact of kind `step_output` on its `step.completed`, served
-like any other artifact. There is no `step.skipped`: a skip is `step.completed` with `outcome:
+like any other artifact. An agent step's `step.completed` carries the step's slice of the session
+transcript as a `transcript` artifact (`.ndjson`, one line per entry: what the agent said, each tool
+call with its arguments summarised, each result summarised with its duration), cut at whole entries
+so a session's slices concatenated are its whole transcript; an end the agent recorded mid-turn gets
+it once the turn is over. While a run is live, the ticket read's `running` says the step it is on
+(`current_step`) and that step's newest lines from the session stream (`recent_lines`, at most 20). There is no `step.skipped`: a skip is `step.completed` with `outcome:
 skipped`. A `question.answered` naming the question a paused step waits on resumes that step. Each
 outcome renders one line ("Build failed after 4 min: back to writing the code", "Tests passed in 2
 min", "Paused on your answer", "Checks skipped: no Elixir changed"), and while a run is under way
@@ -2839,7 +2844,11 @@ agent step again, the run asks the orchestrator for a turn and waits; the orches
 free slot before any dispatch, at once and on every cycle, and starts its new session with the whole
 prompt. While Symphony is paused (dispatch only), a run between steps still runs its machine steps,
 and its next agent turn waits for the pause to lift (decision 1 of TP-1085). A forced run waits only
-for the pause. `run.started` and `run.ended` frame the whole list, and `turn_count` counts agent
+for the pause. A run held by an update's pause records an `update_wait` signal on its ticket, with the
+version and the step. A drain waits for no run between turns (`between_turns` in Section 13.4's
+state): the pause holds its next turn, so the wait would never end, and it has no session to lose.
+Symphony stops with it there. After the restart the ticket's next run starts the list again in the
+same workspace, or resumes on the answer of a Question its step paused on. `run.started` and `run.ended` frame the whole list, and `turn_count` counts agent
 turns. Past the last step the run goes on turn by turn in the same session, as a run with no list
 does.
 
@@ -4214,8 +4223,11 @@ Current Elixir sandbox behavior:
   agent never makes macOS ask the operator to let Symphony access them.
 - Shared write denies protect workflow and runtime guardrail files such as `WORKFLOW.md`,
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
-  `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and
-  macOS launch agent roots.
+  `.tool-versions`, `.github` (CI workflows, actions, `CODEOWNERS`, dependabot),
+  `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and macOS launch agent
+  roots. A person's grant MAY name one path inside `.github` (`.github/workflows/make-all.yml`),
+  which unlocks that path alone: the rest of `.github` stays protected in the run's sandbox, the
+  push tools and the merge gate.
 - The instruction files a `WORKFLOW.md` playbook line pulls in (`.symphony/instructions/` by
   default, Section 5.5) are not write-protected: they are read only from the workflow's source,
   so an agent's edit reaches a run only through a merged pull request. Their placement and the
@@ -5118,6 +5130,10 @@ SHOULD return:
   or for Symphony's pause to lift, `ended` once the Question it waited on was withdrawn), otherwise
   null; a run on a machine step or paused on a Question has `session_id: null`, and its
   `last_message` names the step or the wait
+- each running row SHOULD include `between_turns`: true while `step.waiting` is `slot`, `pause` or
+  `answer`, when the run has no agent session and nothing of it is running; `counts.between_turns`
+  counts those rows, so a drain waits for `counts.running` less `counts.between_turns` runs. A run on
+  a machine step, or one ending, is not between turns: it finishes by itself
 - `watching` (list of recently completed issues now in non-active, non-terminal states)
 - each watching row SHOULD include issue identifier, current state, issue URL, last-run time, and
   final transcript replay metadata while the watch remains open
@@ -5399,6 +5415,7 @@ Minimum endpoints:
       "uptime_seconds": 5025,
       "counts": {
         "running": 2,
+        "between_turns": 0,
         "watching": 1,
         "conflicts": 0,
         "retrying": 1,

@@ -112,6 +112,34 @@ case SymphonyElixir.LeftoverProcesses.Table.read() do
   _denied -> ExUnit.configure(exclude: [:process_table | Keyword.get(ExUnit.configuration(), :exclude, [])])
 end
 
+# Tests that read another process's environment with `ps eww` need it to show a child's
+# environment, which some sandboxes hide even where `ps` itself runs and this VM's own environment
+# shows. The probe does what those tests do: it starts a child with a marker variable and looks for
+# it, for up to a second.
+process_environment_readable? =
+  try do
+    marker = "symphony-probe-#{System.unique_integer([:positive])}"
+    port = Port.open({:spawn_executable, "/bin/sleep"}, [:binary, args: ["5"], env: [{~c"SYMPHONY_PS_PROBE", String.to_charlist(marker)}]])
+    {:os_pid, pid} = Port.info(port, :os_pid)
+
+    try do
+      Enum.any?(1..20, fn _attempt ->
+        {output, _status} = System.cmd("/bin/ps", ["eww", "-o", "command=", "-p", "#{pid}"], stderr_to_stdout: true)
+        shown? = output =~ marker
+        unless shown?, do: Process.sleep(50)
+        shown?
+      end)
+    after
+      System.cmd("/bin/kill", ["#{pid}"], stderr_to_stdout: true)
+    end
+  rescue
+    _denied -> false
+  end
+
+unless process_environment_readable? do
+  ExUnit.configure(exclude: [:process_environment | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
 # Tests that start the real `claude` binary run only with `--only real_claude`, so no default run
 # (CI's, `mix cover.changed`'s) depends on whether or which `claude` is installed.
 ExUnit.configure(exclude: [:real_claude | Keyword.get(ExUnit.configuration(), :exclude, [])])
