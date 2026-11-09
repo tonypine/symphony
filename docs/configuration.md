@@ -1504,8 +1504,8 @@ real key (a real model list, a real run) are manual: a person runs them by hand,
 model, outside QA.
 
 An agent cannot change the agent-protected paths (`WORKFLOW.md`, `symphony.yml`, `.agents/skills`, the
-project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`,
-`config/settings_ui_exempt.yml`): its sandbox denies the
+project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`, `.github` (CI
+workflows and actions, `CODEOWNERS`, dependabot), `config/settings_ui_exempt.yml`): its sandbox denies the
 writes and the `protected-paths` CI job fails a PR whose own commits touch them. The executor hands
 a criterion that only such a change can meet to a person, in a sub-issue or a follow-up ticket
 named in its workpad. The PR QA prompt lists these paths, and the agent marks such a handed-off
