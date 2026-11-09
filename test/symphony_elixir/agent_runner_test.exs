@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.AgentRunnerTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Config.Cache
   alias SymphonyElixir.{Artifacts, Pauses, Questions, TicketEvents}
+  alias SymphonyElixir.Config.Cache
   alias SymphonyElixir.PhaseSteps.Transcript
 
   @issue_id "issue-walk"

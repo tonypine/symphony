@@ -984,7 +984,9 @@ defmodule SymphonyElixir.AgentRunner do
 
   # A session on another host keeps its transcript there.
   defp turn_lines(run_context, session_id, offsets) do
-    if run_context.worker_host, do: {[], offsets}, else: Transcript.read_session(run_context.workspace, session_id, offsets)
+    if run_context.worker_host,
+      do: {[], offsets},
+      else: Transcript.read_session(run_context.workspace, session_id, offsets)
   end
 
   defp turn_session_id({:ok, %{session_id: session_id}}) when is_binary(session_id), do: session_id
@@ -1453,7 +1455,8 @@ defmodule SymphonyElixir.AgentRunner do
     context = step_context(run_context)
     PhaseSteps.record_turn_started(walk.step, context)
     if walk.step.mode == "orchestrated", do: PhaseSteps.clear_answer(walk.step, context)
-    %{run_context | walk: %{walk | started_ms: System.monotonic_time(:millisecond), started_at: DateTime.utc_now(), lines: []}}
+    walk = %{walk | started_ms: System.monotonic_time(:millisecond), started_at: DateTime.utc_now(), lines: []}
+    %{run_context | walk: walk}
   end
 
   defp start_walk_turn(%{walk: %{step: %{mode: "orchestrated"} = step}} = run_context) do

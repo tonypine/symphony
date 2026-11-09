@@ -38,8 +38,8 @@ defmodule SymphonyElixirWeb.Presenter do
   alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
   alias SymphonyElixir.Linear.Webhook, as: LinearWebhook
   alias SymphonyElixir.Linear.Webhook.Deliveries, as: LinearWebhookDeliveries
-  alias SymphonyElixir.PhaseSteps.Transcript
   alias SymphonyElixir.Pauses.Backfill, as: PauseBackfill
+  alias SymphonyElixir.PhaseSteps.Transcript
   alias SymphonyElixir.Repo.Status, as: RepoStatus
   alias SymphonyElixir.TicketEvents.{Event, Summary}
   alias SymphonyElixirWeb.{PullRequestPayload, WatchPayload}

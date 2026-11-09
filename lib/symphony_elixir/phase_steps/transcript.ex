@@ -169,7 +169,8 @@ defmodule SymphonyElixir.PhaseSteps.Transcript do
   and did not complete (`current_step`, nil between steps) and that step's newest lines in `stream`,
   the run's buffered session updates (`recent_lines`, at most `recent_lines_bound/0`).
   """
-  @spec run_now(String.t() | nil, String.t() | nil, [map()]) :: %{current_step: current_step() | nil, recent_lines: [line()]}
+  @spec run_now(String.t() | nil, String.t() | nil, [map()]) ::
+          %{current_step: current_step() | nil, recent_lines: [line()]}
   def run_now(issue_id, run_id, stream) when is_list(stream) do
     case open_step(issue_id, run_id) do
       %Event{at: at, payload: payload} ->

@@ -86,7 +86,11 @@ defmodule SymphonyElixir.PhaseSteps.TranscriptTest do
       text =
         [
           %{type: "assistant", message: %{content: [%{type: "text", text: long}]}},
-          %{type: "assistant", timestamp: "2026-11-06T15:09:00Z", message: %{content: [%{type: "tool_use", id: "t1", name: "Grep", input: %{pattern: "", limit: 3}}]}},
+          %{
+            type: "assistant",
+            timestamp: "2026-11-06T15:09:00Z",
+            message: %{content: [%{type: "tool_use", id: "t1", name: "Grep", input: %{pattern: "", limit: 3}}]}
+          },
           %{type: "assistant", message: %{content: [%{type: "tool_use", id: "t2", name: "Odd", input: "raw"}]}},
           %{type: "user", timestamp: "not a time", message: %{content: [%{type: "tool_result", tool_use_id: "t1", content: nil}]}},
           %{type: "user", timestamp: "2026-11-06T15:10:00Z", message: %{content: [%{type: "tool_result", tool_use_id: "t2", content: [%{"no" => "type"}]}]}},
@@ -128,9 +132,17 @@ defmodule SymphonyElixir.PhaseSteps.TranscriptTest do
       later = DateTime.add(started.at, 1, :second)
 
       stream =
-        [update(:agent_text, %{msg: %{content: "From the step before"}}, before), %{event: :tool_use}, update(:notification, %{}, later)] ++
+        [
+          update(:agent_text, %{msg: %{content: "From the step before"}}, before),
+          %{event: :tool_use},
+          update(:notification, %{}, later)
+        ] ++
           Enum.flat_map(1..15, fn n ->
-            [update(:agent_text, %{msg: %{content: "Said #{n}"}}, later), update(:tool_use, %{tool: "Bash"}, later), update(:tool_result, %{text: "out #{n}"}, later)]
+            [
+              update(:agent_text, %{msg: %{content: "Said #{n}"}}, later),
+              update(:tool_use, %{tool: "Bash"}, later),
+              update(:tool_result, %{text: "out #{n}"}, later)
+            ]
           end)
 
       assert %{current_step: step, recent_lines: lines} = Transcript.run_now(@issue_id, @run_id, stream)
@@ -151,7 +163,8 @@ defmodule SymphonyElixir.PhaseSteps.TranscriptTest do
       assert Transcript.run_now(nil, @run_id, []) == none
 
       record_step!("step.completed", "code")
-      assert Transcript.run_now(@issue_id, @run_id, [update(:agent_text, %{msg: %{content: "Hi"}}, DateTime.utc_now())]) == none
+      hi = update(:agent_text, %{msg: %{content: "Hi"}}, DateTime.utc_now())
+      assert Transcript.run_now(@issue_id, @run_id, [hi]) == none
     end
   end
 end
