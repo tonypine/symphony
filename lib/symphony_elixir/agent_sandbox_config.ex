@@ -313,15 +313,7 @@ defmodule SymphonyElixir.AgentSandboxConfig do
       {:ok, names} ->
         names
         |> Enum.sort()
-        |> Enum.flat_map(fn name ->
-          path = Path.join(dir, name)
-
-          cond do
-            path in granted -> []
-            Enum.any?(granted, &String.starts_with?(&1, path <> "/")) -> ungranted_entries(workspace, path, granted)
-            true -> [path]
-          end
-        end)
+        |> Enum.flat_map(&ungranted_entry(workspace, Path.join(dir, &1), granted))
 
       # A file where a granted path needs a folder: deny it rather than leave it writable.
       {:error, :enotdir} ->
@@ -329,6 +321,14 @@ defmodule SymphonyElixir.AgentSandboxConfig do
 
       {:error, _missing} ->
         []
+    end
+  end
+
+  defp ungranted_entry(workspace, path, granted) do
+    cond do
+      path in granted -> []
+      Enum.any?(granted, &String.starts_with?(&1, path <> "/")) -> ungranted_entries(workspace, path, granted)
+      true -> [path]
     end
   end
 

@@ -778,9 +778,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp host_allow_write_paths(_worker_host), do: []
 
-  # The real files behind symlinked skills (`.agents/skills/pull -> ../../priv/skills/pull`), the rest
-  # of a folder one path of which a grant unlocks (`.github`), and the config, hooks and attributes in the workspace's git dirs: Claude Code lets a worktree's
-  # session write the shared repo's `.git` and protects only part of it. An SSH worker's
+  # The real files behind symlinked skills (`.agents/skills/pull -> ../../priv/skills/pull`), the
+  # rest of a folder one path of which a grant unlocks (`.github`), and the config, hooks and
+  # attributes in the workspace's git dirs: Claude Code lets a worktree's session write the shared
+  # repo's `.git` and protects only part of it. An SSH worker's
   # workspace isn't on this host, so it keeps the plain deny list.
   defp host_deny_write_paths(settings, workspace, nil, unlocked_paths) when is_binary(workspace) do
     link_targets = for path <- AgentSandboxConfig.workspace_deny_write_paths(workspace, unlocked_paths), do: "./" <> path
