@@ -480,3 +480,66 @@ Each ticket, in `queue` and in `groups`:
 
 The read answers `200` with `error` (`snapshot_timeout`, `snapshot_unavailable`) when the orchestrator
 can't be read, as `GET /api/v1/state` does.
+
+# The events across tickets (the Journal)
+
+`GET /api/v1/events?since=&until=&repo=&epic=&classes=&notable=&limit=`: the events of every ticket,
+and of Symphony's own stream (its pauses and questions), newest first and paged
+(`SymphonyElixir.TicketEvents.Journal`). It reads Symphony's store only and makes no Linear request.
+
+```json
+{
+  "events": [
+    {
+      "id": "01JC…", "at": "2026-11-09T14:02:11Z", "type": "rule.action", "phase": "Code Review",
+      "summary": { "title": "PR watcher R22 reran the failed checks", "detail": "A check failed on PR #741…" },
+      "ticket": { "repo_key": "symphony", "identifier": "TP-1401", "title": "The situation read model" },
+      "class": "rule", "notable": true, "by": { "kind": "rule", "name": "PR watcher R22" },
+      "...": "the ticket feed's other fields"
+    }
+  ],
+  "next_until": "2026-11-09T13:40:00Z"
+}
+```
+
+| Parameter | What it does |
+| --- | --- |
+| `since`, `until` | ISO 8601; keep the events after `since` and before `until` (both exclusive). |
+| `repo` | A repository's key: its tickets' events, and Symphony's own (they hold every repository). |
+| `epic` | An epic's identifier: the epic's own events and its sub-tickets'. Symphony's own are left out. |
+| `classes` | Comma-separated: `finding`, `move`, `note`, `pause`, `person`, `question`, `rule`, `run`, `situation`, `ticket`, `verdict`. |
+| `notable` | `true` (the default): the notable events only; `false`: every event. |
+| `limit` | Default 50, at most 200. A page never ends inside a group of events that share one `at`. |
+
+Each event is the ticket feed's event (`GET /api/v1/repos/:repo_key/tickets/:id/events`) with:
+
+| Field | What it holds |
+| --- | --- |
+| `ticket` | `repo_key`, `identifier` and `title` from the ticket's record; null fields on Symphony's own stream. |
+| `class` | The event's class, as `classes` filters it; `other` for a type no class names. |
+| `notable` | Whether a rule of the notable rule set holds for it (below). |
+| `by` | Who did it: `{kind, name}`, `kind` one of `symphony`, `rule` (`name` the rule: `CI wait`, `PR watcher R22`, `Self-heal`), `person` (the Director) or `run` (`name` its kind, with its `run_id`). |
+
+`next_until` is the `at` the next, older page passes as `until`; null on the last page. A `since` or
+`until` that is not ISO 8601, an unknown class, a `notable` other than `true` or `false` or a `limit`
+that is not a positive integer answers `400` `invalid_query`.
+
+## The notable rule set
+
+An event is notable when one rule holds for it (`SymphonyElixir.TicketEvents.Notable`): a verdict; a
+phase entered, or a person's move or cancel; a question asked or answered; a ticket's pause that
+lasted at least 15 minutes (or has, so far); a `rule.action`; a fix ticket self-heal filed or a ticket
+split off (`ticket.filed`); a ticket shipped (entered Done) or cancelled; a release installed
+(Symphony's pause lost an update's build reason); the factory paused or resumed (Symphony's own pause
+set or cleared); a `situation.changed` to `waiting_on_you`, `retrying` or `blocked_by_ticket`.
+
+## The `rule.action` event
+
+Each time a rule of Symphony's acts on a ticket, the ledger records one `rule.action`
+(`SymphonyElixir.RuleActions`): `rule` (its name), `action` (`rerun`, `paused`, `parked`,
+`filed_ticket`, `lifted_pause`, `moved`, `updated_branch`, `auto_merge`, `asked`, `other`), `text`
+(its line in plain words) and `filed` (the ticket it filed). The writers are each action the PR and CI
+watcher applied (`PR watcher R22`), a pause reason a rule set or lifted (`CI wait`, `Release build
+watch`, `Blocked-by links`, `Self-heal`, the update and instructions holds), the dispatch-loop guard,
+the idle park and self-heal's new fix ticket. Its summary names the rule: "CI wait paused the
+ticket". The audit records the rules write stay as they are.

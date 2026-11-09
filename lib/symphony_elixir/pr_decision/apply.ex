@@ -9,6 +9,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
   It applies the upkeep actions (`SymphonyElixir.PrDecision.upkeep/1`) the same way, before the
   flow decision on the same read.
 
+  Each action applied is recorded on the ticket as the watcher row's `rule.action`
+  (`SymphonyElixir.RuleActions`): "PR watcher R22 reran the failed checks", with the action's reason.
+
   An action is applied once per head and rule in a stay in the phase: the stay's `applied` ledger
   holds what was done, so a repeated tick or a duplicate trigger never repeats a move, a rerun, an
   update-branch or a fix-ticket filing. A cancelled run's rerun (U2) is the exception: it is kept
@@ -93,6 +96,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
     Notifications,
     PathUnlock,
     PrDecision,
+    RuleActions,
     RunStore,
     SelfHeal,
     SubIssueWait,
@@ -252,6 +256,8 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
   defp finish({:ok, changes}, action, ctx) do
     entry = %{head_sha: head(ctx), rule: action.rule, kind: action.kind, at: ctx.now}
+    applied = Map.get(changes, :action, action)
+    RuleActions.record(ctx.repo_key, ctx.issue.id, RuleActions.watcher_rule(action.rule), RuleActions.watcher_action(action.kind), applied.reason, head: head(ctx), at: ctx.now)
 
     %{
       action: Map.get(changes, :action, action),

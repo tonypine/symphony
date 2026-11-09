@@ -240,9 +240,39 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary("workspace.removed", payload, _event), do: {"Workspace removed", [removed_reason(text(payload, :reason))]}
 
   defp summary("situation.changed", payload, _event), do: {text(payload, :word) || "Situation changed", [text(payload, :cause)]}
+  defp summary("rule.action", payload, _event), do: {"#{text(payload, :rule) || "A rule"} #{rule_did(payload)}", [text(payload, :text)]}
+
+  defp summary("ticket.filed", payload, _event) do
+    identifier = text(payload, :identifier)
+
+    title =
+      case text(payload, :kind) do
+        "follow_up" -> "Follow-up #{identifier || "ticket"} filed"
+        _split_off -> "Split off #{identifier || "a ticket"}"
+      end
+
+    {title, [text(payload, :title)]}
+  end
+
   defp summary("note", payload, _event), do: {"Note added", [text(payload, :text)]}
   defp summary("note.read", payload, _event), do: {"Note read by a run", [text(payload, :run_id)]}
   defp summary(_type, _payload, _event), do: :unknown
+
+  # What a rule did, as its line says it: "reran the failed checks", "filed TP-1501".
+  defp rule_did(payload) do
+    case text(payload, :action) do
+      "rerun" -> "reran the failed checks"
+      "paused" -> "paused the ticket"
+      "parked" -> "parked the ticket"
+      "filed_ticket" -> "filed " <> (text(payload, :filed) || "a fix ticket")
+      "lifted_pause" -> "lifted a pause"
+      "moved" -> "moved the ticket"
+      "updated_branch" -> "updated the branch"
+      "auto_merge" -> "changed auto-merge"
+      "asked" -> "asked you"
+      _other -> "acted"
+    end
+  end
 
   # A step's outcome: "Build failed after 4 min: back to writing the code", "Tests passed in 2 min",
   # "Paused on your answer", "Checks skipped: no Elixir changed". A delegated step's title, reason

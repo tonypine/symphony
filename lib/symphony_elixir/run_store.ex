@@ -75,7 +75,7 @@ defmodule SymphonyElixir.RunStore do
   @table_load_progress_ms 10_000
 
   @typedoc "What a pause update's function returns: a pause to write (nil clears it), or nothing to write."
-  @type pause_update :: {:write, map() | nil, term()} | {:ok, term()} | {:error, term()}
+  @type pause_update :: {:write, map() | nil, term()} | {:write, map() | nil, [Event.t()], term()} | {:ok, term()} | {:error, term()}
 
   @typedoc """
   What a ticket's pause update's function returns: a pause to write (nil clears it) with the events
@@ -833,6 +833,22 @@ defmodule SymphonyElixir.RunStore do
   def list_ticket_events(_issue_id, _opts), do: {:error, :invalid_issue_id}
 
   @doc """
+  The events of every ticket, and of Symphony's own stream (`list_subject_events/2`), in no
+  particular order: the Journal's read across tickets (`SymphonyElixir.TicketEvents.Journal`). A
+  repository's own stream is left out. `opts`: `types:`, as `list_ticket_events/2` takes them.
+  """
+  @spec list_all_ticket_events(keyword()) :: [Event.t()] | {:error, term()}
+  def list_all_ticket_events(opts \\ []) when is_list(opts) do
+    with :ok <- ensure_started() do
+      transaction(fn ->
+        @ticket_events_table
+        |> :mnesia.foldl(&journal_event_row/2, [])
+        |> filter_ticket_events(opts)
+      end)
+    end
+  end
+
+  @doc """
   Writes the artifact row (`SymphonyElixir.Artifacts`) keyed by its `id`, replacing the one the id
   held. The row's `repo_key` and `issue_id` are the artifact's: its first ingest's ticket.
   """
@@ -1432,7 +1448,8 @@ defmodule SymphonyElixir.RunStore do
   @doc """
   Runs `fun` on the pause of `subject` (see `get_subject_pause/1`) in one durable transaction that
   holds its row's write lock, as `update_ticket_pause/4` does for a ticket: `{:write, pause, result}`
-  writes `pause` (nil removes it) and returns `{:ok, result}`; `{:ok, result}` and
+  writes `pause` (nil removes it) and returns `{:ok, result}`; `{:write, pause, events, result}` also
+  appends `events` to the subject's own event stream (`list_subject_events/2`); `{:ok, result}` and
   `{:error, reason}` write nothing and are returned.
   """
   @spec update_subject_pause(term(), (map() | nil -> pause_update())) :: {:ok, term()} | {:error, term()}
@@ -2405,6 +2422,12 @@ defmodule SymphonyElixir.RunStore do
     |> Enum.sort_by(&{datetime_sort_key(&1.at), &1.seq})
   end
 
+  defp journal_event_row({@ticket_events_table, key, _repo_key, _issue_id, _run_id, _type, _seq, record}, acc)
+       when is_binary(key) or key == {:subject, :symphony},
+       do: [Event.normalize(record) | acc]
+
+  defp journal_event_row(_row, acc), do: acc
+
   defp filter_ticket_events(events, opts) do
     types = Keyword.get(opts, :types)
     run_id = Keyword.get(opts, :run_id)
@@ -2606,6 +2629,11 @@ defmodule SymphonyElixir.RunStore do
 
       {:write, pause, result} ->
         :mnesia.write({@pause_table, {:subject, subject}, pause})
+        {:ok, result}
+
+      {:write, pause, events, result} ->
+        write_subject_pause_row(subject, pause)
+        _stored = write_subject_events(subject, events)
         {:ok, result}
 
       unchanged ->
