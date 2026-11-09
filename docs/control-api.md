@@ -417,3 +417,66 @@ A step's slice holds the lines of every turn it ran (a retry adds to them), cut 
 session's slices concatenated are the lines of its whole transcript. A machine step has no slice, a turn that
 said nothing leaves none, and a session Symphony reads no transcript of (Codex's, or one on another host)
 has none.
+
+# The dispatch order
+
+`GET /api/v1/dispatch/order`, and `order` on `GET /api/v1/state`: every open ticket Symphony works,
+grouped by the kind of its `situation`, and the dispatch candidates in the order the dispatcher starts
+them, each with the reason it is or is not next (`SymphonyElixir.Dispatch.Order`).
+
+The orchestrator walks the poll's candidates at the end of each poll cycle, after the cycle's dispatch
+pass, in the order the pass walks them (forced first, then closest to done, each epic lane's tickets
+nearest the epic, then priority and age) and through the pass's own gates and slot decision. A ticket a
+pass run now would start takes its slot for the tickets after it. The read is recomputed on the
+triggers a poll cycle runs on and never on a timer of its own; it
+makes no Linear request.
+
+```json
+{
+  "generated_at": "2026-11-09T22:00:00Z",
+  "computed_at": "2026-11-09T21:59:58.120Z",
+  "next": "TP-1401",
+  "slots": {
+    "concurrency": { "max_total": 2, "finishing_max": 1, "forced_max": 1 },
+    "work_used": 1,
+    "work_free": 1,
+    "forced_used": 0,
+    "finishing": { "slots": 1, "used": 0, "running": [] },
+    "epic_lanes": { "max_total": 2, "lanes": [], "queued_epics": [], "shared": { "slots": 2, "used": 1 } }
+  },
+  "queue": [
+    { "identifier": "TP-1401", "position": 1, "outcome": "starts", "reason": "next: a slot is free", "slot": "shared", "starts_now": true, "...": "..." },
+    { "identifier": "TP-1402", "position": 2, "outcome": "waits", "reason": "2nd: behind TP-1401", "wait": "work slots full", "starts_now": false, "...": "..." }
+  ],
+  "groups": [
+    { "kind": "blocked_by_ticket", "count": 1, "tickets": [{ "identifier": "TP-1408", "outcome": "held", "reason": "Waiting for TP-1399 to finish", "...": "..." }] },
+    { "kind": "waiting_for_slot", "count": 2, "tickets": ["..."] }
+  ]
+}
+```
+
+| Field | What it holds |
+| --- | --- |
+| `computed_at` | When the orchestrator walked the candidates; null before its first poll cycle. |
+| `next` | The identifier of the ticket first in line; null when none is. |
+| `slots` | The slot and lane facts the walk read: `concurrency` (the limits), `work_used` and `work_free` (of `max_total`), `forced_used`, `finishing` and `epic_lanes` as the state gives them. |
+| `queue` | The tickets in line, by `position`. |
+| `groups` | Every open ticket exactly once: each walked candidate, and every ticket record neither removed nor in a terminal state. The groups follow the situation kinds' precedence and hold only kinds some ticket has; within one, tickets in line come first by `position`, then the rest by identifier. |
+
+Each ticket, in `queue` and in `groups`:
+
+| Field | What it holds |
+| --- | --- |
+| `issue_id`, `identifier`, `title`, `state`, `repo_key` | The ticket. |
+| `outcome` | `starts` (a pass run now starts it), `waits` (it waits for a slot), `paused` (its gates are open but the whole pass is paused), `held` (a gate keeps it out of the pass), `running` (a run works on it) or `not_a_candidate` (an open ticket the poll does not offer for dispatch: Backlog, a plan in review, a parent waiting on its sub-tickets). |
+| `position` | Its place in line, 1 for the next one; null for `held`, `running` and `not_a_candidate`. |
+| `reason` | `next: a slot is free`; `next: ` and why it waits (`next: work slots full`); `2nd: a slot is free` for a later one a pass run now starts too; `2nd: behind TP-n` for a later one that waits; `forced` for a forced ticket that starts on its own allowance; the pause's line for a paused one (`dispatch is paused: updating to v0.0.1.825`); the gate's reason for a held one (`Waiting for TP-1399 to finish`); `already running` for a running one; the situation's `cause` for one that is not a candidate. |
+| `wait` | For `waits`: why it waits (`work slots full`, `finishing slots full`, `TP-n (Merging) is waiting for a finishing slot`). |
+| `rule` | The rule behind a `held` or `paused` ticket (`priority`, `usage_limit`, `symphony_pause`, `daily_budget`...), as `dispatch_skipped` names it; null when no rule is. |
+| `slot` | For `starts` and `running`: the slot it takes (`forced`, `finishing`, `shared` or its epic lane). |
+| `forced` | Whether the ticket is forced. |
+| `starts_now` | `true` for `starts`. |
+| `situation` | The ticket's `situation`, as the ticket read gives it. |
+
+The read answers `200` with `error` (`snapshot_timeout`, `snapshot_unavailable`) when the orchestrator
+can't be read, as `GET /api/v1/state` does.

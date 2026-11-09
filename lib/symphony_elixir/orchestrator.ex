@@ -71,7 +71,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   alias SymphonyElixir.Artifacts.Transcript
   alias SymphonyElixir.Config.{Cache, Schema}
-  alias SymphonyElixir.Dispatch.{Candidates, Settings, Settle, Shadow}
+  alias SymphonyElixir.Dispatch.{Candidates, Order, Settings, Settle, Shadow}
   alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
   alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.QaDriver.DevServerLease
@@ -189,6 +189,7 @@ defmodule SymphonyElixir.Orchestrator do
       forced_issues: %{},
       slot_waiting: %{},
       dispatch_skipped: %{},
+      dispatch_order: nil,
       operator_pause_logged: false,
       cycle_requested: false,
       cycle_deferred: false,
@@ -1751,7 +1752,7 @@ defmodule SymphonyElixir.Orchestrator do
           |> reject_running_quality_gate_candidates(state)
           |> start_quality_gate_or_dispatch(state, :poll)
         else
-          finish_poll_cycle(state, now_ms)
+          state |> put_dispatch_order(issues) |> finish_poll_cycle(now_ms)
         end
 
       {:error, reason, state} ->
@@ -2468,6 +2469,10 @@ defmodule SymphonyElixir.Orchestrator do
   @spec apply_operator_stops_result_for_test(State.t(), [String.t()], term(), DateTime.t()) :: State.t()
   def apply_operator_stops_result_for_test(%State{} = state, stopped_ids, result, read_at \\ DateTime.utc_now()) when is_list(stopped_ids),
     do: state |> apply_operator_stops_result(stopped_ids, result, read_at) |> await_tracker_tasks()
+
+  @doc false
+  @spec put_dispatch_order_for_test(State.t(), [Issue.t() | term()]) :: State.t()
+  def put_dispatch_order_for_test(%State{} = state, issues) when is_list(issues), do: put_dispatch_order(state, issues)
 
   @doc false
   @spec dispatch_chosen_issues_for_test([Issue.t() | term()], State.t()) :: State.t()
@@ -3766,30 +3771,39 @@ defmodule SymphonyElixir.Orchestrator do
       |> act_on_plan_comments(issues)
 
     state =
-      cond do
-        operator_paused?(state) ->
-          state
-          |> log_dispatch_pause()
-          |> skip_paused_pass(issues, Pauses.dispatch_skip_reason(symphony_pause()), :symphony_pause)
+      case dispatch_pass_pause(state) do
+        {reason, :symphony_pause} ->
+          state |> log_dispatch_pause() |> skip_paused_pass(issues, reason, :symphony_pause)
 
-        workspace_quota_paused?(state) ->
-          state |> log_workspace_quota_pause() |> skip_paused_pass(issues, "new dispatch is paused: #{workspace_quota_error(state)}", :workspace_quota)
+        {reason, :workspace_quota} ->
+          state |> log_workspace_quota_pause() |> skip_paused_pass(issues, reason, :workspace_quota)
 
-        daily_budget_paused?(state) ->
+        {reason, :daily_budget} ->
           state
           |> log_daily_budget_pause()
-          |> skip_paused_pass(issues, "the daily token budget is spent (agent.max_tokens_per_day)", :daily_budget)
+          |> skip_paused_pass(issues, reason, :daily_budget)
           |> dispatch_forced_over_daily_budget(issues)
 
-        true ->
+        nil ->
           dispatch_chosen_issues(issues, state)
       end
 
-    finish_poll_cycle(state, System.monotonic_time(:millisecond))
+    state |> put_dispatch_order(issues) |> finish_poll_cycle(System.monotonic_time(:millisecond))
   end
 
   defp continue_after_dispatch_readiness(%State{} = state, {:active_retry, issue, attempt, metadata}, _issues) do
     handle_active_retry_after_readiness(state, issue, attempt, metadata)
+  end
+
+  # What stops a whole dispatch pass, as `{reason, rule}`, or nil when the pass runs: Symphony's
+  # pause, the workspace quota, then the daily token budget, which still lets forced tickets go out.
+  defp dispatch_pass_pause(%State{} = state) do
+    cond do
+      operator_paused?(state) -> {Pauses.dispatch_skip_reason(symphony_pause()), :symphony_pause}
+      workspace_quota_paused?(state) -> {"new dispatch is paused: #{workspace_quota_error(state)}", :workspace_quota}
+      daily_budget_paused?(state) -> {"the daily token budget is spent (agent.max_tokens_per_day)", :daily_budget}
+      true -> nil
+    end
   end
 
   # A `breakdown` parent left `In Progress` with open sub-issues moves to the waiting state, so
@@ -4208,9 +4222,7 @@ defmodule SymphonyElixir.Orchestrator do
 
     {state, _hold} =
       issues
-      |> sort_issues_for_dispatch()
-      |> then(&EpicLanes.order(state.epic_lanes, &1, fn issue -> stage_rank(issue.state) end))
-      |> forced_first(state)
+      |> order_for_dispatch(state)
       |> Enum.reduce({%{state | slot_waiting: slot_waiting, dispatch_skipped: dispatch_skipped}, nil}, fn issue, acc ->
         maybe_dispatch_chosen_issue(issue, acc, previous_waiting, active_states, terminal_states)
       end)
@@ -4218,6 +4230,107 @@ defmodule SymphonyElixir.Orchestrator do
     state
     |> settle_dispatch_skipped(previous_skipped)
     |> recover_usage_limit_canaries()
+  end
+
+  # The order a dispatch pass walks its candidates in, and the dispatch order read
+  # (`put_dispatch_order/2`) with it.
+  defp order_for_dispatch(issues, %State{} = state) do
+    issues
+    |> sort_issues_for_dispatch()
+    |> then(&EpicLanes.order(state.epic_lanes, &1, fn issue -> stage_rank(issue.state) end))
+    |> forced_first(state)
+  end
+
+  # The dispatch order read (`SymphonyElixir.Dispatch.Order`), kept on the state for the snapshot: the
+  # poll's candidates in the order a pass walks them (`order_for_dispatch/2`), each with what a pass run
+  # now would do with it, through the pass's own gates and slot decision (`slot_decision/3`). A ticket
+  # the pass would start takes its slot in a copy of the state, so the next one sees the slots left.
+  # It is recomputed at the end of each poll cycle, after its pass, and never on a timer of its own.
+  defp put_dispatch_order(%State{} = state, issues) do
+    pause = dispatch_pass_pause(state)
+    gates = {active_state_set(), terminal_state_set()}
+    pass = %{state | slot_waiting: %{}}
+
+    {walked, _pass, _hold} =
+      issues
+      |> Enum.filter(&match?(%Issue{}, &1))
+      |> order_for_dispatch(state)
+      |> Enum.reduce({[], pass, nil}, fn issue, {walked, pass, hold} ->
+        {outcome, pass, hold} = dispatch_order_outcome(issue, pass, hold, pause, gates)
+        {[Map.merge(dispatch_order_ticket(issue, state), outcome) | walked], pass, hold}
+      end)
+
+    order = %{computed_at: DateTime.utc_now(), entries: Order.place(Enum.reverse(walked)), slots: dispatch_order_slots(state)}
+    %{state | dispatch_order: order}
+  end
+
+  defp dispatch_order_outcome(%Issue{} = issue, %State{} = pass, hold, pause, {active_states, terminal_states}) do
+    cond do
+      running = Map.get(pass.running, issue.id) ->
+        {%{outcome: :running, reason: running_reason(issue.id), slot: dispatch_slot_label(pass, issue, forced_entry?(running))}, pass, hold}
+
+      gate = dispatch_gate_closed(issue, pass, active_states, terminal_states) ->
+        {reason, rule} = gate
+        {%{outcome: :held, reason: reason, rule: rule}, pass, hold}
+
+      limit = usage_limit_hold(pass, issue) ->
+        {%{outcome: :held, reason: UsageLimit.hold_label(limit), rule: :usage_limit}, pass, hold}
+
+      pass_paused?(pause, issue, pass) ->
+        {reason, rule} = pause
+        {%{outcome: :paused, reason: reason, rule: rule}, pass, hold}
+
+      true ->
+        dispatch_order_slot(issue, pass, hold)
+    end
+  end
+
+  defp dispatch_order_slot(%Issue{} = issue, %State{} = pass, hold) do
+    case slot_decision(pass, issue, hold) do
+      {:start, hold} ->
+        forced? = forced_slot_available?(issue, pass)
+        outcome = %{outcome: :starts, forced: forced?, slot: dispatch_slot_label(pass, issue, forced?)}
+        {outcome, take_order_slot(pass, issue, forced?), hold}
+
+      {{:wait, reason}, hold} ->
+        {%{outcome: :waits, reason: reason}, %{pass | slot_waiting: Map.put(pass.slot_waiting, issue.id, %{})}, hold}
+    end
+  end
+
+  # The daily token budget lets forced tickets out (`dispatch_forced_over_daily_budget/2`).
+  defp pass_paused?(nil, _issue, _state), do: false
+  defp pass_paused?({_reason, :daily_budget}, %Issue{} = issue, %State{} = state), do: not forced_candidate?(issue, state)
+  defp pass_paused?(_pause, _issue, _state), do: true
+
+  # The run a started ticket would be, as far as the slot counts read it.
+  defp take_order_slot(%State{} = pass, %Issue{} = issue, forced?) do
+    host = pass |> select_worker_host(nil) |> then(&if(is_binary(&1), do: &1))
+    kind = if finishing_issue?(issue), do: :landing, else: :work
+    put_running_entry(pass, issue.id, %{issue: issue, identifier: issue.identifier, forced: forced?, run_profile: %{kind: kind}, worker_host: host})
+  end
+
+  defp dispatch_order_ticket(%Issue{} = issue, %State{} = state) do
+    %{
+      issue_id: issue.id,
+      identifier: issue.identifier,
+      title: issue.title,
+      state: issue.state,
+      repo_key: issue_repo_key(issue) || state.repo_key,
+      forced: forced_candidate?(issue, state),
+      rule: nil,
+      slot: nil
+    }
+  end
+
+  defp dispatch_order_slots(%State{} = state) do
+    %{
+      concurrency: concurrency_snapshot(state),
+      work_used: length(work_running_ids(state.running)),
+      work_free: available_slots(state),
+      finishing: finishing_snapshot(state.running),
+      forced_used: Enum.count(state.running, fn {_issue_id, entry} -> forced_entry?(entry) end),
+      epic_lanes: EpicLanes.snapshot(state.epic_lanes, epic_lane_running(state.running))
+    }
   end
 
   # The daily token budget pauses new dispatch, but not a forced ticket's: the forced candidates
@@ -4327,16 +4440,19 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp dispatch_or_wait_for_slot(%State{} = state, %Issue{} = issue, waiting, hold) do
+    case slot_decision(state, issue, hold) do
+      {:start, hold} -> {dispatch_waiting_issue(state, issue, waiting), hold}
+      {{:wait, reason}, hold} -> {put_slot_waiting(state, issue, waiting, reason), hold}
+    end
+  end
+
+  # Whether a candidate whose gates are open starts now or waits for a slot, and why; `hold` names the
+  # finish that keeps fresh work from starting for the rest of the pass, once one waits.
+  defp slot_decision(%State{} = state, %Issue{} = issue, hold) do
     cond do
-      is_binary(hold) and fresh_issue?(issue) and not forced_slot_available?(issue, state) ->
-        {put_slot_waiting(state, issue, waiting, hold), hold}
-
-      issue_dispatch_slots_available?(issue, state) ->
-        {dispatch_waiting_issue(state, issue, waiting), hold}
-
-      true ->
-        state = put_slot_waiting(state, issue, waiting, slot_wait_reason(issue, state))
-        {state, hold || finishing_hold(issue)}
+      is_binary(hold) and fresh_issue?(issue) and not forced_slot_available?(issue, state) -> {{:wait, hold}, hold}
+      issue_dispatch_slots_available?(issue, state) -> {:start, hold}
+      true -> {{:wait, slot_wait_reason(issue, state)}, hold || finishing_hold(issue)}
     end
   end
 
@@ -9411,6 +9527,7 @@ defmodule SymphonyElixir.Orchestrator do
       landing_waits: landing_waits,
       slot_waiting: slot_waiting_snapshot(state.slot_waiting, state) ++ merging_ci_waiting_snapshot(state),
       dispatch_skipped: dispatch_skipped_snapshot(state.dispatch_skipped),
+      dispatch_order: state.dispatch_order,
       shipped_today: ShippedToday.today(state.shipped, now),
       claimed: state.claimed |> MapSet.to_list() |> Enum.sort(),
       pollers: poller_status_snapshot(),

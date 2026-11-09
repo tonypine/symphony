@@ -778,6 +778,7 @@ defmodule SymphonyElixir.ExtensionsTest do
       ],
       "waiting_on_you" => [],
       "inbox_read" => true,
+      "order" => %{"computed_at" => nil, "groups" => [], "next" => nil, "queue" => [], "slots" => nil},
       "conflicts" => [],
       "retrying" => [
         %{
