@@ -112,6 +112,6 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           if ! mix protected_paths.check --repo pull-request --base "origin/$BASE_REF" --head "$HEAD_SHA"; then
-            echo "::error::This pull request's own commits change paths an agent must not edit (its skills, WORKFLOW.md, sandbox settings). Revert them, or, if a person made the change on purpose, have a person other than the author add the $WAIVER_LABEL label after the last push (remove and re-add it if it is already there), or have a person with write access approve the pull request and re-run this job."
+            echo "::error::This pull request's own commits change paths an agent must not edit (its skills, WORKFLOW.md, the CI workflows, sandbox settings). Revert them, or, if a person made the change on purpose, have a person other than the author add the $WAIVER_LABEL label after the last push (remove and re-add it if it is already there), or have a person with write access approve the pull request and re-run this job."
             exit 1
           fi

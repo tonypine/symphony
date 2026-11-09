@@ -1419,7 +1419,8 @@ defmodule SymphonyElixir.AgentTools.Linear do
       {fn -> unprotected_unlocks(decision["options"]) == [] end,
        fn ->
          "`unlocks` names paths that are not protected: #{Enum.join(unprotected_unlocks(decision["options"]), ", ")}. " <>
-           "It may only name the protected paths: #{Enum.join(AgentSandboxConfig.workspace_protected_paths(), ", ")}."
+           "It may only name the protected paths: #{Enum.join(AgentSandboxConfig.workspace_protected_paths(), ", ")}, " <>
+           "or one path inside #{Enum.join(AgentSandboxConfig.file_grant_folders(), ", ")}."
        end},
       {fn -> optional_string?(decision["recommendation_reason"]) end, "`decision.recommendation_reason` must be a string."},
       {fn -> optional_string?(unblocks) end, "`unblocks` must be a string."},
