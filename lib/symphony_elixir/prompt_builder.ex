@@ -828,7 +828,8 @@ defmodule SymphonyElixir.PromptBuilder do
   # it is wrapped as untrusted input, and it is never cut: over `ledger.prompt_brief_max_tokens` it
   # is still rendered whole, since a run only gets here once the Director chose to go on with it
   # (`ticket_ledger_gate/2`). The summary holds every note in full, so a run's prompt that carries the
-  # one read from the store has read the note for the next run (`SymphonyElixir.Marks`).
+  # one read from the store has read the note for the next run (`SymphonyElixir.Marks`). The full and
+  # the compact prompt both carry it, so a Codex run sent the compact one has read the note too.
   defp append_ticket_ledger(prompt, opts) do
     ticket_state = Keyword.get(opts, :ticket_state)
 

@@ -1082,6 +1082,23 @@ defmodule SymphonyElixir.PromptBuilderTest do
       assert %{read_by: %{run_id: "run-1"}} = "i" |> TicketEvents.query(limit: :all) |> SymphonyElixir.Marks.note()
     end
 
+    # A Codex prompt over the stdio soft limit is sent as the compact prompt, which carries the
+    # summary too: the run that is sent it has read the note, and the read names that run.
+    test "a Codex run sent the compact prompt carries the note and records its read", %{issue: issue, record: record, at: at} do
+      {:ok, note} = TicketEvents.record("r", "i", "note", %{text: "Keep the button."}, actor: {:person, "the Director"}, at: at)
+      :ok = RunStore.update_ticket_state("i", %{phase: "QA"})
+
+      {:ok, settings} =
+        SymphonyElixir.Config.Schema.parse(%{agent: %{kind: "codex", command: "codex app-server", codex_stdio_prompt_soft_limit: 1}})
+
+      prompt = AgentRunner.build_first_turn_prompt(issue, settings: settings, ticket_state: record, run_id: "run-codex")
+
+      assert prompt =~ "You are working on Linear ticket `MT-LB`."
+      assert prompt =~ "Keep the button."
+      note_id = note.id
+      assert [%{type: "note.read", payload: %{note_id: ^note_id, run_id: "run-codex"}}] = TicketEvents.query("i", types: ["note.read"])
+    end
+
     test "is not rendered when no ticket state is passed", %{issue: issue} do
       refute PromptBuilder.build_prompt(issue) =~ "Ticket history"
       refute PromptBuilder.build_prompt(issue, ticket_state: nil) =~ "Ticket history"
