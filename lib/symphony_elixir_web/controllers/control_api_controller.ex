@@ -266,7 +266,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
   @spec looked(Conn.t(), map()) :: Conn.t()
   def looked(conn, params) do
     with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
-         {:ok, %{record: record, looked_at: looked_at}} <- Marks.look(identifier, string_param(params["repo_key"])) do
+         {:ok, %{record: record, looked_at: looked_at}} <- Marks.look(identifier, string_param(params["repo_key"]), Map.get(conn.assigns, :marks, [])) do
       looked_at = DateTime.to_iso8601(looked_at)
       json(conn, %{issue_identifier: record.issue_identifier, looked_at: looked_at, new_since_looked: 0})
     else
@@ -276,6 +276,9 @@ defmodule SymphonyElixirWeb.ControlApiController do
       {:error, :not_found} ->
         reason = TicketMoves.no_ticket_reason(params["issue_identifier"], params["repo_key"])
         error_response(conn, 404, "ticket_not_found", reason)
+
+      {:error, reason} ->
+        error_response(conn, 502, "store_error", inspect(reason))
     end
   end
 

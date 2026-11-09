@@ -39,17 +39,19 @@ defmodule SymphonyElixir.Marks do
   @doc """
   Marks that `person` looked at the ticket `issue_identifier` now (`opts[:now]`), in the repository
   `repo_key` when given, else in whichever repository holds it. A ticket with no record is
-  `{:error, :not_found}`; a store that refuses the write answers its error.
+  `{:error, :not_found}`, also when the record goes between the read and the write; a store that
+  refuses the write answers its error. `opts[:write]` replaces the store's write (tests).
   """
   @spec look(String.t(), String.t() | nil, keyword()) ::
           {:ok, %{record: TicketState.t(), looked_at: DateTime.t()}} | {:error, term()}
   def look(issue_identifier, repo_key, opts \\ []) do
     now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
     person = Keyword.get(opts, :person, @person)
+    write = Keyword.get(opts, :write, &RunStore.update_ticket_state/2)
 
     with {:ok, record} <- find(issue_identifier, repo_key),
          looked = Map.put(record.looked, person, now),
-         :ok <- RunStore.update_ticket_state(record.issue_id, %{looked: looked}) do
+         :ok <- written(write.(record.issue_id, %{looked: looked})) do
       {:ok, %{record: %{record | looked: looked}, looked_at: now}}
     end
   end
@@ -140,6 +142,10 @@ defmodule SymphonyElixir.Marks do
       record -> {:ok, record}
     end
   end
+
+  # The record went between the read and the write: the ticket is no longer there.
+  defp written({:error, :ticket_state_not_found}), do: {:error, :not_found}
+  defp written(result), do: result
 
   defp iso8601(%DateTime{} = at), do: DateTime.to_iso8601(at)
   defp iso8601(nil), do: nil

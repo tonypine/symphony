@@ -54,6 +54,19 @@ defmodule SymphonyElixir.MarksTest do
       assert Marks.look("MRK-0", nil) == {:error, :not_found}
       assert Marks.look(ticket.issue_identifier, "elsewhere") == {:error, :not_found}
     end
+
+    test "a record that goes before the write is not found; another refused write answers its error", %{ticket: ticket} do
+      vanish = fn issue_id, attrs ->
+        :ok = RunStore.delete_ticket_state(issue_id)
+        RunStore.update_ticket_state(issue_id, attrs)
+      end
+
+      refuse = fn _issue_id, _attrs -> {:error, :disk_full} end
+
+      assert Marks.look(ticket.issue_identifier, ticket.repo_key, write: refuse) == {:error, :disk_full}
+      assert Marks.looked_at(RunStore.get_ticket_state(ticket.issue_id)) == nil
+      assert Marks.look(ticket.issue_identifier, ticket.repo_key, write: vanish) == {:error, :not_found}
+    end
   end
 
   test "new?/2: later than the mark, every event when never looked, and none without a time" do

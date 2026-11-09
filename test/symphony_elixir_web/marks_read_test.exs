@@ -59,6 +59,16 @@ defmodule SymphonyElixirWeb.MarksReadTest do
 
   defp look(params), do: call(ControlApiController, :looked, params)
 
+  defp look_with(params, marks) do
+    conn(:post, "/", Jason.encode!(params))
+    |> put_req_header("content-type", "application/json")
+    |> Phoenix.Controller.put_view(SymphonyElixirWeb.ErrorJSON)
+    |> assign(:marks, marks)
+    |> Map.put(:params, params)
+    |> Map.put(:body_params, params)
+    |> ControlApiController.looked(params)
+  end
+
   defp timeline do
     conn = call(TicketEventsController, :index, %{"repo_key" => @repo, "issue_identifier" => @identifier, "group" => "run"})
     Jason.decode!(conn.resp_body)["timeline"]
@@ -118,6 +128,21 @@ defmodule SymphonyElixirWeb.MarksReadTest do
     conn = look(%{})
     assert conn.status == 422
     assert Jason.decode!(conn.resp_body)["error"]["code"] == "invalid_request"
+  end
+
+  test "a record that goes before the write is 404, and a write the store refuses is 502" do
+    vanish = fn issue_id, attrs ->
+      :ok = RunStore.delete_ticket_state(issue_id)
+      RunStore.update_ticket_state(issue_id, attrs)
+    end
+
+    conn = look_with(%{"issue_identifier" => @identifier}, write: fn _issue_id, _attrs -> {:error, :disk_full} end)
+    assert conn.status == 502
+    assert Jason.decode!(conn.resp_body)["error"] == %{"code" => "store_error", "message" => ":disk_full"}
+
+    conn = look_with(%{"issue_identifier" => @identifier}, write: vanish)
+    assert conn.status == 404
+    assert Jason.decode!(conn.resp_body)["error"]["code"] == "ticket_not_found"
   end
 
   test "the route needs the control token" do

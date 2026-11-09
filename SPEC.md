@@ -6315,7 +6315,8 @@ Minimum endpoints:
     mark is written on the ticket's state record, keyed by person (one today, the Director); it is a
     view mark, not history, so no event records it. Answers `200` with `issue_identifier`,
     `looked_at` and `new_since_looked` (`0`); a ticket with no record is `404` `ticket_not_found`
-    and a request without `issue_identifier` is `422`.
+    (also when the record goes before the mark is written), a write the store refuses is `502`
+    `store_error`, and a request without `issue_identifier` is `422`.
   - The ticket read carries `looked_at` and `new_since_looked`, the count of the ticket's events
     later than the mark, and each event of the events feed carries `new`. Before the person ever
     looked, every event is new.

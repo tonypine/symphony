@@ -380,7 +380,8 @@ What is new since the person last looked, and the note for the next run (facts 6
 token. It writes the mark on the ticket's record, keyed by person (the Director, the one person the token
 names today). It is a view mark, not history: no ledger event records it. It answers `200`
 `{"issue_identifier", "looked_at", "new_since_looked": 0}`, `404` `ticket_not_found` for a ticket with no
-record and `422` without `issue_identifier`.
+record (also when the record goes before the mark is written), `502` `store_error` when the store refuses
+the write, and `422` without `issue_identifier`.
 
 Each event of the events feed (`GET /api/v1/repos/:repo_key/tickets/:issue_identifier/events`, with or
 without `group=run`) carries `new`: `true` when it is later than the mark, or the person never looked.
