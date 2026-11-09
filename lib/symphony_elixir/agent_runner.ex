@@ -34,6 +34,7 @@ defmodule SymphonyElixir.AgentRunner do
     PathUnlock,
     Pauses,
     PhaseSteps,
+    PhaseSteps.Transcript,
     PromptBuilder,
     PrReviewPoller,
     PrWatch,
@@ -63,6 +64,8 @@ defmodule SymphonyElixir.AgentRunner do
   # The agent session the run holds now: a step walk stops it at a machine step and starts another
   # for the next agent turn, so the run's `after` stops whichever one is current.
   @session_key {__MODULE__, :agent_session}
+  # The session the current agent turn started, kept for a turn that fails before returning it.
+  @turn_session_key {__MODULE__, :turn_session}
   @idle_park_state "Backlog"
   @merging_state "Merging"
   # Consecutive turns with no new commit, no state change and no PR change that end the run.
@@ -818,7 +821,7 @@ defmodule SymphonyElixir.AgentRunner do
   # the session stopped and the slot free. Any other run is one agent session, turn after turn.
   defp new_walk(%{kind: kind}) do
     steps = PhaseSteps.steps(kind)
-    if PhaseSteps.walk?(steps), do: %{steps: steps, step: hd(steps), carry: nil, started_ms: nil, started_at: nil, notes: %{}, answers: [], session_id: nil}
+    if PhaseSteps.walk?(steps), do: %{steps: steps, step: hd(steps), carry: nil, started_ms: nil, started_at: nil, notes: %{}, answers: [], session_id: nil, lines: [], transcript_offsets: %{}}
   end
 
   defp new_walk(_profile), do: nil
@@ -873,7 +876,7 @@ defmodule SymphonyElixir.AgentRunner do
 
     turn_result = run_agent_turn(agent_module, app_session, prompt, run_context)
     # A resumed step's conversation is resumed once, by its first turn.
-    run_context = Map.delete(run_context, :resume_session_id)
+    run_context = run_context |> Map.delete(:resume_session_id) |> keep_turn_transcript(turn_result)
 
     case turn_result do
       {:ok, turn_session} ->
@@ -944,7 +947,7 @@ defmodule SymphonyElixir.AgentRunner do
       prompt,
       issue,
       [
-        on_message: codex_message_handler(codex_update_recipient, issue),
+        on_message: remembering_turn_session(codex_message_handler(codex_update_recipient, issue)),
         settings: Keyword.fetch!(opts, :settings),
         repo_key: Keyword.get(opts, :repo_key),
         run_id: Keyword.get(opts, :run_id),
@@ -958,6 +961,34 @@ defmodule SymphonyElixir.AgentRunner do
       ] ++ resume_opts(run_context)
     )
   end
+
+  # A turn that fails returns no session, and what it added to the transcript still belongs to its step.
+  defp remembering_turn_session(on_message) do
+    fn message ->
+      with {:session_started, session_id} <- message, do: Process.put(@turn_session_key, session_id)
+      on_message.(message)
+    end
+  end
+
+  # What a walk's agent turn said joins its step's lines (a retry of the step adds to them). The agent
+  # may have recorded the step's end during the turn, before the turn's last lines existed, so its
+  # `step.completed` gets them only now; a step's end Symphony records carries them as it is written.
+  defp keep_turn_transcript(%{walk: %{} = walk} = run_context, turn_result) do
+    {lines, offsets} = turn_lines(run_context, turn_session_id(turn_result), walk.transcript_offsets)
+    run_context = %{run_context | walk: %{walk | lines: walk.lines ++ lines, transcript_offsets: offsets}}
+    PhaseSteps.keep_agent_transcript(walk.step, step_context(run_context), walk.started_at)
+    run_context
+  end
+
+  defp keep_turn_transcript(run_context, _turn_result), do: run_context
+
+  # A session on another host keeps its transcript there.
+  defp turn_lines(run_context, session_id, offsets) do
+    if run_context.worker_host, do: {[], offsets}, else: Transcript.read_session(run_context.workspace, session_id, offsets)
+  end
+
+  defp turn_session_id({:ok, %{session_id: session_id}}) when is_binary(session_id), do: session_id
+  defp turn_session_id(_failed_turn), do: Process.get(@turn_session_key)
 
   defp resume_opts(%{resume_session_id: session_id}), do: [resume_session_id: session_id]
   defp resume_opts(_run_context), do: []
@@ -1401,6 +1432,7 @@ defmodule SymphonyElixir.AgentRunner do
 
     %{
       steps: (Map.get(run_context, :walk) || %{steps: []}).steps,
+      transcript_lines: Map.get(Map.get(run_context, :walk) || %{}, :lines, []),
       answer_dir: Keyword.get(opts, :agent_tmp_dir),
       repo_key: repo_key,
       issue_id: issue.id,
@@ -1421,7 +1453,7 @@ defmodule SymphonyElixir.AgentRunner do
     context = step_context(run_context)
     PhaseSteps.record_turn_started(walk.step, context)
     if walk.step.mode == "orchestrated", do: PhaseSteps.clear_answer(walk.step, context)
-    %{run_context | walk: %{walk | started_ms: System.monotonic_time(:millisecond), started_at: DateTime.utc_now()}}
+    %{run_context | walk: %{walk | started_ms: System.monotonic_time(:millisecond), started_at: DateTime.utc_now(), lines: []}}
   end
 
   defp start_walk_turn(%{walk: %{step: %{mode: "orchestrated"} = step}} = run_context) do

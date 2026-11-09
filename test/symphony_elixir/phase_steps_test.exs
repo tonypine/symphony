@@ -702,6 +702,41 @@ defmodule SymphonyElixir.PhaseStepsTest do
     end
   end
 
+  describe "an agent step's transcript" do
+    @lines [%{kind: "say", text: "Reading the module."}, %{kind: "tool", text: "Bash: cat lib/app.ex"}, %{kind: "result", text: "ok", duration_ms: 4}]
+
+    defp transcript_of(artifact_id) do
+      assert {:ok, %{kind: "transcript", label: "Write the code transcript"}} = Artifacts.get(artifact_id)
+      {:ok, path} = Artifacts.path(artifact_id)
+      path |> File.read!() |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!(&1, keys: :atoms))
+    end
+
+    test "Symphony's record of a step's end carries the step's lines, and a turn that said nothing carries none", ctx do
+      code = step(steps(), "code")
+      :ok = PhaseSteps.record_turn_passed(code, context(ctx, %{}, %{transcript_lines: @lines}), 10)
+      :ok = PhaseSteps.record_turn_passed(code, context(ctx, %{}, %{transcript_lines: []}), 10)
+
+      assert [%{artifacts: [artifact_id]}, %{artifacts: []}] = events("step.completed")
+      assert transcript_of(artifact_id) == @lines
+    end
+
+    test "the end the agent recorded mid-turn gets the lines once the turn is over", ctx do
+      code = step(steps(), "code")
+      since = DateTime.utc_now()
+      context = context(ctx, %{}, %{transcript_lines: @lines})
+
+      # No end recorded yet, or no lines: the ledger stays as it is.
+      assert :ok = PhaseSteps.keep_agent_transcript(code, context, since)
+      record_agent!("code", %{outcome: "passed"})
+      assert :ok = PhaseSteps.keep_agent_transcript(code, Map.put(context, :transcript_lines, []), since)
+      assert [%{artifacts: []}] = events("step.completed")
+
+      assert :ok = PhaseSteps.keep_agent_transcript(code, context, since)
+      assert [%{payload: %{step_id: "code", outcome: "passed"}, artifacts: [artifact_id]}] = events("step.completed")
+      assert transcript_of(artifact_id) == @lines
+    end
+  end
+
   describe "an orchestrated step's answer" do
     defp layout_step do
       [

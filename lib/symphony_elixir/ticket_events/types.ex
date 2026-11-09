@@ -57,7 +57,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   why (`reason`); and how long it took (`duration_ms`). Those fields are `conditional`: each is
   required exactly when its outcome holds and refused otherwise, as `command` and `prompt_ref` are
   by mode. A machine step's output is kept as an artifact of the `step_output` kind
-  (`SymphonyElixir.Artifacts`) on its `step.completed`. A skipped step is a `step.completed` with
+  (`SymphonyElixir.Artifacts`) on its `step.completed`; an agent step's slice of the session
+  transcript is a `transcript` artifact on its `step.completed` (`SymphonyElixir.PhaseSteps.Transcript`).
+  A skipped step is a `step.completed` with
   `outcome: skipped`: there is no `step.skipped` type. A `question.answered` naming the question a
   paused step waits on is what resumes that step.
 

@@ -2,7 +2,8 @@ defmodule SymphonyElixir.AgentRunnerTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Cache
-  alias SymphonyElixir.{Pauses, Questions, TicketEvents}
+  alias SymphonyElixir.{Artifacts, Pauses, Questions, TicketEvents}
+  alias SymphonyElixir.PhaseSteps.Transcript
 
   @issue_id "issue-walk"
   @run_id "run-walk"
@@ -29,8 +30,11 @@ defmodule SymphonyElixir.AgentRunnerTest do
       send(recipient, {:turn, count, session, prompt})
       send(recipient, {:turn_resumes, count, Keyword.get(opts, :resume_session_id)})
       script = Application.get_env(:symphony_elixir, :walk_agent_script, &record_step/3)
-      script.(count, prompt, opts)
-      {:ok, %{session_id: "sess-#{count}"}}
+
+      case script.(count, prompt, opts) do
+        {:return, result} -> result
+        _done -> {:ok, %{session_id: "sess-#{count}"}}
+      end
     end
 
     def record_step(_count, prompt, opts) do
@@ -519,6 +523,47 @@ defmodule SymphonyElixir.AgentRunnerTest do
 
     assert [%{payload: %{text: "The agent ended two turns of the Write the code step without recording how it ended."}}] =
              TicketEvents.query(@issue_id, types: ["note"])
+  end
+
+  test "each agent step's end carries its slice of the session transcript, even the end of a turn that failed", ctx do
+    projects = Path.join(Path.dirname(ctx.workspace), "projects")
+    Application.put_env(:symphony_elixir, :claude_projects_dir, projects)
+    on_exit(fn -> Application.delete_env(:symphony_elixir, :claude_projects_dir) end)
+    session_path = Path.join([projects, String.replace(ctx.workspace, ~r/[^A-Za-z0-9]/, "-"), "sess-recorded.jsonl"])
+    File.mkdir_p!(Path.dirname(session_path))
+    fixture = File.read!(Path.expand("../fixtures/session_transcript/session.jsonl", __DIR__))
+    {code_entries, handoff_entries} = fixture |> String.split("\n", trim: true) |> Enum.split(10)
+
+    # The code turn writes the first part of the session and returns it; the handoff turn writes the
+    # rest and fails, so only the session it started says which transcript is its.
+    Application.put_env(:symphony_elixir, :walk_agent_script, fn
+      1, prompt, opts ->
+        Keyword.fetch!(opts, :on_message).({:session_started, "sess-recorded"})
+        File.write!(session_path, Enum.map_join(code_entries, &(&1 <> "\n")))
+        WalkAgent.record_step(1, prompt, opts)
+        {:return, {:ok, %{session_id: "sess-recorded"}}}
+
+      2, prompt, opts ->
+        Keyword.fetch!(opts, :on_message).({:session_started, "sess-recorded"})
+        File.write!(session_path, Enum.map_join(handoff_entries, &(&1 <> "\n")), [:append])
+        WalkAgent.record_step(2, prompt, opts)
+        {:return, {:error, :turn_failed}}
+    end)
+
+    nothing_changed = fn _command, _env, _timeout -> {:ok, {"", 0}} end
+    task = start_run(ctx, [], in_progress_for(1), runner: nothing_changed)
+    Task.await(task, 10_000)
+
+    slices =
+      for %{type: "step.completed", actor: %{kind: :agent}, payload: %{step_id: id}, artifacts: [artifact_id]} <- step_events() do
+        assert {:ok, %{kind: "transcript"}} = Artifacts.get(artifact_id)
+        {:ok, path} = Artifacts.path(artifact_id)
+        {id, path |> File.read!() |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!(&1, keys: :atoms))}
+      end
+
+    assert [{"code", code}, {"handoff", handoff}] = slices
+    assert code ++ handoff == Transcript.lines(fixture)
+    assert List.last(code) == %{kind: "say", text: "The code step is done.", at: "2026-11-06T15:10:06.000Z"}
   end
 
   test "an agent step may fail back to an earlier step, or to one the list lacks, which ends the walk", ctx do

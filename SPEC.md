@@ -562,7 +562,12 @@ orchestrated steps; an agent records only delegated ones. `step.completed` carri
 `returns_to_title`); `paused`, which must name the Question it waits on (`question_id`); `skipped`,
 which must say why (`reason`); and `duration_ms`. Each of those fields is refused on any other
 outcome. A machine step's output is an artifact of kind `step_output` on its `step.completed`, served
-like any other artifact. There is no `step.skipped`: a skip is `step.completed` with `outcome:
+like any other artifact. An agent step's `step.completed` carries the step's slice of the session
+transcript as a `transcript` artifact (`.ndjson`, one line per entry: what the agent said, each tool
+call with its arguments summarised, each result summarised with its duration), cut at whole entries
+so a session's slices concatenated are its whole transcript; an end the agent recorded mid-turn gets
+it once the turn is over. While a run is live, the ticket read's `running` says the step it is on
+(`current_step`) and that step's newest lines from the session stream (`recent_lines`, at most 20). There is no `step.skipped`: a skip is `step.completed` with `outcome:
 skipped`. A `question.answered` naming the question a paused step waits on resumes that step. Each
 outcome renders one line ("Build failed after 4 min: back to writing the code", "Tests passed in 2
 min", "Paused on your answer", "Checks skipped: no Elixir changed"), and while a run is under way

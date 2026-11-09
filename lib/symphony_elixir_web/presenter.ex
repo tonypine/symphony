@@ -38,6 +38,7 @@ defmodule SymphonyElixirWeb.Presenter do
   alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
   alias SymphonyElixir.Linear.Webhook, as: LinearWebhook
   alias SymphonyElixir.Linear.Webhook.Deliveries, as: LinearWebhookDeliveries
+  alias SymphonyElixir.PhaseSteps.Transcript
   alias SymphonyElixir.Pauses.Backfill, as: PauseBackfill
   alias SymphonyElixir.Repo.Status, as: RepoStatus
   alias SymphonyElixir.TicketEvents.{Event, Summary}
@@ -1210,7 +1211,10 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   defp running_issue_payload(running) do
-    %{
+    running
+    |> Map.get(:issue_id)
+    |> Transcript.run_now(Map.get(running, :run_id), buffered_transcript_events(running))
+    |> Map.merge(%{
       repo_key: Map.get(running, :repo_key),
       worker_host: Map.get(running, :worker_host),
       workspace_path: Map.get(running, :workspace_path),
@@ -1232,7 +1236,7 @@ defmodule SymphonyElixirWeb.Presenter do
         output_tokens: entry_output_tokens(running),
         total_tokens: entry_total_tokens(running)
       }
-    }
+    })
   end
 
   defp retry_issue_payload(retry) do
