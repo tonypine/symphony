@@ -360,14 +360,15 @@ jobs:
       - name: Install dependencies
         run: time mix deps.get
 
-      # A restored PLT built by another Erlang/OTP build is rejected as "Old PLT file".
-      # Drop the cached PLTs and build them afresh once, instead of failing the head.
+      # A restored PLT built by another Erlang patch release makes Dialyzer exit with "Old PLT
+      # file" although dialyxir calls it up to date. The cache can't tell, so drop the PLTs and
+      # build them again, once.
       - name: Run Dialyzer
         run: |
           set -o pipefail
-          if ! mix dialyzer --format short 2>&1 | tee "$RUNNER_TEMP/dialyzer.log"; then
-            if grep -q "Old PLT file" "$RUNNER_TEMP/dialyzer.log"; then
-              echo "::warning::Cached Dialyzer PLT was rejected as old; rebuilding it"
+          if ! time mix dialyzer --format short 2>&1 | tee dialyzer.log; then
+            if grep -q "Old PLT file" dialyzer.log; then
+              echo "::warning::Dialyzer rejected a cached PLT as old; rebuilding the PLTs"
               rm -f "$DIALYZER_CORE_PLT_DIR"/dialyxir_*.plt _build/dev/dialyxir_*.plt _build/dev/dialyxir_*.plt.hash
               time mix dialyzer --format short
             else

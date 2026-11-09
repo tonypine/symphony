@@ -2537,7 +2537,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
               {decision.(%{"options" => [option.(%{"recommended" => true, "unlocks" => ["WORKFLOW.md", " "]}), option.(%{})]}), unlocks_type},
               {decision.(%{"options" => [option.(%{"recommended" => true, "unlocks" => ["WORKFLOW.md", "lib/app.ex"]}), option.(%{"unlocks" => [".git"]})]}),
                "`unlocks` names paths that are not protected: lib/app.ex, .git. It may only name the protected paths: " <>
-                 Enum.join(SymphonyElixir.AgentSandboxConfig.workspace_protected_paths(), ", ") <> "."},
+                 Enum.join(SymphonyElixir.AgentSandboxConfig.workspace_protected_paths(), ", ") <> ", or one path inside .github."},
               {decision.(%{"recommendation_reason" => 3}), "`decision.recommendation_reason` must be a string."},
               {%{"unblocks" => 3}, "`unblocks` must be a string."},
               {%{"if_unanswered" => 3}, "`if_unanswered` must be a string."},

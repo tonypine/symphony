@@ -563,7 +563,12 @@ orchestrated steps; an agent records only delegated ones. `step.completed` carri
 `returns_to_title`); `paused`, which must name the Question it waits on (`question_id`); `skipped`,
 which must say why (`reason`); and `duration_ms`. Each of those fields is refused on any other
 outcome. A machine step's output is an artifact of kind `step_output` on its `step.completed`, served
-like any other artifact. There is no `step.skipped`: a skip is `step.completed` with `outcome:
+like any other artifact. An agent step's `step.completed` carries the step's slice of the session
+transcript as a `transcript` artifact (`.ndjson`, one line per entry: what the agent said, each tool
+call with its arguments summarised, each result summarised with its duration), cut at whole entries
+so a session's slices concatenated are its whole transcript; an end the agent recorded mid-turn gets
+it once the turn is over. While a run is live, the ticket read's `running` says the step it is on
+(`current_step`) and that step's newest lines from the session stream (`recent_lines`, at most 20). There is no `step.skipped`: a skip is `step.completed` with `outcome:
 skipped`. A `question.answered` naming the question a paused step waits on resumes that step. Each
 outcome renders one line ("Build failed after 4 min: back to writing the code", "Tests passed in 2
 min", "Paused on your answer", "Checks skipped: no Elixir changed"), and while a run is under way
@@ -3208,8 +3213,12 @@ Rules:
   `In Progress` from `Rework`, `Code Review`, `QA` or `Merging` MUST be refused as a `Restart`.
 - **Explicit handoff.** `In Progress` and `Rework` advance to `Code Review` only on the handoff
   signal the push and pull-request tool hooks record against the pushed head. A run that stops
-  quiet with its open PR already on its workspace HEAD has nothing to push, so the runner records
-  the signal for that head and hands off. A run that ends without it MUST record `handoff_missing`
+  quiet with its open PR already on its workspace HEAD has nothing to push, a finished Rework run
+  may have pushed past the hooks, and a step list's machine `handoff` step pushes with its own
+  command, so in each the runner, on seeing the PR on that HEAD, records the signal for that head and
+  hands off in the same run. A machine `handoff` step does so only on the ticket as it stands when the
+  step ends: not on a hold, still in the phase the run works, nothing pending, and in `Rework` the head
+  moved past the one the `Rework` started from. A run that ends without it MUST record `handoff_missing`
   and leave the ticket where it is for the retry machinery, which MUST back off its quiet runs and
   hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head. A
   ticket on a hold is not counted: it waits on the hold alone. Before the hold, Symphony asks a
@@ -4214,8 +4223,11 @@ Current Elixir sandbox behavior:
   agent never makes macOS ask the operator to let Symphony access them.
 - Shared write denies protect workflow and runtime guardrail files such as `WORKFLOW.md`,
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
-  `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and
-  macOS launch agent roots.
+  `.tool-versions`, `.github` (CI workflows, actions, `CODEOWNERS`, dependabot),
+  `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and macOS launch agent
+  roots. A person's grant MAY name one path inside `.github` (`.github/workflows/make-all.yml`),
+  which unlocks that path alone: the rest of `.github` stays protected in the run's sandbox, the
+  push tools and the merge gate.
 - The instruction files a `WORKFLOW.md` playbook line pulls in (`.symphony/instructions/` by
   default, Section 5.5) are not write-protected: they are read only from the workflow's source,
   so an agent's edit reaches a run only through a merged pull request. Their placement and the
