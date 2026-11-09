@@ -5571,7 +5571,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       #!/bin/sh
       case " $* " in
         *" -C #{primary_repo} worktree add "*)
-          mkdir #{adding} 2>/dev/null || echo overlap >> #{overlaps}
+          mkdir #{adding} 2>/dev/null || { echo "overlap: pid $$ parent $PPID args: $*"; ps -eo pid,ppid,args | grep "worktree add" | grep -v grep; } >> #{overlaps}
           #{System.find_executable("git")} "$@"
           status=$?
           sleep 0.2
@@ -5605,7 +5605,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         assert String.trim(git!(workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"])) == "auto/#{identifier}"
       end
 
-      refute File.exists?(overlaps)
+      refute File.exists?(overlaps), "overlapping adds: " <> (File.read(overlaps) |> elem(1) |> to_string())
       refute File.exists?(Path.join([primary_repo, ".git", "symphony-worktree-add.lock"]))
     end)
   end
