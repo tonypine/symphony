@@ -68,14 +68,18 @@ defmodule SymphonyElixir.Artifacts.Store do
     if String.valid?(bytes), do: sniff_text(bytes, name |> Path.extname() |> String.downcase()), else: "application/octet-stream"
   end
 
-  defp sniff_text(bytes, ".jsonl") do
-    case bytes |> String.split("\n", parts: 2) |> hd() |> Jason.decode() do
-      {:ok, %{}} -> "application/x-ndjson"
-      _other -> "application/octet-stream"
-    end
-  end
+  defp sniff_text(bytes, ".jsonl"), do: json_lines(bytes, "application/x-ndjson")
+  # A step's transcript slice: JSON lines the Director's timeline opens as text, as any `text/*` file.
+  defp sniff_text(bytes, ".ndjson"), do: json_lines(bytes, "text/x-ndjson")
 
   defp sniff_text(_bytes, ".md"), do: "text/markdown"
   defp sniff_text(_bytes, ext) when ext in [".txt", ".log"], do: "text/plain"
   defp sniff_text(_bytes, _ext), do: "application/octet-stream"
+
+  defp json_lines(bytes, mime) do
+    case bytes |> String.split("\n", parts: 2) |> hd() |> Jason.decode() do
+      {:ok, %{}} -> mime
+      _other -> "application/octet-stream"
+    end
+  end
 end

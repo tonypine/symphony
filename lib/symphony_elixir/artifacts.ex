@@ -19,9 +19,12 @@ defmodule SymphonyElixir.Artifacts do
   alias SymphonyElixir.Artifacts.Store
 
   @kinds ~w(screenshot transcript log report diff file step_output)
-  @kind_mimes %{"screenshot" => ["image/png", "image/jpeg"], "transcript" => ["application/x-ndjson"]}
+  @kind_mimes %{"screenshot" => ["image/png", "image/jpeg"], "transcript" => ["application/x-ndjson", "text/x-ndjson"]}
 
-  @typedoc "One of `screenshot`, `transcript`, `log`, `report`, `diff`, `file` and `step_output` (a machine step's output)."
+  @typedoc """
+  One of `screenshot`, `transcript` (a session's whole transcript, or a step's slice of it),
+  `log`, `report`, `diff`, `file` and `step_output` (a machine step's output).
+  """
   @type kind :: String.t()
 
   @type ticket :: %{repo_key: String.t(), issue_id: String.t()}

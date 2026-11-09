@@ -546,7 +546,8 @@ model below), `evidence`, `finding.recorded` (QA
 runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirmed a resolution),
 `checklist.answered`, `drift.detected`, `drift.reverted`,
 `drift.revert_failed`, `pause.set`, `pause.reason_added`, `pause.reason_cleared`, `pause.cleared`,
-`question.asked`, `question.answered`, `question.withdrawn`, `question.reopened`, `park.backfilled`
+`question.asked`, `question.answered`, `question.withdrawn`, `question.reopened`, `question.not_asked`
+(machine only: a request refused at the run's limit of requests), `park.backfilled`
 (machine only: an older park brought up to date at start-up, with what it was given),
 `workspace.synced` (machine only: before a review, QA, landing or rework run, the heads the
 newest-known-head rule compared, the one that won and what it did), `workspace.rebuilt` (machine
@@ -562,7 +563,12 @@ orchestrated steps; an agent records only delegated ones. `step.completed` carri
 `returns_to_title`); `paused`, which must name the Question it waits on (`question_id`); `skipped`,
 which must say why (`reason`); and `duration_ms`. Each of those fields is refused on any other
 outcome. A machine step's output is an artifact of kind `step_output` on its `step.completed`, served
-like any other artifact. There is no `step.skipped`: a skip is `step.completed` with `outcome:
+like any other artifact. An agent step's `step.completed` carries the step's slice of the session
+transcript as a `transcript` artifact (`.ndjson`, one line per entry: what the agent said, each tool
+call with its arguments summarised, each result summarised with its duration), cut at whole entries
+so a session's slices concatenated are its whole transcript; an end the agent recorded mid-turn gets
+it once the turn is over. While a run is live, the ticket read's `running` says the step it is on
+(`current_step`) and that step's newest lines from the session stream (`recent_lines`, at most 20). There is no `step.skipped`: a skip is `step.completed` with `outcome:
 skipped`. A `question.answered` naming the question a paused step waits on resumes that step. Each
 outcome renders one line ("Build failed after 4 min: back to writing the code", "Tests passed in 2
 min", "Paused on your answer", "Checks skipped: no Elixir changed"), and while a run is under way
@@ -2838,7 +2844,11 @@ agent step again, the run asks the orchestrator for a turn and waits; the orches
 free slot before any dispatch, at once and on every cycle, and starts its new session with the whole
 prompt. While Symphony is paused (dispatch only), a run between steps still runs its machine steps,
 and its next agent turn waits for the pause to lift (decision 1 of TP-1085). A forced run waits only
-for the pause. `run.started` and `run.ended` frame the whole list, and `turn_count` counts agent
+for the pause. A run held by an update's pause records an `update_wait` signal on its ticket, with the
+version and the step. A drain waits for no run between turns (`between_turns` in Section 13.4's
+state): the pause holds its next turn, so the wait would never end, and it has no session to lose.
+Symphony stops with it there. After the restart the ticket's next run starts the list again in the
+same workspace, or resumes on the answer of a Question its step paused on. `run.started` and `run.ended` frame the whole list, and `turn_count` counts agent
 turns. Past the last step the run goes on turn by turn in the same session, as a run with no list
 does.
 
@@ -4694,8 +4704,11 @@ Scoped Linear tool extension contract:
   NOT be posted again. A request whose title or question a person already answered (the Decisions
   section, or an answered request under the issue) MUST NOT be posted: the result carries the
   recorded answer, which the run applies. Requests
-  MUST be capped per run (the Elixir cap is 5) and refused when the run has no state to count
-  against, or when the issue's repository turned human actions off. The read-only reviewer scope
+  MUST be capped per run (the Elixir cap is 5, and 12 on a plan run, the `breakdown` run kind, which
+  asks every choice its plan leaves open in one run) and refused when the run has no state to count
+  against, or when the issue's repository turned human actions off. A request refused for the cap is
+  recorded on the ticket as `question.not_asked` with its title and question, asks nothing and pauses
+  nothing. The read-only reviewer scope
   MUST NOT advertise or execute it.
 - `linear_withdraw_human_action` MUST only act on the current issue and MUST accept only a
   non-blank `reason` and an optional `title`. The reason MUST pass the same secret scan as comments
@@ -5114,6 +5127,10 @@ SHOULD return:
   or for Symphony's pause to lift, `ended` once the Question it waited on was withdrawn), otherwise
   null; a run on a machine step or paused on a Question has `session_id: null`, and its
   `last_message` names the step or the wait
+- each running row SHOULD include `between_turns`: true while `step.waiting` is `slot`, `pause` or
+  `answer`, when the run has no agent session and nothing of it is running; `counts.between_turns`
+  counts those rows, so a drain waits for `counts.running` less `counts.between_turns` runs. A run on
+  a machine step, or one ending, is not between turns: it finishes by itself
 - `watching` (list of recently completed issues now in non-active, non-terminal states)
 - each watching row SHOULD include issue identifier, current state, issue URL, last-run time, and
   final transcript replay metadata while the watch remains open
@@ -5395,6 +5412,7 @@ Minimum endpoints:
       "uptime_seconds": 5025,
       "counts": {
         "running": 2,
+        "between_turns": 0,
         "watching": 1,
         "conflicts": 0,
         "retrying": 1,
@@ -5885,7 +5903,9 @@ Minimum endpoints:
       `parsed`; a brief without a `**What to review:**` line comes as `{"format": "raw",
       "markdown": ...}`; null without a brief, `sub_tickets` (`identifier`, `title`, `url`,
       `state`) in landing order, and `unapplied_answers`: how many of the plan's requests a person
-      answered since the plan last moved into `Plan Review`, which no revision has applied yet.
+      answered since the plan last moved into `Plan Review`, which no revision has applied yet,
+      and `unasked_choices`: the titles of the choices its latest run could not ask because it
+      reached its limit of requests (`question.not_asked`), without those a later request asked.
     - `action`: `title`, `question`, `why`, `if_unanswered`, `unblocks`, `steps`, `options`
       (`label`, `effect`, `recommended`, `tradeoffs`: `kind` and `text`), `recommendation_reason`
       and `requested_at`.
@@ -5944,7 +5964,8 @@ Minimum endpoints:
           "review": {
             "brief": {"format": "parsed", "headline": "Approve the saved-searches plan.", "what_to_review": [], "what_changed": [], "decisions": [], "moves": []},
             "sub_tickets": [],
-            "unapplied_answers": 0
+            "unapplied_answers": 0,
+            "unasked_choices": []
           }
         },
         {

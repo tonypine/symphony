@@ -727,7 +727,8 @@ runs. The line under the status shows each step:
    check fails, an alert and a menu line show its error, and Symphony keeps running untouched.
 2. **Pause dispatch,** unless it is already paused. The restart remembers whether it paused it.
 3. **Wait for agent runs:** the menu shows "Waiting for N agent runs…" until a poll shows dispatch paused and
-   `0 running`. If a poll shows dispatch running again (it was resumed just before the restart, or while it
+   no run active. A run between two agent turns doesn't count: its next turn waits for the pause, and its ticket's
+   next run takes it up after the restart. If a poll shows dispatch running again (it was resumed just before the restart, or while it
    waits, from the dashboard for example), the restart pauses it again and then resumes it afterwards.
    After the restart timeout (Settings, 30 minutes by default) **Restart Now Anyway** also shows;
    it stops Symphony and the runs still active. **Cancel Restart** stops waiting and resumes dispatch if the
@@ -1337,7 +1338,7 @@ Ten more variables, read only in QA mode:
   hold; the stuck ticket, SHOP-305, has a failed run 1, its own endpoint and its transcript, SHOP-288 is a done
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
   `paused` (paused for "Deploy freeze") and `idle`, of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done),
-  `inbox-empty` and `inbox-decision` (TP-892's decision, with three options, with every ticket and pull request it mentions resolved
+  `inbox-empty`, `inbox-unasked-choices` (`inbox` with four choices SHOP-330's plan run could not ask, so its page and its Approve sheet carry the warning) and `inbox-decision` (TP-892's decision, with three options, with every ticket and pull request it mentions resolved
   and where TP-892 sits: 4 of its parent's 7 sub-tickets done, its pull request, two connected tickets and one
   earlier decision; TP-891's endpoint, watched in Code Review with its parent, a blocker, TP-892, and a ticket it
   blocks; the plan TP-923, whose brief mentions TP-947; TP-895's pull request, TP-896's clarify and TP-897's

@@ -783,8 +783,9 @@ defmodule SymphonyElixir.RunStore do
 
   @doc """
   Adds fields to the payloads of the ticket's stored events, in one durable transaction: `upgrades`
-  maps an event's `seq` to the fields to add. The one write that touches a stored event, a format
-  upgrade of events an earlier release wrote (`SymphonyElixir.TicketEvents.Backfill`): everything
+  maps an event's `seq` to the fields to add. A format upgrade of events an earlier release wrote
+  (`SymphonyElixir.TicketEvents.Backfill`), and with `attach_ticket_event_artifacts/3` the only write
+  that touches a stored event: everything
   else about each event stays, and a `seq` the ticket does not hold is ignored.
   """
   @spec upgrade_ticket_events(String.t(), %{optional(non_neg_integer()) => map()}) :: :ok | {:error, term()}
@@ -796,6 +797,24 @@ defmodule SymphonyElixir.RunStore do
         @ticket_events_table
         |> :mnesia.read(issue_id, :write)
         |> Enum.each(&upgrade_ticket_event_row(&1, upgrades))
+      end)
+    end
+  end
+
+  @doc """
+  Adds `artifact_ids` to the artifacts of the ticket's stored event `seq`, in one durable transaction:
+  files that exist only after the event was written (`SymphonyElixir.TicketEvents.attach_artifacts/2`).
+  Everything else about the event stays, an id it already holds is not added twice, and a `seq` the
+  ticket does not hold is ignored.
+  """
+  @spec attach_ticket_event_artifacts(String.t(), non_neg_integer(), [String.t()]) :: :ok | {:error, term()}
+  def attach_ticket_event_artifacts(issue_id, seq, artifact_ids) when is_binary(issue_id) and is_integer(seq) and is_list(artifact_ids) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn ->
+        @ticket_events_table
+        |> :mnesia.read(issue_id, :write)
+        |> Enum.filter(&(elem(&1, 6) == seq))
+        |> Enum.each(&attach_ticket_event_row(&1, artifact_ids))
       end)
     end
   end
@@ -2371,6 +2390,12 @@ defmodule SymphonyElixir.RunStore do
       _other ->
         :ok
     end
+  end
+
+  defp attach_ticket_event_row({@ticket_events_table, _key, _repo_key, _issue_id, _run_id, _type, _seq, record} = row, artifact_ids) do
+    :mnesia.delete_object(row)
+    event = Event.normalize(record)
+    write_ticket_event_row(%{event | artifacts: Enum.uniq(event.artifacts ++ artifact_ids)})
   end
 
   defp read_ticket_events(issue_id) do
