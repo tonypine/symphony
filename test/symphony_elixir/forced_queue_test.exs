@@ -172,8 +172,7 @@ defmodule SymphonyElixir.ForcedQueueTest do
       # Once queued it stays listed outside the active states, refreshed by id.
       forced = %{forced | state: "In Review", blocked_by: []}
       tracked([forced])
-      send(pid, :run_poll_cycle)
-      wait_until(fn -> match?(%{"forced-1" => %{state: "In Review"}}, :sys.get_state(pid).forced) end)
+      poll_until(pid, fn -> match?(%{"forced-1" => %{state: "In Review"}}, :sys.get_state(pid).forced) end)
 
       GenServer.stop(pid)
 
@@ -184,8 +183,7 @@ defmodule SymphonyElixir.ForcedQueueTest do
 
       # Removing the label drops it at the next poll, even while its repo is not due.
       tracked([%{forced | labels: ["bug"]}])
-      send(pid, :run_poll_cycle)
-      wait_until(fn -> :sys.get_state(pid).forced == %{} end)
+      poll_until(pid, fn -> :sys.get_state(pid).forced == %{} end)
       assert RunStore.get_forced(Config.repo_key!()) == %{}
 
       assert {:ok, audit} = AuditLog.query(issue: "MT-F1")
@@ -308,6 +306,23 @@ defmodule SymphonyElixir.ForcedQueueTest do
     end)
 
     {pid, name}
+  end
+
+  # Asks for a poll cycle whenever none is running, until `fun` holds. The orchestrator
+  # skips a requested cycle while one is in flight, and that one may have read the
+  # tracker before the test changed it, so a single send can be lost.
+  defp poll_until(pid, fun) do
+    wait_until(fn ->
+      fun.() ||
+        with state <- :sys.get_state(pid),
+             false <- state.poll_check_in_progress,
+             nil <- state.repo_poll_task_ref do
+          send(pid, :run_poll_cycle)
+          false
+        else
+          _busy -> false
+        end
+    end)
   end
 
   defp wait_until(fun, timeout_ms \\ 10_000) do
