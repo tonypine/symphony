@@ -320,6 +320,24 @@ jobs:
             ${{ runner.os }}-mix-dev-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-
             ${{ runner.os }}-mix-dev-
 
+      # `mise.toml` pins Erlang to its major release only, so a runner image or mise update can
+      # bring another patch release, and Dialyzer rejects a PLT its own version did not build.
+      # The PLT cache key names the versions installed here, so a toolchain change misses it.
+      - name: Read the Erlang, Elixir and Dialyzer versions
+        id: toolchain
+        run: |
+          elixir -e '
+            release = :erlang.system_info(:otp_release) |> to_string()
+            otp =
+              case File.read(Path.join([to_string(:code.root_dir()), "releases", release, "OTP_VERSION"])) do
+                {:ok, version} -> String.trim(version)
+                {:error, _} -> release
+              end
+
+            :ok = Application.load(:dialyzer)
+            IO.puts("key=otp-#{otp}-elixir-#{System.version()}-dialyzer-#{Application.spec(:dialyzer, :vsn)}")
+          ' | tee -a "$GITHUB_OUTPUT"
+
       # Dialyxir writes the Erlang and Elixir PLTs to Mix's home, which mise sets to its
       # Elixir install, and the deps PLT with its hash to `_build/dev`.
       - name: Locate Dialyzer PLTs
@@ -335,9 +353,9 @@ jobs:
             ${{ env.DIALYZER_CORE_PLT_DIR }}/dialyxir_*.plt
             _build/dev/dialyxir_*.plt
             _build/dev/dialyxir_*.plt.hash
-          key: ${{ runner.os }}-dialyzer-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
+          key: ${{ runner.os }}-dialyzer-${{ steps.toolchain.outputs.key }}-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}
           restore-keys: |
-            ${{ runner.os }}-dialyzer-
+            ${{ runner.os }}-dialyzer-${{ steps.toolchain.outputs.key }}-
 
       - name: Install dependencies
         run: time mix deps.get
