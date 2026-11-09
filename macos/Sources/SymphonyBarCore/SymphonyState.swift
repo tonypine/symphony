@@ -3,6 +3,9 @@ import Foundation
 /// What the menu shows from one `GET /api/v1/state` response.
 public struct StateSnapshot: Equatable {
     public var running: Int
+    /// Of `running`, the runs between two agent turns: no session, and nothing of them runs until the next turn. 0
+    /// when Symphony predates `counts.between_turns`.
+    public var betweenTurns: Int
     public var retrying: Int
     /// Set while the operator paused dispatch, nil otherwise.
     public var pause: Pause?
@@ -359,8 +362,13 @@ public struct StateSnapshot: Equatable {
         }
     }
 
+    /// The runs a restart or an update waits for. One between turns isn't among them: under a pause its next turn
+    /// never starts, so it would never end, and its ticket's next run takes it up after the restart.
+    public var activeRuns: Int { max(running - betweenTurns, 0) }
+
     public init(
         running: Int = 0,
+        betweenTurns: Int = 0,
         retrying: Int = 0,
         pause: Pause? = nil,
         usageLimits: [UsageLimit] = [],
@@ -382,6 +390,7 @@ public struct StateSnapshot: Equatable {
         pauseReasons: [PauseReason]? = nil
     ) {
         self.running = running
+        self.betweenTurns = betweenTurns
         self.retrying = retrying
         self.pause = pause
         self.usageLimits = usageLimits
@@ -804,7 +813,10 @@ public enum SymphonyState {
         guard let counts = payload.counts else { return .failed("Symphony's state couldn't be read") }
 
         var snapshot = StateSnapshot(
-            running: counts.running, retrying: counts.retrying ?? 0, updateUnblocks: payload.appUpdate?.unblocks ?? 0
+            running: counts.running,
+            betweenTurns: counts.betweenTurns ?? 0,
+            retrying: counts.retrying ?? 0,
+            updateUnblocks: payload.appUpdate?.unblocks ?? 0
         )
         if let line = payload.appUpdate?.buildLine?.trimmingCharacters(in: .whitespacesAndNewlines), !line.isEmpty {
             snapshot.updateBuildLine = line
@@ -931,6 +943,7 @@ public enum SymphonyState {
     private struct Payload: Decodable {
         struct Counts: Decodable {
             let running: Int
+            let betweenTurns: Int?
             let retrying: Int?
         }
 

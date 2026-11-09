@@ -617,25 +617,37 @@ defmodule SymphonyElixir.ExtensionsTest do
     {:ok, pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot.(building))
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
-    assert %{"running" => [%{"session_id" => nil, "last_message" => "running Build", "step" => step}]} = json_response(get(build_conn(), "/api/v1/state"), 200)
+    assert %{"counts" => %{"running" => 1, "between_turns" => 0}, "running" => [%{"session_id" => nil, "last_message" => "running Build", "step" => step, "between_turns" => false}]} =
+             json_response(get(build_conn(), "/api/v1/state"), 200)
+
     assert step == %{"id" => "build", "title" => "Build", "mode" => "machine", "started_at" => "2026-11-05T12:30:00Z", "waiting" => nil}
 
     :sys.replace_state(pid, &Keyword.put(&1, :snapshot, snapshot.(waiting.("slot"))))
-    assert %{"running" => [%{"last_message" => "waiting for a free slot for its next agent turn"}]} = json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    assert %{"counts" => %{"running" => 1, "between_turns" => 1}, "running" => [%{"last_message" => "waiting for a free slot for its next agent turn", "between_turns" => true}]} =
+             json_response(get(build_conn(), "/api/v1/state"), 200)
 
     :sys.replace_state(pid, &Keyword.put(&1, :snapshot, snapshot.(waiting.("pause"))))
 
-    assert %{"running" => [%{"last_message" => "waiting for Symphony's pause to lift before its next agent turn", "step" => %{"waiting" => "pause", "started_at" => nil}}]} =
+    assert %{
+             "counts" => %{"running" => 1, "between_turns" => 1},
+             "running" => [%{"last_message" => "waiting for Symphony's pause to lift before its next agent turn", "step" => %{"waiting" => "pause", "started_at" => nil}, "between_turns" => true}]
+           } =
              json_response(get(build_conn(), "/api/v1/state"), 200)
 
     # A step paused on a Question: no session, on its step, waiting for the person's answer.
     :sys.replace_state(pid, &Keyword.put(&1, :snapshot, snapshot.(Map.put(waiting.("answer"), :question_id, "q-1"))))
 
-    assert %{"running" => [%{"session_id" => nil, "last_message" => "paused on your answer at Write the code", "step" => %{"waiting" => "answer", "question_id" => "q-1"}}]} =
+    assert %{
+             "counts" => %{"between_turns" => 1},
+             "running" => [%{"session_id" => nil, "last_message" => "paused on your answer at Write the code", "step" => %{"waiting" => "answer", "question_id" => "q-1"}, "between_turns" => true}]
+           } =
              json_response(get(build_conn(), "/api/v1/state"), 200)
 
     :sys.replace_state(pid, &Keyword.put(&1, :snapshot, snapshot.(waiting.("ended"))))
-    assert %{"running" => [%{"last_message" => "ending: the question its step waited on was withdrawn"}]} = json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    assert %{"counts" => %{"between_turns" => 0}, "running" => [%{"last_message" => "ending: the question its step waited on was withdrawn", "between_turns" => false}]} =
+             json_response(get(build_conn(), "/api/v1/state"), 200)
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do
@@ -686,6 +698,7 @@ defmodule SymphonyElixir.ExtensionsTest do
       "repositories" => [],
       "counts" => %{
         "running" => 1,
+        "between_turns" => 0,
         "watching" => 1,
         "conflicts" => 0,
         "retrying" => 1,
@@ -721,6 +734,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           "last_message" => "rendered",
           "linear_wait_until" => nil,
           "pending_tool" => nil,
+          "between_turns" => false,
           "step" => nil,
           "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
           "last_event_at" => nil,
@@ -2712,6 +2726,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert response.body["counts"] == %{
              "running" => 1,
+             "between_turns" => 0,
              "watching" => 1,
              "conflicts" => 0,
              "retrying" => 1,

@@ -2844,7 +2844,11 @@ agent step again, the run asks the orchestrator for a turn and waits; the orches
 free slot before any dispatch, at once and on every cycle, and starts its new session with the whole
 prompt. While Symphony is paused (dispatch only), a run between steps still runs its machine steps,
 and its next agent turn waits for the pause to lift (decision 1 of TP-1085). A forced run waits only
-for the pause. `run.started` and `run.ended` frame the whole list, and `turn_count` counts agent
+for the pause. A run held by an update's pause records an `update_wait` signal on its ticket, with the
+version and the step. A drain waits for no run between turns (`between_turns` in Section 13.4's
+state): the pause holds its next turn, so the wait would never end, and it has no session to lose.
+Symphony stops with it there. After the restart the ticket's next run starts the list again in the
+same workspace, or resumes on the answer of a Question its step paused on. `run.started` and `run.ended` frame the whole list, and `turn_count` counts agent
 turns. Past the last step the run goes on turn by turn in the same session, as a run with no list
 does.
 
@@ -5119,6 +5123,10 @@ SHOULD return:
   or for Symphony's pause to lift, `ended` once the Question it waited on was withdrawn), otherwise
   null; a run on a machine step or paused on a Question has `session_id: null`, and its
   `last_message` names the step or the wait
+- each running row SHOULD include `between_turns`: true while `step.waiting` is `slot`, `pause` or
+  `answer`, when the run has no agent session and nothing of it is running; `counts.between_turns`
+  counts those rows, so a drain waits for `counts.running` less `counts.between_turns` runs. A run on
+  a machine step, or one ending, is not between turns: it finishes by itself
 - `watching` (list of recently completed issues now in non-active, non-terminal states)
 - each watching row SHOULD include issue identifier, current state, issue URL, last-run time, and
   final transcript replay metadata while the watch remains open
@@ -5400,6 +5408,7 @@ Minimum endpoints:
       "uptime_seconds": 5025,
       "counts": {
         "running": 2,
+        "between_turns": 0,
         "watching": 1,
         "conflicts": 0,
         "retrying": 1,
