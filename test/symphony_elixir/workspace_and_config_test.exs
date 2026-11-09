@@ -5561,14 +5561,16 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       adding = Path.join(ctx.test_root, "adding")
       overlaps = Path.join(ctx.test_root, "overlaps")
 
-      # The worker's git notes a `worktree add` that starts while another is still
-      # running, and holds each add open a moment so unserialized ones would overlap.
+      # The worker's git notes a `worktree add` of this repo that starts while another is
+      # still running, and holds each add open a moment so unserialized ones would overlap.
+      # PATH is process-wide, so a `worktree add` another test's process runs in its own
+      # repo meanwhile also reaches this git: only adds of this repo count.
       File.mkdir_p!(bin)
 
       File.write!(Path.join(bin, "git"), """
       #!/bin/sh
       case " $* " in
-        *" worktree add "*)
+        *" -C #{primary_repo} worktree add "*)
           mkdir #{adding} 2>/dev/null || echo overlap >> #{overlaps}
           #{System.find_executable("git")} "$@"
           status=$?
