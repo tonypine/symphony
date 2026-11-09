@@ -53,9 +53,13 @@ defmodule SymphonyElixir.RuleActions do
   in plain words (cut to #{@max_text} characters). Best-effort: `:ok` always, a refusal logged.
   """
   @spec record(String.t() | nil, String.t() | nil, String.t(), action(), String.t() | nil, [opt()]) :: :ok
-  def record(repo_key, issue_id, rule, action, text, opts \\ [])
+  def record(repo_key, issue_id, rule, action, text, opts \\ []) do
+    if is_binary(repo_key) and is_binary(issue_id),
+      do: do_record(repo_key, issue_id, rule, action, text, opts),
+      else: :ok
+  end
 
-  def record(repo_key, issue_id, rule, action, text, opts) when is_binary(repo_key) and is_binary(issue_id) do
+  defp do_record(repo_key, issue_id, rule, action, text, opts) do
     record_opts = if at = Keyword.get(opts, :at), do: [at: at], else: []
 
     case TicketEvents.record(repo_key, issue_id, "rule.action", payload(rule, action, text, opts), record_opts) do
@@ -67,8 +71,6 @@ defmodule SymphonyElixir.RuleActions do
         :ok
     end
   end
-
-  def record(_repo_key, _issue_id, _rule, _action, _text, _opts), do: :ok
 
   @doc "The name a PR watcher row's action is recorded under: `PR watcher R22`."
   @spec watcher_rule(String.t()) :: String.t()
@@ -110,7 +112,7 @@ defmodule SymphonyElixir.RuleActions do
   defp pause_action("pause.cleared", %{by: %{kind: :rule, name: rule}, cleared: cleared}) do
     case Enum.reject(cleared, &(&1.reason == :question)) do
       [] -> nil
-      reasons -> {rule, "lifted_pause", reasons |> Enum.map(& &1.text) |> Enum.join("; ")}
+      reasons -> {rule, "lifted_pause", Enum.map_join(reasons, "; ", & &1.text)}
     end
   end
 

@@ -75,7 +75,11 @@ defmodule SymphonyElixir.RunStore do
   @table_load_progress_ms 10_000
 
   @typedoc "What a pause update's function returns: a pause to write (nil clears it), or nothing to write."
-  @type pause_update :: {:write, map() | nil, term()} | {:write, map() | nil, [Event.t()], term()} | {:ok, term()} | {:error, term()}
+  @type pause_update ::
+          {:write, map() | nil, term()}
+          | {:write, map() | nil, [Event.t()], term()}
+          | {:ok, term()}
+          | {:error, term()}
 
   @typedoc """
   What a ticket's pause update's function returns: a pause to write (nil clears it) with the events

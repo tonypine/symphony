@@ -79,7 +79,11 @@ defmodule SymphonyElixir.TicketEvents.Journal do
           | {:now, DateTime.t()}
 
   @typedoc "Who did it: Symphony, a named rule, a person (the Director) or a run (with its `run_id` when known)."
-  @type by :: %{required(:kind) => String.t(), required(:name) => String.t() | nil, optional(:run_id) => String.t() | nil}
+  @type by :: %{
+          required(:kind) => String.t(),
+          required(:name) => String.t() | nil,
+          optional(:run_id) => String.t() | nil
+        }
 
   @typedoc """
   One entry: the event, its ticket (`repo_key`, `identifier`, `title`; nil fields for Symphony's

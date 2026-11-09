@@ -29,7 +29,18 @@ defmodule SymphonyElixir.TicketEvents.Notable do
   alias SymphonyElixir.TicketEvents.Event
 
   @pause_threshold_ms 15 * 60_000
-  @rules [:verdict, :phase_move, :question, :long_pause, :rule_action, :ticket_filed, :shipped_or_cancelled, :release_installed, :factory_paused, :situation]
+  @rules [
+    :verdict,
+    :phase_move,
+    :question,
+    :long_pause,
+    :rule_action,
+    :ticket_filed,
+    :shipped_or_cancelled,
+    :release_installed,
+    :factory_paused,
+    :situation
+  ]
   @symphony_stream "symphony"
   @shipped_phases ["done", "canceled", "cancelled"]
   @situations ["waiting_on_you", "retrying", "blocked_by_ticket"]

@@ -569,7 +569,9 @@ defmodule SymphonyElixir.Pauses do
   # Symphony's own pause records its event on Symphony's stream (`TicketEvents.build_subject/4`):
   # the Journal reads the factory paused and resumed, and an update's build installed, from them.
   defp change(:symphony, pause, type, payload, at) do
-    with {:ok, event} <- TicketEvents.build_subject(:symphony, type, payload, at: at, idempotency: idempotency(type, payload)),
+    opts = [at: at, idempotency: idempotency(type, payload)]
+
+    with {:ok, event} <- TicketEvents.build_subject(:symphony, type, payload, opts),
          do: {:write, pause, [event], pause}
   end
 

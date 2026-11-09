@@ -45,7 +45,16 @@ defmodule SymphonyElixirWeb.JournalController do
          {:ok, classes} <- classes(params["classes"]),
          {:ok, notable} <- notable(params["notable"]),
          {:ok, limit} <- limit(params["limit"]) do
-      {:ok, [since: since, until: until, repo: blank_to_nil(params["repo"]), epic: blank_to_nil(params["epic"]), classes: classes, notable: notable, limit: limit]}
+      {:ok,
+       [
+         since: since,
+         until: until,
+         repo: blank_to_nil(params["repo"]),
+         epic: blank_to_nil(params["epic"]),
+         classes: classes,
+         notable: notable,
+         limit: limit
+       ]}
     end
   end
 

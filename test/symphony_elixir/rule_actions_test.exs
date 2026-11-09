@@ -82,8 +82,12 @@ defmodule SymphonyElixir.RuleActionsTest do
     assert RuleActions.pause_event(@repo, @issue_id, "pause.set", %{set_by | set_by: %{kind: :rule, name: ""}}, @at) == :none
 
     cleared = %{by: @rule, cleared: [%{reason: :question, text: "Waiting for your answer"}, %{reason: :build, text: "Waiting for v1"}]}
-    assert {:ok, %{payload: %{action: "lifted_pause", text: "Waiting for v1"}}} = RuleActions.pause_event(@repo, @issue_id, "pause.cleared", cleared, @at)
-    assert RuleActions.pause_event(@repo, @issue_id, "pause.cleared", %{cleared | cleared: [%{reason: :question, text: "q"}]}, @at) == :none
+
+    assert {:ok, %{payload: %{action: "lifted_pause", text: "Waiting for v1"}}} =
+             RuleActions.pause_event(@repo, @issue_id, "pause.cleared", cleared, @at)
+
+    question_only = %{cleared | cleared: [%{reason: :question, text: "q"}]}
+    assert RuleActions.pause_event(@repo, @issue_id, "pause.cleared", question_only, @at) == :none
     assert RuleActions.pause_event(@repo, @issue_id, "pause.reason_cleared", %{by: @rule, reason: :question, text: "q"}, @at) == :none
     assert RuleActions.pause_event(@repo, @issue_id, "pause.cleared", %{by: %{kind: :person, name: "Director"}, cleared: []}, @at) == :none
   end
@@ -93,7 +97,12 @@ defmodule SymphonyElixir.RuleActionsTest do
     {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("Away"), set_by: %{kind: :person, name: "Director"}, at: @at)
     assert ["pause.set"] = :symphony |> TicketEvents.query_subject() |> Enum.map(& &1.type)
 
-    assert {:ok, %{reasons: [_reason]}, []} = Pauses.set_change(:symphony, nil, Pauses.dispatch_reason("Away"), set_by: symphony, at: @at)
-    assert {:ok, %{reasons: [_reason]}, []} = Pauses.set_change({:repository, @repo}, nil, Pauses.repository_reason(nil), set_by: symphony, at: @at)
+    assert {:ok, %{reasons: [_reason]}, []} =
+             Pauses.set_change(:symphony, nil, Pauses.dispatch_reason("Away"), set_by: symphony, at: @at)
+
+    repository_reason = Pauses.repository_reason(nil)
+
+    assert {:ok, %{reasons: [_reason]}, []} =
+             Pauses.set_change({:repository, @repo}, nil, repository_reason, set_by: symphony, at: @at)
   end
 end
