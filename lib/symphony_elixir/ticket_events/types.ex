@@ -99,7 +99,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   the reason and its `cause`: `ticket_moved`, `restarted`, `hold_cleared`, `superseded`, `superseded_by_move`, or
   `run_ended` for a question that holds nothing), each naming the question by `question_id`, and `question.reopened` when the Director
   takes an answer back, after which the question is open again and its next answer is a new
-  `question.answered`.
+  `question.answered`. `question.not_asked` is the request a run was refused because it reached its
+  limit of requests (`cap`), with the `title` and `question` it would have asked: nothing is asked and
+  nothing pauses, and a plan's Inbox item lists it (`SymphonyElixir.TicketState.unasked_choices/1`).
 
   `situation.changed` is machinery-only: the ticket's situation (`SymphonyElixir.Situation`) took
   another kind, with the old kind (`from`, none on the first), the new one (`to`), the pattern's
@@ -297,6 +299,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
       run_kinds: [],
       required: [question_id: :string],
       optional: [title: :string, by: :map] ++ @signal,
+      idempotency: :writer
+    },
+    "question.not_asked" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [title: {:string, 120}, question: :string, cap: :non_neg_integer],
+      optional: @signal,
       idempotency: :writer
     },
     "person.action" => %{

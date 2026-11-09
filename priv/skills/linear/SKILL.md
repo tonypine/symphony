@@ -105,7 +105,8 @@ arguments from prompts.
   repeats until someone answers), `decision.recommendation_reason` (one line),
   each option's `tradeoffs` (0 to 3 of `{"kind": "good" | "cost" | "risk", "text": "..."}`)
   and `unblocks` are optional. Every field is refused when it holds a secret. A
-  request with the same title still open is not posted again. At most 5 per run.
+  request with the same title still open is not posted again. At most 5 per run,
+  12 on a planning run.
 - `linear_withdraw_human_action` with `{"reason": "...", "title": "..."}`:
   withdraws a human-action request that is no longer needed. It replies with the
   reason under the request and removes the human-action label once no open
