@@ -84,6 +84,7 @@ defmodule SymphonyElixirWeb.Router do
     get("/api/v1/learnings", ObservabilityApiController, :learnings)
     get("/api/v1/repos", ObservabilityApiController, :repos)
     get("/api/v1/inbox", ObservabilityApiController, :inbox)
+    get("/api/v1/dispatch/order", ObservabilityApiController, :dispatch_order)
     get("/api/v1/initiatives", ObservabilityApiController, :initiatives)
     get("/api/v1/runs/:session_id/report", ObservabilityApiController, :quality_report)
     get("/api/v1/pull_requests/:repo_key/:number", ObservabilityApiController, :pull_request)
