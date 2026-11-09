@@ -36,6 +36,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   alias SymphonyElixir.Codex.MessageHumanizer
   alias SymphonyElixir.Connected.Read, as: ConnectedRead
+  alias SymphonyElixir.Dispatch.Order, as: DispatchOrder
   alias SymphonyElixir.Dispatch.Shadow, as: DispatchShadow
   alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
   alias SymphonyElixir.Linear.Webhook, as: LinearWebhook
@@ -127,6 +128,7 @@ defmodule SymphonyElixirWeb.Presenter do
           rate_limit: WatchPayload.rate_limit(PrWatch.rate_limit()),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&(&1 |> slot_waiting_payload() |> status.())),
           dispatch_skipped: snapshot |> Map.get(:dispatch_skipped, []) |> Enum.map(&(&1 |> dispatch_skipped_payload() |> status.())),
+          order: dispatch_order_read(snapshot, Map.values(records)),
           shipped_today: Enum.map(shipped_today, &shipped_payload/1),
           blocked: Enum.map(blocked, &blocked_payload/1),
           app_update: WatchPayload.app_update(blocked, PrWatch.Release.latest(), ReleaseBuild.latest_build()),
@@ -150,6 +152,31 @@ defmodule SymphonyElixirWeb.Presenter do
         %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
     end
   end
+
+  @doc """
+  The dispatch order (`GET /api/v1/dispatch/order`, `SymphonyElixir.Dispatch.Order.read/3`): every open
+  ticket Symphony works, grouped by situation kind, and the candidates in the order the dispatcher
+  starts them, each with its reason. Read from what the orchestrator walked at its last poll cycle and
+  the ticket records: it makes no Linear request.
+  """
+  @spec dispatch_order_payload(GenServer.name(), timeout()) :: map()
+  def dispatch_order_payload(orchestrator, snapshot_timeout_ms) do
+    generated_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+    case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
+      %{} = snapshot ->
+        records = ticket_state_records() |> Map.values()
+        Map.put(dispatch_order_read(snapshot, records), :generated_at, generated_at)
+
+      :timeout ->
+        %{generated_at: generated_at, error: %{code: "snapshot_timeout", message: "Snapshot timed out"}}
+
+      :unavailable ->
+        %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
+    end
+  end
+
+  defp dispatch_order_read(snapshot, records), do: DispatchOrder.read(Map.get(snapshot, :dispatch_order), records, Situation.live_facts(snapshot))
 
   @doc """
   The plan tickets followed to done (`SymphonyElixir.Initiatives.list/4`): active ones first, then
