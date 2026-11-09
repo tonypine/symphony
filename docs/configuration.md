@@ -3402,6 +3402,13 @@ phases:
       # code, build, checks, tests and handoff, as in the implementation list
 ```
 
+A list may instead end on a machine step with the id `handoff`, whose command pushes the branch. Once
+it passes, or a person answers its question with "Go on past it", with the workspace HEAD on the
+ticket's PR, Symphony records the handoff for that head and moves the ticket to `Code Review` in the
+same run. Nothing moves when the PR doesn't show that head, the ticket got a hold or left its phase
+while the step ran, a review comment, red check or conflict is pending, or a `Rework` head hasn't moved
+past the one the `Rework` started from.
+
 `symphony:findings` is a command Symphony runs itself, not in a shell, while the run keeps its slot.
 It keeps the open findings by class from the ticket's history as the step's output. When QA failed
 the ticket on the same class in two QA runs (for a finding QA left `unclassified`, on the same step
