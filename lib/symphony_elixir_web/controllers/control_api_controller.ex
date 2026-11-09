@@ -90,8 +90,7 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   alias Plug.Conn
   alias SymphonyElixir.{AuditLog, DirectorBlockers, DirectorLabels, DirectorMoves, DirectorPriority, DirectorRulings}
-  alias SymphonyElixir.Orchestrator
-  alias SymphonyElixir.{Marks, TicketEvents, TicketMoves, TicketSignals}
+  alias SymphonyElixir.{Marks, Orchestrator, TicketEvents, TicketMoves, TicketSignals}
   alias SymphonyElixir.TicketEvents.Types
   alias SymphonyElixirWeb.{Endpoint, Presenter, TicketEventsController}
 
@@ -268,10 +267,15 @@ defmodule SymphonyElixirWeb.ControlApiController do
   def looked(conn, params) do
     with {:ok, identifier} <- required_param(params["issue_identifier"], "issue_identifier"),
          {:ok, %{record: record, looked_at: looked_at}} <- Marks.look(identifier, string_param(params["repo_key"])) do
-      json(conn, %{issue_identifier: record.issue_identifier, looked_at: DateTime.to_iso8601(looked_at), new_since_looked: 0})
+      looked_at = DateTime.to_iso8601(looked_at)
+      json(conn, %{issue_identifier: record.issue_identifier, looked_at: looked_at, new_since_looked: 0})
     else
-      {:error, {:invalid_request, message}} -> error_response(conn, 422, "invalid_request", message)
-      {:error, :not_found} -> error_response(conn, 404, "ticket_not_found", TicketMoves.no_ticket_reason(params["issue_identifier"], params["repo_key"]))
+      {:error, {:invalid_request, message}} ->
+        error_response(conn, 422, "invalid_request", message)
+
+      {:error, :not_found} ->
+        reason = TicketMoves.no_ticket_reason(params["issue_identifier"], params["repo_key"])
+        error_response(conn, 404, "ticket_not_found", reason)
     end
   end
 

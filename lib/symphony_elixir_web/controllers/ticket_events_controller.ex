@@ -118,13 +118,16 @@ defmodule SymphonyElixirWeb.TicketEventsController do
   defp group("run"), do: {:ok, :run}
   defp group(_value), do: {:error, {:invalid, "group must be run"}}
 
-  defp page_json(record, events, nil),
-    do: %{events: Presenter.ticket_events_json(record.repo_key, record.issue_id, events, looked_at: Marks.looked_at(record))}
+  defp page_json(record, events, nil) do
+    looked_at = Marks.looked_at(record)
+    %{events: Presenter.ticket_events_json(record.repo_key, record.issue_id, events, looked_at: looked_at)}
+  end
 
   # A store error on the history read raises, as the page's own read does.
   defp page_json(record, events, :run) do
     history = RunStore.list_ticket_events(record.issue_id, types: @run_header_types)
-    %{timeline: Presenter.ticket_timeline_json(record.repo_key, record.issue_id, events, history, looked_at: Marks.looked_at(record))}
+    looked_at = Marks.looked_at(record)
+    %{timeline: Presenter.ticket_timeline_json(record.repo_key, record.issue_id, events, history, looked_at: looked_at)}
   end
 
   defp next_since([], since), do: since && DateTime.to_iso8601(since)

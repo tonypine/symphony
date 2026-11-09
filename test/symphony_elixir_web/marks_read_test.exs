@@ -33,7 +33,8 @@ defmodule SymphonyElixirWeb.MarksReadTest do
   end
 
   defp orchestrator do
-    {:ok, pid} = SnapshotOrchestrator.start_link(%{running: [], retrying: [], rate_limits: nil, repositories: [], dispatch_skipped: [], watching: []})
+    snapshot = %{running: [], retrying: [], rate_limits: nil, repositories: [], dispatch_skipped: [], watching: []}
+    {:ok, pid} = SnapshotOrchestrator.start_link(snapshot)
     on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
     pid
   end

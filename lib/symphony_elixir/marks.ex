@@ -41,7 +41,8 @@ defmodule SymphonyElixir.Marks do
   `repo_key` when given, else in whichever repository holds it. A ticket with no record is
   `{:error, :not_found}`; a store that refuses the write answers its error.
   """
-  @spec look(String.t(), String.t() | nil, keyword()) :: {:ok, %{record: TicketState.t(), looked_at: DateTime.t()}} | {:error, term()}
+  @spec look(String.t(), String.t() | nil, keyword()) ::
+          {:ok, %{record: TicketState.t(), looked_at: DateTime.t()}} | {:error, term()}
   def look(issue_identifier, repo_key, opts \\ []) do
     now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
     person = Keyword.get(opts, :person, @person)
