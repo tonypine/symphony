@@ -85,6 +85,15 @@ every module below 100% fails, and a green report saves the baseline pull reques
 To read the lines of an exported run locally: `mix test --cover --export-coverage <name> <files>`,
 then `MIX_ENV=test mix coverage.report`.
 
+CI's `dialyzer` job caches Dialyxir's PLTs (the Erlang and Elixir ones in `MIX_HOME` and the deps
+one in `_build/dev`). Dialyzer refuses a PLT that another Dialyzer version built ("Old PLT file"),
+and `mise.toml` pins Erlang to its major release only, so a runner image or mise update can change
+the Erlang patch release under a cached PLT. The cache key therefore names the Erlang/OTP, Elixir
+and Dialyzer versions installed on the runner, then the hash of `mix.lock`, `mix.exs` and
+`mise.toml`; the restore prefix keeps the versions, so a toolchain change misses the cache and
+builds the PLTs afresh. If Dialyzer still rejects a restored PLT as old, the job deletes the PLTs
+and runs `mix dialyzer` once more, so a stale cache costs one slow run, not a red check.
+
 Use the fast local gate while iterating:
 
 ```bash

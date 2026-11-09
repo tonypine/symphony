@@ -3214,8 +3214,12 @@ Rules:
   `In Progress` from `Rework`, `Code Review`, `QA` or `Merging` MUST be refused as a `Restart`.
 - **Explicit handoff.** `In Progress` and `Rework` advance to `Code Review` only on the handoff
   signal the push and pull-request tool hooks record against the pushed head. A run that stops
-  quiet with its open PR already on its workspace HEAD has nothing to push, so the runner records
-  the signal for that head and hands off. A run that ends without it MUST record `handoff_missing`
+  quiet with its open PR already on its workspace HEAD has nothing to push, a finished Rework run
+  may have pushed past the hooks, and a step list's machine `handoff` step pushes with its own
+  command, so in each the runner, on seeing the PR on that HEAD, records the signal for that head and
+  hands off in the same run. A machine `handoff` step does so only on the ticket as it stands when the
+  step ends: not on a hold, still in the phase the run works, nothing pending, and in `Rework` the head
+  moved past the one the `Rework` started from. A run that ends without it MUST record `handoff_missing`
   and leave the ticket where it is for the retry machinery, which MUST back off its quiet runs and
   hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head. A
   ticket on a hold is not counted: it waits on the hold alone. Before the hold, Symphony asks a
@@ -4220,8 +4224,11 @@ Current Elixir sandbox behavior:
   agent never makes macOS ask the operator to let Symphony access them.
 - Shared write denies protect workflow and runtime guardrail files such as `WORKFLOW.md`,
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
-  `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and
-  macOS launch agent roots.
+  `.tool-versions`, `.github` (CI workflows, actions, `CODEOWNERS`, dependabot),
+  `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and macOS launch agent
+  roots. A person's grant MAY name one path inside `.github` (`.github/workflows/make-all.yml`),
+  which unlocks that path alone: the rest of `.github` stays protected in the run's sandbox, the
+  push tools and the merge gate.
 - The instruction files a `WORKFLOW.md` playbook line pulls in (`.symphony/instructions/` by
   default, Section 5.5) are not write-protected: they are read only from the workflow's source,
   so an agent's edit reaches a run only through a merged pull request. Their placement and the

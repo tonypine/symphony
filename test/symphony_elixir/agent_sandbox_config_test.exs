@@ -93,6 +93,7 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
              "./.git",
              "./mise.toml",
              "./.tool-versions",
+             "./.github",
              "./config/settings_ui_exempt.yml",
              "~/.zshrc",
              "~/.zshenv",
@@ -145,8 +146,94 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
              ".codex/skills",
              "mise.toml",
              ".tool-versions",
+             ".github",
              "config/settings_ui_exempt.yml"
            ]
+  end
+
+  test "every runtime's sandbox denies writes under .github, the CI workflows included" do
+    assert "./.github" in AgentSandboxConfig.claude_filesystem_settings()["denyWrite"]
+    assert "Edit(./.github)" in AgentSandboxConfig.claude_edit_deny_rules()
+
+    workspace = "/repo/workspace"
+    overrides = AgentSandboxConfig.codex_config_overrides("allowlist", [], [], [], workspace: workspace)
+    filesystem = Enum.find(overrides, &String.starts_with?(&1, "permissions.workspace_write.filesystem="))
+    assert filesystem =~ ~s("#{Path.join(workspace, ".github")}"="read")
+
+    assert {:ok, %{"filesystem" => %{"denyWrite" => srt_deny}}} = AgentSandboxConfig.srt_settings("allowlist", [], [])
+    assert "./.github" in srt_deny
+  end
+
+  test "a grant may name the .github folder or one clean path inside it, and nothing else outside the list" do
+    assert AgentSandboxConfig.file_grant_folders() == [".github"]
+
+    for path <- [".github", "./.github/workflows/make-all.yml", ".github/workflows", "WORKFLOW.md", ".claude/skills"] do
+      assert AgentSandboxConfig.grantable?(path), path
+    end
+
+    for path <- [".github/", ".github/../lib/app.ex", ".github/./x", ".github/workflows/*.yml", ".github//x", ".githubx/y", "lib/app.ex", ".git", 3] do
+      refute AgentSandboxConfig.grantable?(path), inspect(path)
+    end
+  end
+
+  test "a grant of one path in .github lifts that path alone" do
+    grant = ["./.github/workflows/make-all.yml", ".github/workflows/make-all.yml", ".github/../WORKFLOW.md", "lib/app.ex"]
+
+    assert AgentSandboxConfig.granted_sub_paths(grant) == [".github/workflows/make-all.yml"]
+    assert AgentSandboxConfig.granted_sub_paths(:none) == []
+    # The whole folder unlocked too: no single path is left to single out.
+    assert AgentSandboxConfig.granted_sub_paths([".github", ".github/workflows/make-all.yml"]) == []
+
+    # The plain list leaves the folder out (the workspace's own list denies the rest of it) ...
+    refute "./.github" in AgentSandboxConfig.deny_write_paths(grant)
+    assert "./WORKFLOW.md" in AgentSandboxConfig.deny_write_paths(grant)
+    # ... and the push tools still read it as protected.
+    assert ".github" in AgentSandboxConfig.workspace_protected_paths(grant)
+    refute ".github" in AgentSandboxConfig.workspace_protected_paths([".github"])
+
+    assert AgentSandboxConfig.granted_sub_path?(".github/workflows/make-all.yml", [".github/workflows"])
+    refute AgentSandboxConfig.granted_sub_path?(".github/workflows-old/x.yml", [".github/workflows"])
+  end
+
+  test "a local workspace denies by name everything in .github but the granted path" do
+    workspace = Path.join(System.tmp_dir!(), "agent-sandbox-github-grant-#{System.unique_integer([:positive])}")
+
+    try do
+      for file <- [".github/workflows/make-all.yml", ".github/workflows/release.yml", ".github/workflows/protected-paths.yml", ".github/CODEOWNERS", ".github/actions/setup/action.yml"] do
+        path = Path.join(workspace, file)
+        File.mkdir_p!(Path.dirname(path))
+        File.write!(path, "x\n")
+      end
+
+      # No grant: the plain list's `.github` covers it, nothing more is named.
+      assert AgentSandboxConfig.workspace_deny_write_paths(workspace) == []
+
+      assert AgentSandboxConfig.workspace_deny_write_paths(workspace, [".github/workflows/make-all.yml"]) == [
+               ".github/CODEOWNERS",
+               ".github/actions",
+               ".github/workflows/protected-paths.yml",
+               ".github/workflows/release.yml"
+             ]
+
+      # A granted path that doesn't exist yet may be made; a file where it needs a folder stays denied.
+      assert AgentSandboxConfig.workspace_deny_write_paths(workspace, [".github/actions/new/action.yml", ".github/CODEOWNERS/x"]) == [
+               ".github/CODEOWNERS",
+               ".github/actions/setup",
+               ".github/workflows"
+             ]
+
+      # A workspace without the folder has nothing more to name.
+      assert AgentSandboxConfig.workspace_deny_write_paths(Path.join(workspace, "missing"), [".github/workflows/make-all.yml"]) == []
+
+      # The run's Claude settings deny the rest and not the granted file.
+      deny = for path <- AgentSandboxConfig.workspace_deny_write_paths(workspace, [".github/workflows/make-all.yml"]), do: "./" <> path
+      settings = AgentSandboxConfig.claude_filesystem_settings([], [], deny, [".github/workflows/make-all.yml"])
+      assert "./.github/workflows/release.yml" in settings["denyWrite"]
+      refute "./.github" in settings["denyWrite"]
+      refute Enum.any?(settings["denyWrite"], &String.ends_with?(&1, "make-all.yml"))
+    after
+      File.rm_rf(workspace)
+    end
   end
 
   test "workspace link targets follow symlinks in protected paths to the workspace files behind them" do
