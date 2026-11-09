@@ -684,6 +684,19 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(brief.paragraphs, ["Checks are running on PR #7's head"])
     }
 
+    func testTheWaitingOnCIFixtureListsItsRowLastAndLeavesTheCountAlone() throws {
+        let inbox = try payload("inbox-waiting-ci")
+        let row = try XCTUnwrap(inbox.items.first { $0.kind == .waiting })
+        XCTAssertEqual(row.identifier, "SHOP-370")
+        XCTAssertEqual(row.review.blocked?.reason, "Checks are running on PR #643's head")
+        XCTAssertEqual(row.review.blocked?.waitLine, "It moves on by itself when the checks report.")
+        XCTAssertEqual(InboxAction.actions(for: row).first, .openPR(try XCTUnwrap(URL(string: "https://github.com/acme/web-shop/pull/643"))))
+
+        let list = InboxList(items: inbox.items)
+        XCTAssertEqual(list.groups.last?.title, "Waiting on CI")
+        XCTAssertEqual(list.totalCount, try payload("inbox").items.count)
+    }
+
     func testAKindTurnedOffDoesntNotifyAndIsntOwedLater() {
         var notifier = InboxNotifier(remembered: [])
         var preferences = NotificationPreferences()

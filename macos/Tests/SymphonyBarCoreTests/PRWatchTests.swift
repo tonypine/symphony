@@ -706,6 +706,15 @@ final class PRWatchTests: XCTestCase {
         XCTAssertFalse(inbox.items.contains { ["TP-704", "TP-707", "TP-709"].contains($0.identifier) })
     }
 
+    func testTheNoProgressFixtureListsTheHeldTicketWithItsReasonAndAge() throws {
+        let state = try Data(contentsOf: fixtureDirectory("pr-watch-no-progress").appendingPathComponent("state.json"))
+        let overview = Overview(state: try XCTUnwrap(OverviewState.decode(state)), now: reference)
+        let held = try XCTUnwrap(overview.problems.first { $0.sentence.hasPrefix("TP-702 ") })
+        XCTAssertEqual(held.sentence, "TP-702 in Rework: its last runs changed nothing, so it stays paused until its PR changes or you answer.")
+        XCTAssertEqual(held.ageSeconds, 1452)
+        XCTAssertEqual(WatchState.decode(state).silentWaits.first?.reason, "No progress: the last 2 turns in Rework made no new commit and no state change")
+    }
+
     // MARK: - Helpers
 
     /// A watch block as the API serves it, on PR #42 of acme/web, with `overrides` and the facts' `facts` merged in.
