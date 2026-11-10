@@ -8,7 +8,9 @@ defmodule SymphonyElixir.RuleActions do
   The writers:
 
     * the PR and CI watcher (`SymphonyElixir.PrDecision.Apply`): each action it applied, named by
-      its row (`watcher_rule/1`, "PR watcher R22") and its kind (`watcher_action/1`);
+      its row (`watcher_rule/1`, "PR watcher R22") and its kind (`watcher_action/1`). Its red
+      backstop records only a question to a person: a fix ticket it hands the self-heal lane is
+      recorded once, by the lane;
     * a pause reason a rule set or lifted (`SymphonyElixir.Pauses`, in the pause's own transaction,
       `pause_event/4`): the CI wait, the release-build watch, the blocked-by links, self-heal's fix
       ticket, the update and instructions holds and every other setter of kind `:rule`. A question's
@@ -38,8 +40,7 @@ defmodule SymphonyElixir.RuleActions do
     merge_now: "auto_merge",
     arm: "auto_merge",
     disarm: "auto_merge",
-    decision: "asked",
-    file_fix_ticket: "filed_ticket"
+    decision: "asked"
   }
 
   @typedoc "What the rule did: one of `SymphonyElixir.TicketEvents.Types.rule_actions/0`."

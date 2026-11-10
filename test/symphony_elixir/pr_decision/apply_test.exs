@@ -641,6 +641,29 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     end
   end
 
+  describe "file_fix_ticket's rule.action" do
+    defp watcher_rule_actions, do: SymphonyElixir.TicketEvents.query(@issue_id, types: ["rule.action"])
+
+    test "a filed fix ticket leaves its one rule.action to the lane; an escalation records a question; a retry or a hold records nothing" do
+      action = action("R20", :file_fix_ticket, args: %{check: "specs"})
+      attempts = %{Attempts.new() | red: 10}
+
+      for result <- [:filed, :retry, :held] do
+        Process.put(:heal_result, result)
+        capture_log(fn -> assert %{outcome: :applied} = Apply.apply(action, ctx(:qa, attempts: attempts)) end)
+      end
+
+      assert watcher_rule_actions() == []
+
+      Process.put(:heal_result, :escalated)
+      capture_log(fn -> assert %{outcome: :applied} = Apply.apply(action, ctx(:qa, attempts: attempts)) end)
+
+      assert [%{payload: %{rule: "PR watcher R20", action: "asked", text: text}}] = watcher_rule_actions()
+      assert text =~ "a person decides"
+      refute Enum.any?(watcher_rule_actions(), &(&1.payload.action == "filed_ticket"))
+    end
+  end
+
   describe "the same failure 3 runs in a row (D15 (c))" do
     test "the backstop's outcome names the streak, and its signature is the one the streak compares" do
       failure = %{check: "specs", error: "** (MatchError) no match of right hand side", head_sha: "head-1"}

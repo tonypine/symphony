@@ -257,7 +257,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
   defp finish({:ok, changes}, action, ctx) do
     entry = %{head_sha: head(ctx), rule: action.rule, kind: action.kind, at: ctx.now}
     applied = Map.get(changes, :action, action)
-    RuleActions.record(ctx.repo_key, ctx.issue.id, RuleActions.watcher_rule(action.rule), RuleActions.watcher_action(action.kind), applied.reason, head: head(ctx), at: ctx.now)
+    record_rule_action(Map.get(changes, :rule_action, RuleActions.watcher_action(action.kind)), action, applied, ctx)
 
     %{
       action: Map.get(changes, :action, action),
@@ -287,6 +287,13 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
     %{recorded(action, ctx) | outcome: {:error, reason}}
   end
+
+  # The action's `rule.action`: what it did, or nothing when an outcome did nothing of its own (a
+  # fix ticket the self-heal lane filed, which records its own, or a red backstop with nothing to do).
+  defp record_rule_action(nil, _action, _applied, _ctx), do: :ok
+
+  defp record_rule_action(rule_action, action, applied, ctx),
+    do: RuleActions.record(ctx.repo_key, ctx.issue.id, RuleActions.watcher_rule(action.rule), rule_action, applied.reason, head: head(ctx), at: ctx.now)
 
   # The actions.
 
@@ -638,18 +645,19 @@ defmodule SymphonyElixir.PrDecision.Apply do
         log_fix_ticket(:filed, check, identifier, ctx)
         reason = "CI keeps failing: waiting on #{identifier || "a fix ticket"}, a fix ticket for the `#{check}` check"
         args = Map.put(action.args, :fix_ticket, identifier)
-        {:ok, %{attempts: Attempts.filed(ctx.attempts, identifier), action: %{action | reason: reason, args: args}}}
+        # The lane records the filing itself (`SymphonyElixir.SelfHeal`): one event per fix ticket.
+        {:ok, %{attempts: Attempts.filed(ctx.attempts, identifier), action: %{action | reason: reason, args: args}, rule_action: nil}}
 
       :escalated ->
         log_fix_ticket(:escalated, check, nil, ctx)
 
-        {:ok, %{action: %{action | reason: "CI keeps failing on the `#{check}` check after its fix ticket landed: a person decides", owner: :person}}}
+        {:ok, %{action: %{action | reason: "CI keeps failing on the `#{check}` check after its fix ticket landed: a person decides", owner: :person}, rule_action: "asked"}}
 
       :retry ->
-        {:ok, %{attempts: Attempts.restart_red(ctx.attempts)}}
+        {:ok, %{attempts: Attempts.restart_red(ctx.attempts), rule_action: nil}}
 
       :held ->
-        {:ok, %{}}
+        {:ok, %{rule_action: nil}}
 
       {:error, reason} ->
         {:error, reason}

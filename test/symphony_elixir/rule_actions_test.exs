@@ -47,7 +47,7 @@ defmodule SymphonyElixir.RuleActionsTest do
     assert RuleActions.watcher_action(:update_branch) == "updated_branch"
     assert RuleActions.watcher_action(:disarm) == "auto_merge"
     assert RuleActions.watcher_action(:decision) == "asked"
-    assert RuleActions.watcher_action(:file_fix_ticket) == "filed_ticket"
+    assert RuleActions.watcher_action(:file_fix_ticket) == "other"
     assert RuleActions.watcher_action(:wait) == "other"
   end
 
