@@ -543,3 +543,62 @@ watcher applied (`PR watcher R22`), a pause reason a rule set or lifted (`CI wai
 watch`, `Blocked-by links`, `Self-heal`, the update and instructions holds), the dispatch-loop guard,
 the idle park and self-heal's new fix ticket. Its summary names the rule: "CI wait paused the
 ticket". The audit records the rules write stay as they are.
+
+# The aggregation read (Insights)
+
+`GET /api/v1/aggregate?from=&to=&unit=30m|1h|6h|day|week&repo=&epic=&series=`: the numbers the
+Insights pages (Quality, Usage and Shipped) draw, as series bucketed by period and unit, kept to a
+repository and an epic (`SymphonyElixir.Aggregate`). It reads the run records' token counts and the
+tickets' events from Symphony's store, writes nothing and makes no Linear request. The pages' older
+reads (`/api/v1/history`, `/api/v1/shipped`, `/api/v1/runs`) stay until the pages move to this one.
+
+```json
+{
+  "generated_at": "2026-11-09T20:00:00Z",
+  "from": "2026-11-03T00:00:00Z",
+  "to": "2026-11-10T00:00:00Z",
+  "unit": "day",
+  "repo": null,
+  "epic": "TP-1400",
+  "series": {
+    "tokens": {
+      "total": 477,
+      "by": { "anthropic": 427, "openai": 50 },
+      "tickets": { "TP-1401": 420, "TP-1402": 50, "TP-1400": 7 },
+      "buckets": [
+        { "start": "2026-11-03T00:00:00Z", "end": "2026-11-04T00:00:00Z", "value": 0, "by": {} },
+        { "start": "2026-11-04T00:00:00Z", "end": "2026-11-05T00:00:00Z", "value": 120, "by": { "anthropic": 120 } }
+      ]
+    },
+    "shipped": {
+      "total": 1, "by": { "symphony": 1 }, "tickets": { "TP-1401": 1 },
+      "buckets": [{ "start": "2026-11-06T00:00:00Z", "end": "2026-11-07T00:00:00Z", "value": 1, "by": { "symphony": 1 }, "tickets": ["TP-1401"] }]
+    }
+  }
+}
+```
+
+| Parameter | What it does |
+| --- | --- |
+| `from`, `to` | ISO 8601 times or dates. A date `from` starts at its midnight; a date `to` takes in its whole day; a time `to` is exclusive. The period widens to whole buckets, and `from` and `to` in the answer are its bounds. Default: the 7 days that end with the bucket holding now. At most 366 days and 5000 buckets. |
+| `unit` | `30m`, `1h`, `6h` (from UTC midnight), `day` (UTC midnight, the day the daily token budget resets on) or `week` (from Monday's UTC midnight). Default `day`. |
+| `repo` | A repository's key: its runs and its tickets. |
+| `epic` | An epic's identifier: the epic and the tickets whose record names it as parent (a run whose ticket has no record counts when its identifier is the epic's). |
+| `series` | Comma-separated names (below); default all of them. |
+
+Every series has its `total` over the period, that total `by` the series' key and by ticket
+identifier (`tickets`), and one bucket per unit of the period, empty ones at `value` 0 with an empty
+`by`:
+
+| Series | Value | `by` | Source |
+| --- | --- | --- | --- |
+| `tokens` | Tokens (the run's and its reviewer's), at the run's start. | Provider: the run's, else the one its model names. | Run records, as `/api/v1/history`'s `tokens_per_day`: a day's bucket equals that day's `total_tokens` and `providers`. |
+| `time_by_stage` | Milliseconds tickets spent in a stage, a stay split across the buckets it overlaps; the phase a ticket is in runs to now. | Stage id (`coding`, `code_review`, `qa`, `merging`), as the ticket read's `lifecycle` counts them. | The ledger's `phase.entered`. |
+| `runs` | Runs started. | The status the run record ends with (`success`, `failure`, `timeout`, `stopped`...; `unknown`). | Run records. |
+| `verdicts` | Verdicts recorded. | `kind:outcome` (`code_review:approve`, `qa:fail`). | The ledger's `verdict.recorded`. A day's `code_review:approve` is the approvals `/api/v1/history`'s `review` judges that day. |
+| `shipped` | Tickets merged: one per ticket, at its latest completion Symphony noted, on its UTC day (Shipped's own read counts the host's local day). Each bucket also lists its `tickets`. | Repository. | Run records, with the 30 days before the period for runs that started before the merge. |
+| `findings` | QA findings recorded. | Class. | The ledger's `finding.recorded`. |
+
+A `from` or `to` that is neither an ISO 8601 time nor a date, a `from` not before `to`, an unknown
+unit or series, or a period over 366 days or 5000 buckets answers `400` `invalid_query`. Like the
+other reads of `/api/v1`, it needs no token.
