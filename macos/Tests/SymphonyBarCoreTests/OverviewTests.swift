@@ -122,10 +122,10 @@ final class OverviewTests: XCTestCase {
     func testEachTileOpensItsView() {
         XCTAssertEqual(Overview.StageKind.waitingOnYou.destination, .inbox)
         XCTAssertEqual(Overview.StageKind.shippedToday.destination, .shipped)
-        XCTAssertEqual(Overview.StageKind.queued.destination, .tickets(.queued))
+        XCTAssertEqual(Overview.StageKind.queued.destination, .tickets(.waitingForSlot))
         XCTAssertEqual(Overview.StageKind.working.destination, .tickets(.working))
-        XCTAssertEqual(Overview.StageKind.review.destination, .tickets(.review))
-        XCTAssertEqual(Overview.StageKind.merging.destination, .tickets(.merging))
+        XCTAssertEqual(Overview.StageKind.review.destination, .tickets(.waitingForCI))
+        XCTAssertEqual(Overview.StageKind.merging.destination, .tickets(.waitingForCI))
         XCTAssertEqual(Overview.showShippedTitle, "Show Shipped")
     }
 
