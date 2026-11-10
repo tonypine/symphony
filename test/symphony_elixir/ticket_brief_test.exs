@@ -69,7 +69,8 @@ defmodule SymphonyElixir.TicketBriefTest do
   end
 
   test "a brief the store holds without a time or a run reads with what it has" do
-    event = %Event{id: "evt-1", type: "brief.written", payload: %{text: "What it does."}, actor: %{kind: :agent, run_id: nil, run_kind: "implementation"}, run_id: "run-9"}
+    actor = %{kind: :agent, run_id: nil, run_kind: "implementation"}
+    event = %Event{id: "evt-1", type: "brief.written", payload: %{text: "What it does."}, actor: actor, run_id: "run-9"}
 
     assert TicketBrief.read([event]) == %{id: "evt-1", text: "What it does.", walkthrough: nil, at: nil, by: %{kind: "agent", run_kind: "implementation", run_id: "run-9"}}
     assert TicketBrief.current([%Event{type: "note"}, event]) == event

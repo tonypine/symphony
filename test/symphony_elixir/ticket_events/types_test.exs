@@ -327,8 +327,11 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert Types.agent_types("qa") == Enum.sort(["finding.recorded" | every])
       assert Types.agent_types(:qa) == Types.agent_types("qa")
 
-      for run_kind <- briefing, do: assert(Types.agent_types(run_kind) == Enum.sort(["brief.written" | every]), run_kind)
-      for run_kind <- Types.agent_run_kinds() -- ["qa" | briefing], do: assert(Types.agent_types(run_kind) == every, run_kind)
+      with_brief = Enum.sort(["brief.written" | every])
+      for run_kind <- briefing, do: assert(Types.agent_types(run_kind) == with_brief, run_kind)
+
+      for run_kind <- Types.agent_run_kinds() -- ["qa" | briefing],
+          do: assert(Types.agent_types(run_kind) == every, run_kind)
 
       assert Types.agent_types("supervisor") == []
       assert Types.agent_types(nil) == []
@@ -372,8 +375,10 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
       assert {:ok, ^brief} = Types.validate("brief.written", brief, :agent, "implementation")
       assert {:ok, _brief} = Types.validate("brief.written", %{brief | text: String.duplicate("a", 1_200)}, :agent, "rework")
-      assert {:error, {:invalid_payload, [:text]}} = Types.validate("brief.written", %{brief | text: String.duplicate("a", 1_201)}, :agent, "implementation")
-      assert {:error, {:invalid_payload, [:walkthrough]}} = Types.validate("brief.written", %{brief | walkthrough: String.duplicate("a", 4_001)}, :agent, "implementation")
+      long_text = %{brief | text: String.duplicate("a", 1_201)}
+      long_walkthrough = %{brief | walkthrough: String.duplicate("a", 4_001)}
+      assert {:error, {:invalid_payload, [:text]}} = Types.validate("brief.written", long_text, :agent, "implementation")
+      assert {:error, {:invalid_payload, [:walkthrough]}} = Types.validate("brief.written", long_walkthrough, :agent, "implementation")
       assert {:error, {:invalid_payload, [:text]}} = Types.validate("brief.written", %{brief | text: "Adds `TicketBrief.read/1`."}, :agent, "implementation")
       assert {:error, {:invalid_payload, [:walkthrough]}} = Types.validate("brief.written", %{brief | walkthrough: "Call `GET /api/v1/x`."}, :agent, "review_feedback")
       assert {:error, {:invalid_payload, [:walkthrough]}} = Types.validate("brief.written", Map.delete(brief, :walkthrough), :agent, "implementation")

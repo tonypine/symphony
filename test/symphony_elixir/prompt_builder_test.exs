@@ -1093,7 +1093,12 @@ defmodule SymphonyElixir.PromptBuilderTest do
       for state <- ["In Progress", "Code Review", "QA", "Merging", "CI Fix"] do
         issue = %{issue | state: state}
 
-        for prompt <- [PromptBuilder.build_prompt(issue, ticket_state: record), PromptBuilder.build_compact_prompt(issue, ticket_state: record)] do
+        prompts = [
+          PromptBuilder.build_prompt(issue, ticket_state: record),
+          PromptBuilder.build_compact_prompt(issue, ticket_state: record)
+        ]
+
+        for prompt <- prompts do
           assert prompt =~ "Brief (written 2026-10-22T10:01:00Z by an agent (Rework run)):\n- What it does: Each ticket says in plain words what it delivers.\n", state
           assert prompt =~ "- Walkthrough: Read a ticket a run just finished.", state
           refute prompt =~ "An older brief.", state
