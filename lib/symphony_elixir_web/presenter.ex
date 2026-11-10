@@ -394,12 +394,14 @@ defmodule SymphonyElixirWeb.Presenter do
   # (`SymphonyElixir.Situation`), where it has been (`SymphonyElixir.Lifecycle`) and its pull request
   # (`SymphonyElixirWeb.PullRequestPayload`), where it sits among the others
   # (`SymphonyElixir.Connected.Read`), its marks: since the person last looked and the note for
-  # the next run (`SymphonyElixir.Marks`), and its brief (`SymphonyElixir.TicketBrief`).
+  # the next run (`SymphonyElixir.Marks`), its brief (`SymphonyElixir.TicketBrief`) and the ticket
+  # itself (`ticket_payload/1`).
   defp record_payload(payload, record, running?, snapshot) do
     repository_pause = if is_binary(payload.repo_key), do: repository_pause_reason(payload.repo_key), else: nil
     events = ticket_events(payload.issue_id)
 
     payload
+    |> Map.put(:ticket, ticket_payload(record))
     |> Map.put(:verdicts, verdicts_payload(record))
     |> Map.put(:watch, WatchPayload.watch(record))
     |> Map.put(:plan_brief, plan_brief_payload(record))
@@ -411,6 +413,11 @@ defmodule SymphonyElixirWeb.Presenter do
     |> complete_connected(record, snapshot)
     |> Map.merge(ticket_status(record, %{identifier: payload.issue_identifier, repo_key: payload.repo_key, repository_pause: repository_pause, running?: running?}))
   end
+
+  # The ticket as its record holds it: the title, the phase, Linear's priority and the labels, the
+  # values the ticket list's columns of the same names serve. A ticket with no record has none.
+  defp ticket_payload(nil), do: %{title: nil, phase: nil, priority: nil, labels: []}
+  defp ticket_payload(record), do: Map.take(record, [:title, :phase, :priority, :labels])
 
   # Every event of the ticket, oldest first; none for a ticket with no id or a store that can't be read.
   defp ticket_events(issue_id), do: issue_id |> TicketEvents.query(limit: :all) |> List.wrap() |> Enum.filter(&is_struct(&1, Event))
@@ -774,8 +781,10 @@ defmodule SymphonyElixirWeb.Presenter do
     %{
       kind: "run",
       run_id: run_id,
-      run_kind: payload_field(started, :run_kind) || payload_field(ended, :run_kind),
-      run_number: payload_field(started, :run_number) || payload_field(ended, :run_number),
+      run_kind: start_or_end(started, ended, :run_kind),
+      run_number: start_or_end(started, ended, :run_number),
+      model: start_or_end(started, ended, :model),
+      effort: start_or_end(started, ended, :effort),
       status: if(ended, do: "ended", else: "running"),
       verdict: verdict && run_verdict_json(verdict),
       started_at: started && DateTime.to_iso8601(started.at),
@@ -794,6 +803,8 @@ defmodule SymphonyElixirWeb.Presenter do
       at: DateTime.to_iso8601(verdict.at)
     }
   end
+
+  defp start_or_end(started, ended, key), do: payload_field(started, key) || payload_field(ended, key)
 
   defp payload_field(nil, _key), do: nil
   defp payload_field(%Event{payload: payload}, key), do: Map.get(payload, key)

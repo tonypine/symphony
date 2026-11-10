@@ -6158,21 +6158,34 @@ defmodule SymphonyElixir.Orchestrator do
   # dispatch with no Linear ticket behind it.
   defp record_dispatch(_issue, _repo_key, _run_id, _run_profile, %{run_kind: :pr}), do: :ok
 
-  defp record_dispatch(%Issue{id: issue_id, state: issue_state}, repo_key, run_id, %{kind: kind}, _running_attrs),
+  defp record_dispatch(%Issue{id: issue_id, state: issue_state}, repo_key, run_id, %{kind: kind} = run_profile, _running_attrs),
     do:
       record_run_started(repo_key, issue_id, %{
         kind: kind,
         run_id: run_id,
         state: issue_state,
-        head: pr_head(issue_id, repo_key)
+        head: pr_head(issue_id, repo_key),
+        model: Map.get(run_profile, :model),
+        effort: Map.get(run_profile, :effort)
       })
 
   # The run's `run.started` event, keyed by its run id. Its number counts the ticket's earlier runs
-  # of the same kind.
-  defp record_run_started(repo_key, issue_id, %{kind: kind, run_id: run_id, state: issue_state, head: head}) do
+  # of the same kind; its `model` and `effort` are the run profile's (`RunKind.profile/2`), left out
+  # when the profile resolves none and the runtime keeps its own default.
+  defp record_run_started(repo_key, issue_id, %{kind: kind, run_id: run_id, state: issue_state, head: head} = run) do
     run_kind = to_string(kind)
     run_number = length(run_events(issue_id, "run.started", &(&1[:run_kind] == run_kind))) + 1
-    payload = %{run_id: run_id, run_kind: run_kind, run_number: run_number, state: issue_state, head: head}
+
+    payload = %{
+      run_id: run_id,
+      run_kind: run_kind,
+      run_number: run_number,
+      state: issue_state,
+      head: head,
+      model: run.model,
+      effort: run.effort
+    }
+
     TicketSignals.record_event(repo_key, issue_id, "run.started", payload, phase: issue_state, run_id: run_id)
   end
 
@@ -6189,6 +6202,8 @@ defmodule SymphonyElixir.Orchestrator do
       run_id: run_id,
       run_kind: started[:run_kind],
       run_number: started[:run_number],
+      model: started[:model],
+      effort: started[:effort],
       exit: run_exit(reason, repo_key, issue_id, head),
       head: head,
       unpushed_head: WorkspaceHead.unpushed_head(Map.get(running_entry, :workspace_path), Map.get(running_entry, :worker_host)),

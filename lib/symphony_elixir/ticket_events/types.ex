@@ -168,6 +168,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
   # The signal an event records (`SymphonyElixir.TicketSignals.signal_event/2`) and the details it
   # was recorded with.
   @signal [signal: :string, signal_details: :map]
+  # The model and effort the run profile resolved at dispatch (`run.started`, copied onto `run.ended`).
+  @run_profile [model: :string, effort: :string]
   @drift [record_phase: :string, linear_phase: :string]
   @pause_reasons ~w(question ticket build person environment)
   # `SymphonyElixir.Situation.kinds/0`, which reads the record and so may not be read here.
@@ -219,7 +221,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [run_id: :string, run_kind: :string],
-      optional: [run_number: :non_neg_integer, state: :string, head: :string] ++ @signal,
+      optional: [run_number: :non_neg_integer, state: :string, head: :string] ++ @run_profile ++ @signal,
       idempotency: {:fields, [:run_id]}
     },
     # The run a person started at once (`SymphonyElixir.Orchestrator.start_issue/3`), by the
@@ -239,6 +241,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
         [
           run_kind: :string,
           run_number: :non_neg_integer,
+          model: :string,
+          effort: :string,
           duration_ms: :non_neg_integer,
           tokens: @tokens,
           head: :string,

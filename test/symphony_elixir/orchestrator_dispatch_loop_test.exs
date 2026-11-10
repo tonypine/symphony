@@ -139,6 +139,29 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     end)
   end
 
+  test "a run's start records the model and effort its profile resolved" do
+    workflow = Workflow.workflow_file_path()
+
+    write_workflow_file!(workflow,
+      tracker_active_states: ["Todo", "In Progress", "Rework"],
+      repos: [[key: @repo_key, workflow: workflow, team: "Loop"]],
+      agent_model: "claude-sonnet-5-5",
+      agent_run_profiles: %{"implementation" => %{"model" => "claude-opus-5-5", "effort" => "high"}}
+    )
+
+    put_observed_head!("sha-now")
+
+    capture_log(fn ->
+      pid = start_retry(:LoopModel)
+      state = wait_for_state(pid, &Map.has_key?(&1.running, @issue_id))
+      run_id = state.running[@issue_id].run_id
+
+      assert [started] = RunStore.list_ticket_events(@issue_id, types: ["run.started"])
+      assert %{run_id: ^run_id, run_kind: "implementation", model: "claude-opus-5-5", effort: "high"} = started.payload
+      assert started.summary.detail == "claude-opus-5-5 · in In Progress · at sha-now"
+    end)
+  end
+
   test "a lower limit set in the watchdog settings holds sooner" do
     workflow = Workflow.workflow_file_path()
 
@@ -217,9 +240,12 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       assert [{"run.ended", %{exit: "usage limit", counted: false}}] = ticket_events(@repo_key, @issue_id, "run.ended")
     end
 
-    test "a run that handed off its head ends with exit handoff, its duration, tokens and run number" do
+    test "a run that handed off its head ends with exit handoff, its duration, tokens, run number and model" do
       put_observed_head!("sha-handed-off")
-      {:ok, _event} = TicketEvents.record(@repo_key, @issue_id, "run.started", %{run_id: "run-handoff", run_kind: "implementation", run_number: 3})
+
+      {:ok, _event} =
+        TicketEvents.record(@repo_key, @issue_id, "run.started", %{run_id: "run-handoff", run_kind: "implementation", run_number: 3, model: "claude-opus-5-5", effort: "high"})
+
       :ok = Handoff.emit(@repo_key, @issue_id, %{head: "sha-handed-off"})
 
       pid = start_orchestrator(:DownHandoff)
@@ -229,6 +255,8 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
                RunStore.list_ticket_events(@issue_id, types: ["run.ended"], run_id: "run-handoff")
 
       assert %{run_id: "run-handoff", run_kind: "implementation", run_number: 3, exit: "handoff", head: "sha-handed-off", tokens: 12_345, counted: true} = payload
+      # The run's model and effort, from its start.
+      assert %{model: "claude-opus-5-5", effort: "high"} = payload
       assert payload.duration_ms >= 90_000
       assert ended.summary.title == "Implementation run 3 ended: handoff"
 

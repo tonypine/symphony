@@ -28,6 +28,7 @@
       "type": "phase.entered"
     },
     {
+      "effort": null,
       "ended_at": "2026-10-18T10:21:00.000000Z",
       "events": [
         {
@@ -343,6 +344,7 @@
       "exit": "paused",
       "head": "aaa1111",
       "kind": "run",
+      "model": null,
       "run_id": "run-impl-1",
       "run_kind": "implementation",
       "run_number": 1,
