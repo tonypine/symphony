@@ -26,6 +26,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Situation,
     StateMachine,
     StrayProcesses,
+    TicketBrief,
     TicketEvents,
     TicketMoves,
     TicketObservation,
@@ -392,10 +393,11 @@ defmodule SymphonyElixirWeb.Presenter do
   # (`SymphonyElixir.PlanBrief`), why it does not move (`ticket_status/2`), where it stands
   # (`SymphonyElixir.Situation`), where it has been (`SymphonyElixir.Lifecycle`) and its pull request
   # (`SymphonyElixirWeb.PullRequestPayload`), where it sits among the others
-  # (`SymphonyElixir.Connected.Read`), and its marks: since the person last looked and the note for
-  # the next run (`SymphonyElixir.Marks`).
+  # (`SymphonyElixir.Connected.Read`), its marks: since the person last looked and the note for
+  # the next run (`SymphonyElixir.Marks`), and its brief (`SymphonyElixir.TicketBrief`).
   defp record_payload(payload, record, running?, snapshot) do
     repository_pause = if is_binary(payload.repo_key), do: repository_pause_reason(payload.repo_key), else: nil
+    events = ticket_events(payload.issue_id)
 
     payload
     |> Map.put(:verdicts, verdicts_payload(record))
@@ -403,7 +405,8 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.put(:plan_brief, plan_brief_payload(record))
     |> Map.put(:situation, situation_payload(record || %{issue_id: payload.issue_id, repo_key: payload.repo_key}, Situation.live_facts(snapshot), nil))
     |> Map.merge(Lifecycle.read(payload.issue_id))
-    |> Map.merge(Marks.read(record, ticket_events(payload.issue_id)))
+    |> Map.merge(Marks.read(record, events))
+    |> Map.put(:brief, TicketBrief.read(events))
     |> Map.put(:pull_request, PullRequestPayload.read(record))
     |> complete_connected(record, snapshot)
     |> Map.merge(ticket_status(record, %{identifier: payload.issue_identifier, repo_key: payload.repo_key, repository_pause: repository_pause, running?: running?}))

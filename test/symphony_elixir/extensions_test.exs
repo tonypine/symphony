@@ -1137,6 +1137,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "looked_at" => nil,
              "new_since_looked" => issue_payload["new_since_looked"],
              "note" => nil,
+             "brief" => nil,
              "pull_request" => nil,
              "pause" => nil
            }
@@ -1185,6 +1186,7 @@ defmodule SymphonyElixir.ExtensionsTest do
              "looked_at" => nil,
              "new_since_looked" => watching_payload["new_since_looked"],
              "note" => nil,
+             "brief" => nil,
              "pull_request" => nil,
              "pause" => nil
            }

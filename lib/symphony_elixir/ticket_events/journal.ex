@@ -58,7 +58,8 @@ defmodule SymphonyElixir.TicketEvents.Journal do
     "checklist.answered" => "finding",
     "person.action" => "person",
     "note" => "note",
-    "note.read" => "note"
+    "note.read" => "note",
+    "brief.written" => "note"
   }
 
   @typedoc """

@@ -509,14 +509,15 @@ defmodule SymphonyElixir.PromptBuilder do
   @evidence_line "`evidence` for every screenshot or output it attaches (the files as `artifacts`)"
 
   defp records_line("implementation") do
-    "This implementation run records `step.completed` for each delegated step as it ends it, #{@evidence_line}, and each walkthrough step's proof " <>
+    "This implementation run records the ticket's brief first, as a `brief.written` (what it does and why, and its walkthrough, in a person's words), " <>
+      "and again at the handoff when the work changed what the ticket does; `step.completed` for each delegated step as it ends it, #{@evidence_line}, and each walkthrough step's proof " <>
       "as `evidence` with `proof` (the step and the test), which `linear_record_walkthrough_proofs` records; a `note` keeps a choice worth knowing later."
   end
 
   defp records_line(kind) when kind in ["rework", "review_feedback"] do
     "This #{kind_words(kind)} run reads `ticket_events` with `open_findings: true` before it plans, records `finding.resolved` for each finding it fixes " <>
       "(Symphony fills the head that fixes it), #{@evidence_line}, `step.completed` for each delegated step and a walkthrough proof again as `evidence` " <>
-      "with `proof` when it changes the test."
+      "with `proof` when it changes the test, and a new `brief.written` at the handoff when the change altered what the ticket does."
   end
 
   defp records_line("ci_fix") do

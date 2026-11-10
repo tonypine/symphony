@@ -1083,6 +1083,29 @@ defmodule SymphonyElixir.PromptBuilderTest do
       assert %{read_by: %{run_id: "run-1"}} = "i" |> TicketEvents.query(limit: :all) |> Marks.note()
     end
 
+    test "every run kind's prompt carries the ticket's current brief", %{issue: issue, record: record, at: at} do
+      impl = {:agent, "run-1", "implementation"}
+      brief = %{text: "Each ticket says in plain words what it delivers.", walkthrough: "Read a ticket a run just finished."}
+      {:ok, _old} = TicketEvents.record("r", "i", "brief.written", %{brief | text: "An older brief."}, actor: impl, at: at)
+      {:ok, _brief} = TicketEvents.record("r", "i", "brief.written", brief, actor: {:agent, "run-2", "rework"}, at: DateTime.add(at, 60))
+      :ok = RunStore.update_ticket_state("i", %{phase: "QA"})
+
+      for state <- ["In Progress", "Code Review", "QA", "Merging", "CI Fix"] do
+        issue = %{issue | state: state}
+
+        prompts = [
+          PromptBuilder.build_prompt(issue, ticket_state: record),
+          PromptBuilder.build_compact_prompt(issue, ticket_state: record)
+        ]
+
+        for prompt <- prompts do
+          assert prompt =~ "Brief (written 2026-10-22T10:01:00Z by an agent (Rework run)):\n- What it does: Each ticket says in plain words what it delivers.\n", state
+          assert prompt =~ "- Walkthrough: Read a ticket a run just finished.", state
+          refute prompt =~ "An older brief.", state
+        end
+      end
+    end
+
     # A Codex prompt over the stdio soft limit is sent as the compact prompt, which carries the
     # summary too: the run that is sent it has read the note, and the read names that run.
     test "a Codex run sent the compact prompt carries the note and records its read", %{issue: issue, record: record, at: at} do
@@ -1336,7 +1359,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
     test "every run kind's prompt names both tools and what that kind records" do
       records = %{
-        "implementation" => "This implementation run records `step.completed` for each delegated step as it ends it",
+        "implementation" => "This implementation run records the ticket's brief first, as a `brief.written`",
         "breakdown" => "This plan run records a `note` for each choice the plan makes",
         "close_out" => "A run records `step.completed` for each delegated step",
         "rework" => "This rework run reads `ticket_events` with `open_findings: true` before it plans, records `finding.resolved`",

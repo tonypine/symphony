@@ -556,7 +556,9 @@ only: a workspace made again, why, the heads compared and the one it started on)
 terminal state or another cleanup), `rule.action` (machine only: a rule of Symphony's acted on the
 ticket, with the rule's name and what it did), `ticket.filed` (machine only: a ticket split off from
 this one, or an epic review's follow-up), `note.read` (machine only: the first run whose prompt carried a
-person's note, keyed by the note) and `note`. `GET /api/v1/events` reads every ticket's events, and
+person's note, keyed by the note), `brief.written` (an implementation, rework or review-feedback run's
+brief of the ticket: what it does and why and its walkthrough, in a person's words, with no backtick; the
+newest one is the ticket read's `brief`) and `note`. `GET /api/v1/events` reads every ticket's events, and
 Symphony's own stream, newest first, with the notable rule set (`docs/control-api.md`).
 
 A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)
@@ -4806,7 +4808,8 @@ Scoped GitHub tool extension contract:
 - `ticket_events` and `ticket_record`, if exposed, MUST act only on the session's current ticket
   and take no ticket argument; every run kind gets both. `ticket_record` MUST take only the types the
   event catalog allows the run's kind (`finding.recorded` in a QA run; `finding.resolved`, `step.*`,
-  `evidence`, `checklist.answered` and `note` in any run), MUST fill the event's actor, run, phase
+  `evidence`, `checklist.answered` and `note` in any run; `brief.written` in an implementation, rework
+  or review-feedback run), MUST fill the event's actor, run, phase
   and head itself, MUST take artifacts only from regular files under the workspace or the run's
   temp folder, and MUST write nothing when it refuses a call, returning the reason and the type's
   schema.
