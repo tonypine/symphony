@@ -389,7 +389,11 @@ public enum UpdateMenu {
         case .refused:
             let retry = retryTitle(version: skipped.version)
             guard let spot = skipped.detail.flatMap(ConfigCheck.unreadable) else {
-                return "\(version) can't read your settings and can't migrate them; edit the file, then choose \(retry)."
+                guard let detail = skipped.detail else {
+                    return "\(version) can't read your settings and can't migrate them; edit the file, then choose \(retry)."
+                }
+                return "\(version) can't read your settings and can't migrate them: \(ConfigCheck.reasonFirst(detail)) "
+                    + "This version keeps running; edit the file, then choose \(retry)."
             }
             return "\(version) can't read \(spot) in your settings; edit it, then choose \(retry)."
         case .rolledBack:

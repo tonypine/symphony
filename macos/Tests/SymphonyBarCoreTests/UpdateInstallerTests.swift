@@ -158,6 +158,19 @@ final class UpdateInstallerTests: XCTestCase {
         }
     }
 
+    func testARefusalThatNamesNoKeyStillSaysWhy() {
+        let message = "Config error in /ops/symphony.yml: workspaces.repo does not exist: /gone"
+        let description = UpdateError.settingsRefused(message).localizedDescription
+
+        XCTAssertTrue(description.contains("workspaces.repo does not exist"), description)
+        XCTAssertTrue(description.contains("keeps running"), description)
+        XCTAssertEqual(
+            UpdateMenu.skippedLine(SkippedRelease(release, reason: .refused, detail: message)),
+            "v0.0.1.43 can't read your settings and can't migrate them: workspaces.repo does not exist: /gone (in /ops/symphony.yml) "
+                + "This version keeps running; edit the file, then choose Retry v0.0.1.43."
+        )
+    }
+
     func testAnUnverifiedDownloadNeverRuns() async throws {
         let asked = AskedBinaries()
         let installer = try installer(downloader: downloader(checksum: String(repeating: "0", count: 64)))
