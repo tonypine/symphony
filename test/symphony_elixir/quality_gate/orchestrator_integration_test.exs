@@ -354,21 +354,10 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     reply = %{author: "Operator", body: "Acceptance criteria are clear.", created_at: ~U[2026-05-05 04:00:00Z]}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue | comments: [reply]}])
 
-    force_repo_poll_due(pid)
-    send(pid, :run_poll_cycle)
-
-    wait_for_orchestrator_state(
-      pid,
-      fn state ->
-        read_the_change? =
-          Enum.any?(state.repo_poll_cache, fn {_repo, entry} ->
-            Enum.any?(Map.get(entry, :issues, []), &(&1.id == "issue-deferred-1" and &1.comments != []))
-          end)
-
-        read_the_change? and state.cycle_deferred and is_nil(state.repo_poll_task_ref)
-      end,
-      5_000
-    )
+    # The orchestrator's own startup cycle can still be in flight here and wipe or outlive a single
+    # forced cycle, so ask again whenever no cycle is running and the change is not yet read.
+    deadline_ms = System.monotonic_time(:millisecond) + 5_000
+    wait_for_deferred_cycle_to_read_change(pid, "issue-deferred-1", deadline_ms)
 
     send(gate_task, :release)
 
@@ -870,6 +859,33 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
 
       item ->
         item
+    end
+  end
+
+  defp wait_for_deferred_cycle_to_read_change(pid, issue_id, deadline_ms) do
+    state = :sys.get_state(pid)
+
+    read_the_change? =
+      Enum.any?(state.repo_poll_cache, fn {_repo, entry} ->
+        Enum.any?(Map.get(entry, :issues, []), &(&1.id == issue_id and &1.comments != []))
+      end)
+
+    cond do
+      read_the_change? and state.cycle_deferred and is_nil(state.repo_poll_task_ref) ->
+        :ok
+
+      System.monotonic_time(:millisecond) > deadline_ms ->
+        flunk("Timed out waiting for the deferred cycle to read the change: #{inspect(state, limit: 20)}")
+
+      state.poll_check_in_progress or not is_nil(state.repo_poll_task_ref) ->
+        Process.sleep(10)
+        wait_for_deferred_cycle_to_read_change(pid, issue_id, deadline_ms)
+
+      true ->
+        force_repo_poll_due(pid)
+        send(pid, :run_poll_cycle)
+        Process.sleep(10)
+        wait_for_deferred_cycle_to_read_change(pid, issue_id, deadline_ms)
     end
   end
 
