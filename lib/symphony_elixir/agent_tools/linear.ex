@@ -1032,9 +1032,22 @@ defmodule SymphonyElixir.AgentTools.Linear do
              opts
            ),
          :ok <- CommentRegistry.check_subissue_title(registry, issue_id, title) do
-      create_child_issue(issue_id, {title, description, priority, blocked_by}, placement, registry, opts)
+      issue_id
+      |> create_child_issue({title, description, priority, blocked_by}, placement, registry, opts)
+      |> record_filed(context, issue_id, title, placement)
     end
   end
+
+  # The child filed is the ticket's `ticket.filed`: a run's split-off, or an epic review's follow-up.
+  # Best-effort, as the ledger's other writes from a tool are.
+  defp record_filed({:ok, response} = created, context, issue_id, title, placement) do
+    identifier = get_in(response, ["data", "issueCreate", "issue", "identifier"])
+    kind = if placement == :by_current_issue, do: "split_off", else: "follow_up"
+    _ = TicketEvents.record(issue_repo_key(context), issue_id, "ticket.filed", %{identifier: identifier, kind: kind, title: String.slice(title, 0, 300)}, run_id: Map.get(context, :run_id))
+    created
+  end
+
+  defp record_filed(error, _context, _issue_id, _title, _placement), do: error
 
   @doc """
   Changes a `Backlog` child of the current issue, so a breakdown run can bring its plan in line

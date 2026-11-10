@@ -108,6 +108,16 @@ defmodule SymphonyElixir.TicketEvents.Types do
   first words (`word`), its cause and since when it holds. A timeline reads how long each situation
   lasted from these events, without parsing.
 
+  `rule.action` is machinery-only: a rule of Symphony's acted on the ticket (`SymphonyElixir.RuleActions`):
+  the rule's name (`rule`: "PR watcher R22", "CI wait", "Self-heal", "Dispatch-loop guard", "Idle
+  park"), what it did (`action`: `rerun`, `paused`, `parked`, `filed_ticket`, `lifted_pause`, `moved`,
+  `updated_branch`, `auto_merge`, `asked`, `other`), its line in plain words (`text`) and the ticket
+  it filed (`filed`). The audit records the rules write stay as they are.
+
+  `ticket.filed` is machinery-only: a ticket split off from this one was filed in Linear, by a run's
+  `linear_create_subissue` (`kind: split_off`) or as an epic review's follow-up (`follow_up`), with
+  its identifier and title.
+
   `note.read` is machinery-only: the first run whose prompt carried a person's note (`note_id`, the
   `note` event's id) read it (`run_id`), keyed by the note so only the first read is kept
   (`SymphonyElixir.Marks`).
@@ -171,6 +181,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @step [step_id: {:string, 200}, title: {:string, 200}, mode: {:enum, @step_modes}]
   # An agent records only a delegated step; Symphony records the machine and orchestrated ones.
   @agent_steps [mode: ["delegated"]]
+
+  @rule_actions ~w(rerun paused parked filed_ticket lifted_pause moved updated_branch auto_merge asked other)
 
   @legacy_types ["hold.set", "hold.cleared", "decision.requested", "decision.recorded", "decision.withdrawn"]
 
@@ -474,6 +486,20 @@ defmodule SymphonyElixir.TicketEvents.Types do
       optional: @signal,
       idempotency: :writer
     },
+    "rule.action" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [rule: {:string, 200}, action: {:enum, @rule_actions}],
+      optional: [text: {:string, 500}, filed: :string, head: :string] ++ @signal,
+      idempotency: :writer
+    },
+    "ticket.filed" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [identifier: :string, kind: {:enum, ~w(split_off follow_up)}],
+      optional: [title: {:string, 300}] ++ @signal,
+      idempotency: {:fields, [:identifier]}
+    },
     "note.read" => %{
       writers: [:machine],
       run_kinds: [],
@@ -489,6 +515,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
       idempotency: :writer
     }
   }
+
+  @doc "What a `rule.action` may say a rule did."
+  @spec rule_actions() :: [String.t()]
+  def rule_actions, do: @rule_actions
 
   @doc "The legacy types: kept so history reads them, never recorded by a live writer (see the moduledoc)."
   @spec legacy_types() :: [String.t()]

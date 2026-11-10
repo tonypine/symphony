@@ -41,6 +41,7 @@ defmodule SymphonyElixir.AgentRunner do
     PrWatch.HeadSync,
     QaVerification,
     Questions,
+    RuleActions,
     RunKind,
     RunStore,
     SetupBlock,
@@ -2442,6 +2443,7 @@ defmodule SymphonyElixir.AgentRunner do
     ctx = %{settings: Keyword.fetch!(opts, :settings), repo_key: repo_key}
 
     :ok = TicketSignals.record(repo_key, issue_id, "blocked", %{to: @idle_park_state, reason: IdlePark.signal_reason(), from: issue.state})
+    :ok = RuleActions.record(repo_key, issue_id, "Idle park", "parked", "#{@max_empty_turns} turns in #{issue.state} changed nothing, so it was parked in #{@idle_park_state}")
     :ok = hold_parked_issue(issue, repo_key)
 
     with :ok <- with_linear_retry(fn -> TransitionGuard.perform(issue_id, :idle_park, ctx) end, label, opts),

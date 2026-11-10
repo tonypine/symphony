@@ -39,6 +39,7 @@ defmodule SymphonyElixir.Orchestrator do
     Questions,
     ReleaseBuild,
     RetiredStates,
+    RuleActions,
     RunKind,
     RunStore,
     Secret,
@@ -5914,6 +5915,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp hold_dispatch_loop(%State{} = state, %Issue{id: issue_id} = issue, repo_key, loop, record) do
     attrs = DispatchLoop.hold_attrs(loop, TicketState.signals(record))
     pause_on_question(repo_key, issue, DispatchLoop.question_attrs(loop, issue.identifier || issue_id), DispatchLoop.hold_type(), attrs.reason)
+    RuleActions.record(repo_key, issue_id, "Dispatch-loop guard", "paused", attrs.reason)
     Logger.error("Holding #{issue_context(issue)} instead of dispatching it again: #{attrs.reason}")
     record_signal(repo_key, issue_id, DispatchLoop.hold_type(), %{kind: loop.kind, count: loop.count, window_ms: loop.window_ms})
     release_undispatched_claim(state, issue_id)
