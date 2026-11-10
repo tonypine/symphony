@@ -1,0 +1,7 @@
+name: self-hosted-test
+on: workflow_dispatch
+jobs:
+  hello:
+    runs-on: [self-hosted, macOS]
+    steps:
+      - run: sw_vers && xcodebuild -version && echo "$HOME" && echo "$PATH"
