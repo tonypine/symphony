@@ -1,0 +1,155 @@
+{
+  "now": "2026-10-30T16:17:00Z",
+  "issues": [
+    {
+      "identifier": "SHOP-501",
+      "situation": {
+        "kind": "working",
+        "word": "Working on the tests step",
+        "cause": "Implementation run 2 is answering Code Review's finding.",
+        "next": "It hands off to Code Review when it pushes.",
+        "since": "2026-10-30T16:09:00Z",
+        "waits_on": { "step": "tests", "run_id": "run-2" },
+        "and_more": 0,
+        "step": { "id": "tests", "title": "Tests and coverage" },
+        "run": { "id": "run-2", "kind": "rework", "number": 2, "label": "Implementation run 2" },
+        "retry": null
+      }
+    },
+    {
+      "identifier": "SHOP-502",
+      "situation": {
+        "kind": "waiting_for_slot",
+        "word": "Waiting for a slot",
+        "cause": "Three runs are ahead of it; Symphony runs four at a time.",
+        "next": "Starts when a slot frees.",
+        "since": "2026-10-30T16:05:00Z",
+        "waits_on": { "slot": "work slots full" },
+        "and_more": 0,
+        "step": null,
+        "run": null,
+        "retry": null
+      }
+    },
+    {
+      "identifier": "SHOP-503",
+      "situation": {
+        "kind": "waiting_for_ci",
+        "word": "Waiting for CI",
+        "cause": "Checks are running on PR #741.",
+        "next": "Code Review starts when they pass.",
+        "since": "2026-10-30T16:11:00Z",
+        "waits_on": { "pr": 741, "check": null },
+        "and_more": 0,
+        "step": null,
+        "run": null,
+        "retry": null
+      }
+    },
+    {
+      "identifier": "SHOP-504",
+      "situation": {
+        "kind": "waiting_for_build",
+        "word": "Waiting for a build",
+        "cause": "The app for this commit is being built for QA.",
+        "next": "QA starts when the build is ready.",
+        "since": "2026-10-30T16:13:00Z",
+        "waits_on": { "commit": "cedfe01" },
+        "and_more": 0,
+        "step": null,
+        "run": null,
+        "retry": null
+      }
+    },
+    {
+      "identifier": "SHOP-505",
+      "situation": {
+        "kind": "waiting_on_you",
+        "word": "Waiting on you",
+        "cause": "Implementation run 3 asked how the paused line's times should read.",
+        "next": "Answer below; the next run starts at once.",
+        "since": "2026-10-30T16:09:00Z",
+        "waits_on": { "question_id": "q-3" },
+        "and_more": 0,
+        "step": null,
+        "run": null,
+        "retry": null
+      }
+    },
+    {
+      "identifier": "SHOP-506",
+      "situation": {
+        "kind": "blocked_by_ticket",
+        "word": "Blocked by TP-1251",
+        "cause": "It is in Code Review.",
+        "next": "Starts when TP-1251 lands.",
+        "since": "2026-10-29T23:17:00Z",
+        "waits_on": { "ticket": "TP-1251" },
+        "and_more": 0,
+        "step": null,
+        "run": null,
+        "retry": null
+      }
+    },
+    {
+      "identifier": "SHOP-507",
+      "situation": {
+        "kind": "paused_by_rule",
+        "word": "Paused",
+        "cause": "Dispatch is paused: Deploy freeze.",
+        "next": "Starts when you resume dispatch.",
+        "since": "2026-10-30T15:13:00Z",
+        "waits_on": null,
+        "and_more": 0,
+        "step": null,
+        "run": null,
+        "retry": null
+      }
+    },
+    {
+      "identifier": "SHOP-508",
+      "situation": {
+        "kind": "retrying",
+        "word": "Retrying",
+        "cause": "The run stopped: the agent hit its usage limit.",
+        "next": "Try 2 of 3 starts at 16:20.",
+        "since": "2026-10-30T16:14:00Z",
+        "waits_on": null,
+        "and_more": 0,
+        "step": null,
+        "run": null,
+        "retry": { "try": 2, "of": 3, "at": "2026-10-30T16:20:00Z" }
+      }
+    },
+    {
+      "identifier": "SHOP-509",
+      "situation": {
+        "kind": "done",
+        "word": "Shipped",
+        "cause": "Merged as PR #741 at 21:05.",
+        "next": null,
+        "since": "2026-10-29T21:05:00Z",
+        "waits_on": null,
+        "and_more": 0,
+        "step": null,
+        "run": null,
+        "retry": null
+      }
+    },
+    {
+      "identifier": "SHOP-510",
+      "situation": {
+        "kind": "cancelled",
+        "word": "Cancelled",
+        "cause": "You cancelled it; PR #812 was closed.",
+        "next": null,
+        "since": "2026-10-28T16:17:00Z",
+        "waits_on": null,
+        "and_more": 0,
+        "step": null,
+        "run": null,
+        "retry": null
+      }
+    }
+  ]
+}
