@@ -354,6 +354,14 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     reply = %{author: "Operator", body: "Acceptance criteria are clear.", created_at: ~U[2026-05-05 04:00:00Z]}
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue | comments: [reply]}])
 
+    # The startup cycle and the one sent above may still be settling: let every poll end so the cycle
+    # below is the only one, and reads the change.
+    wait_for_orchestrator_state(
+      pid,
+      fn state -> not state.poll_check_in_progress and is_nil(state.repo_poll_task_ref) and map_size(state.quality_gate_tasks) > 0 end,
+      5_000
+    )
+
     force_repo_poll_due(pid)
     send(pid, :run_poll_cycle)
 
