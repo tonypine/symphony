@@ -163,6 +163,7 @@ defmodule SymphonyElixir.LifecycleTest do
     test "a read writes nothing" do
       before = TicketEvents.query(@id, limit: :all)
       assert %{lifecycle: _lifecycle} = Lifecycle.read(@id, @shipped_at)
+      assert %{lifecycle: _lifecycle} = Lifecycle.read(@id)
       assert TicketEvents.query(@id, limit: :all) == before
     end
   end

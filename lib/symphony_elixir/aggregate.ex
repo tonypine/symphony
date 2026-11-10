@@ -331,12 +331,8 @@ defmodule SymphonyElixir.Aggregate do
         do: %{from: from, to: to, key: stage, ticket: identifier(records, issue_id)}
   end
 
-  defp identifier(records, issue_id) do
-    case Map.get(records, issue_id) do
-      %{issue_identifier: identifier} -> identifier
-      nil -> nil
-    end
-  end
+  # A ticket Symphony has no record of has no identifier.
+  defp identifier(records, issue_id), do: with(%{issue_identifier: identifier} <- Map.get(records, issue_id), do: identifier)
 
   defp run_tokens(run), do: total_tokens(Map.get(run, :tokens)) + total_tokens(Map.get(run, :reviewer_tokens))
 
