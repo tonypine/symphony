@@ -4,7 +4,7 @@ defmodule SymphonyElixir.ExtensionsTest do
   import Phoenix.ConnTest
 
   alias Mix.Tasks.Symphony.Audit
-  alias SymphonyElixir.{AuditLog, RetiredStates, StrayProcesses, TicketMoves, TicketState}
+  alias SymphonyElixir.{AuditLog, RetiredStates, StrayProcesses, TicketEvents, TicketMoves, TicketState}
   alias SymphonyElixir.Dispatch.Shadow
   alias SymphonyElixir.Inbox.ReviewBrief
   alias SymphonyElixir.Linear.{Adapter, Client, Usage}
@@ -462,6 +462,29 @@ defmodule SymphonyElixir.ExtensionsTest do
              json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
   end
 
+  test "phoenix observability api's ticket read says the step a live run is on and its newest lines" do
+    {:ok, started} =
+      TicketEvents.record("default", "issue-http", "step.started", %{step_id: "code", title: "Write the code", mode: "delegated"}, run_id: "run-http")
+
+    later = DateTime.add(started.at, 1, :second)
+
+    buffer =
+      :queue.from_list([
+        %{event: :agent_text, timestamp: later, payload: %{params: %{msg: %{content: "Reading the module."}}}},
+        %{event: :tool_use, timestamp: later, payload: %{params: %{tool: "Bash"}}}
+      ])
+
+    snapshot = update_in(static_snapshot().running, fn [running] -> [Map.merge(running, %{run_id: "run-http", transcript_buffer: buffer})] end)
+    orchestrator_name = Module.concat(__MODULE__, :RunNowApiOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot)
+    start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
+
+    assert %{"running" => %{"current_step" => %{"id" => "code", "title" => "Write the code", "mode" => "delegated"}, "recent_lines" => lines}} =
+             json_response(get(build_conn(), "/api/v1/MT-HTTP"), 200)
+
+    assert [%{"kind" => "say", "text" => "Reading the module."}, %{"kind" => "tool", "text" => "Bash"}] = lines
+  end
+
   test "phoenix observability api lists the watched issues with the facts read of their PRs" do
     facts = Facts.new(phase: :code_review, ci: :green, pr_number: 9, ahead: [%{issue_identifier: "MT-2", pr_number: 2, files: ["SPEC.md"]}])
     read_at = ~U[2026-10-16 12:00:00.500Z]
@@ -594,25 +617,37 @@ defmodule SymphonyElixir.ExtensionsTest do
     {:ok, pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: snapshot.(building))
     start_test_endpoint(orchestrator: orchestrator_name, snapshot_timeout_ms: 50)
 
-    assert %{"running" => [%{"session_id" => nil, "last_message" => "running Build", "step" => step}]} = json_response(get(build_conn(), "/api/v1/state"), 200)
+    assert %{"counts" => %{"running" => 1, "between_turns" => 0}, "running" => [%{"session_id" => nil, "last_message" => "running Build", "step" => step, "between_turns" => false}]} =
+             json_response(get(build_conn(), "/api/v1/state"), 200)
+
     assert step == %{"id" => "build", "title" => "Build", "mode" => "machine", "started_at" => "2026-11-05T12:30:00Z", "waiting" => nil}
 
     :sys.replace_state(pid, &Keyword.put(&1, :snapshot, snapshot.(waiting.("slot"))))
-    assert %{"running" => [%{"last_message" => "waiting for a free slot for its next agent turn"}]} = json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    assert %{"counts" => %{"running" => 1, "between_turns" => 1}, "running" => [%{"last_message" => "waiting for a free slot for its next agent turn", "between_turns" => true}]} =
+             json_response(get(build_conn(), "/api/v1/state"), 200)
 
     :sys.replace_state(pid, &Keyword.put(&1, :snapshot, snapshot.(waiting.("pause"))))
 
-    assert %{"running" => [%{"last_message" => "waiting for Symphony's pause to lift before its next agent turn", "step" => %{"waiting" => "pause", "started_at" => nil}}]} =
+    assert %{
+             "counts" => %{"running" => 1, "between_turns" => 1},
+             "running" => [%{"last_message" => "waiting for Symphony's pause to lift before its next agent turn", "step" => %{"waiting" => "pause", "started_at" => nil}, "between_turns" => true}]
+           } =
              json_response(get(build_conn(), "/api/v1/state"), 200)
 
     # A step paused on a Question: no session, on its step, waiting for the person's answer.
     :sys.replace_state(pid, &Keyword.put(&1, :snapshot, snapshot.(Map.put(waiting.("answer"), :question_id, "q-1"))))
 
-    assert %{"running" => [%{"session_id" => nil, "last_message" => "paused on your answer at Write the code", "step" => %{"waiting" => "answer", "question_id" => "q-1"}}]} =
+    assert %{
+             "counts" => %{"between_turns" => 1},
+             "running" => [%{"session_id" => nil, "last_message" => "paused on your answer at Write the code", "step" => %{"waiting" => "answer", "question_id" => "q-1"}, "between_turns" => true}]
+           } =
              json_response(get(build_conn(), "/api/v1/state"), 200)
 
     :sys.replace_state(pid, &Keyword.put(&1, :snapshot, snapshot.(waiting.("ended"))))
-    assert %{"running" => [%{"last_message" => "ending: the question its step waited on was withdrawn"}]} = json_response(get(build_conn(), "/api/v1/state"), 200)
+
+    assert %{"counts" => %{"between_turns" => 0}, "running" => [%{"last_message" => "ending: the question its step waited on was withdrawn", "between_turns" => false}]} =
+             json_response(get(build_conn(), "/api/v1/state"), 200)
   end
 
   test "phoenix observability api preserves state, issue, and refresh responses" do
@@ -663,6 +698,7 @@ defmodule SymphonyElixir.ExtensionsTest do
       "repositories" => [],
       "counts" => %{
         "running" => 1,
+        "between_turns" => 0,
         "watching" => 1,
         "conflicts" => 0,
         "retrying" => 1,
@@ -698,6 +734,7 @@ defmodule SymphonyElixir.ExtensionsTest do
           "last_message" => "rendered",
           "linear_wait_until" => nil,
           "pending_tool" => nil,
+          "between_turns" => false,
           "step" => nil,
           "started_at" => state_payload["running"] |> List.first() |> Map.fetch!("started_at"),
           "last_event_at" => nil,
@@ -741,6 +778,7 @@ defmodule SymphonyElixir.ExtensionsTest do
       ],
       "waiting_on_you" => [],
       "inbox_read" => true,
+      "order" => %{"computed_at" => nil, "groups" => [], "next" => nil, "queue" => [], "slots" => nil},
       "conflicts" => [],
       "retrying" => [
         %{
@@ -1061,6 +1099,8 @@ defmodule SymphonyElixir.ExtensionsTest do
              },
              "attempts" => %{"restart_count" => 0, "current_retry_attempt" => 0},
              "running" => %{
+               "current_step" => nil,
+               "recent_lines" => [],
                "repo_key" => "default",
                "worker_host" => nil,
                "workspace_path" => nil,
@@ -1094,6 +1134,10 @@ defmodule SymphonyElixir.ExtensionsTest do
              "situation" => issue_payload["situation"],
              "lifecycle" => issue_payload["lifecycle"],
              "phase_path" => issue_payload["phase_path"],
+             "looked_at" => nil,
+             "new_since_looked" => issue_payload["new_since_looked"],
+             "note" => nil,
+             "brief" => nil,
              "pull_request" => nil,
              "pause" => nil
            }
@@ -1139,6 +1183,10 @@ defmodule SymphonyElixir.ExtensionsTest do
              "situation" => watching_payload["situation"],
              "lifecycle" => watching_payload["lifecycle"],
              "phase_path" => watching_payload["phase_path"],
+             "looked_at" => nil,
+             "new_since_looked" => watching_payload["new_since_looked"],
+             "note" => nil,
+             "brief" => nil,
              "pull_request" => nil,
              "pause" => nil
            }
@@ -1918,6 +1966,23 @@ defmodule SymphonyElixir.ExtensionsTest do
     options: [%{label: "Add it", effect: "Releases sign again.", recommended: true}, %{label: "Drop signing", effect: "Unsigned builds."}]
   }
 
+  test "a CI Fix ticket waiting on CI lists on the inbox api and counts as waiting on no one (TP-1175)" do
+    decision = %{rule: "R24", kind: :wait, owner: :ci, reason: "Checks are running on PR #9's head", since: ~U[2026-11-06 09:00:00Z]}
+    watch = %{facts: struct(Facts, phase: :ci_fix), pr_url: "https://github.com/acme/app/pull/9", decision: decision}
+    waiting = "MT-WAIT" |> inbox_record(%{phase: "CI Fix"}) |> TicketState.put_pr_watch(watch)
+
+    orchestrator_name = Module.concat(__MODULE__, :WaitingInboxOrchestrator)
+    {:ok, _pid} = StaticOrchestrator.start_link(name: orchestrator_name, snapshot: static_snapshot())
+    inbox = record_inbox([waiting], pull_request: fn _url -> {:error, :not_read} end)
+    start_test_endpoint(orchestrator: orchestrator_name, inbox: inbox, snapshot_timeout_ms: 50)
+
+    assert %{"counts" => %{"total" => 0, "waiting" => 1}, "items" => [row]} = json_response(get(build_conn(), "/api/v1/inbox"), 200)
+    assert %{"kind" => "waiting", "identifier" => "MT-WAIT", "state" => "CI Fix", "waiting_since" => "2026-11-06T09:00:00Z"} = row
+    assert %{"clearing_condition" => "when the checks report", "pull_request" => %{"url" => "https://github.com/acme/app/pull/9"}} = row["review"]
+
+    assert %{"counts" => %{"waiting_on_you" => 0}, "waiting_on_you" => []} = json_response(get(build_conn(), "/api/v1/state"), 200)
+  end
+
   test "the inbox api answers from the records with no Linear reachable, and the state api counts the same rows" do
     # A Linear tracker whose endpoint answers nothing (`linear_tracker/1`: a closed port on 127.0.0.1).
     write_workflow_file!(Workflow.workflow_file_path(), linear_tracker())
@@ -2687,6 +2752,7 @@ defmodule SymphonyElixir.ExtensionsTest do
 
     assert response.body["counts"] == %{
              "running" => 1,
+             "between_turns" => 0,
              "watching" => 1,
              "conflicts" => 0,
              "retrying" => 1,

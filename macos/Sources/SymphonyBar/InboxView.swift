@@ -276,7 +276,7 @@ private struct InboxRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
             Image(systemName: item.kind.symbol)
-                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(DesignTokens.Status.you.tint))
+                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(item.kind.status.tint))
                 .imageScale(.medium)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
                 HStack(alignment: .firstTextBaseline) {
@@ -356,6 +356,8 @@ struct InboxReviewBody: View {
                 if let clarify = item.review.clarify { ClarifyCards(clarify: clarify) }
             case .blocked:
                 if let blocked = item.review.blocked { BlockedCards(blocked: blocked) }
+            case .waiting:
+                if let wait = item.review.blocked { WaitingCard(wait: wait) }
             }
             if let context = ContextCard(item: item, now: now) {
                 ContextCardView(card: context, narrow: narrow)
@@ -411,7 +413,7 @@ private struct ReviewHeader: View {
 
     /// The kind pill, waiting time, state and repo, each kept on one line.
     @ViewBuilder private var badges: some View {
-        StatusBadge(status: .you, word: item.kindWord)
+        StatusBadge(status: item.kind.status, word: item.kindWord)
             .fixedSize()
         if let age = item.age {
             Label("Waiting \(age)", systemImage: "clock")
@@ -1265,6 +1267,20 @@ private struct BlockedCards: View {
                     ChipText(text: line)
                 }
                 ChipText(text: blocked.nextLine, font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
+            }
+        }
+    }
+}
+
+/// A ticket waiting on CI: what it waits on, and that it moves on by itself. It offers no move.
+private struct WaitingCard: View {
+    let wait: InboxReview.Blocked
+
+    var body: some View {
+        Card(title: "What it waits on") {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                if let reason = wait.reason { ChipText(text: reason) }
+                ChipText(text: wait.waitLine, font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
             }
         }
     }

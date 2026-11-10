@@ -231,6 +231,7 @@ defmodule SymphonyElixirWeb.WatchPayload do
 
   defp name(nil), do: nil
   defp name(value) when is_atom(value), do: Atom.to_string(value)
+  defp name(value) when is_binary(value), do: value
 
   defp iso8601(%DateTime{} = datetime), do: datetime |> DateTime.truncate(:second) |> DateTime.to_iso8601()
   defp iso8601(_datetime), do: nil

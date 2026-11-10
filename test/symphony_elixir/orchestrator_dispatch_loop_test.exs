@@ -77,6 +77,12 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
 
     assert note =~ "(dispatch_loop)"
 
+    # The hold is the dispatch-loop guard's action on the ticket.
+    assert [%{rule: "Dispatch-loop guard", action: "paused", text: hold_text}] =
+             @issue_id |> TicketEvents.query(types: ["rule.action"]) |> Enum.map(& &1.payload) |> Enum.filter(&(&1.rule == "Dispatch-loop guard"))
+
+    assert hold_text =~ "dispatch_loop: 4 implementation runs in 10 minutes"
+
     # The Inbox, and `/api/v1/state`'s `waiting_on_you` built from it, lists the ticket by its question.
     item = Item.from_question(TicketState.normalize(record), question)
     assert %{kind: :action, ask: ask, review: %{question_id: ^question_id}} = item

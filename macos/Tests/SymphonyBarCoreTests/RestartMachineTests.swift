@@ -201,6 +201,40 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertFalse(machine.pausedByRestart)
     }
 
+    private func betweenTurnsPoll(running: Int, betweenTurns: Int) -> StatusPoll {
+        .state(StateSnapshot(running: running, betweenTurns: betweenTurns, pause: .init(reason: "updating to v0.0.1.856")))
+    }
+
+    func testAnUpdateStopsSymphonyOnceEveryRemainingRunIsBetweenTurns() {
+        var machine = RestartMachine()
+        _ = machine.begin(alreadyPaused: false, purpose: .update, updatingTo: "0.0.1.856", runsTimeout: runsTimeout, logPath: log, now: began)
+        _ = machine.handle(.configChecked(.passed), now: began)
+        _ = machine.handle(.controlFinished(.pauseForUpdate(version: "0.0.1.856"), .done), now: began)
+
+        XCTAssertEqual(machine.handle(.polled(betweenTurnsPoll(running: 2, betweenTurns: 1)), now: began), [])
+        XCTAssertEqual(machine.phase, .waitingForRuns(running: 1))
+        XCTAssertEqual(machine.menuLine, "Waiting for 1 agent run…", "The menu counts only the run the update waits for")
+
+        XCTAssertEqual(machine.handle(.polled(betweenTurnsPoll(running: 1, betweenTurns: 1)), now: began), [.stop])
+        XCTAssertEqual(machine.phase, .stopping)
+        XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped], "The update completes")
+    }
+
+    func testAnAutomaticUpdateDoesNotPostponeForARunBetweenTurns() {
+        var machine = RestartMachine()
+        _ = machine.begin(alreadyPaused: false, purpose: .automaticUpdate, updatingTo: "0.0.1.856", runsTimeout: 0, logPath: log, now: began)
+        _ = machine.handle(.configChecked(.passed), now: began)
+        _ = machine.handle(.controlFinished(.pauseForUpdate(version: "0.0.1.856"), .done), now: began)
+
+        XCTAssertEqual(machine.handle(.polled(betweenTurnsPoll(running: 1, betweenTurns: 1)), now: began), [.stop])
+        XCTAssertFalse(machine.postponed)
+    }
+
+    func testARestartStopsSymphonyWithARunBetweenTurns() {
+        var machine = waiting()
+        XCTAssertEqual(machine.handle(.polled(betweenTurnsPoll(running: 1, betweenTurns: 1)), now: began), [.stop])
+    }
+
     func testTimeoutOffersRestartNow() {
         var machine = waiting()
         XCTAssertTrue(machine.canCancel)

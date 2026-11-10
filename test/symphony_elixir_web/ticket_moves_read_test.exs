@@ -66,9 +66,9 @@ defmodule SymphonyElixirWeb.TicketMovesReadTest do
   end
 
   defp orchestrator(snapshot \\ %{}) do
-    {:ok, pid} = SnapshotOrchestrator.start_link(Map.merge(%{running: [], retrying: [], rate_limits: nil, repositories: [], dispatch_skipped: [], watching: []}, snapshot))
-    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
-    pid
+    snapshot = Map.merge(%{running: [], retrying: [], rate_limits: nil, repositories: [], dispatch_skipped: [], watching: []}, snapshot)
+    # Supervised, so the test's own shutdown stops it; stopping it from on_exit raced that shutdown.
+    start_supervised!(%{id: make_ref(), start: {SnapshotOrchestrator, :start_link, [snapshot]}})
   end
 
   defp running_entry do

@@ -459,7 +459,8 @@ board, and it is let go once a poll finds it closed or out of the workflow.
 section, `/api/v1/state`'s `waiting_on_you` list and the menu bar app list everything only you can
 move on, oldest first: a plan in `Plan Review`, a ticket with an open
 `linear_request_human_action` decision (and, with manual review on, a merge to confirm), and a
-ticket the quality gate holds or skipped. Each entry shows its kind, its one-line ask (the `**What to
+ticket the quality gate holds or skipped. The Inbox also lists, apart and asking nothing, a `CI Fix`
+ticket waiting on its checks. Each entry shows its kind, its one-line ask (the `**What to
 review:**` line of its `## Review brief`) and how long it has waited; the Inbox also shows the brief
 in its parts, the PR's checks and size, the request's steps or what the quality gate found. The
 menu bar icon shows a dot while the list is not empty, and the app notifies each new entry once.

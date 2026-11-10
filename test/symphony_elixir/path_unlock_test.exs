@@ -217,6 +217,18 @@ defmodule SymphonyElixir.PathUnlockTest do
       assert PathUnlock.unprotected(["./WORKFLOW.md", "lib/app.ex", ".git", "~/.zshrc"]) == ["lib/app.ex", ".git", "~/.zshrc"]
     end
 
+    test "a grant may name one CI workflow, which unlocks that file and not the rest of .github" do
+      assert PathUnlock.granted_paths("Unlock `.github/workflows/make-all.yml` for TP-1432.", "TP-1432") == [".github/workflows/make-all.yml"]
+      assert PathUnlock.granted_paths("Unlock .github/../WORKFLOW.md for TP-1432", "TP-1432") == []
+
+      assert PathUnlock.protected([".github/workflows/make-all.yml", ".github", ".github/workflows/*.yml"]) == [".github/workflows/make-all.yml", ".github"]
+      assert PathUnlock.unprotected([".github/workflows/make-all.yml", ".github/../lib/app.ex"]) == [".github/../lib/app.ex"]
+
+      description = PathUnlock.describe(".github/workflows/make-all.yml")
+      assert description == "a CI workflow or GitHub setting, which decides what merges and how the app is built"
+      assert PlainWords.tokens(description) == []
+    end
+
     test "every protected path has a plain description, which names no file" do
       for path <- AgentSandboxConfig.workspace_protected_paths() do
         description = PathUnlock.describe(path)

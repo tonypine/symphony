@@ -1239,6 +1239,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
   describe "create_subissue_in_state/4" do
     test "files the child in the named state, not Backlog, and records it like any sub-issue" do
+      :ok = SymphonyElixir.RunStore.clear()
       {:ok, registry} = Linear.CommentRegistry.start_link()
 
       states = [
@@ -1248,7 +1249,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert {:ok, response} =
                Linear.create_subissue_in_state(
-                 %{issue: %Issue{id: "issue-parent"}, comment_registry: registry},
+                 %{issue: %Issue{id: "issue-parent", repo_key: "repo-a"}, comment_registry: registry},
                  "Todo",
                  %{"title" => "Epic review fails: the export button is missing", "description" => "What the review found."},
                  linear_client: subissue_client(self(), subissue_scope(states))
@@ -1263,6 +1264,10 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute Map.has_key?(input, "priority")
 
       assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-999" => "issue-new"}
+
+      assert [filed] = SymphonyElixir.TicketEvents.query("issue-parent", types: ["ticket.filed"])
+      assert filed.payload == %{identifier: "TP-999", kind: "follow_up", title: "Epic review fails: the export button is missing"}
+      assert filed.repo_key == "repo-a"
     end
 
     test "a child filed without a priority inherits the parent's, and an explicit one wins" do
@@ -2537,7 +2542,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
               {decision.(%{"options" => [option.(%{"recommended" => true, "unlocks" => ["WORKFLOW.md", " "]}), option.(%{})]}), unlocks_type},
               {decision.(%{"options" => [option.(%{"recommended" => true, "unlocks" => ["WORKFLOW.md", "lib/app.ex"]}), option.(%{"unlocks" => [".git"]})]}),
                "`unlocks` names paths that are not protected: lib/app.ex, .git. It may only name the protected paths: " <>
-                 Enum.join(SymphonyElixir.AgentSandboxConfig.workspace_protected_paths(), ", ") <> "."},
+                 Enum.join(SymphonyElixir.AgentSandboxConfig.workspace_protected_paths(), ", ") <> ", or one path inside .github."},
               {decision.(%{"recommendation_reason" => 3}), "`decision.recommendation_reason` must be a string."},
               {%{"unblocks" => 3}, "`unblocks` must be a string."},
               {%{"if_unanswered" => 3}, "`if_unanswered` must be a string."},

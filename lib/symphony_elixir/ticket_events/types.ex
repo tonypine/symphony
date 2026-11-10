@@ -8,6 +8,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   Field specs:
 
     * `:string` - a non-blank string; `{:string, max}` also bounds its length in characters.
+    * `{:prose, max}` - a `{:string, max}` written for a person to read, which holds no backtick.
     * `{:enum, values}` - one of `values`, given as a string or an atom, stored as a string.
     * `:non_neg_integer`, `:boolean`, `:map`, `{:list, :string}`, `:list`.
     * `{:any_of, specs}` - the first spec that accepts the value.
@@ -57,7 +58,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   why (`reason`); and how long it took (`duration_ms`). Those fields are `conditional`: each is
   required exactly when its outcome holds and refused otherwise, as `command` and `prompt_ref` are
   by mode. A machine step's output is kept as an artifact of the `step_output` kind
-  (`SymphonyElixir.Artifacts`) on its `step.completed`. A skipped step is a `step.completed` with
+  (`SymphonyElixir.Artifacts`) on its `step.completed`; an agent step's slice of the session
+  transcript is a `transcript` artifact on its `step.completed` (`SymphonyElixir.PhaseSteps.Transcript`).
+  A skipped step is a `step.completed` with
   `outcome: skipped`: there is no `step.skipped` type. A `question.answered` naming the question a
   paused step waits on is what resumes that step.
 
@@ -105,6 +108,25 @@ defmodule SymphonyElixir.TicketEvents.Types do
   another kind, with the old kind (`from`, none on the first), the new one (`to`), the pattern's
   first words (`word`), its cause and since when it holds. A timeline reads how long each situation
   lasted from these events, without parsing.
+
+  `rule.action` is machinery-only: a rule of Symphony's acted on the ticket (`SymphonyElixir.RuleActions`):
+  the rule's name (`rule`: "PR watcher R22", "CI wait", "Self-heal", "Dispatch-loop guard", "Idle
+  park"), what it did (`action`: `rerun`, `paused`, `parked`, `filed_ticket`, `lifted_pause`, `moved`,
+  `updated_branch`, `auto_merge`, `asked`, `other`), its line in plain words (`text`) and the ticket
+  it filed (`filed`). The audit records the rules write stay as they are.
+
+  `ticket.filed` is machinery-only: a ticket split off from this one was filed in Linear, by a run's
+  `linear_create_subissue` (`kind: split_off`) or as an epic review's follow-up (`follow_up`), with
+  its identifier and title.
+
+  `note.read` is machinery-only: the first run whose prompt carried a person's note (`note_id`, the
+  `note` event's id) read it (`run_id`), keyed by the note so only the first read is kept
+  (`SymphonyElixir.Marks`).
+
+  `brief.written` is an agent's, in an implementation, rework or review-feedback run: what the ticket
+  does and why, in a person's words (`text`, at most 1,200 characters), and its walkthrough as the
+  steps a person takes (`walkthrough`, at most 4,000), both prose with no backtick. The newest one is
+  the ticket's brief (`SymphonyElixir.TicketBrief`).
   """
 
   alias SymphonyElixir.RunKind
@@ -113,6 +135,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @type field_spec ::
           :string
           | {:string, pos_integer()}
+          | {:prose, pos_integer()}
           | {:enum, [String.t()]}
           | :non_neg_integer
           | :boolean
@@ -165,6 +188,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @step [step_id: {:string, 200}, title: {:string, 200}, mode: {:enum, @step_modes}]
   # An agent records only a delegated step; Symphony records the machine and orchestrated ones.
   @agent_steps [mode: ["delegated"]]
+
+  @rule_actions ~w(rerun paused parked filed_ticket lifted_pause moved updated_branch auto_merge asked other)
 
   @legacy_types ["hold.set", "hold.cleared", "decision.requested", "decision.recorded", "decision.withdrawn"]
 
@@ -468,6 +493,34 @@ defmodule SymphonyElixir.TicketEvents.Types do
       optional: @signal,
       idempotency: :writer
     },
+    "rule.action" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [rule: {:string, 200}, action: {:enum, @rule_actions}],
+      optional: [text: {:string, 500}, filed: :string, head: :string] ++ @signal,
+      idempotency: :writer
+    },
+    "ticket.filed" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [identifier: :string, kind: {:enum, ~w(split_off follow_up)}],
+      optional: [title: {:string, 300}] ++ @signal,
+      idempotency: {:fields, [:identifier]}
+    },
+    "brief.written" => %{
+      writers: [:agent],
+      run_kinds: ~w(implementation rework review_feedback),
+      required: [text: {:prose, 1_200}, walkthrough: {:prose, 4_000}],
+      optional: [],
+      idempotency: :writer
+    },
+    "note.read" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [note_id: :string, run_id: :string],
+      optional: @signal,
+      idempotency: {:fields, [:note_id]}
+    },
     "note" => %{
       writers: [:machine, :agent, :person],
       run_kinds: :any,
@@ -476,6 +529,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
       idempotency: :writer
     }
   }
+
+  @doc "What a `rule.action` may say a rule did."
+  @spec rule_actions() :: [String.t()]
+  def rule_actions, do: @rule_actions
 
   @doc "The legacy types: kept so history reads them, never recorded by a live writer (see the moduledoc)."
   @spec legacy_types() :: [String.t()]
@@ -513,8 +570,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   @doc """
   The payload schema of `type` as plain data a tool can return: its `required` and `optional`
-  fields, each `%{name, type}` with a `max` length, the enum `values`, the `item` spec of a list,
-  the `of` specs of a choice or the `fields` of a map, and `required_when` (`%{field, equals}`) for
+  fields, each `%{name, type}` with a `max` length, a character it `forbids`, the enum `values`, the
+  `item` spec of a list, the `of` specs of a choice or the `fields` of a map, and `required_when` (`%{field, equals}`) for
   a field the type requires exactly when another field holds a value (and refuses otherwise). Nil
   for an unknown type. The fields only the machinery passes (`signal`, `signal_details`) are left out.
   """
@@ -543,6 +600,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   defp describe(:string), do: %{type: "string"}
   defp describe({:string, max}), do: %{type: "string", max: max}
+  defp describe({:prose, max}), do: %{type: "string", max: max, forbids: "`"}
   defp describe({:enum, values}), do: %{type: "enum", values: values}
   defp describe({:list, spec}), do: %{type: "list", item: describe(spec)}
   defp describe({:any_of, specs}), do: %{type: "any_of", of: Enum.map(specs, &describe/1)}
@@ -706,6 +764,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   defp check({:string, max}, value) when is_binary(value) do
     if String.length(value) > max, do: :error, else: check(:string, value)
+  end
+
+  defp check({:prose, max}, value) when is_binary(value) do
+    if String.contains?(value, "`"), do: :error, else: check({:string, max}, value)
   end
 
   defp check({:enum, values}, value) when is_atom(value), do: check({:enum, values}, Atom.to_string(value))

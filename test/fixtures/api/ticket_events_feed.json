@@ -11,6 +11,7 @@
       "head_sha": null,
       "id": "ev-01",
       "idempotency": null,
+      "new": true,
       "parent": null,
       "payload": {
         "from": "Todo",
@@ -39,6 +40,7 @@
           "head_sha": null,
           "id": "ev-02",
           "idempotency": "run.started:run-impl-1",
+          "new": true,
           "parent": null,
           "payload": {
             "head": "aaa1111",
@@ -68,6 +70,7 @@
           "head_sha": null,
           "id": "ev-03",
           "idempotency": null,
+          "new": true,
           "parent": null,
           "payload": {
             "text": "Plan: group the feed by run."
@@ -92,6 +95,7 @@
           "head_sha": null,
           "id": "ev-04",
           "idempotency": "run.ended:run-impl-1",
+          "new": true,
           "parent": null,
           "payload": {
             "duration_ms": 1020000,
@@ -136,6 +140,7 @@
       "head_sha": null,
       "id": "ev-05",
       "idempotency": null,
+      "new": true,
       "parent": null,
       "payload": {
         "from": "Code Review",
@@ -164,6 +169,7 @@
           "head_sha": null,
           "id": "ev-06",
           "idempotency": "run.started:run-qa-1",
+          "new": true,
           "parent": null,
           "payload": {
             "head": "bbb2222",
@@ -210,6 +216,7 @@
           "head_sha": null,
           "id": "ev-07",
           "idempotency": null,
+          "new": true,
           "parent": null,
           "payload": {
             "class": "clipped",
@@ -248,6 +255,7 @@
           "head_sha": null,
           "id": "ev-08",
           "idempotency": null,
+          "new": true,
           "parent": null,
           "payload": {
             "class": "state missing",
@@ -274,6 +282,7 @@
           "head_sha": null,
           "id": "ev-09",
           "idempotency": null,
+          "new": true,
           "parent": null,
           "payload": {
             "head": "bbb2222",
@@ -300,6 +309,7 @@
           "head_sha": null,
           "id": "ev-10",
           "idempotency": "run.ended:run-qa-1",
+          "new": true,
           "parent": null,
           "payload": {
             "duration_ms": 900000,
@@ -349,6 +359,7 @@
       "head_sha": null,
       "id": "ev-11",
       "idempotency": null,
+      "new": true,
       "parent": null,
       "payload": {
         "from": "QA",
@@ -375,6 +386,7 @@
       "head_sha": null,
       "id": "ev-12",
       "idempotency": null,
+      "new": true,
       "parent": null,
       "payload": {
         "text": "Keep the run header visible when the pane is narrow."
@@ -399,6 +411,7 @@
       "head_sha": null,
       "id": "ev-13",
       "idempotency": null,
+      "new": true,
       "parent": null,
       "payload": {
         "from": "Code Review",
@@ -427,6 +440,7 @@
           "head_sha": null,
           "id": "ev-14",
           "idempotency": "run.started:run-qa-2",
+          "new": true,
           "parent": null,
           "payload": {
             "head": "ccc3333",
@@ -465,6 +479,7 @@
               "head_sha": null,
               "id": "ev-16",
               "idempotency": null,
+              "new": true,
               "parent": "ev-15",
               "payload": {
                 "text": "The run header stays visible."
@@ -483,6 +498,7 @@
           "head_sha": null,
           "id": "ev-15",
           "idempotency": null,
+          "new": true,
           "parent": null,
           "payload": {
             "text": "Walking step 1 at 1440×900."

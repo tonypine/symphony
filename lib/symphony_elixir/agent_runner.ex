@@ -34,12 +34,14 @@ defmodule SymphonyElixir.AgentRunner do
     PathUnlock,
     Pauses,
     PhaseSteps,
+    PhaseSteps.Transcript,
     PromptBuilder,
     PrReviewPoller,
     PrWatch,
     PrWatch.HeadSync,
     QaVerification,
     Questions,
+    RuleActions,
     RunKind,
     RunStore,
     SetupBlock,
@@ -63,7 +65,8 @@ defmodule SymphonyElixir.AgentRunner do
   # The agent session the run holds now: a step walk stops it at a machine step and starts another
   # for the next agent turn, so the run's `after` stops whichever one is current.
   @session_key {__MODULE__, :agent_session}
-  @idle_park_state "Backlog"
+  # The session the current agent turn started, kept for a turn that fails before returning it.
+  @turn_session_key {__MODULE__, :turn_session}
   @merging_state "Merging"
   # Consecutive turns with no new commit, no state change and no PR change that end the run.
   @max_empty_turns IdlePark.idle_turns()
@@ -818,7 +821,7 @@ defmodule SymphonyElixir.AgentRunner do
   # the session stopped and the slot free. Any other run is one agent session, turn after turn.
   defp new_walk(%{kind: kind}) do
     steps = PhaseSteps.steps(kind)
-    if PhaseSteps.walk?(steps), do: %{steps: steps, step: hd(steps), carry: nil, started_ms: nil, started_at: nil, notes: %{}, answers: [], session_id: nil}
+    if PhaseSteps.walk?(steps), do: %{steps: steps, step: hd(steps), carry: nil, started_ms: nil, started_at: nil, notes: %{}, answers: [], session_id: nil, lines: [], transcript_offsets: %{}}
   end
 
   defp new_walk(_profile), do: nil
@@ -873,7 +876,7 @@ defmodule SymphonyElixir.AgentRunner do
 
     turn_result = run_agent_turn(agent_module, app_session, prompt, run_context)
     # A resumed step's conversation is resumed once, by its first turn.
-    run_context = Map.delete(run_context, :resume_session_id)
+    run_context = run_context |> Map.delete(:resume_session_id) |> keep_turn_transcript(turn_result)
 
     case turn_result do
       {:ok, turn_session} ->
@@ -944,7 +947,7 @@ defmodule SymphonyElixir.AgentRunner do
       prompt,
       issue,
       [
-        on_message: codex_message_handler(codex_update_recipient, issue),
+        on_message: remembering_turn_session(codex_message_handler(codex_update_recipient, issue)),
         settings: Keyword.fetch!(opts, :settings),
         repo_key: Keyword.get(opts, :repo_key),
         run_id: Keyword.get(opts, :run_id),
@@ -958,6 +961,36 @@ defmodule SymphonyElixir.AgentRunner do
       ] ++ resume_opts(run_context)
     )
   end
+
+  # A turn that fails returns no session, and what it added to the transcript still belongs to its step.
+  defp remembering_turn_session(on_message) do
+    fn message ->
+      with {:session_started, session_id} <- message, do: Process.put(@turn_session_key, session_id)
+      on_message.(message)
+    end
+  end
+
+  # What a walk's agent turn said joins its step's lines (a retry of the step adds to them). The agent
+  # may have recorded the step's end during the turn, before the turn's last lines existed, so its
+  # `step.completed` gets them only now; a step's end Symphony records carries them as it is written.
+  defp keep_turn_transcript(%{walk: %{} = walk} = run_context, turn_result) do
+    {lines, offsets} = turn_lines(run_context, turn_session_id(turn_result), walk.transcript_offsets)
+    run_context = %{run_context | walk: %{walk | lines: walk.lines ++ lines, transcript_offsets: offsets}}
+    PhaseSteps.keep_agent_transcript(walk.step, step_context(run_context), walk.started_at)
+    run_context
+  end
+
+  defp keep_turn_transcript(run_context, _turn_result), do: run_context
+
+  # A session on another host keeps its transcript there.
+  defp turn_lines(run_context, session_id, offsets) do
+    if run_context.worker_host,
+      do: {[], offsets},
+      else: Transcript.read_session(run_context.workspace, session_id, offsets)
+  end
+
+  defp turn_session_id({:ok, %{session_id: session_id}}) when is_binary(session_id), do: session_id
+  defp turn_session_id(_failed_turn), do: Process.get(@turn_session_key)
 
   defp resume_opts(%{resume_session_id: session_id}), do: [resume_session_id: session_id]
   defp resume_opts(_run_context), do: []
@@ -1000,6 +1033,10 @@ defmodule SymphonyElixir.AgentRunner do
 
       ci_action = pushed_head_handoff_ci_action(issue, run_context) ->
         hand_off_pushed_head(issue, ci_action, run_context)
+
+      ci_wait = ci_fix_ci_wait(issue, run_context) ->
+        Logger.info("Ending the CI Fix run for #{issue_context(issue)}; waiting for CI on its PR head #{ci_wait.sha}")
+        {:error, {:ci_pending, ci_wait}}
 
       idle_turn_limit_reached?(issue, run_context) ->
         end_idle_run(issue, run_context)
@@ -1310,7 +1347,7 @@ defmodule SymphonyElixir.AgentRunner do
       {:go_on, _on_fail} ->
         case PhaseSteps.next(walk.steps, step, :passed) do
           {:ok, next_step} -> resume_at(agent_module, run_context, next_step, nil, turn_number, max_turns)
-          :end -> :ok
+          :end -> end_machine_walk(run_context, nil)
         end
 
       {:words, {:ok, %{mode: mode} = on_fail}} when mode != "machine" ->
@@ -1357,9 +1394,58 @@ defmodule SymphonyElixir.AgentRunner do
       {:paused, paused, question_id} ->
         pause_walk(agent_module, run_context, paused, question_id, turn_number, max_turns)
 
-      {:end, _carry} ->
+      {:end, carry} ->
         Logger.info("Step list of #{issue_context(run_context.issue)} ended after its machine steps; ending the run")
-        :ok
+        end_machine_walk(run_context, carry)
+    end
+  end
+
+  # A list that ends on a machine `handoff` step pushed with its own command, past the tool hooks, and
+  # no agent turn follows to reach the post-turn handoff. The run that pushed the head moves the ticket,
+  # by the rules a post-turn handoff follows. The step may have run long with the slot free, so the ticket
+  # is read again first. A step that failed (`carry`) or another last step hands nothing off.
+  defp end_machine_walk(%{walk: %{steps: steps}, issue: issue} = run_context, nil) do
+    with %{id: "handoff"} <- List.last(steps),
+         {:ok, [%Issue{} = refreshed_issue | _]} <- refresh_issue_state(issue, run_context.issue_state_fetcher, run_context.opts) do
+      hand_off_machine_head(refreshed_issue, run_context)
+    else
+      {:error, reason} -> {:error, {:issue_state_refresh_failed, reason}}
+      _no_handoff -> :ok
+    end
+  end
+
+  defp end_machine_walk(_run_context, _failed_step), do: :ok
+
+  defp hand_off_machine_head(%Issue{} = issue, %{opts: opts} = run_context) do
+    head = read_workspace_head(run_context.workspace, run_context.worker_host, opts)
+    run_context = put_in(run_context.progress.head, head)
+
+    if machine_head_handed_off?(issue, run_context) do
+      Handoff.emit(run_repo_key(issue, opts), issue.id, %{head: head, pr_url: ticket_pr_url(issue, opts), source: "machine_handoff"})
+
+      case move_to_post_pr_state(issue, post_pr_state(run_context), "after its handoff step", run_context) do
+        :ok -> forget_rework_base(issue, opts)
+        {:error, reason} -> {:error, {:machine_handoff_failed, reason}}
+      end
+    else
+      forget_rework_base_outside_rework(issue, opts)
+    end
+  end
+
+  # A hold, or a person's move to another phase while the step ran, wins over the handoff.
+  defp machine_head_handed_off?(%Issue{} = issue, %{opts: opts} = run_context) do
+    Handoff.origin?(issue.state) and not waiting_on_hold?(issue, opts) and machine_head_finished?(issue, run_context)
+  end
+
+  # In `Rework` the head must have moved past where the Rework started, with nothing pending
+  # (`rework_finished?/2`); any other origin needs nothing pending and the PR on the head
+  # (`post_pr_quiet_continuation?/3`).
+  defp machine_head_finished?(%Issue{} = issue, %{opts: opts, progress: %{head: head}} = run_context) do
+    if rework_state?(issue.state) do
+      rework_finished?(issue, run_context)
+    else
+      is_binary(head) and attached_pr?(issue, opts) and no_pending_rework_signal?(issue, opts) and
+        pr_url_head?(ticket_pr_url(issue, opts), head, run_context)
     end
   end
 
@@ -1401,6 +1487,7 @@ defmodule SymphonyElixir.AgentRunner do
 
     %{
       steps: (Map.get(run_context, :walk) || %{steps: []}).steps,
+      transcript_lines: Map.get(Map.get(run_context, :walk) || %{}, :lines, []),
       answer_dir: Keyword.get(opts, :agent_tmp_dir),
       repo_key: repo_key,
       issue_id: issue.id,
@@ -1421,7 +1508,8 @@ defmodule SymphonyElixir.AgentRunner do
     context = step_context(run_context)
     PhaseSteps.record_turn_started(walk.step, context)
     if walk.step.mode == "orchestrated", do: PhaseSteps.clear_answer(walk.step, context)
-    %{run_context | walk: %{walk | started_ms: System.monotonic_time(:millisecond), started_at: DateTime.utc_now()}}
+    walk = %{walk | started_ms: System.monotonic_time(:millisecond), started_at: DateTime.utc_now(), lines: []}
+    %{run_context | walk: walk}
   end
 
   defp start_walk_turn(%{walk: %{step: %{mode: "orchestrated"} = step}} = run_context) do
@@ -1936,9 +2024,17 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp hand_off_finished_rework(%Issue{} = issue, run_context) do
+  # `rework_finished?/2` already read the workspace HEAD as the PR's head, so the rework is on its PR
+  # however it got there. A push outside the tool hooks (a shell push, a step's own command) emits no
+  # signal, and the run would fail and retry on a head with nothing left to push, so the signal is
+  # recorded for the head here, as `hand_off_quiet_pr_head/3` does outside Rework.
+  defp hand_off_finished_rework(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
     post_pr_state = post_pr_state(run_context)
     Logger.info("Rework for #{issue_context(issue)} is pushed to its PR with no rework signal pending; moving to #{post_pr_state}")
+
+    if not handoff_emitted?(issue, run_context) do
+      Handoff.emit(run_repo_key(issue, run_context.opts), issue.id, %{head: head, pr_url: ticket_pr_url(issue, run_context.opts), source: "pushed_pr_head"})
+    end
 
     case move_to_post_pr_state(issue, post_pr_state, "after rework", run_context) do
       :ok ->
@@ -2089,6 +2185,25 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp handoff_emitted?(_issue, _run_context), do: false
 
+  # A CI Fix run whose turn changed nothing while checks run on the PR head it started on has nothing
+  # to repair yet, and another turn would only find them running again (TP-1175). It ends in a CI
+  # wait, which counts towards neither the idle turns nor a dispatch loop (`{:ci_pending, info}`, as an
+  # epic review's and a QA pass's), and the watcher's wait keeps the next run from starting until the
+  # checks report (`PrWatch.dispatch_reason/2`). Read once a turn was idle, so a run that works makes
+  # no extra read of the PR.
+  defp ci_fix_ci_wait(%Issue{} = issue, %{progress: %{empty_turns: empty_turns, head: head}} = run_context) when empty_turns > 0 do
+    with true <- ci_fix_state?(issue, run_context),
+         %{checks: checks} = ci_status <- pushed_head_ci_status(issue, run_context),
+         :pending <- ci_action(ci_status) do
+      running = Enum.filter(checks, &(Map.get(&1, :status) != "COMPLETED"))
+      %{sha: head, runs: Enum.map(running, &%{workflow_name: Map.get(&1, :name), url: Map.get(&1, :url)}), run: "the CI Fix run"}
+    else
+      _not_waiting -> nil
+    end
+  end
+
+  defp ci_fix_ci_wait(_issue, _run_context), do: nil
+
   # A landing run waits on CI through `merging_ci_pending?/2`, and parking it would drop the
   # human's merge approval.
   defp idle_turn_limit_reached?(%Issue{} = issue, %{progress: progress}) do
@@ -2192,8 +2307,14 @@ defmodule SymphonyElixir.AgentRunner do
     forget_rework_base(issue, run_context.opts)
     committed = commit_parked_work(issue, run_context)
     pushed = push_parked_work(issue, run_context)
-    park_idle_issue(issue, {committed, pushed}, run_context.opts)
+    park_idle_issue(issue, {committed, pushed}, parked_head(committed, pushed, run_context), run_context.opts)
   end
+
+  # The head the park leaves on the branch, which the hold reads the PR against, so its own push is
+  # no new head. A push that failed changed nothing on origin, so it leaves none the watcher could read.
+  defp parked_head(_committed, {:error, _reason}, _run_context), do: nil
+  defp parked_head({:committed, sha}, _pushed, _run_context), do: sha
+  defp parked_head(_committed, _pushed, %{progress: %{head: head}}), do: head
 
   # A parked ticket's work is on origin, never only in its workspace: changes the agent left
   # uncommitted are committed on its branch (`WorkspaceHead.commit_worktree/2`), then commits it
@@ -2315,20 +2436,19 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
-  defp park_idle_issue(%Issue{} = issue, saved, opts) do
+  defp park_idle_issue(%Issue{} = issue, saved, left_head, opts) do
     Logger.warning(
-      "Parking #{issue_context(issue)} in #{@idle_park_state} after #{@max_empty_turns} turns with no new commit, file change or state change" <>
+      "Parking #{issue_context(issue)} where it is, in #{issue.state}, after #{@max_empty_turns} turns with no new commit, file change or state change" <>
         idle_park_pr_note(issue, opts)
     )
 
     repo_key = run_repo_key(issue, opts)
-    run_park(fn -> park_issue(issue, repo_key, saved, opts) end)
+    run_park(fn -> park_issue(issue, {repo_key, left_head}, saved, opts) end)
   end
 
-  # The park is one unit the run's stop never cuts: its first write puts the record in Backlog, and
-  # the orchestrator, which reads a running ticket from its record, stops a run whose ticket left the
-  # active states. So the park runs in a task of its own, not linked to the run, which the run awaits:
-  # a run stopped mid-park leaves the task to finish the park.
+  # The park is one unit the run's stop never cuts: a person can stop the run while Linear takes the
+  # note. So the park runs in a task of its own, not linked to the run, which the run awaits: a run
+  # stopped mid-park leaves the task to finish the park.
   defp run_park(park) do
     metadata = Logger.metadata()
 
@@ -2340,33 +2460,19 @@ defmodule SymphonyElixir.AgentRunner do
     |> Task.await(:infinity)
   end
 
-  # The record is written before Linear is asked, so no park moves Linear without its events: the
-  # move's `phase.entered` (the `blocked` signal, which puts the record in Backlog), then the
-  # question that pauses the ticket on it, then the Linear move (`TransitionGuard.perform/4`, which
-  # finds the record already in Backlog and only projects it), then the note. A Linear move that
-  # fails leaves the record parked and marked for the reconciler to project again.
-  defp park_issue(%Issue{id: issue_id} = issue, repo_key, saved, opts) do
-    label = "parking #{issue_context(issue)} in #{@idle_park_state}"
-    ctx = %{settings: Keyword.fetch!(opts, :settings), repo_key: repo_key}
+  # The ticket keeps its phase (TP-1175): a hold, not a move, stops its runs, so the PR and CI watcher
+  # keeps it and lifts the hold when its PR changes. The hold is written before Linear is asked, so a
+  # note that fails leaves the ticket held.
+  defp park_issue(%Issue{id: issue_id} = issue, {repo_key, left_head}, saved, opts) do
+    label = "parking #{issue_context(issue)} where it is"
+    :ok = IdlePark.hold({:ticket, repo_key, issue_id}, issue.identifier || issue_id, issue.state, @max_empty_turns, PrWatch.watch(issue_id), left_head)
 
-    :ok = TicketSignals.record(repo_key, issue_id, "blocked", %{to: @idle_park_state, reason: IdlePark.signal_reason(), from: issue.state})
-    :ok = hold_parked_issue(issue, repo_key)
+    :ok = RuleActions.record(repo_key, issue_id, "Idle park", "paused", "#{@max_empty_turns} turns in #{issue.state} changed nothing, so it was held where it is")
 
-    with :ok <- with_linear_retry(fn -> TransitionGuard.perform(issue_id, :idle_park, ctx) end, label, opts),
-         :ok <- with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note(saved)) end, label, opts) do
-      :ok
-    else
+    case with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note(issue.state, saved)) end, label, opts) do
+      :ok -> :ok
       {:error, reason} -> {:error, {:idle_park_failed, reason}}
     end
-  end
-
-  # The park asks its question through the one path (`IdlePark.ask/4`), which pauses the ticket on
-  # it. Asked once the record is in Backlog, so the Inbox lists it there. One the store refuses
-  # pauses the ticket on a reason the Director releases with Unblock instead; the park stands either
-  # way.
-  defp hold_parked_issue(%Issue{id: issue_id} = issue, repo_key) do
-    _ = IdlePark.ask({:ticket, repo_key, issue_id}, issue.identifier || issue_id, issue.state, @max_empty_turns)
-    :ok
   end
 
   # The CI checks that keep a run that pushed from being parked read the ticket's PR. Saying
@@ -2378,9 +2484,9 @@ defmodule SymphonyElixir.AgentRunner do
   # The note says what the park saved: the commit it made of the uncommitted changes and the push
   # of the branch, or that there was nothing to commit or push, so it never claims work is on origin
   # when it is not.
-  defp idle_park_note({committed, pushed}) do
+  defp idle_park_note(phase, {committed, pushed}) do
     """
-    Symphony parked this issue in #{@idle_park_state}: the agent's last #{@max_empty_turns} turns made no new commit, no change to its files and no state change, so another turn would repeat them. #{parked_commit_note(committed)} #{parked_push_note(pushed)} Answer its question in the Inbox, or Unblock it in the Director app, to run it again where it stopped.
+    Symphony parked this issue where it is, in #{phase}: the agent's last #{@max_empty_turns} turns made no new commit, no change to its files and no state change, so another turn would repeat them. #{parked_commit_note(committed)} #{parked_push_note(pushed)} Symphony keeps watching its pull request and continues when the pull request gets a new commit or its checks report. Answer its question in the Inbox, or Unblock it in the Director app, to run it again where it stopped.
     """
   end
 

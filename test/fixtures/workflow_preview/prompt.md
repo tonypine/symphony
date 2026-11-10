@@ -35,7 +35,7 @@ Symphony runtime context:
 Ticket tools:
 
 - `ticket_events` reads this ticket's history (Symphony's ledger) and `ticket_record` adds an event to it. Symphony fills the run, phase and head; verdicts, moves, pauses and questions are Symphony's, and `ticket_record` refuses them.
-- This implementation run records `step.completed` for each delegated step as it ends it, `evidence` for every screenshot or output it attaches (the files as `artifacts`), and each walkthrough step's proof as `evidence` with `proof` (the step and the test), which `linear_record_walkthrough_proofs` records; a `note` keeps a choice worth knowing later.
+- This implementation run records the ticket's brief first, as a `brief.written` (what it does and why, and its walkthrough, in a person's words), and again at the handoff when the work changed what the ticket does; `step.completed` for each delegated step as it ends it, `evidence` for every screenshot or output it attaches (the files as `artifacts`), and each walkthrough step's proof as `evidence` with `proof` (the step and the test), which `linear_record_walkthrough_proofs` records; a `note` keeps a choice worth knowing later.
 - This run follows a step list: Symphony runs its build, checks and tests itself between turns and brings a failure back to the step it names, with the output. Run none of them yourself: write the code, record what you changed, and end the turn; the handoff step pushes.
 
 You are working on a Linear ticket `ABC-123`
@@ -101,7 +101,9 @@ its state: open, resolved awaiting QA, or reopened, and their screenshots), and
 it), a delegated step's `step.started` and `step.completed` (its `outcome`:
 `passed`, `failed` with the step it `returns_to`, `paused` on a question, or
 `skipped` with a `reason`), a `checklist.answered`, or a `finding.resolved` naming the open or reopened finding a
-fix closes, on the head that fixes it; a QA run also records `finding.recorded`. `artifacts` are files in the workspace or your
+fix closes, on the head that fixes it; a QA run also records `finding.recorded`, and a run that writes the code
+(implementation, rework, review feedback) a `brief.written`: the ticket's brief, what it does and why and its
+walkthrough, in a person's words. `artifacts` are files in the workspace or your
 `$TMPDIR`; Symphony fills the run, phase and head. Verdicts, moves, pauses and
 questions are Symphony's: `ticket_record` refuses them, with the list of what the run
 may record.
@@ -205,7 +207,7 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
 - `Epic Review` -> an automatic integrity check of an epic parent once its children are terminal: artifacts, comments and PRs verified against the epic's intent. Pass moves it to `Done`; gaps are filed as follow-ups in `Todo` within the same epic and the parent returns to `Waiting on sub-tickets`.
 - `Merging` -> the machine lands the merge; follow the repo's landing flow (do not call `gh pr merge` directly). A red head or a conflict routes to `CI Fix`, and a PR closed without merging to `Rework` (the PR and CI decision table).
 - `Rework` -> a reviewer or QA returned the work for changes; continue on the existing PR (never from scratch). Changes done hand off to `Code Review` (for an epic parent, to `Plan Review`).
-- `CI Fix` -> a mechanical repair lane for red checks or a merge conflict: every red check is fixed, never rerun — formatting, a dependency bump, a failing or flaky test fixed at its cause (in code the ticket touched or not), resolving the conflict. A fixed head returns to where it came from (approvals carried forward); a repair that needs a substantive change goes to `Rework`; a repair you cannot make without access or a secret raises a Needs Decision hold instead of guessing. The run ends in one of those three ways, never with nothing pushed.
+- `CI Fix` -> a mechanical repair lane for red checks or a merge conflict: every red check is fixed, never rerun — formatting, a dependency bump, a failing or flaky test fixed at its cause (in code the ticket touched or not), resolving the conflict. A fixed head returns to where it came from (approvals carried forward); a repair that needs a substantive change goes to `Rework`; a repair you cannot make without access or a secret raises a Needs Decision hold instead of guessing. The run ends in one of those three ways, never with nothing pushed, unless the checks on its head are still running: then Symphony waits on them and starts no other run.
 - `Done` -> terminal state; no further action required.
 
 What a red head, a conflict or a closed PR does in each state is decided by one table, the PR and CI decision table (`docs/pr-ci-decisions.md` in Symphony's repository), never by a run: a conflict that keeps coming back waits on the tickets competing for the same files or goes to `Rework`, and a check that keeps failing gets a fix ticket. Neither asks a person.
@@ -272,7 +274,7 @@ What a red head, a conflict or a closed PR does in each state is decided by one 
     - If the ticket description/comment context includes `Validation`, `Test Plan`, or `Testing` sections, copy those requirements into the workpad `Acceptance Criteria` as required checkboxes (no optional downgrade).
     - If the ticket adds a `symphony.yml` setting, the plan includes its control in the macOS app: in the same PR (add the control, list the key in `SettingsUIManifest.keyPaths`, extend the line editor and its tests), or in a sub-ticket filed with `linear_create_subissue` that the parent's epic review checks and has a `## User walkthrough` for the new control. `mix settings.ui_coverage` fails CI for a setting with neither a control nor an exemption. Never add an exemption yourself: `config/settings_ui_exempt.yml` is agent-protected. If the setting should have no control, say so in the workpad `Confusions` and leave the exemption to a person. See `docs/configuration.md#settings-in-the-macos-app`.
     - If the ticket renames or removes a `symphony.yml` key, the same PR adds its row to `SymphonyElixir.Config.Migration`'s table, or says in the workpad why the key can't migrate and stays refused: an update has to install itself. CI loads the previous release's `symphony.yml` on the new build. See `docs/configuration.md#renamed-keys-are-migrated`.
-    - If the work needs a change to an agent-protected file (`WORKFLOW.md`, `symphony.yml`, `.agents/skills` and the other paths the sandbox write-protects), plan to ask for it before the handoff push: one `linear_request_human_action` with an option whose `unlocks` names the paths and whose label says in plain words what it allows (`Allow this ticket to change the workflow settings file`). The person's pick grants the paths for this ticket: the next run may write them, and the PR may land with them. The shared guides' real folder is `.agents/skills`, also reached as `.claude/skills` and `.codex/skills`: a grant on any of the three names covers all of them and the files their links point at (`priv/skills`). Never ask the person to type a path or a grant, and never answer the request yourself.
+    - If the work needs a change to an agent-protected file (`WORKFLOW.md`, `symphony.yml`, `.agents/skills`, the CI workflows under `.github` and the other paths the sandbox write-protects), plan to ask for it before the handoff push: one `linear_request_human_action` with an option whose `unlocks` names the paths and whose label says in plain words what it allows (`Allow this ticket to change the workflow settings file`). The person's pick grants the paths for this ticket: the next run may write them, and the PR may land with them. The shared guides' real folder is `.agents/skills`, also reached as `.claude/skills` and `.codex/skills`: a grant on any of the three names covers all of them and the files their links point at (`priv/skills`). In `.github` an option may name just the files the change needs (`.github/workflows/make-all.yml`), and the rest of `.github` stays protected. Never ask the person to type a path or a grant, and never answer the request yourself.
 7.  Run a principal-style review of the plan and refine it in the comment.
 8.  Before implementing, capture a concrete reproduction signal and record it in the workpad `Notes` section (command/output, screenshot, or deterministic UI behavior).
 9.  Run the `pull` skill to sync with latest `origin/main` before any code edits, then record the pull/sync result in the workpad `Notes`.
@@ -361,6 +363,10 @@ one of three ways only:
   secret, or the failure is outside the code and no change to the step absorbs it,
   ask with `linear_request_human_action`; the `Needs Decision` hold keeps the ticket
   in `CI Fix` until the answer.
+
+A head whose checks are still running is not red yet, so there is nothing to repair. End the
+turn without pushing and without asking anyone: Symphony ends the run in a wait on CI, starts no
+other run until the checks report, and returns the ticket by itself when they pass.
 
 Deciding that a failure is flaky, or that it is not this ticket's, is not an ending:
 a run that stops there pushes nothing, and the ticket stays red in `CI Fix`.
@@ -727,6 +733,7 @@ In this repository, a QA pass of the Director has two environments: the committe
     - Keep parent/child structure intact as scope evolves.
     - Update the workpad immediately after each meaningful milestone (for example: reproduction complete, code change landed, validation run, review feedback addressed).
     - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
+    - Write the ticket's brief before anything else you record: the first `ticket_record` of your first delegated step is a `brief.written`, with `text` (what the ticket does and why, in a person's words, under 1,200 characters: no module names, no endpoint paths, no backticks) and `walkthrough` (the steps a person takes to see it work, as prose). The newest brief is the one the Director shows first and every later run's prompt carries in the ticket's history; the Linear description stays as it is.
     - Record your work on the ticket's history as you go, with `ticket_record`: `step.completed` for each delegated step of the step list when you end it (its `outcome`: `passed`, `failed` with the step it `returns_to`, or `skipped` with a `reason`), `evidence` for every screenshot or output you attach (the files as `artifacts`, a `caption` saying what it shows), and a `note` for a choice a later run should know. The Director's timeline shows these events as the run works.
 5.  Leave the checks to the step list.
     - This run follows a step list: once you end the `code` step, Symphony runs the build, the checks and the tests itself, with your session closed. A step that fails brings the run back to `code` with its output: fix what it names and end the step again.
@@ -764,6 +771,7 @@ In this repository, a QA pass of the Director has two environments: the committe
     - Confirm every required ticket-provided validation/test-plan item is explicitly marked complete in the workpad.
     - Re-open and refresh the workpad before the handoff so `Acceptance Criteria` and `Notes` exactly match completed work.
 12. Then hand off: push the branch and open the PR (or update it). That push is the handoff signal; Symphony moves the ticket to `Code Review` itself.
+    - Before the push, when the work changed what the ticket does (a part dropped, added or reshaped), write a new `brief.written` that says what it does now; the newest one replaces the brief.
     - Do not ask for `Code Review` (or `QA`, `Merging`) with `linear_update_state`: it is refused, because those states are the handoff's and the verdicts' to enter.
     - A run that ends without pushing its head and opening its PR never advances: the ticket stays where it is and the run is retried.
     - A block is not a handoff: follow the blocked-access escape hatch, which sets a `Blocked` or `Needs Decision` hold and leaves the ticket in its phase.
@@ -808,6 +816,7 @@ Apply this whenever a ticket adds or changes a screen or pane.
 3. The `findings` step ran before this turn: Symphony kept the open findings by class on the ticket's timeline, and when the same class failed twice it asked the person before any code. Read the open findings first with `ticket_events` and `open_findings: true`: each comes with its state (open, resolved awaiting QA, or reopened), its class and its screenshots, so the plan starts from what is still open.
 4. Keep the single workpad comment; extend its `Acceptance Criteria` and `Notes` with what the verdict adds instead of superseding what is there (Symphony writes `Plan` and `Validation` from the run's steps).
 5. Push the changes to the same branch when the step list reaches its `handoff` step. That push is the handoff: it moves the ticket to `Code Review` for a review of the new head. Do not ask for the state by hand.
+   - Before the push, when the change altered what the ticket does, or the ticket has no brief yet, write a new `brief.written` with `ticket_record`: `text` (what the ticket does and why, in a person's words, under 1,200 characters: no module names, no endpoint paths, no backticks) and `walkthrough` (the steps a person takes, as prose). The newest one replaces the brief.
 6. `Restart` is the full reset — close the pull request, a fresh branch from main, the prior attempt superseded in the workpad. It is a person's move from the Director app; an agent can neither request nor perform it. If you judge that the approach itself is wrong, say so plainly in the workpad and ask for a person with `linear_request_human_action` rather than starting over on your own.
 
 ## Review brief
@@ -1065,6 +1074,9 @@ Ticket history (every decision, open finding and note in full; earlier runs one 
 Phase and pauses:
 - Phase: Rework
 - Pauses: none
+
+Brief:
+- none
 
 Decisions (2):
 - Asked 2026-01-05T11:50:00Z by an agent (QA run): Large exports: Should an export over 10,000 rows run in the background?

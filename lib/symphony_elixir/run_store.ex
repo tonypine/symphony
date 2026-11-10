@@ -30,6 +30,8 @@ defmodule SymphonyElixir.RunStore do
   @eval_logs_table :symphony_run_store_eval_logs
   @pause_table :symphony_run_store_pause
   @learnings_table :symphony_run_store_learnings
+  # The saved views of the Tickets page, by id (`SymphonyElixir.Views`).
+  @views_table :symphony_run_store_views
   @eval_log_attributes [:key, :repo_key, :eval_id, :outcome, :agent_kind, :issue_label, :date, :record]
   @eval_log_indexes [:repo_key, :outcome, :agent_kind, :issue_label, :date]
   @learning_attributes [:key, :repo_key, :created_at, :record]
@@ -49,7 +51,8 @@ defmodule SymphonyElixir.RunStore do
     {@eval_logs_table, @eval_log_attributes, [type: :bag, index: @eval_log_indexes]},
     {@learnings_table, @learning_attributes, [index: @learning_indexes]},
     {@ticket_events_table, @ticket_event_attributes, [type: :bag, index: @ticket_event_indexes]},
-    {@artifacts_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]}
+    {@artifacts_table, [:key, :repo_key, :issue_id, :record], [index: [:repo_key]]},
+    {@views_table, [:id, :record], []}
   ]
   @data_tables Enum.map(@tables, fn {table, _attributes, _opts} -> table end)
   @codex_totals_key :codex_totals
@@ -75,7 +78,11 @@ defmodule SymphonyElixir.RunStore do
   @table_load_progress_ms 10_000
 
   @typedoc "What a pause update's function returns: a pause to write (nil clears it), or nothing to write."
-  @type pause_update :: {:write, map() | nil, term()} | {:ok, term()} | {:error, term()}
+  @type pause_update ::
+          {:write, map() | nil, term()}
+          | {:write, map() | nil, [Event.t()], term()}
+          | {:ok, term()}
+          | {:error, term()}
 
   @typedoc """
   What a ticket's pause update's function returns: a pause to write (nil clears it) with the events
@@ -783,8 +790,9 @@ defmodule SymphonyElixir.RunStore do
 
   @doc """
   Adds fields to the payloads of the ticket's stored events, in one durable transaction: `upgrades`
-  maps an event's `seq` to the fields to add. The one write that touches a stored event, a format
-  upgrade of events an earlier release wrote (`SymphonyElixir.TicketEvents.Backfill`): everything
+  maps an event's `seq` to the fields to add. A format upgrade of events an earlier release wrote
+  (`SymphonyElixir.TicketEvents.Backfill`), and with `attach_ticket_event_artifacts/3` the only write
+  that touches a stored event: everything
   else about each event stays, and a `seq` the ticket does not hold is ignored.
   """
   @spec upgrade_ticket_events(String.t(), %{optional(non_neg_integer()) => map()}) :: :ok | {:error, term()}
@@ -801,6 +809,24 @@ defmodule SymphonyElixir.RunStore do
   end
 
   @doc """
+  Adds `artifact_ids` to the artifacts of the ticket's stored event `seq`, in one durable transaction:
+  files that exist only after the event was written (`SymphonyElixir.TicketEvents.attach_artifacts/2`).
+  Everything else about the event stays, an id it already holds is not added twice, and a `seq` the
+  ticket does not hold is ignored.
+  """
+  @spec attach_ticket_event_artifacts(String.t(), non_neg_integer(), [String.t()]) :: :ok | {:error, term()}
+  def attach_ticket_event_artifacts(issue_id, seq, artifact_ids) when is_binary(issue_id) and is_integer(seq) and is_list(artifact_ids) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn ->
+        @ticket_events_table
+        |> :mnesia.read(issue_id, :write)
+        |> Enum.filter(&(elem(&1, 6) == seq))
+        |> Enum.each(&attach_ticket_event_row(&1, artifact_ids))
+      end)
+    end
+  end
+
+  @doc """
   The events of the ticket `issue_id`, oldest first by `at`, then `seq`. `opts`: `types:` (the
   types to keep) and `run_id:` (the run to keep).
   """
@@ -812,6 +838,21 @@ defmodule SymphonyElixir.RunStore do
   end
 
   def list_ticket_events(_issue_id, _opts), do: {:error, :invalid_issue_id}
+
+  @doc """
+  The events of every ticket, and of Symphony's own stream (`list_subject_events/2`), in no
+  particular order: the Journal's read across tickets (`SymphonyElixir.TicketEvents.Journal`). A
+  repository's own stream is left out. `opts`: `types:`, as `list_ticket_events/2` takes them.
+  """
+  @spec list_all_ticket_events(keyword()) :: [Event.t()] | {:error, term()}
+  def list_all_ticket_events(opts \\ []) when is_list(opts) do
+    with :ok <- ensure_started() do
+      transaction(fn ->
+        :mnesia.foldl(&journal_event_row/2, [], @ticket_events_table)
+        |> filter_ticket_events(opts)
+      end)
+    end
+  end
 
   @doc """
   Writes the artifact row (`SymphonyElixir.Artifacts`) keyed by its `id`, replacing the one the id
@@ -1413,7 +1454,8 @@ defmodule SymphonyElixir.RunStore do
   @doc """
   Runs `fun` on the pause of `subject` (see `get_subject_pause/1`) in one durable transaction that
   holds its row's write lock, as `update_ticket_pause/4` does for a ticket: `{:write, pause, result}`
-  writes `pause` (nil removes it) and returns `{:ok, result}`; `{:ok, result}` and
+  writes `pause` (nil removes it) and returns `{:ok, result}`; `{:write, pause, events, result}` also
+  appends `events` to the subject's own event stream (`list_subject_events/2`); `{:ok, result}` and
   `{:error, reason}` write nothing and are returned.
   """
   @spec update_subject_pause(term(), (map() | nil -> pause_update())) :: {:ok, term()} | {:error, term()}
@@ -1474,6 +1516,54 @@ defmodule SymphonyElixir.RunStore do
   def get_usage_limits do
     with :ok <- ensure_started() do
       transaction(&read_usage_limits/0)
+    end
+  end
+
+  @doc "Writes a saved view (`SymphonyElixir.Views`) under its id, replacing the one it had."
+  @spec put_view(map()) :: :ok | {:error, term()}
+  def put_view(%{id: id} = view) when is_binary(id) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn -> :mnesia.write({@views_table, id, view}) end)
+    end
+  end
+
+  def put_view(_view), do: {:error, :invalid_view}
+
+  @doc "The saved view with `id`, or nil."
+  @spec get_view(String.t()) :: map() | nil | {:error, term()}
+  def get_view(id) when is_binary(id) do
+    with :ok <- ensure_started() do
+      transaction(fn -> read_view(id) end)
+    end
+  end
+
+  defp read_view(id) do
+    case :mnesia.read(@views_table, id) do
+      [{@views_table, ^id, view}] -> view
+      [] -> nil
+    end
+  end
+
+  @doc "Every saved view, in no order."
+  @spec list_views() :: [map()] | {:error, term()}
+  def list_views do
+    with :ok <- ensure_started() do
+      transaction(fn -> :mnesia.foldl(fn {@views_table, _id, view}, acc -> [view | acc] end, [], @views_table) end)
+    end
+  end
+
+  @doc "Deletes the saved view with `id`: `{:error, :not_found}` when there is none."
+  @spec delete_view(String.t()) :: :ok | {:error, term()}
+  def delete_view(id) when is_binary(id) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn -> delete_view_row(id) end)
+    end
+  end
+
+  defp delete_view_row(id) do
+    case :mnesia.read(@views_table, id) do
+      [] -> {:error, :not_found}
+      [_view] -> :mnesia.delete({@views_table, id})
     end
   end
 
@@ -2373,12 +2463,24 @@ defmodule SymphonyElixir.RunStore do
     end
   end
 
+  defp attach_ticket_event_row({@ticket_events_table, _key, _repo_key, _issue_id, _run_id, _type, _seq, record} = row, artifact_ids) do
+    :mnesia.delete_object(row)
+    event = Event.normalize(record)
+    write_ticket_event_row(%{event | artifacts: Enum.uniq(event.artifacts ++ artifact_ids)})
+  end
+
   defp read_ticket_events(issue_id) do
     @ticket_events_table
     |> :mnesia.read(issue_id)
     |> Enum.map(fn {@ticket_events_table, _key, _repo_key, _issue_id, _run_id, _type, _seq, record} -> Event.normalize(record) end)
     |> Enum.sort_by(&{datetime_sort_key(&1.at), &1.seq})
   end
+
+  defp journal_event_row({@ticket_events_table, key, _repo_key, _issue_id, _run_id, _type, _seq, record}, acc)
+       when is_binary(key) or key == {:subject, :symphony},
+       do: [Event.normalize(record) | acc]
+
+  defp journal_event_row(_row, acc), do: acc
 
   defp filter_ticket_events(events, opts) do
     types = Keyword.get(opts, :types)
@@ -2581,6 +2683,11 @@ defmodule SymphonyElixir.RunStore do
 
       {:write, pause, result} ->
         :mnesia.write({@pause_table, {:subject, subject}, pause})
+        {:ok, result}
+
+      {:write, pause, events, result} ->
+        write_subject_pause_row(subject, pause)
+        _stored = write_subject_events(subject, events)
         {:ok, result}
 
       unchanged ->

@@ -51,5 +51,9 @@ one of three ways only:
   ask with `linear_request_human_action`; the `Needs Decision` hold keeps the ticket
   in `CI Fix` until the answer.
 
+A head whose checks are still running is not red yet, so there is nothing to repair. End the
+turn without pushing and without asking anyone: Symphony ends the run in a wait on CI, starts no
+other run until the checks report, and returns the ticket by itself when they pass.
+
 Deciding that a failure is flaky, or that it is not this ticket's, is not an ending:
 a run that stops there pushes nothing, and the ticket stays red in `CI Fix`.

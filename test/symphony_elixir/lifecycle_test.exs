@@ -163,6 +163,7 @@ defmodule SymphonyElixir.LifecycleTest do
     test "a read writes nothing" do
       before = TicketEvents.query(@id, limit: :all)
       assert %{lifecycle: _lifecycle} = Lifecycle.read(@id, @shipped_at)
+      assert %{lifecycle: _lifecycle} = Lifecycle.read(@id)
       assert TicketEvents.query(@id, limit: :all) == before
     end
   end
@@ -282,6 +283,26 @@ defmodule SymphonyElixir.LifecycleTest do
 
       assert [%{from: "Backlog", to: "Todo"}, %{from: "Todo", to: "In Progress"}] = Lifecycle.compute(events, @facts).phase_path.moves
       assert [%{from: nil}] = Lifecycle.compute([entered("2026-10-30T10:00", "Todo")], @facts).phase_path.moves
+    end
+  end
+
+  describe "stage spans" do
+    test "each stay in a stage, from its move to the next; the current phase runs to now and a terminal or stageless one has none" do
+      events = moved([{"09:00", "Todo"}, {"10:00", "In Progress"}, {"11:00", "Code Review"}, {"11:30", "Done"}])
+
+      assert Lifecycle.stage_spans(events, @facts) == [
+               %{stage: "coding", from: at("2026-10-30T10:00"), to: at("2026-10-30T11:00")},
+               %{stage: "code_review", from: at("2026-10-30T11:00"), to: at("2026-10-30T11:30")}
+             ]
+
+      assert [%{stage: "qa", to: @shipped_at}] = Lifecycle.stage_spans(moved([{"21:00", "QA"}]), @facts)
+    end
+
+    test "facts come from the settings" do
+      write_workflow_file!(Workflow.workflow_file_path())
+
+      assert %{now: @shipped_at, terminal_states: [_ | _], phase_names: %{ci_fix: ci_fix}} = Lifecycle.facts(@shipped_at)
+      assert is_binary(ci_fix)
     end
   end
 

@@ -105,11 +105,48 @@ Application.put_env(:symphony_elixir, :ticket_pull_request_gh_runner, fn _args, 
 # process table passes `:table` itself.
 Application.put_env(:symphony_elixir, :leftover_process_table, fn -> {:ok, []} end)
 
+# The `:flock` tests hold a remote worker's worktree lock with util-linux `flock`, which Linux
+# hosts have and macOS lacks.
+with flock when is_binary(flock) <- System.find_executable("flock"),
+     {_output, 0} <- System.cmd(flock, ["--version"], stderr_to_stdout: true) do
+  :ok
+else
+  _unavailable -> ExUnit.configure(exclude: [:flock | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
 # Tests that stop real detached processes need `ps`, which sandboxed agent runs
 # (macOS Seatbelt) deny.
 case SymphonyElixir.LeftoverProcesses.Table.read() do
   {:ok, [_ | _]} -> :ok
   _denied -> ExUnit.configure(exclude: [:process_table | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
+# Tests that read another process's environment with `ps eww` need it to show a child's
+# environment, which some sandboxes hide even where `ps` itself runs and this VM's own environment
+# shows. The probe does what those tests do: it starts a child with a marker variable and looks for
+# it, for up to a second.
+process_environment_readable? =
+  try do
+    marker = "symphony-probe-#{System.unique_integer([:positive])}"
+    port = Port.open({:spawn_executable, "/bin/sleep"}, [:binary, args: ["5"], env: [{~c"SYMPHONY_PS_PROBE", String.to_charlist(marker)}]])
+    {:os_pid, pid} = Port.info(port, :os_pid)
+
+    try do
+      Enum.any?(1..20, fn _attempt ->
+        {output, _status} = System.cmd("/bin/ps", ["eww", "-o", "command=", "-p", "#{pid}"], stderr_to_stdout: true)
+        shown? = output =~ marker
+        unless shown?, do: Process.sleep(50)
+        shown?
+      end)
+    after
+      System.cmd("/bin/kill", ["#{pid}"], stderr_to_stdout: true)
+    end
+  rescue
+    _denied -> false
+  end
+
+unless process_environment_readable? do
+  ExUnit.configure(exclude: [:process_environment | Keyword.get(ExUnit.configuration(), :exclude, [])])
 end
 
 # Tests that start the real `claude` binary run only with `--only real_claude`, so no default run

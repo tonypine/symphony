@@ -68,7 +68,6 @@ defmodule SymphonyElixir.TransitionGuardTest do
                %{signal: :landing_done, from: ["Merging"], to: "Done"},
                %{signal: :review_rework, from: :any, to: "In Progress"},
                %{signal: :merge_ready, from: ["Rework", "In Progress"], to: "Merging"},
-               %{signal: :idle_park, from: ["In Progress", "Rework"], to: "Backlog"},
                %{signal: :director_move, from: :any, to: :requested},
                %{signal: :sub_issues_done, from: ["Waiting on sub-tickets"], to: "Done"},
                %{signal: :wait_on_merge, from: ["In Progress", "Code Review", "QA", "Rework", "CI Fix", "Merging"], to: :waiting_on_sub_issues},

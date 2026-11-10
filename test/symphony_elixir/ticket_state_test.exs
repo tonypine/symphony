@@ -50,6 +50,7 @@ defmodule SymphonyElixir.TicketStateTest do
                projected: nil,
                plan_brief: nil,
                plan_brief_error: nil,
+               looked: %{},
                legacy_history: nil,
                updated_at: nil
              }
@@ -188,6 +189,7 @@ defmodule SymphonyElixir.TicketStateTest do
                projected: nil,
                plan_brief: nil,
                plan_brief_error: nil,
+               looked: %{},
                legacy_history: nil,
                updated_at: nil
              }

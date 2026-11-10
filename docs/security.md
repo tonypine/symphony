@@ -61,8 +61,11 @@ shim there.
 
 Both runtimes also deny writes to the workspace's workflow and guardrail files: `WORKFLOW.md`,
 `symphony.yml`, the project `.claude/` settings, agents, commands and hooks, the skill directories
-`.agents/skills`, `.claude/skills` and `.codex/skills`, `mise.toml`, `.tool-versions` and
-`config/settings_ui_exempt.yml`. The agent instruction files in `.symphony/instructions/` are left
+`.agents/skills`, `.claude/skills` and `.codex/skills`, `mise.toml`, `.tool-versions`, `.github`
+(the CI workflows and actions, `CODEOWNERS`, dependabot) and `config/settings_ui_exempt.yml`. CI is
+one of the rules an agent runs by: it decides what merges, what the app is built from and whether
+the `protected-paths` check runs at all, so a workflow change asks a person like any other
+protected change. The agent instruction files in `.symphony/instructions/` are left
 writable on purpose; see [Workflow and instruction files](#workflow-and-instruction-files). In a local workspace the deny
 also covers the files a symlink in one of those points at: Symphony's own `.agents/skills/pull` links
 to `priv/skills/pull`, so `priv/skills/pull` is read-only to the agent. An SSH worker's workspace
@@ -177,6 +180,13 @@ the ticket (In Progress, Rework, CI Fix) claims its grants before its session st
 - The run's sandbox leaves the path out of its write-deny list: Claude's `denyWrite` and `Edit`
   rules, Codex's filesystem permissions and SRT's `denyWrite`. For a skill directory, the files its
   symlinks point at are left out too.
+- A grant may name one path inside `.github` rather than the whole folder
+  (`Unlock .github/workflows/make-all.yml for TP-1432`, or an option whose `unlocks` names that
+  file; Symphony's "Allow the change" names each changed file there). It lifts that path alone: in
+  a local workspace the sandbox denies everything else in `.github` by name, and the push tools and
+  the merge gate accept a change to that path and report a change to any other. An SSH worker's
+  sandbox lifts the whole folder, since its workspace isn't on this host; its pushes are still
+  checked file by file.
 - Its prompt names the path, the decision and its words, so the agent knows it may edit the path.
 - Its `github_sync_base` and `github_push_branch` accept the branch's change to the path.
 
@@ -184,7 +194,7 @@ The grant is the ticket's, not one run's: every later run of the ticket, its rew
 on the same pull request, keeps the path unlocked, and the claim kept in the ticket's record in
 Symphony's store names the run that first used it. Every other ticket keeps the protection.
 
-Only the paths in the list above count: `.git`, the home-folder files and any other path stay
+Only the paths in the list above, and paths inside `.github`, count: `.git`, the home-folder files and any other path stay
 protected whatever a decision says. A decision copied onto another ticket unlocks nothing there,
 since the ticket it names must be the one it is recorded on. Agents post as the operator's Linear
 user, so their comment and sub-issue tools refuse text that reads as such a grant or carries an
