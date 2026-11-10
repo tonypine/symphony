@@ -124,8 +124,8 @@ final class OverviewTests: XCTestCase {
         XCTAssertEqual(Overview.StageKind.shippedToday.destination, .shipped)
         XCTAssertEqual(Overview.StageKind.queued.destination, .tickets(.waitingForSlot))
         XCTAssertEqual(Overview.StageKind.working.destination, .tickets(.working))
-        XCTAssertEqual(Overview.StageKind.review.destination, .tickets(.waitingForCI))
-        XCTAssertEqual(Overview.StageKind.merging.destination, .tickets(.waitingForCI))
+        XCTAssertEqual(Overview.StageKind.review.destination, .tickets(.working))
+        XCTAssertEqual(Overview.StageKind.merging.destination, .tickets(.working))
         XCTAssertEqual(Overview.showShippedTitle, "Show Shipped")
     }
 

@@ -64,6 +64,8 @@ final class TicketListTests: XCTestCase {
         review.waitsOn = "the reviewer"
         XCTAssertEqual(review.line, Situation(kind: .working, cause: "Waits on the reviewer."))
         XCTAssertFalse(TicketList.Filter.waitingForCI.matches(review))
+        // The Review tile opens the list that holds it.
+        XCTAssertEqual(TicketList.Filter(stage: .review)?.matches(review), true)
     }
 
     func testForcedAndAttentionRowsCarryTheirFlagsAndFacts() throws {
@@ -157,9 +159,9 @@ final class TicketListTests: XCTestCase {
     func testEachFlowTileOpensItsStageAndWaitingOnYouOpensTheInbox() {
         XCTAssertEqual(TicketList.Filter(stage: .queued), .waitingForSlot)
         XCTAssertEqual(TicketList.Filter(stage: .working), .working)
-        XCTAssertEqual(TicketList.Filter(stage: .review), .waitingForCI)
+        XCTAssertEqual(TicketList.Filter(stage: .review), .working)
         XCTAssertNil(TicketList.Filter(stage: .waitingOnYou))
-        XCTAssertEqual(TicketList.Filter(stage: .merging), .waitingForCI)
+        XCTAssertEqual(TicketList.Filter(stage: .merging), .working)
         XCTAssertEqual(TicketList.Filter(stage: .shippedToday), .shipped)
         XCTAssertEqual(TicketList.Stage.allCases.map(\.status), [.idle, .working, .working, .you, .working, .done])
         XCTAssertEqual(TicketList.Stage.allCases.map(\.title), ["Queued", "Working", "Review", "Waiting on you", "Merging", "Shipped"])

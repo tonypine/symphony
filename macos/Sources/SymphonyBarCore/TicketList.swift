@@ -99,8 +99,9 @@ public struct TicketList: Equatable {
         public init?(stage: Overview.StageKind) {
             switch stage {
             case .queued: self = .waitingForSlot
-            case .working: self = .working
-            case .review, .merging: self = .waitingForCI
+            // Review, QA and landing tickets read Working (a reviewer, a QA pass or the landing at work), as `Stage.kind`
+            // and Symphony's situation classify them, so their tiles open the list that holds them.
+            case .working, .review, .merging: self = .working
             case .waitingOnYou: return nil
             case .shippedToday: self = .shipped
             }
