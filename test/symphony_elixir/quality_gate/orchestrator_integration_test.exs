@@ -358,7 +358,9 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
     # below is the only one, and reads the change.
     wait_for_orchestrator_state(
       pid,
-      fn state -> not state.poll_check_in_progress and is_nil(state.repo_poll_task_ref) and map_size(state.quality_gate_tasks) > 0 end,
+      fn state ->
+        not state.poll_check_in_progress and is_nil(state.repo_poll_task_ref) and map_size(state.quality_gate_tasks) > 0
+      end,
       5_000
     )
 
