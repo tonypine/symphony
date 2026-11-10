@@ -101,7 +101,9 @@ defmodule SymphonyElixir.Views do
   @spec query(map()) :: {:ok, spec()} | {:error, {:invalid, String.t()}}
   def query(params) when is_map(params) do
     filters =
-      for name <- TicketColumns.filter_names(), value = blank_to_nil(params[name]), do: %{"column" => name, "value" => split(name, value)}
+      for name <- TicketColumns.filter_names(), value = blank_to_nil(params[name]) do
+        %{"column" => name, "value" => split(name, value)}
+      end
 
     sort =
       case {blank_to_nil(params["sort"]), blank_to_nil(params["direction"])} do

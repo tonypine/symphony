@@ -1533,12 +1533,14 @@ defmodule SymphonyElixir.RunStore do
   @spec get_view(String.t()) :: map() | nil | {:error, term()}
   def get_view(id) when is_binary(id) do
     with :ok <- ensure_started() do
-      transaction(fn ->
-        case :mnesia.read(@views_table, id) do
-          [{@views_table, ^id, view}] -> view
-          [] -> nil
-        end
-      end)
+      transaction(fn -> read_view(id) end)
+    end
+  end
+
+  defp read_view(id) do
+    case :mnesia.read(@views_table, id) do
+      [{@views_table, ^id, view}] -> view
+      [] -> nil
     end
   end
 
@@ -1554,12 +1556,14 @@ defmodule SymphonyElixir.RunStore do
   @spec delete_view(String.t()) :: :ok | {:error, term()}
   def delete_view(id) when is_binary(id) do
     with :ok <- ensure_started() do
-      durable_transaction(fn ->
-        case :mnesia.read(@views_table, id) do
-          [] -> {:error, :not_found}
-          [_view] -> :mnesia.delete({@views_table, id})
-        end
-      end)
+      durable_transaction(fn -> delete_view_row(id) end)
+    end
+  end
+
+  defp delete_view_row(id) do
+    case :mnesia.read(@views_table, id) do
+      [] -> {:error, :not_found}
+      [_view] -> :mnesia.delete({@views_table, id})
     end
   end
 

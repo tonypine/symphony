@@ -3,7 +3,7 @@ defmodule SymphonyElixirWeb.ViewsReadTest do
   # and reads the tickets it selects.
   use SymphonyElixir.TestSupport
 
-  import Phoenix.ConnTest, only: [build_conn: 0, get: 2, post: 3, delete: 2, json_response: 2]
+  import Phoenix.ConnTest, only: [build_conn: 0, get: 2, post: 2, post: 3, delete: 2, json_response: 2]
   import Plug.Conn, only: [put_req_header: 3]
 
   alias SymphonyElixir.{ControlToken, TicketColumns}
@@ -55,7 +55,16 @@ defmodule SymphonyElixirWeb.ViewsReadTest do
   end
 
   defp ticket(id, identifier, phase, priority, parent \\ @epic) do
-    :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: id, issue_identifier: identifier, title: "Ticket #{identifier}", phase: phase, priority: priority, parent: parent})
+    :ok =
+      RunStore.put_ticket_state(%{
+        repo_key: @repo,
+        issue_id: id,
+        issue_identifier: identifier,
+        title: "Ticket #{identifier}",
+        phase: phase,
+        priority: priority,
+        parent: parent
+      })
   end
 
   # The bearer plug caches the daemon's token for the BEAM's lifetime.
@@ -132,8 +141,8 @@ defmodule SymphonyElixirWeb.ViewsReadTest do
 
   test "the writes need the control token; other methods on the reads are refused" do
     assert build_conn() |> put_req_header("content-type", "application/json") |> post("/api/v1/control/view", Jason.encode!(%{name: "x"})) |> Map.get(:status) == 401
-    assert build_conn() |> post("/api/v1/views", "") |> Map.get(:status) == 405
-    assert build_conn() |> post("/api/v1/tickets", "") |> Map.get(:status) == 405
+    assert post(build_conn(), "/api/v1/views").status == 405
+    assert post(build_conn(), "/api/v1/tickets").status == 405
   end
 
   test "an unreadable orchestrator gives the records' situations and an error", %{orchestrator: orchestrator} do

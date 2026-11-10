@@ -24,16 +24,28 @@ defmodule SymphonyElixirWeb.TicketsController do
 
   @spec index(Conn.t(), map()) :: Conn.t()
   def index(conn, params) do
-    with {:ok, view, spec} <- spec(params) do
-      {live, error} = live()
-      columns = Enum.map(spec.columns, fn name -> Enum.find(TicketColumns.columns(), &(&1.name == name)) end)
-      tickets = TicketList.select(spec, live: live)
+    case spec(params) do
+      {:ok, view, spec} ->
+        {live, error} = live()
+        columns = Enum.map(spec.columns, fn name -> Enum.find(TicketColumns.columns(), &(&1.name == name)) end)
+        tickets = TicketList.select(spec, live: live)
 
-      payload = %{view: view && Views.payload(view), filters: spec.filters, columns: columns, sort: spec.sort, count: length(tickets), tickets: tickets}
-      json(conn, if(error, do: Map.put(payload, :error, error), else: payload))
-    else
-      {:error, :not_found} -> error_response(conn, 404, "view_not_found", "No view has the id #{params["view"]}")
-      {:error, {:invalid, message}} -> error_response(conn, 400, "invalid_query", message)
+        payload = %{
+          view: view && Views.payload(view),
+          filters: spec.filters,
+          columns: columns,
+          sort: spec.sort,
+          count: length(tickets),
+          tickets: tickets
+        }
+
+        json(conn, if(error, do: Map.put(payload, :error, error), else: payload))
+
+      {:error, :not_found} ->
+        error_response(conn, 404, "view_not_found", "No view has the id #{params["view"]}")
+
+      {:error, {:invalid, message}} ->
+        error_response(conn, 400, "invalid_query", message)
     end
   end
 

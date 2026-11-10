@@ -9,7 +9,13 @@ defmodule SymphonyElixir.TicketListTest do
   # Each ticket with the situation kind its phase and the live facts below give it: the fixture a
   # selection is checked against by hand.
   @fixture [
-    {%{issue_id: "ep-1", issue_identifier: "EP-1", phase: "Waiting on sub-tickets", priority: 2, sub_issues: [%{id: "ep-2", identifier: "EP-2", state: "Todo"}]}, "blocked_by_ticket"},
+    {%{
+       issue_id: "ep-1",
+       issue_identifier: "EP-1",
+       phase: "Waiting on sub-tickets",
+       priority: 2,
+       sub_issues: [%{id: "ep-2", identifier: "EP-2", state: "Todo"}]
+     }, "blocked_by_ticket"},
     {%{issue_id: "ep-2", issue_identifier: "EP-2", phase: "Todo", priority: 2, parent: @epic, labels: ["Bug"]}, "waiting_for_slot"},
     {%{issue_id: "ep-3", issue_identifier: "EP-3", phase: "Plan Review", priority: 1, parent: @epic}, "waiting_on_you"},
     {%{issue_id: "ep-4", issue_identifier: "EP-4", phase: "Backlog", priority: 1, parent: @epic}, "paused_by_rule"},
@@ -48,8 +54,12 @@ defmodule SymphonyElixir.TicketListTest do
     expected =
       @fixture
       |> Enum.filter(fn {record, kind} ->
-        is_map_key(record, :issue_identifier) and not is_map_key(record, :removed_at) and not is_map_key(record, :not_found_at) and
-          (record.issue_identifier == "EP-1" or match?(%{parent: %{identifier: "EP-1"}}, record)) and kind in @waiting
+        listed? =
+          is_map_key(record, :issue_identifier) and not is_map_key(record, :removed_at) and
+            not is_map_key(record, :not_found_at)
+
+        in_epic? = Map.get(record, :issue_identifier) == "EP-1" or match?(%{parent: %{identifier: "EP-1"}}, record)
+        listed? and in_epic? and kind in @waiting
       end)
       |> Enum.sort_by(fn {record, _kind} -> Map.get(record, :priority) || 99 end)
       |> Enum.map(fn {record, kind} -> %{"issue_id" => record.issue_id, "identifier" => record.issue_identifier, "situation" => kind} end)
@@ -71,7 +81,7 @@ defmodule SymphonyElixir.TicketListTest do
     refute Enum.any?(rows, &Map.has_key?(&1, "situation"))
   end
 
-  test "sorts by identifier number, labels and times" do
+  test "sorts by identifier number, labels, text and times" do
     assert select(%{"columns" => ["identifier"]}) |> identifiers() == ["EP-1", "EP-2", "EP-3", "EP-4", "EP-5", "EP-10", "EP-11", "OT-1"]
 
     assert select(%{"columns" => ["identifier", "labels"], "sort" => %{"column" => "labels"}}) |> Enum.take(2) == [
@@ -92,6 +102,8 @@ defmodule SymphonyElixir.TicketListTest do
            ]
 
     assert select(%{"columns" => ["identifier"], "sort" => %{"column" => "identifier", "direction" => "desc"}}, timed) |> identifiers() == ["ROADMAP", "EP-2", "EP-1"]
+
+    assert select(%{"columns" => ["identifier"], "sort" => %{"column" => "phase"}}, timed) |> identifiers() == ["EP-1", "ROADMAP", "EP-2"]
 
     assert select(%{"columns" => ["identifier"], "filters" => [%{"column" => "since", "value" => "2026-11-10T01:30:00Z"}]}, timed) |> identifiers() == ["ROADMAP"]
     assert select(%{"columns" => ["identifier"], "filters" => [%{"column" => "phase", "value" => "todo"}]}, timed) |> identifiers() == ["EP-1", "ROADMAP"]
