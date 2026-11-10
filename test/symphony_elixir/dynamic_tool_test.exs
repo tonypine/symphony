@@ -1196,7 +1196,13 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       states = [%{"id" => "state-backlog", "name" => "Backlog"}, %{"id" => "state-todo", "name" => "Todo"}]
       :ok = RunStore.clear()
-      opts = [issue: %Issue{id: "issue-current", repo_key: "repo-a"}, comment_registry: registry, linear_client: client.(states, %{"success" => true}), run_id: "run-1"]
+
+      opts = [
+        issue: %Issue{id: "issue-current", repo_key: "repo-a"},
+        comment_registry: registry,
+        linear_client: client.(states, %{"success" => true}),
+        run_id: "run-1"
+      ]
 
       response = DynamicTool.execute("linear_create_subissue", %{"title" => "Server first", "description" => "body"}, opts)
       assert response["success"] == true
