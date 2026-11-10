@@ -32,9 +32,7 @@ defmodule SymphonyElixir.TicketBriefTest do
 
   defp orchestrator do
     snapshot = %{running: [], retrying: [], rate_limits: nil, repositories: [], dispatch_skipped: [], watching: []}
-    {:ok, pid} = SnapshotOrchestrator.start_link(snapshot)
-    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
-    pid
+    start_supervised!({SnapshotOrchestrator, snapshot}, id: make_ref())
   end
 
   defp read, do: Presenter.issue_payload(@identifier, orchestrator(), 1_000) |> elem(1)
