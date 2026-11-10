@@ -670,6 +670,9 @@ final class InboxTests: XCTestCase {
         XCTAssertFalse(row.isDecision)
         XCTAssertEqual(row.kind.word, "Waiting on CI")
         XCTAssertEqual(row.kind.symbol, "hourglass")
+        // It asks nothing, so its glyph and badge take the working role, never the "waiting on you" one.
+        XCTAssertEqual(row.kind.status, .working)
+        XCTAssertEqual(InboxItem.Kind.allCases.filter { $0.status == .you }, [.plan, .pr, .action, .clarify, .blocked])
         XCTAssertEqual(row.review.blocked?.waitLine, "It moves on by itself when the checks report.")
         XCTAssertEqual(InboxAction.actions(for: row), [.openPR(pr)])
         XCTAssertEqual(InboxToolbar.toolbar(for: row).buttons.map(\.command), [.link(.openPR(pr))])

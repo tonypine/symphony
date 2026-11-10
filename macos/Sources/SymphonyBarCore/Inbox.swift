@@ -102,6 +102,15 @@ public struct InboxItem: Equatable, Identifiable {
             case .waiting: "hourglass"
             }
         }
+
+        /// The status role of the row's glyph and the review's header badge (design system §3.2). Every kind asks
+        /// something of the Director but `waiting`, which only waits on checks and so takes the working role.
+        public var status: DesignTokens.Status {
+            switch self {
+            case .waiting: .working
+            case .plan, .pr, .action, .clarify, .blocked: .you
+            }
+        }
     }
 
     /// The Linear issue id.

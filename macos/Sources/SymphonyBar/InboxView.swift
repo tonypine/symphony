@@ -276,7 +276,7 @@ private struct InboxRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
             Image(systemName: item.kind.symbol)
-                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(DesignTokens.Status.you.tint))
+                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(item.kind.status.tint))
                 .imageScale(.medium)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
                 HStack(alignment: .firstTextBaseline) {
@@ -413,7 +413,7 @@ private struct ReviewHeader: View {
 
     /// The kind pill, waiting time, state and repo, each kept on one line.
     @ViewBuilder private var badges: some View {
-        StatusBadge(status: .you, word: item.kindWord)
+        StatusBadge(status: item.kind.status, word: item.kindWord)
             .fixedSize()
         if let age = item.age {
             Label("Waiting \(age)", systemImage: "clock")
