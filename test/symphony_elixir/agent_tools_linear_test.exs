@@ -1239,6 +1239,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
   describe "create_subissue_in_state/4" do
     test "files the child in the named state, not Backlog, and records it like any sub-issue" do
+      :ok = SymphonyElixir.RunStore.clear()
       {:ok, registry} = Linear.CommentRegistry.start_link()
 
       states = [
@@ -1263,6 +1264,9 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       refute Map.has_key?(input, "priority")
 
       assert Linear.CommentRegistry.created_subissues(registry) == %{"TP-999" => "issue-new"}
+
+      assert [filed] = SymphonyElixir.TicketEvents.query("issue-parent", types: ["ticket.filed"])
+      assert filed.payload == %{identifier: "TP-999", kind: "follow_up", title: "Epic review fails: the export button is missing"}
     end
 
     test "a child filed without a priority inherits the parent's, and an explicit one wins" do

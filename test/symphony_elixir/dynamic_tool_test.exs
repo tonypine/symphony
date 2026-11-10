@@ -1195,10 +1195,16 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       end
 
       states = [%{"id" => "state-backlog", "name" => "Backlog"}, %{"id" => "state-todo", "name" => "Todo"}]
-      opts = [issue: %Issue{id: "issue-current"}, comment_registry: registry, linear_client: client.(states, %{"success" => true})]
+      :ok = RunStore.clear()
+      opts = [issue: %Issue{id: "issue-current", repo_key: "repo-a"}, comment_registry: registry, linear_client: client.(states, %{"success" => true}), run_id: "run-1"]
 
       response = DynamicTool.execute("linear_create_subissue", %{"title" => "Server first", "description" => "body"}, opts)
       assert response["success"] == true
+
+      assert [filed] = TicketEvents.query("issue-current", types: ["ticket.filed"])
+      assert filed.payload == %{identifier: "TP-41", kind: "split_off", title: "Server first"}
+      assert filed.repo_key == "repo-a"
+      assert filed.run_id == "run-1"
       assert %{"data" => %{"issueCreate" => %{"issue" => %{"identifier" => "TP-41", "blocks" => ["TP-40"]}}}} = Jason.decode!(response["output"])
       assert_received {:linear_called, _mutation, %{input: %{"stateId" => "state-todo"}}}
       assert_received {:linear_called, _relation, %{input: %{"issueId" => "issue-new", "relatedIssueId" => "issue-current", "type" => "blocks"}}}
@@ -1214,6 +1220,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       response = DynamicTool.execute("linear_create_subissue", %{"title" => "Server third", "description" => "body"}, Keyword.put(opts, :linear_client, no_todo))
       assert %{"error" => %{"code" => "child_state_not_found", "available_states" => ["Backlog"], "message" => message}} = Jason.decode!(response["output"])
       assert message =~ "no Todo state"
+
+      assert [_only_the_first] = TicketEvents.query("issue-current", types: ["ticket.filed"])
     end
   end
 
