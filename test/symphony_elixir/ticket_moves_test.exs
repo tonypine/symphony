@@ -179,6 +179,35 @@ defmodule SymphonyElixir.TicketMovesTest do
     assert moves.stop == %{allowed: true, reason: nil}
   end
 
+  # `test/fixtures/api/ticket_moves.json` is what the Mac app's Action rail decodes: the `moves` of a
+  # few tickets, each with the facts it was read on. Each move is the read's, word for word; only the
+  # phases `move_to` lists depend on the workflow, so they are checked as a list.
+  test "the app's fixture holds the moves the read serves for its facts" do
+    fixture = Path.expand("../fixtures/api/ticket_moves.json", __DIR__) |> File.read!() |> Jason.decode!()
+
+    for %{"name" => name, "facts" => given, "moves" => moves} <- fixture["tickets"] do
+      served =
+        facts(%{
+          identifier: fixture["identifier"],
+          phase: given["phase"],
+          running?: given["running"],
+          open_question?: given["open_question"],
+          unblockable?: given["unblockable"]
+        })
+        |> TicketMoves.read()
+        |> Jason.encode!()
+        |> Jason.decode!()
+
+      assert Map.keys(moves) -- Map.keys(served) == [], name
+
+      for {move, entry} <- moves do
+        assert Map.drop(entry, ["states"]) == Map.drop(served[move], ["states"]), "#{name} #{move}"
+      end
+
+      assert is_list(moves["move_to"]["states"]), name
+    end
+  end
+
   describe "facts/2" do
     test "no record: nothing is known of the ticket but what the caller knows" do
       facts = TicketMoves.facts(nil, %{live() | running?: true})

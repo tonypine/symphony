@@ -1,0 +1,295 @@
+{
+  "identifier": "TP-1",
+  "tickets": [
+    {
+      "name": "working",
+      "facts": {
+        "phase": "In Progress",
+        "running": true,
+        "open_question": false,
+        "unblockable": false
+      },
+      "moves": {
+        "answer": {
+          "allowed": false,
+          "reason": "TP-1 is not waiting on a decision"
+        },
+        "start": {
+          "allowed": false,
+          "reason": "A run is already working on it."
+        },
+        "stop": {
+          "allowed": true,
+          "reason": null
+        },
+        "restart": {
+          "allowed": true,
+          "reason": null
+        },
+        "cancel": {
+          "allowed": true,
+          "reason": null
+        },
+        "move_to": {
+          "allowed": true,
+          "reason": null,
+          "states": [
+            "Backlog",
+            "Todo",
+            "Code Review",
+            "Rework",
+            "Done"
+          ]
+        },
+        "force": {
+          "allowed": true,
+          "reason": null
+        },
+        "unforce": {
+          "allowed": false,
+          "reason": "It isn't forced."
+        },
+        "unblock": {
+          "allowed": false,
+          "reason": "TP-1 has nothing a person can unblock"
+        },
+        "note": {
+          "allowed": true,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "waiting_on_you",
+      "facts": {
+        "phase": "In Progress",
+        "running": false,
+        "open_question": true,
+        "unblockable": false
+      },
+      "moves": {
+        "answer": {
+          "allowed": true,
+          "reason": null
+        },
+        "start": {
+          "allowed": false,
+          "reason": "It waits on your answer first."
+        },
+        "stop": {
+          "allowed": false,
+          "reason": "No run is working."
+        },
+        "restart": {
+          "allowed": true,
+          "reason": null
+        },
+        "cancel": {
+          "allowed": true,
+          "reason": null
+        },
+        "move_to": {
+          "allowed": true,
+          "reason": null,
+          "states": [
+            "Backlog",
+            "Todo",
+            "Code Review",
+            "Rework",
+            "Done"
+          ]
+        },
+        "force": {
+          "allowed": true,
+          "reason": null
+        },
+        "unforce": {
+          "allowed": false,
+          "reason": "It isn't forced."
+        },
+        "unblock": {
+          "allowed": false,
+          "reason": "TP-1 has nothing a person can unblock"
+        },
+        "note": {
+          "allowed": true,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "held",
+      "facts": {
+        "phase": "In Progress",
+        "running": false,
+        "open_question": false,
+        "unblockable": true
+      },
+      "moves": {
+        "answer": {
+          "allowed": false,
+          "reason": "TP-1 is not waiting on a decision"
+        },
+        "start": {
+          "allowed": true,
+          "reason": null
+        },
+        "stop": {
+          "allowed": false,
+          "reason": "No run is working."
+        },
+        "restart": {
+          "allowed": true,
+          "reason": null
+        },
+        "cancel": {
+          "allowed": true,
+          "reason": null
+        },
+        "move_to": {
+          "allowed": true,
+          "reason": null,
+          "states": [
+            "Backlog",
+            "Todo",
+            "Code Review",
+            "Rework",
+            "Done"
+          ]
+        },
+        "force": {
+          "allowed": true,
+          "reason": null
+        },
+        "unforce": {
+          "allowed": false,
+          "reason": "It isn't forced."
+        },
+        "unblock": {
+          "allowed": true,
+          "reason": null
+        },
+        "note": {
+          "allowed": true,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "nothing_running",
+      "facts": {
+        "phase": "In Progress",
+        "running": false,
+        "open_question": false,
+        "unblockable": false
+      },
+      "moves": {
+        "answer": {
+          "allowed": false,
+          "reason": "TP-1 is not waiting on a decision"
+        },
+        "start": {
+          "allowed": true,
+          "reason": null
+        },
+        "stop": {
+          "allowed": false,
+          "reason": "No run is working."
+        },
+        "restart": {
+          "allowed": true,
+          "reason": null
+        },
+        "cancel": {
+          "allowed": true,
+          "reason": null
+        },
+        "move_to": {
+          "allowed": true,
+          "reason": null,
+          "states": [
+            "Backlog",
+            "Todo",
+            "Code Review",
+            "Rework",
+            "Done"
+          ]
+        },
+        "force": {
+          "allowed": true,
+          "reason": null
+        },
+        "unforce": {
+          "allowed": false,
+          "reason": "It isn't forced."
+        },
+        "unblock": {
+          "allowed": false,
+          "reason": "TP-1 has nothing a person can unblock"
+        },
+        "note": {
+          "allowed": true,
+          "reason": null
+        }
+      }
+    },
+    {
+      "name": "done",
+      "facts": {
+        "phase": "Done",
+        "running": false,
+        "open_question": false,
+        "unblockable": false
+      },
+      "moves": {
+        "answer": {
+          "allowed": false,
+          "reason": "TP-1 is not waiting on a decision"
+        },
+        "start": {
+          "allowed": false,
+          "reason": "The ticket is done."
+        },
+        "stop": {
+          "allowed": false,
+          "reason": "No run is working."
+        },
+        "restart": {
+          "allowed": false,
+          "reason": "The ticket is done."
+        },
+        "cancel": {
+          "allowed": false,
+          "reason": "The ticket is done."
+        },
+        "move_to": {
+          "allowed": true,
+          "reason": null,
+          "states": [
+            "Backlog",
+            "Todo",
+            "In Progress",
+            "Code Review",
+            "Rework"
+          ]
+        },
+        "force": {
+          "allowed": false,
+          "reason": "The ticket is done."
+        },
+        "unforce": {
+          "allowed": false,
+          "reason": "It isn't forced."
+        },
+        "unblock": {
+          "allowed": false,
+          "reason": "TP-1 has nothing a person can unblock"
+        },
+        "note": {
+          "allowed": true,
+          "reason": null
+        }
+      }
+    }
+  ]
+}
