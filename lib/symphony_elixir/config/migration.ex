@@ -202,7 +202,9 @@ defmodule SymphonyElixir.Config.Migration do
 
     Enum.find_value(length(segments)..1//-1, fn count ->
       path = segments |> Enum.take(count) |> Enum.join(".")
-      Enum.find_value(entries, &(&1.path == path and &1.index + 1))
+      # A list item written inside `{...}` has no key line of its own: its list's key has the line.
+      paths = [path, String.trim_trailing(path, "[]")]
+      Enum.find_value(entries, &(&1.path in paths and &1.index + 1))
     end)
   end
 
