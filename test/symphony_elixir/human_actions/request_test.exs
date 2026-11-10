@@ -276,6 +276,16 @@ defmodule SymphonyElixir.HumanActions.RequestTest do
       assert %{title: "Close TP-612 as a duplicate of TP-668", unblocks: "the Companies board"} = Request.parse(expected)
     end
 
+    test "a decision names the option picked before the person's words, once" do
+      line = fn pick -> [%{question: "Retry?"} |> Map.merge(pick)] |> Request.render_decision() |> String.split("**Decision:** ") |> List.last() end
+
+      assert line.(%{answer: "GitHub is short of machines.", option: "Keep retrying"}) == "Keep retrying: GitHub is short of machines."
+      assert line.(%{answer: "keep retrying, please", option: "Keep retrying"}) == "keep retrying, please"
+      assert line.(%{answer: "2", option: "Wait"}) == "Wait"
+      assert line.(%{answer: "Free words", option: " "}) == "Free words"
+      assert line.(%{answer: "Free words"}) == "Free words"
+    end
+
     test "the reply is the Director's decision once answered, the withdrawal once withdrawn, nothing while open" do
       answered = %{@question | state: :answered} |> Map.put(:answer, %{text: " Close as duplicate "})
 
@@ -285,6 +295,9 @@ defmodule SymphonyElixir.HumanActions.RequestTest do
              1. Close TP-612 as its duplicate?
                 **Decision:** Close as duplicate\
              """
+
+      picked = %{@question | state: :answered} |> Map.put(:answer, %{text: "Nothing is left here.", option: 1})
+      assert Request.render_reply(picked) =~ "**Decision:** Close as duplicate: Nothing is left here."
 
       withdrawn = %{@question | state: :withdrawn} |> Map.put(:withdrawn, %{reason: " Not needed. "})
       assert Request.render_reply(withdrawn) == "## Action withdrawn\n\nNot needed."

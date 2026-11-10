@@ -448,14 +448,24 @@ defmodule SymphonyElixir.Questions do
   Decide records both) read as that question's entry, then the answered questions no decision
   records yet, in the order they were asked. An answered question reads as a decision entry: its
   title, question and answer text, keyed by its id. So an answer reads as soon as it is given, and
-  once only. A decision recording an answer the Director took back (`reopen/3`) reads as nothing:
-  the Decisions entry stays, but the answer no longer counts.
+  once only. An answered question's entry also carries `option`, the label of the option the
+  answer picked (nil for free text), so a reader acts on the pick, never on the words given with it
+  (`SymphonyElixir.MergeConfirmation.picked_answer/2`). A decision recording an answer the
+  Director took back (`reopen/3`) reads as nothing: the Decisions entry stays, but the answer no
+  longer counts.
   """
   @spec answers([map()], [question()]) :: [map()]
   def answers(decisions, questions) when is_list(decisions) and is_list(questions) do
     answered =
       for %{state: :answered, answer: %{text: text}} = question <- questions do
-        %{key: question.id, date: DateTime.to_date(question.answer.at), title: question.title, question: question.question, answer: text}
+        %{
+          key: question.id,
+          date: DateTime.to_date(question.answer.at),
+          title: question.title,
+          question: question.question,
+          answer: text,
+          option: option_label(question)
+        }
       end
 
     taken_back = for question <- questions, text <- taken_back(question), do: %{title: question.title, answer: text}
@@ -473,6 +483,20 @@ defmodule SymphonyElixir.Questions do
       {index, _taken_back} -> {[Enum.at(answered, index)], {List.delete_at(answered, index), taken_back}}
     end
   end
+
+  @doc """
+  The label of the option an answered question's answer picked, kept beside the person's own words
+  (`answer/4`'s `option:`, or an answer that names it); nil for a free-text answer or an open question.
+  """
+  @spec option_label(map()) :: String.t() | nil
+  def option_label(%{answer: %{option: number}, options: options}) when is_integer(number) and is_list(options) do
+    case Enum.at(options, number - 1) do
+      %{label: label} when is_binary(label) and label != "" -> label
+      _none -> nil
+    end
+  end
+
+  def option_label(_question), do: nil
 
   # The answers taken back from a question, oldest first; none on a question stored before Undo.
   defp taken_back(question), do: Map.get(question, :taken_back, [])

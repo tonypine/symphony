@@ -562,6 +562,18 @@ defmodule SymphonyElixir.QuestionsTest do
       assert Questions.answers([], []) == []
     end
 
+    test "an answered question's entry carries the option picked beside the person's words, nil for free text" do
+      picked = ask!()
+      {:ok, picked} = Questions.answer(@ticket, picked.id, "The release can wait a day.", option: "Ship today", at: @later)
+      free = ask!("Rename the release")
+      {:ok, free} = Questions.answer(@ticket, free.id, "Spring", at: @later)
+
+      assert [%{answer: "The release can wait a day.", option: "Ship today"}, %{answer: "Spring", option: nil}] = Questions.answers([], [picked, free])
+      assert Questions.option_label(picked) == "Ship today"
+      assert Questions.option_label(%{picked | answer: %{picked.answer | option: 9}}) == nil
+      assert Questions.option_label(free) == nil
+    end
+
     test "a decision recording an answer the Director took back reads as nothing, whether the question is open again or answered anew" do
       question = ask!()
       {:ok, _answered} = Questions.answer(@ticket, question.id, "Ship today", at: @later)
