@@ -26,6 +26,9 @@ public enum ControlAction: Equatable {
     /// in place, keeping its sub-tickets. `rework` is the rejection that cancels them.
     case changes(String, reason: String)
     case backlog(String, note: String?)
+    /// Drops an open ticket for good (TP-1440's Cancel Ticket…): Symphony moves it to the team's canceled state, ends
+    /// its run and closes its pull request; the note goes on its timeline.
+    case cancel(String, note: String?)
     /// The free move (TP-1327): puts the ticket in phase `to`, any phase the state payload lists, keeping its
     /// workspace, branch and pull request; the note goes on its timeline with the move.
     case move(String, to: String, note: String?)
@@ -132,6 +135,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/changes"
         case .backlog:
             return "api/v1/control/backlog"
+        case .cancel:
+            return "api/v1/control/cancel"
         case .move:
             return "api/v1/control/move"
         case .start:
@@ -165,6 +170,7 @@ public enum ControlAction: Equatable {
         case let .approvePlan(identifier), let .rework(identifier, _),
              let .restart(identifier, _),
              let .decisions(identifier, _), let .changes(identifier, _), let .backlog(identifier, _),
+             let .cancel(identifier, _),
              let .move(identifier, _, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
@@ -201,7 +207,7 @@ public enum ControlAction: Equatable {
             return ["issue_identifier": identifier, "reason": reason]
         case let .decisions(identifier, picks):
             return ["issue_identifier": identifier, "picks": picks.map(\.body)]
-        case let .backlog(identifier, note), let .start(identifier, note):
+        case let .backlog(identifier, note), let .cancel(identifier, note), let .start(identifier, note):
             return note.map { ["issue_identifier": identifier, "note": $0] } ?? ["issue_identifier": identifier]
         case let .move(identifier, to, note):
             var body = ["issue_identifier": identifier, "to": to]
@@ -253,6 +259,8 @@ public enum ControlAction: Equatable {
             return "Couldn't ask for changes to the plan of \(identifier)"
         case let .backlog(identifier, _):
             return "Couldn't move \(identifier) to Backlog"
+        case let .cancel(identifier, _):
+            return "Couldn't cancel \(identifier)"
         case let .move(identifier, to, _):
             return "Couldn't move \(identifier) to \(to)"
         case let .start(identifier, _):

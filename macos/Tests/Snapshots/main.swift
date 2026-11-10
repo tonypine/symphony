@@ -1080,6 +1080,65 @@ func situationLineExtras() -> some View {
     )
 }
 
+/// The Action rail (TP-1440): `test/fixtures/api/ticket_moves.json`, the `moves` of a few tickets, by name.
+let actionRailSample: [String: TicketMoves] = {
+    let url = here.appendingPathComponent("../../../test/fixtures/api/ticket_moves.json").standardizedFileURL
+    guard let root = (try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any],
+          let tickets = root["tickets"] as? [[String: Any]]
+    else { fatalError("Could not read \(url.path)") }
+    var reads: [String: TicketMoves] = [:]
+    for ticket in tickets {
+        guard let name = ticket["name"] as? String,
+              let data = try? JSONSerialization.data(withJSONObject: ticket),
+              let moves = TicketMoves.of(issue: data)
+        else { fatalError("Could not read a ticket of \(url.path)") }
+        reads[name] = moves
+    }
+    return reads
+}()
+
+/// A rail with every move the read can allow, allowed.
+let everyMoveAllowed = TicketMoves(Dictionary(uniqueKeysWithValues: TicketActionRail.Move.allCases.map {
+    ($0.rawValue, TicketMoveRead(allowed: true, states: $0 == .moveTo ? ["Todo", "Code Review", "Done"] : []))
+}))
+
+/// Each rail under a caption naming the ticket it is drawn for, at the laptop's header width (1180 pt) or the
+/// desktop's (2200 pt).
+@MainActor
+func actionRails(_ rails: [(String, TicketMoves)], width: CGFloat, revealsReasons: Bool = false, moreOpen: Bool = false) -> some View {
+    styleStage(
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s5) {
+            ForEach(Array(rails.enumerated()), id: \.offset) { _, rail in
+                VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                    Text(rail.0)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                    ActionRail(rail: TicketActionRail(identifier: "TP-1", moves: rail.1), perform: { _ in },
+                               moreOpen: moreOpen, revealsReasons: revealsReasons)
+                }
+            }
+        },
+        width: width
+    )
+}
+
+/// Every move allowed.
+@MainActor
+func actionRailAllowed(width: CGFloat) -> some View {
+    actionRails([("Every move allowed", everyMoveAllowed)], width: width)
+}
+
+/// Each refusal the read gives, its reason shown under its move as if pressed, and More open on each.
+@MainActor
+func actionRailRefusals(width: CGFloat) -> some View {
+    actionRails(
+        [("A run is working", actionRailSample["working"]!), ("Waiting on you", actionRailSample["waiting_on_you"]!),
+         ("Held for a person", actionRailSample["held"]!), ("Nothing running", actionRailSample["nothing_running"]!),
+         ("Done", actionRailSample["done"]!)],
+        width: width, revealsReasons: true, moreOpen: true
+    )
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1119,6 +1178,12 @@ MainActor.assumeIsolated {
         render(situationLines(.full), scheme, to: "situation-line-full-\(suffix).png")
         render(situationLines(.compact), scheme, to: "situation-line-compact-\(suffix).png")
         render(situationLineExtras(), scheme, to: "situation-line-extras-\(suffix).png")
+        // The Action rail (TP-1440): every move allowed, and each refusal with its reason and More open, at the
+        // laptop's and the desktop's header widths.
+        for (width, name) in [(CGFloat(1180), "laptop"), (2200, "desktop")] {
+            render(actionRailAllowed(width: width), scheme, to: "action-rail-allowed-\(name)-\(suffix).png")
+            render(actionRailRefusals(width: width), scheme, to: "action-rail-refusals-\(name)-\(suffix).png")
+        }
         // The Blocked by card (TP-1354): the laptop and desktop viewports, and the refusal of a ticket as its own blocker.
         render(ledgerPage(window: 1440, blockers: blockersEditor(refused: false)), scheme, to: "ticket-blockers-1440-\(suffix).png")
         render(ledgerPage(window: 2560, blockers: blockersEditor(refused: false)), scheme, to: "ticket-blockers-2560-\(suffix).png")
