@@ -258,6 +258,66 @@ defmodule SymphonyElixir.CodeReviewTest do
       assert reason == "the change delivers or updates a user journey"
     end
 
+    defp watcher_reads!(head, facts) do
+      SymphonyElixir.PrWatchSupport.put_watch!(@repo_key, @issue_id, head_sha: head, decision: :dispatch, facts: facts)
+    end
+
+    test "TP-1204: an approve on a red head stays in Code Review for CI Fix, then goes to QA without a second review" do
+      {workspace, head} = git_workspace!()
+      watcher_reads!(head, %{ci: :red, failing_check: "macos build"})
+
+      assert :ok = run(workspace, settings: designed_settings(), repo_key: @repo_key)
+
+      assert_received {:reviewed, @issue_id, "Code Review"}
+      refute_received {:moved, @issue_id, _state}
+      assert [%{head_sha: ^head, outcome: "approve"} | _] = verdicts()
+      assert [%{name: "code_review_approved_on_red", details: %{head: ^head}} | _] = signals()
+
+      # A CI Fix repairs it on a new head and the lane carries the approval there; or a rerun turns this
+      # head green. Either way the next dispatch moves on with no second review.
+      watcher_reads!(head, %{ci: :green})
+      assert :ok = run(workspace, settings: designed_settings(), repo_key: @repo_key)
+
+      refute_received {:reviewed, _, _}
+      assert_received {:moved, @issue_id, "QA"}
+      assert [%{name: "code_review", details: %{signal: "code_review_approve", target: "QA", carried: true}} | _] = signals()
+    end
+
+    test "TP-1204: an approve carried back while the head is still red moves nothing yet" do
+      {workspace, head} = git_workspace!()
+      :ok = put_verdict(@repo_key, @issue_id, "code_review", "the-red-head", "approve")
+      assert :ok = CiFix.carry_verdict(@repo_key, @issue_id, "Code Review", head, designed_settings())
+      watcher_reads!(head, %{ci: :red})
+
+      assert :ok = run(workspace, settings: designed_settings(), repo_key: @repo_key)
+
+      refute_received {:reviewed, _, _}
+      refute_received {:moved, @issue_id, _state}
+    end
+
+    test "TP-1204: changes requested go to Rework whatever CI says" do
+      {workspace, head} = git_workspace!()
+      watcher_reads!(head, %{ci: :red, failing_check: "macos build"})
+      Process.put(:fake_review_result, {:ok, %{verdict: :request_changes, comments: ["a finding"], reason: "needs work"}})
+
+      assert :ok = run(workspace, settings: designed_settings(), repo_key: @repo_key)
+
+      assert_received {:moved, @issue_id, "Rework"}
+      refute Enum.any?(signals(), &(&1.name == "code_review_approved_on_red"))
+    end
+
+    test "TP-1204: an approve on a head the watcher reads running, or red on another head, goes to QA, whose rules need green" do
+      for {read_head, ci} <- [{:same, :pending}, {:same, :green}, {:same, :required_missing}, {"an-older-head", :red}] do
+        RunStore.delete_ticket_state(@issue_id)
+        {workspace, head} = git_workspace!()
+        watcher_reads!(if(read_head == :same, do: head, else: read_head), %{ci: ci})
+
+        assert :ok = run(workspace, settings: designed_settings(), repo_key: @repo_key)
+
+        assert_received {:moved, @issue_id, "QA"}
+      end
+    end
+
     test "an approve the CI Fix lane re-bound to this head carries the ticket on without a second review" do
       {workspace, head} = git_workspace!()
 

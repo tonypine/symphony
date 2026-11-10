@@ -55,6 +55,63 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
     refute Orchestrator.should_dispatch_issue_for_test(other, state)
   end
 
+  describe "under tickets.priorities: [urgent]" do
+    setup do
+      write_workflow_file!(Workflow.workflow_file_path(),
+        tracker_active_states: ["Todo", "In Progress", "In Review", "Merging", "Rework", @waiting],
+        tracker_terminal_states: ["Done", "Canceled"],
+        epic_lanes: 1,
+        tickets: %{priorities: ["urgent"]}
+      )
+
+      :ok
+    end
+
+    test "two epics: the one whose sub-tickets are all High holds no lane, and the one with Urgent sub-tickets gets it" do
+      high_1 = %Issue{id: "h1", identifier: "MT-11", title: "High 1", state: "Todo", priority: 2}
+      high_2 = %Issue{id: "h2", identifier: "MT-12", title: "High 2", state: "Todo", priority: 2}
+      urgent = %Issue{id: "u1", identifier: "MT-21", title: "Urgent", state: "Todo", priority: 1}
+      other = %Issue{id: "s1", identifier: "MT-30", title: "Other", state: "Todo", priority: 1}
+      # The High plan is the higher priority and the older, so only its tickets can cost it the lane.
+      parked = %{epic("e1", "MT-10", [high_1, high_2]) | priority: 1, created_at: ~U[2026-01-01 00:00:00Z]}
+      live = epic("e2", "MT-20", [urgent])
+
+      state = Orchestrator.put_epic_lanes_for_test(orchestrator_state(2), [parked, live, high_1, high_2, urgent, other])
+
+      assert [%{identifier: "MT-20"}] = state.epic_lanes.lanes
+      assert state.epic_lanes.queued == []
+      assert {:lane, %{identifier: "MT-20"}} = EpicLanes.slot_for(state.epic_lanes, "u1", [])
+
+      # The lane's epic runs its ticket while the shared slot takes the standalone one.
+      state = run(state, urgent)
+      assert Orchestrator.should_dispatch_issue_for_test(other, state)
+
+      reason = "No sub-ticket Symphony can dispatch: priorities below Urgent. MT-11 (Todo, priority High), MT-12 (Todo, priority High)"
+
+      assert %{lanes: [%{identifier: "MT-20", status: "running"}, yielded], queued_epics: []} = snapshot_of(state).epic_lanes
+      assert %{identifier: "MT-10", status: "yielded", reason: ^reason} = yielded
+    end
+
+    test "a High ticket with a run or a claim under way, or forced, keeps its epic's lane until that ends" do
+      high = %Issue{id: "h1", identifier: "MT-11", title: "High", state: "In Progress", priority: 2}
+      parked = epic("e1", "MT-10", [high])
+
+      state = orchestrator_state(2) |> run(high) |> Orchestrator.put_epic_lanes_for_test([parked, high])
+      assert [%{identifier: "MT-10"}] = state.epic_lanes.lanes
+
+      state = Orchestrator.put_epic_lanes_for_test(%{state | running: %{}}, [parked, high])
+      assert [%{identifier: "MT-10"}] = state.epic_lanes.lanes
+
+      state = Orchestrator.put_epic_lanes_for_test(%{state | claimed: MapSet.new()}, [parked, high])
+      assert state.epic_lanes.lanes == []
+      assert [%{identifier: "MT-10"}] = state.epic_lanes.yielded
+
+      forced = %{high | labels: ["expedite"]}
+      state = Orchestrator.put_epic_lanes_for_test(state, [parked, forced])
+      assert [%{identifier: "MT-10"}] = state.epic_lanes.lanes
+    end
+  end
+
   test "the epic's lane runs the blocker of its next part, a ticket outside the epic, while the shared slot is busy" do
     # The final verification waits on a fix filed under another parent, as TP-272 waited on TP-323.
     blocker = %Issue{id: "b1", identifier: "MT-30", title: "Fix", state: "Todo"}

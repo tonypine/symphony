@@ -766,7 +766,9 @@ agent:
 - The kind and profile are chosen once, when the run is dispatched, from the current workflow
   config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
   keeps its profile. A CI fix or review feedback re-activation is a new run with its own kind.
-- The run history record keeps `run_kind`, `model` and `effort`, and the dispatch log line shows
+- The run history record keeps `run_kind`, `model` and `effort`, so do the run's `run.started` and
+  `run.ended` events on the ticket's history (and the run's header in the ticket's timeline, whose
+  summary names the model), and the dispatch log line shows
   `run_kind=… model=… effort=…` (`default` when nothing is added). A `review_feedback` dispatch
   also names the latest pending PR comment it answers: `trigger_comment_id=…
   trigger_comment_author=… trigger_comment="<first line>" pending_comments=<n>`. Code
@@ -788,8 +790,9 @@ agent:
   one, in parent priority then age order, holds one lane: its sub-tickets run there one after
   another, and the lane stays reserved while the current part is landing, so the next part starts
   as soon as it is unblocked. An epic whose path only waits on people (every open ticket on it is in
-  review, in Backlog or Triage, a parent waiting on its sub-tickets, or a ticket held by blockers)
-  yields its lane to the next epic or the shared pool, and takes one again at the next poll once a
+  review, in Backlog or Triage, a parent waiting on its sub-tickets, a ticket held by blockers, or a
+  ticket whose priority `tickets.priorities` keeps from starting) yields its lane to the next epic or
+  the shared pool, the moment a ticket moves or a run on its path ends, and takes one again once a
   ticket on its path can run. The lane also runs whatever is in the way of the next
   part: sub-tickets of sub-tickets at any depth, and tickets blocking any of those (transitively,
   until Done), even when they belong to another parent. The nearest one goes first, so the epic's
@@ -800,7 +803,10 @@ agent:
   turn lanes off. Values outside `0..max_total` fail `symphony check`. The dashboard and
   `/api/v1/state` (`epic_lanes`) show each lane and the shared pool, with the ticket a lane runs
   and why when it is not the epic's own sub-ticket (`MT-30 (In Progress), blocks MT-12`; `via` in
-  the API), and each yielded epic with why (`status: "yielded"` and `reason` in the API). The dispatch log line carries `slot=lane:<epic>`, `slot=shared`, `slot=finishing` or `slot=forced`, and `forced=true|false`.
+  the API), and each yielded epic with why (`status: "yielded"` and `reason` in the API;
+  `No sub-ticket Symphony can dispatch: priorities below Urgent. ...` when a priority holds it, so you
+  can raise a priority or park the plan). The Director's Overview shows the same line on the
+  initiative's card. The dispatch log line carries `slot=lane:<epic>`, `slot=shared`, `slot=finishing` or `slot=forced`, and `forced=true|false`.
 - `concurrency.finishing_max` (default: `2`) caps landing runs (tickets in `Merging`; with
   `pull_requests.auto_merge` on, only the ones that fell back to the landing agent). They only
   finish approved work, so they don't use `max_total` slots or epic lanes and start as soon as one

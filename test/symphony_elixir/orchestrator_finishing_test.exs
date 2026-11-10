@@ -2,6 +2,7 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.EpicLanes
 
   @active_states ["Todo", "In Progress", "Merging", "Rework", "Waiting on sub-tickets"]
 
@@ -321,7 +322,40 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     end
   end
 
-  defp start_with_waiting_run(ctx, poll_check_in_progress: in_progress?) do
+  describe "a run ending with nothing waiting for a slot" do
+    test "on a lane's path, plans the lanes again right away", ctx do
+      plan = EpicLanes.plan([epic_on("land-1")], 2, 1, ["Done", "Canceled"])
+      {pid, ref} = start_with_waiting_run(ctx, poll_check_in_progress: false, slot_waiting: %{}, epic_lanes: plan)
+
+      send(pid, {:DOWN, ref, :process, self(), :normal})
+      state = :sys.get_state(pid)
+
+      assert is_integer(state.next_poll_due_at_ms)
+      assert state.next_poll_due_at_ms <= System.monotonic_time(:millisecond) + 100
+    end
+
+    test "off every lane's path, leaves the next poll where it is", ctx do
+      plan = EpicLanes.plan([epic_on("elsewhere")], 2, 1, ["Done", "Canceled"])
+      {pid, ref} = start_with_waiting_run(ctx, poll_check_in_progress: false, slot_waiting: %{}, epic_lanes: plan)
+
+      send(pid, {:DOWN, ref, :process, self(), :normal})
+
+      assert :sys.get_state(pid).next_poll_due_at_ms == nil
+    end
+  end
+
+  defp epic_on(part_id) do
+    %Issue{
+      id: "epic-of-#{part_id}",
+      identifier: "MT-EPIC",
+      title: "Epic",
+      state: "Waiting on sub-tickets",
+      labels: ["breakdown"],
+      sub_issues: [%{id: part_id, identifier: part_id, state: "Todo"}]
+    }
+  end
+
+  defp start_with_waiting_run(ctx, opts) do
     write_finishing_workflow!(ctx, poll_interval_ms: 600_000)
     tracked([])
     {:ok, pid} = Orchestrator.start_link(name: Module.concat(__MODULE__, "Down#{System.unique_integer([:positive])}"))
@@ -337,8 +371,9 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
       %{
         (run(state, running, :landing)
          |> put_in([Access.key(:running), "land-1", :ref], ref))
-        | slot_waiting: %{"wait-1" => waiting},
-          poll_check_in_progress: in_progress?,
+        | slot_waiting: Keyword.get(opts, :slot_waiting, %{"wait-1" => waiting}),
+          epic_lanes: Keyword.get(opts, :epic_lanes),
+          poll_check_in_progress: Keyword.fetch!(opts, :poll_check_in_progress),
           next_poll_due_at_ms: nil,
           tick_timer_ref: nil,
           tick_token: nil

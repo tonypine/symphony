@@ -617,10 +617,52 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert %{phase: "Todo", pr_watch: nil} = RunStore.get_ticket_state("9")
   end
 
+  describe "TP-1204: Code Review's verdict on the head" do
+    defp approved_on!(repo_key, head), do: :ok = put_verdict(repo_key, "1", "code_review", head, "approve")
+
+    setup %{repo_key: repo_key} do
+      issues!([with_pr(repo_key, issue("1", "Code Review"), 1)])
+      red = %{head_sha: "sha-1", ci: :red, failing_check: "specs", failed_checks: [], check_names: ["specs"]}
+      reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), red)}})
+      %{pid: start_repo!(repo_key)}
+    end
+
+    test "a red head with no verdict is reviewed first", %{repo_key: repo_key, pid: pid} do
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{facts: %Facts{review: :pending, ci: :red}, decision: %{rule: "R27", kind: :dispatch}} = watch(repo_key, "1")
+    end
+
+    test "an approve on the red head lets the CI rules act", %{repo_key: repo_key, pid: pid} do
+      approved_on!(repo_key, "sha-1")
+
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{facts: %Facts{review: :approved}, decision: %{rule: "R22"}} = watch(repo_key, "1")
+    end
+
+    test "an approve on another head, or a newer verdict on this one, is no approval of it", %{repo_key: repo_key, pid: pid} do
+      approved_on!(repo_key, "sha-0")
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{facts: %Facts{review: :pending}, decision: %{rule: "R27"}} = watch(repo_key, "1")
+
+      approved_on!(repo_key, "sha-1")
+      :ok = put_verdict(repo_key, "1", "code_review", "sha-1", "inconclusive")
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{facts: %Facts{review: :pending}, decision: %{rule: "R27"}} = watch(repo_key, "1")
+    end
+
+    test "a verdict on the head says nothing in another phase", %{repo_key: repo_key, pid: pid} do
+      approved_on!(repo_key, "sha-1")
+      issues!([with_pr(repo_key, issue("1", "QA"), 1)])
+
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{facts: %Facts{phase: :qa, review: :pending}, decision: %{rule: "R22"}} = watch(repo_key, "1")
+    end
+  end
+
   describe "the ticket's situation" do
     setup %{repo_key: repo_key} do
       reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{ci: :pending})}})
-      %{issue: with_pr(repo_key, issue("1", "Code Review"), 1), recorder: start_supervised!(Recorder)}
+      %{issue: with_pr(repo_key, issue("1", "QA"), 1), recorder: start_supervised!(Recorder)}
     end
 
     test "a ticket that left the watched states with its CI pending gets the event of its new kind when the watcher drops its facts",
@@ -720,7 +762,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
   end
 
   test "TP-1073: keeps how a red head compared with the base for 10 minutes, and names the base run R23 waits on", %{repo_key: repo_key} do
-    issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+    issues!([repo_key |> with_pr(issue("1", "QA"), 1)])
     key = {"https://github.com/acme/app/actions/runs/100/job/4", "74"}
     base_red = %{check: "specs", sha: "c1c4ae62", run_id: "38988095659", basis: :tests}
     red = %{ci: :red, red_kind: :also_red_on_base, failing_check: "specs", base_red: base_red, comparisons: %{key => :tests}}
@@ -923,7 +965,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     end
 
     test "TP-1196: a failed check in a run still going waits on CI, and the CI label says running", %{repo_key: repo_key, pid: pid} do
-      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+      issues!([repo_key |> with_pr(issue("1", "QA"), 1)])
       reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{ci: :red, red_kind: :run_in_progress, failing_check: "coverage (4/4)"})}})
 
       assert {:ok, _summary} = Repo.poll(pid)
@@ -964,7 +1006,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     end
 
     test "a wait on CI keeps since when it began and is listed past ci.merging_wait_timeout_ms", %{repo_key: repo_key, clock: clock, pid: pid} do
-      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+      issues!([repo_key |> with_pr(issue("1", "QA"), 1)])
       reads!(%{pr_url(1) => {:ok, read_of(pr_url(1), %{ci: :pending})}})
 
       assert {:ok, _summary} = Repo.poll(pid)
@@ -1041,7 +1083,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
     test "an action applied joins the last five, with how its facts arrived", %{repo_key: repo_key, clock: clock, pid: pid} do
       write_workflow_file!(Workflow.workflow_file_path(), ci: %{enabled: true})
-      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+      issues!([repo_key |> with_pr(issue("1", "QA"), 1)])
 
       for n <- 1..6 do
         # Each red head is rerun once (R22); its failed checks carry no run id, so nothing is called.
@@ -1314,7 +1356,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       issues!({:error, :linear_must_not_be_read})
       team = %{key: "ENG", name: "Engineering"}
       project = %{id: "project-1", name: "App", slug_id: "app-1"}
-      observed!(repo_key, with_pr(repo_key, issue("1", "Code Review", team: team, project: project), 1))
+      observed!(repo_key, with_pr(repo_key, issue("1", "QA", team: team, project: project), 1))
 
       # Red on `specs` after its one CI Fix run: the red backstop hands the ticket to the self-heal lane.
       failure = %{check: "specs", error: "ERROR: specs failed", head_sha: "sha-1"}
@@ -1534,7 +1576,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     test "TP-1163: a rework run that pushed and ended has the PR read at once, and the reviewer then waits only on CI", %{repo_key: repo_key} do
       record_source!()
       issues!({:error, :linear_must_not_be_read})
-      observed!(repo_key, with_pr(repo_key, issue("1", "Code Review"), 1))
+      observed!(repo_key, with_pr(repo_key, issue("1", "QA"), 1))
       :ok = RunStore.put_run(%{repo_key: repo_key, run_id: "run-1", issue_id: "1", status: "running"})
       test_pid = self()
       pid = start_repo!(repo_key, timer: reporting_timer(test_pid))
@@ -1552,7 +1594,7 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
       assert_received {:read, "https://github.com/acme/app/pull/1", _opts}
       refute match?(%{decision: %{rule: "R9"}}, watch(repo_key, "1"))
-      assert dispatch_reason(repo_key, "1", "Code Review") =~ "Checks"
+      assert dispatch_reason(repo_key, "1", "QA") =~ "Checks"
     end
 
     test "TP-1163: a read Symphony asks for costs nothing for a ticket the watcher doesn't follow", %{repo_key: repo_key} do

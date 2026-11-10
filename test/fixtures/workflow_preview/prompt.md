@@ -200,7 +200,7 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
   - Special case: if a PR is already attached, treat as feedback/rework loop (run the full PR feedback sweep, address or explicitly push back, revalidate, then hand off to `Code Review`).
 - `In Progress` -> implementation actively underway: net-new work on this ticket, or PR review comments addressed on the same PR and branch.
   - Handing off is explicit: push the branch and open the pull request, and that push is the handoff signal that moves the ticket to `Code Review`. Do not ask for the state by hand — a `linear_update_state` call naming `Code Review` is refused. A run that ends without pushing and opening its PR never advances; the ticket stays here and is retried.
-- `Code Review` -> an agent reviews the PR: correctness, scope, acceptance criteria and intent. Approve moves the ticket to `QA` (or to `Merging` when QA is skipped by policy); a rework verdict returns it to `Rework`; a red head or a conflict routes to `CI Fix`, and a PR closed without merging to `Rework` (the PR and CI decision table). Do not change the issue or PR while it is here. The reviewer runs on its own, once the head's checks are green, so there is nothing to start here — just wait.
+- `Code Review` -> an agent reviews the PR: correctness, scope, acceptance criteria and intent. Approve moves the ticket to `QA` (or to `Merging` when QA is skipped by policy); a rework verdict returns it to `Rework`, whatever CI says; a red head after an approve, or a conflict, routes to `CI Fix`, and a PR closed without merging to `Rework` (the PR and CI decision table). Do not change the issue or PR while it is here. The reviewer runs on its own as soon as the PR is open, without waiting on CI, so there is nothing to start here — just wait.
 - `QA` -> an agent validates the change end to end as a user would, driven by the user journeys it delivers. Pass moves the ticket to `Merging`; fail returns it to `Rework`; a red head or a conflict routes to `CI Fix`, and a PR closed without merging to `Rework` (the PR and CI decision table).
 - `Plan Review` -> an epic parent's plan waits on a person: designs, screens, user stories and proposed sub-tickets. Approval promotes the sub-tickets to `Todo` and moves the parent to `Waiting on sub-tickets`; changes go back through `Rework` to re-plan.
 - `Waiting on sub-tickets` -> a plan parent whose plan a person approved, waiting on its sub-tickets; do nothing. Symphony starts the parent's epic review from here once every sub-ticket is terminal.
@@ -224,7 +224,7 @@ What a red head, a conflict or a closed PR does in each state is decided by one 
    - `Todo` -> immediately move to `In Progress`, then ensure bootstrap workpad comment exists (create if missing), then start execution flow.
      - If PR is already attached, start by reviewing all open PR comments and deciding required changes vs explicit pushback responses.
    - `In Progress` -> continue execution flow from current scratchpad comment.
-   - `Code Review` -> the reviewer agent judges the PR on its green head; do not change the issue or PR, stop and wait for the verdict.
+   - `Code Review` -> the reviewer agent judges the PR on its head, whatever CI says; do not change the issue or PR, stop and wait for the verdict.
    - `QA` -> a QA agent walks the change's user journeys end to end; do not change the issue or PR, stop and wait for the verdict.
    - `CI Fix` -> run the mechanical lane in the `CI failure triage protocol`: fix the red check at its cause on the same branch (never a rerun), `Rework` when the repair is substantive, or a request for a person when no change can fix it.
    - `Plan Review` -> a person reviews the plan; do nothing and stop.
@@ -775,7 +775,7 @@ In this repository, a QA pass of the Director has two environments: the committe
     - Do not ask for `Code Review` (or `QA`, `Merging`) with `linear_update_state`: it is refused, because those states are the handoff's and the verdicts' to enter.
     - A run that ends without pushing its head and opening its PR never advances: the ticket stays where it is and the run is retried.
     - A block is not a handoff: follow the blocked-access escape hatch, which sets a `Blocked` or `Needs Decision` hold and leaves the ticket in its phase.
-    - After the handoff push, end the turn. CI runs on the pushed head: a red head comes back to you through `CI Fix`, and the reviewer runs once the head is green. Do not continue ordinary implementation work unless Symphony injects reviewer, QA, CI or operator context.
+    - After the handoff push, end the turn. The reviewer starts on the pushed head at once, and CI runs beside it: changes come back to you through `Rework` whatever CI says, and a red head comes back through `CI Fix` after an approve. Do not continue ordinary implementation work unless Symphony injects reviewer, QA, CI or operator context.
 13. For `Todo` tickets that already had a PR attached at kickoff:
     - Ensure all existing PR feedback was reviewed and resolved, including inline review comments (code changes or explicit, justified pushback response).
     - Then push the updates to the same branch; that push is the handoff to `Code Review`.
@@ -796,11 +796,11 @@ Apply this whenever a ticket adds or changes a screen or pane.
 ## Step 3: Code Review, QA and merge handling
 
 1. After the handoff push the machine runs the review: do not code or change ticket content while the ticket is in `Code Review`, `QA` or `Merging`, or while a hold is set. Holds are requested, never performed: ask for a person with `linear_request_human_action` (a `Needs Decision` hold) or report a block (a `Blocked` hold), and Symphony sets and clears the label.
-2. `Code Review`: the reviewer agent judges the PR on its green head (correctness, scope, acceptance criteria, intent) and records its verdict against that head. Approve moves the ticket to `QA`, or straight to `Merging` when QA is skipped (a docs-only or internal-only change); a rework verdict moves it to `Rework` on the same PR; an escalation sets a `Needs Decision` hold.
+2. `Code Review`: the reviewer agent judges the PR on its head, whatever CI says (correctness, scope, acceptance criteria, intent), and records its verdict against that head. A CI failure during the review does not interrupt it: CI's state applies once the verdict lands. Approve moves the ticket to `QA`, or straight to `Merging` when QA is skipped (a docs-only or internal-only change); a rework verdict moves it to `Rework` on the same PR; an escalation sets a `Needs Decision` hold.
 3. `QA`: a QA agent exercises the user journeys the change delivers, end to end, as a user would. Pass moves the ticket to `Merging`; fail moves it to `Rework` with the failing journey; a QA environment that cannot run is retried, then repaired through a fix ticket while a `Blocked` hold pauses the ticket.
 4. With the repo's manual review on, the step into `Merging` waits on a `Needs Decision` hold carrying the recommendation, the review reasons, the QA result and the PR link; a person's confirmation continues into `Merging`, a redirect sends it where the person says.
 5. Review comments on the PR (including the operator's own, when Symphony posts with the same GitHub account) bring the ticket back to `In Progress` on the same PR with the comments. Address them with the PR feedback sweep protocol and push: that push hands off to `Code Review` again. Do not close the PR or reset the branch for review comments.
-6. A red head or a merge conflict in `Code Review`, `QA`, `Merging` or `Rework` moves the ticket to `CI Fix` (see the `CI failure triage protocol`). A mechanical repair returns it to where it came from with its approvals carried forward; a substantive one goes through `Rework` and is reviewed again.
+6. A merge conflict in `Code Review`, `QA`, `Merging` or `Rework`, or a red head in `QA`, `Merging`, after a `Code Review` approve or in a `Rework` that no changes verdict sent there, moves the ticket to `CI Fix` (see the `CI failure triage protocol`). A mechanical repair returns it to where it came from with its approvals carried forward; a substantive one goes through `Rework` and is reviewed again.
 7. When the issue is in `Merging`, Symphony turns on GitHub auto-merge for the PR, updates the branch when it falls behind the base branch, and moves the issue to `Done` once GitHub merges it; no agent runs. A merged ticket with started sub-tickets still open waits in `Waiting on sub-tickets` until they finish.
 
    Only when auto-merge can't be used does Symphony dispatch you in `Merging` (with a comment on the issue saying why): then open and follow `.agents/skills/land/SKILL.md`, and run the `land` skill in a loop until the PR is merged. Do not call `gh pr merge` directly; merge with the scoped `github_merge_pull_request` tool.
@@ -918,7 +918,7 @@ before it, because the push is what moves the ticket on.
 - Acceptance criteria and required ticket-provided validation items are complete.
 - Validation/tests are green for the latest commit.
 - All PR review feedback has been addressed or explicitly answered, and no actionable comments remain.
-- Branch is pushed, the PR is open and linked on the issue. CI runs on the pushed head: a red head goes to `CI Fix`, and the reviewer only runs once it is green.
+- Branch is pushed, the PR is open and linked on the issue. The reviewer starts on the pushed head at once, with CI running beside it: a red head goes to `CI Fix` after an approve.
 - The review brief is left before the push (see `Review brief`): it links the PR and says what to check. On a later handoff (review comments addressed, a rework verdict answered), the existing brief is edited in place with `linear_update_comment`, with `What changed since the last brief` filled in; never a second one.
 
 

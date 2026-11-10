@@ -308,7 +308,7 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
 
       assert resolved.context == %{
                parent: parent,
-               pull_request: %{number: 448, url: "https://github.com/tonypine/symphony/pull/448", checks: "pending", sent_back: 2},
+               pull_request: %{number: 448, url: "https://github.com/tonypine/symphony/pull/448", checks: "pending", sent_back: 2, review: nil, failing_check: nil},
                blocked_by: [%{identifier: "TP-880", title: "Before", state: "Done"}, %{identifier: "TP-881", title: nil, state: "Todo"}],
                blocks: [%{identifier: "TP-893", title: "Next", state: "Todo"}, %{identifier: "TP-894", title: "Later", state: "Todo"}],
                related: [],
@@ -320,6 +320,25 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
              }
 
       assert resolved.references == %{}
+    end
+
+    test "TP-1204: the context says the review's state and the red check, side by side" do
+      url = "https://github.com/tonypine/symphony/pull/448"
+
+      context = fn facts ->
+        own = ticket("TP-1", %{pr_watch: Map.put(watched(url), :facts, struct(SymphonyElixir.PrDecision.Facts, facts))})
+        [resolved] = resolve([item("TP-1", action("x"))], [own], github(%{url => {:ok, pull_request(url, %{checks: "failed"})}}))
+        resolved.context.pull_request
+      end
+
+      assert %{review: "reviewing", failing_check: "macos build", checks: "failed"} =
+               context.(%{phase: :code_review, run: :active, ci: :red, failing_check: "macos build"})
+
+      assert %{review: "approved", failing_check: "macos build"} =
+               context.(%{phase: :code_review, review: :approved, ci: :red, failing_check: "macos build"})
+
+      assert %{review: nil, failing_check: nil} = context.(%{phase: :code_review, ci: :pending})
+      assert %{review: nil, failing_check: "test"} = context.(%{phase: :qa, run: :active, ci: :red, failing_check: "test"})
     end
 
     test "a pull request the watcher records under a URL that names no pull request is none" do
@@ -381,6 +400,28 @@ defmodule SymphonyElixir.Inbox.ReferencesTest do
         [resolved] = resolve([odd], [ticket("TP-5", %{repo_key: "app"})], github(%{}))
         assert %{"TP-5" => %{kind: "ticket", repo_key: "app"}, "TP-6" => %{kind: "missing", url: nil}} = resolved.references
       end
+    end
+  end
+
+  describe "facts/1" do
+    test "reads a Linear node's state and the blockers still open" do
+      blocker = fn identifier, type -> %{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"type" => type}}} end
+
+      node = %{
+        "id" => "i",
+        "state" => %{"name" => "Todo", "type" => "unstarted"},
+        "inverseRelations" => %{
+          "nodes" => [
+            blocker.("TP-1", "started"),
+            blocker.("TP-2", "completed"),
+            blocker.("TP-3", "canceled"),
+            %{"type" => "related", "issue" => %{"identifier" => "TP-4", "state" => %{"type" => "started"}}}
+          ]
+        }
+      }
+
+      assert References.facts(node) == %{issue_id: "i", state: "Todo", state_type: "unstarted", open_blockers: ["TP-1"]}
+      assert References.facts(%{}) == %{issue_id: nil, state: nil, state_type: nil, open_blockers: []}
     end
   end
 

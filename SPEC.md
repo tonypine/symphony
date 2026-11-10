@@ -1337,7 +1337,7 @@ Review-comment options are ignored when `enabled` is not `true`. CI failure disp
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
 affect CI escalation. A head whose only failed check is `protected paths` is not red: it gets no
 flaky re-run, no CI-fix run and no escalation, and uses no fix attempt, and it reads as its other
-checks, so the reviewer and QA run once they passed. Only a person clears that check, by a decision
+checks, so QA runs once they passed. Only a person clears that check, by a decision
 that allows the change (an option whose `unlocks` grants the protected paths the PR changes; a
 grant on a folder reached under several names, such as the shared skills in `.agents/skills` and
 their `.claude/skills` and `.codex/skills` links, covers it under every name), and
@@ -3260,16 +3260,24 @@ Rules:
   again.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
   state. A failed check only a person clears (`protected paths`) does not make a head red: with no
-  other failure, the head is green once its other checks passed. The reviewer and QA runs MUST
-  dispatch only on a green head, whether the poll, a retry or
-  the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`) dispatches
-  them; a held-back run records `code_review_head_not_green` or `qa_head_not_green`, with the PR watcher's
-  reason, once per head and reason. A
+  other failure, the head is green once its other checks passed. A green CI gates the merge, not the
+  review: the reviewer run MUST dispatch on a conflict-free PR whatever CI says, and a CI failure
+  during it MUST NOT interrupt it. Its verdict applies CI's state: an approve on a head the PR
+  watcher reads as red MUST stay in `Code Review` with the approval recorded, go through the
+  watcher's rerun and `CI Fix`, and carry on once green with no second review; a rework verdict goes
+  to `Rework` whatever CI says. The QA run MUST dispatch only on a green head, whether the poll, a
+  retry or the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`)
+  dispatches it; a held-back run records `code_review_head_not_green` or `qa_head_not_green`, with
+  the PR watcher's reason, once per head and reason. A
   QA `fail` or block on a head the PR watcher reads as red, missing a required check, or
   conflicting is recorded `blocked` with the component `ci` and leaves the ticket in `QA` for the
-  watcher to route; it MUST NOT go to `Rework`. A red head in `Code Review`,
+  watcher to route; it MUST NOT go to `Rework`. A red head in `Code Review` once approved, in
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
-  origin recorded, whether or not the PR also conflicts. A `Code Review` or `QA` ticket back from
+  origin recorded, whether or not the PR also conflicts. The exception is a `Rework` head Code
+  Review's changes verdict stands on: its code is about to change, so the watcher MUST NOT rerun its
+  checks, update its branch or send it to `CI Fix` for a red check, and the rework run goes ahead
+  whatever CI says. An approval held in `Code Review`, or through `CI Fix` back to it, MUST be carried
+  to the head an update of the branch made, with no second review. A `Code Review` or `QA` ticket back from
   `CI Fix` on the same red head or the same conflict (a repair that pushed nothing) MUST enter
   `CI Fix` again, until the fix attempts run out. Then neither asks a person: a red head gets a
   fix ticket for its failing check and a `Blocked` hold on it, and a conflict waits on the PRs
@@ -3769,7 +3777,9 @@ Epic lanes:
   approved and not finished (any state other than `Backlog`, `Triage` or a terminal state).
 - An active epic yields while nothing on its path can run: every open issue on the path is in
   `Plan Review`, `Backlog` or `Triage`, has no known state, is a plan parent waiting on its
-  sub-issues (outside `Rework`), or has open blockers in any active phase. A yielded epic takes no lane.
+  sub-issues (outside `Rework`), has open blockers in any active phase, or has a priority
+  `tickets.priorities` keeps from dispatching (unless the issue is forced, waits for a slot on a retry,
+  or has a run or a claim under way). A yielded epic takes no lane.
 - The other active epics are ordered by the parent's priority, then the parent's creation time. The
   first `min(epic_lanes, max_concurrent_agents)` of them each reserve one slot (a lane); the rest
   wait for a lane. `epic_lanes` defaults to `max_concurrent_agents`.
@@ -3790,9 +3800,11 @@ Epic lanes:
 - The `epic_lanes` snapshot shows, for a running lane, the issue it runs and, when that is not one
   of the epic's own sub-issues, the issue it blocks or is a sub-issue of (`via`). Yielded epics
   follow the lanes with `status: "yielded"` and a `reason` naming each open issue on the path and
-  what it waits on.
+  what it waits on; when a priority holds one of them, the reason opens with
+  `No sub-ticket Symphony can dispatch: priorities below <lowest allowed>.`
 - Lanes are recomputed from the candidate issues on every poll tick, so a yielded epic takes a lane
-  again once an issue on its path can run.
+  again once an issue on its path can run. A move of an issue and the end of a run on a lane's path
+  each run a tick at once, so a lane whose epic has nothing left to dispatch is released on that event.
 
 ### 8.4 Retry and Backoff
 
@@ -6253,10 +6265,12 @@ Minimum endpoints:
     first, with each event that names an earlier event of the page as `parent` in that event's
     `children` (at any depth), each other event whose `run_id` names a run of the ticket in that
     run's `events`, and the rest at the top level. A run is `{"kind": "run", run_id, run_kind,
-    run_number, status, verdict, started_at, ended_at, exit, head, summary, events}`, placed where
-    its first event on the page falls. Its header is read from the ticket's whole history: `status`
-    is `running` until its `run.ended`, then `ended`, and `verdict` is the newest `verdict.recorded`
-    naming the run (`{kind, outcome, head, at}`), else null. A run whose events span two pages shows
+    run_number, model, effort, status, verdict, started_at, ended_at, exit, head, summary, events}`,
+    placed where its first event on the page falls. Its header is read from the ticket's whole
+    history: `model` and `effort` are the ones its run profile resolved when it was dispatched (its
+    `run.started`, else its `run.ended`; null when the profile resolved none and the runtime kept its
+    own default), `status` is `running` until its `run.ended`, then `ended`, and `verdict` is the
+    newest `verdict.recorded` naming the run (`{kind, outcome, head, at}`), else null. A run whose events span two pages shows
     on each with that page's events and its whole header; the client merges by `run_id`.
   - `since` (ISO 8601, exclusive) pages: `next_since` is the `at` of the last event returned (the
     `since` given, or null, on an empty page). A page never ends inside a group of events that share

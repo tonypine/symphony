@@ -179,6 +179,9 @@ public struct Initiative: Equatable, Identifiable {
             }
         }
 
+        /// The line the Overview's card adds: only an initiative that holds no lane and why.
+        public var overviewLine: String? { status == "yielded" ? line : nil }
+
         private func ordinal(_ position: Int) -> String {
             let formatter = NumberFormatter()
             formatter.numberStyle = .ordinal

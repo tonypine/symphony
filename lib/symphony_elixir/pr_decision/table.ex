@@ -55,7 +55,7 @@ defmodule SymphonyElixir.PrDecision.Table do
     ## Upkeep
 
     Checked first on every read of a PR, by poll or by a delivery. Every upkeep rule that matches acts, and none stops the chain: the flow rule \
-    below still decides on the same read, from the same facts. Upkeep never waits on a hold or a flow wait, only on a run: while one is \
+    below still decides on the same read, from the same facts. Upkeep never waits on a hold or a flow wait, only on a run, and spends nothing on a head a changes verdict stands on: while a run is \
     active it is deferred, and it fires on the read that sees the run end.
 
     #{rule_table(PrDecision.upkeep_rules())}\

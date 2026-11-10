@@ -51,6 +51,7 @@ defmodule SymphonyElixir.TicketSignals do
     "update_wait" => "Its next agent turn waits for the update",
     "handoff_missing" => "The run ended without its handoff",
     "code_review_carried" => "Code Review carried its approval to a new head",
+    "code_review_approved_on_red" => "Code Review approved a red head: CI's state comes next",
     "code_review_reviewer_disabled" => "Code Review's reviewer is turned off",
     "code_review_head_not_green" => "Code Review waits on the PR watcher",
     "qa_head_not_green" => "QA waits on the PR watcher",

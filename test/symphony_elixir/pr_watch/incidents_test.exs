@@ -45,16 +45,16 @@ defmodule SymphonyElixir.PrWatch.IncidentsTest do
            fix_run("1", "head-1-2", "Merging") ++
            [{:github, [merged("1")], [{"1", pr: :merged}]}]
      }},
-    {:tp_920, "TP-920/TP-892: a red head in Code Review waited for green forever",
+    {:tp_920, "TP-920/TP-892: a red head in QA waited for green forever",
      %{
-       tickets: [{"1", "Code Review", []}],
+       tickets: [{"1", "QA", []}],
        steps:
          [
            {:github, [synchronize("1", "head-1-2")], [{"1", head_sha: "head-1-2", ci: :pending}]},
            {:github, [check_failed("1", "head-1-2")], [{"1", red()}]},
            {:github, [check_failed("1", "head-1-2")], []}
          ] ++
-           fix_run("1", "head-1-3", "Code Review", @pending) ++
+           fix_run("1", "head-1-3", "QA", @pending) ++
            [{:github, [check_passed("1", "head-1-3")], [{"1", ci: :green}]}]
      }},
     {:tp_921, "TP-921/TP-891: a push to main made a Merging PR conflict, and auto-merge flapped for 2 h",
@@ -119,7 +119,7 @@ defmodule SymphonyElixir.PrWatch.IncidentsTest do
      }},
     {:failing_check, "a check that keeps failing (D15 (c)): a fix ticket for CI, C held on it until it lands, then QA",
      %{
-       tickets: [{"1", "Code Review", red("test")}],
+       tickets: [{"1", "QA", red("test")}],
        # Each CI Fix run: the red head's first read reruns `test`, the rerun fails the same way, the
        # run pushes the next head and hands C back, and that head fails `test` the same way too.
        # The hold clears and the counts restart: the red head is rerun once, fails, and gets one more CI Fix run.
@@ -128,15 +128,12 @@ defmodule SymphonyElixir.PrWatch.IncidentsTest do
            {head, next} = {"head-1-#{run}", "head-1-#{run + 1}"}
 
            [{:github, [check_failed("1", head)], []}] ++
-             fix_run("1", next, "Code Review", @pending) ++
+             fix_run("1", next, "QA", @pending) ++
              [{:github, [check_failed("1", next)], [{"1", red("test")}]}]
          end) ++
            [{:fix_ticket_lands, "TP-901"}, {:github, [check_failed("1", "head-1-4")], []}] ++
-           fix_run("1", "head-1-5", "Code Review", @pending) ++
-           [
-             {:github, [check_passed("1", "head-1-5")], [{"1", ci: :green}]},
-             {:run, "1", "Code Review", "QA"}
-           ]
+           fix_run("1", "head-1-5", "QA", @pending) ++
+           [{:github, [check_passed("1", "head-1-5")], [{"1", ci: :green}]}]
      }}
   ]
 
@@ -199,7 +196,7 @@ defmodule SymphonyElixir.PrWatch.IncidentsTest do
   end
 
   defp expect(:tp_920, %{actions: actions, tickets: tickets}) do
-    assert %{"1" => %{state: "Code Review", decision: %{rule: "R27", kind: :dispatch}}} = tickets
+    assert %{"1" => %{state: "QA", decision: %{rule: "R27", kind: :dispatch}}} = tickets
     assert calls(actions, :rerun) == ["77"]
     assert moves(actions, "1") == ["CI Fix"]
   end

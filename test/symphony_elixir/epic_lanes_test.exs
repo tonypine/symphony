@@ -6,6 +6,74 @@ defmodule SymphonyElixir.EpicLanesTest do
 
   @terminal ["Done", "Canceled"]
 
+  describe "plan/5 with the priority filter" do
+    test "an epic whose tickets the filter refuses yields, and the next epic takes the lane" do
+      parked = epic("E1", [{"p1", "Todo"}, {"p2", "Todo"}], priority: 1)
+      running = epic("E2", [{"q1", "Todo"}])
+      p2 = ticket("p2", "Todo", blocked_by: [link("x1", "Plan Review")])
+      candidates = [parked, running, ticket("p1", "Todo"), p2, %{ticket("q1", "Todo") | priority: 1}]
+
+      plan = EpicLanes.plan(candidates, 2, 1, @terminal, urgent_only())
+
+      assert [%{identifier: "E2"}] = plan.lanes
+      assert plan.queued == []
+      assert plan.shared == 1
+      assert [%{identifier: "E1", yield_reason: reason}] = plan.yielded
+
+      assert reason ==
+               "No sub-ticket Symphony can dispatch: priorities below Urgent. " <>
+                 "p1 (Todo, priority High), p2 (Todo, blocked by x1), x1 (Plan Review)"
+
+      assert %{lanes: [%{identifier: "E2", status: "waiting"}, %{identifier: "E1", status: "yielded", reason: ^reason}]} =
+               EpicLanes.snapshot(plan, %{})
+    end
+
+    test "one ticket the filter lets through keeps the lane, and the epic takes it back once one passes" do
+      filtered = [epic("E1", [{"p1", "Todo"}, {"p2", "Todo"}]), ticket("p1", "Todo"), ticket("p2", "Todo")]
+
+      assert [%{identifier: "E1"}] = EpicLanes.plan(filtered, 2, 1, @terminal, urgent_only()).yielded
+
+      raised = [epic("E1", [{"p1", "Todo"}, {"p2", "Todo"}]), %{ticket("p1", "Todo") | priority: 1}, ticket("p2", "Todo")]
+      plan = EpicLanes.plan(raised, 2, 1, @terminal, urgent_only())
+
+      assert [%{identifier: "E1"}] = plan.lanes
+      assert plan.yielded == []
+    end
+
+    test "a held path with nothing filtered keeps its own reason, and a ticket not fetched is judged by its state" do
+      gated = [epic("E1", [{"p1", "Plan Review"}]), ticket("p1", "Plan Review")]
+
+      assert [%{yield_reason: "Nothing on its path can run: p1 (Plan Review)"}] = EpicLanes.plan(gated, 2, 1, @terminal, urgent_only()).yielded
+
+      assert [%{identifier: "E2"}] = EpicLanes.plan([epic("E2", [{"q1", "Todo"}])], 2, 1, @terminal, urgent_only()).lanes
+    end
+
+    test "the reason reads the filter's floor, or names a filter that has none" do
+      reason_under = fn names, priority ->
+        candidates = [epic("E1", [{"p1", "Todo"}]), %{ticket("p1", "Todo") | priority: priority}]
+        gate = %{names: names, allowed?: fn _issue -> false end}
+        [%{yield_reason: reason}] = EpicLanes.plan(candidates, 2, 1, @terminal, gate).yielded
+        reason
+      end
+
+      assert reason_under.(["urgent", "high"], 3) =~ "priorities below High. p1 (Todo, priority Medium)"
+      assert reason_under.(["none", "urgent"], nil) =~ "priorities below Urgent. p1 (Todo, priority None)"
+      assert reason_under.(["low", "urgent"], 2) =~ "priorities outside Low, Urgent. p1"
+      assert reason_under.(["none"], 1) =~ "priorities outside None. p1 (Todo, priority Urgent)"
+    end
+  end
+
+  describe "on_lane?/2" do
+    test "is true for a ticket on the path of an epic holding a lane, and only then" do
+      plan = EpicLanes.plan([epic("E1", [{"p1", "Todo"}]), epic("E2", [{"q1", "Plan Review"}])], 2, nil, @terminal)
+
+      assert EpicLanes.on_lane?(plan, "p1")
+      refute EpicLanes.on_lane?(plan, "q1")
+      refute EpicLanes.on_lane?(plan, "S1")
+      refute EpicLanes.on_lane?(nil, "p1")
+    end
+  end
+
   describe "plan/4" do
     test "an epic with a sub-ticket in review and another ready keeps its lane; the rest of max_total is shared" do
       plan = EpicLanes.plan([epic("E1", [{"p1", "Plan Review"}, {"p2", "Todo"}]), standalone("S1")], 2, nil, @terminal)
@@ -391,6 +459,8 @@ defmodule SymphonyElixir.EpicLanesTest do
   end
 
   defp link(id, state), do: %{id: id, identifier: id, state: state}
+
+  defp urgent_only, do: %{names: ["urgent"], allowed?: &(&1.priority == 1)}
 
   defp ids(%Issue{id: id}), do: id
   defp ids(other), do: other
