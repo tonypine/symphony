@@ -19,6 +19,12 @@ defmodule SymphonyElixir.PrDecision.Facts do
   A red head is a plain failure (`red_kind: :failure`) unless the facts classify it otherwise.
   Limits and timeouts arrive as facts (`max_red_attempts`, `landing_timed_out`), so deciding reads
   no config and no clock.
+
+  `review` says whether Code Review approved the head (`:approved`) or still has to judge it
+  (`:pending`, the default). A review reads the code whatever CI says, so CI's state is decided on in
+  Code Review only once the head is approved. In Rework it says whether Code Review's changes verdict
+  stands on the head (`:changes_requested`): that code is about to change, so CI's state decides nothing
+  there either.
   """
 
   @typedoc "The ticket's phase: one of the watched Linear states."
@@ -67,6 +73,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
           base_ref: String.t() | nil,
           head_origin: :symphony | :person,
           review_comments: :none | :unaddressed,
+          review: :pending | :approved | :changes_requested,
           ci: :pending | :green | :none | :red | :required_missing,
           no_ci: :not_configured | :not_reported,
           missing_checks: [String.t()],
@@ -94,6 +101,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
   """
   @type domain :: {atom(), [term()]} | {atom(), [term()], [{atom(), [term()]}]}
 
+  # credo:disable-for-next-line Credo.Check.Warning.StructFieldAmount
   defstruct phase: :in_progress,
             origin: nil,
             github: :ok,
@@ -106,6 +114,7 @@ defmodule SymphonyElixir.PrDecision.Facts do
             base_ref: nil,
             head_origin: :symphony,
             review_comments: :none,
+            review: :pending,
             ci: :pending,
             no_ci: :not_configured,
             missing_checks: [],
@@ -145,6 +154,8 @@ defmodule SymphonyElixir.PrDecision.Facts do
     {:base, [:ok, :changed], @with_pr},
     {:head_origin, [:symphony, :person], @with_pr},
     {:review_comments, [:none, :unaddressed], @with_pr},
+    {:review, [:pending, :approved], [phase: [:code_review], pr: [:open, :draft]]},
+    {:review, [:pending, :changes_requested], [phase: [:rework], pr: [:open, :draft]]},
     {:ci, [:pending, :green, :none, :red, :required_missing], @with_pr},
     {:red_kind, [:failure, :cancelled, :human_only, :also_red_on_base, :run_in_progress], [ci: [:red]]},
     {:cancel_reruns, [1, 2], [ci: [:red], red_kind: [:cancelled]]},

@@ -2281,7 +2281,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "total" => 7,
                "children" => ~w(completed completed completed completed started unstarted backlog)
              },
-             "pull_request" => %{"number" => 448, "url" => "https://github.com/example/app/pull/448", "checks" => "passed", "sent_back" => 2},
+             "pull_request" => %{"number" => 448, "url" => "https://github.com/example/app/pull/448", "checks" => "passed", "sent_back" => 2, "review" => nil, "failing_check" => nil},
              "blocked_by" => [],
              "blocks" => [],
              "related" => [],
