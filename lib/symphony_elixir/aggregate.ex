@@ -89,7 +89,7 @@ defmodule SymphonyElixir.Aggregate do
          unit: unit,
          repo: scope.repo,
          epic: scope.epic,
-         series: Map.new(series, &{&1, &1 |> data(sources) |> bucketize(starts, unit)})
+         series: Map.new(series, &{&1, &1 |> data(sources) |> bucketize(starts, unit) |> put_tickets(&1)})
        }}
     end
   end
@@ -191,9 +191,9 @@ defmodule SymphonyElixir.Aggregate do
           start: iso8601(start),
           end: iso8601(next(start, unit)),
           value: sum(in_bucket),
-          by: sum_by(in_bucket, & &1.key)
+          by: sum_by(in_bucket, & &1.key),
+          pieces: in_bucket
         }
-        |> put_tickets(in_bucket)
       end)
 
     %{
@@ -206,7 +206,7 @@ defmodule SymphonyElixir.Aggregate do
 
   defp pieces(%{at: at} = datum, index, {from, to}, unit) do
     if in_period?(at, from, to),
-      do: [%{bucket: bucket_index(at, index, unit), value: datum.value, key: datum.key, ticket: datum.ticket, list?: datum[:list?]}],
+      do: [%{bucket: bucket_index(at, index, unit), value: datum.value, key: datum.key, ticket: datum.ticket}],
       else: []
   end
 
@@ -220,7 +220,7 @@ defmodule SymphonyElixir.Aggregate do
     |> Stream.take_while(&(DateTime.compare(&1, span_to) == :lt))
     |> Enum.map(fn start ->
       overlap = DateTime.diff(earliest(next(start, unit), span_to), latest(start, span_from), :millisecond)
-      %{bucket: Map.fetch!(index, DateTime.to_unix(start, :microsecond)), value: overlap, key: datum.key, ticket: datum.ticket, list?: false}
+      %{bucket: Map.fetch!(index, DateTime.to_unix(start, :microsecond)), value: overlap, key: datum.key, ticket: datum.ticket}
     end)
   end
 
@@ -234,9 +234,11 @@ defmodule SymphonyElixir.Aggregate do
   defp sum(pieces), do: pieces |> Enum.map(& &1.value) |> Enum.sum()
   defp sum_by(pieces, key), do: pieces |> Enum.group_by(key, & &1.value) |> Map.new(fn {k, values} -> {k, Enum.sum(values)} end)
 
-  # A shipped bucket names its tickets too.
-  defp put_tickets(bucket, [%{list?: true} | _] = pieces), do: Map.put(bucket, :tickets, pieces |> Enum.map(& &1.ticket) |> Enum.reject(&is_nil/1) |> Enum.sort())
-  defp put_tickets(bucket, _pieces), do: bucket
+  # A shipped bucket names its tickets too, an empty one none; no other series lists them.
+  defp put_tickets(series, "shipped"), do: %{series | buckets: Enum.map(series.buckets, &Map.put(Map.delete(&1, :pieces), :tickets, bucket_tickets(&1.pieces)))}
+  defp put_tickets(series, _name), do: %{series | buckets: Enum.map(series.buckets, &Map.delete(&1, :pieces))}
+
+  defp bucket_tickets(pieces), do: pieces |> Enum.map(& &1.ticket) |> Enum.reject(&is_nil/1) |> Enum.sort()
 
   # -- Sources ---------------------------------------------------------------------------------
 
@@ -307,7 +309,7 @@ defmodule SymphonyElixir.Aggregate do
     |> Enum.group_by(&{Map.get(&1, :repo_key), &1.issue_id})
     |> Enum.map(fn {{repo_key, _issue_id}, ticket_runs} ->
       run = Enum.max_by(ticket_runs, & &1.issue_completed_notified_at, DateTime)
-      %{at: run.issue_completed_notified_at, value: 1, key: repo_key || "unknown", ticket: Map.get(run, :issue_identifier), list?: true}
+      %{at: run.issue_completed_notified_at, value: 1, key: repo_key || "unknown", ticket: Map.get(run, :issue_identifier)}
     end)
   end
 

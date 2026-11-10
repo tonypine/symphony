@@ -37,7 +37,7 @@ defmodule SymphonyElixir.AggregateTest do
     :ok
   end
 
-  defp run(issue_id, identifier, started_at, attrs \\ %{}) do
+  defp run(issue_id, identifier, started_at, attrs) do
     Map.merge(%{issue_id: issue_id, issue_identifier: identifier, repo_key: @repo, started_at: started_at, status: "success"}, attrs)
   end
 

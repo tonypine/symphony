@@ -98,9 +98,9 @@ defmodule SymphonyElixir.Lifecycle do
   """
   @spec stage_spans([Event.t() | term()], facts()) :: [%{stage: String.t(), from: DateTime.t(), to: DateTime.t()}]
   def stage_spans(events, %{now: now, terminal_states: terminal_states, phase_names: phase_names}) do
-    for %{stage: stage, at: at, time_ms: time_ms} <- moves(events, now, Enum.map(terminal_states, &normalized/1), phases(phase_names)),
+    for %{stage: stage, at: at, until: until, time_ms: time_ms} <- moves(events, now, Enum.map(terminal_states, &normalized/1), phases(phase_names)),
         is_binary(stage) and time_ms > 0,
-        do: %{stage: stage, from: at, to: DateTime.add(at, time_ms, :millisecond)}
+        do: %{stage: stage, from: at, to: until}
   end
 
   @doc """
@@ -136,6 +136,7 @@ defmodule SymphonyElixir.Lifecycle do
       |> Enum.map_reduce({nil, nil}, fn {move, next_at}, {previous_phase, previous_stage} ->
         phase = normalized(move.to)
         stage = stage_of(phase, previous_stage, phases)
+        until = next_at || end_of_last(move.at, phase, now, terminal_states)
 
         {%{
            to: move.to,
@@ -143,7 +144,8 @@ defmodule SymphonyElixir.Lifecycle do
            at: move.at,
            stage: stage,
            opens_visit?: opens_visit?(stage, phase, previous_stage, previous_phase, phases.ci_fix),
-           time_ms: time_ms(move.at, next_at || end_of_last(move.at, phase, now, terminal_states))
+           until: until,
+           time_ms: time_ms(move.at, until)
          }, {move.to, stage}}
       end)
 
