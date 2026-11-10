@@ -167,7 +167,9 @@ defmodule SymphonyElixir.AggregateTest do
 
       approvals_per_day =
         for date <- Date.range(~D[2026-11-03], ~D[2026-11-09]) do
-          %{agreement: %{agreed: agreed, disagreed: disagreed, pending: pending}} = ReviewQuality.payload([date], manual_review: fn _repo -> "off" end)
+          %{agreement: %{agreed: agreed, disagreed: disagreed, pending: pending}} =
+            ReviewQuality.payload([date], manual_review: fn _repo -> "off" end)
+
           agreed + disagreed + pending
         end
 

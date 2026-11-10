@@ -38,7 +38,12 @@ defmodule SymphonyElixir.Aggregate do
   @event_series ~w(time_by_stage verdicts findings)
 
   @typedoc "A bucket: its start and end, its value and that value split `by` the series' key."
-  @type bucket :: %{start: String.t(), end: String.t(), value: non_neg_integer(), by: %{String.t() => non_neg_integer()}}
+  @type bucket :: %{
+          start: String.t(),
+          end: String.t(),
+          value: non_neg_integer(),
+          by: %{String.t() => non_neg_integer()}
+        }
 
   @typedoc "A series: its total over the period, split `by` its key and by ticket identifier, and its buckets."
   @type series :: %{
@@ -182,7 +187,12 @@ defmodule SymphonyElixir.Aggregate do
       |> Enum.map(fn {start, i} ->
         in_bucket = Map.get(by_bucket, i, [])
 
-        %{start: iso8601(start), end: iso8601(next(start, unit)), value: sum(in_bucket), by: sum_by(in_bucket, & &1.key)}
+        %{
+          start: iso8601(start),
+          end: iso8601(next(start, unit)),
+          value: sum(in_bucket),
+          by: sum_by(in_bucket, & &1.key)
+        }
         |> put_tickets(in_bucket)
       end)
 
