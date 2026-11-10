@@ -262,7 +262,7 @@ final class AutoUpdateTests: XCTestCase {
     }
 
     func testOnReleaseNeverInstallsASkippedOrRolledBackRelease() {
-        for reason in [SkippedRelease.Reason.skipped, .rolledBack] {
+        for reason in [SkippedRelease.Reason.skipped, .rolledBack, .refused] {
             var updater = AutoUpdater()
             let skipped = context(.onRelease, offer: .skipped(release(), reason))
 

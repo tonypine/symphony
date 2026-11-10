@@ -155,6 +155,9 @@ def build_symphony(build, out, prebuilt, env):
     log(f"building the Symphony release for build {build} (make release)")
     release_env = dict(env, SYMPHONY_BUILD_NUMBER=str(build))
     release_env.pop("SYMPHONY_AGENT_RUNTIME", None)
+    # Mix keeps the application file (it carries the build number `BuildInfo` reads) when mix.exs is unchanged, so a
+    # second build would report the first one's number. Drop it so each build records its own.
+    (REPO / "_build" / "prod" / "lib" / "symphony_elixir" / "ebin" / "symphony_elixir.app").unlink(missing_ok=True)
     run(["make", "release"], cwd=REPO, env=release_env, capture=False)
     built = REPO / "_build" / "prod" / "rel" / "symphony"
     if not (built / "releases" / f"0.0.1-{build}").is_dir():

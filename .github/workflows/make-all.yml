@@ -156,6 +156,11 @@ jobs:
       - name: Smoke-test the escript
         run: time scripts/release/smoke_test.sh bin/symphony "$GITHUB_WORKSPACE/symphony.yml"
 
+      # A release that renames or removes a settings key ships its migration: the file an
+      # operator on the previous release has still loads on this build.
+      - name: Load the previous release's symphony.yml
+        run: time scripts/ci/previous-release-config-check.sh bin/symphony
+
   coverage:
     name: coverage (${{ matrix.partition }}/4)
     runs-on: ubuntu-latest

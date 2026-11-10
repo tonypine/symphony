@@ -189,6 +189,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         settingsWindow.onSecretsChanged = { [weak self] in self?.restart() }
         settingsWindow.updateBlocker = { [weak self] developmentMode in self?.updater.blocker(developmentMode: developmentMode) }
         settingsWindow.onSettingsSaved = { [weak self] settings in self?.updates.configure(settings) }
+        updater.checkSettings = { [runner] binary in await runner.updateCheck(binary: binary) }
         updater.onChange = { [weak self] in
             guard let self else { return }
             showUpdateItems()
@@ -353,7 +354,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         for effect in effects {
             switch effect {
             case .checkConfig:
-                runner.checkLaunch { [weak self] launch in
+                // Migrated, as Symphony will read it once it starts: it rewrites the file then.
+                runner.checkLaunch(subcommand: ConfigCheck.migrateSubcommand) { [weak self] launch in
                     switch launch {
                     case let .success(launch):
                         Task { self?.handleHealth(.configChecked(await ConfigCheck.run(launch))) }
@@ -408,6 +410,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         }
         runner.stop { [weak self] in
             guard let self else { return }
+            // The build put back can't read keys this one migrated: give it the file as it was.
+            let config = URL(fileURLWithPath: configPath)
+            if SettingsMigrationBackup.restore(config: config, version: record.version) {
+                updater.log.append("put \(config.lastPathComponent) back as it was before v\(record.version) migrated it")
+            }
             if let problem = updater.rollBack(record) {
                 rollbackFailed(record, problem)
             } else {
@@ -790,7 +797,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         guard let release = availableRelease, updateBlocker == nil, !updater.isUpdating, !restarting else { return }
         let alert = NSAlert()
         alert.messageText = "\(UpdateMenu.installTitle(release))?"
-        alert.informativeText = UpdateMenu.confirmation(release, symphonyRunning: runner.isRunning)
+        alert.informativeText = UpdateMenu.confirmation(
+            release,
+            symphonyRunning: runner.isRunning,
+            migrating: settingsMigrating(release)
+        )
         alert.addButton(withTitle: "Update")
         alert.addButton(withTitle: "Cancel")
         guard SymphonyRunner.confirm(alert) else { return }
@@ -801,6 +812,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         autoUpdater.clearHold()
         startNotifier.began(release, kind: .manual)
         updater.prepare(release) { [weak self] update in self?.drainForUpdate(update, kind: .manual) }
+    }
+
+    /// The migrations of `release` whose key symphony.yml holds.
+    private func settingsMigrating(_ release: Release) -> [ReleaseSettingsMigration] {
+        guard !release.settingsMigrations.isEmpty, let text = try? String(contentsOfFile: configPath, encoding: .utf8) else {
+            return []
+        }
+        return SettingsMigrationPreview.affecting(release.settingsMigrations, text: text)
     }
 
     /// Pauses dispatch, waits for agent runs and stops Symphony, then hands over. A Symphony the app doesn't run
@@ -945,6 +964,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         let held = offer?.offersSkip == true && release?.build == autoUpdater.heldBuild
         let line = updater.menuLine ?? health.menuLine ?? (held ? UpdateMenu.cancelledLine : nil)
             ?? (release == nil ? nil : updateBlocker)
+            ?? release.flatMap { updater.skips.entry(forBuild: $0.build) }.flatMap(UpdateMenu.skippedLine)
+            ?? release.flatMap { UpdateMenu.migrationLine($0, migrating: settingsMigrating($0)) }
         updateLineItem.title = line ?? ""
         updateLineItem.isHidden = line == nil
         let outcome = updateOutcome

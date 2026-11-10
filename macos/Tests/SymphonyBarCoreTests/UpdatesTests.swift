@@ -281,6 +281,17 @@ final class UpdatesTests: XCTestCase {
         XCTAssertNil(UpdateChecker.changeCount(notes: ""))
     }
 
+    func testTheReleaseCarriesTheSettingsItsBuildMigrates() async throws {
+        let version = versionJSON.replacingOccurrences(
+            of: #""changes":12"#,
+            with: #""changes":12,"settings_migrations":[{"key":"a","to":"b","ticket":"TP-1","release":"0.0.1.42"},{"key":"c","to":null,"ticket":"TP-2","release":"0.0.1.42"}]"#
+        )
+        let result = await UpdateChecker(transport: try stub(version: version)).check(current: AppBuild(build: 41, isDevelopment: false))
+
+        guard case let .available(release) = result else { return XCTFail("\(result)") }
+        XCTAssertEqual(release.settingsMigrations, [ReleaseSettingsMigration(key: "a", to: "b"), ReleaseSettingsMigration(key: "c", to: nil)])
+    }
+
     func testChangeCountFallsBackToVersionJSON() async throws {
         let transport = try stub(release: releaseJSON(body: "Hand-written notes"))
 

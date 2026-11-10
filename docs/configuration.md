@@ -125,6 +125,30 @@ same PR; when the ticket reaches Merging Symphony asks them to allow the change,
 also let the ticket's next agent run edit the file by picking an option that allows it in the
 ticket's decision request (see [Allowing a change to a protected path](security.md#allowing-a-change-to-a-protected-path)). `WORKFLOW.md` front matter (repo-owned settings) is not covered.
 
+## Renamed keys are migrated
+
+A release that renames or removes a key rewrites your file for you. `SymphonyElixir.Config.Migration`
+holds the table: each old key, the sibling it became or nothing, the ticket and the release.
+
+- Symphony migrates the file once when it starts (`symphony` and `symphony run`), and logs a note.
+  `symphony config migrate --config <file>` does the same by hand.
+- A migration touches only the lines of the keys it moves. A one-line comment naming the ticket marks
+  each one, and the file as it was stays beside it as `<file>.before-v<version>`, which the previous
+  build still reads. When both the old key and its new name are set, your new name stays and the old
+  block goes.
+- `symphony check --migrate --config <file>` says what the file reads as once migrated, on a hidden
+  copy, without changing it. It prints `Migrated: <note>` per key, and a refusal lists every key the
+  build can't read, with its line. The macOS app runs it with a downloaded build
+  [before it installs it](../macos/README.md#update).
+- A key with no row in the table is still refused at load, with what to do instead: one that moved
+  to another section, or to a different shape, such as `tracker` or `dispatch.max_concurrent`. So is
+  a key in the table written inline (`ledger: {artifact_retention_days: 3}`), which can't be rewritten
+  one line at a time: the refusal names only the keys left in place, each with its line
+  (``Lines it can't rewrite: 1 (`ledger.artifact_retention_days`)``).
+
+A ticket that renames or removes a key adds its row in the same pull request. CI's `build` job loads
+the previous release's `symphony.yml` on the new build (`scripts/ci/previous-release-config-check.sh`).
+
 ## Top-Level Sections
 
 ### `issues`
@@ -720,7 +744,7 @@ agent:
   `implementation` (everything else). `close_out` named the retired legacy machine's close-out
   run: it still loads and matches no run. `code_review` names the Code Review run and its
   reviewer, and `qa` the QA agent's runs. `pre_push_review` named the removed pre-push reviewer:
-  it is refused at load (see [`code_review`](#code_review)). `acceptance_gate` is deprecated with
+  it is migrated to `code_review` at start (see [`code_review`](#code_review)). `acceptance_gate` is deprecated with
   the retired gate, and `final_verification` with the retired `Final verification:` tickets: each
   loads with a warning and does nothing.
 - Resolution per field, for the repository the issue is routed to:
@@ -1261,11 +1285,12 @@ unverifiable. `/api/v1/state` counts inconclusive Code Review runs per cause
 (`counts.review_inconclusive`), and the Mac app's ticket page shows the cause on the run's row.
 
 The pre-push reviewer that used to review an implementation run's commits before its first push
-is removed. A `symphony.yml` that still has `pre_push_review:` is refused at load: "`pre_push_review`
-is not valid; the pre-push reviewer is removed and Code Review owns the review of the code now; set
-Code Review's reviewer in `code_review` (enabled, runtime, command, model, effort) and its run
-profile in `agent.run_profiles.code_review`". The same reason refuses
-`agent.run_profiles.pre_push_review` and `repositories[].agent.run_profiles.pre_push_review`.
+is removed. A `symphony.yml` that still has `pre_push_review:` is [migrated](#renamed-keys-are-migrated)
+to `code_review` at start, and so are `agent.run_profiles.pre_push_review` and
+`repositories[].agent.run_profiles.pre_push_review`. A running Symphony's reload refuses the old
+name: "`pre_push_review` is not valid; the pre-push reviewer is removed and Code Review owns the
+review of the code now; set Code Review's reviewer in `code_review` (enabled, runtime, command,
+model, effort) and its run profile in `agent.run_profiles.code_review`".
 
 ### `auto_review`
 
