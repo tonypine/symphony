@@ -274,7 +274,12 @@ final class InboxTests: XCTestCase {
         let data = try Data(contentsOf: fixture("inbox-decision").appendingPathComponent("state.json"))
         guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else { return XCTFail("not a state") }
         let decision = try XCTUnwrap(snapshot.waitingOnYou.first { $0.identifier == "TP-892" })
-        XCTAssertEqual(StatusMenu.waitingLine(decision), "TP-892 · Decision · Update the old workflow's instructions now, or leave them t… · 1h")
+        // The menu reads the ticket's situation line: its word and cause.
+        XCTAssertEqual(decision.situation?.kind, .you)
+        XCTAssertEqual(StatusMenu.waitingLine(decision), "TP-892 · Waiting on you · Code Review sent PR #448 back twice for the same finding; i… · 1h")
+        var bare = decision
+        bare.situation = nil
+        XCTAssertEqual(StatusMenu.waitingLine(bare), "TP-892 · Decision · Update the old workflow's instructions now, or leave them t… · 1h")
         XCTAssertEqual(InboxNotifier.notice(decision)?.body, "Decision: Update the old workflow's instructions now, or leave them to TP-891?")
 
         // An older hand-written request with steps, or a Symphony that doesn't say, stays an action.

@@ -208,6 +208,8 @@ public struct Overview: Equatable {
         public var note: String?
         /// The first is the primary fix.
         public var fixes: [Fix]
+        /// Where the ticket the row is about stands, under the sentence; nil for a row about no ticket.
+        public var situation: Situation?
 
         public var age: String? { ageSeconds.map(Overview.duration) }
 
@@ -239,6 +241,8 @@ public struct Overview: Equatable {
         public var url: URL?
         /// No agent event for `stuckAfter`.
         public var isStuck: Bool
+        /// Where its ticket stands, as every page says it; nil when the state holds none for it.
+        public var situation: Situation?
 
         /// The second line: "Implementation · turn 7 · last activity 12 s ago".
         public var detail: String {
@@ -256,6 +260,8 @@ public struct Overview: Equatable {
         public var title: String?
         public var repoKey: String?
         public var reason: String
+        /// Where it stands, as every page says it; the row shows `reason` when the state holds none for it.
+        public var situation: Situation?
     }
 
     /// A meter of Today (C11): a ratio against a limit.
@@ -315,6 +321,8 @@ public struct Overview: Equatable {
     /// 09:12", "Updating to v0.0.1.700"), none from a Symphony that predates reasons, whose sentence names its one
     /// reason; then "All repositories paused" when every repository is.
     public var pauseLines: [String]
+    /// Symphony's clock when it took the state, which the rows' situation ages are measured against.
+    public var reference: Date
 
     /// The sentence offers Resume Dispatch while dispatch is paused, unless an update holds it.
     public var showsResume: Bool { mood == .paused && !updating }
@@ -335,6 +343,7 @@ public struct Overview: Equatable {
     ) {
         self.updating = updating
         let reference = state.generatedAt ?? now
+        self.reference = reference
         let index = TicketIndex(state)
         let paused = state.snapshot.pause != nil
 
@@ -472,7 +481,11 @@ public struct Overview: Equatable {
                 runningTime: nil, tokens: nil, url: index.url(identifier: identifier), isStuck: false
             )
         }
-        self.working = runRows + passRows
+        self.working = (runRows + passRows).map { row in
+            var row = row
+            row.situation = state.snapshot.situation(row.identifier)
+            return row
+        }
 
         // Next up: tickets waiting for a slot, longest first, then retries in the order they come due.
         let waitingRows = queuedWaiting
@@ -485,10 +498,14 @@ public struct Overview: Equatable {
             .map { entry in
                 let retry = entry.element
                 let when = retry.dueAt.map { " at \(StatusMenu.clockTime($0, now: reference, timeZone: timeZone, dateFormat: "MMM d HH:mm"))" } ?? ""
-                return QueuedRow(identifier: retry.identifier, title: retry.title, repoKey: retry.repoKey, reason: "retries\(when) after \(retry.attempt) failed attempt\(retry.attempt == 1 ? "" : "s")")
+                return QueuedRow(identifier: retry.identifier, title: retry.title, repoKey: retry.repoKey, reason: when.isEmpty ? "waits to retry" : "retries\(when)")
             }
         var seen = Set<String>()
-        nextUp = Array((waitingRows + retryRows).filter { seen.insert($0.identifier).inserted }.prefix(Self.nextUpLimit))
+        nextUp = Array((waitingRows + retryRows).filter { seen.insert($0.identifier).inserted }.prefix(Self.nextUpLimit)).map { row in
+            var row = row
+            row.situation = state.snapshot.situation(row.identifier)
+            return row
+        }
 
         meters = Self.meters(state.snapshot, reference: reference, timeZone: timeZone)
         reposLine = repos.flatMap { Self.reposLine($0, scope: scope, runs: state.snapshot.runs, reference: reference) }
@@ -532,7 +549,7 @@ public struct Overview: Equatable {
             let error = retry.error?.trimmingWhitespace() ?? ""
             findings.append(Finding(
                 subject: retry.identifier, kind: .failing, severity: .problem,
-                sentence: "\(retry.identifier) failed \(retry.attempt) times" + (error.isEmpty ? "." : ": \(error)."),
+                sentence: "\(retry.identifier) keeps failing" + (error.isEmpty ? "." : ": \(error)."),
                 fixes: [.open(retry.identifier), .stopRun(retry.identifier)]
             ))
         }
@@ -625,7 +642,8 @@ public struct Overview: Equatable {
             } else {
                 rows.append(Problem(
                     id: finding.subject, kinds: [finding.kind], severity: finding.severity, sentence: finding.sentence,
-                    ageSeconds: finding.ageSeconds, note: finding.note, fixes: finding.fixes
+                    ageSeconds: finding.ageSeconds, note: finding.note, fixes: finding.fixes,
+                    situation: state.snapshot.situation(finding.subject)
                 ))
             }
         }

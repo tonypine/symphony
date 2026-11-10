@@ -128,6 +128,27 @@ final class ContextCardTests: XCTestCase {
         XCTAssertNil(alone.partOf?.progress)
     }
 
+    func testTheCardShowsEachTicketsSituationInPlaceOfItsBadgeAndStatusWords() throws {
+        let item = try XCTUnwrap(try payload("inbox-decision").items.first { $0.identifier == "TP-892" })
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/inbox-decision/api/v1/state.json")
+        guard case let .state(snapshot) = SymphonyState.poll(data: try Data(contentsOf: url), statusCode: 200) else { return XCTFail("not a state") }
+        let card = try XCTUnwrap(ContextCard(item: item, now: now, calendar: utc, state: snapshot))
+
+        XCTAssertEqual(card.situation?.kind, .you)
+        XCTAssertEqual(card.work, "#448", "the situation line says where it stands")
+        XCTAssertEqual(card.connected.map(\.identifier), ["TP-893", "TP-891"])
+        XCTAssertEqual(card.connected.map { $0.situation?.kind }, [.blocked, .ci])
+        XCTAssertEqual(card.connected.last?.situation?.cause, "Checks are running on PR #447.")
+        XCTAssertEqual(card.connected.map(\.stage), [nil, nil], "no badge beside the line")
+
+        // A ticket with only a situation still draws the card.
+        let lone = InboxItem(id: "i", identifier: "TP-892", kind: .action, ask: "Decide")
+        XCTAssertEqual(ContextCard(item: lone, state: snapshot)?.situation?.kind, .you)
+        XCTAssertNil(ContextCard(item: lone, state: StateSnapshot()))
+    }
+
     private func item(unblocks: String? = nil, context: TicketContext? = nil, references: [String: Reference] = [:]) -> InboxItem {
         let action = unblocks.map { InboxReview.Action(title: nil, question: nil, why: nil, unblocks: $0, steps: [], options: []) }
         return InboxItem(id: "i-9", identifier: "X-9", kind: .action, ask: "Decide", review: InboxReview(action: action), references: references, context: context)

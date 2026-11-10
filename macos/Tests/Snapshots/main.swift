@@ -1080,6 +1080,94 @@ func situationLineExtras() -> some View {
     )
 }
 
+// The Situation line everywhere (TP-1441): each list that names a ticket, from the fixtures' states at their clock.
+let situationsAPI = here.appendingPathComponent("../Fixtures/director-app").standardizedFileURL
+let situationsNow = ISO8601DateFormatter().date(from: "2026-10-07T14:20:00Z")!
+
+func situationsState(_ name: String) -> OverviewState {
+    guard let state = OverviewState.decode(try! Data(contentsOf: situationsAPI.appendingPathComponent("\(name)/api/v1/state.json"))) else {
+        fatalError("The \(name) fixture's state doesn't read")
+    }
+    return state
+}
+
+/// Tickets: the Situation column of each row, as the table draws it (a `Table` doesn't render offscreen), and the
+/// inspector of a forced ticket beside it.
+@MainActor
+func ticketsSituations() -> some View {
+    let list = TicketList(state: situationsState("tickets"), now: situationsNow, timeZone: TimeZone(identifier: "UTC")!)
+    return styleStage(
+        HStack(alignment: .top, spacing: DesignTokens.Space.s5) {
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(Array(list.rows.enumerated()), id: \.element.id) { index, row in
+                    if index > 0 { Divider() }
+                    HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
+                        Text(row.identifier).font(DesignTokens.TypeStyle.mono.font).frame(width: 90, alignment: .leading)
+                        Text(row.titleText).lineLimit(1).frame(width: 180, alignment: .leading)
+                        SituationLine(row.line, reference: list.reference, size: .compact).lineLimit(1)
+                    }
+                    .padding(.vertical, DesignTokens.Space.s1)
+                }
+            }
+            .frame(width: 900)
+            TicketInspectorBody(row: list.row("SHOP-325")!, reference: list.reference, actions: TicketsActions())
+                .frame(width: 300)
+        },
+        width: 1260
+    )
+}
+
+/// Initiatives: BIL-200's sub-tickets, each with its line, the finished blockers struck through with their dates.
+@MainActor
+func initiativesSituations() -> some View {
+    guard let payload = InitiativesPayload.decode(try! Data(contentsOf: situationsAPI.appendingPathComponent("inbox/api/v1/initiatives.json"))) else {
+        fatalError("The inbox fixture's initiatives don't read")
+    }
+    let list = InitiativesList(initiatives: payload.initiatives, state: situationsState("inbox").snapshot)
+    return VStack(alignment: .leading, spacing: 0) {
+        ForEach(list.active) { initiative in
+            InitiativeDetail(initiative: initiative, actions: InitiativeActions(), reference: situationsNow)
+        }
+    }
+    .frame(width: 960)
+    .background(DesignTokens.Surface.content.color)
+}
+
+/// The Inbox: TP-892's context card with its line and its connected tickets' lines.
+@MainActor
+func inboxContextSituations() -> some View {
+    InboxReviewBody(item: item, perform: { _ in }, now: now, state: situationsState("inbox-decision").snapshot)
+        .frame(width: 900)
+        .background(DesignTokens.Surface.content.color)
+}
+
+/// The menu bar: each Waiting on you item as the status menu titles it, with its kind's symbol.
+@MainActor
+func menuWaitingSituations() -> some View {
+    let tickets = situationsState("inbox-decision").snapshot.waitingOnYou + situationsState("inbox").snapshot.waitingOnYou
+    return styleStage(
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+            Text(StatusMenu.waitingTitle).foregroundStyle(.secondary)
+            ForEach(Array(tickets.enumerated()), id: \.offset) { _, ticket in
+                Label(StatusMenu.waitingLine(ticket), systemImage: ticket.situation?.kind.symbol ?? ticket.kind.symbol)
+            }
+        },
+        width: 640
+    )
+}
+
+/// The Overview: Needs attention, Now working and Next up, each row with its ticket's line.
+@MainActor
+func overviewSituations() -> some View {
+    let width = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
+    return OverviewBody(
+        overview: Overview(state: situationsState("tickets"), now: situationsNow, timeZone: TimeZone(identifier: "UTC")!),
+        actions: OverviewActions(resume: {}, perform: { _ in }), width: width
+    )
+    .frame(width: width)
+    .background(DesignTokens.Surface.content.color)
+}
+
 /// The Action rail (TP-1440): `test/fixtures/api/ticket_moves.json`, the `moves` of a few tickets, by name.
 let actionRailSample: [String: TicketMoves] = {
     let url = here.appendingPathComponent("../../../test/fixtures/api/ticket_moves.json").standardizedFileURL
@@ -1178,6 +1266,12 @@ MainActor.assumeIsolated {
         render(situationLines(.full), scheme, to: "situation-line-full-\(suffix).png")
         render(situationLines(.compact), scheme, to: "situation-line-compact-\(suffix).png")
         render(situationLineExtras(), scheme, to: "situation-line-extras-\(suffix).png")
+        // The Situation line everywhere (TP-1441): Tickets, Initiatives, the Inbox's context, the menu bar, the Overview.
+        render(ticketsSituations(), scheme, to: "situations-tickets-\(suffix).png")
+        render(initiativesSituations(), scheme, to: "situations-initiatives-\(suffix).png")
+        render(inboxContextSituations(), scheme, to: "situations-inbox-context-\(suffix).png")
+        render(menuWaitingSituations(), scheme, to: "situations-menu-waiting-\(suffix).png")
+        render(overviewSituations(), scheme, to: "situations-overview-\(suffix).png")
         // The Action rail (TP-1440): every move allowed, and each refusal with its reason and More open, at the
         // laptop's and the desktop's header widths.
         for (width, name) in [(CGFloat(1180), "laptop"), (2200, "desktop")] {

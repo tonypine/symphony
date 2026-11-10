@@ -51,6 +51,15 @@ public struct StateSnapshot: Equatable {
     /// Every reason Symphony's own pause holds (`pause.reasons`), in the order they were set, the usage-limit holds'
     /// included; nil when Symphony predates them, so the header reads `pause` as before.
     public var pauseReasons: [PauseReason]?
+    /// Each ticket's situation by identifier (`Situation.byTicket(state:)`): the one line every row that names the
+    /// ticket shows.
+    public var situations: [String: Situation] = [:]
+
+    /// The situation of `identifier`, nil when the state holds none for it.
+    public func situation(_ identifier: String?) -> Situation? {
+        guard let identifier else { return nil }
+        return situations[identifier] ?? situations.first { $0.key.caseInsensitiveCompare(identifier) == .orderedSame }?.value
+    }
 
     /// One reason of Symphony's pause: who or what holds dispatch and since when.
     public struct PauseReason: Equatable {
@@ -189,6 +198,8 @@ public struct StateSnapshot: Equatable {
         public var waitingSeconds: Int?
         /// A pull request whose checks are green: its notification offers Approve and Merge….
         public var checksGreen: Bool
+        /// Where the ticket stands, the line every page shows for it; nil when the state holds none for it.
+        public var situation: Situation?
 
         public init(
             issueID: String? = nil,
@@ -200,7 +211,8 @@ public struct StateSnapshot: Equatable {
             isDecision: Bool = false,
             headline: String? = nil,
             waitingSeconds: Int? = nil,
-            checksGreen: Bool = false
+            checksGreen: Bool = false,
+            situation: Situation? = nil
         ) {
             self.issueID = issueID
             self.identifier = identifier
@@ -212,6 +224,7 @@ public struct StateSnapshot: Equatable {
             self.headline = headline
             self.waitingSeconds = waitingSeconds
             self.checksGreen = checksGreen
+            self.situation = situation
         }
     }
 
@@ -904,6 +917,12 @@ public enum SymphonyState {
         snapshot.linearWebhooks = LinearWebhookHealth.decode(state: data)
         snapshot.dispatchShadow = DispatchShadowReport.decode(state: data)
         snapshot.reconcile = ReconcileReport.decode(state: data)
+        snapshot.situations = Situation.byTicket(state: data)
+        snapshot.waitingOnYou = snapshot.waitingOnYou.map { ticket in
+            var ticket = ticket
+            ticket.situation = snapshot.situation(ticket.identifier)
+            return ticket
+        }
         snapshot.repositories = payload.repositories?.compactMap { repository in
             guard let key = repository.repoKey, !key.isEmpty else { return nil }
             let pause = repository.pause.map { pause in

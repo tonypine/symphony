@@ -32,7 +32,7 @@ defmodule SymphonyElixir.Initiatives.Initiative do
           state: String.t() | nil,
           state_type: String.t() | nil,
           created_at: String.t() | nil,
-          blocked_by: [%{identifier: String.t() | nil, state: String.t() | nil, open: boolean()}]
+          blocked_by: [%{identifier: String.t() | nil, state: String.t() | nil, open: boolean(), completed_at: String.t() | nil}]
         }
 
   @type t :: %{
@@ -136,7 +136,13 @@ defmodule SymphonyElixir.Initiatives.Initiative do
     for %{"type" => type, "issue" => %{} = issue} <- node |> get_in(["inverseRelations", "nodes"]) |> List.wrap(),
         normalize(type) == "blocks" do
       type = get_in(issue, ["state", "type"])
-      %{identifier: issue["identifier"], state: get_in(issue, ["state", "name"]), open: type not in ["completed", "canceled"]}
+
+      %{
+        identifier: issue["identifier"],
+        state: get_in(issue, ["state", "name"]),
+        open: type not in ["completed", "canceled"],
+        completed_at: issue["completedAt"]
+      }
     end
   end
 

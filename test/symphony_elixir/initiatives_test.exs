@@ -94,7 +94,7 @@ defmodule SymphonyElixir.InitiativesTest do
 
       # BIL-6 and BIL-7 block each other: creation order breaks the cycle.
       assert Enum.map(initiative.sub_tickets, & &1.identifier) == ["BIL-5", "BIL-3", "BIL-4", "BIL-2", "BIL-6", "BIL-7"]
-      assert hd(Enum.filter(initiative.sub_tickets, &(&1.identifier == "BIL-4"))).blocked_by == [%{identifier: "BIL-3", state: "x", open: true}]
+      assert hd(Enum.filter(initiative.sub_tickets, &(&1.identifier == "BIL-4"))).blocked_by == [%{identifier: "BIL-3", state: "x", open: true, completed_at: nil}]
       assert initiative.repo_key == "billing"
       refute initiative.incomplete
     end

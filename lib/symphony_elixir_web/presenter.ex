@@ -242,6 +242,7 @@ defmodule SymphonyElixirWeb.Presenter do
       state: sub_ticket.state,
       url: URLUtils.present_url(sub_ticket.url),
       blocked_by: Enum.map(sub_ticket.blocked_by, & &1.identifier),
+      blockers: Enum.map(sub_ticket.blocked_by, &Map.take(&1, [:identifier, :open, :completed_at])),
       waits_on: sub_ticket.waits_on,
       waiting_for: sub_ticket.waiting_for
     }

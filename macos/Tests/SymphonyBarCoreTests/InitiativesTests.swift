@@ -29,8 +29,8 @@ final class InitiativesTests: XCTestCase {
         XCTAssertEqual(initiative.legend.map(\.count), [4, 1, 1, 2])
         XCTAssertEqual(initiative.barAccessibilityLabel, "4 of 8 done: 4 done, 1 working, 1 waiting on you, 2 blocked")
         XCTAssertEqual(
-            initiative.subTickets[6].accessibilityLabel,
-            "BIL-207, Credit notes for downgrades, waits on BIL-206, blocked by BIL-206"
+            initiative.subTickets[6].accessibilityLabel(),
+            "BIL-207, Credit notes for downgrades, Blocked by BIL-206., blocked by BIL-206"
         )
         XCTAssertEqual(Initiative.SubTicket.spoken("Waits on 3 tickets"), "waits on 3 tickets")
         XCTAssertEqual(Initiative.SubTicket.spoken(""), "")
@@ -156,6 +156,53 @@ final class InitiativesTests: XCTestCase {
         XCTAssertEqual(payload?.initiatives.count, 1)
         XCTAssertEqual(payload?.initiatives.first?.subTickets.map(\.waits), [.slot])
         XCTAssertNil(payload?.initiatives.first?.slot)
+    }
+
+    // MARK: - Situation lines and resolved blockers
+
+    func testASubTicketsResolvedBlockersCarryTheDateTheyFinished() throws {
+        let initiative = try XCTUnwrap(try payload().initiatives.first)
+        let started = try XCTUnwrap(initiative.subTickets.first { $0.identifier == "BIL-205" })
+        XCTAssertEqual(started.blockers, [.init(identifier: "BIL-202", open: false, completedAt: SymphonyState.parseDate("2026-10-02T11:30:00Z"))])
+        let utc = TimeZone(identifier: "UTC")!
+        XCTAssertEqual(started.blockers.first?.doneLabel(timeZone: utc), "done Oct 2")
+        let waiting = try XCTUnwrap(initiative.subTickets.first { $0.identifier == "BIL-207" })
+        XCTAssertEqual(waiting.blockers, [.init(identifier: "BIL-206")])
+        XCTAssertNil(waiting.blockers.first?.doneLabel(), "an open blocker reads plain")
+        XCTAssertEqual(Initiative.SubTicket.Blocker(identifier: "X-1", open: false).doneLabel(), "done")
+        XCTAssertEqual(
+            started.accessibilityLabel(timeZone: utc),
+            "BIL-205, Usage dashboard for customers, Working., blocked by BIL-202 done Oct 2"
+        )
+
+        // From a Symphony that serves no blockers, each of blocked_by reads open.
+        let bare = Initiative.SubTicket(identifier: "X-2", blockedBy: ["X-1"], waits: .blocker(["X-1"]))
+        XCTAssertEqual(bare.blockers, [.init(identifier: "X-1")])
+    }
+
+    func testEachSubTicketReadsTheSituationTheStateHoldsForIt() throws {
+        let data = try Data(contentsOf: fixture().appendingPathComponent("state.json"))
+        guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else { return XCTFail("not a state") }
+        let list = InitiativesList(initiatives: try payload().initiatives, state: snapshot)
+        let docs = try XCTUnwrap(list.ordered.first { $0.identifier == "DOCS-20" })
+        let ci = try XCTUnwrap(docs.subTickets.first { $0.identifier == "DOCS-23" })
+        XCTAssertEqual(ci.line.kind, .ci)
+        XCTAssertEqual(ci.line.cause, "Checks are running on PR #512.")
+        // A done sub-ticket, which no list of open tickets names, reads Shipped.
+        XCTAssertEqual(docs.subTickets.first?.line, Situation(kind: .done, cause: ""))
+        XCTAssertNil(InitiativesList(initiatives: try payload().initiatives).ordered.first?.subTickets[4].situation)
+    }
+
+    func testWithoutASituationTheLineReadsWhatItWaitsOn() {
+        let line = { (waits: InitiativeWait) in Initiative.SubTicket(identifier: "X-1", waits: waits).line }
+        XCTAssertEqual(line(.done).kind, .done)
+        XCTAssertEqual(line(.working).kind, .working)
+        XCTAssertEqual(line(.you).kind, .you)
+        XCTAssertEqual(line(.ci).kind, .ci)
+        XCTAssertEqual(line(.slot).kind, .slot)
+        XCTAssertEqual(line(.blocker(["X-2"])), Situation(kind: .blocked, word: "Blocked by X-2", cause: ""))
+        XCTAssertEqual(line(.blocker(["X-2", "X-3"])).cause, "Waits on X-2 and X-3.")
+        XCTAssertEqual(line(.blocker([])), Situation(kind: .blocked, cause: ""))
     }
 
     private func payload() throws -> InitiativesPayload {

@@ -499,5 +499,298 @@
       "title": "Webhook retries",
       "url": "https://linear.app/acme/issue/API-119"
     }
-  ]
+  ],
+  "order": {
+    "computed_at": "2026-10-07T14:19:58Z",
+    "next": "SHOP-320",
+    "queue": [],
+    "groups": [
+      {
+        "kind": "waiting_on_you",
+        "count": 2,
+        "tickets": [
+          {
+            "identifier": "DOCS-40",
+            "situation": {
+              "kind": "waiting_on_you",
+              "word": "Waiting on you",
+              "cause": "QA asks whether the quick start keeps the old install steps.",
+              "next": "It continues once you answer in the Inbox.",
+              "since": "2026-10-07T11:08:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "SHOP-290",
+            "situation": {
+              "kind": "waiting_on_you",
+              "word": "Waiting on you",
+              "cause": "The merge waits for your confirmation.",
+              "next": "It merges once you confirm.",
+              "since": "2026-10-07T13:05:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "retrying",
+        "count": 2,
+        "tickets": [
+          {
+            "identifier": "SHOP-311",
+            "situation": {
+              "kind": "retrying",
+              "word": "Retrying",
+              "cause": "Third try of 5: mix test failed: 4 failures.",
+              "next": "The next try starts at 14:40.",
+              "since": "2026-10-07T14:02:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": {
+                "try": 3,
+                "of": 5,
+                "at": "2026-10-07T14:40:00Z"
+              }
+            }
+          },
+          {
+            "identifier": "API-134",
+            "situation": {
+              "kind": "retrying",
+              "word": "Retrying",
+              "cause": "Second try of 5: the agent stopped answering.",
+              "next": "The next try starts at 14:35.",
+              "since": "2026-10-07T14:10:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": {
+                "try": 2,
+                "of": 5,
+                "at": "2026-10-07T14:35:00Z"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "kind": "blocked_by_ticket",
+        "count": 1,
+        "tickets": [
+          {
+            "identifier": "SHOP-322",
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by BIL-206",
+              "cause": "BIL-206 is in Code Review.",
+              "next": "It starts once BIL-206 is done.",
+              "since": "2026-10-07T12:00:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "paused_by_rule",
+        "count": 1,
+        "tickets": [
+          {
+            "identifier": "API-140",
+            "situation": {
+              "kind": "paused_by_rule",
+              "word": "Paused",
+              "cause": "Priority medium is not in the priorities Symphony dispatches (urgent, high).",
+              "next": "It starts once its priority is dispatched.",
+              "since": "2026-10-07T14:13:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "waiting_for_ci",
+        "count": 2,
+        "tickets": [
+          {
+            "identifier": "SHOP-301",
+            "situation": {
+              "kind": "waiting_for_ci",
+              "word": "Waiting for CI",
+              "cause": "Checks are running on PR #741.",
+              "next": "QA starts when they pass.",
+              "since": "2026-10-07T14:14:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "API-119",
+            "situation": {
+              "kind": "waiting_for_ci",
+              "word": "Waiting for CI",
+              "cause": "Checks are running on PR #733; it merges by itself when they pass.",
+              "next": "It lands once they pass.",
+              "since": "2026-10-07T14:05:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "waiting_for_slot",
+        "count": 3,
+        "tickets": [
+          {
+            "identifier": "SHOP-320",
+            "situation": {
+              "kind": "waiting_for_slot",
+              "word": "Waiting for a slot",
+              "cause": "Both work slots are taken.",
+              "next": "It starts when a run ends.",
+              "since": "2026-10-07T13:50:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "API-133",
+            "situation": {
+              "kind": "waiting_for_slot",
+              "word": "Waiting for a slot",
+              "cause": "Both work slots are taken; it is second in line.",
+              "next": "It starts after SHOP-320.",
+              "since": "2026-10-07T14:00:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "SHOP-325",
+            "situation": {
+              "kind": "waiting_for_slot",
+              "word": "Waiting for a slot",
+              "cause": "The forced slot is taken.",
+              "next": "It starts when the forced run ends.",
+              "since": "2026-10-07T14:08:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "working",
+        "count": 4,
+        "tickets": [
+          {
+            "identifier": "SHOP-305",
+            "situation": {
+              "kind": "working",
+              "word": "Working on the Write the code step",
+              "cause": "Implementation run 2 is writing the code.",
+              "next": "Checks run when it ends the step.",
+              "since": "2026-10-07T13:58:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": {
+                "id": "code",
+                "title": "Write the code"
+              },
+              "run": {
+                "kind": "implementation",
+                "number": 2,
+                "label": "Implementation run 2"
+              },
+              "retry": null
+            }
+          },
+          {
+            "identifier": "API-131",
+            "situation": {
+              "kind": "working",
+              "word": "Working",
+              "cause": "Implementation run 1 is writing the code.",
+              "next": "Checks run when it ends the step.",
+              "since": "2026-10-07T14:06:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": {
+                "kind": "implementation",
+                "number": 1,
+                "label": "Implementation run 1"
+              },
+              "retry": null
+            }
+          },
+          {
+            "identifier": "SHOP-298",
+            "situation": {
+              "kind": "working",
+              "word": "Working",
+              "cause": "The landing run is merging PR #728.",
+              "next": "It moves to Done once merged.",
+              "since": "2026-10-07T14:15:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "API-127",
+            "situation": {
+              "kind": "working",
+              "word": "Working",
+              "cause": "Code Review is reading PR #739.",
+              "next": "QA starts if it approves.",
+              "since": "2026-10-07T14:01:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      }
+    ]
+  }
 }

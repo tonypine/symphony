@@ -49,7 +49,7 @@ defmodule SymphonyElixir.Initiatives do
             createdAt
             state { name type }
             inverseRelations(first: $relationsFirst) {
-              nodes { type issue { identifier state { name type } } }
+              nodes { type issue { identifier completedAt state { name type } } }
               pageInfo { hasNextPage }
             }
           }

@@ -192,6 +192,8 @@ struct InitiativeLegend: View {
 struct InitiativeDetail: View {
     let initiative: Initiative
     let actions: InitiativeActions
+    /// The clock the sub-tickets' situation ages are measured against.
+    var reference = Date()
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -227,7 +229,7 @@ struct InitiativeDetail: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(initiative.subTickets.enumerated()), id: \.element.id) { index, ticket in
                         if index > 0 { Divider() }
-                        SubTicketRow(ticket: ticket, actions: actions)
+                        SubTicketRow(ticket: ticket, actions: actions, reference: reference)
                     }
                     if initiative.subTickets.isEmpty {
                         Text("No sub-tickets yet.").foregroundStyle(.secondary)
@@ -240,35 +242,31 @@ struct InitiativeDetail: View {
     }
 }
 
-/// A sub-ticket: its stage symbol, identifier and title, what it waits on and its blocked-by links; Review when it
-/// waits on the Director in the Inbox, else the row opens the ticket page.
+/// A sub-ticket: its identifier and title, its situation line (C31) and its blocked-by links, a resolved blocker
+/// struck through with the date it finished (analysis §2.3); Review when it waits on the Director in the Inbox, else
+/// the row opens the ticket page.
 private struct SubTicketRow: View {
     let ticket: Initiative.SubTicket
     let actions: InitiativeActions
+    var reference = Date()
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-            Image(systemName: ticket.waits.stage.symbol)
-                .foregroundStyle(ticket.waits.stage.status.tint.opacity(ticket.waits.stage.isLight ? 0.6 : 1))
-                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                     Text(ticket.identifier).font(DesignTokens.TypeStyle.rowTitle.font)
                     if let title = ticket.title { Text(title).lineLimit(1) }
                 }
-                HStack(spacing: DesignTokens.Space.s2) {
-                    Text(ticket.waits.line)
-                        .foregroundStyle(ticket.waits == .you ? AnyShapeStyle(DesignTokens.Status.you.tint) : AnyShapeStyle(.secondary))
-                    if !ticket.blockedBy.isEmpty && ticket.waits != .done {
+                SituationLine(ticket.line, reference: reference, size: .compact)
+                if !ticket.blockers.isEmpty && ticket.waits != .done {
+                    HStack(spacing: DesignTokens.Space.s2) {
                         Text("Blocked by").foregroundStyle(.tertiary)
-                        ForEach(ticket.blockedBy, id: \.self) { blocker in
-                            Button { actions.openTicket(blocker) } label: { Text(blocker).foregroundStyle(Color.accentColor) }
-                                .buttonStyle(.plain)
-                                .help("Open \(blocker)")
+                        ForEach(ticket.blockers) { blocker in
+                            BlockerLink(blocker: blocker, open: actions.openTicket)
                         }
                     }
+                    .font(DesignTokens.TypeStyle.callout.font)
                 }
-                .font(DesignTokens.TypeStyle.callout.font)
             }
             Spacer(minLength: DesignTokens.Space.s2)
             if let issueID = reviewIssueID {
@@ -286,9 +284,7 @@ private struct SubTicketRow: View {
         // Review, the ticket page and each blocker are named actions.
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isButton)
-        .accessibilityLabel(
-            ticket.accessibilityLabel
-        )
+        .accessibilityLabel(ticket.accessibilityLabel(reference: reference))
         .accessibilityAction { primaryAction() }
         .accessibilityActions {
             if let issueID = reviewIssueID {
@@ -296,8 +292,8 @@ private struct SubTicketRow: View {
             }
             Button("Open Ticket") { actions.openTicket(ticket.identifier) }
             if ticket.waits != .done {
-                ForEach(ticket.blockedBy, id: \.self) { blocker in
-                    Button("Open \(blocker)") { actions.openTicket(blocker) }
+                ForEach(ticket.blockers) { blocker in
+                    Button("Open \(blocker.identifier)") { actions.openTicket(blocker.identifier) }
                 }
             }
         }
@@ -307,6 +303,27 @@ private struct SubTicketRow: View {
 
     private func primaryAction() {
         if let issueID = reviewIssueID { actions.review(issueID) } else { actions.openTicket(ticket.identifier) }
+    }
+}
+
+/// A blocker's link: plain while it is open; struck through and secondary once it is done, with the date it finished.
+private struct BlockerLink: View {
+    let blocker: Initiative.SubTicket.Blocker
+    let open: (String) -> Void
+
+    var body: some View {
+        Button { open(blocker.identifier) } label: {
+            if let done = blocker.doneLabel() {
+                HStack(spacing: DesignTokens.Space.s1) {
+                    Text(blocker.identifier).strikethrough().foregroundStyle(.secondary)
+                    Text(done).foregroundStyle(.tertiary)
+                }
+            } else {
+                Text(blocker.identifier).foregroundStyle(Color.accentColor)
+            }
+        }
+        .buttonStyle(.plain)
+        .help("Open \(blocker.identifier)")
     }
 }
 

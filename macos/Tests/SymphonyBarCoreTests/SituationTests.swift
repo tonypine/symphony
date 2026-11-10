@@ -209,4 +209,44 @@ final class SituationTests: XCTestCase {
         let situation = try XCTUnwrap(Situation.decode(Data(#"{"kind":"retrying","cause":"The run stopped.","retry":{"try":4,"of":null,"at":null}}"#.utf8)))
         XCTAssertEqual(situation.retry, Situation.Retry(attempt: 4))
     }
+
+    // MARK: - Every ticket's situation in a state
+
+    func testTheStateGivesEachTicketItsSituationByIdentifier() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/tickets/api/v1/state.json")
+        let data = try Data(contentsOf: url)
+        let situations = Situation.byTicket(state: data)
+        XCTAssertEqual(situations.count, 15)
+        XCTAssertEqual(situations["SHOP-301"]?.kind, .ci)
+        XCTAssertEqual(situations["SHOP-301"]?.cause, "Checks are running on PR #741.")
+        XCTAssertNil(situations["DOCS-41"], "a ticket no list names has none")
+
+        guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else { return XCTFail("not a state") }
+        XCTAssertEqual(snapshot.situations, situations)
+        XCTAssertEqual(snapshot.situation("shop-301")?.kind, .ci, "found whatever the case")
+        XCTAssertNil(snapshot.situation(nil))
+        XCTAssertNil(snapshot.situation("TP-404"))
+    }
+
+    func testTheGroupsComeFirstThenTheQueueThenTheWatchedIssues() {
+        let data = Data("""
+        {"order":{"groups":[{"kind":"working","tickets":[{"identifier":"A-1","situation":{"kind":"working","cause":"From the groups."}}]}],
+                  "queue":[{"identifier":"A-1","situation":{"kind":"waiting_for_slot","cause":"From the queue."}},
+                           {"identifier":"A-2","situation":{"kind":"waiting_for_slot","cause":"In line."}}]},
+         "issues":[{"identifier":"A-3","situation":{"kind":"waiting_for_ci","cause":"Watched."}},
+                   {"issue_identifier":"A-4","situation":{"kind":"done","cause":"Shipped."}},
+                   {"identifier":"A-5","situation":{"kind":"needs_attention"}},
+                   {"situation":{"kind":"done"}}]}
+        """.utf8)
+        let situations = Situation.byTicket(state: data)
+        XCTAssertEqual(situations.keys.sorted(), ["A-1", "A-2", "A-3", "A-4"])
+        XCTAssertEqual(situations["A-1"]?.cause, "From the groups.")
+        XCTAssertEqual(situations["A-3"]?.kind, .ci)
+        XCTAssertEqual(situations["A-4"]?.kind, .done)
+        XCTAssertEqual(Situation.byTicket(state: Data("[]".utf8)), [:])
+        XCTAssertEqual(Situation.byTicket(state: Data("not json".utf8)), [:])
+        XCTAssertEqual(Situation.byTicket(state: Data("{}".utf8)), [:])
+    }
 }

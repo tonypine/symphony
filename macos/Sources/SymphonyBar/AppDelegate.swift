@@ -1115,7 +1115,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             let item = menuItem(StatusMenu.waitingLine(ticket), action: #selector(openWaitingTicket(_:)))
             item.representedObject = ticket.issueID ?? ticket.identifier
             item.toolTip = ticket.title
-            item.image = NSImage(systemSymbolName: ticket.kind.symbol, accessibilityDescription: StatusMenu.kindLabel(ticket))
+            item.image = NSImage(
+                systemSymbolName: ticket.situation?.kind.symbol ?? ticket.kind.symbol,
+                accessibilityDescription: ticket.situation?.word ?? StatusMenu.kindLabel(ticket)
+            )
             return item
         }
         let more = waiting.moreTitle.map { [menuItem($0, action: #selector(openWaitingTicket(_:)))] } ?? []

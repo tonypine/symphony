@@ -6051,7 +6051,8 @@ Minimum endpoints:
     and `slot`.
   - `sub_tickets` are the sub-issues in landing order (blocked-by order between them, then creation
     order; a cycle is broken by creation order), canceled ones left out. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
-    `blocked_by` (identifiers), `waits_on` and `waiting_for` (the open blockers it waits on when
+    `blocked_by` (identifiers), `blockers` (each blocker's `identifier`, `open` and `completed_at`, when
+    Linear says it was completed), `waits_on` and `waiting_for` (the open blockers it waits on when
     `waits_on` is `blocker`). `waits_on` is worked out at GET time from what Symphony knows
     locally: `done` (completed), `working` (the orchestrator runs it), `you` (an Inbox item, a review
     state, or not promoted out of Backlog), `blocker` (an open issue it is blocked by), `ci` (Code
