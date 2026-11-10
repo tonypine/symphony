@@ -53,7 +53,7 @@ defmodule SymphonyElixir.SelfHeal do
 
   require Logger
 
-  alias SymphonyElixir.{Config, DecisionRequest, Pauses, RunStore, TicketState, Verification}
+  alias SymphonyElixir.{Config, DecisionRequest, Pauses, RuleActions, RunStore, TicketState, Verification}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
@@ -382,19 +382,26 @@ defmodule SymphonyElixir.SelfHeal do
         {:ok, ticket}
 
       nil ->
-        fixer(ctx.opts).create(
-          %{
-            scope: ctx.scope,
-            issue: ctx.issue,
-            repo_key: ctx.repo_key,
-            component: ctx.component,
-            title: fix_title(ctx.component),
-            description: fix_description(ctx.issue, ctx.component, ctx.signature, ctx.outcome)
-          },
-          ctx.opts
-        )
+        fix = %{
+          scope: ctx.scope,
+          issue: ctx.issue,
+          repo_key: ctx.repo_key,
+          component: ctx.component,
+          title: fix_title(ctx.component),
+          description: fix_description(ctx.issue, ctx.component, ctx.signature, ctx.outcome)
+        }
+
+        filed(fixer(ctx.opts).create(fix, ctx.opts), ctx)
     end
   end
+
+  # A fix ticket the lane filed is the self-heal rule's action on the ticket (`SymphonyElixir.RuleActions`).
+  defp filed({:ok, %{identifier: identifier}} = created, ctx) do
+    RuleActions.record(ctx.repo_key, ctx.issue.id, "Self-heal", "filed_ticket", "Filed #{identifier} to fix #{ctx.component}", filed: identifier)
+    created
+  end
+
+  defp filed(other, _ctx), do: other
 
   # The open ticket the blocked run named as already tracking the missing capability (`covered_by`,
   # say a ticket the acceptance gate filed for the same QA tools): the ticket waits on that one

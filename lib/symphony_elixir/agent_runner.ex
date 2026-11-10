@@ -41,6 +41,7 @@ defmodule SymphonyElixir.AgentRunner do
     PrWatch.HeadSync,
     QaVerification,
     Questions,
+    RuleActions,
     RunKind,
     RunStore,
     SetupBlock,
@@ -2465,6 +2466,8 @@ defmodule SymphonyElixir.AgentRunner do
   defp park_issue(%Issue{id: issue_id} = issue, {repo_key, left_head}, saved, opts) do
     label = "parking #{issue_context(issue)} where it is"
     :ok = IdlePark.hold({:ticket, repo_key, issue_id}, issue.identifier || issue_id, issue.state, @max_empty_turns, PrWatch.watch(issue_id), left_head)
+
+    :ok = RuleActions.record(repo_key, issue_id, "Idle park", "paused", "#{@max_empty_turns} turns in #{issue.state} changed nothing, so it was held where it is")
 
     case with_linear_retry(fn -> Tracker.create_comment(issue_id, idle_park_note(issue.state, saved)) end, label, opts) do
       :ok -> :ok

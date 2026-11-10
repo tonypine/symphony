@@ -301,6 +301,14 @@ defmodule SymphonyElixir.SelfHealTest do
     end
   end
 
+  # The `rule.action` events on the ticket that say a fix ticket was filed.
+  defp filed_ticket_actions do
+    @issue_id
+    |> SymphonyElixir.TicketEvents.query(types: ["rule.action"])
+    |> Enum.map(& &1.payload)
+    |> Enum.filter(&(&1.action == "filed_ticket"))
+  end
+
   # Another affected ticket's record of the fix ticket it filed for `signature`.
   defp fix_record(signature, fix_ticket \\ @fix_ticket) do
     recorded(@symphony_repo_key, "other-issue", %{
@@ -322,6 +330,9 @@ defmodule SymphonyElixir.SelfHealTest do
       assert Process.get(:fixer_block) == {@issue_id, @fix_ticket}
 
       assert @fix_ticket in fix_tickets()
+
+      # The filing is the self-heal rule's action on the ticket, recorded once.
+      assert [%{rule: "Self-heal", action: "filed_ticket", filed: @fix_ticket}] = filed_ticket_actions()
     end
 
     test "pauses the ticket on the fix ticket, once however often it heals" do
@@ -462,6 +473,9 @@ defmodule SymphonyElixir.SelfHealTest do
       assert evidence =~ ":environment_unreachable"
       assert Process.get(:fixer_block) == {@issue_id, @fix_ticket}
       assert @fix_ticket in fix_tickets()
+
+      # Reusing another ticket's fix ticket files nothing, so the self-heal rule records no filing.
+      assert filed_ticket_actions() == []
     end
 
     test "a fix ticket of the same component that is terminal or unreadable is not reused; a new one is filed" do

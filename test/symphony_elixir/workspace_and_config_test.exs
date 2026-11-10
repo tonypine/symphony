@@ -5560,7 +5560,6 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       bin = Path.join(ctx.test_root, "bin")
       adding = Path.join(ctx.test_root, "adding")
       overlaps = Path.join(ctx.test_root, "overlaps")
-      lock = Path.join([primary_repo, ".git", "symphony-worktree-add.lock"])
 
       # The worker's git notes a `worktree add` of this repo that starts while another is
       # still running, and holds each add open a moment so unserialized ones would overlap.
@@ -5572,7 +5571,11 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       #!/bin/sh
       case " $* " in
         *" -C #{primary_repo} worktree add "*)
-          mkdir #{adding} 2>/dev/null || { echo "overlap: pid $$ parent $PPID at $(date +%s.%N) lock: $(cat #{lock}/pid 2>&1) takeover: $(ls -d #{lock}.takeover 2>&1)"; ps -eo pid,ppid,etimes,args | grep -E "worktree add|symphony-worktree|bash -c" | grep -v grep | cut -c1-200; } >> #{overlaps}
+          # A git that re-runs itself for the same add (a child inheriting this env) is the
+          # same add, not a second one.
+          if [ -n "${SYMP_TEST_ADD_ACTIVE:-}" ]; then exec #{System.find_executable("git")} "$@"; fi
+          export SYMP_TEST_ADD_ACTIVE=1
+          mkdir #{adding} 2>/dev/null || echo "overlap pid=$$ args=$*" >> #{overlaps}
           #{System.find_executable("git")} "$@"
           status=$?
           sleep 0.2
@@ -5606,8 +5609,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         assert String.trim(git!(workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"])) == "auto/#{identifier}"
       end
 
-      refute File.exists?(overlaps), "overlapping adds: " <> (File.read(overlaps) |> elem(1) |> to_string())
-      refute File.exists?(lock)
+      refute File.exists?(overlaps), if(File.exists?(overlaps), do: File.read!(overlaps), else: "")
+      refute File.exists?(Path.join([primary_repo, ".git", "symphony-worktree-add.lock"]))
     end)
   end
 

@@ -490,6 +490,10 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert turns() == 2
     refute_received {:memory_tracker_state_update, _issue_id, _state}
     assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue where it is, in In Progress" <> _note}
+
+    # The hold is the idle park rule's action on the ticket.
+    assert [%{rule: "Idle park", action: "paused", text: "2 turns in In Progress changed nothing, so it was held where it is"}] =
+             "issue-progress" |> SymphonyElixir.TicketEvents.query(types: ["rule.action"]) |> Enum.map(& &1.payload) |> Enum.filter(&(&1.rule == "Idle park"))
   end
 
   describe "a CI Fix run with checks running on the head it started on (TP-1175)" do
@@ -670,7 +674,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       assert %{waits_on: %{question_id: id}} = Enum.find(reasons, &(&1.kind == :question))
       assert id == question.id
 
-      events = "issue-progress" |> SymphonyElixir.TicketEvents.query() |> Enum.filter(&(DateTime.compare(&1.at, since) != :lt))
+      events = "issue-progress" |> SymphonyElixir.TicketEvents.query(limit: :all) |> Enum.filter(&(DateTime.compare(&1.at, since) != :lt))
       refute Enum.any?(events, &(&1.type == "phase.entered" and &1.payload[:to] == "Backlog"))
       assert [_asked] = Enum.filter(events, &(&1.type == "question.asked"))
 
