@@ -1,5 +1,7 @@
 name: self-hosted-test
-on: workflow_dispatch
+on:
+  push:
+    branches: [workflow-test]
 jobs:
   hello:
     runs-on: [self-hosted, macOS]
