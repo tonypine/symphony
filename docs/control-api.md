@@ -4,6 +4,23 @@ What `GET /api/v1/:issue_identifier` serves about one ticket, and what each entr
 `GET /api/v1/state`'s `issues` shares with it. The older fields (`status`, `pause`, `watch`) stay for
 the pages that read them.
 
+## `ticket`
+
+The ticket itself, as its record holds it: the same values the ticket list's `title`, `phase`,
+`priority` and `labels` columns serve (`GET /api/v1/tickets`, below), so a client reads one ticket's
+title without listing every ticket.
+
+```json
+{ "title": "Undo a Director move within ten seconds", "phase": "Rework", "priority": 1, "labels": ["qa:live"] }
+```
+
+| Field | What it holds |
+| --- | --- |
+| `title` | The ticket's title; null when Symphony holds no record of it. |
+| `phase` | The phase (state) the record says it is in, also when its ledger holds no `phase.entered` and `phase_path.current` is null. |
+| `priority` | Linear's priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low; null when unknown. |
+| `labels` | The ticket's labels; `[]` when it has none. |
+
 ## `situation`
 
 Where the ticket stands now: one kind from the closed vocabulary of the ticket page
@@ -150,7 +167,7 @@ The phases the ticket went through, for the Phase path component and the timelin
 
 | Field | What it holds |
 | --- | --- |
-| `current` | The phase the ticket is in, as the last `phase.entered` names it; null before any. |
+| `current` | The phase the ticket is in, as the last `phase.entered` names it; null before any (`ticket.phase` says it from the record). |
 | `phases` | Each phase once, in the order it first entered each. |
 | `phases[].count` | How many `phase.entered` events name it, so a return from CI Fix counts. A second event naming the phase it is already in is no move. |
 | `phases[].time_ms` | Wall time in the phase, summed, up to now for the phase it is in. A terminal phase takes none. |
