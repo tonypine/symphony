@@ -156,7 +156,7 @@ defmodule SymphonyElixir.Config.MigrationTest do
 
     test "a block holding more after its colon is refused, naming the key" do
       assert Migration.plan("ledger: &l\n  artifact_retention_days: 30\n", @backup) ==
-               {:error, {:not_migrated, ["ledger.artifact_retention_days"]}}
+               {:error, {:not_migrated, [{"ledger.artifact_retention_days", 2}]}}
     end
 
     test "leaves a file with nothing to migrate as it is" do
@@ -171,10 +171,23 @@ defmodule SymphonyElixir.Config.MigrationTest do
     end
 
     test "refuses a key that isn't on a line of its own, naming it" do
-      assert Migration.plan("ledger: {artifact_retention_days: 3}\n", @backup) == {:error, {:not_migrated, ["ledger.artifact_retention_days"]}}
+      assert Migration.plan("ledger: {artifact_retention_days: 3}\n", @backup) == {:error, {:not_migrated, [{"ledger.artifact_retention_days", 1}]}}
 
-      assert {:error, {:not_migrated, ["repositories[].agent.run_profiles.pre_push_review"]}} =
+      assert {:error, {:not_migrated, [{"repositories[].agent.run_profiles.pre_push_review", 1}]}} =
                Migration.plan("repositories:\n  - {key: a, agent: {run_profiles: {pre_push_review: {model: b}}}}\n", @backup)
+
+      assert {:error, {:not_migrated, [{"ledger.artifact_retention_days", nil}]}} =
+               Migration.plan("{ledger: {artifact_retention_days: 3}}\n", @backup)
+    end
+
+    test "names only the key the rewrite couldn't move, and its line" do
+      text = "pre_push_review:\n  enabled: true\nagent:\n  run_profiles: {pre_push_review: {effort: high}, qa: {effort: low}}\n"
+
+      assert {:error, {:not_migrated, [{"agent.run_profiles.pre_push_review", 4}]} = reason} = Migration.plan(text, @backup)
+
+      assert Migration.format_error(reason) ==
+               "Lines it can't rewrite: 4 (`agent.run_profiles.pre_push_review`). " <>
+                 "Write each of those keys as an indented block, on a line of its own"
     end
 
     test "a section that isn't a block is left alone" do

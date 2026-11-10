@@ -56,8 +56,9 @@ public enum UpdateError: Error, Equatable, LocalizedError {
         case let .helper(reason):
             return "couldn't start the update helper: \(reason)"
         case let .settingsRefused(message):
-            return "the new version can't read your settings: \(ConfigCheck.reasonFirst(message)) "
-                + "Nothing was installed and this version keeps running."
+            let what = ConfigCheck.unreadable(message).map { "\($0) in your settings" } ?? "your settings"
+            return "the new version can't read \(what), so nothing was installed and this version keeps running. "
+                + "Edit the file, then choose Retry."
         }
     }
 }

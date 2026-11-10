@@ -719,7 +719,7 @@ defmodule SymphonyElixir.CLICheckTest do
 
       {{:error, message}, _output, _stderr} = check_io(["--migrate", "--config", path])
 
-      assert message =~ "Config error in #{path}: `ledger.artifact_retention_days` can't be rewritten"
+      assert message =~ "Config error in #{path}: Lines it can't rewrite: "
     end
   end
 
@@ -746,7 +746,7 @@ defmodule SymphonyElixir.CLICheckTest do
       path = write_symphony!(root, "ledger: {artifact_retention_days: 3}\n")
 
       assert {{:error, message}, "", ""} = evaluate_io(["config", "migrate", "--config", path])
-      assert message =~ "Config error in #{path}: `ledger.artifact_retention_days` can't be rewritten"
+      assert message =~ "Config error in #{path}: Lines it can't rewrite: "
 
       missing = Path.join(resolved(root), "missing.yml")
       assert {{:error, "Symphony config file not found: " <> _rest}, "", ""} = evaluate_io(["config", "migrate", "--config", missing])
@@ -793,7 +793,7 @@ defmodule SymphonyElixir.CLICheckTest do
       path = write_symphony!(root, "ledger: {artifact_retention_days: 3}\n")
 
       assert {:error, message} = CLI.configure(["--config", path], cli_deps(@start_overrides))
-      assert message =~ "Config error in #{path}: `ledger.artifact_retention_days` can't be rewritten"
+      assert message =~ "Config error in #{path}: Lines it can't rewrite: "
     end
 
     test "symphony run migrates the file too", %{root: root} do
@@ -801,7 +801,7 @@ defmodule SymphonyElixir.CLICheckTest do
       deps = cli_deps(@start_overrides)
 
       assert {{:error, message, 2}, "", ""} = evaluate_io(["run", "TP-1", "--config", path], deps)
-      assert message =~ "can't be rewritten"
+      assert message =~ "Lines it can't rewrite: "
     end
   end
 

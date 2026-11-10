@@ -9,7 +9,8 @@ defmodule SymphonyElixir.Config.Migration do
   A rewrite touches only the lines of the keys it moves, so comments and ordering stay, leaves a
   one-line comment naming the ticket where each key was, and keeps the file as it was beside it.
   The new text is then compared with the table applied to the parsed YAML: a key that isn't on a line
-  of its own (`agent: {run_profiles: {...}}`) can't be rewritten, and that is an error naming it.
+  of its own (`agent: {run_profiles: {...}}`) can't be rewritten, and that is an error naming it and
+  the line it sits on, and only the keys the rewrite left in place.
 
   `symphony start` and `symphony run` migrate the file in place. `symphony check --migrate`, which
   the macOS app runs with a downloaded build before it installs it, checks a migrated copy and
@@ -19,7 +20,7 @@ defmodule SymphonyElixir.Config.Migration do
   alias SymphonyElixir.BuildInfo
   alias SymphonyElixir.Config.{LineEditor, SystemSchema}
 
-  @type error :: {:not_migrated, [String.t()]} | File.posix()
+  @type error :: {:not_migrated, [{String.t(), pos_integer() | nil}]} | File.posix()
 
   @rename_defaults %{drop_children: [], why: nil}
   @migrations [
@@ -111,7 +112,7 @@ defmodule SymphonyElixir.Config.Migration do
          {:ok, original_text} <- File.read(original),
          [_ | _] = keys <- SystemSchema.refused_keys(document) do
       lines = original_text |> String.split("\n") |> key_entries() |> Map.new(&{&1.path, &1.index + 1})
-      " Lines it can't read: " <> Enum.map_join(keys, ", ", &refused_key(&1, lines)) <> "."
+      " Lines it can't read: " <> Enum.map_join(keys, ", ", &spot(&1, Map.get(lines, &1))) <> "."
     else
       _nothing_to_name -> ""
     end
@@ -120,18 +121,15 @@ defmodule SymphonyElixir.Config.Migration do
   @doc "A migration error, in the words `Config error in <path>: ` opens."
   @spec format_error(error()) :: String.t()
   def format_error({:not_migrated, keys}) do
-    "#{Enum.map_join(keys, ", ", &"`#{&1}`")} can't be rewritten because it isn't on a line of its own; " <>
-      "write it as an indented block"
+    "Lines it can't rewrite: #{Enum.map_join(keys, ", ", fn {key, line} -> spot(key, line) end)}. " <>
+      "Write each of those keys as an indented block, on a line of its own"
   end
 
   def format_error(reason), do: "couldn't write the migrated file: #{:file.format_error(reason)}"
 
-  defp refused_key(key, lines) do
-    case Map.fetch(lines, key) do
-      {:ok, line} -> "#{line} (`#{key}`)"
-      :error -> "`#{key}`"
-    end
-  end
+  # `12 (`tracker`)`, or the key alone when no line holds it.
+  defp spot(key, nil), do: "`#{key}`"
+  defp spot(key, line), do: "#{line} (`#{key}`)"
 
   defp migrate_text(path, text) do
     with {:ok, migrated, notes} <- plan(text, backup_name(path)) do
@@ -174,17 +172,38 @@ defmodule SymphonyElixir.Config.Migration do
     migrated = lines |> apply_edits(edits) |> Enum.join("\n")
     notes = matches |> Enum.map(fn {migration, entry} -> note(migration, target_set?(migration, entry, entries)) end) |> Enum.uniq()
 
-    verify(document, migrated, notes)
+    verify(document, migrated, notes, entries)
   end
 
-  defp verify(document, migrated, notes) do
+  defp verify(document, migrated, notes, entries) do
     expected = Enum.reduce(@migrations, document, &migrate_map(&2, path_of(&1.key), &1))
+    migrated_document = read_map(migrated)
 
-    if read_map(migrated) == expected do
+    if migrated_document == expected do
       {:ok, migrated, notes}
     else
-      {:error, {:not_migrated, for(migration <- @migrations, has_key?(document, path_of(migration.key)), do: migration.key)}}
+      {:error, {:not_migrated, blocking(document, migrated_document, entries)}}
     end
+  end
+
+  # The keys the rewrite left where they were, each with the line it sits on (or its nearest block's,
+  # for a key written inside `{...}`), so the operator edits only those. When every key moved but the
+  # text still reads differently (`ledger: &anchor`), each key the table touches is named.
+  defp blocking(document, migrated_document, entries) do
+    present = for migration <- @migrations, has_key?(document, path_of(migration.key)), do: migration.key
+    left = Enum.filter(present, &has_key?(migrated_document, path_of(&1)))
+    keys = if left == [], do: present, else: left
+
+    Enum.map(keys, &{&1, key_line(&1, entries)})
+  end
+
+  defp key_line(key, entries) do
+    segments = path_of(key)
+
+    Enum.find_value(length(segments)..1//-1, fn count ->
+      path = segments |> Enum.take(count) |> Enum.join(".")
+      Enum.find_value(entries, &(&1.path == path and &1.index + 1))
+    end)
   end
 
   # The edits of one key, each `{index, lines to remove, lines to insert}`.

@@ -143,7 +143,8 @@ holds the table: each old key, the sibling it became or nothing, the ticket and 
 - A key with no row in the table is still refused at load, with what to do instead: one that moved
   to another section, or to a different shape, such as `tracker` or `dispatch.max_concurrent`. So is
   a key in the table written inline (`ledger: {artifact_retention_days: 3}`), which can't be rewritten
-  one line at a time.
+  one line at a time: the refusal names only the keys left in place, each with its line
+  (``Lines it can't rewrite: 1 (`ledger.artifact_retention_days`)``).
 
 A ticket that renames or removes a key adds its row in the same pull request. CI's `build` job loads
 the previous release's `symphony.yml` on the new build (`scripts/ci/previous-release-config-check.sh`).

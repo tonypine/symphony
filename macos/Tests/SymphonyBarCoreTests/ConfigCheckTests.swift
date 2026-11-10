@@ -23,6 +23,25 @@ final class ConfigCheckTests: XCTestCase {
         XCTAssertNil(ConfigCheck.refusedKey("an odd ` backtick"))
     }
 
+    func testUnreadableNamesEachLineTheRefusalLists() {
+        XCTAssertEqual(
+            ConfigCheck.unreadable(
+                "Config error in /ops/a.yml: bad Lines it can't read: `dispatch.max_concurrent`, 6 (`nonsense`), 4 (`tracker`)."
+            ),
+            "`dispatch.max_concurrent`, line 6 (`nonsense`), line 4 (`tracker`)"
+        )
+        XCTAssertEqual(
+            ConfigCheck.unreadable(
+                "Config error in /ops/a.yml: Lines it can't rewrite: 4 (`agent.run_profiles.pre_push_review`). Write each of those keys "
+                    + "as an indented block, on a line of its own"
+            ),
+            "line 4 (`agent.run_profiles.pre_push_review`)"
+        )
+        XCTAssertEqual(ConfigCheck.unreadable("Lines it can't read: 3 (`a`)"), "line 3 (`a`)", "a list with no closing period")
+        XCTAssertEqual(ConfigCheck.unreadable("Config error: `a` is not valid"), "`a`")
+        XCTAssertNil(ConfigCheck.unreadable("workspaces.repo does not exist"))
+    }
+
     func testRunMigratingReturnsTheNotesAndTheResult() async throws {
         let launch = ChildLaunch(
             executable: "/bin/sh",

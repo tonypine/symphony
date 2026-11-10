@@ -98,6 +98,28 @@ public enum ConfigCheck {
         return parts.count >= 3 && !parts[1].isEmpty ? parts[1] : nil
     }
 
+    /// What a refusal asks you to edit, short enough for a menu line: "line 26 (`polling`)", each line its
+    /// "Lines it can't read" or "Lines it can't rewrite" list names, or else the first key it names. Nil when it
+    /// names nothing.
+    public static func unreadable(_ message: String) -> String? {
+        let spots = unreadableSpots(message)
+        guard spots.isEmpty else { return spots.joined(separator: ", ") }
+        return refusedKey(message).map { "`\($0)`" }
+    }
+
+    /// The items of the list after "Lines it can't read: " or "Lines it can't rewrite: ", which ends at the first
+    /// ")." or "`.": keys hold dots, never backticks.
+    private static func unreadableSpots(_ message: String) -> [String] {
+        let markers = ["Lines it can't read: ", "Lines it can't rewrite: "]
+        guard let start = markers.lazy.compactMap({ message.range(of: $0) }).first else { return [] }
+        let rest = message[start.upperBound...]
+        let end = [").", "`."].compactMap { rest.range(of: $0)?.lowerBound }.min().map { rest.index(after: $0) }
+        return rest[..<(end ?? rest.endIndex)]
+            .components(separatedBy: ", ")
+            .filter { !$0.isEmpty }
+            .map { $0.hasPrefix("`") ? $0 : "line " + $0 }
+    }
+
     /// In QA mode, writes each check's log entry to stderr, where the QA tools read the app's output, so a QA pass
     /// sees which Symphony checked: `symphony check` prints its version and commit first. Nil outside QA mode.
     public static func qaLog(_ qaMode: QAMode?) -> Log? {
