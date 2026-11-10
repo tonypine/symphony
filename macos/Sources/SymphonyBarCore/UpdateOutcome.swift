@@ -11,17 +11,26 @@ public struct LastUpdate: Equatable {
     public var build: Int
     public var details: ReleaseDetails
     public var installedAt: Date
+    /// What the update moved in symphony.yml, one line per key.
+    public var settingsChanges: [String]
 
-    public init(version: String, build: Int, details: ReleaseDetails, installedAt: Date) {
+    public init(version: String, build: Int, details: ReleaseDetails, installedAt: Date, settingsChanges: [String] = []) {
         self.version = version
         self.build = build
         self.details = details
         self.installedAt = installedAt
+        self.settingsChanges = settingsChanges
     }
 
     /// The healthy update `pending` describes.
     public init(_ pending: PendingUpdate, installedAt: Date) {
-        self.init(version: pending.version, build: pending.toBuild, details: pending.details, installedAt: installedAt)
+        self.init(
+            version: pending.version,
+            build: pending.toBuild,
+            details: pending.details,
+            installedAt: installedAt,
+            settingsChanges: pending.settingsChanges
+        )
     }
 
     /// True while the app still runs this build and `shownFor` hasn't passed. A later update, or a rollback, runs
@@ -46,6 +55,7 @@ public final class LastUpdateStore {
             "version": update.version,
             "build": update.build,
             "installedAt": update.installedAt.timeIntervalSince1970,
+            "settingsChanges": update.settingsChanges,
         ]
         defaults.set(values.merging(update.details.storedValues) { first, _ in first }, forKey: Self.key)
     }
@@ -65,7 +75,8 @@ public final class LastUpdateStore {
             version: version,
             build: build,
             details: ReleaseDetails(stored: values),
-            installedAt: Date(timeIntervalSince1970: installedAt)
+            installedAt: Date(timeIntervalSince1970: installedAt),
+            settingsChanges: values["settingsChanges"] as? [String] ?? []
         )
     }
 
@@ -163,8 +174,13 @@ public struct UpdateNotice: Equatable {
         let changes = update.details.changes.map { "\(UpdateMenu.changeCount($0)). " } ?? ""
         return UpdateNotice(
             title: "Symphony updated to v\(update.version)",
-            body: changes + "Choose Updated to v\(update.version) in the menu for the release notes."
+            body: changes + settings(update) + "Choose Updated to v\(update.version) in the menu for the release notes."
         )
+    }
+
+    /// What the update moved in your settings, each as its own sentence.
+    private static func settings(_ update: LastUpdate) -> String {
+        update.settingsChanges.map { "\($0). " }.joined()
     }
 
     /// Posted by the build a health check put back, `restoredVersion` being its own version when known.

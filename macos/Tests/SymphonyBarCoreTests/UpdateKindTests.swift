@@ -63,6 +63,10 @@ final class UpdateKindTests: XCTestCase {
 
     func testAFailureBeforeTheSwapTriesAgainAtTheNextCheckWhenReleased() {
         XCTAssertEqual(
+            UpdateKind.onRelease.failureLine("the file is refused", retries: false),
+            "Symphony wasn't updated: the file is refused"
+        )
+        XCTAssertEqual(
             UpdateKind.onRelease.failureLine("the checksum doesn't match"),
             "Symphony wasn't updated: the checksum doesn't match. Trying again at the next check."
         )

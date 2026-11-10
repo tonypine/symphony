@@ -62,14 +62,25 @@ public struct Release: Equatable {
     public var changes: Int?
     /// Where to download the app from, nil when the release doesn't list it.
     public var assets: ReleaseAssets?
+    /// The settings keys its build rewrites by itself; none from a release that didn't list them.
+    public var settingsMigrations: [ReleaseSettingsMigration]
 
-    public init(version: String, build: Int, notes: String, pageURL: URL, changes: Int?, assets: ReleaseAssets? = nil) {
+    public init(
+        version: String,
+        build: Int,
+        notes: String,
+        pageURL: URL,
+        changes: Int?,
+        assets: ReleaseAssets? = nil,
+        settingsMigrations: [ReleaseSettingsMigration] = []
+    ) {
         self.version = version
         self.build = build
         self.notes = notes
         self.pageURL = pageURL
         self.changes = changes
         self.assets = assets
+        self.settingsMigrations = settingsMigrations
     }
 }
 
@@ -220,7 +231,8 @@ public final class UpdateChecker {
             notes: notes,
             pageURL: pageURL,
             changes: Self.changeCount(notes: notes) ?? info.changes,
-            assets: ReleaseAssets(zipName: zip, zip: zipURL, checksum: checksumURL, signature: signatureURL)
+            assets: ReleaseAssets(zipName: zip, zip: zipURL, checksum: checksumURL, signature: signatureURL),
+            settingsMigrations: info.settingsMigrations ?? []
         )
         if let etag = response.value(forHTTPHeaderField: "ETag") {
             cached = (etag, release)
@@ -301,6 +313,12 @@ public final class UpdateChecker {
         let zip: String?
         let minisig: String?
         let changes: Int?
+        let settingsMigrations: [ReleaseSettingsMigration]?
+
+        enum CodingKeys: String, CodingKey {
+            case version, build, zip, minisig, changes
+            case settingsMigrations = "settings_migrations"
+        }
     }
 }
 
@@ -337,11 +355,52 @@ public enum UpdateMenu {
     public static let cancelledLine = "You cancelled this update. It waits for you; a newer release installs by itself."
 
     /// The confirmation before an update, which says what will happen to agent runs.
-    public static func confirmation(_ release: Release, symphonyRunning: Bool) -> String {
-        let swap = "Symphony downloads and verifies v\(release.version), then relaunches as the new version. "
-            + "The current version is kept as Symphony (previous).app."
+    public static func confirmation(
+        _ release: Release,
+        symphonyRunning: Bool,
+        migrating: [ReleaseSettingsMigration] = []
+    ) -> String {
+        let settings = settingsChangeWords(migrating).map { " It \($0) in your file, done for you." } ?? ""
+        let swap = "Symphony downloads and verifies v\(release.version), checks your settings with it, then relaunches "
+            + "as the new version. The current version is kept as Symphony (previous).app." + settings
         guard symphonyRunning else { return swap }
         return swap + " Dispatch is paused first, and the update waits for active agent runs to finish."
+    }
+
+    /// Under an available release that will change your settings file, for example "Update to v0.0.1.700 available; it
+    /// renames one setting in your file, done for you". Nil when it changes nothing there.
+    public static func migrationLine(_ release: Release, migrating: [ReleaseSettingsMigration]) -> String? {
+        settingsChangeWords(migrating).map { "Update to v\(release.version) available; it \($0) in your file, done for you" }
+    }
+
+    /// "renames one setting", "changes 2 settings": a removal is a change, not a rename.
+    private static func settingsChangeWords(_ migrating: [ReleaseSettingsMigration]) -> String? {
+        guard !migrating.isEmpty else { return nil }
+        let verb = migrating.allSatisfy { $0.to != nil } ? "renames" : "changes"
+        return "\(verb) \(migrating.count == 1 ? "one setting" : "\(migrating.count) settings")"
+    }
+
+    /// Why a release isn't offered, and what Retry will do. Nil for one you skipped yourself.
+    public static func skippedLine(_ skipped: SkippedRelease) -> String? {
+        let version = "v\(skipped.version)"
+        switch skipped.reason {
+        case .skipped:
+            return nil
+        case .refused:
+            let retry = retryTitle(version: skipped.version)
+            guard let spot = skipped.detail.flatMap(ConfigCheck.unreadable) else {
+                guard let detail = skipped.detail else {
+                    return "\(version) can't read your settings and can't migrate them; edit the file, then choose \(retry)."
+                }
+                return "\(version) can't read your settings and can't migrate them: \(ConfigCheck.reasonFirst(detail)) "
+                    + "This version keeps running; edit the file, then choose \(retry)."
+            }
+            return "\(version) can't read \(spot) in your settings; edit it, then choose \(retry)."
+        case .rolledBack:
+            guard let detail = skipped.detail else { return "\(version) was rolled back; Retry installs it again" }
+            if let key = ConfigCheck.refusedKey(detail) { return "\(version) can't read `\(key)` in your settings; Retry migrates it" }
+            return "\(version) was rolled back: \(detail). Retry installs it again"
+        }
     }
 
     /// Shown after a relaunch that is still the old build: the helper put the old app back.
@@ -380,7 +439,7 @@ public enum UpdateMenu {
     /// After an update passed its health check, for example "Updated to v0.0.1.43 (12 changes)". Choosing it opens
     /// that version's notes.
     public static func updatedLine(_ update: LastUpdate) -> String {
-        "Updated to v\(update.version)" + changesSuffix(update.details.changes)
+        ([ "Updated to v\(update.version)" + changesSuffix(update.details.changes) ] + update.settingsChanges).joined(separator: "; ")
     }
 
     /// Shown when a version failed its health check but wasn't rolled back, with how to do it by hand.
@@ -403,6 +462,8 @@ public enum UpdateMenu {
             return releaseTitle("Update skipped", release, current: current)
         case .rolledBack:
             return releaseTitle("Update rolled back", release, current: current)
+        case .refused:
+            return releaseTitle("Update refused", release, current: current)
         }
     }
 

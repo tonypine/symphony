@@ -8,6 +8,10 @@ final class UpdateController {
     /// Called after every change, so the menu follows.
     var onChange: (() -> Void)?
 
+    /// Asks a downloaded build what it reads symphony.yml as; set once by the app delegate, which has the runner.
+    var checkSettings: UpdateSettingsCheck = { _ in
+        ConfigMigrationCheck(result: .failed("Symphony isn't set up to check your settings yet."))
+    }
     /// The release being downloaded and verified.
     private(set) var preparing: Release?
     /// The verified update, while Symphony drains before the swap.
@@ -108,7 +112,7 @@ final class UpdateController {
         download = Task {
             defer { download = nil }
             do {
-                let update = try await installer.prepare(release)
+                let update = try await installer.prepare(release, checkSettings: checkSettings)
                 guard preparing != nil else {
                     installer.removeStaging()
                     return
@@ -124,7 +128,13 @@ final class UpdateController {
                     return
                 }
                 preparing = nil
-                fail(error.localizedDescription, version: release.version)
+                // Pinned, so an automatic mode doesn't download it again until you've edited the file.
+                if case let UpdateError.settingsRefused(message) = error {
+                    skips.record(SkippedRelease(release, reason: .refused, detail: message))
+                    fail(error.localizedDescription, version: release.version, retries: false)
+                } else {
+                    fail(error.localizedDescription, version: release.version)
+                }
             }
         }
     }
@@ -149,12 +159,12 @@ final class UpdateController {
     }
 
     /// Calls the update off, saying why in the menu, and in an alert unless the update is automatic. `version` is the
-    /// release's, when it is no longer the one under way.
-    func fail(_ reason: String, version: String? = nil) {
+    /// release's, when it is no longer the one under way. `retries` is false when no automatic mode tries it again.
+    func fail(_ reason: String, version: String? = nil, retries: Bool = true) {
         log.append("the update to v\(version ?? release?.version ?? "?") failed: \(reason)")
         prepared = nil
         installer.removeStaging()
-        error = kind.failureLine(reason)
+        error = kind.failureLine(reason, retries: retries)
         onChange?()
         guard !kind.isAutomatic else {
             kind = .manual
@@ -188,7 +198,8 @@ final class UpdateController {
                 update.release,
                 fromBuild: current.build,
                 startSymphony: symphonyStopped,
-                resumeDispatch: resumeDispatch
+                resumeDispatch: resumeDispatch,
+                settingsChanges: update.settingsChanges
             )
         )
         let launch = ChildLaunch(
@@ -226,7 +237,7 @@ final class UpdateController {
 
     /// Pins the build that failed its health check, so it isn't installed by itself again.
     func pin(_ record: RollbackRecord) {
-        skips.record(SkippedRelease(build: record.build, version: record.version, reason: .rolledBack))
+        skips.record(SkippedRelease(build: record.build, version: record.version, reason: .rolledBack, detail: record.reason))
     }
 
     /// Puts `Symphony (previous).app` back after this build failed its health check: pins this build, records

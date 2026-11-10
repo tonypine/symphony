@@ -39,6 +39,68 @@ final class SkippedReleasesTests: XCTestCase {
         XCTAssertEqual(offer.title(current: current), "Update skipped: v0.0.1.42 (12 changes)")
     }
 
+    func testARolledBackReleaseSaysWhyAndWhatRetryDoes() {
+        let defaults = MemoryKeyValueStore()
+        let message = "symphony check failed: Config error in /ops/symphony.yml: `pre_push_review` is not valid; use `code_review`"
+        SkippedReleaseStore(defaults: defaults).record(SkippedRelease(release(), reason: .rolledBack, detail: message))
+
+        let entry = SkippedReleaseStore(defaults: defaults).entry(forBuild: 42)
+
+        XCTAssertEqual(entry?.detail, message)
+        XCTAssertEqual(
+            entry.flatMap(UpdateMenu.skippedLine),
+            "v0.0.1.42 can't read `pre_push_review` in your settings; Retry migrates it"
+        )
+    }
+
+    func testARollbackWithoutAKeySaysWhatFailed() {
+        XCTAssertEqual(
+            UpdateMenu.skippedLine(SkippedRelease(release(), reason: .rolledBack, detail: "Symphony didn't answer")),
+            "v0.0.1.42 was rolled back: Symphony didn't answer. Retry installs it again"
+        )
+        XCTAssertEqual(
+            UpdateMenu.skippedLine(SkippedRelease(release(), reason: .rolledBack)),
+            "v0.0.1.42 was rolled back; Retry installs it again",
+            "a record from a build that didn't keep the reason"
+        )
+    }
+
+    func testARefusedReleaseNamesTheLinesAndOffersRetry() {
+        let store = SkippedReleaseStore(defaults: MemoryKeyValueStore())
+        let message = "Config error in /ops/symphony.yml: `tracker` is not valid; use `issues` Lines it can't read: 3 (`tracker`)."
+        store.record(SkippedRelease(release(), reason: .refused, detail: message))
+
+        let offer = UpdateOffer(release(), skips: store)
+        let line = store.entry(forBuild: 42).flatMap(UpdateMenu.skippedLine)
+
+        XCTAssertEqual(offer, .skipped(release(), .refused))
+        XCTAssertEqual(offer.installTitle, "Retry v0.0.1.42")
+        XCTAssertFalse(offer.offersSkip)
+        XCTAssertEqual(offer.title(current: current), "Update refused: v0.0.1.42 (12 changes)")
+        XCTAssertEqual(line, "v0.0.1.42 can't read line 3 (`tracker`) in your settings; edit it, then choose Retry v0.0.1.42.")
+        XCTAssertEqual(
+            UpdateMenu.skippedLine(SkippedRelease(release(), reason: .refused)),
+            "v0.0.1.42 can't read your settings and can't migrate them; edit the file, then choose Retry v0.0.1.42."
+        )
+    }
+
+    func testARefusedLineLeavesOutTheInternalPrefixAndThePath() {
+        let message = "Config error in /Users/me/Library/Application Support/Symphony/refused.yml: Invalid merged Symphony "
+            + "config: symphony.yml: `polling` is not valid; use `tracker.polling` Lines it can't read: 26 (`polling`)."
+        let line = UpdateMenu.skippedLine(SkippedRelease(release(), reason: .refused, detail: message))
+
+        XCTAssertEqual(line, "v0.0.1.42 can't read line 26 (`polling`) in your settings; edit it, then choose Retry v0.0.1.42.")
+        XCTAssertEqual(
+            UpdateMenu.skippedLine(SkippedRelease(release(), reason: .refused, detail: "Config error in /ops/symphony.yml: `foo` is odd")),
+            "v0.0.1.42 can't read `foo` in your settings; edit it, then choose Retry v0.0.1.42.",
+            "a refusal without its lines names its first key"
+        )
+    }
+
+    func testAReleaseYouSkippedHasNoLine() {
+        XCTAssertNil(UpdateMenu.skippedLine(SkippedRelease(release(), reason: .skipped)))
+    }
+
     func testANewerReleaseThanTheSkippedOneIsOffered() {
         let store = SkippedReleaseStore(defaults: MemoryKeyValueStore())
         store.record(SkippedRelease(release(build: 42), reason: .skipped))

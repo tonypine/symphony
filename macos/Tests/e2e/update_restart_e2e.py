@@ -28,10 +28,12 @@ tracker) and a stub agent, and checks ten scenarios:
 8. Automatically when idle, from N with Symphony running and no agent runs: it
    installs N+1 by itself, which passes its health check, says so in a
    notification, and shows "Updated to vN+1 (K changes)", which opens N+1's notes.
-9. Automatically when idle with a symphony.yml whose workspaces.repo doesn't
-   exist: N+1 fails its health check and is rolled back; N says so in a
-   notification naming N+1 and the failed check, and in a menu line that opens
-   N+1's notes, and doesn't install N+1 again.
+9. Automatically when idle, with symphony.yml's workspaces.repo removed just
+   after N+1's check passed: N+1 fails its health check and is rolled back; N
+   says so in a notification naming N+1 and the failed check, and in a menu line
+   that opens N+1's notes, and doesn't install N+1 again.
+9b. Retry vN+1 with a symphony.yml N+1 can't read: N+1's own check refuses it
+   before anything is touched, N keeps running and says why, and offers Retry.
 10. Retry vN+1 when N+1 can't start at all (the relaunch finds its binary not
    executable): the update helper puts N back and N runs again within 60s of
    the hand-over, says N+1 was rolled back, lists it as skipped, and the
@@ -681,6 +683,10 @@ def scenario_update(instance):
     instance.wait_for_active_run()
     instance.wait_for_new_run(0, BUILD_N)
     instance.check_runs_from_bundle(instance.app, BUILD_N)
+    # A settings file from before a rename: N+1's start rewrites it. Added while N runs, which keeps its last good
+    # config, so this checks the new build's migration.
+    good_config = instance.config.read_text()
+    instance.config.write_text(good_config + "pre_push_review:\n  enabled: false\n")
     instance.press("Check for Updates…")
     update_title = f"Update to v{version(BUILD_N1)}"
     wait_for(f"'{update_title}'", lambda: instance.menu().get(update_title), 60)
@@ -718,10 +724,24 @@ def scenario_update(instance):
         raise Failure("the app folder doesn't hold N+1 as Symphony.app and N as Symphony (previous).app")
     if instance.alerts():
         raise Failure(f"the updated app showed alerts: {instance.alerts()}")
+    migrated = instance.config.read_text()
+    backup = instance.config.with_name(f"{instance.config.name}.before-v{version(BUILD_N1)}")
+    if "pre_push_review:\n" in migrated or "\ncode_review:\n  enabled: false\n" not in migrated or "(TP-1203)" not in migrated:
+        raise Failure(f"N+1 didn't migrate symphony.yml: {migrated}")
+    if not backup.exists() or "\npre_push_review:\n" not in backup.read_text():
+        raise Failure(f"N+1 left no backup of symphony.yml at {backup}")
+    log("N+1 renamed the settings key, with a note and a backup")
+    # The rest of the run starts from the file as it was.
+    instance.config.write_text(good_config)
+    backup.unlink()
     # The release the old build installed, carried across the relaunch: the line opens its notes.
     updated_line = f"Updated to v{version(BUILD_N1)}"
-    if not any(title.startswith(updated_line) and enabled for title, enabled in instance.menu().items()):
-        raise Failure(f"the updated app's menu has no enabled '{updated_line}' line: {instance.menu()}")
+    # The line replaces "Checking v...", which stays until the new build's health check has finished.
+    wait_for(
+        f"the menu's '{updated_line}' line",
+        lambda: any(title.startswith(updated_line) and enabled for title, enabled in instance.menu().items()),
+        120,
+    )
     log("scenario 1 passed")
 
 
@@ -1150,22 +1170,33 @@ def scenario_automatic_update(instance):
 
 
 def scenario_automatic_rollback(instance):
-    log("scenario 9: N+1 fails its health check (workspaces.repo doesn't exist) and is rolled back to N")
+    log("scenario 9: N+1 passes its check, then fails its health check (workspaces.repo is gone) and is rolled back to N")
     instance.quit()
     shutil.rmtree(instance.app)
     instance.previous.rename(instance.app)
     # Scenario 4's, so the one found afterwards is the rollback's.
     rolled_back = instance.applications / "Symphony (rolled back).app"
     shutil.rmtree(rolled_back, ignore_errors=True)
-    missing = instance.work / "missing-repo"
-    instance.write_config("worktree", missing)
+    # N+1's check before the install must pass, so the repo exists until the hand-over.
+    repo = instance.work / "vanishing-repo"
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    instance.write_config("worktree", repo)
     instance.update_settings(startOnLaunch=False)
-    log(f"installed N again; symphony.yml's workspaces.repo is {missing}, which doesn't exist")
+    update_log = instance.qa / "logs" / "update.log"
+    log_before = len(instance._read(update_log).splitlines()) if update_log.exists() else 0
+    log(f"installed N again; symphony.yml's workspaces.repo is {repo}")
     first = instance.launch()
     if first["build"] != BUILD_N:
         raise Failure(f"the app is build {first['build']}, not {BUILD_N}")
 
-    # N installs N+1 by itself; N+1's symphony check fails, and the helper puts N back and opens it.
+    # N installs N+1 by itself. The repo goes once N+1's check has passed, before the relaunched N+1 checks again;
+    # that check fails, and the helper puts N back and opens it.
+    wait_for(
+        "N+1 to pass its check before the install",
+        lambda: any("downloaded and verified" in line for line in instance._read(update_log).splitlines()[log_before:]),
+        180,
+    )
+    shutil.rmtree(repo)
     instance.wait_for_handoff(first["pid"])
     v, v1 = version(BUILD_N), version(BUILD_N1)
     title = f"Symphony rolled back to v{v}"
@@ -1213,6 +1244,40 @@ def scenario_automatic_rollback(instance):
     log("scenario 9 passed")
 
 
+def scenario_refused_before_install(instance):
+    v, v1 = version(BUILD_N), version(BUILD_N1)
+    log(f"scenario 9b: Retry v{v1} with a symphony.yml it can't read is refused before anything is touched")
+    status = instance.status()
+    if status["build"] != BUILD_N:
+        raise Failure(f"the app is build {status['build']}, not {BUILD_N}")
+    instance.write_config("worktree", instance.work / "missing-repo")
+    alerts_before = len(instance.alerts())
+    try:
+        instance.press(f"Retry v{v1}", timeout=60)
+        alert = new_alert(instance, "Symphony wasn't updated", 240)
+        if "workspaces.repo does not exist" not in alert["message"] or "keeps running" not in alert["message"]:
+            raise Failure(f"the refusal doesn't say why: {alert['message']!r}")
+        log(f"refused: {alert['message'][:200]}")
+        refused = wait_for(
+            f"'Update refused: v{v1}' (menu: {list(instance.menu())})",
+            lambda: any(t.startswith(f"Update refused: v{v1}") for t in instance.menu()),
+            60,
+        )
+        if not refused or f"Retry v{v1}" not in instance.menu():
+            raise Failure(f"the menu offers no Retry v{v1}: {instance.menu()}")
+        after = instance.status()
+        if after["pid"] != status["pid"] or after["build"] != BUILD_N or instance.app_build(instance.app) != BUILD_N:
+            raise Failure(f"the refusal touched the app: pid {after['pid']}, build {after['build']}")
+        # Retry's confirmation ("Update to vN?") is an alert too; the refusal is the only other one.
+        shown = [a["title"] for a in instance.alerts()[alerts_before:]]
+        if sorted(shown) != sorted([f"Update to v{v1}?", "Symphony wasn't updated"]):
+            raise Failure(f"the refusal showed other alerts: {instance.alerts()}")
+    finally:
+        # Scenario 9's repo is gone too: the next scenario's check needs a file that loads.
+        instance.write_config("clone", instance.work / "repo")
+    log(f"scenario 9b passed: v{v} keeps running")
+
+
 # The bound the update helper gives a relaunched app to start (UpdateLaunch.timeout), and the acceptance bound for
 # having the previous app running again after an update whose app can't start.
 LAUNCH_SECONDS = 30
@@ -1245,7 +1310,7 @@ def scenario_unlaunchable_update(instance):
     if first["build"] != BUILD_N:
         raise Failure(f"the app is build {first['build']}, not {BUILD_N}")
 
-    # Scenario 9 pinned N+1; Retry installs it by hand.
+    # Scenarios 9 and 9b pinned N+1; Retry installs it by hand.
     instance.press(f"Retry v{v1}", timeout=60)
     instance.wait_for_handoff(first["pid"])
     handed_over = time.monotonic()
@@ -1317,6 +1382,7 @@ SCENARIOS = (
     scenario_update_on_release_cancel,
     scenario_automatic_update,
     scenario_automatic_rollback,
+    scenario_refused_before_install,
     scenario_unlaunchable_update,
 )
 

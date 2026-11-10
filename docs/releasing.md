@@ -41,7 +41,7 @@ it the release version is the plain `mix.exs` version.
 | `Symphony-<version>.zip` | `Symphony.app`, zipped with `ditto -c -k --keepParent` |
 | `Symphony-<version>.zip.sha256` | its SHA-256, checked with `shasum -a 256 -c` |
 | `Symphony-<version>.zip.minisig` | its minisign signature, only when the minisign key is configured |
-| `version.json` | `version`, `build`, `sha256`, `commit`, `published_at`, `signed`, `zip`, `minisig` (asset name or `null`), `changes` |
+| `version.json` | `version`, `build`, `sha256`, `commit`, `published_at`, `signed`, `zip`, `minisig` (asset name or `null`), `changes`, `settings_migrations` (the settings keys this build rewrites by itself, from `symphony config migrations`) |
 
 The release notes list the commit subjects since the previous `v*` tag, headed
 "N changes since v…". Releases are not marked prerelease, so

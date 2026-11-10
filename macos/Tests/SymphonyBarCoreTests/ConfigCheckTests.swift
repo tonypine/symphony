@@ -2,6 +2,89 @@ import XCTest
 @testable import SymphonyBarCore
 
 final class ConfigCheckTests: XCTestCase {
+    func testMigrationNotesAreTheMigratedLines() {
+        let output = """
+            Symphony 0.0.1.700
+            Migrated: v0.0.1.691 renamed `a` to `b` in your settings
+            Config OK: /ops/symphony.yml
+            Migrated: v0.0.1.688 removed `c` from your settings: gone
+            """
+
+        XCTAssertEqual(
+            ConfigCheck.migrationNotes(output),
+            ["v0.0.1.691 renamed `a` to `b` in your settings", "v0.0.1.688 removed `c` from your settings: gone"]
+        )
+        XCTAssertEqual(ConfigCheck.migrationNotes("Config OK: /ops/symphony.yml\n"), [])
+    }
+
+    func testRefusedKeyIsTheFirstKeyTheMessageNames() {
+        XCTAssertEqual(ConfigCheck.refusedKey("Config error: `a` is not valid; use `b`"), "a")
+        XCTAssertNil(ConfigCheck.refusedKey("workspaces.repo does not exist"))
+        XCTAssertNil(ConfigCheck.refusedKey("an odd ` backtick"))
+    }
+
+    func testUnreadableNamesEachLineTheRefusalLists() {
+        XCTAssertEqual(
+            ConfigCheck.unreadable(
+                "Config error in /ops/a.yml: bad Lines it can't read: `dispatch.max_concurrent`, 6 (`nonsense`), 4 (`tracker`)."
+            ),
+            "`dispatch.max_concurrent`, line 6 (`nonsense`), line 4 (`tracker`)"
+        )
+        XCTAssertEqual(
+            ConfigCheck.unreadable(
+                "Config error in /ops/a.yml: Lines it can't rewrite: 4 (`agent.run_profiles.pre_push_review`). Write each of those keys "
+                    + "as an indented block, on a line of its own"
+            ),
+            "line 4 (`agent.run_profiles.pre_push_review`)"
+        )
+        XCTAssertEqual(ConfigCheck.unreadable("Lines it can't read: 3 (`a`)"), "line 3 (`a`)", "a list with no closing period")
+        XCTAssertEqual(ConfigCheck.unreadable("Config error: `a` is not valid"), "`a`")
+        XCTAssertNil(ConfigCheck.unreadable("workspaces.repo does not exist"))
+    }
+
+    func testRunMigratingReturnsTheNotesAndTheResult() async throws {
+        let launch = ChildLaunch(
+            executable: "/bin/sh",
+            arguments: ["-c", "echo 'Migrated: v1 renamed `a` to `b` in your settings'; echo 'Config OK: x'"],
+            workingDirectory: "/tmp",
+            environment: [:]
+        )
+
+        let check = await ConfigCheck.runMigrating(launch)
+
+        XCTAssertEqual(check, ConfigMigrationCheck(result: .passed, notes: ["v1 renamed `a` to `b` in your settings"]))
+    }
+
+    func testAnUpdateGoesAheadWhenTheAppIsNotSetUpYet() async {
+        for problem in [LaunchProblem.configPathMissing, .linearAPIKeyMissing] {
+            let check = await ConfigCheck.runForUpdate(.failure(problem), configPath: "")
+
+            XCTAssertEqual(check, ConfigMigrationCheck(result: .passed))
+        }
+    }
+
+    func testAnUpdateGoesAheadWithoutRunningTheCheckWhenTheSettingsFileIsMissing() async {
+        let check = await ConfigCheck.runForUpdate(.success(shell("exit 1")), configPath: "/no/such/symphony.yml")
+
+        XCTAssertEqual(check, ConfigMigrationCheck(result: .passed))
+    }
+
+    func testAnUpdateFailsOnAnyOtherLaunchProblem() async {
+        let check = await ConfigCheck.runForUpdate(.failure(LaunchProblem.embeddedSymphonyMissing), configPath: "/ops/symphony.yml")
+
+        XCTAssertEqual(check, ConfigMigrationCheck(result: .failed(LaunchProblem.embeddedSymphonyMissing.message)))
+    }
+
+    func testAnUpdateAsksTheBuildWhenTheSettingsFileIsThere() async throws {
+        let config = FileManager.default.temporaryDirectory.appendingPathComponent("symphony-\(UUID().uuidString).yml")
+        try Data().write(to: config)
+        defer { try? FileManager.default.removeItem(at: config) }
+
+        let check = await ConfigCheck.runForUpdate(.success(shell("echo '`a` is not valid'; exit 1")), configPath: config.path)
+
+        XCTAssertEqual(check.result, .failed("`a` is not valid"))
+    }
+
     private func shell(_ script: String) -> ChildLaunch {
         ChildLaunch(
             executable: "/bin/sh",

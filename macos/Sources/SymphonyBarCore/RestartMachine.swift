@@ -4,9 +4,8 @@ import Foundation
 /// dispatch, wait until no agent run is active, stop, start, wait until Symphony answers, then resume dispatch
 /// if the restart paused it. A run between agent turns isn't active: its next turn waits for the pause, so waiting
 /// for it would never end, and its ticket's next run takes it up after the restart. Events go in; the effects the app must carry out come back. An update drains the same
-/// way but stops there, so the app can swap itself for the new version. The update never runs the new version's
-/// Symphony: running it deletes older versions' unpacked releases, including the one the running Symphony loads
-/// its modules from, so the new one only runs once the relaunched app starts it.
+/// way but stops there, so the app can swap itself for the new version. An update doesn't check symphony.yml here:
+/// only the new build can say whether it reads the file, and `UpdateInstaller` has already asked it.
 public struct RestartMachine: Equatable {
     /// How long a started Symphony has to answer on its control URL before the restart reports it.
     public static let answerTimeout: TimeInterval = 120
@@ -106,7 +105,7 @@ public struct RestartMachine: Equatable {
         return false
     }
 
-    /// Starts a restart. `alreadyPaused` is whether dispatch is paused now, as the app's last poll saw it; the next
+    /// Starts a restart, which checks symphony.yml first. `alreadyPaused` is whether dispatch is paused now, as the app's last poll saw it; the next
     /// poll can show it resumed since, and then the restart pauses it. After `runsTimeout` seconds of waiting
     /// for agent runs the restart also offers Restart Now Anyway, or an `.automaticUpdate` gives up. An update ends
     /// with `.stopped` instead of starting Symphony. With `alerts` false a failure shows in the menu only, as for an
@@ -130,6 +129,8 @@ public struct RestartMachine: Equatable {
         self.alerts = alerts && purpose != .automaticUpdate
         self.runsTimeout = runsTimeout
         self.logPath = logPath
+        // The running build's schema says nothing about the new release's: the new build checked the file already.
+        guard !purpose.isUpdate else { return configChecked(.passed, now: now) }
         enter(.checkingConfig, now: now)
         return [.checkConfig]
     }

@@ -20,6 +20,8 @@ public enum UpdateError: Error, Equatable, LocalizedError {
     case runningAppUnsigned
     case signerMismatch
     case helper(String)
+    /// The new build can't read symphony.yml, even migrated; the message is its check's.
+    case settingsRefused(String)
 
     public var errorDescription: String? {
         switch self {
@@ -53,6 +55,13 @@ public enum UpdateError: Error, Equatable, LocalizedError {
             return "the new app isn't signed with the same certificate as this one."
         case let .helper(reason):
             return "couldn't start the update helper: \(reason)"
+        case let .settingsRefused(message):
+            guard let spot = ConfigCheck.unreadable(message) else {
+                return "the new version can't read your settings: \(ConfigCheck.reasonFirst(message)) "
+                    + "Nothing was installed and this version keeps running."
+            }
+            return "the new version can't read \(spot) in your settings, so nothing was installed and this version "
+                + "keeps running. Edit the file, then choose Retry."
         }
     }
 }
@@ -123,24 +132,29 @@ public struct SystemCodeSignatureChecker: CodeSignatureChecker {
     }
 }
 
+/// Asks the build whose embedded Symphony is at this path what it reads symphony.yml as once migrated.
+public typealias UpdateSettingsCheck = @Sendable (_ symphonyBinary: String) async -> ConfigMigrationCheck
+
 /// A downloaded and verified app, ready to replace the running one.
 public struct PreparedUpdate: Equatable {
     public var release: Release
     /// The new Symphony.app, in the cache folder.
     public var appURL: URL
-    /// Its embedded Symphony. Don't run it while the current Symphony runs: running it deletes the current
-    /// version's unpacked release from under it.
+    /// Its embedded Symphony. It runs in place from the bundle, so `check` is safe next to the running Symphony.
     public var symphonyBinary: String
+    /// What the new build moves in symphony.yml once it starts, one line per key.
+    public var settingsChanges: [String]
 
-    public init(release: Release, appURL: URL, symphonyBinary: String) {
+    public init(release: Release, appURL: URL, symphonyBinary: String, settingsChanges: [String] = []) {
         self.release = release
         self.appURL = appURL
         self.symphonyBinary = symphonyBinary
+        self.settingsChanges = settingsChanges
     }
 }
 
-/// Downloads a release and checks it: SHA-256, minisign signature, `codesign --verify --strict`, and the same
-/// signing certificate as the running app.
+/// Downloads a release and checks it: SHA-256, minisign signature, `codesign --verify --strict`, the same signing
+/// certificate as the running app, and last that the new build reads symphony.yml, which only it can say.
 public final class UpdateInstaller {
     /// Subfolder of the cache folder where releases are downloaded and unzipped.
     public static let stagingFolder = "updates"
@@ -186,8 +200,9 @@ public final class UpdateInstaller {
         try? fileManager.removeItem(at: stagingDirectory)
     }
 
-    /// Downloads `release` into a fresh staging folder and verifies it. Throws an `UpdateError` on any mismatch.
-    public func prepare(_ release: Release) async throws -> PreparedUpdate {
+    /// Downloads `release` into a fresh staging folder and verifies it, then asks the verified build through
+    /// `checkSettings`. Throws an `UpdateError` on any mismatch, and nothing was touched then.
+    public func prepare(_ release: Release, checkSettings: UpdateSettingsCheck) async throws -> PreparedUpdate {
         guard let assets = release.assets else { throw UpdateError.noAssets }
         guard let signatureURL = assets.signature else { throw UpdateError.unsigned }
         guard let publicKey else { throw UpdateError.noPublicKey }
@@ -235,7 +250,10 @@ public final class UpdateInstaller {
             running: try signatures.leafCertificateHash(appAt: runningApp),
             candidate: try signatures.leafCertificateHash(appAt: app)
         )
-        return PreparedUpdate(release: release, appURL: app, symphonyBinary: binary.path)
+
+        let settings = await checkSettings(binary.path)
+        if case let .failed(message) = settings.result { throw UpdateError.settingsRefused(message) }
+        return PreparedUpdate(release: release, appURL: app, symphonyBinary: binary.path, settingsChanges: settings.notes)
     }
 
     /// Throws unless the first word of a `shasum -a 256` line is the SHA-256 of `data`.

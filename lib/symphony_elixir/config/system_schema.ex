@@ -758,6 +758,16 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
+  @doc """
+  Every removed or unknown key `config` sets, as dotted paths. `parse/1` stops at the first; this is
+  for saying all of them at once.
+  """
+  @spec refused_keys(map()) :: [String.t()]
+  def refused_keys(config) when is_map(config) do
+    removed = for {key, _reason} <- @removed_keys, has_path?(config, String.split(key, ".")), do: key
+    Enum.sort(Enum.uniq(removed ++ (Map.keys(config) -- @allowed_keys)))
+  end
+
   defp has_path?(config, [key]) when is_map(config), do: Map.has_key?(config, key)
   defp has_path?(config, [key | rest]) when is_map(config), do: has_path?(Map.get(config, key), rest)
   defp has_path?(_value, _path), do: false
