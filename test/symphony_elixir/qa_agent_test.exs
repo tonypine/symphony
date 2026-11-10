@@ -106,6 +106,18 @@ defmodule SymphonyElixir.QaAgentTest do
     end
   end
 
+  # Records what `qa_build_release_pair` records when the QA host lacks a tool the pair's build
+  # needs, then answers like `FakeSession`.
+  defmodule MissingPairToolSession do
+    defdelegate start_session(workspace, opts), to: FakeSession
+    defdelegate stop_session(session), to: FakeSession
+
+    def run_turn(session, prompt, issue, opts) do
+      :ok = GenServer.call(opts[:qa_driver], {:environment_fault, {:qa_host_missing_tool, ["minisign"]}})
+      FakeSession.run_turn(session, prompt, issue, opts)
+    end
+  end
+
   # Builds and launches the macos_app and resizes its window for the wide pass, as a
   # macos_app QA agent does, then answers like `FakeSession`.
   defmodule WidePassSession do
@@ -2294,6 +2306,43 @@ defmodule SymphonyElixir.QaAgentTest do
       assert_received {:qa_turn, _session, epic_prompt, _issue, _turn_opts}
       refute epic_prompt =~ "Nothing on screen to judge:"
       refute epic_prompt =~ ~s("scope": "<optional)
+    end
+
+    test "gives a blocked pass the missing release pair tool a QA tool found as its cause, keeping its own" do
+      [macos_app] =
+        Selection.playbooks(%{playbooks: %{"cli" => %{"enabled" => false}, "macos_app" => %{"build" => "make app", "app" => "build/App.app"}}})
+
+      run = fn session, turn_result, host ->
+        Application.put_env(:symphony_elixir, :qa_test_turn_result, turn_result)
+
+        {result, _log} =
+          with_log(fn ->
+            QaAgent.run(job(%{playbooks: [macos_app]}), Config.settings!(), git: fake_git(), qa_agent_module: session, qa_driver_opts: qa_vm_opts(host))
+          end)
+
+        result
+      end
+
+      blocked_json = Jason.encode!(%{verdict: "blocked", summary: "", reason: "qa_build_release_pair: the QA host has no minisign"})
+
+      assert {:ok, %{result: %{verdict: :blocked, cause: {:qa_host_missing_tool, ["minisign"]}, reason: "qa_build_release_pair: the QA host has no minisign"}}} =
+               run.(MissingPairToolSession, {:ok, %{result: blocked_json}}, %{})
+
+      # No QA tool found a broken part: the block names no cause.
+      assert {:ok, %{result: %{verdict: :blocked} = blocked}} = run.(FakeSession, {:ok, %{result: blocked_json}}, %{})
+      refute Map.has_key?(blocked, :cause)
+
+      # A pass is the agent's call: the fault only names a block's cause.
+      assert {:ok, %{result: passed}} = run.(MissingPairToolSession, {:ok, %{result: FakeSession.pass_json()}}, %{})
+      refute Map.has_key?(passed, :cause)
+
+      # A QA host Symphony refused keeps its own cause.
+      refused = %{prepare: fn _operator_home, _canary -> {:error, {:unsafe, "has a private key ~/.ssh/id_ed25519"}} end}
+
+      assert {:ok, %{result: %{verdict: :blocked, cause: {:qa_worker, "qa_worker_unsafe"}}}} =
+               run.(MissingPairToolSession, {:ok, %{result: blocked_json}}, refused)
+
+      assert SymphonyElixir.QaDriver.environment_fault(nil) == nil
     end
 
     test "lets the QA driver read fixtures from the pass's own $TMPDIR" do
