@@ -72,6 +72,8 @@ defmodule SymphonyElixirWeb.Router do
     post("/priority", ControlApiController, :priority)
     post("/label", ControlApiController, :label)
     post("/decision", ControlApiController, :decision)
+    post("/view", ViewsController, :save)
+    delete("/view/:id", ViewsController, :delete)
   end
 
   scope "/", SymphonyElixirWeb do
@@ -87,6 +89,8 @@ defmodule SymphonyElixirWeb.Router do
     get("/api/v1/dispatch/order", ObservabilityApiController, :dispatch_order)
     get("/api/v1/events", JournalController, :index)
     get("/api/v1/aggregate", AggregateController, :index)
+    get("/api/v1/views", ViewsController, :index)
+    get("/api/v1/tickets", TicketsController, :index)
     get("/api/v1/initiatives", ObservabilityApiController, :initiatives)
     get("/api/v1/runs/:session_id/report", ObservabilityApiController, :quality_report)
     get("/api/v1/pull_requests/:repo_key/:number", ObservabilityApiController, :pull_request)
@@ -117,6 +121,8 @@ defmodule SymphonyElixirWeb.Router do
     match(:*, "/api/v1/inbox", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/events", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/aggregate", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/views", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/tickets", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/initiatives", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/runs/:session_id/report", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/pull_requests/:repo_key/:number", ObservabilityApiController, :method_not_allowed)
