@@ -270,7 +270,10 @@ rerunning it twice, and the silent-wait detector reports that wait past its boun
 A run is rerun twice on a head. Cancelled a third time, it asks a person (R19a), naming the check
 and the cause, with the ticket held in its phase: **Keep retrying** reruns the check and gives it two
 more reruns before asking again; **Wait** stops rerunning it on that head, and the ticket waits until
-a person reruns it on GitHub or a new head is pushed. A check the base branch doesn't require is
+a person reruns it on GitHub or a new head is pushed. The watcher acts on the option the person
+picked, kept with their answer, whatever words they added (the same holds for R7's and R17's
+answers); only an answer with no pick, a plain reply in Linear, is read from its text, by the
+option's number or label it opens with. A check the base branch doesn't require is
 never a reason to hold a ticket: cancelled again after its two reruns, it is set aside, the head
 reads as its other checks, and the reviewer's or QA's dispatch reason names it. A failure on such a
 check still goes to CI Fix like any other, since those checks catch real regressions. Beside a real

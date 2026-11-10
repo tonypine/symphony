@@ -1499,7 +1499,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp take_answer(attempts, applied, %{ticket: %{hold: :none}} = entry, read, now, state) do
     {attempts, applied} =
       with %{title: title, prior: prior} <- Attempts.open_question(attempts),
-           %{answer: answer} <- answer_to(entry, title, prior) do
+           %{answer: _text} = answer <- answer_to(entry, title, prior) do
         pick = Apply.unreported_answer(answer)
         log_answer(title, pick, entry)
         if pick == :rerun, do: rerun_head(read, state)
@@ -1510,7 +1510,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
       end
 
     with %{title: title, prior: prior} <- Attempts.cancel_question(attempts),
-         %{answer: answer} <- answer_to(entry, title, prior) do
+         %{answer: _text} = answer <- answer_to(entry, title, prior) do
       pick = Apply.cancelled_answer(answer)
       log_answer(title, pick, entry)
       applied = if pick == :rerun, do: Enum.reject(applied, &(&1.rule == "R19a")), else: applied

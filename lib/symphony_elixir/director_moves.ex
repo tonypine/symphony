@@ -1281,10 +1281,10 @@ defmodule SymphonyElixir.DirectorMoves do
     if match?(%{to: to} when is_binary(to), directed) and String.trim(directed.to) == "" do
       {:error, {:invalid, "#{issue.identifier}'s decision moves it to a state not configured for repo #{issue.repo_key}; the question stays open"}}
     else
-      picks = Enum.map(input.picks, &%{question: String.trim(&1.question), answer: String.trim(&1.answer)})
+      picks = Enum.map(input.picks, &%{question: String.trim(&1.question), answer: String.trim(&1.answer), option: blank_to_nil(Map.get(&1, :option))})
 
       with {:ok, question} <- answer_deciding(issue, input, deciding, picks) do
-        project_decision(linear_issue(issue), input, question, picks, directed, opts)
+        project_decision(linear_issue(issue), input, question, recorded_option(picks, question), directed, opts)
       end
     end
   end
@@ -1333,6 +1333,11 @@ defmodule SymphonyElixir.DirectorMoves do
     id = blank_to_nil(input[:question_id]) || row_question_id(issue, input[:request_comment_id]) || deciding.id
     answer_decision(issue, id, Enum.map_join(picks, " / ", & &1.answer), true, picked_option(input.picks))
   end
+
+  # The reply names the option the answered Question recorded (its label, whether the pick named it
+  # by label or number); several picks keep what each named.
+  defp recorded_option([pick], question), do: [%{pick | option: Questions.option_label(question) || pick.option}]
+  defp recorded_option(picks, _question), do: picks
 
   # The option one pick names beside its own words; nil for several picks or none named.
   defp picked_option(picks), do: if(match?([_pick], picks), do: blank_to_nil(Map.get(hd(picks), :option)))
@@ -1396,7 +1401,7 @@ defmodule SymphonyElixir.DirectorMoves do
     case Questions.find({:ticket, repo_key, issue_id}, question_id) do
       %{state: :answered, answer: %{text: text}} = question ->
         tracker = Keyword.get(opts, :tracker, Tracker)
-        picks = [%{question: question.question, answer: text}]
+        picks = [%{question: question.question, answer: text, option: Questions.option_label(question)}]
         comment = decide_comment(picks)
         issue = %Issue{id: issue_id, repo_key: repo_key}
 
@@ -1419,7 +1424,8 @@ defmodule SymphonyElixir.DirectorMoves do
     title = Map.get(decision, :title)
     question = Map.get(decision, :question) || Enum.map_join(picks, " / ", & &1.question)
     answers = Enum.map(picks, & &1.answer)
-    unlocks = PathUnlock.picked_paths(decision, answers)
+    # The option picked beside the person's words unlocks its paths, never the words.
+    unlocks = PathUnlock.picked_paths(decision, Enum.map(picks, &(blank_to_nil(Map.get(&1, :option)) || &1.answer)))
     entry = Decisions.entry(request_comment_id, Date.utc_today(), title, question, Enum.join(answers, " / "), unlocks)
     _ = Decisions.record(issue.id, [entry], [repo_key: issue.repo_key] ++ opts)
     :ok
