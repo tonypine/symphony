@@ -1053,13 +1053,14 @@ func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
 
 MainActor.assumeIsolated {
     for (scheme, suffix) in [(ColorScheme.light, "light"), (.dark, "dark")] {
-        // The shared styles (TP-1438): the control sizes, each state of a row, a card and the buttons, the pressed
+        // The shared styles (TP-1438): the control sizes, each state of a row, a card and the buttons (a selected
+        // button, its menu or sheet open, stays pressed without shrinking), the pressed
         // and lifted ones with Reduce Motion off and on, a disabled button with its reason, and the situation kinds.
         render(controlSizes(), scheme, to: "style-control-sizes-\(suffix).png")
         for (name, state) in interactionStates {
             render(styledRow(state), scheme, to: "style-row-\(name)-\(suffix).png")
             render(styledCard(state), scheme, to: "style-card-\(name)-\(suffix).png")
-            if state != .selection { render(styledButtons(state), scheme, to: "style-button-\(name)-\(suffix).png") }
+            render(styledButtons(state), scheme, to: "style-button-\(name)-\(suffix).png")
         }
         render(styledButtons(.off), scheme, to: "style-button-disabled-\(suffix).png")
         render(styledButtons(.press, reduceMotion: true), scheme, to: "style-button-pressed-reduce-motion-\(suffix).png")
