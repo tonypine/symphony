@@ -105,6 +105,15 @@ Application.put_env(:symphony_elixir, :ticket_pull_request_gh_runner, fn _args, 
 # process table passes `:table` itself.
 Application.put_env(:symphony_elixir, :leftover_process_table, fn -> {:ok, []} end)
 
+# The `:flock` tests hold a remote worker's worktree lock with util-linux `flock`, which Linux
+# hosts have and macOS lacks.
+with flock when is_binary(flock) <- System.find_executable("flock"),
+     {_output, 0} <- System.cmd(flock, ["--version"], stderr_to_stdout: true) do
+  :ok
+else
+  _unavailable -> ExUnit.configure(exclude: [:flock | Keyword.get(ExUnit.configuration(), :exclude, [])])
+end
+
 # Tests that stop real detached processes need `ps`, which sandboxed agent runs
 # (macOS Seatbelt) deny.
 case SymphonyElixir.LeftoverProcesses.Table.read() do

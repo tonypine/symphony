@@ -902,17 +902,30 @@ defmodule SymphonyElixir.Workspace do
 
   # The remote counterpart of the `Fetcher.with_lock/2` the local add runs under:
   # parallel dispatches to one worker host race for the shared repo's refs and
-  # `.git/worktrees`, so its `worktree add` takes a `mkdir` lock in the repo's git
-  # dir, holding the script's pid. Git runs from inside the repo, as the repo may
-  # be relative to the login dir and `--git-common-dir` is relative to the repo.
-  # It waits up to half the script's time limit, then exits 47. An EXIT trap (the
-  # signal traps turn a hangup or kill into an exit) drops the lock however the
-  # script ends; a lock whose holder died without it (SIGKILL) is taken over,
-  # under a second `mkdir` so two waiters never both take it.
+  # `.git/worktrees`, so its `worktree add` takes a per-repo lock in the repo's git
+  # dir. Git runs from inside the repo, as the repo may be relative to the login dir
+  # and `--git-common-dir` is relative to the repo. It waits up to half the script's
+  # time limit, then exits 47. An EXIT trap (the signal traps turn a hangup or kill
+  # into an exit) drops the lock however the script ends.
+  #
+  # A host with util-linux `flock` takes a kernel lock on the
+  # `symphony-worktree-add.flock` file, held by the script's descriptor 9: the kernel
+  # drops it when the holder exits, however it dies, so no waiter ever judges whether
+  # a holder is alive or removes a lock it doesn't hold. A host without it (macOS)
+  # takes a `mkdir` lock holding the script's pid; a lock whose holder died without
+  # it (SIGKILL) is taken over, under a second `mkdir` so two waiters never both take it.
   defp remote_worktree_lock_functions(timeout_ms) do
+    wait_seconds = max(div(timeout_ms, 2_000), 1)
+
     """
     symphony_worktree_lock_dir=""
+    symphony_worktree_lock_fd=""
     symphony_worktree_unlock() {
+      if [ -n "$symphony_worktree_lock_fd" ]; then
+        flock -u 9 2>/dev/null || true
+        exec 9>&-
+        symphony_worktree_lock_fd=""
+      fi
       if [ -n "$symphony_worktree_lock_dir" ]; then
         rm -rf "$symphony_worktree_lock_dir"
         symphony_worktree_lock_dir=""
@@ -921,12 +934,22 @@ defmodule SymphonyElixir.Workspace do
     symphony_worktree_lock() {
       lock_git_dir=$(cd "$repo" && symphony_git . rev-parse --git-common-dir)
       lock_git_dir=$(cd "$repo" && cd "$lock_git_dir" && pwd -P)
-      lock="$lock_git_dir/symphony-worktree-add.lock"
       trap symphony_worktree_unlock EXIT
       trap 'exit 129' HUP
       trap 'exit 130' INT
       trap 'exit 143' TERM
-      lock_deadline=$(($(date +%s) + #{max(div(timeout_ms, 2_000), 1)}))
+      if flock --version >/dev/null 2>&1; then
+        lock="$lock_git_dir/symphony-worktree-add.flock"
+        exec 9>>"$lock"
+        symphony_worktree_lock_fd=9
+        if ! flock -w #{wait_seconds} 9; then
+          echo "workspace_worktree_lock_timeout: $lock"
+          exit 47
+        fi
+        return 0
+      fi
+      lock="$lock_git_dir/symphony-worktree-add.lock"
+      lock_deadline=$(($(date +%s) + #{wait_seconds}))
       until mkdir "$lock" 2>/dev/null; do
         lock_holder=$(cat "$lock/pid" 2>/dev/null || true)
         if [ -n "$lock_holder" ] && ! kill -0 "$lock_holder" 2>/dev/null && mkdir "$lock.takeover" 2>/dev/null; then
