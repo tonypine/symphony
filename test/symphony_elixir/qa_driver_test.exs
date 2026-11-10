@@ -7,6 +7,8 @@ defmodule SymphonyElixir.QaDriverTest do
   alias SymphonyElixir.QaDriver.{DevServerLease, Host, ReleasePair}
 
   @app "macos/build/Demo.app"
+  # The first line of the release pair's build script, which unlocks the keychain and runs make.
+  @pair_build "# Symphony QA release pair build"
   @helper "/fake/symphony-qa-driver"
   @appearance_library "/fake/symphony-qa-appearance.dylib"
   # The `IOPlatformUUID`s of the Symphony Mac and of the QA VM.
@@ -2278,7 +2280,7 @@ defmodule SymphonyElixir.QaDriverTest do
     # The release pair's commands on the QA host, which answer without touching the local disk.
     defp remote_pair(executable, args, _opts) do
       case {executable, args} do
-        {"/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out]} -> {:ok, {"release pair built\n", 0}}
+        {"/bin/sh", ["-c", @pair_build <> _rest, "sh", _out, _identity_script | _tools]} -> {:ok, {"release pair built\n", 0}}
         {"/bin/sh", ["-c", script, "sh" | rest]} -> remote_pair_script(script, rest)
         {"/bin/sh", [_script, "--use"]} -> {:ok, {"symphony-qa-signing-identity:#{String.duplicate("AB", 20)}\nsymphony-qa-signing-keychain:/Users/qa/k.keychain-db\n", 0}}
         {"/bin/cat", [_manifest]} -> {:ok, {~s({"n":{"build":90001},"n1":{"build":90002}}), 0}}
@@ -2340,7 +2342,7 @@ defmodule SymphonyElixir.QaDriverTest do
       assert identity_opts[:cd] == src
       assert_received {:cmd, "/bin/sh", ["-c", _copy, "sh", ^src, feed_dir], _opts}
       assert feed_dir == @run_dir <> "/update-feed"
-      assert_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", out], build_opts}
+      assert_received {:cmd, "/bin/sh", ["-c", @pair_build <> _rest, "sh", out, _identity_script | _tools], build_opts}
       assert out == @run_dir <> "/release-pair"
       assert build_opts[:cd] == src
       assert {"SYMPHONY_E2E_SIGNING_IDENTITY", String.duplicate("AB", 20)} in build_opts[:remote_env]
@@ -2421,7 +2423,7 @@ defmodule SymphonyElixir.QaDriverTest do
         assert install_opts[:cd] == @run_dir
         assert install_opts[:remote_env] == [{"SYMPHONY_QA_SIGNING_SUDO", "sudo -n"}]
         assert_received {:cmd, "/bin/sh", [^script, "--use"], _opts}
-        assert_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out], build_opts}
+        assert_received {:cmd, "/bin/sh", ["-c", @pair_build <> _rest, "sh", _out, _identity_script | _tools], build_opts}
         assert {"SYMPHONY_E2E_SIGNING_IDENTITY", String.duplicate("AB", 20)} in build_opts[:remote_env]
 
         # The next pass finds the identity and installs nothing.
@@ -2450,7 +2452,7 @@ defmodule SymphonyElixir.QaDriverTest do
         assert log =~ "QA driver left the QA signing identity to an operator #{@log_context} worker_host=qa@qa-vm reason=no_passwordless_sudo"
         assert_received {:cmd, "/usr/bin/sudo", ["-n", "true"], _opts}
         refute_received {:cmd, "/bin/sh", ["-c", _installer, "sh"], _opts}
-        refute_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out], _opts}
+        refute_received {:cmd, "/bin/sh", ["-c", @pair_build <> _rest, "sh", _out, _identity_script | _tools], _opts}
         QaDriver.stop(driver)
       end
     end
@@ -2474,7 +2476,7 @@ defmodule SymphonyElixir.QaDriverTest do
         outcome = if install == ready, do: "outcome=completed", else: "outcome=failed"
         assert log =~ "#{@log_context} worker_host=qa@qa-vm #{outcome}"
         assert_received {:cmd, "/bin/sh", ["-c", _installer, "sh"], _opts}
-        refute_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out], _opts}
+        refute_received {:cmd, "/bin/sh", ["-c", @pair_build <> _rest, "sh", _out, _identity_script | _tools], _opts}
         QaDriver.stop(driver)
       end
     end
@@ -2802,7 +2804,7 @@ defmodule SymphonyElixir.QaDriverTest do
     end
 
     defp pair_default("/bin/sh", [_script, "--use"], _opts, pair), do: pair.identity
-    defp pair_default("/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", out], _opts, pair), do: pair.build.(out)
+    defp pair_default("/bin/sh", ["-c", @pair_build <> _rest, "sh", out, _identity_script | _tools], _opts, pair), do: pair.build.(out)
     defp pair_default("/usr/bin/curl", args, _opts, pair), do: feed_reply(pair.mode, args)
 
     # `ditto` is macOS-only; the copy of N runs for real with `cp -R` so the tests run on Linux CI.
@@ -2874,7 +2876,7 @@ defmodule SymphonyElixir.QaDriverTest do
       script = Path.join(source, "scripts/qa/install-test-signing-identity.sh")
       assert_received {:cmd, "/bin/sh", [^script, "--use"], identity_opts}
       assert identity_opts[:cd] == source
-      assert_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", out], build_opts}
+      assert_received {:cmd, "/bin/sh", ["-c", @pair_build <> _rest, "sh", out, _identity_script | _tools], build_opts}
       assert out == Path.join(host_dir, "release-pair")
       assert build_opts[:cd] == source
       assert build_opts[:timeout_ms] == 1_800_000
@@ -2890,6 +2892,84 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:ok, %{"pid" => _pid}} = result
     end
 
+    defp write_executable(path, body) do
+      File.write!(path, "#!/bin/sh\n" <> body)
+      File.chmod!(path, 0o755)
+    end
+
+    # On a QA VM a keychain unlocked over one SSH connection stays locked for the next (TP-1437).
+    test "unlocks the signing keychain and builds the pair in the same command on the QA host", %{worktree: worktree, feed_mode: mode} do
+      driver = pair_driver(worktree, mode)
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+      identity_script = Path.join(host_dir, "pair-src/scripts/qa/install-test-signing-identity.sh")
+
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+      assert_received {:cmd, "/bin/sh", ["-c", @pair_build <> _rest = script, "sh", out, ^identity_script | tools], _opts}
+      assert tools == ReleasePair.tools()
+      assert "minisign" in tools and "jq" in tools
+      {unlock, _length} = :binary.match(script, ~s("$identity_script" --use))
+      {make, _length} = :binary.match(script, "make -C macos release-pair")
+      assert unlock < make
+
+      # The script itself, with stand-ins for the tools, the identity script and make.
+      dir = Path.join(System.tmp_dir!(), "pair-build-#{System.unique_integer([:positive])}")
+      on_exit(fn -> File.rm_rf!(dir) end)
+      unlock_log = Path.join(dir, "unlocked")
+      fake_identity = Path.join(dir, "identity.sh")
+      File.mkdir_p!(dir)
+
+      File.write!(fake_identity, ~S"""
+      if [ -n "$UNLOCK_FAILS" ]; then echo "install-test-signing-identity: not installed"; exit 3; fi
+      echo unlocked > "$UNLOCK_LOG"
+      echo symphony-qa-signing-identity:0123
+      """)
+
+      bin_dir = fn name, present ->
+        bin = Path.join(dir, name)
+        File.mkdir_p!(bin)
+        for tool <- present, do: write_executable(Path.join(bin, tool), "exit 0\n")
+
+        write_executable(Path.join(bin, "make"), ~S"""
+        if [ -f "$UNLOCK_LOG" ]; then echo "make $* after the unlock"; else echo "make $* before any unlock"; exit 1; fi
+        """)
+
+        bin
+      end
+
+      run = fn bin, env ->
+        File.rm_rf!(unlock_log)
+        System.cmd("/bin/sh", ["-c", script, "sh", out, fake_identity | tools], env: [{"PATH", bin}, {"UNLOCK_LOG", unlock_log} | env], stderr_to_stdout: true)
+      end
+
+      assert run.(bin_dir.("all", tools), []) == {"make -C macos release-pair RELEASE_PAIR_OUT=#{out} after the unlock\n", 0}
+      assert run.(bin_dir.("all", tools), [{"UNLOCK_FAILS", "1"}]) == {"install-test-signing-identity: not installed\n", 3}
+
+      assert run.(bin_dir.("partial", tools -- ["minisign", "jq", "make"]), []) ==
+               {"symphony-qa-pair-missing-tool:minisign\nsymphony-qa-pair-missing-tool:jq\n", 69}
+
+      refute File.exists?(unlock_log)
+    end
+
+    test "reports a tool the pair's build needs, missing on the QA host, as a broken QA environment", %{worktree: worktree, feed_mode: mode} do
+      missing = {:ok, {"symphony-qa-pair-missing-tool:minisign\nsymphony-qa-pair-missing-tool:jq\n", 69}}
+      driver = pair_driver(worktree, mode, build: fn _out -> missing end)
+      assert QaDriver.environment_fault(driver) == nil
+
+      assert {:error, {:qa_tool, "qa_host_missing_tool", message}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+      assert message =~ "The QA host has no `minisign`, `jq` on the build's PATH, which the release pair's build needs"
+      assert message =~ "answer with verdict `blocked`"
+      assert QaDriver.environment_fault(driver) == {:qa_host_missing_tool, ["minisign", "jq"]}
+      assert error_code(launch_pair(driver)) == "qa_release_pair_not_built"
+
+      # An exit status 69 that names no tool is the build's own failure.
+      driver = pair_driver(worktree, mode, build: fn _out -> {:ok, {"make: *** [app] Error 69\n", 69}} end)
+      assert {:ok, %{"exit_status" => 69}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
+      assert QaDriver.environment_fault(driver) == nil
+
+      QaDriver.stop(driver)
+      assert QaDriver.environment_fault(driver) == nil
+    end
+
     test "refuses to build without a trusted QA signing identity", %{worktree: worktree, feed_mode: mode} do
       for {reply, code, text} <- [
             {{:ok, {"install-test-signing-identity: not installed: there is no keychain\n", 3}}, "qa_signing_identity_missing", "no QA signing identity"},
@@ -2903,7 +2983,7 @@ defmodule SymphonyElixir.QaDriverTest do
         assert message =~ text
         assert message =~ "answer with verdict `blocked`"
         assert message =~ "scripts/qa/install-test-signing-identity.sh once on the QA host"
-        refute_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out], _opts}
+        refute_received {:cmd, "/bin/sh", ["-c", @pair_build <> _rest, "sh", _out, _identity_script | _tools], _opts}
         refute_received {:cmd, "/bin/sh", ["-c", _installer, "sh"], _opts}
         assert error_code(launch_pair(driver)) == "qa_release_pair_not_built"
         QaDriver.stop(driver)
@@ -2960,7 +3040,7 @@ defmodule SymphonyElixir.QaDriverTest do
       driver = pair_driver(worktree, mode)
       assert {:error, {:qa_tool, "qa_release_pair_failed", message}} = QaDriver.call_tool(driver, "qa_build_release_pair", %{})
       assert message =~ "_server.py is not a regular file"
-      refute_received {:cmd, "/bin/sh", ["-c", "make -C macos release-pair" <> _rest, "sh", _out], _opts}
+      refute_received {:cmd, "/bin/sh", ["-c", @pair_build <> _rest, "sh", _out, _identity_script | _tools], _opts}
     end
 
     test "launches N from a fresh copy beside the pair's feed and drives the app its update helper relaunches", %{worktree: worktree, feed_mode: mode} do

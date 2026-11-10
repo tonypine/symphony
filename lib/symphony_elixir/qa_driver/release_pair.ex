@@ -10,7 +10,8 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
   `scripts/qa/install-test-signing-identity.sh` installs and trusts once per QA
   host: a self-signed identity named for QA tests in a keychain of its own, never
   Symphony's release certificate. The build runs that script's `--use` first,
-  which unlocks the keychain and prints the identity. On a `worker_host` with
+  which unlocks the keychain and prints the identity, and the build runs it again in the
+  same command as `make`, since an unlock holds only for the connection that ran it. On a `worker_host` with
   passwordless sudo (`sudo -n true`) a missing or untrusted identity is installed
   there and then: Symphony runs its own copy of the script, embedded at compile
   time, never the checkout's, which the PR under test may change. Anywhere else
@@ -47,7 +48,9 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
   @external_resource @installer_path
   @installer File.read!(@installer_path)
   @install_timeout_ms 120_000
-  @build_command ~s(make -C macos release-pair RELEASE_PAIR_OUT="$1")
+  # What `make -C macos release-pair` runs (`test/support/macos_release/release_pair.py`'s `TOOLS`)
+  # and the `python3` it runs that with.
+  @pair_tools ~w(python3 swift codesign ditto plutil minisign git make jq security)
   @python "/usr/bin/python3"
   @timeout_ms 30_000
   @output_limit 8_000
@@ -63,6 +66,25 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
   if ! GIT_TERMINAL_PROMPT=0 git -c core.hooksPath=/dev/null -c advice.detachedHead=false clone --quiet --template= -- "$1/head.bundle" "$2" 2>&1; then rm -rf "$1" "$2"; exit 1; fi
   rm -rf "$1"
   printf 'symphony-qa-pair-src:%s\\n' "$2"
+  """
+
+  # Builds the pair into `$1` with the identity script `$2`, once every tool in `$3`… is on the
+  # build's PATH. The unlock and the build run in this one shell: on a QA VM a keychain unlocked
+  # over one SSH connection stays locked for the next, so an unlock in its own command leaves every
+  # signing step of the build with `errSecInternalComponent` (TP-1437). A missing tool exits 69
+  # with one `symphony-qa-pair-missing-tool:` line per tool, before anything is unlocked or built.
+  @build_script """
+  # Symphony QA release pair build: check the tools, unlock the signing keychain, build.
+  out="$1"
+  identity_script="$2"
+  shift 2
+  missing=""
+  for tool in "$@"; do
+    command -v "$tool" >/dev/null 2>&1 || { printf 'symphony-qa-pair-missing-tool:%s\\n' "$tool"; missing=1; }
+  done
+  [ -z "$missing" ] || exit 69
+  unlocked="$(/bin/sh "$identity_script" --use 2>&1)" || { status=$?; printf '%s\\n' "$unlocked"; exit "$status"; }
+  exec make -C macos release-pair RELEASE_PAIR_OUT="$out"
   """
 
   # Copies the update feed's code from the checkout `$1` into `$2/stubs`, so the
@@ -113,6 +135,7 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
   """
 
   @type tool_error :: {:error, {:qa_tool, String.t(), String.t()}}
+  @type missing_tools :: {:error, {:qa_host_missing_tool, [String.t()]}}
   @type identity :: %{sha: String.t(), keychain: String.t(), installed?: boolean()}
 
   @doc "The modes `qa_update_feed` switches the feed to."
@@ -294,11 +317,20 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
   defp feed_server_missing(output),
     do: tool_error("qa_release_pair_failed", "The update feed's code could not be copied from the checkout: #{tail(String.trim(output), 500)}")
 
+  @doc "The executables the pair's build needs on the QA host's PATH."
+  @spec tools() :: [String.t()]
+  def tools, do: @pair_tools
+
   @doc """
   Runs `make -C macos release-pair` in `source`, signing with `identity`, into the
   pair's folder. Returns the build's output and exit status like `qa_build`.
+
+  It is one command on the QA host: it checks the build's tools (`tools/0`), unlocks the
+  keychain with `#{@identity_script} --use` and runs `make`, since the keychain's unlock
+  holds only for the connection that ran it. A missing tool answers
+  `{:error, {:qa_host_missing_tool, names}}`, a broken part of the QA environment.
   """
-  @spec build(map(), Path.t(), identity()) :: {:ok, {String.t(), integer()}} | tool_error()
+  @spec build(map(), Path.t(), identity()) :: {:ok, {String.t(), integer()}} | missing_tools() | tool_error()
   def build(config, source, identity) do
     env = %{"SYMPHONY_E2E_SIGNING_IDENTITY" => identity.sha, "SYMPHONY_E2E_KEYCHAIN" => identity.keychain}
 
@@ -310,7 +342,15 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
       output_limit: @output_limit
     ]
 
-    case config.host.cmd.("/bin/sh", ["-c", @build_command, "sh", root(config)], opts) do
+    args = ["-c", @build_script, "sh", root(config), Path.join(source, @identity_script) | @pair_tools]
+
+    case config.host.cmd.("/bin/sh", args, opts) do
+      {:ok, {output, 69} = result} ->
+        case for("symphony-qa-pair-missing-tool:" <> name <- String.split(output, "\n", trim: true), do: name) do
+          [] -> {:ok, result}
+          names -> {:error, {:qa_host_missing_tool, names}}
+        end
+
       {:ok, {output, status}} ->
         {:ok, {output, status}}
 

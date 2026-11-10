@@ -140,7 +140,7 @@ defmodule SymphonyElixir.QaAgent do
           optional(:needs_dev_server) => true,
           optional(:scope) => :none,
           optional(:app_check) => %{built: boolean(), launched: boolean(), checked: boolean()},
-          optional(:cause) => {:qa_worker, String.t()},
+          optional(:cause) => {:qa_worker, String.t()} | {:qa_host_missing_tool, [String.t()]},
           optional(:follow_ups) => pos_integer(),
           optional(:verdict_retries) => 1
         }
@@ -1068,6 +1068,7 @@ defmodule SymphonyElixir.QaAgent do
             agent_module
             |> run_tracked_session(job, worktree, qa_settings, prompt, opts)
             |> unavailable_host(driver)
+            |> environment_fault(driver)
             |> limit_wide_pass(driver, QaDriver.wide_pass(driver), job)
           else
             {:error, cause} -> {:error, cause, empty_tokens()}
@@ -1188,6 +1189,19 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   defp unavailable_host(run, _driver), do: run
+
+  # A `qa_*` tool that found a broken part of the QA environment mid-pass (a tool the release
+  # pair's build needs, missing on the QA host) told the agent to answer `blocked`: that block
+  # carries the tool's cause, so the self-heal lane files the QA host's fix ticket instead of
+  # asking a person to run QA again (TP-1437). A block that already names its own cause keeps it.
+  defp environment_fault({:ok, %{result: %{verdict: :blocked} = result} = run} = outcome, driver) do
+    case {Map.has_key?(result, :cause), QaDriver.environment_fault(driver)} do
+      {false, {:qa_host_missing_tool, _names} = cause} -> {:ok, %{run | result: Map.put(result, :cause, cause)}}
+      _none -> outcome
+    end
+  end
+
+  defp environment_fault(run, _driver), do: run
 
   # The `macos_app` playbook's wide pass catches layout crashes that only happen in wide
   # windows (TP-701). A `pass` whose wide pass never resized a window checked none of them, so it

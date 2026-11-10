@@ -642,6 +642,9 @@ anyway: Symphony's tool does it, or it is host setup. Where it can't be installe
   `qa_signing_identity_untrusted`, the QA host lacks its test signing identity: mark the steps that
   need the pair `blocked` with the tool's message, finish the other steps, and answer `blocked`
   with that message.
+  When it fails with `qa_host_missing_tool`, the QA host lacks a tool the pair's build needs
+  (`minisign`, `jq`, …): do the same. Symphony files the fix for the QA host itself, so don't ask for
+  another run.
 - **Launch N:** `qa_launch_app` with `release_pair: true` (plus the walkthrough's `appearance`,
   `api_fixtures` and `update_check_interval_seconds`; not `update_feed_port`). N starts from a fresh
   copy, and its update checks read the pair's own feed, which offers N+1. When the walkthrough has
