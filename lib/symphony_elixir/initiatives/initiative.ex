@@ -32,7 +32,14 @@ defmodule SymphonyElixir.Initiatives.Initiative do
           state: String.t() | nil,
           state_type: String.t() | nil,
           created_at: String.t() | nil,
-          blocked_by: [%{identifier: String.t() | nil, state: String.t() | nil, open: boolean(), completed_at: String.t() | nil}]
+          blocked_by: [blocker()]
+        }
+
+  @type blocker :: %{
+          identifier: String.t() | nil,
+          state: String.t() | nil,
+          open: boolean(),
+          completed_at: String.t() | nil
         }
 
   @type t :: %{
