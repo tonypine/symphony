@@ -14,10 +14,11 @@ public struct ContextCard: Equatable {
         public var progress: ProgressStrip?
     }
 
-    /// **Connected**: a ticket blocked by, blocking or related to this one, as a chip, its stage (C7) and the relation
-    /// in words.
+    /// **Connected**: a ticket blocked by, blocking or related to this one, as a chip, its situation line (C31) and
+    /// the relation in words; its stage (C7) only from a Symphony that serves no situation for it.
     public struct Connection: Equatable {
         public var identifier: String
+        public var situation: Situation?
         public var stage: ReferencePopover.Badge?
         /// "waits on TP-892", "TP-892 waits on it", "related".
         public var relation: String
@@ -31,8 +32,11 @@ public struct ContextCard: Equatable {
         public var text: String
     }
 
+    /// **Now**: where the item's ticket stands, the line every page shows for it; nil when the state holds none.
+    public var situation: Situation?
     public var partOf: PartOf?
-    /// **Its work**: "#448 · reviewing · CI red on test · sent back twice", the number a chip.
+    /// **Its work**: "#448 · reviewing · CI red on test · sent back twice", the number a chip; only the number when
+    /// the ticket's situation line says where it stands.
     public var work: String?
     public var connected: [Connection]
     /// **Your answer**: what answering unblocks, as a sentence.
@@ -43,9 +47,11 @@ public struct ContextCard: Equatable {
     public var references: [String: Reference]
 
     /// The card for `item`; nil when it would have no row. `now` and `calendar` tell an earlier call from today
-    /// from an older one.
-    public init?(item: InboxItem, now: Date = Date(), calendar: Calendar = .current) {
+    /// from an older one. `state` gives each ticket's situation (`StateSnapshot.situations`).
+    public init?(item: InboxItem, now: Date = Date(), calendar: Calendar = .current, state: StateSnapshot? = nil) {
         let context = item.context ?? TicketContext()
+        let situation = state?.situation(item.identifier)
+        self.situation = situation
         var references = item.references
         let addTicket = { (identifier: String, title: String?, state: String?) in
             if references[identifier] == nil {
@@ -65,6 +71,7 @@ public struct ContextCard: Equatable {
             let key = ["#\(pullRequest.number)", "PR #\(pullRequest.number)"].first { references[$0] != nil } ?? "#\(pullRequest.number)"
             if references[key] == nil { references[key] = .missing(url: pullRequest.url) }
             let checks = pullRequest.failingCheck.map { "CI red on \($0)" } ?? pullRequest.checks?.state
+            guard situation == nil else { return key }
             return ([key, pullRequest.review, checks, Self.sentBack(pullRequest.sentBack)].compactMap { $0 }).joined(separator: " · ")
         }
 
@@ -77,9 +84,11 @@ public struct ContextCard: Equatable {
         connected = groups.flatMap { list, relation in
             list.map { connected in
                 addTicket(connected.identifier, connected.title, connected.state)
+                let situation = state?.situation(connected.identifier)
                 return Connection(
                     identifier: connected.identifier,
-                    stage: connected.state.map { ReferencePopover.Badge(status: ReferencePopover.status(state: $0, waitingOn: nil), word: $0) },
+                    situation: situation,
+                    stage: situation != nil ? nil : connected.state.map { ReferencePopover.Badge(status: ReferencePopover.status(state: $0, waitingOn: nil), word: $0) },
                     relation: relation
                 )
             }
@@ -94,7 +103,7 @@ public struct ContextCard: Equatable {
         }
 
         self.references = references
-        if partOf == nil && work == nil && connected.isEmpty && answer == nil && earlierCalls.isEmpty { return nil }
+        if situation == nil && partOf == nil && work == nil && connected.isEmpty && answer == nil && earlierCalls.isEmpty { return nil }
     }
 
     /// "sent back twice"; nil when Code Review never sent it back.

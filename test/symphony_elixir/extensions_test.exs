@@ -1813,7 +1813,14 @@ defmodule SymphonyElixir.ExtensionsTest do
     end
 
     blocked_by = fn identifier ->
-      %{"inverseRelations" => %{"nodes" => [%{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"name" => "Plan Review", "type" => "started"}}}]}}
+      %{
+        "inverseRelations" => %{
+          "nodes" => [
+            %{"type" => "blocks", "issue" => %{"identifier" => identifier, "state" => %{"name" => "Plan Review", "type" => "started"}}},
+            %{"type" => "blocks", "issue" => %{"identifier" => "MT-1", "completedAt" => "2026-10-02T10:00:00Z", "state" => %{"name" => "Done", "type" => "completed"}}}
+          ]
+        }
+      }
     end
 
     plan = fn identifier, state, type, children, extra ->
@@ -1900,7 +1907,16 @@ defmodule SymphonyElixir.ExtensionsTest do
              "slot" => %{"status" => "running", "identifier" => "MT-HTTP", "reason" => nil},
              "sub_tickets" => [
                %{"identifier" => "MT-2", "waits_on" => "you", "blocked_by" => [], "waiting_for" => []},
-               %{"identifier" => "MT-3", "waits_on" => "blocker", "blocked_by" => ["MT-2"], "waiting_for" => ["MT-2"]},
+               %{
+                 "identifier" => "MT-3",
+                 "waits_on" => "blocker",
+                 "blocked_by" => ["MT-2", "MT-1"],
+                 "blockers" => [
+                   %{"identifier" => "MT-2", "open" => true, "completed_at" => nil},
+                   %{"identifier" => "MT-1", "open" => false, "completed_at" => "2026-10-02T10:00:00Z"}
+                 ],
+                 "waiting_for" => ["MT-2"]
+               },
                %{"identifier" => "MT-HTTP", "waits_on" => "working"}
              ]
            } = hd(listed)

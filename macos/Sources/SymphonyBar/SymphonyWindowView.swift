@@ -386,7 +386,7 @@ final class SymphonyWindowModel: ObservableObject {
 
     /// The Initiatives under the window's scope.
     var initiativesList: InitiativesList? {
-        initiatives.map { InitiativesList(initiatives: $0.initiatives, scope: scope) }
+        initiatives.map { InitiativesList(initiatives: $0.initiatives, scope: scope, state: overviewState?.snapshot) }
     }
 
     /// Reads the Initiatives; Symphony serves them from what it cached on its last poll, so this costs no Linear

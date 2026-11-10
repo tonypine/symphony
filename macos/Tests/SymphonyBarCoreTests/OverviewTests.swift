@@ -122,10 +122,10 @@ final class OverviewTests: XCTestCase {
     func testEachTileOpensItsView() {
         XCTAssertEqual(Overview.StageKind.waitingOnYou.destination, .inbox)
         XCTAssertEqual(Overview.StageKind.shippedToday.destination, .shipped)
-        XCTAssertEqual(Overview.StageKind.queued.destination, .tickets(.queued))
+        XCTAssertEqual(Overview.StageKind.queued.destination, .tickets(.waitingForSlot))
         XCTAssertEqual(Overview.StageKind.working.destination, .tickets(.working))
-        XCTAssertEqual(Overview.StageKind.review.destination, .tickets(.review))
-        XCTAssertEqual(Overview.StageKind.merging.destination, .tickets(.merging))
+        XCTAssertEqual(Overview.StageKind.review.destination, .tickets(.working))
+        XCTAssertEqual(Overview.StageKind.merging.destination, .tickets(.working))
         XCTAssertEqual(Overview.showShippedTitle, "Show Shipped")
     }
 
@@ -196,7 +196,7 @@ final class OverviewTests: XCTestCase {
         let overview = Overview(state: state, now: now, timeZone: utc)
 
         XCTAssertEqual(overview.problems.map(\.id), ["API-7", "SHOP-4", "stray-processes"])
-        XCTAssertEqual(overview.problems[0].sentence, "API-7 failed 3 times: agent exited: turn timeout.")
+        XCTAssertEqual(overview.problems[0].sentence, "API-7 keeps failing: agent exited: turn timeout.")
         XCTAssertEqual(overview.problems[0].severity, .problem)
         XCTAssertEqual(overview.problems[0].fixes, [.open("API-7"), .stopRun("API-7")])
         XCTAssertEqual(overview.problems[0].fixes.map(\.title), ["Open", "Stop Run…"])
@@ -207,7 +207,7 @@ final class OverviewTests: XCTestCase {
         XCTAssertEqual(Overview.Fix.openDiagnostics.title, "Open Diagnostics")
         XCTAssertEqual(overview.sentence, "3 things need attention.")
         XCTAssertEqual(overview.stages[0].count, 2)
-        XCTAssertEqual(overview.nextUp.map(\.reason), ["retries after 3 failed attempts", "retries after 2 failed attempts"])
+        XCTAssertEqual(overview.nextUp.map(\.reason), ["waits to retry", "waits to retry"])
 
         let one = Overview(state: OverviewState(generatedAt: now, strayProcesses: [OverviewState.StrayProcess()]), now: now, timeZone: utc)
         XCTAssertEqual(one.problems.first?.sentence, "1 process is still running from a finished run.")
@@ -376,6 +376,20 @@ final class OverviewTests: XCTestCase {
     func testAStateThatIsntOneDecodesToNothing() {
         XCTAssertNil(OverviewState.decode(Data("nope".utf8)))
         XCTAssertNil(OverviewState.decode(Data(#"{"error":{"code":"snapshot_timeout"}}"#.utf8)))
+    }
+
+    // MARK: - Situation lines
+
+    func testNowWorkingNextUpAndNeedsAttentionRowsReadTheTicketsSituation() throws {
+        let overview = Overview(state: try state("tickets"), now: wallClock, timeZone: utc)
+        XCTAssertEqual(overview.reference, SymphonyState.parseDate("2026-10-07T14:20:00Z"))
+        let working = try XCTUnwrap(overview.working.first { $0.identifier == "SHOP-305" })
+        XCTAssertEqual(working.situation?.word, "Working on the Write the code step")
+        XCTAssertEqual(overview.nextUp.first { $0.identifier == "SHOP-320" }?.situation?.kind, .slot)
+        let failing = try XCTUnwrap(overview.problems.first { $0.id == "SHOP-311" })
+        XCTAssertEqual(failing.situation?.cause, "Third try of 5: mix test failed: 4 failures.")
+        XCTAssertFalse(failing.sentence.contains("times"), "the count lives in the cause")
+        XCTAssertNil(overview.problems.first { $0.id == "DOCS-41" }?.situation)
     }
 
     // MARK: - Helpers

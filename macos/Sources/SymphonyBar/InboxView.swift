@@ -23,6 +23,8 @@ struct InboxContent: View {
                     openMention: model.openPeek,
                     openMentionDirectly: model.openMentionDirectly,
                     watches: model.watchState.watches,
+                    state: model.overviewState?.snapshot,
+                    now: model.overviewState?.generatedAt ?? Date(),
                     scrollOffset: { model.inboxScroll[$0] },
                     rememberScroll: { model.inboxScroll[$1] = $0 }
                 )
@@ -72,6 +74,10 @@ struct InboxView: View {
     var openMentionDirectly: (Mention) -> Void = { _ in }
     /// The PR and CI watcher's block on each ticket, by identifier, for a watcher decision's evidence (S16).
     var watches: [String: WatchBlock] = [:]
+    /// Symphony's state, for each ticket's situation line in the context card (C31).
+    var state: StateSnapshot?
+    /// Symphony's clock, so the context card's situation ages read as on every other page.
+    var now = Date()
     /// Where each review was scrolled to, by issue id, and keeping it: a page opened from the review and left with ⌘[
     /// finds it where it was.
     var scrollOffset: (String) -> Double? = { _ in nil }
@@ -101,7 +107,9 @@ struct InboxView: View {
                                 openMention: openMention,
                                 openMentionDirectly: openMentionDirectly,
                                 narrow: narrow,
-                                evidence: WatcherEvidence(item: item, watch: watches[item.identifier])
+                                now: now,
+                                evidence: WatcherEvidence(item: item, watch: watches[item.identifier]),
+                                state: state
                             )
                             // Picking the write-in scrolls its field into view, once it is laid out.
                             .onChange(of: item.review.action?.isWriteIn(picks(item.id)) == true) { _, picked in
@@ -327,10 +335,12 @@ struct InboxReviewBody: View {
     /// True in a narrow pane: an option card's Recommended badge goes under its label, the key hints hide, and the
     /// context card puts its labels above their values.
     var narrow = false
-    /// The context card's clock: an earlier call today shows its time only.
+    /// The context card's clock, Symphony's: an earlier call today shows its time only, and its situation ages.
     var now = Date()
     /// What the watcher found behind its decision (S16), above the options.
     var evidence: WatcherEvidence?
+    /// Symphony's state, for the context card's situation lines.
+    var state: StateSnapshot?
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -359,8 +369,8 @@ struct InboxReviewBody: View {
             case .waiting:
                 if let wait = item.review.blocked { WaitingCard(wait: wait) }
             }
-            if let context = ContextCard(item: item, now: now) {
-                ContextCardView(card: context, narrow: narrow)
+            if let context = ContextCard(item: item, now: now, state: state) {
+                ContextCardView(card: context, narrow: narrow, reference: now)
             }
         }
         .padding(DesignTokens.Space.s5)
@@ -1117,12 +1127,14 @@ private struct TradeoffTag: View {
     }
 }
 
-/// N9: where the item's ticket sits, last in its review: its parent and progress (N10), its pull request, the tickets
+/// N9: where the item's ticket sits, last in its review: its situation line (C31), its parent and progress (N10), its
+/// pull request, the tickets
 /// connected to it, what answering unblocks and the calls already made. Two columns, labels above values in a narrow
 /// pane. Its chips find the context's tickets too.
 private struct ContextCardView: View {
     let card: ContextCard
     let narrow: Bool
+    var reference = Date()
 
     var body: some View {
         Card(title: ContextCard.title) {
@@ -1152,6 +1164,9 @@ private struct ContextCardView: View {
 
     private var rows: [(label: String, value: AnyView)] {
         var rows: [(label: String, value: AnyView)] = []
+        if let situation = card.situation {
+            rows.append(("Now", AnyView(SituationLine(situation, reference: reference, size: .compact))))
+        }
         if let partOf = card.partOf {
             rows.append(("Part of", AnyView(VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                 ChipText(text: partOf.text)
@@ -1166,8 +1181,15 @@ private struct ContextCardView: View {
                 ForEach(Array(card.connected.enumerated()), id: \.offset) { _, connection in
                     HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                         ChipText(text: connection.identifier).fixedSize()
-                        if let stage = connection.stage { StatusBadge(status: stage.status, word: stage.word).fixedSize() }
-                        ChipText(text: connection.relation, color: .secondaryLabelColor)
+                        if let situation = connection.situation {
+                            VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
+                                SituationLine(situation, reference: reference, size: .compact)
+                                ChipText(text: connection.relation, color: .secondaryLabelColor)
+                            }
+                        } else {
+                            if let stage = connection.stage { StatusBadge(status: stage.status, word: stage.word).fixedSize() }
+                            ChipText(text: connection.relation, color: .secondaryLabelColor)
+                        }
                     }
                 }
             })))

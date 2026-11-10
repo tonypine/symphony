@@ -28,29 +28,57 @@ public struct TicketList: Equatable {
         }
 
         public static func < (lhs: Stage, rhs: Stage) -> Bool { lhs.rawValue < rhs.rawValue }
+
+        /// The situation kind a stage reads as when Symphony serves no situation.
+        public var kind: DesignTokens.SituationKind {
+            switch self {
+            case .queued: .slot
+            // A ticket in review, QA or landing has a reviewer, a QA pass or the landing at work, not CI.
+            case .working, .review, .merging: .working
+            case .waitingOnYou: .you
+            case .shipped: .done
+            }
+        }
     }
 
-    /// The scope bar's choices, in its order.
+    /// The scope bar's choices, in its order: the situation kinds (`director-ticket-page.md` §3), a few joined, then
+    /// Needs attention and Forced, which say something no kind does.
     public enum Filter: String, CaseIterable, Equatable {
-        case all, working, review, waitingOnYou, merging, queued, needsAttention, forced, shipped
+        case all, waitingOnYou, working, waitingForCI, waitingForSlot, held, retrying, needsAttention, forced, shipped
 
         public var title: String {
             switch self {
             case .all: "All"
-            case .working: "Working"
-            case .review: "Review"
-            case .waitingOnYou: "Waiting on you"
-            case .merging: "Merging"
-            case .queued: "Queued"
+            case .waitingOnYou: DesignTokens.SituationKind.you.word
+            case .working: DesignTokens.SituationKind.working.word
+            case .waitingForCI: DesignTokens.SituationKind.ci.word
+            case .waitingForSlot: DesignTokens.SituationKind.slot.word
+            case .held: "Blocked or paused"
+            case .retrying: DesignTokens.SituationKind.retrying.word
             case .needsAttention: "Needs attention"
             case .forced: "Forced"
-            case .shipped: "Shipped today"
+            case .shipped: DesignTokens.SituationKind.done.word
+            }
+        }
+
+        /// The situation kinds the choice shows; nil for a choice that is not about a kind.
+        public var kinds: Set<DesignTokens.SituationKind>? {
+            switch self {
+            case .all, .needsAttention, .forced: nil
+            case .waitingOnYou: [.you]
+            case .working: [.working]
+            case .waitingForCI: [.ci, .build]
+            case .waitingForSlot: [.slot]
+            case .held: [.blocked, .paused]
+            case .retrying: [.retrying]
+            case .shipped: [.done]
             }
         }
 
         /// The choices shown in the bar itself; the others fold into **More** while the inspector narrows the table.
         public static func bar(inspectorShown: Bool) -> [Filter] {
-            inspectorShown ? [.all, .working, .review, .waitingOnYou] : [.all, .working, .review, .waitingOnYou, .merging, .queued, .needsAttention, .forced]
+            inspectorShown ? [.all, .waitingOnYou, .working, .waitingForCI]
+                : [.all, .waitingOnYou, .working, .waitingForCI, .waitingForSlot, .held, .retrying, .needsAttention]
         }
 
         /// The choices under **More**.
@@ -61,25 +89,20 @@ public struct TicketList: Equatable {
         public func matches(_ row: Row) -> Bool {
             switch self {
             case .all: true
-            case .working: row.stage == .working
-            case .review: row.stage == .review
-            case .waitingOnYou: row.stage == .waitingOnYou
-            case .merging: row.stage == .merging
-            case .queued: row.stage == .queued
             case .needsAttention: row.needsAttention
             case .forced: row.forced
-            case .shipped: row.stage == .shipped
+            default: kinds?.contains(row.kind) ?? true
             }
         }
 
         /// The filter a flow strip tile opens Tickets on; nil for Waiting on you, which opens the Inbox.
         public init?(stage: Overview.StageKind) {
             switch stage {
-            case .queued: self = .queued
-            case .working: self = .working
-            case .review: self = .review
+            case .queued: self = .waitingForSlot
+            // Review, QA and landing tickets read Working (a reviewer, a QA pass or the landing at work), as `Stage.kind`
+            // and Symphony's situation classify them, so their tiles open the list that holds them.
+            case .working, .review, .merging: self = .working
             case .waitingOnYou: return nil
-            case .merging: self = .merging
             case .shippedToday: self = .shipped
             }
         }
@@ -94,7 +117,10 @@ public struct TicketList: Equatable {
         public var repoKey: String?
         /// Its Linear state, for example "In Progress".
         public var state: String?
+        /// Where the list it came from puts it; the kind falls back on it when Symphony serves no situation.
         public var stage: Stage
+        /// Where it stands, as Symphony computes it for every page (`Situation`); nil from a Symphony that serves none.
+        public var situation: Situation?
         /// What it waits on: "retry at 14:05", "a slot", "BIL-206", "CI", "you".
         public var waitsOn: String
         /// Since when it is where it is; nil when Symphony didn't say.
@@ -108,14 +134,22 @@ public struct TicketList: Equatable {
         /// The inspector's facts, in order.
         public var facts: [Fact]
 
+        /// Its situation's kind, or the closest kind to its stage when Symphony serves no situation.
+        public var kind: DesignTokens.SituationKind { situation?.kind ?? stage.kind }
+
+        /// Its situation, or one of the kind its stage reads as with what it waits on as the cause, so a row from a
+        /// Symphony that serves none still reads as a line.
+        public var line: Situation { situation ?? Situation(kind: stage.kind, cause: waitsOn == "nothing" ? "" : "Waits on \(waitsOn).", since: since) }
+
         /// Values the table sorts on, never optional.
+        public var kindSort: Int { kind.precedence }
         public var titleText: String { title ?? "" }
         public var repoText: String { repoKey ?? "" }
         public var sinceSort: Date { since ?? .distantFuture }
 
-        /// One element for VoiceOver: "SHOP-301, Checkout total, Working, waits on the agent, 3 h".
-        public var accessibilityLabel: String {
-            [identifier, title, stage.title, forced ? "forced" : nil, needsAttention ? "needs attention" : nil, "waits on \(waitsOn)", sinceText.isEmpty ? nil : sinceText]
+        /// One element for VoiceOver: "SHOP-301, Checkout total, Waiting for CI: Checks are running on PR #741."
+        public func accessibilityLabel(reference: Date) -> String {
+            [identifier, title, needsAttention ? "needs attention" : nil, SituationText(line, reference: reference).spoken(forced: forced)]
                 .compactMap { $0 }
                 .joined(separator: ", ")
         }
@@ -139,13 +173,16 @@ public struct TicketList: Equatable {
     public static let stopForcingTitle = "Stop Forcing"
     public static let openTitle = "Open Ticket"
 
-    /// Every tracked ticket in the repo scope, by stage then oldest first.
+    /// Every tracked ticket in the repo scope, by situation kind then oldest first.
     public var rows: [Row]
+    /// Symphony's clock when it took the state, which the situations' ages are measured against.
+    public var reference: Date
 
     /// The rows of `state` in `scope`. Ages are measured against Symphony's own clock (`generated_at`), `now` only
     /// when the state has none; clock times are in `timeZone`.
     public init(state: OverviewState, scope: OverviewScope = .all, now: Date, timeZone: TimeZone = .current) {
         let reference = state.generatedAt ?? now
+        self.reference = reference
         var builder = Builder(reference: reference, timeZone: timeZone)
         let forcedByID = Dictionary(state.snapshot.forced.map { ($0.identifier, $0) }, uniquingKeysWith: { first, _ in first })
         let landingIDs = Set(state.landing)
@@ -216,7 +253,7 @@ public struct TicketList: Equatable {
         }
         for retry in state.retrying {
             let when = retry.dueAt.map { "retry at \(StatusMenu.clockTime($0, now: reference, timeZone: timeZone, dateFormat: "MMM d HH:mm"))" }
-            var facts = [Fact(label: "Failed attempts", value: "\(retry.attempt)")]
+            var facts: [Fact] = []
             if let error = retry.error { facts.append(Fact(label: "Last error", value: error)) }
             builder.add(Row(
                 identifier: retry.identifier, issueID: retry.issueID, title: retry.title, repoKey: retry.repoKey, state: nil,
@@ -267,6 +304,7 @@ public struct TicketList: Equatable {
                     if let summary = forced.summary { row.facts.append(Fact(label: "Forced status", value: summary)) }
                     if let part = forced.part { row.facts.append(Fact(label: "Working through", value: part)) }
                 }
+                row.situation = state.snapshot.situation(row.identifier)
                 row.sinceText = row.since.map { Overview.duration(Int(reference.timeIntervalSince($0))) } ?? ""
                 row.facts = Self.facts(row) + row.facts
                 return row
@@ -280,7 +318,8 @@ public struct TicketList: Equatable {
         let words = search.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
         return rows.filter { row in
             guard filter.matches(row) else { return false }
-            let text = [row.identifier, row.titleText, row.repoText, row.waitsOn, row.stage.title].joined(separator: " ").lowercased()
+            let line = row.line
+            let text = [row.identifier, row.titleText, row.repoText, row.waitsOn, line.word, line.cause].joined(separator: " ").lowercased()
             return words.allSatisfy(text.contains)
         }
     }
@@ -289,7 +328,7 @@ public struct TicketList: Equatable {
     public func count(_ filter: Filter) -> Int { rows.filter(filter.matches).count }
 
     /// The default order, then the columns' comparators, as the table sorts.
-    public static let defaultSort = [KeyPathComparator(\Row.stage), KeyPathComparator(\Row.sinceSort)]
+    public static let defaultSort = [KeyPathComparator(\Row.kindSort), KeyPathComparator(\Row.sinceSort)]
 
     /// The row of `identifier`, case-insensitively.
     public func row(_ identifier: String) -> Row? {
@@ -329,19 +368,17 @@ public struct TicketList: Equatable {
         }
     }
 
+    /// The inspector's facts beside the situation line, which says the stage, what it waits on and since when.
     private static func facts(_ row: Row) -> [Fact] {
-        var facts = [Fact(label: "Stage", value: row.stage.title)]
-        if let state = row.state { facts.append(Fact(label: "State", value: state)) }
+        var facts: [Fact] = []
         if let repo = row.repoKey { facts.append(Fact(label: "Repo", value: repo)) }
-        facts.append(Fact(label: "Waits on", value: row.waitsOn))
-        if !row.sinceText.isEmpty { facts.append(Fact(label: "Since", value: "\(row.sinceText) ago")) }
         facts.append(Fact(label: "Forced", value: row.forced ? "Yes" : "No"))
         return facts
     }
 
-    /// Stage by stage, then the oldest first, then by identifier.
+    /// Kind by kind in the situation's precedence, then the oldest first, then by identifier.
     private static func defaultOrder(_ lhs: Row, _ rhs: Row) -> Bool {
-        if lhs.stage != rhs.stage { return lhs.stage < rhs.stage }
+        if lhs.kind != rhs.kind { return lhs.kindSort < rhs.kindSort }
         if lhs.sinceSort != rhs.sinceSort { return lhs.sinceSort < rhs.sinceSort }
         return lhs.identifier.localizedStandardCompare(rhs.identifier) == .orderedAscending
     }

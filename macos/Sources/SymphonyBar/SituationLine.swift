@@ -6,7 +6,8 @@ import SymphonyBarCore
 /// its word and age in one status pill; the compact one sits in a row, the word and the cause with the age trailing.
 /// The cause wraps at the reading measure and the word is never cut. Color never says it alone: the glyph and the word
 /// always come with it, and VoiceOver reads the word, the age and the cause as one sentence. A forced ticket shows the
-/// Forced chip beside the line; the phase is not part of it.
+/// Forced chip beside the line; the phase is not part of it. On a selected row (the background's prominence raised, as a
+/// table draws its selection) the word and glyph take the row's text color, so they never vanish on the highlight.
 struct SituationLine: View {
     enum Size { case full, compact }
 
@@ -14,6 +15,7 @@ struct SituationLine: View {
     var size: Size = .full
     var forced = false
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.backgroundProminence) private var prominence
 
     init(_ situation: Situation, reference: Date = Date(), size: Size = .full, forced: Bool = false) {
         text = SituationText(situation, reference: reference)
@@ -22,6 +24,15 @@ struct SituationLine: View {
     }
 
     private var kind: DesignTokens.SituationKind { text.kind }
+
+    /// The word and glyph color: the kind's tint, or the row's own text color on a selection highlight.
+    private var wordStyle: AnyShapeStyle {
+        prominence == .increased ? AnyShapeStyle(.primary) : AnyShapeStyle(kind.tint)
+    }
+
+    private var glyph: some View {
+        Image(systemName: kind.symbol).foregroundStyle(wordStyle).accessibilityHidden(true)
+    }
 
     var body: some View {
         Group {
@@ -56,9 +67,9 @@ struct SituationLine: View {
     private var pill: some View {
         HStack(spacing: 6) {
             Label {
-                Text(text.word).fontWeight(.semibold).foregroundStyle(kind.tint)
+                Text(text.word).fontWeight(.semibold).foregroundStyle(wordStyle)
             } icon: {
-                kind.glyph
+                glyph
             }
             .labelStyle(.titleAndIcon)
             if let age = text.ageLabel {
@@ -92,10 +103,10 @@ struct SituationLine: View {
 
     private var compact: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-            kind.glyph
+            glyph
             Text(text.word)
                 .fontWeight(.semibold)
-                .foregroundStyle(kind.tint)
+                .foregroundStyle(wordStyle)
                 .fixedSize()
             if forced { StatusBadge(status: .forced).fixedSize() }
             Text(text.cause)

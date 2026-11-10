@@ -131,18 +131,48 @@ public struct Initiative: Equatable, Identifiable {
     }
 
     public struct SubTicket: Equatable, Identifiable {
+        /// A ticket it is blocked by: open, or done since `completedAt` (analysis §2.3: a resolved blocker reads struck
+        /// through with the date it finished).
+        public struct Blocker: Equatable, Identifiable {
+            public var identifier: String
+            public var open: Bool
+            public var completedAt: Date?
+            public var id: String { identifier }
+
+            public init(identifier: String, open: Bool = true, completedAt: Date? = nil) {
+                self.identifier = identifier
+                self.open = open
+                self.completedAt = completedAt
+            }
+
+            /// "done Oct 2" for a resolved blocker, "done" when Linear gave no date; nil for an open one.
+            public func doneLabel(timeZone: TimeZone = .current) -> String? {
+                guard !open else { return nil }
+                guard let completedAt else { return "done" }
+                let formatter = DateFormatter()
+                formatter.locale = Locale(identifier: "en_US_POSIX")
+                formatter.timeZone = timeZone
+                formatter.dateFormat = "MMM d"
+                return "done \(formatter.string(from: completedAt))"
+            }
+        }
+
         public var issueID: String?
         public var identifier: String
         public var title: String?
         public var state: String?
         public var url: URL?
         public var blockedBy: [String]
+        /// Each of `blockedBy`, open or done; from a Symphony that serves no `blockers`, every one reads open.
+        public var blockers: [Blocker]
         public var waits: InitiativeWait
+        /// Where it stands, as every page says it (`StateSnapshot.situations`); nil when the state holds none for it.
+        public var situation: Situation?
         public var id: String { identifier }
 
         public init(
             issueID: String? = nil, identifier: String, title: String? = nil, state: String? = nil, url: URL? = nil,
-            blockedBy: [String] = [], waits: InitiativeWait
+            blockedBy: [String] = [], blockers: [Blocker]? = nil, waits: InitiativeWait, situation: Situation? = nil
         ) {
             self.issueID = issueID
             self.identifier = identifier
@@ -150,7 +180,24 @@ public struct Initiative: Equatable, Identifiable {
             self.state = state
             self.url = url
             self.blockedBy = blockedBy
+            self.blockers = blockers ?? blockedBy.map { Blocker(identifier: $0) }
             self.waits = waits
+            self.situation = situation
+        }
+
+        /// Its situation, or one of the kind closest to what it waits on when the state holds none (a done
+        /// sub-ticket, which no list of open tickets names, or a Symphony that serves no situation).
+        public var line: Situation {
+            if let situation { return situation }
+            switch waits {
+            case .done: return Situation(kind: .done, cause: "")
+            case .working: return Situation(kind: .working, cause: "")
+            case .you: return Situation(kind: .you, cause: "")
+            case let .blocker(identifiers):
+                return Situation(kind: .blocked, word: identifiers.first.map { "Blocked by \($0)" }, cause: identifiers.count > 1 ? waits.line + "." : "")
+            case .ci: return Situation(kind: .ci, cause: "")
+            case .slot: return Situation(kind: .slot, cause: "")
+            }
         }
 
         /// The issue id Review opens in the Inbox, nil when the row opens the ticket page instead: only a ticket
@@ -280,8 +327,15 @@ public struct Initiative: Equatable, Identifiable {
             let state: String?
             let url: String?
             let blockedBy: [String]?
+            let blockers: [BlockerPayload]?
             let waitsOn: String?
             let waitingFor: [String]?
+        }
+
+        struct BlockerPayload: Decodable {
+            let identifier: String?
+            let open: Bool?
+            let completedAt: String?
         }
 
         struct SlotPayload: Decodable {
@@ -309,16 +363,25 @@ extension Initiative.SubTicket {
         self.init(
             issueID: payload.issueId, identifier: identifier, title: payload.title, state: payload.state,
             url: payload.url.flatMap(URL.init(string:)), blockedBy: payload.blockedBy ?? [],
+            blockers: payload.blockers?.compactMap { blocker in
+                blocker.identifier.map {
+                    Blocker(identifier: $0, open: blocker.open ?? true, completedAt: blocker.completedAt.flatMap(SymphonyState.parseDate))
+                }
+            },
             waits: InitiativeWait(payload.waitsOn, waitingFor: payload.waitingFor ?? [])
         )
     }
 
-    /// What VoiceOver reads for the row: "BIL-206, Refund flow, waits on you, blocked by BIL-205".
-    public var accessibilityLabel: String {
+    /// What VoiceOver reads for the row: "BIL-206, Refund flow, Blocked by BIL-205: BIL-205 is in Code Review.,
+    /// blocked by BIL-205, BIL-204 done Oct 2".
+    public func accessibilityLabel(reference: Date = Date(), timeZone: TimeZone = .current) -> String {
         var parts = [identifier]
         if let title { parts.append(title) }
-        parts.append(Self.spoken(waits.line))
-        if !blockedBy.isEmpty { parts.append("blocked by " + ListFormatter.localizedString(byJoining: blockedBy)) }
+        parts.append(SituationText(line, reference: reference).spoken())
+        if !blockers.isEmpty {
+            let names = blockers.map { [$0.identifier, $0.doneLabel(timeZone: timeZone)].compactMap { $0 }.joined(separator: " ") }
+            parts.append("blocked by " + ListFormatter.localizedString(byJoining: names))
+        }
         return parts.joined(separator: ", ")
     }
 
@@ -344,8 +407,18 @@ public struct InitiativesList: Equatable {
 
     public var sections: [Section]
 
-    public init(initiatives: [Initiative], scope: OverviewScope = .all) {
-        let shown = initiatives.filter { scope.includes($0.repoKey) }
+    /// The initiatives under `scope`, each sub-ticket with its situation from `state` (`StateSnapshot.situations`).
+    public init(initiatives: [Initiative], scope: OverviewScope = .all, state: StateSnapshot? = nil) {
+        let shown = initiatives.filter { scope.includes($0.repoKey) }.map { initiative in
+            guard let state else { return initiative }
+            var initiative = initiative
+            initiative.subTickets = initiative.subTickets.map { ticket in
+                var ticket = ticket
+                ticket.situation = state.situation(ticket.identifier) ?? ticket.situation
+                return ticket
+            }
+            return initiative
+        }
         sections = Initiative.Group.allCases.compactMap { group in
             let inGroup = shown.filter { $0.group == group }
             return inGroup.isEmpty ? nil : Section(group: group, initiatives: inGroup)

@@ -111,6 +111,26 @@ public struct Situation: Equatable, Decodable {
     }
 }
 
+extension Situation {
+    /// Each ticket's `situation` in a `/api/v1/state` payload, by identifier: the dispatch order's groups (every open
+    /// ticket Symphony works) and queue, then the watched `issues`. The pages read a ticket's line from here, so every
+    /// row that names it says the same; a ticket none of them holds has none.
+    public static func byTicket(state data: Data) -> [String: Situation] {
+        guard let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return [:] }
+        let order = root["order"] as? [String: Any]
+        let groups = (order?["groups"] as? [[String: Any]] ?? []).flatMap { $0["tickets"] as? [[String: Any]] ?? [] }
+        let entries = groups + (order?["queue"] as? [[String: Any]] ?? []) + (root["issues"] as? [[String: Any]] ?? [])
+        var situations: [String: Situation] = [:]
+        for entry in entries {
+            guard let identifier = (entry["identifier"] ?? entry["issue_identifier"]) as? String, situations[identifier] == nil,
+                  let situation = decode(object: entry["situation"])
+            else { continue }
+            situations[identifier] = situation
+        }
+        return situations
+    }
+}
+
 extension DesignTokens.SituationKind {
     /// The kind's name in the API (`waiting_for_ci`).
     public var apiKind: String {

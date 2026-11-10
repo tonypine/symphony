@@ -60,7 +60,7 @@ struct OverviewBody: View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s6) {
             StatusSentence(overview: overview, actions: actions)
             if !overview.problems.isEmpty {
-                NeedsAttention(problems: overview.problems, actions: actions)
+                NeedsAttention(problems: overview.problems, reference: overview.reference, actions: actions)
                     .transition(.opacity)
             }
             FlowStrip(stages: overview.stages, rows: width - 2 * DesignTokens.Space.s5 >= FlowStrip.oneRowMinWidth ? 1 : 2, actions: actions)
@@ -91,14 +91,14 @@ struct OverviewBody: View {
             if !overview.working.isEmpty {
                 Card(title: Overview.nowWorkingTitle) {
                     RowList(items: overview.working) { row in
-                        WorkingRowView(row: row).opensTicket(row.identifier, open: actions.openTicket)
+                        WorkingRowView(row: row, reference: overview.reference).opensTicket(row.identifier, open: actions.openTicket)
                     }
                 }
             }
             if !overview.nextUp.isEmpty {
                 Card(title: Overview.nextUpTitle) {
                     RowList(items: overview.nextUp) { row in
-                        QueuedRowView(row: row).opensTicket(row.identifier, open: actions.openTicket)
+                        QueuedRowView(row: row, reference: overview.reference).opensTicket(row.identifier, open: actions.openTicket)
                     }
                 }
             }
@@ -282,6 +282,7 @@ private struct StatTile: View {
 
 private struct NeedsAttention: View {
     let problems: [Overview.Problem]
+    var reference = Date()
     let actions: OverviewActions
     @State private var hovering = false
     /// The order shown; a poll keeps it while the pointer is over the list.
@@ -290,7 +291,7 @@ private struct NeedsAttention: View {
     var body: some View {
         Card(title: Overview.needsAttentionTitle) {
             RowList(items: shown) { problem in
-                AttentionRow(problem: problem, actions: actions)
+                AttentionRow(problem: problem, reference: reference, actions: actions)
                     .opensTicket(problem.ticketIdentifier, open: actions.openTicket)
             }
         }
@@ -312,9 +313,11 @@ private struct NeedsAttention: View {
     }
 }
 
-/// C9: the severity symbol, the sentence, its age and its fixes, the first one prominent.
+/// C9: the severity symbol, the sentence, its age and its fixes, the first one prominent; under the sentence, the
+/// situation line of the ticket it is about.
 private struct AttentionRow: View {
     let problem: Overview.Problem
+    var reference = Date()
     let actions: OverviewActions
 
     var body: some View {
@@ -331,6 +334,9 @@ private struct AttentionRow: View {
                         .font(DesignTokens.TypeStyle.callout.font)
                         .foregroundStyle(.secondary)
                 }
+                if let situation = problem.situation {
+                    SituationLine(situation, reference: reference, size: .compact)
+                }
             }
             Spacer(minLength: DesignTokens.Space.s2)
             if let age = problem.age {
@@ -345,7 +351,11 @@ private struct AttentionRow: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([problem.sentence + (problem.age.map { ", \($0)" } ?? ""), problem.note].compactMap { $0 }.joined(separator: ". "))
+        .accessibilityLabel(
+            [problem.sentence + (problem.age.map { ", \($0)" } ?? ""), problem.note, problem.situation.map { SituationText($0, reference: reference).spoken() }]
+                .compactMap { $0 }
+                .joined(separator: ". ")
+        )
         .accessibilityActions {
             ForEach(problem.fixes, id: \.self) { fix in
                 Button(fix.title) { actions.perform(fix) }
@@ -422,21 +432,28 @@ private struct RowList<Item: Identifiable, Row: View>: View {
     }
 }
 
+/// A run's row: its ticket and the ticket's situation line (C31), or the run's phase and turn from a Symphony that
+/// serves no situation; its time and tokens trail.
 private struct WorkingRowView: View {
     let row: Overview.WorkingRow
+    var reference = Date()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.openURL) private var openURL
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
-            symbol
+            if row.situation == nil { symbol }
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
                 TicketTitle(identifier: row.identifier, title: row.title, repoKey: row.repoKey)
-                Text(row.detail)
-                    .font(DesignTokens.TypeStyle.callout.font)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .contentTransition(.numericText())
+                if let situation = row.situation {
+                    SituationLine(situation, reference: reference, size: .compact)
+                } else {
+                    Text(row.detail)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                }
                 if let message = row.lastMessage {
                     Text(message)
                         .font(DesignTokens.TypeStyle.callout.font)
@@ -446,7 +463,8 @@ private struct WorkingRowView: View {
             }
             Spacer(minLength: DesignTokens.Space.s2)
             VStack(alignment: .trailing, spacing: DesignTokens.Space.s1 / 2) {
-                if let time = row.runningTime {
+                // The situation line carries its own age.
+                if let time = row.runningTime, row.situation == nil {
                     Text(time).font(DesignTokens.TypeStyle.callout.font).monospacedDigit()
                 }
                 if let tokens = row.tokens {
@@ -487,30 +505,44 @@ private struct WorkingRowView: View {
         var parts = [row.identifier]
         if let title = row.title { parts.append(title) }
         if let repo = row.repoKey { parts.append(repo) }
-        parts.append(row.isStuck ? "needs attention, \(row.detail)" : row.detail)
+        let reading = row.situation.map { SituationText($0, reference: reference).spoken() } ?? row.detail
+        parts.append(row.isStuck ? "needs attention, \(reading)" : reading)
         if let time = row.runningTime { parts.append(time) }
         return parts.joined(separator: ", ")
     }
 }
 
+/// A queued ticket's row: the ticket and its situation line (C31), or why it waits from a Symphony that serves no
+/// situation.
 private struct QueuedRowView: View {
     let row: Overview.QueuedRow
+    var reference = Date()
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
-            Image(systemName: "clock")
-                .foregroundStyle(DesignTokens.Status.idle.tint)
-                .accessibilityHidden(true)
+            if row.situation == nil {
+                Image(systemName: "clock")
+                    .foregroundStyle(DesignTokens.Status.idle.tint)
+                    .accessibilityHidden(true)
+            }
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
                 TicketTitle(identifier: row.identifier, title: row.title, repoKey: row.repoKey)
-                Text(row.reason)
-                    .font(DesignTokens.TypeStyle.callout.font)
-                    .foregroundStyle(.secondary)
+                if let situation = row.situation {
+                    SituationLine(situation, reference: reference, size: .compact)
+                } else {
+                    Text(row.reason)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                }
             }
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([row.identifier, row.title, row.repoKey, row.reason].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel(
+            [row.identifier, row.title, row.repoKey, row.situation.map { SituationText($0, reference: reference).spoken() } ?? row.reason]
+                .compactMap { $0 }
+                .joined(separator: ", ")
+        )
     }
 }
 

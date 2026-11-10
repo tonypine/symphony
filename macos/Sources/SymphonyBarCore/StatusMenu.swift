@@ -136,9 +136,16 @@ public enum StatusMenu {
         return WaitingMenu(tickets: Array(tickets.prefix(limit)), moreTitle: left > 0 ? "\(left) more…" : nil)
     }
 
-    /// One waiting ticket, for example "TP-123 · Plan · Split the importer into four sub-tickets · 2h". Without a
-    /// review brief its title stands in for the headline.
+    /// One waiting ticket, as its compact situation line reads: "TP-123 · Waiting on you · The plan waits for your
+    /// review. · 2h". From a Symphony that serves no situation, its kind and headline: "TP-123 · Plan · Split the
+    /// importer into four sub-tickets · 2h"; without a review brief its title stands in for the headline.
     public static func waitingLine(_ ticket: StateSnapshot.WaitingTicket) -> String {
+        if let situation = ticket.situation {
+            let cause = SituationText(situation, reference: Date()).cause.trimmingWhitespace()
+            return [ticket.identifier, situation.word, cause.isEmpty ? nil : shortened(cause), ticket.waitingSeconds.map(waitedLabel)]
+                .compactMap { $0 }
+                .joined(separator: " · ")
+        }
         let headline = [ticket.headline, ticket.title]
             .compactMap { $0?.trimmingWhitespace() }
             .first { !$0.isEmpty }

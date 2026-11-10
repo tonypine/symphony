@@ -104,7 +104,7 @@ final class DispatchTests: XCTestCase {
         XCTAssertNil(ForceSheet.identifier("   "))
         XCTAssertEqual(ForceSheet.identifier(" shop-320 "), "SHOP-320")
         XCTAssertEqual(ForceSheet.matches("shop-3", in: list).count, ForceSheet.suggestionLimit)
-        XCTAssertEqual(ForceSheet.matches("SHOP-32", in: list).map(\.identifier), ["SHOP-320", "SHOP-325", "SHOP-322"])
+        XCTAssertEqual(ForceSheet.matches("SHOP-32", in: list).map(\.identifier), ["SHOP-322", "SHOP-320", "SHOP-325"])
         XCTAssertEqual(ForceSheet.matches("API-131", in: list).map(\.identifier), ["API-131"])
         XCTAssertTrue(ForceSheet.matches("", in: list).isEmpty)
         XCTAssertTrue(ForceSheet.matches("SHOP", in: nil).isEmpty)

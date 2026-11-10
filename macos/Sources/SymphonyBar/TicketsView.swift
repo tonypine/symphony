@@ -241,7 +241,7 @@ struct TicketsView: View {
             if rows.isEmpty {
                 EmptyState(title: search.isEmpty ? TicketList.emptyTitle : TicketList.noMatchTitle, symbol: SymphonyView.tickets.symbol)
             } else {
-                TicketsTable(rows: rows, selection: $tableSelection, sortOrder: $sortOrder, actions: actions)
+                TicketsTable(rows: rows, reference: list.reference, selection: $tableSelection, sortOrder: $sortOrder, actions: actions)
                     .onKeyPress(.space) {
                         inspectorShown.toggle()
                         return .handled
@@ -257,7 +257,7 @@ struct TicketsView: View {
             if chosen != tableSelection { tableSelection = chosen }
         }
         .inspector(isPresented: $inspectorShown) {
-            TicketInspector(row: selection.flatMap(list.row), actions: actions)
+            TicketInspector(row: selection.flatMap(list.row), reference: list.reference, actions: actions)
                 .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
         }
     }
@@ -278,7 +278,7 @@ struct TicketsScopeBar: View {
 
     private var bar: some View {
         HStack(spacing: DesignTokens.Space.s2) {
-            Picker("Stage", selection: barSelection) {
+            Picker("Situation", selection: barSelection) {
                 ForEach(TicketList.Filter.bar(inspectorShown: inspectorShown), id: \.self) { choice in
                     Text(label(choice)).tag(Optional(choice))
                 }
@@ -295,7 +295,7 @@ struct TicketsScopeBar: View {
             }
             .menuStyle(.button)
             .fixedSize()
-            .help("More stages")
+            .help("More situations")
             Spacer(minLength: 0)
         }
         .padding(.horizontal, DesignTokens.Space.s4)
@@ -315,9 +315,11 @@ struct TicketsScopeBar: View {
     }
 }
 
-/// C19: ticket, title, repo, stage, what it waits on and since when; Return or a double-click opens the ticket.
+/// C19: ticket, title, repo and the ticket's situation line (C31), which says what it waits on and since when; Return
+/// or a double-click opens the ticket.
 struct TicketsTable: View {
     let rows: [TicketList.Row]
+    var reference = Date()
     @Binding var selection: String?
     @Binding var sortOrder: [KeyPathComparator<TicketList.Row>]
     let actions: TicketsActions
@@ -332,32 +334,26 @@ struct TicketsTable: View {
                             .foregroundStyle(DesignTokens.Status.forced.tint)
                             .accessibilityLabel("Forced")
                     }
+                    if row.needsAttention {
+                        Image(systemName: DesignTokens.Status.problem.symbol)
+                            .foregroundStyle(DesignTokens.Status.problem.tint)
+                            .accessibilityLabel("Needs attention")
+                            .help("Needs attention")
+                    }
                 }
             }
-            .width(min: 90, ideal: 100)
+            .width(min: 90, ideal: 110)
             TableColumn("Title", value: \.titleText) { row in
                 Text(row.titleText).lineLimit(1)
             }
             .width(min: 140, ideal: 240)
             TableColumn("Repo", value: \.repoText)
                 .width(min: 60, ideal: 90)
-            TableColumn("Stage", value: \.stage) { row in
-                HStack(spacing: DesignTokens.Space.s1) {
-                    Image(systemName: row.needsAttention ? DesignTokens.Status.problem.symbol : row.stage.status.symbol)
-                        .foregroundStyle(row.needsAttention ? DesignTokens.Status.problem.tint : row.stage.status.tint)
-                        .accessibilityHidden(true)
-                    Text(row.stage.title)
-                }
+            TableColumn("Situation", value: \.kindSort) { row in
+                SituationLine(row.line, reference: reference, size: .compact)
+                    .lineLimit(1)
             }
-            .width(min: 90, ideal: 120)
-            TableColumn("Waits on", value: \.waitsOn) { row in
-                Text(row.waitsOn).lineLimit(1)
-            }
-            .width(min: 80, ideal: 130)
-            TableColumn("Since", value: \.sinceSort) { row in
-                Text(row.sinceText).monospacedDigit().foregroundStyle(.secondary)
-            }
-            .width(min: 60, ideal: 80)
+            .width(min: 220, ideal: 420)
         }
         .contextMenu(forSelectionType: String.self) { identifiers in
             if let identifier = identifiers.first, let row = rows.first(where: { $0.identifier == identifier }) {
@@ -395,12 +391,13 @@ private struct TicketForceButton: View {
 /// The inspector: the selected ticket's facts in short, Open Ticket, and Force or Stop Forcing.
 struct TicketInspector: View {
     let row: TicketList.Row?
+    var reference = Date()
     let actions: TicketsActions
 
     var body: some View {
         if let row {
             ScrollView {
-                TicketInspectorBody(row: row, actions: actions)
+                TicketInspectorBody(row: row, reference: reference, actions: actions)
             }
         } else {
             EmptyState(title: "Select a ticket.", symbol: "sidebar.right")
@@ -411,6 +408,7 @@ struct TicketInspector: View {
 /// The inspector's facts and buttons, outside the scroll view so they also render offscreen.
 struct TicketInspectorBody: View {
     let row: TicketList.Row
+    var reference = Date()
     let actions: TicketsActions
 
     var body: some View {
@@ -419,10 +417,7 @@ struct TicketInspectorBody: View {
                 Text(row.identifier).font(DesignTokens.TypeStyle.mono.font).foregroundStyle(.secondary)
                 Text(row.titleText).font(DesignTokens.TypeStyle.rowTitle.font).fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: DesignTokens.Space.s1) {
-                StatusBadge(status: row.needsAttention ? .problem : row.stage.status, word: row.needsAttention ? DesignTokens.Status.problem.word : row.stage.title)
-                if row.forced { StatusBadge(status: .forced) }
-            }
+            SituationLine(row.line, reference: reference, size: .compact, forced: row.forced)
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: DesignTokens.Space.s3, verticalSpacing: DesignTokens.Space.s2) {
                 ForEach(Array(row.facts.enumerated()), id: \.offset) { _, fact in
                     GridRow {

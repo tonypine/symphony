@@ -232,5 +232,135 @@
       "waiting_since": "2026-10-07T14:13:00Z"
     }
   ],
-  "watching": []
+  "watching": [],
+  "order": {
+    "computed_at": "2026-10-07T14:20:00Z",
+    "next": null,
+    "queue": [],
+    "groups": [
+      {
+        "kind": "waiting_on_you",
+        "count": 5,
+        "tickets": [
+          {
+            "identifier": "TP-923",
+            "situation": {
+              "kind": "waiting_on_you",
+              "word": "Waiting on you",
+              "cause": "The plan to redesign the Inbox decision screen waits for your review.",
+              "next": "It continues once you answer in the Inbox.",
+              "since": "2026-10-07T12:05:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "TP-892",
+            "situation": {
+              "kind": "waiting_on_you",
+              "word": "Waiting on you",
+              "cause": "Code Review sent PR #448 back twice for the same finding; it asks how to handle it.",
+              "next": "It continues once you answer in the Inbox.",
+              "since": "2026-10-07T13:20:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "TP-895",
+            "situation": {
+              "kind": "waiting_on_you",
+              "word": "Waiting on you",
+              "cause": "PR #452 waits for your merge.",
+              "next": "It continues once you answer in the Inbox.",
+              "since": "2026-10-07T13:40:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "TP-896",
+            "situation": {
+              "kind": "waiting_on_you",
+              "word": "Waiting on you",
+              "cause": "The quality gate asks 2 questions.",
+              "next": "It continues once you answer in the Inbox.",
+              "since": "2026-10-07T14:05:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "TP-897",
+            "situation": {
+              "kind": "waiting_on_you",
+              "word": "Waiting on you",
+              "cause": "The run reported a block it cannot clear.",
+              "next": "It continues once you answer in the Inbox.",
+              "since": "2026-10-07T14:13:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "blocked_by_ticket",
+        "count": 1,
+        "tickets": [
+          {
+            "identifier": "TP-893",
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-892",
+              "cause": "TP-892 waits on you.",
+              "next": "It starts once TP-892 is done.",
+              "since": "2026-10-07T13:20:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "waiting_for_ci",
+        "count": 1,
+        "tickets": [
+          {
+            "identifier": "TP-891",
+            "situation": {
+              "kind": "waiting_for_ci",
+              "word": "Waiting for CI",
+              "cause": "Checks are running on PR #447.",
+              "next": "Code Review starts when they pass.",
+              "since": "2026-10-07T14:14:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      }
+    ]
+  }
 }

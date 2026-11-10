@@ -33,9 +33,39 @@ final class TicketListTests: XCTestCase {
         XCTAssertEqual(rows["API-140"]?.sinceText, "7 min")
         XCTAssertEqual(rows["DOCS-41"]?.waitsOn, "one repo label")
         XCTAssertEqual(rows["SHOP-288"]?.stage, .shipped)
-        // Stage by stage, oldest first.
-        XCTAssertEqual(list.rows.first?.identifier, "SHOP-320")
+        // Situation kind by kind, oldest first.
+        XCTAssertEqual(list.rows.first?.identifier, "DOCS-40")
         XCTAssertEqual(list.rows.last?.identifier, "SHOP-288")
+    }
+
+    func testEachRowReadsTheSituationSymphonyServesForIt() throws {
+        let list = try tickets("tickets")
+        let ci = try XCTUnwrap(list.row("SHOP-301"))
+        XCTAssertEqual(ci.situation?.kind, .ci)
+        XCTAssertEqual(ci.kind, .ci)
+        XCTAssertEqual(ci.line.cause, "Checks are running on PR #741.")
+        XCTAssertEqual(SituationText(ci.line, reference: list.reference).sentence,
+                       "Waiting for CI · Checks are running on PR #741. · QA starts when they pass. · for 6 min")
+        XCTAssertEqual(list.row("SHOP-311")?.kind, .retrying)
+        XCTAssertEqual(list.row("SHOP-322")?.line.word, "Blocked by BIL-206")
+        XCTAssertEqual(list.row("API-140")?.kind, .paused)
+
+        // A ticket the state holds no situation for reads the kind its stage is closest to, its wait as the cause.
+        let conflict = try XCTUnwrap(list.row("DOCS-41"))
+        XCTAssertNil(conflict.situation)
+        XCTAssertEqual(conflict.line, Situation(kind: .slot, cause: "Waits on one repo label."))
+        let shipped = try XCTUnwrap(list.row("SHOP-288"))
+        XCTAssertEqual(shipped.kind, .done)
+        XCTAssertEqual(shipped.line.cause, "")
+        // Review, QA and landing have a reviewer, a QA pass or the landing at work: never Waiting for CI.
+        XCTAssertEqual(TicketList.Stage.allCases.map(\.kind), [.slot, .working, .working, .you, .working, .done])
+        var review = conflict
+        review.stage = .review
+        review.waitsOn = "the reviewer"
+        XCTAssertEqual(review.line, Situation(kind: .working, cause: "Waits on the reviewer."))
+        XCTAssertFalse(TicketList.Filter.waitingForCI.matches(review))
+        // The Review tile opens the list that holds it.
+        XCTAssertEqual(TicketList.Filter(stage: .review)?.matches(review), true)
     }
 
     func testForcedAndAttentionRowsCarryTheirFlagsAndFacts() throws {
@@ -44,13 +74,17 @@ final class TicketListTests: XCTestCase {
         XCTAssertTrue(forced.forced)
         XCTAssertTrue(forced.facts.contains(TicketList.Fact(label: "Forced", value: "Yes")))
         XCTAssertTrue(forced.facts.contains(TicketList.Fact(label: "Forced status", value: "implementation · waiting for a forced slot")))
-        XCTAssertEqual(forced.facts.first, TicketList.Fact(label: "Stage", value: "Queued"))
-        XCTAssertTrue(forced.accessibilityLabel.hasPrefix("SHOP-325, Express checkout, Queued, forced, waits on a slot"))
+        XCTAssertFalse(forced.facts.contains { ["Stage", "State", "Waits on", "Failed attempts"].contains($0.label) })
+        let label = forced.accessibilityLabel(reference: list.reference)
+        XCTAssertTrue(label.hasPrefix("SHOP-325, Express checkout, Waiting for a slot, for 12 minutes"), label)
+        XCTAssertTrue(label.hasSuffix("The forced slot is taken. Forced."), label)
 
         XCTAssertTrue(try XCTUnwrap(list.row("SHOP-311")).needsAttention, "3 failed attempts")
         XCTAssertFalse(try XCTUnwrap(list.row("API-134")).needsAttention)
         XCTAssertTrue(try XCTUnwrap(list.row("DOCS-41")).needsAttention, "routed to two repos")
+        XCTAssertTrue(try XCTUnwrap(list.row("DOCS-41")).accessibilityLabel(reference: list.reference).contains("needs attention"))
         XCTAssertEqual(list.row("SHOP-311")?.facts.last, TicketList.Fact(label: "Last error", value: "mix test failed: 4 failures"))
+        XCTAssertFalse(list.row("SHOP-311")?.facts.contains { $0.label == "Failed attempts" } ?? true)
     }
 
     func testAPassedOverTicketWaitsOnItsDispatchGate() throws {
@@ -61,43 +95,42 @@ final class TicketListTests: XCTestCase {
             since: SymphonyState.parseDate("2026-10-07T14:13:00Z")
         )])
 
-        // The inspector's facts: the reason it waits on and since when.
+        // The inspector's facts beside its situation line, which says the gate and since when.
         let row = try XCTUnwrap(TicketList(state: state, now: Date(), timeZone: utc).row("API-140"))
         XCTAssertEqual(row.facts, [
-            TicketList.Fact(label: "Stage", value: "Queued"),
-            TicketList.Fact(label: "State", value: "Todo"),
             TicketList.Fact(label: "Repo", value: "api"),
-            TicketList.Fact(label: "Waits on", value: "priority medium is not in tickets.priorities (urgent, high)"),
-            TicketList.Fact(label: "Since", value: "7 min ago"),
             TicketList.Fact(label: "Forced", value: "No"),
         ])
+        XCTAssertEqual(row.line.word, "Paused")
     }
 
     func testTheScopeBarSearchAndRepoScopeFilter() throws {
         let list = try tickets("tickets")
-        XCTAssertEqual(list.rows(filter: .working, search: "").map(\.identifier), ["SHOP-305", "API-131"])
-        XCTAssertEqual(list.rows(filter: .review, search: "").count, 2)
+        XCTAssertEqual(Set(list.rows(filter: .working, search: "").map(\.identifier)), ["SHOP-305", "API-131", "SHOP-298", "API-127"])
+        XCTAssertEqual(Set(list.rows(filter: .waitingForCI, search: "").map(\.identifier)), ["SHOP-301", "API-119"])
         XCTAssertEqual(list.rows(filter: .waitingOnYou, search: "").map(\.identifier), ["DOCS-40", "SHOP-290"])
-        XCTAssertEqual(list.rows(filter: .merging, search: "").count, 2)
-        XCTAssertEqual(list.count(.queued), 8)
-        XCTAssertEqual(list.rows(filter: .needsAttention, search: "").map(\.identifier), ["DOCS-41", "SHOP-311"])
+        XCTAssertEqual(Set(list.rows(filter: .waitingForSlot, search: "").map(\.identifier)), ["SHOP-320", "API-133", "SHOP-325", "DOCS-41"])
+        XCTAssertEqual(list.rows(filter: .held, search: "").map(\.identifier), ["SHOP-322", "API-140"])
+        XCTAssertEqual(list.count(.retrying), 2)
+        XCTAssertEqual(list.rows(filter: .needsAttention, search: "").map(\.identifier), ["SHOP-311", "DOCS-41"])
         XCTAssertEqual(list.rows(filter: .forced, search: "").map(\.identifier), ["SHOP-325"])
         XCTAssertEqual(list.count(.shipped), 3)
         XCTAssertEqual(list.count(.all), 19)
 
         XCTAssertEqual(list.rows(filter: .all, search: "bil-206").map(\.identifier), ["SHOP-322"])
         XCTAssertEqual(list.rows(filter: .all, search: "  checkout  express ").map(\.identifier), ["SHOP-325"])
-        XCTAssertEqual(list.rows(filter: .working, search: "api").map(\.identifier), ["API-131"])
+        XCTAssertEqual(Set(list.rows(filter: .working, search: "api").map(\.identifier)), ["API-131", "API-127"])
+        XCTAssertEqual(list.rows(filter: .all, search: "pr #741").map(\.identifier), ["SHOP-301"], "the situation's cause is searched")
         XCTAssertTrue(list.rows(filter: .forced, search: "nothing like this").isEmpty)
 
         let scoped = try tickets("tickets", scope: .repo("api"))
         XCTAssertEqual(Set(scoped.rows.compactMap(\.repoKey)), ["api"])
-        XCTAssertEqual(scoped.rows(filter: .working, search: "").map(\.identifier), ["API-131"])
+        XCTAssertEqual(Set(scoped.rows(filter: .working, search: "").map(\.identifier)), ["API-131", "API-127"])
     }
 
     func testSortsOnEveryColumnBothWays() throws {
         let list = try tickets("tickets")
-        let rows = list.rows(filter: .waitingOnYou, search: "") + list.rows(filter: .working, search: "")
+        let rows = list.rows(filter: .waitingOnYou, search: "") + ["SHOP-305", "API-131"].compactMap(list.row)
         let ids: ([KeyPathComparator<TicketList.Row>]) -> [String] = { rows.sorted(using: $0).map(\.identifier) }
         XCTAssertEqual(ids([KeyPathComparator(\.identifier)]), ["API-131", "DOCS-40", "SHOP-290", "SHOP-305"])
         XCTAssertEqual(ids([KeyPathComparator(\.identifier, order: .reverse)]), ["SHOP-305", "SHOP-290", "DOCS-40", "API-131"])
@@ -105,24 +138,30 @@ final class TicketListTests: XCTestCase {
         XCTAssertEqual(ids([KeyPathComparator(\.repoText)]).first, "API-131")
         XCTAssertEqual(ids([KeyPathComparator(\.waitsOn, order: .reverse)]).first, "DOCS-40")
         XCTAssertEqual(ids([KeyPathComparator(\.sinceSort)]).first, "DOCS-40")
-        XCTAssertEqual(ids(TicketList.defaultSort), ["SHOP-305", "API-131", "DOCS-40", "SHOP-290"])
-        XCTAssertEqual(list.rows.sorted(using: TicketList.defaultSort).map(\.stage), list.rows.map(\.stage))
+        XCTAssertEqual(ids([KeyPathComparator(\.kindSort)]).prefix(2), ["DOCS-40", "SHOP-290"])
+        XCTAssertEqual(ids(TicketList.defaultSort), ["DOCS-40", "SHOP-290", "SHOP-305", "API-131"])
+        XCTAssertEqual(list.rows.sorted(using: TicketList.defaultSort).map(\.kind), list.rows.map(\.kind))
     }
 
     func testTheScopeBarFoldsIntoMoreWhileTheInspectorIsOpen() {
         XCTAssertEqual(TicketList.Filter.bar(inspectorShown: false).map(\.title),
-                       ["All", "Working", "Review", "Waiting on you", "Merging", "Queued", "Needs attention", "Forced"])
-        XCTAssertEqual(TicketList.Filter.more(inspectorShown: false), [.shipped])
-        XCTAssertEqual(TicketList.Filter.bar(inspectorShown: true), [.all, .working, .review, .waitingOnYou])
-        XCTAssertEqual(TicketList.Filter.more(inspectorShown: true), [.merging, .queued, .needsAttention, .forced, .shipped])
+                       ["All", "Waiting on you", "Working", "Waiting for CI", "Waiting for a slot", "Blocked or paused", "Retrying", "Needs attention"])
+        XCTAssertEqual(TicketList.Filter.more(inspectorShown: false), [.forced, .shipped])
+        XCTAssertEqual(TicketList.Filter.more(inspectorShown: false).map(\.title), ["Forced", "Shipped"])
+        XCTAssertEqual(TicketList.Filter.bar(inspectorShown: true), [.all, .waitingOnYou, .working, .waitingForCI])
+        XCTAssertEqual(TicketList.Filter.more(inspectorShown: true), [.waitingForSlot, .held, .retrying, .needsAttention, .forced, .shipped])
+        // Each choice is one or more situation kinds, or none for the choices about something else.
+        XCTAssertEqual(TicketList.Filter.allCases.map(\.kinds), [
+            nil, [.you], [.working], [.ci, .build], [.slot], [.blocked, .paused], [.retrying], nil, nil, [.done],
+        ])
     }
 
     func testEachFlowTileOpensItsStageAndWaitingOnYouOpensTheInbox() {
-        XCTAssertEqual(TicketList.Filter(stage: .queued), .queued)
+        XCTAssertEqual(TicketList.Filter(stage: .queued), .waitingForSlot)
         XCTAssertEqual(TicketList.Filter(stage: .working), .working)
-        XCTAssertEqual(TicketList.Filter(stage: .review), .review)
+        XCTAssertEqual(TicketList.Filter(stage: .review), .working)
         XCTAssertNil(TicketList.Filter(stage: .waitingOnYou))
-        XCTAssertEqual(TicketList.Filter(stage: .merging), .merging)
+        XCTAssertEqual(TicketList.Filter(stage: .merging), .working)
         XCTAssertEqual(TicketList.Filter(stage: .shippedToday), .shipped)
         XCTAssertEqual(TicketList.Stage.allCases.map(\.status), [.idle, .working, .working, .you, .working, .done])
         XCTAssertEqual(TicketList.Stage.allCases.map(\.title), ["Queued", "Working", "Review", "Waiting on you", "Merging", "Shipped"])
@@ -180,7 +219,7 @@ final class TicketListTests: XCTestCase {
         XCTAssertEqual(stuck?.title, "From watching", "a later list fills in what the first lacks")
         XCTAssertEqual(stuck?.repoKey, "r", "but never replaces it")
         XCTAssertEqual(stuck?.url, URL(string: "https://x.test/TP-5"))
-        XCTAssertEqual(stuck?.facts.map(\.label), ["Stage", "Repo", "Waits on", "Forced", "Run", "Turn", "Last activity", "Tokens", "Last message"])
+        XCTAssertEqual(stuck?.facts.map(\.label), ["Repo", "Forced", "Run", "Turn", "Last activity", "Tokens", "Last message"])
         XCTAssertEqual(stuck?.facts.first { $0.label == "Run" }?.value, "Plan revision")
 
         XCTAssertEqual(list.row("TP-6")?.waitsOn, "a QA pass")

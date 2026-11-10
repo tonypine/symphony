@@ -444,5 +444,195 @@
       "title": "Webhook retries",
       "url": "https://linear.app/acme/issue/API-119"
     }
-  ]
+  ],
+  "order": {
+    "computed_at": "2026-10-07T14:20:00Z",
+    "next": null,
+    "queue": [],
+    "groups": [
+      {
+        "kind": "waiting_on_you",
+        "count": 1,
+        "tickets": [
+          {
+            "identifier": "BIL-206",
+            "situation": {
+              "kind": "waiting_on_you",
+              "word": "Waiting on you",
+              "cause": "QA passed; the merge waits for your confirmation.",
+              "next": "It merges once you confirm.",
+              "since": "2026-10-07T13:40:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "blocked_by_ticket",
+        "count": 2,
+        "tickets": [
+          {
+            "identifier": "BIL-207",
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by BIL-206",
+              "cause": "BIL-206 waits on you.",
+              "next": "It starts once BIL-206 is done.",
+              "since": "2026-10-07T13:40:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "BIL-208",
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by BIL-206",
+              "cause": "BIL-206 waits on you.",
+              "next": "It starts once BIL-206 is done.",
+              "since": "2026-10-07T13:40:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "waiting_for_ci",
+        "count": 2,
+        "tickets": [
+          {
+            "identifier": "DOCS-23",
+            "situation": {
+              "kind": "waiting_for_ci",
+              "word": "Waiting for CI",
+              "cause": "Checks are running on PR #512.",
+              "next": "QA starts when they pass.",
+              "since": "2026-10-07T14:14:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "SHOP-301",
+            "situation": {
+              "kind": "waiting_for_ci",
+              "word": "Waiting for CI",
+              "cause": "Checks are running on PR #741.",
+              "next": "QA starts when they pass.",
+              "since": "2026-10-07T14:14:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "waiting_for_slot",
+        "count": 3,
+        "tickets": [
+          {
+            "identifier": "DOCS-24",
+            "situation": {
+              "kind": "waiting_for_slot",
+              "word": "Waiting for a slot",
+              "cause": "Both work slots are taken.",
+              "next": "It starts when a run ends.",
+              "since": "2026-10-07T13:30:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "DOCS-25",
+            "situation": {
+              "kind": "waiting_for_slot",
+              "word": "Waiting for a slot",
+              "cause": "Both work slots are taken; it is second in line.",
+              "next": "It starts after DOCS-24.",
+              "since": "2026-10-07T13:35:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "SHOP-320",
+            "situation": {
+              "kind": "waiting_for_slot",
+              "word": "Waiting for a slot",
+              "cause": "Both work slots are taken.",
+              "next": "It starts when a run ends.",
+              "since": "2026-10-07T13:50:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "working",
+        "count": 2,
+        "tickets": [
+          {
+            "identifier": "BIL-205",
+            "situation": {
+              "kind": "working",
+              "word": "Working on the Write the code step",
+              "cause": "Implementation run 1 is writing the code.",
+              "next": "Checks run when it ends the step.",
+              "since": "2026-10-07T13:58:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": {
+                "id": "code",
+                "title": "Write the code"
+              },
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "SHOP-305",
+            "situation": {
+              "kind": "working",
+              "word": "Working",
+              "cause": "Implementation run 2 is writing the code.",
+              "next": "Checks run when it ends the step.",
+              "since": "2026-10-07T13:58:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      }
+    ]
+  }
 }
