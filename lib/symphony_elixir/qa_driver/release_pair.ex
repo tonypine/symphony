@@ -346,10 +346,7 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
 
     case config.host.cmd.("/bin/sh", args, opts) do
       {:ok, {output, 69} = result} ->
-        case for("symphony-qa-pair-missing-tool:" <> name <- String.split(output, "\n", trim: true), do: name) do
-          [] -> {:ok, result}
-          names -> {:error, {:qa_host_missing_tool, names}}
-        end
+        missing_tools(output, result)
 
       {:ok, {output, status}} ->
         {:ok, {output, status}}
@@ -359,6 +356,13 @@ defmodule SymphonyElixir.QaDriver.ReleasePair do
 
       {:error, reason} ->
         tool_error("qa_release_pair_failed", "The release pair build could not start: #{inspect(reason)}")
+    end
+  end
+
+  defp missing_tools(output, result) do
+    case for("symphony-qa-pair-missing-tool:" <> name <- String.split(output, "\n", trim: true), do: name) do
+      [] -> {:ok, result}
+      names -> {:error, {:qa_host_missing_tool, names}}
     end
   end
 
