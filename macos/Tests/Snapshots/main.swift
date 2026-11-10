@@ -1101,12 +1101,17 @@ func ticketsSituations() -> some View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(list.rows.enumerated()), id: \.element.id) { index, row in
                     if index > 0 { Divider() }
+                    let selected = row.identifier == "SHOP-301"
                     HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
                         Text(row.identifier).font(DesignTokens.TypeStyle.mono.font).frame(width: 90, alignment: .leading)
                         Text(row.titleText).lineLimit(1).frame(width: 180, alignment: .leading)
                         SituationLine(row.line, reference: list.reference, size: .compact).lineLimit(1)
                     }
                     .padding(.vertical, DesignTokens.Space.s1)
+                    // SHOP-301 drawn selected, as the table draws it: white text on the accent, the word included.
+                    .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                    .background(selected ? Color.accentColor : Color.clear)
+                    .environment(\.backgroundProminence, selected ? .increased : .standard)
                 }
             }
             .frame(width: 900)
