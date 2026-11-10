@@ -129,6 +129,36 @@ defmodule SymphonyElixir.Config.MigrationTest do
       assert migrated == "ledger:\n  # Symphony: #{note} (TP-1201). The file as it was: #{@backup}.\n\n  # keep this\n  other: 1\n"
     end
 
+    test "a block whose only key is removed stays as an empty map, its comment kept" do
+      text = "issues:\n  provider: memory\nledger: # retention\n  artifact_retention_days: 30\n"
+
+      assert {:ok, migrated, [note]} = Migration.plan(text, @backup)
+
+      assert migrated ==
+               "issues:\n  provider: memory\nledger: {} # retention\n  # Symphony: #{note} (TP-1201). The file as it was: #{@backup}.\n"
+
+      assert {:ok, %{"ledger" => %{}, "issues" => %{"provider" => "memory"}}} = YamlElixir.read_from_string(migrated)
+    end
+
+    test "the only-key removal migrates beside a rename" do
+      text = "pre_push_review:\n  enabled: true\nledger:\n  artifact_retention_days: 30\n"
+
+      assert {:ok, migrated, [_rename, _removal]} = Migration.plan(text, @backup)
+      assert {:ok, %{"code_review" => %{"enabled" => true}, "ledger" => %{}}} = YamlElixir.read_from_string(migrated)
+    end
+
+    test "a renamed block whose every key is dropped stays as an empty map" do
+      text = "pre_push_review:\n  run_on: first_push\n  max_iterations: 2\n"
+
+      assert {:ok, migrated, [_note]} = Migration.plan(text, @backup)
+      assert {:ok, %{"code_review" => %{}}} = YamlElixir.read_from_string(migrated)
+    end
+
+    test "a block holding more after its colon is refused, naming the key" do
+      assert Migration.plan("ledger: &l\n  artifact_retention_days: 30\n", @backup) ==
+               {:error, {:not_migrated, ["ledger.artifact_retention_days"]}}
+    end
+
     test "leaves a file with nothing to migrate as it is" do
       text = "issues:\n  provider: memory\n# pre_push_review:\nagent:\n  pre_push_review: looks like it but isn't\n"
 

@@ -699,6 +699,21 @@ defmodule SymphonyElixir.CLICheckTest do
       assert message =~ "(`tracker`)"
     end
 
+    test "migrates a block whose only key is removed, beside a rename", %{root: root} do
+      content = @pre_push_review <> valid_symphony(root) <> "ledger:\n  artifact_retention_days: 30\n"
+      path = write_symphony!(root, content)
+
+      {result, output} = check(["--migrate", "--config", path])
+
+      assert result == {:halt, 0}
+      assert output =~ "removed `ledger.artifact_retention_days`"
+      assert File.read!(path) == content
+
+      assert {{:halt, 0}, _output, _stderr} = evaluate_io(["config", "migrate", "--config", path])
+      assert File.read!(path) =~ "\nledger: {}\n"
+      assert {{:halt, 0}, _output} = check(["--config", path])
+    end
+
     test "refuses a migratable key that isn't on a line of its own", %{root: root} do
       path = write_symphony!(root, valid_symphony(root) <> "ledger: {artifact_retention_days: 3}\n")
 

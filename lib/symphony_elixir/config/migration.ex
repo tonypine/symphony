@@ -170,6 +170,7 @@ defmodule SymphonyElixir.Config.Migration do
     matches = for migration <- @migrations, entry <- entries, entry.path == migration.key, do: {migration, entry}
 
     edits = Enum.flat_map(matches, fn {migration, entry} -> edits(migration, entry, entries, lines, backup) end)
+    edits = edits ++ emptied_parents(matches, entries, lines)
     migrated = lines |> apply_edits(edits) |> Enum.join("\n")
     notes = matches |> Enum.map(fn {migration, entry} -> note(migration, target_set?(migration, entry, entries)) end) |> Enum.uniq()
 
@@ -194,13 +195,35 @@ defmodule SymphonyElixir.Config.Migration do
       [{entry.index, block_length(lines, entry), [comment]}]
     else
       renamed = String.replace(Enum.at(lines, entry.index), entry.name <> ":", migration.to <> ":", global: false)
+      children = Enum.filter(entries, &(&1.parent == entry.index))
+      {dropped, kept} = Enum.split_with(children, &(&1.name in migration.drop_children))
+      renamed = if dropped != [] and kept == [], do: empty_map_line(renamed, migration.to), else: renamed
 
-      dropped =
-        for child <- entries, child.parent == entry.index, child.name in migration.drop_children do
-          {child.index, block_length(lines, child), []}
-        end
+      [{entry.index, 1, [comment, renamed]} | Enum.map(dropped, &{&1.index, block_length(lines, &1), []})]
+    end
+  end
 
-      [{entry.index, 1, [comment, renamed]} | dropped]
+  # A block whose every key the table removes is left as `{}`, so it still reads as the empty map the
+  # table makes of it and not as nothing.
+  defp emptied_parents(matches, entries, lines) do
+    removed = for {migration, entry} <- matches, migration.to == nil or target_set?(migration, entry, entries), into: MapSet.new(), do: entry.index
+    edited = MapSet.new(matches, fn {_migration, entry} -> entry.index end)
+
+    for parent <- entries,
+        not MapSet.member?(edited, parent.index),
+        children = Enum.filter(entries, &(&1.parent == parent.index)),
+        children != [],
+        Enum.all?(children, &MapSet.member?(removed, &1.index)) do
+      {parent.index, 1, [empty_map_line(Enum.at(lines, parent.index), parent.name)]}
+    end
+  end
+
+  # `ledger:` or `ledger: # a comment` becomes `ledger: {}`, the comment kept. A line holding more
+  # after its colon is left, and the check against the table names the key.
+  defp empty_map_line(line, name) do
+    case Regex.run(~r/\A(.*?#{Regex.escape(name)}:)((?:\s+#.*)?\s*)\z/, line) do
+      [_line, key, rest] -> key <> " {}" <> rest
+      nil -> line
     end
   end
 
