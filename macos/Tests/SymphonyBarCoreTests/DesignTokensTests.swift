@@ -92,6 +92,11 @@ final class DesignTokensTests: XCTestCase {
         XCTAssertNil(DesignTokens.SituationKind.shown([]))
     }
 
+    func testReadingTextStopsAtTheMeasure() {
+        XCTAssertEqual(DesignTokens.Measure.characters, 68)
+        XCTAssertEqual(DesignTokens.Measure.reading, 480)
+    }
+
     // MARK: - Motion
 
     func testEveryCurveHasItsTiming() {

@@ -117,6 +117,26 @@ defmodule SymphonyElixir.SituationTest do
       end
     end
 
+    # `test/fixtures/api/situations.json` is what the Mac app's Situation line decodes: one ticket per
+    # kind, each with the fields the API serves for that kind.
+    test "the app's fixture holds every kind once, in the payload's shape" do
+      fixture = Path.expand("../fixtures/api/situations.json", __DIR__) |> File.read!() |> Jason.decode!()
+      samples = Map.new(fixture["issues"], &{&1["situation"]["kind"], &1["situation"]})
+
+      assert Enum.sort(Map.keys(samples)) == Enum.sort(Situation.kinds())
+      assert length(fixture["issues"]) == length(Situation.kinds())
+
+      for kind <- Situation.kinds() do
+        :ok = RunStore.clear()
+        :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: @id, issue_identifier: "TP-1", phase: "In Progress"})
+        facts = arrange(kind)
+        served = Situation.read(stored_record(), live(facts)) |> Situation.payload() |> Jason.encode!() |> Jason.decode!()
+
+        assert Enum.sort(Map.keys(samples[kind])) == Enum.sort(Map.keys(served)), kind
+        assert served["kind"] == kind
+      end
+    end
+
     # One case per pair: the kind listed first wins, whichever was arranged last.
     for {first, index} <- Enum.with_index(~w(waiting_on_you retrying blocked_by_ticket paused_by_rule waiting_for_ci waiting_for_build waiting_for_slot working done cancelled)),
         second <- Enum.drop(~w(waiting_on_you retrying blocked_by_ticket paused_by_rule waiting_for_ci waiting_for_build waiting_for_slot working done cancelled), index + 1) do

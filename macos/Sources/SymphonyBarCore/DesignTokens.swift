@@ -109,6 +109,13 @@ public enum DesignTokens {
         public static let s8: Double = 32
     }
 
+    /// The reading measure (§3.4, `--measure`): reading text never runs past 68 characters, about 480 pt of body
+    /// text. A situation's cause wraps there.
+    public enum Measure {
+        public static let characters = 68
+        public static let reading: Double = 480
+    }
+
     /// Corner radii (§3.6); inner radii are the outer minus the padding between them.
     public enum Radius {
         public static let card: Double = 14

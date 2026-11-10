@@ -1034,6 +1034,52 @@ func situationKinds() -> some View {
     )
 }
 
+/// The Situation line (TP-1439): `test/fixtures/api/situations.json`, one ticket per kind, at the fixture's clock.
+let situationSample: (now: Date, lines: [Situation]) = {
+    let url = here.appendingPathComponent("../../../test/fixtures/api/situations.json").standardizedFileURL
+    guard let root = (try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any],
+          let now = (root["now"] as? String).flatMap({ ISO8601DateFormatter().date(from: $0) }),
+          let issues = root["issues"] as? [[String: Any]]
+    else { fatalError("Could not read \(url.path)") }
+    return (now, issues.compactMap { Situation.decode(object: $0["situation"]) })
+}()
+
+/// Every kind's line in one size, in the order of the design's table.
+@MainActor
+func situationLines(_ size: SituationLine.Size) -> some View {
+    styleStage(
+        VStack(alignment: .leading, spacing: size == .full ? DesignTokens.Space.s4 : DesignTokens.Space.s3) {
+            ForEach(Array(situationSample.lines.enumerated()), id: \.offset) { _, situation in
+                SituationLine(situation, reference: situationSample.now, size: size)
+            }
+        },
+        width: size == .full ? 900 : 640
+    )
+}
+
+/// A forced ticket's line in both sizes, a pause with two more reasons, and both sizes in a narrow column, where the
+/// cause wraps and the word stays whole.
+@MainActor
+func situationLineExtras() -> some View {
+    let ci = situationSample.lines.first { $0.kind == .ci }!
+    var paused = situationSample.lines.first { $0.kind == .paused }!
+    paused.andMore = 2
+    return styleStage(
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
+            SituationLine(ci, reference: situationSample.now, size: .full, forced: true)
+            SituationLine(ci, reference: situationSample.now, size: .compact, forced: true)
+            SituationLine(paused, reference: situationSample.now, size: .full)
+            SituationLine(paused, reference: situationSample.now, size: .compact)
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+                SituationLine(situationSample.lines[0], reference: situationSample.now, size: .full)
+                SituationLine(situationSample.lines[0], reference: situationSample.now, size: .compact)
+            }
+            .frame(width: 420, alignment: .leading)
+        },
+        width: 900
+    )
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1069,6 +1115,10 @@ MainActor.assumeIsolated {
         render(styledCard(.press, reduceMotion: true), scheme, to: "style-card-pressed-reduce-motion-\(suffix).png")
         render(disabledWithReason(), scheme, to: "style-button-disabled-reason-\(suffix).png")
         render(situationKinds(), scheme, to: "style-situation-kinds-\(suffix).png")
+        // The Situation line (TP-1439): every kind in the full and the compact size, and forced, "and n more", narrow.
+        render(situationLines(.full), scheme, to: "situation-line-full-\(suffix).png")
+        render(situationLines(.compact), scheme, to: "situation-line-compact-\(suffix).png")
+        render(situationLineExtras(), scheme, to: "situation-line-extras-\(suffix).png")
         // The Blocked by card (TP-1354): the laptop and desktop viewports, and the refusal of a ticket as its own blocker.
         render(ledgerPage(window: 1440, blockers: blockersEditor(refused: false)), scheme, to: "ticket-blockers-1440-\(suffix).png")
         render(ledgerPage(window: 2560, blockers: blockersEditor(refused: false)), scheme, to: "ticket-blockers-2560-\(suffix).png")
