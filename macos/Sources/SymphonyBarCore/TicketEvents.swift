@@ -106,19 +106,58 @@ public struct TicketEventsPayload: Equatable {
         public var kind: String?
         public var outcome: String?
         public var exit: String?
+        /// A step's id and title (`step.started`, `step.completed`).
+        public var stepID: String?
+        public var title: String?
+        /// Why a step was skipped.
+        public var reason: String?
+        /// The step a failed step sends the run back to, and its title.
+        public var returnsTo: String?
+        public var returnsToTitle: String?
+        /// The Question a paused step waits on.
+        public var questionID: String?
+        /// A run's model and effort (`run.started`, `run.ended`).
+        public var model: String?
+        public var effort: String?
+        /// The tokens a run spent (`run.ended`).
+        public var tokens: Int?
+        /// How long a run or a step took (`run.ended`, `step.completed`).
+        public var durationMs: Int?
 
-        enum CodingKeys: String, CodingKey { case kind, outcome, exit }
+        enum CodingKeys: String, CodingKey {
+            case kind, outcome, exit, stepId, title, reason, returnsTo, returnsToTitle, questionId, model, effort, tokens, durationMs
+        }
 
-        public init(kind: String? = nil, outcome: String? = nil, exit: String? = nil) {
+        public init(
+            kind: String? = nil, outcome: String? = nil, exit: String? = nil, stepID: String? = nil, title: String? = nil,
+            reason: String? = nil, returnsTo: String? = nil, returnsToTitle: String? = nil, questionID: String? = nil,
+            model: String? = nil, effort: String? = nil, tokens: Int? = nil, durationMs: Int? = nil
+        ) {
             self.kind = kind
             self.outcome = outcome
             self.exit = exit
+            self.stepID = stepID
+            self.title = title
+            self.reason = reason
+            self.returnsTo = returnsTo
+            self.returnsToTitle = returnsToTitle
+            self.questionID = questionID
+            self.model = model
+            self.effort = effort
+            self.tokens = tokens
+            self.durationMs = durationMs
         }
 
         public init(from decoder: Decoder) throws {
             let container = try? decoder.container(keyedBy: CodingKeys.self)
             func text(_ key: CodingKeys) -> String? { (try? container?.decodeIfPresent(String.self, forKey: key)) ?? nil }
-            self.init(kind: text(.kind), outcome: text(.outcome), exit: text(.exit))
+            func number(_ key: CodingKeys) -> Int? { (try? container?.decodeIfPresent(Int.self, forKey: key)) ?? nil }
+            self.init(
+                kind: text(.kind), outcome: text(.outcome), exit: text(.exit), stepID: text(.stepId), title: text(.title),
+                reason: text(.reason), returnsTo: text(.returnsTo), returnsToTitle: text(.returnsToTitle),
+                questionID: text(.questionId), model: text(.model), effort: text(.effort), tokens: number(.tokens),
+                durationMs: number(.durationMs)
+            )
         }
     }
 
@@ -155,6 +194,9 @@ public struct TicketEventsPayload: Equatable {
         public var startedAt: String?
         public var endedAt: String?
         public var head: String?
+        /// The model the run used and its effort, nil when Symphony didn't say.
+        public var model: String? = nil
+        public var effort: String? = nil
     }
 
     /// The headers of the runs the history holds, by run id.
@@ -402,7 +444,7 @@ public struct TicketEventsPayload: Equatable {
         case event(Node)
 
         enum CodingKeys: String, CodingKey {
-            case kind, runId, runKind, runNumber, status, exit, verdict, startedAt, endedAt, head, events
+            case kind, runId, runKind, runNumber, status, exit, verdict, startedAt, endedAt, head, model, effort, events
         }
 
         init(from decoder: Decoder) throws {
@@ -420,7 +462,9 @@ public struct TicketEventsPayload: Equatable {
                 verdict: try? container.decodeIfPresent(Verdict.self, forKey: .verdict),
                 startedAt: try? container.decodeIfPresent(String.self, forKey: .startedAt),
                 endedAt: try? container.decodeIfPresent(String.self, forKey: .endedAt),
-                head: try? container.decodeIfPresent(String.self, forKey: .head)
+                head: try? container.decodeIfPresent(String.self, forKey: .head),
+                model: try? container.decodeIfPresent(String.self, forKey: .model),
+                effort: try? container.decodeIfPresent(String.self, forKey: .effort)
             )
             self = .run(run, try container.decodeIfPresent([Node].self, forKey: .events) ?? [])
         }

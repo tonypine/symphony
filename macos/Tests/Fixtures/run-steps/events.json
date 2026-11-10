@@ -1,0 +1,52 @@
+{
+  "timeline": [
+    {
+      "kind": "run", "run_id": "run-1", "run_kind": "implementation", "run_number": 1,
+      "model": "claude-opus-5-5", "effort": "high", "status": "ended", "exit": "failed",
+      "verdict": null, "started_at": "2026-10-07T09:02:00Z", "ended_at": "2026-10-07T09:24:00Z", "head": "8f3e2a1c9d",
+      "events": [
+        {"id": "e1", "seq": 1, "at": "2026-10-07T09:02:00Z", "type": "run.started", "run_id": "run-1",
+         "payload": {"run_id": "run-1", "run_kind": "implementation", "run_number": 1, "model": "claude-opus-5-5", "effort": "high"}, "artifacts": [], "children": []},
+        {"id": "e2", "seq": 2, "at": "2026-10-07T09:02:05Z", "type": "step.started", "run_id": "run-1",
+         "payload": {"step_id": "code", "title": "Write the code", "mode": "delegated"}, "artifacts": [], "children": []},
+        {"id": "e3", "seq": 3, "at": "2026-10-07T09:10:05Z", "type": "step.completed", "run_id": "run-1",
+         "payload": {"step_id": "code", "title": "Write the code", "mode": "delegated", "outcome": "passed", "duration_ms": 480000},
+         "artifacts": [{"id": "tr-code-1", "kind": "transcript", "label": "Write the code transcript", "mime": "application/x-ndjson", "url": "/api/v1/artifacts/tr-code-1", "available": true}], "children": []},
+        {"id": "e4", "seq": 4, "at": "2026-10-07T09:10:06Z", "type": "step.started", "run_id": "run-1",
+         "payload": {"step_id": "build", "title": "Build", "mode": "machine"}, "artifacts": [], "children": []},
+        {"id": "e5", "seq": 5, "at": "2026-10-07T09:12:06Z", "type": "step.completed", "run_id": "run-1",
+         "payload": {"step_id": "build", "title": "Build", "mode": "machine", "outcome": "passed"}, "artifacts": [], "children": []},
+        {"id": "e6", "seq": 6, "at": "2026-10-07T09:12:07Z", "type": "step.completed", "run_id": "run-1",
+         "payload": {"step_id": "checks", "title": "Checks", "mode": "machine", "outcome": "skipped", "reason": "no Elixir file changed"}, "artifacts": [], "children": []},
+        {"id": "e7", "seq": 7, "at": "2026-10-07T09:14:00Z", "type": "step.started", "run_id": "run-1",
+         "payload": {"step_id": "tests", "title": "Tests", "mode": "delegated"}, "artifacts": [], "children": []},
+        {"id": "e8", "seq": 8, "at": "2026-10-07T09:16:00Z", "type": "step.completed", "run_id": "run-1",
+         "payload": {"step_id": "tests", "title": "Tests", "mode": "delegated", "outcome": "failed", "returns_to": "code", "returns_to_title": "Write the code"},
+         "artifacts": [{"id": "tr-tests-1", "kind": "transcript", "label": "Tests transcript", "mime": "application/x-ndjson", "url": "/api/v1/artifacts/tr-tests-1", "available": true}], "children": []},
+        {"id": "e9", "seq": 9, "at": "2026-10-07T09:24:00Z", "type": "run.ended", "run_id": "run-1",
+         "payload": {"run_id": "run-1", "exit": "failed", "duration_ms": 1320000, "tokens": 1840000, "model": "claude-opus-5-5", "effort": "high"}, "artifacts": [], "children": []}
+      ]
+    },
+    {
+      "kind": "run", "run_id": "run-2", "run_kind": "implementation", "run_number": 2,
+      "model": "claude-opus-5-5", "effort": "high", "status": "running", "exit": null,
+      "verdict": null, "started_at": "2026-10-07T11:45:00Z", "ended_at": null, "head": null,
+      "events": [
+        {"id": "f1", "seq": 10, "at": "2026-10-07T11:45:00Z", "type": "run.started", "run_id": "run-2",
+         "payload": {"run_id": "run-2", "run_kind": "implementation", "run_number": 2, "model": "claude-opus-5-5", "effort": "high"}, "artifacts": [], "children": []},
+        {"id": "f2", "seq": 11, "at": "2026-10-07T11:45:05Z", "type": "step.started", "run_id": "run-2",
+         "payload": {"step_id": "code", "title": "Write the code", "mode": "delegated"}, "artifacts": [], "children": []},
+        {"id": "f3", "seq": 12, "at": "2026-10-07T11:55:05Z", "type": "step.completed", "run_id": "run-2",
+         "payload": {"step_id": "code", "title": "Write the code", "mode": "delegated", "outcome": "passed"},
+         "artifacts": [{"id": "tr-code-2", "kind": "transcript", "label": "Write the code transcript", "mime": "application/x-ndjson", "url": "/api/v1/artifacts/tr-code-2", "available": true}], "children": []},
+        {"id": "f4", "seq": 13, "at": "2026-10-07T11:55:06Z", "type": "step.started", "run_id": "run-2",
+         "payload": {"step_id": "build", "title": "Build", "mode": "machine"}, "artifacts": [], "children": []},
+        {"id": "f5", "seq": 14, "at": "2026-10-07T11:57:06Z", "type": "step.completed", "run_id": "run-2",
+         "payload": {"step_id": "build", "title": "Build", "mode": "machine", "outcome": "passed"}, "artifacts": [], "children": []},
+        {"id": "f6", "seq": 15, "at": "2026-10-07T11:57:10Z", "type": "step.started", "run_id": "run-2",
+         "payload": {"step_id": "tests", "title": "Tests", "mode": "delegated"}, "artifacts": [], "children": []}
+      ]
+    }
+  ],
+  "next_since": "2026-10-07T11:57:10Z"
+}

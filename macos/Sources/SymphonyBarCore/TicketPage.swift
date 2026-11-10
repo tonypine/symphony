@@ -238,6 +238,8 @@ public struct TicketPage: Equatable {
     public var workspacePath: String?
     /// Whether an agent runs on the ticket, so Stop has something to stop.
     public var isRunning: Bool
+    /// The step the run now is on and its newest lines, from the ticket read; nil when no run works on it.
+    public var runNow: RunNow?
     /// Whether Symphony tracks the ticket now, so its transcript endpoint answers.
     public var isTracked: Bool
     /// The phase the ticket is in, as the State fact shows it; nil while Symphony didn't say.
@@ -381,6 +383,7 @@ public struct TicketPage: Equatable {
         workspacePath = issue?.workspace?.path ?? running?.workspacePath ?? retry?.workspacePath
         lastMessage = running?.lastMessage?.nonEmpty ?? retry?.error?.nonEmpty ?? issue?.lastError?.nonEmpty
         isRunning = running != nil
+        runNow = sources.issue.flatMap { RunNow.decode(issue: $0) }
         // A ticket only waiting to be dispatched has no run, so no transcript yet.
         isTracked = running != nil || retry != nil || watching != nil
             || issue.map { !["slot_waiting", "dispatch_skipped"].contains($0.status ?? "") } ?? false

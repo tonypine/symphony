@@ -1297,6 +1297,43 @@ func decisionSheet(_ questions: [InboxReview.Action], picks: DecisionPicks = Dec
         .environment(\.mentionReferences, item.references)
 }
 
+// MARK: - The Run group and the Step list (TP-1443)
+
+/// TP-1376's runs (`Tests/Fixtures/run-steps`): run 1 failed on its tests, run 2 is live on its tests step.
+let runStepsFixtures = here.appendingPathComponent("../Fixtures/run-steps").standardizedFileURL
+let runStepsReference = ISO8601DateFormatter().date(from: "2026-10-07T12:27:00Z")!
+
+/// The fixture's step transcripts, kept as a read of each would keep them.
+@MainActor
+func runStepTranscripts() -> StepTranscripts {
+    let transcripts = StepTranscripts { _ in .unreachable }
+    for id in ["tr-code-1", "tr-tests-1", "tr-code-2"] {
+        guard let data = try? Data(contentsOf: runStepsFixtures.appendingPathComponent("artifacts/\(id).ndjson")) else {
+            fatalError("\(id) is missing from \(runStepsFixtures.path)")
+        }
+        transcripts.keep(TranscriptLine.lines(data), for: id)
+    }
+    return transcripts
+}
+
+/// Run 1 and run 2, the run now with the ticket read's step and lines.
+let runStepGroups: [RunGroupModel] = {
+    guard let events = try? Data(contentsOf: runStepsFixtures.appendingPathComponent("events.json")),
+          let history = TicketEventsPayload.decode(events),
+          let issue = try? Data(contentsOf: runStepsFixtures.appendingPathComponent("issue.json"))
+    else { fatalError("The run steps fixture is missing from \(runStepsFixtures.path)") }
+    return RunGroupModel.groups(history, runNow: RunNow.decode(issue: issue), liveTokens: 920_000, reference: runStepsReference)
+}()
+
+/// A run group in the laptop's main column.
+@MainActor
+func runGroup(_ run: RunGroupModel, unfolded: Bool? = nil) -> some View {
+    RunGroup(run: run, transcripts: runStepTranscripts(), unfolded: unfolded)
+        .padding(DesignTokens.Space.s5)
+        .frame(width: 760)
+        .background(DesignTokens.Surface.content.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1376,6 +1413,11 @@ MainActor.assumeIsolated {
         render(decisionSheet([unpickedAction]), scheme, to: "decision-sheet-one-question-\(suffix).png")
         render(decisionSheet([unpickedAction, secondAction], picks: DecisionPicks(picks: [0: 0])), scheme, to: "decision-sheet-one-of-two-\(suffix).png")
         render(decisionSheet([unpickedAction, secondAction], picks: DecisionPicks(picks: [0: 0, 1: 1])), scheme, to: "decision-sheet-both-answered-\(suffix).png")
+        // The Run group and the Step list (TP-1443): an ended run folded, the same run unfolded on its failed step, and
+        // the run now live on its current step.
+        render(runGroup(runStepGroups[0]), scheme, to: "run-group-folded-\(suffix).png")
+        render(runGroup(runStepGroups[0], unfolded: true), scheme, to: "run-group-failed-step-\(suffix).png")
+        render(runGroup(runStepGroups[1]), scheme, to: "run-group-run-now-\(suffix).png")
         render(review(width: 640, picks: picks), scheme, to: "inbox-write-in-\(suffix).png")
         // Chips inside the question, story and options, wrapping with the text (TP-952).
         render(review(width: 1200), scheme, to: "decision-chips-wide-\(suffix).png")
