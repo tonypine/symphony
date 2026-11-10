@@ -33,8 +33,8 @@ public struct TicketList: Equatable {
         public var kind: DesignTokens.SituationKind {
             switch self {
             case .queued: .slot
-            case .working: .working
-            case .review, .merging: .ci
+            // A ticket in review, QA or landing has a reviewer, a QA pass or the landing at work, not CI.
+            case .working, .review, .merging: .working
             case .waitingOnYou: .you
             case .shipped: .done
             }

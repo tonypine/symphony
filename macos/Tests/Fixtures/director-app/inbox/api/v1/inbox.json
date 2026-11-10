@@ -284,6 +284,20 @@
     },
     {
       "ask": "Answer the quality gate's questions",
+      "context": {
+        "blocked_by": [],
+        "blocks": [],
+        "earlier_decisions": [],
+        "parent": null,
+        "pull_request": null,
+        "related": [
+          {
+            "identifier": "SHOP-301",
+            "state": "Code Review",
+            "title": "Saved carts"
+          }
+        ]
+      },
       "identifier": "SHOP-341",
       "issue_id": "i-341",
       "kind": "clarify",

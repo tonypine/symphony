@@ -149,6 +149,20 @@ final class ContextCardTests: XCTestCase {
         XCTAssertNil(ContextCard(item: lone, state: StateSnapshot()))
     }
 
+    func testTheInboxFixturesTicketWaitingForCIReadsTheSameLineInAContextCard() throws {
+        // SHOP-301 waits for CI on Tickets, the Overview and Initiatives; SHOP-341's card names it with the same line.
+        let item = try XCTUnwrap(try payload("inbox").items.first { $0.identifier == "SHOP-341" })
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/inbox/api/v1/state.json")
+        guard case let .state(snapshot) = SymphonyState.poll(data: try Data(contentsOf: url), statusCode: 200) else { return XCTFail("not a state") }
+        let card = try XCTUnwrap(ContextCard(item: item, now: now, calendar: utc, state: snapshot))
+        let connected = try XCTUnwrap(card.connected.first { $0.identifier == "SHOP-301" })
+        XCTAssertEqual(connected.situation?.kind, .ci)
+        XCTAssertEqual(connected.situation?.cause, "Checks are running on PR #741.")
+        XCTAssertNil(connected.stage)
+    }
+
     private func item(unblocks: String? = nil, context: TicketContext? = nil, references: [String: Reference] = [:]) -> InboxItem {
         let action = unblocks.map { InboxReview.Action(title: nil, question: nil, why: nil, unblocks: $0, steps: [], options: []) }
         return InboxItem(id: "i-9", identifier: "X-9", kind: .action, ask: "Decide", review: InboxReview(action: action), references: references, context: context)

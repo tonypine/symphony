@@ -16,7 +16,8 @@ struct InitiativesContent: View {
                     review: { model.showInbox(selecting: $0) },
                     openTicket: model.openTicket,
                     openURL: model.onOpenURL
-                )
+                ),
+                reference: model.overviewState?.generatedAt ?? Date()
             )
         } else if case .unsupported? = model.initiativesResult {
             EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
@@ -41,6 +42,8 @@ struct InitiativesView: View {
     let list: InitiativesList
     @Binding var selection: String?
     let actions: InitiativeActions
+    /// Symphony's clock, so a sub-ticket's situation age reads as on every other page.
+    var reference = Date()
 
     var body: some View {
         if list.isEmpty {
@@ -59,7 +62,7 @@ struct InitiativesView: View {
                 Divider()
                 if let initiative = list.selection(selection) {
                     ScrollView {
-                        InitiativeDetail(initiative: initiative, actions: actions)
+                        InitiativeDetail(initiative: initiative, actions: actions, reference: reference)
                     }
                     .id(initiative.id)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -57,7 +57,13 @@ final class TicketListTests: XCTestCase {
         let shipped = try XCTUnwrap(list.row("SHOP-288"))
         XCTAssertEqual(shipped.kind, .done)
         XCTAssertEqual(shipped.line.cause, "")
-        XCTAssertEqual(TicketList.Stage.allCases.map(\.kind), [.slot, .working, .ci, .you, .ci, .done])
+        // Review, QA and landing have a reviewer, a QA pass or the landing at work: never Waiting for CI.
+        XCTAssertEqual(TicketList.Stage.allCases.map(\.kind), [.slot, .working, .working, .you, .working, .done])
+        var review = conflict
+        review.stage = .review
+        review.waitsOn = "the reviewer"
+        XCTAssertEqual(review.line, Situation(kind: .working, cause: "Waits on the reviewer."))
+        XCTAssertFalse(TicketList.Filter.waitingForCI.matches(review))
     }
 
     func testForcedAndAttentionRowsCarryTheirFlagsAndFacts() throws {
