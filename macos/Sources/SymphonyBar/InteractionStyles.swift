@@ -168,11 +168,11 @@ extension View {
 
 // MARK: - Button
 
-/// A button's face of a kind, at one of the three control sizes.
 /// A button's kind: primary (the accent fill, one per view), secondary (content with a hairline edge) or quiet
 /// (accent text, no fill until the pointer is over it).
 enum ButtonKind: String, CaseIterable { case primary, secondary, quiet }
 
+/// A button's face of a kind, at one of the three control sizes.
 struct ButtonFace<Label: View>: View {
     let label: Label
     var kind: ButtonKind = .secondary

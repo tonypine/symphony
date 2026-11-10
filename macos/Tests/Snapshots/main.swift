@@ -945,7 +945,7 @@ func styleStage(_ view: some View, width: CGFloat = 360) -> some View {
 
 /// A ticket row as today's lists draw it, in the row's face.
 @MainActor
-func styledRow(_ state: DesignTokens.Interaction) -> some View {
+func styledRow(_ state: DesignTokens.Interaction, reduceMotion: Bool = false) -> some View {
     styleStage(
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
             DesignTokens.SituationKind.ci.glyph
@@ -956,7 +956,7 @@ func styledRow(_ state: DesignTokens.Interaction) -> some View {
             Spacer(minLength: DesignTokens.Space.s2)
             Text("6 min").font(DesignTokens.TypeStyle.callout.font).monospacedDigit().foregroundStyle(.secondary)
         }
-        .modifier(RowFace(state: state, reduceMotion: false))
+        .modifier(RowFace(state: state, reduceMotion: reduceMotion))
     )
 }
 
@@ -1063,6 +1063,7 @@ MainActor.assumeIsolated {
             render(styledButtons(state), scheme, to: "style-button-\(name)-\(suffix).png")
         }
         render(styledButtons(.off), scheme, to: "style-button-disabled-\(suffix).png")
+        render(styledRow(.press, reduceMotion: true), scheme, to: "style-row-pressed-reduce-motion-\(suffix).png")
         render(styledButtons(.press, reduceMotion: true), scheme, to: "style-button-pressed-reduce-motion-\(suffix).png")
         render(styledCard(.hover, reduceMotion: true), scheme, to: "style-card-hover-reduce-motion-\(suffix).png")
         render(styledCard(.press, reduceMotion: true), scheme, to: "style-card-pressed-reduce-motion-\(suffix).png")
