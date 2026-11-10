@@ -1022,6 +1022,33 @@ defmodule SymphonyElixir.DirectorMovesTest do
       refute "decision.recorded" in types
     end
 
+    test "a pick sent with the Director's own words keeps its option, and the reply names it before the words", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add checkout."}])
+      id = ask_signing()
+      words = "We have the keys now; sign everything."
+      pick = [%{question: signing_request().question, answer: words, option: "1"}]
+
+      assert {:ok, %{moved: false, commented: true}} =
+               DirectorMoves.move(:decide, "MOT-40", %{picks: pick, question_id: id, request_comment_id: "comment-1"}, opts)
+
+      assert %{state: :answered, answer: %{text: ^words, option: 1}} = Questions.find({:ticket, "repo-director", "pr"}, id)
+      assert_received {:memory_tracker_reply, "pr", "comment-1", reply}
+      assert reply =~ "**Decision:** Add the secrets: We have the keys now; sign everything."
+      # The Decisions section keeps the words as the answer.
+      assert_received {:memory_tracker_description_update, "pr", description}
+      assert [%{key: "comment-1", answer: ^words}] = SymphonyElixir.Decisions.recorded(description)
+    end
+
+    test "several picks answering one Question keep what each named", %{opts: opts} do
+      put_issues([%{pr("In Progress") | repo_key: "repo-director", description: "Add checkout."}])
+      id = ask_signing()
+      picks = [%{question: "Sign?", answer: "Soon", option: "Add the secrets"}, %{question: "Ship?", answer: "Later"}]
+
+      assert {:ok, %{commented: true}} = DirectorMoves.move(:decide, "MOT-40", %{picks: picks, question_id: id, request_comment_id: "comment-1"}, opts)
+      assert_received {:memory_tracker_reply, "pr", "comment-1", reply}
+      assert reply == "Decision from the Director:\n\n1. Sign?\n   **Decision:** Add the secrets: Soon\n\n2. Ship?\n   **Decision:** Later"
+    end
+
     test "with Linear down, Decide answers the Question and ends its pause; the reply waits on the record", %{opts: opts} do
       id = ask_signing()
       ticket = {:ticket, "repo-director", "pr"}

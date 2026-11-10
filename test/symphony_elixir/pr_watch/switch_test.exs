@@ -576,6 +576,15 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       withdraw!(issue_id)
     end
 
+    # The Director's pick of an option with their own words, as the control API's Decide answers
+    # the open question: the words are the answer, the option is the pick.
+    defp pick!(issue_id, title, words, option) do
+      ticket = {:ticket, @repo_key, issue_id}
+      %{id: id} = Enum.find(Questions.open(ticket), &(&1.title == title))
+      {:ok, _question} = Questions.answer(ticket, id, words, option: option)
+      :ok
+    end
+
     defp asked(issue_id, title), do: Enum.count(comments(issue_id), &(&1 =~ "## Decision needed: #{title}"))
 
     test "walkthrough 1: a repo with no workflows gets its reviewer on a head with no checks (G1, D2)" do
@@ -645,6 +654,32 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid, 2)
       assert %{rule: "R26", kind: :dispatch} = decision(issue_id)
       assert asked(issue_id, title) == 3
+    end
+
+    test "R17: a pick sent with the person's own words acts on the pick, not on the words" do
+      issue_id = ticket!("1", "QA", ci: :required_missing, missing_checks: ["build"], run_ids: ["40"])
+      title = "Check build never reported on TP-1"
+      pid = start!()
+      tick!(pid)
+      advance!(timeout_ms())
+      tick!(pid, 3)
+      assert asked(issue_id, title) == 1
+
+      # Rerun the checks, with words that name no option: the head's runs run again.
+      pick!(issue_id, title, "Probably a lost runner, give it another go.", "Rerun the checks")
+      tick!(pid)
+      assert World.calls(:rerun_all) == [{"40", "acme/app"}]
+      assert %{rule: "R24"} = decision(issue_id)
+      advance!(timeout_ms())
+      tick!(pid)
+      assert asked(issue_id, title) == 2
+
+      # Proceed, with words that open with another option's label: the check is waived for the head.
+      pick!(issue_id, title, "Rerun the checks would not help; the check was renamed.", "Proceed without it for this PR")
+      tick!(pid)
+      assert %{rule: "R27", kind: :dispatch} = decision(issue_id)
+      assert %{ci: :green} = watch(issue_id).facts
+      assert World.calls(:rerun_all) == [{"40", "acme/app"}]
     end
 
     test "an answer that picks no option asks again once the wait passes again" do
@@ -817,6 +852,43 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       pr!("1", [head_sha: "head-1-2"] ++ cancelled([%{install | job_id: 8}], names))
       tick!(pid)
       assert length(World.calls(:rerun)) == 5
+    end
+
+    test "R19a: a pick sent with the person's own words acts on the pick, not on the words" do
+      install = %{name: "install script", run_id: "39571199843", job_id: 2, workflow_name: "macos", conclusion: "CANCELLED"}
+      names = ["specs", "install script"]
+      title = "Check install script keeps being cancelled on TP-1"
+      cancel! = fn job -> pr!("1", cancelled([%{install | job_id: job}], names)) end
+      issue_id = ticket!("1", "QA", cancelled([install], names))
+      pid = start!()
+
+      tick!(pid)
+      cancel!.(3)
+      tick!(pid)
+      cancel!.(4)
+      tick!(pid, 2)
+      assert asked(issue_id, title) == 1
+      assert length(World.calls(:rerun)) == 2
+
+      # Keep retrying, with words that name no option: the check is rerun.
+      pick!(issue_id, title, "GitHub macOS runner starvation; keep rerunning.", "Keep retrying")
+      tick!(pid)
+      assert length(World.calls(:rerun)) == 3
+      refute match?(%{rule: "R19a", kind: :wait}, decision(issue_id))
+      cancel!.(5)
+      tick!(pid)
+      cancel!.(6)
+      tick!(pid)
+      assert asked(issue_id, title) == 2
+      assert length(World.calls(:rerun)) == 4
+
+      # Wait, with words that read like a rerun: nothing is rerun, and the ticket waits on a person.
+      pick!(issue_id, title, "Keep retrying later, once GitHub has machines.", "Wait")
+      tick!(pid)
+      cancel!.(7)
+      tick!(pid, 2)
+      assert length(World.calls(:rerun)) == 4
+      assert %{rule: "R19a", kind: :wait, owner: :person} = decision(issue_id)
     end
 
     test "a check the base doesn't require, cancelled again after its reruns, is set aside instead of holding the ticket" do
