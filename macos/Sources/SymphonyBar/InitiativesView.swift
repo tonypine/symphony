@@ -145,9 +145,12 @@ struct InitiativeBar: View {
                     Capsule().fill(DesignTokens.Surface.raised.color)
                 } else {
                     ForEach(segments, id: \.stage) { segment in
+                        let opacity: Double = segment.stage.isLight ? 0.45 : 1
+                        let share = CGFloat(segment.count) / CGFloat(total)
+                        let width = max(0, (geometry.size.width - gaps) * share)
                         RoundedRectangle(cornerRadius: height / 2, style: .continuous)
-                            .fill(segment.stage.status.tint.opacity(segment.stage.isLight ? 0.45 : 1))
-                            .frame(width: max(0, (geometry.size.width - gaps) * CGFloat(segment.count) / CGFloat(total)))
+                            .fill(segment.stage.status.tint.opacity(opacity))
+                            .frame(width: width)
                     }
                 }
             }
