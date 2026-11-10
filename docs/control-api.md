@@ -602,3 +602,113 @@ identifier (`tickets`), and one bucket per unit of the period, empty ones at `va
 A `from` or `to` that is neither an ISO 8601 time nor a date, a `from` not before `to`, an unknown
 unit or series, or a period over 366 days or 5000 buckets answers `400` `invalid_query`. Like the
 other reads of `/api/v1`, it needs no token.
+
+# Saved views and the tickets read (the Tickets page)
+
+The Tickets page's views live on the server (`SymphonyElixir.Views`, in the run store), so a view
+saved on one client is listed by every other. A view is a name, filters, columns and a sort over the
+ticket entity, and nothing more. Its columns and filters come from one catalog
+(`SymphonyElixir.TicketColumns`), and every write is validated against it.
+
+## The column catalog
+
+| Column | Type | What it holds |
+| --- | --- | --- |
+| `identifier` | `identifier` | The ticket's identifier. |
+| `title` | `string` | The ticket's title. |
+| `repo` | `string` | The key of the repository the ticket lives in. |
+| `epic` | `identifier` | The identifier of the epic the ticket is a sub-ticket of (its record's parent). |
+| `phase` | `string` | The phase (state) the ticket is in. |
+| `situation` | `situation` | The kind of the ticket's situation (the ticket read's `situation.kind`). |
+| `situation_since` | `time` | Since when the situation holds. |
+| `labels` | `list` | The ticket's labels. |
+| `priority` | `integer` | Linear's priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low. |
+| `assignee` | `string` | Who the ticket is assigned to. |
+| `url` | `string` | The ticket's page in Linear. |
+| `created_at` | `time` | When the ticket was created. |
+| `phase_at` | `time` | When the ticket entered its phase. |
+| `updated_at` | `time` | When Symphony last wrote the ticket's record. |
+
+| Filter | Column | Matches |
+| --- | --- | --- |
+| `repo` | `repo` | Any of its values, in any case. |
+| `epic` | `epic` | The epic itself and the tickets whose record names it as parent, as the Journal's and the aggregation read's `epic`. |
+| `phase` | `phase` | Any of its values, in any case. |
+| `situation` | `situation` | Any of its kinds (`waiting_on_you`, `retrying`, `blocked_by_ticket`, `paused_by_rule`, `waiting_for_ci`, `waiting_for_build`, `waiting_for_slot`, `working`, `done`, `cancelled`). |
+| `label` | `labels` | A ticket holding any of its labels, in any case. |
+| `priority` | `priority` | Any of its values, integers from 0 to 4. |
+| `since` | `updated_at` | The tickets whose record was written after its one ISO 8601 time. |
+
+A ticket passes when every filter lets it through. A filter's `value` is a list (a single value is
+read as a list of one), except `since`'s.
+
+## `GET /api/v1/views`
+
+```json
+{
+  "views": [
+    {
+      "id": "view-3f9a1c2b7d4e",
+      "name": "Epic 6, waiting",
+      "filters": [
+        { "column": "epic", "value": ["TP-1400"] },
+        { "column": "situation", "value": ["waiting_on_you", "waiting_for_ci", "waiting_for_build", "waiting_for_slot"] }
+      ],
+      "columns": ["identifier", "title", "situation", "priority"],
+      "sort": { "column": "priority", "direction": "asc" },
+      "created_at": "2026-11-10T04:00:00.000000Z",
+      "updated_at": "2026-11-10T04:00:00.000000Z"
+    }
+  ],
+  "columns": [{ "name": "identifier", "type": "identifier", "description": "The ticket's identifier." }],
+  "filters": ["repo", "epic", "phase", "situation", "label", "priority", "since"]
+}
+```
+
+The views by name, with the catalog's columns and filter names. Like the other reads of `/api/v1`, it
+needs no token.
+
+## `POST /api/v1/control/view` and `DELETE /api/v1/control/view/:id`
+
+`POST` takes `name` (required, at most 120 bytes), `filters` (default none), `columns` (default
+`identifier`, `title`, `phase`, `situation`) and `sort` (default `identifier`, `asc`), and creates a
+view; with an `id` it replaces that view's name, filters, columns and sort and keeps its
+`created_at`. It answers `200` `{"view": view}`. `DELETE` answers `200` `{"deleted": id}`.
+
+An unknown column, sort column or filter, an unknown situation, a priority outside 0 to 4, a `since`
+that is not ISO 8601, an empty value list, an empty `columns`, a direction other than `asc` or
+`desc`, or a missing name is `400` `invalid_view` with the reason; an unknown name's reason lists the
+catalog's names (`Unknown column(s): colour. The columns are: identifier, title, …`). An `id` no
+view has is `404` `view_not_found`. Both need the control token, and neither writes a ticket event.
+
+## `GET /api/v1/tickets`
+
+    GET /api/v1/tickets?view=<id>
+    GET /api/v1/tickets?epic=TP-1400&situation=waiting_on_you,waiting_for_slot&columns=identifier,situation&sort=priority&direction=desc
+
+The tickets a saved view selects, or the same grammar inline: each filter by its name with
+comma-separated values, `columns` comma-separated, `sort` a column and `direction`. `view` and inline
+parameters don't mix.
+
+```json
+{
+  "view": { "id": "view-3f9a1c2b7d4e", "name": "Epic 6, waiting", "...": "..." },
+  "filters": [{ "column": "epic", "value": ["TP-1400"] }],
+  "columns": [{ "name": "identifier", "type": "identifier", "description": "The ticket's identifier." }],
+  "sort": { "column": "priority", "direction": "asc" },
+  "count": 2,
+  "tickets": [
+    { "issue_id": "4b1c…", "identifier": "TP-1402", "situation": "waiting_on_you", "priority": 1 },
+    { "issue_id": "9e2d…", "identifier": "TP-1403", "situation": "waiting_for_slot", "priority": 2 }
+  ]
+}
+```
+
+A ticket is a record with an identifier that no webhook removed and that Linear still has. Each row
+is its `issue_id` and the columns asked for, times in ISO 8601. The sort puts the tickets without a
+value last, either way, and breaks ties by identifier (`TP-9` before `TP-10`). The situations are
+computed from the ledger and what the orchestrator holds now, only when the view shows, filters or
+sorts by one; when the orchestrator's snapshot can't be read they come from the records alone and the
+answer carries an `error` (`snapshot_timeout` or `snapshot_unavailable`). An unknown view is `404`
+`view_not_found`; a malformed query, or `view` with inline parameters, is `400` `invalid_query`. It
+reads Symphony's store only, makes no Linear request and needs no token.

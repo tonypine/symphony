@@ -6093,6 +6093,18 @@ Minimum endpoints:
     it MUST make no Linear request. A day's `tokens` equals `/api/v1/history`'s `tokens_per_day`.
     `docs/control-api.md` documents its shape; a malformed query returns `400` `invalid_query`.
 
+- `GET /api/v1/views` and `GET /api/v1/tickets?view=<id>` (or inline filters)
+  - The saved views of the Tickets page, stored in the run store so every client lists the same
+    ones: a name, filters (each a filter of the ticket entity's column catalog: `repo`, `epic`,
+    `phase`, `situation`, `label`, `priority`, `since`), columns from the catalog and a sort (a
+    column and `asc` or `desc`). `GET /api/v1/views` lists them with the catalog's columns (name and
+    type) and filters. `GET /api/v1/tickets` answers the tickets a view selects, or the same
+    filters, `columns`, `sort` and `direction` given inline, sorted, each with its `issue_id` and the
+    columns asked for. The `epic` and `repo` filters match as the Journal's and the aggregation
+    read's do. It reads the ticket records and the situations (from what the orchestrator holds) and
+    MUST make no Linear request. `docs/control-api.md` documents the shapes; a malformed query is
+    `400` `invalid_query` and an unknown view `404` `view_not_found`.
+
 - `GET /api/v1/learnings?repo=&tag=&q=`
   - The learnings of every configured repo, from the learnings store, newest first. `repo` keeps one repo key, `tag` one tag, and `q` the records
     whose rule, evidence, tags or ticket identifier contain the text, in any case; a blank filter is
@@ -6336,6 +6348,14 @@ Minimum endpoints:
   - The ticket read carries `looked_at` and `new_since_looked`, the count of the ticket's events
     later than the mark, and each event of the events feed carries `new`. Before the person ever
     looked, every event is new.
+
+- `POST /api/v1/control/view` and `DELETE /api/v1/control/view/:id` (OPTIONAL)
+  - Create a saved view (`name`, `filters`, `columns`, `sort`), update the one an `id` names (its
+    creation time kept), or delete one. Each is validated against the ticket entity's column
+    catalog: an unknown column, filter, situation or direction, or a missing name, is `400`
+    `invalid_view` with the reason, and the reason for an unknown name lists the catalog's names; an
+    `id` no view has is `404` `view_not_found`. They need the control bearer token and write no
+    ticket event.
 
 - `POST /api/v1/control/<move>` (the Director's moves, OPTIONAL)
   - The Mac app's Inbox makes the Director's Linear moves through Symphony, which holds the Linear
