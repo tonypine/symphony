@@ -1504,8 +1504,8 @@ real key (a real model list, a real run) are manual: a person runs them by hand,
 model, outside QA.
 
 An agent cannot change the agent-protected paths (`WORKFLOW.md`, `symphony.yml`, `.agents/skills`, the
-project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`,
-`config/settings_ui_exempt.yml`): its sandbox denies the
+project `.claude` settings, hooks and skills, `mise.toml`, `.tool-versions`, `.github` (CI
+workflows and actions, `CODEOWNERS`, dependabot), `config/settings_ui_exempt.yml`): its sandbox denies the
 writes and the `protected-paths` CI job fails a PR whose own commits touch them. The executor hands
 a criterion that only such a change can meet to a person, in a sub-issue or a follow-up ticket
 named in its workpad. The PR QA prompt lists these paths, and the agent marks such a handed-off
@@ -2559,7 +2559,7 @@ Linear on such a ticket is drift and is moved back, so this is the way to move o
 reset. The record's phase is written first, then Linear, and a move Linear refuses stands on the
 record for the reconciler to project. A phase that dispatches starts a cycle at once; a move into
 Backlog or a closed state stops a running turn as Stop does, without the stop's pause. A pause from a
-dispatch loop, a quiet handoff or an idle park lifts with the move (its question is answered "Run it
+dispatch loop, a quiet handoff or an idle run's pause lifts with the move (its question is answered "Run it
 again"); every other pause reason stays. The ticket's timeline gets one `ticket.moved` event ("Moved
 to In Progress from Backlog") with the note. A move to the phase the ticket is already in answers
 200 with `moved: false`. A ticket in no configured repository, one Symphony has no record of
@@ -3402,6 +3402,13 @@ phases:
       # code, build, checks, tests and handoff, as in the implementation list
 ```
 
+A list may instead end on a machine step with the id `handoff`, whose command pushes the branch. Once
+it passes, or a person answers its question with "Go on past it", with the workspace HEAD on the
+ticket's PR, Symphony records the handoff for that head and moves the ticket to `Code Review` in the
+same run. Nothing moves when the PR doesn't show that head, the ticket got a hold or left its phase
+while the step ran, a review comment, red check or conflict is pending, or a `Rework` head hasn't moved
+past the one the `Rework` started from.
+
 `symphony:findings` is a command Symphony runs itself, not in a shell, while the run keeps its slot.
 It keeps the open findings by class from the ticket's history as the step's output. When QA failed
 the ticket on the same class in two QA runs (for a finding QA left `unclassified`, on the same step
@@ -3599,7 +3606,7 @@ Every run kind, the reviewer and QA included, gets two tools on the current tick
 | Tool | What it does |
 | --- | --- |
 | `ticket_events` | Reads the ticket's events, oldest first, each with its id, seq, time, type, actor, summary, payload, head and artifacts (`{id, kind, label, url}`). `types`, `since` (ISO 8601, exclusive), `run_id`, `open_findings` (the findings QA has not confirmed fixed: open, resolved awaiting QA, reopened; each finding's `finding.recorded` carries `finding`, its `state`, resolution, the head it was resolved on, the event that reopened it and the resolution that event superseded) and `limit` (at most 200) narrow the read. |
-| `ticket_record` | Records one event: `finding.resolved`, a delegated step's `step.started` and `step.completed` (its `outcome`: `passed`, `failed` with the step it `returns_to`, `paused` with the `question_id` it waits on, `skipped` with a `reason`; Symphony records machine and orchestrated steps, and refuses them from an agent), `evidence` (with an optional `proof`: the walkthrough step and its test), `checklist.answered` and `note` in any run, and `finding.recorded` in a QA run. Symphony fills the run, run kind, phase and head. `artifacts` are files under the workspace or the run's `$TMPDIR`, kept in the artifact store. A refusal (`unknown_type`, `not_allowed` with the types the run may record, `invalid_payload` naming the fields, `unknown_finding`, `already_resolved` naming the resolution, `no_head` for a resolution with no head that fixes it, `unknown_parent`, `invalid_artifact`) returns the type's schema and writes nothing. |
+| `ticket_record` | Records one event: `finding.resolved`, a delegated step's `step.started` and `step.completed` (its `outcome`: `passed`, `failed` with the step it `returns_to`, `paused` with the `question_id` it waits on, `skipped` with a `reason`; Symphony records machine and orchestrated steps, and refuses them from an agent), `evidence` (with an optional `proof`: the walkthrough step and its test), `checklist.answered` and `note` in any run, `finding.recorded` in a QA run, and `brief.written` (the ticket's brief: `text` and `walkthrough`, prose with no backtick) in an implementation, rework or review-feedback run. Symphony fills the run, run kind, phase and head. `artifacts` are files under the workspace or the run's `$TMPDIR`, kept in the artifact store. A refusal (`unknown_type`, `not_allowed` with the types the run may record, `invalid_payload` naming the fields, `unknown_finding`, `already_resolved` naming the resolution, `no_head` for a resolution with no head that fixes it, `unknown_parent`, `invalid_artifact`) returns the type's schema and writes nothing. |
 
 ### Push check
 

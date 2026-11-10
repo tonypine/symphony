@@ -9,10 +9,15 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     step.started step.completed evidence finding.recorded finding.resolved finding.confirmed checklist.answered
     ticket.cancelled ticket.moved drift.detected drift.reverted drift.revert_failed
     pause.set pause.reason_added pause.reason_cleared pause.cleared
-    question.asked question.answered question.withdrawn question.reopened question.not_asked park.backfilled workspace.synced workspace.rebuilt workspace.removed situation.changed note
+    question.asked question.answered question.withdrawn question.reopened question.not_asked park.backfilled workspace.synced workspace.rebuilt workspace.removed situation.changed rule.action ticket.filed note.read brief.written note
   )
 
   describe "catalog/0" do
+    test "a rule action names one of the actions a rule may take" do
+      assert "paused" in Types.rule_actions()
+      assert "lifted_pause" in Types.rule_actions()
+    end
+
     test "has every type, each with a schema, a writer list, run kinds and an idempotency rule" do
       catalog = Types.catalog()
 
@@ -315,13 +320,18 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
   end
 
   describe "agent_types/1" do
-    test "a QA run also records findings; every other run kind records the same agent types; nothing else is an agent's" do
+    test "a QA run also records findings, the runs that write the code a brief; every other run kind the same agent types; nothing else is an agent's" do
       every = ~w(checklist.answered evidence finding.resolved note step.completed step.started)
+      briefing = ~w(implementation rework review_feedback)
 
       assert Types.agent_types("qa") == Enum.sort(["finding.recorded" | every])
       assert Types.agent_types(:qa) == Types.agent_types("qa")
 
-      for run_kind <- Types.agent_run_kinds() -- ["qa"], do: assert(Types.agent_types(run_kind) == every, run_kind)
+      with_brief = Enum.sort(["brief.written" | every])
+      for run_kind <- briefing, do: assert(Types.agent_types(run_kind) == with_brief, run_kind)
+
+      for run_kind <- Types.agent_run_kinds() -- ["qa" | briefing],
+          do: assert(Types.agent_types(run_kind) == every, run_kind)
 
       assert Types.agent_types("supervisor") == []
       assert Types.agent_types(nil) == []
@@ -354,7 +364,35 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert %{optional: [_head, %{name: "evidence", type: "any_of", of: [%{type: "string"}, %{type: "list"}]}]} = Types.schema("finding.resolved")
       refute Enum.any?(Types.schema("phase.entered").optional, &(&1.name in ["signal", "signal_details"]))
       assert Types.schema("note").optional == []
+      assert Types.schema("brief.written").required == [%{name: "text", type: "string", max: 1_200, forbids: "`"}, %{name: "walkthrough", type: "string", max: 4_000, forbids: "`"}]
       assert Types.schema("nope") == nil
+    end
+  end
+
+  describe "brief.written" do
+    test "is prose a person reads: bounded, and without a backtick" do
+      brief = %{text: "Each ticket says in plain words what it delivers.", walkthrough: "Open a ticket a run just finished and read what it delivers."}
+
+      assert {:ok, ^brief} = Types.validate("brief.written", brief, :agent, "implementation")
+      assert {:ok, _brief} = Types.validate("brief.written", %{brief | text: String.duplicate("a", 1_200)}, :agent, "rework")
+      long_text = %{brief | text: String.duplicate("a", 1_201)}
+      long_walkthrough = %{brief | walkthrough: String.duplicate("a", 4_001)}
+      assert {:error, {:invalid_payload, [:text]}} = Types.validate("brief.written", long_text, :agent, "implementation")
+      assert {:error, {:invalid_payload, [:walkthrough]}} = Types.validate("brief.written", long_walkthrough, :agent, "implementation")
+      assert {:error, {:invalid_payload, [:text]}} = Types.validate("brief.written", %{brief | text: "Adds `TicketBrief.read/1`."}, :agent, "implementation")
+      assert {:error, {:invalid_payload, [:walkthrough]}} = Types.validate("brief.written", %{brief | walkthrough: "Call `GET /api/v1/x`."}, :agent, "review_feedback")
+      assert {:error, {:invalid_payload, [:walkthrough]}} = Types.validate("brief.written", Map.delete(brief, :walkthrough), :agent, "implementation")
+    end
+
+    test "is written by the runs that write the code, never by a reviewer, QA, the machine or a person" do
+      brief = %{text: "What it does.", walkthrough: "What a person does."}
+
+      for run_kind <- ~w(code_review qa ci_fix landing breakdown epic_review) do
+        assert {:error, {:not_allowed, _reason}} = Types.validate("brief.written", brief, :agent, run_kind)
+      end
+
+      assert {:error, {:not_allowed, _reason}} = Types.validate("brief.written", brief, :machine, nil)
+      assert {:error, {:not_allowed, _reason}} = Types.validate("brief.written", brief, :person, nil)
     end
   end
 

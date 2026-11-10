@@ -5,6 +5,27 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
 
   alias SymphonyElixir.{Inbox, Questions}
 
+  defmodule HeldFirstScoreProvider do
+    @behaviour SymphonyElixir.QualityGate.Provider
+
+    @impl true
+    def score(issue, _settings) do
+      if issue.comments == [] do
+        send(Application.fetch_env!(:symphony_elixir, :memory_tracker_recipient), {:scoring, self()})
+
+        receive do
+          :release -> :ok
+        after
+          30_000 -> :ok
+        end
+
+        {:ok, %{score: 5, reason: "needs answer", questions: ["What is done?", "Which module?", "What is out of scope?"]}}
+      else
+        {:ok, %{score: 8, reason: "clear now"}}
+      end
+    end
+  end
+
   defmodule PassProvider do
     @behaviour SymphonyElixir.QualityGate.Provider
 
@@ -289,6 +310,74 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
 
     assert_bootstrap_workpad_comment("issue-inbox-1")
     assert Questions.open(ticket) == []
+  end
+
+  test "a cycle that finds the gate's task in flight runs when the task ends, not at the next poll" do
+    issue = %Issue{
+      id: "issue-deferred-1",
+      identifier: "MT-DEFER",
+      title: "Deferred cycle",
+      description: "Almost ready",
+      state: "Todo",
+      team: %{key: "Test"},
+      url: "https://example.org/issues/MT-DEFER",
+      labels: [],
+      comments: [],
+      updated_at: ~U[2026-05-05 03:00:00Z]
+    }
+
+    Application.put_env(:symphony_elixir, :quality_gate_anthropic_module, HeldFirstScoreProvider)
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+    Application.put_env(:symphony_elixir, :memory_tracker_recipient, self())
+
+    write_workflow_file!(Workflow.workflow_file_path(),
+      quality_gate: %{
+        enabled: true,
+        provider: "anthropic",
+        model: "claude-haiku-4-5-20251001",
+        pass_threshold: 6,
+        clarification_floor: 4,
+        max_clarification_rounds: 2,
+        on_error: "pass"
+      }
+    )
+
+    name = Module.concat(__MODULE__, :DeferredCycleOrchestrator)
+    {:ok, pid} = Orchestrator.start_link(name: name)
+    on_exit(fn -> if Process.alive?(pid), do: Process.exit(pid, :normal) end)
+
+    send(pid, :run_poll_cycle)
+    assert_receive {:scoring, gate_task}, 5_000
+
+    # The ticket changes while the gate scores what it read before: the next cycle reads the change
+    # and finds the task in flight.
+    reply = %{author: "Operator", body: "Acceptance criteria are clear.", created_at: ~U[2026-05-05 04:00:00Z]}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{issue | comments: [reply]}])
+
+    force_repo_poll_due(pid)
+    send(pid, :run_poll_cycle)
+
+    wait_for_orchestrator_state(
+      pid,
+      fn state ->
+        read_the_change? =
+          Enum.any?(state.repo_poll_cache, fn {_repo, entry} ->
+            Enum.any?(Map.get(entry, :issues, []), &(&1.id == "issue-deferred-1" and &1.comments != []))
+          end)
+
+        read_the_change? and state.cycle_deferred and is_nil(state.repo_poll_task_ref)
+      end,
+      5_000
+    )
+
+    send(gate_task, :release)
+
+    assert_receive {:memory_tracker_comment, "issue-deferred-1", body}, 5_000
+    assert body =~ "clarification requested"
+
+    # The workflow's next poll is 30 seconds away: only the deferred cycle starts the ticket in time.
+    assert_bootstrap_workpad_comment("issue-deferred-1")
+    refute :sys.get_state(pid).cycle_deferred
   end
 
   test "a reply in Linear re-scores the ticket and withdraws the gate's open Question" do
@@ -844,7 +933,9 @@ defmodule SymphonyElixir.QualityGate.OrchestratorIntegrationTest do
   end
 
   defp assert_bootstrap_workpad_comment(issue_id) do
-    assert_receive {:memory_tracker_comment, ^issue_id, body}, 500
+    # From the poll to the first comment is four tasks in a row (poll, gate, readiness, the run), so
+    # the bound is generous; a passing test does not wait for it.
+    assert_receive {:memory_tracker_comment, ^issue_id, body}, 5_000
     assert body =~ "## Symphony Workpad"
     refute body =~ "skipped"
     refute body =~ "clarification requested"

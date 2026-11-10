@@ -66,6 +66,18 @@ defmodule Mix.Tasks.ProtectedPaths.CheckTest do
     assert stderr =~ "Changed: config/settings_ui_exempt.yml"
   end
 
+  test "fails a branch whose own commits change a CI workflow, the protected-paths check included", %{repo: repo} do
+    commit_files!(repo, %{".github/workflows/make-all.yml" => "agent repair\n", ".github/workflows/protected-paths.yml" => "agent turns it off\n"}, "ci")
+
+    stderr =
+      capture_io(:stderr, fn ->
+        assert_raise Mix.Error, fn -> Check.run(["--base", "main", "--repo", repo]) end
+      end)
+
+    assert stderr =~ "Changed: .github/workflows/make-all.yml"
+    assert stderr =~ "Changed: .github/workflows/protected-paths.yml"
+  end
+
   test "fails a branch that changes the files behind a symlinked skill", %{repo: repo} do
     commit_files!(repo, %{"priv/skills/pull/SKILL.md" => "agent rewrite\n"}, "rewrite the pull skill")
 

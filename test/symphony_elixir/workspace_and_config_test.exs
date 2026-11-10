@@ -5561,15 +5561,21 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       adding = Path.join(ctx.test_root, "adding")
       overlaps = Path.join(ctx.test_root, "overlaps")
 
-      # The worker's git notes a `worktree add` that starts while another is still
-      # running, and holds each add open a moment so unserialized ones would overlap.
+      # The worker's git notes a `worktree add` of this repo that starts while another is
+      # still running, and holds each add open a moment so unserialized ones would overlap.
+      # PATH is process-wide, so a `worktree add` another test's process runs in its own
+      # repo meanwhile also reaches this git: only adds of this repo count.
       File.mkdir_p!(bin)
 
       File.write!(Path.join(bin, "git"), """
       #!/bin/sh
       case " $* " in
-        *" worktree add "*)
-          mkdir #{adding} 2>/dev/null || echo overlap >> #{overlaps}
+        *" -C #{primary_repo} worktree add "*)
+          # A git that re-runs itself for the same add (a child inheriting this env) is the
+          # same add, not a second one.
+          if [ -n "${SYMP_TEST_ADD_ACTIVE:-}" ]; then exec #{System.find_executable("git")} "$@"; fi
+          export SYMP_TEST_ADD_ACTIVE=1
+          mkdir #{adding} 2>/dev/null || echo "overlap pid=$$ args=$*" >> #{overlaps}
           #{System.find_executable("git")} "$@"
           status=$?
           sleep 0.2
@@ -5603,7 +5609,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         assert String.trim(git!(workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"])) == "auto/#{identifier}"
       end
 
-      refute File.exists?(overlaps)
+      refute File.exists?(overlaps), if(File.exists?(overlaps), do: File.read!(overlaps), else: "")
       refute File.exists?(Path.join([primary_repo, ".git", "symphony-worktree-add.lock"]))
     end)
   end
@@ -5616,7 +5622,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       workspace_root = Path.join(ctx.test_root, "wsroot")
       workspace_path = Path.join([workspace_root, "default", "MT-LOCK-REL"])
       lock = Path.join([primary_repo, ".git", "symphony-worktree-add.lock"])
-      write_real_exec_fake_ssh!(Path.join(ctx.test_root, "ssh"), "", login_dir)
+      write_real_exec_fake_ssh!(Path.join(ctx.test_root, "ssh"), without_flock_path_prefix!(ctx.test_root), login_dir)
 
       # This VM stands in for another dispatch's script holding the lock.
       File.mkdir_p!(lock)
@@ -5691,6 +5697,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       create_primary_repo!(primary_repo, Path.join(ctx.test_root, "origin.git"))
       workspace_root = Path.join(ctx.test_root, "wsroot")
       lock = Path.join([primary_repo, ".git", "symphony-worktree-add.lock"])
+      write_real_exec_fake_ssh!(Path.join(ctx.test_root, "ssh"), without_flock_path_prefix!(ctx.test_root))
 
       # This VM stands in for another dispatch's script holding the lock.
       File.mkdir_p!(lock)
@@ -5721,6 +5728,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       workspace_root = Path.join(ctx.test_root, "wsroot")
       workspace_path = Path.join([workspace_root, "default", "MT-LOCK-DEAD"])
       lock = Path.join([primary_repo, ".git", "symphony-worktree-add.lock"])
+      write_real_exec_fake_ssh!(Path.join(ctx.test_root, "ssh"), without_flock_path_prefix!(ctx.test_root))
 
       # A script killed while it held the lock: its pid has exited.
       {dead_pid, 0} = System.cmd("sh", ["-c", "echo $$"])
@@ -5737,6 +5745,44 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-LOCK-DEAD", "worker-01")
       refute File.exists?(lock)
       refute File.exists?(lock <> ".takeover")
+    end)
+  end
+
+  @tag :flock
+  test "remote worktree add on a host with flock waits for the repo's flock, gives up at the limit and takes it once released" do
+    with_real_exec_fake_ssh(fn ctx ->
+      primary_repo = Path.join(ctx.test_root, "primary")
+      create_primary_repo!(primary_repo, Path.join(ctx.test_root, "origin.git"))
+      workspace_root = Path.join(ctx.test_root, "wsroot")
+      workspace_path = Path.join([workspace_root, "default", "MT-FLOCK"])
+      lock = Path.join([primary_repo, ".git", "symphony-worktree-add.flock"])
+
+      write_workflow_file!(Workflow.workflow_file_path(),
+        workspace_root: workspace_root,
+        workspace_strategy: "worktree",
+        workspace_repo: primary_repo,
+        worker_ssh_hosts: ["worker-01"],
+        hook_timeout_ms: 4_000
+      )
+
+      # Another dispatch's script holding the lock.
+      holder = hold_flock!(lock)
+
+      assert {:error, {:workspace_prepare_failed, "worker-01", 47, output}} =
+               Workspace.create_for_issue("MT-FLOCK", "worker-01")
+
+      assert output =~ "workspace_worktree_lock_timeout: #{lock}"
+      refute File.exists?(workspace_path)
+
+      # The holder exits without unlocking: the kernel drops its lock.
+      Port.close(holder)
+
+      assert {:ok, ^workspace_path} = Workspace.create_for_issue("MT-FLOCK", "worker-01")
+      assert String.trim(git!(workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"])) == "auto/MT-FLOCK"
+      refute File.exists?(Path.join([primary_repo, ".git", "symphony-worktree-add.lock"]))
+
+      # The script let the lock go: another process takes it at once.
+      hold_flock!(lock) |> Port.close()
     end)
   end
 
@@ -6810,6 +6856,28 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     File.chmod!(path, 0o755)
     :ok
+  end
+
+  # A worker PATH prefix whose `flock` fails the script's probe, so the script takes its
+  # `mkdir` lock even on a host that has util-linux `flock`.
+  defp without_flock_path_prefix!(test_root) do
+    bin = Path.join(test_root, "no-flock")
+    File.mkdir_p!(bin)
+    File.write!(Path.join(bin, "flock"), "#!/bin/sh\nexit 127\n")
+    File.chmod!(Path.join(bin, "flock"), 0o755)
+    bin <> ":"
+  end
+
+  # Holds `lock_file`'s flock in a process of its own until the port closes.
+  defp hold_flock!(lock_file) do
+    port =
+      Port.open({:spawn_executable, System.find_executable("flock")}, [
+        :binary,
+        args: ["-w", "5", lock_file, "-c", "echo held; exec cat"]
+      ])
+
+    assert_receive {^port, {:data, "held\n"}}, 10_000
+    port
   end
 
   defp create_primary_repo!(primary_repo, origin_repo \\ nil) do

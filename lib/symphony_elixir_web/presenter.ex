@@ -11,6 +11,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Inbox,
     Initiatives,
     Lifecycle,
+    Marks,
     Orchestrator,
     Pauses,
     PlanBrief,
@@ -25,6 +26,8 @@ defmodule SymphonyElixirWeb.Presenter do
     Situation,
     StateMachine,
     StrayProcesses,
+    TicketBrief,
+    TicketEvents,
     TicketMoves,
     TicketObservation,
     TicketState,
@@ -34,6 +37,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   alias SymphonyElixir.Codex.MessageHumanizer
   alias SymphonyElixir.Connected.Read, as: ConnectedRead
+  alias SymphonyElixir.Dispatch.Order, as: DispatchOrder
   alias SymphonyElixir.Dispatch.Shadow, as: DispatchShadow
   alias SymphonyElixir.GitHub.WebhookSetup.Cache, as: WebhookSetupCache
   alias SymphonyElixir.Linear.Webhook, as: LinearWebhook
@@ -125,6 +129,7 @@ defmodule SymphonyElixirWeb.Presenter do
           rate_limit: WatchPayload.rate_limit(PrWatch.rate_limit()),
           slot_waiting: snapshot |> Map.get(:slot_waiting, []) |> Enum.map(&(&1 |> slot_waiting_payload() |> status.())),
           dispatch_skipped: snapshot |> Map.get(:dispatch_skipped, []) |> Enum.map(&(&1 |> dispatch_skipped_payload() |> status.())),
+          order: dispatch_order_read(snapshot, Map.values(records)),
           shipped_today: Enum.map(shipped_today, &shipped_payload/1),
           blocked: Enum.map(blocked, &blocked_payload/1),
           app_update: WatchPayload.app_update(blocked, PrWatch.Release.latest(), ReleaseBuild.latest_build()),
@@ -148,6 +153,31 @@ defmodule SymphonyElixirWeb.Presenter do
         %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
     end
   end
+
+  @doc """
+  The dispatch order (`GET /api/v1/dispatch/order`, `SymphonyElixir.Dispatch.Order.read/3`): every open
+  ticket Symphony works, grouped by situation kind, and the candidates in the order the dispatcher
+  starts them, each with its reason. Read from what the orchestrator walked at its last poll cycle and
+  the ticket records: it makes no Linear request.
+  """
+  @spec dispatch_order_payload(GenServer.name(), timeout()) :: map()
+  def dispatch_order_payload(orchestrator, snapshot_timeout_ms) do
+    generated_at = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_iso8601()
+
+    case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
+      %{} = snapshot ->
+        records = ticket_state_records() |> Map.values()
+        Map.put(dispatch_order_read(snapshot, records), :generated_at, generated_at)
+
+      :timeout ->
+        %{generated_at: generated_at, error: %{code: "snapshot_timeout", message: "Snapshot timed out"}}
+
+      :unavailable ->
+        %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
+    end
+  end
+
+  defp dispatch_order_read(snapshot, records), do: DispatchOrder.read(Map.get(snapshot, :dispatch_order), records, Situation.live_facts(snapshot))
 
   @doc """
   The plan tickets followed to done (`SymphonyElixir.Initiatives.list/4`): active ones first, then
@@ -235,8 +265,9 @@ defmodule SymphonyElixirWeb.Presenter do
   defp initiative_slot(_lanes, _issue_id), do: nil
 
   @doc """
-  Everything that waits on the Director (`SymphonyElixir.Inbox.items/2`), oldest first, with
-  counts by kind. Built from the tickets' records on this read: it makes no Linear request. Each
+  What the Inbox lists (`SymphonyElixir.Inbox.listing/2`), oldest first, with counts by kind: `total`
+  counts what waits on the Director, so a `waiting` row, which asks nothing, counts only under its
+  kind. Built from the tickets' records on this read: it makes no Linear request. Each
   item's `subject` says what it is asked on: `ticket`, or, for a Question with no ticket, `symphony`
   or `repository` (its `issue_id` and `identifier` null, its `title` naming Symphony or the
   repository).
@@ -248,12 +279,12 @@ defmodule SymphonyElixirWeb.Presenter do
 
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
       %{} = snapshot ->
-        items = Inbox.items(snapshot, inbox)
+        items = Inbox.listing(snapshot, inbox)
         by_kind = Enum.frequencies_by(items, &Atom.to_string(&1.kind))
 
         %{
           generated_at: generated_at,
-          counts: Map.new(~w(plan pr action clarify blocked), &{&1, Map.get(by_kind, &1, 0)}) |> Map.put("total", length(items)),
+          counts: Map.new(~w(plan pr action clarify blocked waiting), &{&1, Map.get(by_kind, &1, 0)}) |> Map.put("total", Enum.count(items, &Inbox.Item.on_director?/1)),
           items: Enum.map(items, &inbox_item_payload(&1, now))
         }
 
@@ -361,10 +392,12 @@ defmodule SymphonyElixirWeb.Presenter do
   # What the ticket's record adds to its payload: its verdicts, the watcher's block, a plan's brief
   # (`SymphonyElixir.PlanBrief`), why it does not move (`ticket_status/2`), where it stands
   # (`SymphonyElixir.Situation`), where it has been (`SymphonyElixir.Lifecycle`) and its pull request
-  # (`SymphonyElixirWeb.PullRequestPayload`), and where it sits among the others
-  # (`SymphonyElixir.Connected.Read`).
+  # (`SymphonyElixirWeb.PullRequestPayload`), where it sits among the others
+  # (`SymphonyElixir.Connected.Read`), its marks: since the person last looked and the note for
+  # the next run (`SymphonyElixir.Marks`), and its brief (`SymphonyElixir.TicketBrief`).
   defp record_payload(payload, record, running?, snapshot) do
     repository_pause = if is_binary(payload.repo_key), do: repository_pause_reason(payload.repo_key), else: nil
+    events = ticket_events(payload.issue_id)
 
     payload
     |> Map.put(:verdicts, verdicts_payload(record))
@@ -372,10 +405,15 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.put(:plan_brief, plan_brief_payload(record))
     |> Map.put(:situation, situation_payload(record || %{issue_id: payload.issue_id, repo_key: payload.repo_key}, Situation.live_facts(snapshot), nil))
     |> Map.merge(Lifecycle.read(payload.issue_id))
+    |> Map.merge(Marks.read(record, events))
+    |> Map.put(:brief, TicketBrief.read(events))
     |> Map.put(:pull_request, PullRequestPayload.read(record))
     |> complete_connected(record, snapshot)
     |> Map.merge(ticket_status(record, %{identifier: payload.issue_identifier, repo_key: payload.repo_key, repository_pause: repository_pause, running?: running?}))
   end
+
+  # Every event of the ticket, oldest first; none for a ticket with no id or a store that can't be read.
+  defp ticket_events(issue_id), do: issue_id |> TicketEvents.query(limit: :all) |> List.wrap() |> Enum.filter(&is_struct(&1, Event))
 
   # A ticket with neither a record nor what the orchestrator holds of it has no `connected`.
   defp complete_connected(payload, record, snapshot) do
@@ -642,11 +680,15 @@ defmodule SymphonyElixirWeb.Presenter do
   relative to the server) serves the bytes: false for an artifact the store marks expired, and for
   an id the store doesn't know, whose other fields are null. The page's artifacts are read in one
   `SymphonyElixir.Artifacts.list/1` call.
+
+  `opts[:looked_at]`, when given (nil when the person never looked), adds `new` to each event: whether
+  it is later than that mark (`SymphonyElixir.Marks.new?/2`).
   """
-  @spec ticket_events_json(String.t(), String.t(), [Event.t()]) :: [map()]
-  def ticket_events_json(repo_key, issue_id, events) do
+  @spec ticket_events_json(String.t(), String.t(), [Event.t()], keyword()) :: [map()]
+  def ticket_events_json(repo_key, issue_id, events, opts \\ []) do
     artifacts = ticket_artifacts(repo_key, issue_id, events)
-    Enum.map(events, &ticket_event_json(&1, artifacts))
+    mark = event_mark(opts)
+    Enum.map(events, &ticket_event_json(&1, artifacts, mark))
   end
 
   @doc """
@@ -661,10 +703,10 @@ defmodule SymphonyElixirWeb.Presenter do
   first), not from the page: `status` is `running` until its `run.ended`, then `ended`, `verdict` is
   the newest verdict naming the run (`{kind, outcome, head, at}`), else null, and `summary` is the
   run's line (`SymphonyElixir.TicketEvents.Summary.run_group/1`), which names the step a running run
-  is on.
+  is on. `opts[:looked_at]` adds `new` to each event, as `ticket_events_json/4`'s does.
   """
-  @spec ticket_timeline_json(String.t(), String.t(), [Event.t()], [Event.t()]) :: [map()]
-  def ticket_timeline_json(repo_key, issue_id, events, history) do
+  @spec ticket_timeline_json(String.t(), String.t(), [Event.t()], [Event.t()], keyword()) :: [map()]
+  def ticket_timeline_json(repo_key, issue_id, events, history, opts \\ []) do
     runs = run_headers(history)
 
     {placed, _seen} =
@@ -675,6 +717,7 @@ defmodule SymphonyElixirWeb.Presenter do
     timeline = %{
       artifacts: ticket_artifacts(repo_key, issue_id, events),
       runs: runs,
+      mark: event_mark(opts),
       members: Enum.group_by(placed, &elem(&1, 1), &elem(&1, 0))
     }
 
@@ -699,7 +742,7 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp timeline_entry({:event, event}, timeline) do
     event
-    |> ticket_event_json(timeline.artifacts)
+    |> ticket_event_json(timeline.artifacts, timeline.mark)
     |> Map.put(:children, timeline_members({:event, event.id}, timeline))
   end
 
@@ -763,7 +806,23 @@ defmodule SymphonyElixirWeb.Presenter do
       else: %{}
   end
 
-  defp ticket_event_json(%Event{} = event, artifacts) do
+  defp event_mark(opts) do
+    case Keyword.fetch(opts, :looked_at) do
+      {:ok, looked_at} -> {:looked, looked_at}
+      :error -> :none
+    end
+  end
+
+  defp ticket_event_json(%Event{} = event, artifacts, mark) do
+    event
+    |> ticket_event_fields(artifacts)
+    |> put_new_mark(event, mark)
+  end
+
+  defp put_new_mark(json, _event, :none), do: json
+  defp put_new_mark(json, event, {:looked, looked_at}), do: Map.put(json, :new, Marks.new?(event, looked_at))
+
+  defp ticket_event_fields(%Event{} = event, artifacts) do
     %{
       id: event.id,
       seq: event.seq,

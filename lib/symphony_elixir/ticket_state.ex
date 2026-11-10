@@ -306,8 +306,16 @@ defmodule SymphonyElixir.TicketState do
           plan_brief: PlanBrief.t() | nil,
           plan_brief_error: String.t() | nil,
           legacy_history: legacy_history() | nil,
+          looked: looked(),
           updated_at: DateTime.t() | nil
         }
+
+  @typedoc """
+  When each person last looked at the ticket, by the person's name (`SymphonyElixir.Marks`): a view
+  mark, not history, so no ledger event records it. The control API names one person today, the
+  Director.
+  """
+  @type looked :: %{String.t() => DateTime.t()}
 
   @typedoc """
   Which read of Linear an observation came from: the repo poll, a by-id read, the PR and CI
@@ -394,6 +402,7 @@ defmodule SymphonyElixir.TicketState do
       plan_brief: PlanBrief.normalize(Map.get(record, :plan_brief)),
       plan_brief_error: map_string(record, :plan_brief_error),
       legacy_history: carried_history(record),
+      looked: normalize_looked(Map.get(record, :looked)),
       updated_at: map_datetime(record, :updated_at)
     }
   end
@@ -439,6 +448,7 @@ defmodule SymphonyElixir.TicketState do
       plan_brief: nil,
       plan_brief_error: nil,
       legacy_history: nil,
+      looked: %{},
       updated_at: nil
     }
   end
@@ -1388,6 +1398,12 @@ defmodule SymphonyElixir.TicketState do
   end
 
   defp normalize_string(_value), do: nil
+
+  defp normalize_looked(looked) when is_map(looked) do
+    for {person, %DateTime{} = at} <- looked, is_binary(person), into: %{}, do: {person, at}
+  end
+
+  defp normalize_looked(_looked), do: %{}
 
   defp map_datetime(map, key) do
     case Map.get(map, key) do

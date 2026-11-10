@@ -13,7 +13,8 @@ defmodule SymphonyElixir.Pauses do
       version, `%{pull_request: 448}`, or `%{commit: sha}`, a commit on the base branch the running
       build must include);
     * `:person` - the Director (`waits_on: %{action: "unblock" | "restart"}`);
-    * `:environment` - a named condition (`waits_on: %{condition: name}`).
+    * `:environment` - a named condition (`waits_on: %{condition: name}`), with what its writer read
+      when it set it when the condition depends on that (`head`, `earlier_head`, `ci`).
 
   Each reason has `text`, one line in plain words of at most 300 characters (a default per kind, or
   the writer's; a longer one is refused), `set_by` (`%{kind: :person | :run | :rule | :symphony,
@@ -24,8 +25,11 @@ defmodule SymphonyElixir.Pauses do
   A ticket's pause lives on its record (`SymphonyElixir.TicketState`, field `pause`), and each change
   records a ledger event (`SymphonyElixir.TicketEvents`): `pause.set` for the first reason,
   `pause.reason_added` for each further one, `pause.reason_cleared` for a reason cleared while
-  others remain and `pause.cleared` when none is left. A repository's or Symphony's pause is kept by
-  `SymphonyElixir.RunStore` under its subject and records no event.
+  others remain and `pause.cleared` when none is left. A reason a rule set or lifted (a setter of
+  kind `:rule`, not a question's) also records the rule's `rule.action` (`SymphonyElixir.RuleActions`)
+  in the same transaction. A repository's or Symphony's pause is kept by `SymphonyElixir.RunStore`
+  under its subject; Symphony's records the same events on its own stream
+  (`SymphonyElixir.TicketEvents.build_subject/4`), a repository's none.
 
   Symphony's own pause stops dispatch while it has the Director's reason (their Pause) or an
   update's (the menu bar app's, waiting on the version it installs): `dispatch_reason/1` makes
@@ -69,7 +73,7 @@ defmodule SymphonyElixir.Pauses do
 
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses.Projector
-  alias SymphonyElixir.{RunStore, TicketEvents, TicketState}
+  alias SymphonyElixir.{RuleActions, RunStore, TicketEvents, TicketState}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @kinds [:question, :ticket, :build, :person, :environment]
@@ -349,7 +353,7 @@ defmodule SymphonyElixir.Pauses do
   def set_change(subject, pause, reason, opts) do
     with {:ok, subject} <- subject(subject),
          {:ok, reason} <- new_reason(reason, opts, :set_by),
-         do: changed(add(subject, normalize(pause), reason, source(opts)))
+         do: changed(subject, add(subject, normalize(pause), reason, source(opts)))
   end
 
   @doc """
@@ -360,7 +364,7 @@ defmodule SymphonyElixir.Pauses do
   def clear_reason_change(subject, pause, reason, opts) do
     with {:ok, subject} <- subject(subject),
          {:ok, target} <- new_reason(reason, opts, :by),
-         do: changed(drop(subject, normalize(pause), target))
+         do: changed(subject, drop(subject, normalize(pause), target))
   end
 
   @doc "Clears `subject`'s pause whatever its reasons, recording `pause.cleared`. A subject not paused is unchanged."
@@ -553,18 +557,34 @@ defmodule SymphonyElixir.Pauses do
   # A ticket's event is built (and validated) before anything is written, so a pause whose event the
   # ledger refuses is never stored, and the store appends it with the pause. Any other subject
   # records no event.
+  # A reason a rule set or lifted also records the rule's `rule.action` (`SymphonyElixir.RuleActions`).
   defp change({:ticket, repo_key, issue_id}, pause, type, payload, at) do
-    with {:ok, event} <- TicketEvents.build(repo_key, issue_id, type, payload, at: at, idempotency: idempotency(type, payload)),
+    with {:ok, event} <- TicketEvents.build(repo_key, issue_id, type, payload, at: at, idempotency: idempotency(type, payload)) do
+      case RuleActions.pause_event(repo_key, issue_id, type, payload, at) do
+        {:ok, rule_event} -> {:write, pause, [event, rule_event], pause}
+        :none -> {:write, pause, [event], pause}
+      end
+    end
+  end
+
+  # Symphony's own pause records its event on Symphony's stream (`TicketEvents.build_subject/4`):
+  # the Journal reads the factory paused and resumed, and an update's build installed, from them.
+  defp change(:symphony, pause, type, payload, at) do
+    opts = [at: at, idempotency: idempotency(type, payload)]
+
+    with {:ok, event} <- TicketEvents.build_subject(:symphony, type, payload, opts),
          do: {:write, pause, [event], pause}
   end
 
   defp change(_subject, pause, _type, _payload, _at), do: {:write, pause, pause}
 
-  # A ticket's change as a writer of its record stores it: the pause with its events, none when
-  # nothing changes; a refusal passes through.
-  defp changed({:write, pause, events, _pause}), do: {:ok, pause, events}
-  defp changed({:write, pause, _pause}), do: {:ok, pause, []}
-  defp changed(unchanged), do: with({:ok, pause} <- unchanged, do: {:ok, pause, []})
+  # A change as a writer of its record stores it: the ticket's pause with its events, none when
+  # nothing changes; a refusal passes through. Symphony's own events are `update/3`'s alone: a
+  # question's writer records the question's events in their place.
+  defp changed({:ticket, _repo_key, _issue_id}, {:write, pause, events, _pause}), do: {:ok, pause, events}
+  defp changed(_subject, {:write, pause, _events, _pause}), do: {:ok, pause, []}
+  defp changed(_subject, {:write, pause, _pause}), do: {:ok, pause, []}
+  defp changed(_subject, unchanged), do: with({:ok, pause} <- unchanged, do: {:ok, pause, []})
 
   # The pause is read, changed and written in one store transaction that holds its lock, with the
   # ticket's event appended in it; the event's notice goes out once it commits. Each change is
@@ -663,13 +683,15 @@ defmodule SymphonyElixir.Pauses do
 
   defp waits_on(:question, waits_on), do: one(waits_on, :question_id)
   defp waits_on(:ticket, waits_on), do: matching(waits_on, :identifier, @identifier)
-  defp waits_on(:environment, waits_on), do: one(waits_on, :condition)
+  defp waits_on(:environment, waits_on), do: with(%{} = condition <- one(waits_on, :condition), do: Map.merge(condition, condition_read(waits_on)))
   defp waits_on(:build, %{pull_request: number}) when is_integer(number) and number > 0, do: %{pull_request: number}
   defp waits_on(:build, %{commit: commit}), do: matching(%{commit: commit}, :commit, @commit)
   defp waits_on(:build, waits_on), do: matching(waits_on, :version, @version)
   defp waits_on(:person, %{action: action}) when is_atom(action), do: waits_on(:person, %{action: Atom.to_string(action)})
   defp waits_on(:person, %{action: action}) when action in @person_actions, do: %{action: action}
   defp waits_on(:person, _waits_on), do: nil
+
+  defp condition_read(waits_on), do: for({field, value} when field in [:head, :earlier_head, :ci] and is_binary(value) <- waits_on, into: %{}, do: {field, value})
 
   defp one(waits_on, field) do
     if value = line(Map.get(waits_on, field)), do: %{field => value}

@@ -5,8 +5,9 @@ defmodule SymphonyElixir.CiWait do
 
   An epic review that finds a workflow run on its commit still going ends with `{:ci_pending, info}`
   (`SymphonyElixir.EpicReview`), and so does a QA pass whose pre-check finds a named check still
-  running on the PR head (`SymphonyElixir.QaVerification`); the orchestrator starts it again a minute
-  later. Those runs
+  running on the PR head (`SymphonyElixir.QaVerification`) and a CI Fix run whose idle turn finds
+  checks still running on the PR head (`SymphonyElixir.AgentRunner`); the orchestrator starts it
+  again a minute later, unless the PR and CI watcher's wait holds a CI Fix run back. Those runs
   are not dispatch-loop runs (`SymphonyElixir.DispatchLoop`): nothing went wrong, CI is still
   running. The wait is bounded here instead, per commit, in the ticket's store record: the first
   wait on a commit records a `ci_wait_started` signal, and once the wait has lasted `limit_ms/0`

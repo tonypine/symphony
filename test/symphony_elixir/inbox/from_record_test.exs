@@ -285,6 +285,59 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
     end
   end
 
+  describe "a CI Fix ticket waiting on CI (TP-1175)" do
+    @since ~U[2026-11-06 09:00:00Z]
+
+    defp waiting_record(phase, decision) do
+      facts = struct(SymphonyElixir.PrDecision.Facts, phase: phase)
+
+      @repo_key
+      |> TicketState.new("id-TP-7", %{issue_identifier: "TP-7", title: "A ticket", phase: "CI Fix", phase_at: ~U[2026-11-06 08:00:00Z]})
+      |> TicketState.put_pr_watch(%{facts: facts, pr_url: "https://github.com/acme/app/pull/7", decision: decision})
+    end
+
+    test "lists as waiting on CI with what it waits on and what clears it, since the decision stands" do
+      decision = %{rule: "R24", kind: :wait, owner: :ci, reason: "Checks are running on PR #7's head", since: @since}
+
+      assert [
+               %{
+                 identifier: "TP-7",
+                 kind: :waiting,
+                 state: "CI Fix",
+                 ask: "Checks are running on PR #7's head",
+                 waiting_since: @since,
+                 review: %{
+                   reason: "Checks are running on PR #7's head",
+                   clearing_condition: "when the checks report",
+                   pull_request: %{url: "https://github.com/acme/app/pull/7"}
+                 }
+               }
+             ] = items([waiting_record(:ci_fix, decision)])
+    end
+
+    test "a rerun of its check lists too, from the phase's time when the decision keeps none" do
+      decision = %{rule: "U2", kind: :rerun_failed, reason: "A cancelled run was rerun"}
+
+      assert [%{kind: :waiting, waiting_since: ~U[2026-11-06 08:00:00Z]}] = items([waiting_record(:ci_fix, decision)])
+    end
+
+    test "lists nothing in another phase, on another decision, or with no decision" do
+      wait = %{rule: "R24", kind: :wait, owner: :ci, reason: "Checks are running"}
+
+      assert items([waiting_record(:qa, wait)]) == []
+      assert items([waiting_record(:ci_fix, %{rule: "R21", kind: :dispatch, reason: "Red"})]) == []
+      assert items([waiting_record(:ci_fix, %{wait | owner: :github})]) == []
+      assert items([waiting_record(:ci_fix, nil)]) == []
+    end
+
+    test "what asks the Director something comes first: an open Question takes the row" do
+      record = waiting_record(:ci_fix, %{rule: "R24", kind: :wait, owner: :ci, reason: "Checks are running"})
+      question = %{Enum.at(backfilled(), 0) | state: :open}
+
+      assert [%{kind: :action}] = items([%{record | questions: [question]}])
+    end
+  end
+
   describe "a Question the backfill stored" do
     defp backfilled do
       {questions, _binding} = Code.eval_file(@backfilled)

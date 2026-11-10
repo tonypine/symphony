@@ -71,7 +71,8 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
         "description" =>
           "Record an event on the current ticket's history. A run records `finding.resolved` (an open or reopened finding it fixed, by `finding_id`; Symphony fills the head that fixes it), " <>
             "a delegated step's `step.started` and `step.completed` (`outcome` `passed`, `failed` with the step it `returns_to`, `paused` with the `question_id` it waits on, or `skipped` with a `reason`; Symphony records machine and orchestrated steps), " <>
-            "`evidence` (with an optional `proof`: the walkthrough `step` number and the `test` that proves it), `checklist.answered` and `note`; a QA run also records `finding.recorded`. " <>
+            "`evidence` (with an optional `proof`: the walkthrough `step` number and the `test` that proves it), `checklist.answered` and `note`; a QA run also records `finding.recorded`, and an implementation, rework or review-feedback run `brief.written` " <>
+            "(the ticket's brief: `text`, what it does and why in a person's words, under 1,200 characters, and `walkthrough`, the steps a person takes, both with no backtick). " <>
             "Verdicts, moves, pauses, questions and runs are Symphony's: ask a question with the question tool. " <>
             "`artifacts` are paths of files in the workspace or your $TMPDIR, kept with the event (a screenshot shows as a thumbnail in the Director); `parent` nests the event under another. " <>
             "Symphony fills the run, phase and head. A refusal returns its reason and the type's schema; nothing is written.",
