@@ -384,14 +384,15 @@ private struct FixButton: View {
 // MARK: - C8: Now working and Next up
 
 extension View {
-    /// A ticket row: a double-click, or Return once it has focus, opens the ticket's page (D3, P10). VoiceOver reads
-    /// the row as one element, its label and its own actions combined, with Open as its default and a named action.
-    /// Nothing changes for a row that is not about a ticket.
+    /// A ticket row: a double-click, or Return once it has focus, opens the ticket's page (D3, P10). It carries the
+    /// shared row's states (hover, pressed, the focus ring). VoiceOver reads the row as one element, its label and its
+    /// own actions combined, with Open as its default and a named action. Nothing changes for a row that is not about
+    /// a ticket.
     @ViewBuilder func opensTicket(_ identifier: String?, open: @escaping (String) -> Void) -> some View {
         if let identifier {
             contentShape(Rectangle())
                 .onTapGesture(count: 2) { open(identifier) }
-                .focusable()
+                .rowStyle()
                 .onKeyPress(.return) {
                     open(identifier)
                     return .handled

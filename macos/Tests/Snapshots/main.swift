@@ -928,6 +928,112 @@ func labelsEditor(refused: Bool) -> TicketLabelsEditor {
     )
 }
 
+// The shared styles (TP-1438): one state per snapshot, each on the content surface with room for the focus ring.
+
+/// The states a style is drawn in, by the name its snapshot takes.
+let interactionStates: [(String, DesignTokens.Interaction)] = [
+    ("rest", .rest), ("hover", .hover), ("pressed", .press), ("selected", .selection), ("focused", .focus),
+]
+
+@MainActor
+func styleStage(_ view: some View, width: CGFloat = 360) -> some View {
+    view
+        .padding(DesignTokens.Space.s5)
+        .frame(width: width, alignment: .leading)
+        .background(DesignTokens.Surface.content.color)
+}
+
+/// A ticket row as today's lists draw it, in the row's face.
+@MainActor
+func styledRow(_ state: DesignTokens.Interaction) -> some View {
+    styleStage(
+        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
+            DesignTokens.SituationKind.ci.glyph
+            VStack(alignment: .leading, spacing: 2) {
+                Text("SHOP-305 · Checkout total rounding").font(DesignTokens.TypeStyle.rowTitle.font)
+                Text("Checks are running on PR #741.").font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: DesignTokens.Space.s2)
+            Text("6 min").font(DesignTokens.TypeStyle.callout.font).monospacedDigit().foregroundStyle(.secondary)
+        }
+        .modifier(RowFace(state: state, reduceMotion: false))
+    )
+}
+
+/// A clickable card, in the card's face; `reduceMotion` keeps a hovered card down and a pressed one at full size.
+@MainActor
+func styledCard(_ state: DesignTokens.Interaction, reduceMotion: Bool = false) -> some View {
+    styleStage(
+        Card(title: "Answer in my own words", hint: "4") {
+            Text("Tell the agent what to do instead.").font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+        }
+        .modifier(CardFace(state: state, reduceMotion: reduceMotion)),
+        width: 400
+    )
+    .padding(DesignTokens.Space.s2)
+    .background(DesignTokens.Surface.content.color)
+}
+
+/// A button of each kind side by side, in one state; `reduceMotion` keeps a pressed one at full size.
+@MainActor
+func styledButtons(_ state: DesignTokens.Interaction, reduceMotion: Bool = false) -> some View {
+    styleStage(
+        HStack(spacing: DesignTokens.Space.s3) {
+            ButtonFace(label: Text("Approve Plan"), kind: .primary, state: state, reduceMotion: reduceMotion)
+            ButtonFace(label: Text("Restart…"), kind: .secondary, state: state, reduceMotion: reduceMotion)
+            ButtonFace(label: Text("Show All"), kind: .quiet, state: state, reduceMotion: reduceMotion)
+        },
+        width: 400
+    )
+}
+
+/// The three control sizes, a primary and a secondary button at each.
+@MainActor
+func controlSizes() -> some View {
+    styleStage(
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+            ForEach(DesignTokens.Control.allCases, id: \.self) { size in
+                HStack(spacing: DesignTokens.Space.s3) {
+                    Text("\(size.rawValue.capitalized), \(Int(size.height)) pt")
+                        .font(DesignTokens.TypeStyle.label.font)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 110, alignment: .leading)
+                    ButtonFace(label: Text("Send"), kind: .primary, size: size, state: .rest, reduceMotion: false)
+                    ButtonFace(label: Text("Save Note"), kind: .secondary, size: size, state: .rest, reduceMotion: false)
+                }
+            }
+        },
+        width: 400
+    )
+}
+
+/// A button off for a reason, pressed once: the reason shows under it.
+@MainActor
+func disabledWithReason() -> some View {
+    styleStage(
+        Button("Approve and Merge…") {}
+            .directorButton(.primary)
+            .disabledReason("Checks are still running on PR #812.", revealed: true),
+        width: 400
+    )
+}
+
+/// The ten situation kinds, each with its glyph in its status color and its word, in the order that picks one.
+@MainActor
+func situationKinds() -> some View {
+    styleStage(
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+            ForEach(DesignTokens.SituationKind.allCases, id: \.self) { kind in
+                Label {
+                    Text(kind.word).font(DesignTokens.TypeStyle.rowTitle.font)
+                } icon: {
+                    kind.glyph
+                }
+            }
+        }
+    )
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -947,6 +1053,20 @@ func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
 
 MainActor.assumeIsolated {
     for (scheme, suffix) in [(ColorScheme.light, "light"), (.dark, "dark")] {
+        // The shared styles (TP-1438): the control sizes, each state of a row, a card and the buttons, the pressed
+        // and lifted ones with Reduce Motion off and on, a disabled button with its reason, and the situation kinds.
+        render(controlSizes(), scheme, to: "style-control-sizes-\(suffix).png")
+        for (name, state) in interactionStates {
+            render(styledRow(state), scheme, to: "style-row-\(name)-\(suffix).png")
+            render(styledCard(state), scheme, to: "style-card-\(name)-\(suffix).png")
+            if state != .selection { render(styledButtons(state), scheme, to: "style-button-\(name)-\(suffix).png") }
+        }
+        render(styledButtons(.off), scheme, to: "style-button-disabled-\(suffix).png")
+        render(styledButtons(.press, reduceMotion: true), scheme, to: "style-button-pressed-reduce-motion-\(suffix).png")
+        render(styledCard(.hover, reduceMotion: true), scheme, to: "style-card-hover-reduce-motion-\(suffix).png")
+        render(styledCard(.press, reduceMotion: true), scheme, to: "style-card-pressed-reduce-motion-\(suffix).png")
+        render(disabledWithReason(), scheme, to: "style-button-disabled-reason-\(suffix).png")
+        render(situationKinds(), scheme, to: "style-situation-kinds-\(suffix).png")
         // The Blocked by card (TP-1354): the laptop and desktop viewports, and the refusal of a ticket as its own blocker.
         render(ledgerPage(window: 1440, blockers: blockersEditor(refused: false)), scheme, to: "ticket-blockers-1440-\(suffix).png")
         render(ledgerPage(window: 2560, blockers: blockersEditor(refused: false)), scheme, to: "ticket-blockers-2560-\(suffix).png")

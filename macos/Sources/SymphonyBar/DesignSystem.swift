@@ -85,9 +85,41 @@ extension DesignTokens.TypeStyle {
     }
 }
 
+extension DesignTokens.Motion.Curve {
+    /// The curve as a SwiftUI animation; under Reduce Motion, a change of 0.01 s.
+    func animation(reduceMotion: Bool) -> Animation {
+        switch timing(reduceMotion: reduceMotion) {
+        case let .eased(duration): .smooth(duration: duration)
+        case let .spring(duration, bounce): .spring(duration: duration, bounce: bounce)
+        }
+    }
+}
+
 extension Animation {
-    /// `motion.standard`: sections appearing or leaving, selection.
-    static var standard: Animation { .smooth(duration: DesignTokens.Motion.standardDuration) }
+    /// `motion.standard`: sections appearing or leaving, selection, a fold's height. It follows the system's Reduce
+    /// Motion setting, as every curve of `motion` does.
+    static var standard: Animation { .motion(.standard) }
+
+    /// A curve of `motion`, collapsed to 0.01 s while the system's Reduce Motion is on. A view that reads
+    /// `accessibilityReduceMotion` passes it instead.
+    static func motion(_ curve: DesignTokens.Motion.Curve, reduceMotion: Bool? = nil) -> Animation {
+        curve.animation(reduceMotion: reduceMotion ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+    }
+}
+
+extension DesignTokens.Control {
+    /// The SwiftUI control size whose height is closest to this one, for system controls.
+    var controlSize: ControlSize {
+        switch self {
+        case .small: .small
+        case .medium: .regular
+        case .large: .large
+        }
+    }
+}
+
+extension DesignTokens.StateSurface {
+    func fill(dark: Bool) -> Color { color.color.opacity(opacity(dark: dark)) }
 }
 
 /// C7: a status's symbol and word in a capsule tinted with its color. The word stays in the primary text color, so
