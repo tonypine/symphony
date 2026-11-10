@@ -228,23 +228,22 @@ struct TranscriptLineRow: View {
 public struct StepList: View {
     let steps: [RunStep]
     @ObservedObject var transcripts: StepTranscripts
-    @State private var unfolded: Set<String>
+    @State private var folds: FoldState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// `unfolded` names the steps open to start with; nil opens each step that opens by default.
+    /// `unfolded` pins which steps are open (a render's fixed state); nil opens each step that opens by default,
+    /// as the ticket read brings it, until the person folds it.
     public init(steps: [RunStep], transcripts: StepTranscripts, unfolded: Set<String>? = nil) {
         self.steps = steps
         self.transcripts = transcripts
-        _unfolded = State(initialValue: unfolded ?? Set(steps.filter(\.opensByDefault).map(\.id)))
+        _folds = State(initialValue: unfolded.map { FoldState(ids: steps.map(\.id), unfolded: $0) } ?? FoldState())
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             ForEach(steps) { step in
-                StepRow(step: step, transcripts: transcripts, unfolded: unfolded.contains(step.id) && step.canUnfold) {
-                    withAnimation(.motion(.standard, reduceMotion: reduceMotion)) {
-                        if unfolded.contains(step.id) { unfolded.remove(step.id) } else { unfolded.insert(step.id) }
-                    }
+                StepRow(step: step, transcripts: transcripts, unfolded: folds.isUnfolded(step)) {
+                    withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { folds.toggle(step) }
                 }
             }
         }
@@ -330,7 +329,7 @@ private struct StepLines: View {
 
     var body: some View {
         Group {
-            if step.isLive, !step.liveLines.isEmpty {
+            if step.isLive, !step.liveLines.isEmpty || step.transcript == nil {
                 LineList(lines: step.liveLines, live: true)
             } else if let transcript = step.transcript {
                 switch transcripts.lines(transcript) {

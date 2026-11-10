@@ -8,7 +8,8 @@ public struct RunGroup: View {
     let run: RunGroupModel
     @ObservedObject var transcripts: StepTranscripts
     let unfoldedSteps: Set<String>?
-    @State private var unfolded: Bool
+    /// The person's own fold, over the run's default: the run now opens, and folds once it ended, until they fold it.
+    @State private var folded: Bool?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
 
@@ -17,8 +18,10 @@ public struct RunGroup: View {
         self.run = run
         self.transcripts = transcripts
         self.unfoldedSteps = unfoldedSteps
-        _unfolded = State(initialValue: unfolded ?? run.opensByDefault)
+        _folded = State(initialValue: unfolded.map { !$0 })
     }
+
+    private var unfolded: Bool { folded.map { !$0 } ?? run.opensByDefault }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -60,7 +63,7 @@ public struct RunGroup: View {
     }
 
     private func toggle() {
-        withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { unfolded.toggle() }
+        withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { folded = unfolded }
     }
 
     public static let noSteps = "This run recorded no steps."

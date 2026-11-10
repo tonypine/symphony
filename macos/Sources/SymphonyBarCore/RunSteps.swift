@@ -209,8 +209,9 @@ public struct RunStep: Equatable, Identifiable {
 
     public var isLive: Bool { state == .current }
 
-    /// Whether the step has lines to unfold into: a transcript, or the run now's lines.
-    public var canUnfold: Bool { transcript != nil || !liveLines.isEmpty }
+    /// Whether the step has lines to unfold into: a transcript, or the run now's lines. The step the run now is on
+    /// unfolds before its first line comes, so that line fades in where the person sees it.
+    public var canUnfold: Bool { isLive || transcript != nil || !liveLines.isEmpty }
 
     /// What the pointer shows on a step that can't unfold.
     public var cannotUnfoldReason: String? { canUnfold ? nil : Self.nothingYet }
@@ -233,6 +234,37 @@ public struct RunStep: Equatable, Identifiable {
 }
 
 /// One run of an agent, as the Run group shows it: its header and its steps.
+/// What a person folded or unfolded by hand, over what opens by default. Only their own folds are kept, so a step
+/// that comes to open by default (a step just started, the run now's step gaining its first line, one that just
+/// failed) opens as the ticket read brings it, and a fold the person made stays as they left it.
+public struct FoldState: Equatable {
+    public private(set) var overrides: [String: Bool]
+
+    public init(overrides: [String: Bool] = [:]) {
+        self.overrides = overrides
+    }
+
+    /// Every one of `ids` pinned open when `unfolded` names it, folded otherwise.
+    public init(ids: [String], unfolded: Set<String>) {
+        self.init(overrides: Dictionary(ids.map { ($0, unfolded.contains($0)) }, uniquingKeysWith: { first, _ in first }))
+    }
+
+    public func isUnfolded(_ id: String, byDefault: Bool) -> Bool { overrides[id] ?? byDefault }
+
+    public mutating func toggle(_ id: String, byDefault: Bool) {
+        overrides[id] = !isUnfolded(id, byDefault: byDefault)
+    }
+
+    /// A step is open when it can unfold and the person opened it, or left it and it opens by default.
+    public func isUnfolded(_ step: RunStep) -> Bool {
+        step.canUnfold && isUnfolded(step.id, byDefault: step.opensByDefault)
+    }
+
+    public mutating func toggle(_ step: RunStep) {
+        overrides[step.id] = !isUnfolded(step)
+    }
+}
+
 public struct RunGroupModel: Equatable, Identifiable {
     public enum State: String, Equatable {
         case running, passed, failed, stopped

@@ -229,6 +229,49 @@ final class RunStepsTests: XCTestCase {
         XCTAssertEqual(RunGroupModel.State.allStatuses, [.working, .done, .problem, .idle])
     }
 
+    func testTheRunNowsStepOpensAsItGoesLiveAndKeepsThePersonsOwnFold() {
+        var folds = FoldState()
+        // A step just started, with no line yet, opens and says nothing is missing.
+        let started = RunStep(id: "code", stepID: "code", title: "Write the code", state: .current)
+        XCTAssertTrue(started.canUnfold)
+        XCTAssertNil(started.cannotUnfoldReason)
+        XCTAssertTrue(folds.isUnfolded(started))
+        // The next read brings its first line: still open, with nothing the person did.
+        var gainedALine = started
+        gainedALine.liveLines = [TranscriptLine(kind: .say, text: "Reading the ticket")]
+        XCTAssertTrue(folds.isUnfolded(gainedALine))
+        // The run moves on: the step it ended is done and folds, the new one opens.
+        let done = RunStep(id: "code", stepID: "code", title: "Write the code", state: .done)
+        let next = RunStep(id: "tests", stepID: "tests", title: "Tests", state: .current)
+        XCTAssertFalse(folds.isUnfolded(done))
+        XCTAssertTrue(folds.isUnfolded(next))
+        // A fold the person made stays as they left it, whatever the read brings.
+        folds.toggle(next)
+        XCTAssertFalse(folds.isUnfolded(next))
+        var nextWithLines = next
+        nextWithLines.liveLines = gainedALine.liveLines
+        XCTAssertFalse(folds.isUnfolded(nextWithLines))
+        folds.toggle(nextWithLines)
+        XCTAssertTrue(folds.isUnfolded(nextWithLines))
+        // A step with nothing to show never opens, even when asked.
+        let empty = RunStep(id: "build", stepID: "build", title: "Build", state: .done)
+        folds.toggle(empty)
+        XCTAssertFalse(folds.isUnfolded(empty))
+    }
+
+    func testAPinnedFoldStateOpensOnlyTheStepsItNames() {
+        let failed = RunStep(id: "tests", stepID: "tests", title: "Tests", state: .failed, transcript: nil, liveLines: [TranscriptLine(kind: .say, text: "x")])
+        let current = RunStep(id: "code#2", stepID: "code", title: "Write the code", state: .current)
+        let folds = FoldState(ids: ["tests", "code#2", "tests"], unfolded: ["code#2"])
+        XCTAssertEqual(folds.overrides, ["tests": false, "code#2": true])
+        XCTAssertFalse(folds.isUnfolded(failed))
+        XCTAssertTrue(folds.isUnfolded(current))
+        var run = FoldState()
+        XCTAssertTrue(run.isUnfolded("r", byDefault: true))
+        run.toggle("r", byDefault: true)
+        XCTAssertFalse(run.isUnfolded("r", byDefault: true))
+    }
+
     func testEachStateHasItsMarkAndWord() {
         let states: [RunStep.State] = [.done, .current, .failed, .paused, .skipped]
         XCTAssertEqual(states.map(\.word), ["Done", "Working", "Failed", "Asked a question", "Skipped"])
