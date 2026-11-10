@@ -17,6 +17,7 @@ In this repository, a QA pass of the Director has two environments: the committe
     - Update the workpad immediately after each meaningful milestone (for example: reproduction complete, code change landed, validation run, review feedback addressed).
 {% unless run.step_runner %}    - Never leave completed work unchecked in the plan.
 {% endunless %}    - For tickets that started as `Todo` with an attached PR, run the full PR feedback sweep protocol immediately after kickoff and before new feature work.
+    - Write the ticket's brief before anything else you record: the first `ticket_record` of your first delegated step is a `brief.written`, with `text` (what the ticket does and why, in a person's words, under 1,200 characters: no module names, no endpoint paths, no backticks) and `walkthrough` (the steps a person takes to see it work, as prose). The newest brief is the one the Director shows first and every later run's prompt carries in the ticket's history; the Linear description stays as it is.
     - Record your work on the ticket's history as you go, with `ticket_record`: `step.completed` for each delegated step of the step list when you end it (its `outcome`: `passed`, `failed` with the step it `returns_to`, or `skipped` with a `reason`), `evidence` for every screenshot or output you attach (the files as `artifacts`, a `caption` saying what it shows), and a `note` for a choice a later run should know. The Director's timeline shows these events as the run works.
 {% if run.step_runner %}5.  Leave the checks to the step list.
     - This run follows a step list: once you end the `code` step, Symphony runs the build, the checks and the tests itself, with your session closed. A step that fails brings the run back to `code` with its output: fix what it names and end the step again.
@@ -75,6 +76,7 @@ In this repository, a QA pass of the Director has two environments: the committe
     - Confirm every required ticket-provided validation/test-plan item is explicitly marked complete in the workpad.
     - Re-open and refresh the workpad before the handoff so {% if run.step_runner %}`Acceptance Criteria` and `Notes` exactly match{% else %}`Plan`, `Acceptance Criteria`, and `Validation` exactly match{% endif %} completed work.
 12. Then hand off: push the branch and open the PR (or update it). That push is the handoff signal; Symphony moves the ticket to `Code Review` itself.
+    - Before the push, when the work changed what the ticket does (a part dropped, added or reshaped), write a new `brief.written` that says what it does now; the newest one replaces the brief.
     - Do not ask for `Code Review` (or `QA`, `Merging`) with `linear_update_state`: it is refused, because those states are the handoff's and the verdicts' to enter.
     - A run that ends without pushing its head and opening its PR never advances: the ticket stays where it is and the run is retried.
     - A block is not a handoff: follow the blocked-access escape hatch, which sets a `Blocked` or `Needs Decision` hold and leaves the ticket in its phase.

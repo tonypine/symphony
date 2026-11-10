@@ -73,6 +73,9 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
              - Phase: unknown
              - Pauses: none
 
+             Brief:
+             - none
+
              Decisions (0):
              - none
 
@@ -88,6 +91,31 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
              Other events, newest first (0):
              - none\
              """
+    end
+
+    test "the brief is the newest one a run wrote, in full with who wrote it and when, and no other section repeats it" do
+      impl = {:agent, "run-1", "implementation"}
+      rework = {:agent, "run-2", "rework"}
+
+      events = [
+        event(0, "brief.written", %{text: "First words.", walkthrough: "First steps."}, actor: impl, run_id: "run-1"),
+        event(5, "brief.written", %{text: "Each ticket says what it delivers.\nIn plain words.", walkthrough: "1. Read a ticket.\n2. See its brief."}, actor: rework, run_id: "run-2")
+      ]
+
+      text = Brief.build(nil, events).text
+
+      assert text =~ """
+             Brief (written 2026-10-22T10:05:00Z by an agent (Rework run)):
+             - What it does: Each ticket says what it delivers.
+               In plain words.
+             - Walkthrough: 1. Read a ticket.
+               2. See its brief.
+
+             Decisions (0):
+             """
+
+      refute text =~ "First words."
+      assert text =~ "Other events, newest first (0):\n- none"
     end
 
     test "phase and pauses come from the record" do
