@@ -32,7 +32,7 @@ public struct ContextCard: Equatable {
     }
 
     public var partOf: PartOf?
-    /// **Its work**: "#448 · checks passing · sent back twice", the number a chip.
+    /// **Its work**: "#448 · reviewing · CI red on test · sent back twice", the number a chip.
     public var work: String?
     public var connected: [Connection]
     /// **Your answer**: what answering unblocks, as a sentence.
@@ -64,7 +64,8 @@ public struct ContextCard: Equatable {
         work = context.pullRequest.map { pullRequest in
             let key = ["#\(pullRequest.number)", "PR #\(pullRequest.number)"].first { references[$0] != nil } ?? "#\(pullRequest.number)"
             if references[key] == nil { references[key] = .missing(url: pullRequest.url) }
-            return ([key, pullRequest.checks?.state, Self.sentBack(pullRequest.sentBack)].compactMap { $0 }).joined(separator: " · ")
+            let checks = pullRequest.failingCheck.map { "CI red on \($0)" } ?? pullRequest.checks?.state
+            return ([key, pullRequest.review, checks, Self.sentBack(pullRequest.sentBack)].compactMap { $0 }).joined(separator: " · ")
         }
 
         let ticket = item.identifier

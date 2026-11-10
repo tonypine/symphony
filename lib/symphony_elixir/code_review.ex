@@ -7,13 +7,16 @@ defmodule SymphonyElixir.CodeReview do
   `SymphonyElixir.ReviewAgent`, a read-only agent that judges the PR's diff, configured in
   `symphony.yml`'s `code_review` section.
 
-  The run is only ever started on a green head (the orchestrator gates dispatch on the ticket's
-  recorded CI state). Its verdict is recorded bound to the head SHA it judged, then performed
-  through the one writer, `SymphonyElixir.TransitionGuard`:
+  A review reads the code, so the run starts on any clean PR, whatever CI says (R27 of the PR and CI
+  decision table). Its verdict is recorded bound to the head SHA it judged, then performed through the
+  one writer, `SymphonyElixir.TransitionGuard`, and CI's state applies at that moment:
 
-    * `approve` -> `QA`, or straight to `Merging` when the QA state's skip rule applies
-    * `request_changes` -> `Rework`, with the reason and findings posted on the ticket first, so the
-      operator reads them and the rework run finds them in its prompt
+    * `approve` -> `QA`, or straight to `Merging` when the QA state's skip rule applies. On a head the
+      PR and CI watcher reads as red, the ticket stays here with the approval recorded: the watcher
+      applies CI's state (a rerun, then CI Fix), and once the head is green the approval carries on
+      with no second review
+    * `request_changes` -> `Rework`, whatever CI says, with the reason and findings posted on the
+      ticket first, so the operator reads them and the rework run finds them in its prompt
     * `block` -> a Needs Decision hold: the ticket stays in Code Review and a person decides
 
   An approve carries the QA run/skip decision: `SymphonyElixir.QaPolicy` decides it deterministically
@@ -63,6 +66,7 @@ defmodule SymphonyElixir.CodeReview do
     EscalationRules,
     Handoff,
     MergeConfirmation,
+    PrWatch,
     QaPolicy,
     ReviewAgent,
     RunStore,
@@ -81,6 +85,7 @@ defmodule SymphonyElixir.CodeReview do
   @verdict_kind "code_review"
   @reviewer_disabled_signal "code_review_reviewer_disabled"
   @carried_signal "code_review_carried"
+  @approved_on_red_signal "code_review_approved_on_red"
   # Written by the second reviewer pass this module no longer takes; read only to route a deepened
   # verdict recorded before the upgrade (`pending_deepening/3`).
   @deepening_signal "code_review_deepened"
@@ -159,8 +164,9 @@ defmodule SymphonyElixir.CodeReview do
 
   # A dispatch first performs what an earlier one recorded for this head, before it reviews afresh:
   # a deepening an earlier version recorded and never routed is routed (`route_deepened/5`), and a
-  # carried approve — a mechanical CI Fix re-bound it to the head the repair left — is applied without
-  # a review (`carried_approval/3`). Only when neither holds does the reviewer run.
+  # carried approve — a mechanical CI Fix re-bound it to the head the repair left, or it was given on a
+  # head that was red and has since gone green — is applied without a review (`carried_approval/3`).
+  # Only when neither holds does the reviewer run.
   defp review(issue, workspace, opts, settings) do
     cond do
       decided_escalation?(issue, workspace, opts, settings) ->
@@ -227,7 +233,8 @@ defmodule SymphonyElixir.CodeReview do
   # and this module applies it again instead of dispatching the reviewer. An unreadable head carries
   # nothing, so the ordinary review runs.
   #
-  # The carry has to be the lane's own, marked by `@carried_signal`, and not merely "an approve is
+  # The carry has to be marked, by the lane's `@carried_signal` or the `@approved_on_red_signal` of an
+  # approve that waited on CI (`approve/5`), and not merely "an approve is
   # bound to this head": a deepening an earlier version recorded also bound its second pass's approve
   # to the head it judged without routing it, and that verdict is the deepening's to route
   # (`pending_deepening/3`), not a lane carry to replay on a later dispatch.
@@ -243,7 +250,7 @@ defmodule SymphonyElixir.CodeReview do
   end
 
   defp carried_for_head?(issue, opts, head) do
-    is_binary(head) and Enum.any?(signals(issue, opts), &(&1.name == @carried_signal and signal_head(&1) == head))
+    is_binary(head) and Enum.any?(signals(issue, opts), &(&1.name in [@carried_signal, @approved_on_red_signal] and signal_head(&1) == head))
   end
 
   defp carry(issue, workspace, opts, settings, head) do
@@ -556,7 +563,23 @@ defmodule SymphonyElixir.CodeReview do
   # verdict is read. `extra` marks a verdict carried forward from an earlier review, which is
   # recorded so the audit trail shows no reviewer ran a second time, and carries the reviewer's own
   # reason for the merge-confirmation summary.
+  #
+  # An approve on a head the watcher reads as red moves nothing: QA and Merging need green. The ticket
+  # stays here with the approval recorded, which the watcher reads (`review: :approved`) to apply CI's
+  # state, and which carries the ticket on once the head is green (`carried_approval/3`). A head that
+  # turned red after the watcher's last read goes to QA, whose own rules send it to CI Fix.
   defp approve(issue, workspace, opts, settings, extra) do
+    head = workspace_head(workspace, opts)
+
+    if PrWatch.red_on?(issue.id, head, Keyword.take(opts, [:run_store])) do
+      Logger.info("Code Review approved #{issue_label(issue)} head=#{head} on red CI; the PR watcher applies CI's state next")
+      TicketSignals.record(repo_key(issue, opts), issue.id, @approved_on_red_signal, %{head: head})
+    else
+      route_approve(issue, workspace, opts, settings, extra)
+    end
+  end
+
+  defp route_approve(issue, workspace, opts, settings, extra) do
     policy = Keyword.get(opts, :qa_policy, QaPolicy)
 
     case policy.decide(issue, settings, workspace: workspace, repo_key: repo_key(issue, opts)) do

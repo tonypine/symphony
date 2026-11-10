@@ -85,6 +85,9 @@ final class ContextCardTests: XCTestCase {
         XCTAssertEqual(work(.failed, 1), "#7 · checks failing · sent back once")
         XCTAssertEqual(work(.pending, 3), "#7 · checks running · sent back 3 times")
         XCTAssertEqual(work(nil, 0), "#7")
+        // TP-1204: the review's state and CI's, side by side.
+        let beside = TicketContext(pullRequest: .init(number: 7, url: nil, checks: .failed, sentBack: 0, review: "reviewing", failingCheck: "macos build"))
+        XCTAssertEqual(ContextCard(item: item(context: beside), now: now, calendar: utc)?.work, "#7 · reviewing · CI red on macos build")
         // The text names the pull request as the item's references do, so its chip finds it.
         XCTAssertEqual(work(nil, 0, references: ["PR #7": .missing(url: nil)]), "PR #7")
 

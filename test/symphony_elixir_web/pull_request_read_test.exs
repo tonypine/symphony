@@ -153,9 +153,9 @@ defmodule SymphonyElixirWeb.PullRequestReadTest do
              %{"workflow" => "macOS", "checks" => [%{"name" => "Swift tests", "state" => "running", "duration_ms" => nil}]}
            ] = pull_request["checks"]
 
-    assert %{"rule" => "R22", "action" => "rerun_failed", "reason" => reason, "owner" => owner, "since" => "2026-11-06T10:03:00Z", "outcome" => "applied"} = pull_request["next_action"]
+    assert %{"rule" => "R27", "action" => "dispatch", "reason" => reason, "owner" => owner, "since" => "2026-11-06T10:03:00Z", "outcome" => "applied"} = pull_request["next_action"]
     assert is_binary(reason) and is_binary(owner)
-    assert %{"rule" => "R22", "reason" => ^reason, "owner" => ^owner} = ticket_read("PR-1")["watch"]
+    assert %{"rule" => "R27", "reason" => ^reason, "owner" => ^owner} = ticket_read("PR-1")["watch"]
   end
 
   test "a superseded run lists each check once with its newest state, and a cancelled-for-lack-of-a-machine check reads as such" do

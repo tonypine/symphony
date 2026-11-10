@@ -174,6 +174,10 @@ public struct TicketContext: Equatable {
         public var checks: Reference.Checks?
         /// How many times Code Review sent it back.
         public var sentBack: Int
+        /// Code Review's state while the ticket is there: "reviewing" or "approved".
+        public var review: String? = nil
+        /// The check that is red, when the watcher names one.
+        public var failingCheck: String? = nil
     }
 
     public struct Connected: Equatable {
@@ -226,6 +230,8 @@ public struct TicketContext: Equatable {
             let url: String?
             let checks: String?
             let sentBack: Int?
+            let review: String?
+            let failingCheck: String?
         }
 
         struct ConnectedPayload: Decodable {
@@ -264,7 +270,9 @@ public struct TicketContext: Equatable {
                         number: $0,
                         url: pullRequest.url.flatMap(URL.init(string:)),
                         checks: pullRequest.checks.flatMap(Reference.Checks.init(rawValue:)),
-                        sentBack: pullRequest.sentBack ?? 0
+                        sentBack: pullRequest.sentBack ?? 0,
+                        review: pullRequest.review,
+                        failingCheck: pullRequest.failingCheck
                     )
                 }
             },
