@@ -28,6 +28,7 @@
       "type": "phase.entered"
     },
     {
+      "effort": "high",
       "ended_at": "2026-10-18T10:20:00.000000Z",
       "events": [
         {
@@ -43,7 +44,9 @@
           "new": true,
           "parent": null,
           "payload": {
+            "effort": "high",
             "head": "aaa1111",
+            "model": "claude-opus-5-5",
             "run_id": "run-impl-1",
             "run_kind": "implementation",
             "run_number": 1
@@ -52,7 +55,7 @@
           "run_id": "run-impl-1",
           "seq": 2,
           "summary": {
-            "detail": "at aaa1111",
+            "detail": "claude-opus-5-5 · at aaa1111",
             "title": "Implementation run 1 started"
           },
           "supersedes": null,
@@ -99,8 +102,10 @@
           "parent": null,
           "payload": {
             "duration_ms": 1020000,
+            "effort": "high",
             "exit": "handoff",
             "head": "bbb2222",
+            "model": "claude-opus-5-5",
             "run_id": "run-impl-1",
             "run_kind": "implementation",
             "run_number": 1
@@ -109,7 +114,7 @@
           "run_id": "run-impl-1",
           "seq": 4,
           "summary": {
-            "detail": "17 min",
+            "detail": "claude-opus-5-5 · 17 min",
             "title": "Implementation run 1 ended: handoff"
           },
           "supersedes": null,
@@ -119,13 +124,14 @@
       "exit": "handoff",
       "head": "bbb2222",
       "kind": "run",
+      "model": "claude-opus-5-5",
       "run_id": "run-impl-1",
       "run_kind": "implementation",
       "run_number": 1,
       "started_at": "2026-10-18T10:02:00.000000Z",
       "status": "ended",
       "summary": {
-        "detail": "17 min",
+        "detail": "claude-opus-5-5 · 17 min",
         "title": "Implementation run 1 ended: handoff"
       },
       "verdict": null
@@ -157,6 +163,7 @@
       "type": "phase.entered"
     },
     {
+      "effort": null,
       "ended_at": "2026-10-18T10:46:00.000000Z",
       "events": [
         {
@@ -173,6 +180,7 @@
           "parent": null,
           "payload": {
             "head": "bbb2222",
+            "model": "claude-sonnet-5-5",
             "run_id": "run-qa-1",
             "run_kind": "qa",
             "run_number": 1
@@ -181,7 +189,7 @@
           "run_id": "run-qa-1",
           "seq": 6,
           "summary": {
-            "detail": "at bbb2222",
+            "detail": "claude-sonnet-5-5 · at bbb2222",
             "title": "QA run 1 started"
           },
           "supersedes": null,
@@ -315,6 +323,7 @@
             "duration_ms": 900000,
             "exit": "ended normally",
             "head": "bbb2222",
+            "model": "claude-sonnet-5-5",
             "run_id": "run-qa-1",
             "run_kind": "qa",
             "run_number": 1
@@ -323,7 +332,7 @@
           "run_id": "run-qa-1",
           "seq": 10,
           "summary": {
-            "detail": "15 min",
+            "detail": "claude-sonnet-5-5 · 15 min",
             "title": "QA run 1 ended: ended normally"
           },
           "supersedes": null,
@@ -333,13 +342,14 @@
       "exit": "ended normally",
       "head": "bbb2222",
       "kind": "run",
+      "model": "claude-sonnet-5-5",
       "run_id": "run-qa-1",
       "run_kind": "qa",
       "run_number": 1,
       "started_at": "2026-10-18T10:31:00.000000Z",
       "status": "ended",
       "summary": {
-        "detail": "15 min",
+        "detail": "claude-sonnet-5-5 · 15 min",
         "title": "QA run 1 ended: ended normally"
       },
       "verdict": {
@@ -428,6 +438,7 @@
       "type": "phase.entered"
     },
     {
+      "effort": null,
       "ended_at": null,
       "events": [
         {
@@ -444,6 +455,7 @@
           "parent": null,
           "payload": {
             "head": "ccc3333",
+            "model": "claude-sonnet-5-5",
             "run_id": "run-qa-2",
             "run_kind": "qa",
             "run_number": 2
@@ -452,7 +464,7 @@
           "run_id": "run-qa-2",
           "seq": 14,
           "summary": {
-            "detail": "at ccc3333",
+            "detail": "claude-sonnet-5-5 · at ccc3333",
             "title": "QA run 2 started"
           },
           "supersedes": null,
@@ -517,13 +529,14 @@
       "exit": null,
       "head": "ccc3333",
       "kind": "run",
+      "model": "claude-sonnet-5-5",
       "run_id": "run-qa-2",
       "run_kind": "qa",
       "run_number": 2,
       "started_at": "2026-10-18T11:11:00.000000Z",
       "status": "running",
       "summary": {
-        "detail": "at ccc3333",
+        "detail": "claude-sonnet-5-5 · at ccc3333",
         "title": "QA run 2 started"
       },
       "verdict": null

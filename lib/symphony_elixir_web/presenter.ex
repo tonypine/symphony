@@ -781,8 +781,10 @@ defmodule SymphonyElixirWeb.Presenter do
     %{
       kind: "run",
       run_id: run_id,
-      run_kind: payload_field(started, :run_kind) || payload_field(ended, :run_kind),
-      run_number: payload_field(started, :run_number) || payload_field(ended, :run_number),
+      run_kind: start_or_end(started, ended, :run_kind),
+      run_number: start_or_end(started, ended, :run_number),
+      model: start_or_end(started, ended, :model),
+      effort: start_or_end(started, ended, :effort),
       status: if(ended, do: "ended", else: "running"),
       verdict: verdict && run_verdict_json(verdict),
       started_at: started && DateTime.to_iso8601(started.at),
@@ -801,6 +803,8 @@ defmodule SymphonyElixirWeb.Presenter do
       at: DateTime.to_iso8601(verdict.at)
     }
   end
+
+  defp start_or_end(started, ended, key), do: payload_field(started, key) || payload_field(ended, key)
 
   defp payload_field(nil, _key), do: nil
   defp payload_field(%Event{payload: payload}, key), do: Map.get(payload, key)

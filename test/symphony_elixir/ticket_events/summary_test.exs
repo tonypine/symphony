@@ -6,7 +6,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
   @long String.duplicate("word ", 100)
   @transcript String.duplicate("ab", 32)
   @run_ended %{run_id: "run-3", run_kind: "rework", run_number: 3, exit: "handoff", transcript: @transcript}
-             |> Map.merge(%{duration_ms: 1_260_000, tokens: 13_400_000})
+             |> Map.merge(%{duration_ms: 1_260_000, tokens: 13_400_000, model: "claude-opus-5-5"})
 
   # One fixture per catalog type: the event's type, payload and artifacts, then the summary it
   # renders.
@@ -15,10 +15,11 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
      %{title: "Entered QA from Code Review", detail: "Code Review approved the head · via verdict"}},
     {"hold.set", %{kind: "blocked", reason: "Waiting on TP-12"}, [], %{title: "Blocked hold set", detail: "Waiting on TP-12"}},
     {"hold.cleared", %{kind: "blocked", by: "TP-12 done"}, [], %{title: "Blocked hold cleared", detail: "by TP-12 done"}},
-    {"run.started", %{run_id: "run-3", run_kind: "rework", run_number: 3, state: "Rework", head: "e051234abcdef"}, [], %{title: "Rework run 3 started", detail: "in Rework · at e051234"}},
+    {"run.started", %{run_id: "run-3", run_kind: "rework", run_number: 3, state: "Rework", head: "e051234abcdef", model: "claude-opus-5-5", effort: "high"}, [],
+     %{title: "Rework run 3 started", detail: "claude-opus-5-5 · in Rework · at e051234"}},
     {"run.started_by_person", %{run_id: "run-3", run_kind: "implementation", run_number: 1, by: "the Director", note: "customer demo"}, [],
      %{title: "Implementation run 1 started by the Director", detail: "customer demo"}},
-    {"run.ended", @run_ended, [@transcript], %{title: "Rework run 3 ended: handoff", detail: "21 min · 13.4M tokens · transcript"}},
+    {"run.ended", @run_ended, [@transcript], %{title: "Rework run 3 ended: handoff", detail: "claude-opus-5-5 · 21 min · 13.4M tokens · transcript"}},
     {"attempt.pushed", %{head: "e051234abcdef", attempt: 5, intent: "Render the summary on record"}, [], %{title: "Attempt 5 pushed e051234", detail: "Render the summary on record"}},
     {"verdict.recorded", %{kind: "code_review", outcome: "approve", head: "e051234abcdef"}, [], %{title: "Code Review verdict: approve", detail: "on e051234"}},
     {"decision.requested", %{title: "Close TP-612 as a duplicate", question: "Should TP-612 close as a duplicate of TP-668?"}, [],
