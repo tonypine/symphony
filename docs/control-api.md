@@ -390,6 +390,26 @@ A run reads the note when the prompt it builds carries the ticket's history summ
 note in full. Symphony then records a machine `note.read` event naming the note (`note_id`) and the run
 (`run_id`), keyed by the note, so only the first read is kept. A preview of the prompt records nothing.
 
+## `brief`
+
+What the ticket does and why, in a person's words, with its walkthrough (fact 25 of
+`docs/design/director-ticket-page.md`; `SymphonyElixir.TicketBrief`). Null until a run wrote one.
+
+| Field | What it holds |
+| --- | --- |
+| `brief.id` | The id of the `brief.written` event it comes from. |
+| `brief.text` | What the ticket does and why, in plain words: at most 1,200 characters, no backtick. |
+| `brief.walkthrough` | The steps a person takes to see it work, as prose: at most 4,000 characters, no backtick. |
+| `brief.at` | When it was written. |
+| `brief.by` | Who wrote it: `kind` (`agent`), `run_kind` and `run_id`. |
+
+An implementation, rework or review-feedback run writes it with `ticket_record` as a `brief.written` event:
+at its first delegated step, and again at its handoff when the work changed what the ticket does. The newest
+`brief.written` is the brief; the earlier ones stay in the ticket's history. The catalog refuses a brief
+over its bounds or holding a backtick, and from any other run kind, the machine or a person. Linear's
+description is left as it is. The summary of the ticket's history that every run's prompt carries opens
+with the brief, in full, under `Brief`.
+
 ## `running`
 
 The live run, null when none is. Beside the run's session, workspace and tokens, it says what the run is

@@ -8,6 +8,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   Field specs:
 
     * `:string` - a non-blank string; `{:string, max}` also bounds its length in characters.
+    * `{:prose, max}` - a `{:string, max}` written for a person to read, which holds no backtick.
     * `{:enum, values}` - one of `values`, given as a string or an atom, stored as a string.
     * `:non_neg_integer`, `:boolean`, `:map`, `{:list, :string}`, `:list`.
     * `{:any_of, specs}` - the first spec that accepts the value.
@@ -121,6 +122,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `note.read` is machinery-only: the first run whose prompt carried a person's note (`note_id`, the
   `note` event's id) read it (`run_id`), keyed by the note so only the first read is kept
   (`SymphonyElixir.Marks`).
+
+  `brief.written` is an agent's, in an implementation, rework or review-feedback run: what the ticket
+  does and why, in a person's words (`text`, at most 1,200 characters), and its walkthrough as the
+  steps a person takes (`walkthrough`, at most 4,000), both prose with no backtick. The newest one is
+  the ticket's brief (`SymphonyElixir.TicketBrief`).
   """
 
   alias SymphonyElixir.RunKind
@@ -129,6 +135,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @type field_spec ::
           :string
           | {:string, pos_integer()}
+          | {:prose, pos_integer()}
           | {:enum, [String.t()]}
           | :non_neg_integer
           | :boolean
@@ -500,6 +507,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
       optional: [title: {:string, 300}] ++ @signal,
       idempotency: {:fields, [:identifier]}
     },
+    "brief.written" => %{
+      writers: [:agent],
+      run_kinds: ~w(implementation rework review_feedback),
+      required: [text: {:prose, 1_200}, walkthrough: {:prose, 4_000}],
+      optional: [],
+      idempotency: :writer
+    },
     "note.read" => %{
       writers: [:machine],
       run_kinds: [],
@@ -556,8 +570,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   @doc """
   The payload schema of `type` as plain data a tool can return: its `required` and `optional`
-  fields, each `%{name, type}` with a `max` length, the enum `values`, the `item` spec of a list,
-  the `of` specs of a choice or the `fields` of a map, and `required_when` (`%{field, equals}`) for
+  fields, each `%{name, type}` with a `max` length, a character it `forbids`, the enum `values`, the
+  `item` spec of a list, the `of` specs of a choice or the `fields` of a map, and `required_when` (`%{field, equals}`) for
   a field the type requires exactly when another field holds a value (and refuses otherwise). Nil
   for an unknown type. The fields only the machinery passes (`signal`, `signal_details`) are left out.
   """
@@ -586,6 +600,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   defp describe(:string), do: %{type: "string"}
   defp describe({:string, max}), do: %{type: "string", max: max}
+  defp describe({:prose, max}), do: %{type: "string", max: max, forbids: "`"}
   defp describe({:enum, values}), do: %{type: "enum", values: values}
   defp describe({:list, spec}), do: %{type: "list", item: describe(spec)}
   defp describe({:any_of, specs}), do: %{type: "any_of", of: Enum.map(specs, &describe/1)}
@@ -749,6 +764,10 @@ defmodule SymphonyElixir.TicketEvents.Types do
 
   defp check({:string, max}, value) when is_binary(value) do
     if String.length(value) > max, do: :error, else: check(:string, value)
+  end
+
+  defp check({:prose, max}, value) when is_binary(value) do
+    if String.contains?(value, "`"), do: :error, else: check({:string, max}, value)
   end
 
   defp check({:enum, values}, value) when is_atom(value), do: check({:enum, values}, Atom.to_string(value))

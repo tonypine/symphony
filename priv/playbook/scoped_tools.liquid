@@ -33,7 +33,9 @@ its state: open, resolved awaiting QA, or reopened, and their screenshots), and
 it), a delegated step's `step.started` and `step.completed` (its `outcome`:
 `passed`, `failed` with the step it `returns_to`, `paused` on a question, or
 `skipped` with a `reason`), a `checklist.answered`, or a `finding.resolved` naming the open or reopened finding a
-fix closes, on the head that fixes it; a QA run also records `finding.recorded`. `artifacts` are files in the workspace or your
+fix closes, on the head that fixes it; a QA run also records `finding.recorded`, and a run that writes the code
+(implementation, rework, review feedback) a `brief.written`: the ticket's brief, what it does and why and its
+walkthrough, in a person's words. `artifacts` are files in the workspace or your
 `$TMPDIR`; Symphony fills the run, phase and head. Verdicts, moves, pauses and
 questions are Symphony's: `ticket_record` refuses them, with the list of what the run
 may record.

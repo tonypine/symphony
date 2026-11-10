@@ -8,6 +8,8 @@ defmodule SymphonyElixir.TicketEvents.Brief do
 
     * **Phase and pauses**, from the ticket's record: its phase and each reason its pause
       (`SymphonyElixir.Pauses`) waits on.
+    * **Brief**: the ticket's brief (`SymphonyElixir.TicketBrief`), the newest `brief.written`, in
+      full with who wrote it and when; `none` until a run wrote one.
     * **Decisions**: every request (a `decision.requested`, or a Question's `question.asked`) with
       its answer or withdrawal, every open request, and every ruling a person recorded without a
       request.
@@ -20,7 +22,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
     * **Runs**: one line per run (kind, number, result or state, commit, when), with the latest
       run's events in full under it. An earlier run's steps are summed up in its line.
     * **Other events**: every event outside a run, one line each from its summary, newest first.
-      Findings, notes and the decision events Decisions shows are not repeated there; a withdrawal
+      Findings, notes, briefs and the decision events Decisions shows are not repeated there; a withdrawal
       or a later answer naming no request it shows is.
 
   Nothing is left out to fit a size: the size the prompt builder checks
@@ -29,7 +31,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   same bytes.
   """
 
-  alias SymphonyElixir.{RunStore, TicketEvents, TicketState}
+  alias SymphonyElixir.{RunStore, TicketBrief, TicketEvents, TicketState}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
 
   @type t :: %{
@@ -44,7 +46,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   # The types a section renders, which Other events doesn't repeat. A decision event is left out of
   # it only when Decisions renders it: a withdrawal or a second answer naming no request it shows is
   # one of the other events.
-  @section_types ["note", "finding.recorded", "finding.resolved"]
+  @section_types ["note", "brief.written", "finding.recorded", "finding.resolved"]
   @run_types ["run.started", "run.ended"]
   # The payload fields that hold an event's whole free text, which a summary's detail cuts.
   @full_fields %{
@@ -91,6 +93,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
     text =
       [
         phase_section(state),
+        brief_section(TicketBrief.current(events)),
         decisions_section(decisions),
         findings_section(findings),
         notes_section(notes),
@@ -116,6 +119,21 @@ defmodule SymphonyElixir.TicketEvents.Brief do
 
   defp pause_lines([]), do: ["- Pauses: none"]
   defp pause_lines(reasons), do: Enum.map(reasons, &("- Paused: #{&1.kind} (#{&1.text})" <> suffix(", since ", time(&1.set_at))))
+
+  # Brief: the newest one a run wrote, whole.
+
+  defp brief_section(nil), do: "Brief:\n- none"
+
+  defp brief_section(%Event{} = brief) do
+    Enum.join(
+      [
+        "Brief (written #{time(brief.at)} by #{actor(brief.actor)}):",
+        indent("- What it does: " <> (text(brief, :text) || ""), "  "),
+        indent("- Walkthrough: " <> (text(brief, :walkthrough) || ""), "  ")
+      ],
+      "\n"
+    )
+  end
 
   # Decisions: each request with the event that ended it (nil while open), and each ruling, in the
   # order they were made.
