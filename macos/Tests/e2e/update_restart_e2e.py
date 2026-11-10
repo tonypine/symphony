@@ -736,8 +736,12 @@ def scenario_update(instance):
     backup.unlink()
     # The release the old build installed, carried across the relaunch: the line opens its notes.
     updated_line = f"Updated to v{version(BUILD_N1)}"
-    if not any(title.startswith(updated_line) and enabled for title, enabled in instance.menu().items()):
-        raise Failure(f"the updated app's menu has no enabled '{updated_line}' line: {instance.menu()}")
+    # The line replaces "Checking v...", which stays until the new build's health check has finished.
+    wait_for(
+        f"the menu's '{updated_line}' line",
+        lambda: any(title.startswith(updated_line) and enabled for title, enabled in instance.menu().items()),
+        120,
+    )
     log("scenario 1 passed")
 
 

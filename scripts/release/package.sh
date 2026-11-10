@@ -135,7 +135,10 @@ shown=200
 
 # The settings keys this build rewrites by itself, so the running app can say what an update changes
 # in your file before it downloads it.
-settings_migrations="$("$app/Contents/Resources/symphony" config migrations)"
+# It runs with its own state folder: the release writes its cookie there, and the machine's real one is not ours.
+migrations_state="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/symphony-migrations.XXXXXX")"
+settings_migrations="$(SYMPHONY_STATE_ROOT="$migrations_state" "$app/Contents/Resources/symphony" config migrations)"
+rm -rf "$migrations_state"
 
 jq -n \
   --arg version "$version" \
