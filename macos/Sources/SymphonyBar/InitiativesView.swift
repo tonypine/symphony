@@ -12,7 +12,7 @@ struct InitiativesContent: View {
                 list: list,
                 selection: $model.initiativeSelection,
                 actions: InitiativeActions(
-                    inbox: Set(model.inbox?.items.map(\.id) ?? []),
+                    inbox: Set(model.inbox?.items.filter(\.waitsOnDirector).map(\.id) ?? []),
                     review: { model.showInbox(selecting: $0) },
                     openTicket: model.openTicket,
                     openURL: model.onOpenURL

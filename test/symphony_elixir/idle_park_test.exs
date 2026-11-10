@@ -21,6 +21,17 @@ defmodule SymphonyElixir.IdleParkTest do
     assert {answered.(1), answered.(2), answered.(3)} == {:unblock, :restart, :keep}
   end
 
+  test "the hold's question names the phase, offers Run it again (recommended), Start it over and Keep it paused, and a ticket with no record holds nothing" do
+    request = IdlePark.hold_question_attrs("TP-1248", "CI Fix", 2)
+
+    assert request.title == "TP-1248 is paused in CI Fix: its last 2 turns changed nothing"
+    assert request.if_unanswered == "TP-1248 stays paused in CI Fix until its pull request gets a new commit or its checks report."
+    assert [%{label: "Run it again", recommended: true}, %{label: "Start it over from main"}, %{label: "Keep it paused"}] = request.options
+    assert IdlePark.silent_bound() == "no_progress"
+    assert IdlePark.reason(nil) == nil
+    assert IdlePark.settle({:ticket, "default", "1"}, nil, %{}) == :held
+  end
+
   describe "parked_from/2" do
     test "a ticket out of Backlog was not parked" do
       assert IdlePark.parked_from("In Progress", [park_signal(%{from: "Rework"})]) == :none

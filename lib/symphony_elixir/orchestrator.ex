@@ -193,6 +193,7 @@ defmodule SymphonyElixir.Orchestrator do
       dispatch_order: nil,
       operator_pause_logged: false,
       cycle_requested: false,
+      cycle_deferred: false,
       dispatch_settle: %{},
       dispatch_settings: nil,
       config_reload_handler: nil,
@@ -541,6 +542,7 @@ defmodule SymphonyElixir.Orchestrator do
           state
           |> Map.put(:quality_gate_tasks, tasks)
           |> handle_quality_gate_result(context, result)
+          |> run_deferred_cycle()
 
         {:noreply, state}
     end
@@ -559,6 +561,7 @@ defmodule SymphonyElixir.Orchestrator do
           state
           |> Map.put(:dispatch_readiness_tasks, tasks)
           |> handle_dispatch_readiness_result(context, result)
+          |> run_deferred_cycle()
 
         {:noreply, state}
     end
@@ -606,6 +609,7 @@ defmodule SymphonyElixir.Orchestrator do
           state
           |> Map.put(:quality_gate_tasks, tasks)
           |> handle_quality_gate_exit(context, reason)
+          |> run_deferred_cycle()
 
         {:noreply, state}
 
@@ -624,6 +628,7 @@ defmodule SymphonyElixir.Orchestrator do
           state
           |> Map.put(:dispatch_readiness_tasks, tasks)
           |> handle_dispatch_readiness_exit(context, reason)
+          |> run_deferred_cycle()
 
         {:noreply, state}
 
@@ -861,6 +866,12 @@ defmodule SymphonyElixir.Orchestrator do
     if poll_tick_coalesced?(state, System.monotonic_time(:millisecond)), do: state, else: schedule_tick(state, 0)
   end
 
+  # A cycle that found a gate or readiness task in flight ended without scoring or dispatching, and
+  # that task read its candidates before whatever asked for the cycle (a Question answered, a pause
+  # lifted). The cycle runs when the task ends, so the change does not wait for the repo's next poll.
+  defp run_deferred_cycle(%State{cycle_deferred: true} = state), do: request_cycle(%{state | cycle_deferred: false})
+  defp run_deferred_cycle(%State{} = state), do: state
+
   # Polls now unless a poll is already running or due; true when it was.
   defp request_poll(%State{} = state) do
     if poll_tick_coalesced?(state, System.monotonic_time(:millisecond)) do
@@ -1014,10 +1025,11 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # The epic review found CI still running on the commit it reviews (`SymphonyElixir.EpicReview`).
-  # Nothing failed: the attempt stays, no `run_failed` goes out, the run counts towards no dispatch
-  # loop, and the review starts again once CI had a minute more to finish. The wait is bounded per
-  # commit (`SymphonyElixir.CiWait`): past the limit the ticket is held instead.
+  # The epic review found CI still running on the commit it reviews (`SymphonyElixir.EpicReview`), or
+  # a QA pass or an idle CI Fix run did on the PR head. Nothing failed: the attempt stays, no
+  # `run_failed` goes out, the run counts towards no dispatch loop, and the review starts again once
+  # CI had a minute more to finish. The wait is bounded per commit (`SymphonyElixir.CiWait`): past
+  # the limit the ticket is held instead.
   defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:ci_pending, %{} = info} = reason) do
     error = agent_exit_reason_summary(reason)
     persist_run_completion(running_entry, "waiting_for_ci", error)
@@ -3211,7 +3223,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp defer_quality_gate_request(%State{} = state, :poll) do
     Logger.debug("Deferring poll dispatch: quality gate task already in flight")
-    finish_poll_cycle(state, System.monotonic_time(:millisecond))
+    finish_poll_cycle(%{state | cycle_deferred: true}, System.monotonic_time(:millisecond))
   end
 
   defp defer_quality_gate_request(%State{} = state, {:active_retry, issue, attempt, metadata}) do
@@ -3627,7 +3639,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp defer_dispatch_readiness_request(%State{} = state, :poll) do
     Logger.debug("Deferring poll dispatch: dispatch readiness task already in flight")
-    finish_poll_cycle(state, System.monotonic_time(:millisecond))
+    finish_poll_cycle(%{state | cycle_deferred: true}, System.monotonic_time(:millisecond))
   end
 
   # A continuation stays a retry so its continuation flag reaches the headroom check; waiting for

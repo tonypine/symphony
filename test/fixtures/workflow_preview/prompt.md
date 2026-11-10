@@ -207,7 +207,7 @@ for a fresh one. Do not copy these links into comments or the workpad: they stop
 - `Epic Review` -> an automatic integrity check of an epic parent once its children are terminal: artifacts, comments and PRs verified against the epic's intent. Pass moves it to `Done`; gaps are filed as follow-ups in `Todo` within the same epic and the parent returns to `Waiting on sub-tickets`.
 - `Merging` -> the machine lands the merge; follow the repo's landing flow (do not call `gh pr merge` directly). A red head or a conflict routes to `CI Fix`, and a PR closed without merging to `Rework` (the PR and CI decision table).
 - `Rework` -> a reviewer or QA returned the work for changes; continue on the existing PR (never from scratch). Changes done hand off to `Code Review` (for an epic parent, to `Plan Review`).
-- `CI Fix` -> a mechanical repair lane for red checks or a merge conflict: every red check is fixed, never rerun — formatting, a dependency bump, a failing or flaky test fixed at its cause (in code the ticket touched or not), resolving the conflict. A fixed head returns to where it came from (approvals carried forward); a repair that needs a substantive change goes to `Rework`; a repair you cannot make without access or a secret raises a Needs Decision hold instead of guessing. The run ends in one of those three ways, never with nothing pushed.
+- `CI Fix` -> a mechanical repair lane for red checks or a merge conflict: every red check is fixed, never rerun — formatting, a dependency bump, a failing or flaky test fixed at its cause (in code the ticket touched or not), resolving the conflict. A fixed head returns to where it came from (approvals carried forward); a repair that needs a substantive change goes to `Rework`; a repair you cannot make without access or a secret raises a Needs Decision hold instead of guessing. The run ends in one of those three ways, never with nothing pushed, unless the checks on its head are still running: then Symphony waits on them and starts no other run.
 - `Done` -> terminal state; no further action required.
 
 What a red head, a conflict or a closed PR does in each state is decided by one table, the PR and CI decision table (`docs/pr-ci-decisions.md` in Symphony's repository), never by a run: a conflict that keeps coming back waits on the tickets competing for the same files or goes to `Rework`, and a check that keeps failing gets a fix ticket. Neither asks a person.
@@ -362,6 +362,10 @@ one of three ways only:
   secret, or the failure is outside the code and no change to the step absorbs it,
   ask with `linear_request_human_action`; the `Needs Decision` hold keeps the ticket
   in `CI Fix` until the answer.
+
+A head whose checks are still running is not red yet, so there is nothing to repair. End the
+turn without pushing and without asking anyone: Symphony ends the run in a wait on CI, starts no
+other run until the checks report, and returns the ticket by itself when they pass.
 
 Deciding that a failure is flaky, or that it is not this ticket's, is not an ending:
 a run that stops there pushes nothing, and the ticket stays red in `CI Fix`.

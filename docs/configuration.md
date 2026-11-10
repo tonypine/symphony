@@ -2559,7 +2559,7 @@ Linear on such a ticket is drift and is moved back, so this is the way to move o
 reset. The record's phase is written first, then Linear, and a move Linear refuses stands on the
 record for the reconciler to project. A phase that dispatches starts a cycle at once; a move into
 Backlog or a closed state stops a running turn as Stop does, without the stop's pause. A pause from a
-dispatch loop, a quiet handoff or an idle park lifts with the move (its question is answered "Run it
+dispatch loop, a quiet handoff or an idle run's pause lifts with the move (its question is answered "Run it
 again"); every other pause reason stays. The ticket's timeline gets one `ticket.moved` event ("Moved
 to In Progress from Backlog") with the note. A move to the phase the ticket is already in answers
 200 with `moved: false`. A ticket in no configured repository, one Symphony has no record of

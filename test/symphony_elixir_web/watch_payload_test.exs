@@ -107,6 +107,23 @@ defmodule SymphonyElixirWeb.WatchPayloadTest do
              |> then(fn block -> Map.new(block, fn {key, value} -> {String.to_atom(key), value} end) end)
   end
 
+  test "a held ticket's silent wait with no watcher record gives its record's phase and no PR or rule (TP-1175)" do
+    assert %{"phase" => "in_progress", "pr_url" => nil, "rule" => nil, "bound" => "no_progress"} =
+             json(
+               WatchPayload.silent_wait(%{
+                 issue_id: "issue-42",
+                 issue_identifier: "TP-42",
+                 repo_key: "default",
+                 phase: "in_progress",
+                 pr_url: nil,
+                 since: @at,
+                 rule: nil,
+                 bound: "no_progress",
+                 reason: "No progress"
+               })
+             )
+  end
+
   test "a silent wait and the rate limit, as the state API lists them" do
     assert json(
              WatchPayload.silent_wait(%{

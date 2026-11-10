@@ -656,6 +656,50 @@ final class InboxTests: XCTestCase {
         XCTAssertEqual(InboxItem.Kind.blocked.word, "Blocked")
     }
 
+    func testATicketWaitingOnCIListsApartAndAsksNothing() throws {
+        let json = """
+        {"items": [{"issue_id": "i-7", "identifier": "TP-7", "kind": "waiting", "state": "CI Fix", "ask": "Checks are running on PR #7's head",
+          "waiting_seconds": 60, "review": {"reason": "Checks are running on PR #7's head", "clearing_condition": "when the checks report",
+          "pull_request": {"url": "https://github.com/acme/app/pull/7"}}}]}
+        """
+        let row = try XCTUnwrap(InboxPayload.decode(Data(json.utf8))?.items.first)
+        let pr = try XCTUnwrap(URL(string: "https://github.com/acme/app/pull/7"))
+
+        XCTAssertEqual(row.kind, .waiting)
+        XCTAssertFalse(row.waitsOnDirector)
+        XCTAssertFalse(row.isDecision)
+        XCTAssertEqual(row.kind.word, "Waiting on CI")
+        XCTAssertEqual(row.kind.symbol, "hourglass")
+        // It asks nothing, so its glyph and badge take the working role, never the "waiting on you" one.
+        XCTAssertEqual(row.kind.status, .working)
+        XCTAssertEqual(InboxItem.Kind.allCases.filter { $0.status == .you }, [.plan, .pr, .action, .clarify, .blocked])
+        XCTAssertEqual(row.review.blocked?.waitLine, "It moves on by itself when the checks report.")
+        XCTAssertEqual(InboxAction.actions(for: row), [.openPR(pr)])
+        XCTAssertEqual(InboxToolbar.toolbar(for: row).buttons.map(\.command), [.link(.openPR(pr))])
+
+        // Listed last under its own heading, and left out of the count of what waits on the Director.
+        let list = InboxList(items: [row, item("P-1", .plan)])
+        XCTAssertEqual(list.groups.map(\.title), ["Plans", "Waiting on CI"])
+        XCTAssertEqual(list.totalCount, 1)
+
+        let brief = try XCTUnwrap(TicketPage.Brief(identifier: "TP-7", items: [row]))
+        XCTAssertEqual(brief.title, "What it waits on")
+        XCTAssertEqual(brief.paragraphs, ["Checks are running on PR #7's head"])
+    }
+
+    func testTheWaitingOnCIFixtureListsItsRowLastAndLeavesTheCountAlone() throws {
+        let inbox = try payload("inbox-waiting-ci")
+        let row = try XCTUnwrap(inbox.items.first { $0.kind == .waiting })
+        XCTAssertEqual(row.identifier, "SHOP-370")
+        XCTAssertEqual(row.review.blocked?.reason, "Checks are running on PR #643's head")
+        XCTAssertEqual(row.review.blocked?.waitLine, "It moves on by itself when the checks report.")
+        XCTAssertEqual(InboxAction.actions(for: row).first, .openPR(try XCTUnwrap(URL(string: "https://github.com/acme/web-shop/pull/643"))))
+
+        let list = InboxList(items: inbox.items)
+        XCTAssertEqual(list.groups.last?.title, "Waiting on CI")
+        XCTAssertEqual(list.totalCount, try payload("inbox").items.count)
+    }
+
     func testAKindTurnedOffDoesntNotifyAndIsntOwedLater() {
         var notifier = InboxNotifier(remembered: [])
         var preferences = NotificationPreferences()
