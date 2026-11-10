@@ -6,7 +6,7 @@ import SymphonyBarCore
 // shares (`docs/design/design-system.md` §5). Nothing here hardcodes a color but the chart palette.
 
 extension DesignTokens.SystemColor {
-    var color: Color {
+    public var color: Color {
         switch self {
         case .orange: .orange
         case .blue: .blue
@@ -29,13 +29,13 @@ extension DesignTokens.SystemColor {
 extension EnvironmentValues {
     /// True while a view renders offscreen with `ImageRenderer` (the snapshots in `Tests/Snapshots`), which can't
     /// draw an AppKit-backed control: the few that are draw a SwiftUI stand-in of the same size instead.
-    @Entry var offscreenSnapshot = false
+    @Entry public var offscreenSnapshot = false
 }
 
 // The one exception to system colors: the chart palette's validated light and dark pair (§3.3).
 extension DesignTokens.ChartSeries {
     /// The series color, its light or dark value following the appearance.
-    var color: Color {
+    public var color: Color {
         let (light, dark) = hex
         return Color(nsColor: NSColor(name: nil) { appearance in
             let value = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua ? dark : light
@@ -48,11 +48,11 @@ extension DesignTokens.ChartSeries {
 }
 
 extension DesignTokens.Status {
-    var tint: Color { color.color }
+    public var tint: Color { color.color }
 }
 
 extension DesignTokens.TypeStyle {
-    var font: Font {
+    public var font: Font {
         switch self {
         case .sentence: .title2.weight(.semibold)
         case .figure: .system(size: 28, weight: .semibold)
@@ -69,7 +69,7 @@ extension DesignTokens.TypeStyle {
 
 extension DesignTokens.TypeStyle {
     /// The same style as an AppKit font, for text an AppKit view draws (`ChipText`).
-    var nsFont: NSFont {
+    public var nsFont: NSFont {
         func preferred(_ style: NSFont.TextStyle) -> CGFloat { NSFont.preferredFont(forTextStyle: style).pointSize }
         return switch self {
         case .sentence: .systemFont(ofSize: preferred(.title2), weight: .semibold)
@@ -87,7 +87,7 @@ extension DesignTokens.TypeStyle {
 
 extension DesignTokens.Motion.Curve {
     /// The curve as a SwiftUI animation; under Reduce Motion, a change of 0.01 s.
-    func animation(reduceMotion: Bool) -> Animation {
+    public func animation(reduceMotion: Bool) -> Animation {
         switch timing(reduceMotion: reduceMotion) {
         case let .eased(duration): .smooth(duration: duration)
         case let .spring(duration, bounce): .spring(duration: duration, bounce: bounce)
@@ -98,18 +98,18 @@ extension DesignTokens.Motion.Curve {
 extension Animation {
     /// `motion.standard`: sections appearing or leaving, selection, a fold's height. It follows the system's Reduce
     /// Motion setting, as every curve of `motion` does.
-    static var standard: Animation { .motion(.standard) }
+    public static var standard: Animation { .motion(.standard) }
 
     /// A curve of `motion`, collapsed to 0.01 s while the system's Reduce Motion is on. A view that reads
     /// `accessibilityReduceMotion` passes it instead.
-    static func motion(_ curve: DesignTokens.Motion.Curve, reduceMotion: Bool? = nil) -> Animation {
+    public static func motion(_ curve: DesignTokens.Motion.Curve, reduceMotion: Bool? = nil) -> Animation {
         curve.animation(reduceMotion: reduceMotion ?? NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
     }
 }
 
 extension DesignTokens.Control {
     /// The SwiftUI control size whose height is closest to this one, for system controls.
-    var controlSize: ControlSize {
+    public var controlSize: ControlSize {
         switch self {
         case .small: .small
         case .medium: .regular
@@ -119,18 +119,24 @@ extension DesignTokens.Control {
 }
 
 extension DesignTokens.StateSurface {
-    func fill(dark: Bool) -> Color { color.color.opacity(opacity(dark: dark)) }
+    public func fill(dark: Bool) -> Color { color.color.opacity(opacity(dark: dark)) }
 }
 
 /// C7: a status's symbol and word in a capsule tinted with its color. The word stays in the primary text color, so
 /// contrast never depends on the hue.
-struct StatusBadge: View {
+public struct StatusBadge: View {
     let status: DesignTokens.Status
     var word: String?
     var small = true
     @Environment(\.colorScheme) private var colorScheme
 
-    var body: some View {
+    public init(status: DesignTokens.Status, word: String? = nil, small: Bool = true) {
+        self.status = status
+        self.word = word
+        self.small = small
+    }
+
+    public var body: some View {
         Label {
             Text(word ?? status.word).foregroundStyle(.primary)
         } icon: {
@@ -150,11 +156,16 @@ struct StatusBadge: View {
 }
 
 /// C4: the connection state, quiet while connected; the time of the last update is in its help.
-struct ConnectionState: View {
+public struct ConnectionState: View {
     let state: WindowState
     let lastUpdate: Date?
 
-    var body: some View {
+    public init(state: WindowState, lastUpdate: Date?) {
+        self.state = state
+        self.lastUpdate = lastUpdate
+    }
+
+    public var body: some View {
         HStack(spacing: DesignTokens.Space.s1) {
             Circle()
                 .fill(state.connectionStatus.tint)
@@ -176,13 +187,19 @@ struct ConnectionState: View {
 }
 
 /// C10: a titled section on the solid content surface.
-struct Card<Content: View>: View {
+public struct Card<Content: View>: View {
     let title: String
     /// A quiet line at the title's trailing end, such as the keys that work in the card.
     var hint: String?
     @ViewBuilder var content: Content
 
-    var body: some View {
+    public init(title: String, hint: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.hint = hint
+        self.content = content()
+    }
+
+    public var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
             HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                 Text(title)
@@ -213,13 +230,20 @@ struct Card<Content: View>: View {
 }
 
 /// C20: a symbol, a sentence and its actions, for an empty or unavailable view.
-struct EmptyState: View {
+public struct EmptyState: View {
     let title: String
     let symbol: String
     var actions: [(title: String, perform: () -> Void)] = []
     var showsSpinner = false
 
-    var body: some View {
+    public init(title: String, symbol: String, actions: [(title: String, perform: () -> Void)] = [], showsSpinner: Bool = false) {
+        self.title = title
+        self.symbol = symbol
+        self.actions = actions
+        self.showsSpinner = showsSpinner
+    }
+
+    public var body: some View {
         ContentUnavailableView {
             Label(title, systemImage: symbol)
         } description: {

@@ -148,9 +148,10 @@ extension InboxReview.Action {
     }
 
     /// The index of the option Send Decision sends: the Director's pick, else the recommended one; `writeInIndex`
-    /// for the write-in; nil when none is picked.
-    public func pickedIndex(_ picks: DecisionPicks) -> Int? {
-        guard let decision, let index = picks.pick(0, in: decision), options.indices.contains(index) || index == writeInIndex else {
+    /// for the write-in; nil when none is picked. `decision` is the request's index in `picks`: 0 for a request, a
+    /// plan's or a decision sheet's Question by its place.
+    public func pickedIndex(_ picks: DecisionPicks, decision index: Int = 0) -> Int? {
+        guard let decision, let index = picks.pick(index, in: decision), options.indices.contains(index) || index == writeInIndex else {
             return nil
         }
         return index
@@ -162,8 +163,8 @@ extension InboxReview.Action {
     }
 
     /// True when the write-in (N11) is picked: Send Decision sends the Director's own words.
-    public func isWriteIn(_ picks: DecisionPicks) -> Bool {
-        pickedIndex(picks) == writeInIndex
+    public func isWriteIn(_ picks: DecisionPicks, decision index: Int = 0) -> Bool {
+        pickedIndex(picks, decision: index) == writeInIndex
     }
 
     /// What Send Decision posts: the question with the picked option's label, or with the Director's own words when

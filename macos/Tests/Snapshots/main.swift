@@ -4,6 +4,7 @@ import AppKit
 import ImageIO
 import SwiftUI
 import SymphonyBarCore
+import SymphonyBarUI
 import UniformTypeIdentifiers
 
 let here = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -1232,6 +1233,70 @@ func actionRailRefusals(width: CGFloat) -> some View {
     )
 }
 
+// MARK: - The Question block and the decision sheet (TP-1442)
+
+/// TP-892's request with no option recommended, so nothing is picked to start with.
+let unpickedAction: InboxReview.Action = {
+    var open = action
+    for index in open.options.indices { open.options[index].recommended = false }
+    return open
+}()
+
+/// A second Question for the sheet: TP-892's options under another question.
+let secondAction: InboxReview.Action = {
+    var second = unpickedAction
+    second.question = "Let TP-892 change the file that sets how agents work?"
+    second.why = "The change needs one line in the file that sets how agents work. Agents may change it only when you say so."
+    second.ifUnanswered = "TP-892 leaves the line out."
+    return second
+}()
+
+/// TP-892's Question block at the laptop's column width, with its own Send under the cards.
+@MainActor
+func questionBlock(_ question: InboxReview.Action = action, picks: DecisionPicks = DecisionPicks(), width: CGFloat = 720) -> some View {
+    QuestionBlock(action: question, picks: picks, narrow: width < DesignTokens.Layout.narrowReviewWidth, send: {})
+        .padding(DesignTokens.Space.s5)
+        .frame(width: width)
+        .background(DesignTokens.Surface.window.color)
+        .environment(\.mentionReferences, item.references)
+}
+
+/// TP-892's first option card in each of its states, and hovered and pressed again under Reduce Motion (no lift, no
+/// settle).
+@MainActor
+func optionCardStates() -> some View {
+    let card = OptionCard.cards(for: action, writeIn: true)[0]
+    let states: [(String, DesignTokens.Interaction, Bool)] = [
+        ("Rest", .rest, false), ("Hover", .hover, false), ("Pressed", .press, false), ("Selected", .selection, false),
+        ("Focused", .focus, false), ("Hover, Reduce Motion", .hover, true), ("Pressed, Reduce Motion", .press, true),
+    ]
+    return VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
+        ForEach(Array(states.enumerated()), id: \.offset) { _, entry in
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                Text(entry.0).font(DesignTokens.TypeStyle.caption.font).foregroundStyle(.secondary)
+                OptionCardFace(card: card, state: entry.1, showsKey: true, reduceMotion: entry.2)
+            }
+        }
+    }
+    .padding(DesignTokens.Space.s5)
+    .frame(width: 640)
+    .background(DesignTokens.Surface.window.color)
+    .environment(\.mentionReferences, item.references)
+}
+
+/// The decision sheet over a dimmed laptop page, 520 pt on its right.
+@MainActor
+func decisionSheet(_ questions: [InboxReview.Action], picks: DecisionPicks = DecisionPicks()) -> some View {
+    DesignTokens.Surface.content.color
+        .frame(width: 1180, height: 900)
+        .decisionSheet(isPresented: .constant(true)) {
+            DecisionSheet(questions: questions, picks: picks, subtitle: "TP-892 · Remove the Final verification and Supervisor check flows",
+                          pick: { _, _ in }, send: {}, close: {})
+                .frame(height: 900)
+        }
+        .environment(\.mentionReferences, item.references)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1299,6 +1364,18 @@ MainActor.assumeIsolated {
         render(ledgerPage(window: 1440, decisions: decisionsEditor(refused: false)), scheme, to: "ticket-decisions-1440-\(suffix).png")
         render(ledgerPage(window: 2560, decisions: decisionsEditor(refused: false)), scheme, to: "ticket-decisions-2560-\(suffix).png")
         render(ledgerPage(window: 1440, decisions: decisionsEditor(refused: true)), scheme, to: "ticket-decisions-refused-\(suffix).png")
+        // The Question block and the decision sheet (TP-1442): the option card's states, the block with nothing picked,
+        // an option picked, the own-words card blank and written, and the sheet with one Question, one of two answered
+        // and both.
+        render(optionCardStates(), scheme, to: "question-option-card-states-\(suffix).png")
+        render(questionBlock(unpickedAction), scheme, to: "question-block-unpicked-\(suffix).png")
+        render(questionBlock(), scheme, to: "question-block-picked-\(suffix).png")
+        render(questionBlock(picks: DecisionPicks(picks: [0: action.writeInIndex])), scheme, to: "question-block-own-words-blank-\(suffix).png")
+        render(questionBlock(picks: picks), scheme, to: "question-block-own-words-\(suffix).png")
+        render(questionBlock(width: 420), scheme, to: "question-block-narrow-\(suffix).png")
+        render(decisionSheet([unpickedAction]), scheme, to: "decision-sheet-one-question-\(suffix).png")
+        render(decisionSheet([unpickedAction, secondAction], picks: DecisionPicks(picks: [0: 0])), scheme, to: "decision-sheet-one-of-two-\(suffix).png")
+        render(decisionSheet([unpickedAction, secondAction], picks: DecisionPicks(picks: [0: 0, 1: 1])), scheme, to: "decision-sheet-both-answered-\(suffix).png")
         render(review(width: 640, picks: picks), scheme, to: "inbox-write-in-\(suffix).png")
         // Chips inside the question, story and options, wrapping with the text (TP-952).
         render(review(width: 1200), scheme, to: "decision-chips-wide-\(suffix).png")

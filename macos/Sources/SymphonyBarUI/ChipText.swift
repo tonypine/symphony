@@ -1,31 +1,30 @@
 import AppKit
 import SwiftUI
 import SymphonyBarCore
-import SymphonyBarUI
 
 extension EnvironmentValues {
     /// The `references` of the Inbox item whose text a `ChipText` shows.
-    var mentionReferences: [String: Reference] {
+    public var mentionReferences: [String: Reference] {
         get { self[MentionReferencesKey.self] }
         set { self[MentionReferencesKey.self] = newValue }
     }
 
     /// A click on a chip: its peek (N4) on the decision screen.
-    var openMention: OpenMentionAction {
+    public var openMention: OpenMentionAction {
         get { self[OpenMentionKey.self] }
         set { self[OpenMentionKey.self] = newValue }
     }
 
     /// ⌘-click or ⌘Return on a chip: the ticket's page (D3) or the pull request's (D15) (`MentionTarget`); nil opens it
     /// as a click.
-    var openMentionDirectly: OpenMentionAction? {
+    public var openMentionDirectly: OpenMentionAction? {
         get { self[OpenMentionDirectlyKey.self] }
         set { self[OpenMentionDirectlyKey.self] = newValue }
     }
 
     /// Scrolls the review a distance down, through its scroll view's position, to show the chip the keyboard is on
     /// (`ChipTextView.scrollReview`); nil outside the review's scroll view.
-    var scrollReview: ScrollReviewAction? {
+    public var scrollReview: ScrollReviewAction? {
         get { self[ScrollReviewKey.self] }
         set { self[ScrollReviewKey.self] = newValue }
     }
@@ -48,23 +47,27 @@ private struct ScrollReviewKey: EnvironmentKey {
 }
 
 /// What a click on a chip opens, as `OpenURLAction` is for a link.
-struct OpenMentionAction {
+public struct OpenMentionAction {
     let handler: (Mention) -> Void
 
-    func callAsFunction(_ mention: Mention) { handler(mention) }
+    public init(handler: @escaping (Mention) -> Void) { self.handler = handler }
+
+    public func callAsFunction(_ mention: Mention) { handler(mention) }
 }
 
 /// What scrolls the review a distance down, in points.
-struct ScrollReviewAction {
+public struct ScrollReviewAction {
     let handler: (CGFloat) -> Void
 
-    func callAsFunction(_ distance: CGFloat) { handler(distance) }
+    public init(handler: @escaping (CGFloat) -> Void) { self.handler = handler }
+
+    public func callAsFunction(_ distance: CGFloat) { handler(distance) }
 }
 
 /// A paragraph of an Inbox item's text in native Mac text, each ticket and pull request it mentions a chip (N1) with
 /// a popover (N2, N3): one `ChipTextView` that wraps in its pane like a `Text` (DD-5). The mentions are found by the
 /// item's `references`, which the review puts in the environment.
-struct ChipText: View {
+public struct ChipText: View {
     let text: String
     /// A bold lead before the text: "If you don't answer:".
     var lead: String?
@@ -78,7 +81,15 @@ struct ChipText: View {
     /// True while the window has a sheet over it: the paragraph is drawn as that image too, so it dims with the window.
     @State private var covered = false
 
-    var body: some View {
+    public init(text: String, lead: String? = nil, font: NSFont = DesignTokens.TypeStyle.body.nsFont, color: NSColor = .labelColor, selectable: Bool = true) {
+        self.text = text
+        self.lead = lead
+        self.font = font
+        self.color = color
+        self.selectable = selectable
+    }
+
+    public var body: some View {
         if let content = ChipTextContent.chips(text, references: references, lead: lead) {
             let style = ChipTextStyle(font: font, color: color, selectable: selectable)
             // An AppKit view gives SwiftUI no text baselines, so they come from TextKit's line for the font.
@@ -218,7 +229,7 @@ private struct ChipTextSizing: Layout {
 extension View {
     /// Keeps `covered` true while the view's window has a sheet over it (N4's peek, C17). SwiftUI dims the window behind
     /// a sheet in its own drawing, which an AppKit view draws above, so an AppKit view is drawn by SwiftUI meanwhile.
-    func sheetCover(_ covered: Binding<Bool>) -> some View {
+    public func sheetCover(_ covered: Binding<Bool>) -> some View {
         modifier(SheetCoverModifier(covered: covered))
     }
 }
