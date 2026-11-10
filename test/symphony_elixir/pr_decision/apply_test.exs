@@ -883,6 +883,17 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert SymphonyElixir.Pauses.paused?({:ticket, @repo_key, @issue_id})
     end
 
+    test "two ticks on the same head record one rule.action: the pause's, never the wait's own (R14a)" do
+      action = action("R14a", :wait_for_competitors, args: %{prs: [@leader], step_behind: false})
+      assert %{outcome: :applied} = Apply.apply(action, ctx(:qa))
+      applied = [%{head_sha: "head-1", rule: "R14a", kind: :wait_for_competitors, at: @now}]
+      assert %{outcome: :applied} = Apply.apply(action, ctx(:qa, applied: applied))
+
+      rule_actions = SymphonyElixir.TicketEvents.query(@issue_id, types: ["rule.action"])
+      assert length(rule_actions) <= 1
+      refute Enum.any?(rule_actions, &(&1.payload.rule == "PR watcher R14a"))
+    end
+
     test "applies again on a head it waited on before, and fails when the pause can't be set" do
       action = action("R14a", :wait_for_competitors, args: %{prs: [@leader], step_behind: false})
       applied = [%{head_sha: "head-1", rule: "R14a", kind: :wait_for_competitors, at: @now}]

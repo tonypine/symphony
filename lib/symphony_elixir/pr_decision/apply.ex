@@ -289,7 +289,8 @@ defmodule SymphonyElixir.PrDecision.Apply do
   end
 
   # The action's `rule.action`: what it did, or nothing when an outcome did nothing of its own (a
-  # fix ticket the self-heal lane filed, which records its own, or a red backstop with nothing to do).
+  # fix ticket the self-heal lane filed, which records its own, a red backstop with nothing to do, or
+  # a wait on competitors, whose pause records its own).
   defp record_rule_action(nil, _action, _applied, _ctx), do: :ok
 
   defp record_rule_action(rule_action, action, applied, ctx),
@@ -457,7 +458,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
     with :ok <- disarm_in_merging(ctx, :conflict),
          {:ok, links} <- Competitors.wait(ctx.issue, prs, step_behind, opts) do
-      {:ok, %{links: links}}
+      # The wait comes back on every read while it lasts: the blocked-by pause it sets records the
+      # rule's `paused` action once, when a reason is new, so the wait records none of its own.
+      {:ok, %{links: links, rule_action: nil}}
     end
   end
 
