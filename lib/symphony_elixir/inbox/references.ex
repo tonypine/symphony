@@ -467,7 +467,7 @@ defmodule SymphonyElixir.Inbox.References do
   defp context(item, record, ctx) do
     %{
       parent: record.parent,
-      pull_request: own_pull_request(record_pull_request(record), item, ctx),
+      pull_request: own_pull_request(record, item, ctx),
       blocked_by: for(%{identifier: identifier} = blocker <- record.blockers, is_binary(identifier), do: link(identifier, blocker.state, ctx)),
       blocks: for(other <- ctx.records, blocks?(other, record), do: %{identifier: other.issue_identifier, title: other.title, state: other.phase}),
       related: [],
@@ -484,16 +484,30 @@ defmodule SymphonyElixir.Inbox.References do
       Enum.any?(other.blockers, &((is_binary(&1.id) and &1.id == record.issue_id) or (is_binary(&1.identifier) and &1.identifier == record.issue_identifier)))
   end
 
-  defp own_pull_request(nil, _item, _ctx), do: nil
+  defp own_pull_request(record, item, ctx) do
+    case record_pull_request(record) do
+      nil ->
+        nil
 
-  defp own_pull_request(url, item, ctx) do
-    %{
-      number: pull_request_number(url),
-      url: url,
-      checks: checks(ctx, url),
-      sent_back: item.repo_key |> ticket_verdicts(item.issue_id, ctx) |> rounds(["request_changes"])
-    }
+      url ->
+        %{
+          number: pull_request_number(url),
+          url: url,
+          checks: checks(ctx, url),
+          sent_back: item.repo_key |> ticket_verdicts(item.issue_id, ctx) |> rounds(["request_changes"]),
+          review: review_word(record),
+          failing_check: failing_check(record)
+        }
+    end
   end
+
+  # The review's state and the check that is red, for the context card to say side by side.
+  defp review_word(%{pr_watch: %{facts: %{phase: :code_review, run: :active}}}), do: "reviewing"
+  defp review_word(%{pr_watch: %{facts: %{phase: :code_review, review: :approved}}}), do: "approved"
+  defp review_word(_record), do: nil
+
+  defp failing_check(%{pr_watch: %{facts: %{ci: :red, failing_check: check}}}), do: check
+  defp failing_check(_record), do: nil
 
   # The answers the ticket was given, newest first: a withdrawn Question was never answered.
   defp earlier_decisions(record) do

@@ -85,9 +85,9 @@ defmodule SymphonyElixir.PrWatch.ParityTest do
     end
   end
 
-  test "a check_run failure delivery moves a Code Review ticket to CI Fix within one confirm read; with deliveries off, within one poll interval" do
+  test "a check_run failure delivery moves a QA ticket to CI Fix within one confirm read; with deliveries off, within one poll interval" do
     fixture = %{
-      tickets: [{"1", "Code Review", red()}],
+      tickets: [{"1", "QA", red()}],
       steps: [{:github, [check_failed("1", "head-1-1")], []}]
     }
 
@@ -109,7 +109,7 @@ defmodule SymphonyElixir.PrWatch.ParityTest do
 
   test "a push to main re-reads every watched PR on main, 1 s apart, and a newly DIRTY one goes to CI Fix" do
     fixture = %{
-      tickets: [{"1", "Code Review", []}, {"2", "QA", []}, {"3", "Code Review", base_ref: "release"}],
+      tickets: [{"1", "QA", []}, {"2", "QA", []}, {"3", "QA", base_ref: "release"}],
       steps: [{:github, [push()], [{"2", mergeable: :dirty}]}]
     }
 
@@ -117,7 +117,7 @@ defmodule SymphonyElixir.PrWatch.ParityTest do
 
     assert delivered.elapsed_ms == [2_000]
     assert Parity.state("2") == "CI Fix"
-    assert Parity.state("1") == "Code Review"
+    assert Parity.state("1") == "QA"
     assert %{source: :webhook, facts: %{mergeable: :clean}} = Parity.watch("1")
     # The push named no PR on another base: the full read that PR 2's conflict set off reads it unpatched.
     assert %{delivered_at: nil, facts: %{mergeable: :clean}} = Parity.watch("3")

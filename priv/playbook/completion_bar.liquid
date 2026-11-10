@@ -11,5 +11,5 @@ before it, because the push is what moves the ticket on.
 - Acceptance criteria and required ticket-provided validation items are complete.
 - Validation/tests are green for the latest commit.
 - All PR review feedback has been addressed or explicitly answered, and no actionable comments remain.
-- Branch is pushed, the PR is open and linked on the issue. CI runs on the pushed head: a red head goes to `CI Fix`, and the reviewer only runs once it is green.
+- Branch is pushed, the PR is open and linked on the issue. The reviewer starts on the pushed head at once, with CI running beside it: a red head goes to `CI Fix` after an approve.
 - The review brief is left before the push (see `Review brief`): it links the PR and says what to check. On a later handoff (review comments addressed, a rework verdict answered), the existing brief is edited in place with `linear_update_comment`, with `What changed since the last brief` filled in; never a second one.
