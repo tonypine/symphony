@@ -5571,7 +5571,11 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       #!/bin/sh
       case " $* " in
         *" -C #{primary_repo} worktree add "*)
-          mkdir #{adding} 2>/dev/null || echo overlap >> #{overlaps}
+          # A git that re-runs itself for the same add (a child inheriting this env) is the
+          # same add, not a second one.
+          if [ -n "${SYMP_TEST_ADD_ACTIVE:-}" ]; then exec #{System.find_executable("git")} "$@"; fi
+          export SYMP_TEST_ADD_ACTIVE=1
+          mkdir #{adding} 2>/dev/null || echo "overlap pid=$$ args=$*" >> #{overlaps}
           #{System.find_executable("git")} "$@"
           status=$?
           sleep 0.2
@@ -5605,7 +5609,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         assert String.trim(git!(workspace_path, ["rev-parse", "--abbrev-ref", "HEAD"])) == "auto/#{identifier}"
       end
 
-      refute File.exists?(overlaps)
+      refute File.exists?(overlaps), if(File.exists?(overlaps), do: File.read!(overlaps), else: "")
       refute File.exists?(Path.join([primary_repo, ".git", "symphony-worktree-add.lock"]))
     end)
   end

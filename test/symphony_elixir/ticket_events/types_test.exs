@@ -9,10 +9,15 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     step.started step.completed evidence finding.recorded finding.resolved finding.confirmed checklist.answered
     ticket.cancelled ticket.moved drift.detected drift.reverted drift.revert_failed
     pause.set pause.reason_added pause.reason_cleared pause.cleared
-    question.asked question.answered question.withdrawn question.reopened question.not_asked park.backfilled workspace.synced workspace.rebuilt workspace.removed situation.changed note.read note
+    question.asked question.answered question.withdrawn question.reopened question.not_asked park.backfilled workspace.synced workspace.rebuilt workspace.removed situation.changed rule.action ticket.filed note.read note
   )
 
   describe "catalog/0" do
+    test "a rule action names one of the actions a rule may take" do
+      assert "paused" in Types.rule_actions()
+      assert "lifted_pause" in Types.rule_actions()
+    end
+
     test "has every type, each with a schema, a writer list, run kinds and an idempotency rule" do
       catalog = Types.catalog()
 

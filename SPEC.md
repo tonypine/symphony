@@ -553,8 +553,11 @@ runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirme
 newest-known-head rule compared, the one that won and what it did), `workspace.rebuilt` (machine
 only: a workspace made again, why, the heads compared and the one it started on),
 `workspace.removed` (machine only: Symphony removed a ticket's workspace, for the age GC, a Stop, a
-terminal state or another cleanup), `note.read` (machine only: the first run whose prompt carried a
-person's note, keyed by the note) and `note`.
+terminal state or another cleanup), `rule.action` (machine only: a rule of Symphony's acted on the
+ticket, with the rule's name and what it did), `ticket.filed` (machine only: a ticket split off from
+this one, or an epic review's follow-up), `note.read` (machine only: the first run whose prompt carried a
+person's note, keyed by the note) and `note`. `GET /api/v1/events` reads every ticket's events, and
+Symphony's own stream, newest first, with the notable rule set (`docs/control-api.md`).
 
 A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)
 and its `mode`: `machine` (a `command` Symphony runs), `orchestrated` (an agent turn Symphony drives

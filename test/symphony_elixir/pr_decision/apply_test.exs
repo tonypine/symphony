@@ -641,6 +641,29 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     end
   end
 
+  describe "file_fix_ticket's rule.action" do
+    defp watcher_rule_actions, do: SymphonyElixir.TicketEvents.query(@issue_id, types: ["rule.action"])
+
+    test "a filed fix ticket leaves its one rule.action to the lane; an escalation records a question; a retry or a hold records nothing" do
+      action = action("R20", :file_fix_ticket, args: %{check: "specs"})
+      attempts = %{Attempts.new() | red: 10}
+
+      for result <- [:filed, :retry, :held] do
+        Process.put(:heal_result, result)
+        capture_log(fn -> assert %{outcome: :applied} = Apply.apply(action, ctx(:qa, attempts: attempts)) end)
+      end
+
+      assert watcher_rule_actions() == []
+
+      Process.put(:heal_result, :escalated)
+      capture_log(fn -> assert %{outcome: :applied} = Apply.apply(action, ctx(:qa, attempts: attempts)) end)
+
+      assert [%{payload: %{rule: "PR watcher R20", action: "asked", text: text}}] = watcher_rule_actions()
+      assert text =~ "a person decides"
+      refute Enum.any?(watcher_rule_actions(), &(&1.payload.action == "filed_ticket"))
+    end
+  end
+
   describe "the same failure 3 runs in a row (D15 (c))" do
     test "the backstop's outcome names the streak, and its signature is the one the streak compares" do
       failure = %{check: "specs", error: "** (MatchError) no match of right hand side", head_sha: "head-1"}
@@ -858,6 +881,17 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       log = capture_log(fn -> assert %{outcome: :applied, links: [%{linked: false}]} = Apply.apply(action, ctx(:qa)) end)
       assert log =~ "could not link TP-1 as a blocker"
       assert SymphonyElixir.Pauses.paused?({:ticket, @repo_key, @issue_id})
+    end
+
+    test "two ticks on the same head record one rule.action: the pause's, never the wait's own (R14a)" do
+      action = action("R14a", :wait_for_competitors, args: %{prs: [@leader], step_behind: false})
+      assert %{outcome: :applied} = Apply.apply(action, ctx(:qa))
+      applied = [%{head_sha: "head-1", rule: "R14a", kind: :wait_for_competitors, at: @now}]
+      assert %{outcome: :applied} = Apply.apply(action, ctx(:qa, applied: applied))
+
+      rule_actions = SymphonyElixir.TicketEvents.query(@issue_id, types: ["rule.action"])
+      assert length(rule_actions) <= 1
+      refute Enum.any?(rule_actions, &(&1.payload.rule == "PR watcher R14a"))
     end
 
     test "applies again on a head it waited on before, and fails when the pause can't be set" do

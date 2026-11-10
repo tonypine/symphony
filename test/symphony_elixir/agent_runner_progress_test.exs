@@ -490,6 +490,10 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
     assert_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue in Backlog" <> _note}
     assert_signal("blocked", %{to: "Backlog", reason: "idle_park", from: "In Progress"})
+
+    # The park is the idle park rule's action on the ticket.
+    assert [%{rule: "Idle park", action: "parked", text: "2 turns in In Progress changed nothing, so it was parked in Backlog"}] =
+             "issue-progress" |> SymphonyElixir.TicketEvents.query(types: ["rule.action"]) |> Enum.map(& &1.payload) |> Enum.filter(&(&1.rule == "Idle park"))
   end
 
   describe "a parked ticket (TP-1326)" do
