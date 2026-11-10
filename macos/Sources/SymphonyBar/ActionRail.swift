@@ -181,9 +181,39 @@ private struct RailMoreList: View {
 extension View {
     /// The pointer says not allowed over a control that can't act.
     func notAllowedPointer(_ notAllowed: Bool) -> some View {
-        onHover { inside in
-            guard notAllowed else { return }
-            if inside { NSCursor.operationNotAllowed.push() } else { NSCursor.pop() }
+        modifier(NotAllowedPointer(notAllowed: notAllowed))
+    }
+}
+
+/// Pushes the not-allowed cursor while the pointer is over a refused control, and pops exactly what it pushed: on
+/// hover-exit whatever the read says now, when a new read allows the move under the pointer, and when the control
+/// leaves the view tree without a hover-exit (a move changing place on the rail).
+private struct NotAllowedPointer: ViewModifier {
+    let notAllowed: Bool
+    @State private var hovering = false
+    @State private var pushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { inside in
+                hovering = inside
+                update()
+            }
+            .onChange(of: notAllowed) { update() }
+            .onDisappear {
+                hovering = false
+                update()
+            }
+    }
+
+    private func update() {
+        let want = hovering && notAllowed
+        if want, !pushed {
+            NSCursor.operationNotAllowed.push()
+            pushed = true
+        } else if !want, pushed {
+            NSCursor.pop()
+            pushed = false
         }
     }
 }
