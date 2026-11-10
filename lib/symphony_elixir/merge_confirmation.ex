@@ -144,6 +144,17 @@ defmodule SymphonyElixir.MergeConfirmation do
     end
   end
 
+  @doc """
+  The number (from 1) of the option among `labels` a recorded answer picks. An answer that carries
+  its pick as data (`:option`, the label or number the Director picked beside their own words) is
+  read by that pick alone; only an answer with no pick (a reply in Linear, a plain string) is read
+  from its text, as `picked_option/2` reads it. nil when it picks none.
+  """
+  @spec picked_answer([String.t()], map() | String.t() | nil) :: pos_integer() | nil
+  def picked_answer(labels, %{option: option}) when is_binary(option) and option != "", do: picked_option(labels, [option])
+  def picked_answer(labels, %{} = answer), do: picked_option(labels, List.wrap(Map.get(answer, :answer)))
+  def picked_answer(labels, answer), do: picked_option(labels, List.wrap(answer))
+
   # The options an answer picks: the one its number or label opens with.
   defp picks(answer, options) when is_binary(answer) do
     head = answer |> String.replace(~r/[*_`>#]/, "") |> String.trim() |> String.downcase()

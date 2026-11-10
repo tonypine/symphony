@@ -944,7 +944,9 @@ defmodule SymphonyElixir.PromptBuilder do
   defp ends?(ended, request), do: payload(ended, :request) == request.id
 
   defp summary_pick(%Event{type: type} = answer) when type in ["decision.recorded", "question.answered"] do
-    case MergeConfirmation.picked_option([@go_on, @cancel], [payload(answer, :answer) || ""]) do
+    picked = %{option: payload(answer, :option), answer: payload(answer, :answer)}
+
+    case MergeConfirmation.picked_answer([@go_on, @cancel], picked) do
       1 -> :go_on
       2 -> :cancel
       nil -> nil

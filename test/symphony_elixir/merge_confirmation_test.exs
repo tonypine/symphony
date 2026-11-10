@@ -250,6 +250,17 @@ defmodule SymphonyElixir.MergeConfirmationTest do
       assert MergeConfirmation.picked_option(labels, []) == nil
     end
 
+    test "picked_answer reads a recorded answer's pick first, and its text only when it carries no pick" do
+      labels = ["Keep retrying", "Wait"]
+      assert MergeConfirmation.picked_answer(labels, %{answer: "GitHub is short of machines", option: "Keep retrying"}) == 1
+      assert MergeConfirmation.picked_answer(labels, %{answer: "Keep retrying", option: "Wait"}) == 2
+      assert MergeConfirmation.picked_answer(labels, %{answer: "Wait", option: ""}) == 2
+      assert MergeConfirmation.picked_answer(labels, %{answer: "GitHub is short of machines"}) == nil
+      assert MergeConfirmation.picked_answer(labels, %{option: nil}) == nil
+      assert MergeConfirmation.picked_answer(labels, "1") == 1
+      assert MergeConfirmation.picked_answer(labels, nil) == nil
+    end
+
     test "nothing is picked by free text, a longer word, conflicting answers or no hold" do
       assert MergeConfirmation.picked(ci_hold(), ["Neither: leave it alone", nil]) == :none
       assert MergeConfirmation.picked(ci_hold(), ["12 is the count"]) == :none

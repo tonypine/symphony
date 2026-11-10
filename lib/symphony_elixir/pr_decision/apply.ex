@@ -908,8 +908,8 @@ defmodule SymphonyElixir.PrDecision.Apply do
   """
   @spec base_answer([map()], Issue.t(), map()) :: :accept | :put_back | nil
   def base_answer(decisions, %Issue{} = issue, read) do
-    with %{answer: answer} <- Decisions.find(decisions, base_title(issue, read), nil) do
-      case MergeConfirmation.picked_option([@put_back, @accept_base], [answer]) do
+    with %{answer: _answer} = decision <- Decisions.find(decisions, base_title(issue, read), nil) do
+      case MergeConfirmation.picked_answer([@put_back, @accept_base], decision) do
         1 -> :put_back
         2 -> :accept
         nil -> nil
@@ -970,13 +970,14 @@ defmodule SymphonyElixir.PrDecision.Apply do
   end
 
   @doc """
-  What a person's answer to R17 picks, read from the recorded answer text (an option's number or
-  label, as `SymphonyElixir.MergeConfirmation.picked_option/2` reads it): `:proceed`, `:rerun`,
-  `:rework`, or `:other` for an answer that picks none.
+  What a person's answer to R17 picks: `:proceed`, `:rerun`, `:rework`, or `:other` for an answer
+  that picks none. A recorded answer that carries its pick (`option`, the option the Director
+  picked beside their own words) is read by the pick; one with no pick (a reply in Linear, or a
+  plain text) by its number or label, as `SymphonyElixir.MergeConfirmation.picked_answer/2` reads it.
   """
-  @spec unreported_answer(String.t() | nil) :: :proceed | :rerun | :rework | :other
+  @spec unreported_answer(map() | String.t() | nil) :: :proceed | :rerun | :rework | :other
   def unreported_answer(answer) do
-    case MergeConfirmation.picked_option([@proceed, @rerun, @fix_in_rework], List.wrap(answer)) do
+    case MergeConfirmation.picked_answer([@proceed, @rerun, @fix_in_rework], answer) do
       1 -> :proceed
       2 -> :rerun
       3 -> :rework
@@ -1018,12 +1019,14 @@ defmodule SymphonyElixir.PrDecision.Apply do
   end
 
   @doc """
-  What a person's answer to R19a picks, read from the recorded answer text (an option's number or
-  label): `:rerun` (keep retrying), `:wait`, or `:other` for an answer that picks neither.
+  What a person's answer to R19a picks: `:rerun` (keep retrying), `:wait`, or `:other` for an
+  answer that picks neither. A recorded answer that carries its pick (`option`) is read by the
+  pick, whatever words came with it; one with no pick by its number or label, as
+  `unreported_answer/1` reads R17's.
   """
-  @spec cancelled_answer(String.t() | nil) :: :rerun | :wait | :other
+  @spec cancelled_answer(map() | String.t() | nil) :: :rerun | :wait | :other
   def cancelled_answer(answer) do
-    case MergeConfirmation.picked_option([@keep_retrying, @wait], List.wrap(answer)) do
+    case MergeConfirmation.picked_answer([@keep_retrying, @wait], answer) do
       1 -> :rerun
       2 -> :wait
       nil -> :other

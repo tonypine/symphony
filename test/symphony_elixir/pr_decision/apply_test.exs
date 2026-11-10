@@ -808,6 +808,18 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert deciding() == nil
     end
 
+    test "a recorded answer that carries its pick is read by the pick, whatever the words; one with none by its text" do
+      words = "GitHub macOS runner starvation; keep rerunning."
+      assert Apply.cancelled_answer(%{answer: words, option: "Keep retrying"}) == :rerun
+      assert Apply.cancelled_answer(%{answer: "Keep retrying once GitHub has machines", option: "Wait"}) == :wait
+      assert Apply.cancelled_answer(%{answer: words, option: nil}) == :other
+      assert Apply.cancelled_answer(%{answer: "Keep retrying"}) == :rerun
+
+      assert Apply.unreported_answer(%{answer: "a lost runner, try again", option: "Rerun the checks"}) == :rerun
+      assert Apply.unreported_answer(%{answer: "Rerun the checks won't help", option: "Proceed without it for this PR"}) == :proceed
+      assert Apply.unreported_answer(%{answer: "Fix the workflow in Rework", option: ""}) == :rework
+    end
+
     test "an answer to R17 picks an option by its number or label, or none" do
       assert Apply.unreported_answer("1") == :proceed
       assert Apply.unreported_answer("Proceed without it for this PR") == :proceed
@@ -1072,6 +1084,8 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert Apply.base_answer([], issue, read) == nil
       assert Apply.base_answer([decision.("PR \\#7 of TP-7 merges into release, not main", "Put the base back")], issue, read) == :put_back
       assert Apply.base_answer([decision.("PR #7 of TP-7 merges into release, not main", "2")], issue, read) == :accept
+      picked = Map.put(decision.("PR #7 of TP-7 merges into release, not main", "Put the base back, please"), :option, "Accept the new base")
+      assert Apply.base_answer([picked], issue, read) == :accept
       assert Apply.base_answer([decision.("PR #7 of TP-7 merges into release, not main", "Whatever you think")], issue, read) == nil
       assert Apply.base_answer([decision.("PR #7 of TP-7 merges into hotfix, not main", "Accept the new base")], issue, read) == nil
       assert Apply.base_answer([decision.("The pull request of TP-7 merges into release, not main", "1")], issue, %{read | pr_url: nil}) == :put_back

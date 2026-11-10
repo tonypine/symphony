@@ -41,6 +41,10 @@ defmodule SymphonyElixir.HumanActions.Request do
   `## Action withdrawn`, which `linear_withdraw_human_action` posts with its reason.
   """
 
+  alias SymphonyElixir.Questions
+
+  # An answer that is only an option's number: "2" or "option 2".
+  @number_only ~r/\A\s*(?:option\s*)?\d+\s*\z/i
   @decision_heading "## Decision needed:"
   @action_heading "## Action needed:"
   @withdrawn_heading "## Action withdrawn"
@@ -145,19 +149,48 @@ defmodule SymphonyElixir.HumanActions.Request do
   reason (`render_withdrawal/1`). nil while the question is open.
   """
   @spec render_reply(map()) :: String.t() | nil
-  def render_reply(%{state: :answered, question: text, answer: %{text: answer}}), do: render_decision([%{question: text, answer: answer}])
+  def render_reply(%{state: :answered, question: text, answer: %{text: answer}} = question),
+    do: render_decision([%{question: text, answer: answer, option: Questions.option_label(question)}])
+
   def render_reply(%{state: :withdrawn, withdrawn: %{reason: reason}}), do: render_withdrawal(reason)
   def render_reply(_question), do: nil
 
-  @doc "Renders the reply a decision posts under its request: each question with the option picked."
-  @spec render_decision([%{question: String.t(), answer: String.t()}]) :: String.t()
+  @doc """
+  Renders the reply a decision posts under its request: each question with the option picked. A
+  pick given with the person's own words (`:option` beside `:answer`) names the option before the
+  words, so the reply reads as the pick it is: `Keep retrying: GitHub is short of machines.`
+  """
+  @typedoc "A decision's pick: the question, the answer as given and the option picked beside it."
+  @type decision_pick :: %{
+          required(:question) => String.t(),
+          required(:answer) => String.t(),
+          optional(:option) => String.t() | nil
+        }
+
+  @spec render_decision([decision_pick()]) :: String.t()
   def render_decision(picks) when is_list(picks) do
     lines =
       picks
       |> Enum.with_index(1)
-      |> Enum.map(fn {%{question: question, answer: answer}, index} -> "#{index}. #{String.trim(question)}\n   **Decision:** #{String.trim(answer)}" end)
+      |> Enum.map(fn {%{question: question} = pick, index} -> "#{index}. #{String.trim(question)}\n   **Decision:** #{decision_text(pick)}" end)
 
     Enum.join(["Decision from the Director:" | lines], "\n\n")
+  end
+
+  # The option first, then the words given with it: the option alone for an answer that is only its
+  # number, the words alone when they already open with it.
+  defp decision_text(%{answer: answer} = pick) do
+    decision_text(String.trim(answer), pick |> Map.get(:option) |> blank_to_nil())
+  end
+
+  defp decision_text(words, nil), do: words
+
+  defp decision_text(words, option) do
+    cond do
+      words =~ @number_only -> option
+      String.starts_with?(String.downcase(words), String.downcase(option)) -> words
+      true -> "#{option}: #{words}"
+    end
   end
 
   defp render_request(%{title: title, question: question, why: why, options: options} = request, closing) do
@@ -410,6 +443,8 @@ defmodule SymphonyElixir.HumanActions.Request do
   defp present(value), do: value
 
   defp blank?(value), do: not is_binary(value) or String.trim(value) == ""
+
+  defp blank_to_nil(value), do: if(blank?(value), do: nil, else: String.trim(value))
 
   defp normalize(state), do: state |> String.trim() |> String.downcase()
 end

@@ -638,15 +638,16 @@ defmodule SymphonyElixir.ReleaseBuild do
 
     with %{question: %{title: title, prior: prior, issue_id: issue_id} = question} <- record,
          false <- answered?(record, question.kind, question.attempt),
-         %{answer: answer} <- record |> decisions(issue_id) |> Enum.filter(&Apply.same_title?(&1, title)) |> Enum.at(prior) do
+         %{answer: _text} = answer <- record |> decisions(issue_id) |> Enum.filter(&Apply.same_title?(&1, title)) |> Enum.at(prior) do
       apply_answer(record, question, pick(question.kind, answer), run)
     else
       _unanswered -> record
     end
   end
 
-  defp pick(:cancelled, answer), do: MergeConfirmation.picked_option([@keep_retrying, @wait], List.wrap(answer))
-  defp pick(:failed, answer), do: MergeConfirmation.picked_option([@rerun_build, @wait_for_fix], List.wrap(answer))
+  # A recorded answer's pick, else (a reply in Linear) the option its text names.
+  defp pick(:cancelled, answer), do: MergeConfirmation.picked_answer([@keep_retrying, @wait], answer)
+  defp pick(:failed, answer), do: MergeConfirmation.picked_answer([@rerun_build, @wait_for_fix], answer)
 
   defp apply_answer(record, %{kind: :cancelled}, 1, _run), do: %{record | reruns: 0, question: nil}
 
