@@ -253,6 +253,17 @@ GitHub or Linear in QA:
     Rework, …" with **Open PR**. The Inbox lists none of TP-704, TP-707 and TP-709.
   - VoiceOver: the card's summary reads as one element (the status word, the line, who acts
     next, since when, Updated), each action row as one, and each button by its title.
+- **A held ticket in the silent-wait report (TP-1175):** pass
+  `macos/Tests/Fixtures/director-app/pr-watch-no-progress` as `api_fixtures`. It is `pr-watch`
+  with TP-702 held in Rework by an idle run instead of waiting silently. Overview's row reads
+  "TP-702 in Rework: its last runs changed nothing, so it stays paused until its PR changes or
+  you answer." with its age, 24 min, and the buttons **Check Now** and **Open Ticket**.
+- **Waiting on CI in the Inbox (TP-1175):** pass
+  `macos/Tests/Fixtures/director-app/inbox-waiting-ci` as `api_fixtures`. It is `inbox` with
+  SHOP-370, a CI Fix ticket waiting on its checks. The Inbox lists it last, under **Waiting on
+  CI**, with an hourglass, and the sidebar badge still counts 5. Its review shows the card
+  **What it waits on**: "Checks are running on PR #643's head", then "It moves on by itself when
+  the checks report." Its toolbar offers only links (Open PR first), no move.
 - **File locations in a question (TP-1386):** pass
   `macos/Tests/Fixtures/director-app/inbox-file-location` as `api_fixtures`. It is
   `inbox-decision` with TP-892's decision pointing at files in its workspace. In the Inbox,

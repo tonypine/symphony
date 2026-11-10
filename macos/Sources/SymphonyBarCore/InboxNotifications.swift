@@ -24,7 +24,7 @@ public enum NoticeKind: String, CaseIterable, Equatable {
         case .action?: self = .action
         case .clarify?: self = .clarify
         case .blocked?: self = .blocked
-        case nil: return nil
+        case .waiting?, nil: return nil
         }
     }
 }

@@ -99,12 +99,34 @@ defmodule SymphonyElixirWeb.WatchPayloadTest do
     assert summary.(busy, %{github: {:rate_limited, nil}}) ==
              "PR #7 a draft · CI red · conflicts with the base · auto-merge on · run active · Blocked hold · GitHub rate limited"
 
+    # TP-1204: the review's state, beside CI's.
+    red_head = [phase: :code_review, pr: :open, pr_number: 42, ci: :red, mergeable: :clean]
+    assert summary.(red_head ++ [run: :active], %{}) == "PR #42 open · CI red · no conflict · reviewing"
+    assert summary.(red_head ++ [review: :approved], %{}) == "PR #42 open · CI red · no conflict · approved"
+
     # No decision yet, nor a phase from a move.
     assert %{rule: nil, action: nil, owner: nil, since: nil, phase: "qa", actions: [], silent: nil, facts: %{"github" => "rate_limited"}} =
              record(%{facts: Facts.new(phase: :qa), stay: nil, decision: nil, actions: [], silent: nil, github: {:rate_limited, @at}, rate_limit: nil})
              |> WatchPayload.watch()
              |> json()
              |> then(fn block -> Map.new(block, fn {key, value} -> {String.to_atom(key), value} end) end)
+  end
+
+  test "a held ticket's silent wait with no watcher record gives its record's phase and no PR or rule (TP-1175)" do
+    assert %{"phase" => "in_progress", "pr_url" => nil, "rule" => nil, "bound" => "no_progress"} =
+             json(
+               WatchPayload.silent_wait(%{
+                 issue_id: "issue-42",
+                 issue_identifier: "TP-42",
+                 repo_key: "default",
+                 phase: "in_progress",
+                 pr_url: nil,
+                 since: @at,
+                 rule: nil,
+                 bound: "no_progress",
+                 reason: "No progress"
+               })
+             )
   end
 
   test "a silent wait and the rate limit, as the state API lists them" do

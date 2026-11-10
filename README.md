@@ -96,7 +96,7 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
 - **Scoped agent tools** — current-issue Linear updates, GitHub PR evidence, and attachment handling.
 - **Quality gate** — optionally scores issue clarity before dispatch so unclear work is held back.
 - **Ticket state machine** — every repo runs one ticket flow: `In Progress` → `Code Review` (a
-  reviewer agent, on a green head) → `QA` (a journey-driven QA agent) → `Merging` → `Done`, with
+  reviewer agent, as soon as the PR is open) → `QA` (a journey-driven QA agent) → `Merging` → `Done`, with
   `Rework` continuing the same PR, `CI Fix` repairing red heads and conflicts, and epic parents
   going `Plan Review` → `Waiting on sub-tickets` → `Epic Review`. `Blocked` and `Needs Decision`
   are labels that pause a ticket in place; a person only decides, and `Restart` from the Director
@@ -136,7 +136,7 @@ branch name Linear suggests for the ticket; a PR on a branch with any other name
   `linear_withdraw_human_action`; see `human_actions` in
   [docs/configuration.md](docs/configuration.md).
 - **Code Review** — a read-only reviewer agent (`code_review` in `symphony.yml`) judges each pull
-  request's diff against the ticket once its head is green; see
+  request's diff against the ticket as soon as the PR is open, whatever CI says; see
   [`code_review`](docs/configuration.md#code_review).
 - **QA** — the `QA` state's agent uses each PR the way a user would, with
   built-in playbooks for CLIs (`cli`), web apps in a headless browser (`web`), macOS apps through
@@ -457,7 +457,8 @@ board, and it is let go once a poll finds it closed or out of the workflow.
 section, `/api/v1/state`'s `waiting_on_you` list and the menu bar app list everything only you can
 move on, oldest first: a plan in `Plan Review`, a ticket with an open
 `linear_request_human_action` decision (and, with manual review on, a merge to confirm), and a
-ticket the quality gate holds or skipped. Each entry shows its kind, its one-line ask (the `**What to
+ticket the quality gate holds or skipped. The Inbox also lists, apart and asking nothing, a `CI Fix`
+ticket waiting on its checks. Each entry shows its kind, its one-line ask (the `**What to
 review:**` line of its `## Review brief`) and how long it has waited; the Inbox also shows the brief
 in its parts, the PR's checks and size, the request's steps or what the quality gate found. The
 menu bar icon shows a dot while the list is not empty, and the app notifies each new entry once.

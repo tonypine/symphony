@@ -1,7 +1,7 @@
 ## implementation
 
 - `ticket_events` reads this ticket's history (Symphony's ledger) and `ticket_record` adds an event to it. Symphony fills the run, phase and head; verdicts, moves, pauses and questions are Symphony's, and `ticket_record` refuses them.
-- This implementation run records `step.completed` for each delegated step as it ends it, `evidence` for every screenshot or output it attaches (the files as `artifacts`), and each walkthrough step's proof as `evidence` with `proof` (the step and the test), which `linear_record_walkthrough_proofs` records; a `note` keeps a choice worth knowing later.
+- This implementation run records the ticket's brief first, as a `brief.written` (what it does and why, and its walkthrough, in a person's words), and again at the handoff when the work changed what the ticket does; `step.completed` for each delegated step as it ends it, `evidence` for every screenshot or output it attaches (the files as `artifacts`), and each walkthrough step's proof as `evidence` with `proof` (the step and the test), which `linear_record_walkthrough_proofs` records; a `note` keeps a choice worth knowing later.
 - This run follows a step list: Symphony runs its build, checks and tests itself between turns and brings a failure back to the step it names, with the output. Run none of them yourself: write the code, record what you changed, and end the turn; the handoff step pushes.
 
 ## breakdown
@@ -12,7 +12,7 @@
 ## rework
 
 - `ticket_events` reads this ticket's history (Symphony's ledger) and `ticket_record` adds an event to it. Symphony fills the run, phase and head; verdicts, moves, pauses and questions are Symphony's, and `ticket_record` refuses them.
-- This rework run reads `ticket_events` with `open_findings: true` before it plans, records `finding.resolved` for each finding it fixes (Symphony fills the head that fixes it), `evidence` for every screenshot or output it attaches (the files as `artifacts`), `step.completed` for each delegated step and a walkthrough proof again as `evidence` with `proof` when it changes the test.
+- This rework run reads `ticket_events` with `open_findings: true` before it plans, records `finding.resolved` for each finding it fixes (Symphony fills the head that fixes it), `evidence` for every screenshot or output it attaches (the files as `artifacts`), `step.completed` for each delegated step and a walkthrough proof again as `evidence` with `proof` when it changes the test, and a new `brief.written` at the handoff when the change altered what the ticket does.
 - This run follows a step list: Symphony runs its build, checks and tests itself between turns and brings a failure back to the step it names, with the output. Run none of them yourself: write the code, record what you changed, and end the turn; the handoff step pushes.
 
 ## landing
@@ -38,7 +38,7 @@
 ## review_feedback
 
 - `ticket_events` reads this ticket's history (Symphony's ledger) and `ticket_record` adds an event to it. Symphony fills the run, phase and head; verdicts, moves, pauses and questions are Symphony's, and `ticket_record` refuses them.
-- This review-feedback run reads `ticket_events` with `open_findings: true` before it plans, records `finding.resolved` for each finding it fixes (Symphony fills the head that fixes it), `evidence` for every screenshot or output it attaches (the files as `artifacts`), `step.completed` for each delegated step and a walkthrough proof again as `evidence` with `proof` when it changes the test.
+- This review-feedback run reads `ticket_events` with `open_findings: true` before it plans, records `finding.resolved` for each finding it fixes (Symphony fills the head that fixes it), `evidence` for every screenshot or output it attaches (the files as `artifacts`), `step.completed` for each delegated step and a walkthrough proof again as `evidence` with `proof` when it changes the test, and a new `brief.written` at the handoff when the change altered what the ticket does.
 
 ## qa
 

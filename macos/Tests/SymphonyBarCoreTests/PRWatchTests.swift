@@ -109,7 +109,7 @@ final class PRWatchTests: XCTestCase {
 
     func testWaitingForCISaysOnWhichHeadWhoActsNextAndBothFixAttemptCounts() throws {
         let card = try card([
-            "phase": "code_review", "rule": "R24", "action": "wait", "owner": "ci", "clears_when": "the checks finish",
+            "phase": "qa", "rule": "R24", "action": "wait", "owner": "ci", "clears_when": "the checks finish",
             "head": "9f8e7d6c5b4a", "since": "2026-10-16T12:00:00Z", "read_at": "2026-10-16T12:04:00Z", "source": "webhook",
             "reason": "Checks are running on PR #42's head",
             "actions": [
@@ -291,7 +291,7 @@ final class PRWatchTests: XCTestCase {
     }
 
     func testTheOtherRowsSayWhatTheWatcherDoes() throws {
-        let run = try card(["rule": "R9", "action": "wait", "owner": "agent", "clears_when": "the run ends"], facts: ["run": "active"])
+        let run = try card(["phase": "qa", "rule": "R9", "action": "wait", "owner": "agent", "clears_when": "the run ends"], facts: ["run": "active"])
         XCTAssertEqual(run.headline, "A run is working on it")
         XCTAssertEqual(run.status, .working)
         XCTAssertEqual(run.next, "An agent acts next")
@@ -312,6 +312,21 @@ final class PRWatchTests: XCTestCase {
         XCTAssertEqual(fix.headline, "test failed on PR #42: CI Fix run 3 of 10")
         XCTAssertEqual(fix.word, "Fixing")
         XCTAssertEqual(try card(["action": "ci_fix", "reason": NSNull()], facts: [:]).headline, "Sent to CI Fix")
+
+        let reviewing = try card(["phase": "code_review", "rule": "R9", "owner": "agent"], facts: ["ci": "red", "failing_check": "macos build", "run": "active"])
+        XCTAssertEqual(reviewing.word, "Reviewing")
+        XCTAssertEqual(reviewing.headline, "Reviewing; CI red on macos build")
+        XCTAssertEqual(fact(reviewing, "Review"), "reviewing")
+        XCTAssertEqual(fact(reviewing, "Checks"), "macos build failing")
+        let reviewWords = [("pending", "checks still running"), ("green", "checks passing"), ("none", "no CI"), ("required_missing", "a required check has not reported")]
+        for (ci, words) in reviewWords {
+            XCTAssertEqual(try card(["phase": "code_review", "rule": "R9"], facts: ["ci": ci, "run": "active"]).headline, "Reviewing; \(words)")
+        }
+        XCTAssertEqual(try card(["phase": "code_review", "rule": "R9"], facts: ["ci": "red"]).headline, "Reviewing; CI red")
+        XCTAssertEqual(try card(["phase": "code_review", "rule": "R9"], facts: [:]).headline, "Reviewing")
+        XCTAssertEqual(fact(try card(["phase": "code_review", "rule": "R22"], facts: ["ci": "red", "review": "approved"]), "Review"), "approved; CI's state comes next")
+        XCTAssertEqual(fact(try card(["phase": "code_review", "rule": "R27"], facts: ["ci": "pending", "review": "pending"]), "Review"), "not started")
+        XCTAssertNil(fact(try card(["phase": "qa", "rule": "R27"], facts: ["ci": "green"]), "Review"))
 
         let dispatch = try card(["rule": "R27", "action": "dispatch", "owner": "symphony", "reason": "The head is green, so the reviewer runs"], facts: [:])
         XCTAssertEqual(dispatch.headline, "The head is green, so the reviewer runs")
@@ -421,6 +436,7 @@ final class PRWatchTests: XCTestCase {
         XCTAssertEqual(PRWatchCard.silentSentence(bound: nil), "nothing is running and nothing says why")
         XCTAssertEqual(PRWatchCard.silentSentence(bound: "ci.merging_wait_timeout_ms"), "CI has been running longer than the wait allows, and nothing says why")
         XCTAssertEqual(PRWatchCard.silentSentence(bound: "rate_limit_reset"), "GitHub's request limit should have reset by now, and nothing has read the PR since")
+        XCTAssertEqual(PRWatchCard.silentSentence(bound: "no_progress"), "its last runs changed nothing, so it stays paused until its PR changes or you answer")
     }
 
     // MARK: - The ticket page
@@ -703,6 +719,15 @@ final class PRWatchTests: XCTestCase {
         XCTAssertEqual(closed.headline, "PR #709 was closed without merging. Sent back to Rework, where the next run opens a new PR from main.")
         XCTAssertTrue(closed.buttons.contains(.openPR(URL(string: "https://github.com/tonypine/symphony/pull/709")!)))
         XCTAssertFalse(inbox.items.contains { ["TP-704", "TP-707", "TP-709"].contains($0.identifier) })
+    }
+
+    func testTheNoProgressFixtureListsTheHeldTicketWithItsReasonAndAge() throws {
+        let state = try Data(contentsOf: fixtureDirectory("pr-watch-no-progress").appendingPathComponent("state.json"))
+        let overview = Overview(state: try XCTUnwrap(OverviewState.decode(state)), now: reference)
+        let held = try XCTUnwrap(overview.problems.first { $0.sentence.hasPrefix("TP-702 ") })
+        XCTAssertEqual(held.sentence, "TP-702 in Rework: its last runs changed nothing, so it stays paused until its PR changes or you answer.")
+        XCTAssertEqual(held.ageSeconds, 1452)
+        XCTAssertEqual(WatchState.decode(state).silentWaits.first?.reason, "No progress: the last 2 turns in Rework made no new commit and no state change")
     }
 
     // MARK: - Helpers

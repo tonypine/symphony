@@ -1010,8 +1010,8 @@ extension TicketPage {
     /// its latest review brief and the decisions answered on it, each ticket and pull request they mention a chip
     /// (N1) read from the item's `references`.
     public struct Brief: Equatable {
-        /// The brief's card: "Review brief", "Your decision", "Action", "What the quality gate found" or "Why it is
-        /// blocked".
+        /// The brief's card: "Review brief", "Your decision", "Action", "What the quality gate found", "Why it is
+        /// blocked" or "What it waits on".
         public var title: String
         /// The ticket's Symphony status line, from its own reference; nil when the item doesn't resolve itself.
         public var summary: String?
@@ -1036,6 +1036,9 @@ extension TicketPage {
                 paragraphs = [review.clarify?.found].compactMap { $0 } + (review.clarify?.questions ?? [])
             case .blocked:
                 title = "Why it is blocked"
+                paragraphs = [review.blocked?.reason].compactMap { $0 }
+            case .waiting:
+                title = "What it waits on"
                 paragraphs = [review.blocked?.reason].compactMap { $0 }
             }
             if paragraphs.isEmpty { paragraphs = [item.ask] }

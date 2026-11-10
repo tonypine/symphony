@@ -1,0 +1,117 @@
+{
+  "attempts": {
+    "current_retry_attempt": 0,
+    "restart_count": 0
+  },
+  "connected": {
+    "blocked_by": [],
+    "blocks": [],
+    "parent": null,
+    "related": [],
+    "sub_tickets": []
+  },
+  "issue_id": "i-703",
+  "issue_identifier": "TP-703",
+  "last_error": null,
+  "logs": {
+    "codex_session_logs": []
+  },
+  "recent_events": [],
+  "repo_key": "symphony",
+  "retry": null,
+  "running": null,
+  "status": "watching",
+  "tracked": {},
+  "verdicts": [],
+  "watch": {
+    "action": "wait",
+    "actions": [
+      {
+        "action": "decision",
+        "at": "2026-10-16T11:30:00Z",
+        "head": "7c6b5a4f3e2d1c0b9a8f",
+        "rule": "R18",
+        "source": "poll"
+      }
+    ],
+    "applied": [],
+    "clears_when": "a person answers and the hold clears",
+    "decision": {
+      "args": {},
+      "clears_when": "a person answers and the hold clears",
+      "decided_at": "2026-10-16T12:03:30Z",
+      "error": null,
+      "head_sha": "7c6b5a4f3e2d1c0b9a8f",
+      "kind": "wait",
+      "outcome": "recorded",
+      "owner": "person",
+      "reason": "A Needs Decision hold pauses the ticket",
+      "rule": "R4",
+      "since": "2026-10-16T11:30:00Z",
+      "waits_on": null
+    },
+    "facts": {
+      "ahead": [],
+      "auto_merge": "off",
+      "base": "ok",
+      "base_ref": null,
+      "ci": "red",
+      "competing": [],
+      "conflict_attempts": 0,
+      "failing_check": "protected paths",
+      "fix_failures": [],
+      "github": "ok",
+      "github_reset_at": null,
+      "head_origin": "symphony",
+      "head_sha": "7c6b5a4f3e2d1c0b9a8f",
+      "hold": "needs_decision",
+      "landing_timed_out": false,
+      "max_red_attempts": 10,
+      "mergeable": "unstable",
+      "missing_checks": [],
+      "no_ci": "not_configured",
+      "origin": null,
+      "phase": "code_review",
+      "pr": "open",
+      "pr_number": 703,
+      "pr_url": "https://github.com/tonypine/symphony/pull/703",
+      "protected_files": [
+        "WORKFLOW.md",
+        "config/settings_ui_exempt.yml"
+      ],
+      "rate_limit": {
+        "remaining": 4321,
+        "reset_at": "2026-10-16T13:00:00Z"
+      },
+      "read_at": "2026-10-16T12:03:30Z",
+      "red_attempts": 0,
+      "red_kind": "human_only",
+      "rerun_done": false,
+      "review_comments": "none",
+      "run": "none",
+      "same_failure_streak": 0,
+      "source": "poll"
+    },
+    "head": "7c6b5a4f3e2d1c0b9a8f",
+    "links": [],
+    "outcome": "recorded",
+    "owner": "person",
+    "phase": "code_review",
+    "pr_url": "https://github.com/tonypine/symphony/pull/703",
+    "read_at": "2026-10-16T12:03:30Z",
+    "reason": "A Needs Decision hold pauses the ticket",
+    "rule": "R4",
+    "silent": null,
+    "since": "2026-10-16T11:30:00Z",
+    "source": "poll",
+    "summary": null,
+    "waits_on": []
+  },
+  "watching": {
+    "pull_request_url": "https://github.com/tonypine/symphony/pull/703"
+  },
+  "workspace": {
+    "host": null,
+    "path": "/Users/director/symphony-workspaces/symphony/TP-703"
+  }
+}

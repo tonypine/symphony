@@ -386,6 +386,8 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
         assert {false, %{"error" => %{"reason" => "no_ticket"}}} = call(tool, args, session(ctx, issue: nil))
         assert {false, %{"error" => %{"reason" => "no_ticket"}}} = call(tool, args, session(ctx, issue: %Issue{id: @issue_id}))
       end
+
+      assert {:error, {:ticket_ledger, %{"reason" => "no_ticket"}}} = TicketLedger.record(%{issue: nil}, %{"type" => "note", "payload" => %{"text" => "x"}})
     end
 
     test "Symphony fills the head from the workspace and the phase from the ticket's record; issue_id and repo_key may come from the session", ctx do

@@ -169,13 +169,19 @@ defmodule SymphonyElixirWeb.WatchPayload do
       still_running(read?, facts),
       if(read?, do: @mergeable_words[facts.mergeable]),
       if(facts.auto_merge == :armed, do: "auto-merge on"),
-      if(facts.run == :active, do: "run active"),
+      run_words(facts),
       @hold_words[facts.hold],
       if(match?({:rate_limited, _reset_at}, watch.github), do: "GitHub rate limited")
     ]
     |> Enum.reject(&is_nil/1)
     |> Enum.join(" · ")
   end
+
+  # The review's state, beside CI's. A record written before `review` was read has none.
+  defp run_words(%{run: :active, phase: :code_review}), do: "reviewing"
+  defp run_words(%{run: :active}), do: "run active"
+  defp run_words(%{phase: :code_review, review: :approved}), do: "approved"
+  defp run_words(_facts), do: nil
 
   # A green head can have checks its base doesn't require still running. A record written before
   # this field was read has none.
@@ -231,6 +237,7 @@ defmodule SymphonyElixirWeb.WatchPayload do
 
   defp name(nil), do: nil
   defp name(value) when is_atom(value), do: Atom.to_string(value)
+  defp name(value) when is_binary(value), do: value
 
   defp iso8601(%DateTime{} = datetime), do: datetime |> DateTime.truncate(:second) |> DateTime.to_iso8601()
   defp iso8601(_datetime), do: nil

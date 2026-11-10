@@ -1012,12 +1012,13 @@ defmodule SymphonyElixir.Codex.AppServer do
     |> Kernel.++(Enum.map(workspace_link_targets(workspace, unlocked_paths: unlocked_paths), &Path.join(workspace, &1)))
   end
 
-  # The real files behind symlinked skills (`.agents/skills/pull -> ../../priv/skills/pull`). A remote
-  # workspace isn't on this host, so it keeps the plain deny list.
+  # The real files behind symlinked skills (`.agents/skills/pull -> ../../priv/skills/pull`), and the
+  # rest of a folder one path of which a grant unlocks. A remote workspace isn't on this host, so it
+  # keeps the plain deny list.
   defp workspace_link_targets(workspace, opts) do
     if Keyword.get(opts, :remote, false),
       do: [],
-      else: AgentSandboxConfig.workspace_link_targets(workspace, Keyword.get(opts, :unlocked_paths, []))
+      else: AgentSandboxConfig.workspace_deny_write_paths(workspace, Keyword.get(opts, :unlocked_paths, []))
   end
 
   # Git stages blob objects under `<git_dir>/objects` before updating the index, so denying

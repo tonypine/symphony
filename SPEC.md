@@ -553,7 +553,13 @@ runs), `finding.resolved`, `finding.confirmed` (machine only: a QA pass confirme
 newest-known-head rule compared, the one that won and what it did), `workspace.rebuilt` (machine
 only: a workspace made again, why, the heads compared and the one it started on),
 `workspace.removed` (machine only: Symphony removed a ticket's workspace, for the age GC, a Stop, a
-terminal state or another cleanup) and `note`.
+terminal state or another cleanup), `rule.action` (machine only: a rule of Symphony's acted on the
+ticket, with the rule's name and what it did), `ticket.filed` (machine only: a ticket split off from
+this one, or an epic review's follow-up), `note.read` (machine only: the first run whose prompt carried a
+person's note, keyed by the note), `brief.written` (an implementation, rework or review-feedback run's
+brief of the ticket: what it does and why and its walkthrough, in a person's words, with no backtick; the
+newest one is the ticket read's `brief`) and `note`. `GET /api/v1/events` reads every ticket's events, and
+Symphony's own stream, newest first, with the notable rule set (`docs/control-api.md`).
 
 A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)
 and its `mode`: `machine` (a `command` Symphony runs), `orchestrated` (an agent turn Symphony drives
@@ -1029,11 +1035,14 @@ Fields:
     throwaway worktree of a QA pass. So does the `git worktree add --detach` of each throwaway
     worktree: a QA pass's checkouts of the PR head.
   - On a remote worker the dispatch script's `git worktree add` takes a per-repo lock on the
-    worker host: a `symphony-worktree-add.lock` directory in the repo's git common dir, holding
-    the script's pid, so parallel dispatches to one remote repo add their worktrees one at a
-    time. The script waits up to half the hook timeout (at least 1 second) for it, then fails
-    with status 47 and `workspace_worktree_lock_timeout: <lock>`. It drops the lock after the
-    add and on any exit or hangup; a lock whose holder process is gone is taken over.
+    worker host, in the repo's git common dir, so parallel dispatches to one remote repo add
+    their worktrees one at a time. On a host with util-linux `flock` it is a kernel lock on the
+    `symphony-worktree-add.flock` file, which the kernel drops when its holder exits however it
+    dies. On a host without it (macOS) it is a `symphony-worktree-add.lock` directory holding
+    the script's pid, and a lock whose holder process is gone is taken over. The script waits
+    up to half the hook timeout (at least 1 second) for it, then fails with status 47 and
+    `workspace_worktree_lock_timeout: <lock>`. It drops the lock after the add and on any exit
+    or hangup.
   - Every git call Symphony makes runs SSH with keepalives, so a connection that stops answering
     is dropped after about a minute. A host-side `fetch`, `pull`, `push` or `ls-remote` also has
     a wall-clock limit (`workspaces.git_network_timeout_ms`, 5 minutes by default; unset, the
@@ -1328,7 +1337,7 @@ Review-comment options are ignored when `enabled` is not `true`. CI failure disp
 by failed status checks and ignores comment authorship; the ignored reviewer set above does not
 affect CI escalation. A head whose only failed check is `protected paths` is not red: it gets no
 flaky re-run, no CI-fix run and no escalation, and uses no fix attempt, and it reads as its other
-checks, so the reviewer and QA run once they passed. Only a person clears that check, by a decision
+checks, so QA runs once they passed. Only a person clears that check, by a decision
 that allows the change (an option whose `unlocks` grants the protected paths the PR changes; a
 grant on a folder reached under several names, such as the shared skills in `.agents/skills` and
 their `.claude/skills` and `.codex/skills` links, covers it under every name), and
@@ -2723,25 +2732,29 @@ Important nuance:
   when the ticket continues.
 - When the workspace `HEAD` is readable, two consecutive turns with no new commit, no change to the
   workspace's uncommitted files (a turn that edits files without committing them made progress), no
-  issue state change and no newly attached PR MUST end the run, move the issue to
-  `Backlog` and post a comment saying why. This does not apply in `Merging`. Nor does it apply to
+  issue state change and no newly attached PR MUST end the run, hold the issue in the phase it is in
+  and post a comment saying why. The issue MUST NOT leave its phase for `Backlog`, so the PR and CI
+  watcher keeps watching it. This does not apply in `Merging`. Nor does it apply to
   a `Rework` run while the attached PR's head is the workspace `HEAD`, that `HEAD` differs from the
   one the run started on or from the head the `Rework` started from, and its checks are still
   running or have all passed. The run pushed that head and is waiting on its CI, so it MUST end and
   move to the post-PR state instead. This includes a `Rework` run whose CI failure stays pending
   until the run ends. Nor does it apply while the attached PR's head is the workspace `HEAD` and
   that head has checks still pending; such a run (one that started on that head) keeps
-  turning up to `agent.max_turns`. Nor does it apply, outside `Rework`, to a run started by
+  turning up to `agent.max_turns`, except in `CI Fix`: there the first idle turn with checks pending
+  on that head MUST end the run in a wait on CI (`{:ci_pending, info}`), which counts towards no
+  dispatch loop, and while the watcher's decision waits on those checks or reruns one no CI Fix run
+  MAY start. Nor does it apply, outside `Rework`, to a run started by
   a CI failure once the PR head is the workspace `HEAD` and all its checks have passed: the red
   check was a flake, so green CI is that run's outcome. Such a run MUST end and move the issue back
   to `Merging` (with a comment saying why, and the CI-fix auto-merge hold dropped so auto-merge
   turns on again) when the CI failure came from `Merging` and the PR head is still the commit that
-  failed, and to the post-PR state otherwise. A head that is still red, or has no checks, is parked as before.
+  failed, and to the post-PR state otherwise. A head that is still red, or has no checks, is held as before.
   The same holds for a run started by a merge conflict once GitHub reports the PR `MERGEABLE` and
   its head green: it moves back to `Merging` (with the conflict's auto-merge state dropped) when the
   conflict was found in `Merging` and the PR head is still the one that conflicted, and to the
   post-PR state otherwise. A PR that still conflicts, or whose mergeability GitHub has not computed
-  yet, is parked as before, even when a CI failure is pending too.
+  yet, is held as before, even when a CI failure is pending too.
   Nor does it apply while the branch on `origin` is at the workspace `HEAD` and the attached PR
   still shows an older head: GitHub has not attached the push yet, which is progress the PR can't
   show. The run waits for GitHub instead (up to two minutes per idle turn), nudges the PR with a
@@ -2752,19 +2765,20 @@ Important nuance:
   (`git add -A`, a `WIP: parked by Symphony` commit that skips the repo's hooks), then commits in
   the workspace that no remote has MUST be pushed to the workspace's branch on `origin` (only when every push URL of the workspace's `origin` is the source repo's),
   so a parked ticket's work is never only in its workspace; a push that fails is logged and the
-  park goes on. The park MUST write the ticket's record before Linear: the move into `Backlog`
-  (its `phase.entered`), then its question through the one decision path ("Run it again",
-  recommended; "Start it over from main"; "Leave it parked"), which pauses the ticket on it, then
-  the Linear move and the comment, which names the commit the park made and the branch it pushed,
-  or says nothing was committed or pushed. The park's move signal names the phase the ticket was parked
-  from. The park MUST finish even when the run is stopped partway through: the orchestrator stops
-  a run once the ticket's record leaves the active states, which the park's first write does. A run
-  the orchestrator stops that way MUST still record its `run.ended`. A move with no repo key, so no
-  record to write, MUST be logged at error with the key it tried. Unblock, or the
-  answer "Run it again", MUST move the ticket back to that phase with its workspace and branch as
-  they are, then lift the pause (which empties the counted runs) and dispatch it at once; "Start it
-  over from main" is Restart. A ticket parked before parks asked has no question: when its newest
-  move signal is the park's, Unblock moves it back the same way.
+  park goes on. The park MUST write the hold before Linear: a pause reason the Director may release,
+  which says why and keeps the PR's head and CI as the watcher last read them, then its question
+  through the one decision path ("Run it again", recommended; "Start it over from main"; "Keep it
+  paused"), then the comment, which names the commit the park made and the branch it pushed, or says
+  nothing was committed or pushed. The park MUST finish even when the run is stopped partway
+  through. The silent-wait report MUST list the held ticket with the reason and since when it is
+  held, including a ticket the watcher does not watch, such as a plan parent with no PR, until it is
+  terminal. A watcher read that shows a new PR head, or checks that reported green or red where they had
+  not, MUST lift the hold: its question is withdrawn and its reason cleared, and the ticket continues
+  in its phase, a green CI Fix ticket returning to its origin. Unblock, or the answer "Run it again",
+  MUST lift the pause (which empties the counted runs) and dispatch it at once; "Start it over from
+  main" is Restart. A ticket parked in `Backlog` by an earlier version keeps its way back: when its
+  newest move signal is the park's, Unblock moves it to the phase it was parked from, with its
+  workspace and branch as they are.
 - Once per start-up, in a task startup does not wait on, every ticket whose record Symphony put in
   `Backlog` (`phase_owner` Symphony) with the park's move signal as its newest, and whose pause holds
   no open question and no reason the Director may release, MUST be brought into the shape a park
@@ -3213,8 +3227,12 @@ Rules:
   `In Progress` from `Rework`, `Code Review`, `QA` or `Merging` MUST be refused as a `Restart`.
 - **Explicit handoff.** `In Progress` and `Rework` advance to `Code Review` only on the handoff
   signal the push and pull-request tool hooks record against the pushed head. A run that stops
-  quiet with its open PR already on its workspace HEAD has nothing to push, so the runner records
-  the signal for that head and hands off. A run that ends without it MUST record `handoff_missing`
+  quiet with its open PR already on its workspace HEAD has nothing to push, a finished Rework run
+  may have pushed past the hooks, and a step list's machine `handoff` step pushes with its own
+  command, so in each the runner, on seeing the PR on that HEAD, records the signal for that head and
+  hands off in the same run. A machine `handoff` step does so only on the ticket as it stands when the
+  step ends: not on a hold, still in the phase the run works, nothing pending, and in `Rework` the head
+  moved past the one the `Rework` started from. A run that ends without it MUST record `handoff_missing`
   and leave the ticket where it is for the retry machinery, which MUST back off its quiet runs and
   hold the ticket `Blocked` with `handoff_missing` after a bounded number on the same head. A
   ticket on a hold is not counted: it waits on the hold alone. Before the hold, Symphony asks a
@@ -3242,16 +3260,24 @@ Rules:
   again.
 - **Green-head gating.** CI state (`running` / `green` / `red`) is an attribute per PR head, not a
   state. A failed check only a person clears (`protected paths`) does not make a head red: with no
-  other failure, the head is green once its other checks passed. The reviewer and QA runs MUST
-  dispatch only on a green head, whether the poll, a retry or
-  the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`) dispatches
-  them; a held-back run records `code_review_head_not_green` or `qa_head_not_green`, with the PR watcher's
-  reason, once per head and reason. A
+  other failure, the head is green once its other checks passed. A green CI gates the merge, not the
+  review: the reviewer run MUST dispatch on a conflict-free PR whatever CI says, and a CI failure
+  during it MUST NOT interrupt it. Its verdict applies CI's state: an approve on a head the PR
+  watcher reads as red MUST stay in `Code Review` with the approval recorded, go through the
+  watcher's rerun and `CI Fix`, and carry on once green with no second review; a rework verdict goes
+  to `Rework` whatever CI says. The QA run MUST dispatch only on a green head, whether the poll, a
+  retry or the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`)
+  dispatches it; a held-back run records `code_review_head_not_green` or `qa_head_not_green`, with
+  the PR watcher's reason, once per head and reason. A
   QA `fail` or block on a head the PR watcher reads as red, missing a required check, or
   conflicting is recorded `blocked` with the component `ci` and leaves the ticket in `QA` for the
-  watcher to route; it MUST NOT go to `Rework`. A red head in `Code Review`,
+  watcher to route; it MUST NOT go to `Rework`. A red head in `Code Review` once approved, in
   `QA`, `Merging` or `Rework`, or a PR that conflicts with its base, MUST enter `CI Fix` with its
-  origin recorded, whether or not the PR also conflicts. A `Code Review` or `QA` ticket back from
+  origin recorded, whether or not the PR also conflicts. The exception is a `Rework` head Code
+  Review's changes verdict stands on: its code is about to change, so the watcher MUST NOT rerun its
+  checks, update its branch or send it to `CI Fix` for a red check, and the rework run goes ahead
+  whatever CI says. An approval held in `Code Review`, or through `CI Fix` back to it, MUST be carried
+  to the head an update of the branch made, with no second review. A `Code Review` or `QA` ticket back from
   `CI Fix` on the same red head or the same conflict (a repair that pushed nothing) MUST enter
   `CI Fix` again, until the fix attempts run out. Then neither asks a person: a red head gets a
   fix ticket for its failing check and a `Blocked` hold on it, and a conflict waits on the PRs
@@ -4223,8 +4249,11 @@ Current Elixir sandbox behavior:
   agent never makes macOS ask the operator to let Symphony access them.
 - Shared write denies protect workflow and runtime guardrail files such as `WORKFLOW.md`,
   `symphony.yml`, `symphony.local.yml`, `.claude/settings.json`, `.git`, `mise.toml`,
-  `.tool-versions`, `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and
-  macOS launch agent roots.
+  `.tool-versions`, `.github` (CI workflows, actions, `CODEOWNERS`, dependabot),
+  `config/settings_ui_exempt.yml`, shell startup files, `~/.gitconfig`, and macOS launch agent
+  roots. A person's grant MAY name one path inside `.github` (`.github/workflows/make-all.yml`),
+  which unlocks that path alone: the rest of `.github` stays protected in the run's sandbox, the
+  push tools and the merge gate.
 - The instruction files a `WORKFLOW.md` playbook line pulls in (`.symphony/instructions/` by
   default, Section 5.5) are not write-protected: they are read only from the workflow's source,
   so an agent's edit reaches a run only through a merged pull request. Their placement and the
@@ -4791,7 +4820,8 @@ Scoped GitHub tool extension contract:
 - `ticket_events` and `ticket_record`, if exposed, MUST act only on the session's current ticket
   and take no ticket argument; every run kind gets both. `ticket_record` MUST take only the types the
   event catalog allows the run's kind (`finding.recorded` in a QA run; `finding.resolved`, `step.*`,
-  `evidence`, `checklist.answered` and `note` in any run), MUST fill the event's actor, run, phase
+  `evidence`, `checklist.answered` and `note` in any run; `brief.written` in an implementation, rework
+  or review-feedback run), MUST fill the event's actor, run, phase
   and head itself, MUST take artifacts only from regular files under the workspace or the run's
   temp folder, and MUST write nothing when it refuses a call, returning the reason and the type's
   schema.
@@ -5940,7 +5970,12 @@ Minimum endpoints:
     - No Linear request: the tickets come from the records. GitHub is read for an item's pull
       requests only when the item changed since its last read, kept by its question; a failed read is
       tried again after two minutes.
-  - `counts` has `total` and the number of items of each kind.
+  - A `CI Fix` ticket whose watcher decision waits on CI or reruns a check lists as a `waiting` item:
+    its `ask` and `review.reason` the decision's reason, `review.clearing_condition` what clears it
+    and `review.pull_request.url` its PR. It asks nothing of a person: the state API's
+    `waiting_on_you` leaves it out, and nothing counts it as waiting on the Director.
+  - `counts` has the number of items of each kind, and `total`, those that wait on the Director: every
+    kind but `waiting`.
   - When the orchestrator snapshot times out or is unavailable, return `200` with an `error` object
     in place of the list, as `/api/v1/state` does.
   - Suggested response shape:
@@ -5948,7 +5983,7 @@ Minimum endpoints:
     ```json
     {
       "generated_at": "2026-10-07T14:20:00Z",
-      "counts": {"total": 2, "plan": 1, "pr": 0, "action": 0, "clarify": 1, "blocked": 0},
+      "counts": {"total": 2, "plan": 1, "pr": 0, "action": 0, "clarify": 1, "blocked": 0, "waiting": 0},
       "items": [
         {
           "issue_id": "i-330",
@@ -6072,6 +6107,28 @@ Minimum endpoints:
     (its move out of Todo), else its first run, to the merge.
   - `shipped_per_day` has one entry per day (`date`, `shipped`). The response also has `days`,
     `from`, `to` and `total`.
+
+- `GET /api/v1/aggregate?from=&to=&unit=&repo=&epic=&series=`
+  - One aggregation read for the Insights pages (Quality, Usage and Shipped): each named series
+    (`tokens`, `time_by_stage`, `runs`, `verdicts`, `shipped`, `findings`; default all) bucketed by
+    `unit` (`30m`, `1h`, `6h`, `day`, `week`; default `day`) at UTC boundaries, over `from` to `to`
+    (ISO 8601 times or dates, widened to whole buckets; default the 7 days ending with the bucket
+    holding now), kept to a repository (`repo`) and an epic (`epic`: the epic and the tickets whose
+    record names it as parent). Read from the run records' token counts and the tickets' events;
+    it MUST make no Linear request. A day's `tokens` equals `/api/v1/history`'s `tokens_per_day`.
+    `docs/control-api.md` documents its shape; a malformed query returns `400` `invalid_query`.
+
+- `GET /api/v1/views` and `GET /api/v1/tickets?view=<id>` (or inline filters)
+  - The saved views of the Tickets page, stored in the run store so every client lists the same
+    ones: a name, filters (each a filter of the ticket entity's column catalog: `repo`, `epic`,
+    `phase`, `situation`, `label`, `priority`, `since`), columns from the catalog and a sort (a
+    column and `asc` or `desc`). `GET /api/v1/views` lists them with the catalog's columns (name and
+    type) and filters. `GET /api/v1/tickets` answers the tickets a view selects, or the same
+    filters, `columns`, `sort` and `direction` given inline, sorted, each with its `issue_id` and the
+    columns asked for. The `epic` and `repo` filters match as the Journal's and the aggregation
+    read's do. It reads the ticket records and the situations (from what the orchestrator holds) and
+    MUST make no Linear request. `docs/control-api.md` documents the shapes; a malformed query is
+    `400` `invalid_query` and an unknown view `404` `view_not_found`.
 
 - `GET /api/v1/learnings?repo=&tag=&q=`
   - The learnings of every configured repo, from the learnings store, newest first. `repo` keeps one repo key, `tag` one tag, and `q` the records
@@ -6302,6 +6359,28 @@ Minimum endpoints:
     `repo_key` or `issue_identifier` is `422`. None of them writes an event or an audit record.
     Unlike a stop's event, the note is the request: an answer other than `200` means it wasn't
     written.
+  - The ticket read's `note` is the newest note a person left, with `read_by`: the first run whose
+    prompt carried it (the summary holds every note), from a machine `note.read` event keyed by the
+    note. A newer note replaces it, unread until a run reads it.
+
+- `POST /api/v1/control/looked` (OPTIONAL)
+  - Marks that the person looked at a ticket now: `issue_identifier` and an optional `repo_key`. The
+    mark is written on the ticket's state record, keyed by person (one today, the Director); it is a
+    view mark, not history, so no event records it. Answers `200` with `issue_identifier`,
+    `looked_at` and `new_since_looked` (`0`); a ticket with no record is `404` `ticket_not_found`
+    (also when the record goes before the mark is written), a write the store refuses is `502`
+    `store_error`, and a request without `issue_identifier` is `422`.
+  - The ticket read carries `looked_at` and `new_since_looked`, the count of the ticket's events
+    later than the mark, and each event of the events feed carries `new`. Before the person ever
+    looked, every event is new.
+
+- `POST /api/v1/control/view` and `DELETE /api/v1/control/view/:id` (OPTIONAL)
+  - Create a saved view (`name`, `filters`, `columns`, `sort`), update the one an `id` names (its
+    creation time kept), or delete one. Each is validated against the ticket entity's column
+    catalog: an unknown column, filter, situation or direction, or a missing name, is `400`
+    `invalid_view` with the reason, and the reason for an unknown name lists the catalog's names; an
+    `id` no view has is `404` `view_not_found`. They need the control bearer token and write no
+    ticket event.
 
 - `POST /api/v1/control/<move>` (the Director's moves, OPTIONAL)
   - The Mac app's Inbox makes the Director's Linear moves through Symphony, which holds the Linear

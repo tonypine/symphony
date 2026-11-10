@@ -1,0 +1,163 @@
+{
+  "counts": {
+    "action": 2,
+    "blocked": 0,
+    "clarify": 0,
+    "plan": 0,
+    "pr": 0,
+    "total": 2
+  },
+  "generated_at": "2026-10-16T12:04:12Z",
+  "items": [
+    {
+      "ask": "Protected files changed on TP-703",
+      "context": null,
+      "identifier": "TP-703",
+      "issue_id": "i-703",
+      "kind": "action",
+      "references": {
+        "#703": {
+          "additions": 40,
+          "checks": "failed",
+          "deletions": 6,
+          "files": 3,
+          "kind": "pull_request",
+          "number": 703,
+          "repo_key": "symphony",
+          "review_rounds": 1,
+          "review_state": "open",
+          "summary": null,
+          "ticket": "TP-703",
+          "title": "Let symphony.yml name the review agent's model",
+          "url": "https://github.com/tonypine/symphony/pull/703"
+        },
+        "TP-703": {
+          "identifier": "TP-703",
+          "kind": "ticket",
+          "parent": null,
+          "pull_request": {
+            "checks": "failed",
+            "number": 703,
+            "url": "https://github.com/tonypine/symphony/pull/703"
+          },
+          "repo_key": "symphony",
+          "state": "Code Review",
+          "summary": null,
+          "title": "Let symphony.yml name the review agent's model",
+          "url": "https://linear.app/tonypine/issue/TP-703",
+          "waiting_on": "you"
+        }
+      },
+      "repo_key": "symphony",
+      "review": {
+        "comment_id": "c-703-request",
+        "confirm": null,
+        "if_unanswered": "TP-703 stays in Code Review and PR #703 isn't merged.",
+        "options": [
+          {
+            "effect": "you add the protected-paths-approved label to PR #703; the check runs again and passes, and the ticket continues in Code Review",
+            "label": "Add the waiver label",
+            "recommended": false,
+            "tradeoffs": []
+          },
+          {
+            "effect": "the ticket moves to Rework, where a run takes the change to those files out of the pull request",
+            "label": "Drop the change in Rework",
+            "recommended": true,
+            "tradeoffs": []
+          }
+        ],
+        "question": "The pull request of TP-703 changes files that agents may only change with a person's permission, and that is the only failing check. How should it continue?",
+        "recommendation_reason": "No one allowed the change, so taking it out is the safe default.",
+        "requested_at": "2026-10-16T11:30:00Z",
+        "steps": [],
+        "title": "Protected files changed on TP-703",
+        "unblocks": null,
+        "why": "Symphony's check for changes to those files failed on PR #703, and only a person can clear it. Adding the protected-paths-approved label to the pull request runs the check again, and it passes."
+      },
+      "state": "Code Review",
+      "title": "Let symphony.yml name the review agent's model",
+      "url": "https://linear.app/tonypine/issue/TP-703",
+      "waiting_seconds": 2040,
+      "waiting_since": "2026-10-16T11:30:00Z"
+    },
+    {
+      "ask": "Check macos never reported on TP-706",
+      "context": null,
+      "identifier": "TP-706",
+      "issue_id": "i-706",
+      "kind": "action",
+      "references": {
+        "#706": {
+          "additions": 40,
+          "checks": "failed",
+          "deletions": 6,
+          "files": 3,
+          "kind": "pull_request",
+          "number": 706,
+          "repo_key": "symphony",
+          "review_rounds": 1,
+          "review_state": "open",
+          "summary": null,
+          "ticket": "TP-706",
+          "title": "Run the macOS checks on every pull request",
+          "url": "https://github.com/tonypine/symphony/pull/706"
+        },
+        "TP-706": {
+          "identifier": "TP-706",
+          "kind": "ticket",
+          "parent": null,
+          "pull_request": {
+            "checks": "failed",
+            "number": 706,
+            "url": "https://github.com/tonypine/symphony/pull/706"
+          },
+          "repo_key": "symphony",
+          "state": "QA",
+          "summary": null,
+          "title": "Run the macOS checks on every pull request",
+          "url": "https://linear.app/tonypine/issue/TP-706",
+          "waiting_on": "you"
+        }
+      },
+      "repo_key": "symphony",
+      "review": {
+        "comment_id": "c-706-request",
+        "confirm": null,
+        "if_unanswered": "TP-706 stays in QA and keeps waiting for the check.",
+        "options": [
+          {
+            "effect": "TP-706 continues in QA on its current changes without the check; a new push waits for it again",
+            "label": "Proceed without it for this PR",
+            "recommended": false,
+            "tradeoffs": []
+          },
+          {
+            "effect": "Symphony runs the checks of PR #706 again and waits for the check once more",
+            "label": "Rerun the checks",
+            "recommended": true,
+            "tradeoffs": []
+          },
+          {
+            "effect": "the ticket moves to Rework, where a run changes the workflow so it reports the check",
+            "label": "Fix the workflow in Rework",
+            "recommended": false,
+            "tradeoffs": []
+          }
+        ],
+        "question": "The base branch requires the macos check, but it never reported on PR #706 of TP-706 within 30 minutes. How should TP-706 continue?",
+        "recommendation_reason": "A rerun costs nothing and shows whether the check was only lost.",
+        "requested_at": "2026-10-16T11:00:00Z",
+        "steps": [],
+        "title": "Check macos never reported on TP-706",
+        "unblocks": null,
+        "why": "No workflow reported the macos check on the pull request's latest changes. The check may have been renamed in the branch rules, or its workflow may not run on this pull request. Symphony doesn't skip a required check without a person's say."
+      },
+      "state": "QA",
+      "title": "Run the macOS checks on every pull request",
+      "url": "https://linear.app/tonypine/issue/TP-706",
+      "waiting_seconds": 3780,
+      "waiting_since": "2026-10-16T11:00:00Z"
+    }
+  ]
+}

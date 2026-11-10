@@ -9,6 +9,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
   It applies the upkeep actions (`SymphonyElixir.PrDecision.upkeep/1`) the same way, before the
   flow decision on the same read.
 
+  Each action applied is recorded on the ticket as the watcher row's `rule.action`
+  (`SymphonyElixir.RuleActions`): "PR watcher R22 reran the failed checks", with the action's reason.
+
   An action is applied once per head and rule in a stay in the phase: the stay's `applied` ledger
   holds what was done, so a repeated tick or a duplicate trigger never repeats a move, a rerun, an
   update-branch or a fix-ticket filing. A cancelled run's rerun (U2) is the exception: it is kept
@@ -93,6 +96,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
     Notifications,
     PathUnlock,
     PrDecision,
+    RuleActions,
     RunStore,
     SelfHeal,
     SubIssueWait,
@@ -252,6 +256,8 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
   defp finish({:ok, changes}, action, ctx) do
     entry = %{head_sha: head(ctx), rule: action.rule, kind: action.kind, at: ctx.now}
+    applied = Map.get(changes, :action, action)
+    record_rule_action(Map.get(changes, :rule_action, RuleActions.watcher_action(action.kind)), action, applied, ctx)
 
     %{
       action: Map.get(changes, :action, action),
@@ -281,6 +287,14 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
     %{recorded(action, ctx) | outcome: {:error, reason}}
   end
+
+  # The action's `rule.action`: what it did, or nothing when an outcome did nothing of its own (a
+  # fix ticket the self-heal lane filed, which records its own, a red backstop with nothing to do, or
+  # a wait on competitors, whose pause records its own).
+  defp record_rule_action(nil, _action, _applied, _ctx), do: :ok
+
+  defp record_rule_action(rule_action, action, applied, ctx),
+    do: RuleActions.record(ctx.repo_key, ctx.issue.id, RuleActions.watcher_rule(action.rule), rule_action, applied.reason, head: head(ctx), at: ctx.now)
 
   # The actions.
 
@@ -444,7 +458,9 @@ defmodule SymphonyElixir.PrDecision.Apply do
 
     with :ok <- disarm_in_merging(ctx, :conflict),
          {:ok, links} <- Competitors.wait(ctx.issue, prs, step_behind, opts) do
-      {:ok, %{links: links}}
+      # The wait comes back on every read while it lasts: the blocked-by pause it sets records the
+      # rule's `paused` action once, when a reason is new, so the wait records none of its own.
+      {:ok, %{links: links, rule_action: nil}}
     end
   end
 
@@ -632,18 +648,19 @@ defmodule SymphonyElixir.PrDecision.Apply do
         log_fix_ticket(:filed, check, identifier, ctx)
         reason = "CI keeps failing: waiting on #{identifier || "a fix ticket"}, a fix ticket for the `#{check}` check"
         args = Map.put(action.args, :fix_ticket, identifier)
-        {:ok, %{attempts: Attempts.filed(ctx.attempts, identifier), action: %{action | reason: reason, args: args}}}
+        # The lane records the filing itself (`SymphonyElixir.SelfHeal`): one event per fix ticket.
+        {:ok, %{attempts: Attempts.filed(ctx.attempts, identifier), action: %{action | reason: reason, args: args}, rule_action: nil}}
 
       :escalated ->
         log_fix_ticket(:escalated, check, nil, ctx)
 
-        {:ok, %{action: %{action | reason: "CI keeps failing on the `#{check}` check after its fix ticket landed: a person decides", owner: :person}}}
+        {:ok, %{action: %{action | reason: "CI keeps failing on the `#{check}` check after its fix ticket landed: a person decides", owner: :person}, rule_action: "asked"}}
 
       :retry ->
-        {:ok, %{attempts: Attempts.restart_red(ctx.attempts)}}
+        {:ok, %{attempts: Attempts.restart_red(ctx.attempts), rule_action: nil}}
 
       :held ->
-        {:ok, %{}}
+        {:ok, %{rule_action: nil}}
 
       {:error, reason} ->
         {:error, reason}

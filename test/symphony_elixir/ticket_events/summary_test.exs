@@ -72,7 +72,12 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"workspace.removed", %{reason: "age_gc"}, [], %{title: "Workspace removed", detail: "The age GC reclaimed it"}},
     {"situation.changed", %{from: "working", to: "waiting_for_ci", word: "Waiting for CI", cause: "Checks are running on PR #741."}, [],
      %{title: "Waiting for CI", detail: "Checks are running on PR #741."}},
-    {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}}
+    {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}},
+    {"note.read", %{note_id: "evt-1", run_id: "run-4"}, [], %{title: "Note read by a run", detail: "run-4"}},
+    {"brief.written", %{text: "Each ticket says what it delivers.", walkthrough: "Read a ticket."}, [], %{title: "Brief written", detail: "Each ticket says what it delivers."}},
+    {"rule.action", %{rule: "PR watcher R22", action: "rerun", text: "A check failed on PR #741: Symphony reran it once"}, [],
+     %{title: "PR watcher R22 reran the failed checks", detail: "A check failed on PR #741: Symphony reran it once"}},
+    {"ticket.filed", %{identifier: "TP-1500", kind: "split_off", title: "Split the parser"}, [], %{title: "Split off TP-1500", detail: "Split the parser"}}
   ]
 
   defp event(type, payload, artifacts \\ []), do: %Event{type: type, payload: payload, artifacts: artifacts}
@@ -89,6 +94,30 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     for {type, payload, artifacts, summary} <- @fixtures do
       assert Summary.render(event(type, payload, artifacts)) == summary, type
     end
+  end
+
+  test "a rule's action names the rule and what it did, and the ticket it filed" do
+    assert render("rule.action", %{rule: "CI wait", action: "paused", text: "Waiting for CI on abc1234 to finish"}) ==
+             %{title: "CI wait paused the ticket", detail: "Waiting for CI on abc1234 to finish"}
+
+    assert render("rule.action", %{rule: "Self-heal", action: "filed_ticket", filed: "TP-1501"}) == %{title: "Self-heal filed TP-1501", detail: nil}
+    assert render("rule.action", %{rule: "Self-heal", action: "filed_ticket"}).title == "Self-heal filed a fix ticket"
+
+    for {action, words} <- [
+          {"parked", "parked the ticket"},
+          {"lifted_pause", "lifted a pause"},
+          {"moved", "moved the ticket"},
+          {"updated_branch", "updated the branch"},
+          {"auto_merge", "changed auto-merge"},
+          {"asked", "asked you"},
+          {"other", "acted"}
+        ] do
+      assert render("rule.action", %{rule: "Idle park", action: action}).title == "Idle park " <> words, action
+    end
+
+    assert render("rule.action", %{}).title == "A rule acted"
+    assert render("ticket.filed", %{identifier: "TP-1502", kind: "follow_up"}) == %{title: "Follow-up TP-1502 filed", detail: nil}
+    assert render("ticket.filed", %{}).title == "Split off a ticket"
   end
 
   test "an event of an unknown type renders its type and no detail" do

@@ -61,6 +61,7 @@
     "red_attempts": 0,
     "red_kind": "failure",
     "rerun_done": false,
+    "review": "pending",
     "review_comments": "none",
     "run": "none",
     "running_checks": [],

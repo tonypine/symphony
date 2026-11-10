@@ -9,6 +9,7 @@ defmodule SymphonyElixir.PromptBuilder do
     Config,
     Decisions,
     LandingOrder,
+    Marks,
     MergeConfirmation,
     PhaseSteps,
     PromptSafety,
@@ -508,14 +509,15 @@ defmodule SymphonyElixir.PromptBuilder do
   @evidence_line "`evidence` for every screenshot or output it attaches (the files as `artifacts`)"
 
   defp records_line("implementation") do
-    "This implementation run records `step.completed` for each delegated step as it ends it, #{@evidence_line}, and each walkthrough step's proof " <>
+    "This implementation run records the ticket's brief first, as a `brief.written` (what it does and why, and its walkthrough, in a person's words), " <>
+      "and again at the handoff when the work changed what the ticket does; `step.completed` for each delegated step as it ends it, #{@evidence_line}, and each walkthrough step's proof " <>
       "as `evidence` with `proof` (the step and the test), which `linear_record_walkthrough_proofs` records; a `note` keeps a choice worth knowing later."
   end
 
   defp records_line(kind) when kind in ["rework", "review_feedback"] do
     "This #{kind_words(kind)} run reads `ticket_events` with `open_findings: true` before it plans, records `finding.resolved` for each finding it fixes " <>
       "(Symphony fills the head that fixes it), #{@evidence_line}, `step.completed` for each delegated step and a walkthrough proof again as `evidence` " <>
-      "with `proof` when it changes the test."
+      "with `proof` when it changes the test, and a new `brief.written` at the handoff when the change altered what the ticket does."
   end
 
   defp records_line("ci_fix") do
@@ -826,7 +828,9 @@ defmodule SymphonyElixir.PromptBuilder do
   # workflow preview's sample), else it is read from the store. It carries agent and person text, so
   # it is wrapped as untrusted input, and it is never cut: over `ledger.prompt_brief_max_tokens` it
   # is still rendered whole, since a run only gets here once the Director chose to go on with it
-  # (`ticket_ledger_gate/2`).
+  # (`ticket_ledger_gate/2`). The summary holds every note in full, so a run's prompt that carries the
+  # one read from the store has read the note for the next run (`SymphonyElixir.Marks`). The full and
+  # the compact prompt both carry it, so a Codex run sent the compact one has read the note too.
   defp append_ticket_ledger(prompt, opts) do
     ticket_state = Keyword.get(opts, :ticket_state)
 
@@ -836,6 +840,7 @@ defmodule SymphonyElixir.PromptBuilder do
       case ticket_ledger(state, opts) do
         {:ok, brief} ->
           warn_if_over_limit(brief, state)
+          record_note_read(state, opts)
           prompt <> "\n\n" <> render_ticket_ledger(brief)
 
         {:error, reason} ->
@@ -852,6 +857,13 @@ defmodule SymphonyElixir.PromptBuilder do
       {:ok, brief} -> {:ok, brief}
       :error -> Brief.render(state.issue_id)
     end
+  end
+
+  defp record_note_read(%{repo_key: repo_key, issue_id: issue_id}, opts) do
+    run_id = Keyword.get(opts, :run_id)
+
+    if is_binary(repo_key) and is_binary(issue_id) and is_binary(run_id) and not Keyword.has_key?(opts, :ticket_ledger),
+      do: Marks.record_note_read(repo_key, issue_id, run_id)
   end
 
   defp warn_if_over_limit(%{tokens: tokens}, state) do

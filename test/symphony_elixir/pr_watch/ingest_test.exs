@@ -180,7 +180,7 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
 
   describe "a delivery and its confirm read" do
     test "patches the named record at once, marked as a delivery's, and the confirm read decides on GitHub's read" do
-      pid = started!([{"1", "Code Review", []}, {"2", "QA", []}])
+      pid = started!([{"1", "QA", []}, {"2", "Code Review", []}])
       Parity.change!([{"1", red()}])
 
       :ok = Ingest.deliver(check_failed("1", "head-1-1"), @repo_url, watchers: [pid])
@@ -388,7 +388,7 @@ defmodule SymphonyElixir.PrWatch.IngestTest do
     end
 
     test "a ping reads every watched PR now" do
-      pid = started!([{"1", "Code Review", []}])
+      pid = started!([{"1", "QA", []}])
       Parity.change!([{"1", red()}])
       Parity.advance!(1_000)
 
