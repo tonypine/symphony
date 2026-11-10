@@ -1249,7 +1249,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert {:ok, response} =
                Linear.create_subissue_in_state(
-                 %{issue: %Issue{id: "issue-parent"}, comment_registry: registry},
+                 %{issue: %Issue{id: "issue-parent", repo_key: "repo-a"}, comment_registry: registry},
                  "Todo",
                  %{"title" => "Epic review fails: the export button is missing", "description" => "What the review found."},
                  linear_client: subissue_client(self(), subissue_scope(states))
@@ -1267,6 +1267,7 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
 
       assert [filed] = SymphonyElixir.TicketEvents.query("issue-parent", types: ["ticket.filed"])
       assert filed.payload == %{identifier: "TP-999", kind: "follow_up", title: "Epic review fails: the export button is missing"}
+      assert filed.repo_key == "repo-a"
     end
 
     test "a child filed without a priority inherits the parent's, and an explicit one wins" do
