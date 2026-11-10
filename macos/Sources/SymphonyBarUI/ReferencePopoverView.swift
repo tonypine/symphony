@@ -5,11 +5,16 @@ import SymphonyBarCore
 /// badge (C7), its title, summary and facts; a pull request its symbol, number and ticket with its review state,
 /// title, summary and figures. A mention Symphony can't see says so. The footer says what a click on the chip does
 /// and holds the link out.
-struct ReferencePopoverView: View {
+public struct ReferencePopoverView: View {
     let popover: ReferencePopover
     var openURL: (URL) -> Void = { _ in }
 
-    var body: some View {
+    public init(popover: ReferencePopover, openURL: @escaping (URL) -> Void = { _ in }) {
+        self.popover = popover
+        self.openURL = openURL
+    }
+
+    public var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
             switch popover.content {
             case let .ticket(ticket): TicketPopover(ticket: ticket)
@@ -41,10 +46,12 @@ struct ReferencePopoverView: View {
 }
 
 /// N2's body.
-struct TicketPopover: View {
+public struct TicketPopover: View {
     let ticket: ReferencePopover.Ticket
 
-    var body: some View {
+    public init(ticket: ReferencePopover.Ticket) { self.ticket = ticket }
+
+    public var body: some View {
         HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
             Text([ticket.identifier, ticket.repoKey].compactMap { $0 }.joined(separator: " · "))
                 .font(DesignTokens.TypeStyle.label.font)
@@ -81,10 +88,12 @@ struct TicketPopover: View {
 }
 
 /// N3's body: no commit hash, branch or file name, only what the Director decides on.
-struct PullRequestPopover: View {
+public struct PullRequestPopover: View {
     let pullRequest: ReferencePopover.PullRequest
 
-    var body: some View {
+    public init(pullRequest: ReferencePopover.PullRequest) { self.pullRequest = pullRequest }
+
+    public var body: some View {
         HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
             Label(pullRequest.number, systemImage: ReferencePopover.pullRequestSymbol)
                 .font(DesignTokens.TypeStyle.rowTitle.font)

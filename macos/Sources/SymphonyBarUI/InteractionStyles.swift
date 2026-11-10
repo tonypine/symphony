@@ -11,7 +11,7 @@ import SymphonyBarCore
 
 extension View {
     /// The focus ring (§3.10) `offset` outside `shape`, following its corners. Draw it for keyboard focus only.
-    func focusRing<S: InsettableShape>(_ shown: Bool, _ shape: S, offset: Double = DesignTokens.FocusRing.offset) -> some View {
+    public func focusRing<S: InsettableShape>(_ shown: Bool, _ shape: S, offset: Double = DesignTokens.FocusRing.offset) -> some View {
         modifier(FocusRingModifier(shown: shown, shape: shape, offset: offset))
     }
 }
@@ -43,7 +43,7 @@ private struct FocusRingModifier<S: InsettableShape>: ViewModifier {
 
 /// A row's face: its state's surface over whatever is under it, the accent ring when selected, the focus ring on
 /// its edge. The surface bleeds `bleed` past the row's content, so the content keeps its place in the list.
-struct RowFace: ViewModifier {
+public struct RowFace: ViewModifier {
     let state: DesignTokens.Interaction
     let reduceMotion: Bool
     var bleed = EdgeInsets(
@@ -52,7 +52,13 @@ struct RowFace: ViewModifier {
     )
     @Environment(\.colorScheme) private var colorScheme
 
-    func body(content: Content) -> some View {
+    public init(state: DesignTokens.Interaction, reduceMotion: Bool, bleed: EdgeInsets? = nil) {
+        self.state = state
+        self.reduceMotion = reduceMotion
+        if let bleed { self.bleed = bleed }
+    }
+
+    public func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
         content
             .padding(bleed)
@@ -106,11 +112,16 @@ private struct RowStyle: ViewModifier {
 
 /// A clickable card's face: it lifts a point with a deeper shadow under the pointer, settles to 99 % when pressed,
 /// and carries the accent ring when selected and the focus ring outside its corners.
-struct CardFace: ViewModifier {
+public struct CardFace: ViewModifier {
     let state: DesignTokens.Interaction
     let reduceMotion: Bool
 
-    func body(content: Content) -> some View {
+    public init(state: DesignTokens.Interaction, reduceMotion: Bool) {
+        self.state = state
+        self.reduceMotion = reduceMotion
+    }
+
+    public func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
         let raised = state.hovered && !state.pressed && !state.disabled
         content
@@ -159,21 +170,21 @@ private struct CardStyle: ViewModifier {
 extension View {
     /// A list row's states: the hover and pressed surfaces, the accent tint and ring when `selected`, and the focus
     /// ring for keyboard focus.
-    func rowStyle(selected: Bool = false) -> some View { modifier(RowStyle(selected: selected)) }
+    public func rowStyle(selected: Bool = false) -> some View { modifier(RowStyle(selected: selected)) }
 
     /// A clickable card's states: the lift under the pointer, the press, the accent ring when `selected`, the focus
     /// ring for keyboard focus.
-    func cardStyle(selected: Bool = false) -> some View { modifier(CardStyle(selected: selected)) }
+    public func cardStyle(selected: Bool = false) -> some View { modifier(CardStyle(selected: selected)) }
 }
 
 // MARK: - Button
 
 /// A button's kind: primary (the accent fill, one per view), secondary (content with a hairline edge) or quiet
 /// (accent text, no fill until the pointer is over it).
-enum ButtonKind: String, CaseIterable { case primary, secondary, quiet }
+public enum ButtonKind: String, CaseIterable { case primary, secondary, quiet }
 
 /// A button's face of a kind, at one of the three control sizes.
-struct ButtonFace<Label: View>: View {
+public struct ButtonFace<Label: View>: View {
     let label: Label
     var kind: ButtonKind = .secondary
     var size: DesignTokens.Control = .medium
@@ -181,7 +192,15 @@ struct ButtonFace<Label: View>: View {
     let reduceMotion: Bool
     @Environment(\.colorScheme) private var colorScheme
 
-    var body: some View {
+    public init(label: Label, kind: ButtonKind = .secondary, size: DesignTokens.Control = .medium, state: DesignTokens.Interaction, reduceMotion: Bool) {
+        self.label = label
+        self.kind = kind
+        self.size = size
+        self.state = state
+        self.reduceMotion = reduceMotion
+    }
+
+    public var body: some View {
         let shape = RoundedRectangle(cornerRadius: size.radius, style: .continuous)
         label
             .font(.system(size: size.fontSize, weight: .medium))
@@ -246,12 +265,18 @@ struct ButtonFace<Label: View>: View {
 
 /// The catalog's button as a `ButtonStyle`: the face, given the press, the pointer, keyboard focus and whether the
 /// button is enabled. Pair it with `focusEffectDisabled()`, as `directorButton` does, so only the face's ring shows.
-struct DirectorButtonStyle: ButtonStyle {
+public struct DirectorButtonStyle: ButtonStyle {
     var kind: ButtonKind = .secondary
     var size: DesignTokens.Control = .medium
     var selected = false
 
-    func makeBody(configuration: Configuration) -> some View {
+    public init(kind: ButtonKind = .secondary, size: DesignTokens.Control = .medium, selected: Bool = false) {
+        self.kind = kind
+        self.size = size
+        self.selected = selected
+    }
+
+    public func makeBody(configuration: Configuration) -> some View {
         Face(configuration: configuration, kind: kind, size: size, selected: selected)
     }
 
@@ -283,7 +308,7 @@ struct DirectorButtonStyle: ButtonStyle {
 
 extension View {
     /// The catalog's button style at `size`; `selected` keeps it pressed while its menu or sheet is open.
-    func directorButton(_ kind: ButtonKind = .secondary, size: DesignTokens.Control = .medium, selected: Bool = false) -> some View {
+    public func directorButton(_ kind: ButtonKind = .secondary, size: DesignTokens.Control = .medium, selected: Bool = false) -> some View {
         buttonStyle(DirectorButtonStyle(kind: kind, size: size, selected: selected)).focusEffectDisabled()
     }
 }
@@ -291,10 +316,12 @@ extension View {
 // MARK: - Disabled with its reason
 
 /// The reason a control is off, under it: a lock and the sentence (the catalog's inline refusal).
-struct Refusal: View {
+public struct Refusal: View {
     let reason: String
 
-    var body: some View {
+    public init(reason: String) { self.reason = reason }
+
+    public var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 6) {
             Image(systemName: "lock.fill")
                 .font(.system(size: 10))
@@ -350,7 +377,7 @@ private struct DisabledReason: ViewModifier {
 extension View {
     /// Disables the control while `reason` is set, and shows the reason under it once pressed (or at once when
     /// `revealed`).
-    func disabledReason(_ reason: String?, revealed: Bool = false) -> some View {
+    public func disabledReason(_ reason: String?, revealed: Bool = false) -> some View {
         modifier(DisabledReason(reason: reason, revealed: revealed))
     }
 }
@@ -359,10 +386,10 @@ extension View {
 
 extension DesignTokens.SituationKind {
     /// The kind's status color.
-    var tint: Color { status.tint }
+    public var tint: Color { status.tint }
 
     /// The glyph in its status color.
-    var glyph: some View {
+    public var glyph: some View {
         Image(systemName: symbol).foregroundStyle(tint).accessibilityHidden(true)
     }
 }
