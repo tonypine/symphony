@@ -97,7 +97,8 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary("hold.cleared", payload, _event), do: {"Blocked hold cleared", prefixed("by", text(payload, :by))}
 
   defp summary("run.started", payload, _event) do
-    {"#{run_name(payload)} started", [text(payload, :model)] ++ prefixed("in", text(payload, :state)) ++ prefixed("at", short_sha(text(payload, :head)))}
+    where = prefixed("in", text(payload, :state)) ++ prefixed("at", short_sha(text(payload, :head)))
+    {"#{run_name(payload)} started", [text(payload, :model) | where]}
   end
 
   # The run a person started at once (`Orchestrator.start_issue/3`), by the Director with their
@@ -109,7 +110,8 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary("run.ended", payload, _event) do
     title = "#{run_name(payload)} ended" <> suffix(": ", text(payload, :exit))
     transcript = if text(payload, :transcript), do: "transcript"
-    {title, [text(payload, :model), duration(count(payload, :duration_ms)), tokens(field(payload, :tokens)), transcript]}
+    usage = [duration(count(payload, :duration_ms)), tokens(field(payload, :tokens)), transcript]
+    {title, [text(payload, :model) | usage]}
   end
 
   defp summary("attempt.pushed", payload, _event) do

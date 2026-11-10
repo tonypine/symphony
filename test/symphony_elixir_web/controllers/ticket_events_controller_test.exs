@@ -345,7 +345,18 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
     implementer = {:agent, "run-impl-1", "implementation"}
     qa = {:agent, "run-qa-1", "qa"}
     qa_again = {:agent, "run-qa-2", "qa"}
-    impl_ended = %{run_id: "run-impl-1", run_kind: "implementation", run_number: 1, model: "claude-opus-5-5", effort: "high", exit: "handoff", head: "bbb2222", duration_ms: 1_020_000}
+
+    impl_ended = %{
+      run_id: "run-impl-1",
+      run_kind: "implementation",
+      run_number: 1,
+      model: "claude-opus-5-5",
+      effort: "high",
+      exit: "handoff",
+      head: "bbb2222",
+      duration_ms: 1_020_000
+    }
+
     qa_ended = %{run_id: "run-qa-1", run_kind: "qa", run_number: 1, model: "claude-sonnet-5-5", exit: "ended normally", head: "bbb2222", duration_ms: 900_000}
     clipped = %{class: "clipped", severity: "major", description: "The run header is cut off.", viewport: "1440×900"}
     missing = %{class: "state missing", severity: "minor", description: "The verdict badge is gone after a refresh."}
