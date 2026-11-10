@@ -6083,6 +6083,16 @@ Minimum endpoints:
   - `shipped_per_day` has one entry per day (`date`, `shipped`). The response also has `days`,
     `from`, `to` and `total`.
 
+- `GET /api/v1/aggregate?from=&to=&unit=&repo=&epic=&series=`
+  - One aggregation read for the Insights pages (Quality, Usage and Shipped): each named series
+    (`tokens`, `time_by_stage`, `runs`, `verdicts`, `shipped`, `findings`; default all) bucketed by
+    `unit` (`30m`, `1h`, `6h`, `day`, `week`; default `day`) at UTC boundaries, over `from` to `to`
+    (ISO 8601 times or dates, widened to whole buckets; default the 7 days ending with the bucket
+    holding now), kept to a repository (`repo`) and an epic (`epic`: the epic and the tickets whose
+    record names it as parent). Read from the run records' token counts and the tickets' events;
+    it MUST make no Linear request. A day's `tokens` equals `/api/v1/history`'s `tokens_per_day`.
+    `docs/control-api.md` documents its shape; a malformed query returns `400` `invalid_query`.
+
 - `GET /api/v1/learnings?repo=&tag=&q=`
   - The learnings of every configured repo, from the learnings store, newest first. `repo` keeps one repo key, `tag` one tag, and `q` the records
     whose rule, evidence, tags or ticket identifier contain the text, in any case; a blank filter is

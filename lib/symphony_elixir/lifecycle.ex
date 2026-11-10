@@ -71,17 +71,36 @@ defmodule SymphonyElixir.Lifecycle do
   """
   @spec read(String.t() | nil, DateTime.t()) :: t()
   def read(issue_id, now \\ DateTime.utc_now()) do
-    settings = Config.settings!()
-
     issue_id
     |> TicketEvents.query(limit: :all)
     |> List.wrap()
-    |> compute(%{
+    |> compute(facts(now))
+  end
+
+  @doc "What `compute/2` and `stage_spans/2` need beside the ledger, from the settings, at `now`."
+  @spec facts(DateTime.t()) :: facts()
+  def facts(now) do
+    settings = Config.settings!()
+
+    %{
       now: now,
       terminal_states: settings.tracker.terminal_states,
       token_cap: settings.agent.max_tokens_per_issue,
       phase_names: %{code_review: settings.tracker.code_review_state, qa: settings.tracker.qa_state, ci_fix: CiFix.state(settings)}
-    })
+    }
+  end
+
+  @doc """
+  Each stay of a ticket holding `events` (oldest first) in a phase that counts for a stage: the stage
+  and when the stay began and ended, as `compute/2` counts the stages' time (the phase the ticket is
+  in runs to `now`; a terminal one takes no time, so it has no span). `SymphonyElixir.Aggregate`'s
+  time by stage.
+  """
+  @spec stage_spans([Event.t() | term()], facts()) :: [%{stage: String.t(), from: DateTime.t(), to: DateTime.t()}]
+  def stage_spans(events, %{now: now, terminal_states: terminal_states, phase_names: phase_names}) do
+    for %{stage: stage, at: at, until: until, time_ms: time_ms} <- moves(events, now, Enum.map(terminal_states, &normalized/1), phases(phase_names)),
+        is_binary(stage) and time_ms > 0,
+        do: %{stage: stage, from: at, to: until}
   end
 
   @doc """
@@ -117,6 +136,7 @@ defmodule SymphonyElixir.Lifecycle do
       |> Enum.map_reduce({nil, nil}, fn {move, next_at}, {previous_phase, previous_stage} ->
         phase = normalized(move.to)
         stage = stage_of(phase, previous_stage, phases)
+        until = next_at || end_of_last(move.at, phase, now, terminal_states)
 
         {%{
            to: move.to,
@@ -124,7 +144,8 @@ defmodule SymphonyElixir.Lifecycle do
            at: move.at,
            stage: stage,
            opens_visit?: opens_visit?(stage, phase, previous_stage, previous_phase, phases.ci_fix),
-           time_ms: time_ms(move.at, next_at || end_of_last(move.at, phase, now, terminal_states))
+           until: until,
+           time_ms: time_ms(move.at, until)
          }, {move.to, stage}}
       end)
 
