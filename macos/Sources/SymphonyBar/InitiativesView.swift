@@ -332,12 +332,23 @@ struct InitiativesCard: View {
                             }
                             InitiativeBar(initiative: initiative, height: 6)
                             InitiativeLegend(initiative: initiative)
+                            if let noLane = initiative.slot?.overviewLine {
+                                Text(noLane)
+                                    .font(DesignTokens.TypeStyle.callout.font)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .help("Open \(initiative.identifier) in Initiatives")
-                    .accessibilityLabel("\(initiative.identifier), \(initiative.title ?? ""), \(initiative.barAccessibilityLabel)")
+                    .accessibilityLabel(
+                        [initiative.identifier, initiative.title ?? "", initiative.barAccessibilityLabel, initiative.slot?.overviewLine]
+                            .compactMap { $0 }
+                            .joined(separator: ", ")
+                    )
                 }
                 if initiatives.count > Self.limit {
                     Text("\(initiatives.count - Self.limit) more in Initiatives")

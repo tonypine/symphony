@@ -121,6 +121,25 @@ final class InitiativesTests: XCTestCase {
         XCTAssertEqual(Initiative.Slot(status: "other").line, "other")
     }
 
+    func testOverviewLineSaysOnlyWhyAnInitiativeHoldsNoLane() {
+        let reason = "No sub-ticket Symphony can dispatch: priorities below Urgent. A-2 (Todo, priority High)"
+        XCTAssertEqual(Initiative.Slot(status: "yielded", reason: reason).overviewLine, "Gave up its lane: \(reason)")
+        XCTAssertNil(Initiative.Slot(status: "waiting", identifier: "A-2").overviewLine)
+        XCTAssertNil(Initiative.Slot(status: "queued").overviewLine)
+    }
+
+    func testTheLaneYieldedFixtureGivesTheOverviewItsNoLaneLine() throws {
+        let data = try Data(contentsOf: fixture("inbox-lane-yielded").appendingPathComponent("initiatives.json"))
+        let initiatives = try XCTUnwrap(InitiativesPayload.decode(data)).initiatives
+        let lines = Dictionary(uniqueKeysWithValues: initiatives.map { ($0.identifier, $0.slot?.overviewLine) })
+        XCTAssertEqual(
+            lines["DOCS-20"],
+            "Gave up its lane: No sub-ticket Symphony can dispatch: priorities below Urgent. "
+                + "DOCS-24 (Todo, priority High), DOCS-25 (Todo, priority High)"
+        )
+        XCTAssertEqual(lines["BIL-200"], .some(nil))
+    }
+
     // MARK: - Decoding
 
     func testAnErrorOrABrokenPayloadIsNoList() {
@@ -143,10 +162,10 @@ final class InitiativesTests: XCTestCase {
         try XCTUnwrap(InitiativesPayload.decode(try Data(contentsOf: fixture().appendingPathComponent("initiatives.json"))))
     }
 
-    private func fixture() -> URL {
+    private func fixture(_ name: String = "inbox") -> URL {
         URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/director-app/inbox/api/v1", isDirectory: true)
+            .appendingPathComponent("Fixtures/director-app/\(name)/api/v1", isDirectory: true)
     }
 }

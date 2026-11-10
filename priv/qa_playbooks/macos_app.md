@@ -285,6 +285,14 @@ GitHub or Linear in QA:
   stays as written: its 2 open questions are not answered." The other Inbox items carry no such
   line. Walk it at 1440×900, light and dark: every title is readable and nothing on the page or the
   sheet is clipped.
+- **An epic that gave up its lane (TP-1431):** pass
+  `macos/Tests/Fixtures/director-app/inbox-lane-yielded` as `api_fixtures`. It is `inbox` with
+  DOCS-20 holding no lane: its two open sub-tickets are High under an Urgent-only filter. On the
+  Overview, the Initiatives card's DOCS-20 row shows, under its bar and legend, the secondary line
+  "Gave up its lane: No sub-ticket Symphony can dispatch: priorities below Urgent. DOCS-24 (Todo,
+  priority High), DOCS-25 (Todo, priority High)", wrapped to at most two lines; BIL-200, which holds
+  a lane, shows no such line. Walk it at 1440×900, light and dark: the line stays readable in the
+  secondary colour and nothing in the card is clipped.
 - **Ticket timeline (TP-1193):** pass `macos/Tests/Fixtures/director-app/ticket-ledger` as
   `api_fixtures` and open SHOP-410 from Tickets (Code Review & QA). Its clock is 2026-10-18 11:20
   UTC. It serves the ticket's events feed and no live channel, so the page reads the feed after
