@@ -743,7 +743,9 @@ agent:
 - The kind and profile are chosen once, when the run is dispatched, from the current workflow
   config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
   keeps its profile. A CI fix or review feedback re-activation is a new run with its own kind.
-- The run history record keeps `run_kind`, `model` and `effort`, and the dispatch log line shows
+- The run history record keeps `run_kind`, `model` and `effort`, so do the run's `run.started` and
+  `run.ended` events on the ticket's history (and the run's header in the ticket's timeline, whose
+  summary names the model), and the dispatch log line shows
   `run_kind=… model=… effort=…` (`default` when nothing is added). A `review_feedback` dispatch
   also names the latest pending PR comment it answers: `trigger_comment_id=…
   trigger_comment_author=… trigger_comment="<first line>" pending_comments=<n>`. Code

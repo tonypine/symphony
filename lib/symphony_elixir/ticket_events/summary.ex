@@ -12,7 +12,8 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   so its line says them: "Build failed after 4 min: back to writing the code", "Tests passed in 2
   min", "Paused on your answer", "Checks skipped: no Elixir changed".
 
-  Numbers come from the payload only (`run_number`, `attempt`, `class_count`, `duration_ms`,
+  A run's start and end name its model (`model`) first in their detail, as the run's profile
+  resolved it. Numbers come from the payload only (`run_number`, `attempt`, `class_count`, `duration_ms`,
   `tokens`). An event of a type the catalog does not name, such as a legacy record, renders its type
   as the title and no detail; a known type with a malformed payload renders what it can, so a reader
   never crashes on a stored event.
@@ -96,7 +97,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary("hold.cleared", payload, _event), do: {"Blocked hold cleared", prefixed("by", text(payload, :by))}
 
   defp summary("run.started", payload, _event) do
-    {"#{run_name(payload)} started", prefixed("in", text(payload, :state)) ++ prefixed("at", short_sha(text(payload, :head)))}
+    {"#{run_name(payload)} started", [text(payload, :model)] ++ prefixed("in", text(payload, :state)) ++ prefixed("at", short_sha(text(payload, :head)))}
   end
 
   # The run a person started at once (`Orchestrator.start_issue/3`), by the Director with their
@@ -108,7 +109,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary("run.ended", payload, _event) do
     title = "#{run_name(payload)} ended" <> suffix(": ", text(payload, :exit))
     transcript = if text(payload, :transcript), do: "transcript"
-    {title, [duration(count(payload, :duration_ms)), tokens(field(payload, :tokens)), transcript]}
+    {title, [text(payload, :model), duration(count(payload, :duration_ms)), tokens(field(payload, :tokens)), transcript]}
   end
 
   defp summary("attempt.pushed", payload, _event) do

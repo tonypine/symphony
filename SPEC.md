@@ -6253,10 +6253,12 @@ Minimum endpoints:
     first, with each event that names an earlier event of the page as `parent` in that event's
     `children` (at any depth), each other event whose `run_id` names a run of the ticket in that
     run's `events`, and the rest at the top level. A run is `{"kind": "run", run_id, run_kind,
-    run_number, status, verdict, started_at, ended_at, exit, head, summary, events}`, placed where
-    its first event on the page falls. Its header is read from the ticket's whole history: `status`
-    is `running` until its `run.ended`, then `ended`, and `verdict` is the newest `verdict.recorded`
-    naming the run (`{kind, outcome, head, at}`), else null. A run whose events span two pages shows
+    run_number, model, effort, status, verdict, started_at, ended_at, exit, head, summary, events}`,
+    placed where its first event on the page falls. Its header is read from the ticket's whole
+    history: `model` and `effort` are the ones its run profile resolved when it was dispatched (its
+    `run.started`, else its `run.ended`; null when the profile resolved none and the runtime kept its
+    own default), `status` is `running` until its `run.ended`, then `ended`, and `verdict` is the
+    newest `verdict.recorded` naming the run (`{kind, outcome, head, at}`), else null. A run whose events span two pages shows
     on each with that page's events and its whole header; the client merges by `run_id`.
   - `since` (ISO 8601, exclusive) pages: `next_since` is the `at` of the last event returned (the
     `since` given, or null, on an empty page). A page never ends inside a group of events that share

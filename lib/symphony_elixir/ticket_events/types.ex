@@ -219,7 +219,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [run_id: :string, run_kind: :string],
-      optional: [run_number: :non_neg_integer, state: :string, head: :string] ++ @signal,
+      optional: [run_number: :non_neg_integer, state: :string, head: :string, model: :string, effort: :string] ++ @signal,
       idempotency: {:fields, [:run_id]}
     },
     # The run a person started at once (`SymphonyElixir.Orchestrator.start_issue/3`), by the
@@ -239,6 +239,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
         [
           run_kind: :string,
           run_number: :non_neg_integer,
+          model: :string,
+          effort: :string,
           duration_ms: :non_neg_integer,
           tokens: @tokens,
           head: :string,

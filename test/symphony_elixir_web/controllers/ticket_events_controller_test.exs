@@ -48,10 +48,12 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
 
       %{"timeline" => timeline} = json_response(get(build_conn(), @path <> "?group=run"), 200)
 
-      assert %{"status" => "ended", "verdict" => nil, "exit" => "handoff", "events" => impl_events} = run(timeline, "run-impl-1")
+      assert %{"status" => "ended", "verdict" => nil, "exit" => "handoff", "model" => "claude-opus-5-5", "effort" => "high", "events" => impl_events} = run(timeline, "run-impl-1")
       assert Enum.map(impl_events, & &1["type"]) == ["run.started", "note", "run.ended"]
 
-      assert %{"status" => "ended", "verdict" => %{"kind" => "qa", "outcome" => "fail", "head" => "bbb2222"}, "events" => qa_events} = run(timeline, "run-qa-1")
+      assert %{"status" => "ended", "verdict" => %{"kind" => "qa", "outcome" => "fail", "head" => "bbb2222"}, "model" => "claude-sonnet-5-5", "effort" => nil, "events" => qa_events} =
+               run(timeline, "run-qa-1")
+
       assert Enum.map(qa_events, & &1["type"]) == ["run.started", "finding.recorded", "finding.recorded", "verdict.recorded", "run.ended"]
 
       [two_shots, one_shot] = Enum.filter(qa_events, &(&1["type"] == "finding.recorded"))
@@ -146,6 +148,7 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
                "started_at" => started_at,
                "ended_at" => nil,
                "head" => "abc1234",
+               "model" => nil,
                "summary" => %{"title" => "QA run 3 started"},
                "verdict" => %{"kind" => "qa", "outcome" => "pass", "head" => "abc1234", "at" => verdict_at},
                "events" => [%{"type" => "verdict.recorded", "payload" => %{"outcome" => "pass"}}]
@@ -154,11 +157,13 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
       assert started_at == DateTime.to_iso8601(at(1))
       assert verdict_at == DateTime.to_iso8601(at(4))
 
-      record!("run.ended", %{run_id: "run-1", exit: "ended normally", head: "def5678"}, at(5), run_id: "run-1")
+      record!("run.ended", %{run_id: "run-1", exit: "ended normally", head: "def5678", model: "claude-sonnet-5-5", effort: "medium"}, at(5), run_id: "run-1")
       since = URI.encode_www_form(DateTime.to_iso8601(at(4)))
       %{"timeline" => [run]} = json_response(get(build_conn(), @path <> "?group=run&since=#{since}"), 200)
 
       assert %{"status" => "ended", "ended_at" => ended_at, "exit" => "ended normally", "head" => "def5678", "run_number" => 3} = run
+      # A start that named no model leaves the run's model to its end.
+      assert %{"model" => "claude-sonnet-5-5", "effort" => "medium"} = run
       assert ended_at == DateTime.to_iso8601(at(5))
       assert %{"verdict" => %{"outcome" => "pass"}, "events" => [%{"type" => "run.ended"}]} = run
     end
@@ -340,19 +345,19 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
     implementer = {:agent, "run-impl-1", "implementation"}
     qa = {:agent, "run-qa-1", "qa"}
     qa_again = {:agent, "run-qa-2", "qa"}
-    impl_ended = %{run_id: "run-impl-1", run_kind: "implementation", run_number: 1, exit: "handoff", head: "bbb2222", duration_ms: 1_020_000}
-    qa_ended = %{run_id: "run-qa-1", run_kind: "qa", run_number: 1, exit: "ended normally", head: "bbb2222", duration_ms: 900_000}
+    impl_ended = %{run_id: "run-impl-1", run_kind: "implementation", run_number: 1, model: "claude-opus-5-5", effort: "high", exit: "handoff", head: "bbb2222", duration_ms: 1_020_000}
+    qa_ended = %{run_id: "run-qa-1", run_kind: "qa", run_number: 1, model: "claude-sonnet-5-5", exit: "ended normally", head: "bbb2222", duration_ms: 900_000}
     clipped = %{class: "clipped", severity: "major", description: "The run header is cut off.", viewport: "1440×900"}
     missing = %{class: "state missing", severity: "minor", description: "The verdict badge is gone after a refresh."}
 
     events =
       for {id, minute, type, payload, opts} <- [
             {"ev-01", 1, "phase.entered", %{to: "In Progress", from: "Todo"}, phase: "In Progress"},
-            {"ev-02", 2, "run.started", %{run_id: "run-impl-1", run_kind: "implementation", run_number: 1, head: "aaa1111"}, run_id: "run-impl-1"},
+            {"ev-02", 2, "run.started", %{run_id: "run-impl-1", run_kind: "implementation", run_number: 1, head: "aaa1111", model: "claude-opus-5-5", effort: "high"}, run_id: "run-impl-1"},
             {"ev-03", 3, "note", %{text: "Plan: group the feed by run."}, actor: implementer},
             {"ev-04", 20, "run.ended", impl_ended, run_id: "run-impl-1"},
             {"ev-05", 30, "phase.entered", %{to: "QA", from: "Code Review"}, phase: "QA"},
-            {"ev-06", 31, "run.started", %{run_id: "run-qa-1", run_kind: "qa", run_number: 1, head: "bbb2222"}, run_id: "run-qa-1"},
+            {"ev-06", 31, "run.started", %{run_id: "run-qa-1", run_kind: "qa", run_number: 1, head: "bbb2222", model: "claude-sonnet-5-5"}, run_id: "run-qa-1"},
             {"ev-07", 40, "finding.recorded", clipped, actor: qa, artifacts: [header, narrow]},
             {"ev-08", 41, "finding.recorded", missing, actor: qa, artifacts: [badge]},
             {"ev-09", 45, "verdict.recorded", %{kind: "qa", outcome: "fail", head: "bbb2222"}, run_id: "run-qa-1"},
@@ -360,7 +365,7 @@ defmodule SymphonyElixirWeb.TicketEventsControllerTest do
             {"ev-11", 47, "phase.entered", %{to: "Rework", from: "QA"}, phase: "Rework"},
             {"ev-12", 50, "note", %{text: "Keep the run header visible when the pane is narrow."}, actor: {:person, "Director"}},
             {"ev-13", 70, "phase.entered", %{to: "QA", from: "Code Review"}, phase: "QA"},
-            {"ev-14", 71, "run.started", %{run_id: "run-qa-2", run_kind: "qa", run_number: 2, head: "ccc3333"}, run_id: "run-qa-2"},
+            {"ev-14", 71, "run.started", %{run_id: "run-qa-2", run_kind: "qa", run_number: 2, head: "ccc3333", model: "claude-sonnet-5-5"}, run_id: "run-qa-2"},
             {"ev-15", 72, "note", %{text: "Walking step 1 at 1440×900."}, actor: qa_again},
             {"ev-16", 73, "note", %{text: "The run header stays visible."}, actor: qa_again, parent: "ev-15"}
           ] do

@@ -776,6 +776,8 @@ defmodule SymphonyElixirWeb.Presenter do
       run_id: run_id,
       run_kind: payload_field(started, :run_kind) || payload_field(ended, :run_kind),
       run_number: payload_field(started, :run_number) || payload_field(ended, :run_number),
+      model: payload_field(started, :model) || payload_field(ended, :model),
+      effort: payload_field(started, :effort) || payload_field(ended, :effort),
       status: if(ended, do: "ended", else: "running"),
       verdict: verdict && run_verdict_json(verdict),
       started_at: started && DateTime.to_iso8601(started.at),
