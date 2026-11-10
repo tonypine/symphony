@@ -656,7 +656,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_build_release_pair",
       "description" =>
-        "Build the signed release pair (make -C macos release-pair): release N of the app and its update N+1, signed with the QA host's test signing identity, where the app runs. Takes several minutes; returns the manifest (versions, builds, tag). Fails with qa_signing_identity_missing or qa_signing_identity_untrusted on a QA host without that identity: answer blocked with its message.",
+        "Build the signed release pair (make -C macos release-pair): release N of the app and its update N+1, signed with the QA host's test signing identity, where the app runs. Takes several minutes; returns the manifest (versions, builds, tag). Fails with qa_signing_identity_missing or qa_signing_identity_untrusted on a QA host without that identity, and with qa_host_missing_tool on one without a tool the build needs: answer blocked with its message.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
     },
     %{

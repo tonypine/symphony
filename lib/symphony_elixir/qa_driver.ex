@@ -501,6 +501,20 @@ defmodule SymphonyElixir.QaDriver do
     :exit, _reason -> nil
   end
 
+  @doc """
+  The broken part of the QA environment a `qa_*` tool found during the pass, as the cause the
+  self-heal lane repairs (`{:qa_host_missing_tool, names}`: a tool the release pair's build
+  needs); `nil` when none did or there is no driver.
+  """
+  @spec environment_fault(pid() | nil) :: {:qa_host_missing_tool, [String.t()]} | nil
+  def environment_fault(nil), do: nil
+
+  def environment_fault(driver) when is_pid(driver) do
+    GenServer.call(driver, :environment_fault)
+  catch
+    :exit, _reason -> nil
+  end
+
   @doc "Stops the driver, quitting every app it launched."
   @spec stop(pid() | nil) :: :ok
   def stop(nil), do: :ok
@@ -621,7 +635,7 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, identity} <- ReleasePair.identity(config, source),
          :ok <- ReleasePair.copy_feed_server(config, source),
          :ok <- GenServer.call(driver, :stop_feed, 30_000),
-         {:ok, {output, status}} <- ReleasePair.build(config, source, identity) |> rebaseline_on_timeout(driver, config),
+         {:ok, {output, status}} <- config |> ReleasePair.build(source, identity) |> pair_tools_missing(driver) |> rebaseline_on_timeout(driver, config),
          {:ok, ignored, _dirty} <- worktree_status(config) do
       driver
       |> record_pair(config, status, tail(output, @output_limit), ignored_signatures(config, ignored))
@@ -1134,6 +1148,22 @@ defmodule SymphonyElixir.QaDriver do
     GenServer.call(driver, {:record_pair, nil})
     {:ok, %{"exit_status" => status, "output" => output}}
   end
+
+  # A tool the pair's build needs is missing on the QA host: a broken part of the QA environment,
+  # which the driver keeps for the pass's outcome (`environment_fault/1`), so the self-heal lane
+  # files its fix ticket rather than asking a person to run QA again.
+  defp pair_tools_missing({:error, {:qa_host_missing_tool, names} = fault}, driver) do
+    GenServer.call(driver, {:record_pair, nil})
+    GenServer.call(driver, {:environment_fault, fault})
+
+    tool_error(
+      "qa_host_missing_tool",
+      "The QA host has no #{Enum.map_join(names, ", ", &"`#{&1}`")} on the build's PATH, which the release pair's build needs, " <>
+        "so nothing was built. #{Checks.blocked_hint()} Symphony files the fix for the QA host (scripts/qa-vm/provision.sh) itself."
+    )
+  end
+
+  defp pair_tools_missing(result, _driver), do: result
 
   defp identity_installed({:ok, payload}, %{installed?: true}) do
     note = "Symphony installed the QA host's QA signing identity this pass: the host had none, or did not trust it. Say so in the QA report."
@@ -1877,7 +1907,7 @@ defmodule SymphonyElixir.QaDriver do
 
     state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}
     state = Map.merge(state, %{wide_pass: nil, launched_app?: false, checked_app?: false, host_ports: pick_host_ports(), tunnel: nil, tunnel_error: nil, checkouts: []})
-    state = Map.merge(state, %{pair: nil, pair_launches: %{}, feed: nil, dev_server: nil})
+    state = Map.merge(state, %{pair: nil, pair_launches: %{}, feed: nil, dev_server: nil, environment_fault: nil})
     # QA roots by number: 1 is the pass's first, and each fresh_root launch adds the next.
     state = Map.merge(state, %{roots: %{1 => Map.get(state.config, :qa_root)}, last_root: 1})
     state = Map.put(state, :host_check, check_tools(state.config))
@@ -2032,6 +2062,8 @@ defmodule SymphonyElixir.QaDriver do
 
   def handle_call({:record_ignored, ignored}, _from, state), do: {:reply, :ok, %{state | ignored: ignored}}
   def handle_call({:record_pair, pair}, _from, state), do: {:reply, :ok, %{state | pair: pair}}
+  def handle_call({:environment_fault, fault}, _from, state), do: {:reply, :ok, %{state | environment_fault: fault}}
+  def handle_call(:environment_fault, _from, state), do: {:reply, state.environment_fault, state}
   def handle_call(:pair, _from, state), do: {:reply, state.pair, state}
   def handle_call(:pair_launches, _from, state), do: {:reply, state.pair_launches, state}
   def handle_call(:feed, _from, state), do: {:reply, state.feed, state}

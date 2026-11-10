@@ -1,6 +1,6 @@
 #!/bin/sh
 # Gives a QA VM (`auto_review.worker_host`) the toolchain project QA passes build with: Go,
-# Postgres 18's server binaries and jq. Run it from the Symphony Mac; it runs itself on the VM over
+# Postgres 18's server binaries, jq and minisign. Run it from the Symphony Mac; it runs itself on the VM over
 # SSH, as the QA user, and needs that user's passwordless sudo for the links in /usr/local/bin.
 #
 #   * Go from the official go.dev darwin-arm64 package, under /usr/local/go. The version is the
@@ -11,6 +11,8 @@
 #     never starts a Postgres service and never creates a cluster: the project's dev server owns
 #     its cluster for each pass.
 #   * jq, from Homebrew when the VM has none.
+#   * minisign, from Homebrew when the VM has none: the QA release pair's build signs the update
+#     with it (qa_build_release_pair).
 #
 # Each tool is linked into /usr/local/bin, and ~/.zshenv puts /usr/local/bin first on the PATH,
 # so a non-login SSH shell (the one the QA build and the QA host check run in) finds it. Running it
@@ -89,6 +91,14 @@ remote() {
     note_installed jq
   fi
   if [ ! -e /usr/local/bin/jq ] && [ -x /opt/homebrew/bin/jq ]; then link jq /opt/homebrew/bin/jq; fi
+
+  if [ -x /opt/homebrew/bin/minisign ] || [ -x /usr/local/bin/minisign ]; then
+    note_skipped minisign "present"
+  else
+    "$brew" install --quiet minisign
+    note_installed minisign
+  fi
+  if [ ! -e /usr/local/bin/minisign ] && [ -x /opt/homebrew/bin/minisign ]; then link minisign /opt/homebrew/bin/minisign; fi
 
   if "$brew" list --versions postgresql@18 >/dev/null 2>&1; then
     note_skipped postgresql@18 "present"
@@ -174,5 +184,5 @@ ssh $ssh_opts "$host" /bin/sh -s -- --remote "$go_version" < "$0"
 # A fresh SSH session, so the versions come from the PATH a non-login shell gets.
 echo "symphony-qa-provision:begin host=$host"
 # shellcheck disable=SC2086
-ssh $ssh_opts "$host" 'for tool in go pg_ctl initdb jq; do command -v "$tool" >/dev/null || { echo "missing: $tool"; exit 1; }; done; go version; pg_ctl --version; initdb --version; jq --version'
+ssh $ssh_opts "$host" 'for tool in go pg_ctl initdb jq minisign; do command -v "$tool" >/dev/null || { echo "missing: $tool"; exit 1; }; done; go version; pg_ctl --version; initdb --version; jq --version; minisign -v'
 echo "symphony-qa-provision:end"

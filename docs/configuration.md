@@ -2198,9 +2198,9 @@ fresh throwaway clone of a clean image (see step 6 below).
    on. Commands started over SSH are attributed to it, so this covers `screencapture` and the
    helper. Restart the VM.
 5. Install what `build` needs, then run the build once by hand over SSH to confirm it works. For
-   Go, Postgres 18 and jq, run `scripts/qa-vm/provision.sh admin@<vm>` from the Symphony Mac: it
-   installs Go from go.dev (`--go-version`, default `1.26`) and Homebrew's `postgresql@18` and
-   `jq`, links them into `/usr/local/bin` and puts that first on the non-login SSH `PATH` in
+   Go, Postgres 18, jq and minisign, run `scripts/qa-vm/provision.sh admin@<vm>` from the Symphony Mac: it
+   installs Go from go.dev (`--go-version`, default `1.26`) and Homebrew's `postgresql@18`, `jq`
+   and `minisign` (which the signed release pair's build signs the update with), links them into `/usr/local/bin` and puts that first on the non-login SSH `PATH` in
    `~/.zshenv`, and prints each tool's version from a fresh SSH session. It never starts Postgres
    or creates a cluster, refuses a VM that holds push credentials, and installs nothing when run
    again. List the tools in the playbook's `requires` so a pass on a VM without them says so. The [signed release pair](#the-signed-release-pair)'s test
@@ -2287,10 +2287,17 @@ release certificate, in a keychain of its own,
 only finds an identity there) and trusts the certificate for code signing only
 (`sudo security add-trusted-cert -d -r trustRoot -p codeSign`). Running it again changes nothing
 once the identity is installed and trusted, and finishes an install that stopped half way. The
-pair's build also needs `minisign` and `jq` (`brew install minisign jq`) and the repository's
-toolchain for `make release`. Without the identity, where QA cannot install it,
+pair's build also needs `minisign` and `jq` (`scripts/qa-vm/provision.sh` installs both) and the
+repository's toolchain for `make release`. Without the identity, where QA cannot install it,
 `qa_build_release_pair` fails with `qa_signing_identity_missing` or
 `qa_signing_identity_untrusted`, and the QA agent answers `blocked` with that message.
+
+The build unlocks the identity's keychain (`--use`) and runs `make -C macos release-pair` in one
+command on the QA host: on a QA VM a keychain unlocked over one SSH connection stays locked for the
+next, so codesign would fail with `errSecInternalComponent`. Before it unlocks anything, the same
+command checks the build's tools; one missing (`minisign`, `jq`, …) fails the tool with
+`qa_host_missing_tool`, and the pass's `blocked` carries that cause, so the self-heal lane files the
+QA host's fix ticket instead of asking a person to run QA again.
 
 QA needs `pull_requests.enabled: true` and `pull_requests.checks.enabled: true`: the `QA` run only
 dispatches on a head the PR and CI watcher reads as green ([rule R27](pr-ci-decisions.md)).
