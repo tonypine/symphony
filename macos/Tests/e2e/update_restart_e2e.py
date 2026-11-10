@@ -1268,7 +1268,9 @@ def scenario_refused_before_install(instance):
         after = instance.status()
         if after["pid"] != status["pid"] or after["build"] != BUILD_N or instance.app_build(instance.app) != BUILD_N:
             raise Failure(f"the refusal touched the app: pid {after['pid']}, build {after['build']}")
-        if len(instance.alerts()) != alerts_before + 1:
+        # Retry's confirmation ("Update to vN?") is an alert too; the refusal is the only other one.
+        shown = [a["title"] for a in instance.alerts()[alerts_before:]]
+        if sorted(shown) != sorted([f"Update to v{v1}?", "Symphony wasn't updated"]):
             raise Failure(f"the refusal showed other alerts: {instance.alerts()}")
     finally:
         # Scenario 9's repo is gone too: the next scenario's check needs a file that loads.
