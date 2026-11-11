@@ -23,9 +23,12 @@ final class TimelineTests: XCTestCase {
         try XCTUnwrap(TicketEventsPayload.decode(Data(contentsOf: Self.fixtures.appendingPathComponent("events.json"))))
     }
 
-    private func model() throws -> TimelineModel {
-        TimelineModel.build(try history(), reference: reference, calendar: utc)
+    private func model(lookedAt: Date? = nil) throws -> TimelineModel {
+        TimelineModel.build(try history(), reference: reference, calendar: utc, lookedAt: lookedAt)
     }
+
+    /// When the fixture's person last looked: between the note and the Rework entry, before the run now.
+    private let lookedAt = ISO8601DateFormatter().date(from: "2026-10-08T09:40:00Z")!
 
     private func entries(_ model: TimelineModel) -> [TimelineEntry] {
         model.items.compactMap { item in
@@ -171,7 +174,7 @@ final class TimelineTests: XCTestCase {
     }
 
     func testDuplicateRecordWritesFoldIntoOneEntry() throws {
-        let entries = self.entries(try model())
+        let entries = self.entries(try model(lookedAt: lookedAt))
         let rework = entries.filter { $0.title == "Entered Rework from QA" }
         XCTAssertEqual(rework.count, 1)
         XCTAssertEqual(rework.first?.eventIDs, ["m1", "m2"])
@@ -320,6 +323,59 @@ final class TimelineTests: XCTestCase {
 
     func testTheClockReadsInTheCalendarsZone() {
         XCTAssertEqual(TimelineModel.clock(utc)(reference), "10:27")
+    }
+
+    // MARK: - Since you last looked (TP-1451)
+
+    func testTheMarkerSitsAboveTheNewestThingSeenAndTheDotsAreTheFeedsNew() throws {
+        let model = try model(lookedAt: lookedAt)
+        // The feed calls the second Rework write and the run now's events new: the entry and the run carry the dot.
+        XCTAssertEqual(model.items.filter(\.isNew).map(\.id), ["run-run-2", "entry-m1"])
+        XCTAssertEqual(model.marker, TimelineMarker(lookedAt: lookedAt, before: "entry-n1"))
+        let rework = try XCTUnwrap(entries(model).first { $0.id == "m1" })
+        XCTAssertEqual(rework.accessibilityLabel(time: "09:44"), "09:44, phase move, Entered Rework from QA, QA failed, by Symphony, new since you last looked")
+        // The run now is live: it says so instead of carrying the dot.
+        let run = try XCTUnwrap(model.items.first?.run)
+        XCTAssertTrue(run.isNew)
+        XCTAssertFalse(run.showsNewDot)
+        XCTAssertFalse(run.accessibilityLabel.contains(TimelineEntry.newWords))
+        XCTAssertEqual(TicketMarksRead.markerText(lookedAt, clock: TimelineModel.clock(utc)), "Since you last looked, at 09:40")
+    }
+
+    func testAFirstVisitShowsNoMarkerAndNoDotsThoughTheFeedCallsEverythingNew() throws {
+        let history = try page([
+            #"{"id": "a", "at": "2026-10-08T09:00:00Z", "type": "note", "actor": {"kind": "machine"}, "payload": {}, "summary": {"title": "Note added"}, "new": true}"#,
+            #"{"id": "b", "at": "2026-10-08T09:10:00Z", "type": "note", "actor": {"kind": "machine"}, "payload": {}, "summary": {"title": "Note again"}, "new": true}"#,
+        ])
+        let model = TimelineModel.build(history, reference: reference, calendar: utc)
+        XCTAssertNil(model.marker)
+        XCTAssertTrue(model.items.allSatisfy { !$0.isNew })
+    }
+
+    func testAnEndedRunWithANewEventCarriesTheDotAndTheLineGoesUnderIt() throws {
+        let history = try page([
+            #"{"id": "old", "at": "2026-10-08T08:00:00Z", "type": "note", "actor": {"kind": "machine"}, "payload": {}, "summary": {"title": "Note added"}, "new": false}"#,
+            #"{"kind": "run", "run_id": "run-1", "run_kind": "implementation", "run_number": 1, "status": "ended", "exit": "normal", "started_at": "2026-10-08T09:00:00Z", "ended_at": "2026-10-08T09:20:00Z", "events": [{"id": "r1", "at": "2026-10-08T09:00:00Z", "type": "run.started", "run_id": "run-1", "payload": {}, "new": true}]}"#,
+        ])
+        let lookedAt = ISO8601DateFormatter().date(from: "2026-10-08T08:30:00Z")!
+        let model = TimelineModel.build(history, reference: reference, calendar: utc, lookedAt: lookedAt)
+        let run = try XCTUnwrap(model.items.first?.run)
+        XCTAssertTrue(run.showsNewDot)
+        XCTAssertTrue(run.accessibilityLabel.hasSuffix(", new since you last looked"))
+        XCTAssertEqual(model.marker?.before, "entry-old")
+    }
+
+    func testNoMarkerWhenNothingIsNewOrNothingWasSeen() throws {
+        let seen = try page([
+            #"{"id": "a", "at": "2026-10-08T09:00:00Z", "type": "note", "actor": {"kind": "machine"}, "payload": {}, "summary": {"title": "Note added"}, "new": false}"#,
+        ])
+        XCTAssertNil(TimelineModel.build(seen, reference: reference, calendar: utc, lookedAt: lookedAt).marker)
+        let unseen = try page([
+            #"{"id": "a", "at": "2026-10-08T09:50:00Z", "type": "note", "actor": {"kind": "machine"}, "payload": {}, "summary": {"title": "Note added"}, "new": true}"#,
+        ])
+        let model = TimelineModel.build(unseen, reference: reference, calendar: utc, lookedAt: lookedAt)
+        XCTAssertNil(model.marker)
+        XCTAssertEqual(model.items.map(\.isNew), [true])
     }
 
     // MARK: - The entering motion

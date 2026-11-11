@@ -121,6 +121,7 @@ extension SymphonyWindowModel {
             sources.events = ticketSources.events
             sources.feedAbsence = ticketSources.feedAbsence
             ticketSources = sources
+            ticketLook.repoKnown(ticketPage?.repoKey, for: identifier)
             followTicketFeed(afterPoll: false)
         }
     }
@@ -309,6 +310,30 @@ extension SymphonyWindowModel {
                 readTicket()
             }
         }
+    }
+
+    // MARK: The look (TP-1451)
+
+    /// The place changed: leaving a ticket page sends its look, once, when the person had it in front for at least
+    /// `TicketLook.minimumVisit`; a read of the page never does, so the marker stays put for the visit.
+    func followTicketLook(now: Date = Date()) {
+        sendLook(ticketLook.show(shownTicket, at: now))
+    }
+
+    /// The window closes or the app quits: the page shown is left. The task ends once Symphony answered.
+    @discardableResult
+    func leaveTicketPage(now: Date = Date()) -> Task<Void, Never>? {
+        sendLook(ticketLook.leave(at: now))
+    }
+
+    /// Whether leaving now sends a look, so quitting waits for it.
+    var holdsLook: Bool { ticketLook.looks(at: Date()) }
+
+    /// Sends `look` quietly: a look Symphony didn't take only leaves the next visit's marker where it was.
+    @discardableResult
+    private func sendLook(_ look: ControlAction?) -> Task<Void, Never>? {
+        guard let look else { return nil }
+        return Task { _ = await onControl(look) }
     }
 
     private func readTicketPath(_ path: String) async -> Data? {
@@ -692,12 +717,11 @@ struct TicketPageBody: View {
                 LifecycleSection(model: LifecycleModel.build(lifecycle, phase: page.lifecycleRead?.phasePath?.current))
             }
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                Text(TimelineSection.title)
-                    .font(DesignTokens.TypeStyle.section.font)
-                    .accessibilityAddTraits(.isHeader)
+                TimelineTitle(marks: page.marksRead)
                 TimelineSection(
                     model: TimelineModel.build(
-                        page.history ?? TicketEventsPayload(), runNow: page.runNow, reference: page.reference, calendar: calendar
+                        page.history ?? TicketEventsPayload(), runNow: page.runNow, reference: page.reference, calendar: calendar,
+                        lookedAt: page.marksRead?.lookedAt
                     ),
                     transcripts: transcripts, calendar: calendar
                 )

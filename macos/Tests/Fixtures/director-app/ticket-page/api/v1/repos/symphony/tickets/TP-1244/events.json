@@ -18,7 +18,8 @@
         "detail": "Phase 3b chain"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "a2",
@@ -38,7 +39,8 @@
         "detail": "via move"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "a3",
@@ -56,7 +58,8 @@
         "title": "Entered In Progress from Todo"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "kind": "run",
@@ -88,7 +91,8 @@
             "title": "Implementation run 1 started"
           },
           "artifacts": [],
-          "children": []
+          "children": [],
+          "new": false
         },
         {
           "id": "r2",
@@ -101,7 +105,8 @@
             "title": "Write the code"
           },
           "artifacts": [],
-          "children": []
+          "children": [],
+          "new": false
         },
         {
           "id": "r3",
@@ -115,7 +120,8 @@
             "outcome": "passed"
           },
           "artifacts": [],
-          "children": []
+          "children": [],
+          "new": false
         },
         {
           "id": "r4",
@@ -128,7 +134,8 @@
             "title": "Tests"
           },
           "artifacts": [],
-          "children": []
+          "children": [],
+          "new": false
         },
         {
           "id": "r5",
@@ -144,7 +151,8 @@
             "returns_to_title": "Write the code"
           },
           "artifacts": [],
-          "children": []
+          "children": [],
+          "new": false
         },
         {
           "id": "r6",
@@ -158,7 +166,8 @@
             "tokens": 1840000
           },
           "artifacts": [],
-          "children": []
+          "children": [],
+          "new": false
         }
       ]
     },
@@ -182,7 +191,8 @@
         "title": "Paused: deploy freeze"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "p2",
@@ -202,7 +212,8 @@
         "detail": "Deploy freeze"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "p3",
@@ -220,7 +231,8 @@
         "title": "Also paused: holding for the build of a0be0aa"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "p4",
@@ -238,7 +250,8 @@
         "title": "Pause reason cleared: holding for the build of a0be0aa"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "p5",
@@ -265,7 +278,8 @@
         "detail": "Deploy freeze"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "p6",
@@ -284,7 +298,8 @@
         "title": "Waiting for a slot"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "b1",
@@ -304,7 +319,8 @@
         "detail": "Waiting for TP-1443 to finish"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "b2",
@@ -322,7 +338,8 @@
         "title": "Paused: waiting for TP-1443 to finish"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "b3",
@@ -341,7 +358,8 @@
         "title": "Blocked by TP-1443: It is in Todo."
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "b4",
@@ -364,7 +382,8 @@
         "detail": "Waiting for TP-1443 to finish"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "b5",
@@ -382,7 +401,8 @@
         "title": "Paused: waiting for TP-1443 to finish"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "b6",
@@ -401,7 +421,8 @@
         "title": "Blocked-by links paused the ticket"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "b7",
@@ -424,7 +445,8 @@
         "detail": "Waiting for TP-1443 to finish"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "b8",
@@ -442,7 +464,8 @@
         "title": "Blocked-by links lifted a pause"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "q1",
@@ -462,7 +485,8 @@
         "detail": "Two options, one recommended"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "q2",
@@ -485,7 +509,8 @@
         "detail": "In the Inbox"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "h1",
@@ -503,7 +528,8 @@
         "title": "Forced ahead of the queue"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "g1",
@@ -523,7 +549,8 @@
         "detail": "with the newest main"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "v1",
@@ -542,7 +569,8 @@
         "detail": "One finding"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": false
     },
     {
       "id": "v2",
@@ -562,7 +590,8 @@
         "title": "Finding: the timeline missed a stopped run"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": true
     },
     {
       "id": "n1",
@@ -581,7 +610,8 @@
         "detail": "Check the stopped run first"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": true
     },
     {
       "id": "m1",
@@ -600,7 +630,8 @@
         "detail": "QA failed"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": true
     },
     {
       "id": "m2",
@@ -619,7 +650,8 @@
         "detail": "QA failed"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "new": true
     },
     {
       "kind": "run",
@@ -648,7 +680,8 @@
             "effort": "high"
           },
           "artifacts": [],
-          "children": []
+          "children": [],
+          "new": true
         },
         {
           "id": "s2",
@@ -661,7 +694,8 @@
             "title": "Write the code"
           },
           "artifacts": [],
-          "children": []
+          "children": [],
+          "new": true
         },
         {
           "id": "s3",
@@ -675,7 +709,8 @@
             "outcome": "passed"
           },
           "artifacts": [],
-          "children": []
+          "children": [],
+          "new": true
         },
         {
           "id": "s4",
@@ -688,7 +723,8 @@
             "title": "Tests"
           },
           "artifacts": [],
-          "children": []
+          "children": [],
+          "new": true
         }
       ]
     }

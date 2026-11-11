@@ -440,9 +440,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     }
 
     /// Quitting stops an owned Symphony first, after confirming when agent runs are active. An Inbox answer held for
-    /// Undo is sent before, while Symphony still runs to take it.
+    /// Undo, and the look of the ticket page shown, are sent before, while Symphony still runs to take them.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard runner.isRunning || symphonyWindow.holdsAnswer else { return .terminateNow }
+        guard runner.isRunning || symphonyWindow.holdsAnswer || symphonyWindow.holdsLook else { return .terminateNow }
 
         Task {
             if runner.isRunning, !runner.isStopping, let message = StatusMenu.quitConfirmation(activeRuns: await runner.activeRunCount()) {
@@ -457,6 +457,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 }
             }
             await symphonyWindow.sendHeldAnswer()
+            await symphonyWindow.sendLook()
             guard runner.isRunning else { return sender.reply(toApplicationShouldTerminate: true) }
             runner.stop { sender.reply(toApplicationShouldTerminate: true) }
         }

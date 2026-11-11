@@ -62,6 +62,9 @@ public enum ControlAction: Equatable {
     case pauseRepository(key: String, reason: String)
     /// Resumes dispatch for the repository `key`.
     case resumeRepository(key: String)
+    /// Marks that the Director looked at the ticket now (TP-1451), in the repository `repoKey` when known: its next
+    /// page shows what came after as new. A view mark, not a move: Symphony records no history for it.
+    case looked(String, repoKey: String?)
 
     /// The request a decision answers: its Question, by the id the Inbox row carries (TP-1240), or, from a Symphony
     /// whose row names none, the request comment its answer replies under. Symphony accepts either.
@@ -161,6 +164,8 @@ public enum ControlAction: Equatable {
             return "api/v1/control/repos/\(key)/pause"
         case let .resumeRepository(key):
             return "api/v1/control/repos/\(key)/resume"
+        case .looked:
+            return "api/v1/control/looked"
         }
     }
 
@@ -175,7 +180,7 @@ public enum ControlAction: Equatable {
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
         case .pause, .pauseWithReason, .pauseForUpdate, .resume, .force, .stopForcing, .stop, .start, .note, .blocker,
-             .priority, .label, .decision, .pauseRepository, .resumeRepository:
+             .priority, .label, .decision, .pauseRepository, .resumeRepository, .looked:
             return nil
         }
     }
@@ -231,6 +236,8 @@ public enum ControlAction: Equatable {
             return ["issue_identifier": identifier, "label": label, "action": on ? "add" : "remove"]
         case let .decision(identifier, text):
             return ["issue_identifier": identifier, "text": text]
+        case let .looked(identifier, repoKey):
+            return repoKey.map { ["issue_identifier": identifier, "repo_key": $0] } ?? ["issue_identifier": identifier]
         }
     }
 
@@ -285,6 +292,8 @@ public enum ControlAction: Equatable {
             return "Couldn't pause \(key)"
         case let .resumeRepository(key):
             return "Couldn't resume \(key)"
+        case let .looked(identifier, _):
+            return "Couldn't mark \(identifier) as looked at"
         }
     }
 }

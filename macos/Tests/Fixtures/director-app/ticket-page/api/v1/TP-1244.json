@@ -2,6 +2,8 @@
   "issue_id": "i-1244",
   "issue_identifier": "TP-1244",
   "repo_key": "symphony",
+  "looked_at": "2026-10-08T09:30:00Z",
+  "new_since_looked": 8,
   "last_error": null,
   "ticket": {
     "title": "The paused line on the ticket page",

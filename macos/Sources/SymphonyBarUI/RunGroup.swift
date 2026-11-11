@@ -102,6 +102,12 @@ private struct RunHeaderLabel: View {
 
     @ViewBuilder private func lead(whereFixed: Bool) -> some View {
         StateMark(symbol: run.state.symbol, status: run.state.status, live: run.isLive, size: 15)
+        if run.showsNewDot {
+            Circle()
+                .fill(DesignTokens.SystemColor.accent.color)
+                .frame(width: 6, height: 6)
+                .help(TimelineEntry.newHelp)
+        }
         Text(run.title)
             .font(DesignTokens.TypeStyle.body.font.weight(.semibold))
             .lineLimit(1)

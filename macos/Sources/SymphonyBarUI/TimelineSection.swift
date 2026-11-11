@@ -6,8 +6,9 @@ import SymphonyBarCore
 // the day's history ran, each entry with its time, its class's glyph, what happened and who did it, and each run as
 // its Run group with the run now on top, unfolded. A row is selected with a click or the arrow keys (the accent tint
 // and ring), Return and Space fold the selected run, and Escape clears the selection. A new event drops in from 12 pt
-// above on a spring and its tint fades over 1.2 s; under Reduce Motion it is there at once. The marker line where the
-// person last looked and the new dot belong to the marks (14/26) and draw nothing yet.
+// above on a spring and its tint fades over 1.2 s; under Reduce Motion it is there at once. The marks (TP-1451): the
+// line "Since you last looked, at 16:50" above the newest item the person saw, and a small accent dot on every entry
+// and ended run newer than it; the Timeline title (`TimelineTitle`) counts the new events.
 
 /// The timeline's keys (§4 Keyboard): the arrows move the selection, Return and Space fold the selected run, Escape
 /// clears the selection.
@@ -78,6 +79,9 @@ public struct TimelineSection: View {
             ForEach(model.days) { day in
                 DaySeparator(day: day)
                 ForEach(day.items) { item in
+                    if let marker = model.marker, marker.before == item.id {
+                        SinceLookedLine(text: TicketMarksRead.markerText(marker.lookedAt, clock: clock))
+                    }
                     row(item)
                         .modifier(TimelineEntering(entering: !seen.contains(item.id), reduceMotion: reduceMotion) {
                             seen.insert(item.id)
@@ -147,6 +151,58 @@ public struct TimelineSection: View {
     }
 }
 
+/// The Timeline section's title, with the count of events new since the person last looked ("3 new") beside it.
+public struct TimelineTitle: View {
+    let marks: TicketMarksRead?
+
+    public init(marks: TicketMarksRead?) {
+        self.marks = marks
+    }
+
+    public var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+            Text(TimelineSection.title)
+                .font(DesignTokens.TypeStyle.section.font)
+                .accessibilityAddTraits(.isHeader)
+            if let new = marks?.newText {
+                Text(new)
+                    .font(DesignTokens.TypeStyle.callout.font.weight(.semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(DesignTokens.SystemColor.accent.color)
+                    .help(TimelineEntry.newHelp)
+                    .accessibilityLabel(marks?.newAccessibilityLabel ?? new)
+            }
+        }
+    }
+}
+
+/// The line where the person last looked: its words in the accent between two thin accent rules.
+private struct SinceLookedLine: View {
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
+            rule.frame(width: 12)
+            Text(text)
+                .font(DesignTokens.TypeStyle.caption.font.weight(.semibold))
+                .tracking(0.2)
+                .foregroundStyle(DesignTokens.SystemColor.accent.color)
+                .fixedSize()
+            rule
+        }
+        .padding(.vertical, DesignTokens.Space.s2)
+        .padding(.leading, TimelineSection.timeColumn + DesignTokens.Space.s2)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text)
+    }
+
+    private var rule: some View {
+        Rectangle()
+            .fill(DesignTokens.SystemColor.accent.color.opacity(0.4))
+            .frame(height: 1)
+    }
+}
+
 /// A day's separator: its date (and "Today" or "Yesterday"), how long its history ran, and a rule across.
 private struct DaySeparator: View {
     let day: TimelineDay
@@ -200,9 +256,10 @@ struct TimelineEntryRow: View {
                 .frame(width: TimelineSection.markColumn)
                 .help(Self.glyphHelp(entry.kind))
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(Text(entry.lead).fontWeight(.semibold))\(entry.rest.map { " " + $0 } ?? "")")
+                Text("\(newDot)\(Text(entry.lead).fontWeight(.semibold))\(entry.rest.map { " " + $0 } ?? "")")
                     .font(DesignTokens.TypeStyle.body.font)
                     .fixedSize(horizontal: false, vertical: true)
+                    .help(entry.isNew ? TimelineEntry.newHelp : "")
                 if let detail = entry.detail {
                     Text(detail)
                         .font(DesignTokens.TypeStyle.callout.font)
@@ -237,6 +294,15 @@ struct TimelineEntryRow: View {
     }
 
     static let durationHelp = "How long the pause lasted"
+
+    /// The small accent dot before what happened, on an entry newer than the person's last look.
+    private var newDot: Text {
+        guard entry.isNew else { return Text(verbatim: "") }
+        return Text(Image(systemName: "circle.fill"))
+            .font(.system(size: 6))
+            .baselineOffset(2.5)
+            .foregroundStyle(DesignTokens.SystemColor.accent.color) + Text(verbatim: "  ")
+    }
 
     /// What the glyph means, under the pointer: "Phase move".
     static func glyphHelp(_ kind: TimelineEntry.Kind) -> String {

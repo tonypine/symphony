@@ -403,6 +403,13 @@ the write, and `422` without `issue_identifier`.
 Each event of the events feed (`GET /api/v1/repos/:repo_key/tickets/:issue_identifier/events`, with or
 without `group=run`) carries `new`: `true` when it is later than the mark, or the person never looked.
 
+The Director sends the look when the person leaves a ticket page they had in front for at least two
+seconds: another place in the window, the window closing, or the app quitting. It never sends it on
+opening the page or from a read, so a page kept open keeps the `looked_at` it opened with: its line
+"Since you last looked" stays where it was for the visit, while each new event still comes `new` and gets
+its dot. A first visit (`looked_at` null) shows no line, no dots and no count, although the feed calls
+every event new then.
+
 A run reads the note when the prompt it builds carries the ticket's history summary, which holds every
 note in full. Symphony then records a machine `note.read` event naming the note (`note_id`) and the run
 (`run_id`), keyed by the note, so only the first read is kept. A preview of the prompt records nothing.
