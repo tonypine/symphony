@@ -149,27 +149,32 @@ private struct RunHeaderLabel: View {
     static let durationHelp = "How long the run took"
 }
 
-/// A short bar per step, in its state's tint; the one it is on breathes while it works, still under Reduce Motion.
+/// A short bar per step, in its state's tint; the one it is on breathes while it works (on a layer: `Breathing`), still
+/// under Reduce Motion and in a snapshot.
 struct StepBars: View {
     let steps: [RunStep]
-    @State private var flowing = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     var body: some View {
         HStack(spacing: 3) {
             ForEach(steps) { step in
-                Capsule()
-                    .fill(step.state == .skipped ? AnyShapeStyle(.quaternary) : AnyShapeStyle(step.state.status.tint))
+                bar(step)
                     .frame(width: 14, height: 4)
-                    .opacity(step.isLive && flowing ? 0.45 : 1)
                     .help("\(step.title): \(step.state.word.lowercased())")
             }
         }
         .fixedSize()
         .accessibilityHidden(true)
-        .onAppear {
-            guard !reduceMotion, steps.contains(where: \.isLive) else { return }
-            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { flowing = true }
+    }
+
+    @ViewBuilder private func bar(_ step: RunStep) -> some View {
+        if step.isLive, !reduceMotion, !offscreenSnapshot {
+            // The bar's own shape under the layer keeps its tooltip: the layer takes no pointer.
+            Capsule().fill(.clear).contentShape(Capsule())
+                .background { Breathing(color: step.state.status.tint, change: .opacity, from: 1, to: 0.45, duration: 0.9) }
+        } else {
+            Capsule().fill(step.state == .skipped ? AnyShapeStyle(.quaternary) : AnyShapeStyle(step.state.status.tint))
         }
     }
 }
