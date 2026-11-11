@@ -1573,8 +1573,10 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
       pid = start_orchestrator(ctx, :ResumeNothingOrchestrator)
       {:ok, _pause} = Pauses.set(:symphony, UsageLimit.reason(hold(ctx), ctx.now, []))
 
-      assert {:error, {:nothing_to_resume, [%{kind: :environment, waits_on: %{condition: @condition}, text: "Claude's 5-hour limit until " <> _time}]}} =
-               Orchestrator.resume_dispatch(pid)
+      assert {:error, {:nothing_to_resume, [reason]}} = Orchestrator.resume_dispatch(pid)
+
+      assert %{kind: :environment, waits_on: %{condition: @condition}, text: "Claude's 5-hour limit until " <> _time} =
+               reason
 
       assert {:ok, %{reasons: [%{kind: :environment}]}} = Pauses.get(:symphony)
 
