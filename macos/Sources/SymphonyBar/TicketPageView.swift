@@ -641,15 +641,21 @@ final class TicketPageScroll: ObservableObject {
     }
 
     func update(viewport: Double) {
-        if self.viewport != viewport { self.viewport = viewport }
+        let changed = self.viewport != viewport
+        TicketPageLayoutTrace.record("viewport", changed: changed)
+        if changed { self.viewport = viewport }
     }
 
     func update(insets: EdgeInsets) {
-        if self.insets != insets { self.insets = insets }
+        let changed = self.insets != insets
+        TicketPageLayoutTrace.record("insets", changed: changed)
+        if changed { self.insets = insets }
     }
 
     func update(row: CGRect) {
-        if self.row != row { self.row = row }
+        let changed = self.row != row
+        TicketPageLayoutTrace.record("row", changed: changed)
+        if changed { self.row = row }
     }
 }
 

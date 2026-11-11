@@ -419,28 +419,24 @@ struct StateMark: View {
     }
 }
 
-/// The working dot, breathing while it works (its halo on a layer: `Breathing`); still under Reduce Motion and in a
-/// snapshot.
+/// The working dot, breathing while it works; still under Reduce Motion.
 struct LiveDot: View {
     var size: Double = 8
+    @State private var breathing = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
-
-    /// The halo's size against the dot's: at rest, and at the top of a breath.
-    static let haloScale = (rest: 1.6, breath: 2.2)
-    static let breathDuration = 1.2
 
     var body: some View {
-        let halo = DesignTokens.Status.working.tint.opacity(0.25)
         Circle()
             .fill(DesignTokens.Status.working.tint)
             .frame(width: size, height: size)
             .background {
-                if reduceMotion || offscreenSnapshot {
-                    Circle().fill(halo).scaleEffect(Self.haloScale.rest)
-                } else {
-                    Breathing(color: halo, change: .scale, from: Self.haloScale.rest, to: Self.haloScale.breath, duration: Self.breathDuration)
-                }
+                Circle()
+                    .fill(DesignTokens.Status.working.tint.opacity(0.25))
+                    .scaleEffect(breathing ? 2.2 : 1.6)
+            }
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) { breathing = true }
             }
     }
 }
