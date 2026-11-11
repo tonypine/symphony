@@ -1410,6 +1410,33 @@ func phasePaths(width: CGFloat) -> some View {
     .background(DesignTokens.Surface.content.color)
 }
 
+// MARK: - The facts rail's Pull request and Connected panels (TP-1446)
+
+/// Three tickets (`Tests/Fixtures/facts-rail`): a green PR and nothing connected; a red PR with three workflows; no PR
+/// yet, in an epic, with one blocker resolved yesterday and one open.
+let factsFixtures = here.appendingPathComponent("../Fixtures/facts-rail").standardizedFileURL
+let factsReference = ISO8601DateFormatter().date(from: "2026-11-10T15:00:00Z")!
+let factsTickets = ["green-pr", "red-pr", "blockers"]
+
+/// The two panels of `name`'s facts rail, one under the other, `width` wide: the laptop's (340 pt) or the desktop's
+/// (440 pt).
+@MainActor
+func factsRail(_ name: String, width: CGFloat) -> some View {
+    guard let data = try? Data(contentsOf: factsFixtures.appendingPathComponent("\(name).json")),
+          let read = TicketFactsRead.decode(data)
+    else { fatalError("The facts rail fixture \(name) is missing from \(factsFixtures.path)") }
+    return VStack(alignment: .leading, spacing: DesignTokens.Space.s5) {
+        PullRequestPanel(model: PullRequestPanelModel.build(read.pullRequest), open: { _ in })
+        ConnectedPanel(
+            model: ConnectedPanelModel.build(read.connected, reference: factsReference, calendar: timelineCalendar),
+            openTicket: { _ in }, openInitiatives: {}
+        )
+    }
+    .frame(width: width, alignment: .leading)
+    .padding(DesignTokens.Space.s5)
+    .background(DesignTokens.Surface.window.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1507,6 +1534,12 @@ MainActor.assumeIsolated {
         }
         render(phasePaths(width: 780), scheme, to: "phase-path-laptop-\(suffix).png")
         render(phasePaths(width: 1040), scheme, to: "phase-path-desktop-\(suffix).png")
+        // The facts rail's Pull request and Connected panels (TP-1446): a green PR, a red PR with three workflows and a
+        // ticket with a resolved and an open blocker, at the laptop's and the desktop's rail widths.
+        for name in factsTickets {
+            render(factsRail(name, width: FactsRail.laptopWidth), scheme, to: "facts-rail-\(name)-laptop-\(suffix).png")
+            render(factsRail(name, width: FactsRail.desktopWidth), scheme, to: "facts-rail-\(name)-desktop-\(suffix).png")
+        }
         render(review(width: 640, picks: picks), scheme, to: "inbox-write-in-\(suffix).png")
         // Chips inside the question, story and options, wrapping with the text (TP-952).
         render(review(width: 1200), scheme, to: "decision-chips-wide-\(suffix).png")
