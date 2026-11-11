@@ -126,6 +126,19 @@ extension SymphonyWindowModel {
         }
     }
 
+    /// A run's More › Read the whole session: the session reader on `run` of `identifier`, following the run while the
+    /// page shows the ticket.
+    func readSession(_ identifier: String, run: RunGroupModel) {
+        let runID = run.id
+        onReadSession(identifier, run) { [weak self] in self?.sessionRun(identifier, runID: runID) }
+    }
+
+    /// Run `runID` of `identifier` as the page has it now; nil once the page shows another ticket or lost the run.
+    func sessionRun(_ identifier: String, runID: String) -> RunGroupModel? {
+        guard shownTicket == identifier, let page = ticketPage else { return nil }
+        return page.timelineModel(calendar: .current).run(runID)
+    }
+
     /// Opens the Stop Run sheet on `identifier`; nothing is sent until its button is pressed.
     func openStopRun(_ identifier: String, origin: StopRunSheet.Origin) {
         guard !stopInFlight else { return }
@@ -364,6 +377,18 @@ struct TicketPageActions {
     var copy: (String) -> Void = DetailsPanel.pasteboardCopy
     /// The Note panel's Save Note.
     var saveNote: () -> Void = {}
+    /// A run's More › Read the whole session: the session reader on that run.
+    var readSession: (RunGroupModel) -> Void = { _ in }
+}
+
+extension TicketPage {
+    /// The page's Timeline: its history with the run now's step, lines and tokens so far, and the marks.
+    func timelineModel(calendar: Calendar) -> TimelineModel {
+        TimelineModel.build(
+            history ?? TicketEventsPayload(), runNow: runNow, liveTokens: runTokens, reference: reference, calendar: calendar,
+            lookedAt: marksRead?.lookedAt
+        )
+    }
 }
 
 extension SymphonyWindowModel {
@@ -453,7 +478,8 @@ struct TicketPageContent: View {
                     openTicket: model.openTicket,
                     openInitiatives: { model.show(.initiatives) },
                     copy: model.copy,
-                    saveNote: model.submitNote
+                    saveNote: model.submitNote,
+                    readSession: { model.readSession(identifier, run: $0) }
                 ),
                 transcripts: model.stepTranscripts,
                 note: model.ticketNote,
@@ -719,13 +745,12 @@ struct TicketPageBody: View {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 TimelineTitle(marks: page.marksRead)
                 TimelineSection(
-                    model: TimelineModel.build(
-                        page.history ?? TicketEventsPayload(), runNow: page.runNow, reference: page.reference, calendar: calendar,
-                        lookedAt: page.marksRead?.lookedAt
-                    ),
+                    model: page.timelineModel(calendar: calendar),
+                    idle: TimelineIdleLine(page.situation, reference: page.reference),
                     transcripts: transcripts, calendar: calendar
                 )
                 .id(page.identifier)
+                .environment(\.readSession, ReadSessionAction(actions.readSession))
             }
         }
     }

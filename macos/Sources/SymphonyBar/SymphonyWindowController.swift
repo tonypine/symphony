@@ -33,14 +33,8 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
 
     private var window: NSWindow?
     private var model: SymphonyWindowModel?
-    /// The transcript windows (D4), which stay open after the main window closes.
-    private lazy var transcripts: TranscriptWindows = {
-        let transcripts = TranscriptWindows(client: client)
-        transcripts.reference = { [weak self] in
-            self?.client.stateJSON.flatMap(OverviewState.decode)?.generatedAt ?? Date()
-        }
-        return transcripts
-    }()
+    /// The session readers (D4, TP-1452), which stay open after the main window closes.
+    private lazy var readers = SessionReaderWindows(client: client)
     private var state = WindowState.stopped
     private var paused = false
     private var updateHold: UpdateHold?
@@ -194,8 +188,8 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
                 guard let secrets = self?.secrets else { return .failed("The app's secrets aren't available to run symphony check.") }
                 return await ReposWindowController.configCheck(path, secrets: secrets)
             }
-            model.onOpenTranscript = { [weak self] identifier, repoKey, newWindow in
-                self?.transcripts.open(identifier: identifier, repoKey: repoKey, newWindow: newWindow)
+            model.onReadSession = { [weak self] identifier, run, follow in
+                self?.readers.open(identifier: identifier, run: run, follow: follow)
             }
             self.model = model
 

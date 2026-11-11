@@ -67,6 +67,19 @@ final class TimelineTests: XCTestCase {
         XCTAssertTrue(runs[0].opensByDefault)
         XCTAssertFalse(runs[1].opensByDefault)
         XCTAssertEqual(runs[1].state, .failed)
+        // The run now is the timeline's first line, and each run is found by its id (TP-1452).
+        let model = try model()
+        XCTAssertEqual(model.runNow?.id, "run-2")
+        XCTAssertEqual(model.run("run-1")?.state, .failed)
+        XCTAssertNil(model.run("run-9"))
+    }
+
+    func testWithNoRunWorkingTheTimelineHasNoRunNow() throws {
+        let history = try page([#"{"kind": "run", "run_id": "r", "run_kind": "qa", "run_number": 1, "status": "passed", "started_at": "2026-10-08T09:00:00Z", "events": []}"#])
+        let model = TimelineModel.build(history, reference: reference, calendar: utc)
+        XCTAssertEqual(model.items.first?.run?.id, "r")
+        XCTAssertNil(model.runNow)
+        XCTAssertNil(TimelineModel.build(TicketEventsPayload(), reference: reference, calendar: utc).runNow)
     }
 
     func testTheRunNowIsOnTopEvenWhenSomethingHappenedSinceItStarted() throws {

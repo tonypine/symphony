@@ -10,7 +10,7 @@ final class TicketPageTests: XCTestCase {
 
     // MARK: - D3 from the shipped fixtures
 
-    func testAWorkingTicketShowsNowTheTimelineItsFactsAndTheLastMessage() throws {
+    func testAWorkingTicketShowsNowTheTimelineItsFactsAndItsTokensSoFar() throws {
         let page = try fixturePage("SHOP-305")
 
         XCTAssertEqual(page.title, "Checkout total rounding")
@@ -35,6 +35,8 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(now.tokens.value, "1.2M of 2M")
         XCTAssertEqual(try XCTUnwrap(now.tokens.fraction), 0.62, accuracy: 0.001)
         XCTAssertEqual(now.tokens.note, "Per-ticket cap")
+        // The run now's tokens so far, for its line on the timeline; the provider's last message isn't kept (TP-1452).
+        XCTAssertEqual(page.runTokens, 1_240_000)
 
         // The timeline: run 1 failed, then run 2 live.
         XCTAssertEqual(page.timeline.map(\.title), ["Implementation run 1", "Implementation run 2"])
@@ -53,7 +55,6 @@ final class TicketPageTests: XCTestCase {
             TicketPage.Fact(label: "Type", value: "Ticket"),
             TicketPage.Fact(label: "Forced", value: "Yes"),
         ])
-        XCTAssertEqual(page.lastMessage, "Waiting on npm test")
         XCTAssertEqual(page.apiPath, "api/v1/SHOP-305")
     }
 
@@ -309,7 +310,7 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(page.facts.map(\.label), ["State", "Type", "Initiative", "Forced"])
         XCTAssertEqual(page.facts[1].value, "Ticket")
         XCTAssertEqual(page.timeline.map(\.title), [])
-        XCTAssertEqual(page.lastMessage, "boom")
+        XCTAssertNil(page.runTokens)
         XCTAssertEqual(page.workspacePath, "/w/T-1")
     }
 

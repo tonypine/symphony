@@ -14,6 +14,7 @@ public struct RunGroup: View {
     let fold: Binding<Bool>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.readSession) private var readSession
 
     /// `unfolded` and `unfoldedSteps` say what is open to start with; nil opens what opens by default. `fold`, when
     /// given, keeps whether the run is unfolded instead, and `unfolded` is ignored.
@@ -32,8 +33,13 @@ public struct RunGroup: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            FoldHeader(unfolded: unfolded, accessibilityLabel: run.foldAccessibilityLabel(folded: !unfolded) + ", " + run.accessibilityLabel, toggle: toggle) {
-                RunHeaderLabel(run: run, folded: !unfolded)
+            HStack(alignment: .center, spacing: DesignTokens.Space.s1) {
+                FoldHeader(unfolded: unfolded, accessibilityLabel: run.foldAccessibilityLabel(folded: !unfolded) + ", " + run.accessibilityLabel, toggle: toggle) {
+                    RunHeaderLabel(run: run, folded: !unfolded)
+                }
+                if let readSession {
+                    RunMoreMenu(run: run, readSession: readSession)
+                }
             }
             .padding(.vertical, DesignTokens.Space.s1)
             if unfolded {
@@ -76,6 +82,62 @@ public struct RunGroup: View {
     }
 
     public static let noSteps = "This run recorded no steps."
+}
+
+/// Opens the session reader on a run: the window that reads its whole session (TP-1452). A Run group shows its More
+/// menu only where the view around it gives one.
+public struct ReadSessionAction {
+    let handler: (RunGroupModel) -> Void
+
+    public init(_ handler: @escaping (RunGroupModel) -> Void) {
+        self.handler = handler
+    }
+
+    public func callAsFunction(_ run: RunGroupModel) { handler(run) }
+}
+
+public extension EnvironmentValues {
+    @Entry var readSession: ReadSessionAction?
+}
+
+/// The run's More: "Read the whole session", off with its reason while the run has nothing to read.
+private struct RunMoreMenu: View {
+    let run: RunGroupModel
+    let readSession: ReadSessionAction
+
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    private var canRead: Bool { SessionReader.canRead(run) }
+
+    var body: some View {
+        Group {
+            // `ImageRenderer` draws no menu: a snapshot shows its button's face.
+            if offscreenSnapshot {
+                face
+            } else {
+                Menu {
+                    Button(SessionReader.menuTitle) { readSession(run) }
+                        .disabled(!canRead)
+                } label: {
+                    face
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+            }
+        }
+        .fixedSize()
+        .help(canRead ? Self.title : SessionReader.nothingToRead)
+        .accessibilityLabel(Self.title + ", " + run.title)
+        .accessibilityHint(canRead ? SessionReader.menuTitle : SessionReader.nothingToRead)
+    }
+
+    private var face: some View {
+        Image(systemName: "ellipsis.circle")
+            .font(.system(size: 13, weight: .regular))
+            .foregroundStyle(.secondary)
+    }
+
+    static let title = "More"
 }
 
 /// The run's header line. In a column too narrow for it on one line (the desktop's main column beside the decisions,

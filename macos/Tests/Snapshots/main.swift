@@ -1301,6 +1301,48 @@ func timelineSinceLooked() -> some View {
     .background(DesignTokens.Surface.content.color)
 }
 
+// MARK: - The run in place (TP-1452)
+
+/// `identifier`'s Timeline as its page draws it, in the laptop's 780 pt column: the run now on top with its step and
+/// newest lines, or, with no run, the line from the situation (`situation` stands in for the read's own).
+@MainActor
+func timelineInPlace(_ identifier: String, situation: Situation? = nil) -> some View {
+    let page = ticketPageRead(identifier)
+    return VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+        TimelineTitle(marks: nil)
+        TimelineSection(
+            model: page.timelineModel(calendar: timelineCalendar),
+            idle: TimelineIdleLine(situation ?? page.situation, reference: page.reference),
+            transcripts: StepTranscripts { _ in .unreachable }, calendar: timelineCalendar
+        )
+        .environment(\.readSession, ReadSessionAction { _ in })
+    }
+    .padding(DesignTokens.Space.s5)
+    .frame(width: 780, alignment: .leading)
+    .background(DesignTokens.Surface.content.color)
+}
+
+/// The three no-run lines: TP-1245 waiting on you, the same ticket waiting for a slot, and TP-1246 shipped.
+let noRunMoments: [(String, String, Situation?)] = [
+    ("waiting-on-you", "TP-1245", nil),
+    ("waiting-for-slot", "TP-1245", Situation(
+        kind: .slot, cause: "Every slot is taken: 3 of 3 runs are working.", next: "It starts when one frees up.",
+        since: ISO8601DateFormatter().date(from: "2026-10-08T10:20:00Z")
+    )),
+    ("shipped", "TP-1246", nil),
+]
+
+/// The session reader on run 1 of TP-1376 (`Tests/Fixtures/run-steps`): every step's lines, the tests step's failing
+/// result expanded in place.
+@MainActor
+func sessionReader() -> some View {
+    let transcripts = runStepTranscripts()
+    let reader = SessionReader.build(identifier: "TP-1376", run: runStepGroups[0]) { transcripts.lines($0) }
+    let failing = reader.lines.first { $0.line.failed && $0.expands } ?? reader.lines.first { $0.expands }
+    return SessionReaderPage(reader: reader, expanded: Set([failing?.id].compactMap { $0 }))
+        .frame(width: 820, alignment: .topLeading)
+}
+
 /// `identifier`'s decisions, as the facts rail's Decisions panel reads them.
 @MainActor
 func ticketPageDecisions(_ identifier: String) -> [TicketDecision] {
@@ -1451,6 +1493,13 @@ MainActor.assumeIsolated {
         render(timeline(width: 780, selection: "entry-b2", unfoldedRuns: ["run-2", "run-1"]), scheme, to: "timeline-selected-\(suffix).png")
         // The marks (TP-1451): the Timeline title's count, the line where you last looked and the dots above it.
         render(timelineSinceLooked(), scheme, to: "timeline-since-looked-\(suffix).png")
+        // The run in place (TP-1452): the run now on top with its newest lines, the no-run line for three situations, and
+        // the session reader with a line expanded.
+        render(timelineInPlace("TP-1244"), scheme, to: "timeline-run-now-\(suffix).png")
+        for (name, identifier, situation) in noRunMoments {
+            render(timelineInPlace(identifier, situation: situation), scheme, to: "timeline-no-run-\(name)-\(suffix).png")
+        }
+        render(sessionReader(), scheme, to: "session-reader-\(suffix).png")
         // The Lifecycle section and the Phase path (TP-1445): a ticket mid-way, one Done and one at 95 % of its cap, at
         // the laptop's and the desktop's column widths; their phase paths in full and compact.
         for name in lifecycleTickets {

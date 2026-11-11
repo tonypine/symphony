@@ -443,7 +443,7 @@ doing now, for the run in place on the ticket page (facts 4, 8 and 13 of
 | Field | What it holds |
 | --- | --- |
 | `current_step` | The step the run started and has not ended, from its `step.started` on the ledger: `id`, `title`, `mode` and `started_at`. Null between steps and on a run with no step list. |
-| `recent_lines` | The newest lines of that step, oldest first and at most 20, from the session stream the orchestrator buffers for the run (the transcript window reads the same stream and is unchanged). Each is a line as below; a tool line carries only the tool's name, since the stream holds no arguments. Empty when `current_step` is null. |
+| `recent_lines` | The newest lines of that step, oldest first and at most 20, from the session stream the orchestrator buffers for the run (the Director's session reader shows them for the step the run now is on). Each is a line as below; a tool line carries only the tool's name, since the stream holds no arguments. Empty when `current_step` is null. |
 
 Once a step ends, its whole slice of the session transcript is a `transcript` artifact on its
 `step.completed`, served by `GET /api/v1/artifacts/:id` like any other, so the Director's timeline unfolds
