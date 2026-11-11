@@ -918,6 +918,8 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
 
       key = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == "qa_key"))
       assert %{"items" => %{"enum" => ["command", "shift", "option", "control"]}} = key["inputSchema"]["properties"]["modifiers"]
+      # A ⌘ shortcut reaches the app's menu as a keyboard's does (TP-1469).
+      assert key["description"] =~ "a ⌘ shortcut goes as a keyboard sends it, so the app's menu runs it"
 
       response = DynamicTool.execute("qa_check_app", %{"pid" => 1, "page" => "Decide"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
       assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
