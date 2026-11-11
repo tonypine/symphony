@@ -741,6 +741,9 @@ public struct DecisionSheet: View {
                     Image(systemName: "xmark")
                 }
                 .directorButton(.quiet, size: .small)
+                // Escape presses it wherever the keyboard is in the sheet: an option card that has the keyboard
+                // doesn't pass the exit command on to the sheet.
+                .keyboardShortcut(.cancelAction)
                 .help("Close (Esc)")
                 .accessibilityLabel("Close")
             }
@@ -802,6 +805,10 @@ private struct DecisionSheetLayer<Sheet: View>: ViewModifier {
                             .shadow(color: Color(nsColor: .shadowColor).opacity(0.22), radius: 24, x: -4)
                             .transition(reduceMotion ? .opacity : .move(edge: .trailing))
                             .onExitCommand { isPresented = false }
+                            .onKeyPress(.escape) {
+                                isPresented = false
+                                return .handled
+                            }
                             .accessibilityAddTraits(.isModal)
                     }
                 }
