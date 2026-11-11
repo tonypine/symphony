@@ -27,12 +27,6 @@ extension SymphonyWindowModel {
         peek.close()
     }
 
-    /// The toolbar's inspector toggle and ⌥⌘I on the Inbox.
-    func togglePeek() {
-        peek.toggle()
-        readPeek()
-    }
-
     /// What a peek page shows: a ticket's page from everything the window has read, or a pull request's, or the line
     /// for a mention Symphony can't see.
     func peekContent(_ entry: PeekEntry) -> PeekContent {
