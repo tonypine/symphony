@@ -286,11 +286,7 @@ final class APIFixturesTests: XCTestCase {
     /// update to v9.9.9, with two runs finishing (`update-paused`) or none (`update-paused-idle`).
     func testTheUpdateFixturesReadAsDispatchPausedForAnUpdate() throws {
         let utc = TimeZone(identifier: "UTC")!
-        let expected = [
-            "update-paused": "2 runs are finishing. Symphony updates and resumes dispatch when they end; no new run starts until then.",
-            "update-paused-idle": "Nothing is running. Symphony updates and resumes dispatch next; no new run starts until then.",
-        ]
-        for (name, context) in expected {
+        for name in ["update-paused", "update-paused-idle"] {
             let directory = Self.shippedRunning.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
             let shipped = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl"))
             let data = shipped.answer(URLRequest(url: SymphonyState.stateURL(base: APIFixtures.baseURL))).0
@@ -302,9 +298,10 @@ final class APIFixturesTests: XCTestCase {
             XCTAssertEqual(control.accessibilityLabel, "Dispatch paused, updating to v9.9.9", name)
             XCTAssertEqual(control.pauseFacts.first, TicketList.Fact(label: "By", value: "an update to v9.9.9"), name)
 
-            let overview = Overview(state: state, now: Date(), timeZone: utc)
-            XCTAssertEqual(overview.mood, .paused, name)
-            XCTAssertEqual(overview.context, context, name)
+            // Home says dispatch is paused, and offers no Resume while the update holds it.
+            let board = HomeBoard(state: state, updating: true, now: Date(), timeZone: utc)
+            XCTAssertNotNil(board.pauseSentence, name)
+            XCTAssertFalse(board.showsResume, name)
         }
     }
 
@@ -321,7 +318,7 @@ final class APIFixturesTests: XCTestCase {
             let data = shipped.answer(URLRequest(url: SymphonyState.stateURL(base: APIFixtures.baseURL))).0
             let state = try XCTUnwrap(OverviewState.decode(data), name)
             let now = Date(timeIntervalSince1970: 1_791_385_200) // 2026-10-07 15:00 UTC, the fixtures' day
-            XCTAssertEqual(Overview(state: state, now: now, timeZone: utc).pauseLines, lines, name)
+            XCTAssertEqual(HomeBoard(state: state, now: now, timeZone: utc).pauseLines, lines, name)
             XCTAssertEqual(Array(StatusMenu.detailLines(.paused(state.snapshot, external: false), now: now, timeZone: utc).dropFirst()), lines, name)
         }
     }

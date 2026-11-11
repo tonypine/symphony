@@ -94,18 +94,6 @@ public struct TicketList: Equatable {
             default: kinds?.contains(row.kind) ?? true
             }
         }
-
-        /// The filter a flow strip tile opens Tickets on; nil for Waiting on you, which opens the Inbox.
-        public init?(stage: Overview.StageKind) {
-            switch stage {
-            case .queued: self = .waitingForSlot
-            // Review, QA and landing tickets read Working (a reviewer, a QA pass or the landing at work), as `Stage.kind`
-            // and Symphony's situation classify them, so their tiles open the list that holds them.
-            case .working, .review, .merging: self = .working
-            case .waitingOnYou: return nil
-            case .shippedToday: self = .shipped
-            }
-        }
     }
 
     /// A row of the table (C19), and what the inspector shows of it.

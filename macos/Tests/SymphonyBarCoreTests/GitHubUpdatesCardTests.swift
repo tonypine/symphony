@@ -288,7 +288,7 @@ final class GitHubUpdatesCardTests: XCTestCase {
     func testTheOverviewShowsARowWhileInstantUpdatesStopped() throws {
         let data = try Data(contentsOf: Self.fixture("github-updates-degraded").appendingPathComponent("api/v1/state.json"))
         var state = try XCTUnwrap(OverviewState.decode(data))
-        let row = try XCTUnwrap(Overview(state: state, now: now).problems.first { $0.id == "github-updates" })
+        let row = try XCTUnwrap(Overview.problems(state, now: now).first { $0.id == "github-updates" })
         XCTAssertEqual(row.kinds, [.githubUpdates])
         XCTAssertEqual(row.severity, .warning)
         XCTAssertEqual(row.sentence, "Instant GitHub updates stopped: the relay is down.")
@@ -300,22 +300,22 @@ final class GitHubUpdatesCardTests: XCTestCase {
         state.snapshot.setup?.githubUpdates?.relay = .init(kind: "smee", label: "smee.io", runsInSymphony: false)
         state.snapshot.setup?.githubUpdates?.repos[0].relayState = nil
         state.snapshot.setup?.githubUpdates?.repos[1].relayState = nil
-        let quiet = try XCTUnwrap(Overview(state: state, now: now).problems.first { $0.id == "github-updates" })
+        let quiet = try XCTUnwrap(Overview.problems(state, now: now).first { $0.id == "github-updates" })
         XCTAssertEqual(quiet.sentence, "Instant GitHub updates stopped: GitHub went quiet.")
         XCTAssertEqual(quiet.fixes, [.openSetup])
 
         state.snapshot.setup?.githubUpdates?.secret.present = false
-        let secret = try XCTUnwrap(Overview(state: state, now: now).problems.first { $0.id == "github-updates" })
+        let secret = try XCTUnwrap(Overview.problems(state, now: now).first { $0.id == "github-updates" })
         XCTAssertEqual(secret.sentence, "Instant GitHub updates fail the secret check.")
         XCTAssertEqual(secret.fixes, [.openSetup])
 
         // Instant, off, or a setup under way: no row.
         for name in ["github-updates", "github-updates-off"] {
             let healthy = try XCTUnwrap(OverviewState.decode(try Data(contentsOf: Self.fixture(name).appendingPathComponent("api/v1/state.json"))))
-            XCTAssertFalse(Overview(state: healthy, now: now).problems.contains { $0.id == "github-updates" }, name)
+            XCTAssertFalse(Overview.problems(healthy, now: now).contains { $0.id == "github-updates" }, name)
         }
         state.snapshot.setup?.githubUpdates?.mode = .needsSetup
-        XCTAssertFalse(Overview(state: state, now: now).problems.contains { $0.id == "github-updates" })
+        XCTAssertFalse(Overview.problems(state, now: now).contains { $0.id == "github-updates" })
         XCTAssertNil(GitHubUpdatesCard.attention(nil))
     }
 

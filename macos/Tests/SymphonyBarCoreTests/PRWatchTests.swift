@@ -482,15 +482,13 @@ final class PRWatchTests: XCTestCase {
                 WatchState.SilentWait(identifier: "T-7", bound: "rate_limit_reset"),
             ]
         )
-        let overview = Overview(state: state, now: reference)
-        XCTAssertEqual(overview.mood, .attention)
-        XCTAssertEqual(overview.sentence, "3 things need attention.")
-        XCTAssertEqual(overview.problems.map(\.sentence), [
+        let problems = Overview.problems(state, now: reference)
+        XCTAssertEqual(problems.map(\.sentence), [
             "T-5 in Rework: nothing is running and nothing says why.",
             "T-6 in Merging: CI has been running longer than the wait allows, and nothing says why.",
             "T-7: GitHub's request limit should have reset by now, and nothing has read the PR since.",
         ])
-        let row = overview.problems[0]
+        let row = problems[0]
         XCTAssertEqual(row.kinds, [.silentWait])
         XCTAssertEqual(row.severity, .problem)
         XCTAssertEqual(row.age, "5 min")
@@ -500,13 +498,11 @@ final class PRWatchTests: XCTestCase {
         XCTAssertEqual(row.ticketIdentifier, "T-5")
 
         // Under one repo's scope only its own; the badge counts every repo.
-        let scoped = Overview(state: state, scope: .repo("web"), now: reference)
-        XCTAssertEqual(scoped.problems.map(\.id), ["T-5", "T-7"])
-        XCTAssertEqual(scoped.sentence, "2 things need attention.")
+        XCTAssertEqual(Overview.problems(state, scope: .repo("web"), now: reference).map(\.id), ["T-5", "T-7"])
         XCTAssertEqual(Overview.badgeCount(state, now: reference), 3)
 
-        let one = Overview(state: OverviewState(generatedAt: reference, silentWaits: [state.silentWaits[0]]), now: reference)
-        XCTAssertEqual(one.sentence, "1 thing needs attention.")
+        let one = Overview.problems(OverviewState(generatedAt: reference, silentWaits: [state.silentWaits[0]]), now: reference)
+        XCTAssertEqual(one.count, 1)
     }
 
     func testTheOverviewReadsSilentWaitsFromTheState() throws {
@@ -515,7 +511,7 @@ final class PRWatchTests: XCTestCase {
         object["silent_waits"] = [["identifier": "SHOP-400", "phase": "rework", "repo_key": "web-shop"]]
         let state = try XCTUnwrap(OverviewState.decode(json(object)))
         XCTAssertEqual(state.silentWaits.map(\.identifier), ["SHOP-400"])
-        XCTAssertTrue(Overview(state: state, now: reference).problems.contains { $0.id == "SHOP-400" && $0.kinds == [.silentWait] })
+        XCTAssertTrue(Overview.problems(state, now: reference).contains { $0.id == "SHOP-400" && $0.kinds == [.silentWait] })
     }
 
     // MARK: - S16: a watcher decision's evidence, and items that leave by themselves
@@ -690,11 +686,10 @@ final class PRWatchTests: XCTestCase {
         XCTAssertEqual(try page("TP-701", check: check).updated, "Updated 3 s ago · check")
 
         // Step 3: the silent Rework ticket.
-        let overview = Overview(state: try XCTUnwrap(OverviewState.decode(state)), now: reference)
-        XCTAssertEqual(overview.sentence, "1 thing needs attention.")
-        XCTAssertEqual(overview.problems.map(\.sentence), ["TP-702 in Rework: nothing is running and nothing says why."])
-        XCTAssertEqual(overview.problems.first?.fixes.map(\.title), ["Check Now", "Open Ticket"])
-        XCTAssertEqual(overview.problems.first?.note, PRWatchCard.silentExpectation)
+        let problems = Overview.problems(try XCTUnwrap(OverviewState.decode(state)), now: reference)
+        XCTAssertEqual(problems.map(\.sentence), ["TP-702 in Rework: nothing is running and nothing says why."])
+        XCTAssertEqual(problems.first?.fixes.map(\.title), ["Check Now", "Open Ticket"])
+        XCTAssertEqual(problems.first?.note, PRWatchCard.silentExpectation)
 
         // Step 4: the protected-paths decision, its evidence, and the next item after it.
         let list = InboxList(items: inbox.items)
@@ -723,8 +718,8 @@ final class PRWatchTests: XCTestCase {
 
     func testTheNoProgressFixtureListsTheHeldTicketWithItsReasonAndAge() throws {
         let state = try Data(contentsOf: fixtureDirectory("pr-watch-no-progress").appendingPathComponent("state.json"))
-        let overview = Overview(state: try XCTUnwrap(OverviewState.decode(state)), now: reference)
-        let held = try XCTUnwrap(overview.problems.first { $0.sentence.hasPrefix("TP-702 ") })
+        let problems = Overview.problems(try XCTUnwrap(OverviewState.decode(state)), now: reference)
+        let held = try XCTUnwrap(problems.first { $0.sentence.hasPrefix("TP-702 ") })
         XCTAssertEqual(held.sentence, "TP-702 in Rework: its last runs changed nothing, so it stays paused until its PR changes or you answer.")
         XCTAssertEqual(held.ageSeconds, 1452)
         XCTAssertEqual(WatchState.decode(state).silentWaits.first?.reason, "No progress: the last 2 turns in Rework made no new commit and no state change")

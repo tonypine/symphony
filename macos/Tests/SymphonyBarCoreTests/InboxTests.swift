@@ -228,12 +228,9 @@ final class InboxTests: XCTestCase {
                 return XCTFail("\(name)'s state doesn't read as a state")
             }
             let status = SymphonyStatus.running(snapshot, external: true)
-            let overview = Overview(state: state, now: Date())
-            let tile = try XCTUnwrap(overview.stages.first { $0.kind == .waitingOnYou })
 
             XCTAssertEqual(InboxList(items: inbox.items).totalCount, inbox.items.count, name)
             XCTAssertEqual(state.snapshot.waitingOnYou.count, inbox.items.count, name)
-            XCTAssertEqual(tile.count, inbox.items.count, name)
             XCTAssertEqual(StatusMenu.badgeCount(for: status), inbox.items.isEmpty ? nil : inbox.items.count, name)
             XCTAssertEqual(StatusMenu.waitingMenu(status).tickets.map(\.identifier), Array(inbox.items.map(\.identifier).prefix(5)), name)
         }

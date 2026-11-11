@@ -1116,33 +1116,26 @@ struct SymphonyDetail: View {
     }
 }
 
-/// D1: the Overview, from `/api/v1/state` and `/api/v1/repos`, under the window's scope.
+/// D1: Home, the board of every open ticket Symphony works, from `/api/v1/state`'s dispatch order under the window's
+/// scope.
 struct OverviewContent: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
 
     var body: some View {
         if let state = model.overviewWithSetup {
-            OverviewView(
-                overview: Overview(state: state, scope: model.scope, repos: model.repos, updating: model.updateHold != nil, now: Date()),
-                actions: OverviewActions(
+            HomeView(
+                board: HomeBoard(state: state, scope: model.scope, updating: model.updateHold != nil, now: Date()),
+                actions: HomeActions(
                     resume: { model.send(.resume) },
-                    perform: model.perform,
                     controlInFlight: model.controlInFlight,
-                    checkingNow: model.checkingNow,
-                    openInbox: { model.showInbox() },
-                    openTicket: model.openTicket,
-                    openTickets: model.showTickets,
-                    openInitiative: model.showInitiative,
-                    openUsage: model.showUsage,
-                    openShipped: { model.showShipped() }
-                ),
-                initiatives: model.initiativesList?.active ?? []
+                    openTicket: model.openTicket
+                )
             )
         } else if client.stateResult == .unsupported {
             EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
         } else {
-            EmptyState(title: "Reading Symphony's state…", symbol: SymphonyView.overview.symbol, showsSpinner: true)
+            EmptyState(title: HomeBoard.readingOrder, symbol: SymphonyView.overview.symbol, showsSpinner: true)
         }
     }
 }

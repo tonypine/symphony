@@ -168,7 +168,7 @@ public enum PauseSheet {
     public static let stays = "Runs working now go on to their end. Nothing moves in Linear, and Resume Dispatch starts dispatch again."
     public static let reasonLabel = "Reason (optional)"
     public static let reasonPrompt = "Deploy freeze"
-    public static let reasonHelp = "Shown wherever the pause shows: the toolbar, the Overview and the menu."
+    public static let reasonHelp = "Shown wherever the pause shows: the toolbar, Home and the menu."
     public static let buttonTitle = "Pause Dispatch"
 
     /// The request the sheet sends: the reason typed, or the app's own when none was.
