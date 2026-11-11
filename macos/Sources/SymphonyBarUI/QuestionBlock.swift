@@ -635,6 +635,9 @@ public struct DecisionSheet: View {
     /// Closes the sheet; nil for the desktop's column, which stays open and has no close button.
     var close: (() -> Void)?
     var narrow: Bool
+    /// Why Send stays off whatever is picked (the ticket page's sheet, until answering from it lands); nil when the
+    /// picks decide.
+    var sendOff: String?
     @FocusState private var firstAnswer: Bool
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
@@ -646,7 +649,8 @@ public struct DecisionSheet: View {
         writeIn: @escaping (String, Int) -> Void = { _, _ in },
         send: @escaping () -> Void,
         close: (() -> Void)? = nil,
-        narrow: Bool = false
+        narrow: Bool = false,
+        sendOff: String? = nil
     ) {
         self.questions = questions
         self.picks = picks
@@ -656,6 +660,14 @@ public struct DecisionSheet: View {
         self.send = send
         self.close = close
         self.narrow = narrow
+        self.sendOff = sendOff
+    }
+
+    /// Send under the Questions: the picks' answer, off with `sendOff` when it is set.
+    private var sheetSend: QuestionSend {
+        var send = QuestionSend(questions: questions, picks: picks)
+        if let sendOff { send.refusal = sendOff }
+        return send
     }
 
     public var body: some View {
@@ -669,7 +681,7 @@ public struct DecisionSheet: View {
                 ScrollView { questionList }
             }
             Divider()
-            QuestionSendArea(send: QuestionSend(questions: questions, picks: picks), action: send)
+            QuestionSendArea(send: sheetSend, action: send)
                 .padding(DesignTokens.Space.s4)
         }
         .frame(maxHeight: .infinity)
@@ -729,6 +741,9 @@ public struct DecisionSheet: View {
                     Image(systemName: "xmark")
                 }
                 .directorButton(.quiet, size: .small)
+                // Escape presses it wherever the keyboard is in the sheet: an option card that has the keyboard
+                // doesn't pass the exit command on to the sheet.
+                .keyboardShortcut(.cancelAction)
                 .help("Close (Esc)")
                 .accessibilityLabel("Close")
             }
@@ -790,6 +805,10 @@ private struct DecisionSheetLayer<Sheet: View>: ViewModifier {
                             .shadow(color: Color(nsColor: .shadowColor).opacity(0.22), radius: 24, x: -4)
                             .transition(reduceMotion ? .opacity : .move(edge: .trailing))
                             .onExitCommand { isPresented = false }
+                            .onKeyPress(.escape) {
+                                isPresented = false
+                                return .handled
+                            }
                             .accessibilityAddTraits(.isModal)
                     }
                 }

@@ -53,18 +53,6 @@ func review(_ item: InboxItem, width: CGFloat, picks: DecisionPicks = DecisionPi
         .background(DesignTokens.Surface.content.color)
 }
 
-/// TP-892's ticket page (D3), its brief and earlier decisions from its Inbox item, in a 1200 pt window beside the
-/// sidebar.
-@MainActor
-func ticketPage() -> some View {
-    let state = try? Data(contentsOf: fixture.deletingLastPathComponent().appendingPathComponent("state.json"))
-    let page = TicketPage(identifier: "TP-892", sources: TicketPage.Sources(state: state), timeZone: TimeZone(identifier: "UTC")!)
-    let width = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
-    return TicketPageBody(page: page, brief: TicketPage.Brief(identifier: "TP-892", items: inbox.items), actions: TicketPageActions(), width: width)
-        .frame(width: width)
-        .background(DesignTokens.Surface.content.color)
-}
-
 /// A chip's popover (N2, N3, or a mention Symphony can't see). `ImageRenderer` draws no glass, so it sits on the
 /// window's surface.
 @MainActor
@@ -113,21 +101,6 @@ let watchState = try Data(contentsOf: watchAPI.appendingPathComponent("state.jso
 let watchNow = ISO8601DateFormatter().date(from: "2026-10-16T12:04:12Z")!
 guard let watchInbox = InboxPayload.decode(try Data(contentsOf: watchAPI.appendingPathComponent("inbox.json"))) else {
     fatalError("The PR and CI fixture's Inbox doesn't read")
-}
-
-/// S15: a ticket's whole page with its PR and CI card, in a 1200 pt window beside the sidebar.
-@MainActor
-func watchPage(_ identifier: String) -> some View {
-    let issue = try? Data(contentsOf: watchAPI.appendingPathComponent("\(identifier).json"))
-    let decision = watchInbox.items.contains { $0.identifier == identifier && $0.isDecision }
-    let page = TicketPage(
-        identifier: identifier, sources: TicketPage.Sources(state: watchState, issue: issue, inboxDecision: decision),
-        now: watchNow, timeZone: TimeZone(identifier: "UTC")!
-    )
-    let width = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
-    return TicketPageBody(page: page, actions: TicketPageActions(), width: width)
-        .frame(width: width)
-        .background(DesignTokens.Surface.content.color)
 }
 
 /// S16: the protected-paths decision's review, with what the watcher found above its options.
@@ -662,70 +635,8 @@ func planUnaskedApprove() -> some View {
 let ledgerAPI = here.appendingPathComponent("../Fixtures/director-app/ticket-ledger/api/v1").standardizedFileURL
 let ledgerNow = ISO8601DateFormatter().date(from: "2026-10-18T11:20:00Z")!
 
-/// SHOP-410's page in a window `window` pt wide beside the sidebar, with the note field pinned under it as the window
-/// shows it: the laptop viewport (1440) and the desktop one (2560).
-@MainActor
-func ledgerPage(
-    window: CGFloat, api: URL = ledgerAPI, feed: Bool = true, note: TicketNoteComposer? = nil, repositoryPaused: Bool = false, blockers: TicketBlockersEditor? = nil,
-    priority: TicketPriorityEditor? = nil, labels: TicketLabelsEditor? = nil, decisions: TicketDecisionsEditor? = nil
-) -> some View {
-    let events = feed ? (try? Data(contentsOf: api.appendingPathComponent("repos/web-shop/tickets/SHOP-410/events.json"))).flatMap(TicketEventsPayload.decode) : nil
-    var page = TicketPage(
-        identifier: "SHOP-410",
-        sources: TicketPage.Sources(
-            state: try? Data(contentsOf: ledgerAPI.appendingPathComponent("state.json")),
-            issue: try? Data(contentsOf: ledgerAPI.appendingPathComponent("SHOP-410.json")),
-            events: events,
-            feedAbsence: feed ? .unread : .unsupported
-        ),
-        now: ledgerNow, timeZone: TimeZone(identifier: "UTC")!
-    )
-    page.repositoryPaused = repositoryPaused
-    let width = window - DesignTokens.Layout.sidebarWidth
-    return VStack(spacing: 0) {
-        TicketPageBody(page: page, actions: TicketPageActions(), width: width, blockers: blockers, priority: priority, labels: labels,
-            decisions: decisions
-        )
-        TicketNoteBar(page: page, composer: note ?? TicketNoteComposer(), submit: {})
-    }
-    .frame(width: width)
-    .background(DesignTokens.Surface.content.color)
-}
-
 // A run's steps (TP-1413): SHOP-410 with a step history, its failed tests' output listed and its build's gone.
 let stepsAPI = here.appendingPathComponent("../Fixtures/director-app/ticket-steps/api/v1").standardizedFileURL
-
-/// The step output's sheet at its ideal size: the test output read, or one Symphony no longer keeps.
-@MainActor
-func outputSheet(gone: Bool) -> some View {
-    let id = "2b6e3b53b1dbea0958f2c191d2001ebef2d53a2f6aada7b72f44ed91636736c8"
-    let output = TicketOutput(id: id, label: gone ? "Build output" : "Test output", path: "api/v1/artifacts/\(id)", available: !gone)
-    let text = (try? String(contentsOf: stepsAPI.appendingPathComponent("artifacts/\(id).txt"), encoding: .utf8)) ?? ""
-    return VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-        Text(output.label).font(DesignTokens.TypeStyle.sentence.font)
-        OutputState(output: output, text: gone ? .unavailable : .loaded(text))
-    }
-    .padding(DesignTokens.Space.s5)
-    .frame(width: 900, height: 600)
-    .background(DesignTokens.Surface.content.color)
-}
-
-/// The note field alone, under a laptop window's page: a refusal with the feed read (`absence` nil), and the field off
-/// for an older Symphony or a ticket that hasn't run.
-@MainActor
-func ledgerNoteBar(absence: TicketFeedAbsence? = nil, note: TicketNoteComposer) -> some View {
-    let page = TicketPage(
-        identifier: "SHOP-410",
-        sources: TicketPage.Sources(
-            issue: try? Data(contentsOf: ledgerAPI.appendingPathComponent("SHOP-410.json")),
-            events: absence == nil ? TicketEventsPayload() : nil, feedAbsence: absence ?? .unread
-        ),
-        now: ledgerNow
-    )
-    return TicketNoteBar(page: page, composer: note, submit: {})
-        .frame(width: 1440 - DesignTokens.Layout.sidebarWidth)
-        .background(DesignTokens.Surface.content.color)
-}
 
 // The paused line (TP-1244): the `paused-ticket` fixture's tickets with one, two and three pause reasons.
 let pausedAPI = here.appendingPathComponent("../Fixtures/director-app/paused-ticket/api/v1").standardizedFileURL
@@ -742,52 +653,8 @@ func blockedReview(_ identifier: String, window: CGFloat) -> some View {
     return review(item, width: window - DesignTokens.Layout.sidebarWidth - DesignTokens.Layout.listColumnWidth)
 }
 
-/// A paused ticket's page in a window `window` pt wide beside the sidebar: the laptop viewport (1440) and the desktop
-/// one (2560); `releasing` while its unblock is on its way.
-@MainActor
-func pausedPage(_ identifier: String, window: CGFloat, releasing: Bool = false) -> some View {
-    let page = TicketPage(
-        identifier: identifier,
-        sources: TicketPage.Sources(
-            state: try? Data(contentsOf: pausedAPI.appendingPathComponent("state.json")),
-            issue: try? Data(contentsOf: pausedAPI.appendingPathComponent("\(identifier).json"))
-        ),
-        now: ledgerNow, timeZone: TimeZone(identifier: "UTC")!
-    )
-    let width = window - DesignTokens.Layout.sidebarWidth
-    return TicketPageBody(page: page, actions: TicketPageActions(releasing: releasing), width: width)
-        .frame(width: width)
-        .background(DesignTokens.Surface.content.color)
-}
-
 // Move to… (TP-1328): the `parked-backlog` fixture's SHOP-430, parked in Backlog by the dispatch loop.
 let parkedAPI = here.appendingPathComponent("../Fixtures/director-app/parked-backlog/api/v1").standardizedFileURL
-
-/// SHOP-430's page in a window `window` pt wide beside the sidebar, its action bar with Move to…, and the banner after
-/// the move when `banner`.
-@MainActor
-func parkedPage(window: CGFloat, banner: Bool = false) -> some View {
-    let page = TicketPage(
-        identifier: "SHOP-430",
-        sources: TicketPage.Sources(
-            state: try? Data(contentsOf: parkedAPI.appendingPathComponent("state.json")),
-            issue: try? Data(contentsOf: parkedAPI.appendingPathComponent("SHOP-430.json"))
-        ),
-        now: ledgerNow, timeZone: TimeZone(identifier: "UTC")!
-    )
-    let width = window - DesignTokens.Layout.sidebarWidth
-    let moved = InboxBanner(itemID: "SHOP-430", identifier: "SHOP-430", text: "Moved to In Progress", undo: true)
-    return VStack(spacing: 0) {
-        TicketPageBody(page: page, actions: TicketPageActions(), width: width)
-        if banner {
-            InboxBannerView(banner: moved, undo: {}, close: {})
-                .padding(.horizontal, DesignTokens.Space.s5)
-                .padding(.bottom, DesignTokens.Space.s3)
-        }
-    }
-    .frame(width: width)
-    .background(DesignTokens.Surface.content.color)
-}
 
 /// The sheet Move to… → In Progress opens on SHOP-430, with the walkthrough's note typed.
 @MainActor
@@ -801,31 +668,6 @@ func moveSheet(error: String? = nil) -> some View {
 // `start-now-paused` fixture's, on a paused Symphony.
 let startAPI = here.appendingPathComponent("../Fixtures/director-app/start-now/api/v1").standardizedFileURL
 let startPausedAPI = here.appendingPathComponent("../Fixtures/director-app/start-now-paused/api/v1").standardizedFileURL
-
-/// SHOP-320's page in a window `window` pt wide beside the sidebar, its action bar with Start Now: `starting` while its
-/// call is on its way, and the refusal banner after a refused start when `refused`.
-@MainActor
-func startPage(window: CGFloat, api: URL = startAPI, starting: Bool = false, refused: String? = nil) -> some View {
-    let page = TicketPage(
-        identifier: "SHOP-320",
-        sources: TicketPage.Sources(
-            state: try? Data(contentsOf: api.appendingPathComponent("state.json")),
-            issue: try? Data(contentsOf: api.appendingPathComponent("SHOP-320.json"))
-        ),
-        now: now, timeZone: TimeZone(identifier: "UTC")!
-    )
-    let width = window - DesignTokens.Layout.sidebarWidth
-    return VStack(spacing: 0) {
-        TicketPageBody(page: page, actions: TicketPageActions(starting: starting), width: width)
-        if let refused {
-            InboxBannerView(banner: .failed(itemID: "SHOP-320", identifier: "SHOP-320", message: refused), undo: {}, close: {})
-                .padding(.horizontal, DesignTokens.Space.s5)
-                .padding(.bottom, DesignTokens.Space.s3)
-        }
-    }
-    .frame(width: width)
-    .background(DesignTokens.Surface.content.color)
-}
 
 /// Start Now disabled for each reason Symphony refuses a start with, its tooltip standing in beside it (`ImageRenderer`
 /// draws no tooltip), then the Tickets row menu's entry with its reason under the title.
@@ -858,75 +700,6 @@ func startDisabledReasons() -> some View {
     .padding(DesignTokens.Space.s5)
     .frame(width: 760, alignment: .leading)
     .background(DesignTokens.Surface.window.color)
-}
-
-/// The Blocked by card (TP-1354) on SHOP-410's page: two blockers, the add field with a typed identifier, and the
-/// refusal of the ticket as its own blocker when `refused`.
-@MainActor
-func blockersEditor(refused: Bool) -> TicketBlockersEditor {
-    TicketBlockersEditor(
-        identifier: "SHOP-410",
-        blockers: [
-            .init(identifier: "SHOP-402", title: "Fix the CSV exporter's date column", state: "In Progress"),
-            .init(identifier: "SHOP-399", title: "Move exports to the jobs queue", state: "Todo"),
-        ],
-        candidates: [.init(identifier: "SHOP-411", title: "Rename the export button", state: "Todo")],
-        load: .loaded,
-        entry: refused ? "SHOP-410" : "",
-        refusal: refused ? "Couldn't add SHOP-410 as a blocker of SHOP-410: SHOP-410 can't block itself. (HTTP 409)" : nil
-    )
-}
-
-/// The Priority card (TP-1355) on SHOP-410's page: Low, and the refusal of a pick when `refused`.
-@MainActor
-func priorityEditor(refused: Bool) -> TicketPriorityEditor {
-    TicketPriorityEditor(
-        identifier: "SHOP-410", priority: .low, load: .loaded,
-        refusal: refused ? "Couldn't set SHOP-410 to Urgent: Linear didn't set SHOP-410 to Urgent, so nothing changed. Try again in a moment. (HTTP 502)" : nil
-    )
-}
-
-/// The Decisions card (TP-1357) on SHOP-410's page: a Decide answer and the Director's ruling, with a ruling being
-/// written, and the refusal of one when `refused`.
-@MainActor
-func decisionsEditor(refused: Bool) -> TicketDecisionsEditor {
-    TicketDecisionsEditor(
-        identifier: "SHOP-410",
-        decisions: [
-            TicketDecision(
-                id: "D1", date: "2026-11-01", title: "Excel export", question: "Ship the Excel export here, or leave it for SHOP-330?",
-                answer: "Ship CSV in this ticket; Excel waits for SHOP-330.", scope: "Deferred to SHOP-330"
-            ),
-            TicketDecision(
-                id: "D2", date: "2026-11-03", title: "Ruling by the Director",
-                question: "No question asked: the Director recorded this ruling on the ticket page.",
-                answer: "Keep the old endpoint until TP-1400 lands", scope: "As answered"
-            ),
-        ],
-        load: .loaded,
-        text: refused ? "Keep the old endpoint until TP-1400 lands" : "",
-        refusal: refused ? "Couldn't record the decision on SHOP-410: SHOP-410 already has this decision (D2). (HTTP 409)" : nil
-    )
-}
-
-/// The Labels card (TP-1356) on SHOP-410's page: Feature on, and the refusal of a toggle when `refused`.
-@MainActor
-func labelsEditor(refused: Bool) -> TicketLabelsEditor {
-    let rows = [
-        ("plan", "Plan", "Groom into sub-tickets before any work starts"),
-        ("type:bug", "Bug", "The bug steps, and back to Backlog without its sections"),
-        ("type:feature", "Feature", "The feature steps, and back to Backlog without its sections"),
-        ("qa:skip", "Skip QA", "Once approved, it goes on without a QA pass"),
-        ("skip-update-hold", "Skip the app update wait", "Doesn't wait for an app update with its blocker's fix"),
-        ("qa:live", "QA on the live server", "QA runs Symphony's own server, whatever Symphony picks"),
-        ("qa:fixture", "QA on fixtures", "QA reads the committed fixtures only, whatever Symphony picks"),
-        ("needs-human", "needs-human", "Code Review asks you before approving"),
-    ]
-    return TicketLabelsEditor(
-        identifier: "SHOP-410", toggles: rows.map { TicketLabelToggle(label: $0.0, title: $0.1, effect: $0.2, on: $0.0 == "type:feature") },
-        load: .loaded,
-        refusal: refused ? "Couldn't turn on Skip QA on SHOP-410: Linear has no qa:skip label, so Symphony couldn't turn on Skip QA on SHOP-410. Create the label in Linear, then try again. (HTTP 502)" : nil
-    )
 }
 
 // The shared styles (TP-1438): one state per snapshot, each on the content surface with room for the focus ring.
@@ -1486,6 +1259,77 @@ func factsDetails(_ name: String, width: CGFloat) -> some View {
     .background(DesignTokens.Surface.window.color)
 }
 
+// MARK: - The ticket page at laptop width (TP-1448)
+
+/// Three moments of one ticket (`Tests/Fixtures/director-app/ticket-page`): TP-1244 with a run working on its tests,
+/// TP-1245 waiting on your answer, TP-1246 shipped, each read with its events feed, its decisions and the Inbox.
+let ticketPageAPI = here.appendingPathComponent("../Fixtures/director-app/ticket-page/api/v1").standardizedFileURL
+let ticketPageMoments = [("TP-1244", "running"), ("TP-1245", "waiting"), ("TP-1246", "shipped")]
+let ticketPageInbox: InboxPayload = {
+    guard let inbox = InboxPayload.decode(try! Data(contentsOf: ticketPageAPI.appendingPathComponent("inbox.json"))) else {
+        fatalError("The ticket page fixture's Inbox doesn't read")
+    }
+    return inbox
+}()
+
+/// `identifier`'s page as the window builds it from the fixture.
+func ticketPageRead(_ identifier: String) -> TicketPage {
+    func data(_ path: String) -> Data? { try? Data(contentsOf: ticketPageAPI.appendingPathComponent(path)) }
+    let events = data("repos/symphony/tickets/\(identifier)/events.json").flatMap(TicketEventsPayload.decode)
+    return TicketPage(
+        identifier: identifier,
+        sources: TicketPage.Sources(state: data("state.json"), issue: data("\(identifier).json"), events: events, feedAbsence: .unread),
+        timeZone: TimeZone(identifier: "UTC")!
+    )
+}
+
+/// `identifier`'s decisions, as the facts rail's Decisions panel reads them.
+@MainActor
+func ticketPageDecisions(_ identifier: String) -> [TicketDecision] {
+    let editor = TicketDecisionsEditor()
+    editor.show(identifier)
+    editor.apply(try? Data(contentsOf: ticketPageAPI.appendingPathComponent("tickets/\(identifier)/decisions.json")), for: identifier)
+    return editor.decisions
+}
+
+/// The whole page of `identifier` in a 1440 × 900 window beside the sidebar: about 1180 pt of content, the rail at
+/// 340 pt. The page scrolls as one, so it is drawn at its whole height, down to the rail's foot.
+@MainActor
+func ticketPageLaptop(_ identifier: String) -> some View {
+    let page = ticketPageRead(identifier)
+    let width = TicketPageLayout.laptopPageWidth
+    return TicketPageBody(
+        page: page, questions: TicketPage.questions(of: identifier, in: ticketPageInbox.items), width: width,
+        transcripts: StepTranscripts { _ in .unreachable }, note: TicketNoteComposer(identifier: identifier),
+        decisions: ticketPageDecisions(identifier), calendar: timelineCalendar
+    )
+    .frame(width: width, alignment: .topLeading)
+    .frame(minHeight: TicketPageLayout.laptopWindowHeight, alignment: .top)
+    .background(DesignTokens.Surface.content.color)
+}
+
+/// TP-1245's page in the 1440 × 900 window with Answer pressed: the decision sheet over the dimmed page, Send off.
+@MainActor
+func ticketPageAnswering() -> some View {
+    let identifier = "TP-1245"
+    let page = ticketPageRead(identifier)
+    let width = TicketPageLayout.laptopPageWidth
+    let questions = TicketPage.questions(of: identifier, in: ticketPageInbox.items)
+    return TicketPageBody(
+        page: page, questions: questions, width: width, transcripts: StepTranscripts { _ in .unreachable },
+        note: TicketNoteComposer(identifier: identifier), decisions: ticketPageDecisions(identifier), sheetOpen: true,
+        calendar: timelineCalendar
+    )
+    .frame(width: width, height: TicketPageLayout.laptopWindowHeight, alignment: .top)
+    .clipped()
+    .background(DesignTokens.Surface.content.color)
+    .decisionSheet(isPresented: .constant(true)) {
+        DecisionSheet(questions: questions, picks: DecisionPicks(), subtitle: page.sheetSubtitle, pick: { _, _ in }, send: {}, close: {},
+                      sendOff: DecisionsLine.sendLaterReason)
+            .frame(height: TicketPageLayout.laptopWindowHeight)
+    }
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1537,22 +1381,6 @@ MainActor.assumeIsolated {
             render(actionRailAllowed(width: width), scheme, to: "action-rail-allowed-\(name)-\(suffix).png")
             render(actionRailRefusals(width: width), scheme, to: "action-rail-refusals-\(name)-\(suffix).png")
         }
-        // The Blocked by card (TP-1354): the laptop and desktop viewports, and the refusal of a ticket as its own blocker.
-        render(ledgerPage(window: 1440, blockers: blockersEditor(refused: false)), scheme, to: "ticket-blockers-1440-\(suffix).png")
-        render(ledgerPage(window: 2560, blockers: blockersEditor(refused: false)), scheme, to: "ticket-blockers-2560-\(suffix).png")
-        render(ledgerPage(window: 1440, blockers: blockersEditor(refused: true)), scheme, to: "ticket-blockers-refused-\(suffix).png")
-        // The Priority card (TP-1355): the laptop and desktop viewports, and a pick Linear refused.
-        render(ledgerPage(window: 1440, priority: priorityEditor(refused: false)), scheme, to: "ticket-priority-1440-\(suffix).png")
-        render(ledgerPage(window: 2560, priority: priorityEditor(refused: false)), scheme, to: "ticket-priority-2560-\(suffix).png")
-        render(ledgerPage(window: 1440, priority: priorityEditor(refused: true)), scheme, to: "ticket-priority-refused-\(suffix).png")
-        // The Labels card (TP-1356): the laptop and desktop viewports, and a toggle Linear refused.
-        render(ledgerPage(window: 1440, labels: labelsEditor(refused: false)), scheme, to: "ticket-labels-1440-\(suffix).png")
-        render(ledgerPage(window: 2560, labels: labelsEditor(refused: false)), scheme, to: "ticket-labels-2560-\(suffix).png")
-        render(ledgerPage(window: 1440, labels: labelsEditor(refused: true)), scheme, to: "ticket-labels-refused-\(suffix).png")
-        // The Decisions card (TP-1357): the laptop and desktop viewports, and a ruling Symphony refused.
-        render(ledgerPage(window: 1440, decisions: decisionsEditor(refused: false)), scheme, to: "ticket-decisions-1440-\(suffix).png")
-        render(ledgerPage(window: 2560, decisions: decisionsEditor(refused: false)), scheme, to: "ticket-decisions-2560-\(suffix).png")
-        render(ledgerPage(window: 1440, decisions: decisionsEditor(refused: true)), scheme, to: "ticket-decisions-refused-\(suffix).png")
         // The Question block and the decision sheet (TP-1442): the option card's states, the block with nothing picked,
         // an option picked, the own-words card blank and written, and the sheet with one Question, one of two answered
         // and both.
@@ -1595,6 +1423,11 @@ MainActor.assumeIsolated {
             render(factsDetails(name, width: FactsRail.laptopWidth), scheme, to: "facts-rail-\(name)-laptop-\(suffix).png")
             render(factsDetails(name, width: FactsRail.desktopWidth), scheme, to: "facts-rail-\(name)-desktop-\(suffix).png")
         }
+        // The ticket page at laptop width (TP-1448): a run working, waiting on you, shipped; and Answer's sheet open.
+        for (identifier, moment) in ticketPageMoments {
+            render(ticketPageLaptop(identifier), scheme, to: "ticket-page-\(moment)-laptop-\(suffix).png")
+        }
+        render(ticketPageAnswering(), scheme, to: "ticket-page-answer-sheet-laptop-\(suffix).png")
         render(review(width: 640, picks: picks), scheme, to: "inbox-write-in-\(suffix).png")
         // Chips inside the question, story and options, wrapping with the text (TP-952).
         render(review(width: 1200), scheme, to: "decision-chips-wide-\(suffix).png")
@@ -1609,19 +1442,15 @@ MainActor.assumeIsolated {
         render(peekPage("TP-891"), scheme, to: "peek-ticket-\(suffix).png")
         render(peekPage("#448"), scheme, to: "peek-pr-\(suffix).png")
         render(peekBesideReview(), scheme, to: "peek-beside-review-\(suffix).png")
-        // The same chips in the other reviews and on the ticket page (TP-988).
+        // The same chips in the other reviews (TP-988).
         for (identifier, name) in [("TP-923", "plan"), ("TP-895", "pr"), ("TP-896", "clarify"), ("TP-897", "blocked")] {
             render(review(identifier), scheme, to: "\(name)-chips-\(suffix).png")
         }
-        render(ticketPage(), scheme, to: "ticket-page-chips-\(suffix).png")
         render(planQuestions(), scheme, to: "plan-questions-\(suffix).png")
         render(planUnapplied(), scheme, to: "plan-unapplied-\(suffix).png")
         render(planUnasked(), scheme, to: "plan-unasked-\(suffix).png")
         render(planUnaskedApprove(), scheme, to: "plan-unasked-approve-\(suffix).png")
-        // The PR and CI watcher (TP-946): S15's states, S16 and S17.
-        for (identifier, name) in [("TP-701", "ci"), ("TP-704", "competing"), ("TP-707", "fix-ticket"), ("TP-703", "on-hold"), ("TP-709", "pr-closed")] {
-            render(watchPage(identifier), scheme, to: "pr-watch-\(name)-\(suffix).png")
-        }
+        // The PR and CI watcher (TP-946): S16 and S17.
         render(watcherDecision(), scheme, to: "watcher-decision-\(suffix).png")
         render(silentWaitOverview(), scheme, to: "silent-wait-\(suffix).png")
         // Setup (TP-910): the page with problems, its Details, healthy, no Linear key, and the fix sheets.
@@ -1684,52 +1513,18 @@ MainActor.assumeIsolated {
         render(pullRequestPage(unavailablePullRequest), scheme, to: "pr-page-github-unavailable-\(suffix).png")
         render(pullRequestPage(untrackedPullRequest), scheme, to: "pr-page-untracked-\(suffix).png")
         render(pullRequestPage(.notFound), scheme, to: "pr-page-not-found-\(suffix).png")
-        // The note field under a ticket's timeline (TP-1195): laptop and desktop, a refusal, an older Symphony, and a
-        // ticket that hasn't run.
-        // A run's steps (TP-1413): the failed step failed with its output to open, the paused one stopped, the gone
-        // output unavailable; the output's sheet, read and gone.
-        render(ledgerPage(window: 1440, api: stepsAPI), scheme, to: "ticket-steps-laptop-\(suffix).png")
-        render(ledgerPage(window: 2560, api: stepsAPI), scheme, to: "ticket-steps-desktop-\(suffix).png")
-        render(outputSheet(gone: false), scheme, to: "ticket-step-output-\(suffix).png")
-        render(outputSheet(gone: true), scheme, to: "ticket-step-output-gone-\(suffix).png")
-        render(ledgerPage(window: 1440), scheme, to: "ticket-note-laptop-\(suffix).png")
-        render(ledgerPage(window: 2560), scheme, to: "ticket-note-desktop-\(suffix).png")
-        let long = String(repeating: "Keep the run header visible. ", count: 160)
-        render(ledgerNoteBar(note: TicketNoteComposer(identifier: "SHOP-410", text: long, refusal: TicketNoteComposer.tooLong(long))),
-               scheme, to: "ticket-note-refused-\(suffix).png")
-        render(ledgerNoteBar(absence: .unsupported, note: TicketNoteComposer(identifier: "SHOP-410")), scheme, to: "ticket-note-no-feed-\(suffix).png")
-        render(ledgerNoteBar(absence: .unknownTicket, note: TicketNoteComposer(identifier: "SHOP-410")), scheme, to: "ticket-note-not-run-\(suffix).png")
         // Pause one repository (TP-1238): Setup's Repositories card, the Repos window's Dispatch section at its
-        // narrowest and at a laptop's width, and a paused repository's ticket.
+        // narrowest and at a laptop's width, and the sidebar.
         render(repositoriesPage(), scheme, to: "repo-pause-setup-laptop-\(suffix).png")
         render(repositoriesPage(window: 2560), scheme, to: "repo-pause-setup-desktop-\(suffix).png")
         render(repoPauseSection(width: 500), scheme, to: "repo-pause-repos-narrow-\(suffix).png")
         render(repoPauseSection(width: 1220), scheme, to: "repo-pause-repos-laptop-\(suffix).png")
-        render(ledgerPage(window: 1440, repositoryPaused: true), scheme, to: "repo-pause-ticket-laptop-\(suffix).png")
         render(repoPausedSidebar(), scheme, to: "repo-pause-sidebar-\(suffix).png")
-        // The paused line (TP-1244): one reason (stopped by you, with Release), two (a question and a dependency) and
-        // three (Release on the releasable one only), at the laptop and desktop viewports; Release while it sends.
-        for (identifier, name) in [("SHOP-421", "one"), ("SHOP-420", "two"), ("SHOP-422", "three")] {
-            render(pausedPage(identifier, window: 1440), scheme, to: "paused-line-\(name)-laptop-\(suffix).png")
-            render(pausedPage(identifier, window: 2560), scheme, to: "paused-line-\(name)-desktop-\(suffix).png")
-        }
-        render(pausedPage("SHOP-421", window: 1440, releasing: true), scheme, to: "paused-line-releasing-laptop-\(suffix).png")
-        // Move to… (TP-1328): the parked ticket's action bar at the laptop and desktop viewports, the banner after the
-        // move, and the move's sheet, also with a refusal.
-        render(parkedPage(window: 1440), scheme, to: "move-to-laptop-\(suffix).png")
-        render(parkedPage(window: 2560), scheme, to: "move-to-desktop-\(suffix).png")
-        render(parkedPage(window: 1440, banner: true), scheme, to: "move-to-banner-laptop-\(suffix).png")
+        // Move to… (TP-1328): the move's sheet, also with a refusal.
         render(moveSheet(), scheme, to: "move-sheet-\(suffix).png")
         render(moveSheet(error: "Couldn't move SHOP-430 to In Progress: Symphony has no record of SHOP-430 yet, so it can't move it (HTTP 409)"),
                scheme, to: "move-sheet-refused-\(suffix).png")
-        // Start now (TP-1330): the waiting Todo ticket's action bar at the laptop and desktop viewports, while its call
-        // is on its way, the banner after a refusal, a paused Symphony's page, and each disabled reason.
-        render(startPage(window: 1440), scheme, to: "start-now-laptop-\(suffix).png")
-        render(startPage(window: 2560), scheme, to: "start-now-desktop-\(suffix).png")
-        render(startPage(window: 1440, starting: true), scheme, to: "start-now-starting-laptop-\(suffix).png")
-        render(startPage(window: 1440, refused: "Couldn't start SHOP-320 now: dispatch is paused by the operator (HTTP 409)"),
-               scheme, to: "start-now-refused-laptop-\(suffix).png")
-        render(startPage(window: 1440, api: startPausedAPI), scheme, to: "start-now-paused-laptop-\(suffix).png")
+        // Start now (TP-1330): each disabled reason.
         render(startDisabledReasons(), scheme, to: "start-now-disabled-reasons-\(suffix).png")
         // A blocked Inbox row's pause (TP-1253): stopped by the Director, and two reasons, one releasable.
         for (identifier, name) in [("TP-897", "stopped"), ("TP-899", "two-reasons")] {

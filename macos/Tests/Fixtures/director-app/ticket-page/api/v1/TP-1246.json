@@ -1,0 +1,391 @@
+{
+  "issue_id": "i-1246",
+  "issue_identifier": "TP-1246",
+  "repo_key": "symphony",
+  "last_error": null,
+  "ticket": {
+    "title": "The paused line in the Inbox",
+    "phase": "Done",
+    "priority": 1,
+    "labels": [
+      "skip-update-hold"
+    ]
+  },
+  "workspace": {
+    "path": "/Users/director/symphony-workspaces/symphony/TP-1246",
+    "host": null
+  },
+  "note": null,
+  "brief": {
+    "id": "01M746BRIEF",
+    "text": "Adds the paused line under the ticket page's title: why the ticket is paused, since when, and Release where you may release it.",
+    "walkthrough": "Open a paused ticket: the line under its title says why and since when.",
+    "at": "2026-10-07T09:03:00Z",
+    "by": {
+      "kind": "agent",
+      "run_kind": "implementation",
+      "run_id": "run-1"
+    }
+  },
+  "connected": {
+    "epic": {
+      "identifier": "TP-1381",
+      "title": "Phase 3b: the Director redesigned around a ticket's situation",
+      "done": 3,
+      "total": 6,
+      "incomplete": false,
+      "tickets": [
+        {
+          "identifier": "TP-1443",
+          "title": "The Step list and Run group components",
+          "state": "Done",
+          "situation": "done",
+          "current": false
+        },
+        {
+          "identifier": "TP-1444",
+          "title": "The Timeline section",
+          "state": "Done",
+          "situation": "done",
+          "current": false
+        },
+        {
+          "identifier": "TP-1445",
+          "title": "The Lifecycle section and the Phase path",
+          "state": "Done",
+          "situation": "done",
+          "current": false
+        },
+        {
+          "identifier": "TP-1446",
+          "title": "The facts rail's Pull request and Connected panels",
+          "state": "Code Review",
+          "situation": "waiting_for_ci",
+          "current": false
+        },
+        {
+          "identifier": "TP-1447",
+          "title": "The facts rail's Note, Decisions and Details panels",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": true
+        },
+        {
+          "identifier": "TP-1448",
+          "title": "The ticket page's layout on a laptop",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        }
+      ]
+    },
+    "parent": {
+      "identifier": "TP-1381",
+      "title": "Phase 3b: the Director redesigned around a ticket's situation",
+      "done": 3,
+      "total": 6,
+      "children": [
+        "completed",
+        "completed",
+        "completed",
+        "started",
+        "unstarted",
+        "unstarted"
+      ]
+    },
+    "sub_tickets": [],
+    "blocked_by": [
+      {
+        "identifier": "TP-1445",
+        "title": "The Lifecycle section and the Phase path",
+        "state": "Done",
+        "status": "resolved",
+        "resolved_at": "2026-11-09T22:37:00Z"
+      },
+      {
+        "identifier": "TP-1446",
+        "title": "The facts rail's Pull request and Connected panels",
+        "state": "Code Review",
+        "status": "open",
+        "resolved_at": null
+      }
+    ],
+    "blocks": [
+      {
+        "identifier": "TP-1448",
+        "title": "The ticket page's layout on a laptop",
+        "state": "Todo",
+        "situation": "blocked_by_ticket"
+      }
+    ],
+    "related": []
+  },
+  "open_questions": [],
+  "pause": null,
+  "status": "done",
+  "situation": {
+    "kind": "done",
+    "word": "Shipped",
+    "cause": "Merged as PR #741 at 11:42.",
+    "next": null,
+    "since": "2026-10-08T11:42:00Z",
+    "waits_on": null,
+    "and_more": 0,
+    "step": null,
+    "run": null,
+    "retry": null
+  },
+  "moves": {
+    "answer": {
+      "allowed": false,
+      "reason": "TP-1 is not waiting on a decision"
+    },
+    "start": {
+      "allowed": false,
+      "reason": "The ticket is done."
+    },
+    "stop": {
+      "allowed": false,
+      "reason": "No run is working."
+    },
+    "restart": {
+      "allowed": false,
+      "reason": "The ticket is done."
+    },
+    "cancel": {
+      "allowed": false,
+      "reason": "The ticket is done."
+    },
+    "move_to": {
+      "allowed": true,
+      "reason": null,
+      "states": [
+        "Backlog",
+        "Todo",
+        "In Progress",
+        "Code Review",
+        "Rework"
+      ]
+    },
+    "force": {
+      "allowed": false,
+      "reason": "The ticket is done."
+    },
+    "unforce": {
+      "allowed": false,
+      "reason": "It isn't forced."
+    },
+    "unblock": {
+      "allowed": false,
+      "reason": "TP-1 has nothing a person can unblock"
+    },
+    "note": {
+      "allowed": true,
+      "reason": null
+    }
+  },
+  "pull_request": {
+    "number": 741,
+    "url": "https://github.com/acme/symphony/pull/741",
+    "title": "TP-1244 The paused line on the ticket page",
+    "state": "merged",
+    "draft": false,
+    "head_sha": "4c1d2e9a0ffee0123456789abcdef0123456789a",
+    "head_short": "4c1d2e9",
+    "base": "main",
+    "mergeable": "clean",
+    "behind_base": false,
+    "review_state": "approved",
+    "review_rounds": 1,
+    "files_changed": 14,
+    "additions": 412,
+    "deletions": 88,
+    "checks": [
+      {
+        "workflow": "Elixir checks",
+        "checks": [
+          {
+            "name": "Format",
+            "state": "passed",
+            "started_at": "2026-11-10T14:00:00Z",
+            "duration_ms": 42000,
+            "url": "https://github.com/acme/symphony/actions/runs/200/job/1",
+            "required": true
+          },
+          {
+            "name": "Lint",
+            "state": "passed",
+            "started_at": "2026-11-10T14:00:00Z",
+            "duration_ms": 64000,
+            "url": "https://github.com/acme/symphony/actions/runs/200/job/2",
+            "required": true
+          },
+          {
+            "name": "Tests",
+            "state": "passed",
+            "started_at": "2026-11-10T14:00:00Z",
+            "duration_ms": 372000,
+            "url": "https://github.com/acme/symphony/actions/runs/200/job/3",
+            "required": true
+          }
+        ]
+      },
+      {
+        "workflow": "Mac app",
+        "checks": [
+          {
+            "name": "What changed",
+            "state": "passed",
+            "started_at": "2026-11-10T14:00:00Z",
+            "duration_ms": 8000,
+            "url": "https://github.com/acme/symphony/actions/runs/201/job/1",
+            "required": null
+          },
+          {
+            "name": "App build",
+            "state": "skipped",
+            "started_at": null,
+            "duration_ms": null,
+            "url": "https://github.com/acme/symphony/actions/runs/201/job/2",
+            "required": null
+          }
+        ]
+      }
+    ],
+    "red_kind": null,
+    "next_action": null,
+    "read_at": "2026-10-08T10:27:00Z"
+  },
+  "lifecycle": {
+    "current": null,
+    "stages": [
+      {
+        "id": "coding",
+        "name": "Coding",
+        "state": "passed",
+        "visits": 1,
+        "time_ms": 3000000,
+        "agent_time_ms": 2900000,
+        "tokens": 3100000
+      },
+      {
+        "id": "code_review",
+        "name": "Code Review",
+        "state": "passed",
+        "visits": 2,
+        "time_ms": 4200000,
+        "agent_time_ms": 1260000,
+        "tokens": 900000
+      },
+      {
+        "id": "qa",
+        "name": "QA",
+        "state": "passed",
+        "visits": 1,
+        "time_ms": 2160000,
+        "agent_time_ms": 1800000,
+        "tokens": 600000
+      },
+      {
+        "id": "merging",
+        "name": "Merging",
+        "state": "passed",
+        "visits": 1,
+        "time_ms": 720000,
+        "agent_time_ms": 0,
+        "tokens": 100000
+      },
+      {
+        "id": "done",
+        "name": "Done",
+        "state": "passed",
+        "visits": 1,
+        "time_ms": 0,
+        "agent_time_ms": 0,
+        "tokens": 0
+      }
+    ],
+    "tokens": {
+      "total": 4700000,
+      "cap": 8000000
+    }
+  },
+  "phase_path": {
+    "current": "Done",
+    "phases": [
+      {
+        "phase": "In Progress",
+        "count": 1,
+        "time_ms": 3000000,
+        "first_entered_at": "2026-10-07T15:23:00Z"
+      },
+      {
+        "phase": "Code Review",
+        "count": 2,
+        "time_ms": 2400000,
+        "first_entered_at": "2026-10-07T16:13:00Z"
+      },
+      {
+        "phase": "Rework",
+        "count": 1,
+        "time_ms": 1800000,
+        "first_entered_at": "2026-10-07T16:43:00Z"
+      },
+      {
+        "phase": "QA",
+        "count": 1,
+        "time_ms": 2160000,
+        "first_entered_at": "2026-10-08T09:01:00Z"
+      },
+      {
+        "phase": "Merging",
+        "count": 1,
+        "time_ms": 720000,
+        "first_entered_at": "2026-10-08T09:37:00Z"
+      },
+      {
+        "phase": "Done",
+        "count": 1,
+        "time_ms": 0,
+        "first_entered_at": "2026-10-08T09:49:00Z"
+      }
+    ],
+    "moves": [
+      {
+        "from": "Todo",
+        "to": "In Progress",
+        "at": "2026-10-07T15:23:00Z"
+      },
+      {
+        "from": "In Progress",
+        "to": "Code Review",
+        "at": "2026-10-07T16:13:00Z"
+      },
+      {
+        "from": "Code Review",
+        "to": "Rework",
+        "at": "2026-10-07T16:43:00Z"
+      },
+      {
+        "from": "Rework",
+        "to": "Code Review",
+        "at": "2026-10-08T08:31:00Z"
+      },
+      {
+        "from": "Code Review",
+        "to": "QA",
+        "at": "2026-10-08T09:01:00Z"
+      },
+      {
+        "from": "QA",
+        "to": "Merging",
+        "at": "2026-10-08T09:37:00Z"
+      },
+      {
+        "from": "Merging",
+        "to": "Done",
+        "at": "2026-10-08T09:49:00Z"
+      }
+    ]
+  }
+}

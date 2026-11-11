@@ -60,9 +60,6 @@ extension SymphonyWindowModel {
             selection = view
         case let .ticket(identifier):
             ticketNote.show(identifier)
-            ticketBlockers.show(identifier)
-            ticketPriority.show(identifier)
-            ticketLabels.show(identifier)
             ticketDecisions.show(identifier)
             ticketSources = TicketPage.Sources()
             ticketSlowReadAt = nil
@@ -114,16 +111,10 @@ extension SymphonyWindowModel {
                 sources.audit = audit
                 ticketSlowReadAt = Date()
             }
-            let blockers = await readBlockers(identifier)
-            let priority = await readTicketPath(TicketPriorityEditor.path(identifier))
-            let labels = await readTicketPath(TicketLabelsEditor.path(identifier))
             let decisions = await readTicketPath(TicketDecisionsEditor.path(identifier))
             readingTicket = false
             // A page left while its reads were out doesn't take them.
             guard shownTicket == identifier else { return }
-            ticketBlockers.apply(blockers, for: identifier)
-            ticketPriority.apply(priority, for: identifier)
-            ticketLabels.apply(labels, for: identifier)
             ticketDecisions.apply(decisions, for: identifier)
             // A Check Now answer and the feed's events that came in meanwhile stay.
             sources.check = ticketSources.check
@@ -271,64 +262,13 @@ extension SymphonyWindowModel {
         }
     }
 
-    /// Return in the note field: the note goes on the shown ticket, then the page reads what is new in its feed, so
-    /// the note shows at once.
+    /// Save Note in the facts rail: the note goes on the shown ticket, then the page reads what is new in its feed and
+    /// the ticket read again, so the panel shows it at once.
     func submitNote() {
         guard let page = ticketPage else { return }
         Task {
-            await ticketNote.submit(on: page, send: onControl, read: { [ticketFeed] in ticketFeed.read() })
-        }
-    }
-
-    /// The body of ticket `identifier`'s blockers endpoint, nil when it didn't answer one.
-    func readBlockers(_ identifier: String) async -> Data? {
-        if case let .loaded(data) = await client.get(TicketBlockersEditor.path(identifier)) { return data }
-        return nil
-    }
-
-    /// The Blocked by card's Add Blocker, or a pick from its menu: Symphony links the blocker, then the card and the
-    /// page read again, so the ticket shows it waits.
-    func addBlocker(_ blocker: String?) {
-        Task {
-            if await ticketBlockers.add(blocker, send: onControl, read: { [weak self] in await self?.readTicketPath($0) }) {
-                client.refresh()
-            }
-        }
-    }
-
-    /// A blocker row's Remove: Symphony unlinks it, then the card and the page read again.
-    func removeBlocker(_ blocker: String) {
-        Task {
-            if await ticketBlockers.remove(blocker, send: onControl, read: { [weak self] in await self?.readTicketPath($0) }) {
-                client.refresh()
-            }
-        }
-    }
-
-    /// A pick from the Priority card's menu: Symphony sets it in Linear, then the card and the page read again.
-    func setPriority(_ priority: TicketPriority) {
-        Task {
-            if await ticketPriority.set(priority, send: onControl, read: { [weak self] in await self?.readTicketPath($0) }) {
-                client.refresh()
-            }
-        }
-    }
-
-    /// A toggle on the Labels card: Symphony adds or removes the label in Linear, then the card and the page read again.
-    func setLabel(_ label: String, on: Bool) {
-        Task {
-            if await ticketLabels.set(label, on: on, send: onControl, read: { [weak self] in await self?.readTicketPath($0) }) {
-                client.refresh()
-            }
-        }
-    }
-
-    /// Record on the Decisions card: Symphony writes the ruling into the ticket's Decisions, then the card and the page
-    /// read again.
-    func recordDecision() {
-        Task {
-            if await ticketDecisions.record(send: onControl, read: { [weak self] in await self?.readTicketPath($0) }) {
-                client.refresh()
+            if await ticketNote.submit(on: page, send: onControl, read: { [ticketFeed] in ticketFeed.read() }) {
+                readTicket()
             }
         }
     }
@@ -338,129 +278,82 @@ extension SymphonyWindowModel {
         return nil
     }
 
-    /// The ticket's API URL on the clipboard.
-    func copyAPIURL(_ page: TicketPage) {
-        guard let url = apiURL()?.appendingPathComponent(page.apiPath) else { return }
-        copy(url.absoluteString)
-    }
-
-    /// Opens Audit filtered to the ticket.
-    func showAuditRecords(_ page: TicketPage) {
-        showAudit(ticket: page.identifier)
-    }
-
-    func revealWorktree(_ path: String) {
-        let url = URL(fileURLWithPath: path)
-        if FileManager.default.fileExists(atPath: url.path) {
-            NSWorkspace.shared.activateFileViewerSelecting([url])
-        } else {
-            NSWorkspace.shared.open(url.deletingLastPathComponent())
-        }
-    }
-
     func copy(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
     }
 }
 
-// MARK: - D3: the ticket page
+// MARK: - D3: the ticket page (TP-1448)
 
-/// What the ticket page's buttons do.
+/// What the ticket page's controls do.
 struct TicketPageActions {
-    var viewTranscript: (_ newWindow: Bool) -> Void = { _ in }
+    /// A move on the Action rail, after the page took the ones it shows itself (Answer, Restart…, Write a Note…).
+    var move: (TicketActionRail.Request) -> Void = { _ in }
     var openURL: (URL) -> Void = { _ in }
-    var stopRun: () -> Void = {}
-    /// A Move to… pick: its sheet.
-    var move: (MoveSheet) -> Void = { _ in }
-    /// Start now: the ticket's run starts at once; `starting` while the call is on its way.
-    var start: () -> Void = {}
-    var starting = false
-    var copyAPIURL: () -> Void = {}
-    var showAuditRecords: () -> Void = {}
-    var revealWorktree: (String) -> Void = { _ in }
-    /// The ⋯ menu's Force… (the Force a Ticket sheet) and Stop Forcing.
-    var force: () -> Void = {}
-    var stopForcing: () -> Void = {}
     /// A click on a ticket or pull request chip in the page's text.
     var openMention: (Mention) -> Void = { _ in }
-    /// The Pull request fact and the done line: the pull request's page (D15), with its link.
-    var openPullRequest: (PullRequestPlace, URL?) -> Void = { _, _ in }
-    /// The PR and CI card's Check Now, Open in Inbox and Open TP-x.
-    var checkNow: () -> Void = {}
-    var openInInbox: () -> Void = {}
+    /// A blocker's or a held ticket's row in the Connected panel.
     var openTicket: (String) -> Void = { _ in }
-    /// True while a Check Now is on its way.
-    var checking = false
-    /// A pause reason's Release: the unblock move.
-    var release: () -> Void = {}
-    /// True while the unblock is on its way.
-    var releasing = false
+    /// The epic's row in the Connected panel: its place in Initiatives.
+    var openInitiatives: () -> Void = {}
+    /// The Details panel's Copy beside the workspace path.
+    var copy: (String) -> Void = DetailsPanel.pasteboardCopy
+    /// The Note panel's Save Note.
+    var saveNote: () -> Void = {}
+}
 
-    /// A pull request link of the ticket's repo: its page (D15) when it is one, else the link.
-    func open(pullRequest url: URL, repoKey: String?) {
-        if let place = PullRequestPlace(repoKey: repoKey, url: url) {
-            openPullRequest(place, url)
-        } else {
-            openURL(url)
-        }
-    }
-
-    /// Acts on a PR and CI card's button.
-    func perform(_ button: PRWatchCard.Button) {
-        switch button {
-        case .checkNow: checkNow()
-        case let .openPR(url), let .openPullRequest(_, url): openURL(url)
-        case .openInInbox: openInInbox()
-        case let .openTicket(identifier): openTicket(identifier)
+extension SymphonyWindowModel {
+    /// A move the Action rail asks for on `page`: the control call sent, or its sheet opened. Answer, Restart… and
+    /// Write a Note… are the page's own and never get here.
+    func performMove(_ request: TicketActionRail.Request, on page: TicketPage) {
+        switch request {
+        case let .send(action):
+            if action == TicketStart.action(page.identifier) { startNow(page.identifier) } else { send(action) }
+        case .sheet(.stopRun):
+            openStopRun(page.identifier, origin: .ticketPage)
+        case let .sheet(.moveTo(state)):
+            if let sheet = page.moveSheet(to: state) { openMove(sheet) }
+        case .sheet(.force):
+            openForceSheet(page.identifier)
+        case .sheet(.answer), .sheet(.restart), .sheet(.note), .confirm:
+            break
         }
     }
 }
 
-/// D3 for the window: the page with its Stop Run sheet, or a placeholder while it reads.
+/// D3 for the window: the page with its sheets, or a placeholder while it reads.
 struct TicketPageContent: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
+    @ObservedObject var decisions: TicketDecisionsEditor
+
+    init(model: SymphonyWindowModel, client: LiveAPIClient) {
+        self.model = model
+        self.client = client
+        decisions = model.ticketDecisions
+    }
 
     var body: some View {
         if let page = model.ticketPage {
+            let items = model.inbox?.items ?? []
             TicketPageView(
                 page: page,
-                brief: model.inbox.flatMap { TicketPage.Brief(identifier: page.identifier, items: $0.items) },
+                questions: TicketPage.questions(of: page.identifier, in: items),
+                references: items.first { $0.identifier == page.identifier }?.references ?? [:],
                 actions: TicketPageActions(
-                    viewTranscript: { newWindow in model.onOpenTranscript(page.identifier, page.repoKey, newWindow) },
+                    move: { model.performMove($0, on: page) },
                     openURL: model.onOpenURL,
-                    stopRun: { model.openStopRun(page.identifier, origin: .ticketPage) },
-                    move: model.openMove,
-                    start: { model.startNow(page.identifier) },
-                    starting: model.startInFlight == page.identifier,
-                    copyAPIURL: { model.copyAPIURL(page) },
-                    showAuditRecords: { model.showAuditRecords(page) },
-                    revealWorktree: model.revealWorktree,
-                    force: { model.openForceSheet(page.identifier) },
-                    stopForcing: { model.stopForcing(page.identifier) },
                     openMention: model.openDirectly,
-                    openPullRequest: model.openPullRequest,
-                    checkNow: { model.checkNow(page.identifier) },
-                    openInInbox: { model.openInInbox(page.identifier) },
                     openTicket: model.openTicket,
-                    checking: model.checkingNow.contains(page.identifier),
-                    release: { model.send(.unblock(page.identifier)) },
-                    releasing: model.controlInFlight == .unblock(page.identifier)
+                    openInitiatives: { model.show(.initiatives) },
+                    copy: model.copy,
+                    saveNote: model.submitNote
                 ),
-                images: model.artifactImages,
-                texts: model.artifactTexts,
-                blockers: model.ticketBlockers,
-                addBlocker: model.addBlocker,
-                removeBlocker: model.removeBlocker,
-                priority: model.ticketPriority,
-                setPriority: model.setPriority,
-                labels: model.ticketLabels,
-                setLabel: model.setLabel,
-                decisions: model.ticketDecisions,
-                recordDecision: model.recordDecision,
+                transcripts: model.stepTranscripts,
                 note: model.ticketNote,
-                submitNote: model.submitNote,
+                decisions: decisions.decisions,
+                restart: { model.send(.restart(page.identifier, reason: TicketPageView.restartReason)) },
                 banner: model.moveBanner.flatMap { $0.identifier == page.identifier ? $0 : nil },
                 undo: model.undoMove,
                 closeBanner: model.dismissBanner
@@ -471,318 +364,205 @@ struct TicketPageContent: View {
     }
 }
 
-/// The ticket page in a scroll view, laid out for the width it gets.
+/// The ticket page in a scroll view that scrolls as one, laid out for the width it gets, with the decision sheet over
+/// it.
 struct TicketPageView: View {
     let page: TicketPage
-    var brief: TicketPage.Brief?
+    /// The ticket's open Questions with their options, from the Inbox.
+    var questions: [InboxReview.Action] = []
+    /// The chips in the page's text, from the ticket's Inbox item.
+    var references: [String: Reference] = [:]
     let actions: TicketPageActions
-    /// The timeline's screenshots, read through the window's client.
-    var images: ArtifactImages?
-    /// The timeline's text outputs (a step's output), read through the window's client.
-    var texts: ArtifactTexts?
-    /// The Blocked by card, with its Add Blocker and each row's Remove.
-    var blockers: TicketBlockersEditor?
-    var addBlocker: (String?) -> Void = { _ in }
-    var removeBlocker: (String) -> Void = { _ in }
-    /// The Priority card, with its menu.
-    var priority: TicketPriorityEditor?
-    var setPriority: (TicketPriority) -> Void = { _ in }
-    /// The Labels card, with its toggles.
-    var labels: TicketLabelsEditor?
-    var setLabel: (String, Bool) -> Void = { _, _ in }
-    /// The Decisions card, with its Record a decision field.
-    var decisions: TicketDecisionsEditor?
-    var recordDecision: () -> Void = {}
-    /// The note field pinned under the page, so it stays reachable however long the timeline is.
-    var note: TicketNoteComposer?
-    var submitNote: () -> Void = {}
-    /// A Move to…'s banner, with its Undo for 10 s, above the note field.
+    let transcripts: StepTranscripts
+    let note: TicketNoteComposer
+    var decisions: [TicketDecision] = []
+    /// Restart… once confirmed.
+    var restart: () -> Void = {}
+    /// A Move to…'s banner, with its Undo for 10 s, under the page.
     var banner: InboxBanner?
     var undo: (InboxBanner) -> Void = { _ in }
     var closeBanner: () -> Void = {}
-    @State private var width: CGFloat = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
-    /// The run groups folded, by run id: they stay folded as the feed is read again.
-    @State private var folded = Set<String>()
-    /// The screenshot shown full size.
-    @State private var fullScreenshot: TicketScreenshot?
-    /// The text output shown in a sheet.
-    @State private var openedOutput: TicketOutput?
+    @State private var width: CGFloat = TicketPageLayout.laptopPageWidth
+    @State private var sheetOpen = false
+    @State private var picks = DecisionPicks()
+    @State private var confirmingRestart = false
+    @FocusState private var answerFocused: Bool
+
+    static let restartReason = "Restarted from the ticket page"
+    static let noteAnchor = "note-panel"
 
     var body: some View {
-        ScrollView {
-            TicketPageBody(
-                page: page, brief: brief, actions: actions, width: width, folded: $folded, images: images,
-                openScreenshot: { fullScreenshot = $0 }, openOutput: { openedOutput = $0 }, blockers: blockers, addBlocker: addBlocker, removeBlocker: removeBlocker,
-                priority: priority, setPriority: setPriority, labels: labels, setLabel: setLabel,
-                decisions: decisions, recordDecision: recordDecision
-            )
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                TicketPageBody(
+                    page: page, questions: questions, width: width, transcripts: transcripts, note: note, decisions: decisions,
+                    actions: actions, sheetOpen: sheetOpen, answerFocus: $answerFocused,
+                    move: { handle($0, proxy: proxy) }, answer: { sheetOpen = true }
+                )
+                .environment(\.mentionReferences, references)
+            }
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            VStack(spacing: 0) {
-                if let banner {
-                    InboxBannerView(banner: banner, undo: { undo(banner) }, close: closeBanner)
-                        .padding(.horizontal, DesignTokens.Space.s5)
-                        .padding(.bottom, DesignTokens.Space.s3)
-                }
-                if let note { TicketNoteBar(page: page, composer: note, submit: submitNote) }
+            if let banner {
+                InboxBannerView(banner: banner, undo: { undo(banner) }, close: closeBanner)
+                    .padding(.horizontal, DesignTokens.Space.s5)
+                    .padding(.bottom, DesignTokens.Space.s3)
             }
         }
-        .sheet(item: $fullScreenshot) { shot in
-            ScreenshotSheet(shot: shot, images: images, close: { fullScreenshot = nil })
+        .decisionSheet(isPresented: $sheetOpen, returnFocus: $answerFocused) {
+            DecisionSheet(
+                questions: questions, picks: picks, subtitle: page.sheetSubtitle,
+                pick: { option, question in picks.picks[question] = option },
+                writeIn: { text, question in picks.writeIns[question] = text },
+                send: {}, close: { sheetOpen = false }, sendOff: DecisionsLine.sendLaterReason
+            )
+            .environment(\.mentionReferences, references)
         }
-        .sheet(item: $openedOutput) { output in
-            OutputSheet(output: output, texts: texts, close: { openedOutput = nil })
+        .confirmationDialog("Restart \(page.identifier)?", isPresented: $confirmingRestart) {
+            Button("Restart", role: .destructive, action: restart)
+            Button("Keep It", role: .cancel) {}
+        } message: {
+            Text("Symphony closes \(page.identifier)'s pull request and starts it over from a fresh branch.")
+        }
+        .onChange(of: page.identifier) { _, _ in
+            sheetOpen = false
+            picks = DecisionPicks()
+        }
+    }
+
+    /// A move on the rail: the page shows Answer's sheet, asks before Restart… and takes Write a Note… to the Note
+    /// panel; the rest go to the window.
+    private func handle(_ request: TicketActionRail.Request, proxy: ScrollViewProxy) {
+        switch request {
+        case .sheet(.answer): sheetOpen = true
+        case .sheet(.restart): confirmingRestart = true
+        case .sheet(.note): withAnimation { proxy.scrollTo(Self.noteAnchor, anchor: .top) }
+        default: actions.move(request)
         }
     }
 }
 
-/// The page's sections, outside the scroll view so they also render offscreen.
+/// The page's zones, outside the scroll view so they also render offscreen: the header across the page; under it,
+/// in the main column, the decisions line, the Lifecycle section and the Timeline section; the facts rail beside
+/// them, 340 pt wide. Below the width where the main column fits beside the rail, the rail goes under it.
 struct TicketPageBody: View {
     let page: TicketPage
-    /// What the Inbox says about the ticket, when it holds it.
-    var brief: TicketPage.Brief?
-    let actions: TicketPageActions
+    var questions: [InboxReview.Action] = []
     let width: CGFloat
-    var folded: Binding<Set<String>> = .constant([])
-    var images: ArtifactImages?
-    var openScreenshot: (TicketScreenshot) -> Void = { _ in }
-    var openOutput: (TicketOutput) -> Void = { _ in }
-    var blockers: TicketBlockersEditor?
-    var addBlocker: (String?) -> Void = { _ in }
-    var removeBlocker: (String) -> Void = { _ in }
-    var priority: TicketPriorityEditor?
-    var setPriority: (TicketPriority) -> Void = { _ in }
-    var labels: TicketLabelsEditor?
-    var setLabel: (String, Bool) -> Void = { _, _ in }
-    var decisions: TicketDecisionsEditor?
-    var recordDecision: () -> Void = {}
+    let transcripts: StepTranscripts
+    let note: TicketNoteComposer
+    var decisions: [TicketDecision] = []
+    var actions = TicketPageActions()
+    /// Answer stays pressed while the sheet is open.
+    var sheetOpen = false
+    var answerFocus: FocusState<Bool>.Binding?
+    /// A move on the Action rail.
+    var move: (TicketActionRail.Request) -> Void = { _ in }
+    /// The decisions line's Answer.
+    var answer: () -> Void = {}
+    var calendar: Calendar = .current
+    /// Snapshots only: the Details panel's run models unfolded.
+    var detailsUnfolded = false
 
-    static let sideColumnWidth: CGFloat = 300
-    static let mainColumnMinWidth: CGFloat = 460
-
-    private var sideBySide: Bool {
-        width - 2 * DesignTokens.Space.s5 >= Self.mainColumnMinWidth + DesignTokens.Space.s4 + Self.sideColumnWidth
-    }
+    private var gap: CGFloat { TicketPageLayout.gap }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s5) {
-            TicketHeader(page: page, summary: brief?.summary, actions: actions)
-            let layout = sideBySide
-                ? AnyLayout(HStackLayout(alignment: .top, spacing: DesignTokens.Space.s4))
-                : AnyLayout(VStackLayout(alignment: .leading, spacing: DesignTokens.Space.s4))
-            layout {
-                VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-                    if let brief { BriefCards(brief: brief) }
-                    if let watch = page.watch {
-                        PRWatchCardView(card: watch, checking: actions.checking, perform: actions.perform)
-                    }
-                    if let now = page.now {
-                        Card(title: "Now") { NowGrid(now: now, reveal: actions.revealWorktree) }
-                    }
-                    if let decisions {
-                        Card(title: TicketDecisionsEditor.title) {
-                            TicketDecisionsCard(identifier: page.identifier, editor: decisions, record: recordDecision)
-                        }
-                    }
-                    Card(title: "Timeline") {
-                        if page.timeline.isEmpty {
-                            Text("No runs yet.").font(DesignTokens.TypeStyle.body.font).foregroundStyle(.secondary)
-                        } else {
-                            RunTimeline(
-                                steps: page.timeline, folded: folded, images: images, openScreenshot: openScreenshot, openOutput: openOutput
-                            )
-                        }
-                    }
+        VStack(alignment: .leading, spacing: gap) {
+            TicketPageHeader(page: page, move: move)
+            if TicketPageLayout.railBeside(page: width) {
+                HStack(alignment: .top, spacing: gap) {
+                    mainColumn.frame(maxWidth: .infinity, alignment: .topLeading)
+                    rail.frame(width: TicketPageLayout.railWidth)
                 }
-                .frame(minWidth: sideBySide ? Self.mainColumnMinWidth : nil, maxWidth: .infinity, alignment: .topLeading)
-                VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-                    Card(title: "Ticket") { FactsGrid(facts: page.facts, open: { actions.open(pullRequest: $0, repoKey: page.repoKey) }) }
-                    if let priority {
-                        Card(title: TicketPriorityEditor.title) {
-                            TicketPriorityCard(identifier: page.identifier, editor: priority, set: setPriority)
-                        }
-                    }
-                    if let labels {
-                        Card(title: TicketLabelsEditor.title) {
-                            TicketLabelsCard(identifier: page.identifier, editor: labels, set: setLabel)
-                        }
-                    }
-                    if let blockers {
-                        Card(title: TicketBlockersEditor.title) {
-                            TicketBlockersCard(
-                                identifier: page.identifier, editor: blockers, add: addBlocker, remove: removeBlocker, open: actions.openTicket
-                            )
-                        }
-                    }
-                    if let message = page.lastMessage {
-                        Card(title: "Last message") { ChipText(text: message) }
-                    }
-                }
-                .frame(maxWidth: sideBySide ? Self.sideColumnWidth : .infinity, alignment: .topLeading)
+            } else {
+                mainColumn
+                rail
             }
         }
-        .padding(DesignTokens.Space.s5)
+        .padding(gap)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        // The mentions in the page's text are chips (N1) with popovers (N2, N3), read from its Inbox item.
-        .environment(\.mentionReferences, brief?.references ?? [:])
         .environment(\.openMention, OpenMentionAction(handler: actions.openMention))
     }
+
+    private var mainColumn: some View {
+        VStack(alignment: .leading, spacing: gap) {
+            DecisionsLineView(
+                line: DecisionsLine(openQuestions: page.openQuestions, questions: questions),
+                open: sheetOpen, focus: answerFocus, answer: answer
+            )
+            if let lifecycle = page.lifecycleRead?.lifecycle {
+                LifecycleSection(model: LifecycleModel.build(lifecycle, phase: page.lifecycleRead?.phasePath?.current))
+            }
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                Text(TimelineSection.title)
+                    .font(DesignTokens.TypeStyle.section.font)
+                    .accessibilityAddTraits(.isHeader)
+                TimelineSection(
+                    model: TimelineModel.build(
+                        page.history ?? TicketEventsPayload(), runNow: page.runNow, reference: page.reference, calendar: calendar
+                    ),
+                    transcripts: transcripts, calendar: calendar
+                )
+                .id(page.identifier)
+            }
+        }
+    }
+
+    private var rail: some View {
+        let runs = page.history?.runs ?? [:]
+        return VStack(alignment: .leading, spacing: gap) {
+            PullRequestPanel(model: PullRequestPanelModel.build(page.factsRead?.pullRequest), open: actions.openURL)
+            ConnectedPanel(
+                model: ConnectedPanelModel.build(page.factsRead?.connected, reference: page.reference, calendar: calendar),
+                openTicket: actions.openTicket, openInitiatives: actions.openInitiatives
+            )
+            NotePanel(
+                model: NotePanelModel.build(
+                    note: page.detailsRead?.note, move: page.detailsRead?.noteMove, runs: runs, reference: page.reference, calendar: calendar
+                ),
+                composer: note, save: actions.saveNote
+            )
+            .id(TicketPageView.noteAnchor)
+            DecisionsPanel(model: DecisionsPanelModel.build(decisions))
+            DetailsPanel(
+                model: DetailsPanelModel.build(
+                    page.detailsRead, runs: runs, linearURL: page.url, pullRequest: page.factsRead?.pullRequest, description: nil,
+                    reference: page.reference, calendar: calendar
+                ),
+                open: actions.openURL, copy: actions.copy, modelsUnfolded: detailsUnfolded
+            )
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Facts")
+    }
 }
 
-/// The note field under the ticket page: one line, where Return posts the Director's note on the ticket. Under it, while
-/// needed, one line: why the field is off (an older Symphony without the events feed, a ticket that hasn't run, or the
-/// ticket's history not read yet), the note on its way, or why the last one wasn't added.
-struct TicketNoteBar: View {
+/// The header across the page: the identifier with its repo and epic chips, the title, where the ticket stands and
+/// why (the Situation line), and the moves on their own row under them.
+struct TicketPageHeader: View {
     let page: TicketPage
-    @ObservedObject var composer: TicketNoteComposer
-    let submit: () -> Void
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
-
-    /// A one-line note needs no more on a wide window; the rest of the bar stays empty.
-    static let maxFieldWidth: CGFloat = 720
-    /// The line under the field wraps to at most this many lines. The window's split view measures the page's smallest
-    /// size with no width, where unbounded text wraps a character a line: the bar then claimed more height than the
-    /// window has, and pushed itself and the window's content off screen.
-    static let lineLimit = 3
+    var move: (TicketActionRail.Request) -> Void = { _ in }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            if offscreenSnapshot {
-                snapshotField
-            } else {
-                TextField(TicketNoteComposer.placeholder, text: $composer.text)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(submit)
-                    .disabled(!page.acceptsNotes)
-                    .accessibilityLabel(TicketNoteComposer.fieldLabel(page.identifier))
-                    .accessibilityHint(page.notesOffReason ?? TicketNoteComposer.hint)
-            }
-            if let reason = page.notesOffReason {
-                Label(reason, systemImage: "info.circle")
-                    .font(DesignTokens.TypeStyle.callout.font)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(Self.lineLimit)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if composer.sending {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 HStack(spacing: DesignTokens.Space.s2) {
-                    if offscreenSnapshot {
-                        // `ImageRenderer` can't draw a spinner: its symbol stands in.
-                        Image(systemName: "ellipsis").foregroundStyle(.secondary)
-                    } else {
-                        ProgressView().controlSize(.small)
-                    }
-                    Text(TicketNoteComposer.sendingTitle)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                    Text(page.identifier)
+                        .font(DesignTokens.TypeStyle.label.font)
                         .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    if let repo = page.repoKey { HeaderChip(text: repo, systemImage: SymphonyView.repos.symbol) }
+                    if let epic = page.epicChip { HeaderChip(text: epic, systemImage: SymphonyView.initiatives.symbol) }
                 }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(TicketNoteComposer.sendingTitle)
-            } else if let refusal = composer.refusal {
-                Label(refusal, systemImage: DesignTokens.Status.problem.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
-                    .foregroundStyle(DesignTokens.Status.problem.tint)
-                    .lineLimit(Self.lineLimit)
+                Text(page.headerTitle ?? page.identifier)
+                    .font(DesignTokens.TypeStyle.sentence.font)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
-                    .help(refusal)
-                    .accessibilityLabel(TicketNoteComposer.refusalLabel(refusal))
+                    .accessibilityAddTraits(.isHeader)
             }
-        }
-        .frame(maxWidth: Self.maxFieldWidth, alignment: .leading)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, DesignTokens.Space.s5)
-        .padding(.vertical, DesignTokens.Space.s3)
-        .background(DesignTokens.Surface.content.color)
-        .overlay(alignment: .top) { Divider() }
-    }
-
-    /// `ImageRenderer` can't draw a text field: a rounded box with its text or placeholder stands in.
-    private var snapshotField: some View {
-        Text(composer.text.isEmpty ? TicketNoteComposer.placeholder : composer.text)
-            .font(DesignTokens.TypeStyle.body.font)
-            .foregroundStyle(composer.text.isEmpty || !page.acceptsNotes ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
-            .lineLimit(1)
-            .padding(.horizontal, DesignTokens.Space.s2)
-            .padding(.vertical, DesignTokens.Space.s1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(DesignTokens.Surface.content.color.opacity(page.acceptsNotes ? 1 : 0.5), in: RoundedRectangle(cornerRadius: 5))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(DesignTokens.Surface.separator.color))
-    }
-}
-
-/// The ticket's latest review brief and the decisions answered on it, from its Inbox item.
-private struct BriefCards: View {
-    let brief: TicketPage.Brief
-
-    var body: some View {
-        Card(title: brief.title) {
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-                ForEach(Array(brief.paragraphs.enumerated()), id: \.offset) { _, paragraph in
-                    ChipText(text: paragraph)
-                }
-            }
-        }
-        if !brief.decisions.isEmpty {
-            Card(title: "Earlier decisions") {
-                VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-                    ForEach(Array(brief.decisions.enumerated()), id: \.offset) { _, decision in
-                        EarlierDecisionRow(decision: decision)
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// An answered request: when, what it asked, and the answer.
-private struct EarlierDecisionRow: View {
-    let decision: TicketContext.EarlierDecision
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                if let title = decision.title { ChipText(text: title, font: DesignTokens.TypeStyle.rowTitle.nsFont) }
-                Spacer(minLength: DesignTokens.Space.s2)
-                if let at = decision.at {
-                    Text(at, format: .dateTime.month(.abbreviated).day())
-                        .font(DesignTokens.TypeStyle.callout.font)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            if let answer = decision.answer {
-                ChipText(text: answer, lead: "Your answer:", color: .secondaryLabelColor)
-            }
-        }
-    }
-}
-
-/// The identifier and title, repo, initiative and badges (C7), what it is doing, and the page's actions.
-private struct TicketHeader: View {
-    let page: TicketPage
-    /// The ticket's Symphony status line, from the Inbox.
-    let summary: String?
-    let actions: TicketPageActions
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: DesignTokens.Space.s2) {
-                    badges
-                    Spacer(minLength: DesignTokens.Space.s2)
-                    TicketActions(page: page, actions: actions)
-                }
-                VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                    HStack(spacing: DesignTokens.Space.s2) { badges }
-                    TicketActions(page: page, actions: actions)
-                }
-            }
-            Text([page.identifier, page.title].compactMap { $0 }.joined(separator: " "))
-                .font(DesignTokens.TypeStyle.sentence.font)
-                .textSelection(.enabled)
-                .accessibilityAddTraits(.isHeader)
-            if let paused = page.paused, page.phase == .paused {
-                PausedLine(paused: paused, release: actions.release, releasing: actions.releasing)
+            if let situation = page.situation {
+                SituationLine(situation, reference: page.reference, forced: page.isForced)
             } else {
                 Text(page.phaseSentence)
                     .font(DesignTokens.TypeStyle.body.font)
@@ -794,699 +574,102 @@ private struct TicketHeader: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let summary { ChipText(text: summary, color: .secondaryLabelColor) }
-            if case let .done(pullRequest, _) = page.phase, pullRequest != nil || page.mergedText != nil {
-                DoneLine(pullRequest: pullRequest, merged: page.mergedText, open: { actions.open(pullRequest: $0, repoKey: page.repoKey) })
+            if let moves = page.moves {
+                ActionRail(rail: TicketActionRail(identifier: page.identifier, moves: moves), perform: move)
             }
         }
-    }
-
-    @ViewBuilder private var badges: some View {
-        ForEach(Array(page.badges.enumerated()), id: \.offset) { _, badge in
-            StatusBadge(status: badge.status, word: badge.word).fixedSize()
-        }
-        if let repo = page.repoKey {
-            Label(repo, systemImage: SymphonyView.repos.symbol)
-                .font(DesignTokens.TypeStyle.label.font)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
-        if let initiative = page.initiative {
-            Label(initiative, systemImage: SymphonyView.initiatives.symbol)
-                .font(DesignTokens.TypeStyle.label.font)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-/// Why the ticket is paused: "Paused: waiting for your answer", or one row per reason under "Paused for 2 reasons",
-/// each with since when and Release where the Director may release it. Rows wrap rather than truncate.
-struct PausedLine: View {
-    let paused: TicketPage.Paused
-    let release: () -> Void
-    var releasing = false
+/// A chip beside the identifier: the repo, the epic.
+private struct HeaderChip: View {
+    let text: String
+    let systemImage: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            if paused.reasons.count == 1, let reason = paused.reasons.first {
-                row(paused.sentence, since: reason.since.map { "since \($0)" } ?? paused.sinceText, reason: reason)
-            } else {
-                Label {
-                    Text(([paused.sentence] + [paused.sinceText].compactMap { $0 }).joined(separator: " · "))
-                } icon: {
-                    Image(systemName: DesignTokens.Status.idle.symbol).accessibilityHidden(true)
-                }
-                .font(DesignTokens.TypeStyle.body.font)
-                .foregroundStyle(.secondary)
-                ForEach(paused.reasons) { reason in
-                    row(reason.text, since: reason.since.map { "since \($0)" }, reason: reason)
-                        .padding(.leading, DesignTokens.Space.s5)
-                }
-            }
-        }
-    }
-
-    private func row(_ text: String, since: String?, reason: TicketPage.Paused.Reason) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-            Text(text)
-                .font(DesignTokens.TypeStyle.body.font)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-            if let since {
-                Text(since)
-                    .font(DesignTokens.TypeStyle.label.font)
-                    .foregroundStyle(.secondary)
-                    .fixedSize()
-            }
-            if reason.releasable {
-                Button(TicketPage.releaseTitle, action: release)
-                    .controlSize(.small)
-                    .disabled(releasing)
-                    .fixedSize()
-                    .help("Release this pause: Symphony sets the ticket moving again")
-                    .accessibilityLabel(reason.releaseAccessibilityLabel)
-            }
-        }
-    }
-}
-
-/// Done: the pull request and when it merged.
-private struct DoneLine: View {
-    let pullRequest: URL?
-    let merged: String?
-    let open: (URL) -> Void
-
-    var body: some View {
-        HStack(spacing: DesignTokens.Space.s2) {
-            Image(systemName: DesignTokens.Status.done.symbol)
-                .foregroundStyle(DesignTokens.Status.done.tint)
-                .accessibilityHidden(true)
-            if let merged {
-                Text("Merged \(merged)").font(DesignTokens.TypeStyle.body.font)
-            }
-            if let pullRequest {
-                Button(TicketPage.pullRequestName(pullRequest)) { open(pullRequest) }
-                    .buttonStyle(.link)
-            }
-        }
-        .accessibilityElement(children: .combine)
-    }
-}
-
-/// View Transcript (the default), Open in Linear, Start Now, Stop Run…, Move to…, and the ⋯ menu.
-private struct TicketActions: View {
-    let page: TicketPage
-    let actions: TicketPageActions
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
-
-    var body: some View {
-        HStack(spacing: DesignTokens.Space.s2) {
-            Button(TicketPage.viewTranscriptTitle) {
-                // ⌘-click opens another window.
-                actions.viewTranscript(NSEvent.modifierFlags.contains(.command))
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(!page.isTracked)
-            .help(page.isTracked ? "Open the run's transcript (⌘-click for another window)" : "Symphony no longer keeps this ticket's transcript")
-            if let url = page.url {
-                Button(TicketPage.openInLinearTitle) { actions.openURL(url) }
-            }
-            if let start = page.start {
-                StartNowButton(identifier: page.identifier, start: start, starting: actions.starting, action: actions.start)
-            }
-            Button(StopRunSheet.buttonTitle, action: actions.stopRun)
-                .disabled(!page.isRunning)
-            if let moveMenu = page.moveMenu {
-                MoveToMenu(menu: moveMenu, move: actions.move)
-            }
-            if offscreenSnapshot {
-                // `ImageRenderer` can't draw a menu.
-                Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
-            } else {
-                menu
-            }
-        }
-        .fixedSize()
-    }
-
-    private var menu: some View {
-        Menu {
-            Button(TicketPage.copyAPIURLTitle, action: actions.copyAPIURL)
-            Button(TicketPage.showAuditRecordsTitle, action: actions.showAuditRecords)
-            Button(TicketPage.revealWorktreeTitle) { page.workspacePath.map(actions.revealWorktree) }
-                .disabled(page.workspacePath == nil)
-            Divider()
-            if page.isForced {
-                Button(TicketList.stopForcingTitle, action: actions.stopForcing)
-            } else {
-                Button(TicketList.forceTitle, action: actions.force)
-            }
-        } label: {
-            Label("More", systemImage: "ellipsis.circle")
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("More actions")
-    }
-}
-
-/// Now: the run, its model, time, turn, last activity, workspace and tokens against the cap.
-private struct NowGrid: View {
-    let now: TicketPage.Now
-    let reveal: (String) -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: DesignTokens.Space.s4, verticalSpacing: DesignTokens.Space.s2) {
-                row("Run", now.run)
-                if let model = now.model { row("Model", model) }
-                if let time = now.runningTime { row("Running for", time) }
-                if let turn = now.turn { row("Turn", String(turn)) }
-                if let activity = now.lastActivity { row("Last activity", activity) }
-                if let pending = now.pendingTool { row("Tool call", pending) }
-                if let workspace = now.workspace {
-                    GridRow {
-                        label("Workspace")
-                        HStack(spacing: DesignTokens.Space.s2) {
-                            Text(workspace)
-                                .font(DesignTokens.TypeStyle.mono.font)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                                .textSelection(.enabled)
-                            Button("Reveal") { reveal(workspace) }
-                                .controlSize(.small)
-                        }
-                    }
-                    .accessibilityElement(children: .combine)
-                }
-            }
-            MeterView(meter: now.tokens)
-        }
-    }
-
-    private func row(_ title: String, _ value: String) -> some View {
-        GridRow {
-            label(title)
-            Text(value)
-                .font(DesignTokens.TypeStyle.body.font)
-                .monospacedDigit()
-                .contentTransition(.numericText())
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private func label(_ text: String) -> some View {
-        Text(text)
-            .font(DesignTokens.TypeStyle.body.font)
+        Label(text, systemImage: systemImage)
+            .font(DesignTokens.TypeStyle.caption.font)
             .foregroundStyle(.secondary)
-            .gridColumnAlignment(.leading)
-            .frame(minWidth: 96, alignment: .leading)
+            .lineLimit(1)
+            .padding(.horizontal, DesignTokens.Space.s2)
+            .padding(.vertical, 2)
+            .background(DesignTokens.Surface.separator.color.opacity(0.5), in: Capsule())
     }
 }
 
-/// The Ticket card: state, type, initiative, PR, gate verdict, forced.
-private struct FactsGrid: View {
-    let facts: [TicketPage.Fact]
-    /// The PR fact's link: its page (D15).
-    let open: (URL) -> Void
+/// The decisions line (§2, question 1): "A question waits on you" in the Waiting on you tint with Answer, which opens
+/// the decision sheet and stays pressed while it is open; or "Nothing needs you" in the same place and height.
+struct DecisionsLineView: View {
+    let line: DecisionsLine
+    var open = false
+    var focus: FocusState<Bool>.Binding?
+    let answer: () -> Void
+
+    /// The line's height either way, so the page never jumps when a Question comes or goes.
+    static let height: CGFloat = 56
+
+    private var tint: Color { DesignTokens.Status.you.tint }
 
     var body: some View {
-        Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: DesignTokens.Space.s4, verticalSpacing: DesignTokens.Space.s2) {
-            ForEach(Array(facts.enumerated()), id: \.offset) { _, fact in
-                GridRow {
-                    Text(fact.label)
-                        .font(DesignTokens.TypeStyle.body.font)
-                        .foregroundStyle(.secondary)
-                        .gridColumnAlignment(.leading)
-                    if let url = fact.url {
-                        Button(fact.value) { open(url) }
-                            .buttonStyle(.link)
-                            .help(url.absoluteString)
-                    } else {
-                        Text(fact.value)
-                            .font(DesignTokens.TypeStyle.body.font)
-                            .textSelection(.enabled)
-                    }
-                }
-                .accessibilityElement(children: .combine)
-            }
-        }
-    }
-}
-
-// MARK: - C14: the run timeline
-
-/// Steps down a connecting line: time, symbol, step, result, duration and tokens; the current step live. A run is a
-/// group that folds, its events inside it; an event's replies sit under it, and a finding shows its screenshots.
-struct RunTimeline: View {
-    let steps: [TicketPage.Step]
-    var folded: Binding<Set<String>> = .constant([])
-    var images: ArtifactImages?
-    var openScreenshot: (TicketScreenshot) -> Void = { _ in }
-    var openOutput: (TicketOutput) -> Void = { _ in }
-    /// Inside a run or under an event: the time sits at the line's end, so each level doesn't spend a column on it.
-    var nested = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
-                TimelineRow(
-                    step: step, first: index == 0, last: index == steps.count - 1, folded: folded, images: images,
-                    openScreenshot: openScreenshot, openOutput: openOutput, nested: nested
-                )
-            }
-        }
-    }
-}
-
-private struct TimelineRow: View {
-    let step: TicketPage.Step
-    let first: Bool
-    let last: Bool
-    let folded: Binding<Set<String>>
-    let images: ArtifactImages?
-    let openScreenshot: (TicketScreenshot) -> Void
-    let openOutput: (TicketOutput) -> Void
-    let nested: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var isFolded: Bool { step.runID.map(folded.wrappedValue.contains) ?? false }
-
-    /// A plain step reads as one element; a group, a step with screenshots, outputs or replies keeps its controls.
-    private var isPlain: Bool { !step.isGroup && step.children.isEmpty && step.screenshots.isEmpty && step.outputs.isEmpty }
-
-    var body: some View {
-        let row = HStack(alignment: .top, spacing: nested ? DesignTokens.Space.s2 : DesignTokens.Space.s3) {
-            if !nested {
-                Text(step.timeText)
-                    .font(DesignTokens.TypeStyle.callout.font)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .frame(width: 88, alignment: .trailing)
-                    .padding(.top, DesignTokens.Space.s2)
-                    .accessibilityHidden(!isPlain)
-            }
-            ZStack(alignment: .top) {
-                // The connecting line, from the step above to the one below.
-                VStack(spacing: 0) {
-                    Rectangle().fill(first ? .clear : DesignTokens.Surface.separator.color).frame(width: 2, height: DesignTokens.Space.s2 + 4)
-                    Rectangle().fill(last ? .clear : DesignTokens.Surface.separator.color).frame(width: 2)
-                }
-                symbol
-                    .frame(width: 20, height: 20)
-                    .background(DesignTokens.Surface.content.color, in: Circle())
-                    .padding(.top, DesignTokens.Space.s1 + 2)
-            }
-            .frame(width: 20)
-            .frame(maxHeight: .infinity, alignment: .top)
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
-                if step.isGroup {
-                    Button(action: toggle) {
-                        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                            Image(systemName: isFolded ? "chevron.right" : "chevron.down")
-                                .font(DesignTokens.TypeStyle.callout.font.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                                .frame(width: 12)
-                            summary
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help(isFolded ? "Show what happened in this run" : "Hide what happened in this run")
-                    .accessibilityLabel(step.foldAccessibilityLabel(folded: isFolded))
-                    .accessibilityValue(step.accessibilityLabel)
-                } else if isPlain {
-                    summary
-                } else {
-                    summary
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(spokenLabel)
-                }
-                if !step.screenshots.isEmpty {
-                    ScreenshotThumbnails(shots: step.screenshots, images: images, open: openScreenshot)
-                        .padding(.top, DesignTokens.Space.s1)
-                }
-                if !step.outputs.isEmpty {
-                    OutputLinks(outputs: step.outputs, open: openOutput)
-                        .padding(.top, DesignTokens.Space.s1)
-                }
-                if !step.children.isEmpty, !isFolded {
-                    RunTimeline(
-                        steps: step.children, folded: folded, images: images, openScreenshot: openScreenshot, openOutput: openOutput,
-                        nested: true
-                    )
-                        .padding(.top, DesignTokens.Space.s1)
-                }
-            }
-            .padding(.vertical, DesignTokens.Space.s2)
-        }
-        // The line column takes the row's full height, so the line runs unbroken from step to step.
-        .fixedSize(horizontal: false, vertical: true)
-        if isPlain {
-            row
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(spokenLabel)
-        } else {
-            row.accessibilityElement(children: .contain)
-        }
-    }
-
-    private var spokenLabel: String { step.accessibilityLabel + (step.detail.map { ". \($0)" } ?? "") }
-
-    /// The title, its result, duration and tokens, then the detail.
-    private var summary: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
-            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                Text(step.title).font(DesignTokens.TypeStyle.rowTitle.font)
-                if let word = step.resultWord {
-                    Text(word)
-                        .font(DesignTokens.TypeStyle.callout.font)
-                        .foregroundStyle(step.result == .failed ? AnyShapeStyle(status.tint) : AnyShapeStyle(.secondary))
-                }
-                Spacer(minLength: DesignTokens.Space.s2)
-                if nested, !step.timeText.isEmpty {
-                    Text(step.timeText)
-                        .font(DesignTokens.TypeStyle.callout.font)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                        .fixedSize()
-                }
-                if let duration = step.duration {
-                    Text(duration).font(DesignTokens.TypeStyle.callout.font).monospacedDigit()
-                }
-                if let tokens = step.tokensText {
-                    Text(tokens)
-                        .font(DesignTokens.TypeStyle.callout.font)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .frame(minWidth: 44, alignment: .trailing)
-                }
-            }
-            if let detail = step.detail {
-                Text(detail)
+        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
+        HStack(spacing: DesignTokens.Space.s3) {
+            mark
+            VStack(alignment: .leading, spacing: 2) {
+                Text(line.title)
+                    .font(line.waiting ? DesignTokens.TypeStyle.rowTitle.font : DesignTokens.TypeStyle.body.font)
+                    .foregroundStyle(line.waiting ? .primary : .secondary)
+                Text(line.detail)
                     .font(DesignTokens.TypeStyle.callout.font)
                     .foregroundStyle(.secondary)
-                    .lineLimit(3)
-                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: DesignTokens.Measure.reading, alignment: .leading)
             }
-        }
-    }
-
-    private func toggle() {
-        guard let runID = step.runID else { return }
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.15)) {
-            if folded.wrappedValue.contains(runID) {
-                folded.wrappedValue.remove(runID)
-            } else {
-                folded.wrappedValue.insert(runID)
-            }
-        }
-    }
-
-    private var status: DesignTokens.Status {
-        switch step.result {
-        case .done: .done
-        case .current: .working
-        case .failed: .problem
-        case .stopped: .idle
-        }
-    }
-
-    @ViewBuilder private var symbol: some View {
-        let image = Image(systemName: step.result == .stopped ? "stop.circle.fill" : status.symbol)
-            .foregroundStyle(status.tint)
-        if step.result == .current {
-            // motion.live: only the current step, and only while drawn; Reduce Motion stops the loop.
-            image
-                .symbolEffect(.variableColor.iterative, isActive: !reduceMotion)
-                .accessibilityLabel(TicketPage.runningTitle)
-                .accessibilityHidden(isPlain)
-        } else {
-            image.accessibilityHidden(true)
-        }
-    }
-}
-
-/// A finding's screenshots, wrapping onto more lines when the column is narrow.
-private struct ScreenshotThumbnails: View {
-    let shots: [TicketScreenshot]
-    let images: ArtifactImages?
-    let open: (TicketScreenshot) -> Void
-
-    var body: some View {
-        WrappingStack(spacing: DesignTokens.Space.s2) {
-            ForEach(shots) { shot in
-                if let images {
-                    ScreenshotThumbnail(shot: shot, images: images, open: open)
-                } else {
-                    ScreenshotTile(shot: shot, image: shot.available ? .loading : .unavailable, open: open)
-                }
-            }
-        }
-    }
-}
-
-/// A thumbnail that reads its image through the window's cache when it shows.
-private struct ScreenshotThumbnail: View {
-    let shot: TicketScreenshot
-    @ObservedObject var images: ArtifactImages
-    let open: (TicketScreenshot) -> Void
-
-    var body: some View {
-        ScreenshotTile(shot: shot, image: images.image(shot), open: open)
-            .onAppear { images.load(shot) }
-    }
-}
-
-/// The thumbnail itself: the image, opening full size; a quiet tile while it reads; the placeholder when Symphony no
-/// longer has it or it isn't an image.
-private struct ScreenshotTile: View {
-    let shot: TicketScreenshot
-    let image: ArtifactImages.Image
-    let open: (TicketScreenshot) -> Void
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
-
-    static let size = CGSize(width: 128, height: 80)
-
-    var body: some View {
-        switch image {
-        case let .loaded(data):
-            if let picture = NSImage(data: data) {
-                Button { open(shot) } label: {
-                    Image(nsImage: picture)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: Self.size.width, height: Self.size.height)
-                        .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.mark))
-                        .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.mark).strokeBorder(DesignTokens.Surface.separator.color))
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help(shot.label)
-                .accessibilityLabel(shot.accessibilityLabel)
-            } else {
-                unavailable
-            }
-        case .loading:
-            tile {
-                if offscreenSnapshot {
-                    // `ImageRenderer` can't draw a spinner: its symbol stands in.
-                    Image(systemName: "photo").foregroundStyle(.tertiary)
-                } else {
-                    ProgressView().controlSize(.small)
-                }
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Screenshot \(shot.label), loading")
-        case .unavailable, .failed:
-            unavailable
+            .accessibilityLabel(line.accessibilityLabel)
+            if line.waiting { answerButton }
+        }
+        .padding(.leading, DesignTokens.Space.s4)
+        .padding(.trailing, DesignTokens.Space.s3)
+        .frame(minHeight: Self.height)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(line.waiting ? AnyShapeStyle(tint.opacity(0.12)) : AnyShapeStyle(DesignTokens.Surface.content.color), in: shape)
+        .overlay(shape.strokeBorder(line.waiting ? tint.opacity(0.25) : DesignTokens.Surface.separator.color))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Decisions")
+    }
+
+    @ViewBuilder private var mark: some View {
+        if line.waiting {
+            Image(systemName: "questionmark")
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(tint, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .accessibilityHidden(true)
+        } else {
+            Image(systemName: "checkmark.circle")
+                .font(.system(size: 17))
+                .foregroundStyle(.tertiary)
+                .frame(width: 32, height: 32)
+                .accessibilityHidden(true)
         }
     }
 
-    private var unavailable: some View {
-        tile {
-            VStack(spacing: DesignTokens.Space.s1) {
-                Image(systemName: "eye.slash").foregroundStyle(.secondary)
-                Text(TicketScreenshot.unavailableTitle)
-                    .font(DesignTokens.TypeStyle.callout.font)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
-            }
-            .padding(DesignTokens.Space.s1)
-        }
-        .help(shot.label)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(shot.unavailableAccessibilityLabel)
-    }
-
-    private func tile(@ViewBuilder _ content: () -> some View) -> some View {
-        RoundedRectangle(cornerRadius: DesignTokens.Radius.mark)
-            .fill(DesignTokens.Surface.raised.color)
-            .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.mark).strokeBorder(DesignTokens.Surface.separator.color))
-            .overlay(content())
-            .frame(width: Self.size.width, height: Self.size.height)
-    }
-}
-
-/// A screenshot full size, over the window; Close or Esc closes it.
-struct ScreenshotSheet: View {
-    let shot: TicketScreenshot
-    let images: ArtifactImages?
-    let close: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                Text(shot.label)
-                    .font(DesignTokens.TypeStyle.sentence.font)
-                    .textSelection(.enabled)
-                    .accessibilityAddTraits(.isHeader)
-                Spacer(minLength: DesignTokens.Space.s2)
-                Button("Close", action: close)
-                    .keyboardShortcut(.cancelAction)
-            }
-            Group {
-                if case let .loaded(data)? = images?.image(shot), let picture = NSImage(data: data) {
-                    Image(nsImage: picture)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .accessibilityLabel("Screenshot \(shot.label)")
-                } else {
-                    Label(TicketScreenshot.unavailableTitle, systemImage: "eye.slash")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .padding(DesignTokens.Space.s5)
-        .frame(minWidth: 480, idealWidth: 1000, maxWidth: 1800, minHeight: 360, idealHeight: 680, maxHeight: 1300)
-        .onExitCommand(perform: close)
-    }
-}
-
-/// A step's text outputs by label, each opening its text; one Symphony no longer keeps reads as unavailable.
-private struct OutputLinks: View {
-    let outputs: [TicketOutput]
-    let open: (TicketOutput) -> Void
-
-    var body: some View {
-        WrappingStack(spacing: DesignTokens.Space.s2) {
-            ForEach(outputs) { output in
-                if output.available {
-                    Button { open(output) } label: {
-                        Label(output.label, systemImage: "doc.text")
-                            .font(DesignTokens.TypeStyle.callout.font)
-                    }
-                    .buttonStyle(.link)
-                    .help("Open \(output.label)")
-                    .accessibilityLabel(output.accessibilityLabel)
-                } else {
-                    Label(output.unavailableTitle, systemImage: "eye.slash")
-                        .font(DesignTokens.TypeStyle.callout.font)
-                        .foregroundStyle(.secondary)
-                        .help(TicketOutput.unavailableText)
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(output.unavailableAccessibilityLabel)
-                }
-            }
+    @ViewBuilder private var answerButton: some View {
+        let button = Button(DecisionsLine.answerTitle, action: answer)
+            .directorButton(.primary, size: .medium, selected: open)
+            .disabledReason(line.answerReason)
+            .help(line.answerReason ?? "Open the question to answer it")
+            .accessibilityHint(line.answerReason ?? "Opens the decision sheet")
+        if let focus {
+            button.focused(focus)
+        } else {
+            button
         }
     }
-}
-
-/// A step's output as text, over the window; Close or Esc closes it. It reads the text when it opens.
-struct OutputSheet: View {
-    let output: TicketOutput
-    let texts: ArtifactTexts?
-    let close: () -> Void
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                Text(output.label)
-                    .font(DesignTokens.TypeStyle.sentence.font)
-                    .textSelection(.enabled)
-                    .accessibilityAddTraits(.isHeader)
-                Spacer(minLength: DesignTokens.Space.s2)
-                Button("Close", action: close)
-                    .keyboardShortcut(.cancelAction)
-            }
-            if let texts {
-                OutputText(output: output, texts: texts)
-            } else {
-                OutputState(output: output, text: output.available ? .loading : .unavailable)
-            }
-        }
-        .padding(DesignTokens.Space.s5)
-        .frame(minWidth: 480, idealWidth: 900, maxWidth: 1600, minHeight: 320, idealHeight: 600, maxHeight: 1200)
-        .onExitCommand(perform: close)
-    }
-}
-
-/// The output's text as the window's cache holds it, read when it shows.
-private struct OutputText: View {
-    let output: TicketOutput
-    @ObservedObject var texts: ArtifactTexts
-
-    var body: some View {
-        OutputState(output: output, text: texts.text(output))
-            .onAppear { texts.load(output) }
-    }
-}
-
-/// The text itself, scrolling both ways and selectable; a quiet line while it reads; the unavailable line when Symphony
-/// no longer has it; a failed read's line.
-struct OutputState: View {
-    let output: TicketOutput
-    let text: ArtifactTexts.Text
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
-
-    var body: some View {
-        Group {
-            switch text {
-            case let .loaded(body):
-                let log = Text(body.isEmpty ? " " : body)
-                    .font(.system(.callout, design: .monospaced))
-                    .textSelection(.enabled)
-                    .padding(DesignTokens.Space.s3)
-                Group {
-                    if offscreenSnapshot {
-                        // ImageRenderer draws no scroll view's content, so the snapshot shows the text as it opens.
-                        log.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).clipped()
-                    } else {
-                        // A scroll view centres content smaller than itself; at least its size, the text starts at the
-                        // top-left like a log and scrolls once it is longer or wider.
-                        GeometryReader { box in
-                            ScrollView([.vertical, .horizontal]) {
-                                log.frame(minWidth: box.size.width, minHeight: box.size.height, alignment: .topLeading)
-                            }
-                        }
-                    }
-                }
-                .background(DesignTokens.Surface.raised.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.mark))
-                .accessibilityLabel("\(output.label) text")
-            case .loading:
-                if offscreenSnapshot {
-                    Label("Reading \(output.label)…", systemImage: "doc.text").foregroundStyle(.secondary)
-                } else {
-                    ProgressView().controlSize(.small).accessibilityLabel("\(output.label), loading")
-                }
-            case .unavailable:
-                Label(output.unavailableTitle, systemImage: "eye.slash")
-                    .foregroundStyle(.secondary)
-                    .help(TicketOutput.unavailableText)
-            case .failed:
-                Label("\(output.label) couldn't be read. Open it again to retry.", systemImage: "exclamationmark.triangle")
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: text.isLoaded ? .topLeading : .center)
-    }
-}
-
-private extension ArtifactTexts.Text {
-    var isLoaded: Bool { if case .loaded = self { true } else { false } }
 }
 
 /// Lays its views out in lines, left to right, starting a new line when the next one doesn't fit.
@@ -1576,32 +759,7 @@ struct StartNowMenuItem: View {
 
 // MARK: - TP-1328: Move to…
 
-/// Move to… as a button-styled menu: every phase, the ticket's own checked and disabled. Offscreen, where
-/// `ImageRenderer` can't draw a menu, its button alone.
-struct MoveToMenu: View {
-    let menu: TicketMoveMenu
-    let move: (MoveSheet) -> Void
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
-
-    var body: some View {
-        if offscreenSnapshot {
-            Button {} label: {
-                HStack(spacing: DesignTokens.Space.s1) {
-                    Text(TicketMoveMenu.title)
-                    Image(systemName: "chevron.down").imageScale(.small).accessibilityHidden(true)
-                }
-            }
-        } else {
-            Menu(TicketMoveMenu.title) { MoveToMenuItems(menu: menu, move: move) }
-                .menuStyle(.button)
-                .fixedSize()
-                .help("Put \(menu.identifier) in another phase; its workspace and branch stay")
-                .accessibilityLabel("Move \(menu.identifier) to another phase")
-        }
-    }
-}
-
-/// The menu's entries, in the page's Move to… and in a Tickets row's context menu.
+/// Move to…'s entries, in a Tickets row's context menu.
 struct MoveToMenuItems: View {
     let menu: TicketMoveMenu
     let move: (MoveSheet) -> Void

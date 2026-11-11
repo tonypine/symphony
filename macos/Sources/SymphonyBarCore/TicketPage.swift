@@ -252,6 +252,18 @@ public struct TicketPage: Equatable {
     /// Every Director move on the ticket read (TP-1403), each saying why when it can't act; nil from a Symphony that
     /// sends none. The Action rail (TP-1440) is drawn from it.
     public var moves: TicketMoves?
+    /// Where the ticket stands and why (C31), from the ticket read's `situation`; nil from a Symphony that sends none.
+    public var situation: Situation?
+    /// The Lifecycle section's stages and the phase path, from the ticket read.
+    public var lifecycleRead: TicketLifecycleRead?
+    /// The facts rail's Pull request and Connected panels, from the ticket read.
+    public var factsRead: TicketFactsRead?
+    /// The facts rail's Note and Details panels, from the ticket read.
+    public var detailsRead: TicketDetailsRead?
+    /// The ticket's history from its events feed, for the Timeline section; nil until the feed is read.
+    public var history: TicketEventsPayload?
+    /// The moment the page measures against: the state's `generated_at`, else when it was built.
+    public var reference: Date
     /// Whether the note field takes a note: Symphony serves the ticket's events feed, which a note is written to, and
     /// the ticket's repo is known. An older Symphony doesn't.
     public var acceptsNotes: Bool
@@ -392,6 +404,14 @@ public struct TicketPage: Equatable {
         repositoryPaused = issue?.repositoryPaused ?? false
         start = TicketStart.of(identifier, issue: sources.issue, state: sources.state)
         moves = TicketMoves.of(issue: sources.issue)
+        situation = sources.issue.flatMap { data in
+            (try? JSONSerialization.jsonObject(with: data)).flatMap { ($0 as? [String: Any])?["situation"] }.flatMap(Situation.decode(object:))
+        }
+        lifecycleRead = sources.issue.flatMap(TicketLifecycleRead.decode)
+        factsRead = sources.issue.flatMap(TicketFactsRead.decode)
+        detailsRead = sources.issue.flatMap(TicketDetailsRead.decode)
+        self.history = sources.events
+        self.reference = reference
         // Symphony's one answer to why it doesn't move: the ticket's own payload, else its entry in the state. A
         // Symphony that predates it sends no `open_questions`, and the page derives the phase from the lists.
         let status = sources.issue.flatMap { try? Self.decoder.decode(TicketStatus.Carrier.self, from: $0) }?.status
