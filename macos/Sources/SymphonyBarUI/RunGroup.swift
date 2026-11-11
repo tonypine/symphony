@@ -110,40 +110,46 @@ public extension EnvironmentValues {
 }
 
 /// The run's More: "Read the whole session", off with its reason while the run has nothing to read.
+///
+/// A plain button that opens a small popover, not a SwiftUI `Menu`: a `Menu` is an AppKit pop-up button with its menu
+/// built up front, one per run, and on a long timeline with the run now live (its breathing step bar and flowing mark
+/// redrawing the page all the time) those pop-ups kept the page from answering accessibility reads and keys (TP-1452's
+/// QA on TP-1244). The popover and its one button exist only while it is open.
 private struct RunMoreMenu: View {
     let run: RunGroupModel
     let readSession: ReadSessionAction
 
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+    @State private var open = false
 
     private var canRead: Bool { SessionReader.canRead(run) }
 
     var body: some View {
-        Group {
-            // `ImageRenderer` draws no menu: a snapshot shows its button's face.
-            if offscreenSnapshot {
-                face
-            } else {
-                Menu {
-                    Button(SessionReader.menuTitle) { readSession(run) }
-                        .disabled(!canRead)
-                } label: {
-                    face
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-            }
+        Button { open = true } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .fixedSize()
         .help(canRead ? Self.title : SessionReader.nothingToRead)
         .accessibilityLabel(Self.title + ", " + run.title)
         .accessibilityHint(canRead ? SessionReader.menuTitle : SessionReader.nothingToRead)
-    }
-
-    private var face: some View {
-        Image(systemName: "ellipsis.circle")
-            .font(.system(size: 13, weight: .regular))
-            .foregroundStyle(.secondary)
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                Button(SessionReader.menuTitle) {
+                    open = false
+                    readSession(run)
+                }
+                .disabled(!canRead)
+                if !canRead {
+                    Text(SessionReader.nothingToRead)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(DesignTokens.Space.s3)
+        }
     }
 
     static let title = "More"
