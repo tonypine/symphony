@@ -8,7 +8,7 @@ phases:
         title: Build
         mode: machine
         command:
-          - run: cd macos && swift build
+          - run: cd macos && make guarded-build
             when: macos_changed
           - run: mix compile --warnings-as-errors
             when: elixir_changed

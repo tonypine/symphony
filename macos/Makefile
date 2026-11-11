@@ -35,9 +35,41 @@ MIX ?= mix
 ERL ?= erl
 QA_SYMPHONY := $(BUILD_DIR)/qa-symphony
 
-.PHONY: all app bundle qa-app install run test e2e release-pair snapshots clean
+.PHONY: all build app bundle qa-app install run test e2e release-pair snapshots clean
+
+# The slow type-check guard. `make guarded-<target>` makes <target> with the Swift compiler
+# warning on every expression it takes longer than TYPE_CHECK_LIMIT_MS to type-check, and fails
+# when it warned: Swift gives up on an expression after a fixed budget, and the budget runs out
+# sooner on an older Xcode, so an expression near the limit here is a build failure there. CI's
+# macos build runs `make guarded-app`, and a run's Build step `make guarded-build` (the default
+# step list in Symphony's config schema), so a run sees the file and line in its own Build output
+# before it pushes. The guarded build keeps its own scratch path, so it never switches the flags
+# of the plain `.build` that `swift test` reuses (a switch rebuilds every module). A file that
+# warned is touched, so the next guarded build compiles it again and fails again until it is
+# fixed.
+TYPE_CHECK_LIMIT_MS := 100
+TYPE_CHECK_GUARD_FLAGS := -Xswiftc -Xfrontend -Xswiftc -warn-long-expression-type-checking=$(TYPE_CHECK_LIMIT_MS)
+TYPE_CHECK_GUARD_SCRATCH := .build/type-check-guard
 
 all: app
+
+build:
+	swift build $(SWIFT_FLAGS)
+
+guarded-%:
+	@log="$$(mktemp "$${TMPDIR:-/tmp}/type-check-guard.XXXXXX")" || exit 1; \
+	set -o pipefail; \
+	$(MAKE) --no-print-directory $* SWIFT_FLAGS='$(SWIFT_FLAGS) $(TYPE_CHECK_GUARD_FLAGS) --scratch-path $(TYPE_CHECK_GUARD_SCRATCH)' 2>&1 | tee "$$log"; \
+	status=$$?; \
+	slow="$$(grep 'expression took' "$$log" | cut -d: -f1 | sort -u)"; \
+	rm -f "$$log"; \
+	if [ -n "$$slow" ]; then \
+		printf '%s\n' "$$slow" | while IFS= read -r file; do if [ -f "$$file" ]; then touch "$$file"; fi; done; \
+		message="An expression took longer than $(TYPE_CHECK_LIMIT_MS) ms to type-check (the warning above names its file and line). Break it up: CI's macos build fails on it, and an older Xcode cannot compile it."; \
+		if [ -n "$$GITHUB_ACTIONS" ]; then echo "::error::$$message"; else echo "error: $$message"; fi; \
+		exit 1; \
+	fi; \
+	exit $$status
 
 # The QA helper is signed with the hardened runtime, so dyld ignores
 # DYLD_INSERT_LIBRARIES and no other code runs with its Accessibility and Screen

@@ -37,7 +37,7 @@ defmodule SymphonyElixir.WorkflowPreviewStepsTest do
 
     assert steps =~
              "2. `build` Build · machine · times out after 15 min · on failure returns to `code`\n" <>
-               "   - when macos/ changed: `cd macos && swift build`\n" <>
+               "   - when macos/ changed: `cd macos && make guarded-build`\n" <>
                "   - when Elixir files changed: `mix compile --warnings-as-errors`\n"
 
     assert steps =~
