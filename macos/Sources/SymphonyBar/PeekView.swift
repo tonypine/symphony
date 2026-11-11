@@ -27,12 +27,6 @@ extension SymphonyWindowModel {
         peek.close()
     }
 
-    /// The toolbar's inspector toggle and ⌥⌘I on the Inbox.
-    func togglePeek() {
-        peek.toggle()
-        readPeek()
-    }
-
     /// What a peek page shows: a ticket's page from everything the window has read, or a pull request's, or the line
     /// for a mention Symphony can't see.
     func peekContent(_ entry: PeekEntry) -> PeekContent {
@@ -102,47 +96,6 @@ struct PeekActions {
     /// Open Pull Request Page (D15).
     var openPullRequestPage: (PullRequestPlace, URL?) -> Void = { _, _ in }
     var openURL: (URL) -> Void = { _ in }
-}
-
-// MARK: - Where it shows
-
-/// N4 beside the review in the window's inspector column, or as a sheet over the window when the review would be under
-/// 560 pt with the inspector open. The review under it is left alone: the same item, picks and scroll position.
-struct PeekPresenter: ViewModifier {
-    @ObservedObject var model: SymphonyWindowModel
-    @State private var presentation = PeekPresentation.inspector
-
-    func body(content: Content) -> some View {
-        content
-            // While the peek is closed this is the choice it opens with.
-            .onGeometryChange(for: Double.self) { $0.size.width } action: { width in
-                presentation = PeekPresentation.choose(inboxWidth: width, inspectorShown: shows(.inspector))
-            }
-            .inspector(isPresented: binding(.inspector)) {
-                PeekView(model: model)
-                    .inspectorColumnWidth(
-                        min: PeekPresentation.minInspectorWidth,
-                        ideal: PeekPresentation.idealInspectorWidth,
-                        max: PeekPresentation.maxInspectorWidth
-                    )
-            }
-            .sheet(isPresented: binding(.sheet)) {
-                PeekView(model: model)
-                    .frame(width: PeekPresentation.maxInspectorWidth, height: DesignTokens.Layout.narrowReviewWidth)
-            }
-    }
-
-    private func shows(_ place: PeekPresentation) -> Bool { model.peek.isShown && presentation == place }
-
-    /// Shown in `place`; a dismissal there (a sheet's Esc) closes the peek, a move to the other place doesn't.
-    private func binding(_ place: PeekPresentation) -> Binding<Bool> {
-        Binding(
-            get: { shows(place) },
-            set: { shown in
-                if !shown, presentation == place { model.closePeek() }
-            }
-        )
-    }
 }
 
 /// N4: the page on top of the peek's stack, the first opened from the review, the others pushed by its chips; Back and

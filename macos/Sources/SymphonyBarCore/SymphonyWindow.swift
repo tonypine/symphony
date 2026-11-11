@@ -84,8 +84,9 @@ public enum SidebarSection: String, CaseIterable, Equatable {
 
 /// The sidebar: only the views built so far, in the design's order, with ⌘1–⌘8 following that order.
 public struct Sidebar: Equatable {
-    /// The views this version of the app has. Later views join here, in place.
-    public static let builtViews: [SymphonyView] = [.inbox, .overview, .initiatives, .tickets, .quality, .usage, .shipped, .audit, .repos, .setup, .diagnostics]
+    /// The views this version of the app has. Later views join here, in place. The Inbox is no longer one (TP-1454): its
+    /// items are on Home, and its review is Home's drawer; a window that remembers it opens on Home.
+    public static let builtViews: [SymphonyView] = [.overview, .initiatives, .tickets, .quality, .usage, .shipped, .audit, .repos, .setup, .diagnostics]
     public static let maxShortcuts = 8
 
     public let views: [SymphonyView]
@@ -205,7 +206,7 @@ public enum WindowState: Equatable {
     /// Badges and counts show only while Symphony answers; otherwise they are unknown, not zero.
     public var countsKnown: Bool { self == .connected }
 
-    /// The connection state (C4) in the toolbar and the sidebar footer; nil while connected, which stays quiet.
+    /// The connection state (C4) in the status bar's health line; nil while connected.
     public var connectionLabel: String? {
         switch self {
         case .connected: nil

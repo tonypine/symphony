@@ -108,28 +108,11 @@ public struct PeekReads: Equatable {
     }
 }
 
-/// Where the peek shows: the window's inspector column beside the review, or a sheet over the window when the detail
-/// would be too narrow with the inspector open.
-public enum PeekPresentation: Equatable {
-    case inspector
-    case sheet
-
-    /// The inspector column's width (N4): 320 to 400 pt.
+/// The peek's column in the Inbox drawer (N4): 320 to 400 pt.
+public enum PeekPresentation {
     public static let minInspectorWidth: Double = 320
     public static let idealInspectorWidth: Double = 340
     public static let maxInspectorWidth: Double = 400
-    /// Under this, the decision's review beside the inspector is too narrow to read.
-    public static let minDetailWidth: Double = DesignTokens.Layout.narrowReviewWidth
-
-    /// The presentation for an Inbox `inboxWidth` wide (its list column, a divider and the review), measured with the
-    /// inspector open when `inspectorShown`. The review left beside the inspector decides. While the inspector is
-    /// closed its widest column is assumed, so a peek that turned into a sheet stays one until the window is wide
-    /// enough for the inspector at any width, and never flips back and forth.
-    public static func choose(inboxWidth: Double, inspectorShown: Bool) -> PeekPresentation {
-        let review = inboxWidth - DesignTokens.Layout.listColumnWidth - 1
-        let besideInspector = inspectorShown ? review : review - maxInspectorWidth
-        return besideInspector < minDetailWidth ? .sheet : .inspector
-    }
 }
 
 /// What the peek reads beside the entry's own reference: the Inbox (a ticket waiting on the Director brings where it

@@ -86,9 +86,10 @@ final class SymphonyWindowTests: XCTestCase {
 
     func testSidebarListsOnlyBuiltViewsInTheDesignsOrder() {
         let sidebar = Sidebar()
-        XCTAssertEqual(sidebar.views, [.inbox, .overview, .initiatives, .tickets, .quality, .usage, .shipped, .audit, .repos, .setup, .diagnostics])
+        XCTAssertEqual(sidebar.views, [.overview, .initiatives, .tickets, .quality, .usage, .shipped, .audit, .repos, .setup, .diagnostics])
         XCTAssertEqual(sidebar.sections.map(\.section), [.main, .insights, .records, .factory])
-        XCTAssertEqual(sidebar.sections.first?.views, [.inbox, .overview, .initiatives, .tickets])
+        // The Inbox is Home's drawer, not a view of the sidebar (TP-1454).
+        XCTAssertEqual(sidebar.sections.first?.views, [.overview, .initiatives, .tickets])
         XCTAssertEqual(sidebar.sections[1].views, [.quality, .usage])
         XCTAssertEqual(sidebar.sections[2].views, [.shipped, .audit])
         XCTAssertEqual(sidebar.sections.last?.views, [.repos, .setup, .diagnostics])
@@ -110,19 +111,20 @@ final class SymphonyWindowTests: XCTestCase {
 
     func testShortcutsFollowSidebarOrderUpToEight() {
         let sidebar = Sidebar()
-        XCTAssertEqual(sidebar.shortcut(for: .inbox), 1)
-        XCTAssertEqual(sidebar.shortcut(for: .overview), 2)
-        XCTAssertEqual(sidebar.shortcut(for: .initiatives), 3)
-        XCTAssertEqual(sidebar.shortcut(for: .tickets), 4)
-        XCTAssertEqual(sidebar.shortcut(for: .quality), 5)
-        XCTAssertEqual(sidebar.shortcut(for: .usage), 6)
-        XCTAssertEqual(sidebar.shortcut(for: .shipped), 7)
-        XCTAssertEqual(sidebar.shortcut(for: .audit), 8)
-        XCTAssertNil(sidebar.shortcut(for: .repos))
+        XCTAssertNil(sidebar.shortcut(for: .inbox))
+        XCTAssertEqual(sidebar.shortcut(for: .overview), 1)
+        XCTAssertEqual(sidebar.shortcut(for: .initiatives), 2)
+        XCTAssertEqual(sidebar.shortcut(for: .tickets), 3)
+        XCTAssertEqual(sidebar.shortcut(for: .quality), 4)
+        XCTAssertEqual(sidebar.shortcut(for: .usage), 5)
+        XCTAssertEqual(sidebar.shortcut(for: .shipped), 6)
+        XCTAssertEqual(sidebar.shortcut(for: .audit), 7)
+        XCTAssertEqual(sidebar.shortcut(for: .repos), 8)
         XCTAssertNil(sidebar.shortcut(for: .setup))
         XCTAssertNil(sidebar.shortcut(for: .diagnostics))
-        XCTAssertEqual(sidebar.view(forShortcut: 7), .shipped)
-        XCTAssertEqual(sidebar.view(forShortcut: 8), .audit)
+        XCTAssertEqual(sidebar.view(forShortcut: 6), .shipped)
+        XCTAssertEqual(sidebar.view(forShortcut: 7), .audit)
+        XCTAssertEqual(sidebar.view(forShortcut: 8), .repos)
         XCTAssertNil(sidebar.view(forShortcut: 9))
         XCTAssertNil(sidebar.view(forShortcut: 0))
 
@@ -136,14 +138,16 @@ final class SymphonyWindowTests: XCTestCase {
         let sidebar = Sidebar()
         XCTAssertEqual(sidebar.restoredView(saved: "diagnostics"), .diagnostics)
         XCTAssertEqual(sidebar.restoredView(saved: "overview"), .overview)
-        // The first time, the window opens on the Inbox: decisions first.
-        XCTAssertEqual(sidebar.restoredView(saved: nil), .inbox)
+        // The first time, the window opens on Home: what needs you first. A window that remembers the Inbox opens on
+        // Home too, where its items are (TP-1454).
+        XCTAssertEqual(sidebar.restoredView(saved: nil), .overview)
+        XCTAssertEqual(sidebar.restoredView(saved: "inbox"), .overview)
         XCTAssertEqual(sidebar.restoredView(saved: "tickets"), .tickets)
         XCTAssertEqual(sidebar.restoredView(saved: "usage"), .usage)
         XCTAssertEqual(sidebar.restoredView(saved: "quality"), .quality)
         XCTAssertEqual(sidebar.restoredView(saved: "shipped"), .shipped)
         XCTAssertEqual(sidebar.restoredView(saved: "audit"), .audit)
-        XCTAssertEqual(sidebar.restoredView(saved: "repos"), .inbox)
+        XCTAssertEqual(sidebar.restoredView(saved: "repos"), .overview)
         XCTAssertEqual(Sidebar(built: [.overview, .diagnostics]).restoredView(saved: "nonsense"), .overview)
     }
 

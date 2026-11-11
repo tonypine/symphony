@@ -262,6 +262,19 @@ GitHub or Linear in QA:
   with TP-702 held in Rework by an idle run instead of waiting silently. Overview's row reads
   "TP-702 in Rework: its last runs changed nothing, so it stays paused until its PR changes or
   you answer." with its age, 24 min, and the buttons **Check Now** and **Open Ticket**.
+- **Home's top, the Inbox drawer and the status bar (TP-1454):** pass
+  `macos/Tests/Fixtures/director-app/home-questions` as `api_fixtures`. It is `home` with two
+  questions (TP-892, SHOP-344) and TP-899's releasable pause. The sidebar has no Inbox item: the
+  Inbox's items are on Home above the board, under **Needs you**, newest first (TP-899, SHOP-344,
+  TP-892), each with its buttons and **Review**. Pick an option on TP-892 and press **Send
+  Decision…**: the Inbox's consequence sheet opens; confirm it and TP-892 leaves while the board
+  below stays as it was (answer TP-892: the fixture's Inbox after `decide` drops only it).
+  **Review** opens the item's whole review in the drawer on the right; a chip in it opens its
+  peek there. **Open Inbox** (⇧⌘I) and the menu bar's waiting rows open the drawer on Home. The
+  window's bottom bar shows the dispatch control ("Dispatch on"), Symphony's build and
+  "Answering"; the control lights under the pointer and darkens while pressed, and its popover
+  opens above it. Since TP-1454, every "the Inbox" step of this playbook is walked on Home and in
+  its drawer.
 - **Waiting on CI in the Inbox (TP-1175):** pass
   `macos/Tests/Fixtures/director-app/inbox-waiting-ci` as `api_fixtures`. It is `inbox` with
   SHOP-370, a CI Fix ticket waiting on its checks. The Inbox lists it last, under **Waiting on
