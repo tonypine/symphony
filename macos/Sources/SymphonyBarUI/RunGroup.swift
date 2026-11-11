@@ -158,26 +158,23 @@ private struct RunMoreMenu: View {
 /// The run's header line. In a column too narrow for it on one line (the desktop's main column beside the decisions,
 /// TP-1449), its tokens, model and duration go to a second line under it, and where it stopped gives way first, so
 /// nothing runs past the column.
+///
+/// `RunHeaderLayout` places one copy of the line's parts, not a `ViewThatFits` between two copies: picking between
+/// copies tore down and rebuilt the losing one's views (the live dot, the step bars) on every pass of the page's
+/// layout, and the run now's header kept the ticket page laying itself out forever, so it answered no accessibility
+/// read and no key (TP-1466, QA's main-thread sample on TP-1244).
 private struct RunHeaderLabel: View {
     let run: RunGroupModel
     let folded: Bool
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
-                lead(whereFixed: true)
-                Spacer(minLength: DesignTokens.Space.s2)
-                facts
-            }
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-                HStack(alignment: .center, spacing: DesignTokens.Space.s2) { lead(whereFixed: false) }
-                HStack(alignment: .center, spacing: DesignTokens.Space.s2) { facts }
-                    .padding(.leading, 15 + DesignTokens.Space.s2)
-            }
+        RunHeaderLayout {
+            HStack(alignment: .center, spacing: DesignTokens.Space.s2) { lead }
+            HStack(alignment: .center, spacing: DesignTokens.Space.s2) { facts }
         }
     }
 
-    @ViewBuilder private func lead(whereFixed: Bool) -> some View {
+    @ViewBuilder private var lead: some View {
         StateMark(symbol: run.state.symbol, status: run.state.status, live: run.isLive, size: 15)
         if run.showsNewDot {
             Circle()
@@ -200,7 +197,7 @@ private struct RunHeaderLabel: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .fixedSize(horizontal: whereFixed, vertical: false)
+                .layoutPriority(-1)
         }
     }
 
@@ -224,6 +221,68 @@ private struct RunHeaderLabel: View {
     }
 
     static let durationHelp = "How long the run took"
+}
+
+/// Lays a run's header out as two parts, its lead (the mark, title, state, step bars and where it stopped) and its
+/// facts (tokens, model, duration): on one line, the facts at the trailing edge, when both fit whole in the width
+/// offered; otherwise the facts on a second line under the lead, indented past the mark, and the lead gets the width,
+/// so where it stopped is cut short first. The choice depends only on the two parts' ideal widths and the width
+/// offered, and both parts stay the same views either way.
+struct RunHeaderLayout: Layout {
+    /// The least room between the lead and the facts on one line.
+    static let gap: CGFloat = DesignTokens.Space.s2
+    /// The room between the two lines.
+    static let lineSpacing: CGFloat = DesignTokens.Space.s1
+    /// The second line starts past the header's 15 pt mark.
+    static let factsIndent: CGFloat = 15 + DesignTokens.Space.s2
+
+    /// Whether a lead and facts `lead` and `facts` wide sit whole on one line in `width` (nil: any width).
+    static func fitsOneLine(lead: CGFloat, facts: CGFloat, width: CGFloat?) -> Bool {
+        guard let width, width.isFinite else { return true }
+        return needed(lead: lead, facts: facts) <= width
+    }
+
+    /// The width one line needs: the lead, and the facts after the gap when there are any.
+    static func needed(lead: CGFloat, facts: CGFloat) -> CGFloat {
+        facts > 0 ? lead + gap + facts : lead
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard subviews.count == 2 else { return .zero }
+        let lead = subviews[0].sizeThatFits(.unspecified), facts = subviews[1].sizeThatFits(.unspecified)
+        if Self.fitsOneLine(lead: lead.width, facts: facts.width, width: proposal.width) {
+            let needed = Self.needed(lead: lead.width, facts: facts.width)
+            let width = proposal.width.map { $0.isFinite ? max($0, needed) : needed } ?? needed
+            return CGSize(width: width, height: max(lead.height, facts.height))
+        }
+        let width = proposal.width ?? lead.width
+        let shortLead = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
+        let factsHeight = facts.width > 0 ? Self.lineSpacing + facts.height : 0
+        return CGSize(width: max(shortLead.width, width), height: shortLead.height + factsHeight)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { return }
+        let lead = subviews[0].sizeThatFits(.unspecified), facts = subviews[1].sizeThatFits(.unspecified)
+        if Self.fitsOneLine(lead: lead.width, facts: facts.width, width: bounds.width) {
+            subviews[0].place(
+                at: CGPoint(x: bounds.minX, y: bounds.midY), anchor: .leading, proposal: ProposedViewSize(lead)
+            )
+            subviews[1].place(
+                at: CGPoint(x: bounds.maxX, y: bounds.midY), anchor: .trailing, proposal: ProposedViewSize(facts)
+            )
+            return
+        }
+        let shortLead = subviews[0].sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+        subviews[0].place(
+            at: CGPoint(x: bounds.minX, y: bounds.minY), anchor: .topLeading,
+            proposal: ProposedViewSize(width: bounds.width, height: shortLead.height)
+        )
+        subviews[1].place(
+            at: CGPoint(x: bounds.minX + Self.factsIndent, y: bounds.minY + shortLead.height + Self.lineSpacing),
+            anchor: .topLeading, proposal: ProposedViewSize(facts)
+        )
+    }
 }
 
 /// A short bar per step, in its state's tint; the one it is on breathes while it works, still under Reduce Motion.
