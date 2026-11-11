@@ -61,6 +61,20 @@ public struct TicketEventsPayload: Equatable {
     public struct Actor: Decodable, Equatable {
         public var kind: String?
         public var name: String?
+        /// An agent's run and its kind.
+        public var runId: String?
+        public var runKind: String?
+    }
+
+    /// Who a pause or a question names as its setter (`set_by`, `by`, `asked_by`): a rule, a person or a run.
+    public struct Setter: Decodable, Equatable {
+        public var kind: String?
+        public var name: String?
+
+        public init(kind: String? = nil, name: String? = nil) {
+            self.kind = kind
+            self.name = name
+        }
     }
 
     public struct Summary: Decodable, Equatable {
@@ -123,15 +137,25 @@ public struct TicketEventsPayload: Equatable {
         public var tokens: Int?
         /// How long a run or a step took (`run.ended`, `step.completed`).
         public var durationMs: Int?
+        /// The phase or situation moved to and from (`phase.entered`, `ticket.moved`, `situation.changed`).
+        public var to: String?
+        public var from: String?
+        /// What a rule or a person did (`rule.action`, `person.action`), and the rule's name.
+        public var action: String?
+        public var rule: String?
+        /// Who set a pause or asked or answered a question: the first of `set_by`, `by` and `asked_by` that names one.
+        public var setter: Setter?
 
         enum CodingKeys: String, CodingKey {
             case kind, outcome, exit, stepId, title, reason, returnsTo, returnsToTitle, questionId, model, effort, tokens, durationMs
+            case to, from, action, rule, setBy, by, askedBy
         }
 
         public init(
             kind: String? = nil, outcome: String? = nil, exit: String? = nil, stepID: String? = nil, title: String? = nil,
             reason: String? = nil, returnsTo: String? = nil, returnsToTitle: String? = nil, questionID: String? = nil,
-            model: String? = nil, effort: String? = nil, tokens: Int? = nil, durationMs: Int? = nil
+            model: String? = nil, effort: String? = nil, tokens: Int? = nil, durationMs: Int? = nil, to: String? = nil,
+            from: String? = nil, action: String? = nil, rule: String? = nil, setter: Setter? = nil
         ) {
             self.kind = kind
             self.outcome = outcome
@@ -146,6 +170,11 @@ public struct TicketEventsPayload: Equatable {
             self.effort = effort
             self.tokens = tokens
             self.durationMs = durationMs
+            self.to = to
+            self.from = from
+            self.action = action
+            self.rule = rule
+            self.setter = setter
         }
 
         public init(from decoder: Decoder) throws {
@@ -156,7 +185,11 @@ public struct TicketEventsPayload: Equatable {
                 kind: text(.kind), outcome: text(.outcome), exit: text(.exit), stepID: text(.stepId), title: text(.title),
                 reason: text(.reason), returnsTo: text(.returnsTo), returnsToTitle: text(.returnsToTitle),
                 questionID: text(.questionId), model: text(.model), effort: text(.effort), tokens: number(.tokens),
-                durationMs: number(.durationMs)
+                durationMs: number(.durationMs), to: text(.to), from: text(.from), action: text(.action), rule: text(.rule),
+                // `hold.cleared`'s `by` is a string, not a setter: it is skipped.
+                setter: [CodingKeys.setBy, .by, .askedBy].lazy.compactMap { key in
+                    (try? container?.decodeIfPresent(Setter.self, forKey: key)) ?? nil
+                }.first
             )
         }
     }
@@ -172,6 +205,8 @@ public struct TicketEventsPayload: Equatable {
         public var summary: Summary?
         public var payload: Payload
         public var artifacts: [Artifact]
+        /// Later than when the person last looked at the ticket (`new`), or they never did.
+        public var isNew: Bool = false
     }
 
     /// A run's verdict, when one names it.
@@ -476,7 +511,7 @@ public struct TicketEventsPayload: Equatable {
         let children: [Node]
 
         enum CodingKeys: String, CodingKey {
-            case id, seq, at, type, runId, parent, actor, summary, payload, artifacts, children
+            case id, seq, at, type, runId, parent, actor, summary, payload, artifacts, children, new
         }
 
         init(from decoder: Decoder) throws {
@@ -491,7 +526,8 @@ public struct TicketEventsPayload: Equatable {
                 actor: try? container.decodeIfPresent(Actor.self, forKey: .actor),
                 summary: try? container.decodeIfPresent(Summary.self, forKey: .summary),
                 payload: (try? container.decodeIfPresent(Payload.self, forKey: .payload)) ?? Payload(),
-                artifacts: (try? container.decodeIfPresent([Artifact].self, forKey: .artifacts)) ?? []
+                artifacts: (try? container.decodeIfPresent([Artifact].self, forKey: .artifacts)) ?? [],
+                isNew: (try? container.decodeIfPresent(Bool.self, forKey: .new)) == true
             )
             children = try container.decodeIfPresent([Node].self, forKey: .children) ?? []
         }
