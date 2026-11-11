@@ -162,12 +162,12 @@ final class TimelineTests: XCTestCase {
             event("s4", "09:01:00", "pause.set", title: "Paused: other"),
         ])
         let entries = self.entries(TimelineModel.build(history, reference: reference, calendar: utc))
-        XCTAssertEqual(entries.map(\.kind), [.pauseCleared, .pauseCleared, .pause, .pause, .pause])
+        // Newest first: the pause still holding, the one set again later, the first one, then the two lone clears.
+        XCTAssertEqual(entries.map(\.kind), [.pause, .pause, .pause, .pauseCleared, .pauseCleared])
+        XCTAssertEqual(entries.map(\.id), ["s4", "s3", "s1", "r", "c"])
+        XCTAssertTrue(entries[0].isOngoing)
         XCTAssertEqual(entries[2].detail, "Paused: b")
         XCTAssertEqual(entries[2].durationSeconds, 120)
-        XCTAssertEqual(entries[3].id, "s3")
-        XCTAssertEqual(entries[4].id, "s4")
-        XCTAssertTrue(entries[4].isOngoing)
     }
 
     func testDuplicateRecordWritesFoldIntoOneEntry() throws {
@@ -186,7 +186,7 @@ final class TimelineTests: XCTestCase {
             event("d4", "09:02:00", "note", title: "Note added"),
         ])
         let folded = self.entries(TimelineModel.build(history, reference: reference, calendar: utc))
-        XCTAssertEqual(folded.map(\.eventIDs), [["d1", "d2", "d3"], ["x"], ["d4"]])
+        XCTAssertEqual(folded.map(\.eventIDs), [["d4"], ["x"], ["d1", "d2", "d3"]])
     }
 
     func testAPhaseEnteredBesideAPersonsMoveIsThatMove() throws {
@@ -202,8 +202,9 @@ final class TimelineTests: XCTestCase {
             event("pf", "09:30:00", "phase.entered", title: "Entered Done again", payload: #"{"to": "Done"}"#),
         ])
         let moves = self.entries(TimelineModel.build(history, reference: reference, calendar: utc))
-        XCTAssertEqual(moves.map(\.eventIDs), [["pa", "pe"], ["pf"]])
-        XCTAssertEqual(moves[0].actor, "Tony")
+        XCTAssertEqual(moves.map(\.eventIDs), [["pf"], ["pa", "pe"]])
+        XCTAssertEqual(moves[0].actor, "Symphony")
+        XCTAssertEqual(moves[1].actor, "Tony")
     }
 
     func testARuleThatMovedTheTicketIsWhoMadeTheMoveAndOneThatCausedNothingIsItsOwnEntry() throws {
@@ -213,11 +214,11 @@ final class TimelineTests: XCTestCase {
             event("l", "11:00:00", "rule.action", title: "Self-heal lifted a pause", payload: #"{"rule": "Self-heal", "action": "lifted_pause"}"#),
         ])
         let entries = self.entries(TimelineModel.build(history, reference: reference, calendar: utc))
-        XCTAssertEqual(entries.map(\.id), ["m", "l"])
-        XCTAssertEqual(entries[0].actor, "Rule: R7")
-        XCTAssertEqual(entries[0].eventIDs, ["m", "r"])
-        XCTAssertEqual(entries[1].kind, .rule)
-        XCTAssertEqual(entries[1].actor, "Rule: Self-heal")
+        XCTAssertEqual(entries.map(\.id), ["l", "m"])
+        XCTAssertEqual(entries[0].kind, .rule)
+        XCTAssertEqual(entries[0].actor, "Rule: Self-heal")
+        XCTAssertEqual(entries[1].actor, "Rule: R7")
+        XCTAssertEqual(entries[1].eventIDs, ["m", "r"])
     }
 
     func testEveryClassOfEventFindsItsKind() throws {
