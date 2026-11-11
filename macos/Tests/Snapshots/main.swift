@@ -1330,6 +1330,25 @@ func ticketPageAnswering() -> some View {
     }
 }
 
+// MARK: - The ticket page at desktop width (TP-1449)
+
+/// The whole page of `identifier` `width` wide in a window 1360 pt tall: at 2200 pt (a 1440p display) the desktop's
+/// arrangement, with a waiting ticket's Questions as the column on the far right; at 1590 and 1610 pt the two sides of
+/// the 1600 pt breakpoint. The page hasn't scrolled, and is drawn at its whole height.
+@MainActor
+func ticketPageWide(_ identifier: String, width: CGFloat = TicketPageLayout.desktopPageWidth) -> some View {
+    let page = ticketPageRead(identifier)
+    let height = TicketPageLayout.desktopPageHeight
+    return TicketPageBody(
+        page: page, questions: TicketPage.questions(of: identifier, in: ticketPageInbox.items), width: width,
+        transcripts: StepTranscripts { _ in .unreachable }, note: TicketNoteComposer(identifier: identifier),
+        decisions: ticketPageDecisions(identifier), scroll: TicketPageScroll(viewport: height), calendar: timelineCalendar
+    )
+    .frame(width: width, alignment: .topLeading)
+    .frame(minHeight: height, alignment: .top)
+    .background(DesignTokens.Surface.content.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1428,6 +1447,14 @@ MainActor.assumeIsolated {
             render(ticketPageLaptop(identifier), scheme, to: "ticket-page-\(moment)-laptop-\(suffix).png")
         }
         render(ticketPageAnswering(), scheme, to: "ticket-page-answer-sheet-laptop-\(suffix).png")
+        // The ticket page at desktop width (TP-1449): the three moments at 2200 pt, and the waiting ticket on either
+        // side of the 1600 pt breakpoint.
+        for (identifier, moment) in ticketPageMoments {
+            render(ticketPageWide(identifier), scheme, to: "ticket-page-\(moment)-desktop-\(suffix).png")
+        }
+        for width in [CGFloat(1590), 1610] {
+            render(ticketPageWide("TP-1245", width: width), scheme, to: "ticket-page-waiting-\(Int(width))-\(suffix).png")
+        }
         render(review(width: 640, picks: picks), scheme, to: "inbox-write-in-\(suffix).png")
         // Chips inside the question, story and options, wrapping with the text (TP-952).
         render(review(width: 1200), scheme, to: "decision-chips-wide-\(suffix).png")

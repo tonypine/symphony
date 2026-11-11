@@ -383,13 +383,18 @@ struct TicketPageView: View {
     var undo: (InboxBanner) -> Void = { _ in }
     var closeBanner: () -> Void = {}
     @State private var width: CGFloat = TicketPageLayout.laptopPageWidth
+    @State private var scroll = TicketPageScroll()
     @State private var sheetOpen = false
     @State private var picks = DecisionPicks()
     @State private var confirmingRestart = false
+    /// Bumped by the header's Answer on a desktop: the decisions column takes the keyboard to its first answer again.
+    @State private var answerPresses = 0
     @FocusState private var answerFocused: Bool
 
     static let restartReason = "Restarted from the ticket page"
     static let noteAnchor = "note-panel"
+
+    private var desktop: Bool { TicketPageLayout.isDesktop(page: width) }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -397,12 +402,25 @@ struct TicketPageView: View {
                 TicketPageBody(
                     page: page, questions: questions, width: width, transcripts: transcripts, note: note, decisions: decisions,
                     actions: actions, sheetOpen: sheetOpen, answerFocus: $answerFocused,
-                    move: { handle($0, proxy: proxy) }, answer: { sheetOpen = true }
+                    move: { handle($0, proxy: proxy) }, answer: { sheetOpen = true },
+                    picks: picks, pick: { option, question in picks.picks[question] = option },
+                    writeIn: { text, question in picks.writeIns[question] = text },
+                    scroll: scroll, answerPresses: answerPresses
                 )
                 .environment(\.mentionReferences, references)
             }
+            .onScrollGeometryChange(for: Double.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, offset in
+                scroll.offset = offset
+            }
         }
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
+            width = size.width
+            scroll.viewport = size.height
+        }
+        .onChange(of: desktop) { _, wide in
+            // The desktop's decisions are a column on the page: the laptop's sheet has nothing left to cover.
+            if wide { sheetOpen = false }
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             if let banner {
                 InboxBannerView(banner: banner, undo: { undo(banner) }, close: closeBanner)
@@ -410,7 +428,7 @@ struct TicketPageView: View {
                     .padding(.bottom, DesignTokens.Space.s3)
             }
         }
-        .decisionSheet(isPresented: $sheetOpen, returnFocus: $answerFocused) {
+        .decisionSheet(isPresented: desktop ? .constant(false) : $sheetOpen, returnFocus: $answerFocused) {
             DecisionSheet(
                 questions: questions, picks: picks, subtitle: page.sheetSubtitle,
                 pick: { option, question in picks.picks[question] = option },
@@ -431,11 +449,12 @@ struct TicketPageView: View {
         }
     }
 
-    /// A move on the rail: the page shows Answer's sheet, asks before Restart… and takes Write a Note… to the Note
+    /// A move on the rail: the page shows Answer's sheet (on a desktop, the keyboard goes to the decisions column), asks before Restart… and takes Write a Note… to the Note
     /// panel; the rest go to the window.
     private func handle(_ request: TicketActionRail.Request, proxy: ScrollViewProxy) {
         switch request {
-        case .sheet(.answer): sheetOpen = true
+        case .sheet(.answer):
+            if desktop { answerPresses += 1 } else { sheetOpen = true }
         case .sheet(.restart): confirmingRestart = true
         case .sheet(.note): withAnimation { proxy.scrollTo(Self.noteAnchor, anchor: .top) }
         default: actions.move(request)
@@ -443,9 +462,31 @@ struct TicketPageView: View {
     }
 }
 
+/// Where the page's scroll view is, for the sticky columns: only the views that read it draw again as the page
+/// scrolls, never the timeline beside them.
+final class TicketPageScroll: ObservableObject {
+    /// How far the page has scrolled.
+    @Published var offset: Double = 0
+    /// The window's height for the page.
+    @Published var viewport: Double
+    /// The columns' row: where it starts in the page and how tall it is.
+    @Published var rowTop: Double = 0
+    @Published var rowHeight: Double = 0
+
+    init(offset: Double = 0, viewport: Double = TicketPageLayout.laptopWindowHeight) {
+        self.offset = offset
+        self.viewport = viewport
+    }
+}
+
 /// The page's zones, outside the scroll view so they also render offscreen: the header across the page; under it,
 /// in the main column, the decisions line, the Lifecycle section and the Timeline section; the facts rail beside
 /// them, 340 pt wide. Below the width where the main column fits beside the rail, the rail goes under it.
+///
+/// From 1600 pt on, the desktop's (TP-1449): the moves on the identifier's line; no decisions line, the open
+/// Questions instead as a 600 pt column on the far right with their Send; the rail at 440 pt; the main column fluid
+/// beside them, up to 1040 pt with the columns centred when nothing waits. The rail and the decisions column are
+/// sticky within the page's scroll.
 struct TicketPageBody: View {
     let page: TicketPage
     var questions: [InboxReview.Action] = []
@@ -461,36 +502,62 @@ struct TicketPageBody: View {
     var move: (TicketActionRail.Request) -> Void = { _ in }
     /// The decisions line's Answer.
     var answer: () -> Void = {}
+    /// The desktop's decisions column: the answers picked so far, and what picking one does.
+    var picks = DecisionPicks()
+    var pick: (Int, Int) -> Void = { _, _ in }
+    var writeIn: (String, Int) -> Void = { _, _ in }
+    /// Where the page's scroll view is; a snapshot's page hasn't scrolled.
+    var scroll = TicketPageScroll()
+    /// The header's Answer on a desktop, counted: each press takes the keyboard to the column's first answer.
+    var answerPresses = 0
     var calendar: Calendar = .current
     /// Snapshots only: the Details panel's run models unfolded.
     var detailsUnfolded = false
 
+    static let coordinateSpace = "ticket-page"
+
     private var gap: CGFloat { TicketPageLayout.gap }
+    private var line: DecisionsLine { DecisionsLine(openQuestions: page.openQuestions, questions: questions) }
+    private var arrangement: TicketPageLayout.Arrangement {
+        TicketPageLayout.arrangement(page: width, decisions: line.waiting)
+    }
 
     var body: some View {
+        let arrangement = arrangement
         VStack(alignment: .leading, spacing: gap) {
-            TicketPageHeader(page: page, move: move)
-            if TicketPageLayout.railBeside(page: width) {
-                HStack(alignment: .top, spacing: gap) {
-                    mainColumn.frame(maxWidth: .infinity, alignment: .topLeading)
-                    rail.frame(width: TicketPageLayout.railWidth)
+            TicketPageHeader(page: page, desktop: arrangement.desktop, move: move)
+            if arrangement.railBeside {
+                HStack(alignment: .top, spacing: arrangement.columnGap) {
+                    mainColumn(desktop: arrangement.desktop).frame(maxWidth: .infinity, alignment: .topLeading)
+                    StickyColumn(scroll: scroll) { rail(width: arrangement.railWidth) }
+                        .frame(width: arrangement.railWidth)
+                    if let decisionsWidth = arrangement.decisionsWidth {
+                        DecisionsColumn(scroll: scroll) { decisionsColumn }
+                            .frame(width: decisionsWidth)
+                    }
+                }
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.coordinateSpace)) } action: { frame in
+                    scroll.rowTop = frame.minY
+                    scroll.rowHeight = frame.height
                 }
             } else {
-                mainColumn
-                rail
+                mainColumn(desktop: false)
+                rail(width: nil)
             }
         }
+        .frame(width: arrangement.desktop ? arrangement.contentWidth : nil, alignment: .topLeading)
         .padding(gap)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: arrangement.desktop ? .top : .topLeading)
+        .coordinateSpace(name: Self.coordinateSpace)
         .environment(\.openMention, OpenMentionAction(handler: actions.openMention))
     }
 
-    private var mainColumn: some View {
+    private func mainColumn(desktop: Bool) -> some View {
         VStack(alignment: .leading, spacing: gap) {
-            DecisionsLineView(
-                line: DecisionsLine(openQuestions: page.openQuestions, questions: questions),
-                open: sheetOpen, focus: answerFocus, answer: answer
-            )
+            // The desktop shows the Questions in their own column: no line, no Answer.
+            if !desktop {
+                DecisionsLineView(line: line, open: sheetOpen, focus: answerFocus, answer: answer)
+            }
             if let lifecycle = page.lifecycleRead?.lifecycle {
                 LifecycleSection(model: LifecycleModel.build(lifecycle, phase: page.lifecycleRead?.phasePath?.current))
             }
@@ -509,7 +576,36 @@ struct TicketPageBody: View {
         }
     }
 
-    private var rail: some View {
+    /// The desktop's decisions column: the decision sheet's content without its sheet chrome (no close button, no
+    /// shadow), its header on top and its Send at the foot, the Questions scrolling between them.
+    @ViewBuilder private var decisionsColumn: some View {
+        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
+        Group {
+            if questions.isEmpty {
+                // Symphony names a Question the Inbox doesn't hold yet: its options come with the Inbox's next read.
+                VStack(spacing: DesignTokens.Space.s3) {
+                    ProgressView().controlSize(.small)
+                    Text(line.title).font(DesignTokens.TypeStyle.rowTitle.font)
+                    Text(DecisionsLine.readingReason)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(DesignTokens.Surface.window.color)
+                .accessibilityElement(children: .combine)
+            } else {
+                DecisionSheet(
+                    questions: questions, picks: picks, subtitle: page.sheetSubtitle, pick: pick, writeIn: writeIn,
+                    send: {}, close: nil, sendOff: DecisionsLine.sendLaterReason
+                )
+                .id(answerPresses)
+            }
+        }
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color))
+    }
+
+    private func rail(width: CGFloat?) -> some View {
         let runs = page.history?.runs ?? [:]
         return VStack(alignment: .leading, spacing: gap) {
             PullRequestPanel(model: PullRequestPanelModel.build(page.factsRead?.pullRequest), open: actions.openURL)
@@ -533,27 +629,75 @@ struct TicketPageBody: View {
                 open: actions.openURL, copy: actions.copy, modelsUnfolded: detailsUnfolded
             )
         }
+        .frame(width: width, alignment: .topLeading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Facts")
     }
 }
 
+/// A column that stays in view as the page scrolls (§5): shorter than the window, it sticks under the window's top;
+/// taller, it scrolls with the page until its foot is in view and stays there. Only this view draws again as the page
+/// scrolls.
+private struct StickyColumn<Content: View>: View {
+    @ObservedObject var scroll: TicketPageScroll
+    @ViewBuilder let content: () -> Content
+    @State private var height: Double = 0
+
+    var body: some View {
+        content()
+            .onGeometryChange(for: Double.self) { $0.size.height } action: { height = $0 }
+            .offset(
+                y: TicketPageLayout.stickyOffset(
+                    scroll: scroll.offset, viewport: scroll.viewport, top: scroll.rowTop, height: height, room: scroll.rowHeight
+                )
+            )
+    }
+}
+
+/// The desktop's decisions column in its row: as tall as the window lets it be with its header and Send in view,
+/// sticky under the window's top once the page scrolls. It keeps its first height in the row, so a short page still
+/// holds it.
+private struct DecisionsColumn<Content: View>: View {
+    @ObservedObject var scroll: TicketPageScroll
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        let column = TicketPageLayout.decisionsColumn(
+            scroll: scroll.offset, viewport: scroll.viewport, top: scroll.rowTop, room: scroll.rowHeight
+        )
+        Color.clear
+            .frame(height: TicketPageLayout.decisionsColumnRoom(viewport: scroll.viewport, top: scroll.rowTop))
+            .overlay(alignment: .top) {
+                content()
+                    .frame(height: column.height)
+                    .offset(y: column.offset)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Decisions")
+    }
+}
+
 /// The header across the page: the identifier with its repo and epic chips, the title, where the ticket stands and
-/// why (the Situation line), and the moves on their own row under them.
+/// why (the Situation line), and the moves on their own row under them. On a desktop (TP-1449) the moves sit on the
+/// identifier's line, at its right, so the title has the whole width under them.
 struct TicketPageHeader: View {
     let page: TicketPage
+    var desktop = false
     var move: (TicketActionRail.Request) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                HStack(spacing: DesignTokens.Space.s2) {
-                    Text(page.identifier)
-                        .font(DesignTokens.TypeStyle.label.font)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                    if let repo = page.repoKey { HeaderChip(text: repo, systemImage: SymphonyView.repos.symbol) }
-                    if let epic = page.epicChip { HeaderChip(text: epic, systemImage: SymphonyView.initiatives.symbol) }
+                if desktop, let moves = page.moves {
+                    HStack(alignment: .top, spacing: DesignTokens.Space.s8) {
+                        identifierLine
+                            .frame(minHeight: DesignTokens.Control.medium.height)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        ActionRail(rail: TicketActionRail(identifier: page.identifier, moves: moves), perform: move)
+                            .layoutPriority(1)
+                    }
+                } else {
+                    identifierLine
                 }
                 Text(page.headerTitle ?? page.identifier)
                     .font(DesignTokens.TypeStyle.sentence.font)
@@ -574,11 +718,22 @@ struct TicketPageHeader: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            if let moves = page.moves {
+            if !desktop, let moves = page.moves {
                 ActionRail(rail: TicketActionRail(identifier: page.identifier, moves: moves), perform: move)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var identifierLine: some View {
+        HStack(spacing: DesignTokens.Space.s2) {
+            Text(page.identifier)
+                .font(DesignTokens.TypeStyle.label.font)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            if let repo = page.repoKey { HeaderChip(text: repo, systemImage: SymphonyView.repos.symbol) }
+            if let epic = page.epicChip { HeaderChip(text: epic, systemImage: SymphonyView.initiatives.symbol) }
+        }
     }
 }
 

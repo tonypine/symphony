@@ -178,6 +178,99 @@ final class TicketPageLayoutTests: XCTestCase {
         XCTAssertEqual(TicketPageLayout.mainColumnWidth(page: 0), 0)
     }
 
+    // MARK: - The desktop width (TP-1449)
+
+    func testTheBreakpointSwitchesToTheDesktopAt1600Points() {
+        XCTAssertFalse(TicketPageLayout.isDesktop(page: 1590))
+        XCTAssertFalse(TicketPageLayout.isDesktop(page: 1599.5))
+        XCTAssertTrue(TicketPageLayout.isDesktop(page: 1600))
+        XCTAssertTrue(TicketPageLayout.isDesktop(page: 1610))
+        XCTAssertTrue(TicketPageLayout.isDesktop(page: TicketPageLayout.desktopPageWidth))
+    }
+
+    func testUnderTheBreakpointTheLaptopArrangementIsUnchanged() {
+        for width in [TicketPageLayout.laptopPageWidth, 1590] {
+            for decisions in [false, true] {
+                let arrangement = TicketPageLayout.arrangement(page: width, decisions: decisions)
+                XCTAssertFalse(arrangement.desktop)
+                XCTAssertTrue(arrangement.railBeside)
+                XCTAssertEqual(arrangement.railWidth, 340)
+                XCTAssertNil(arrangement.decisionsWidth)
+                XCTAssertEqual(arrangement.mainWidth, TicketPageLayout.mainColumnWidth(page: width))
+                XCTAssertEqual(arrangement.columnGap, TicketPageLayout.gap)
+                XCTAssertEqual(arrangement.contentWidth, width - 2 * TicketPageLayout.gap)
+            }
+        }
+        XCTAssertFalse(TicketPageLayout.arrangement(page: 700, decisions: true).railBeside)
+    }
+
+    func testADesktopPageWithAQuestionPutsTheDecisionsInAColumnOnTheFarRight() {
+        let arrangement = TicketPageLayout.arrangement(page: 2200, decisions: true)
+
+        XCTAssertTrue(arrangement.desktop)
+        XCTAssertEqual(arrangement.railWidth, 440)
+        XCTAssertEqual(arrangement.decisionsWidth, 600)
+        XCTAssertEqual(arrangement.columnGap, 32)
+        // 2200 less two 24 pt margins, two 32 pt gaps, the 440 pt rail and the 600 pt column: the main column is fluid.
+        XCTAssertEqual(arrangement.mainWidth, 1048)
+        XCTAssertEqual(arrangement.contentWidth, 2152)
+        // Just past the breakpoint the columns keep their widths and the main column gives way.
+        XCTAssertEqual(TicketPageLayout.arrangement(page: 1610, decisions: true).mainWidth, 458)
+    }
+
+    func testADesktopPageWithNothingWaitingGivesTheMainColumnUpTo1040Points() {
+        let arrangement = TicketPageLayout.arrangement(page: 2200, decisions: false)
+
+        XCTAssertNil(arrangement.decisionsWidth)
+        XCTAssertEqual(arrangement.mainWidth, 1040)
+        // The columns are centred: the main column, the gap and the rail.
+        XCTAssertEqual(arrangement.contentWidth, 1512)
+        // At the breakpoint there is already more than 1040 pt beside the rail; wider gives the margins the room.
+        XCTAssertEqual(TicketPageLayout.arrangement(page: 1600, decisions: false).mainWidth, 1040)
+        XCTAssertEqual(TicketPageLayout.arrangement(page: 3000, decisions: false).mainWidth, 1040)
+    }
+
+    // MARK: - Sticky columns
+
+    func testAShortRailSticksUnderTheWindowsTopAndNeverLeavesItsRow() {
+        // The row starts 150 pt down the page and is 3000 pt tall; the rail is 800 pt in a 1360 pt window.
+        func offset(_ scroll: Double) -> Double {
+            TicketPageLayout.stickyOffset(scroll: scroll, viewport: 1360, top: 150, height: 800, room: 3000)
+        }
+        XCTAssertEqual(offset(0), 0)
+        XCTAssertEqual(offset(126), 0)
+        XCTAssertEqual(offset(500), 374)
+        // At the row's end it stops.
+        XCTAssertEqual(offset(5000), 2200)
+    }
+
+    func testATallRailScrollsUntilItsFootIsInViewThenStays() {
+        // A 2000 pt rail in a 1360 pt window: it scrolls with the page until its foot is 24 pt above the window's bottom.
+        func offset(_ scroll: Double) -> Double {
+            TicketPageLayout.stickyOffset(scroll: scroll, viewport: 1360, top: 150, height: 2000, room: 4000)
+        }
+        XCTAssertEqual(offset(0), 0)
+        XCTAssertEqual(offset(814), 0)
+        XCTAssertEqual(offset(1000), 186)
+        // A rail as tall as its row never moves.
+        XCTAssertEqual(TicketPageLayout.stickyOffset(scroll: 1000, viewport: 1360, top: 150, height: 2000, room: 2000), 0)
+    }
+
+    func testTheDecisionsColumnKeepsItsHeaderAndSendInView() {
+        // Before the page scrolls the column starts with its row and ends 24 pt above the window's bottom.
+        let start = TicketPageLayout.decisionsColumn(scroll: 0, viewport: 1360, top: 150, room: 3000)
+        XCTAssertEqual(start.offset, 0)
+        XCTAssertEqual(start.height, 1186)
+        XCTAssertEqual(TicketPageLayout.decisionsColumnRoom(viewport: 1360, top: 150), 1186)
+        // Scrolled past its row's top, it sticks 24 pt under the window's top, as tall as the window less the margins.
+        let scrolled = TicketPageLayout.decisionsColumn(scroll: 600, viewport: 1360, top: 150, room: 3000)
+        XCTAssertEqual(scrolled.offset, 474)
+        XCTAssertEqual(scrolled.height, 1312)
+        // At the row's end it stops; in a tiny window it keeps its least height.
+        XCTAssertEqual(TicketPageLayout.decisionsColumn(scroll: 9000, viewport: 1360, top: 150, room: 3000).offset, 1688)
+        XCTAssertEqual(TicketPageLayout.decisionsColumn(scroll: 0, viewport: 300, top: 150, room: 3000).height, 320)
+    }
+
     private var calendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = utc
