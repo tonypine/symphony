@@ -218,6 +218,17 @@ final class TicketPageLayoutTests: XCTestCase {
         XCTAssertEqual(TicketPageLayout.arrangement(page: 1610, decisions: true).mainWidth, 458)
     }
 
+    func testTheDesktopHeaderLeavesAnswerToTheDecisionsColumn() throws {
+        let page = try page("TP-1245")
+        let moves = try XCTUnwrap(page.moves)
+        // The laptop's header offers Answer first; the desktop's has the decisions column open beside it instead (§5).
+        XCTAssertEqual(TicketActionRail(identifier: page.identifier, moves: moves).primary?.move, .answer)
+        let desktop = TicketActionRail(identifier: page.identifier, moves: moves, omitting: [.answer])
+        XCTAssertFalse(desktop.items.contains { $0.move == .answer })
+        XCTAssertNil(desktop.request(.answer))
+        XCTAssertNotEqual(desktop.primary?.move, .answer)
+    }
+
     func testADesktopPageWithNothingWaitingGivesTheMainColumnUpTo1040Points() {
         let arrangement = TicketPageLayout.arrangement(page: 2200, decisions: false)
 

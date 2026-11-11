@@ -387,8 +387,6 @@ struct TicketPageView: View {
     @State private var sheetOpen = false
     @State private var picks = DecisionPicks()
     @State private var confirmingRestart = false
-    /// Bumped by the header's Answer on a desktop: the decisions column takes the keyboard to its first answer again.
-    @State private var answerPresses = 0
     @FocusState private var answerFocused: Bool
 
     static let restartReason = "Restarted from the ticket page"
@@ -428,8 +426,7 @@ struct TicketPageView: View {
                         TicketDecisionsColumn(
                             page: page, questions: questions, picks: picks,
                             pick: { option, question in picks.picks[question] = option },
-                            writeIn: { text, question in picks.writeIns[question] = text },
-                            answerPresses: answerPresses
+                            writeIn: { text, question in picks.writeIns[question] = text }
                         )
                     }
                 }
@@ -471,12 +468,12 @@ struct TicketPageView: View {
         }
     }
 
-    /// A move on the rail: the page shows Answer's sheet (on a desktop, the keyboard goes to the decisions column), asks before Restart… and takes Write a Note… to the Note
+    /// A move on the rail: the page shows Answer's sheet (the desktop's header has no Answer), asks before Restart… and takes Write a Note… to the Note
     /// panel; the rest go to the window.
     private func handle(_ request: TicketActionRail.Request, proxy: ScrollViewProxy) {
         switch request {
         case .sheet(.answer):
-            if desktop { answerPresses += 1 } else { sheetOpen = true }
+            sheetOpen = true
         case .sheet(.restart): confirmingRestart = true
         case .sheet(.note): withAnimation { proxy.scrollTo(Self.noteAnchor, anchor: .top) }
         default: actions.move(request)
@@ -734,8 +731,6 @@ struct TicketDecisionsColumn: View {
     var picks = DecisionPicks()
     var pick: (Int, Int) -> Void = { _, _ in }
     var writeIn: (String, Int) -> Void = { _, _ in }
-    /// The header's Answer on a desktop, counted: each press takes the keyboard to the column's first answer.
-    var answerPresses = 0
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
@@ -758,7 +753,6 @@ struct TicketDecisionsColumn: View {
                     questions: questions, picks: picks, subtitle: page.sheetSubtitle, pick: pick, writeIn: writeIn,
                     send: {}, close: nil, sendOff: DecisionsLine.sendLaterReason
                 )
-                .id(answerPresses)
             }
         }
         .clipShape(shape)
@@ -782,7 +776,8 @@ struct TicketPageHeader: View {
                         identifierLine
                             .frame(minHeight: DesignTokens.Control.medium.height)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        ActionRail(rail: TicketActionRail(identifier: page.identifier, moves: moves), perform: move)
+                        // The decisions column is always open beside the page: no Answer (§5).
+                        ActionRail(rail: TicketActionRail(identifier: page.identifier, moves: moves, omitting: [.answer]), perform: move)
                             .layoutPriority(1)
                     }
                 } else {

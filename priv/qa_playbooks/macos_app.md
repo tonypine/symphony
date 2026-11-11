@@ -385,8 +385,8 @@ GitHub or Linear in QA:
   situation reads Shipped and the PR panel shows #741 merged. Walk it in light and dark.
 - **Ticket page at desktop width (TP-1449):** the same fixtures, with the window as wide as the
   screen allows (the page switches past 1600 pt of content, beside the sidebar). Open TP-1245:
-  the moves sit at the right of the identifier's line and the title spans the page under them;
-  there is no decisions line and no Answer… sheet. The question is a 600 pt column on the far
+  the moves (Start Now, Force…, More; no Answer) sit at the right of the identifier's line and
+  the title spans the page under them; there is no decisions line and no Answer… sheet. The question is a 600 pt column on the far
   right, with "Your decision", the two options and Send (off, with "Answer it in the Inbox for
   now…") at its foot; scroll the page: the column and the 440 pt facts rail stay in view, the
   column's header and Send stay in place, and nothing scrolls sideways. Open TP-1244: no column,

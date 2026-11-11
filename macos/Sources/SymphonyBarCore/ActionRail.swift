@@ -136,10 +136,12 @@ public struct TicketActionRail: Equatable {
     /// The rest, in More, Stop Run… last.
     public var more: [Item]
 
-    public init(identifier: String, moves: TicketMoves) {
+    /// The rail for `moves`, leaving out the ones in `omitting`: the desktop ticket page's header leaves out Answer,
+    /// since its decisions column is always open beside it (TP-1449).
+    public init(identifier: String, moves: TicketMoves, omitting: Set<Move> = []) {
         self.identifier = identifier
         func item(_ move: Move) -> Item? {
-            guard let read = moves[move.rawValue] else { return nil }
+            guard !omitting.contains(move), let read = moves[move.rawValue] else { return nil }
             return Item(move: move, reason: read.allowed ? nil : (read.reason ?? Self.unknownReason), states: read.states)
         }
         let primary = Self.expectedOrder.lazy.compactMap(item).first { $0.allowed }
