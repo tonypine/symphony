@@ -1,0 +1,29 @@
+{
+  "identifier": "TP-901",
+  "lifecycle": {
+    "current": "code_review",
+    "stages": [
+      { "id": "coding", "name": "Coding", "state": "passed", "visits": 1, "time_ms": 2400000, "agent_time_ms": 2280000, "tokens": 2400000 },
+      { "id": "code_review", "name": "Code Review", "state": "current", "visits": 3, "time_ms": 6060000, "agent_time_ms": 1500000, "tokens": 1200000 },
+      { "id": "qa", "name": "QA", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0 },
+      { "id": "merging", "name": "Merging", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0 },
+      { "id": "done", "name": "Done", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0 }
+    ],
+    "tokens": { "total": 3600000, "cap": 8000000 }
+  },
+  "phase_path": {
+    "current": "Rework",
+    "phases": [
+      { "phase": "In Progress", "count": 1, "time_ms": 2400000, "first_entered_at": "2026-10-08T09:00:00Z" },
+      { "phase": "Code Review", "count": 2, "time_ms": 3300000, "first_entered_at": "2026-10-08T09:40:00Z" },
+      { "phase": "Rework", "count": 2, "time_ms": 2760000, "first_entered_at": "2026-10-08T10:10:00Z" }
+    ],
+    "moves": [
+      { "from": "Todo", "to": "In Progress", "at": "2026-10-08T09:00:00Z" },
+      { "from": "In Progress", "to": "Code Review", "at": "2026-10-08T09:40:00Z" },
+      { "from": "Code Review", "to": "Rework", "at": "2026-10-08T10:10:00Z" },
+      { "from": "Rework", "to": "Code Review", "at": "2026-10-08T10:40:00Z" },
+      { "from": "Code Review", "to": "Rework", "at": "2026-10-08T11:05:00Z" }
+    ]
+  }
+}

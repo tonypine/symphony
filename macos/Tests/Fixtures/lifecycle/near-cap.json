@@ -1,0 +1,30 @@
+{
+  "identifier": "TP-903",
+  "lifecycle": {
+    "current": "qa",
+    "stages": [
+      { "id": "coding", "name": "Coding", "state": "passed", "visits": 1, "time_ms": 5400000, "agent_time_ms": 5280000, "tokens": 5800000 },
+      { "id": "code_review", "name": "Code Review", "state": "passed", "visits": 2, "time_ms": 2100000, "agent_time_ms": 1440000, "tokens": 1200000 },
+      { "id": "qa", "name": "QA", "state": "current", "visits": 1, "time_ms": 1320000, "agent_time_ms": 900000, "tokens": 600000 },
+      { "id": "merging", "name": "Merging", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0 },
+      { "id": "done", "name": "Done", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0 }
+    ],
+    "tokens": { "total": 7600000, "cap": 8000000 }
+  },
+  "phase_path": {
+    "current": "QA",
+    "phases": [
+      { "phase": "In Progress", "count": 1, "time_ms": 5400000, "first_entered_at": "2026-10-08T07:00:00Z" },
+      { "phase": "Code Review", "count": 2, "time_ms": 1500000, "first_entered_at": "2026-10-08T08:30:00Z" },
+      { "phase": "CI Fix", "count": 1, "time_ms": 600000, "first_entered_at": "2026-10-08T08:45:00Z" },
+      { "phase": "QA", "count": 1, "time_ms": 1320000, "first_entered_at": "2026-10-08T10:05:00Z" }
+    ],
+    "moves": [
+      { "from": "Todo", "to": "In Progress", "at": "2026-10-08T07:00:00Z" },
+      { "from": "In Progress", "to": "Code Review", "at": "2026-10-08T08:30:00Z" },
+      { "from": "Code Review", "to": "CI Fix", "at": "2026-10-08T08:45:00Z" },
+      { "from": "CI Fix", "to": "Code Review", "at": "2026-10-08T08:55:00Z" },
+      { "from": "Code Review", "to": "QA", "at": "2026-10-08T10:05:00Z" }
+    ]
+  }
+}
