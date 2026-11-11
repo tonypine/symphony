@@ -382,14 +382,10 @@ struct TicketPageActions {
 }
 
 extension TicketPage {
-    /// The page's Timeline: its history with the run now's step and lines, and the marks.
-    ///
-    /// The run now's line carries no tokens so far for the time being (`runTokens` stays read): D1's second bisect cut
-    /// for the working-run page's accessibility hang (TP-1452), after the first cut, no More on the run now, left the
-    /// page hanging. If the page answers with it, the tokens on the live line were the cause.
+    /// The page's Timeline: its history with the run now's step, lines and tokens so far, and the marks.
     func timelineModel(calendar: Calendar) -> TimelineModel {
         TimelineModel.build(
-            history ?? TicketEventsPayload(), runNow: runNow, reference: reference, calendar: calendar,
+            history ?? TicketEventsPayload(), runNow: runNow, liveTokens: runTokens, reference: reference, calendar: calendar,
             lookedAt: marksRead?.lookedAt
         )
     }
