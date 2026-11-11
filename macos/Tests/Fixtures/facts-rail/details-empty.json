@@ -1,0 +1,9 @@
+{
+  "identifier": "TP-1",
+  "repo_key": null,
+  "ticket": { "title": null, "phase": null, "priority": null, "labels": [] },
+  "workspace": null,
+  "note": null,
+  "brief": null,
+  "moves": { "note": { "allowed": false, "reason": "No ticket TP-1 in symphony" } }
+}
