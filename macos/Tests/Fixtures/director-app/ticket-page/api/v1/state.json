@@ -1,0 +1,237 @@
+{
+  "auto_merge": [],
+  "awaiting_clarification": [],
+  "blocked": [],
+  "budget": {
+    "daily_limit": 5000000,
+    "daily_paused": false,
+    "daily_remaining": 5000000,
+    "daily_used": 0,
+    "per_issue_limit": 2000000
+  },
+  "build": {
+    "sha": "9f54098c3a1e5b7d2f4c6a8e0b1d3f5a7c9e1b3d",
+    "version": "0.0.1.412"
+  },
+  "codex_totals": {
+    "cache_creation_input_tokens": 6568666,
+    "cached_input_tokens": 149857148,
+    "input_tokens": 156430436,
+    "output_tokens": 629302,
+    "seconds_running": 23413,
+    "total_tokens": 156465114,
+    "uncached_input_tokens": 4622
+  },
+  "concurrency": {
+    "finishing_max": 2,
+    "forced_max": 1,
+    "max_total": 10
+  },
+  "conflicts": [],
+  "counts": {
+    "claimed": 0,
+    "conflicts": 0,
+    "forced": 0,
+    "retrying": 0,
+    "running": 1,
+    "shipped_today": 1,
+    "watching": 0
+  },
+  "dispatch_state": {
+    "active?": true,
+    "blockers": []
+  },
+  "finishing": {
+    "running": [],
+    "slots": 2,
+    "used": 0
+  },
+  "forced": [],
+  "generated_at": "2026-10-08T10:27:00Z",
+  "linear_usage": {
+    "callers": [
+      {
+        "caller": "poll",
+        "requests": 720
+      },
+      {
+        "caller": "reconcile",
+        "requests": 402
+      },
+      {
+        "caller": "agent_tool",
+        "requests": 151
+      },
+      {
+        "caller": "qa",
+        "requests": 11
+      }
+    ],
+    "queries": [
+      {
+        "query": "CandidateIssues",
+        "requests": 720
+      }
+    ],
+    "total": 1284,
+    "window_ms": 3600000
+  },
+  "orchestrator": {
+    "message_queue_len": 0,
+    "snapshot_age_ms": 420,
+    "snapshot_build_ms": 12,
+    "snapshot_parts_ms": {}
+  },
+  "pause": {
+    "paused": false,
+    "paused_at": null,
+    "reason": null
+  },
+  "phases": [
+    {
+      "dispatches": false,
+      "name": "Backlog"
+    },
+    {
+      "dispatches": true,
+      "name": "Todo"
+    },
+    {
+      "dispatches": true,
+      "name": "In Progress"
+    },
+    {
+      "dispatches": true,
+      "name": "Code Review"
+    },
+    {
+      "dispatches": true,
+      "name": "QA"
+    },
+    {
+      "dispatches": true,
+      "name": "Merging"
+    },
+    {
+      "dispatches": true,
+      "name": "Rework"
+    },
+    {
+      "dispatches": false,
+      "name": "Plan Review"
+    },
+    {
+      "dispatches": true,
+      "name": "Epic Review"
+    },
+    {
+      "dispatches": false,
+      "name": "Waiting on sub-tickets"
+    },
+    {
+      "dispatches": true,
+      "name": "CI Fix"
+    },
+    {
+      "dispatches": false,
+      "name": "Done"
+    },
+    {
+      "dispatches": false,
+      "name": "Canceled"
+    }
+  ],
+  "pollers": {
+    "ci": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": {
+        "enabled": true,
+        "events_received": 214,
+        "last_event_at": "2026-10-07T13:58:40Z",
+        "rejected": 2,
+        "relay": "smee.io",
+        "results_via_poll": 7,
+        "results_via_webhook": 96
+      }
+    },
+    "pr_review": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": null
+    }
+  },
+  "qa": {
+    "queued": [],
+    "running": []
+  },
+  "rate_limits": null,
+  "repos": [
+    "symphony"
+  ],
+  "retrying": [],
+  "run_history": [],
+  "running": [
+    {
+      "issue_id": "i-1244",
+      "issue_identifier": "TP-1244",
+      "last_event": "notification",
+      "last_event_at": "2026-10-08T10:15:20Z",
+      "last_message": "Running the ticket page tests",
+      "pending_tool": null,
+      "pull_request_url": "https://github.com/acme/symphony/pull/741",
+      "repo_key": "symphony",
+      "run_kind": "implementation",
+      "run_profile": {
+        "effort": "high",
+        "kind": "implementation",
+        "label": "implementation · claude-opus-5-5 · high",
+        "model": "claude-opus-5-5"
+      },
+      "session_id": "session-TP-1244",
+      "started_at": "2026-10-08T09:45:00Z",
+      "state": "Rework",
+      "title": "The paused line on the ticket page",
+      "tokens": {
+        "total_tokens": 1240000
+      },
+      "turn_count": 9,
+      "url": "https://linear.app/acme/issue/TP-1244",
+      "workspace_path": "/Users/director/symphony-workspaces/symphony/TP-1244"
+    }
+  ],
+  "shipped_today": [
+    {
+      "completed_at": "2026-10-08T11:42:00Z",
+      "issue_id": "i-1246",
+      "issue_identifier": "TP-1246",
+      "repo_key": "symphony",
+      "title": "The paused line in the Inbox",
+      "pull_request_url": "https://github.com/acme/symphony/pull/741"
+    }
+  ],
+  "skipped": [],
+  "slot_waiting": [],
+  "stray_processes": [],
+  "uptime_seconds": 11580,
+  "usage_limits": [],
+  "waiting_on_you": [
+    {
+      "headline": "The paused line's times",
+      "issue_id": "i-1245",
+      "issue_identifier": "TP-1245",
+      "kind": "action",
+      "repo_key": "symphony",
+      "state": "Rework",
+      "title": "The paused line's times",
+      "url": "https://linear.app/acme/issue/TP-1245",
+      "waiting_seconds": 1349,
+      "waiting_since": "2026-10-08T10:04:31Z"
+    }
+  ],
+  "watching": []
+}

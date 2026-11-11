@@ -1,0 +1,75 @@
+{
+  "counts": {
+    "action": 1,
+    "blocked": 0,
+    "clarify": 0,
+    "plan": 0,
+    "pr": 0,
+    "total": 1
+  },
+  "generated_at": "2026-10-08T10:27:00Z",
+  "items": [
+    {
+      "ask": "How should the paused line's times read?",
+      "context": {
+        "blocked_by": [],
+        "blocks": [],
+        "earlier_decisions": [],
+        "parent": null,
+        "pull_request": {
+          "checks": "failed",
+          "number": 741,
+          "sent_back": 1,
+          "url": "https://github.com/acme/symphony/pull/741"
+        },
+        "related": []
+      },
+      "identifier": "TP-1245",
+      "issue_id": "i-1245",
+      "kind": "action",
+      "references": {},
+      "repo_key": "symphony",
+      "review": {
+        "comment_id": "c-1245-request",
+        "confirm": null,
+        "if_unanswered": "TP-1245 stays in Rework, and its next run waits for the answer.",
+        "options": [
+          {
+            "effect": "The line reads 'Paused for 2 h 10 min', and the next run changes it.",
+            "label": "For how long",
+            "recommended": true,
+            "tradeoffs": [
+              {
+                "kind": "good",
+                "text": "Reads the same at any hour."
+              }
+            ]
+          },
+          {
+            "effect": "The line reads 'Paused since 08:20', with the date after midnight.",
+            "label": "Since when",
+            "recommended": false,
+            "tradeoffs": [
+              {
+                "kind": "cost",
+                "text": "Needs the date once the pause is older than a day."
+              }
+            ]
+          }
+        ],
+        "question": "TP-1245 (The paused line's times) shows when a pause started. Should the paused line say since when the ticket is paused, or for how long?",
+        "recommendation_reason": "A length reads the same at any hour and needs no date.",
+        "requested_at": "2026-10-08T10:04:31Z",
+        "steps": [],
+        "title": "How should the paused line's times read?",
+        "unblocks": "TP-1245's next run",
+        "why": "QA found the line hard to read when a pause is older than a day.\n\nA clock time needs the date beside it after midnight; a length reads the same at any hour."
+      },
+      "state": "Rework",
+      "title": "The paused line's times",
+      "url": "https://linear.app/acme/issue/TP-1245",
+      "waiting_seconds": 1349,
+      "waiting_since": "2026-10-08T10:04:31Z"
+    }
+  ]
+}

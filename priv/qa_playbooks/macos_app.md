@@ -366,59 +366,23 @@ GitHub or Linear in QA:
   freeze". The fixture's state stays the same; the live server proves that the page shows In
   Progress and its running line within seconds of the press while the other tickets keep their
   order. Walk it at 1440×900 and 2560×1440, light and dark: nothing on the action bar is clipped.
-- **Blocked by (TP-1354):** pass `macos/Tests/Fixtures/director-app/ticket-blockers` as
-  `api_fixtures` and open SHOP-320 from Tickets (Todo, waiting on a slot). Its page has a
-  **Blocked by** card listing SHOP-305 "Checkout total rounding", In Progress, with **Remove**,
-  then a field (placeholder "e.g. TP-12"), **Pick a Ticket** and **Add Blocker**. Pick a Ticket
-  lists six open tickets, API-131 to DOCS-40, each with its title. Type API-133 and
-  press **Add Blocker**: `qa_api_requests` lists one `POST /api/v1/control/blocker` whose body
-  has `issue_identifier` `SHOP-320`, `blocker` `API-133` and `action` `add`, and the field
-  empties. Press SHOP-305's **Remove**: the log gains one with `action` `remove`. The fixture's
-  card stays the same after each move; the live server proves that the blocker appears or leaves
-  and that the ticket shows it waits. Then pass `ticket-blockers-refused`, type SHOP-320 and press
-  Add Blocker: the line under the field reads "Couldn't add SHOP-320 as a blocker of SHOP-320:
-  SHOP-320 can't block itself. (HTTP 409)" and the field keeps SHOP-320. VoiceOver reads a row's
-  Remove as "Remove SHOP-305 as a blocker", the field as "Blocker of SHOP-320" and the line as
-  "Blocker not saved: …". Walk it at 1440×900 and 2560×1440, light and dark: nothing on the card
-  is clipped.
-- **Priority (TP-1355):** pass `macos/Tests/Fixtures/director-app/ticket-priority` as
-  `api_fixtures` and open SHOP-320 from Tickets. Its page has a **Priority** card under Ticket
-  showing **Low** in a menu of Urgent, High, Medium, Low and No priority (Low checked and
-  disabled). Pick **Urgent**: `qa_api_requests` lists one `POST /api/v1/control/priority` whose
-  body has `issue_identifier` `SHOP-320` and `priority` `urgent`. The fixture's card reads Low
-  again after the pick; the live server proves that the page shows Urgent and the ticket is
-  dispatched in its turn, and that setting Low takes it out of the picks. Then pass
-  `ticket-priority-refused` and pick Urgent: the line under the menu reads "Couldn't set SHOP-320
-  to Urgent: Symphony doesn't track SHOP-320, so it can't set its priority. (HTTP 409)" and the
-  menu keeps Low. VoiceOver reads the menu as "Priority of SHOP-320: Low" and the line as
-  "Priority not saved: …". Walk it at 1440×900 and 2560×1440, light and dark: nothing on the card
-  is clipped.
-- **Labels (TP-1356):** pass `macos/Tests/Fixtures/director-app/ticket-labels` as `api_fixtures`
-  and open SHOP-320 from Tickets. Its page has a **Labels** card listing Plan, Bug, Feature, Skip
-  QA, Skip the app update wait, QA on the live server, QA on fixtures and needs-human, each a
-  checkbox with its one-line effect under its name; only Feature is on. Turn on **Plan**:
-  `qa_api_requests` lists one `POST /api/v1/control/label` whose body has `issue_identifier`
-  `SHOP-320`, `label` `plan` and `action` `add`, and the card shows Plan on. The live server
-  proves that the ticket's next run plans it, that Skip QA on a ticket in Code Review sends it on
-  without a QA pass once approved, and that turning a toggle off removes the label. Then pass
-  `ticket-labels-refused` and turn on Skip QA: the line under the card reads "Couldn't turn on
-  Skip QA on SHOP-320: Symphony doesn't track SHOP-320, so it can't change its labels. (HTTP
-  409)" and Skip QA stays off. VoiceOver reads each checkbox as "Skip QA on SHOP-320: Once
-  approved, it goes on without a QA pass" and the line as "Label not saved: …". Walk it at
-  1440×900 and 2560×1440, light and dark: nothing on the card is clipped.
-- **Decisions (TP-1357):** pass `macos/Tests/Fixtures/director-app/ticket-decisions` as
-  `api_fixtures` and open SHOP-320 from Tickets. Its page has a **Decisions** card listing D1
-  (Excel export, "Ship CSV in this ticket; Excel waits for SHOP-330."), then a "Record a decision"
-  field and a **Record a decision** button, off while the field is blank. Type "Keep the old
-  endpoint until TP-1400 lands" and press the button: `qa_api_requests` lists one
-  `POST /api/v1/control/decision` whose body has `issue_identifier` `SHOP-320` and that `text`,
-  and the field clears. The live server proves that the card then lists it as D2, that the
-  ticket's Decisions section in Linear shows it, and that the ticket's next run reads it among its
-  decisions. Then pass `ticket-decisions-refused` and record the same text: the line under the
-  field reads "Couldn't record the decision on SHOP-320: SHOP-320 already has this decision (D1).
-  (HTTP 409)" and the text stays. VoiceOver reads the field as "Decision on SHOP-320" and the
-  line as "Decision not recorded: …". Walk it at 1440×900 and 2560×1440, light and dark: nothing
-  on the card is clipped.
+- **Ticket page at laptop width (TP-1448):** pass
+  `macos/Tests/Fixtures/director-app/ticket-page` as `api_fixtures` and size the window to
+  1440×900. The page replaced the cards page (Now, Ticket, Blocked by, Priority, Labels,
+  Decisions and the note field under it are gone). Open TP-1244 from Tickets: the header has
+  TP-1244 with its repo and epic chips, the title, the situation line "Working on the tests
+  step", and the moves on their own row (Start Now dimmed, Force…, More with Stop Run… last in
+  red); under it the quiet line "Nothing needs you"; then Lifecycle, then Timeline with
+  implementation run 2 first and unfolded on its Tests step; beside them a 340 pt column with
+  Pull request (PR #741 and its checks), Connected, Note for the next run, Decisions (D1) and
+  Details. Scroll the page: everything scrolls as one, the column's Details panel is reachable,
+  and nothing scrolls sideways or is clipped. Open TP-1245: the line under the header reads "A
+  question waits on you" with **Answer…**, and its height matches TP-1244's quiet line. Press
+  Answer…: a sheet slides in from the right over the dimmed page with the question and its two
+  options; Send stays off with "Answer it in the Inbox for now: sending from the ticket page
+  comes next." Press Escape: the sheet closes and the keyboard is back on Answer…; open it again
+  and close it with its button, then with a click on the dimmed page. Open TP-1246: the
+  situation reads Shipped and the PR panel shows #741 merged. Walk it in light and dark.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before

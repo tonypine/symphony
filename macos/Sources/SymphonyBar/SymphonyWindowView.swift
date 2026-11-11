@@ -34,19 +34,11 @@ final class SymphonyWindowModel: ObservableObject {
     /// Reads the shown ticket's events feed: all of it when the page opens, then what is new when the channel names
     /// the ticket, when it reconnects, or after a state poll while it is down.
     let ticketFeed: TicketEventsReader
-    /// The screenshots the ticket page shows, read through `client` and kept by artifact id.
-    let artifactImages: ArtifactImages
-    /// The step outputs the ticket page opens, read through `client` and kept by artifact id.
-    let artifactTexts: ArtifactTexts
-    /// The note field under the ticket page: what is typed, the note on its way, why the last one wasn't added.
+    /// The transcripts of the timeline's steps a person unfolds, read through `client` and kept by artifact id.
+    let stepTranscripts: StepTranscripts
+    /// The facts rail's Note for the next run: what is typed, the note on its way, why the last one wasn't added.
     let ticketNote = TicketNoteComposer()
-    /// The ticket page's Blocked by card: the shown ticket's blockers, the ones it can take, the change on its way.
-    let ticketBlockers = TicketBlockersEditor()
-    /// The ticket page's Priority card: the shown ticket's Linear priority, the change on its way.
-    let ticketPriority = TicketPriorityEditor()
-    /// The ticket page's Labels card: the labels a person adds for Symphony to read, the change on its way.
-    let ticketLabels = TicketLabelsEditor()
-    /// The ticket page's Decisions card: the decisions recorded on the ticket, and the Director's ruling on its way.
+    /// The facts rail's Decisions panel: the decisions recorded on the shown ticket.
     let ticketDecisions = TicketDecisionsEditor()
     /// The build of the Symphony the window last read, to tell a restart onto another build.
     private var symphonyBuild: DiagnosticsPayload.Build?
@@ -311,8 +303,7 @@ final class SymphonyWindowModel: ObservableObject {
         self.eventStream = eventStream
         self.selection = selection
         ticketFeed = TicketEventsReader(get: { [client] path in TicketEventsResult(await client.answer(path)) })
-        artifactImages = ArtifactImages(get: { [client] path in await client.answer(path) })
-        artifactTexts = ArtifactTexts(get: { [client] path in await client.answer(path) })
+        stepTranscripts = StepTranscripts(get: { [client] path in await client.answer(path) })
         history = NavigationHistory(current: .view(selection))
         ticketFeed.listen(to: eventStream)
         ticketFeed.onChange = { [weak self] events in self?.ticketEventsChanged(events) }

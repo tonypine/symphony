@@ -115,7 +115,7 @@ struct PullRequestPageBody: View {
     static let sideColumnWidth: CGFloat = 330
 
     private var sideBySide: Bool {
-        width - 2 * DesignTokens.Space.s5 >= TicketPageBody.mainColumnMinWidth + DesignTokens.Space.s4 + Self.sideColumnWidth
+        width - 2 * DesignTokens.Space.s5 >= TicketPageLayout.mainColumnMinWidth + DesignTokens.Space.s4 + Self.sideColumnWidth
     }
 
     var body: some View {
@@ -201,7 +201,7 @@ struct PullRequestPageBody: View {
                         }
                     }
                 }
-                .frame(minWidth: sideBySide ? TicketPageBody.mainColumnMinWidth : nil, maxWidth: .infinity, alignment: .topLeading)
+                .frame(minWidth: sideBySide ? TicketPageLayout.mainColumnMinWidth : nil, maxWidth: .infinity, alignment: .topLeading)
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
                     Card(title: PullRequestScreen.healthTitle) {
                         if let page {
