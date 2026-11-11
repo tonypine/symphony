@@ -395,6 +395,10 @@ struct TicketPageView: View {
     static let noteAnchor = "note-panel"
 
     private var desktop: Bool { TicketPageLayout.isDesktop(page: width) }
+    private var decisionsWidth: Double? {
+        TicketPageLayout.arrangement(page: width, decisions: DecisionsLine(openQuestions: page.openQuestions, questions: questions).waiting)
+            .decisionsWidth
+    }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -403,19 +407,33 @@ struct TicketPageView: View {
                     page: page, questions: questions, width: width, transcripts: transcripts, note: note, decisions: decisions,
                     actions: actions, sheetOpen: sheetOpen, answerFocus: $answerFocused,
                     move: { handle($0, proxy: proxy) }, answer: { sheetOpen = true },
-                    picks: picks, pick: { option, question in picks.picks[question] = option },
-                    writeIn: { text, question in picks.writeIns[question] = text },
-                    scroll: scroll, answerPresses: answerPresses
+                    scroll: scroll, decisionsInRow: false
                 )
                 .environment(\.mentionReferences, references)
             }
-            .onScrollGeometryChange(for: Double.self) { $0.contentOffset.y + $0.contentInsets.top } action: { _, offset in
-                scroll.offset = offset
+            .onScrollGeometryChange(for: EdgeInsets.self) { $0.contentInsets } action: { _, insets in
+                scroll.update(insets: insets)
+            }
+            .coordinateSpace(name: TicketPageBody.viewportSpace)
+            // The desktop's decisions column is pinned over the scroll view, outside the page it scrolls: its height and
+            // place follow the page's scroll, and nothing they do can change the page's own layout (TP-1449's QA found a
+            // column inside the page, sized from the page's measured row, hanging the app).
+            .overlay(alignment: .topLeading) {
+                if let decisionsWidth {
+                    PinnedDecisions(scroll: scroll, width: decisionsWidth) {
+                        TicketDecisionsColumn(
+                            page: page, questions: questions, picks: picks,
+                            pick: { option, question in picks.picks[question] = option },
+                            writeIn: { text, question in picks.writeIns[question] = text },
+                            answerPresses: answerPresses
+                        )
+                    }
+                }
             }
         }
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
-            width = size.width
-            scroll.viewport = size.height
+            if width != size.width { width = size.width }
+            scroll.update(viewport: size.height)
         }
         .onChange(of: desktop) { _, wide in
             // The desktop's decisions are a column on the page: the laptop's sheet has nothing left to cover.
@@ -463,19 +481,32 @@ struct TicketPageView: View {
 }
 
 /// Where the page's scroll view is, for the sticky columns: only the views that read it draw again as the page
-/// scrolls, never the timeline beside them.
+/// scrolls, never the timeline beside them. What it holds only places those columns (an offset, the pinned decisions
+/// column over the scroll view), never sizes anything inside the page, so a measure can't feed back into itself. A
+/// value set again unchanged publishes nothing.
 final class TicketPageScroll: ObservableObject {
-    /// How far the page has scrolled.
-    @Published var offset: Double = 0
-    /// The window's height for the page.
-    @Published var viewport: Double
-    /// The columns' row: where it starts in the page and how tall it is.
-    @Published var rowTop: Double = 0
-    @Published var rowHeight: Double = 0
+    /// The scroll view's height.
+    @Published private(set) var viewport: Double
+    /// What the window covers at the scroll view's edges: a toolbar on top, a banner at the foot.
+    @Published private(set) var insets = EdgeInsets()
+    /// The columns' row in the scroll view: it moves up as the page scrolls. In a snapshot, with no scroll view, where
+    /// it is in the page.
+    @Published private(set) var row: CGRect = .zero
 
-    init(offset: Double = 0, viewport: Double = TicketPageLayout.laptopWindowHeight) {
-        self.offset = offset
+    init(viewport: Double = TicketPageLayout.laptopWindowHeight) {
         self.viewport = viewport
+    }
+
+    func update(viewport: Double) {
+        if self.viewport != viewport { self.viewport = viewport }
+    }
+
+    func update(insets: EdgeInsets) {
+        if self.insets != insets { self.insets = insets }
+    }
+
+    func update(row: CGRect) {
+        if self.row != row { self.row = row }
     }
 }
 
@@ -502,19 +533,17 @@ struct TicketPageBody: View {
     var move: (TicketActionRail.Request) -> Void = { _ in }
     /// The decisions line's Answer.
     var answer: () -> Void = {}
-    /// The desktop's decisions column: the answers picked so far, and what picking one does.
-    var picks = DecisionPicks()
-    var pick: (Int, Int) -> Void = { _, _ in }
-    var writeIn: (String, Int) -> Void = { _, _ in }
     /// Where the page's scroll view is; a snapshot's page hasn't scrolled.
     var scroll = TicketPageScroll()
-    /// The header's Answer on a desktop, counted: each press takes the keyboard to the column's first answer.
-    var answerPresses = 0
+    /// A snapshot draws the desktop's decisions column in its row, as tall as the window lets it be unscrolled; the
+    /// window's page keeps only its room there and pins the column over its scroll view (`PinnedDecisions`).
+    var decisionsInRow = true
     var calendar: Calendar = .current
     /// Snapshots only: the Details panel's run models unfolded.
     var detailsUnfolded = false
 
-    static let coordinateSpace = "ticket-page"
+    /// The page's scroll view, where the columns' row is measured as the page scrolls.
+    static let viewportSpace = "ticket-page-viewport"
 
     private var gap: CGFloat { TicketPageLayout.gap }
     private var line: DecisionsLine { DecisionsLine(openQuestions: page.openQuestions, questions: questions) }
@@ -532,23 +561,29 @@ struct TicketPageBody: View {
                     StickyColumn(scroll: scroll) { rail(width: arrangement.railWidth) }
                         .frame(width: arrangement.railWidth)
                     if let decisionsWidth = arrangement.decisionsWidth {
-                        DecisionsColumn(scroll: scroll) { decisionsColumn }
+                        if decisionsInRow {
+                            UnscrolledDecisions(scroll: scroll) {
+                                TicketDecisionsColumn(page: page, questions: questions)
+                            }
                             .frame(width: decisionsWidth)
+                        } else {
+                            Color.clear.frame(width: decisionsWidth, height: 0)
+                        }
                     }
                 }
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.coordinateSpace)) } action: { frame in
-                    scroll.rowTop = frame.minY
-                    scroll.rowHeight = frame.height
+                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.viewportSpace)) } action: { frame in
+                    scroll.update(row: frame)
                 }
             } else {
                 mainColumn(desktop: false)
                 rail(width: nil)
             }
         }
-        .frame(width: arrangement.desktop ? arrangement.contentWidth : nil, alignment: .topLeading)
+        // At most as wide as the columns need, never wider than the scroll view gives: a scroller beside the page
+        // narrows the page instead of pushing it sideways.
+        .frame(maxWidth: arrangement.desktop ? arrangement.contentWidth : nil, alignment: .topLeading)
         .padding(gap)
         .frame(maxWidth: .infinity, alignment: arrangement.desktop ? .top : .topLeading)
-        .coordinateSpace(name: Self.coordinateSpace)
         .environment(\.openMention, OpenMentionAction(handler: actions.openMention))
     }
 
@@ -574,35 +609,6 @@ struct TicketPageBody: View {
                 .id(page.identifier)
             }
         }
-    }
-
-    /// The desktop's decisions column: the decision sheet's content without its sheet chrome (no close button, no
-    /// shadow), its header on top and its Send at the foot, the Questions scrolling between them.
-    @ViewBuilder private var decisionsColumn: some View {
-        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
-        Group {
-            if questions.isEmpty {
-                // Symphony names a Question the Inbox doesn't hold yet: its options come with the Inbox's next read.
-                VStack(spacing: DesignTokens.Space.s3) {
-                    ProgressView().controlSize(.small)
-                    Text(line.title).font(DesignTokens.TypeStyle.rowTitle.font)
-                    Text(DecisionsLine.readingReason)
-                        .font(DesignTokens.TypeStyle.callout.font)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(DesignTokens.Surface.window.color)
-                .accessibilityElement(children: .combine)
-            } else {
-                DecisionSheet(
-                    questions: questions, picks: picks, subtitle: page.sheetSubtitle, pick: pick, writeIn: writeIn,
-                    send: {}, close: nil, sendOff: DecisionsLine.sendLaterReason
-                )
-                .id(answerPresses)
-            }
-        }
-        .clipShape(shape)
-        .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color))
     }
 
     private func rail(width: CGFloat?) -> some View {
@@ -637,43 +643,98 @@ struct TicketPageBody: View {
 
 /// A column that stays in view as the page scrolls (§5): shorter than the window, it sticks under the window's top;
 /// taller, it scrolls with the page until its foot is in view and stays there. Only this view draws again as the page
-/// scrolls.
+/// scrolls, and only its offset changes: never its size, nor the row's.
 private struct StickyColumn<Content: View>: View {
     @ObservedObject var scroll: TicketPageScroll
     @ViewBuilder let content: () -> Content
     @State private var height: Double = 0
 
     var body: some View {
+        // The row's place in what the window shows of the scroll view: where it starts there, as the page has scrolled.
+        let visible = scroll.viewport - scroll.insets.top - scroll.insets.bottom
         content()
-            .onGeometryChange(for: Double.self) { $0.size.height } action: { height = $0 }
+            .onGeometryChange(for: Double.self) { $0.size.height } action: { if height != $0 { height = $0 } }
             .offset(
                 y: TicketPageLayout.stickyOffset(
-                    scroll: scroll.offset, viewport: scroll.viewport, top: scroll.rowTop, height: height, room: scroll.rowHeight
+                    scroll: 0, viewport: visible, top: scroll.row.minY - scroll.insets.top, height: height, room: scroll.row.height
                 )
             )
     }
 }
 
-/// The desktop's decisions column in its row: as tall as the window lets it be with its header and Send in view,
-/// sticky under the window's top once the page scrolls. It keeps its first height in the row, so a short page still
-/// holds it.
-private struct DecisionsColumn<Content: View>: View {
+/// The desktop's decisions column pinned over the page's scroll view: its top with the columns' row until the row
+/// scrolls under the window's top, its foot above the window's bottom, so its header and Send are always in view. It
+/// sits over the row's room for it, at the row's right edge.
+private struct PinnedDecisions<Content: View>: View {
+    @ObservedObject var scroll: TicketPageScroll
+    let width: Double
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        let pinned = TicketPageLayout.pinnedDecisions(
+            rowTop: scroll.row.minY, viewport: scroll.viewport, insetTop: scroll.insets.top, insetBottom: scroll.insets.bottom
+        )
+        content()
+            .frame(width: width, height: pinned.height)
+            .offset(x: scroll.row.maxX - width, y: pinned.top)
+            // Until the row is measured there is nowhere to put it.
+            .opacity(scroll.row == .zero ? 0 : 1)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Decisions")
+    }
+}
+
+/// A snapshot's decisions column in its row: from the row's top to the window's bottom margin, the page unscrolled.
+private struct UnscrolledDecisions<Content: View>: View {
     @ObservedObject var scroll: TicketPageScroll
     @ViewBuilder let content: () -> Content
 
     var body: some View {
-        let column = TicketPageLayout.decisionsColumn(
-            scroll: scroll.offset, viewport: scroll.viewport, top: scroll.rowTop, room: scroll.rowHeight
-        )
-        Color.clear
-            .frame(height: TicketPageLayout.decisionsColumnRoom(viewport: scroll.viewport, top: scroll.rowTop))
-            .overlay(alignment: .top) {
-                content()
-                    .frame(height: column.height)
-                    .offset(y: column.offset)
-            }
+        content()
+            .frame(height: TicketPageLayout.decisionsColumnRoom(viewport: scroll.viewport, top: scroll.row.minY))
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Decisions")
+    }
+}
+
+/// The desktop's decisions column: the decision sheet's content without its sheet chrome (no close button, no
+/// shadow), its header on top and its Send at the foot, the Questions scrolling between them.
+struct TicketDecisionsColumn: View {
+    let page: TicketPage
+    let questions: [InboxReview.Action]
+    /// The answers picked so far, and what picking one does.
+    var picks = DecisionPicks()
+    var pick: (Int, Int) -> Void = { _, _ in }
+    var writeIn: (String, Int) -> Void = { _, _ in }
+    /// The header's Answer on a desktop, counted: each press takes the keyboard to the column's first answer.
+    var answerPresses = 0
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
+        Group {
+            if questions.isEmpty {
+                // Symphony names a Question the Inbox doesn't hold yet: its options come with the Inbox's next read.
+                VStack(spacing: DesignTokens.Space.s3) {
+                    ProgressView().controlSize(.small)
+                    Text(DecisionsLine(openQuestions: page.openQuestions, questions: questions).title)
+                        .font(DesignTokens.TypeStyle.rowTitle.font)
+                    Text(DecisionsLine.readingReason)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(DesignTokens.Surface.window.color)
+                .accessibilityElement(children: .combine)
+            } else {
+                DecisionSheet(
+                    questions: questions, picks: picks, subtitle: page.sheetSubtitle, pick: pick, writeIn: writeIn,
+                    send: {}, close: nil, sendOff: DecisionsLine.sendLaterReason
+                )
+                .id(answerPresses)
+            }
+        }
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color))
     }
 }
 

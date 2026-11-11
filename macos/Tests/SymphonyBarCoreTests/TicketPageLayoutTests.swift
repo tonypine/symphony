@@ -258,17 +258,20 @@ final class TicketPageLayoutTests: XCTestCase {
 
     func testTheDecisionsColumnKeepsItsHeaderAndSendInView() {
         // Before the page scrolls the column starts with its row and ends 24 pt above the window's bottom.
-        let start = TicketPageLayout.decisionsColumn(scroll: 0, viewport: 1360, top: 150, room: 3000)
-        XCTAssertEqual(start.offset, 0)
+        let start = TicketPageLayout.pinnedDecisions(rowTop: 150, viewport: 1360)
+        XCTAssertEqual(start.top, 150)
         XCTAssertEqual(start.height, 1186)
         XCTAssertEqual(TicketPageLayout.decisionsColumnRoom(viewport: 1360, top: 150), 1186)
-        // Scrolled past its row's top, it sticks 24 pt under the window's top, as tall as the window less the margins.
-        let scrolled = TicketPageLayout.decisionsColumn(scroll: 600, viewport: 1360, top: 150, room: 3000)
-        XCTAssertEqual(scrolled.offset, 474)
+        // Once the row scrolls up past the visible top, the column sticks 24 pt under it, as tall as the window less
+        // the margins.
+        let scrolled = TicketPageLayout.pinnedDecisions(rowTop: -450, viewport: 1360)
+        XCTAssertEqual(scrolled.top, 24)
         XCTAssertEqual(scrolled.height, 1312)
-        // At the row's end it stops; in a tiny window it keeps its least height.
-        XCTAssertEqual(TicketPageLayout.decisionsColumn(scroll: 9000, viewport: 1360, top: 150, room: 3000).offset, 1688)
-        XCTAssertEqual(TicketPageLayout.decisionsColumn(scroll: 0, viewport: 300, top: 150, room: 3000).height, 320)
+        // What a toolbar and a banner cover stays out of it; in a tiny window it keeps its least height.
+        let covered = TicketPageLayout.pinnedDecisions(rowTop: -450, viewport: 1360, insetTop: 52, insetBottom: 60)
+        XCTAssertEqual(covered.top, 76)
+        XCTAssertEqual(covered.height, 1200)
+        XCTAssertEqual(TicketPageLayout.pinnedDecisions(rowTop: 150, viewport: 300).height, 320)
     }
 
     private var calendar: Calendar {

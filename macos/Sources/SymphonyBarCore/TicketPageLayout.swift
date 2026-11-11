@@ -107,20 +107,24 @@ public enum TicketPageLayout {
         return max(0, min(underTop, footInView, room - height))
     }
 
-    /// The desktop's decisions column in the window: how far down its row it moves and how tall it is, so its header
-    /// and Send are always in view. Its top follows the row until the row reaches `inset` under the window's top, then
-    /// stays there; its foot stays `inset` above the window's bottom.
-    public static func decisionsColumn(scroll: Double, viewport: Double, top: Double, room: Double, inset: Double = gap) -> (offset: Double, height: Double) {
-        let screenTop = max(inset, top - scroll)
-        let height = max(decisionsColumnMinHeight, viewport - inset - screenTop)
-        let offset = max(0, min(scroll + screenTop - top, room - height))
-        return (offset, height)
+    /// The desktop's decisions column pinned over the page's scroll view, outside its content, so nothing it does can
+    /// change the page's height: where its top is and how tall it is in a `viewport` tall scroll view. `rowTop` is where
+    /// the columns' row is in the scroll view now (it moves up as the page scrolls), `insetTop` and `insetBottom` what
+    /// the window covers at the scroll view's edges (a toolbar, a banner). Its top follows the row until the row
+    /// reaches `inset` under the visible top, then stays there; its foot stays `inset` above the visible bottom, so its
+    /// header and Send are always in view.
+    public static func pinnedDecisions(
+        rowTop: Double, viewport: Double, insetTop: Double = 0, insetBottom: Double = 0, inset: Double = gap
+    ) -> (top: Double, height: Double) {
+        let top = max(insetTop + inset, rowTop)
+        let height = max(decisionsColumnMinHeight, viewport - insetBottom - inset - top)
+        return (top, height)
     }
 
-    /// The room the decisions column keeps in its row on a page that doesn't scroll yet: its height before the page
-    /// scrolls, so a short page still holds it without growing as it scrolls.
+    /// The decisions column's height in its row on a page drawn whole and unscrolled (a snapshot): from the row's
+    /// `top` to `inset` above the window's bottom.
     public static func decisionsColumnRoom(viewport: Double, top: Double, inset: Double = gap) -> Double {
-        decisionsColumn(scroll: 0, viewport: viewport, top: top, room: .infinity, inset: inset).height
+        pinnedDecisions(rowTop: top, viewport: viewport, inset: inset).height
     }
 }
 
