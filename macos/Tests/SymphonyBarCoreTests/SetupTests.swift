@@ -686,12 +686,13 @@ final class SetupTests: XCTestCase {
 
     // MARK: - Sidebar
 
-    func testSetupSitsBetweenReposAndDiagnostics() {
+    func testSetupLeadsFactorysPages() {
         let sidebar = Sidebar()
-        XCTAssertEqual(sidebar.sections.last?.views, [.repos, .setup, .diagnostics])
+        XCTAssertEqual(Destination.factory.pages, [.setup, .repos, .diagnostics, .settings])
         XCTAssertEqual(SymphonyView.setup.title, "Setup")
         XCTAssertEqual(SymphonyView.setup.symbol, "wrench.and.screwdriver")
-        XCTAssertEqual(SymphonyView.setup.section, .factory)
+        XCTAssertEqual(SymphonyView.setup.destination, .factory)
+        XCTAssertEqual(sidebar.item(for: .setup), .page(.setup))
         XCTAssertFalse(SymphonyView.setup.opensOwnWindow)
         XCTAssertEqual(sidebar.restoredView(saved: "setup"), .setup)
         XCTAssertEqual(WindowState.Action.checkForUpdates.title, "Check for Updates…")
