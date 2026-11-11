@@ -1367,6 +1367,49 @@ func timeline(width: CGFloat, selection: String? = nil, unfoldedRuns: Set<String
     .background(DesignTokens.Surface.content.color)
 }
 
+// MARK: - The Lifecycle section and the Phase path (TP-1445)
+
+/// Three tickets (`Tests/Fixtures/lifecycle`): one mid-way, back in Rework with Code Review entered three times; one
+/// Done; one in QA at 95 % of its cap.
+let lifecycleFixtures = here.appendingPathComponent("../Fixtures/lifecycle").standardizedFileURL
+let lifecycleReference = ISO8601DateFormatter().date(from: "2026-10-08T11:21:00Z")!
+let lifecycleTickets = ["mid-way", "done", "near-cap"]
+
+func lifecycleRead(_ name: String) -> TicketLifecycleRead {
+    guard let data = try? Data(contentsOf: lifecycleFixtures.appendingPathComponent("\(name).json")),
+          let read = TicketLifecycleRead.decode(data), read.lifecycle != nil, read.phasePath != nil
+    else { fatalError("The lifecycle fixture \(name) is missing from \(lifecycleFixtures.path)") }
+    return read
+}
+
+/// The Lifecycle section of `name` in a main column `width` wide: the laptop's (780 pt) or the desktop's (1040 pt).
+@MainActor
+func lifecycle(_ name: String, width: CGFloat) -> some View {
+    let read = lifecycleRead(name)
+    return LifecycleSection(model: LifecycleModel.build(read.lifecycle!, phase: read.phasePath?.current))
+        .padding(DesignTokens.Space.s5)
+        .frame(width: width + 2 * DesignTokens.Space.s5, alignment: .leading)
+        .background(DesignTokens.Surface.window.color)
+}
+
+/// The three tickets' phase paths, in full and compact (a board row's preview, 340 pt), in a column `width` wide.
+@MainActor
+func phasePaths(width: CGFloat) -> some View {
+    VStack(alignment: .leading, spacing: DesignTokens.Space.s5) {
+        ForEach(lifecycleTickets, id: \.self) { name in
+            let model = PhasePathModel.build(lifecycleRead(name).phasePath!, reference: lifecycleReference, calendar: timelineCalendar)
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+                Text(name).font(DesignTokens.TypeStyle.caption.font).foregroundStyle(.tertiary)
+                PhasePath(model: model)
+                PhasePath(model: model, compact: true).frame(width: 340, alignment: .leading)
+            }
+        }
+    }
+    .padding(DesignTokens.Space.s5)
+    .frame(width: width, alignment: .leading)
+    .background(DesignTokens.Surface.content.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1456,6 +1499,14 @@ MainActor.assumeIsolated {
         render(timeline(width: 780), scheme, to: "timeline-laptop-\(suffix).png")
         render(timeline(width: 1040), scheme, to: "timeline-desktop-\(suffix).png")
         render(timeline(width: 780, selection: "entry-b2", unfoldedRuns: ["run-2", "run-1"]), scheme, to: "timeline-selected-\(suffix).png")
+        // The Lifecycle section and the Phase path (TP-1445): a ticket mid-way, one Done and one at 95 % of its cap, at
+        // the laptop's and the desktop's column widths; their phase paths in full and compact.
+        for name in lifecycleTickets {
+            render(lifecycle(name, width: LifecycleSection.laptopWidth), scheme, to: "lifecycle-\(name)-laptop-\(suffix).png")
+            render(lifecycle(name, width: LifecycleSection.desktopWidth), scheme, to: "lifecycle-\(name)-desktop-\(suffix).png")
+        }
+        render(phasePaths(width: 780), scheme, to: "phase-path-laptop-\(suffix).png")
+        render(phasePaths(width: 1040), scheme, to: "phase-path-desktop-\(suffix).png")
         render(review(width: 640, picks: picks), scheme, to: "inbox-write-in-\(suffix).png")
         // Chips inside the question, story and options, wrapping with the text (TP-952).
         render(review(width: 1200), scheme, to: "decision-chips-wide-\(suffix).png")
