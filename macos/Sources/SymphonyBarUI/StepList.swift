@@ -419,11 +419,11 @@ struct StateMark: View {
     }
 }
 
-/// The working dot: the working tint in a soft ring. It holds still: a dot that breathed forever (a `repeatForever`
-/// animation) redrew the page without end, and a ticket page with its run now live answered no accessibility read
-/// and no key while it did (TP-1452's QA on TP-1244). The live step's newest lines entering are the run's motion.
+/// The working dot, breathing while it works; still under Reduce Motion.
 struct LiveDot: View {
     var size: Double = 8
+    @State private var breathing = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         Circle()
@@ -432,7 +432,11 @@ struct LiveDot: View {
             .background {
                 Circle()
                     .fill(DesignTokens.Status.working.tint.opacity(0.25))
-                    .scaleEffect(1.6)
+                    .scaleEffect(breathing ? 2.2 : 1.6)
+            }
+            .onAppear {
+                guard !reduceMotion else { return }
+                withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) { breathing = true }
             }
     }
 }

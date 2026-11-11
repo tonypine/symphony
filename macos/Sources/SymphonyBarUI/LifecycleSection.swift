@@ -6,7 +6,7 @@ import SymphonyBarCore
 // 20): the five stages a ticket moves through, each with its state, visits and time, then one token bar against the
 // ticket's cap split by the same stages (the Progress meter in its stacked form: `status.you` from 75 %,
 // `status.problem` from 95 %); and the phases the ticket went through in order, with their counts and the times of
-// their moves. The current stage's dot is the still live dot (TP-1452) and the bar's segments resize on a spring; under
+// their moves. The current stage's dot breathes while it works and the bar's segments resize on a spring; under
 // Reduce Motion they are still.
 
 // MARK: - The Lifecycle section
