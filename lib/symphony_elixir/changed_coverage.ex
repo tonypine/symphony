@@ -29,8 +29,9 @@ defmodule SymphonyElixir.ChangedCoverage do
         }
 
   @doc """
-  Runs the check. `opts`: `:base` (default `origin/main`), `:ignore_modules` (modules or regexes)
-  and `:extra_tests` (test files to run as well). Returns `:ok`, or `{:error, message}` naming
+  Runs the check. `opts`: `:base` (default `origin/main`), `:ignore_modules` (modules or regexes),
+  `:extra_tests` (test files to run as well) and `:covering_tests` (a map from a `lib/` file to
+  the test files that cover it without naming its modules, run whenever that file changes). Returns `:ok`, or `{:error, message}` naming
   what failed.
   """
   @spec run(keyword(), deps()) :: :ok | {:error, String.t()}
@@ -50,7 +51,9 @@ defmodule SymphonyElixir.ChangedCoverage do
         (changed ++ Enum.map(named, &elem(&1, 0))) |> Enum.sort_by(fn {module, file} -> {file, inspect(module)} end) |> Enum.split_with(&ignored?(elem(&1, 0), ignores))
 
       Enum.each(ignored, fn {module, _file} -> deps.info.("skipped #{inspect(module)}: in mix.exs test_coverage ignore_modules") end)
-      check(checked, files, Keyword.get(opts, :extra_tests, []), deps)
+      covering = Keyword.get(opts, :covering_tests, %{})
+      extra_tests = Keyword.get(opts, :extra_tests, []) ++ Enum.flat_map(files, &Map.get(covering, &1, []))
+      check(checked, files, extra_tests, deps)
     end
   end
 

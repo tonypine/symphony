@@ -4,7 +4,7 @@ An implementation run follows these steps (the default list, `phases.implementat
 
 1. `code` Write the code · delegated
 2. `build` Build · machine · times out after 15 min · on failure returns to `code`
-   - when macos/ changed: `cd macos && swift build`
+   - when macos/ changed: `cd macos && make guarded-build`
    - when Elixir files changed: `mix compile --warnings-as-errors`
 3. `checks` Format, specs and credo · machine · when Elixir files changed · times out after 10 min · on failure returns to `code`
    - `mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES`

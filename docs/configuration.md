@@ -3401,7 +3401,7 @@ phases:
         title: Build
         mode: machine
         command:
-          - {run: cd macos && swift build, when: macos_changed}
+          - {run: cd macos && make guarded-build, when: macos_changed}
           - {run: mix compile --warnings-as-errors, when: elixir_changed}
         timeout_ms: 900000
         on_fail: code
@@ -3424,6 +3424,13 @@ phases:
         title: "Hand off: push and open the pull request"
         mode: delegated
 ```
+
+`make guarded-build` (in `macos/Makefile`) is `swift build` with the slow type-check guard CI's
+macos build applies (`make guarded-app`): the compiler warns on each expression it takes longer than
+100 ms to type-check, and the step fails on such a warning, so the run reads the file and line in its
+own Build output and fixes it before the push instead of in a CI Fix run. The guarded build keeps its
+own scratch path (`.build/type-check-guard`), so the `tests` step's `swift test` keeps reusing the
+plain `.build`.
 
 The default `rework` list is the same steps with `findings` before them:
 
