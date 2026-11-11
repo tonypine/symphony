@@ -238,6 +238,31 @@ final class HomeBoardTests: XCTestCase {
         XCTAssertTrue(board.showsResume, "no update is under way, so the pause it left behind can be resumed")
     }
 
+    /// A usage limit alone holding runs shows the notice with Try Now and no Resume Dispatch, which would lift nothing
+    /// (TP-1471).
+    func testAUsageLimitAloneOffersTryNowNotResume() {
+        let resumeAt = Date(timeIntervalSince1970: 1_000_000)
+        let limit = StateSnapshot.UsageLimit(window: "five_hour", phase: .paused, resumeAt: resumeAt)
+        let board = HomeBoard(state: OverviewState(snapshot: StateSnapshot(usageLimits: [limit]), generatedAt: resumeAt), now: resumeAt, timeZone: utc)
+        XCTAssertEqual(board.pauseSentence, HomeBoard.heldSentence)
+        XCTAssertEqual(board.pauseLines, ["Paused: Claude limit, resumes ~13:46"])
+        XCTAssertTrue(board.showsTryNow)
+        XCTAssertEqual(board.tryNow, limit)
+        XCTAssertFalse(board.showsResume)
+
+        // While the limit is checked, it is no longer offered, and nothing else holds runs.
+        var canary = limit
+        canary.phase = .canary
+        let checking = HomeBoard(state: OverviewState(snapshot: StateSnapshot(usageLimits: [canary])), now: resumeAt, timeZone: utc)
+        XCTAssertNil(checking.pauseSentence)
+        XCTAssertFalse(checking.showsTryNow)
+
+        // Beside the Director's pause, both are offered.
+        let both = HomeBoard(state: OverviewState(snapshot: StateSnapshot(pause: .init(), usageLimits: [limit])), now: resumeAt, timeZone: utc)
+        XCTAssertTrue(both.showsResume)
+        XCTAssertTrue(both.showsTryNow)
+    }
+
     /// Every repository paused adds its line, whether or not Symphony itself is.
     func testEveryRepositoryPausedAddsItsLine() {
         let repositoryPause = StateSnapshot.RepositoryPause(reasons: ["You paused this repository"])

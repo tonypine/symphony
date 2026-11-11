@@ -4,6 +4,8 @@ import SymphonyBarCore
 /// What Home's rows and its pause notice do.
 struct HomeActions {
     var resume: () -> Void = {}
+    /// Try Now on the paused usage limit the notice names.
+    var tryNow: (StateSnapshot.UsageLimit) -> Void = { _ in }
     /// The control request under way; Resume Dispatch is off until it is answered.
     var controlInFlight: ControlAction?
     /// A click on a row, or Return on the picked one, opens the ticket's page (D3).
@@ -49,7 +51,10 @@ struct HomeBody: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
             if let sentence = board.pauseSentence {
-                PauseNotice(sentence: sentence, lines: board.pauseLines, showsResume: board.showsResume, actions: actions)
+                PauseNotice(
+                    sentence: sentence, lines: board.pauseLines, showsResume: board.showsResume,
+                    tryNow: board.showsTryNow ? board.tryNow : nil, actions: actions
+                )
                     .padding(.bottom, DesignTokens.Space.s2)
             }
             if !board.hasOrder {
@@ -113,11 +118,13 @@ struct HomeBody: View {
     }
 }
 
-/// While dispatch is paused: the sentence, one line per reason, and Resume Dispatch unless an update holds it.
+/// While dispatch is paused or a usage limit holds runs: the sentence, one line per reason, Try Now while a usage
+/// limit is paused, and Resume Dispatch unless an update holds it.
 private struct PauseNotice: View {
     let sentence: String
     let lines: [String]
     let showsResume: Bool
+    let tryNow: StateSnapshot.UsageLimit?
     let actions: HomeActions
 
     var body: some View {
@@ -138,6 +145,13 @@ private struct PauseNotice: View {
                 }
             }
             Spacer(minLength: DesignTokens.Space.s4)
+            if let tryNow {
+                Button(StatusMenu.tryNowTitle) { actions.tryNow(tryNow) }
+                    .directorButton(showsResume ? .secondary : .primary)
+                    .help(StatusMenu.tryNowHelp)
+                    .accessibilityHint(StatusMenu.tryNowHelp)
+                    .disabled(actions.controlInFlight != nil)
+            }
             if showsResume {
                 Button(Overview.resumeTitle, action: actions.resume)
                     .directorButton(.primary)

@@ -571,7 +571,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert %{active?: false, blockers: [blocker]} = snapshot.dispatch_state
 
     assert %{text: "Claude's 5-hour limit until " <> time} = blocker
-    assert time =~ ~r/\A\d{2}:\d{2}\z/
+    assert time =~ ~r/\A\d{2}:\d{2} UTC([+-]\d{1,2}(:\d{2})?)?\z/
 
     assert Map.delete(blocker, :text) == %{
              kind: :usage_limit,
@@ -1452,5 +1452,135 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
 
   test "UsageLimit.remaining_ms never goes negative", ctx do
     assert UsageLimit.remaining_ms(hold(ctx), DateTime.add(ctx.now, 4000)) == 0
+  end
+
+  describe "Try Now (TP-1471)" do
+    @condition "usage_limit:anthropic:all"
+
+    # A fake `claude` refused on its first `rejections` runs, each refusal with the next reset of
+    # `resets`; later runs succeed.
+    defp refusing_claude!(ctx, resets) do
+      fake_claude = Path.join(ctx.test_root, "fake-claude-refusing")
+
+      refusals =
+        resets
+        |> Enum.with_index()
+        |> Enum.map_join("\n", fn {reset, index} ->
+          marker = Path.join(ctx.test_root, "refused-#{index}")
+
+          """
+          if [ ! -f #{marker} ]; then
+            touch #{marker}
+            printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-try","cwd":"/tmp","tools":[],"mcp_servers":[{"name":"symphony","status":"connected"}],"model":"claude-opus-5-5","permissionMode":"default","apiKeySource":"env"}'
+            printf '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":%s,"rateLimitType":"five_hour","utilization":1.0},"session_id":"sess-try"}\\n' #{DateTime.to_unix(reset)}
+            exit 1
+          fi
+          """
+        end)
+
+      File.write!(fake_claude, "#!/bin/sh\ncat > /dev/null\n#{refusals}\nexec #{ctx.fake_claude}\n")
+      File.chmod!(fake_claude, 0o755)
+
+      write_usage_workflow!(%{ctx | fake_claude: fake_claude},
+        agent_usage_limit: %{resume_margin_seconds: 0},
+        tracker_active_states: ["Todo"]
+      )
+    end
+
+    defp held_run!(ctx, name, issue) do
+      Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
+      pid = start_orchestrator(ctx, name)
+      wait_until(fn -> match?(%{usage_limit_key: @anthropic}, :sys.get_state(pid).retry_attempts[issue.id]) end)
+      # The canary goes out on the poll the check schedules.
+      :sys.replace_state(pid, &%{&1 | repo_poll_due_at_ms: %{}})
+      pid
+    end
+
+    test "on a paused hold sends the held run as the canary at once; the provider allows it, so the hold clears", ctx do
+      reset = DateTime.add(ctx.now, 5 * 3600)
+      refusing_claude!(ctx, [reset])
+      issue = issue("issue-try-allowed", "MT-TRY-OK", %{state: "Todo"})
+
+      log =
+        capture_log(fn ->
+          pid = held_run!(ctx, :TryNowAllowedOrchestrator, issue)
+          assert %{phase: :paused, resume_at: ^reset} = :sys.get_state(pid).usage_limits[@anthropic]
+
+          # Hours before the recorded reset, the Director says the limit is back.
+          assert {:ok, %{usage_limit: %{phase: :canary}}} = Orchestrator.try_usage_limit_now(pid, @condition)
+
+          wait_until(fn -> :sys.get_state(pid).usage_limits == %{} end)
+          wait_until(fn -> Enum.find(RunStore.list_runs(:all), &(&1.issue_id == issue.id and &1.status != "usage_limited")) end)
+        end)
+
+      assert log =~ "Usage limit check requested provider=anthropic scope=all resume_at=#{DateTime.to_iso8601(reset)}; starting the canary now"
+      assert log =~ "Usage limit canary provider=anthropic scope=all issue_identifier=MT-TRY-OK"
+      assert log =~ "Usage limit resumed provider=anthropic scope=all"
+      assert RunStore.get_usage_limits() == %{}
+      assert Pauses.get(:symphony) == {:ok, nil}
+    end
+
+    test "a canary the provider refuses restores the hold with its latest reset, and the reason says the limit is still on", ctx do
+      first_reset = DateTime.add(ctx.now, 5 * 3600)
+      next_reset = DateTime.add(ctx.now, 2 * 3600)
+      refusing_claude!(ctx, [first_reset, next_reset])
+      issue = issue("issue-try-refused", "MT-TRY-NO", %{state: "Todo"})
+
+      log =
+        capture_log(fn ->
+          pid = held_run!(ctx, :TryNowRefusedOrchestrator, issue)
+          assert {:ok, %{usage_limit: %{phase: :canary}}} = Orchestrator.try_usage_limit_now(pid, @condition)
+
+          wait_until(fn -> match?(%{phase: :paused, still_on: true}, :sys.get_state(pid).usage_limits[@anthropic]) end)
+          state = :sys.get_state(pid)
+          assert %{resets_at: ^next_reset, resume_at: ^next_reset, since: since} = state.usage_limits[@anthropic]
+          assert since == ctx.now
+          assert is_reference(state.usage_limit_timers[@anthropic])
+          assert %{attempt: _attempt, usage_limit_key: @anthropic} = state.retry_attempts[issue.id]
+        end)
+
+      assert log =~ "Usage limit still active provider=anthropic scope=all next_resume_at=#{DateTime.to_iso8601(next_reset)} issue_identifier=MT-TRY-NO"
+      assert %{still_on: true} = RunStore.get_usage_limits()[@anthropic]
+      assert {:ok, %{reasons: [%{kind: :environment, text: "Claude's 5-hour limit is still on, until " <> _time}]}} = Pauses.get(:symphony)
+    end
+
+    test "with no run held the hold clears and the next run is the check", ctx do
+      write_usage_workflow!(ctx)
+      pid = start_orchestrator(ctx, :TryNowEmptyOrchestrator)
+      :sys.replace_state(pid, &%{&1 | usage_limits: %{@anthropic => hold(ctx)}})
+
+      assert {:ok, %{usage_limit: nil}} = Orchestrator.try_usage_limit_now(pid, @condition)
+      assert :sys.get_state(pid).usage_limits == %{}
+    end
+
+    test "a hold already checking answers as it stands; a headroom hold or no hold is refused", ctx do
+      write_usage_workflow!(ctx)
+      pid = start_orchestrator(ctx, :TryNowRefusalsOrchestrator)
+      checking = hold(ctx, %{phase: :canary, canary_issue_id: "issue-checking"})
+      :sys.replace_state(pid, &%{&1 | usage_limits: %{@anthropic => checking}})
+
+      assert {:ok, %{usage_limit: %{phase: :canary}}} = Orchestrator.try_usage_limit_now(pid, @condition)
+      assert :sys.get_state(pid).usage_limits == %{@anthropic => checking}
+
+      :sys.replace_state(pid, &%{&1 | usage_limits: %{@anthropic => hold(ctx, %{phase: :headroom})}})
+      assert {:error, {:usage_limit_headroom, @condition}} = Orchestrator.try_usage_limit_now(pid, @condition)
+      assert {:error, {:usage_limit_not_found, "usage_limit:openai:all"}} = Orchestrator.try_usage_limit_now(pid, "usage_limit:openai:all")
+      assert Orchestrator.try_usage_limit_now(Module.concat(__MODULE__, :NoSuchOrchestrator), @condition) == :unavailable
+    end
+
+    test "Resume with only a usage limit's reason answers that nothing was lifted, and why", ctx do
+      write_usage_workflow!(ctx)
+      pid = start_orchestrator(ctx, :ResumeNothingOrchestrator)
+      {:ok, _pause} = Pauses.set(:symphony, UsageLimit.reason(hold(ctx), ctx.now, []))
+
+      assert {:error, {:nothing_to_resume, [%{kind: :environment, waits_on: %{condition: @condition}, text: "Claude's 5-hour limit until " <> _time}]}} =
+               Orchestrator.resume_dispatch(pid)
+
+      assert {:ok, %{reasons: [%{kind: :environment}]}} = Pauses.get(:symphony)
+
+      # With the Director's pause beside it, Resume lifts that one and leaves the limit's.
+      assert {:ok, %{paused: true}} = Orchestrator.pause_dispatch(pid, "maintenance")
+      assert {:ok, %{paused: false, reasons: [%{kind: :environment}]}} = Orchestrator.resume_dispatch(pid)
+    end
   end
 end

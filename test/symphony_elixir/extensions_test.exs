@@ -2649,7 +2649,9 @@ defmodule SymphonyElixir.ExtensionsTest do
                "source" => nil,
                "error" => nil,
                "utilization" => nil,
-               "issue_identifier" => "MT-HELD"
+               "issue_identifier" => "MT-HELD",
+               "still_on" => false,
+               "condition" => "usage_limit:anthropic:all"
              }
            ]
 

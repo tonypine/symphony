@@ -14,7 +14,9 @@ defmodule SymphonyElixir.UsageLimit do
 
   At `resume_at` a hold moves to `phase: :canary`: one held run goes out alone while the
   hold keeps covering every other run, and the canary's outcome decides whether the hold
-  clears or pauses again.
+  clears or pauses again. A person who knows the limit is back sooner moves a paused hold to the
+  canary phase at once (`checking/1`): the same canary decides, and a refused one keeps the hold
+  with the provider's latest reset, marked `still_on`.
 
   With `headroom_utilization` set, an `allowed_warning` at or above it puts a hold in
   `phase: :headroom` on new runs of the provider until the window resets, so the rest of the
@@ -46,6 +48,7 @@ defmodule SymphonyElixir.UsageLimit do
   @type entry :: %{
           optional(:error) => String.t(),
           optional(:retry_seconds) => pos_integer(),
+          optional(:still_on) => true,
           provider: String.t(),
           scope: String.t() | :all,
           reason: String.t(),
@@ -74,7 +77,8 @@ defmodule SymphonyElixir.UsageLimit do
   reported; an unknown one falls back to the remembered reset time of the window (see
   `remember_windows/2`), then to `now + unknown_reset_retry_seconds`. A refresh without
   a known reset time never brings the resume time forward. A canary hold goes back to
-  `:paused`.
+  `:paused`, marked `still_on: true`: the provider refused the canary, so the limit is still on.
+  A refresh of a hold so marked keeps the mark.
   """
   @spec put(entry() | nil, map(), keyword()) :: entry()
   def put(existing, %{source: :api_unreachable} = info, opts) do
@@ -119,7 +123,12 @@ defmodule SymphonyElixir.UsageLimit do
       issue_identifier: Keyword.get(opts, :issue_identifier),
       utilization: Map.get(info, :utilization)
     }
+    |> still_on(existing)
   end
+
+  defp still_on(entry, %{phase: :canary}), do: Map.put(entry, :still_on, true)
+  defp still_on(entry, %{still_on: true}), do: Map.put(entry, :still_on, true)
+  defp still_on(entry, _existing), do: entry
 
   # A canary that still couldn't reach the API doubles the wait to the next probe, and so does a
   # run that finds the outage again soon after its hold was released with no run held on it
@@ -316,6 +325,15 @@ defmodule SymphonyElixir.UsageLimit do
   @spec canary(entry(), String.t()) :: entry()
   def canary(entry, issue_id) when is_binary(issue_id), do: Map.merge(entry, %{phase: :canary, canary_issue_id: issue_id})
 
+  @doc """
+  A paused hold moved to the canary phase before its `resume_at`, because a person said the limit
+  is back: no canary is picked yet (`canary_issue_id: nil`), so the hold keeps every run back
+  until the orchestrator lets one through with `canary/2`. Its `resume_at` stays, for a canary the
+  provider refuses without a reset time.
+  """
+  @spec checking(entry()) :: entry()
+  def checking(%{phase: :paused} = entry), do: Map.merge(entry, %{phase: :canary, canary_issue_id: nil})
+
   @doc "Whether `entry` is in the canary phase with `issue_id` as its canary."
   @spec canary?(entry(), String.t() | nil) :: boolean()
   def canary?(entry, issue_id), do: Map.get(entry, :phase) == :canary and Map.get(entry, :canary_issue_id) == issue_id
@@ -406,9 +424,11 @@ defmodule SymphonyElixir.UsageLimit do
         "Paused: #{limit_label(entry)}#{error_suffix(entry)}" <> time_suffix("retries", datetime(Map.get(entry, :resume_at)), now, opts)
 
       true ->
-        "Paused: #{limit_label(entry)}" <> time_suffix("resumes", datetime(Map.get(entry, :resume_at)), now, opts)
+        "Paused: #{limit_label(entry)}#{still_on_words(entry)}" <> time_suffix("resumes", datetime(Map.get(entry, :resume_at)), now, opts)
     end
   end
+
+  defp still_on_words(entry), do: if(Map.get(entry, :still_on) == true, do: " still on", else: "")
 
   defp error_suffix(entry) do
     case Map.get(entry, :error) do
@@ -463,9 +483,12 @@ defmodule SymphonyElixir.UsageLimit do
 
   @doc """
   The `:environment` reason `entry` gives Symphony's pause, waiting on condition
-  `usage_limit:<provider>:<scope>`: `Claude's 5-hour limit until 14:30` (its resume time), for a
-  headroom hold `Claude's weekly limit headroom: new runs wait until 14:30` (its reset time) and
-  for an unreachable API `Claude API unreachable, retrying at 14:05`. Times as `local_time/3`.
+  `usage_limit:<provider>:<scope>`: `Claude's 5-hour limit until 14:30 UTC-3` (its resume time),
+  `Claude's 5-hour limit is still on, until 17:30 UTC-3` once a canary was refused, for a
+  headroom hold `Claude's weekly limit headroom: new runs wait until 14:30 UTC-3` (its reset time)
+  and for an unreachable API `Claude API unreachable, retrying at 14:05 UTC-3`. Times as
+  `local_time/3`, followed by their zone (`zone_label/2`), so the line reads in one clock beside
+  the hold's UTC times.
   """
   @spec reason(entry(), DateTime.t(), keyword()) :: Pauses.reason_input()
   def reason(entry, %DateTime{} = now, opts) when is_map(entry) do
@@ -484,13 +507,35 @@ defmodule SymphonyElixir.UsageLimit do
       api_unreachable?(entry) ->
         limit_label(entry) <> at(", retrying at ", entry.resume_at, now, opts)
 
+      Map.get(entry, :still_on) == true ->
+        "#{provider_label(entry.provider)}'s #{window_label(entry.window)} is still on" <> at(", until ", entry.resume_at, now, opts)
+
       true ->
         "#{provider_label(entry.provider)}'s #{window_label(entry.window)}" <> at(" until ", entry.resume_at, now, opts)
     end
   end
 
   defp at(_words, nil, _now, _opts), do: ""
-  defp at(words, %DateTime{} = at, now, opts), do: words <> local_time(at, now, opts)
+  defp at(words, %DateTime{} = at, now, opts), do: words <> local_time(at, now, opts) <> " " <> zone_label(at, opts)
+
+  @doc """
+  The zone `local_time/3` writes `at` in, as its offset from UTC: `UTC`, `UTC-3`, `UTC+5:30`.
+  `opts[:to_local]` as for `local_time/3`.
+  """
+  @spec zone_label(DateTime.t(), keyword()) :: String.t()
+  def zone_label(%DateTime{} = at, opts) do
+    to_local = Keyword.get(opts, :to_local, &host_local_time/1)
+    naive = DateTime.to_naive(at)
+    offset_minutes = div(NaiveDateTime.diff(to_local.(naive), naive), 60)
+    sign = if offset_minutes < 0, do: "-", else: "+"
+    hours = div(abs(offset_minutes), 60)
+
+    case rem(abs(offset_minutes), 60) do
+      _minutes when offset_minutes == 0 -> "UTC"
+      0 -> "UTC#{sign}#{hours}"
+      minutes -> "UTC#{sign}#{hours}:#{String.pad_leading(Integer.to_string(minutes), 2, "0")}"
+    end
+  end
 
   @doc """
   Brings Symphony's pause in line with `usage_limits`: each hold's reason (`reason/3`) set, or its
@@ -542,7 +587,7 @@ defmodule SymphonyElixir.UsageLimit do
       seen = Map.get(windows, {entry.provider, entry.window}, %{})
 
       entry
-      |> Map.take([:provider, :scope, :reason, :window, :phase, :since, :resets_at, :resume_at, :source, :issue_identifier, :error])
+      |> Map.take([:provider, :scope, :reason, :window, :phase, :since, :resets_at, :resume_at, :source, :issue_identifier, :error, :still_on])
       |> Map.put(:utilization, Map.get(seen, :utilization) || Map.get(entry, :utilization))
     end)
   end

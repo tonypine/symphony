@@ -70,6 +70,20 @@ final class DispatchTests: XCTestCase {
         XCTAssertEqual(held.limits, ["Daily token budget used up, resets at midnight UTC"])
     }
 
+    /// The popover offers Try Now beside the paused limit it checks (TP-1471).
+    func testHoldingOffersTryNowForAPausedLimit() throws {
+        let control = DispatchControl(window: .connected, paused: false, state: try state("holding"), now: Date(), timeZone: utc)
+        XCTAssertTrue(control.canTryNow)
+        XCTAssertEqual(control.tryNow?.phase, .paused)
+        XCTAssertEqual(DispatchControl.tryNowTitle, "Try Now")
+
+        let checking = OverviewState(snapshot: StateSnapshot(usageLimits: [.init(phase: .canary)]))
+        XCTAssertFalse(DispatchControl(window: .connected, paused: false, state: checking, now: Date()).canTryNow)
+        let headroom = OverviewState(snapshot: StateSnapshot(usageLimits: [.init(phase: .headroom)]))
+        XCTAssertFalse(DispatchControl(window: .connected, paused: false, state: headroom, now: Date()).canTryNow)
+        XCTAssertFalse(DispatchControl(window: .stopped, paused: false, state: nil, now: Date()).canTryNow)
+    }
+
     func testSymphonyStoppedOffersStartOnlyWhenStopped() {
         let stopped = DispatchControl(window: .stopped, paused: false, state: nil, now: Date())
         XCTAssertEqual(stopped.mode, .stopped)

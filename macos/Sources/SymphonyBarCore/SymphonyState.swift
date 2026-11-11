@@ -284,9 +284,18 @@ public struct StateSnapshot: Equatable {
         public var reason: String?
         /// What the agent got when it couldn't reach the model API, for example `ENOTFOUND`.
         public var error: String?
+        /// A check of the limit (its canary) was refused by the provider: the limit is still on (`still_on`).
+        public var stillOn: Bool
 
         /// Symphony holds the provider because its API couldn't be reached, not for a usage limit.
         public var isAPIUnreachable: Bool { reason == "model_api_unreachable" }
+
+        /// What the hold's reason on Symphony's pause waits on, and what Try Now names: `usage_limit:anthropic:all`.
+        public var condition: String { "usage_limit:\(provider):\(scope)" }
+
+        /// Try Now checks a paused hold before its reset: one held run goes out first. A hold already checking, or a
+        /// headroom hold the provider never refused, has nothing to try.
+        public var canTryNow: Bool { phase == .paused }
 
         public init(
             provider: String = "anthropic",
@@ -297,7 +306,8 @@ public struct StateSnapshot: Equatable {
             resumeAt: Date? = nil,
             utilization: Double? = nil,
             reason: String? = nil,
-            error: String? = nil
+            error: String? = nil,
+            stillOn: Bool = false
         ) {
             self.provider = provider
             self.scope = scope
@@ -308,6 +318,7 @@ public struct StateSnapshot: Equatable {
             self.utilization = utilization
             self.reason = reason
             self.error = error
+            self.stillOn = stillOn
         }
     }
 
@@ -859,7 +870,8 @@ public enum SymphonyState {
                 resumeAt: limit.resumeAt.flatMap(parseDate),
                 utilization: limit.utilization,
                 reason: limit.reason,
-                error: limit.error
+                error: limit.error,
+                stillOn: limit.stillOn ?? false
             )
         }
         snapshot.budget = payload.budget.map { budget in
@@ -1000,6 +1012,7 @@ public enum SymphonyState {
             let utilization: Double?
             let reason: String?
             let error: String?
+            let stillOn: Bool?
         }
 
         struct Budget: Decodable {

@@ -340,17 +340,31 @@ defmodule SymphonyElixir.UsageLimitTest do
       assert UsageLimit.condition(hold(%{scope: "opus"})) == "usage_limit:anthropic:opus"
 
       assert UsageLimit.reason(hold(%{window: nil}), @now, @to_local) ==
-               %{kind: :environment, waits_on: %{condition: "usage_limit:anthropic:all"}, text: "Claude's usage limit until 14:30"}
+               %{kind: :environment, waits_on: %{condition: "usage_limit:anthropic:all"}, text: "Claude's usage limit until 14:30 UTC-3"}
 
-      assert UsageLimit.reason(hold(%{}), @now, @to_local).text == "Claude's 5-hour limit until 14:30"
+      assert UsageLimit.reason(hold(%{}), @now, @to_local).text == "Claude's 5-hour limit until 14:30 UTC-3"
 
       assert UsageLimit.reason(hold(%{phase: :headroom, window: "seven_day"}), @now, @to_local).text ==
-               "Claude's weekly limit headroom: new runs wait until 14:00"
+               "Claude's weekly limit headroom: new runs wait until 14:00 UTC-3"
 
       assert UsageLimit.reason(hold(%{phase: :headroom, resets_at: nil}), @now, @to_local).text == "Claude's 5-hour limit headroom: new runs wait"
 
       outage = hold(%{reason: "model_api_unreachable", source: :api_unreachable, window: nil, resets_at: nil})
-      assert UsageLimit.reason(outage, @now, @to_local).text == "Claude API unreachable, retrying at 14:30"
+      assert UsageLimit.reason(outage, @now, @to_local).text == "Claude API unreachable, retrying at 14:30 UTC-3"
+    end
+
+    test "says the limit is still on once a canary was refused" do
+      assert UsageLimit.reason(hold(%{still_on: true}), @now, @to_local).text == "Claude's 5-hour limit is still on, until 14:30 UTC-3"
+      assert UsageLimit.banner(hold(%{still_on: true}), @now, @to_local) == "Paused: Claude 5-hour limit still on, resumes ~14:30"
+    end
+
+    test "names the zone of its local time" do
+      at = ~U[2026-10-03 17:30:00Z]
+      assert UsageLimit.zone_label(at, to_local: & &1) == "UTC"
+      assert UsageLimit.zone_label(at, @to_local) == "UTC-3"
+      assert UsageLimit.zone_label(at, to_local: &NaiveDateTime.add(&1, 5 * 3600 + 30 * 60)) == "UTC+5:30"
+      assert UsageLimit.zone_label(at, to_local: &NaiveDateTime.add(&1, -(9 * 3600 + 30 * 60))) == "UTC-9:30"
+      assert UsageLimit.zone_label(at, []) =~ ~r/\AUTC([+-]\d{1,2}(:\d{2})?)?\z/
     end
 
     test "is set with each hold, refreshed when its line changes and cleared when the hold ends" do
@@ -359,7 +373,7 @@ defmodule SymphonyElixir.UsageLimitTest do
       opus = hold(%{scope: "opus", window: "seven_day_opus"})
 
       assert UsageLimit.sync_reasons(%{{"anthropic", :all} => hold(%{}), {"anthropic", "opus"} => opus}, @now, @to_local) == :ok
-      assert Pauses.why(:symphony) == ["Waiting for the environment to be ready", "Claude's 5-hour limit until 14:30", "Claude's weekly Opus limit until 14:30"]
+      assert Pauses.why(:symphony) == ["Waiting for the environment to be ready", "Claude's 5-hour limit until 14:30 UTC-3", "Claude's weekly Opus limit until 14:30 UTC-3"]
 
       # Nothing changed: nothing is written again.
       {:ok, pause} = Pauses.get(:symphony)
@@ -368,7 +382,7 @@ defmodule SymphonyElixir.UsageLimitTest do
 
       later = hold(%{resume_at: ~U[2026-10-03 18:00:00Z]})
       assert UsageLimit.sync_reasons(%{{"anthropic", :all} => later}, @now, @to_local) == :ok
-      assert Pauses.why(:symphony) == ["Waiting for the environment to be ready", "Claude's 5-hour limit until 15:00"]
+      assert Pauses.why(:symphony) == ["Waiting for the environment to be ready", "Claude's 5-hour limit until 15:00 UTC-3"]
 
       assert UsageLimit.sync_reasons(%{}, @now, @to_local) == :ok
       assert {:ok, %{reasons: [%{waits_on: %{condition: "github_down"}}]}} = Pauses.get(:symphony)
@@ -470,6 +484,25 @@ defmodule SymphonyElixir.UsageLimitTest do
     assert resume_at == DateTime.add(later, 900)
 
     assert %{phase: :paused, canary_issue_id: nil} = UsageLimit.paused(canary)
+  end
+
+  test "a refused canary marks the hold still on, a refresh keeps the mark, and a new hold has none" do
+    canary = put(nil, info()) |> UsageLimit.canary("issue-canary")
+    refused = put(canary, info(%{resets_at: ~U[2026-10-03 09:00:00Z]}))
+    assert %{phase: :paused, still_on: true, resets_at: ~U[2026-10-03 09:00:00Z]} = refused
+    assert put(refused, info()).still_on == true
+    refute Map.has_key?(put(nil, info()), :still_on)
+    assert [%{still_on: true}] = UsageLimit.snapshot(%{{"anthropic", :all} => refused}, %{})
+  end
+
+  test "checking a paused hold moves it to the canary phase with no canary picked, keeping its resume time" do
+    paused = put(nil, info())
+    checking = UsageLimit.checking(paused)
+    profile = %{provider: "anthropic", model: "claude-opus-5-5"}
+
+    assert %{phase: :canary, canary_issue_id: nil, resume_at: resume_at} = checking
+    assert resume_at == paused.resume_at
+    assert UsageLimit.holding(%{{"anthropic", :all} => checking}, profile, "issue-any") == checking
   end
 
   describe "headroom" do
