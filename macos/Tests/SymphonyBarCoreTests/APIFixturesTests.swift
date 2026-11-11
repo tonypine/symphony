@@ -91,6 +91,28 @@ final class APIFixturesTests: XCTestCase {
         XCTAssertEqual(fixtures.answer(request("api/v1/control/blocker", method: "POST")).1.statusCode, 200)
     }
 
+    /// A GET answers `<path>.after-<move>.json` once Symphony took a POST to that move, and its own file before; a
+    /// refused POST changes nothing (TP-1450: a Question answered from the ticket page).
+    func testAGetAnswersItsAfterFileOnceTheMoveItNamesWasTaken() throws {
+        let directory = root.appendingPathComponent("fixtures/api/v1", isDirectory: true)
+        let control = directory.appendingPathComponent("control", isDirectory: true)
+        try FileManager.default.createDirectory(at: control, withIntermediateDirectories: true)
+        try Data(#"{"counts":{"running":0}}"#.utf8).write(to: directory.appendingPathComponent("state.after-decide.json"))
+        try Data(#"{"error":{"code":"move_not_allowed","message":"No."}}"#.utf8).write(to: control.appendingPathComponent("blocker.409.json"))
+        func state() -> String { String(decoding: fixtures.answer(request("api/v1/state")).0, as: UTF8.self) }
+
+        XCTAssertEqual(state(), #"{"counts":{"running":2}}"#)
+        // Another move, and a refused one, leave it as it was.
+        _ = fixtures.answer(request("api/v1/control/note", method: "POST"))
+        _ = fixtures.answer(request("api/v1/control/blocker", method: "POST"))
+        XCTAssertEqual(fixtures.postedMoves(), ["note"])
+        XCTAssertEqual(state(), #"{"counts":{"running":2}}"#)
+
+        XCTAssertEqual(fixtures.answer(request("api/v1/control/decide", method: "POST")).1.statusCode, 200)
+        XCTAssertEqual(fixtures.postedMoves(), ["note", "decide"])
+        XCTAssertEqual(state(), #"{"counts":{"running":0}}"#)
+    }
+
     func testTheLiveChannelWithoutAFixtureIsUnavailable() async throws {
         // No `api/v1/stream.json`: a 404, so the window reads the ticket's feed after each state poll.
         let connect = EventStream.buffered(fixtures.transport)

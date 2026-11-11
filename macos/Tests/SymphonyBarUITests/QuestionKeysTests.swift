@@ -34,6 +34,18 @@ final class QuestionKeysTests: XCTestCase {
         XCTAssertNil(try option("2", modifiers: .option))
     }
 
+    /// Return sends once an answer is picked, while the keyboard is not in the own-words field (TP-1450).
+    func testReturnSendsAPickedAnswerOutsideTheField() {
+        XCTAssertTrue(QuestionKeys.sends(modifiers: [], typing: false, enabled: true))
+        // In the field Return types a new line; with nothing to send, or a modifier held, it does nothing here.
+        XCTAssertFalse(QuestionKeys.sends(modifiers: [], typing: true, enabled: true))
+        XCTAssertFalse(QuestionKeys.sends(modifiers: [], typing: false, enabled: false))
+        XCTAssertFalse(QuestionKeys.sends(modifiers: .option, typing: false, enabled: true))
+        // ⌘Return sends from anywhere, the field included, as the Options card's hint says; not with nothing to send.
+        XCTAssertTrue(QuestionKeys.sends(modifiers: .command, typing: true, enabled: true))
+        XCTAssertFalse(QuestionKeys.sends(modifiers: .command, typing: false, enabled: false))
+    }
+
     func testAKeyPastTheOwnWordsCardOrNotADigitPicksNothing() throws {
         XCTAssertNil(try option("9"))
         XCTAssertNil(try option("0"))

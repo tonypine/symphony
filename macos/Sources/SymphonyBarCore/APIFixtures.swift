@@ -8,7 +8,9 @@ import Foundation
 /// appended to the request log as one JSON line and answered 200, with `<dir>/<path>.json` when there is one, or 409
 /// with `<path>.409.json` when only that is there (Symphony refusing the move). A POST
 /// whose answer changes from one request to the next reads `<path>.1.json` the first time, `<path>.2.json` the second,
-/// and the last one there is after that (Setup's fix, Undo, fix again). `<dir>/github_webhook_secret` stands for the
+/// and the last one there is after that (Setup's fix, Undo, fix again). A GET whose answer changes once a move was made
+/// reads `<path>.after-<move>.json` once the request log holds a POST to `.../control/<move>` (a Question answered from
+/// the ticket page: the Inbox, the ticket and its feed as Symphony serves them after `decide`). `<dir>/github_webhook_secret` stands for the
 /// webhook secret Symphony hands off (`WebhookSecret`), a made-up value. No request leaves the app, so QA walks every
 /// view with fixed data and no Linear or model calls.
 public struct APIFixtures: Equatable {
@@ -38,8 +40,9 @@ public struct APIFixtures: Equatable {
     public func answer(_ request: URLRequest, now: Date = Date()) -> (Data, HTTPURLResponse) {
         let url = request.url ?? Self.baseURL
         let file = file(forPath: url.path)
-        let fixture = file.flatMap { try? Data(contentsOf: $0) }
-        if request.httpMethod?.uppercased() == "POST" {
+        let isPost = request.httpMethod?.uppercased() == "POST"
+        let fixture = (isPost ? nil : file.flatMap(afterFixture(of:))) ?? file.flatMap { try? Data(contentsOf: $0) }
+        if isPost {
             let answer = fixture ?? file.flatMap { sequenceFile(of: $0, request: postCount(url.path) + 1) }.flatMap { try? Data(contentsOf: $0) }
             log(request, path: url.path, at: now)
             if answer == nil, let refusal = file.flatMap(refusalFixture(of:)) {
@@ -72,6 +75,28 @@ public struct APIFixtures: Equatable {
         return nil
     }
 
+    /// The GET answer `<path>.after-<move>.json` gives next to `file` (`<path>.json`) once the request log holds a POST
+    /// whose path ends in `<move>`; the newest such POST wins.
+    func afterFixture(of file: URL) -> Data? {
+        let stem = file.deletingPathExtension()
+        for move in postedMoves().reversed() {
+            if let data = try? Data(contentsOf: stem.appendingPathExtension("after-\(move)").appendingPathExtension("json")) { return data }
+        }
+        return nil
+    }
+
+    /// The last path component of each POST the request log holds that Symphony took, oldest first: a POST the
+    /// fixtures refuse (only `<path>.409.json` there) changed nothing.
+    func postedMoves() -> [String] {
+        postedPaths().filter { !refuses($0) }.compactMap { $0.split(separator: "/").last.map(String.init) }
+    }
+
+    /// Whether a POST to `path` is answered with its refusal.
+    private func refuses(_ path: String) -> Bool {
+        guard let file = file(forPath: path) else { return false }
+        return !FileManager.default.fileExists(atPath: file.path) && refusalFixture(of: file) != nil
+    }
+
     /// The POST answer `<path>.409.json` gives next to `file` (`<path>.json`): Symphony's refusal of the move.
     func refusalFixture(of file: URL) -> Data? {
         try? Data(contentsOf: file.deletingPathExtension().appendingPathExtension("409").appendingPathExtension("json"))
@@ -99,11 +124,15 @@ public struct APIFixtures: Equatable {
 
     /// The POSTs to `path` the request log holds.
     func postCount(_ path: String) -> Int {
-        guard let text = try? String(contentsOf: requestLog, encoding: .utf8) else { return 0 }
-        return text.split(separator: "\n").filter { line in
-            guard let entry = try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any] else { return false }
-            return entry["path"] as? String == path
-        }.count
+        postedPaths().filter { $0 == path }.count
+    }
+
+    /// The path of each POST the request log holds, oldest first.
+    private func postedPaths() -> [String] {
+        guard let text = try? String(contentsOf: requestLog, encoding: .utf8) else { return [] }
+        return text.split(separator: "\n").compactMap { line in
+            (try? JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any])?["path"] as? String
+        }
     }
 
     private func response(_ url: URL, statusCode: Int, contentType: String = "application/json") -> HTTPURLResponse {
