@@ -939,6 +939,70 @@ func homeBoard(_ fixture: String, window: CGFloat, selection: String? = nil) -> 
     .background(DesignTokens.Surface.window.color)
 }
 
+/// Home's top (TP-1454): the `home-questions` fixture's Inbox, two questions and a pause, read as the window reads it.
+let homeQuestionsAPI = situationsAPI.appendingPathComponent("home-questions/api/v1")
+let homeQuestionsInbox: InboxPayload = {
+    guard let inbox = InboxPayload.decode(try! Data(contentsOf: homeQuestionsAPI.appendingPathComponent("inbox.json"))) else {
+        fatalError("The home-questions fixture's Inbox doesn't read")
+    }
+    return inbox.withPauses(fromState: try? Data(contentsOf: homeQuestionsAPI.appendingPathComponent("state.json")))
+}()
+
+/// Home with the questions and the pause above the board, in a window `window` wide less its sidebar.
+@MainActor
+func homeWithQuestions(window: CGFloat) -> some View {
+    let width = window - DesignTokens.Layout.sidebarWidth
+    return HomeBody(
+        board: HomeBoard(state: situationsState("home-questions"), now: situationsNow, timeZone: TimeZone(identifier: "UTC")!),
+        actions: HomeActions(),
+        inbox: HomeInbox(items: homeQuestionsInbox.items),
+        now: situationsNow
+    )
+    .frame(width: width, alignment: .topLeading)
+    .background(DesignTokens.Surface.window.color)
+}
+
+/// The Inbox's drawer beside Home: TP-892's review, at the drawer's ideal width.
+@MainActor
+func inboxDrawer() -> some View {
+    guard let item = homeQuestionsInbox.items.first(where: { $0.identifier == "TP-892" }) else { fatalError("TP-892 is missing") }
+    return VStack(spacing: 0) {
+        InboxDrawerHeader(title: HomeInbox.drawerTitle, close: {})
+        Divider()
+        InboxReviewBody(item: item, perform: { _ in }, narrow: true, now: situationsNow, state: situationsState("home-questions").snapshot)
+    }
+    .frame(width: InboxDrawer.idealWidth)
+    .background(DesignTokens.Surface.content.color)
+}
+
+/// The status bar at `window`'s width less the sidebar: the dispatch control at rest, under the pointer and pressed,
+/// then the health line; dispatch on and Symphony answering, or paused, or Symphony stopped.
+@MainActor
+func statusBar(window: CGFloat) -> some View {
+    let width = window - DesignTokens.Layout.sidebarWidth
+    let build = DiagnosticsPayload.decode(try! Data(contentsOf: homeQuestionsAPI.appendingPathComponent("state.json")))?.build
+    let utc = TimeZone(identifier: "UTC")!
+    func bar(_ window: WindowState, _ state: String?, _ face: DesignTokens.Interaction) -> some View {
+        let control = DispatchControl(
+            window: window, paused: false, state: state.map(situationsState), now: situationsNow, timeZone: utc
+        )
+        let line = HealthLine(window: window, dispatch: control, build: build, appVersion: "0.0.1.866", lastUpdate: situationsNow, timeZone: utc)
+        return StatusBarContent(line: line) {
+            ButtonFace(label: DispatchControlLabel(control: control), kind: .quiet, size: .small, state: face, reduceMotion: false)
+        }
+        .frame(width: width)
+    }
+    return VStack(spacing: DesignTokens.Space.s3) {
+        bar(.connected, "home-questions", .rest)
+        bar(.connected, "home-questions", .hover)
+        bar(.connected, "home-questions", .press)
+        bar(.connected, "paused", .rest)
+        bar(.stopped, nil, .rest)
+    }
+    .padding(.vertical, DesignTokens.Space.s3)
+    .background(DesignTokens.Surface.content.color)
+}
+
 /// The Action rail (TP-1440): `test/fixtures/api/ticket_moves.json`, the `moves` of a few tickets, by name.
 let actionRailSample: [String: TicketMoves] = {
     let url = here.appendingPathComponent("../../../test/fixtures/api/ticket_moves.json").standardizedFileURL
@@ -1460,6 +1524,13 @@ MainActor.assumeIsolated {
             render(homeBoard("home", window: window, selection: "SHOP-320"), scheme, to: "home-board-\(name)-\(suffix).png")
             render(homeBoard("home-quiet", window: window), scheme, to: "home-board-quiet-\(name)-\(suffix).png")
         }
+        // Home's top (TP-1454): two questions and a pause above the board, the drawer, the status bar, at the laptop's and
+        // the desktop's widths.
+        for (window, name) in [(CGFloat(1440), "laptop"), (2560, "desktop")] {
+            render(homeWithQuestions(window: window), scheme, to: "home-questions-\(name)-\(suffix).png")
+            render(statusBar(window: window), scheme, to: "status-bar-\(name)-\(suffix).png")
+        }
+        render(inboxDrawer(), scheme, to: "inbox-drawer-\(suffix).png")
         // The Action rail (TP-1440): every move allowed, and each refusal with its reason and More open, at the
         // laptop's and the desktop's header widths.
         for (width, name) in [(CGFloat(1180), "laptop"), (2200, "desktop")] {

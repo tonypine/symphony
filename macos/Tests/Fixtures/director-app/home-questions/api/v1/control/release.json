@@ -1,0 +1,10 @@
+{
+  "commented": true,
+  "from_state": "In Progress",
+  "issue_id": "i-899",
+  "issue_identifier": "TP-899",
+  "move": "release",
+  "moved": false,
+  "to_state": "In Progress",
+  "undo_window_ms": null
+}

@@ -67,7 +67,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         model?.setupWelcome = welcome
     }
 
-    /// Opens the window on the Inbox, with the item of issue id `id` selected when it is listed.
+    /// Opens the window on Home with the Inbox's drawer, on the item of issue id `id` when it is listed.
     func showInbox(selecting id: String?) {
         show()
         model?.showInbox(selecting: id)
@@ -245,7 +245,8 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
 
     // MARK: View menu
 
-    /// The main menu's View items: one per sidebar view on ⌘1–⌘8, Back and Forward on ⌘[ and ⌘], and Refresh on ⌘R.
+    /// The main menu's View items: one per sidebar view on ⌘1–⌘8, Open Inbox on ⇧⌘I (Home's drawer), Back and Forward
+    /// on ⌘[ and ⌘], and Refresh on ⌘R.
     func viewMenu() -> NSMenu {
         let menu = NSMenu(title: "View")
         let sidebar = Sidebar()
@@ -256,6 +257,10 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             item.target = self
             menu.addItem(item)
         }
+        let inbox = NSMenuItem(title: HomeInbox.openInboxTitle, action: #selector(openInbox(_:)), keyEquivalent: "I")
+        inbox.keyEquivalentModifierMask = [.command, .shift]
+        inbox.target = self
+        menu.addItem(inbox)
         menu.addItem(.separator())
         let back = NSMenuItem(title: NavigationHistory.backTitle, action: #selector(goBack(_:)), keyEquivalent: String(NavigationHistory.backKey))
         back.target = self
@@ -285,6 +290,10 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     @objc private func selectView(_ sender: NSMenuItem) {
         guard let view = (sender.representedObject as? String).flatMap(SymphonyView.init(rawValue:)) else { return }
         model?.show(view)
+    }
+
+    @objc private func openInbox(_ sender: Any?) {
+        model?.showInbox()
     }
 
     @objc private func refresh(_ sender: Any?) {

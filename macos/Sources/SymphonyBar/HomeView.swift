@@ -14,21 +14,31 @@ struct HomeActions {
 struct HomeView: View {
     let board: HomeBoard
     let actions: HomeActions
+    /// What waits on the Director, above the board (TP-1454); nil until the Inbox is read.
+    var inbox: HomeInbox?
+    var inboxActions = HomeInboxActions()
+    var now = Date()
 
     var body: some View {
         ScrollView {
-            HomeBody(board: board, actions: actions)
+            HomeBody(board: board, actions: actions, inbox: inbox, inboxActions: inboxActions, now: now)
         }
     }
 }
 
-/// Home's board (the catalog's Board group): the pause notice while dispatch is paused, then one group per situation
+/// Home's board (the catalog's Board group): what waits on the Director first, each item answerable in place
+/// (TP-1454), the pause notice while dispatch is paused, then one group per situation
 /// kind stacked top to bottom in the order the Director acts on them, each a card with its heading (glyph, title, the
 /// count of its rows, a hint) and its rows in dispatch order. A group with nothing in it is one quiet heading. Outside
 /// the scroll view, so it also renders offscreen.
 struct HomeBody: View {
     let board: HomeBoard
     let actions: HomeActions
+    /// The Inbox's items above the board; nil or empty draws none.
+    var inbox: HomeInbox?
+    var inboxActions = HomeInboxActions()
+    /// Symphony's clock, for the items' ages.
+    var now = Date()
     /// The row picked: it follows the keyboard's focus, and the arrow keys move it across groups.
     @State private var selection: String?
     /// The groups folded by a click on their heading.
@@ -40,14 +50,26 @@ struct HomeBody: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// `selection` is the row drawn picked at first, for a snapshot.
-    init(board: HomeBoard, actions: HomeActions, selection: String? = nil) {
+    init(
+        board: HomeBoard, actions: HomeActions, inbox: HomeInbox? = nil, inboxActions: HomeInboxActions = HomeInboxActions(),
+        now: Date = Date(), selection: String? = nil
+    ) {
         self.board = board
         self.actions = actions
+        self.inbox = inbox
+        self.inboxActions = inboxActions
+        self.now = now
         _selection = State(initialValue: selection)
     }
 
+    @State private var narrow = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+            if let inbox, !inbox.isEmpty {
+                HomeInboxSection(inbox: inbox, actions: inboxActions, now: now, narrow: narrow)
+                    .padding(.bottom, DesignTokens.Space.s3)
+            }
             if let sentence = board.pauseSentence {
                 PauseNotice(sentence: sentence, lines: board.pauseLines, showsResume: board.showsResume, actions: actions)
                     .padding(.bottom, DesignTokens.Space.s2)
@@ -87,6 +109,7 @@ struct HomeBody: View {
         }
         .padding(DesignTokens.Space.s5)
         .frame(maxWidth: .infinity, alignment: .topLeading)
+        .onGeometryChange(for: Bool.self) { $0.size.width < DesignTokens.Layout.narrowReviewWidth } action: { narrow = $0 }
         .onKeyPress(phases: .down) { _ in
             keyboardFocus = true
             return .ignored
