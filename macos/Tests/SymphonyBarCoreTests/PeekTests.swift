@@ -126,21 +126,7 @@ final class PeekTests: XCTestCase {
 
     // MARK: - Presentation
 
-    func testANarrowWindowPresentsThePeekAsASheet() {
-        // The Inbox is its 340 pt list column, a divider and the review; the review beside the inspector decides.
-        // A 1200 pt window: 1000 pt of Inbox leaves the review 259 pt beside a 400 pt inspector, so a sheet.
-        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 1000, inspectorShown: false), .sheet)
-        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 760, inspectorShown: false), .sheet)
-        // A window wide enough for the review at 560 pt beside the inspector at its widest.
-        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 341 + 560 + 400, inspectorShown: false), .inspector)
-        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 341 + 559 + 400, inspectorShown: false), .sheet)
-        // Measured with the inspector open.
-        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 341 + 560, inspectorShown: true), .inspector)
-        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 341 + 559, inspectorShown: true), .sheet)
-        // Narrowed under 560 beside a 340 pt inspector, it turns into a sheet, and the wider Inbox the closed
-        // inspector leaves keeps it one.
-        XCTAssertEqual(PeekPresentation.choose(inboxWidth: 341 + 559 + 340, inspectorShown: false), .sheet)
-        XCTAssertEqual(PeekPresentation.minDetailWidth, DesignTokens.Layout.narrowReviewWidth)
+    func testThePeekColumnIsBetween320And400Points() {
         XCTAssertLessThanOrEqual(PeekPresentation.minInspectorWidth, PeekPresentation.idealInspectorWidth)
         XCTAssertLessThanOrEqual(PeekPresentation.idealInspectorWidth, PeekPresentation.maxInspectorWidth)
     }

@@ -69,6 +69,8 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var inboxResult: EndpointResult?
     /// The Inbox item shown, by issue id; nil shows the first.
     @Published var inboxSelection: String?
+    /// The Inbox's drawer (TP-1454): the review of `inboxSelection` in the window's inspector, on Home or a ticket page.
+    @Published var inboxDrawerShown = false
     /// The Director's picks in each item's decisions, and its write-in, by issue id (C16, N11). Not `@Published`: a
     /// keystroke in the write-in redraws the window only when the text turns blank or stops being blank.
     private(set) var inboxPicks = InboxPicks() {
@@ -154,7 +156,11 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var initiativeSelection: String?
     /// The views and ticket pages shown, for ⌘[ and ⌘] (P10); its current place is what the window shows.
     @Published var history: NavigationHistory {
-        didSet { followTicketLook() }
+        didSet {
+            followTicketLook()
+            // The drawer belongs to the place it opened on: another view or page opens without it.
+            if history.current != oldValue.current { inboxDrawerShown = false }
+        }
     }
     /// The ticket page shown and the look it sends when the person leaves it (TP-1451).
     var ticketLook = TicketLook()
@@ -375,11 +381,39 @@ final class SymphonyWindowModel: ObservableObject {
         return overviewState.snapshot.waitingOnYou.count
     }
 
-    /// Opens the Inbox on the item with issue id `id`, or on its first item.
+    /// Opens the Inbox's drawer on Home, on the item with issue id `id`, or on its first item: the menu bar's Open
+    /// Inbox and its rows, a notification, the View menu.
     func showInbox(selecting id: String? = nil) {
         if let id { inboxSelection = id }
-        show(.inbox)
+        show(.overview)
+        inboxDrawerShown = true
         readInbox()
+    }
+
+    /// Review on a Home row or a ticket page's decisions line: the drawer on the item with issue id `id`, where the
+    /// window is.
+    func reviewInDrawer(_ id: String) {
+        inboxSelection = id
+        peek.close()
+        inboxDrawerShown = true
+        readInbox()
+    }
+
+    /// True where the window draws the drawer: Home, and a ticket's page; not a pull request's page.
+    var presentsInboxDrawer: Bool {
+        HomeInbox.presentsDrawer(onHome: selection == .overview && !showsPage, onTicketPage: shownTicket != nil)
+    }
+
+    /// Hides the drawer, or shows it on the item selected.
+    func toggleInboxDrawer() {
+        if !inboxDrawerShown { readInbox() }
+        inboxDrawerShown.toggle()
+    }
+
+    /// Home's top (TP-1454): every Inbox item under the window's scope, newest first, less the ones answered from the
+    /// app, which leave at once.
+    var homeInbox: HomeInbox? {
+        inbox.map { HomeInbox(items: $0.items, scope: scope, answered: answeredItems, picks: picks(for:)) }
     }
 
     /// Opens Initiatives on the initiative with issue id `id`.
@@ -700,16 +734,17 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// Open in Inbox on the ticket's PR and CI card: the Inbox, on the ticket's item.
+    /// Open in Inbox on the ticket's PR and CI card: the drawer on the ticket's item, over the page.
     func openInInbox(_ identifier: String) {
-        showInbox(selecting: inbox?.items.first { $0.identifier == identifier }?.id)
+        guard let id = inbox?.items.first(where: { $0.identifier == identifier })?.id else { return showInbox() }
+        reviewInDrawer(id)
     }
 
     /// S16: a watcher's decision that left the Inbox by itself says why in the banner, once.
     private func showDepartures(from previous: [InboxItem], to current: [InboxItem]) {
         let banners = WatcherDeparture.banners(previous: previous, current: current, answered: answeredItems, watches: watchState.watches)
         answeredItems.subtract(previous.map(\.id).filter { id in !current.contains { $0.id == id } })
-        if let banner = banners.first, selection == .inbox, !showsPage { showBanner(banner) }
+        if let banner = banners.first, selection == .overview && !showsPage || inboxDrawerShown { showBanner(banner) }
     }
 
     /// Opens Usage and reads the history at once.
@@ -801,13 +836,12 @@ final class SymphonyWindowModel: ObservableObject {
         return ticketPage?.title ?? "Ticket"
     }
 
-    /// The sidebar footer's first line: Symphony's state, on its own so the sidebar never cuts it off.
-    var footerState: String { state.stateWord(paused: paused) }
-
-    /// The sidebar footer's second line: Symphony and its version.
-    var footerVersion: String {
-        let version = state == .connected ? client.diagnostics?.build?.version ?? appVersion : appVersion
-        return version.isEmpty ? "Symphony" : "Symphony \(version)"
+    /// The status bar's health line (TP-1454): the build that answers and whether Symphony does.
+    var healthLine: HealthLine {
+        HealthLine(
+            window: state, dispatch: dispatchControl, build: client.diagnostics?.build, appVersion: appVersion,
+            lastUpdate: client.lastUpdate
+        )
     }
 
     /// Copies the last state payload to the clipboard.
@@ -818,8 +852,8 @@ final class SymphonyWindowModel: ObservableObject {
     }
 }
 
-/// The Symphony window: a sidebar of views, the selected view, and a toolbar with its title, the connection state
-/// and Refresh.
+/// The Symphony window: a sidebar of views, the selected view, a toolbar with its title and Refresh, and the status
+/// bar with the dispatch control and the factory's health (TP-1454).
 struct SymphonyWindowView: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
@@ -829,8 +863,15 @@ struct SymphonyWindowView: View {
         client = model.client
     }
 
+    /// The sidebar, shown unless the Inbox's drawer needs its room (TP-1454).
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    /// True while the sidebar is folded for the drawer, so closing the drawer, or widening the window, brings it back;
+    /// a sidebar the Director folded stays folded.
+    @State private var sidebarFoldedForDrawer = false
+    @State private var windowWidth: Double = DesignTokens.Layout.windowWidth
+
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             SymphonySidebar(model: model, client: client)
                 .navigationSplitViewColumnWidth(
                     min: DesignTokens.Layout.minSidebarWidth,
@@ -838,9 +879,15 @@ struct SymphonyWindowView: View {
                     max: DesignTokens.Layout.maxSidebarWidth
                 )
         } detail: {
-            SymphonyDetail(model: model, client: client)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(DesignTokens.Surface.window.color)
+            // The status bar under the page, in the layout rather than an inset, so nothing on the page (the decision
+            // banner, the drawer) is drawn under it: one line of the factory's health, and the dispatch control
+            // (TP-1454).
+            VStack(spacing: 0) {
+                SymphonyDetail(model: model, client: client)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(DesignTokens.Surface.window.color)
+                WindowStatusBar(model: model, client: client)
+            }
                 .modifier(StopRunSheetPresenter(model: model))
                 .modifier(MoveSheetPresenter(model: model))
                 .modifier(DispatchSheetsPresenter(model: model))
@@ -870,16 +917,9 @@ struct SymphonyWindowView: View {
                         .frame(maxWidth: DesignTokens.Layout.toolbarTitleMaxWidth, alignment: .leading)
                         .accessibilityElement(children: .combine)
                     }
-                    ToolbarItem(placement: .status) {
-                        ConnectionState(state: model.state, lastUpdate: client.lastUpdate)
-                    }
                     ToolbarItem(placement: .automatic) {
                         ScopePicker(model: model)
                     }
-                    ToolbarItem(placement: .automatic) {
-                        DispatchControlButton(model: model, client: client)
-                    }
-                    .sharedBackgroundVisibility(.hidden)
                     if model.selection == .shipped, !model.showsPage {
                         ToolbarItem(placement: .principal) {
                             Picker("Shipped or Learnings", selection: $model.shippedTab) {
@@ -907,14 +947,15 @@ struct SymphonyWindowView: View {
                             .disabled(!model.dispatchControl.canForce)
                         }
                     }
-                    if model.selection == .inbox, !model.showsPage {
+                    if model.presentsInboxDrawer, model.state == .connected {
                         ToolbarItem(placement: .primaryAction) {
-                            // N4: closes the peek, or shows it again.
-                            Button { model.togglePeek() } label: {
-                                Label(model.inspectorTitle, systemImage: "sidebar.trailing")
+                            // The Inbox's drawer, on Home and on a ticket page (TP-1454).
+                            Button { model.toggleInboxDrawer() } label: {
+                                Label(model.inboxDrawerShown ? HomeInbox.hideDrawerTitle : HomeInbox.showDrawerTitle, systemImage: "sidebar.trailing")
                             }
-                            .help("\(model.inspectorTitle) (⌥⌘I)")
-                            .disabled(!model.peek.canToggle)
+                            .help(model.selection == .overview && !model.showsPage
+                                ? "\(model.inspectorTitle) (⌥⌘I)"
+                                : model.inboxDrawerShown ? HomeInbox.hideDrawerTitle : HomeInbox.showDrawerTitle)
                         }
                     }
                     ToolbarItem(placement: .primaryAction) {
@@ -940,6 +981,27 @@ struct SymphonyWindowView: View {
                     }
                 }
         }
+        .onGeometryChange(for: Double.self) { $0.size.width } action: { width in
+            windowWidth = width
+            fitDrawer()
+        }
+        .onChange(of: model.inboxDrawerShown) { fitDrawer() }
+        .onChange(of: model.presentsInboxDrawer) { fitDrawer() }
+    }
+
+    /// Folds the sidebar while the drawer is open in a window too narrow for the sidebar, the page and the drawer, so
+    /// neither the sidebar nor the drawer's Close is pushed off the window's edge; unfolds it once there is room.
+    private func fitDrawer() {
+        if HomeInbox.drawerFoldsSidebar(
+            windowWidth: windowWidth, drawerShown: model.inboxDrawerShown && model.presentsInboxDrawer
+        ) {
+            guard columnVisibility != .detailOnly else { return }
+            columnVisibility = .detailOnly
+            sidebarFoldedForDrawer = true
+        } else if sidebarFoldedForDrawer {
+            columnVisibility = .all
+            sidebarFoldedForDrawer = false
+        }
     }
 }
 
@@ -961,10 +1023,9 @@ struct ScopePicker: View {
     }
 }
 
-/// The sidebar: views by section, and Symphony's version and state at the foot.
+/// The sidebar: views by section. Symphony's version and state are in the status bar (TP-1454).
 struct SymphonySidebar: View {
     @ObservedObject var model: SymphonyWindowModel
-    /// Observed so the footer shows Symphony's version once its first state payload arrives.
     @ObservedObject var client: LiveAPIClient
 
     var body: some View {
@@ -990,29 +1051,6 @@ struct SymphonySidebar: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 0) {
-                    HStack(spacing: DesignTokens.Space.s2) {
-                        Circle()
-                            .fill(model.state.connectionStatus.tint)
-                            .frame(width: 8, height: 8)
-                            .accessibilityHidden(true)
-                        Text(model.footerState)
-                            .font(DesignTokens.TypeStyle.callout.font)
-                    }
-                    Text(model.footerVersion)
-                        .font(DesignTokens.TypeStyle.caption.font)
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 8 + DesignTokens.Space.s2)
-                }
-                .fixedSize(horizontal: false, vertical: true)
-                .accessibilityElement(children: .combine)
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, DesignTokens.Space.s4)
-            .padding(.vertical, DesignTokens.Space.s2)
-        }
     }
 
     /// The list's selection, which opens the Repos window instead of selecting it.
@@ -1027,11 +1065,12 @@ struct SymphonySidebar: View {
         )
     }
 
-    /// C1's count and its color: the Inbox's in `status.you`, the Overview's in `status.problem`, Setup's errors in
-    /// `status.problem` or else its warnings in `status.you` (SU1); nil hides it.
+    /// C1's count and its color: Home's in `status.you` while something waits on the Director (its Inbox items, on
+    /// top), else in `status.problem` for what needs attention; Setup's errors in `status.problem` or else its warnings
+    /// in `status.you` (SU1); nil hides it.
     private func badge(_ view: SymphonyView) -> (count: Int, status: DesignTokens.Status)? {
         switch view {
-        case .inbox: model.inboxBadge > 0 ? (model.inboxBadge, .you) : nil
+        case .overview where model.inboxBadge > 0: (model.inboxBadge, .you)
         case .overview: model.attentionBadge > 0 ? (model.attentionBadge, .problem) : nil
         case .setup: model.setupSummary.badge
         default: nil
@@ -1041,7 +1080,7 @@ struct SymphonySidebar: View {
     /// C1: "Inbox, 4 waiting".
     private func accessibilityValue(_ view: SymphonyView) -> String {
         switch view {
-        case .inbox where model.inboxBadge > 0: "\(model.inboxBadge) waiting"
+        case .overview where model.inboxBadge > 0: "\(model.inboxBadge) waiting"
         case .overview where model.attentionBadge > 0: "\(model.attentionBadge) need attention"
         case .setup: model.setupSummary.accessibilityValue
         default: ""
@@ -1089,9 +1128,8 @@ struct SymphonyDetail: View {
             PullRequestPageContent(model: model)
         } else {
             switch model.selection {
-            case .inbox:
-                InboxContent(model: model, client: client)
-            case .overview:
+            case .inbox, .overview:
+                // The Inbox is Home's drawer (TP-1454).
                 OverviewContent(model: model, client: client)
             case .initiatives:
                 InitiativesContent(model: model, client: client)
@@ -1116,23 +1154,37 @@ struct SymphonyDetail: View {
     }
 }
 
-/// D1: Home, the board of every open ticket Symphony works, from `/api/v1/state`'s dispatch order under the window's
-/// scope.
+/// D1: Home, what waits on the Director on top (TP-1454), then the board of every open ticket Symphony works, from
+/// `/api/v1/state`'s dispatch order under the window's scope. The Inbox's review is its drawer, its moves ask with
+/// the Inbox's consequence sheets, and the banner after one sits under the page.
 struct OverviewContent: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
 
     var body: some View {
         if let state = model.overviewWithSetup {
-            HomeView(
-                board: HomeBoard(state: state, scope: model.scope, updating: model.updateHold != nil, now: Date()),
-                actions: HomeActions(
-                    resume: { model.send(.resume) },
-                    tryNow: { model.send(.tryNow(condition: $0.condition)) },
-                    controlInFlight: model.controlInFlight,
-                    openTicket: model.openTicket
+            VStack(spacing: 0) {
+                HomeView(
+                    board: HomeBoard(state: state, scope: model.scope, updating: model.updateHold != nil, now: Date()),
+                    actions: HomeActions(
+                        resume: { model.send(.resume) },
+                        tryNow: { model.send(.tryNow(condition: $0.condition)) },
+                        controlInFlight: model.controlInFlight,
+                        openTicket: model.openTicket
+                    ),
+                    inbox: model.homeInbox,
+                    inboxActions: model.homeInboxActions,
+                    now: model.overviewState?.generatedAt ?? Date()
                 )
-            )
+                if let banner = model.inboxBanner {
+                    InboxBannerView(banner: banner, undo: { model.undo(banner) }, close: model.dismissBanner)
+                        .padding(DesignTokens.Space.s3)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+            }
+            .animation(.default, value: model.inboxBanner)
+            .modifier(InboxDrawerPresenter(model: model))
+            .modifier(InboxSheetPresenter(model: model))
         } else if client.stateResult == .unsupported {
             EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
         } else {

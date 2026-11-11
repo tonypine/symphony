@@ -43,7 +43,8 @@ extension SymphonyWindowModel {
 
     var canGoBack: Bool { peekCanGoBack || history.canGoBack }
 
-    private var peekCanGoBack: Bool { !showsPage && selection == .inbox && peek.canGoBack }
+    /// ⌘[ in the drawer's peek returns to the page under it first.
+    private var peekCanGoBack: Bool { inboxDrawerShown && peek.canGoBack }
 
     /// ⌘].
     func goForward() {
@@ -379,6 +380,8 @@ struct TicketPageActions {
     var saveNote: () -> Void = {}
     /// A run's More › Read the whole session: the session reader on that run.
     var readSession: (RunGroupModel) -> Void = { _ in }
+    /// The decisions line's Review: the Inbox's drawer on the ticket's item, nil while the Inbox lists none (TP-1454).
+    var review: (() -> Void)?
 }
 
 extension TicketPage {
@@ -442,16 +445,10 @@ struct TicketPageContent: View {
 
     var body: some View {
         content
+            // The Inbox's drawer, opened from the decisions line's Review (TP-1454).
+            .modifier(InboxDrawerPresenter(model: model))
             // C17: the Send of the page's Question asks first, with the Inbox's own consequence sheet.
-            .sheet(item: $model.inboxSheet) { sheet in
-                ConsequenceSheetView(
-                    sheet: sheet,
-                    working: model.inboxMoveInFlight,
-                    error: model.inboxMoveError,
-                    cancel: model.cancelSheet,
-                    confirm: { reason in model.confirm(sheet, reason: reason) }
-                )
-            }
+            .modifier(InboxSheetPresenter(model: model))
     }
 
     @ViewBuilder private var content: some View {
@@ -479,7 +476,8 @@ struct TicketPageContent: View {
                     openInitiatives: { model.show(.initiatives) },
                     copy: model.copy,
                     saveNote: model.submitNote,
-                    readSession: { model.readSession(identifier, run: $0) }
+                    readSession: { model.readSession(identifier, run: $0) },
+                    review: items.first { $0.identifier == identifier && $0.waitsOnDirector }.map { item in { model.reviewInDrawer(item.id) } }
                 ),
                 transcripts: model.stepTranscripts,
                 note: model.ticketNote,
@@ -737,7 +735,7 @@ struct TicketPageBody: View {
         VStack(alignment: .leading, spacing: gap) {
             // The desktop shows the Questions in their own column: no line, no Answer.
             if !desktop {
-                DecisionsLineView(line: line, open: sheetOpen, focus: answerFocus, answer: answer)
+                DecisionsLineView(line: line, open: sheetOpen, focus: answerFocus, answer: answer, review: actions.review)
             }
             if let lifecycle = page.lifecycleRead?.lifecycle {
                 LifecycleSection(model: LifecycleModel.build(lifecycle, phase: page.lifecycleRead?.phasePath?.current))
@@ -983,6 +981,8 @@ struct DecisionsLineView: View {
     var open = false
     var focus: FocusState<Bool>.Binding?
     let answer: () -> Void
+    /// Review: the Inbox's drawer on the ticket's item (TP-1454), nil while the Inbox lists none.
+    var review: (() -> Void)?
 
     /// The line's height either way, so the page never jumps when a Question comes or goes.
     static let height: CGFloat = 56
@@ -1007,6 +1007,11 @@ struct DecisionsLineView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(line.accessibilityLabel)
+            if line.waiting, let review {
+                Button(HomeInbox.reviewTitle, action: review)
+                    .directorButton(.secondary, size: .medium)
+                    .help("Open the question's review in the Inbox drawer")
+            }
             if line.waiting { answerButton }
         }
         .padding(.leading, DesignTokens.Space.s4)
