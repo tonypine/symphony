@@ -162,6 +162,18 @@ public enum DesignTokens {
         public static let rowPressScale: Double = 0.995
         /// How far a hovered clickable card rises, in points.
         public static let lift: Double = 1
+        /// How far above its place a new timeline entry drops in from, in points.
+        public static let enterOffset: Double = 12
+        /// How long a new timeline entry's accent tint takes to fade out.
+        public static let enterTintDuration: Double = 1.2
+        /// The new entry's tint, at its start: the selection's.
+        public static func enterTint(dark: Bool) -> Double { StateSurface.selected.opacity(dark: dark) }
+
+        /// How a new timeline entry drops into place: on a spring of `motion.slow`; nil under Reduce Motion, where it
+        /// is there at once, without moving or flashing.
+        public static func entering(reduceMotion: Bool) -> Timing? {
+            reduceMotion ? nil : .spring(duration: slowDuration, bounce: springBounce)
+        }
 
         /// How a curve moves: an eased change of a duration, or a spring of a duration and a bounce.
         public enum Timing: Equatable {

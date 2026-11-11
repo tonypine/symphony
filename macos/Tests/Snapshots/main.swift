@@ -1334,6 +1334,39 @@ func runGroup(_ run: RunGroupModel, unfolded: Bool? = nil) -> some View {
         .background(DesignTokens.Surface.content.color)
 }
 
+// MARK: - The Timeline section (TP-1444)
+
+/// Two days of a ticket with every class of entry (`Tests/Fixtures/timeline`): a move, a phase entered, a pause the
+/// rules wrote as seven records, a question asked and answered, a person's action, a rule's, a verdict, a finding, a
+/// note, a write recorded twice, run 1 that failed and the run now.
+let timelineFixtures = here.appendingPathComponent("../Fixtures/timeline").standardizedFileURL
+let timelineReference = ISO8601DateFormatter().date(from: "2026-10-08T10:27:00Z")!
+let timelineCalendar: Calendar = {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = TimeZone(identifier: "UTC")!
+    return calendar
+}()
+
+let timelineModel: TimelineModel = {
+    guard let events = try? Data(contentsOf: timelineFixtures.appendingPathComponent("events.json")),
+          let history = TicketEventsPayload.decode(events)
+    else { fatalError("The timeline fixture is missing from \(timelineFixtures.path)") }
+    return TimelineModel.build(history, reference: timelineReference, calendar: timelineCalendar)
+}()
+
+/// The timeline in a main column `width` wide: the laptop's (780 pt, the column's widest) or the desktop's (1040 pt,
+/// where the column stops at 780 pt).
+@MainActor
+func timeline(width: CGFloat, selection: String? = nil, unfoldedRuns: Set<String>? = nil) -> some View {
+    TimelineSection(
+        model: timelineModel, transcripts: StepTranscripts { _ in .unreachable }, calendar: timelineCalendar,
+        selection: selection, unfoldedRuns: unfoldedRuns
+    )
+    .padding(DesignTokens.Space.s5)
+    .frame(width: width, alignment: .leading)
+    .background(DesignTokens.Surface.content.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1418,6 +1451,11 @@ MainActor.assumeIsolated {
         render(runGroup(runStepGroups[0]), scheme, to: "run-group-folded-\(suffix).png")
         render(runGroup(runStepGroups[0], unfolded: true), scheme, to: "run-group-failed-step-\(suffix).png")
         render(runGroup(runStepGroups[1]), scheme, to: "run-group-run-now-\(suffix).png")
+        // The Timeline section (TP-1444): a day with every entry class at the laptop's and the desktop's column widths,
+        // and an entry selected with the failed run unfolded.
+        render(timeline(width: 780), scheme, to: "timeline-laptop-\(suffix).png")
+        render(timeline(width: 1040), scheme, to: "timeline-desktop-\(suffix).png")
+        render(timeline(width: 780, selection: "entry-b2", unfoldedRuns: ["run-2", "run-1"]), scheme, to: "timeline-selected-\(suffix).png")
         render(review(width: 640, picks: picks), scheme, to: "inbox-write-in-\(suffix).png")
         // Chips inside the question, story and options, wrapping with the text (TP-952).
         render(review(width: 1200), scheme, to: "decision-chips-wide-\(suffix).png")
