@@ -245,15 +245,13 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
 
     // MARK: View menu
 
-    /// The main menu's View items: one per sidebar view on ⌘1–⌘8, Open Inbox on ⇧⌘I (Home's drawer), Back and Forward
-    /// on ⌘[ and ⌘], and Refresh on ⌘R.
+    /// The main menu's View items: one per destination on ⌘1–⌘5 (TP-1455), Open Inbox on ⇧⌘I (Home's drawer), Back
+    /// and Forward on ⌘[ and ⌘], Find a Ticket on ⌘F, the page's search on ⌥⌘F, and Refresh on ⌘R.
     func viewMenu() -> NSMenu {
         let menu = NSMenu(title: "View")
-        let sidebar = Sidebar()
-        for view in sidebar.views {
-            let item = NSMenuItem(title: view.title, action: #selector(selectView(_:)), keyEquivalent: "")
-            if let number = sidebar.shortcut(for: view) { item.keyEquivalent = String(number) }
-            item.representedObject = view.rawValue
+        for destination in Sidebar().destinations {
+            let item = NSMenuItem(title: destination.title, action: #selector(selectDestination(_:)), keyEquivalent: String(destination.shortcut))
+            item.representedObject = destination.rawValue
             item.target = self
             menu.addItem(item)
         }
@@ -269,9 +267,13 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         forward.target = self
         menu.addItem(forward)
         menu.addItem(.separator())
-        let find = NSMenuItem(title: "Search Tickets", action: #selector(searchTickets(_:)), keyEquivalent: "f")
+        let find = NSMenuItem(title: TicketFinder.menuTitle, action: #selector(findTicket(_:)), keyEquivalent: "f")
         find.target = self
         menu.addItem(find)
+        let search = NSMenuItem(title: "Search Tickets", action: #selector(searchPage(_:)), keyEquivalent: "f")
+        search.keyEquivalentModifierMask = [.command, .option]
+        search.target = self
+        menu.addItem(search)
         let inspector = NSMenuItem(title: "Show Inspector", action: #selector(toggleInspector(_:)), keyEquivalent: "i")
         inspector.keyEquivalentModifierMask = [.command, .option]
         inspector.target = self
@@ -287,9 +289,9 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         return menu
     }
 
-    @objc private func selectView(_ sender: NSMenuItem) {
-        guard let view = (sender.representedObject as? String).flatMap(SymphonyView.init(rawValue:)) else { return }
-        model?.show(view)
+    @objc private func selectDestination(_ sender: NSMenuItem) {
+        guard let destination = (sender.representedObject as? String).flatMap(Destination.init(rawValue:)) else { return }
+        model?.show(destination)
     }
 
     @objc private func openInbox(_ sender: Any?) {
@@ -300,8 +302,12 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         if let model { model.refresh() } else { client.refresh() }
     }
 
-    @objc private func searchTickets(_ sender: Any?) {
-        model?.searchTickets()
+    @objc private func findTicket(_ sender: Any?) {
+        model?.findTicket()
+    }
+
+    @objc private func searchPage(_ sender: Any?) {
+        model?.searchPage()
     }
 
     @objc private func toggleInspector(_ sender: Any?) {
@@ -329,9 +335,9 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             menuItem.title = model?.inspectorTitle ?? "Show Inspector"
             return model?.hasInspector ?? false
         case #selector(forceTicket(_:)): return model?.dispatchControl.canForce ?? false
-        case #selector(searchTickets(_:)):
+        case #selector(searchPage(_:)):
             menuItem.title = model?.searchTitle ?? "Search Tickets"
-            return true
+            return model?.hasPageSearch ?? false
         default: return true
         }
     }

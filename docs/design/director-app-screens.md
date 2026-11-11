@@ -22,7 +22,7 @@ windows; Repos is also reachable from the sidebar.
 | Part | What it is |
 | --- | --- |
 | Structure | `NavigationSplitView`: sidebar, content, and an inspector (`.inspector`) on views with selectable rows. Inbox and Initiatives use three columns (list and detail), as Mail does |
-| Sidebar | Inbox (badge), Overview (badge when something needs attention), Initiatives, Tickets · **Insights:** Quality, Usage · **Records:** Shipped, Audit · **Factory:** Repos, Diagnostics. ⌘1–⌘8 in that order. Footer: Symphony's version and state |
+| Sidebar | Five destinations on ⌘1–⌘5 (TP-1455): Home (badge: what waits on you), Journal, Work (tabs: Initiatives, Tickets), Insights (tabs: Quality, Usage, Shipped, Audit), Factory (badge: setup problems; lists Setup, Repos, Diagnostics, Settings). ⌘F finds a ticket from any page |
 | Toolbar | Title and subtitle of the view; the scope pop-up (all repos or one); the dispatch control (the one custom glass element); search; view-specific actions on glass |
 | Size | Default 1200 × 760, minimum 960 × 600; frame, view and selection restored |
 | Presence | While the window is open the app is a regular app (Dock icon, ⌘-Tab, main menu); closing it returns to the menu bar only (decision DD2) |

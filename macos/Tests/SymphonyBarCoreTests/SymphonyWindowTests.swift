@@ -84,54 +84,79 @@ final class SymphonyWindowTests: XCTestCase {
 
     // MARK: - Sidebar
 
-    func testSidebarListsOnlyBuiltViewsInTheDesignsOrder() {
+    func testSidebarListsTheFiveDestinationsWithFactorysPagesUnderIt() {
         let sidebar = Sidebar()
-        XCTAssertEqual(sidebar.views, [.overview, .initiatives, .tickets, .quality, .usage, .shipped, .audit, .repos, .setup, .diagnostics])
-        XCTAssertEqual(sidebar.sections.map(\.section), [.main, .insights, .records, .factory])
-        // The Inbox is Home's drawer, not a view of the sidebar (TP-1454).
-        XCTAssertEqual(sidebar.sections.first?.views, [.overview, .initiatives, .tickets])
-        XCTAssertEqual(sidebar.sections[1].views, [.quality, .usage])
-        XCTAssertEqual(sidebar.sections[2].views, [.shipped, .audit])
-        XCTAssertEqual(sidebar.sections.last?.views, [.repos, .setup, .diagnostics])
-        XCTAssertEqual(SidebarSection.records.title, "Records")
-        XCTAssertEqual(SidebarSection.factory.title, "Factory")
-        XCTAssertEqual(SymphonyView.shipped.symbol, "shippingbox")
-        XCTAssertEqual(SymphonyView.audit.symbol, "checklist")
-        XCTAssertEqual(SymphonyView.audit.title, "Audit")
-        XCTAssertEqual(SymphonyView.audit.section, .records)
-        XCTAssertFalse(SymphonyView.audit.subtitle.isEmpty)
+        XCTAssertEqual(sidebar.destinations, [.home, .journal, .work, .insights, .factory])
+        XCTAssertEqual(sidebar.destinations.map(\.title), ["Home", "Journal", "Work", "Insights", "Factory"])
+        XCTAssertEqual(sidebar.items, [
+            .destination(.home), .destination(.journal), .destination(.work), .destination(.insights), .destination(.factory),
+            .page(.setup), .page(.repos), .page(.diagnostics), .page(.settings),
+        ])
+        XCTAssertEqual(Destination.work.pages, [.initiatives, .tickets])
+        XCTAssertEqual(Destination.insights.pages, [.quality, .usage, .shipped, .audit])
+        XCTAssertEqual(Destination.factory.pages, [.setup, .repos, .diagnostics, .settings])
+        XCTAssertEqual(Destination.allCases.map(\.presentation), [.single, .single, .tabs, .tabs, .list])
+        // Every page belongs to the destination that lists it; the Inbox is Home's drawer.
+        for destination in Destination.allCases {
+            for page in destination.pages { XCTAssertEqual(page.destination, destination) }
+        }
+        XCTAssertEqual(SymphonyView.inbox.destination, .home)
     }
 
-    func testViewsJoinInPlace() {
-        let sidebar = Sidebar(built: [.diagnostics, .overview, .repos, .usage, .inbox])
-        XCTAssertEqual(sidebar.views, [.inbox, .overview, .usage, .repos, .diagnostics])
-        XCTAssertEqual(sidebar.sections.map(\.section), [.main, .insights, .factory])
-        XCTAssertEqual(sidebar.sections.map { $0.section.title }, [nil, "Insights", "Factory"])
+    func testTheSelectedRowIsTheDestinationOrFactorysPage() {
+        let sidebar = Sidebar()
+        XCTAssertEqual(sidebar.item(for: .overview), .destination(.home))
+        XCTAssertEqual(sidebar.item(for: .inbox), .destination(.home))
+        XCTAssertEqual(sidebar.item(for: .journal), .destination(.journal))
+        XCTAssertEqual(sidebar.item(for: .tickets), .destination(.work))
+        XCTAssertEqual(sidebar.item(for: .audit), .destination(.insights))
+        XCTAssertEqual(sidebar.item(for: .diagnostics), .page(.diagnostics))
     }
 
-    func testShortcutsFollowSidebarOrderUpToEight() {
-        let sidebar = Sidebar()
-        XCTAssertNil(sidebar.shortcut(for: .inbox))
-        XCTAssertEqual(sidebar.shortcut(for: .overview), 1)
-        XCTAssertEqual(sidebar.shortcut(for: .initiatives), 2)
-        XCTAssertEqual(sidebar.shortcut(for: .tickets), 3)
-        XCTAssertEqual(sidebar.shortcut(for: .quality), 4)
-        XCTAssertEqual(sidebar.shortcut(for: .usage), 5)
-        XCTAssertEqual(sidebar.shortcut(for: .shipped), 6)
-        XCTAssertEqual(sidebar.shortcut(for: .audit), 7)
-        XCTAssertEqual(sidebar.shortcut(for: .repos), 8)
-        XCTAssertNil(sidebar.shortcut(for: .setup))
-        XCTAssertNil(sidebar.shortcut(for: .diagnostics))
-        XCTAssertEqual(sidebar.view(forShortcut: 6), .shipped)
-        XCTAssertEqual(sidebar.view(forShortcut: 7), .audit)
-        XCTAssertEqual(sidebar.view(forShortcut: 8), .repos)
-        XCTAssertNil(sidebar.view(forShortcut: 9))
-        XCTAssertNil(sidebar.view(forShortcut: 0))
+    func testCommandOneToFivePickTheDestinations() {
+        XCTAssertEqual(Destination.allCases.map(\.shortcut), [1, 2, 3, 4, 5])
+        XCTAssertEqual(Destination.forShortcut(3), .work)
+        XCTAssertEqual(Destination.forShortcut(5), .factory)
+        XCTAssertNil(Destination.forShortcut(0))
+        XCTAssertNil(Destination.forShortcut(6))
+        XCTAssertEqual(Destination.work.shortcutHelp, "Work (⌘3)")
+    }
 
-        let all = Sidebar(built: SymphonyView.allCases)
-        XCTAssertEqual(all.views.count, 11)
-        XCTAssertEqual(all.views.compactMap(all.shortcut(for:)), Array(1...8))
-        XCTAssertEqual(all.view(forShortcut: 8), .audit)
+    func testDestinationsOpenOnTheirFirstPageThenTheLastOneThisSession() {
+        var memory = DestinationMemory()
+        XCTAssertEqual(memory.page(for: .work), .initiatives)
+        XCTAssertEqual(memory.page(for: .insights), .quality)
+        XCTAssertEqual(memory.page(for: .factory), .setup)
+        XCTAssertEqual(memory.page(for: .home), .overview)
+        XCTAssertEqual(memory.page(for: .journal), .journal)
+        memory.remember(.tickets)
+        memory.remember(.audit)
+        // Repos and Settings open their own windows: Factory stays on the page it showed.
+        memory.remember(.diagnostics)
+        memory.remember(.repos)
+        memory.remember(.settings)
+        XCTAssertEqual(memory.page(for: .work), .tickets)
+        XCTAssertEqual(memory.page(for: .insights), .audit)
+        XCTAssertEqual(memory.page(for: .factory), .diagnostics)
+        XCTAssertEqual(DestinationMemory().page(for: .work), .initiatives)
+    }
+
+    func testOnlyHomeAndFactoryCarryABadge() {
+        let setup = SetupSummary(errors: 1, warnings: 2)
+        XCTAssertEqual(
+            Destination.home.badge(waitingOnYou: 4, setup: setup),
+            DestinationBadge(count: 4, status: .you, accessibilityValue: "4 waiting")
+        )
+        XCTAssertEqual(
+            Destination.factory.badge(waitingOnYou: 4, setup: setup),
+            DestinationBadge(count: 3, status: .problem, accessibilityValue: "Setup: 1 error, 2 warnings")
+        )
+        XCTAssertEqual(Destination.factory.badge(waitingOnYou: 0, setup: SetupSummary(warnings: 1))?.status, .problem)
+        for destination in [Destination.journal, .work, .insights] {
+            XCTAssertNil(destination.badge(waitingOnYou: 4, setup: setup))
+        }
+        XCTAssertNil(Destination.home.badge(waitingOnYou: 0, setup: setup))
+        XCTAssertNil(Destination.factory.badge(waitingOnYou: 4, setup: SetupSummary()))
     }
 
     func testRestoresTheSavedViewWhenItShowsInTheWindow() {
@@ -143,12 +168,11 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertEqual(sidebar.restoredView(saved: nil), .overview)
         XCTAssertEqual(sidebar.restoredView(saved: "inbox"), .overview)
         XCTAssertEqual(sidebar.restoredView(saved: "tickets"), .tickets)
-        XCTAssertEqual(sidebar.restoredView(saved: "usage"), .usage)
-        XCTAssertEqual(sidebar.restoredView(saved: "quality"), .quality)
-        XCTAssertEqual(sidebar.restoredView(saved: "shipped"), .shipped)
+        XCTAssertEqual(sidebar.restoredView(saved: "journal"), .journal)
         XCTAssertEqual(sidebar.restoredView(saved: "audit"), .audit)
         XCTAssertEqual(sidebar.restoredView(saved: "repos"), .overview)
-        XCTAssertEqual(Sidebar(built: [.overview, .diagnostics]).restoredView(saved: "nonsense"), .overview)
+        XCTAssertEqual(sidebar.restoredView(saved: "settings"), .overview)
+        XCTAssertEqual(sidebar.restoredView(saved: "nonsense"), .overview)
     }
 
     func testEveryViewHasATitleSymbolAndSubtitle() {
@@ -156,9 +180,66 @@ final class SymphonyWindowTests: XCTestCase {
             XCTAssertFalse(view.title.isEmpty)
             XCTAssertFalse(view.subtitle.isEmpty)
             XCTAssertFalse(view.symbol.isEmpty)
+            XCTAssertEqual(view.id, view.rawValue)
+        }
+        for destination in Destination.allCases {
+            XCTAssertFalse(destination.symbol.isEmpty)
+            XCTAssertEqual(destination.id, destination.rawValue)
+            XCTAssertFalse(destination.firstPage.opensOwnWindow)
         }
         XCTAssertTrue(SymphonyView.repos.opensOwnWindow)
+        XCTAssertTrue(SymphonyView.settings.opensOwnWindow)
         XCTAssertFalse(SymphonyView.diagnostics.opensOwnWindow)
+        // A tabbed destination's name heads the toolbar, as its tabs name the page.
+        XCTAssertEqual(SymphonyView.tickets.toolbarTitle, "Work")
+        XCTAssertEqual(SymphonyView.usage.toolbarTitle, "Insights")
+        XCTAssertEqual(SymphonyView.overview.toolbarTitle, "Home")
+        XCTAssertEqual(SymphonyView.setup.toolbarTitle, "Setup")
+        XCTAssertEqual(SymphonyView.journal.subtitle, Journal.explanation)
+    }
+
+    // MARK: - Finding a ticket (⌘F)
+
+    private func trackedTickets() -> TicketList {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let forced: [StateSnapshot.ForcedTicket] = [
+            ("TP-14", "Retry the release"), ("TP-1455", "The five destinations"), ("TP-145", "Sidebar badges"),
+            ("API-9", "Release notes for the café"), ("API-10", nil),
+        ].map { .init(identifier: $0.0, issueID: nil, title: $0.1, repoKey: "web", summary: "", state: "Todo") }
+        return TicketList(state: OverviewState(snapshot: StateSnapshot(forced: forced), generatedAt: now), now: now)
+    }
+
+    func testFindsATicketByItsIdentifierExactFirstThenByPrefix() {
+        let list = trackedTickets()
+        XCTAssertEqual(TicketFinder.matches("tp-145", in: list).map(\.identifier), ["TP-145", "TP-1455"])
+        XCTAssertEqual(TicketFinder.matches(" TP-1455 ", in: list).map(\.identifier), ["TP-1455"])
+        XCTAssertEqual(TicketFinder.target("tp-145", in: list), "TP-145")
+    }
+
+    func testFindsATicketByEveryWordOfItsTitle() {
+        let list = trackedTickets()
+        XCTAssertEqual(TicketFinder.matches("release", in: list).map(\.identifier).sorted(), ["API-9", "TP-14"])
+        XCTAssertEqual(TicketFinder.matches("Cafe NOTES", in: list).map(\.identifier), ["API-9"])
+        XCTAssertEqual(TicketFinder.matches("five badges", in: list), [])
+        XCTAssertEqual(TicketFinder.line(list.row("TP-1455")!), "TP-1455 · The five destinations")
+        XCTAssertEqual(TicketFinder.line(list.row("API-10")!), "API-10")
+    }
+
+    func testAnUntrackedIdentifierStillOpensItsPageAndNothingElseDoes() {
+        let list = trackedTickets()
+        XCTAssertEqual(TicketFinder.target("shop-7", in: list), "SHOP-7")
+        XCTAssertEqual(TicketFinder.target("shop-7", in: nil), "SHOP-7")
+        XCTAssertNil(TicketFinder.target("no such words", in: list))
+        XCTAssertNil(TicketFinder.target("   ", in: list))
+        XCTAssertEqual(TicketFinder.matches("", in: list), [])
+        XCTAssertEqual(TicketFinder.matches("TP", in: nil), [])
+        let many = TicketList(
+            state: OverviewState(snapshot: StateSnapshot(forced: (1...12).map {
+                .init(identifier: "TP-\($0)", issueID: nil, title: nil, repoKey: nil, summary: "", state: nil)
+            })),
+            now: Date()
+        )
+        XCTAssertEqual(TicketFinder.matches("TP", in: many).count, TicketFinder.limit)
     }
 
     // MARK: - Design tokens
