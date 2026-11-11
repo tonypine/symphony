@@ -1162,8 +1162,12 @@ struct SymphonyDetail: View {
                 if model.destination.presentation == .tabs {
                     DestinationTabs(model: model)
                 }
+                // The page takes the rest of the height, so the tabs stay at the top over a page that isn't full
+                // (an empty state centres in the space under them).
                 page
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
     }
 
