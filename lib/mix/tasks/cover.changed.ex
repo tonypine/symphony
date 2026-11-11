@@ -15,6 +15,8 @@ defmodule Mix.Tasks.Cover.Changed do
 
   The changed files are those since the merge-base with `--base`, uncommitted and untracked ones
   included. Extra `TEST_FILES` run as well: pass them when the tests that cover a module don't name it.
+  `mix.exs`'s `cover_changed` `covering_tests` maps a `lib/` file to the test files that always run
+  when it changes, for a file such as the config schema whose modules the tests reach without naming.
   """
   @shortdoc "Fails when a lib/ module the branch changes is below 100% coverage"
 
@@ -25,7 +27,14 @@ defmodule Mix.Tasks.Cover.Changed do
     {opts, extra_tests} = OptionParser.parse!(args, strict: @switches)
     Mix.Task.run("compile")
 
-    opts = Keyword.merge(opts, extra_tests: extra_tests, ignore_modules: Mix.Project.config()[:test_coverage][:ignore_modules] || [])
+    config = Mix.Project.config()
+
+    opts =
+      Keyword.merge(opts,
+        extra_tests: extra_tests,
+        ignore_modules: config[:test_coverage][:ignore_modules] || [],
+        covering_tests: config[:cover_changed][:covering_tests] || %{}
+      )
 
     # Tests swap in fakes for git, `mix test` and `:cover` here.
     deps = Map.merge(ChangedCoverage.default_deps(), Application.get_env(:symphony_elixir, :cover_changed_deps, %{}))

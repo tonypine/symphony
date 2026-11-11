@@ -9,6 +9,40 @@ defmodule SymphonyElixir.MixProject do
       version: @version,
       elixir: "~> 1.19",
       start_permanent: Mix.env() == :prod,
+      # `mix cover.changed` runs these whenever the file changes: its tests reach the schema's
+      # modules through `Config` without naming them.
+      cover_changed: [
+        covering_tests: %{
+          "lib/symphony_elixir/config/schema.ex" => [
+            "test/symphony_elixir/agent_tools_linear_test.exs",
+            "test/symphony_elixir/claude_code/app_server_test.exs",
+            "test/symphony_elixir/cli_check_test.exs",
+            "test/symphony_elixir/config/embed_dependencies_test.exs",
+            "test/symphony_elixir/config/required_fields_test.exs",
+            "test/symphony_elixir/config_split_test.exs",
+            "test/symphony_elixir/core_test.exs",
+            "test/symphony_elixir/dispatch_config_test.exs",
+            "test/symphony_elixir/dynamic_tool_test.exs",
+            "test/symphony_elixir/learnings_config_test.exs",
+            "test/symphony_elixir/ledger_config_test.exs",
+            "test/symphony_elixir/linear_webhooks_config_test.exs",
+            "test/symphony_elixir/qa_agent/playbook_settings_test.exs",
+            "test/symphony_elixir/qa_agent_test.exs",
+            "test/symphony_elixir/qa_android/emulator_test.exs",
+            "test/symphony_elixir/qa_mode_contract_test.exs",
+            "test/symphony_elixir/qa_policy_test.exs",
+            "test/symphony_elixir/quality_gate_config_test.exs",
+            "test/symphony_elixir/repository_run_profiles_test.exs",
+            "test/symphony_elixir/review_agent_config_test.exs",
+            "test/symphony_elixir/run_profiles_config_test.exs",
+            "test/symphony_elixir/state_machine_test.exs",
+            "test/symphony_elixir/state_provisioning_test.exs",
+            "test/symphony_elixir/sub_issue_wait_test.exs",
+            "test/symphony_elixir/ticket_priority_filter_test.exs",
+            "test/symphony_elixir/workspace_and_config_test.exs"
+          ]
+        }
+      ],
       test_coverage: [
         summary: [
           threshold: 100

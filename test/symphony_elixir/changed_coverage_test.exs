@@ -118,6 +118,17 @@ defmodule SymphonyElixir.ChangedCoverageTest do
            ] = infos()
   end
 
+  test "runs the covering tests of a changed file, and not those of an unchanged one" do
+    covering = %{
+      "lib/symphony_elixir/foo.ex" => ["test/symphony_elixir/foo_reach_test.exs"],
+      "lib/symphony_elixir/other.ex" => ["test/symphony_elixir/other_reach_test.exs"]
+    }
+
+    assert :ok = ChangedCoverage.run([covering_tests: covering], deps())
+
+    assert_received {:run_tests, ["test/symphony_elixir/foo_reach_test.exs", "test/symphony_elixir/bar_test.exs", "test/symphony_elixir/foo_test.exs"]}
+  end
+
   test "checks the unchanged modules a deleted test named, with the tests left that name them" do
     git = fn
       ["merge-base" | _] -> {:ok, "abc123\n"}
