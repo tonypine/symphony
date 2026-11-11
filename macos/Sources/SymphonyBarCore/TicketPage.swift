@@ -230,7 +230,6 @@ public struct TicketPage: Equatable {
     public var facts: [Fact]
     /// S15: the PR and CI card, nil while the watcher doesn't watch the ticket.
     public var watch: PRWatchCard?
-    public var lastMessage: String?
     /// "13:40", or "Oct 6, 13:40" before today: when a done ticket merged.
     public var mergedText: String?
     /// The run's session, for Copy Session ID; nil without a run.
@@ -240,6 +239,8 @@ public struct TicketPage: Equatable {
     public var isRunning: Bool
     /// The step the run now is on and its newest lines, from the ticket read; nil when no run works on it.
     public var runNow: RunNow?
+    /// The run now's tokens so far, from the state; nil when no run works on the ticket.
+    public var runTokens: Int?
     /// Whether Symphony tracks the ticket now, so its transcript endpoint answers.
     public var isTracked: Bool
     /// The phase the ticket is in, as the State fact shows it; nil while Symphony didn't say.
@@ -395,8 +396,8 @@ public struct TicketPage: Equatable {
         }
         sessionID = running?.sessionId ?? history.last?.sessionId ?? records.last?.sessionId
         workspacePath = issue?.workspace?.path ?? running?.workspacePath ?? retry?.workspacePath
-        lastMessage = running?.lastMessage?.nonEmpty ?? retry?.error?.nonEmpty ?? issue?.lastError?.nonEmpty
         isRunning = running != nil
+        runTokens = running?.tokens?.totalTokens
         runNow = sources.issue.flatMap { RunNow.decode(issue: $0) }
         // A ticket only waiting to be dispatched has no run, so no transcript yet.
         isTracked = running != nil || retry != nil || watching != nil
@@ -872,7 +873,6 @@ public struct TicketPage: Equatable {
         let sessionId: String?
         let workspacePath: String?
         let turnCount: Int?
-        let lastMessage: String?
         let startedAt: String?
         let lastEventAt: String?
         let pendingTool: PendingTool?
@@ -965,7 +965,6 @@ public struct TicketPage: Equatable {
         let workspace: Workspace?
         let running: Running?
         let watching: Watching?
-        let lastError: String?
         let verdicts: [Verdict]?
         /// Missing before Symphony paused one repository at a time.
         let repositoryPaused: Bool?

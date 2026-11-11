@@ -261,8 +261,9 @@ final class SymphonyWindowModel: ObservableObject {
     /// Check Now on a ticket: Symphony's watcher reads and decides at once, and answers with its new watch block.
     var onCheckNow: (String) async -> WatchCheck.Result = { _ in .failed("") }
     var onOpenURL: (URL) -> Void = { _ in }
-    /// Opens the transcript window of (identifier, repo key); `newWindow` (⌘-click) opens another beside it.
-    var onOpenTranscript: (_ identifier: String, _ repoKey: String?, _ newWindow: Bool) -> Void = { _, _, _ in }
+    /// Opens the session reader on a run of a ticket; `follow` reads the run again as the page has it now, nil once the
+    /// page shows another ticket.
+    var onReadSession: (_ identifier: String, _ run: RunGroupModel, _ follow: @escaping () -> RunGroupModel?) -> Void = { _, _, _ in }
 
     /// The repos are read again at most this often: Symphony reads each checkout's remote to answer.
     static let reposInterval: TimeInterval = 30

@@ -983,7 +983,7 @@ let scrollPause: useconds_t = 8_000
 // nothing, so rows a page load adds at the end are scrolled to as well, within
 // the helper's time budget.
 let edgeRoundPixels = 3000
-let edgeDeadline: TimeInterval = 15
+let edgeDeadline: TimeInterval = 40
 let edgeStableRounds = 2
 
 enum ScrollRoute: String {

@@ -300,13 +300,17 @@ later journeys point back to it. The mock draws every screen under its ID.
 - **Data:** `/api/v1/:issue_identifier`, `run_history`, `/api/v1/runs`; the brief, earlier decisions and `references`
   from the ticket's `/api/v1/inbox` item.
 
-#### D4 · Run transcript
+#### D4 · Session reader
 
-- **Shows:** events grouped by turn: the agent's messages, each tool call with its result and duration; the selected
-  event in full below, monospaced and selectable; a call that hasn't returned says how long it has been silent.
-- **Actions:** All / Messages / Tools / Errors, search, **Copy Session ID**.
-- **Conventions:** its own window (⌘-click opens another).
-- **Data:** the transcript endpoint that exists today.
+- **Shows:** one run's whole session (TP-1452): the run's header as its Run group shows it, then every step top to
+  bottom with every line the agent wrote in it: what it said, each tool call and what came back, with its time and
+  how long the tool took. A line reads in short; a click, Return or Space expands it in place to its full text,
+  selectable. While the run works, the step it is on takes its newest lines as the ticket page reads them.
+- **Actions:** expand and fold a line.
+- **Conventions:** its own window, one per run, opened from a Run group's More as **Read the whole session**; the
+  ticket page's header and the old Now card no longer open it.
+- **Data:** each step's `transcript` artifact from the ticket's events feed, and the ticket read's
+  `running.recent_lines` for the step the run now is on.
 
 #### D12c · Stop Run: the consequence sheet
 

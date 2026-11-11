@@ -8,7 +8,9 @@ import SymphonyBarCore
 // and ring), Return and Space fold the selected run, and Escape clears the selection. A new event drops in from 12 pt
 // above on a spring and its tint fades over 1.2 s; under Reduce Motion it is there at once. The marks (TP-1451): the
 // line "Since you last looked, at 16:50" above the newest item the person saw, and a small accent dot on every entry
-// and ended run newer than it; the Timeline title (`TimelineTitle`) counts the new events.
+// and ended run newer than it; the Timeline title (`TimelineTitle`) counts the new events. The run in place (TP-1452):
+// the run now is the timeline's first line, unfolded and live, its newest lines coming in as the page reads the ticket;
+// when no run works on the ticket that place holds one line from the situation saying why, so the page keeps its shape.
 
 /// The timeline's keys (§4 Keyboard): the arrows move the selection, Return and Space fold the selected run, Escape
 /// clears the selection.
@@ -37,6 +39,8 @@ public enum TimelineKeys {
 
 public struct TimelineSection: View {
     let model: TimelineModel
+    /// Why nothing runs, shown in the run now's place while no run works on the ticket.
+    let idle: TimelineIdleLine?
     @ObservedObject var transcripts: StepTranscripts
     let clock: (Date) -> String
     @State private var selection: String?
@@ -54,12 +58,13 @@ public struct TimelineSection: View {
     static let markColumn: CGFloat = 18
 
     /// `selection` and `unfoldedRuns` say what is selected and which runs are open to start with; nil opens what
-    /// opens by default. The times are `calendar`'s.
+    /// opens by default. The times are `calendar`'s. `idle` is the line shown in the run now's place when no run works.
     public init(
-        model: TimelineModel, transcripts: StepTranscripts, calendar: Calendar = .current, selection: String? = nil,
-        unfoldedRuns: Set<String>? = nil
+        model: TimelineModel, idle: TimelineIdleLine? = nil, transcripts: StepTranscripts, calendar: Calendar = .current,
+        selection: String? = nil, unfoldedRuns: Set<String>? = nil
     ) {
         self.model = model
+        self.idle = idle
         self.transcripts = transcripts
         clock = TimelineModel.clock(calendar)
         _selection = State(initialValue: selection)
@@ -69,7 +74,11 @@ public struct TimelineSection: View {
     }
 
     public var body: some View {
+        let idle = model.runNow == nil ? idle : nil
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+            if model.isEmpty, let idle {
+                TimelineIdleRow(line: idle)
+            }
             if model.isEmpty {
                 Text(TimelineModel.empty)
                     .font(DesignTokens.TypeStyle.callout.font)
@@ -78,6 +87,9 @@ public struct TimelineSection: View {
             }
             ForEach(model.days) { day in
                 DaySeparator(day: day)
+                if let idle, day.id == model.days.first?.id {
+                    TimelineIdleRow(line: idle)
+                }
                 ForEach(day.items) { item in
                     if let marker = model.marker, marker.before == item.id {
                         SinceLookedLine(text: TicketMarksRead.markerText(marker.lookedAt, clock: clock))
@@ -174,6 +186,34 @@ public struct TimelineTitle: View {
             }
         }
     }
+}
+
+/// Why no run works on the ticket, in the run now's place: the situation's glyph in its tint, "No run now", its word
+/// and what it waits on, as tall as a folded run's line.
+struct TimelineIdleRow: View {
+    let line: TimelineIdleLine
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+            Color.clear.frame(width: TimelineSection.timeColumn, height: 1)
+            Image(systemName: line.kind.symbol)
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(line.kind.tint)
+                .frame(width: TimelineSection.markColumn)
+            Text("\(Text(line.lead).fontWeight(.semibold)) · \(Text(line.word + (line.detail == nil ? "" : ":")).foregroundStyle(line.kind.tint))\(line.detail.map { " " + $0 } ?? "")")
+                .font(DesignTokens.TypeStyle.body.font)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: DesignTokens.Measure.reading, alignment: .leading)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, DesignTokens.Space.s2)
+        .frame(minHeight: Self.height, alignment: .leading)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(line.accessibilityLabel)
+    }
+
+    /// A folded run's line, so the page keeps its height when the run ends.
+    static let height: CGFloat = 36
 }
 
 /// The line where the person last looked: its words in the accent between two thin accent rules.
