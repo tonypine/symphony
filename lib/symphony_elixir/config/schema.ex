@@ -2385,8 +2385,8 @@ defmodule SymphonyElixir.Config.Schema do
       `list` or `object`), which Symphony checks before the step passes.
 
       A machine step's `command` is a shell command, or a list of `{run, when}` entries run in
-      order, each only when its condition holds: `build` runs `swift build` when `macos/` changed
-      and `mix compile` when Elixir files did.
+      order, each only when its condition holds: `build` runs `make guarded-build` (`swift build`
+      with CI's slow type-check guard) when `macos/` changed and `mix compile` when Elixir files did.
       """
       use Ecto.Schema
       import Ecto.Changeset
@@ -2667,8 +2667,9 @@ defmodule SymphonyElixir.Config.Schema do
 
     @doc """
     A kind's default step list, for a `symphony.yml` that doesn't set `phases.<kind>` (decision 2 of
-    TP-1085): `implementation` writes the code (delegated), builds it (`swift build` when `macos/`
-    changed, `mix compile --warnings-as-errors` when Elixir files did), checks it (format, specs and
+    TP-1085): `implementation` writes the code (delegated), builds it (`make guarded-build` when
+    `macos/` changed: `swift build` failing on an expression slow to type-check, as CI's macos build
+    does; `mix compile --warnings-as-errors` when Elixir files did), checks it (format, specs and
     credo on the changed files), tests it (the changed test files and `mix cover.changed`, plus
     `swift test` for the changed targets when `macos/` changed), each returning to `code` on
     failure, then hands off (delegated). `rework` reads the open findings first (`findings`, machine),
@@ -2710,7 +2711,7 @@ defmodule SymphonyElixir.Config.Schema do
           "title" => "Build",
           "mode" => "machine",
           "command" => [
-            %{"run" => "cd macos && swift build", "when" => "macos_changed"},
+            %{"run" => "cd macos && make guarded-build", "when" => "macos_changed"},
             %{"run" => "mix compile --warnings-as-errors", "when" => "elixir_changed"}
           ],
           "timeout_ms" => 900_000,

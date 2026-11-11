@@ -50,7 +50,7 @@ defmodule SymphonyElixir.ConfigPhasesTest do
 
       [_code, build, checks, tests, _handoff] = steps
 
-      assert [%Command{run: "cd macos && swift build", when: "macos_changed"}, %Command{run: "mix compile --warnings-as-errors", when: "elixir_changed"}] =
+      assert [%Command{run: "cd macos && make guarded-build", when: "macos_changed"}, %Command{run: "mix compile --warnings-as-errors", when: "elixir_changed"}] =
                build.command
 
       assert [%Command{run: "mix format --check-formatted && mix specs.check && mix credo --strict" <> _, when: "always"}] = checks.command

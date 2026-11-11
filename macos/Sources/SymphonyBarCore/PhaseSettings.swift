@@ -325,7 +325,7 @@ public enum PhaseDefaults {
                 title: "Build",
                 mode: .machine,
                 commands: [
-                    StepCommand(run: "cd macos && swift build", when: .macosChanged),
+                    StepCommand(run: "cd macos && make guarded-build", when: .macosChanged),
                     StepCommand(run: "mix compile --warnings-as-errors", when: .elixirChanged),
                 ],
                 timeoutMs: 900_000,
