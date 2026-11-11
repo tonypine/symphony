@@ -1,0 +1,31 @@
+{
+  "identifier": "TP-1447",
+  "pull_request": null,
+  "connected": {
+    "epic": {
+      "identifier": "TP-1381",
+      "title": "Phase 3b: the Director redesigned around a ticket's situation",
+      "done": 3,
+      "total": 6,
+      "incomplete": false,
+      "tickets": [
+        { "identifier": "TP-1443", "title": "The Step list and Run group components", "state": "Done", "situation": "done", "current": false },
+        { "identifier": "TP-1444", "title": "The Timeline section", "state": "Done", "situation": "done", "current": false },
+        { "identifier": "TP-1445", "title": "The Lifecycle section and the Phase path", "state": "Done", "situation": "done", "current": false },
+        { "identifier": "TP-1446", "title": "The facts rail's Pull request and Connected panels", "state": "Code Review", "situation": "waiting_for_ci", "current": false },
+        { "identifier": "TP-1447", "title": "The facts rail's Note, Decisions and Details panels", "state": "Todo", "situation": "blocked_by_ticket", "current": true },
+        { "identifier": "TP-1448", "title": "The ticket page's layout on a laptop", "state": "Todo", "situation": "blocked_by_ticket", "current": false }
+      ]
+    },
+    "parent": { "identifier": "TP-1381", "title": "Phase 3b: the Director redesigned around a ticket's situation", "done": 3, "total": 6, "children": ["completed", "completed", "completed", "started", "unstarted", "unstarted"] },
+    "sub_tickets": [],
+    "blocked_by": [
+      { "identifier": "TP-1445", "title": "The Lifecycle section and the Phase path", "state": "Done", "status": "resolved", "resolved_at": "2026-11-09T22:37:00Z" },
+      { "identifier": "TP-1446", "title": "The facts rail's Pull request and Connected panels", "state": "Code Review", "status": "open", "resolved_at": null }
+    ],
+    "blocks": [
+      { "identifier": "TP-1448", "title": "The ticket page's layout on a laptop", "state": "Todo", "situation": "blocked_by_ticket" }
+    ],
+    "related": []
+  }
+}
