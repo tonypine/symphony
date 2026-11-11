@@ -93,7 +93,7 @@ public struct TimelineEntry: Equatable, Identifiable {
     public var durationSeconds: Int?
     /// Every event folded into it, in the order Symphony wrote them.
     public var eventIDs: [String]
-    /// One of its events is newer than the person's last look (the new dot, drawn by the marks of 14/26).
+    /// One of its events is newer than the person's last look: it carries the new dot (TP-1451).
     public var isNew: Bool
 
     public init(
@@ -133,11 +133,18 @@ public struct TimelineEntry: Equatable, Identifiable {
         return rest.isEmpty ? nil : rest
     }
 
-    /// The entry for VoiceOver, as one sentence: "09:30, pause, Paused: deploy freeze, lasted 35 minutes, by Tony".
+    /// The entry for VoiceOver, as one sentence: "09:30, pause, Paused: deploy freeze, lasted 35 minutes, by Tony",
+    /// and ", new since you last looked" when it carries the dot.
     public func accessibilityLabel(time: String) -> String {
         let lasted = durationSeconds.map { (isOngoing ? "for " : "lasted ") + Overview.spokenDuration($0) + (isOngoing ? " so far" : "") }
-        return ([time, kind.word, title, detail, lasted, "by " + actor].compactMap { $0 }).joined(separator: ", ")
+        let new = isNew ? Self.newWords : nil
+        return ([time, kind.word, title, detail, lasted, "by " + actor, new].compactMap { $0 }).joined(separator: ", ")
     }
+
+    /// What the new dot says to VoiceOver.
+    public static let newWords = "new since you last looked"
+    /// The dot's help, under the pointer.
+    public static let newHelp = "New since you last looked"
 }
 
 /// One line of the timeline: an entry, or a run folded into its group.
@@ -170,6 +177,27 @@ public enum TimelineItem: Equatable, Identifiable {
     public var run: RunGroupModel? {
         if case let .run(run, _) = self { return run }
         return nil
+    }
+
+    /// Newer than the person's last look: an entry or a run with a new event.
+    public var isNew: Bool {
+        switch self {
+        case let .entry(entry): entry.isNew
+        case let .run(run, _): run.isNew
+        }
+    }
+}
+
+/// The line "Since you last looked, at 16:50" between what is new and what the person saw (TP-1451).
+public struct TimelineMarker: Equatable {
+    /// When the person last looked: the line's time.
+    public var lookedAt: Date
+    /// The item the line sits above: the newest one the person saw.
+    public var before: String
+
+    public init(lookedAt: Date, before: String) {
+        self.lookedAt = lookedAt
+        self.before = before
     }
 }
 
@@ -205,9 +233,12 @@ public struct TimelineDay: Equatable, Identifiable {
 /// A ticket's timeline: its days, newest first, each with its entries and runs newest first; the run now at the top.
 public struct TimelineModel: Equatable {
     public var days: [TimelineDay]
+    /// Where the person last looked; nil on a first visit, and when nothing is new or nothing was seen.
+    public var marker: TimelineMarker?
 
-    public init(days: [TimelineDay]) {
+    public init(days: [TimelineDay], marker: TimelineMarker? = nil) {
         self.days = days
+        self.marker = marker
     }
 
     /// Every item, top to bottom: the order the arrow keys move the selection in.
@@ -229,25 +260,52 @@ public struct TimelineModel: Equatable {
     // MARK: - Building
 
     /// The history as the timeline: `runNow` and `liveTokens` go to the running run, durations so far count to
-    /// `reference`, and the days and times are `calendar`'s.
+    /// `reference`, and the days and times are `calendar`'s. `lookedAt`, when the person last looked, keeps the feed's
+    /// `new` as the dots and draws the marker; nil, a first visit, draws neither (the feed calls everything new then).
     public static func build(
-        _ history: TicketEventsPayload, runNow: RunNow? = nil, liveTokens: Int? = nil, reference: Date, calendar: Calendar
+        _ history: TicketEventsPayload, runNow: RunNow? = nil, liveTokens: Int? = nil, reference: Date, calendar: Calendar,
+        lookedAt: Date? = nil
     ) -> TimelineModel {
-        let runs = RunGroupModel.groups(history, runNow: runNow, liveTokens: liveTokens, reference: reference)
+        let newRuns: Set<String> = lookedAt == nil ? [] : Set(history.events.filter(\.isNew).compactMap(\.runID))
+        let runs = RunGroupModel.groups(history, runNow: runNow, liveTokens: liveTokens, reference: reference).map { run in
+            var run = run
+            run.isNew = newRuns.contains(run.id)
+            return run
+        }
         let runItems: [TimelineItem] = runs.compactMap { run in
             let header = history.runs[run.id]
             let first = history.events.lazy.filter { $0.runID == run.id }.compactMap { $0.at.flatMap(TicketPage.date) }.first
             guard let at = header?.startedAt.flatMap(TicketPage.date) ?? first else { return nil }
             return .run(run, at: at)
         }
-        let entries = self.entries(history, reference: reference).map(TimelineItem.entry)
+        let entries = self.entries(history, reference: reference).map { entry in
+            var entry = entry
+            if lookedAt == nil { entry.isNew = false }
+            return TimelineItem.entry(entry)
+        }
         // Newest first; the run now on top, whenever it started.
         let ordered = (entries + runItems).enumerated().sorted { lhs, rhs in
             let left = lhs.element, right = rhs.element
             if (left.run?.isLive ?? false) != (right.run?.isLive ?? false) { return left.run?.isLive ?? false }
             return left.at == right.at ? lhs.offset > rhs.offset : left.at > right.at
         }.map(\.element)
-        return TimelineModel(days: days(ordered, reference: reference, calendar: calendar))
+        return TimelineModel(
+            days: days(ordered, reference: reference, calendar: calendar), marker: lookedAt.flatMap { marker(ordered, lookedAt: $0) }
+        )
+    }
+
+    /// The marker above the newest item the person saw, newest first in `items`, when something new is above it. The
+    /// run now, on top whenever it started, doesn't say where the line goes.
+    static func marker(_ items: [TimelineItem], lookedAt: Date) -> TimelineMarker? {
+        var newAbove = false
+        for item in items {
+            if item.isNew {
+                newAbove = true
+            } else if item.run?.isLive != true {
+                return newAbove ? TimelineMarker(lookedAt: lookedAt, before: item.id) : nil
+            }
+        }
+        return nil
     }
 
     /// The items cut into days by the day each happened, newest first. The run now sits in the newest day.

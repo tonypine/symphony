@@ -360,10 +360,20 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         await model?.sendHeldNow()?.value
     }
 
+    /// Whether the ticket page shown sends its look when it is left.
+    var holdsLook: Bool { model?.holdsLook ?? false }
+
+    /// Sends the look of the ticket page shown and waits for Symphony's answer: the app is quitting.
+    func sendLook() async {
+        await model?.leaveTicketPage()?.value
+    }
+
     func windowWillClose(_ notification: Notification) {
         window?.saveFrame(to: frame, after: notification)
         // An Inbox answer held for Undo goes now: its banner closes with the window.
         model?.sendHeldNow()
+        // The ticket page shown is left: its look goes now.
+        model?.leaveTicketPage()
         // The live channel closes with the window; the next window opens its own.
         model?.eventStream.stop()
         window = nil

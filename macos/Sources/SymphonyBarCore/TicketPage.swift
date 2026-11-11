@@ -260,6 +260,8 @@ public struct TicketPage: Equatable {
     public var factsRead: TicketFactsRead?
     /// The facts rail's Note and Details panels, from the ticket read.
     public var detailsRead: TicketDetailsRead?
+    /// When the person last looked and how much is new since, from the ticket read (TP-1451).
+    public var marksRead: TicketMarksRead?
     /// The ticket's history from its events feed, for the Timeline section; nil until the feed is read.
     public var history: TicketEventsPayload?
     /// The moment the page measures against: the state's `generated_at`, else when it was built.
@@ -410,6 +412,7 @@ public struct TicketPage: Equatable {
         lifecycleRead = sources.issue.flatMap(TicketLifecycleRead.decode)
         factsRead = sources.issue.flatMap(TicketFactsRead.decode)
         detailsRead = sources.issue.flatMap(TicketDetailsRead.decode)
+        marksRead = sources.issue.flatMap(TicketMarksRead.decode)
         self.history = sources.events
         self.reference = reference
         // Symphony's one answer to why it doesn't move: the ticket's own payload, else its entry in the state. A

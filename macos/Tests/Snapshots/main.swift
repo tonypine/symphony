@@ -1283,6 +1283,24 @@ func ticketPageRead(_ identifier: String) -> TicketPage {
     )
 }
 
+/// The marks (TP-1451): TP-1244's Timeline as its page draws it, last looked at at 09:30, with its title's count, the
+/// line "Since you last looked, at 09:30" and the dot on the three entries newer than it (the run now says it is live).
+@MainActor
+func timelineSinceLooked() -> some View {
+    let page = ticketPageRead("TP-1244")
+    let model = TimelineModel.build(
+        page.history ?? TicketEventsPayload(), runNow: page.runNow, reference: page.reference, calendar: timelineCalendar,
+        lookedAt: page.marksRead?.lookedAt
+    )
+    return VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+        TimelineTitle(marks: page.marksRead)
+        TimelineSection(model: model, transcripts: StepTranscripts { _ in .unreachable }, calendar: timelineCalendar)
+    }
+    .padding(DesignTokens.Space.s5)
+    .frame(width: 780, alignment: .leading)
+    .background(DesignTokens.Surface.content.color)
+}
+
 /// `identifier`'s decisions, as the facts rail's Decisions panel reads them.
 @MainActor
 func ticketPageDecisions(_ identifier: String) -> [TicketDecision] {
@@ -1431,6 +1449,8 @@ MainActor.assumeIsolated {
         render(timeline(width: 780), scheme, to: "timeline-laptop-\(suffix).png")
         render(timeline(width: 1040), scheme, to: "timeline-desktop-\(suffix).png")
         render(timeline(width: 780, selection: "entry-b2", unfoldedRuns: ["run-2", "run-1"]), scheme, to: "timeline-selected-\(suffix).png")
+        // The marks (TP-1451): the Timeline title's count, the line where you last looked and the dots above it.
+        render(timelineSinceLooked(), scheme, to: "timeline-since-looked-\(suffix).png")
         // The Lifecycle section and the Phase path (TP-1445): a ticket mid-way, one Done and one at 95 % of its cap, at
         // the laptop's and the desktop's column widths; their phase paths in full and compact.
         for name in lifecycleTickets {

@@ -153,7 +153,11 @@ final class SymphonyWindowModel: ObservableObject {
     /// The initiative shown, by issue id; nil shows the first.
     @Published var initiativeSelection: String?
     /// The views and ticket pages shown, for ⌘[ and ⌘] (P10); its current place is what the window shows.
-    @Published var history: NavigationHistory
+    @Published var history: NavigationHistory {
+        didSet { followTicketLook() }
+    }
+    /// The ticket page shown and the look it sends when the person leaves it (TP-1451).
+    var ticketLook = TicketLook()
     /// What the ticket page shown last read from its own endpoints; the state comes from the client's poll.
     @Published var ticketSources = TicketPage.Sources()
     /// What the pull request page shown read from its endpoint, nil while it reads (D15).

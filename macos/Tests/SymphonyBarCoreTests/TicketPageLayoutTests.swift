@@ -61,6 +61,13 @@ final class TicketPageLayoutTests: XCTestCase {
         let timeline = TimelineModel.build(history, runNow: page.runNow, reference: page.reference, calendar: calendar)
         XCTAssertEqual(timeline.items.first?.run?.id, "run-2")
         XCTAssertEqual(timeline.items.first?.run?.isLive, true)
+        // The marks (TP-1451): looked at 09:30, eight events since; the finding, the note and the Rework entry are new.
+        XCTAssertEqual(page.marksRead?.newText, "8 new")
+        let marked = TimelineModel.build(
+            history, runNow: page.runNow, reference: page.reference, calendar: calendar, lookedAt: page.marksRead?.lookedAt
+        )
+        XCTAssertEqual(marked.marker?.before, "entry-v1")
+        XCTAssertEqual(marked.items.filter(\.isNew).map(\.id), ["run-run-2", "entry-m1", "entry-n1", "entry-v2"])
         XCTAssertTrue(DecisionsLine(openQuestions: page.openQuestions, questions: TicketPage.questions(of: page.identifier, in: try inbox())).waiting == false)
     }
 

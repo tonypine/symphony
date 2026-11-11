@@ -301,6 +301,8 @@ public struct RunGroupModel: Equatable, Identifiable {
     /// "claude-opus-5-5 · high", nil when Symphony didn't say.
     public var model: String?
     public var steps: [RunStep]
+    /// One of its events is newer than the person's last look (TP-1451): an ended run's header carries the new dot.
+    public var isNew = false
 
     public init(
         id: String, title: String, state: State, word: String, durationSeconds: Int? = nil, tokens: Int? = nil,
@@ -317,6 +319,9 @@ public struct RunGroupModel: Equatable, Identifiable {
     }
 
     public var isLive: Bool { state == .running }
+
+    /// The new dot on its header: an ended run with something new; the run now says it is live instead.
+    public var showsNewDot: Bool { isNew && !isLive }
 
     /// Unfolded by default while it runs; folded once it ended.
     public var opensByDefault: Bool { isLive }
@@ -346,7 +351,8 @@ public struct RunGroupModel: Equatable, Identifiable {
     /// The header for VoiceOver: "Implementation run 2, running, on Tests, 42 minutes, 1.2M tokens".
     public var accessibilityLabel: String {
         let spoken = durationSeconds.map(Overview.spokenDuration)
-        return ([title, word.lowercased(), whereText, spoken, tokensText, model].compactMap { $0 }).joined(separator: ", ")
+        let new = showsNewDot ? TimelineEntry.newWords : nil
+        return ([title, word.lowercased(), whereText, spoken, tokensText, model, new].compactMap { $0 }).joined(separator: ", ")
     }
 
     /// The fold's button: "Expand Implementation run 1, failed".
