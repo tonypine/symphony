@@ -34,6 +34,9 @@ public struct OverviewState: Equatable {
     public var autoMerge: [AutoMerge]
     /// Tickets that wait with nothing under way and no reason anybody can act on (the PR and CI watcher's).
     public var silentWaits: [WatchState.SilentWait]
+    /// `order`: every open ticket Symphony works by situation, and the candidates in dispatch order (Home's board); nil
+    /// from a Symphony that predates it.
+    public var order: DispatchOrder?
 
     public struct Run: Equatable {
         public var issueID: String?
@@ -239,7 +242,8 @@ public struct OverviewState: Equatable {
         strayProcesses: [StrayProcess] = [],
         blocked: [Blocked] = [],
         autoMerge: [AutoMerge] = [],
-        silentWaits: [WatchState.SilentWait] = []
+        silentWaits: [WatchState.SilentWait] = [],
+        order: DispatchOrder? = nil
     ) {
         self.snapshot = snapshot
         self.generatedAt = generatedAt
@@ -259,6 +263,7 @@ public struct OverviewState: Equatable {
         self.blocked = blocked
         self.autoMerge = autoMerge
         self.silentWaits = silentWaits
+        self.order = order
     }
 
     /// The Overview's state in a state payload, nil when it isn't one (an error, or not JSON).
@@ -338,7 +343,10 @@ public struct OverviewState: Equatable {
                     updatedAt: entry.updatedAt.flatMap(SymphonyState.parseDate)
                 )
             },
-            silentWaits: WatchState.decode(data).silentWaits
+            silentWaits: WatchState.decode(data).silentWaits,
+            order: ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])
+                .flatMap { $0["order"] as? [String: Any] }
+                .flatMap(DispatchOrder.decode(object:))
         )
     }
 

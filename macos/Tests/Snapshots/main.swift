@@ -113,16 +113,6 @@ func watcherDecision() -> some View {
         .background(DesignTokens.Surface.content.color)
 }
 
-/// S17: the Overview with the silent Rework ticket in Needs attention.
-@MainActor
-func silentWaitOverview() -> some View {
-    guard let state = OverviewState.decode(watchState) else { fatalError("The PR and CI fixture's state doesn't read") }
-    let width = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
-    return OverviewBody(overview: Overview(state: state, now: watchNow, timeZone: TimeZone(identifier: "UTC")!), actions: OverviewActions(resume: {}, perform: { _ in }), width: width)
-        .frame(width: width)
-        .background(DesignTokens.Surface.content.color)
-}
-
 // Setup (TP-910): SU3–SU9 from the Setup QA fixture, at its clock.
 let setupAPI = here.appendingPathComponent("../Fixtures/director-app/setup/api/v1").standardizedFileURL
 let setupConfig = here.appendingPathComponent("../Fixtures/director-app/setup/config/symphony.yml").standardizedFileURL
@@ -935,16 +925,18 @@ func menuWaitingSituations() -> some View {
     )
 }
 
-/// The Overview: Needs attention, Now working and Next up, each row with its ticket's line.
+/// Home's board (TP-1453) from `fixture`'s dispatch order, in a window `window` wide less its sidebar: every group
+/// populated (`home`, SHOP-320 picked) or most empty with dispatch paused (`home-quiet`).
 @MainActor
-func overviewSituations() -> some View {
-    let width = DesignTokens.Layout.windowWidth - DesignTokens.Layout.sidebarWidth
-    return OverviewBody(
-        overview: Overview(state: situationsState("tickets"), now: situationsNow, timeZone: TimeZone(identifier: "UTC")!),
-        actions: OverviewActions(resume: {}, perform: { _ in }), width: width
+func homeBoard(_ fixture: String, window: CGFloat, selection: String? = nil) -> some View {
+    let width = window - DesignTokens.Layout.sidebarWidth
+    return HomeBody(
+        board: HomeBoard(state: situationsState(fixture), now: situationsNow, timeZone: TimeZone(identifier: "UTC")!),
+        actions: HomeActions(),
+        selection: selection
     )
-    .frame(width: width)
-    .background(DesignTokens.Surface.content.color)
+    .frame(width: width, alignment: .topLeading)
+    .background(DesignTokens.Surface.window.color)
 }
 
 /// The Action rail (TP-1440): `test/fixtures/api/ticket_moves.json`, the `moves` of a few tickets, by name.
@@ -1457,12 +1449,17 @@ MainActor.assumeIsolated {
         render(situationLines(.full), scheme, to: "situation-line-full-\(suffix).png")
         render(situationLines(.compact), scheme, to: "situation-line-compact-\(suffix).png")
         render(situationLineExtras(), scheme, to: "situation-line-extras-\(suffix).png")
-        // The Situation line everywhere (TP-1441): Tickets, Initiatives, the Inbox's context, the menu bar, the Overview.
+        // The Situation line everywhere (TP-1441): Tickets, Initiatives, the Inbox's context, the menu bar.
         render(ticketsSituations(), scheme, to: "situations-tickets-\(suffix).png")
         render(initiativesSituations(), scheme, to: "situations-initiatives-\(suffix).png")
         render(inboxContextSituations(), scheme, to: "situations-inbox-context-\(suffix).png")
         render(menuWaitingSituations(), scheme, to: "situations-menu-waiting-\(suffix).png")
-        render(overviewSituations(), scheme, to: "situations-overview-\(suffix).png")
+        // Home's board (TP-1453): every group populated and most empty with dispatch paused, at the laptop's and the
+        // desktop's widths.
+        for (window, name) in [(CGFloat(1440), "laptop"), (2560, "desktop")] {
+            render(homeBoard("home", window: window, selection: "SHOP-320"), scheme, to: "home-board-\(name)-\(suffix).png")
+            render(homeBoard("home-quiet", window: window), scheme, to: "home-board-quiet-\(name)-\(suffix).png")
+        }
         // The Action rail (TP-1440): every move allowed, and each refusal with its reason and More open, at the
         // laptop's and the desktop's header widths.
         for (width, name) in [(CGFloat(1180), "laptop"), (2200, "desktop")] {
@@ -1562,9 +1559,8 @@ MainActor.assumeIsolated {
         render(planUnapplied(), scheme, to: "plan-unapplied-\(suffix).png")
         render(planUnasked(), scheme, to: "plan-unasked-\(suffix).png")
         render(planUnaskedApprove(), scheme, to: "plan-unasked-approve-\(suffix).png")
-        // The PR and CI watcher (TP-946): S16 and S17.
+        // The PR and CI watcher (TP-946): S16.
         render(watcherDecision(), scheme, to: "watcher-decision-\(suffix).png")
-        render(silentWaitOverview(), scheme, to: "silent-wait-\(suffix).png")
         // Setup (TP-910): the page with problems, its Details, healthy, no Linear key, and the fix sheets.
         render(setupPage(setupState), scheme, to: "setup-problems-\(suffix).png")
         render(setupPage(SetupPayload(problems: setupState.problems + [setupDrift], checkedAt: setupState.checkedAt),

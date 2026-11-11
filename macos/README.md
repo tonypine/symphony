@@ -1060,7 +1060,7 @@ one, quit the app and run the install script with `SYMPHONY_RELEASE_TAG` set to 
 and, in the toolbar, **Back** and **Forward** (⌘[ and ⌘], between the views and the ticket pages shown), the
 view's title, Symphony's connection state (quiet while Symphony answers; the time of the last update is in its
 help), the scope pop-up and **Refresh** (⌘R). The sidebar lists the views this
-version has, in the order they will keep as more arrive, on ⌘1 to ⌘8: **Inbox**, **Overview**, **Initiatives**, then under
+version has, in the order they will keep as more arrive, on ⌘1 to ⌘8: **Inbox**, **Home**, **Initiatives**, then under
 **Factory**, **Repos** (which opens the Repos window), **Setup** and **Diagnostics**. Its foot shows Symphony's version and
 state. The window opens on the Inbox the first time.
 
@@ -1076,7 +1076,7 @@ state. The window opens on the Inbox the first time.
   unblocks and the decisions already made on it; each row only when known, and no card without one. No review shows
   a time estimate. A review brief Symphony can't read into its parts shows as text. **Open in Linear** opens
   the ticket in Linear: in the Linear desktop app when it is installed (its `linear://` link, without starting the
-  browser), else in the browser. Every Linear link in the app opens the same way. The review's title, or a double-click on a row, opens its ticket page. With nothing left it says "Nothing waits on you." with **Open Overview**, and a scope that hides
+  browser), else in the browser. Every Linear link in the app opens the same way. The review's title, or a double-click on a row, opens its ticket page. With nothing left it says "Nothing waits on you." with **Open Home**, and a scope that hides
   items says how many ("2 more in other repos").
 
   You answer from the review's actions, the default one prominent: a plan has **Approve Plan…**, **Send
@@ -1109,21 +1109,20 @@ state. The window opens on the Inbox the first time.
   Overview's side column shows the active initiatives in an **Initiatives** card; a click opens one here. The
   scope pop-up applies.
 
-- **Overview** answers "is the factory moving, is anything stuck" at a glance. One sentence says how things
-  are: "The factory is flowing.", "2 things need attention.", "Dispatch is paused since 14:03: Deploy
-  freeze." with **Resume Dispatch**, or "The factory is idle.", with a line of context under it. The flow
-  strip counts the tickets at each stage: Queued, Working, Code Review & QA, Waiting on you (the Inbox; the tile
-  opens it), Merging
-  and Shipped today (the tickets Symphony saw reach Done today, UTC); a stage at 0 stays in place in grey.
-  **Needs attention** shows only when something does, most severe and oldest first, one row per ticket or
-  hold: a run with no agent activity for 10 minutes, 3 failed attempts or more, a ticket routed to more than
-  one repo (**Open in Linear**), a usage-limit hold with the time runs resume, a forced ticket gone stale
-  (**Stop Forcing**) and stray processes (**Open Diagnostics**); **Open** opens the ticket page, and a stuck or
-  failing row also has **Stop Run…**. The sidebar's Overview item counts these rows. **Now working** lists the agent runs, QA passes and landings
-  with their phase, turn, last activity, running time and tokens, and **Next up** the tickets waiting for a
-  slot or a retry. On the side, **Today** has the day's tokens against the daily budget and each provider
-  limit Symphony reports, accent below 75%, orange from 75% and red from 95%, and **Repos** says in one line
-  whether each repo is healthy. Return or a double-click on a ticket row opens its ticket page.
+- **Home** is one board of every open ticket Symphony works, read from Symphony's dispatch order (`order` on
+  `/api/v1/state`). The tickets are grouped by situation in the order the Director acts on them: Waiting on you,
+  Retrying, Blocked by a ticket, Paused by a rule, Waiting for CI, Waiting for a build, Waiting for a slot and
+  Working (Shipped and Cancelled join only with a ticket in them). Each group is a card whose heading has its
+  glyph, the count of its rows and a hint ("oldest 30 min", "longest 22 min"); a click on the heading folds it. A
+  group with nothing in it is one quiet heading that says "None right now". Each row is the ticket, its compact
+  situation line with its age, the Forced chip when forced and, for a ticket in line or held out of it, why it is
+  or is not next ("Next: a slot is free", "2nd: behind SHOP-325", "Not next: Waiting for BIL-206 to finish").
+  Within a group the tickets are in the order the dispatcher would start them. Every count is a count of the rows
+  the board shows. A click on a row, or Return on the picked one, opens its ticket page; the arrow keys move
+  between rows across groups. While dispatch is paused, "Dispatch is paused since 14:03: Deploy freeze." heads
+  it, with one line per reason and **Resume Dispatch**. The sidebar's Home item counts what needs attention (a
+  run with no agent activity for 10 minutes, 3 failed attempts or more, a ticket routed to more than one repo, a
+  usage-limit hold, a stale forced ticket, stray processes), which also notifies.
 - A **ticket page** tells one ticket's story: its badges, repo and initiative, what it is doing ("Waiting on a
   retry at 14:32", "In review · QA pass running"), **Now** (the run and its model and effort, running time,
   turn, last activity, the tool call it waits on, its workspace with **Reveal**, and its tokens against the
@@ -1140,11 +1139,11 @@ state. The window opens on the Inbox the first time.
   in full below, monospaced and selectable, and a call that hasn't returned says how long it has been silent.
 - **Stop Run…** opens a sheet first. It says what a stop does: it ends the agent and removes its workspace,
   with any work not pushed, and the ticket keeps its Linear state, so Symphony starts it again on its next
-  poll. **Also move to Backlog** (on from Needs attention, off from the ticket page) then moves the ticket to
+  poll. **Also move to Backlog** (off from the ticket page) then moves the ticket to
   Backlog with your note as a comment (`POST /api/v1/control/stop`, then `backlog`). A failing ticket between
   attempts has no run to stop, so only the Backlog move is left.
 - The **scope** pop-up shows all repos or one of the repos Symphony has tickets in. It filters every count
-  and row of the Overview (the sidebar badge still counts every repo), and the app remembers it across
+  and row of Home (the sidebar badge still counts every repo), and the app remembers it across
   relaunches.
 
 - **Audit** (⌘8, under Records) lists the local audit records newest first (`/api/v1/audit`, the newest 1,000
@@ -1351,8 +1350,10 @@ Ten more variables, read only in QA mode:
   Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit
   hold; the stuck ticket, SHOP-305, has a failed run 1, its own endpoint and its transcript, SHOP-288 is a done
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
-  `paused` (paused for "Deploy freeze") and `idle`, of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done),
-  `inbox-empty`, `inbox-unasked-choices` (`inbox` with four choices SHOP-330's plan run could not ask, so its page and its Approve sheet carry the warning), `inbox-lane-yielded` (`inbox` with DOCS-20 holding no lane because its open sub-tickets are below the priority filter, so the Overview's Initiatives card says why) and `inbox-decision` (TP-892's decision, with three options, with every ticket and pull request it mentions resolved
+  `paused` (paused for "Deploy freeze") and `idle`, of Home's board: `home` (every situation group populated,
+  sixteen tickets with their dispatch order and reasons) and `home-quiet` (one ticket working, every other group
+  empty, dispatch paused for "Deploy freeze"), of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done),
+  `inbox-empty`, `inbox-unasked-choices` (`inbox` with four choices SHOP-330's plan run could not ask, so its page and its Approve sheet carry the warning), `inbox-lane-yielded` (`inbox` with DOCS-20 holding no lane because its open sub-tickets are below the priority filter, so Initiatives says why) and `inbox-decision` (TP-892's decision, with three options, with every ticket and pull request it mentions resolved
   and where TP-892 sits: 4 of its parent's 7 sub-tickets done, its pull request, two connected tickets and one
   earlier decision; TP-891's endpoint, watched in Code Review with its parent, a blocker, TP-892, and a ticket it
   blocks; the plan TP-923, whose brief mentions TP-947; TP-895's pull request, TP-896's clarify and TP-897's

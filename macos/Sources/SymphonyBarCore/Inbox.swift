@@ -770,7 +770,7 @@ public struct InboxList: Equatable {
     }
 
     public static let emptyTitle = "Nothing waits on you."
-    public static let openOverviewTitle = "Open Overview"
+    public static let openOverviewTitle = "Open Home"
 
     public var groups: [Group]
     /// Items the scope hides; the sidebar badge still counts them.
