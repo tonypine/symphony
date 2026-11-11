@@ -1,0 +1,16 @@
+{
+  "issue_identifier": "TP-1376",
+  "repo_key": "symphony",
+  "status": "running",
+  "running": {
+    "current_step": {"id": "tests", "title": "Tests", "mode": "delegated", "started_at": "2026-10-07T11:57:10Z"},
+    "recent_lines": [
+      {"kind": "say", "text": "Running the orchestrator tests that failed in run 1.", "at": "2026-10-07T11:57:20Z"},
+      {"kind": "tool", "text": "Bash", "at": "2026-10-07T11:57:22Z"},
+      {"kind": "result", "text": "12 tests, 0 failures", "at": "2026-10-07T12:01:40Z", "duration_ms": 258000},
+      {"kind": "unknown", "text": "skipped"},
+      {"kind": "say", "text": "Both retry tests pass now. Checking the coverage of the changed modules before", "at": "2026-10-07T12:01:52Z"}
+    ],
+    "tokens": {"total_tokens": 920000}
+  }
+}
