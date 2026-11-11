@@ -96,6 +96,7 @@ final class TicketMarksTests: XCTestCase {
 
     /// The fixture server: the page read three times while it is open sends nothing; leaving it sends the look once,
     /// and the next visit's read, as Symphony serves it after the look, has nothing new.
+    @MainActor
     func testWithTheFixtureServerTheLookIsSentOnceAndTheCountFollowsTheRead() async throws {
         let root = uniqueTemporaryDirectory("ticket-marks")
         defer { try? FileManager.default.removeItem(at: root) }
