@@ -34,6 +34,9 @@ struct HomeBody: View {
     /// The groups folded by a click on their heading.
     @State private var folded: Set<DesignTokens.SituationKind> = []
     @FocusState private var focus: String?
+    /// Set by the first key pressed on the board: a group heading draws its focus ring only for keyboard focus, never
+    /// for the focus the window hands it at launch.
+    @State private var keyboardFocus = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// `selection` is the row drawn picked at first, for a snapshot.
@@ -59,6 +62,7 @@ struct HomeBody: View {
                 BoardGroup(
                     group: group,
                     folded: folded.contains(group.kind),
+                    keyboardFocus: keyboardFocus,
                     reference: board.reference,
                     toggle: { toggle(group.kind) }
                 ) { row in
@@ -83,6 +87,10 @@ struct HomeBody: View {
         }
         .padding(DesignTokens.Space.s5)
         .frame(maxWidth: .infinity, alignment: .topLeading)
+        .onKeyPress(phases: .down) { _ in
+            keyboardFocus = true
+            return .ignored
+        }
         .onChange(of: focus) { _, id in
             if let id { selection = id }
         }
@@ -144,9 +152,11 @@ private struct PauseNotice: View {
 private struct BoardGroup<Row: View>: View {
     let group: HomeBoard.Group
     let folded: Bool
+    let keyboardFocus: Bool
     let reference: Date
     let toggle: () -> Void
     @ViewBuilder let row: (HomeBoard.Row) -> Row
+    @FocusState private var headingFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous) }
@@ -163,6 +173,8 @@ private struct BoardGroup<Row: View>: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(GroupHeadingStyle())
+                .focusEffectDisabled()
+                .focused($headingFocused)
                 .accessibilityLabel(group.accessibilityLabel)
                 .accessibilityValue(folded ? "Folded" : "Open")
                 .accessibilityHint(folded ? "Shows its tickets" : "Hides its tickets")
@@ -184,6 +196,8 @@ private struct BoardGroup<Row: View>: View {
         }
         .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color))
         .clipShape(shape)
+        // The heading spans the card's top edge, so its keyboard focus rings the card, outside its rounded corners.
+        .focusRing(headingFocused && keyboardFocus, shape)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(group.accessibilityLabel)
     }
