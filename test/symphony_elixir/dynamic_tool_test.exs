@@ -955,6 +955,17 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
       response = DynamicTool.execute("qa_open_status_menu", %{"pid" => 1, "path" => "0"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
       assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
 
+      response =
+        DynamicTool.execute("qa_sample", %{"pid" => 1, "page" => "Ticket", "seconds" => 5, "name" => "hang"},
+          issue: %Issue{id: "issue-current"},
+          tool_scope: :qa
+        )
+
+      assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
+
+      response = DynamicTool.execute("qa_sample", %{"pid" => 1, "path" => "0"}, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
+      assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
+
       assert %{"release_pair" => %{"type" => "boolean"}} = launch["inputSchema"]["properties"]
       assert %{"fresh_root" => %{"type" => "boolean"}, "root" => %{"type" => "integer", "minimum" => 1}} = launch["inputSchema"]["properties"]
 

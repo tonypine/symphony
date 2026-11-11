@@ -2019,7 +2019,10 @@ The QA agent:
   points, or the screen's usable area when that is smaller, through the Accessibility grant alone, and
   `qa_check_app` reports whether the app still runs, answers an accessibility request within 10
   seconds, and has written a crash report since launch, naming the page the agent passes and that
-  window size. A pass whose resize met a usable screen area under 1400×900 points MUST NOT be
+  window size. `qa_sample` runs `/usr/bin/sample` on the QA host against a running app the driver
+  launched, for 1 to 10 seconds, saves the whole report as evidence and returns the main thread's
+  heaviest stack from its call graph, so a hang finding names its cause; it MUST answer `qa_no_app`
+  when that app is not running. A pass whose resize met a usable screen area under 1400×900 points MUST NOT be
   reported `pass`: its `pass` becomes `blocked`, and that pass's `blocked` goes to a person. A pass
   with no `qa_resize_window` call MUST NOT be reported `pass` either: its wide pass did not run, so
   its `pass` becomes `inconclusive` with that reason (an epic review's becomes `blocked`). A missing
