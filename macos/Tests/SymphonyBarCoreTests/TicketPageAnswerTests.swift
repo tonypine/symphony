@@ -19,6 +19,7 @@ final class TicketPageAnswerTests: XCTestCase {
 
     override func setUpWithError() throws {
         root = uniqueTemporaryDirectory("ticket-page-answer")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         fixtures = APIFixtures(directory: Self.director, requestLog: root.appendingPathComponent("api-requests.jsonl"))
     }
 
