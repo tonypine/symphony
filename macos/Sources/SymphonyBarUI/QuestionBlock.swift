@@ -90,7 +90,7 @@ public struct QuestionBlock<Evidence: View>: View {
                     )
                     if writeInPicked {
                         WriteInField(initialText: picks.writeIns[index] ?? "", commit: writeIn, focused: $writeInFocused)
-                            .id(WriteInField.scrollID)
+                            .id(WriteInField.scrollID(decision: index))
                             .transition(.opacity)
                     }
                 }
@@ -444,6 +444,12 @@ public struct WriteInField: View {
     /// The field's id in the review's scroll view, which scrolls to it once it is picked.
     public static let scrollID = "write-in"
 
+    /// The field's id under decision `index`: the Inbox's one decision keeps `scrollID`, and each later decision of a
+    /// ticket page's sheet has its own, so the sheet scrolls to the field just picked.
+    public static func scrollID(decision index: Int) -> String {
+        index == 0 ? scrollID : "\(scrollID)-\(index)"
+    }
+
     public init(initialText: String, commit: @escaping (String) -> Void, focused: FocusState<Bool>.Binding) {
         _text = State(initialValue: initialText)
         self.commit = commit
@@ -678,6 +684,11 @@ public struct DecisionSheet: View {
         self.failure = failure
     }
 
+    /// The Questions whose own-words card is picked.
+    private var writeInsPicked: Set<Int> {
+        Set(questions.indices.filter { questions[$0].isWriteIn(picks, decision: $0) })
+    }
+
     /// Send under the Questions: the picks' answer, off with `sendOff` when it is set.
     private var sheetSend: QuestionSend {
         var send = QuestionSend(questions: questions, picks: picks)
@@ -693,7 +704,19 @@ public struct DecisionSheet: View {
             if offscreenSnapshot {
                 questionList.frame(minHeight: 0, maxHeight: .infinity, alignment: .top).clipped().layoutPriority(-1)
             } else {
-                ScrollView { questionList }
+                ScrollView {
+                    ScrollViewReader { proxy in
+                        questionList
+                            // Picking an own-words card scrolls its field into view above the footer, once it is laid
+                            // out, so the Director sees what they type (TP-1450's QA found it under Send).
+                            .onChange(of: writeInsPicked) { before, after in
+                                guard let index = after.subtracting(before).min() else { return }
+                                DispatchQueue.main.async {
+                                    withAnimation { proxy.scrollTo(WriteInField.scrollID(decision: index), anchor: .bottom) }
+                                }
+                            }
+                    }
+                }
             }
             Divider()
             QuestionSendArea(send: sheetSend, failure: failure, action: send)

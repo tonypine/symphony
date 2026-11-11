@@ -52,4 +52,12 @@ final class QuestionKeysTests: XCTestCase {
         XCTAssertNil(try option("22"))
         XCTAssertNil(try option(""))
     }
+
+    /// Each decision's own-words field has its own scroll id, so the ticket page's sheet scrolls to the one just picked;
+    /// the Inbox's one decision keeps the id it scrolls to (TP-1450's QA found the field under the sheet's footer).
+    func testEachDecisionsOwnWordsFieldHasItsOwnScrollID() {
+        XCTAssertEqual(WriteInField.scrollID(decision: 0), WriteInField.scrollID)
+        XCTAssertEqual(WriteInField.scrollID(decision: 2), "write-in-2")
+        XCTAssertNotEqual(WriteInField.scrollID(decision: 1), WriteInField.scrollID(decision: 2))
+    }
 }
