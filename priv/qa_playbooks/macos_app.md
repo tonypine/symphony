@@ -77,6 +77,10 @@ worktree's configured app and on apps you launched:
   the app runs on). Pass the `page` on screen: each entry of `problems` names it and the window
   size `qa_resize_window` set. `healthy` is true when there are no problems. It works after the
   app has exited.
+- `qa_sample`: samples the app's threads on the QA VM for `seconds` (1 to 10, default 3) and
+  returns the main thread's heaviest stack (`stack`, outermost frame first, each with its sample
+  count), with the whole report saved to `qa-evidence/<name>.txt`. Pass the `page` on screen. It
+  answers `qa_no_app` when the app is not running.
 - `qa_screenshot`: saves the app's windows to `qa-evidence/<name>.png`. Each name can be used
   once; it never replaces an existing file. Pass `window_id` to save one window, such as the menu
   `qa_open_status_menu` opened.
@@ -763,5 +767,12 @@ Verdicts for this playbook:
   for `qa_helper_unavailable`, and for `qa_worker_missing`, `qa_worker_same_machine`,
   `qa_worker_unsafe` and `qa_worker_unreachable`, which mean there is no QA VM Symphony may use:
   never try to build or launch the app another way.
+- A hang is diagnosed from its stack, never bisected blind. Whenever `qa_ax_tree`, `qa_scroll` or
+  `qa_key` times out (`qa_helper_timeout`) while `qa_check_app` says the app is `healthy`, or
+  `qa_check_app` says it is hung, call `qa_sample` at once with the `page` on screen and
+  `seconds: 5`, while the app is still stuck. In the failing step's `details` and the finding,
+  quote the `stack` it returned (the frames from the app's own code down to where the main thread
+  waits or spins) and the page, and attach the report it saved with `linear_attach_file`. When
+  `qa_sample` answers `qa_no_app`, the app exited: report it as below.
 - The app crashing or exiting (`qa_app_exited`) during the walkthrough or the wide pass is a
   failing step; quote its last output and the `qa_check_app` problems.

@@ -94,6 +94,15 @@ and Dialyzer versions installed on the runner, then the hash of `mix.lock`, `mix
 builds the PLTs afresh. If Dialyzer still rejects a restored PLT as old, the job deletes the PLTs
 and runs `mix dialyzer` once more, so a stale cache costs one slow run, not a red check.
 
+CI installs Ubuntu packages (the coverage partitions' `bubblewrap` and `socat`) through
+`scripts/ci/apt-install.sh <packages>`, never a bare `apt-get`. It retries `apt-get update` and
+`apt-get install -y` together up to 5 times, 10 seconds apart, printing each attempt, and fails only
+after the last one, so a mirror or DNS outage of a few minutes is absorbed inside the step instead
+of turning the check red and sending the ticket to CI Fix. The retry lives in the script, not the
+workflow: add a package or a new apt step by calling the script. Its test,
+`sh scripts/ci/apt-install-test.sh`, runs it against a stub `apt-get` (first-try success, success on
+the third try, failure after five) and runs in the coverage job before the install.
+
 Use the fast local gate while iterating:
 
 ```bash
