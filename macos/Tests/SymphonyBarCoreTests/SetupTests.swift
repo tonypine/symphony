@@ -671,19 +671,17 @@ final class SetupTests: XCTestCase {
     func testOverviewHasOneRowForSetupErrors() throws {
         let data = try Data(contentsOf: Self.fixture().appendingPathComponent("state.json"))
         let state = try XCTUnwrap(OverviewState.decode(data))
-        let overview = Overview(state: state, now: now)
-        let row = try XCTUnwrap(overview.problems.first { $0.id == "setup" })
+        let row = try XCTUnwrap(Overview.problems(state, now: now).first { $0.id == "setup" })
         XCTAssertEqual(row.sentence, "Setup has 1 error.")
         XCTAssertEqual(row.fixes, [.openSetup])
         XCTAssertEqual(row.severity, .problem)
         XCTAssertEqual(row.kinds, [.setup])
         XCTAssertNil(row.ticketIdentifier)
         XCTAssertEqual(Overview.Fix.openSetup.title, "Open Setup")
-        XCTAssertEqual(overview.sentence, "1 thing needs attention.")
 
         var healthy = state
         healthy.snapshot.setup = SetupPayload(problems: [problem("future:x")], checkedAt: now)
-        XCTAssertFalse(Overview(state: healthy, now: now).problems.contains { $0.id == "setup" })
+        XCTAssertFalse(Overview.problems(healthy, now: now).contains { $0.id == "setup" })
     }
 
     // MARK: - Sidebar

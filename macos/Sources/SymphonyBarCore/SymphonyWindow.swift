@@ -2,12 +2,13 @@ import Foundation
 
 /// A view of the Symphony window, in sidebar order (`docs/design/director-app-screens.md` §0).
 public enum SymphonyView: String, CaseIterable, Equatable {
+    /// `overview` is Home (TP-1453); the raw value stays, so the view the window remembers still opens.
     case inbox, overview, initiatives, tickets, quality, usage, shipped, audit, repos, setup, diagnostics
 
     public var title: String {
         switch self {
         case .inbox: "Inbox"
-        case .overview: "Overview"
+        case .overview: "Home"
         case .initiatives: "Initiatives"
         case .tickets: "Tickets"
         case .quality: "Quality"
@@ -24,7 +25,7 @@ public enum SymphonyView: String, CaseIterable, Equatable {
     public var subtitle: String {
         switch self {
         case .inbox: "What waits on you"
-        case .overview: "The factory at a glance"
+        case .overview: "Every open ticket, by where it stands"
         case .initiatives: "Plans and their sub-tickets"
         case .tickets: "Every ticket Symphony sees"
         case .quality: "How far to trust the crew"
@@ -41,7 +42,7 @@ public enum SymphonyView: String, CaseIterable, Equatable {
     public var symbol: String {
         switch self {
         case .inbox: "tray.full"
-        case .overview: "gauge.with.needle"
+        case .overview: "house"
         case .initiatives: "flag.pattern.checkered"
         case .tickets: "list.bullet.rectangle"
         case .quality: "checkmark.seal"

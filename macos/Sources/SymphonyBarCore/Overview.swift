@@ -69,64 +69,9 @@ public enum OverviewScope: Equatable, Hashable {
     }
 }
 
-/// The Overview (D1): a sentence, the flow strip, what needs attention, what is working and what is next, and
-/// today's spend, all from one state payload. Pure, so each of the four states is tested against its fixture.
-public struct Overview: Equatable {
-    /// Which of the four states the sentence says (P1).
-    public enum Mood: Equatable {
-        case flowing, attention, paused, idle
-    }
-
-    /// A stage of the flow strip (P2), left to right.
-    public enum StageKind: String, CaseIterable, Equatable {
-        case queued, working, review, waitingOnYou, merging, shippedToday
-
-        public var title: String {
-            switch self {
-            case .queued: "Queued"
-            case .working: "Working"
-            case .review: "Code Review & QA"
-            case .waitingOnYou: "Waiting on you"
-            case .merging: "Merging"
-            case .shippedToday: "Shipped today"
-            }
-        }
-
-        /// Where a tile leads (J2 step 5).
-        public enum Destination: Equatable {
-            case inbox, shipped
-            case tickets(TicketList.Filter)
-        }
-
-        /// Waiting on you opens the Inbox, Shipped today opens Shipped (D9), the others open Tickets filtered to their
-        /// stage.
-        public var destination: Destination {
-            switch self {
-            case .waitingOnYou: .inbox
-            case .shippedToday: .shipped
-            default: TicketList.Filter(stage: self).map(Destination.tickets) ?? .inbox
-            }
-        }
-    }
-
-    /// A stat tile (C5): a count, its label and one line of context.
-    public struct Stage: Equatable, Identifiable {
-        public var kind: StageKind
-        public var count: Int
-        public var context: String
-        /// The context as VoiceOver reads it, durations in words.
-        public var spokenContext: String
-
-        public var id: StageKind { kind }
-        public var title: String { kind.title }
-        /// A stage at 0 keeps its place in tertiary text.
-        public var isZero: Bool { count == 0 }
-        /// Only Waiting on you carries a status tint, and only while something waits.
-        public var isTinted: Bool { kind == .waitingOnYou && count > 0 }
-        /// One element for VoiceOver: "Waiting on you, 4, oldest 3 hours".
-        public var accessibilityLabel: String { "\(title), \(count), \(spokenContext)" }
-    }
-
+/// What needs attention across every repo (what notifies, D14, and the sidebar's count), today's meters, and the
+/// words and numbers every page writes durations and tokens in. Home's board is `HomeBoard`.
+public enum Overview {
     /// A button at the end of a Needs attention row.
     public enum Fix: Equatable, Hashable {
         /// Opens the ticket's page (D3).
@@ -219,51 +164,6 @@ public struct Overview: Equatable {
         }
     }
 
-    /// A row of Now working (C8): an agent run, a QA pass or a landing.
-    public struct WorkingRow: Equatable, Identifiable {
-        public enum Kind: Equatable {
-            case agent, qaPass, landing
-        }
-
-        public var id: String
-        public var kind: Kind
-        public var identifier: String
-        public var title: String?
-        public var repoKey: String?
-        /// "Implementation", "QA pass", "Landing".
-        public var phase: String
-        public var turn: Int?
-        /// "12 s ago", from the run's last agent event.
-        public var lastActivity: String?
-        public var lastMessage: String?
-        public var runningTime: String?
-        public var tokens: String?
-        public var url: URL?
-        /// No agent event for `stuckAfter`.
-        public var isStuck: Bool
-        /// Where its ticket stands, as every page says it; nil when the state holds none for it.
-        public var situation: Situation?
-
-        /// The second line: "Implementation · turn 7 · last activity 12 s ago".
-        public var detail: String {
-            var parts = [phase]
-            if let turn, turn > 0 { parts.append("turn \(turn)") }
-            if let lastActivity { parts.append("last activity \(lastActivity)") }
-            return parts.joined(separator: " · ")
-        }
-    }
-
-    /// A row of Next up: a queued ticket and why it waits.
-    public struct QueuedRow: Equatable, Identifiable {
-        public var id: String { identifier }
-        public var identifier: String
-        public var title: String?
-        public var repoKey: String?
-        public var reason: String
-        /// Where it stands, as every page says it; the row shows `reason` when the state holds none for it.
-        public var situation: Situation?
-    }
-
     /// A meter of Today (C11): a ratio against a limit.
     public struct Meter: Equatable, Identifiable {
         /// accent below 75%, `status.you` from 75%, `status.problem` from 95%.
@@ -292,233 +192,20 @@ public struct Overview: Equatable {
     /// DD7: a run with no agent event for this long counts as stuck, as in the Repos window.
     public static let stuckAfter = RepoHealth.stuckAfter
     public static let failedAttemptsLimit = 3
-    public static let nextUpLimit = 5
     public static let nearLimit = 0.75
     public static let atLimit = 0.95
 
     public static let resumeTitle = "Resume Dispatch"
-    public static let allCaughtUp = "All caught up."
-    public static let showShippedTitle = "Show Shipped"
-    public static let nowWorkingTitle = "Now working"
-    public static let nextUpTitle = "Next up"
-    public static let needsAttentionTitle = "Needs attention"
-    public static let todayTitle = "Today"
-    public static let reposTitle = "Repos"
 
-    public var mood: Mood
-    public var sentence: String
-    public var context: String
-    public var stages: [Stage]
-    public var problems: [Problem]
-    public var working: [WorkingRow]
-    public var nextUp: [QueuedRow]
-    public var meters: [Meter]
-    /// Repos health in one line, nil until Symphony listed its repos.
-    public var reposLine: String?
-    /// An update is under way (S3a, S3b): it resumes the dispatch it paused, or Cancel Update does.
-    public var updating: Bool
-    /// Under the sentence: while dispatch is paused, one line per reason of Symphony's pause ("Paused by you since
-    /// 09:12", "Updating to v0.0.1.700"), none from a Symphony that predates reasons, whose sentence names its one
-    /// reason; then "All repositories paused" when every repository is.
-    public var pauseLines: [String]
-    /// Symphony's clock when it took the state, which the rows' situation ages are measured against.
-    public var reference: Date
-
-    /// The sentence offers Resume Dispatch while dispatch is paused, unless an update holds it.
-    public var showsResume: Bool { mood == .paused && !updating }
-    /// The main column says "All caught up." while the factory is idle.
-    public var showsAllCaughtUp: Bool { mood == .idle }
-
-    // MARK: - Building
-
-    /// The Overview of `state` under `scope`. Ages are measured against Symphony's own clock (`generated_at`),
-    /// `now` only when the state has none. Clock times are in `timeZone`. `updating` is whether an update is under way.
-    public init(
-        state: OverviewState,
-        scope: OverviewScope = .all,
-        repos: ReposPoll? = nil,
-        updating: Bool = false,
-        now: Date,
-        timeZone: TimeZone = .current
-    ) {
-        self.updating = updating
-        let reference = state.generatedAt ?? now
-        self.reference = reference
-        let index = TicketIndex(state)
-        let paused = state.snapshot.pause != nil
-
-        // The flow strip's tickets, by stage, as identifiers.
-        let landingIDs = Set(state.landing)
-        let scopedRuns = state.running.filter { scope.includes($0.repoKey) }
-        let isLanding: (OverviewState.Run) -> Bool = { run in
-            run.issueID.map(landingIDs.contains) == true || Self.isState(run.state, "Merging")
-        }
-        let agentRuns = scopedRuns.filter { !isLanding($0) }
-        let landingRuns = scopedRuns.filter(isLanding)
-        let runningIDs = Set(state.running.map(\.identifier))
-
-        let waiting = state.slotWaiting.filter { scope.includes($0.repoKey) }
-        let queuedWaiting = waiting.filter { !Self.isState($0.state, "Merging") && !runningIDs.contains($0.identifier) }
-        let queuedRetries = state.retrying.filter { scope.includes($0.repoKey) && !runningIDs.contains($0.identifier) }
-        let queued = Self.unique(queuedWaiting.map(\.identifier) + queuedRetries.map(\.identifier))
-
-        let working = Self.unique(agentRuns.map(\.identifier))
-
-        let qaIdentifiers = (state.qaRunning + state.qaQueued).compactMap { id -> String? in
-            guard scope.includes(index.repoKey(issueID: id)) else { return nil }
-            return index.identifier(issueID: id) ?? id
-        }
-        // The Inbox's items, as the state lists them: the same count as the sidebar badge and the menu (US1).
-        let waitingOnYou = state.snapshot.waitingOnYou.filter { scope.includes($0.repoKey) }
-
-        // A ticket a decision holds in Code Review or QA waits on you, not on the review: it counts there only,
-        // as in Tickets.
-        let waitingIdentifiers = Set(waitingOnYou.map(\.identifier))
-        let review = Self.unique(
-            state.watching.filter { (Self.isState($0.state, "Code Review") || Self.isState($0.state, "QA")) && scope.includes($0.repoKey) }
-                .map(\.identifier)
-                + qaIdentifiers
-        ).filter { !waitingIdentifiers.contains($0) }
-
-        let merging = Self.unique(
-            state.watching.filter { Self.isState($0.state, "Merging") && scope.includes($0.repoKey) }.map(\.identifier)
-                + landingRuns.map(\.identifier)
-                + waiting.filter { Self.isState($0.state, "Merging") }.map(\.identifier)
-        )
-
-        let shipped = state.shippedToday.filter { scope.includes($0.repoKey) }
-        let shippedCount = scope == .all ? (state.shippedTodayCount ?? shipped.count) : shipped.count
-
-        let oldestWaitingOnYou = waitingOnYou.compactMap(\.waitingSeconds).max()
-        let longestRun = agentRuns.compactMap { $0.startedAt.map { Int(reference.timeIntervalSince($0)) } }.max()
-        let scopedQA = state.qaRunning.filter { scope.includes(index.repoKey(issueID: $0)) }
-
-        stages = [
-            Stage(
-                kind: .queued,
-                count: queued.count,
-                context: queued.isEmpty ? "Nothing queued" : paused ? "held by the pause" : "next: \(queued[0])"
-            ),
-            Stage(
-                kind: .working,
-                count: working.count,
-                context: working.isEmpty ? "No runs" : paused ? "finishing" : longestRun.map { "longest \(Self.duration($0))" } ?? "running",
-                spoken: working.isEmpty || paused ? nil : longestRun.map { "longest \(Self.spokenDuration($0))" }
-            ),
-            Stage(
-                kind: .review,
-                count: review.count,
-                context: review.isEmpty ? "None" : scopedQA.isEmpty ? "waiting on checks"
-                    : scopedQA.count == 1 ? "1 QA pass running" : "\(scopedQA.count) QA passes running"
-            ),
-            Stage(
-                kind: .waitingOnYou,
-                count: waitingOnYou.count,
-                context: waitingOnYou.isEmpty ? "Nothing waits on you"
-                    : oldestWaitingOnYou.map { "oldest \(Self.duration($0))" } ?? "in the Inbox",
-                spoken: waitingOnYou.isEmpty ? nil : oldestWaitingOnYou.map { "oldest \(Self.spokenDuration($0))" }
-            ),
-            Stage(
-                kind: .merging,
-                count: merging.count,
-                context: merging.isEmpty ? "None" : landingRuns.isEmpty ? "waiting on CI" : "\(landingRuns.count) landing"
-            ),
-            Stage(
-                kind: .shippedToday,
-                count: shippedCount,
-                context: shippedCount == 0 ? "None yet" : shipped.first.map { "latest \($0.identifier)" } ?? "today"
-            ),
-        ]
-
-        problems = Self.problems(state: state, scope: scope, index: index, reference: reference, timeZone: timeZone)
-
-        // The sentence and its context line (P1).
-        let inProgress = Self.unique(queued + working + review + waitingOnYou.map(\.identifier) + merging)
-        pauseLines = []
-        if let pause = state.snapshot.pause {
-            mood = .paused
-            if let reasons = state.snapshot.pauseReasons {
-                sentence = "Dispatch is paused."
-                pauseLines = StatusMenu.pauseReasonLines(reasons, now: reference, timeZone: timeZone)
-            } else {
-                sentence = Self.pauseSentence(pause, reference: reference, timeZone: timeZone)
-            }
-            let finishing = scopedRuns.count
-            let runs = finishing == 0 ? "Nothing is running." : finishing == 1 ? "1 run is finishing." : "\(finishing) runs are finishing."
-            if updating || state.snapshot.updatePauseVersion != nil {
-                context = runs + (finishing == 0 ? " Symphony updates and resumes dispatch next" : " Symphony updates and resumes dispatch when they end")
-                    + "; no new run starts until then."
-            } else {
-                context = runs + " No new run starts until you resume, forced tickets included."
-            }
-        } else if !problems.isEmpty {
-            mood = .attention
-            sentence = problems.count == 1 ? "1 thing needs attention." : "\(problems.count) things need attention."
-            context = Self.flowContext(inProgress: inProgress, index: index, scope: scope, waitingOnYou: waitingOnYou.count, oldest: oldestWaitingOnYou)
-        } else if inProgress.isEmpty {
-            mood = .idle
-            sentence = "The factory is idle."
-            context = "Nothing is queued and nothing waits on you. Tickets moved to Todo in Linear start here."
-        } else {
-            mood = .flowing
-            sentence = "The factory is flowing."
-            context = Self.flowContext(inProgress: inProgress, index: index, scope: scope, waitingOnYou: waitingOnYou.count, oldest: oldestWaitingOnYou)
-        }
-        if state.snapshot.allRepositoriesPaused { pauseLines.append(StatusMenu.allRepositoriesPausedLine) }
-
-        // Now working: agent runs and landings in the order they started, so a new run joins at the end, then the
-        // QA passes.
-        let runRows = scopedRuns
-            .enumerated()
-            .sorted { ($0.element.startedAt ?? .distantFuture, $0.offset) < ($1.element.startedAt ?? .distantFuture, $1.offset) }
-            .map { Self.workingRow($0.element, landing: isLanding($0.element), reference: reference) }
-        let passRows = Self.unique(state.qaRunning).compactMap { id -> WorkingRow? in
-            let identifier = index.identifier(issueID: id) ?? id
-            guard scope.includes(index.repoKey(issueID: id)), !runningIDs.contains(identifier) else { return nil }
-            return WorkingRow(
-                id: "qa-\(id)", kind: .qaPass, identifier: identifier, title: index.title(identifier: identifier),
-                repoKey: index.repoKey(issueID: id), phase: "QA pass", turn: nil, lastActivity: nil, lastMessage: nil,
-                runningTime: nil, tokens: nil, url: index.url(identifier: identifier), isStuck: false
-            )
-        }
-        self.working = (runRows + passRows).map { row in
-            var row = row
-            row.situation = state.snapshot.situation(row.identifier)
-            return row
-        }
-
-        // Next up: tickets waiting for a slot, longest first, then retries in the order they come due.
-        let waitingRows = queuedWaiting
-            .enumerated()
-            .sorted { ($0.element.since ?? .distantFuture, $0.offset) < ($1.element.since ?? .distantFuture, $1.offset) }
-            .map { QueuedRow(identifier: $0.element.identifier, title: $0.element.title, repoKey: $0.element.repoKey, reason: $0.element.reason ?? "waiting for a slot") }
-        let retryRows = queuedRetries
-            .enumerated()
-            .sorted { ($0.element.dueAt ?? .distantFuture, $0.offset) < ($1.element.dueAt ?? .distantFuture, $1.offset) }
-            .map { entry in
-                let retry = entry.element
-                let when = retry.dueAt.map { " at \(StatusMenu.clockTime($0, now: reference, timeZone: timeZone, dateFormat: "MMM d HH:mm"))" } ?? ""
-                return QueuedRow(identifier: retry.identifier, title: retry.title, repoKey: retry.repoKey, reason: when.isEmpty ? "waits to retry" : "retries\(when)")
-            }
-        var seen = Set<String>()
-        nextUp = Array((waitingRows + retryRows).filter { seen.insert($0.identifier).inserted }.prefix(Self.nextUpLimit)).map { row in
-            var row = row
-            row.situation = state.snapshot.situation(row.identifier)
-            return row
-        }
-
-        meters = Self.meters(state.snapshot, reference: reference, timeZone: timeZone)
-        reposLine = repos.flatMap { Self.reposLine($0, scope: scope, runs: state.snapshot.runs, reference: reference) }
-    }
-
-    /// The count on the sidebar's Overview item: what needs attention in every repo, whatever the scope (P6).
+    /// The count on the sidebar's Home item: what needs attention in every repo, whatever the scope (P6).
     public static func badgeCount(_ state: OverviewState, now: Date) -> Int {
         problems(state, now: now).count
     }
 
-    /// What needs attention in every repo, whatever the scope: what notifies (D14).
-    public static func problems(_ state: OverviewState, now: Date) -> [Problem] {
-        problems(state: state, scope: .all, index: TicketIndex(state), reference: state.generatedAt ?? now, timeZone: .current)
+    /// What needs attention under `scope` (every repo for what notifies, D14), severest first. Ages are measured against
+    /// Symphony's own clock (`generated_at`), `now` only when the state has none; clock times are in `timeZone`.
+    public static func problems(_ state: OverviewState, scope: OverviewScope = .all, now: Date, timeZone: TimeZone = .current) -> [Problem] {
+        problems(state: state, scope: scope, index: TicketIndex(state), reference: state.generatedAt ?? now, timeZone: timeZone)
     }
 
     // MARK: - Needs attention
@@ -677,34 +364,13 @@ public struct Overview: Equatable {
 
     // MARK: - Parts
 
-    private static func workingRow(_ run: OverviewState.Run, landing: Bool, reference: Date) -> WorkingRow {
-        let idle = idleSeconds(run, reference: reference)
-        let phase = landing ? "Landing" : run.runKind.map(phaseName) ?? run.state ?? "Working"
-        let message = run.lastMessage?.trimmingWhitespace() ?? ""
-        return WorkingRow(
-            id: run.issueID ?? run.identifier,
-            kind: landing ? .landing : .agent,
-            identifier: run.identifier,
-            title: run.title,
-            repoKey: run.repoKey,
-            phase: phase,
-            turn: run.turnCount,
-            lastActivity: run.lastEventAt.flatMap { _ in idle.map { "\(duration($0)) ago" } },
-            lastMessage: message.isEmpty ? nil : message,
-            runningTime: run.startedAt.map { duration(Int(reference.timeIntervalSince($0))) },
-            tokens: run.totalTokens > 0 ? "\(tokens(run.totalTokens)) tokens" : nil,
-            url: run.url,
-            isStuck: idle.map(isStuck(idleSeconds:)) ?? false
-        )
-    }
-
     /// "implementation" → "Implementation", "plan_revision" → "Plan revision".
     static func phaseName(_ runKind: String) -> String {
         let words = runKind.replacingOccurrences(of: "_", with: " ")
         return words.prefix(1).uppercased() + words.dropFirst()
     }
 
-    private static func pauseSentence(_ pause: StateSnapshot.Pause, reference: Date, timeZone: TimeZone) -> String {
+    static func pauseSentence(_ pause: StateSnapshot.Pause, reference: Date, timeZone: TimeZone) -> String {
         var sentence = "Dispatch is paused"
         if let since = pause.since {
             sentence += " since \(StatusMenu.clockTime(since, now: reference, timeZone: timeZone, dateFormat: "MMM d, HH:mm"))"
@@ -717,33 +383,6 @@ public struct Overview: Equatable {
             sentence += "."
         }
         return sentence
-    }
-
-    /// "10 tickets in progress across 3 repos. 4 wait on you, the oldest for 3 h 12 min."
-    private static func flowContext(inProgress: [String], index: TicketIndex, scope: OverviewScope, waitingOnYou: Int, oldest: Int?) -> String {
-        let count = inProgress.count
-        let tickets = count == 1 ? "1 ticket in progress" : "\(count) tickets in progress"
-        let repos = Set(inProgress.compactMap { index.repoKey(identifier: $0) })
-        let place: String
-        if case let .repo(key) = scope {
-            place = " in \(key)"
-        } else if repos.count == 1, let repo = repos.first {
-            place = " in \(repo)"
-        } else if repos.count > 1 {
-            place = " across \(repos.count) repos"
-        } else {
-            place = ""
-        }
-        let waiting: String
-        switch waitingOnYou {
-        case 0:
-            waiting = "Nothing waits on you."
-        case 1:
-            waiting = "1 waits on you" + (oldest.map { ", for \(duration($0))." } ?? ".")
-        default:
-            waiting = "\(waitingOnYou) wait on you" + (oldest.map { ", the oldest for \(duration($0))." } ?? ".")
-        }
-        return "\(tickets)\(place). \(waiting)"
     }
 
     static func meters(_ snapshot: StateSnapshot, reference: Date, timeZone: TimeZone) -> [Meter] {
@@ -775,26 +414,6 @@ public struct Overview: Equatable {
         if fraction >= atLimit { return .atLimit }
         if fraction >= nearLimit { return .near }
         return .normal
-    }
-
-    /// "3 repos healthy", or "2 of 3 repos healthy. api is not working." Nil when Symphony didn't list its repos.
-    private static func reposLine(_ poll: ReposPoll, scope: OverviewScope, runs: [StateSnapshot.Run], reference: Date) -> String? {
-        guard case let .repos(all, _) = poll else { return nil }
-        let repos = all.filter { scope.includes($0.key) }
-        guard !repos.isEmpty else { return nil }
-        let unhealthy = repos.compactMap { repo -> String? in
-            let health = RepoHealth.of(repo, warning: nil, runs: runs, pending: nil, now: reference)
-            switch health.status {
-            case .healthy, .notChecked: return nil
-            case .needsAttention: return "\(repo.key) needs attention"
-            case .notWorking: return "\(repo.key) is not working"
-            }
-        }
-        if repos.count == 1 {
-            return unhealthy.first.map { "\($0)." } ?? "\(repos[0].key) is healthy."
-        }
-        guard !unhealthy.isEmpty else { return "\(repos.count) repos healthy." }
-        return "\(repos.count - unhealthy.count) of \(repos.count) repos healthy. \(unhealthy.joined(separator: "; "))."
     }
 
     // MARK: - Words and numbers
@@ -855,22 +474,6 @@ public struct Overview: Equatable {
         }
     }
 
-    // MARK: - Helpers
-
-    private static func isState(_ state: String?, _ name: String) -> Bool {
-        state?.trimmingWhitespace().caseInsensitiveCompare(name) == .orderedSame
-    }
-
-    private static func unique(_ values: [String]) -> [String] {
-        var seen = Set<String>()
-        return values.filter { seen.insert($0).inserted }
-    }
-}
-
-private extension Overview.Stage {
-    init(kind: Overview.StageKind, count: Int, context: String, spoken: String? = nil) {
-        self.init(kind: kind, count: count, context: context, spokenContext: spoken ?? context)
-    }
 }
 
 /// Every ticket the state names, to find its identifier, repo, title and Linear URL from any list.
