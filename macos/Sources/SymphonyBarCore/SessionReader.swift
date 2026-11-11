@@ -80,11 +80,6 @@ public struct SessionReader: Equatable {
     public static let nothingToRead = "This run has nothing to read yet"
     public static let noSteps = "This run recorded no steps."
 
-    /// Whether `run`'s header carries a More: every run but the run now, which re-draws on each read of the page. D1's
-    /// bisect of TP-1452's accessibility hang on a page with a working run: this head drops the More from the live run
-    /// only, and keeps its tokens so far.
-    public static func showsMore(_ run: RunGroupModel) -> Bool { !run.isLive }
-
     /// Whether `run` has anything for the reader: a step with a transcript, or lines, or the step the run now is on.
     public static func canRead(_ run: RunGroupModel) -> Bool {
         run.steps.contains(where: \.canUnfold)

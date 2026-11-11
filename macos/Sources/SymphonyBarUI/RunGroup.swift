@@ -37,7 +37,7 @@ public struct RunGroup: View {
                 FoldHeader(unfolded: unfolded, accessibilityLabel: run.foldAccessibilityLabel(folded: !unfolded) + ", " + run.accessibilityLabel, toggle: toggle) {
                     RunHeaderLabel(run: run, folded: !unfolded)
                 }
-                if let readSession, SessionReader.showsMore(run) {
+                if let readSession {
                     RunMoreMenu(run: run, readSession: readSession)
                 }
             }
@@ -85,7 +85,7 @@ public struct RunGroup: View {
 }
 
 /// Opens the session reader on a run: the window that reads its whole session (TP-1452). A Run group shows its More
-/// menu only where the view around it gives one, and never on the run now (`SessionReader.showsMore`).
+/// menu only where the view around it gives one.
 ///
 /// Two actions for the same ticket are equal, so a page that draws again (each read, each scroll the page measures)
 /// hands its Run groups the same value and SwiftUI leaves their More menus as they are, instead of rebuilding every

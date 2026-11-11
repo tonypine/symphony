@@ -119,9 +119,6 @@ final class SessionReaderTests: XCTestCase {
         let earlier = try XCTUnwrap(timeline.run("run-1"))
         XCTAssertFalse(earlier.isLive)
         XCTAssertTrue(SessionReader.canRead(earlier))
-        XCTAssertTrue(SessionReader.showsMore(earlier))
-        let live = try XCTUnwrap(timeline.runNow)
-        XCTAssertFalse(SessionReader.showsMore(live), "The run now carries no More")
 
         let transcripts = StepTranscripts(get: { await client.answer($0) })
         for transcript in earlier.steps.compactMap(\.transcript) {
