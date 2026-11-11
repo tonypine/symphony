@@ -112,9 +112,8 @@ public extension EnvironmentValues {
 /// The run's More: "Read the whole session", off with its reason while the run has nothing to read.
 ///
 /// A plain button that opens a small popover, not a SwiftUI `Menu`: a `Menu` is an AppKit pop-up button with its menu
-/// built up front, one per run, and on a long timeline with the run now live (its breathing step bar and flowing mark
-/// redrawing the page all the time) those pop-ups kept the page from answering accessibility reads and keys (TP-1452's
-/// QA on TP-1244). The popover and its one button exist only while it is open.
+/// built up front, one per run, and on a long timeline with the run now live those pop-ups kept the page from answering
+/// accessibility reads and keys (TP-1452's QA on TP-1244). The popover and its one button exist only while it is open.
 private struct RunMoreMenu: View {
     let run: RunGroupModel
     let readSession: ReadSessionAction
@@ -226,11 +225,10 @@ private struct RunHeaderLabel: View {
     static let durationHelp = "How long the run took"
 }
 
-/// A short bar per step, in its state's tint; the one it is on breathes while it works, still under Reduce Motion.
+/// A short bar per step, in its state's tint. The one it is on holds still, as the live dot does: a bar that breathed
+/// forever kept a long live page from answering accessibility reads (TP-1452).
 struct StepBars: View {
     let steps: [RunStep]
-    @State private var flowing = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 3) {
@@ -238,15 +236,10 @@ struct StepBars: View {
                 Capsule()
                     .fill(step.state == .skipped ? AnyShapeStyle(.quaternary) : AnyShapeStyle(step.state.status.tint))
                     .frame(width: 14, height: 4)
-                    .opacity(step.isLive && flowing ? 0.45 : 1)
                     .help("\(step.title): \(step.state.word.lowercased())")
             }
         }
         .fixedSize()
         .accessibilityHidden(true)
-        .onAppear {
-            guard !reduceMotion, steps.contains(where: \.isLive) else { return }
-            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { flowing = true }
-        }
     }
 }
