@@ -1,0 +1,789 @@
+{
+  "timeline": [
+    {
+      "id": "a1",
+      "seq": 1,
+      "at": "2026-10-07T09:00:00Z",
+      "type": "ticket.moved",
+      "actor": {
+        "kind": "person",
+        "name": "Tony"
+      },
+      "payload": {
+        "from": "Backlog",
+        "to": "Todo"
+      },
+      "summary": {
+        "title": "Moved to Todo from Backlog",
+        "detail": "Phase 3b chain"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "a2",
+      "seq": 2,
+      "at": "2026-10-07T09:00:01Z",
+      "type": "phase.entered",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "from": "Backlog",
+        "to": "Todo",
+        "via": "move"
+      },
+      "summary": {
+        "title": "Entered Todo from Backlog",
+        "detail": "via move"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "a3",
+      "seq": 3,
+      "at": "2026-10-07T09:01:00Z",
+      "type": "phase.entered",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "from": "Todo",
+        "to": "In Progress"
+      },
+      "summary": {
+        "title": "Entered In Progress from Todo"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "kind": "run",
+      "run_id": "run-1",
+      "run_kind": "implementation",
+      "run_number": 1,
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "status": "ended",
+      "exit": "failed",
+      "verdict": null,
+      "started_at": "2026-10-07T09:02:00Z",
+      "ended_at": "2026-10-07T09:24:00Z",
+      "head": "8f3e2a1c9d",
+      "events": [
+        {
+          "id": "r1",
+          "seq": 4,
+          "at": "2026-10-07T09:02:00Z",
+          "type": "run.started",
+          "run_id": "run-1",
+          "payload": {
+            "run_kind": "implementation",
+            "run_number": 1,
+            "model": "claude-opus-5-5",
+            "effort": "high"
+          },
+          "summary": {
+            "title": "Implementation run 1 started"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "r2",
+          "seq": 5,
+          "at": "2026-10-07T09:02:05Z",
+          "type": "step.started",
+          "run_id": "run-1",
+          "payload": {
+            "step_id": "code",
+            "title": "Write the code"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "r3",
+          "seq": 6,
+          "at": "2026-10-07T09:10:05Z",
+          "type": "step.completed",
+          "run_id": "run-1",
+          "payload": {
+            "step_id": "code",
+            "title": "Write the code",
+            "outcome": "passed"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "r4",
+          "seq": 7,
+          "at": "2026-10-07T09:14:00Z",
+          "type": "step.started",
+          "run_id": "run-1",
+          "payload": {
+            "step_id": "tests",
+            "title": "Tests"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "r5",
+          "seq": 8,
+          "at": "2026-10-07T09:16:00Z",
+          "type": "step.completed",
+          "run_id": "run-1",
+          "payload": {
+            "step_id": "tests",
+            "title": "Tests",
+            "outcome": "failed",
+            "returns_to": "code",
+            "returns_to_title": "Write the code"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "r6",
+          "seq": 9,
+          "at": "2026-10-07T09:24:00Z",
+          "type": "run.ended",
+          "run_id": "run-1",
+          "payload": {
+            "exit": "failed",
+            "duration_ms": 1320000,
+            "tokens": 1840000
+          },
+          "artifacts": [],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "p1",
+      "seq": 10,
+      "at": "2026-10-07T09:30:00Z",
+      "type": "pause.set",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "reason": "person",
+        "text": "Deploy freeze",
+        "set_by": {
+          "kind": "person",
+          "name": "Tony"
+        }
+      },
+      "summary": {
+        "title": "Paused: deploy freeze"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "p2",
+      "seq": 11,
+      "at": "2026-10-07T09:30:01Z",
+      "type": "situation.changed",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "to": "paused_by_rule",
+        "word": "Paused",
+        "cause": "Deploy freeze"
+      },
+      "summary": {
+        "title": "Paused",
+        "detail": "Deploy freeze"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "p3",
+      "seq": 12,
+      "at": "2026-10-07T09:45:00Z",
+      "type": "pause.reason_added",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "reason": "build",
+        "text": "Holding for the build of a0be0aa"
+      },
+      "summary": {
+        "title": "Also paused: holding for the build of a0be0aa"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "p4",
+      "seq": 13,
+      "at": "2026-10-07T09:50:00Z",
+      "type": "pause.reason_cleared",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "reason": "build",
+        "text": "Holding for the build of a0be0aa"
+      },
+      "summary": {
+        "title": "Pause reason cleared: holding for the build of a0be0aa"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "p5",
+      "seq": 14,
+      "at": "2026-10-07T10:05:00Z",
+      "type": "pause.cleared",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "cleared": [
+          {
+            "reason": "person",
+            "text": "Deploy freeze"
+          }
+        ],
+        "by": {
+          "kind": "person",
+          "name": "Tony"
+        }
+      },
+      "summary": {
+        "title": "Moving again",
+        "detail": "Deploy freeze"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "p6",
+      "seq": 15,
+      "at": "2026-10-07T10:05:01Z",
+      "type": "situation.changed",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "to": "waiting_for_slot",
+        "word": "Waiting for a slot",
+        "cause": "No run is working on it."
+      },
+      "summary": {
+        "title": "Waiting for a slot"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "b1",
+      "seq": 16,
+      "at": "2026-10-08T08:00:00Z",
+      "type": "rule.action",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "rule": "Blocked-by links",
+        "action": "paused",
+        "text": "Waiting for TP-1443 to finish"
+      },
+      "summary": {
+        "title": "Blocked-by links paused the ticket",
+        "detail": "Waiting for TP-1443 to finish"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "b2",
+      "seq": 17,
+      "at": "2026-10-08T08:00:00Z",
+      "type": "pause.set",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "reason": "ticket",
+        "text": "Waiting for TP-1443 to finish"
+      },
+      "summary": {
+        "title": "Paused: waiting for TP-1443 to finish"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "b3",
+      "seq": 18,
+      "at": "2026-10-08T08:00:01Z",
+      "type": "situation.changed",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "to": "blocked_by_ticket",
+        "word": "Blocked by TP-1443",
+        "cause": "It is in Todo."
+      },
+      "summary": {
+        "title": "Blocked by TP-1443: It is in Todo."
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "b4",
+      "seq": 19,
+      "at": "2026-10-08T08:20:00Z",
+      "type": "pause.cleared",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "cleared": [
+          {
+            "reason": "ticket",
+            "text": "Waiting for TP-1443 to finish"
+          }
+        ]
+      },
+      "summary": {
+        "title": "Moving again",
+        "detail": "Waiting for TP-1443 to finish"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "b5",
+      "seq": 20,
+      "at": "2026-10-08T08:20:02Z",
+      "type": "pause.set",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "reason": "ticket",
+        "text": "Waiting for TP-1443 to finish"
+      },
+      "summary": {
+        "title": "Paused: waiting for TP-1443 to finish"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "b6",
+      "seq": 21,
+      "at": "2026-10-08T08:20:02Z",
+      "type": "rule.action",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "rule": "Blocked-by links",
+        "action": "paused",
+        "text": "Waiting for TP-1443 to finish"
+      },
+      "summary": {
+        "title": "Blocked-by links paused the ticket"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "b7",
+      "seq": 22,
+      "at": "2026-10-08T08:21:00Z",
+      "type": "pause.cleared",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "cleared": [
+          {
+            "reason": "ticket",
+            "text": "Waiting for TP-1443 to finish"
+          }
+        ]
+      },
+      "summary": {
+        "title": "Moving again",
+        "detail": "Waiting for TP-1443 to finish"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "b8",
+      "seq": 23,
+      "at": "2026-10-08T08:21:01Z",
+      "type": "rule.action",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "rule": "Blocked-by links",
+        "action": "lifted_pause"
+      },
+      "summary": {
+        "title": "Blocked-by links lifted a pause"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "q1",
+      "seq": 24,
+      "at": "2026-10-08T08:30:00Z",
+      "type": "question.asked",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "question_id": "q-1",
+        "title": "Review the design catalog",
+        "question": "Approve the catalog?"
+      },
+      "summary": {
+        "title": "Asked you: Review the design catalog",
+        "detail": "Two options, one recommended"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "q2",
+      "seq": 25,
+      "at": "2026-10-08T09:10:00Z",
+      "type": "question.answered",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "question_id": "q-1",
+        "answer": "Approve the catalog",
+        "by": {
+          "kind": "person",
+          "name": "Tony"
+        }
+      },
+      "summary": {
+        "title": "Answered: Approve the catalog",
+        "detail": "In the Inbox"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "h1",
+      "seq": 26,
+      "at": "2026-10-08T09:11:00Z",
+      "type": "person.action",
+      "actor": {
+        "kind": "person",
+        "name": "Tony"
+      },
+      "payload": {
+        "action": "force"
+      },
+      "summary": {
+        "title": "Forced ahead of the queue"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "g1",
+      "seq": 27,
+      "at": "2026-10-08T09:12:00Z",
+      "type": "rule.action",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "rule": "PR watcher R22",
+        "action": "updated_branch",
+        "text": "Branch updated with the newest main"
+      },
+      "summary": {
+        "title": "PR watcher R22 updated the branch",
+        "detail": "with the newest main"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "v1",
+      "seq": 28,
+      "at": "2026-10-08T09:30:00Z",
+      "type": "verdict.recorded",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "kind": "qa",
+        "outcome": "fail"
+      },
+      "summary": {
+        "title": "QA failed",
+        "detail": "One finding"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "v2",
+      "seq": 29,
+      "at": "2026-10-08T09:30:01Z",
+      "type": "finding.recorded",
+      "actor": {
+        "kind": "agent",
+        "run_kind": "qa"
+      },
+      "payload": {
+        "class": "visual",
+        "severity": "major",
+        "description": "The timeline missed a stopped run"
+      },
+      "summary": {
+        "title": "Finding: the timeline missed a stopped run"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "n1",
+      "seq": 30,
+      "at": "2026-10-08T09:35:00Z",
+      "type": "note",
+      "actor": {
+        "kind": "person",
+        "name": "Tony"
+      },
+      "payload": {
+        "text": "Check the stopped run first"
+      },
+      "summary": {
+        "title": "Note added",
+        "detail": "Check the stopped run first"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "m1",
+      "seq": 31,
+      "at": "2026-10-08T09:44:00Z",
+      "type": "phase.entered",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "from": "QA",
+        "to": "Rework"
+      },
+      "summary": {
+        "title": "Entered Rework from QA",
+        "detail": "QA failed"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "m2",
+      "seq": 32,
+      "at": "2026-10-08T09:44:00Z",
+      "type": "phase.entered",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "from": "QA",
+        "to": "Rework"
+      },
+      "summary": {
+        "title": "Entered Rework from QA",
+        "detail": "QA failed"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "kind": "run",
+      "run_id": "run-2",
+      "run_kind": "implementation",
+      "run_number": 2,
+      "model": "claude-opus-5-5",
+      "effort": "high",
+      "status": "ended",
+      "exit": "paused",
+      "verdict": null,
+      "started_at": "2026-10-08T09:45:00Z",
+      "ended_at": "2026-10-08T10:05:00Z",
+      "head": "c41d7e2b90",
+      "events": [
+        {
+          "id": "s1",
+          "seq": 33,
+          "at": "2026-10-08T09:45:00Z",
+          "type": "run.started",
+          "run_id": "run-2",
+          "payload": {
+            "run_kind": "implementation",
+            "run_number": 2,
+            "model": "claude-opus-5-5",
+            "effort": "high"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "s2",
+          "seq": 34,
+          "at": "2026-10-08T09:45:05Z",
+          "type": "step.started",
+          "run_id": "run-2",
+          "payload": {
+            "step_id": "code",
+            "title": "Write the code"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "s5",
+          "seq": 35,
+          "at": "2026-10-08T10:04:00Z",
+          "type": "step.completed",
+          "run_id": "run-2",
+          "payload": {
+            "step_id": "code",
+            "title": "Write the code",
+            "outcome": "paused",
+            "question_id": "q-3"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "s6",
+          "seq": 36,
+          "at": "2026-10-08T10:05:00Z",
+          "type": "run.ended",
+          "run_id": "run-2",
+          "payload": {
+            "exit": "paused"
+          },
+          "summary": {
+            "title": "Implementation run 2 ended",
+            "detail": "Waiting on your answer"
+          },
+          "artifacts": [],
+          "children": []
+        }
+      ]
+    },
+    {
+      "id": "q3",
+      "seq": 37,
+      "at": "2026-10-08T10:04:30Z",
+      "type": "question.asked",
+      "actor": {
+        "kind": "agent",
+        "run_id": "run-2",
+        "run_kind": "implementation"
+      },
+      "payload": {
+        "question_id": "q-3",
+        "title": "How should the paused line's times read?",
+        "question": "Should the paused line say since when, or for how long?"
+      },
+      "summary": {
+        "title": "Asked you: How should the paused line's times read?",
+        "detail": "Two options, one recommended"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "q4",
+      "seq": 38,
+      "at": "2026-10-08T10:04:31Z",
+      "type": "situation.changed",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "to": "waiting_on_you",
+        "word": "Waiting on you"
+      },
+      "summary": {
+        "title": "Waiting on you",
+        "detail": "Implementation run 2 asked a question"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "q5",
+      "seq": 39,
+      "at": "2026-10-08T10:27:10Z",
+      "type": "question.answered",
+      "actor": {
+        "kind": "person",
+        "name": "Tony"
+      },
+      "payload": {
+        "question_id": "q-3",
+        "answer": "For how long"
+      },
+      "summary": {
+        "title": "Answered: How should the paused line's times read?",
+        "detail": "For how long"
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "q6",
+      "seq": 40,
+      "at": "2026-10-08T10:27:10Z",
+      "type": "pause.cleared",
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "cleared": [
+          {
+            "reason": "question",
+            "text": "Waiting for your answer"
+          }
+        ],
+        "by": {
+          "kind": "person",
+          "name": "Tony"
+        }
+      },
+      "summary": {
+        "title": "Pause cleared",
+        "detail": "Waiting for your answer"
+      },
+      "artifacts": [],
+      "children": []
+    }
+  ],
+  "next_since": "2026-10-08T10:27:10Z"
+}

@@ -145,8 +145,9 @@ public struct DecisionsLine: Equatable {
     public static let answerTitle = "Answer…"
     /// Answer's reason while Symphony says a Question is open and the Inbox holds none of it yet.
     public static let readingReason = "Reading the question from the Inbox…"
-    /// The decision sheet's Send until answering from the ticket page lands: the Inbox answers it meanwhile.
-    public static let sendLaterReason = "Answer it in the Inbox for now: sending from the ticket page comes next."
+    /// The decision sheet's Send while the answer is held for the banner's Undo or on its way to Symphony: the
+    /// Question leaves the page once Symphony's next read drops it, and nothing can be sent twice meanwhile.
+    public static let sendingReason = "Sending your answer…"
 
     /// The line from the ticket's open Questions as Symphony names them (`open_questions`) and the ones the Inbox
     /// holds with their options (`questions`); either may lag the other, so the larger count is the one shown.
@@ -172,10 +173,53 @@ public struct DecisionsLine: Equatable {
     }
 }
 
+/// The ticket page's open Questions as the Inbox holds them, one Inbox item each, answered with the Inbox's own picks:
+/// the page and the Inbox show the same answer picked, and Send on either opens the same consequence sheet and sends
+/// it through the same `decide`. Question `n` of the page is item `n`'s one request (decision 0).
+public struct TicketQuestions: Equatable {
+    /// The ticket's Inbox items that carry a Question with options, in the Inbox's order.
+    public let items: [InboxItem]
+
+    public init(identifier: String, in items: [InboxItem]) {
+        self.items = items.filter { $0.identifier == identifier && $0.isDecision }
+    }
+
+    /// The Questions, each with its options.
+    public var questions: [InboxReview.Action] { items.compactMap(\.review.action) }
+
+    /// The page's picks, by Question: each item's pick and own words as the Inbox keeps them.
+    public func picks(_ inbox: InboxPicks) -> DecisionPicks {
+        var picks = DecisionPicks()
+        for (index, item) in items.enumerated() {
+            let held = inbox[item.id]
+            picks.picks[index] = held.picks[0]
+            picks.writeIns[index] = held.writeIns[0]
+        }
+        return picks
+    }
+
+    /// The Inbox item of the page's Question `index`, nil past the last.
+    public func item(_ index: Int) -> InboxItem? {
+        items.indices.contains(index) ? items[index] : nil
+    }
+
+    /// Whether one of the Questions was answered and still waits for the read that drops it: `answered` holds the Inbox
+    /// items the Director answered (held for Undo, on its way, or taken by Symphony) until the Inbox read no longer
+    /// lists them. Send stays off meanwhile, so the same answer can't go twice.
+    public func awaitingRead(_ answered: Set<String>) -> Bool {
+        items.contains { answered.contains($0.id) }
+    }
+
+    /// The item Send answers: the first Question with an answer to send, nil while none has one.
+    public func toSend(_ inbox: InboxPicks) -> InboxItem? {
+        items.first { item in item.review.action.map { QuestionSend(question: $0, picks: inbox[item.id]).enabled } ?? false }
+    }
+}
+
 extension TicketPage {
     /// The open Questions of ticket `identifier` the Inbox holds, each with its options, in the Inbox's order.
     public static func questions(of identifier: String, in items: [InboxItem]) -> [InboxReview.Action] {
-        items.filter { $0.identifier == identifier && $0.isDecision }.compactMap(\.review.action)
+        TicketQuestions(identifier: identifier, in: items).questions
     }
 
     /// The header's title: the state's, else the ticket read's.

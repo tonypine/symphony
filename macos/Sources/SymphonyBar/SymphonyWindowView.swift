@@ -287,11 +287,20 @@ final class SymphonyWindowModel: ObservableObject {
     private var bannerTask: Task<Void, Never>?
     /// An answer the app holds for the banner's Undo before it sends it (`ConsequenceSheet.holdsForUndo`), with the
     /// banner that offers the Undo and the wait that sends it.
-    private var held: (sheet: ConsequenceSheet, action: ControlAction, bannerID: UUID, wait: Task<Void, Never>)?
+    private var held: (sheet: ConsequenceSheet, action: ControlAction, bannerID: UUID, wait: Task<Void, Never>)? = nil {
+        // The ticket page's Send stays off while its answer is held: it redraws when one is held or let go.
+        willSet { objectWillChange.send() }
+    }
+    /// Why Symphony refused a ticket's answer sent after the banner's time, by identifier: the ticket page shows it
+    /// under its Send until the Director answers again.
+    @Published private(set) var answerFailures: [String: String] = [:]
     /// Whether an answer waits for the banner's Undo, still to send.
     var holdsAnswer: Bool { held != nil }
     /// The Inbox items the Director answered, by issue id: they leave the Inbox without a banner of their own.
-    private var answeredItems = Set<String>()
+    /// It also keeps the ticket page's Send off from the answer until the read that drops it (`answering`).
+    private var answeredItems = Set<String>() {
+        willSet { objectWillChange.send() }
+    }
     /// The tickets a Check Now is on its way for.
     @Published private(set) var checkingNow = Set<String>()
     /// A sheet to open once the Inbox lists its item: Approve and Merge… chosen on a notification.
@@ -451,7 +460,26 @@ final class SymphonyWindowModel: ObservableObject {
             if inboxBanner?.id == held.bannerID { dismissBanner() }
         }
         inboxMoveError = nil
+        answerFailures[item.identifier] = nil
         inboxSheet = ConsequenceSheet(move: move, item: item, picks: picks(for: item.id))
+    }
+
+    /// True from the moment an answer to ticket `identifier` is confirmed until the Inbox read that drops its
+    /// Question: held for the banner's Undo, on its way to Symphony, or taken and not read back yet. The ticket page's
+    /// Send stays off meanwhile, so nothing is sent twice. A refusal or an Undo turns it on again.
+    func answering(_ identifier: String) -> Bool {
+        held?.sheet.identifier == identifier
+            || (inboxMoveInFlight && inboxSheet?.identifier == identifier)
+            || ticketQuestions(identifier).awaitingRead(answeredItems)
+    }
+
+    /// Symphony took an answer to ticket `identifier`: the ticket page, when it shows it, reads the ticket and its feed
+    /// again at once, so the Question leaves it and the timeline gains the answer.
+    private func answerSent(_ identifier: String) {
+        answerFailures[identifier] = nil
+        guard shownTicket == identifier else { return }
+        readTicket(force: true)
+        ticketFeed.read()
     }
 
     /// Cancel on the sheet: nothing is sent.
@@ -481,6 +509,7 @@ final class SymphonyWindowModel: ObservableObject {
                 let outcome = result.moveOutcome ?? sheet.expectedOutcome
                 if sheet.selectsNext(after: outcome) { inboxSelection = inboxList?.neighbor(of: sheet.itemID)?.id }
                 showBanner(sheet.banner(after: outcome))
+                answerSent(sheet.identifier)
             case let .failed(message):
                 inboxMoveError = message
             }
@@ -523,8 +552,10 @@ final class SymphonyWindowModel: ObservableObject {
                 if inboxBanner == nil || inboxBanner?.id == held.bannerID {
                     showBanner(sheet.banner(after: result.moveOutcome ?? sheet.expectedOutcome))
                 }
+                answerSent(sheet.identifier)
             case let .failed(message):
                 answeredItems.remove(sheet.itemID)
+                answerFailures[sheet.identifier] = message
                 showBanner(.failed(itemID: sheet.itemID, identifier: sheet.identifier, message: message))
             }
             client.refresh()
@@ -547,6 +578,8 @@ final class SymphonyWindowModel: ObservableObject {
         Task {
             switch await onControl(.undo(banner.identifier)) {
             case .done, .moved:
+                // The answer was taken back: the Question stays, and the page's Send turns on again.
+                answeredItems.remove(banner.itemID)
                 inboxSelection = banner.itemID
                 showBanner(.undone(itemID: banner.itemID, identifier: banner.identifier))
             case let .failed(message):

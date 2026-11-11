@@ -241,6 +241,44 @@ extension SymphonyWindowModel {
         return banner
     }
 
+    /// The banner under ticket `identifier`'s page: a Move to…'s, a refused Start now's, or the answer's sent from the
+    /// page ("Sending your decision" with Undo, then "Sent your decision" or why Symphony refused it).
+    func ticketBanner(_ identifier: String) -> InboxBanner? {
+        guard let banner = inboxBanner, banner.identifier == identifier else { return nil }
+        return banner
+    }
+
+    /// Undo on the page's banner: a Move to…'s takes the move back; an answer's takes it back as the Inbox's does.
+    func undoTicketBanner(_ banner: InboxBanner) {
+        if banner.id == moveBannerID { undoMove(banner) } else { undo(banner) }
+    }
+
+    // MARK: Answering from the page (TP-1450)
+
+    /// The shown ticket's open Questions, with the Inbox's picks.
+    func ticketQuestions(_ identifier: String) -> TicketQuestions {
+        TicketQuestions(identifier: identifier, in: inbox?.items ?? [])
+    }
+
+    /// Picks option `option` in the page's Question `question`: the Inbox's item takes the same pick.
+    func pickOnTicketPage(_ option: Int, question: Int, identifier: String) {
+        guard let item = ticketQuestions(identifier).item(question) else { return }
+        pick(option, decision: 0, itemID: item.id)
+    }
+
+    /// Keeps the own words of the page's Question `question` with its Inbox item's picks.
+    func writeInOnTicketPage(_ text: String, question: Int, identifier: String) {
+        guard let item = ticketQuestions(identifier).item(question) else { return }
+        writeIn(text, decision: 0, itemID: item.id)
+    }
+
+    /// Send on the page: the Inbox's consequence sheet of Send Decision on the first answered Question, which sends it
+    /// through the same `decide` once confirmed. Nothing is sent before that, nor while an answer is on its way.
+    func answerFromTicketPage(_ identifier: String) {
+        guard !answering(identifier), let item = ticketQuestions(identifier).toSend(inboxPicks) else { return }
+        open(.decide, on: item)
+    }
+
     func showMoveBanner(_ banner: InboxBanner) {
         moveBannerID = banner.id
         showBanner(banner)
@@ -322,6 +360,24 @@ extension SymphonyWindowModel {
     }
 }
 
+/// The answers to the page's Questions and what answering does (TP-1450): the picks are the Inbox's, so the page and
+/// the Inbox agree, and Send opens the Inbox's consequence sheet.
+struct TicketPageAnswers {
+    var picks = DecisionPicks()
+    /// Picks option (first) in Question (second).
+    var pick: (Int, Int) -> Void = { _, _ in }
+    /// Keeps a Question's own words: (text, Question).
+    var writeIn: (String, Int) -> Void = { _, _ in }
+    var send: () -> Void = {}
+    /// True while the answer is held for the banner's Undo or on its way: Send stays off, so it can't go twice.
+    var sending = false
+    /// Why Symphony refused the last answer sent, under Send.
+    var failure: String?
+
+    /// Why Send stays off whatever is picked: while an answer is on its way.
+    var sendOff: String? { sending ? DecisionsLine.sendingReason : nil }
+}
+
 /// D3 for the window: the page with its sheets, or a placeholder while it reads.
 struct TicketPageContent: View {
     @ObservedObject var model: SymphonyWindowModel
@@ -335,11 +391,35 @@ struct TicketPageContent: View {
     }
 
     var body: some View {
+        content
+            // C17: the Send of the page's Question asks first, with the Inbox's own consequence sheet.
+            .sheet(item: $model.inboxSheet) { sheet in
+                ConsequenceSheetView(
+                    sheet: sheet,
+                    working: model.inboxMoveInFlight,
+                    error: model.inboxMoveError,
+                    cancel: model.cancelSheet,
+                    confirm: { reason in model.confirm(sheet, reason: reason) }
+                )
+            }
+    }
+
+    @ViewBuilder private var content: some View {
         if let page = model.ticketPage {
             let items = model.inbox?.items ?? []
+            let identifier = page.identifier
+            let open = model.ticketQuestions(identifier)
             TicketPageView(
                 page: page,
-                questions: TicketPage.questions(of: page.identifier, in: items),
+                questions: open.questions,
+                answers: TicketPageAnswers(
+                    picks: open.picks(model.inboxPicks),
+                    pick: { model.pickOnTicketPage($0, question: $1, identifier: identifier) },
+                    writeIn: { model.writeInOnTicketPage($0, question: $1, identifier: identifier) },
+                    send: { model.answerFromTicketPage(identifier) },
+                    sending: model.answering(identifier),
+                    failure: model.answerFailures[identifier]
+                ),
                 references: items.first { $0.identifier == page.identifier }?.references ?? [:],
                 actions: TicketPageActions(
                     move: { model.performMove($0, on: page) },
@@ -354,8 +434,8 @@ struct TicketPageContent: View {
                 note: model.ticketNote,
                 decisions: decisions.decisions,
                 restart: { model.send(.restart(page.identifier, reason: TicketPageView.restartReason)) },
-                banner: model.moveBanner.flatMap { $0.identifier == page.identifier ? $0 : nil },
-                undo: model.undoMove,
+                banner: model.ticketBanner(page.identifier),
+                undo: model.undoTicketBanner,
                 closeBanner: model.dismissBanner
             )
         } else {
@@ -370,6 +450,8 @@ struct TicketPageView: View {
     let page: TicketPage
     /// The ticket's open Questions with their options, from the Inbox.
     var questions: [InboxReview.Action] = []
+    /// Their answers, and Send.
+    var answers = TicketPageAnswers()
     /// The chips in the page's text, from the ticket's Inbox item.
     var references: [String: Reference] = [:]
     let actions: TicketPageActions
@@ -385,17 +467,17 @@ struct TicketPageView: View {
     @State private var width: CGFloat = TicketPageLayout.laptopPageWidth
     @State private var scroll = TicketPageScroll()
     @State private var sheetOpen = false
-    @State private var picks = DecisionPicks()
     @State private var confirmingRestart = false
     @FocusState private var answerFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let restartReason = "Restarted from the ticket page"
     static let noteAnchor = "note-panel"
 
     private var desktop: Bool { TicketPageLayout.isDesktop(page: width) }
+    private var waiting: Bool { DecisionsLine(openQuestions: page.openQuestions, questions: questions).waiting }
     private var decisionsWidth: Double? {
-        TicketPageLayout.arrangement(page: width, decisions: DecisionsLine(openQuestions: page.openQuestions, questions: questions).waiting)
-            .decisionsWidth
+        TicketPageLayout.arrangement(page: width, decisions: waiting).decisionsWidth
     }
 
     var body: some View {
@@ -423,15 +505,17 @@ struct TicketPageView: View {
             .overlay(alignment: .topLeading) {
                 if let decisionsWidth {
                     PinnedDecisions(scroll: scroll, width: decisionsWidth) {
-                        TicketDecisionsColumn(
-                            page: page, questions: questions, picks: picks,
-                            pick: { option, question in picks.picks[question] = option },
-                            writeIn: { text, question in picks.writeIns[question] = text }
-                        )
+                        TicketDecisionsColumn(page: page, questions: questions, answers: answers)
                     }
+                    // §4: once the read drops the answered Question the column slides out to the right; under Reduce
+                    // Motion it goes at once.
+                    .transition(reduceMotion ? .identity : .move(edge: .trailing).combined(with: .opacity))
                 }
             }
         }
+        // The page glides into its shape without the Question: the main column takes the column's room, the decisions
+        // line fades to its quiet form.
+        .animation(.motion(.sheet, reduceMotion: reduceMotion), value: waiting)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size in
             if width != size.width { width = size.width }
             scroll.update(viewport: size.height)
@@ -449,12 +533,19 @@ struct TicketPageView: View {
         }
         .decisionSheet(isPresented: desktop ? .constant(false) : $sheetOpen, returnFocus: $answerFocused) {
             DecisionSheet(
-                questions: questions, picks: picks, subtitle: page.sheetSubtitle,
-                pick: { option, question in picks.picks[question] = option },
-                writeIn: { text, question in picks.writeIns[question] = text },
-                send: {}, close: { sheetOpen = false }, sendOff: DecisionsLine.sendLaterReason
+                questions: questions, picks: answers.picks, subtitle: page.sheetSubtitle,
+                pick: answers.pick, writeIn: answers.writeIn, send: answers.send, close: { sheetOpen = false },
+                sendOff: answers.sendOff, failure: answers.failure
             )
             .environment(\.mentionReferences, references)
+        }
+        .onChange(of: answers.sending) { _, sending in
+            // §4: once the answer is confirmed the laptop's sheet slides out as the dimmed page clears.
+            if sending { sheetOpen = false }
+        }
+        .onChange(of: waiting) { _, waits in
+            // Answered in the Inbox meanwhile: the sheet has nothing left to answer.
+            if !waits { sheetOpen = false }
         }
         .confirmationDialog("Restart \(page.identifier)?", isPresented: $confirmingRestart) {
             Button("Restart", role: .destructive, action: restart)
@@ -464,7 +555,6 @@ struct TicketPageView: View {
         }
         .onChange(of: page.identifier) { _, _ in
             sheetOpen = false
-            picks = DecisionPicks()
         }
     }
 
@@ -523,6 +613,8 @@ final class TicketPageScroll: ObservableObject {
 struct TicketPageBody: View {
     let page: TicketPage
     var questions: [InboxReview.Action] = []
+    /// Their answers and Send, for a snapshot's decisions column drawn in its row.
+    var answers = TicketPageAnswers()
     let width: CGFloat
     let transcripts: StepTranscripts
     let note: TicketNoteComposer
@@ -567,7 +659,7 @@ struct TicketPageBody: View {
                     if let decisionsWidth = arrangement.decisionsWidth {
                         if decisionsInRow {
                             UnscrolledDecisions(scroll: scroll) {
-                                TicketDecisionsColumn(page: page, questions: questions)
+                                TicketDecisionsColumn(page: page, questions: questions, answers: answers)
                             }
                             .frame(width: decisionsWidth)
                         } else {
@@ -727,10 +819,8 @@ private struct UnscrolledDecisions<Content: View>: View {
 struct TicketDecisionsColumn: View {
     let page: TicketPage
     let questions: [InboxReview.Action]
-    /// The answers picked so far, and what picking one does.
-    var picks = DecisionPicks()
-    var pick: (Int, Int) -> Void = { _, _ in }
-    var writeIn: (String, Int) -> Void = { _, _ in }
+    /// The answers picked so far, what picking one does, and Send.
+    var answers = TicketPageAnswers()
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
@@ -750,8 +840,8 @@ struct TicketDecisionsColumn: View {
                 .accessibilityElement(children: .combine)
             } else {
                 DecisionSheet(
-                    questions: questions, picks: picks, subtitle: page.sheetSubtitle, pick: pick, writeIn: writeIn,
-                    send: {}, close: nil, sendOff: DecisionsLine.sendLaterReason
+                    questions: questions, picks: answers.picks, subtitle: page.sheetSubtitle, pick: answers.pick,
+                    writeIn: answers.writeIn, send: answers.send, close: nil, sendOff: answers.sendOff, failure: answers.failure
                 )
             }
         }

@@ -90,7 +90,7 @@ public struct QuestionBlock<Evidence: View>: View {
                     )
                     if writeInPicked {
                         WriteInField(initialText: picks.writeIns[index] ?? "", commit: writeIn, focused: $writeInFocused)
-                            .id(WriteInField.scrollID)
+                            .id(WriteInField.scrollID(decision: index))
                             .transition(.opacity)
                     }
                 }
@@ -444,6 +444,12 @@ public struct WriteInField: View {
     /// The field's id in the review's scroll view, which scrolls to it once it is picked.
     public static let scrollID = "write-in"
 
+    /// The field's id under decision `index`: the Inbox's one decision keeps `scrollID`, and each later decision of a
+    /// ticket page's sheet has its own, so the sheet scrolls to the field just picked.
+    public static func scrollID(decision index: Int) -> String {
+        index == 0 ? scrollID : "\(scrollID)-\(index)"
+    }
+
     public init(initialText: String, commit: @escaping (String) -> Void, focused: FocusState<Bool>.Binding) {
         _text = State(initialValue: initialText)
         self.commit = commit
@@ -554,10 +560,13 @@ private struct TradeoffTag: View {
 /// button.
 public struct QuestionSendArea: View {
     let send: QuestionSend
+    /// Why Symphony refused the last answer sent: shown under the answer while Send stays on to send it again.
+    var failure: String?
     let action: () -> Void
 
-    public init(send: QuestionSend, action: @escaping () -> Void) {
+    public init(send: QuestionSend, failure: String? = nil, action: @escaping () -> Void) {
         self.send = send
+        self.failure = failure
         self.action = action
     }
 
@@ -568,7 +577,7 @@ public struct QuestionSendArea: View {
             } else if send.total > 1 {
                 line("Answered", "\(send.answered) of \(send.total)")
             }
-            if let refusal = send.refusal {
+            if let refusal = send.refusal ?? failure {
                 Refusal(reason: refusal)
             }
             Button(send.title, action: action)
@@ -600,6 +609,14 @@ public enum QuestionKeys {
         guard modifiers.isEmpty, !typing, characters.count == 1, let key = characters.first else { return nil }
         return optionIndex(key)
     }
+
+    /// Whether Return sends an answer there is (`enabled`): ⌘Return anywhere, as in the Inbox (the Options card's hint);
+    /// plain Return while the keyboard is outside a text field, where it types a new line.
+    public static func sends(modifiers: EventModifiers, typing: Bool, enabled: Bool) -> Bool {
+        guard enabled else { return false }
+        if modifiers == .command { return true }
+        return modifiers.isEmpty && !typing
+    }
 }
 
 extension View {
@@ -621,7 +638,7 @@ extension View {
 
 /// Every open Question of a ticket: a header with the count and, on a laptop, a close button; the Questions one under
 /// the other, scrolling on their own; and one Send at the foot that sends every answered one. When it opens the
-/// keyboard goes to the first answer; with one Question its number keys pick.
+/// keyboard goes to the first answer; with one Question its number keys pick, and Return sends.
 public struct DecisionSheet: View {
     let questions: [InboxReview.Action]
     let picks: DecisionPicks
@@ -635,9 +652,11 @@ public struct DecisionSheet: View {
     /// Closes the sheet; nil for the desktop's column, which stays open and has no close button.
     var close: (() -> Void)?
     var narrow: Bool
-    /// Why Send stays off whatever is picked (the ticket page's sheet, until answering from it lands); nil when the
+    /// Why Send stays off whatever is picked (the ticket page's sheet while its answer is on its way); nil when the
     /// picks decide.
     var sendOff: String?
+    /// Why Symphony refused the last answer sent, under Send; nil when nothing was refused.
+    var failure: String?
     @FocusState private var firstAnswer: Bool
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
@@ -650,7 +669,8 @@ public struct DecisionSheet: View {
         send: @escaping () -> Void,
         close: (() -> Void)? = nil,
         narrow: Bool = false,
-        sendOff: String? = nil
+        sendOff: String? = nil,
+        failure: String? = nil
     ) {
         self.questions = questions
         self.picks = picks
@@ -661,6 +681,12 @@ public struct DecisionSheet: View {
         self.close = close
         self.narrow = narrow
         self.sendOff = sendOff
+        self.failure = failure
+    }
+
+    /// The Questions whose own-words card is picked.
+    private var writeInsPicked: Set<Int> {
+        Set(questions.indices.filter { questions[$0].isWriteIn(picks, decision: $0) })
     }
 
     /// Send under the Questions: the picks' answer, off with `sendOff` when it is set.
@@ -678,15 +704,34 @@ public struct DecisionSheet: View {
             if offscreenSnapshot {
                 questionList.frame(minHeight: 0, maxHeight: .infinity, alignment: .top).clipped().layoutPriority(-1)
             } else {
-                ScrollView { questionList }
+                ScrollView {
+                    ScrollViewReader { proxy in
+                        questionList
+                            // Picking an own-words card scrolls its field into view above the footer, once it is laid
+                            // out, so the Director sees what they type (TP-1450's QA found it under Send).
+                            .onChange(of: writeInsPicked) { before, after in
+                                guard let index = after.subtracting(before).min() else { return }
+                                DispatchQueue.main.async {
+                                    withAnimation { proxy.scrollTo(WriteInField.scrollID(decision: index), anchor: .bottom) }
+                                }
+                            }
+                    }
+                }
             }
             Divider()
-            QuestionSendArea(send: sheetSend, action: send)
+            QuestionSendArea(send: sheetSend, failure: failure, action: send)
                 .padding(DesignTokens.Space.s4)
         }
         .frame(maxHeight: .infinity)
         .background(DesignTokens.Surface.window.color)
         .modifier(SheetKeys(questions: questions, pick: pick))
+        // Return sends once there is an answer, while the keyboard is not in the own-words field.
+        .onKeyPress(.return, phases: .down) { press in
+            let typing = NSApp?.keyWindow?.firstResponder is NSText
+            guard QuestionKeys.sends(modifiers: press.modifiers, typing: typing, enabled: sheetSend.enabled) else { return .ignored }
+            send()
+            return .handled
+        }
         .onAppear {
             // The keyboard goes to the first answer once the sheet is laid out.
             guard !offscreenSnapshot else { return }

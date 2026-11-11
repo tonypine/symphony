@@ -126,7 +126,10 @@ struct InboxBannerView: View {
         }
         .padding(.horizontal, DesignTokens.Space.s4)
         .padding(.vertical, DesignTokens.Space.s3)
+        // The raised fill is a see-through system fill: the window's own background under it hides the rows scrolling
+        // under the banner (TP-1450's QA found the ticket page's timeline showing through).
         .background(DesignTokens.Surface.raised.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous))
+        .background(DesignTokens.Surface.window.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
                 .strokeBorder(DesignTokens.Surface.separator.color)

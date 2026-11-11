@@ -1,0 +1,402 @@
+{
+  "issue_id": "i-1245",
+  "issue_identifier": "TP-1245",
+  "repo_key": "symphony",
+  "last_error": null,
+  "ticket": {
+    "title": "The paused line's times",
+    "phase": "Rework",
+    "priority": 1,
+    "labels": [
+      "skip-update-hold"
+    ]
+  },
+  "workspace": {
+    "path": "/Users/director/symphony-workspaces/symphony/TP-1245",
+    "host": null
+  },
+  "note": {
+    "id": "01M746NOTE",
+    "text": "Keep the paused line to one row on a laptop; the reasons fold under it.",
+    "at": "2026-10-08T09:35:00Z",
+    "by": "Tony",
+    "read_by": {
+      "run_id": "run-2",
+      "at": "2026-10-08T09:45:00Z"
+    }
+  },
+  "brief": {
+    "id": "01M746BRIEF",
+    "text": "Adds the paused line under the ticket page's title: why the ticket is paused, since when, and Release where you may release it.",
+    "walkthrough": "Open a paused ticket: the line under its title says why and since when.",
+    "at": "2026-10-07T09:03:00Z",
+    "by": {
+      "kind": "agent",
+      "run_kind": "implementation",
+      "run_id": "run-1"
+    }
+  },
+  "connected": {
+    "epic": {
+      "identifier": "TP-1381",
+      "title": "Phase 3b: the Director redesigned around a ticket's situation",
+      "done": 3,
+      "total": 6,
+      "incomplete": false,
+      "tickets": [
+        {
+          "identifier": "TP-1443",
+          "title": "The Step list and Run group components",
+          "state": "Done",
+          "situation": "done",
+          "current": false
+        },
+        {
+          "identifier": "TP-1444",
+          "title": "The Timeline section",
+          "state": "Done",
+          "situation": "done",
+          "current": false
+        },
+        {
+          "identifier": "TP-1445",
+          "title": "The Lifecycle section and the Phase path",
+          "state": "Done",
+          "situation": "done",
+          "current": false
+        },
+        {
+          "identifier": "TP-1446",
+          "title": "The facts rail's Pull request and Connected panels",
+          "state": "Code Review",
+          "situation": "waiting_for_ci",
+          "current": false
+        },
+        {
+          "identifier": "TP-1447",
+          "title": "The facts rail's Note, Decisions and Details panels",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": true
+        },
+        {
+          "identifier": "TP-1448",
+          "title": "The ticket page's layout on a laptop",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        }
+      ]
+    },
+    "parent": {
+      "identifier": "TP-1381",
+      "title": "Phase 3b: the Director redesigned around a ticket's situation",
+      "done": 3,
+      "total": 6,
+      "children": [
+        "completed",
+        "completed",
+        "completed",
+        "started",
+        "unstarted",
+        "unstarted"
+      ]
+    },
+    "sub_tickets": [],
+    "blocked_by": [
+      {
+        "identifier": "TP-1445",
+        "title": "The Lifecycle section and the Phase path",
+        "state": "Done",
+        "status": "resolved",
+        "resolved_at": "2026-11-09T22:37:00Z"
+      },
+      {
+        "identifier": "TP-1446",
+        "title": "The facts rail's Pull request and Connected panels",
+        "state": "Code Review",
+        "status": "open",
+        "resolved_at": null
+      }
+    ],
+    "blocks": [
+      {
+        "identifier": "TP-1448",
+        "title": "The ticket page's layout on a laptop",
+        "state": "Todo",
+        "situation": "blocked_by_ticket"
+      }
+    ],
+    "related": []
+  },
+  "open_questions": [],
+  "pause": null,
+  "status": "working",
+  "situation": {
+    "kind": "working",
+    "word": "Starting a run",
+    "cause": "Your answer cleared the pause: implementation run 3 is starting.",
+    "next": null,
+    "since": "2026-10-08T10:27:10Z",
+    "waits_on": null,
+    "and_more": 0,
+    "step": null,
+    "run": null,
+    "retry": null
+  },
+  "moves": {
+    "answer": {
+      "allowed": false,
+      "reason": "No question waits on your answer."
+    },
+    "start": {
+      "allowed": false,
+      "reason": "It waits on your answer first."
+    },
+    "stop": {
+      "allowed": false,
+      "reason": "The run is starting."
+    },
+    "restart": {
+      "allowed": true,
+      "reason": null
+    },
+    "cancel": {
+      "allowed": true,
+      "reason": null
+    },
+    "move_to": {
+      "allowed": true,
+      "reason": null,
+      "states": [
+        "Backlog",
+        "Todo",
+        "Code Review",
+        "Rework",
+        "Done"
+      ]
+    },
+    "force": {
+      "allowed": true,
+      "reason": null
+    },
+    "unforce": {
+      "allowed": false,
+      "reason": "It isn't forced."
+    },
+    "unblock": {
+      "allowed": false,
+      "reason": "TP-1 has nothing a person can unblock"
+    },
+    "note": {
+      "allowed": true,
+      "reason": null
+    }
+  },
+  "pull_request": {
+    "number": 741,
+    "url": "https://github.com/acme/symphony/pull/741",
+    "title": "TP-1244 The paused line on the ticket page",
+    "state": "open",
+    "draft": false,
+    "head_sha": "8b03e51c0ffee0123456789abcdef0123456789a",
+    "head_short": "8b03e51",
+    "base": "main",
+    "mergeable": "unstable",
+    "behind_base": false,
+    "review_state": "changes_requested",
+    "review_rounds": 2,
+    "files_changed": 9,
+    "additions": 486,
+    "deletions": 52,
+    "checks": [
+      {
+        "workflow": "Mac app",
+        "checks": [
+          {
+            "name": "What changed",
+            "state": "passed",
+            "started_at": "2026-11-10T10:00:00Z",
+            "duration_ms": 8000,
+            "url": "https://github.com/acme/symphony/actions/runs/101/job/1",
+            "required": null
+          },
+          {
+            "name": "App build",
+            "state": "running",
+            "started_at": "2026-11-10T10:01:00Z",
+            "duration_ms": null,
+            "url": "https://github.com/acme/symphony/actions/runs/101/job/2",
+            "required": null
+          }
+        ]
+      },
+      {
+        "workflow": "Elixir checks",
+        "checks": [
+          {
+            "name": "Format",
+            "state": "passed",
+            "started_at": "2026-11-10T10:00:00Z",
+            "duration_ms": 42000,
+            "url": "https://github.com/acme/symphony/actions/runs/100/job/1",
+            "required": true
+          },
+          {
+            "name": "Dialyzer",
+            "state": "passed",
+            "started_at": "2026-11-10T10:00:00Z",
+            "duration_ms": 100000,
+            "url": "https://github.com/acme/symphony/actions/runs/100/job/2",
+            "required": true
+          },
+          {
+            "name": "Tests, part 1 of 4",
+            "state": "failed",
+            "started_at": "2026-11-10T10:00:00Z",
+            "duration_ms": 372000,
+            "url": "https://github.com/acme/symphony/actions/runs/100/job/3",
+            "required": true
+          },
+          {
+            "name": "Coverage report",
+            "state": "skipped",
+            "started_at": null,
+            "duration_ms": null,
+            "url": "https://github.com/acme/symphony/actions/runs/100/job/4",
+            "required": true
+          }
+        ]
+      },
+      {
+        "workflow": "Docs",
+        "checks": [
+          {
+            "name": "Links",
+            "state": "waiting",
+            "started_at": null,
+            "duration_ms": null,
+            "url": "https://github.com/acme/symphony/actions/runs/102/job/1",
+            "required": null
+          }
+        ]
+      }
+    ],
+    "red_kind": "failure",
+    "next_action": {
+      "rule": "R22",
+      "action": "rerun_failed",
+      "reason": "Tests failed on PR #741: rerunning it once before CI Fix",
+      "owner": "symphony",
+      "clears_when": "the failed checks run again",
+      "since": "2026-11-10T10:06:30Z",
+      "outcome": "applied"
+    },
+    "read_at": "2026-10-08T10:27:00Z"
+  },
+  "lifecycle": {
+    "current": "coding",
+    "stages": [
+      {
+        "id": "coding",
+        "name": "Coding",
+        "state": "current",
+        "visits": 1,
+        "time_ms": 2400000,
+        "agent_time_ms": 2280000,
+        "tokens": 2400000
+      },
+      {
+        "id": "code_review",
+        "name": "Code Review",
+        "state": "passed",
+        "visits": 3,
+        "time_ms": 6060000,
+        "agent_time_ms": 1500000,
+        "tokens": 1200000
+      },
+      {
+        "id": "qa",
+        "name": "QA",
+        "state": "passed",
+        "visits": 1,
+        "time_ms": 840000,
+        "agent_time_ms": 780000,
+        "tokens": 600000
+      },
+      {
+        "id": "merging",
+        "name": "Merging",
+        "state": "not_yet",
+        "visits": 0,
+        "time_ms": 0,
+        "agent_time_ms": 0,
+        "tokens": 0
+      },
+      {
+        "id": "done",
+        "name": "Done",
+        "state": "not_yet",
+        "visits": 0,
+        "time_ms": 0,
+        "agent_time_ms": 0,
+        "tokens": 0
+      }
+    ],
+    "tokens": {
+      "total": 3900000,
+      "cap": 8000000
+    }
+  },
+  "phase_path": {
+    "current": "Rework",
+    "phases": [
+      {
+        "phase": "Todo",
+        "count": 1,
+        "time_ms": 60000,
+        "first_entered_at": "2026-10-07T09:00:01Z"
+      },
+      {
+        "phase": "In Progress",
+        "count": 1,
+        "time_ms": 2520000,
+        "first_entered_at": "2026-10-07T09:01:00Z"
+      },
+      {
+        "phase": "QA",
+        "count": 1,
+        "time_ms": 840000,
+        "first_entered_at": "2026-10-08T09:30:00Z"
+      },
+      {
+        "phase": "Rework",
+        "count": 1,
+        "time_ms": 2580000,
+        "first_entered_at": "2026-10-08T09:44:00Z"
+      }
+    ],
+    "moves": [
+      {
+        "from": "Backlog",
+        "to": "Todo",
+        "at": "2026-10-07T09:00:01Z"
+      },
+      {
+        "from": "Todo",
+        "to": "In Progress",
+        "at": "2026-10-07T09:01:00Z"
+      },
+      {
+        "from": "In Progress",
+        "to": "QA",
+        "at": "2026-10-08T09:30:00Z"
+      },
+      {
+        "from": "QA",
+        "to": "Rework",
+        "at": "2026-10-08T09:44:00Z"
+      }
+    ]
+  }
+}

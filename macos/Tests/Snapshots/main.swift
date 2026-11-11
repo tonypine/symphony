@@ -1308,13 +1308,22 @@ func ticketPageLaptop(_ identifier: String) -> some View {
     .background(DesignTokens.Surface.content.color)
 }
 
-/// TP-1245's page in the 1440 × 900 window with Answer pressed: the decision sheet over the dimmed page, Send off.
+/// TP-1245's answers on the ticket page (TP-1450): its second option picked, or its own-words card with words in it.
+let ticketPagePicked = DecisionPicks(picks: [0: 1])
+var ticketPageOwnWords: DecisionPicks {
+    let action = TicketPage.questions(of: "TP-1245", in: ticketPageInbox.items)[0]
+    return DecisionPicks(picks: [0: action.writeInIndex], writeIns: [0: "Say for how long, and add the clock time on hover."])
+}
+
+/// TP-1245's page in the 1440 × 900 window with Answer pressed: the decision sheet over the dimmed page, the
+/// recommended answer picked, or `picks`; Send on, or off with `sending` while the answer is on its way.
 @MainActor
-func ticketPageAnswering() -> some View {
+func ticketPageAnswering(picks: DecisionPicks = DecisionPicks(), sending: Bool = false) -> some View {
     let identifier = "TP-1245"
     let page = ticketPageRead(identifier)
     let width = TicketPageLayout.laptopPageWidth
     let questions = TicketPage.questions(of: identifier, in: ticketPageInbox.items)
+    let answers = TicketPageAnswers(picks: picks, sending: sending)
     return TicketPageBody(
         page: page, questions: questions, width: width, transcripts: StepTranscripts { _ in .unreachable },
         note: TicketNoteComposer(identifier: identifier), decisions: ticketPageDecisions(identifier), sheetOpen: true,
@@ -1324,8 +1333,8 @@ func ticketPageAnswering() -> some View {
     .clipped()
     .background(DesignTokens.Surface.content.color)
     .decisionSheet(isPresented: .constant(true)) {
-        DecisionSheet(questions: questions, picks: DecisionPicks(), subtitle: page.sheetSubtitle, pick: { _, _ in }, send: {}, close: {},
-                      sendOff: DecisionsLine.sendLaterReason)
+        DecisionSheet(questions: questions, picks: answers.picks, subtitle: page.sheetSubtitle, pick: { _, _ in }, send: {}, close: {},
+                      sendOff: answers.sendOff)
             .frame(height: TicketPageLayout.laptopWindowHeight)
     }
 }
@@ -1336,11 +1345,11 @@ func ticketPageAnswering() -> some View {
 /// arrangement, with a waiting ticket's Questions as the column on the far right; at 1590 and 1610 pt the two sides of
 /// the 1600 pt breakpoint. The page hasn't scrolled, and is drawn at its whole height.
 @MainActor
-func ticketPageWide(_ identifier: String, width: CGFloat = TicketPageLayout.desktopPageWidth) -> some View {
+func ticketPageWide(_ identifier: String, width: CGFloat = TicketPageLayout.desktopPageWidth, picks: DecisionPicks = DecisionPicks()) -> some View {
     let page = ticketPageRead(identifier)
     let height = TicketPageLayout.desktopPageHeight
     return TicketPageBody(
-        page: page, questions: TicketPage.questions(of: identifier, in: ticketPageInbox.items), width: width,
+        page: page, questions: TicketPage.questions(of: identifier, in: ticketPageInbox.items), answers: TicketPageAnswers(picks: picks), width: width,
         transcripts: StepTranscripts { _ in .unreachable }, note: TicketNoteComposer(identifier: identifier),
         decisions: ticketPageDecisions(identifier), scroll: TicketPageScroll(viewport: height), calendar: timelineCalendar
     )
@@ -1447,6 +1456,13 @@ MainActor.assumeIsolated {
             render(ticketPageLaptop(identifier), scheme, to: "ticket-page-\(moment)-laptop-\(suffix).png")
         }
         render(ticketPageAnswering(), scheme, to: "ticket-page-answer-sheet-laptop-\(suffix).png")
+        // Answering from the page (TP-1450): the sheet and the desktop's column with another option picked and with
+        // the Director's own words, and the sheet while the answer is on its way, Send off.
+        render(ticketPageAnswering(picks: ticketPagePicked), scheme, to: "ticket-page-answer-picked-laptop-\(suffix).png")
+        render(ticketPageAnswering(picks: ticketPageOwnWords), scheme, to: "ticket-page-answer-own-words-laptop-\(suffix).png")
+        render(ticketPageAnswering(sending: true), scheme, to: "ticket-page-answer-sending-laptop-\(suffix).png")
+        render(ticketPageWide("TP-1245", picks: ticketPagePicked), scheme, to: "ticket-page-answer-picked-desktop-\(suffix).png")
+        render(ticketPageWide("TP-1245", picks: ticketPageOwnWords), scheme, to: "ticket-page-answer-own-words-desktop-\(suffix).png")
         // The ticket page at desktop width (TP-1449): the three moments at 2200 pt, and the waiting ticket on either
         // side of the 1600 pt breakpoint.
         for (identifier, moment) in ticketPageMoments {

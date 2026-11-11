@@ -379,16 +379,15 @@ GitHub or Linear in QA:
   and nothing scrolls sideways or is clipped. Open TP-1245: the line under the header reads "A
   question waits on you" with **Answer…**, and its height matches TP-1244's quiet line. Press
   Answer…: a sheet slides in from the right over the dimmed page with the question and its two
-  options; Send stays off with "Answer it in the Inbox for now: sending from the ticket page
-  comes next." Press Escape: the sheet closes and the keyboard is back on Answer…; open it again
-  and close it with its button, then with a click on the dimmed page. Open TP-1246: the
+  options, the recommended one picked and Send on. Press Escape: the sheet closes and the
+  keyboard is back on Answer…; open it again and close it with its button, then with a click on
+  the dimmed page. Open TP-1246: the
   situation reads Shipped and the PR panel shows #741 merged. Walk it in light and dark.
 - **Ticket page at desktop width (TP-1449):** the same fixtures, with the window as wide as the
   screen allows (the page switches past 1600 pt of content, beside the sidebar). Open TP-1245:
   the moves (Start Now, Force…, More; no Answer) sit at the right of the identifier's line and
   the title spans the page under them; there is no decisions line and no Answer… sheet. The question is a 600 pt column on the far
-  right, with "Your decision", the two options and Send (off, with "Answer it in the Inbox for
-  now…") at its foot; scroll the page: the column and the 440 pt facts rail stay in view, the
+  right, with "Your decision", the two options and Send at its foot; scroll the page: the column and the 440 pt facts rail stay in view, the
   column's header and Send stay in place, and nothing scrolls sideways. Open TP-1244: no column,
   the Lifecycle and Timeline at most 1040 pt wide, centred with the rail. Narrow the window
   below about 1600 pt of content: the page becomes the laptop layout, with the decisions line
@@ -396,6 +395,22 @@ GitHub or Linear in QA:
   Where the screen is too small for 1600 pt, the desktop width is proved by the
   `ticket-page-*-desktop` and `ticket-page-waiting-1590`/`-1610` snapshots. Walk it in light and
   dark.
+- **Answering from the ticket page (TP-1450):** the same `ticket-page` fixtures at 1440×900, on a
+  fresh launch (its answer reads once Symphony took a `decide`: the fixtures then serve each
+  file's `.after-decide.json`). Open TP-1245 and press Answer…; press 2, then 1: the option
+  cards follow the keys. Press Return: the same consequence sheet as the Inbox's Send Decision
+  opens, titled `Send "For how long"?`. Confirm it: the sheet slides out, the banner "Sending
+  your decision" with Undo shows under the page, and Answer…'s sheet offers Send off with
+  "Sending your answer…" while it waits. After 10 s `qa_api_requests` lists one
+  `POST /api/v1/control/decide` for TP-1245 with the pick "For how long"; the page reads again:
+  the decisions line fades to "Nothing needs you", the situation reads "Starting a run", the
+  timeline shows "Answered" and "Pause cleared" at its top, and the banner says "Sent your
+  decision" (VoiceOver announces it). Open the Inbox: TP-1245's question is gone. Relaunch with
+  a fresh root and pick "Answer in my own words" instead: Send stays off with "Write your answer
+  first." until there is text, and the consequence sheet quotes it. With the window past 1600 pt
+  of content, the desktop's column has the same Send, and it slides out once the read drops the
+  question. Walk it in light and dark, and once with Reduce Motion on: the question disappears
+  at once.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before
