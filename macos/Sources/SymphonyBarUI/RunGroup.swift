@@ -14,6 +14,7 @@ public struct RunGroup: View {
     let fold: Binding<Bool>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.readSession) private var readSession
 
     /// `unfolded` and `unfoldedSteps` say what is open to start with; nil opens what opens by default. `fold`, when
     /// given, keeps whether the run is unfolded instead, and `unfolded` is ignored.
@@ -32,8 +33,13 @@ public struct RunGroup: View {
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            FoldHeader(unfolded: unfolded, accessibilityLabel: run.foldAccessibilityLabel(folded: !unfolded) + ", " + run.accessibilityLabel, toggle: toggle) {
-                RunHeaderLabel(run: run, folded: !unfolded)
+            HStack(alignment: .center, spacing: DesignTokens.Space.s1) {
+                FoldHeader(unfolded: unfolded, accessibilityLabel: run.foldAccessibilityLabel(folded: !unfolded) + ", " + run.accessibilityLabel, toggle: toggle) {
+                    RunHeaderLabel(run: run, folded: !unfolded)
+                }
+                if let readSession {
+                    RunMoreMenu(run: run, readSession: readSession)
+                }
             }
             .padding(.vertical, DesignTokens.Space.s1)
             if unfolded {
@@ -76,6 +82,77 @@ public struct RunGroup: View {
     }
 
     public static let noSteps = "This run recorded no steps."
+}
+
+/// Opens the session reader on a run: the window that reads its whole session (TP-1452). A Run group shows its More
+/// menu only where the view around it gives one.
+///
+/// Two actions for the same ticket are equal, so a page that draws again (each read, each scroll the page measures)
+/// hands its Run groups the same value and SwiftUI leaves their More menus as they are, instead of rebuilding every
+/// run's menu on every update of a long timeline.
+public struct ReadSessionAction: Equatable {
+    /// The ticket whose runs it opens.
+    let identifier: String
+    let handler: (RunGroupModel) -> Void
+
+    public init(_ identifier: String, _ handler: @escaping (RunGroupModel) -> Void) {
+        self.identifier = identifier
+        self.handler = handler
+    }
+
+    public func callAsFunction(_ run: RunGroupModel) { handler(run) }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool { lhs.identifier == rhs.identifier }
+}
+
+public extension EnvironmentValues {
+    @Entry var readSession: ReadSessionAction?
+}
+
+/// The run's More: "Read the whole session", off with its reason while the run has nothing to read.
+///
+/// A plain button that opens a small popover, not a SwiftUI `Menu`: a `Menu` is an AppKit pop-up button with its menu
+/// built up front, one per run, and on a long timeline with the run now live (its breathing step bar and flowing mark
+/// redrawing the page all the time) those pop-ups kept the page from answering accessibility reads and keys (TP-1452's
+/// QA on TP-1244). The popover and its one button exist only while it is open.
+private struct RunMoreMenu: View {
+    let run: RunGroupModel
+    let readSession: ReadSessionAction
+
+    @State private var open = false
+
+    private var canRead: Bool { SessionReader.canRead(run) }
+
+    var body: some View {
+        Button { open = true } label: {
+            Image(systemName: "ellipsis.circle")
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(.secondary)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .fixedSize()
+        .help(canRead ? Self.title : SessionReader.nothingToRead)
+        .accessibilityLabel(Self.title + ", " + run.title)
+        .accessibilityHint(canRead ? SessionReader.menuTitle : SessionReader.nothingToRead)
+        .popover(isPresented: $open, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                Button(SessionReader.menuTitle) {
+                    open = false
+                    readSession(run)
+                }
+                .disabled(!canRead)
+                if !canRead {
+                    Text(SessionReader.nothingToRead)
+                        .font(DesignTokens.TypeStyle.callout.font)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(DesignTokens.Space.s3)
+        }
+    }
+
+    static let title = "More"
 }
 
 /// The run's header line. In a column too narrow for it on one line (the desktop's main column beside the decisions,

@@ -119,7 +119,16 @@
             "title": "Write the code",
             "outcome": "passed"
           },
-          "artifacts": [],
+          "artifacts": [
+            {
+              "id": "tr-1244-run1-code",
+              "kind": "transcript",
+              "label": "Write the code transcript",
+              "mime": "application/x-ndjson",
+              "url": "/api/v1/artifacts/tr-1244-run1-code",
+              "available": true
+            }
+          ],
           "children": [],
           "new": false
         },
@@ -150,7 +159,16 @@
             "returns_to": "code",
             "returns_to_title": "Write the code"
           },
-          "artifacts": [],
+          "artifacts": [
+            {
+              "id": "tr-1244-run1-tests",
+              "kind": "transcript",
+              "label": "Tests transcript",
+              "mime": "application/x-ndjson",
+              "url": "/api/v1/artifacts/tr-1244-run1-tests",
+              "available": true
+            }
+          ],
           "children": [],
           "new": false
         },
