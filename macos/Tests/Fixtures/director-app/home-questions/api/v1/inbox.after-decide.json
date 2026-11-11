@@ -1,0 +1,87 @@
+{
+  "items": [
+    {
+      "ask": "Show the gift card balance on the printed receipt too?",
+      "context": {
+        "blocked_by": [],
+        "blocks": [],
+        "earlier_decisions": [],
+        "parent": null,
+        "pull_request": null,
+        "related": []
+      },
+      "identifier": "SHOP-344",
+      "issue_id": "i-344",
+      "kind": "action",
+      "references": {},
+      "repo_key": "web-shop",
+      "review": {
+        "comment_id": "c-344-request",
+        "confirm": null,
+        "if_unanswered": "SHOP-344 stays in In Progress with only the emailed receipt done.",
+        "options": [
+          {
+            "effect": "The next run adds the balance under the total on the printed receipt.",
+            "label": "Show it on both",
+            "recommended": true,
+            "tradeoffs": [
+              {
+                "kind": "good",
+                "text": "Customers see the balance wherever they look."
+              }
+            ]
+          },
+          {
+            "effect": "SHOP-344 goes to Code Review as it is.",
+            "label": "Emailed receipt only",
+            "recommended": false,
+            "tradeoffs": [
+              {
+                "kind": "cost",
+                "text": "The store team asks again."
+              }
+            ]
+          }
+        ],
+        "question": "SHOP-344 (Gift card balance on the receipt) shows the remaining balance on the emailed receipt. Should the printed receipt show it too?",
+        "question_id": "q-344",
+        "recommendation_reason": "The free line fits the balance, and the store team asked for both.",
+        "requested_at": "2026-10-07T14:10:00Z",
+        "steps": [],
+        "title": "Show the gift card balance on the printed receipt too?",
+        "unblocks": "SHOP-344",
+        "why": "The printed receipt has one free line under the total. The store team asked for the balance on both."
+      },
+      "state": "In Progress",
+      "title": "Gift card balance on the receipt",
+      "url": "https://linear.app/acme/issue/SHOP-344",
+      "waiting_seconds": 600,
+      "waiting_since": "2026-10-07T14:10:00Z"
+    },
+    {
+      "ask": "The upload host refused the release twice",
+      "context": {
+        "blocked_by": [],
+        "blocks": [],
+        "earlier_decisions": [],
+        "parent": null,
+        "pull_request": null,
+        "related": []
+      },
+      "identifier": "TP-899",
+      "issue_id": "i-899",
+      "kind": "blocked",
+      "references": {},
+      "repo_key": "symphony",
+      "review": {
+        "clearing_condition": "when a person clears the hold",
+        "reason": "The upload host refused the release twice"
+      },
+      "state": "In Progress",
+      "title": "Retry the release upload",
+      "url": "https://linear.app/tonypine/issue/TP-899",
+      "waiting_seconds": 300,
+      "waiting_since": "2026-10-07T14:15:00Z"
+    }
+  ]
+}

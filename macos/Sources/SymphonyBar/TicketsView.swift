@@ -61,16 +61,17 @@ extension SymphonyWindowModel {
     /// Whether the view shown has an inspector for ⌥⌘I.
     var hasInspector: Bool {
         guard !showsPage else { return false }
-        return [.tickets, .audit].contains(selection) || selection == .inbox && peek.canToggle
+        return [.tickets, .audit, .overview].contains(selection)
     }
 
-    /// The inspector's menu item and toolbar button: on the Inbox, the peek (N4).
+    /// The inspector's menu item and toolbar button: on Home, the Inbox's drawer (TP-1454).
     var inspectorTitle: String {
-        (selection == .inbox ? peek.isShown : inspectorShown) ? "Hide Inspector" : "Show Inspector"
+        if selection == .overview { return inboxDrawerShown ? HomeInbox.hideDrawerTitle : HomeInbox.showDrawerTitle }
+        return inspectorShown ? "Hide Inspector" : "Show Inspector"
     }
 
     func toggleInspector() {
-        if selection == .inbox { togglePeek() } else { inspectorShown.toggle() }
+        if selection == .overview { toggleInboxDrawer() } else { inspectorShown.toggle() }
     }
 
     /// The control pressed while Symphony is stopped.
@@ -441,7 +442,8 @@ struct TicketInspectorBody: View {
 
 // MARK: - C2 and D12a: the dispatch control and its popover
 
-/// The toolbar's one custom glass element; with Reduce Transparency it is a solid `surface.raised` capsule.
+/// The status bar's dispatch control (TP-1454): a quiet button with the catalog's hover and pressed faces, pressed
+/// while its popover is open.
 struct DispatchControlButton: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
@@ -453,11 +455,11 @@ struct DispatchControlButton: View {
         } label: {
             DispatchControlLabel(control: control)
         }
-        .buttonStyle(.plain)
+        .directorButton(.quiet, size: .small, selected: model.dispatchPopoverShown)
         .help(control.canStart ? DispatchControl.startTitle : "Dispatch")
         .accessibilityLabel(control.accessibilityLabel)
         .accessibilityAddTraits(.isButton)
-        .popover(isPresented: $model.dispatchPopoverShown, arrowEdge: .bottom) {
+        .popover(isPresented: $model.dispatchPopoverShown, arrowEdge: .top) {
             DispatchPopover(
                 control: control,
                 working: model.dispatchInFlight,
@@ -474,10 +476,9 @@ struct DispatchControlButton: View {
     }
 }
 
-/// The control's face: status dot, word and chevron (or Start Symphony), on glass.
+/// The control's face: status dot, word and chevron (or Start Symphony); the button's style draws its surface.
 struct DispatchControlLabel: View {
     let control: DispatchControl
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         HStack(spacing: DesignTokens.Space.s2) {
@@ -485,31 +486,14 @@ struct DispatchControlLabel: View {
                 .fill(control.status.tint)
                 .frame(width: 8, height: 8)
             Text(control.word)
-                .foregroundStyle(control.mode == .paused ? AnyShapeStyle(control.status.tint) : AnyShapeStyle(.primary))
+                // Plain colors: the quiet button's own foreground is the accent, which a hierarchical style would take.
+                .foregroundStyle(control.mode == .paused ? control.status.tint : Color.primary)
                 .lineLimit(1)
             if control.canStart {
                 Text(DispatchControl.startTitle).foregroundStyle(Color.accentColor)
             } else {
-                Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                Image(systemName: "chevron.up").font(.caption2.weight(.semibold)).foregroundStyle(Color.secondary)
             }
-        }
-        .font(DesignTokens.TypeStyle.callout.font.weight(.medium))
-        .padding(.horizontal, DesignTokens.Space.s3)
-        .padding(.vertical, DesignTokens.Space.s1 + 2)
-        .contentShape(Capsule())
-        .modifier(DispatchGlass(reduceTransparency: reduceTransparency))
-    }
-}
-
-/// `material.glass.control`, or `surface.raised` under Reduce Transparency.
-struct DispatchGlass: ViewModifier {
-    let reduceTransparency: Bool
-
-    func body(content: Content) -> some View {
-        if reduceTransparency {
-            content.background(DesignTokens.Surface.raised.color, in: Capsule())
-        } else {
-            content.glassEffect(.regular.interactive(), in: .capsule)
         }
     }
 }
