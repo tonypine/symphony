@@ -1849,9 +1849,7 @@ defmodule SymphonyElixir.QaDriver do
   defp sample_name(nil, pid), do: {:ok, "sample-#{pid}-#{System.os_time(:millisecond)}"}
 
   defp sample_name(name, _pid) when is_binary(name) do
-    with {:ok, name} <- Checks.screenshot_name(String.replace_suffix(name, ".txt", "")) do
-      {:ok, name}
-    end
+    Checks.screenshot_name(String.replace_suffix(name, ".txt", ""))
   end
 
   defp sample_name(_name, _pid), do: tool_error("invalid_arguments", "`name` must be a string.")
