@@ -3,6 +3,8 @@ import Foundation
 // The ticket page at laptop width (TP-1448): the catalog's Page layout (`docs/design/director-ticket-page.md` §2 and
 // §5) assembled from the components. The header runs across the page; under it the decisions line; then the
 // Lifecycle section on top of the Timeline section in the main column, with the facts rail beside them at 340 pt.
+// From 1600 pt on (TP-1449) the desktop's: the moves on the identifier's line, the decisions as a 600 pt column on the
+// far right, the rail at 440 pt, the main column fluid beside them, up to 1040 pt when nothing waits on the person.
 
 /// The page's sizes at the laptop width (§5): a 1440 × 900 window gives about 1180 pt of content beside the sidebar.
 public enum TicketPageLayout {
@@ -30,6 +32,100 @@ public enum TicketPageLayout {
 
     /// The page's width in a laptop window, beside the sidebar.
     public static var laptopPageWidth: Double { laptopWindowWidth - DesignTokens.Layout.sidebarWidth }
+
+    // MARK: The desktop width (TP-1449)
+
+    /// The container query (§5, the catalog's breakpoint): from this page width on, the header, the decisions and the
+    /// columns take the desktop arrangement; under it the laptop's.
+    public static let breakpoint: Double = 1600
+    /// A 1440p display gives about 2200 × 1360 pt of content (the `optimize` viewport).
+    public static let desktopPageWidth: Double = 2200
+    public static let desktopPageHeight: Double = 1360
+    /// The facts rail at the desktop width.
+    public static let desktopRailWidth: Double = 440
+    /// The decisions column on the far right, always open while a Question waits.
+    public static let decisionsColumnWidth: Double = DecisionSheetLayout.desktopWidth
+    /// The main column's widest when nothing waits on the person: the page's columns are centred instead.
+    public static let mainColumnMaxWidth: Double = 1040
+    /// The gap between the desktop's columns (the catalog's `--space-8`).
+    public static let desktopColumnGap: Double = DesignTokens.Space.s8
+    /// The decisions column never gets shorter than this, however small the window.
+    public static let decisionsColumnMinHeight: Double = 320
+
+    /// Whether a page `width` wide takes the desktop arrangement.
+    public static func isDesktop(page width: Double) -> Bool {
+        width >= breakpoint
+    }
+
+    /// How a page `width` wide lays its columns out, with the decisions column when `decisions` (a Question waits).
+    public struct Arrangement: Equatable {
+        public var desktop: Bool
+        /// The rail sits beside the main column; false only on a laptop page too narrow for both.
+        public var railBeside: Bool
+        public var railWidth: Double
+        /// The decisions column's width on a desktop while a Question waits; nil when there is none on the page.
+        public var decisionsWidth: Double?
+        public var mainWidth: Double
+        /// The gap between columns.
+        public var columnGap: Double
+        /// The width the header and the columns span together, centred in the page when narrower than it.
+        public var contentWidth: Double
+    }
+
+    public static func arrangement(page width: Double, decisions: Bool) -> Arrangement {
+        let inner = max(0, width - 2 * gap)
+        guard isDesktop(page: width) else {
+            let beside = railBeside(page: width)
+            return Arrangement(
+                desktop: false, railBeside: beside, railWidth: railWidth, decisionsWidth: nil,
+                mainWidth: mainColumnWidth(page: width), columnGap: gap, contentWidth: inner
+            )
+        }
+        let columnGap = desktopColumnGap
+        if decisions {
+            return Arrangement(
+                desktop: true, railBeside: true, railWidth: desktopRailWidth, decisionsWidth: decisionsColumnWidth,
+                mainWidth: inner - 2 * columnGap - desktopRailWidth - decisionsColumnWidth, columnGap: columnGap, contentWidth: inner
+            )
+        }
+        let main = min(mainColumnMaxWidth, inner - columnGap - desktopRailWidth)
+        return Arrangement(
+            desktop: true, railBeside: true, railWidth: desktopRailWidth, decisionsWidth: nil,
+            mainWidth: main, columnGap: columnGap, contentWidth: main + columnGap + desktopRailWidth
+        )
+    }
+
+    // MARK: Sticky columns (§5, Scrolling)
+
+    /// How far down a sticky column moves inside its row so it stays in view as the page scrolls. The page has scrolled
+    /// `scroll` in a `viewport` tall; the row starts at `top` in the page and is `room` tall; the column is `height`
+    /// tall. A column shorter than the window sticks `inset` under the window's top; a taller one scrolls with the page
+    /// until its foot is `inset` above the window's bottom, and stays there. It never leaves its row.
+    public static func stickyOffset(scroll: Double, viewport: Double, top: Double, height: Double, room: Double, inset: Double = gap) -> Double {
+        let underTop = scroll + inset - top
+        let footInView = scroll + viewport - inset - top - height
+        return max(0, min(underTop, footInView, room - height))
+    }
+
+    /// The desktop's decisions column pinned over the page's scroll view, outside its content, so nothing it does can
+    /// change the page's height: where its top is and how tall it is in a `viewport` tall scroll view. `rowTop` is where
+    /// the columns' row is in the scroll view now (it moves up as the page scrolls), `insetTop` and `insetBottom` what
+    /// the window covers at the scroll view's edges (a toolbar, a banner). Its top follows the row until the row
+    /// reaches `inset` under the visible top, then stays there; its foot stays `inset` above the visible bottom, so its
+    /// header and Send are always in view.
+    public static func pinnedDecisions(
+        rowTop: Double, viewport: Double, insetTop: Double = 0, insetBottom: Double = 0, inset: Double = gap
+    ) -> (top: Double, height: Double) {
+        let top = max(insetTop + inset, rowTop)
+        let height = max(decisionsColumnMinHeight, viewport - insetBottom - inset - top)
+        return (top, height)
+    }
+
+    /// The decisions column's height in its row on a page drawn whole and unscrolled (a snapshot): from the row's
+    /// `top` to `inset` above the window's bottom.
+    public static func decisionsColumnRoom(viewport: Double, top: Double, inset: Double = gap) -> Double {
+        pinnedDecisions(rowTop: top, viewport: viewport, inset: inset).height
+    }
 }
 
 /// The decisions line under the ticket page's header (§2, question 1): "A question waits on you" with the first

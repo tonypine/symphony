@@ -383,6 +383,19 @@ GitHub or Linear in QA:
   comes next." Press Escape: the sheet closes and the keyboard is back on Answer…; open it again
   and close it with its button, then with a click on the dimmed page. Open TP-1246: the
   situation reads Shipped and the PR panel shows #741 merged. Walk it in light and dark.
+- **Ticket page at desktop width (TP-1449):** the same fixtures, with the window as wide as the
+  screen allows (the page switches past 1600 pt of content, beside the sidebar). Open TP-1245:
+  the moves (Start Now, Force…, More; no Answer) sit at the right of the identifier's line and
+  the title spans the page under them; there is no decisions line and no Answer… sheet. The question is a 600 pt column on the far
+  right, with "Your decision", the two options and Send (off, with "Answer it in the Inbox for
+  now…") at its foot; scroll the page: the column and the 440 pt facts rail stay in view, the
+  column's header and Send stay in place, and nothing scrolls sideways. Open TP-1244: no column,
+  the Lifecycle and Timeline at most 1040 pt wide, centred with the rail. Narrow the window
+  below about 1600 pt of content: the page becomes the laptop layout, with the decisions line
+  and Answer…; widen it again: the desktop arrangement returns and no section moves elsewhere.
+  Where the screen is too small for 1600 pt, the desktop width is proved by the
+  `ticket-page-*-desktop` and `ticket-page-waiting-1590`/`-1610` snapshots. Walk it in light and
+  dark.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before

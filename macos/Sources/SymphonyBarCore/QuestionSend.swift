@@ -67,10 +67,10 @@ public struct QuestionSend: Equatable {
 }
 
 /// The decision sheet's sizes and motion (the catalog's Decision sheet): 520 pt over the right of a laptop's page,
-/// 640 pt as the desktop's column; it slides in on `motion.sheet` while the page behind it dims on `motion.standard`.
+/// 600 pt as the desktop's column; it slides in on `motion.sheet` while the page behind it dims on `motion.standard`.
 public enum DecisionSheetLayout {
     public static let laptopWidth: Double = 520
-    public static let desktopWidth: Double = 640
+    public static let desktopWidth: Double = 600
     /// How dark the page behind the laptop's sheet goes.
     public static let scrimOpacity: Double = 0.18
 

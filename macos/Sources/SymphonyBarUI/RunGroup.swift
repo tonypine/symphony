@@ -78,47 +78,65 @@ public struct RunGroup: View {
     public static let noSteps = "This run recorded no steps."
 }
 
-/// The run's header line.
+/// The run's header line. In a column too narrow for it on one line (the desktop's main column beside the decisions,
+/// TP-1449), its tokens, model and duration go to a second line under it, and where it stopped gives way first, so
+/// nothing runs past the column.
 private struct RunHeaderLabel: View {
     let run: RunGroupModel
     let folded: Bool
 
     var body: some View {
-        HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
-            StateMark(symbol: run.state.symbol, status: run.state.status, live: run.isLive, size: 15)
-            Text(run.title)
-                .font(DesignTokens.TypeStyle.body.font.weight(.semibold))
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
+                lead(whereFixed: true)
+                Spacer(minLength: DesignTokens.Space.s2)
+                facts
+            }
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                HStack(alignment: .center, spacing: DesignTokens.Space.s2) { lead(whereFixed: false) }
+                HStack(alignment: .center, spacing: DesignTokens.Space.s2) { facts }
+                    .padding(.leading, 15 + DesignTokens.Space.s2)
+            }
+        }
+    }
+
+    @ViewBuilder private func lead(whereFixed: Bool) -> some View {
+        StateMark(symbol: run.state.symbol, status: run.state.status, live: run.isLive, size: 15)
+        Text(run.title)
+            .font(DesignTokens.TypeStyle.body.font.weight(.semibold))
+            .lineLimit(1)
+            .fixedSize()
+        StatusBadge(status: run.state.status, word: run.word)
+            .fixedSize()
+        if !run.steps.isEmpty {
+            StepBars(steps: run.steps)
+        }
+        if folded, let whereText = run.whereText {
+            Text(whereText)
+                .font(DesignTokens.TypeStyle.callout.font)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: whereFixed, vertical: false)
+        }
+    }
+
+    @ViewBuilder private var facts: some View {
+        ForEach([run.tokensText, run.model].compactMap { $0 }, id: \.self) { fact in
+            Text(fact)
+                .font(DesignTokens.TypeStyle.callout.font)
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize()
-            StatusBadge(status: run.state.status, word: run.word)
+        }
+        if let duration = run.duration {
+            Text(duration)
+                .font(DesignTokens.TypeStyle.callout.font)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .lineLimit(1)
                 .fixedSize()
-            if !run.steps.isEmpty {
-                StepBars(steps: run.steps)
-            }
-            if folded, let whereText = run.whereText {
-                Text(whereText)
-                    .font(DesignTokens.TypeStyle.callout.font)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-            Spacer(minLength: DesignTokens.Space.s2)
-            ForEach([run.tokensText, run.model].compactMap { $0 }, id: \.self) { fact in
-                Text(fact)
-                    .font(DesignTokens.TypeStyle.callout.font)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .fixedSize()
-            }
-            if let duration = run.duration {
-                Text(duration)
-                    .font(DesignTokens.TypeStyle.callout.font)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-                    .fixedSize()
-                    .help(Self.durationHelp)
-            }
+                .help(Self.durationHelp)
         }
     }
 
