@@ -311,20 +311,33 @@ private struct PhaseChip: View {
 
     private var current: Bool { phase.state == .current }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(alignment: .firstTextBaseline, spacing: 3) {
-                Text(phase.name)
-                    .font(.system(size: compact ? 11 : 12, weight: current ? .semibold : .medium))
-                    .foregroundStyle(current ? AnyShapeStyle(phase.status.tint) : AnyShapeStyle(.primary))
-                if let count = phase.countLabel {
-                    Text(count)
-                        .font(.system(size: compact ? 10 : 11, weight: .semibold))
-                        .foregroundStyle(DesignTokens.Status.you.tint)
-                        .monospacedDigit()
-                }
+    private var cornerRadius: CGFloat { compact ? 6 : DesignTokens.Radius.row - 2 }
+    private var nameFont: Font { .system(size: compact ? 11 : 12, weight: current ? .semibold : .medium) }
+    private var nameStyle: AnyShapeStyle { current ? AnyShapeStyle(phase.status.tint) : AnyShapeStyle(.primary) }
+    private var chipFill: Color { current ? phase.status.tint.opacity(0.14) : DesignTokens.Surface.raised.color }
+    private var chipStroke: Color { current ? phase.status.tint.opacity(0.45) : .clear }
+    private var horizontalPadding: CGFloat { compact ? 6 : DesignTokens.Space.s2 }
+    private var verticalPadding: CGFloat { compact ? 2 : DesignTokens.Space.s1 + 1 }
+    private var helpText: String { phase.entered.isEmpty ? "" : "Entered " + phase.entered.joined(separator: ", ") }
+
+    private var titleRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 3) {
+            Text(phase.name)
+                .font(nameFont)
+                .foregroundStyle(nameStyle)
+            if let count = phase.countLabel {
+                Text(count)
+                    .font(.system(size: compact ? 10 : 11, weight: .semibold))
+                    .foregroundStyle(DesignTokens.Status.you.tint)
+                    .monospacedDigit()
             }
-            .lineLimit(1)
+        }
+        .lineLimit(1)
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            titleRow
             if !compact, let meta = meta {
                 Text(meta)
                     .font(DesignTokens.TypeStyle.caption.font)
@@ -333,20 +346,19 @@ private struct PhaseChip: View {
                     .lineLimit(1)
             }
         }
-        .fixedSize()
-        .padding(.horizontal, compact ? 6 : DesignTokens.Space.s2)
-        .padding(.vertical, compact ? 2 : DesignTokens.Space.s1 + 1)
-        .background(
-            RoundedRectangle(cornerRadius: compact ? 6 : DesignTokens.Radius.row - 2, style: .continuous)
-                .fill(current ? phase.status.tint.opacity(0.14) : DesignTokens.Surface.raised.color)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: compact ? 6 : DesignTokens.Radius.row - 2, style: .continuous)
-                .strokeBorder(current ? phase.status.tint.opacity(0.45) : .clear)
-        )
-        .help(phase.entered.isEmpty ? "" : "Entered " + phase.entered.joined(separator: ", "))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(phase.accessibilityLabel)
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        return content
+            .fixedSize()
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
+            .background(shape.fill(chipFill))
+            .overlay(shape.strokeBorder(chipStroke))
+            .help(helpText)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(phase.accessibilityLabel)
     }
 
     /// "16:02 · 29 min": when it was last entered and how long it spent there in all.
