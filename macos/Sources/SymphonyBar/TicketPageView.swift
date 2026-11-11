@@ -411,6 +411,10 @@ struct TicketPageView: View {
                 )
                 .environment(\.mentionReferences, references)
             }
+            // The page never asks the window for more width than it gives: without this the desktop's columns held the
+            // detail at their own width, so narrowing the window squeezed the sidebar instead and the page measured
+            // itself still past the breakpoint (TP-1449's QA). Its width is the window's, whatever the page holds.
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
             .onScrollGeometryChange(for: EdgeInsets.self) { $0.contentInsets } action: { _, insets in
                 scroll.update(insets: insets)
             }
@@ -480,8 +484,9 @@ struct TicketPageView: View {
     }
 }
 
-/// Where the page's scroll view is, for the sticky columns: only the views that read it draw again as the page
-/// scrolls, never the timeline beside them. What it holds only places those columns (an offset, the pinned decisions
+/// Where the page's scroll view is, for the sticky columns: the window's height and chrome, and, only while the desktop's
+/// decisions column is on the page, where the columns' row is as the page scrolls. Only the views that read it draw
+/// again, never the timeline beside them. What it holds only places those columns (an offset, the pinned decisions
 /// column over the scroll view), never sizes anything inside the page, so a measure can't feed back into itself. A
 /// value set again unchanged publishes nothing.
 final class TicketPageScroll: ObservableObject {
@@ -544,6 +549,8 @@ struct TicketPageBody: View {
 
     /// The page's scroll view, where the columns' row is measured as the page scrolls.
     static let viewportSpace = "ticket-page-viewport"
+    /// The columns' row, which a sticky column never leaves.
+    static let rowSpace = "ticket-page-row"
 
     private var gap: CGFloat { TicketPageLayout.gap }
     private var line: DecisionsLine { DecisionsLine(openQuestions: page.openQuestions, questions: questions) }
@@ -571,9 +578,8 @@ struct TicketPageBody: View {
                         }
                     }
                 }
-                .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(Self.viewportSpace)) } action: { frame in
-                    scroll.update(row: frame)
-                }
+                .coordinateSpace(name: Self.rowSpace)
+                .modifier(RowMeasure(scroll: scroll, measures: arrangement.decisionsWidth != nil))
             } else {
                 mainColumn(desktop: false)
                 rail(width: nil)
@@ -642,23 +648,45 @@ struct TicketPageBody: View {
 }
 
 /// A column that stays in view as the page scrolls (§5): shorter than the window, it sticks under the window's top;
-/// taller, it scrolls with the page until its foot is in view and stays there. Only this view draws again as the page
-/// scrolls, and only its offset changes: never its size, nor the row's.
+/// taller, it scrolls with the page until its foot is in view and stays there. It moves as it draws, from where the
+/// scroll view has it (`visualEffect`): scrolling writes no state and lays nothing out again, and its offset never
+/// changes its size, nor the row's. Only the window's height and chrome, which no page content changes, come from
+/// `scroll`.
 private struct StickyColumn<Content: View>: View {
     @ObservedObject var scroll: TicketPageScroll
     @ViewBuilder let content: () -> Content
-    @State private var height: Double = 0
 
     var body: some View {
-        // The row's place in what the window shows of the scroll view: where it starts there, as the page has scrolled.
         let visible = scroll.viewport - scroll.insets.top - scroll.insets.bottom
+        let insetTop = scroll.insets.top
+        let rowSpace = TicketPageBody.rowSpace
         content()
-            .onGeometryChange(for: Double.self) { $0.size.height } action: { if height != $0 { height = $0 } }
-            .offset(
-                y: TicketPageLayout.stickyOffset(
-                    scroll: 0, viewport: visible, top: scroll.row.minY - scroll.insets.top, height: height, room: scroll.row.height
+            .visualEffect { effect, proxy in
+                // Where the column (and so its row) starts in what the window shows, as the page has scrolled; and
+                // how tall its row is. A snapshot has no scroll view: the page, unscrolled.
+                let top = proxy.frame(in: .scrollView).minY - insetTop
+                let room = proxy.bounds(of: .named(rowSpace))?.height ?? proxy.size.height
+                return effect.offset(
+                    y: TicketPageLayout.stickyOffset(scroll: 0, viewport: visible, top: top, height: proxy.size.height, room: room)
                 )
-            )
+            }
+    }
+}
+
+/// Measures the columns' row in the page's scroll view for the decisions column, only while there is one: the pinned
+/// column follows it as the page scrolls. A page without a Question measures nothing as it scrolls.
+private struct RowMeasure: ViewModifier {
+    let scroll: TicketPageScroll
+    let measures: Bool
+
+    func body(content: Content) -> some View {
+        if measures {
+            content.onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TicketPageBody.viewportSpace)) } action: { frame in
+                scroll.update(row: frame)
+            }
+        } else {
+            content
+        }
     }
 }
 
