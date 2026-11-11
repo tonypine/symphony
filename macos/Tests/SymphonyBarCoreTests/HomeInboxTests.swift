@@ -106,4 +106,11 @@ final class HomeInboxTests: XCTestCase {
         XCTAssertFalse(HomeInbox.drawerFoldsSidebar(windowWidth: DesignTokens.Layout.windowWidth, drawerShown: false))
     }
 
+    /// Home and a ticket's page present the drawer; a pull request's page opened from Home doesn't.
+    func testOnlyHomeAndATicketPagePresentTheDrawer() {
+        XCTAssertTrue(HomeInbox.presentsDrawer(onHome: true, onTicketPage: false))
+        XCTAssertTrue(HomeInbox.presentsDrawer(onHome: false, onTicketPage: true))
+        XCTAssertFalse(HomeInbox.presentsDrawer(onHome: false, onTicketPage: false))
+    }
+
 }

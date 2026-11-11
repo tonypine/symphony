@@ -399,6 +399,11 @@ final class SymphonyWindowModel: ObservableObject {
         readInbox()
     }
 
+    /// True where the window draws the drawer: Home, and a ticket's page; not a pull request's page.
+    var presentsInboxDrawer: Bool {
+        HomeInbox.presentsDrawer(onHome: selection == .overview && !showsPage, onTicketPage: shownTicket != nil)
+    }
+
     /// Hides the drawer, or shows it on the item selected.
     func toggleInboxDrawer() {
         if !inboxDrawerShown { readInbox() }
@@ -942,7 +947,7 @@ struct SymphonyWindowView: View {
                             .disabled(!model.dispatchControl.canForce)
                         }
                     }
-                    if model.selection == .overview || model.shownTicket != nil, model.state == .connected {
+                    if model.presentsInboxDrawer, model.state == .connected {
                         ToolbarItem(placement: .primaryAction) {
                             // The Inbox's drawer, on Home and on a ticket page (TP-1454).
                             Button { model.toggleInboxDrawer() } label: {
@@ -981,12 +986,15 @@ struct SymphonyWindowView: View {
             fitDrawer()
         }
         .onChange(of: model.inboxDrawerShown) { fitDrawer() }
+        .onChange(of: model.presentsInboxDrawer) { fitDrawer() }
     }
 
     /// Folds the sidebar while the drawer is open in a window too narrow for the sidebar, the page and the drawer, so
     /// neither the sidebar nor the drawer's Close is pushed off the window's edge; unfolds it once there is room.
     private func fitDrawer() {
-        if HomeInbox.drawerFoldsSidebar(windowWidth: windowWidth, drawerShown: model.inboxDrawerShown) {
+        if HomeInbox.drawerFoldsSidebar(
+            windowWidth: windowWidth, drawerShown: model.inboxDrawerShown && model.presentsInboxDrawer
+        ) {
             guard columnVisibility != .detailOnly else { return }
             columnVisibility = .detailOnly
             sidebarFoldedForDrawer = true

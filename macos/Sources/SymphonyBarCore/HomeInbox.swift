@@ -90,6 +90,12 @@ public struct HomeInbox: Equatable {
         drawerShown && windowWidth - DesignTokens.Layout.sidebarWidth - drawerIdealWidth < minPageWidthBesideDrawer
     }
 
+    /// True where the window presents the drawer: Home, and a ticket's page. A pull request's page, opened from Home,
+    /// has none, so it shows no drawer toggle and never folds the sidebar for a drawer it can't draw.
+    public static func presentsDrawer(onHome: Bool, onTicketPage: Bool) -> Bool {
+        onHome || onTicketPage
+    }
+
     /// The section's heading for VoiceOver: "Needs you, 3".
     public var accessibilityLabel: String { "\(Self.title), \(rows.count)" }
 }
