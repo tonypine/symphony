@@ -246,6 +246,16 @@ public struct TimelineModel: Equatable {
 
     public var isEmpty: Bool { days.isEmpty }
 
+    /// The run working on the ticket, on top of the timeline; nil when none is.
+    public var runNow: RunGroupModel? {
+        items.first?.run.flatMap { $0.isLive ? $0 : nil }
+    }
+
+    /// The run `id`, as the timeline has it now.
+    public func run(_ id: String) -> RunGroupModel? {
+        items.lazy.compactMap(\.run).first { $0.id == id }
+    }
+
     public static let empty = "Nothing has happened to this ticket yet."
 
     /// The selection `steps` items down (up when negative) from `selection`; the first item when nothing is selected
