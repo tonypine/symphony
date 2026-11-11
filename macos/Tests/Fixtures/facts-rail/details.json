@@ -1,0 +1,24 @@
+{
+  "identifier": "TP-1447",
+  "repo_key": "symphony",
+  "ticket": { "title": "The facts rail's Note, Decisions and Details panels", "phase": "In Progress", "priority": 1, "labels": ["skip-update-hold", "qa:fixture"] },
+  "workspace": { "path": "/Users/tonypine/symphony-workspaces/symphony/TP-1447", "host": null },
+  "note": {
+    "id": "01M746NOTE",
+    "text": "Keep the agent description folded by default; the brief is what a person reads first.",
+    "at": "2026-11-10T13:40:00Z",
+    "by": "Tony",
+    "read_by": { "run_id": "run-3", "at": "2026-11-10T14:02:00Z" }
+  },
+  "brief": {
+    "id": "01M746BRIEF",
+    "text": "Adds the last three panels of the ticket page's facts rail: the note for the next run with whether a run read it, the decisions taken on the ticket, and the details looked up rarely, with the brief folded open above the agent's description.",
+    "walkthrough": "Write a note and save it: the rail shows it with its time and says no run has read it yet. Unfold Details: the brief reads as a person's summary, the agent's description folded under it.",
+    "at": "2026-11-10T09:12:00Z",
+    "by": { "kind": "agent", "run_kind": "implementation", "run_id": "run-1" }
+  },
+  "moves": {
+    "note": { "allowed": true, "reason": null },
+    "stop": { "allowed": true, "reason": null }
+  }
+}

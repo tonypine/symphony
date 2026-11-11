@@ -7,7 +7,7 @@ import Foundation
 @MainActor
 public final class TicketNoteComposer: ObservableObject {
     /// The most characters a note holds: the `note` event type's bound, which Symphony checks too.
-    public static let maxLength = 4_000
+    public nonisolated static let maxLength = 4_000
     public static let placeholder = "Add a note for the next run"
     public static let hint = "Press Return to add it to the timeline. The next agent run reads it."
     public static let sendingTitle = "Adding the note…"
@@ -42,12 +42,12 @@ public final class TicketNoteComposer: ObservableObject {
     public static func refusalLabel(_ reason: String) -> String { "Note not added: \(reason)" }
 
     /// Why `note` is too long to be one, nil when it isn't: the reason Symphony would give.
-    public static func tooLong(_ note: String) -> String? {
+    public nonisolated static func tooLong(_ note: String) -> String? {
         guard note.count > maxLength else { return nil }
         return "A note holds at most \(delimited(maxLength)) characters; this one has \(delimited(note.count))"
     }
 
-    private static func delimited(_ number: Int) -> String {
+    private nonisolated static func delimited(_ number: Int) -> String {
         number.formatted(.number.grouping(.automatic).locale(Locale(identifier: "en_US")))
     }
 
@@ -66,16 +66,24 @@ public final class TicketNoteComposer: ObservableObject {
     /// refused here, with the reason. Returns whether the note was written.
     @discardableResult
     public func submit(on page: TicketPage, send: (ControlAction) async -> ControlResult, read: () -> Void) async -> Bool {
-        // The field is the shown page's: what is typed in it is that ticket's note.
-        identifier = page.identifier
-        guard page.acceptsNotes, let repoKey = page.repoKey, !sending else { return false }
+        await submit(identifier: page.identifier, repoKey: page.acceptsNotes ? page.repoKey : nil, send: send, read: read)
+    }
+
+    /// Save Note in the facts rail's Note panel: posts the note on ticket `identifier` of repository `repoKey` with
+    /// `send` (`POST /api/v1/control/note`), then `read`s the ticket again, so the panel shows the note set and not read
+    /// yet. Posts nothing without a repository, with blank text or while a note is on its way; a note over the bound is
+    /// refused here. Returns whether the note was written.
+    @discardableResult
+    public func submit(identifier: String, repoKey: String?, send: (ControlAction) async -> ControlResult, read: () -> Void) async -> Bool {
+        // The field is the shown ticket's: what is typed in it is that ticket's note.
+        self.identifier = identifier
+        guard let repoKey, !sending else { return false }
         let note = text.trimmingWhitespace()
         guard !note.isEmpty else { return false }
         if let reason = Self.tooLong(note) {
             refusal = reason
             return false
         }
-        let identifier = page.identifier
         sending = true
         refusal = nil
         let result = await send(.note(repoKey: repoKey, identifier: identifier, text: note))

@@ -296,7 +296,7 @@ private struct TicketRow: View {
 // MARK: - Shared pieces
 
 /// A panel: its title outside the card, then the card with its parts one under the other.
-private struct FactsPanel<Content: View>: View {
+struct FactsPanel<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
 
@@ -322,7 +322,7 @@ private struct FactsPanel<Content: View>: View {
     }
 }
 
-private struct SubPanel<Content: View>: View {
+struct SubPanel<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
 
@@ -340,7 +340,7 @@ private struct SubPanel<Content: View>: View {
 }
 
 /// A fact that is unknown or absent, said in a plain line, never a dash.
-private struct EmptyLine: View {
+struct EmptyLine: View {
     let text: String
 
     var body: some View {
@@ -352,7 +352,7 @@ private struct EmptyLine: View {
 }
 
 /// The row's arrow: it slides 2 pt right while the pointer is over the row.
-private struct RowArrow: View {
+struct RowArrow: View {
     @Environment(\.factRowHovered) private var hovered
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -372,7 +372,7 @@ extension EnvironmentValues {
 }
 
 /// A fact row as a button: it opens `url` with `open`, or runs `action`; a row with neither is plain text.
-private struct FactRow<Label: View>: View {
+struct FactRow<Label: View>: View {
     var url: URL?
     var open: ((URL) -> Void)?
     var action: (() -> Void)?

@@ -1,0 +1,15 @@
+{
+  "identifier": "TP-1448",
+  "repo_key": "symphony",
+  "ticket": { "title": "The ticket page at laptop width", "phase": "Todo", "priority": 3, "labels": [] },
+  "workspace": null,
+  "note": {
+    "id": "01M746NOTE2",
+    "text": "Use the 340 pt rail on a laptop.",
+    "at": "2026-11-10T14:55:00Z",
+    "by": "Tony",
+    "read_by": null
+  },
+  "brief": null,
+  "moves": { "note": { "allowed": true, "reason": null } }
+}

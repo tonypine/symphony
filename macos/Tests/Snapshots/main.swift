@@ -1437,6 +1437,55 @@ func factsRail(_ name: String, width: CGFloat) -> some View {
     .background(DesignTokens.Surface.window.color)
 }
 
+// MARK: - The facts rail's Note, Decisions and Details panels (TP-1447)
+
+/// Three tickets (`Tests/Fixtures/facts-rail/details*.json`, the runs' models from `details-events.json`): a note
+/// implementation run 3 read, two decisions (the older unfolded) and every detail, the run models unfolded; a note no run
+/// read yet with a new one typed in the field, no decisions and no brief; and a ticket Symphony holds nothing of, Save
+/// Note off with its reason.
+let factsDetailTickets = ["details", "details-unread", "details-empty"]
+
+@MainActor
+func factsDetails(_ name: String, width: CGFloat) -> some View {
+    func data(_ file: String) -> Data {
+        guard let data = try? Data(contentsOf: factsFixtures.appendingPathComponent("\(file).json")) else {
+            fatalError("The facts rail fixture \(file) is missing from \(factsFixtures.path)")
+        }
+        return data
+    }
+    guard let read = TicketDetailsRead.decode(data(name)), let history = TicketEventsPayload.decode(data("details-events")) else {
+        fatalError("The facts rail fixture \(name) doesn't decode")
+    }
+    let full = name == "details"
+    let runs = name == "details-empty" ? [:] : history.runs
+    let decisions: [TicketDecision] = full ? [
+        TicketDecision(
+            id: "D1", date: "2026-11-09", title: "Keep the facts rail at 340 pt on a laptop",
+            question: "How wide is the facts rail on a laptop?", answer: "340 pt, as the catalog shows; the desktop keeps 440 pt.",
+            scope: "The rail's width is fixed; the main column gives way."
+        ),
+        TicketDecision(id: "D2", date: "2026-11-10", answer: "Fold the agent description by default."),
+    ] : []
+    let composer = TicketNoteComposer(
+        identifier: name, text: name == "details-unread" ? "Check the dark snapshots at 440 pt." : ""
+    )
+    let note = NotePanelModel.build(note: read.note, move: read.noteMove, runs: runs, reference: factsReference, calendar: timelineCalendar)
+    let details = DetailsPanelModel.build(
+        read, runs: runs, linearURL: full ? URL(string: "https://linear.app/acme/issue/TP-1447") : nil,
+        pullRequest: full ? TicketPullRequest(number: 870, url: URL(string: "https://github.com/acme/symphony/pull/870")) : nil,
+        description: full ? "## Goal\n\nThree more FactsRail panels: Note for the next run, Decisions and Details." : nil,
+        reference: factsReference, calendar: timelineCalendar
+    )
+    return VStack(alignment: .leading, spacing: DesignTokens.Space.s5) {
+        NotePanel(model: note, composer: composer, save: {})
+        DecisionsPanel(model: DecisionsPanelModel.build(decisions), unfolded: ["D1"])
+        DetailsPanel(model: details, open: { _ in }, copy: { _ in }, modelsUnfolded: full)
+    }
+    .frame(width: width, alignment: .leading)
+    .padding(DesignTokens.Space.s5)
+    .background(DesignTokens.Surface.window.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1539,6 +1588,12 @@ MainActor.assumeIsolated {
         for name in factsTickets {
             render(factsRail(name, width: FactsRail.laptopWidth), scheme, to: "facts-rail-\(name)-laptop-\(suffix).png")
             render(factsRail(name, width: FactsRail.desktopWidth), scheme, to: "facts-rail-\(name)-desktop-\(suffix).png")
+        }
+        // The Note for the next run, Decisions and Details panels (TP-1447): with every fact, with a note not read yet,
+        // and with nothing, at both rail widths.
+        for name in factsDetailTickets {
+            render(factsDetails(name, width: FactsRail.laptopWidth), scheme, to: "facts-rail-\(name)-laptop-\(suffix).png")
+            render(factsDetails(name, width: FactsRail.desktopWidth), scheme, to: "facts-rail-\(name)-desktop-\(suffix).png")
         }
         render(review(width: 640, picks: picks), scheme, to: "inbox-write-in-\(suffix).png")
         // Chips inside the question, story and options, wrapping with the text (TP-952).

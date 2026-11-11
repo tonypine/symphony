@@ -1,0 +1,9 @@
+{
+  "timeline": [
+    { "kind": "run", "run_id": "run-1", "run_kind": "implementation", "run_number": 1, "status": "ended", "started_at": "2026-11-10T09:00:00Z", "ended_at": "2026-11-10T10:00:00Z", "model": "claude-opus-5-5", "effort": "high", "events": [] },
+    { "kind": "run", "run_id": "run-2", "run_kind": "code_review", "run_number": 1, "status": "ended", "started_at": "2026-11-10T10:05:00Z", "ended_at": "2026-11-10T10:30:00Z", "model": "claude-sonnet-5-5", "effort": null, "events": [] },
+    { "kind": "run", "run_id": "run-4", "run_kind": "qa", "run_number": 1, "status": "ended", "started_at": "2026-11-10T13:00:00Z", "ended_at": "2026-11-10T13:20:00Z", "model": null, "events": [] },
+    { "kind": "run", "run_id": "run-3", "run_kind": "implementation", "run_number": 3, "status": "running", "started_at": "2026-11-10T14:01:00Z", "model": "claude-opus-5-5", "effort": "high", "events": [] }
+  ],
+  "next_since": null
+}
