@@ -48,7 +48,9 @@
 // and `ax-ping` tells a hung app from a busy one; both use the Accessibility
 // grant like the other `ax-` commands. `ax-select` selects a table or outline
 // row, which answers no AXPress, and `click` and `key` send mouse and key
-// events to the app's PID alone (see `selectRow`, `click` and `pressKey`).
+// events to the app's PID alone (see `selectRow`, `click` and `pressKey`); a ⌘
+// shortcut goes through the HID tap, only while the app owns the keyboard, as
+// the menu takes it from no other route (see `postShortcut`).
 // `click`, `hover` and `context-menu` move the real pointer to the target first
 // (see `movePointer`), only once the app's own window is in front there.
 // `scroll` posts scroll-wheel events in the scroll area at the target, by a delta
@@ -340,6 +342,57 @@ func postKey(_ pid: pid_t, _ code: CGKeyCode, flags: CGEventFlags = [], text: [U
         event.postToPid(pid)
         usleep(keyPause)
     }
+}
+
+// Each modifier's own key, which a keyboard presses before the key it modifies.
+let modifierKeys: [(flag: CGEventFlags, code: CGKeyCode)] = [
+    (.maskCommand, 55), (.maskShift, 56), (.maskAlternate, 58), (.maskControl, 59)
+]
+
+// A ⌘ shortcut, sent as a keyboard sends it: each modifier's own key goes down,
+// then the key, then the modifiers come up, all through the HID tap. AppKit runs
+// a menu's key equivalents only for keys that come that way: posted to the app's
+// PID, ⌘[, ⌘1, ⌘, and ⌘W reached the window as plain keys and the menu never saw
+// them (TP-1469). The HID tap delivers to the app that owns the keyboard, so
+// `pressKey` checks the app does before calling this.
+func postShortcut(_ code: CGKeyCode, flags: CGEventFlags, text: [UniChar]) {
+    let held = modifierKeys.filter { flags.contains($0.flag) }
+    var down: CGEventFlags = []
+
+    func postModifier(_ key: CGKeyCode, _ state: CGEventFlags) {
+        guard let event = CGEvent(keyboardEventSource: keySource, virtualKey: key, keyDown: true) else {
+            fail("typing_failed", "Could not create a key event.")
+        }
+        event.type = .flagsChanged
+        event.flags = state
+        event.post(tap: .cghidEventTap)
+        usleep(keyPause)
+    }
+
+    for modifier in held {
+        down.insert(modifier.flag)
+        postModifier(modifier.code, down)
+    }
+    for pressed in [true, false] {
+        guard let event = CGEvent(keyboardEventSource: keySource, virtualKey: code, keyDown: pressed) else {
+            fail("typing_failed", "Could not create a key event.")
+        }
+        event.flags = flags
+        if !text.isEmpty { event.keyboardSetUnicodeString(stringLength: text.count, unicodeString: text) }
+        event.post(tap: .cghidEventTap)
+        usleep(keyPause)
+    }
+    for modifier in held.reversed() {
+        down.remove(modifier.flag)
+        postModifier(modifier.code, down)
+    }
+}
+
+// The PID of the app that owns the keyboard: the one the HID tap delivers keys to.
+func keyboardOwner() -> pid_t? {
+    guard let focused = element(attribute(AXUIElementCreateSystemWide(), kAXFocusedApplicationAttribute as String)) else { return nil }
+    var owner: pid_t = 0
+    return AXUIElementGetPid(focused, &owner) == .success ? owner : nil
 }
 
 // Splits on Unicode scalars, so no surrogate pair is cut in two.
@@ -929,7 +982,8 @@ func focusedDescription(_ app: AXUIElement, _ name: String) -> [String: Any]? {
 }
 
 // Presses one key with its modifiers in the app's focused window: the app comes
-// to the front, and the events go to its PID alone.
+// to the front, and the events go to its PID alone, except a ⌘ shortcut, which
+// goes as a keyboard sends it once the app owns the keyboard (see `postShortcut`).
 func pressKey(_ pid: pid_t, _ name: String, _ modifiers: String) {
     var flags: CGEventFlags = []
     for modifier in modifiers.split(separator: ",") {
@@ -956,10 +1010,23 @@ func pressKey(_ pid: pid_t, _ name: String, _ modifiers: String) {
         fail("no_window", "The app has no focused window to send the key to. Raise one with qa_ax_press and AXRaise first.")
     }
 
-    postKey(pid, code, flags: flags, text: Array(text.utf16))
+    let via: String
+    if flags.contains(.maskCommand) {
+        // A shortcut goes through the HID tap, which delivers to whichever app owns
+        // the keyboard: only the app's own, never another app's.
+        guard waitUntil(2, { keyboardOwner() == pid }) else {
+            fail("not_frontmost", "Another app owns the keyboard, so the shortcut was not sent. Raise the app's window with qa_ax_press and AXRaise, then try again.")
+        }
+        postShortcut(code, flags: flags, text: Array(text.utf16))
+        via = "hid"
+    } else {
+        postKey(pid, code, flags: flags, text: Array(text.utf16))
+        via = "pid"
+    }
     usleep(clickPause)
     emit([
         "ok": true,
+        "via": via,
         "key": name,
         "modifiers": modifiers.split(separator: ",").map(String.init),
         "window": focusedDescription(app, kAXFocusedWindowAttribute as String) ?? [:],

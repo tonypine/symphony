@@ -37,7 +37,9 @@ worktree's configured app and on apps you launched:
 - `qa_key`: presses a `key` (`return`, `escape`, `tab`, `space`, `delete`, arrows such as `down`,
   or one character such as `[`) with optional `modifiers` (`command`, `shift`, `option`,
   `control`) in the app's focused window. A shortcut such as ⌘[ is `key: "["`,
-  `modifiers: ["command"]`. It returns the `window` and `focused` element the key went to.
+  `modifiers: ["command"]`; it reaches the app's menu as a person's keyboard does, so a shortcut
+  that does nothing through `qa_key` does nothing for a person either. It returns the `window` and
+  `focused` element the key went to.
 - `qa_click`: clicks the centre of an element's frame (`clicks: 2` double-clicks), for a control
   no accessibility action reaches. The pointer moves there first, as a person's mouse would, and
   the result names the element under it (`under_pointer`) and whether the tree or the windows
