@@ -1181,6 +1181,171 @@ defmodule SymphonyElixir.QaDriverTest do
     end
   end
 
+  describe "qa_sample" do
+    # What `/usr/bin/sample` writes: a thread that is not the main one first,
+    # then the main thread stuck in a page's body under the run loop.
+    @sample_report """
+    Analysis of sampling Demo (pid 4242) every 1 millisecond
+    Process:         Demo [4242]
+
+    Call graph:
+        2310 Thread_9001
+        + 2310 start_wqthread  (in libsystem_pthread.dylib) + 8  [0x18f5a0b74]
+        2310 Thread_9000   DispatchQueue_1: com.apple.main-thread  (serial)
+        + 2310 start  (in dyld) + 1942  [0x18f1b2b98]
+        +   2310 main  (in Demo) + 12  [0x100a8c1f0]
+        +     2310 NSApplicationMain  (in AppKit) + 880  [0x18f6b5a2c]
+        +       2200 -[NSApplication run]  (in AppKit) + 480  [0x18f6e0a40]
+        +       ! 2200 TicketPage.body.getter  (in Demo) + 64  [0x100a9b000]
+        +       ! : 2200 AttributeGraph::Graph::update  (in AttributeGraph) + 200  [0x1a0000000]
+        +       110 -[NSApplication(NSEvent) _nextEventMatchingEventMask]  (in AppKit) + 1  [0x18f6e1000]
+
+    Total number in stack (recursive counted multiple times):
+    """
+
+    # A fake `/usr/bin/sample`: it sends the test its arguments and answers with `reply`,
+    # writing `report` to its `-file` first when there is one.
+    defp sample_host(reply, report \\ @sample_report) do
+      test = self()
+
+      host(%{
+        cmd: fn
+          "/usr/bin/sample", args, opts ->
+            send(test, {:sample, args, opts})
+            if report, do: File.write!(List.last(args), report)
+            reply
+
+          executable, args, opts ->
+            default_cmd(executable, args, opts, replies(%{}))
+        end
+      })
+    end
+
+    test "samples the app on the QA host and returns the main thread's heaviest stack with the report", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree, host: sample_host({:ok, {"Sample analysis of process written to file\n", 0}}))
+
+      assert {:ok, payload} = QaDriver.call_tool(driver, "qa_sample", %{"pid" => pid, "page" => "Ticket TP-1", "seconds" => 5, "name" => "hang.txt"})
+      assert_received {:sample, [pid_arg, "5", "-mayDie", "-file", file], opts}
+      assert pid_arg == Integer.to_string(pid)
+      assert opts[:timeout_ms] > 5_000
+      assert String.ends_with?(file, ".txt")
+      refute File.exists?(file)
+
+      assert payload["pid"] == pid
+      assert payload["page"] == "Ticket TP-1"
+      assert payload["seconds"] == 5
+      assert payload["file"] == "qa-evidence/hang.txt"
+      assert payload["thread"] =~ "com.apple.main-thread"
+
+      assert payload["stack"] == [
+               "2310 start  (in dyld) + 1942  [0x18f1b2b98]",
+               "2310 main  (in Demo) + 12  [0x100a8c1f0]",
+               "2310 NSApplicationMain  (in AppKit) + 880  [0x18f6b5a2c]",
+               "2200 -[NSApplication run]  (in AppKit) + 480  [0x18f6e0a40]",
+               "2200 TicketPage.body.getter  (in Demo) + 64  [0x100a9b000]",
+               "2200 AttributeGraph::Graph::update  (in AttributeGraph) + 200  [0x1a0000000]"
+             ]
+
+      assert payload["note"] =~ "linear_attach_file"
+      assert File.read!(Path.join(worktree, "qa-evidence/hang.txt")) == @sample_report
+
+      assert {:error, {:qa_tool, "qa_sample_exists", _message}} = QaDriver.call_tool(driver, "qa_sample", %{"pid" => pid, "name" => "hang"})
+
+      assert {:ok, %{"seconds" => 3, "file" => "qa-evidence/sample-" <> _rest, "page" => nil}} = QaDriver.call_tool(driver, "qa_sample", %{"pid" => pid})
+      assert_received {:sample, [_pid, "3", "-mayDie", "-file", _file], _opts}
+    end
+
+    test "takes the first thread when none is named main, and says when the report has no call graph", %{worktree: worktree} do
+      unnamed = String.replace(@sample_report, "DispatchQueue_1: com.apple.main-thread  (serial)", "")
+      {driver, pid} = launched_app(worktree, host: sample_host({:ok, {"", 0}}, unnamed))
+
+      assert {:ok, %{"thread" => "2310 Thread_9001", "stack" => ["2310 start_wqthread  (in libsystem_pthread.dylib) + 8  [0x18f5a0b74]"]}} =
+               QaDriver.call_tool(driver, "qa_sample", %{"pid" => pid, "name" => "unnamed"})
+
+      {driver, pid} = launched_app(worktree, host: sample_host({:ok, {"", 0}}, "Analysis of sampling Demo\n"))
+
+      assert {:ok, %{"thread" => nil, "stack" => [], "note" => note}} = QaDriver.call_tool(driver, "qa_sample", %{"pid" => pid, "name" => "empty"})
+      assert note =~ "qa-evidence/empty.txt"
+    end
+
+    test "answers qa_no_app when the app is not launched or gone", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree, host: sample_host({:ok, {"sample cannot examine process 1 because the process does not exist.\n", 255}}, nil))
+      stranger = System.pid() |> String.to_integer()
+
+      assert {:error, {:qa_tool, "qa_no_app", message}} = QaDriver.call_tool(driver, "qa_sample", %{"pid" => stranger})
+      assert message =~ "not launched by qa_launch_app"
+      refute_received {:sample, _args, _opts}
+
+      assert {:error, {:qa_tool, "qa_no_app", message}} = QaDriver.call_tool(driver, "qa_sample", %{"pid" => pid})
+      assert message =~ "does not exist"
+      assert_received {:sample, _args, _opts}
+
+      assert_received {:launched, _executable, _opts, port, ^pid}
+      send(driver, {port, {:exit_status, 134}})
+
+      assert {:error, {:qa_tool, "qa_no_app", message}} = QaDriver.call_tool(driver, "qa_sample", %{"pid" => pid})
+      assert message =~ "status 134"
+    end
+
+    test "answers qa_no_app when the app exits while sample runs", %{worktree: worktree} do
+      test = self()
+
+      exiting =
+        host(%{
+          cmd: fn
+            "/usr/bin/sample", _args, _opts ->
+              send(test, :sampling)
+              receive do: (:exited -> {:error, :closed})
+
+            executable, args, opts ->
+              default_cmd(executable, args, opts, replies(%{}))
+          end
+        })
+
+      {driver, pid} = launched_app(worktree, host: exiting)
+      assert_received {:launched, _executable, _opts, port, ^pid}
+      task = Task.async(fn -> QaDriver.call_tool(driver, "qa_sample", %{"pid" => pid}) end)
+      assert_receive :sampling
+      send(driver, {port, {:exit_status, 0}})
+      assert QaDriver.launched_app?(driver)
+      send(task.pid, :exited)
+      assert {:error, {:qa_tool, "qa_no_app", message}} = Task.await(task)
+      assert message =~ "exited with status 0"
+    end
+
+    test "fails with qa_sample_failed when sample fails on a running app or its report is unreadable", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree, host: sample_host({:ok, {"sample: permission denied\n", 1}}, nil))
+      assert {:error, {:qa_tool, "qa_sample_failed", message}} = QaDriver.call_tool(driver, "qa_sample", %{"pid" => pid})
+      assert message =~ "status 1: sample: permission denied"
+
+      {driver, pid} = launched_app(worktree, host: sample_host({:error, :timeout}, nil))
+      assert {:error, {:qa_tool, "qa_sample_failed", message}} = QaDriver.call_tool(driver, "qa_sample", %{"pid" => pid})
+      assert message =~ ":timeout"
+
+      {driver, pid} = launched_app(worktree, host: sample_host({:ok, {"", 0}}, nil))
+      assert {:error, {:qa_tool, "qa_sample_failed", message}} = QaDriver.call_tool(driver, "qa_sample", %{"pid" => pid, "name" => "lost"})
+      assert message =~ "could not be read"
+
+      {driver, pid} = launched_app(worktree, host: sample_host({:ok, {"", 0}}))
+      File.mkdir_p!(Path.join(worktree, "qa-evidence"))
+      File.chmod!(Path.join(worktree, "qa-evidence"), 0o500)
+      assert {:error, {:qa_tool, "qa_sample_failed", message}} = QaDriver.call_tool(driver, "qa_sample", %{"pid" => pid, "name" => "denied"})
+      assert message =~ "Could not save qa-evidence/denied.txt"
+      File.chmod!(Path.join(worktree, "qa-evidence"), 0o755)
+    end
+
+    test "refuses bad arguments before sampling", %{worktree: worktree} do
+      {driver, pid} = launched_app(worktree, host: sample_host({:ok, {"", 0}}))
+
+      for args <- [%{"seconds" => 0}, %{"seconds" => 11}, %{"seconds" => "5"}, %{"name" => 5}, %{"name" => "../x"}, %{"page" => 5}] do
+        assert error_code(QaDriver.call_tool(driver, "qa_sample", Map.put(args, "pid", pid))) == "invalid_arguments"
+      end
+
+      assert error_code(QaDriver.call_tool(driver, "qa_sample", %{})) == "invalid_arguments"
+      refute_received {:sample, _args, _opts}
+    end
+  end
+
   describe "qa_api_requests" do
     defp api_requests(driver), do: QaDriver.call_tool(driver, "qa_api_requests", %{})
 

@@ -887,6 +887,22 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     },
     %{
+      "name" => "qa_sample",
+      "description" =>
+        "Sample a launched app's threads on the QA VM with /usr/bin/sample for `seconds` (1 to 10, default 3) and return the main thread's heaviest stack from the report's call graph, outermost frame first, with the whole report saved to qa-evidence/<name>.txt. Use it when qa_ax_tree, qa_scroll or qa_key time out while qa_check_app says the app is healthy, or when qa_check_app says it is hung: the stack names what the main thread is busy with. Answers qa_no_app when the app is not running.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["pid"],
+        "properties" => %{
+          "pid" => @pid_property,
+          "page" => %{"type" => "string", "maxLength" => 200, "description" => "The page, view or panel on screen while it was sampled."},
+          "seconds" => %{"type" => "integer", "minimum" => 1, "maximum" => 10, "default" => 3},
+          "name" => %{"type" => "string", "description" => "File name without extension: letters, digits, `.`, `_`, `-`. Defaults to sample-<pid>-<time>."}
+        }
+      }
+    },
+    %{
       "name" => "qa_put_file",
       "description" =>
         "Put a fixture file you wrote (a test config, a WORKFLOW.md) where the app can open it, and return the path to give the app. The app runs on the QA VM and cannot see your files, so always pass it this path. Only a regular file of at most 1 MB under the worktree or $TMPDIR; no symlinks.",
@@ -1162,6 +1178,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_key" => ["pid", "key", "modifiers"],
     "qa_resize_window" => ["pid", "path", "width", "height"],
     "qa_check_app" => ["pid", "page"],
+    "qa_sample" => ["pid", "page", "seconds", "name"],
     "qa_open_status_menu" => ["pid"],
     "qa_put_file" => ["local_path", "remote_name"],
     "qa_put_checkout" => ["local_path", "remote_url", "remote_name"],

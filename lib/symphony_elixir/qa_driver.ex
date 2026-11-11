@@ -73,6 +73,12 @@ defmodule SymphonyElixir.QaDriver do
     would, then waits for the menu's window (the pop-up menu layer, 101) in the
     helper's window list. A menu that does not open in time takes the request
     back and fails with `qa_status_menu_not_opened`;
+  - `qa_sample` runs `/usr/bin/sample <pid> <seconds> -mayDie -file <path>` on
+    the QA host against a running app this driver launched, for 1 to 10
+    seconds, copies the report into `qa-evidence/<name>.txt` (a new file, as a
+    screenshot) and returns the main thread's heaviest path in its call graph.
+    A PID the pass did not launch, an app that exited, and a process `sample`
+    cannot find all answer `qa_no_app`;
   - `qa_api_requests` returns the requests the apps of one QA root (its `root`,
     by default the last launch's) logged to `api-requests.jsonl` there since the
     last call (the POSTs they answered from `api_fixtures`), at most the last
@@ -268,6 +274,13 @@ defmodule SymphonyElixir.QaDriver do
   # Prints each executable `command -v` cannot find, then a line that says the check ran.
   @tool_check_script ~S(for tool in "$@"; do command -v "$tool" >/dev/null 2>&1 || printf 'symphony-qa-missing-tool:%s\n' "$tool"; done; printf 'symphony-qa-tools:checked\n')
   @screenshot_timeout_ms 15_000
+  # `qa_sample`: `/usr/bin/sample` on the QA host, for 1 to 10 seconds (3 by
+  # default), plus the time it takes to symbolicate and write its report.
+  @sample_command "/usr/bin/sample"
+  @max_sample_seconds 10
+  @default_sample_seconds 3
+  @sample_overhead_ms 60_000
+  @max_sample_frames 200
   @output_limit 8_000
   @app_output_limit 16_000
   @tree_bytes_limit 100_000
@@ -370,7 +383,7 @@ defmodule SymphonyElixir.QaDriver do
 
   @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_ax_select qa_click qa_key) ++
            ~w(qa_hover qa_context_menu qa_scroll qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests qa_open_status_menu) ++
-           ~w(qa_build_release_pair qa_relaunched_app qa_update_feed)
+           ~w(qa_sample qa_build_release_pair qa_relaunched_app qa_update_feed)
 
   # The QA host's OS boundary: `SymphonyElixir.QaDriver.Remote.host/1`, unless a test overrides it.
   @type host :: %{
@@ -790,6 +803,18 @@ defmodule SymphonyElixir.QaDriver do
       health = health(pid, page, app, reports -- app.crash_reports, responding)
       GenServer.call(driver, {:checked, health["healthy"]})
       {:ok, health}
+    end
+  end
+
+  defp run_tool("qa_sample", driver, config, args) do
+    with {:ok, pid} <- sample_pid(driver, args),
+         {:ok, page} <- optional_string(args, "page", 200),
+         {:ok, seconds} <- optional_integer(args, "seconds", 1, @max_sample_seconds),
+         {:ok, name} <- sample_name(Map.get(args, "name"), pid),
+         {:ok, evidence} <- Checks.ensure_evidence_dir(config.worktree),
+         {:ok, report} <- take_sample(driver, config, pid, seconds || @default_sample_seconds),
+         :ok <- write_sample(Path.join(evidence, name <> ".txt"), report, name <> ".txt") do
+      {:ok, sample_payload(pid, page, seconds || @default_sample_seconds, name <> ".txt", report)}
     end
   end
 
@@ -1808,6 +1833,142 @@ defmodule SymphonyElixir.QaDriver do
       "note" => "The menu is open. Screenshot it with qa_screenshot and this window_id; qa_key with key `escape` closes it."
     }
   end
+
+  # -- main-thread sample -----------------------------------------------------
+
+  # A PID the pass did not launch, or whose app has exited, has nothing to sample.
+  defp sample_pid(driver, args) do
+    with {:ok, pid} <- pid_argument(args) do
+      case GenServer.call(driver, {:running, pid}) do
+        {:ok, pid} -> {:ok, pid}
+        {:error, {:qa_tool, _code, message}} -> no_app(message)
+      end
+    end
+  end
+
+  defp sample_name(nil, pid), do: {:ok, "sample-#{pid}-#{System.os_time(:millisecond)}"}
+
+  defp sample_name(name, _pid) when is_binary(name) do
+    with {:ok, name} <- Checks.screenshot_name(String.replace_suffix(name, ".txt", "")) do
+      {:ok, name}
+    end
+  end
+
+  defp sample_name(_name, _pid), do: tool_error("invalid_arguments", "`name` must be a string.")
+
+  # `sample` writes the report on the QA host; the host's `read` copies it back
+  # and removes it there. `-mayDie` keeps what it gathered when the app dies
+  # during the sample.
+  defp take_sample(driver, config, pid, seconds) do
+    file = Path.join(config.host_dir, "sample-#{pid}-#{System.unique_integer([:positive])}.txt")
+    args = [Integer.to_string(pid), Integer.to_string(seconds), "-mayDie", "-file", file]
+
+    case config.host.cmd.(@sample_command, args, timeout_ms: seconds * 1_000 + @sample_overhead_ms, output_limit: @output_limit) do
+      {:ok, {_output, 0}} ->
+        case config.host.read.(file) do
+          {:ok, report} -> {:ok, report}
+          {:error, reason} -> tool_error("qa_sample_failed", "sample ran but its report could not be read from the QA host: #{inspect(reason)}.")
+        end
+
+      {:ok, {output, status}} ->
+        config.host.cmd.("/bin/rm", ["-f", file], timeout_ms: @helper_timeout_ms, output_limit: @output_limit)
+        sample_failed(driver, pid, "sample exited with status #{status}: #{tail(output, 500)}")
+
+      {:error, reason} ->
+        config.host.cmd.("/bin/rm", ["-f", file], timeout_ms: @helper_timeout_ms, output_limit: @output_limit)
+        sample_failed(driver, pid, "sample could not run on the QA host: #{inspect(reason)}")
+    end
+  end
+
+  # The app may have exited while `sample` ran, or before it attached.
+  defp sample_failed(driver, pid, detail) do
+    case GenServer.call(driver, {:running, pid}) do
+      {:ok, _pid} ->
+        if detail =~ ~r/does not exist|no such process/i,
+          do: no_app("The app with PID #{pid} is gone: #{detail}"),
+          else: tool_error("qa_sample_failed", detail <> ".")
+
+      {:error, {:qa_tool, _code, message}} ->
+        no_app(message)
+    end
+  end
+
+  defp no_app(detail) do
+    tool_error(
+      "qa_no_app",
+      "There is no running app to sample: #{detail} Launch it with qa_launch_app, or check it with qa_check_app."
+    )
+  end
+
+  defp write_sample(destination, report, file) do
+    case File.write(destination, report, [:exclusive]) do
+      :ok -> :ok
+      {:error, :eexist} -> tool_error("qa_sample_exists", "#{@evidence_dir}/#{file} already exists. Give each sample a new name.")
+      {:error, reason} -> tool_error("qa_sample_failed", "Could not save #{@evidence_dir}/#{file}: #{inspect(reason)}.")
+    end
+  end
+
+  defp sample_payload(pid, page, seconds, file, report) do
+    {thread, stack} = main_thread_stack(report)
+
+    %{
+      "pid" => pid,
+      "page" => page,
+      "seconds" => seconds,
+      "file" => Path.join(@evidence_dir, file),
+      "thread" => thread,
+      "stack" => stack,
+      "note" =>
+        if(stack == [],
+          do: "No main-thread call graph was found in the report; read #{@evidence_dir}/#{file}.",
+          else:
+            "`stack` is the main thread's heaviest path in the call graph, outermost frame first, each with its sample count. " <>
+              "Quote it in the finding and attach #{@evidence_dir}/#{file} with linear_attach_file."
+        )
+    }
+  end
+
+  # The main thread's heaviest path in a `sample` report's call graph: its
+  # header line and the frames from the outermost in. `sample` lists each
+  # node's children heaviest first, depth first, so the heaviest path is the
+  # lines under the thread's header while each sits deeper than the one before.
+  defp main_thread_stack(report) do
+    lines =
+      report
+      |> String.split("\n")
+      |> Enum.drop_while(&(not String.starts_with?(&1, "Call graph:")))
+      |> Enum.drop(1)
+      |> Enum.take_while(&(String.trim(&1) != ""))
+
+    threads = Enum.filter(lines, &thread_line?/1)
+    header = Enum.find(threads, &(&1 =~ "com.apple.main-thread")) || List.first(threads)
+
+    case header do
+      nil ->
+        {nil, []}
+
+      header ->
+        frames =
+          lines
+          |> Enum.drop_while(&(&1 != header))
+          |> Enum.drop(1)
+          |> Enum.map(&frame_depth/1)
+          |> heaviest_path(frame_depth(header) |> elem(0), [])
+
+        {String.trim(header), Enum.take(frames, @max_sample_frames)}
+    end
+  end
+
+  defp thread_line?(line), do: line =~ ~r/\A\s*\d+\s+Thread_/
+
+  # A frame's depth is the width of the tree's drawing before its sample count.
+  defp frame_depth(line) do
+    [_line, prefix, frame] = Regex.run(~r/\A([\s+!:|]*)(.*)\z/, line)
+    {byte_size(prefix), String.trim_trailing(frame)}
+  end
+
+  defp heaviest_path([{depth, frame} | rest], parent, acc) when depth > parent, do: heaviest_path(rest, depth, [frame | acc])
+  defp heaviest_path(_lines, _parent, acc), do: Enum.reverse(acc)
 
   # -- screenshots ------------------------------------------------------------
 
