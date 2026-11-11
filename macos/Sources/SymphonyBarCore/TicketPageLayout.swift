@@ -203,6 +203,13 @@ public struct TicketQuestions: Equatable {
         items.indices.contains(index) ? items[index] : nil
     }
 
+    /// Whether one of the Questions was answered and still waits for the read that drops it: `answered` holds the Inbox
+    /// items the Director answered (held for Undo, on its way, or taken by Symphony) until the Inbox read no longer
+    /// lists them. Send stays off meanwhile, so the same answer can't go twice.
+    public func awaitingRead(_ answered: Set<String>) -> Bool {
+        items.contains { answered.contains($0.id) }
+    }
+
     /// The item Send answers: the first Question with an answer to send, nil while none has one.
     public func toSend(_ inbox: InboxPicks) -> InboxItem? {
         items.first { item in item.review.action.map { QuestionSend(question: $0, picks: inbox[item.id]).enabled } ?? false }

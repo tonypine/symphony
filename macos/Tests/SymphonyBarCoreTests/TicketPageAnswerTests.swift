@@ -85,7 +85,14 @@ final class TicketPageAnswerTests: XCTestCase {
         let action = try XCTUnwrap(sheet.action())
         let question = try XCTUnwrap(item.review.action?.question)
         XCTAssertEqual(action, .decide("TP-1245", request: .comment("c-1245-request"), picks: [.init(question: question, answer: "For how long")], move: nil))
+        // From the confirm (held for Undo), through the send, until the read drops the Question, Send stays off: the
+        // item counts as answered, so the same decide can't go a second time, even with the recommended pick back.
+        let answeredIDs: Set<String> = [item.id]
+        XCTAssertTrue(open.awaitingRead(answeredIDs))
+        XCTAssertFalse(open.awaitingRead([]))
         XCTAssertEqual(send(action, to: fixtures), .done)
+        XCTAssertTrue(open.awaitingRead(answeredIDs))
+        XCTAssertNotNil(open.toSend(InboxPicks()))
         XCTAssertEqual(sheet.banner(after: sheet.expectedOutcome).text, "Sent your decision")
         let entry = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixtures.requestLog)) as? [String: Any])
         XCTAssertEqual(entry["path"] as? String, "/api/v1/control/decide")
@@ -99,6 +106,7 @@ final class TicketPageAnswerTests: XCTestCase {
         open = TicketQuestions(identifier: "TP-1245", in: after.items)
         XCTAssertTrue(open.items.isEmpty)
         XCTAssertNil(open.toSend(inboxPicks))
+        XCTAssertFalse(open.awaitingRead(answeredIDs))
         XCTAssertFalse(after.items.contains { $0.identifier == "TP-1245" })
         XCTAssertEqual(after.page.openQuestions, [])
         let line = DecisionsLine(openQuestions: after.page.openQuestions, questions: open.questions)
@@ -137,6 +145,8 @@ final class TicketPageAnswerTests: XCTestCase {
 
         let after = try read(refusing)
         XCTAssertEqual(TicketQuestions(identifier: "TP-1245", in: after.items).items, open.items)
+        // The refusal takes the item out of the answered ones: Send is on again for the Question still listed.
+        XCTAssertFalse(open.awaitingRead([]))
         XCTAssertEqual(after.page.openQuestions, before.page.openQuestions)
     }
 }
