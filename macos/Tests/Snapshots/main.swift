@@ -1315,7 +1315,7 @@ func timelineInPlace(_ identifier: String, situation: Situation? = nil) -> some 
             idle: TimelineIdleLine(situation ?? page.situation, reference: page.reference),
             transcripts: StepTranscripts { _ in .unreachable }, calendar: timelineCalendar
         )
-        .environment(\.readSession, ReadSessionAction { _ in })
+        .environment(\.readSession, ReadSessionAction(identifier) { _ in })
     }
     .padding(DesignTokens.Space.s5)
     .frame(width: 780, alignment: .leading)

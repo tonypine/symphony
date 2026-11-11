@@ -86,14 +86,23 @@ public struct RunGroup: View {
 
 /// Opens the session reader on a run: the window that reads its whole session (TP-1452). A Run group shows its More
 /// menu only where the view around it gives one.
-public struct ReadSessionAction {
+///
+/// Two actions for the same ticket are equal, so a page that draws again (each read, each scroll the page measures)
+/// hands its Run groups the same value and SwiftUI leaves their More menus as they are, instead of rebuilding every
+/// run's menu on every update of a long timeline.
+public struct ReadSessionAction: Equatable {
+    /// The ticket whose runs it opens.
+    let identifier: String
     let handler: (RunGroupModel) -> Void
 
-    public init(_ handler: @escaping (RunGroupModel) -> Void) {
+    public init(_ identifier: String, _ handler: @escaping (RunGroupModel) -> Void) {
+        self.identifier = identifier
         self.handler = handler
     }
 
     public func callAsFunction(_ run: RunGroupModel) { handler(run) }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool { lhs.identifier == rhs.identifier }
 }
 
 public extension EnvironmentValues {

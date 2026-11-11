@@ -750,7 +750,7 @@ struct TicketPageBody: View {
                     transcripts: transcripts, calendar: calendar
                 )
                 .id(page.identifier)
-                .environment(\.readSession, ReadSessionAction(actions.readSession))
+                .environment(\.readSession, ReadSessionAction(page.identifier, actions.readSession))
             }
         }
     }

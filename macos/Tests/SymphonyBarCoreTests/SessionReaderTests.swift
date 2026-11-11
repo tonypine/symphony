@@ -98,6 +98,43 @@ final class SessionReaderTests: XCTestCase {
         XCTAssertTrue(SessionReader.build(identifier: "T-1", run: run([]), lines: { _ in .loading }).sections.isEmpty)
     }
 
+    /// Walkthrough step 2 on the fixtures QA launches the app with: TP-1244's earlier run (`ticket-page`) has a session to
+    /// read, and the reader shows every line of it, step by step, through the same fixture server the app reads.
+    @MainActor
+    func testWithTheFixtureServerAnEarlierRunsWholeSessionReadsEveryLine() async throws {
+        let directory = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/ticket-page", isDirectory: true)
+        let root = uniqueTemporaryDirectory("ticket-page-reader")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fixtures = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("requests.jsonl"))
+        let client = LiveAPIClient(fetch: LiveAPIClient.fetch(base: { APIFixtures.baseURL }, transport: fixtures.transport))
+
+        guard case let .answered(feed, 200) = await client.answer("api/v1/repos/symphony/tickets/TP-1244/events") else {
+            return XCTFail("The fixture serves TP-1244's events")
+        }
+        let history = try XCTUnwrap(TicketEventsPayload.decode(feed))
+        let timeline = TimelineModel.build(history, reference: reference, calendar: Calendar(identifier: .gregorian))
+        let earlier = try XCTUnwrap(timeline.run("run-1"))
+        XCTAssertFalse(earlier.isLive)
+        XCTAssertTrue(SessionReader.canRead(earlier))
+
+        let transcripts = StepTranscripts(get: { await client.answer($0) })
+        for transcript in earlier.steps.compactMap(\.transcript) {
+            await transcripts.load(transcript)?.value
+        }
+        let reader = SessionReader.build(identifier: "TP-1244", run: earlier, lines: transcripts.lines)
+
+        XCTAssertEqual(reader.windowTitle, "TP-1244 · Implementation run 1")
+        XCTAssertEqual(reader.sections.map(\.step.title), ["Write the code", "Tests"])
+        XCTAssertEqual(reader.lines.count, 10)
+        XCTAssertEqual(reader.lines.first?.line.text, "Reading the ticket and the timeline before writing the change.")
+        // A line of more than one line expands in place; a short one doesn't.
+        XCTAssertEqual(reader.lines.filter(\.expands).count, 2)
+        XCTAssertTrue(reader.lines.last?.line.text.hasPrefix("One test fails") == true)
+    }
+
     // MARK: - The line when no run works
 
     func testTheNoRunLineSaysWhyInTheSituationsWords() throws {
