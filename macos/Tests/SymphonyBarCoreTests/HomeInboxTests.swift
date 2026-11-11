@@ -50,6 +50,12 @@ final class HomeInboxTests: XCTestCase {
         let picked = HomeInbox(items: items, picks: { $0 == row.id ? blank : DecisionPicks() })
         XCTAssertEqual(picked.rows.first { $0.id == row.id }?.toolbar.buttons.first?.enabled, false)
 
+        // The option picked is the row's own, so Home draws the pick that Send Decision sends.
+        let second = DecisionPicks(picks: [0: 1])
+        let chosen = HomeInbox(items: items, picks: { $0 == row.id ? second : DecisionPicks() })
+        XCTAssertEqual(chosen.rows.first { $0.id == row.id }?.picks, second)
+        XCTAssertNotEqual(chosen, HomeInbox(items: items))
+
         XCTAssertFalse(try XCTUnwrap(HomeInbox(items: items).rows.first { $0.item.kind == .plan }).asksInPlace)
     }
 
@@ -91,4 +97,13 @@ final class HomeInboxTests: XCTestCase {
     private func payload(_ name: String) throws -> InboxPayload {
         try XCTUnwrap(InboxPayload.decode(Data(contentsOf: fixture(name).appendingPathComponent("inbox.json"))))
     }
+
+    /// The drawer at the window's opening size folds the sidebar rather than clip it; a wide window keeps both.
+    func testTheDrawerFoldsTheSidebarOnlyWhenTheWindowCantHoldAllThree() {
+        XCTAssertTrue(HomeInbox.drawerFoldsSidebar(windowWidth: DesignTokens.Layout.windowWidth, drawerShown: true))
+        XCTAssertTrue(HomeInbox.drawerFoldsSidebar(windowWidth: DesignTokens.Layout.minWindowWidth, drawerShown: true))
+        XCTAssertFalse(HomeInbox.drawerFoldsSidebar(windowWidth: 1400, drawerShown: true))
+        XCTAssertFalse(HomeInbox.drawerFoldsSidebar(windowWidth: DesignTokens.Layout.windowWidth, drawerShown: false))
+    }
+
 }

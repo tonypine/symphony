@@ -6,7 +6,6 @@ import SymphonyBarUI
 
 /// What Home's Inbox rows do: the same picks, write-ins and moves as the Inbox, through the window model.
 struct HomeInboxActions {
-    var picks: (String) -> DecisionPicks = { _ in DecisionPicks() }
     /// Picks an option: (option, decision, issue id).
     var pick: (Int, Int, String) -> Void = { _, _, _ in }
     /// Keeps a write-in's text: (text, decision, issue id).
@@ -23,7 +22,6 @@ struct HomeInboxActions {
 extension SymphonyWindowModel {
     var homeInboxActions: HomeInboxActions {
         HomeInboxActions(
-            picks: { [weak self] in self?.picks(for: $0) ?? DecisionPicks() },
             pick: { [weak self] in self?.pick($0, decision: $1, itemID: $2) },
             writeIn: { [weak self] in self?.writeIn($0, decision: $1, itemID: $2) },
             perform: { [weak self] in self?.perform($0, on: $1) },
@@ -105,7 +103,8 @@ struct HomeInboxRow: View {
             if row.asksInPlace, let action = item.review.action {
                 QuestionBlock(
                     action: action,
-                    picks: actions.picks(item.id),
+                    // The row's own picks, so a pick changes the row and redraws its cards.
+                    picks: row.picks,
                     pick: { actions.pick($0, 0, item.id) },
                     writeIn: { actions.writeIn($0, 0, item.id) },
                     answerable: item.answerable,
@@ -206,8 +205,8 @@ struct InboxDrawerPresenter: ViewModifier {
             InboxDrawer(model: model)
                 .inspectorColumnWidth(
                     min: PeekPresentation.minInspectorWidth,
-                    ideal: InboxDrawer.idealWidth,
-                    max: InboxDrawer.maxWidth
+                    ideal: HomeInbox.drawerIdealWidth,
+                    max: HomeInbox.drawerMaxWidth
                 )
         }
     }
@@ -216,9 +215,6 @@ struct InboxDrawerPresenter: ViewModifier {
 /// The drawer's content: the peek while one is open, else the review of the selected item, with Close.
 struct InboxDrawer: View {
     @ObservedObject var model: SymphonyWindowModel
-
-    static let idealWidth: CGFloat = 460
-    static let maxWidth: CGFloat = 640
 
     var body: some View {
         if model.peek.isShown {

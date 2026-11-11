@@ -23,7 +23,15 @@ public struct HomeInbox: Equatable {
         public var item: InboxItem
         /// The Inbox's toolbar for the item: its buttons, the first the prominent default, and the ⋯ menu.
         public var toolbar: InboxToolbar
+        /// The Director's picks in the item's Question, drawn on its option cards: a pick redraws the row.
+        public var picks: DecisionPicks
         public var id: String { item.id }
+
+        public init(item: InboxItem, toolbar: InboxToolbar, picks: DecisionPicks = DecisionPicks()) {
+            self.item = item
+            self.toolbar = toolbar
+            self.picks = picks
+        }
 
         /// True for a request with options: the row draws its Question block, answered in place.
         public var asksInPlace: Bool { item.isDecision && item.review.action != nil }
@@ -48,7 +56,7 @@ public struct HomeInbox: Equatable {
     public var hiddenLine: String?
 
     /// `answered` holds the issue ids of the items the Director answered from the app, which leave at once; `picks`
-    /// is each item's picks, by issue id, for its toolbar (Send Decision is off while the write-in is blank).
+    /// is each item's picks, by issue id, for its cards and its toolbar (Send Decision is off while the write-in is blank).
     public init(
         items: [InboxItem],
         scope: OverviewScope = .all,
@@ -61,10 +69,26 @@ public struct HomeInbox: Equatable {
             .filter { scope.includes($0.element.repoKey) && !answered.contains($0.element.id) }
             // Newest first: the shortest wait first; an item whose wait is unknown goes last, in Symphony's order.
             .sorted { ($0.element.waitingSeconds ?? .max, $0.offset) < ($1.element.waitingSeconds ?? .max, $1.offset) }
-            .map { Row(item: $0.element, toolbar: InboxToolbar.toolbar(for: $0.element, picks: picks($0.element.id))) }
+            .map { entry in
+                let itemPicks = picks(entry.element.id)
+                return Row(item: entry.element, toolbar: InboxToolbar.toolbar(for: entry.element, picks: itemPicks), picks: itemPicks)
+            }
     }
 
     public var isEmpty: Bool { rows.isEmpty }
+
+    /// The drawer's column: its ideal width, and its widest.
+    public static let drawerIdealWidth: Double = 460
+    public static let drawerMaxWidth: Double = 640
+    /// Under this, the page beside the drawer is too narrow to read: Home's rows and their buttons start to clip.
+    public static let minPageWidthBesideDrawer: Double = DesignTokens.Layout.narrowReviewWidth
+
+    /// True when the window, `windowWidth` wide, can't hold the sidebar, a readable page and the drawer at once: the
+    /// sidebar folds while the drawer is open, rather than being pushed off the window's edge (1200 pt, the size the
+    /// window opens at, folds it; 1400 pt keeps it).
+    public static func drawerFoldsSidebar(windowWidth: Double, drawerShown: Bool) -> Bool {
+        drawerShown && windowWidth - DesignTokens.Layout.sidebarWidth - drawerIdealWidth < minPageWidthBesideDrawer
+    }
 
     /// The section's heading for VoiceOver: "Needs you, 3".
     public var accessibilityLabel: String { "\(Self.title), \(rows.count)" }

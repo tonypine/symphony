@@ -858,8 +858,15 @@ struct SymphonyWindowView: View {
         client = model.client
     }
 
+    /// The sidebar, shown unless the Inbox's drawer needs its room (TP-1454).
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    /// True while the sidebar is folded for the drawer, so closing the drawer, or widening the window, brings it back;
+    /// a sidebar the Director folded stays folded.
+    @State private var sidebarFoldedForDrawer = false
+    @State private var windowWidth: Double = DesignTokens.Layout.windowWidth
+
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             SymphonySidebar(model: model, client: client)
                 .navigationSplitViewColumnWidth(
                     min: DesignTokens.Layout.minSidebarWidth,
@@ -867,13 +874,15 @@ struct SymphonyWindowView: View {
                     max: DesignTokens.Layout.maxSidebarWidth
                 )
         } detail: {
-            SymphonyDetail(model: model, client: client)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(DesignTokens.Surface.window.color)
-                // The status bar: one line of the factory's health, and the dispatch control (TP-1454).
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    WindowStatusBar(model: model, client: client)
-                }
+            // The status bar under the page, in the layout rather than an inset, so nothing on the page (the decision
+            // banner, the drawer) is drawn under it: one line of the factory's health, and the dispatch control
+            // (TP-1454).
+            VStack(spacing: 0) {
+                SymphonyDetail(model: model, client: client)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(DesignTokens.Surface.window.color)
+                WindowStatusBar(model: model, client: client)
+            }
                 .modifier(StopRunSheetPresenter(model: model))
                 .modifier(MoveSheetPresenter(model: model))
                 .modifier(DispatchSheetsPresenter(model: model))
@@ -966,6 +975,24 @@ struct SymphonyWindowView: View {
                         }
                     }
                 }
+        }
+        .onGeometryChange(for: Double.self) { $0.size.width } action: { width in
+            windowWidth = width
+            fitDrawer()
+        }
+        .onChange(of: model.inboxDrawerShown) { fitDrawer() }
+    }
+
+    /// Folds the sidebar while the drawer is open in a window too narrow for the sidebar, the page and the drawer, so
+    /// neither the sidebar nor the drawer's Close is pushed off the window's edge; unfolds it once there is room.
+    private func fitDrawer() {
+        if HomeInbox.drawerFoldsSidebar(windowWidth: windowWidth, drawerShown: model.inboxDrawerShown) {
+            guard columnVisibility != .detailOnly else { return }
+            columnVisibility = .detailOnly
+            sidebarFoldedForDrawer = true
+        } else if sidebarFoldedForDrawer {
+            columnVisibility = .all
+            sidebarFoldedForDrawer = false
         }
     }
 }

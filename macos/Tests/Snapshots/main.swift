@@ -971,7 +971,7 @@ func inboxDrawer() -> some View {
         Divider()
         InboxReviewBody(item: item, perform: { _ in }, narrow: true, now: situationsNow, state: situationsState("home-questions").snapshot)
     }
-    .frame(width: InboxDrawer.idealWidth)
+    .frame(width: HomeInbox.drawerIdealWidth)
     .background(DesignTokens.Surface.content.color)
 }
 
