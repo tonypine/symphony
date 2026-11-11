@@ -746,7 +746,7 @@ struct TicketPageBody: View {
                 TimelineTitle(marks: page.marksRead)
                 TimelineSection(
                     model: page.timelineModel(calendar: calendar),
-                    idle: TimelineIdleLine(page.situation, reference: page.reference),
+                    idle: page.idleLine,
                     transcripts: transcripts, calendar: calendar
                 )
                 .id(page.identifier)

@@ -314,6 +314,24 @@ final class TicketPageTests: XCTestCase {
         XCTAssertEqual(page.workspacePath, "/w/T-1")
     }
 
+    func testNoNoRunLineWhileARunWorksEvenBeforeTheFeedListsIt() throws {
+        // Dispatched, but the events feed has no runs entry yet: the timeline has no live run group.
+        var running = try fixturePage("SHOP-305")
+        running.history = nil
+        running.situation = Situation(kind: .working, cause: "Run 2 is writing the code.")
+        XCTAssertTrue(running.isRunning)
+        XCTAssertNil(running.idleLine)
+
+        // Nothing runs: the line says why in the situation's words.
+        var idle = try fixturePage("SHOP-288")
+        XCTAssertFalse(idle.isRunning)
+        idle.situation = Situation(kind: .you, cause: "Run 2 asked a question.", next: "Answer below.")
+        let line = try XCTUnwrap(idle.idleLine)
+        XCTAssertEqual(line.word, "Waiting on you")
+        idle.situation = nil
+        XCTAssertNil(idle.idleLine)
+    }
+
     func testAPlanAndARunWithoutACapOrAProfile() {
         let state = json([
             "generated_at": "2026-10-07T14:20:00Z",

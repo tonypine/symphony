@@ -165,3 +165,12 @@ public struct TimelineIdleLine: Equatable {
         "\(lead). " + (detail.map { "\(word): \($0)" } ?? word)
     }
 }
+
+extension TicketPage {
+    /// The line at the top of the timeline when no run works on the ticket; nil while one does. A run can be
+    /// dispatched before the events feed lists it, so the timeline has no live run group yet: the state's running
+    /// entry decides, never the timeline alone, or the page would say "No run now" beside a running header.
+    public var idleLine: TimelineIdleLine? {
+        isRunning ? nil : TimelineIdleLine(situation, reference: reference)
+    }
+}
