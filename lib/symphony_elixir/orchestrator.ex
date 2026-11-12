@@ -73,6 +73,7 @@ defmodule SymphonyElixir.Orchestrator do
   alias SymphonyElixir.Artifacts.Transcript
   alias SymphonyElixir.Config.{Cache, Schema}
   alias SymphonyElixir.Dispatch.{Candidates, Order, Settings, Settle, Shadow}
+  alias SymphonyElixir.EpicReview.MainCi
   alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
   alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.QaDriver.DevServerLease
@@ -295,6 +296,9 @@ defmodule SymphonyElixir.Orchestrator do
     # Once per boot: a ticket an idle run parked before parks asked a question gets the question,
     # the releasable reason and the push a park gives today, in a task of its own.
     IdlePark.Backfill.start(configured_repo_keys(repo_key))
+    # Once per boot: an epic waiting for CI on its base branch whose CI finished while Symphony was
+    # stopped is lifted, and so dispatched (`SymphonyElixir.EpicReview.MainCi.recheck/1`).
+    MainCi.start_recheck()
     tick_token = make_ref()
     send(self(), {:tick, tick_token})
     schedule_snapshot_publish(config.observability.snapshot_publish_ms)
@@ -2547,6 +2551,14 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc false
+  @spec hold_for_main_ci_for_test(State.t(), [Issue.t()], term()) :: [{Issue.t(), String.t() | nil}]
+  def hold_for_main_ci_for_test(%State{} = state, issues, context) when is_list(issues) do
+    candidates = main_ci_candidates(state, issues, context)
+    hold_for_main_ci(candidates)
+    candidates
+  end
+
+  @doc false
   @spec dispatch_refresh_ids_for_test(State.t(), [Issue.t()], term()) :: [String.t()]
   def dispatch_refresh_ids_for_test(%State{} = state, issues, context) when is_list(issues), do: dispatch_refresh_ids(state, issues, context)
 
@@ -3667,6 +3679,7 @@ defmodule SymphonyElixir.Orchestrator do
       active_workspace_identifiers_by_repo: active_workspace_identifiers_by_repo(state),
       run_age_gc?: workspace_age_gc_due?(state, now_ms),
       dispatch_refresh_ids: dispatch_refresh_ids(state, issues, context),
+      main_ci: main_ci_candidates(state, issues, context),
       now_ms: now_ms
     }
 
@@ -3706,13 +3719,41 @@ defmodule SymphonyElixir.Orchestrator do
         do: issue_id
   end
 
+  # An epic review the pass may start waits for CI on its base branch first
+  # (`SymphonyElixir.EpicReview.MainCi`): the epic whose base branch head has workflow runs still
+  # going is paused on that commit here, in the readiness task, so the pass that follows skips it and
+  # no run starts. A poll checks only the epics whose dispatch gates are open now; a retry its own.
+  defp main_ci_candidates(%State{} = state, issues, :poll) do
+    active_states = active_state_set()
+    terminal_states = terminal_state_set()
+
+    for %Issue{} = issue <- issues,
+        epic_review_candidate?(issue),
+        dispatch_gates_open?(issue, state, active_states, terminal_states),
+        do: {issue, hold_repo_key(issue)}
+  end
+
+  defp main_ci_candidates(_state, _issues, {:active_retry, %Issue{} = issue, _attempt, _metadata}) do
+    if epic_review_candidate?(issue), do: [{issue, hold_repo_key(issue)}], else: []
+  end
+
+  defp epic_review_candidate?(%Issue{} = issue) do
+    settings = Config.settings!()
+    RunKind.classify(issue, terminal_states: settings.tracker.terminal_states, settings: settings) == :epic_review
+  end
+
+  defp hold_for_main_ci(candidates), do: Enum.each(candidates, fn {issue, repo_key} -> MainCi.hold(issue, repo_key) end)
+
   defp run_dispatch_readiness_checks(%{
          repo_keys: repo_keys,
          active_workspace_identifiers_by_repo: active_identifiers_by_repo,
          run_age_gc?: run_age_gc?,
          dispatch_refresh_ids: dispatch_refresh_ids,
+         main_ci: main_ci,
          now_ms: now_ms
        }) do
+    hold_for_main_ci(main_ci)
+
     %{
       now_ms: now_ms,
       dispatch_refresh: prefetch_dispatch_issues(dispatch_refresh_ids),

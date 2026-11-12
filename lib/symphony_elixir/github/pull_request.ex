@@ -635,6 +635,20 @@ defmodule SymphonyElixir.GitHub.PullRequest do
   end
 
   @doc """
+  The commit `branch` of `repo` (`owner/repo`, or `host/owner/repo` off github.com) is at, lowercase,
+  in one REST read (`repos/<owner>/<repo>/commits/<branch>`).
+  """
+  @spec branch_head(String.t(), String.t(), keyword()) :: {:ok, String.t()} | {:error, term()}
+  def branch_head(repo, branch, opts \\ []) when is_binary(repo) and is_binary(branch) do
+    with {:ok, host, owner, name} <- split_repo(repo),
+         ref = URI.encode(branch, &URI.char_unreserved?/1),
+         {:ok, output} <- run_gh(github_api_args(host, "repos/#{owner}/#{name}/commits/#{ref}") ++ ["--jq", ".sha"], opts) do
+      sha = output |> String.trim() |> String.downcase()
+      if sha =~ ~r/\A[0-9a-f]{40}\z/, do: {:ok, sha}, else: {:error, :invalid_branch_head_payload}
+    end
+  end
+
+  @doc """
   The workflow runs on commit `sha`, newest first, in one request: at most `:limit` runs (default
   100). The repository is `:repo` when given, else the one `gh` reads from the git checkout at
   `:cwd`.
