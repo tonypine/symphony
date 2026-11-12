@@ -161,7 +161,8 @@ jobs:
 
       # The ticket page's speed (TP-1491): the app built above, in QA mode over the ticket-page-speed fixtures
       # (500 events over 15 runs), with the page open while polls land. Prints the idle main thread's busy share from
-      # a 5 s sample and the hitch ratio of a scroll to the bottom and back, and fails over their budgets.
+      # a 5 s sample and the hitch ratio of a scroll to the bottom and back against their budgets; it fails when it
+      # cannot measure, and over the budgets once TP-1480 turns them on.
       - name: Test the ticket page's idle sample and scroll hitches
         working-directory: macos
         timeout-minutes: 10

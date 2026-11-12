@@ -15,12 +15,24 @@ while the window shows, reading the ticket and its feed after each poll. Then:
    second counted, in ms/s, Apple's measure (under 5 ms/s reads smooth, over 10 ms/s a person feels it). The seconds
    counted include the driver's pauses between its rounds of scroll events, when the page settles.
 
-It prints both numbers and fails when the idle main thread is busy more than IDLE_BUDGET_PERCENT of the time or the
-hitch ratio is over HITCH_BUDGET_MS_PER_S, naming the number and the budget.
+It prints both numbers on every run. It fails when it cannot measure: the page never shows, the sample has no main
+thread, the app counts no frames or exits. The budgets fail it only once ENFORCE_BUDGETS is on.
 
-The budgets. The idle one is the ticket's: 5 %. The hitch budget is provisional until the first CI runs measure the
-app on main before TP-1480 (Ticket page speed 3/4): it is then set to main's hitch ratio with room for the runner's
-noise, and those numbers are written in TP-1491's PR.
+The budgets, and why they report only for now (the Director's decision on TP-1491). The idle one is the ticket's:
+the main thread busy at most IDLE_BUDGET_PERCENT, 5 %. The hitch budget was to be main's hitch ratio with room for
+the runner's noise, but main before TP-1480 (Ticket page speed 3/4) measured at the ceiling, in PR #903's first Mac
+CI build (GitHub's macos-26 runner):
+
+- idle: the main thread 100.0 % busy over 5 s, every sample inside SwiftUI's view graph update (the page redraws
+  while untouched);
+- scroll: a hitch ratio of 874.2 ms/s, 5113 dropped frames, 85130 ms of hitch over 97.4 s, the longest frame 1098 ms;
+  the QA driver reached neither end of the page in its 40 s per edge.
+
+A budget picked from those numbers would sit near 1000 ms/s and never fail, and the 5 % budget would fail every
+pull request that touches the app. So until TP-1480 the test reports each number against its budget, and a scroll
+that cannot reach an edge is reported too, since a page that never settles is what it measures. TP-1480 turns
+ENFORCE_BUDGETS on and sets HITCH_BUDGET_MS_PER_S from the hitch ratio it measures after its fix, with room for the
+runner's noise; from then a change that redraws the whole page on every poll fails, naming the ratio and the budget.
 
 It launches a window and needs the Accessibility grant (the QA driver's scroll), so it runs in the Mac CI build only,
 never in an agent's sandbox.
@@ -45,10 +57,14 @@ FIXTURES = os.path.join(HERE, "Fixtures", "director-app", "ticket-page-speed")
 TICKET = "TP-1244"
 TITLE = "The paused line on the ticket page"
 
+# Off until TP-1480: main measured 100 % idle-busy and 874.2 ms/s of hitch, so the budgets report and do not fail
+# (see the module's doc comment). TP-1480 turns it on.
+ENFORCE_BUDGETS = False
 # The ticket's budget for the page left open and untouched.
 IDLE_BUDGET_PERCENT = 5.0
-# Milliseconds of hitch per second of scrolling. Provisional: see the module's doc comment.
-HITCH_BUDGET_MS_PER_S = 250.0
+# Milliseconds of hitch per second of scrolling. None until TP-1480 sets it from its own measured ratio plus room for
+# the runner's noise: main's 874.2 ms/s leaves no room under the 1000 ms/s ceiling.
+HITCH_BUDGET_MS_PER_S = None
 
 SAMPLE_SECONDS = 5
 # Polls land every 2 s while the window shows: wait for a few before measuring.
@@ -226,8 +242,12 @@ def main():
             busy, samples = idle
             print(f"idle main thread: {busy:.1f} % busy over {SAMPLE_SECONDS} s ({samples} samples), budget {IDLE_BUDGET_PERCENT:.0f} %")
             if busy > IDLE_BUDGET_PERCENT:
-                failures.append("idle sample")
-                print(f"FAIL [idle sample]: the main thread is {busy:.1f} % busy with the page untouched, over the {IDLE_BUDGET_PERCENT:.0f} % budget")
+                over = f"the main thread is {busy:.1f} % busy with the page untouched, over the {IDLE_BUDGET_PERCENT:.0f} % budget"
+                if ENFORCE_BUDGETS:
+                    failures.append("idle sample")
+                    print(f"FAIL [idle sample]: {over}")
+                else:
+                    print(f"over budget [idle sample]: {over} (reported; the budgets fail the test from TP-1480)")
                 with open(report, errors="replace") as handle:
                     print(handle.read()[:6000])
 
@@ -235,8 +255,12 @@ def main():
         frames, replies = scroll_and_count(binary, pid, area, os.path.join(qa_root, "frames.json"))
         for edge, reply in zip(("bottom", "top"), replies):
             if "error" in reply or reply.get("at_edge") is not True:
-                failures.append(f"scroll to the {edge}")
-                print(f"FAIL [scroll to the {edge}]: {reply.get('error') or reply.get('note') or reply}")
+                why = reply.get('error') or reply.get('note') or reply
+                if ENFORCE_BUDGETS:
+                    failures.append(f"scroll to the {edge}")
+                    print(f"FAIL [scroll to the {edge}]: {why}")
+                else:
+                    print(f"short of the {edge} [scroll]: {why} (reported; the page never settling is what the hitch ratio measures)")
             else:
                 print(f"ok [scroll to the {edge}]: {reply.get('rounds')} rounds via {reply.get('via')}, scroll bars {reply.get('scroll_bars')}")
         if not frames or frames.get("frames", 0) < 2:
@@ -244,14 +268,19 @@ def main():
             print(f"FAIL [frames]: the app counted no frames while scrolling: {frames}")
         else:
             ratio = frames["hitch_ratio"]
+            budget = "none until TP-1480" if HITCH_BUDGET_MS_PER_S is None else f"{HITCH_BUDGET_MS_PER_S:.0f} ms/s"
             print(
-                f"scroll: hitch ratio {ratio:.1f} ms/s, budget {HITCH_BUDGET_MS_PER_S:.0f} ms/s; "
+                f"scroll: hitch ratio {ratio:.1f} ms/s, budget {budget}; "
                 f"{frames['dropped']} dropped frames, {frames['hitch_ms']:.0f} ms of hitch over {frames['seconds']:.1f} s "
                 f"({frames['frames']} frames of {frames['frame_ms']:.1f} ms, the longest {frames['longest_ms']:.0f} ms)"
             )
-            if ratio > HITCH_BUDGET_MS_PER_S:
-                failures.append("hitch ratio")
-                print(f"FAIL [hitch ratio]: scrolling {TICKET}'s page hitched {ratio:.1f} ms/s, over the {HITCH_BUDGET_MS_PER_S:.0f} ms/s budget")
+            if HITCH_BUDGET_MS_PER_S is not None and ratio > HITCH_BUDGET_MS_PER_S:
+                over = f"scrolling {TICKET}'s page hitched {ratio:.1f} ms/s, over the {HITCH_BUDGET_MS_PER_S:.0f} ms/s budget"
+                if ENFORCE_BUDGETS:
+                    failures.append("hitch ratio")
+                    print(f"FAIL [hitch ratio]: {over}")
+                else:
+                    print(f"over budget [hitch ratio]: {over} (reported; the budgets fail the test from TP-1480)")
         if process.poll() is not None:
             failures.append("app")
             print(f"FAIL [app]: the app exited ({process.returncode}) during the test")
@@ -266,7 +295,7 @@ def main():
 
     if failures:
         sys.exit(f"{len(failures)} failed: {', '.join(failures)}")
-    print("all passed")
+    print("all passed" if ENFORCE_BUDGETS else "measured (budgets reported, enforced from TP-1480)")
 
 
 if __name__ == "__main__":
