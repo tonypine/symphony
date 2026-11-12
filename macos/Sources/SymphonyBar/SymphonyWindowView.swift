@@ -17,7 +17,7 @@ final class SymphonyWindowModel: ObservableObject {
             onSelect(selection)
             readTicketsIfDue()
             readInitiativeStoryIfDue()
-            readHistoryIfDue()
+            readAggregateIfDue()
             readQualityIfDue()
             readShippedIfDue()
             readAuditIfDue()
@@ -66,6 +66,8 @@ final class SymphonyWindowModel: ObservableObject {
             ticketsReadAt = nil
             readTicketsIfDue()
             restartJournal()
+            // The Insights pages read the scope's slice when their repo control reads the scope.
+            insightsSliceChanged()
         }
     }
     /// The control request a view sent and Symphony hasn't answered yet.
@@ -108,22 +110,24 @@ final class SymphonyWindowModel: ObservableObject {
     var readingInitiativeStory = false
     /// When the selected epic's story was last read, by the epic's identifier.
     var initiativeStoryReadAt: [String: Date] = [:]
-    /// The last history Symphony served, for Usage; read while Usage shows.
-    @Published private(set) var usageHistory: HistoryPayload?
-    /// What the last history read got when it got none, nil after one that did.
-    @Published private(set) var historyResult: EndpointResult?
-    /// The history and runs of Quality's period, read while Quality shows.
-    @Published private(set) var quality: (history: HistoryPayload, runs: [QualityRun])?
-    /// What the last Quality read got when it got none, nil after one that did.
-    @Published private(set) var qualityResult: EndpointResult?
-    /// Quality's period; changing it reads again.
-    @Published var qualityPeriod: Quality.Period = .month {
+    /// The Insights control bar's choice (TP-1463): the period, unit, repo and epic Quality, Usage and Shipped read
+    /// together, remembered across relaunches. Changing it reads the three pages' slice again.
+    @Published var insightsSlice = InsightsSlice() {
         didSet {
-            guard qualityPeriod != oldValue else { return }
-            qualityReadAt = nil
-            readQualityIfDue()
+            guard insightsSlice != oldValue else { return }
+            onInsightsSliceChange(insightsSlice)
+            insightsSliceChanged()
         }
     }
+    var onInsightsSliceChange: (InsightsSlice) -> Void = { _ in }
+    /// `GET /api/v1/aggregate`'s answer for the slice, read while an Insights page shows; the three pages draw it.
+    @Published private(set) var aggregate: AggregatePayload?
+    /// The read `aggregate` answers, to tell an answer for another slice.
+    @Published private(set) var aggregatePath: String?
+    /// What the last aggregate read got when it got none, nil after one that did.
+    @Published private(set) var aggregateResult: EndpointResult?
+    /// The history's review and the runs of Quality's slice, read while Quality shows.
+    @Published private(set) var quality: (history: HistoryPayload, runs: [QualityRun])?
     /// Shipped's merged tickets for its period, read while Shipped shows (D9).
     @Published var shipped: ShippedPayload?
     /// What the last Shipped read got when it got none, nil after one that did.
@@ -133,14 +137,6 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var learningsResult: EndpointResult?
     /// Shipped's segmented control: Shipped or Learnings.
     @Published var shippedTab: Shipped.Tab = .shipped
-    /// Shipped's period; changing it reads again.
-    @Published var shippedPeriod: Shipped.Period = .week {
-        didSet {
-            guard shippedPeriod != oldValue else { return }
-            shippedReadAt = nil
-            readShippedIfDue()
-        }
-    }
     /// The Learnings tab's repo and tag filters and search.
     @Published var learningsFilter = Learnings.Filter()
     /// Set by ⌥⌘F on Shipped to put the focus in the Learnings search field.
@@ -352,9 +348,9 @@ final class SymphonyWindowModel: ObservableObject {
     private var readingRepos = false
     private var readingInbox = false
     private var readingInitiatives = false
-    private var readingHistory = false
-    /// When the history was last read; the run records it comes from change slowly.
-    private var historyReadAt: Date?
+    private var readingAggregate = false
+    /// When the aggregate was last read; the run records and events it comes from change slowly.
+    private var aggregateReadAt: Date?
     private var readingQuality = false
     private var qualityReadAt: Date?
     /// The history is read again at most this often.
@@ -419,7 +415,7 @@ final class SymphonyWindowModel: ObservableObject {
                 readInitiatives()
                 readInitiativeStoryIfDue()
                 readTicketsIfDue()
-                readHistoryIfDue()
+                readAggregateIfDue()
                 readQualityIfDue()
                 readShippedIfDue()
                 readAuditIfDue()
@@ -824,53 +820,78 @@ final class SymphonyWindowModel: ObservableObject {
         if let banner = banners.first, selection == .overview && !showsPage || inboxDrawerShown { showBanner(banner) }
     }
 
-    /// Opens Usage and reads the history at once.
+    /// Opens Usage and reads its slice at once.
     func showUsage() {
         show(.usage)
-        historyReadAt = nil
-        readHistoryIfDue()
+        aggregateReadAt = nil
+        readAggregateIfDue()
     }
 
-    /// Reads the history while Usage shows; Symphony answers from its run records, with no Linear request.
-    private func readHistoryIfDue() {
-        guard selection == .usage, !showsPage, !readingHistory, state.countsKnown,
-            historyReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
+    /// Symphony's UTC day, which the Insights presets end on: its state's clock, else the Mac's.
+    var insightsToday: String { Insights.today(overviewState?.generatedAt ?? Date()) }
+
+    /// The read of the slice under the window's scope.
+    var aggregateReadPath: String { insightsSlice.path(today: insightsToday, scope: scope) }
+
+    /// Whether an Insights page shows.
+    private var showsInsights: Bool { [.quality, .usage, .shipped].contains(selection) && !showsPage }
+
+    /// The slice or the scope changed: the three pages read it again.
+    private func insightsSliceChanged() {
+        aggregateReadAt = nil
+        readAggregateIfDue()
+        qualityReadAt = nil
+        readQualityIfDue()
+        shippedReadAt = nil
+        readShippedIfDue()
+    }
+
+    /// The control bar's repos and epics: the repos Symphony has tickets in and the epics it lists, with those picked.
+    var insightsValues: InsightsControlValues {
+        InsightsControlValues(
+            repos: overviewState?.repos ?? [], epics: initiatives?.initiatives.map(\.identifier) ?? [], slice: insightsSlice
+        )
+    }
+
+    /// Reads the slice while an Insights page shows: one read for Quality, Usage and Shipped, so a page switch reads
+    /// nothing. Symphony answers from its run records and events, with no Linear request.
+    private func readAggregateIfDue() {
+        let path = aggregateReadPath
+        guard showsInsights, !readingAggregate, state.countsKnown,
+            path != aggregatePath || aggregateReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
         else { return }
-        readingHistory = true
+        readingAggregate = true
         Task {
-            let result = await client.get(HistoryPayload.path(days: HistoryPayload.defaultDays))
-            if case let .loaded(data) = result, let payload = HistoryPayload.decode(data) {
-                usageHistory = payload
-                historyResult = nil
+            let result = await client.get(path)
+            if case let .loaded(data) = result, let payload = AggregatePayload.decode(data) {
+                aggregate = payload
+                aggregatePath = path
+                aggregateResult = nil
             } else {
-                historyResult = result
+                aggregateResult = result
             }
-            historyReadAt = Date()
-            readingHistory = false
+            aggregateReadAt = Date()
+            readingAggregate = false
+            if path != aggregateReadPath { readAggregateIfDue() }
         }
     }
 
-    /// Reads Quality's history and runs while Quality shows, for its period.
+    /// Reads Quality's review history and runs while Quality shows, for the slice's days.
     private func readQualityIfDue() {
         guard selection == .quality, !showsPage, !readingQuality, state.countsKnown,
             qualityReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
         else { return }
         readingQuality = true
-        let period = qualityPeriod
+        let slice = insightsSlice
+        let today = insightsToday
         Task {
-            let result = await client.get(HistoryPayload.path(days: period.rawValue))
+            let result = await client.get(HistoryPayload.path(days: slice.daysBack(today: today)))
             if case let .loaded(data) = result, let history = HistoryPayload.decode(data) {
-                let from = history.tokensPerDay.first?.date ?? ""
-                let runsResult = await client.get(QualityRun.path(from: from))
+                let runsResult = await client.get(QualityRun.path(from: slice.period.days(today: today).from))
                 let runs = if case let .loaded(data) = runsResult { QualityRun.decode(data) ?? [] } else { [QualityRun]() }
-                if period == qualityPeriod {
-                    quality = (history, runs)
-                    qualityResult = nil
-                }
-            } else {
-                qualityResult = result
+                if slice == insightsSlice { quality = (history, runs) }
             }
-            qualityReadAt = period == qualityPeriod ? Date() : nil
+            qualityReadAt = slice == insightsSlice ? Date() : nil
             readingQuality = false
             if qualityReadAt == nil { readQualityIfDue() }
         }

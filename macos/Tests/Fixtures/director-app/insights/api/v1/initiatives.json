@@ -1,0 +1,715 @@
+{
+  "generated_at": "2026-11-12T03:30:00Z",
+  "read": true,
+  "counts": {
+    "active": 2,
+    "in_review": 0,
+    "done": 1
+  },
+  "initiatives": [
+    {
+      "issue_id": "p-1381",
+      "identifier": "TP-1381",
+      "title": "Phase 3b: the Director redesigned around a ticket's situation",
+      "state": "Waiting on sub-tickets",
+      "repo_key": "symphony",
+      "url": "https://linear.app/tonypine/issue/TP-1381",
+      "group": "active",
+      "completed_at": null,
+      "counts": {
+        "done": 3,
+        "working": 1,
+        "you": 0,
+        "queued": 0,
+        "blocked": 22,
+        "total": 26
+      },
+      "slot": {
+        "status": "running",
+        "identifier": "TP-1441",
+        "reason": null
+      },
+      "sub_tickets": [
+        {
+          "issue_id": "i-TP-1438",
+          "identifier": "TP-1438",
+          "title": "3b (1/26): The shared styles",
+          "state": "Done",
+          "url": "https://linear.app/tonypine/issue/TP-1438",
+          "blocked_by": [],
+          "waits_on": "done",
+          "waiting_for": [],
+          "blockers": []
+        },
+        {
+          "issue_id": "i-TP-1439",
+          "identifier": "TP-1439",
+          "title": "3b (2/26): The Situation line",
+          "state": "Done",
+          "url": "https://linear.app/tonypine/issue/TP-1439",
+          "blocked_by": [
+            "TP-1438"
+          ],
+          "waits_on": "done",
+          "waiting_for": [],
+          "blockers": [
+            {
+              "identifier": "TP-1438",
+              "open": false,
+              "completed_at": "2026-11-10T19:12:00Z"
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1440",
+          "identifier": "TP-1440",
+          "title": "3b (3/26): The Action rail",
+          "state": "Done",
+          "url": "https://linear.app/tonypine/issue/TP-1440",
+          "blocked_by": [
+            "TP-1439"
+          ],
+          "waits_on": "done",
+          "waiting_for": [],
+          "blockers": [
+            {
+              "identifier": "TP-1439",
+              "open": false,
+              "completed_at": "2026-11-11T08:40:00Z"
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1441",
+          "identifier": "TP-1441",
+          "title": "3b (4/26): The Situation line everywhere",
+          "state": "In Progress",
+          "url": "https://linear.app/tonypine/issue/TP-1441",
+          "blocked_by": [
+            "TP-1440"
+          ],
+          "waits_on": "working",
+          "waiting_for": [],
+          "blockers": [
+            {
+              "identifier": "TP-1440",
+              "open": false,
+              "completed_at": "2026-11-11T21:05:00Z"
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1442",
+          "identifier": "TP-1442",
+          "title": "3b (5/26): The Question block",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1442",
+          "blocked_by": [
+            "TP-1441"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1441"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1441",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1443",
+          "identifier": "TP-1443",
+          "title": "3b (6/26): The Run group and the Step list",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1443",
+          "blocked_by": [
+            "TP-1442"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1442"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1442",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1444",
+          "identifier": "TP-1444",
+          "title": "3b (7/26): The Timeline",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1444",
+          "blocked_by": [
+            "TP-1443"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1443"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1443",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1445",
+          "identifier": "TP-1445",
+          "title": "3b (8/26): The ticket page at laptop width",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1445",
+          "blocked_by": [
+            "TP-1444"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1444"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1444",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1446",
+          "identifier": "TP-1446",
+          "title": "3b (9/26): The ticket page at desktop width",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1446",
+          "blocked_by": [
+            "TP-1445"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1445"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1445",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1447",
+          "identifier": "TP-1447",
+          "title": "3b (10/26): The Lifecycle section",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1447",
+          "blocked_by": [
+            "TP-1446"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1446"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1446",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1448",
+          "identifier": "TP-1448",
+          "title": "3b (11/26): The facts rail",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1448",
+          "blocked_by": [
+            "TP-1447"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1447"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1447",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1449",
+          "identifier": "TP-1449",
+          "title": "3b (12/26): The decisions editor",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1449",
+          "blocked_by": [
+            "TP-1448"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1448"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1448",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1450",
+          "identifier": "TP-1450",
+          "title": "3b (13/26): The labels and priority editors",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1450",
+          "blocked_by": [
+            "TP-1449"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1449"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1449",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1451",
+          "identifier": "TP-1451",
+          "title": "3b (14/26): Home's board",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1451",
+          "blocked_by": [
+            "TP-1450"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1450"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1450",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1452",
+          "identifier": "TP-1452",
+          "title": "3b (15/26): Home's top",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1452",
+          "blocked_by": [
+            "TP-1451"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1451"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1451",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1453",
+          "identifier": "TP-1453",
+          "title": "3b (16/26): The five destinations",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1453",
+          "blocked_by": [
+            "TP-1452"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1452"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1452",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1454",
+          "identifier": "TP-1454",
+          "title": "3b (17/26): Tickets as the table",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1454",
+          "blocked_by": [
+            "TP-1453"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1453"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1453",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1455",
+          "identifier": "TP-1455",
+          "title": "3b (18/26): Saved views on Tickets",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1455",
+          "blocked_by": [
+            "TP-1454"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1454"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1454",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1456",
+          "identifier": "TP-1456",
+          "title": "3b (19/26): The Inbox drawer",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1456",
+          "blocked_by": [
+            "TP-1455"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1455"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1455",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1457",
+          "identifier": "TP-1457",
+          "title": "3b (20/26): Initiatives as the epic's story",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1457",
+          "blocked_by": [
+            "TP-1456"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1456"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1456",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1458",
+          "identifier": "TP-1458",
+          "title": "3b (21/26): The Journal page",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1458",
+          "blocked_by": [
+            "TP-1457"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1457"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1457",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1459",
+          "identifier": "TP-1459",
+          "title": "3b (22/26): Insights",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1459",
+          "blocked_by": [
+            "TP-1458"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1458"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1458",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1460",
+          "identifier": "TP-1460",
+          "title": "3b (23/26): Factory",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1460",
+          "blocked_by": [
+            "TP-1459"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1459"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1459",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1461",
+          "identifier": "TP-1461",
+          "title": "3b (24/26): The menu bar",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1461",
+          "blocked_by": [
+            "TP-1460"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1460"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1460",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1462",
+          "identifier": "TP-1462",
+          "title": "3b (25/26): Keyboard pass",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1462",
+          "blocked_by": [
+            "TP-1461"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1461"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1461",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        },
+        {
+          "issue_id": "i-TP-1463",
+          "identifier": "TP-1463",
+          "title": "3b (26/26): Accessibility pass",
+          "state": "Todo",
+          "url": "https://linear.app/tonypine/issue/TP-1463",
+          "blocked_by": [
+            "TP-1462"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "TP-1462"
+          ],
+          "blockers": [
+            {
+              "identifier": "TP-1462",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "issue_id": "p-500",
+      "identifier": "SHOP-500",
+      "title": "Gift cards",
+      "state": "Done",
+      "repo_key": "web-shop",
+      "url": "https://linear.app/acme/issue/SHOP-500",
+      "group": "done",
+      "completed_at": "2026-11-06T10:00:00Z",
+      "counts": {
+        "done": 3,
+        "working": 0,
+        "you": 0,
+        "queued": 0,
+        "blocked": 0,
+        "total": 3
+      },
+      "slot": null,
+      "sub_tickets": [
+        {
+          "issue_id": "i-SHOP-501",
+          "identifier": "SHOP-501",
+          "title": "Gift card balance",
+          "state": "Done",
+          "url": "https://linear.app/acme/issue/SHOP-501",
+          "blocked_by": [],
+          "waits_on": "done",
+          "waiting_for": [],
+          "blockers": []
+        },
+        {
+          "issue_id": "i-SHOP-502",
+          "identifier": "SHOP-502",
+          "title": "Redeem a gift card at checkout",
+          "state": "Done",
+          "url": "https://linear.app/acme/issue/SHOP-502",
+          "blocked_by": [
+            "SHOP-501"
+          ],
+          "waits_on": "done",
+          "waiting_for": [],
+          "blockers": [
+            {
+              "identifier": "SHOP-501",
+              "open": false,
+              "completed_at": "2026-11-03T10:00:00Z"
+            }
+          ]
+        },
+        {
+          "issue_id": "i-SHOP-503",
+          "identifier": "SHOP-503",
+          "title": "Gift card emails",
+          "state": "Done",
+          "url": "https://linear.app/acme/issue/SHOP-503",
+          "blocked_by": [],
+          "waits_on": "done",
+          "waiting_for": [],
+          "blockers": []
+        }
+      ]
+    },
+    {
+      "issue_id": "p-300",
+      "identifier": "BIL-300",
+      "title": "Annual plans",
+      "state": "Waiting on sub-tickets",
+      "repo_key": "api",
+      "url": "https://linear.app/acme/issue/BIL-300",
+      "group": "active",
+      "completed_at": null,
+      "counts": {
+        "done": 1,
+        "working": 1,
+        "you": 0,
+        "queued": 1,
+        "blocked": 1,
+        "total": 4
+      },
+      "slot": {
+        "status": "waiting",
+        "identifier": "BIL-304",
+        "reason": null
+      },
+      "sub_tickets": [
+        {
+          "issue_id": "i-301",
+          "identifier": "BIL-301",
+          "title": "Annual price in the plan catalog",
+          "state": "Done",
+          "url": "https://linear.app/acme/issue/BIL-301",
+          "blocked_by": [],
+          "waits_on": "done",
+          "waiting_for": [],
+          "blockers": []
+        },
+        {
+          "issue_id": "i-302",
+          "identifier": "BIL-302",
+          "title": "Charge the year up front",
+          "state": "Code Review",
+          "url": "https://linear.app/acme/issue/BIL-302",
+          "blocked_by": [
+            "BIL-301"
+          ],
+          "waits_on": "ci",
+          "waiting_for": [],
+          "blockers": [
+            {
+              "identifier": "BIL-301",
+              "open": false,
+              "completed_at": "2026-11-09T15:30:00Z"
+            }
+          ]
+        },
+        {
+          "issue_id": "i-304",
+          "identifier": "BIL-304",
+          "title": "Annual plan FAQ page",
+          "state": "Todo",
+          "url": "https://linear.app/acme/issue/BIL-304",
+          "blocked_by": [],
+          "waits_on": "slot",
+          "waiting_for": [],
+          "blockers": []
+        },
+        {
+          "issue_id": "i-305",
+          "identifier": "BIL-305",
+          "title": "Prorate a switch to annual",
+          "state": "Todo",
+          "url": "https://linear.app/acme/issue/BIL-305",
+          "blocked_by": [
+            "BIL-302"
+          ],
+          "waits_on": "blocker",
+          "waiting_for": [
+            "BIL-302"
+          ],
+          "blockers": [
+            {
+              "identifier": "BIL-302",
+              "open": true,
+              "completed_at": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

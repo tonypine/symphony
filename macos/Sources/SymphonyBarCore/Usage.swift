@@ -162,118 +162,68 @@ public enum UsageProvider: String, CaseIterable, Equatable, Comparable {
     }
 }
 
-/// D8: tokens per day by provider against the daily budget, today against the budget, the provider limits and the
-/// heaviest tickets.
+/// D8: tokens per bucket by provider for the Insights slice (TP-1463), against the daily budget by day, today against the
+/// budget, the provider limits and the slice's heaviest tickets.
 public struct Usage: Equatable {
-    /// A provider's tokens on a day: one stacked segment of the day's bar.
-    public struct Segment: Equatable, Identifiable {
-        public var id: String { "\(date)-\(provider.rawValue)" }
-        public var date: Date
-        public var provider: UsageProvider
-        public var tokens: Int
-    }
-
     /// A row of Heaviest tickets with its meter against the cap.
     public struct TicketRow: Equatable, Identifiable {
         public var id: String { identifier }
         public var identifier: String
-        public var title: String?
         public var tokens: Int
-        public var attempts: Int
         /// From 0 to 1 against the cap; nil without one.
         public var fraction: Double?
-        /// "182K of 500K, 2 attempts".
+        /// "182K of 500K".
         public var value: String
         public var level: Overview.Meter.Level { Overview.level(fraction) }
     }
 
-    public static let tokensTitle = "Tokens per day"
     public static let todayTitle = "Today"
     public static let limitsTitle = "Provider limits"
     public static let heaviestTitle = "Heaviest tickets"
     public static let showDataTitle = "Show Data"
     public static let heaviestLimit = 5
 
-    public var segments: [Segment]
-    /// The days the chart spans, oldest first, each once even without tokens.
-    public var dates: [Date]
-    /// The providers that used tokens in the period, in the fixed series order.
-    public var providers: [UsageProvider]
-    public var dailyBudget: Int?
+    /// Tokens per bucket, stacked by provider in the fixed series order; the daily budget's line by day.
+    public var chart: InsightsChart
     /// Today against the budget, with the per-ticket cap.
     public var today: [Overview.Meter]
     /// Each provider limit with its reset (C11).
     public var limits: [Overview.Meter]
     public var heaviest: [TicketRow]
+    /// Nil while the slice used tokens.
+    public var empty: InsightsEmpty?
 
-    public init(history: HistoryPayload, snapshot: StateSnapshot?, now: Date = Date(), timeZone: TimeZone = .current) {
-        let days = history.tokensPerDay.compactMap { day in Self.utcDate(day.date).map { (date: $0, day: day) } }
-        dates = days.map(\.date)
-        segments = days.flatMap { entry in
-            entry.day.providers
-                .map { (provider: UsageProvider($0.key), tokens: $0.value) }
-                .reduce(into: [UsageProvider: Int]()) { $0[$1.provider, default: 0] += $1.tokens }
-                .filter { $0.value > 0 }
-                .sorted { $0.key < $1.key }
-                .map { Segment(date: entry.date, provider: $0.key, tokens: $0.value) }
+    public init(
+        aggregate: AggregatePayload, slice: InsightsSlice, snapshot: StateSnapshot?, today day: String, now: Date = Date(),
+        timeZone: TimeZone = .current
+    ) {
+        let budget = slice.unit == .day ? snapshot?.budget?.dailyLimit.map { InsightsChart.Reference(title: "Daily budget", value: $0) } : nil
+        chart = InsightsChart.build(
+            aggregate.tokens, unit: aggregate.unit, title: "Tokens \(aggregate.unit.per)", measure: "Tokens", format: .tokens,
+            reference: budget, fallback: UsageProvider.unknown.rawValue, order: UsageProvider.allCases.map(\.rawValue)
+        ) { raw in
+            let provider = UsageProvider(raw)
+            return InsightsChart.Key(key: provider.rawValue, name: provider.name, tint: .series(provider.series))
         }
-        providers = Set(segments.map(\.provider)).sorted()
-        dailyBudget = history.dailyBudget
         let meters = snapshot.map { Overview.meters($0, reference: now, timeZone: timeZone) } ?? []
         var today = meters.filter { $0.id == "tokens" }
-        if let cap = snapshot?.budget?.perIssueLimit ?? history.perTicketCap {
+        let cap = snapshot?.budget?.perIssueLimit
+        if let cap {
             today.append(Overview.Meter(id: "cap", label: "Per-ticket cap", value: "\(Overview.tokens(cap)) tokens", fraction: nil, note: nil))
         }
         self.today = today
         limits = meters.filter { $0.id != "tokens" }
-        heaviest = history.tickets
-            .sorted { ($0.totalTokens, $1.identifier) > ($1.totalTokens, $0.identifier) }
+        heaviest = aggregate.tokens.tickets
+            .sorted { ($0.value, $1.key) > ($1.value, $0.key) }
             .prefix(Self.heaviestLimit)
-            .map { ticket in
-                let cap = ticket.cap ?? history.perTicketCap
-                let attempts = ticket.attempts == 1 ? "1 attempt" : "\(ticket.attempts) attempts"
-                let amount = cap.map { "\(Overview.tokens(ticket.totalTokens)) of \(Overview.tokens($0))" } ?? Overview.tokens(ticket.totalTokens)
-                return TicketRow(
-                    identifier: ticket.identifier, title: ticket.title, tokens: ticket.totalTokens, attempts: ticket.attempts,
-                    fraction: cap.flatMap { $0 > 0 ? min(Double(ticket.totalTokens) / Double($0), 1) : nil },
-                    value: "\(amount), \(attempts)"
+            .map { identifier, tokens in
+                TicketRow(
+                    identifier: identifier, tokens: tokens,
+                    fraction: cap.flatMap { $0 > 0 ? min(Double(tokens) / Double($0), 1) : nil },
+                    value: cap.map { "\(Overview.tokens(tokens)) of \(Overview.tokens($0))" } ?? Overview.tokens(tokens)
                 )
             }
-    }
-
-    /// A day's tokens over every provider.
-    public func total(on date: Date) -> Int {
-        segments.filter { $0.date == date }.reduce(0) { $0 + $1.tokens }
-    }
-
-    /// The hover line of a day's bar: "Oct 13: Claude 1.2M, Codex 300K; 1.5M in all".
-    public func hoverLine(on date: Date) -> String {
-        let parts = segments.filter { $0.date == date }.map { "\($0.provider.name) \(Overview.tokens($0.tokens))" }
-        let day = Self.dayLabel(date)
-        guard !parts.isEmpty else { return "\(day): no tokens" }
-        return "\(day): \(parts.joined(separator: ", ")); \(Overview.tokens(total(on: date))) in all"
-    }
-
-    /// Show Data's table: a header row, then one row per day with each provider's tokens and the day's total.
-    public var dataTable: [[String]] {
-        let header = ["Day"] + providers.map(\.name) + ["Total"]
-        let rows = dates.map { date in
-            [Self.dayLabel(date)]
-                + providers.map { provider in String(segments.first { $0.date == date && $0.provider == provider }?.tokens ?? 0) }
-                + [String(total(on: date))]
-        }
-        return [header] + rows
-    }
-
-    /// The chart's accessibility summary, for its `AXChartDescriptor`.
-    public var chartSummary: String {
-        let totals = dates.map(total(on:))
-        let budget = dailyBudget.map { " The daily budget is \(Overview.tokens($0)) tokens." } ?? ""
-        guard let peak = totals.max(), peak > 0, let peakDate = dates.first(where: { total(on: $0) == peak }) else {
-            return "No tokens used in the last \(dates.count) days.\(budget)"
-        }
-        let names = ListFormatter.localizedString(byJoining: providers.map(\.name))
-        return "Tokens per day for \(names) over \(dates.count) days. The most was \(Overview.tokens(peak)) on \(Self.dayLabel(peakDate)).\(budget)"
+        empty = chart.total > 0 ? nil : slice.empty("No tokens used", today: day)
     }
 
     /// "Oct 13".

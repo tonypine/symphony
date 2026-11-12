@@ -1672,6 +1672,49 @@ func journalReportsPage(window: CGFloat, reportsOnly: Bool = false) -> some View
     .background(DesignTokens.Surface.content.color)
 }
 
+// MARK: - Insights (TP-1463)
+
+// Quality, Usage and Shipped under their shared control bar, from the `insights` fixture's week (Nov 6–12) by day, by
+// 6 h and kept to epic TP-1381, on Symphony's day 2026-11-12.
+let insightsAPI = here.appendingPathComponent("../Fixtures/director-app/insights/api/v1").standardizedFileURL
+let insightsToday = "2026-11-12"
+let insightsNow = ISO8601DateFormatter().date(from: "2026-11-12T03:30:00Z")!
+let insightsQuery = "from=2026-11-06&to=2026-11-12&unit=%@&series=tokens,runs,verdicts,shipped"
+let insightsSlices: [(name: String, slice: InsightsSlice, file: String)] = [
+    ("daily", InsightsSlice(), "aggregate"),
+    ("6h", InsightsSlice(unit: .sixHours), "aggregate." + String(format: insightsQuery, "6h")),
+    ("epic", InsightsSlice(epic: "TP-1381"), "aggregate." + String(format: insightsQuery, "day&epic=TP-1381")),
+]
+
+func insightsRead(_ file: String) -> Data {
+    try! Data(contentsOf: insightsAPI.appendingPathComponent("\(file).json"))
+}
+
+/// `page` (Quality, Usage or Shipped) under the control bar, as the window draws it beside the sidebar at `window`.
+@MainActor
+func insightsPage(_ page: SymphonyView, slice: InsightsSlice, file: String, window: CGFloat) -> some View {
+    guard let aggregate = AggregatePayload.decode(insightsRead(file)), let state = OverviewState.decode(insightsRead("state")),
+          let initiatives = InitiativesPayload.decode(insightsRead("initiatives")), let history = HistoryPayload.decode(insightsRead("history")),
+          let runs = QualityRun.decode(insightsRead("runs")), let details = ShippedPayload.decode(insightsRead("shipped"))
+    else { fatalError("The insights fixture's \(file) doesn't read") }
+    let values = InsightsControlValues(repos: state.repos, epics: initiatives.initiatives.map(\.identifier), slice: slice)
+    return VStack(spacing: 0) {
+        InsightsControlBar(slice: .constant(slice), values: values, today: insightsToday, summary: Insights.summary(aggregate, slice: slice, scope: .all))
+        Divider()
+        switch page {
+        case .usage:
+            UsageCards(usage: Usage(aggregate: aggregate, slice: slice, snapshot: state.snapshot, today: insightsToday, now: insightsNow,
+                                    timeZone: TimeZone(identifier: "UTC")!))
+        case .quality:
+            QualityCards(quality: Quality(aggregate: aggregate, slice: slice, review: history.review, runs: runs, today: insightsToday))
+        default:
+            ShippedCards(shipped: Shipped(aggregate: aggregate, slice: slice, details: details, today: insightsToday))
+        }
+    }
+    .frame(width: window - DesignTokens.Layout.sidebarWidth, alignment: .top)
+    .background(DesignTokens.Surface.content.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1872,6 +1915,16 @@ MainActor.assumeIsolated {
             // the reports alone.
             render(journalReportsPage(window: window), scheme, to: "journal-reports-\(name)-\(suffix).png")
             render(journalReportsPage(window: window, reportsOnly: true), scheme, to: "journal-reports-only-\(name)-\(suffix).png")
+        }
+        // The Insights control bar (TP-1463): Quality, Usage and Shipped by day, by 6 h and with an epic set, at the
+        // laptop's and the desktop's widths.
+        for (window, name) in [(CGFloat(1440), "laptop"), (2560, "desktop")] {
+            for (sliceName, slice, file) in insightsSlices {
+                for page in [SymphonyView.quality, .usage, .shipped] {
+                    render(insightsPage(page, slice: slice, file: file, window: window), scheme,
+                           to: "insights-\(page.rawValue)-\(sliceName)-\(name)-\(suffix).png")
+                }
+            }
         }
         // Saved views (TP-1457): the menu with three views, and the save sheet.
         render(ticketViewsMenuOpen(), scheme, to: "ticket-views-menu-\(suffix).png")

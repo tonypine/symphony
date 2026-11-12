@@ -223,17 +223,9 @@ public struct QualityRun: Equatable, Identifiable {
     }
 }
 
-/// D7: how far to trust the crew. Four tiles, review agreement by repo, runs by outcome per day, the disagreements
-/// and every run, over the chosen period.
+/// D7: how far to trust the crew over the Insights slice (TP-1463). Four tiles, runs by outcome and verdicts per bucket
+/// from the aggregation, review agreement by repo and the disagreements from the history's review, and every run.
 public struct Quality: Equatable {
-    /// The period pop-up.
-    public enum Period: Int, CaseIterable, Equatable, Identifiable {
-        case week = 7, month = 30, quarter = 90
-
-        public var id: Int { rawValue }
-        public var title: String { "Last \(rawValue) days" }
-    }
-
     /// C5: a figure, its label and one line of context.
     public struct Tile: Equatable, Identifiable {
         public var id: String { title }
@@ -255,14 +247,6 @@ public struct Quality: Equatable {
         public var value: String
     }
 
-    /// A day's runs of one outcome: one stacked segment of the day's bar.
-    public struct OutcomeSegment: Equatable, Identifiable {
-        public var id: String { "\(date)-\(outcome.rawValue)" }
-        public var date: Date
-        public var outcome: QualityRun.Outcome
-        public var runs: Int
-    }
-
     /// A row of Disagreements: both decisions.
     public struct DisagreementRow: Equatable, Identifiable {
         public var id: String { identifier }
@@ -275,89 +259,99 @@ public struct Quality: Equatable {
     }
 
     public static let agreementTitle = "Review agreement by repo"
-    public static let outcomesTitle = "Runs by outcome"
     public static let disagreementsTitle = "Disagreements"
     public static let showAllRunsTitle = "Show All Runs"
     public static let changeReviewTitle = "Change Review…"
     public static let showDataTitle = "Show Data"
 
-    public var period: Period
     public var tiles: [Tile]
     public var repos: [RepoBar]
-    public var dates: [Date]
-    public var segments: [OutcomeSegment]
-    /// The outcomes the period has, in their fixed order.
-    public var outcomes: [QualityRun.Outcome]
+    /// Runs started per bucket, stacked by how they ended, in status colors.
+    public var runsChart: InsightsChart
+    /// Verdicts recorded per bucket: approvals and passes against what was sent back or failed.
+    public var verdictsChart: InsightsChart
     public var disagreements: [DisagreementRow]
+    /// The runs of the period's days, newest first, for Show All Runs.
     public var runs: [QualityRun]
+    /// Nil while the slice has a run or a verdict.
+    public var empty: InsightsEmpty?
 
-    public init(history: HistoryPayload, runs allRuns: [QualityRun], period: Period) {
-        self.period = period
-        let days = history.tokensPerDay.compactMap { Usage.utcDate($0.date) }
-        dates = Array(days.suffix(period.rawValue))
-        let from = dates.first.map(Self.isoDay) ?? ""
-        runs = allRuns.filter { $0.date >= from }.sorted { ($0.date, $0.id) > ($1.date, $1.id) }
-        let review = history.review ?? ReviewHistory()
+    public init(
+        aggregate: AggregatePayload, slice: InsightsSlice, scope: OverviewScope = .all, review: ReviewHistory?, runs allRuns: [QualityRun],
+        today: String
+    ) {
+        let (from, to) = slice.period.days(today: today)
+        runs = allRuns.filter { $0.date >= from && $0.date <= to }.sorted { ($0.date, $0.id) > ($1.date, $1.id) }
+        runsChart = InsightsChart.build(
+            aggregate.runs, unit: aggregate.unit, title: "Runs \(aggregate.unit.per)", measure: "Runs", format: .count, fallback: "other",
+            order: Self.runKeys.map(\.key), key: Self.runKey
+        )
+        verdictsChart = InsightsChart.build(
+            aggregate.verdicts, unit: aggregate.unit, title: "Verdicts \(aggregate.unit.per)", measure: "Verdicts", format: .count,
+            fallback: "other", order: Self.verdictKeys.map(\.key), key: Self.verdictKey
+        )
 
-        let opened = runs.filter { $0.outcome == .prOpened }.count
+        let repoKey = slice.repoKey(scope: scope)
+        let review = review ?? ReviewHistory()
+        let byRepo = review.byRepo.filter { repo in repoKey.map { repo.repoKey == $0 } ?? true }
+        let agreement = repoKey == nil ? review.agreement : (byRepo.first?.agreement ?? ReviewHistory.Agreement())
+        let runsBy = aggregate.runs.by
+        let verdicts = aggregate.verdicts.by
+        let codeReview = verdicts.filter { $0.key.hasPrefix("code_review:") }.values.reduce(0, +)
+        let qa = verdicts.filter { $0.key.hasPrefix("qa:") }.values.reduce(0, +)
+        let runCount = runsBy.values.reduce(0, +)
         tiles = [
-            Self.tile("Review agreement", review.agreement.rate, of: review.agreement.judged, context: "judged Code Review approvals"),
-            Self.tile(
-                "QA passed first time", Self.rate(review.qaFirstPass.passed, review.qaFirstPass.judged), of: review.qaFirstPass.judged,
-                context: "tickets QA judged"
-            ),
-            Self.tile("Runs that opened a PR", Self.rate(opened, runs.count), of: runs.count, context: "runs"),
-            Self.tile(
-                "PRs sent to Rework", Self.rate(review.sentToRework.sent, review.sentToRework.reviewed), of: review.sentToRework.reviewed,
-                context: "reviewed tickets"
-            ),
+            Self.tile("Runs that succeeded", Self.rate(runsBy["success"] ?? 0, runCount), of: runCount, context: "runs"),
+            Self.tile("Code Review approvals", Self.rate(verdicts["code_review:approve"] ?? 0, codeReview), of: codeReview, context: "Code Review verdicts"),
+            Self.tile("QA passes", Self.rate(verdicts["qa:pass"] ?? 0, qa), of: qa, context: "QA verdicts"),
+            Self.tile("Review agreement", agreement.rate, of: agreement.judged, context: "judged Code Review approvals"),
         ]
-        repos = review.byRepo.map { repo in
+        repos = byRepo.map { repo in
             RepoBar(
                 repoKey: repo.repoKey, rate: repo.agreement.rate, mode: "Manual review \(repo.manualReview.title.lowercased())",
                 value: repo.agreement.judged > 0 ? "\(repo.agreement.agreed) of \(repo.agreement.judged) upheld" : "Nothing judged yet"
             )
         }
-        let dates = dates
-        segments = dates.flatMap { date in
-            let day = Self.isoDay(date)
-            return QualityRun.Outcome.allCases.compactMap { outcome in
-                let count = allRuns.filter { $0.date == day && $0.outcome == outcome }.count
-                return count > 0 ? OutcomeSegment(date: date, outcome: outcome, runs: count) : nil
+        disagreements = review.disagreements
+            .filter { row in repoKey.map { row.repoKey == $0 } ?? true }
+            .map { row in
+                DisagreementRow(
+                    identifier: row.identifier, repoKey: row.repoKey, review: "Code Review: \(row.review)", decision: "\(row.decidedBy): \(row.decision)"
+                )
             }
-        }
-        outcomes = Set(segments.map(\.outcome)).sorted()
-        disagreements = review.disagreements.map { row in
-            DisagreementRow(
-                identifier: row.identifier, repoKey: row.repoKey, review: "Code Review: \(row.review)",
-                decision: "\(row.decidedBy): \(row.decision)"
-            )
-        }
+        empty = runsChart.total + verdictsChart.total > 0 ? nil : slice.empty("No runs or verdicts", today: today)
     }
 
-    /// A day's runs over every outcome.
-    public func total(on date: Date) -> Int {
-        segments.filter { $0.date == date }.reduce(0) { $0 + $1.runs }
+    /// How a run ended, as its status color says it (design system §3.3): a status chart, not a series one.
+    static let runKeys: [InsightsChart.Key] = [
+        .init(key: "success", name: "Succeeded", tint: .status(.done)),
+        .init(key: "failure", name: "Failed", tint: .status(.problem)),
+        .init(key: "timeout", name: "Timed out", tint: .status(.you)),
+        .init(key: "stopped", name: "Stopped", tint: .status(.idle)),
+        .init(key: "other", name: "Other", tint: .status(.working)),
+    ]
+
+    /// A run record's status as its stacked key: `cancelled` reads as stopped, any other unknown one as Other.
+    public static func runKey(_ raw: String) -> InsightsChart.Key {
+        let key = ["stopped", "cancelled", "canceled"].contains(raw) ? "stopped" : raw
+        return runKeys.first { $0.key == key } ?? runKeys[runKeys.count - 1]
     }
 
-    /// The hover line of a day's bar: "Oct 13: Opened a PR 4, Failed 1; 5 runs".
-    public func hoverLine(on date: Date) -> String {
-        let parts = segments.filter { $0.date == date }.map { "\($0.outcome.title) \($0.runs)" }
-        let day = Usage.dayLabel(date)
-        guard !parts.isEmpty else { return "\(day): no runs" }
-        let total = total(on: date)
-        return "\(day): \(parts.joined(separator: ", ")); \(total) \(total == 1 ? "run" : "runs")"
-    }
+    /// A verdict, `kind:outcome`, by what it did to the work.
+    static let verdictKeys: [InsightsChart.Key] = [
+        .init(key: "upheld", name: "Approved or passed", tint: .status(.done)),
+        .init(key: "returned", name: "Sent back or failed", tint: .status(.problem)),
+        .init(key: "other", name: "Other", tint: .status(.idle)),
+    ]
 
-    /// Show Data's table for runs by outcome.
-    public var outcomesTable: [[String]] {
-        let header = ["Day"] + outcomes.map(\.title) + ["Total"]
-        let rows = dates.map { date in
-            [Usage.dayLabel(date)]
-                + outcomes.map { outcome in String(segments.first { $0.date == date && $0.outcome == outcome }?.runs ?? 0) }
-                + [String(total(on: date))]
+    /// `code_review:approve` and `qa:pass` let the work on; `request_changes`, `block`, `fail` and `rework` send it back.
+    public static func verdictKey(_ raw: String) -> InsightsChart.Key {
+        let outcome = raw.split(separator: ":").last.map(String.init) ?? raw
+        switch outcome {
+        case "approve", "pass": return verdictKeys[0]
+        case "request_changes", "block", "fail", "rework", "changes": return verdictKeys[1]
+        default: return verdictKeys[2]
         }
-        return [header] + rows
     }
 
     /// Show Data's table for review agreement by repo.
@@ -365,17 +359,9 @@ public struct Quality: Equatable {
         [["Repo", "Mode", "Agreement", "Upheld"]] + repos.map { [$0.repoKey, $0.mode, Self.percent($0.rate), $0.value] }
     }
 
-    /// The runs by outcome chart's accessibility summary.
-    public var outcomesSummary: String {
-        let total = dates.map(total(on:)).reduce(0, +)
-        guard total > 0 else { return "No runs in the last \(dates.count) days." }
-        let parts = outcomes.map { outcome in "\(segments.filter { $0.outcome == outcome }.reduce(0) { $0 + $1.runs }) \(outcome.title.lowercased())" }
-        return "\(total) runs over \(dates.count) days: \(parts.joined(separator: ", "))."
-    }
-
     /// The agreement chart's accessibility summary.
     public var agreementSummary: String {
-        guard !repos.isEmpty else { return "No Code Review approval in the last \(dates.count) days." }
+        guard !repos.isEmpty else { return "No Code Review approval in this period." }
         return repos.map { "\($0.repoKey): \(Self.percent($0.rate)), \($0.value), \($0.mode)" }.joined(separator: ". ") + "."
     }
 

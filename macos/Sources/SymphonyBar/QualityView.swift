@@ -3,35 +3,39 @@ import Charts
 import SwiftUI
 import SymphonyBarCore
 
-/// D7: Quality, from `/api/v1/history` (its `review` part) and `/api/v1/runs`.
+/// D7: Quality over the Insights slice (TP-1463), from `/api/v1/aggregate`, the `review` part of `/api/v1/history` and
+/// `/api/v1/runs`.
 struct QualityContent: View {
     @ObservedObject var model: SymphonyWindowModel
 
     var body: some View {
-        if let quality = model.quality {
+        InsightsPage(model: model, symbol: SymphonyView.quality.symbol) { aggregate in
             QualityView(
-                quality: Quality(history: quality.history, runs: quality.runs, period: model.qualityPeriod),
-                period: $model.qualityPeriod,
+                quality: Quality(
+                    aggregate: aggregate, slice: model.insightsSlice, scope: model.scope, review: model.quality?.history.review,
+                    runs: model.quality?.runs ?? [], today: model.insightsToday
+                ),
                 openTicket: model.openTicket,
-                changeReview: model.changeReview
+                changeReview: model.changeReview,
+                widen: { model.insightsSlice.choose($0, today: model.insightsToday) }
             )
-        } else if model.qualityResult == .unsupported {
-            EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
-        } else {
-            EmptyState(title: "Reading Symphony's history…", symbol: SymphonyView.quality.symbol, showsSpinner: true)
         }
     }
 }
 
 struct QualityView: View {
     let quality: Quality
-    @Binding var period: Quality.Period
     var openTicket: (String) -> Void = { _ in }
     var changeReview: (String) -> Void = { _ in }
+    var widen: (InsightsPeriod) -> Void = { _ in }
 
     var body: some View {
-        ScrollView {
-            QualityCards(quality: quality, period: $period, openTicket: openTicket, changeReview: changeReview)
+        if let empty = quality.empty {
+            InsightsEmptyState(empty: empty, symbol: SymphonyView.quality.symbol, widen: widen)
+        } else {
+            ScrollView {
+                QualityCards(quality: quality, openTicket: openTicket, changeReview: changeReview)
+            }
         }
     }
 }
@@ -39,30 +43,23 @@ struct QualityView: View {
 /// Quality's cards, outside the scroll view so they also render offscreen.
 struct QualityCards: View {
     let quality: Quality
-    @Binding var period: Quality.Period
     var openTicket: (String) -> Void = { _ in }
     var changeReview: (String) -> Void = { _ in }
     @State private var showsRuns = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-            HStack {
-                Picker("Period", selection: $period) {
-                    ForEach(Quality.Period.allCases) { Text($0.title).tag($0) }
-                }
-                .pickerStyle(.menu)
-                .fixedSize()
-                Spacer()
-                Button(Quality.showAllRunsTitle) { showsRuns = true }
-            }
             HStack(spacing: DesignTokens.Space.s3) {
                 ForEach(quality.tiles) { QualityTile(tile: $0) }
             }
+            Card(title: quality.runsChart.title) {
+                InsightsBarChart(chart: quality.runsChart)
+            }
+            Card(title: quality.verdictsChart.title) {
+                InsightsBarChart(chart: quality.verdictsChart, height: 160)
+            }
             Card(title: Quality.agreementTitle) {
                 AgreementChart(quality: quality, changeReview: changeReview)
-            }
-            Card(title: Quality.outcomesTitle) {
-                OutcomesChart(quality: quality)
             }
             Card(title: Quality.disagreementsTitle) {
                 if quality.disagreements.isEmpty {
@@ -76,6 +73,10 @@ struct QualityCards: View {
                         }
                     }
                 }
+            }
+            HStack {
+                Spacer()
+                Button(Quality.showAllRunsTitle) { showsRuns = true }
             }
         }
         .padding(DesignTokens.Space.s6)
@@ -183,82 +184,6 @@ private struct AgreementChart: View {
     }
 }
 
-/// C12: runs per day stacked by outcome, in status colors with a legend; hover values, Show Data and a chart
-/// description.
-private struct OutcomesChart: View {
-    let quality: Quality
-    @State private var hovered: Date?
-    @State private var showsData = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            HStack {
-                HStack(spacing: DesignTokens.Space.s3) {
-                    ForEach(quality.outcomes, id: \.self) { outcome in
-                        HStack(spacing: DesignTokens.Space.s1) {
-                            RoundedRectangle(cornerRadius: 2).fill(outcome.status.tint).frame(width: 10, height: 10)
-                            Text(outcome.title).font(DesignTokens.TypeStyle.caption.font)
-                        }
-                    }
-                }
-                .accessibilityElement(children: .combine)
-                Spacer()
-                Button(Quality.showDataTitle) { showsData = true }
-            }
-            Chart {
-                ForEach(quality.segments) { segment in
-                    BarMark(
-                        x: .value("Day", segment.date, unit: .day),
-                        y: .value("Runs", segment.runs),
-                        width: .fixed(min(24, 600 / Double(max(quality.dates.count, 1))))
-                    )
-                    .foregroundStyle(by: .value("Outcome", segment.outcome.title))
-                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: DesignTokens.Radius.mark, topTrailingRadius: DesignTokens.Radius.mark))
-                }
-                if let hovered {
-                    RuleMark(x: .value("Day", hovered, unit: .day))
-                        .foregroundStyle(DesignTokens.Surface.separator.color)
-                        .annotation(position: .top, overflowResolution: .init(x: .fit, y: .disabled)) {
-                            Text(quality.hoverLine(on: hovered))
-                                .font(DesignTokens.TypeStyle.caption.font)
-                                .padding(DesignTokens.Space.s1)
-                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.mark))
-                        }
-                }
-            }
-            .chartForegroundStyleScale(domain: quality.outcomes.map(\.title), range: quality.outcomes.map(\.status.tint))
-            .chartLegend(.hidden)
-            .chartXAxis {
-                AxisMarks(values: .stride(by: .day, count: max(quality.dates.count / 7, 1))) { _ in
-                    AxisValueLabel(format: .dateTime.month(.abbreviated).day(), centered: true)
-                }
-            }
-            .chartYAxis {
-                AxisMarks { _ in
-                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-                    AxisValueLabel()
-                }
-            }
-            .chartOverlay { proxy in
-                Rectangle().fill(.clear).contentShape(Rectangle())
-                    .onContinuousHover { phase in
-                        switch phase {
-                        case let .active(location):
-                            hovered = proxy.value(atX: location.x, as: Date.self).flatMap { date in quality.dates.last { $0 <= date } }
-                        case .ended:
-                            hovered = nil
-                        }
-                    }
-            }
-            .frame(height: 200)
-            .accessibilityChartDescriptor(OutcomesChartDescriptor(quality: quality))
-        }
-        .sheet(isPresented: $showsData) {
-            DataTable(title: Quality.outcomesTitle, rows: quality.outcomesTable) { showsData = false }
-        }
-    }
-}
-
 /// A row of Disagreements: the ticket, the Code Review decision and the one that overturned it.
 private struct DisagreementRowView: View {
     let row: Quality.DisagreementRow
@@ -332,28 +257,6 @@ private struct AgreementChartDescriptor: AXChartDescriptorRepresentable {
         )
         return AXChartDescriptor(
             title: Quality.agreementTitle, summary: quality.agreementSummary, xAxis: xAxis, yAxis: yAxis, additionalAxes: [], series: [series]
-        )
-    }
-}
-
-private struct OutcomesChartDescriptor: AXChartDescriptorRepresentable {
-    let quality: Quality
-
-    func makeChartDescriptor() -> AXChartDescriptor {
-        let labels = quality.dates.map(Usage.dayLabel)
-        let peak = quality.dates.map(quality.total(on:)).max() ?? 0
-        let xAxis = AXCategoricalDataAxisDescriptor(title: "Day", categoryOrder: labels)
-        let yAxis = AXNumericDataAxisDescriptor(title: "Runs", range: 0...Double(max(peak, 1)), gridlinePositions: []) { "\(Int($0))" }
-        let series = quality.outcomes.map { outcome in
-            AXDataSeriesDescriptor(
-                name: outcome.title, isContinuous: false,
-                dataPoints: quality.dates.map { date in
-                    AXDataPoint(x: Usage.dayLabel(date), y: Double(quality.segments.first { $0.date == date && $0.outcome == outcome }?.runs ?? 0))
-                }
-            )
-        }
-        return AXChartDescriptor(
-            title: Quality.outcomesTitle, summary: quality.outcomesSummary, xAxis: xAxis, yAxis: yAxis, additionalAxes: [], series: series
         )
     }
 }

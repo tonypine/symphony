@@ -38,31 +38,33 @@ final class QualityTests: XCTestCase {
         XCTAssertEqual(QualityRun.path(from: "2026-09-24"), "api/v1/runs?date_from=2026-09-24&limit=500")
     }
 
-    func testFourTilesForThePeriod() throws {
-        let quality = try self.quality(.month)
-        XCTAssertEqual(quality.tiles.map(\.title), ["Review agreement", "QA passed first time", "Runs that opened a PR", "PRs sent to Rework"])
-        XCTAssertEqual(quality.tiles[0].value, "92%")
-        XCTAssertEqual(quality.tiles[0].context, "12 judged Code Review approvals")
-        XCTAssertEqual(quality.tiles[1].value, "82%")
-        XCTAssertEqual(quality.tiles[3].value, "23%")
-        XCTAssertEqual(quality.runs.count, 44)
-        let opened = quality.runs.filter { $0.outcome == .prOpened }.count
-        XCTAssertEqual(quality.tiles[2].value, Quality.percent(Double(opened) / 44))
+    func testFourTilesForTheSlice() throws {
+        let quality = try self.quality()
+        XCTAssertEqual(quality.tiles.map(\.title), ["Runs that succeeded", "Code Review approvals", "QA passes", "Review agreement"])
+        XCTAssertEqual(quality.tiles[0].value, "84%")
+        XCTAssertEqual(quality.tiles[0].context, "50 runs")
+        XCTAssertEqual(quality.tiles[1].value, "90%")
+        XCTAssertEqual(quality.tiles[1].context, "21 Code Review verdicts")
+        XCTAssertEqual(quality.tiles[2].value, "82%")
+        XCTAssertEqual(quality.tiles[3].value, "92%")
+        XCTAssertEqual(quality.tiles[3].context, "12 judged Code Review approvals")
+        XCTAssertNil(quality.empty)
     }
 
-    func testAShorterPeriodKeepsItsDaysAndRuns() throws {
-        let month = try quality(.month)
-        let week = try quality(.week)
-        XCTAssertEqual(month.dates.count, 14)
-        XCTAssertEqual(week.dates.count, 7)
-        XCTAssertEqual(week.runs.map(\.date).min(), "2026-10-01")
-        XCTAssertLessThan(week.runs.count, month.runs.count)
-        XCTAssertEqual(Quality.Period.allCases.map(\.title), ["Last 7 days", "Last 30 days", "Last 90 days"])
-        XCTAssertEqual(Quality.Period.week.id, 7)
+    func testTheSlicesRepoKeepsItsAgreementAndDisagreements() throws {
+        let shop = try quality(InsightsSlice(repo: "shop"))
+        XCTAssertEqual(shop.repos.map(\.repoKey), ["shop"])
+        XCTAssertEqual(shop.tiles[3].value, "86%")
+        XCTAssertEqual(shop.disagreements.map(\.identifier), ["SHOP-298"])
+        let api = try quality(InsightsSlice(), scope: .repo("api"))
+        XCTAssertEqual(api.repos.map(\.repoKey), ["api"])
+        XCTAssertTrue(api.disagreements.isEmpty)
+        let gone = try quality(InsightsSlice(repo: "gone"))
+        XCTAssertEqual(gone.tiles[3].value, "—")
     }
 
     func testAgreementByRepoNamesTheManualReview() throws {
-        let quality = try quality(.month)
+        let quality = try quality()
         XCTAssertEqual(quality.repos.map(\.mode), ["Manual review off", "Manual review on"])
         XCTAssertEqual(quality.repos.map(\.value), ["5 of 5 upheld", "6 of 7 upheld"])
         XCTAssertEqual(quality.agreementTable.first, ["Repo", "Mode", "Agreement", "Upheld"])
@@ -71,42 +73,50 @@ final class QualityTests: XCTestCase {
     }
 
     func testDisagreementsShowBothDecisions() throws {
-        XCTAssertEqual(try quality(.month).disagreements, [
+        XCTAssertEqual(try quality().disagreements, [
             Quality.DisagreementRow(identifier: "SHOP-298", repoKey: "shop", review: "Code Review: Approved", decision: "Director: Sent to Rework"),
         ])
     }
 
-    func testRunsByOutcomeUseStatusColorsNeverSeries() throws {
-        let quality = try quality(.month)
-        XCTAssertEqual(quality.outcomes, [.prOpened, .noChanges, .error])
+    func testRunsAndVerdictsUseStatusColorsNeverSeries() throws {
+        let quality = try quality()
+        XCTAssertEqual(quality.runsChart.title, "Runs per day")
+        XCTAssertEqual(quality.runsChart.keys.map(\.name), ["Succeeded", "Failed", "Timed out", "Stopped"])
+        XCTAssertEqual(quality.runsChart.keys.map(\.tint), [.status(.done), .status(.problem), .status(.you), .status(.idle)])
+        XCTAssertEqual(quality.runsChart.total, 50)
+        let last = try XCTUnwrap(quality.runsChart.bars.last)
+        XCTAssertEqual(quality.runsChart.hoverLine(last.id), "Nov 12: Succeeded 3")
+        XCTAssertEqual(quality.verdictsChart.keys.map(\.name), ["Approved or passed", "Sent back or failed"])
+        XCTAssertEqual(quality.verdictsChart.total, 38)
+        XCTAssertEqual(Quality.runKey("cancelled").key, "stopped")
+        XCTAssertEqual(Quality.runKey("mystery").name, "Other")
+        XCTAssertEqual(Quality.verdictKey("code_review:block").key, "returned")
+        XCTAssertEqual(Quality.verdictKey("plan:odd").key, "other")
         XCTAssertEqual(QualityRun.Outcome.allCases.map(\.status), [.done, .idle, .problem])
-        let last = try XCTUnwrap(quality.dates.last)
-        XCTAssertEqual(quality.hoverLine(on: last), "Oct 7: Opened a PR 4, Failed 2; 6 runs")
-        XCTAssertEqual(quality.outcomesTable.first, ["Day", "Opened a PR", "No changes", "Failed", "Total"])
-        XCTAssertEqual(quality.outcomesTable.count, 15)
-        XCTAssertTrue(quality.outcomesSummary.hasPrefix("44 runs over 14 days: "))
     }
 
-    func testShowAllRunsFiltersByAgentOutcomeAndDay() throws {
-        let quality = try quality(.month)
+    func testShowAllRunsKeepsTheSlicesDaysAndFiltersByAgentOutcomeAndDay() throws {
+        let quality = try quality()
+        XCTAssertEqual(quality.runs.count, 50)
+        XCTAssertEqual(quality.runs.map(\.date).min(), "2026-11-06")
         let failed = quality.runs(matching: Quality.RunFilter(outcome: .error))
         XCTAssertFalse(failed.isEmpty)
         XCTAssertTrue(failed.allSatisfy { $0.outcome == .error })
         XCTAssertEqual(quality.agents, ["claude", "codex"])
-        XCTAssertEqual(quality.runDates.first, "2026-10-07")
-        let one = quality.runs(matching: Quality.RunFilter(agent: "codex", date: "2026-09-24"))
-        XCTAssertTrue(one.allSatisfy { $0.agent == "codex" && $0.date == "2026-09-24" })
+        XCTAssertEqual(quality.runDates.first, "2026-11-12")
+        let one = quality.runs(matching: Quality.RunFilter(agent: "codex", date: "2026-11-07"))
+        XCTAssertTrue(one.allSatisfy { $0.agent == "codex" && $0.date == "2026-11-07" })
         XCTAssertEqual(quality.runs(matching: Quality.RunFilter()).count, quality.runs.count)
+        XCTAssertEqual(try self.quality(InsightsSlice(period: .preset(.today))).runs.count, 3)
     }
 
-    func testAnEmptyPeriodSaysSo() {
-        let quality = Quality(history: HistoryPayload(days: 7), runs: [], period: .week)
+    func testAnEmptySliceSaysSo() {
+        let quality = Quality(aggregate: AggregatePayload(), slice: InsightsSlice(), review: nil, runs: [], today: "2026-11-12")
         XCTAssertEqual(quality.tiles.map(\.value), ["—", "—", "—", "—"])
         XCTAssertTrue(quality.tiles.allSatisfy(\.isEmpty))
         XCTAssertEqual(quality.tiles[0].context, "Nothing to count yet")
-        XCTAssertEqual(quality.outcomesSummary, "No runs in the last 0 days.")
-        XCTAssertEqual(quality.agreementSummary, "No Code Review approval in the last 0 days.")
-        XCTAssertEqual(quality.hoverLine(on: Date(timeIntervalSince1970: 0)), "Jan 1: no runs")
+        XCTAssertEqual(quality.agreementSummary, "No Code Review approval in this period.")
+        XCTAssertEqual(quality.empty?.title, "No runs or verdicts in the last 7 days.")
     }
 
     private func fixture(_ name: String) throws -> Data {
@@ -124,7 +134,12 @@ final class QualityTests: XCTestCase {
         try XCTUnwrap(QualityRun.decode(fixture("runs.json")))
     }
 
-    private func quality(_ period: Quality.Period) throws -> Quality {
-        Quality(history: try history(), runs: try runs(), period: period)
+    /// The `insights` fixture's slice with the `attention` fixture's review.
+    private func quality(_ slice: InsightsSlice = InsightsSlice(), scope: OverviewScope = .all) throws -> Quality {
+        let api = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/insights/api/v1")
+        let aggregate = try XCTUnwrap(AggregatePayload.decode(Data(contentsOf: api.appendingPathComponent("aggregate.json"))))
+        let runs = try XCTUnwrap(QualityRun.decode(Data(contentsOf: api.appendingPathComponent("runs.json"))))
+        return Quality(aggregate: aggregate, slice: slice, scope: scope, review: try history().review, runs: runs, today: "2026-11-12")
     }
 }
