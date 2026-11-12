@@ -406,11 +406,7 @@ public struct PhasePathModel: Equatable {
 
     /// "15:23" on `reference`'s day, "Wed 7 Oct 15:23" on another.
     static func clock(_ date: Date, reference: Date, calendar: Calendar) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_GB")
-        formatter.timeZone = calendar.timeZone
-        formatter.calendar = calendar
-        formatter.dateFormat = calendar.isDate(date, inSameDayAs: reference) ? "HH:mm" : "EEE d MMM HH:mm"
-        return formatter.string(from: date)
+        let format = calendar.isDate(date, inSameDayAs: reference) ? "HH:mm" : "EEE d MMM HH:mm"
+        return SharedDateFormatter.string(date, format: format, locale: SharedDateFormatter.british, calendar: calendar)
     }
 }

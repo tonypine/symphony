@@ -390,11 +390,8 @@ public enum StatusMenu {
     static func clockTime(_ date: Date, now: Date, timeZone: TimeZone, dateFormat: String) -> String {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = timeZone
-        formatter.dateFormat = calendar.isDate(date, inSameDayAs: now) ? "HH:mm" : dateFormat
-        return formatter.string(from: date)
+        let format = calendar.isDate(date, inSameDayAs: now) ? "HH:mm" : dateFormat
+        return SharedDateFormatter.string(date, format: format, calendar: calendar)
     }
 
     private static func statusWord(_ status: SymphonyStatus) -> String {

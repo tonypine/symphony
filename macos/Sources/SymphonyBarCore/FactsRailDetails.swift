@@ -169,12 +169,7 @@ public struct TicketDetailsRead: Equatable, Decodable {
 /// "today at 14:02", "yesterday at 09:10", "Fri 6 Nov at 18:40": a moment against `reference`'s day.
 enum FactsMoment {
     static func say(_ date: Date, reference: Date, calendar: Calendar) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_GB")
-        formatter.timeZone = calendar.timeZone
-        formatter.calendar = calendar
-        formatter.dateFormat = "HH:mm"
-        let time = formatter.string(from: date)
+        let time = SharedDateFormatter.string(date, format: "HH:mm", locale: SharedDateFormatter.british, calendar: calendar)
         if calendar.isDate(date, inSameDayAs: reference) { return "today at \(time)" }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: reference), calendar.isDate(date, inSameDayAs: yesterday) {
             return "yesterday at \(time)"

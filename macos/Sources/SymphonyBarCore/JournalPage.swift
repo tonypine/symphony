@@ -287,8 +287,8 @@ public struct JournalFeed: Equatable {
 
     /// Newest first: by when it happened, then by Symphony's order, then by id, as the read pages them.
     static func newerFirst(_ lhs: JournalPayload.Event, _ rhs: JournalPayload.Event) -> Bool {
-        let left = lhs.event.at.flatMap(TicketPage.date) ?? .distantPast
-        let right = rhs.event.at.flatMap(TicketPage.date) ?? .distantPast
+        let left = lhs.event.date ?? .distantPast
+        let right = rhs.event.date ?? .distantPast
         if left != right { return left > right }
         if let l = lhs.event.seq, let r = rhs.event.seq, l != r { return l > r }
         return lhs.id > rhs.id
@@ -421,9 +421,9 @@ public struct JournalModel: Equatable {
         _ feed: JournalFeed, reports: [JournalReportCard] = [], reportsOnly: Bool = false, reference: Date, calendar: Calendar
     ) -> JournalModel {
         let rows: [JournalDay.Item] = reportsOnly ? [] : feed.events.compactMap { event in
-            event.event.at.flatMap(TicketPage.date).map { .event(row(event, at: $0)) }
+            event.event.date.map { .event(row(event, at: $0)) }
         }
-        let oldest = feed.events.last?.event.at.flatMap(TicketPage.date)
+        let oldest = feed.events.last?.event.date
         let cards = reports
             .filter { card in !feed.canShowEarlier || oldest.map { card.at >= $0 } ?? true }
             .sorted { $0.at > $1.at }

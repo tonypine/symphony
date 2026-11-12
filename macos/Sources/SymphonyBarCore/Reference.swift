@@ -280,7 +280,7 @@ public struct TicketContext: Equatable {
             blocks: connected(payload.blocks),
             related: connected(payload.related),
             earlierDecisions: (payload.earlierDecisions ?? []).map {
-                EarlierDecision(at: $0.at.flatMap { ISO8601DateFormatter().date(from: $0) }, title: $0.title, answer: $0.answer)
+                EarlierDecision(at: $0.at.flatMap(TicketPage.date), title: $0.title, answer: $0.answer)
             }
         )
     }

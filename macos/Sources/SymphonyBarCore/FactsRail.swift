@@ -503,17 +503,12 @@ public struct ConnectedPanelModel: Equatable {
 
     /// "today 14:02", "yesterday, Mon 9 Nov", "Fri 6 Nov".
     static func day(_ date: Date, reference: Date, calendar: Calendar) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_GB")
-        formatter.timeZone = calendar.timeZone
-        formatter.calendar = calendar
-        if calendar.isDate(date, inSameDayAs: reference) {
-            formatter.dateFormat = "HH:mm"
-            return "today \(formatter.string(from: date))"
+        func text(_ format: String) -> String {
+            SharedDateFormatter.string(date, format: format, locale: SharedDateFormatter.british, calendar: calendar)
         }
-        formatter.dateFormat = "EEE d MMM"
+        if calendar.isDate(date, inSameDayAs: reference) { return "today \(text("HH:mm"))" }
         let yesterday = calendar.date(byAdding: .day, value: -1, to: reference).map { calendar.isDate(date, inSameDayAs: $0) } ?? false
-        return (yesterday ? "yesterday, " : "") + formatter.string(from: date)
+        return (yesterday ? "yesterday, " : "") + text("EEE d MMM")
     }
 }
 
