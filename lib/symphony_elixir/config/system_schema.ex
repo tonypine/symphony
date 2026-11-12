@@ -129,7 +129,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "dependency_audit" => ~w(allow_registries allow_git_sources allow_path_sources),
     "human_actions" => ~w(enabled interval_ms min_update_interval_ms),
     "ledger" => ~w(artifact_max_bytes prompt_brief_enabled prompt_brief_max_tokens),
-    "reports" => ~w(model),
+    "reports" => ~w(model cadence triggers),
+    "reports.triggers" => ~w(ticket_shipped epic_closed ci_fix_loop self_heal_filed release_installed paused_by_rule),
     "dispatch" => ~w(source shadow_window),
     # A run kind's step list (`Schema.Phases`); each kind holds one setting, its `steps` list.
     "phases" => Schema.Phases.kinds(),
@@ -1388,8 +1389,10 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_reports(config) do
     with {:ok, config} <- section_map(config, "reports"),
-         :ok <- reject_unknown_section_keys(config, section_keys("reports"), "reports") do
-      {:ok, config}
+         :ok <- reject_unknown_section_keys(config, section_keys("reports"), "reports"),
+         {:ok, triggers} <- section_map(Map.get(config, "triggers", %{}), "reports.triggers"),
+         :ok <- reject_unknown_section_keys(triggers, section_keys("reports.triggers"), "reports.triggers") do
+      {:ok, if(Map.has_key?(config, "triggers"), do: Map.put(config, "triggers", triggers), else: config)}
     end
   end
 

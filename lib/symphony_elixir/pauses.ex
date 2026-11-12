@@ -601,6 +601,27 @@ defmodule SymphonyElixir.Pauses do
     end
   end
 
+  # Symphony's own events go out on the live channel once they are written, as a ticket's do: the
+  # report scheduler (`SymphonyElixir.Reports.Scheduler`) reads the factory paused and an update
+  # installed from them.
+  defp update(:symphony, _at, fun) do
+    noticed = fn pause ->
+      case fun.(normalize(pause)) do
+        {:write, pause, events, result} -> {:write, pause, events, {:noticed, events, result}}
+        other -> other
+      end
+    end
+
+    case RunStore.update_subject_pause(:symphony, noticed) do
+      {:ok, {:noticed, events, result}} ->
+        Enum.each(events, &TicketEvents.notify/1)
+        {:ok, result}
+
+      other ->
+        other
+    end
+  end
+
   defp update(subject, _at, fun), do: RunStore.update_subject_pause(subject, &fun.(normalize(&1)))
 
   defp read({:ticket, _repo_key, issue_id}) do

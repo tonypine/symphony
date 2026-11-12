@@ -597,6 +597,18 @@ defmodule SymphonyElixir.Config do
   end
 
   @doc """
+  The `reports` section of symphony.yml (`Schema.Reports`: the model, the cadence and the triggers
+  of `SymphonyElixir.Reports.Scheduler`), read on each call, else its defaults.
+  """
+  @spec report_settings() :: Schema.Reports.t()
+  def report_settings do
+    case system() do
+      {:ok, %{reports: %Schema.Reports{} = reports}} -> reports
+      {:error, _reason} -> %Schema.Reports{}
+    end
+  end
+
+  @doc """
   Whether agents' prompts carry the summary of the ticket's history
   (`SymphonyElixir.TicketEvents.Brief`): symphony.yml's `ledger.prompt_brief_enabled`, read on each
   call, else true.

@@ -2,7 +2,8 @@ defmodule SymphonyElixir.ReportsTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.AgentTools.Report
-  alias SymphonyElixir.Config.SystemSchema
+  alias SymphonyElixir.Config.{Schema, SystemSchema}
+  alias SymphonyElixir.Config.Schema.Reports.Triggers
   alias SymphonyElixir.{Questions, Reports, Situation, TicketEvents}
   alias SymphonyElixir.Reports.{Anthropic, Material, Period}
 
@@ -373,9 +374,77 @@ defmodule SymphonyElixir.ReportsTest do
 
     test "refuses a blank model and an unknown key, and is a setting the macOS app must edit" do
       assert {:error, {:invalid_symphony_config, "reports.model must name a model"}} = SystemSchema.parse(Map.put(@base, "reports", %{"model" => " "}))
-      assert {:error, {:invalid_symphony_config, "unknown symphony.yml key `reports.cadence`"}} = SystemSchema.parse(Map.put(@base, "reports", %{"cadence" => "daily"}))
+      assert {:error, {:invalid_symphony_config, "unknown symphony.yml key `reports.weekly`"}} = SystemSchema.parse(Map.put(@base, "reports", %{"weekly" => true}))
       assert {:error, {:invalid_symphony_config, "`reports` must be an object"}} = SystemSchema.parse(Map.put(@base, "reports", 7))
       assert "reports.model" in SystemSchema.operator_key_paths()
+    end
+  end
+
+  describe "the reports.cadence and reports.triggers settings" do
+    test "default to every six hours, with a ticket shipped and the factory paused by a rule on" do
+      assert {:ok, %{reports: %{cadence: "six_hours", triggers: triggers}}} = SystemSchema.parse(@base)
+
+      assert Map.take(triggers, Triggers.names()) == %{
+               ticket_shipped: true,
+               epic_closed: false,
+               ci_fix_loop: false,
+               self_heal_filed: false,
+               release_installed: false,
+               paused_by_rule: true
+             }
+
+      assert Schema.Reports.cadences() == ~w(none hourly six_hours daily)
+      assert %Schema.Reports{cadence: "six_hours"} = Config.report_settings()
+
+      path = Workflow.symphony_file_path()
+      original = File.read!(path)
+      File.write!(path, original <> "reports:\n  cadence: hourly\n  triggers:\n    epic_closed: true\n")
+      Cache.clear()
+      assert %{cadence: "hourly", triggers: %{epic_closed: true, ticket_shipped: true}} = Config.report_settings()
+
+      File.write!(path, original <> "reports: 7\n")
+      Cache.clear()
+      assert Config.report_settings() == %Schema.Reports{}
+    end
+
+    test "take a null triggers section as the defaults, and refuse an unknown cadence or trigger" do
+      assert {:ok, %{reports: %{triggers: %{ticket_shipped: true}}}} = SystemSchema.parse(Map.put(@base, "reports", %{"triggers" => nil}))
+
+      assert {:error, {:invalid_symphony_config, "reports.cadence must be one of none, hourly, six_hours, daily"}} =
+               SystemSchema.parse(Map.put(@base, "reports", %{"cadence" => "weekly"}))
+
+      assert {:error, {:invalid_symphony_config, "unknown symphony.yml key `reports.triggers.weekly`"}} =
+               SystemSchema.parse(Map.put(@base, "reports", %{"triggers" => %{"weekly" => true}}))
+
+      assert {:error, {:invalid_symphony_config, "`reports.triggers` must be an object"}} = SystemSchema.parse(Map.put(@base, "reports", %{"triggers" => 1}))
+      assert {:error, {:invalid_symphony_config, message}} = SystemSchema.parse(Map.put(@base, "reports", %{"triggers" => %{"epic_closed" => "maybe"}}))
+      assert message =~ "reports.triggers.epic_closed"
+
+      for key <- ~w(cadence triggers.ticket_shipped triggers.epic_closed triggers.ci_fix_loop triggers.self_heal_filed triggers.release_installed triggers.paused_by_rule) do
+        assert "reports.#{key}" in SystemSchema.operator_key_paths()
+      end
+    end
+  end
+
+  describe "latest/0, launch/2 and cited_tickets/1" do
+    test "the newest report, the run's task, and each cited event's ticket with its Linear URL" do
+      assert Reports.latest() == nil
+      ids = fixture_period!()
+      :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "three", issue_identifier: "FIX-3", phase: "Rework", url: "https://linear.app/acme/issue/FIX-3"})
+      {:ok, _older} = publish_at!("report-a", at(12), ids.moved)
+      {:ok, newest} = publish_at!("report-b", at(14), ids.moved)
+      assert Reports.latest().id == newest.id
+
+      {:ok, _pause} = SymphonyElixir.Pauses.set(:symphony, SymphonyElixir.Pauses.dispatch_reason("deploy window"), at: at(10))
+      [symphony | _rest] = RunStore.list_subject_events(:symphony, [])
+      report = %{newest | payload: %{newest.payload | events: [ids.moved, ids.approved, symphony.id]}}
+
+      assert Reports.cited_tickets(report) == %{
+               ids.moved => %{identifier: "FIX-3", url: "https://linear.app/acme/issue/FIX-3"},
+               ids.approved => %{identifier: "FIX-2", url: nil}
+             }
+
+      assert {:ok, %{events: 4}, :the_task} = Reports.launch(@period, start_task: fn _fun -> :the_task end, live: Situation.live_facts(%{}))
     end
   end
 

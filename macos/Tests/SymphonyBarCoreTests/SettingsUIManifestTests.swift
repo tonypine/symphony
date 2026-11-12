@@ -100,8 +100,13 @@ final class SettingsUIManifestTests: XCTestCase {
                 to: LedgerSettings(maxBytes: 52_428_800, briefEnabled: false, briefMaxTokens: 80_000)
             )
         }, from: yaml)
-        yaml = try record("setting the status report's model", {
-            try ReportSettings.updating($0, from: ReportSettings(), to: ReportSettings(model: "claude-sonnet-5-5"))
+        yaml = try record("setting the status report's model, cadence and triggers", {
+            let flipped = Dictionary(uniqueKeysWithValues: ReportTrigger.allCases.map { ($0, !$0.defaultOn) })
+            return try ReportSettings.updating(
+                $0,
+                from: ReportSettings(),
+                to: ReportSettings(model: "claude-sonnet-5-5", cadence: .hourly, triggers: flipped)
+            )
         }, from: yaml)
         yaml = try record("setting allowed ticket priorities", {
             try TicketPriorities.updating($0, from: TicketPriorities(), to: TicketPriorities(priorities: [.urgent, .high]))

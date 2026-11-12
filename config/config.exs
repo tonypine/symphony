@@ -55,6 +55,9 @@ if config_env() == :test do
     # A ticket's situation event (`SymphonyElixir.Situation.Recorder`) would join the events each
     # suite asserts; its own test starts it.
     situation_recorder: false,
+    # The report scheduler (`SymphonyElixir.Reports.Scheduler`) would start report runs over the
+    # events each suite writes; its own test starts it.
+    report_scheduler: false,
     # A move into `Plan Review` captures the plan's brief from Linear in a task
     # (`SymphonyElixir.PlanBrief`); in tests it would race the records a test asserts, so it runs
     # only where a test turns it on.

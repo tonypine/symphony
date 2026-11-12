@@ -3159,16 +3159,41 @@ Journal's) and where each ticket they concern stands, and publishes one report o
 ledger, every sentence citing the events it rests on. It changes nothing else: its only tools publish
 the report and ask the Director one question, which lands in the Inbox. Start one with
 `symphony report --from <time> --to <time>` or `POST /api/v1/control/report`; `GET /api/v1/reports`
-lists them, newest first. The setting has a control in the Mac app's Settings, under Reports.
+lists them, newest first. Reports also run on their own, at the cadence and on the triggers below,
+each covering the time since the previous report. Each setting has a control in the Mac app's
+Settings, under Reports. Until Phase 10, the Linear project update Symphony posts
+(`human_actions`) is the newest report's text, each sentence followed by links to the issues it
+cites; with no report yet it lists the open actions.
 
 ```yaml
 reports:
   model: claude-haiku-5-5
+  cadence: six_hours
+  triggers:
+    ticket_shipped: true
+    epic_closed: false
+    ci_fix_loop: false
+    self_heal_filed: false
+    release_installed: false
+    paused_by_rule: true
 ```
 
 - `model` (default `claude-haiku-5-5`, the cheapest capable model): the Anthropic model the report
   run calls, with the `ANTHROPIC_API_KEY` of Symphony's environment. Read on each run, so a change
   applies without a restart.
+- `cadence` (default `six_hours`): `none`, `hourly`, `six_hours` or `daily`. Boundaries are on the
+  UTC clock (every full hour; 00:00, 06:00, 12:00 and 18:00; midnight). A boundary that passed while
+  Symphony was down runs at startup. Read at each full hour, so a change needs no restart.
+- `triggers`: one switch per event that writes a report at once: `ticket_shipped` (a ticket entered
+  Done), `epic_closed` (an epic entered Done from Epic Review), `ci_fix_loop` (a ticket entered CI
+  Fix for the fourth time), `self_heal_filed` (self-heal filed a fix ticket), `release_installed`
+  (the build an update waited on runs) and `paused_by_rule` (Symphony's pause was set by anything
+  but the Director, a usage-limit hold among them). A trigger within a minute of a report's start
+  writes none of its own; its event is in the next report. One report runs at a time, and a report
+  waits for a usage-limit hold on its model like any run. A period with no notable event writes no
+  report.
+
+These keys are new: no existing `symphony.yml` key is renamed, so nothing migrates.
 
 ### `ledger`
 

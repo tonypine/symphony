@@ -115,6 +115,7 @@ defmodule SymphonyElixir.Application do
              SymphonyElixir.StrayProcesses,
              ci_child_spec(system_config),
              human_actions_child_spec(system_config),
+             report_scheduler_child_spec(),
              initiatives_child_spec(system_config),
              SymphonyElixir.Setup,
              SymphonyElixir.HttpServer,
@@ -203,6 +204,11 @@ defmodule SymphonyElixir.Application do
   # Off in tests (`config/config.exs`): its events would join the ones each test asserts.
   defp situation_recorder_child_spec do
     if Application.get_env(:symphony_elixir, :situation_recorder, true), do: SymphonyElixir.Situation.Recorder
+  end
+
+  # Off in tests (`config/config.exs`): a report run at startup would read the events each suite writes.
+  defp report_scheduler_child_spec do
+    if Application.get_env(:symphony_elixir, :report_scheduler, true), do: SymphonyElixir.Reports.Scheduler
   end
 
   # The PR and CI watcher decides and acts on every CI and merge row; it watches the repos whose PRs

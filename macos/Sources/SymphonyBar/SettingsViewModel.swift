@@ -162,6 +162,10 @@ final class SettingsViewModel: ObservableObject {
     @Published private(set) var ledgerError: String?
     /// `reports.model` in the configured symphony.yml: the model a status report is written with.
     @Published var reportModel = ReportSettings.defaultModel
+    /// `reports.cadence`: how often Symphony writes a status report on its own.
+    @Published var reportCadence = ReportSettings.defaultCadence
+    /// `reports.triggers.*`: the events that start a status report at once.
+    @Published var reportTriggers = ReportSettings.defaultTriggers
     /// Why `symphony check` rejected the changed report settings, shown in their section.
     @Published private(set) var reportsError: String?
     /// `auto_review.playbooks.macos_app.dev_server`, `dev_server_port` and `launch_env` in the configured
@@ -590,6 +594,8 @@ final class SettingsViewModel: ObservableObject {
         do {
             let reports = try SymphonyConfigFile(path: path).readReportSettings()
             reportModel = reports.model
+            reportCadence = reports.cadence
+            reportTriggers = reports.triggers
             loadedReportSettings = reports
         } catch {
             configFileError = "Could not read the report settings from symphony.yml: \(error.localizedDescription)"
@@ -784,7 +790,9 @@ final class SettingsViewModel: ObservableObject {
         ledger?.briefMaxTokens = promptBriefMaxTokens
         let oldLedger = loadedLedgerSettings.flatMap { $0 != ledger ? $0 : nil }
         reportsError = nil
-        let reports = loadedReportSettings.map { _ in ReportSettings(model: reportModel.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        let reports = loadedReportSettings.map { _ in
+            ReportSettings(model: reportModel.trimmingCharacters(in: .whitespacesAndNewlines), cadence: reportCadence, triggers: reportTriggers)
+        }
         let oldReports = loadedReportSettings.flatMap { $0 != reports ? $0 : nil }
         macAppQAError = nil
         let qaPlaybook = macAppQA.trimmed()
@@ -1119,7 +1127,7 @@ final class SettingsViewModel: ObservableObject {
         return true
     }
 
-    /// Writes the report model to symphony.yml once `symphony check` passes on the result.
+    /// Writes the report settings that changed to symphony.yml once `symphony check` passes on the result.
     private func saveReportSettings(
         _ reports: ReportSettings,
         from loaded: ReportSettings,

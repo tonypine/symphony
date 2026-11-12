@@ -11,7 +11,11 @@ defmodule SymphonyElixir.HumanActions do
   the set in the last update Symphony posted to it, and at most once per
   `human_actions.min_update_interval_ms`; a change inside that window is posted once it passes.
   When the last action closes, one short "Nothing needs you" update says so, and nothing more is
-  posted until a new action opens. Each new action also goes out as a `human_action_needed`
+  posted until a new action opens. Once a status report exists (`SymphonyElixir.Reports`), the
+  update is the newest report's text instead, its citations as links to the Linear issues
+  (`SymphonyElixir.HumanActions.Update.render_report/3`): a new report is a new update to every
+  project Symphony has posted to, and the report scheduler asks for it at once
+  (`SymphonyElixir.Reports.Scheduler`, `refresh/1`). Each new action also goes out as a `human_action_needed`
   notification.
 
   The last list posted is remembered per project. After a restart it is read back from the list
@@ -29,7 +33,7 @@ defmodule SymphonyElixir.HumanActions do
   require Logger
 
   alias SymphonyElixir.AgentTools.SecretScanner
-  alias SymphonyElixir.{Config, Notifications}
+  alias SymphonyElixir.{Config, Notifications, Reports}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{CiSecrets, Collector, Update}
   alias SymphonyElixir.Linear.{Client, Usage}
@@ -119,12 +123,13 @@ defmodule SymphonyElixir.HumanActions do
     with {:ok, repos} <- enabled_repos(state),
          {:ok, collected} <- collect.(repos, Keyword.take(state.opts, [:records])) do
       {collected, state} = with_ci_actions(collected, repos, settings, state)
+      report = Keyword.get(state.opts, :latest_report, &Reports.latest/0).()
 
       collected
       |> Map.keys()
-      |> Enum.concat(listed_project_ids(state))
+      |> Enum.concat(listed_project_ids(state, report))
       |> Enum.uniq()
-      |> Enum.reduce(state, &sync_project(&1, Map.get(collected, &1), settings, &2))
+      |> Enum.reduce(state, &sync_project(&1, Map.get(collected, &1), {settings, report}, &2))
     else
       {:error, reason} ->
         Logger.warning("Human actions: could not read the open actions: #{inspect(reason)}")
@@ -143,26 +148,25 @@ defmodule SymphonyElixir.HumanActions do
   defp with_ci_actions(collected, _repos, _settings, state), do: {collected, state}
 
   # Projects whose last update listed actions: they need a "Nothing needs you" update once their
-  # last action closes, even when no issue of theirs is read anymore.
-  defp listed_project_ids(state) do
+  # last action closes, even when no issue of theirs is read anymore. With a report, every project
+  # Symphony knows gets the newest one.
+  defp listed_project_ids(state, nil) do
     empty = Update.list_id([])
     for {project_id, %{list_id: list_id}} <- state.projects, list_id not in [nil, empty], do: project_id
   end
 
-  defp sync_project(project_id, collected, settings, state) do
+  defp listed_project_ids(state, _report), do: Map.keys(state.projects)
+
+  defp sync_project(project_id, collected, {settings, report}, state) do
     actions = if collected, do: collected.actions, else: []
 
     case last_posted(state, project_id, collected) do
       {:ok, posted} ->
         state = put_in(state.projects[project_id], posted)
-        list_id = Update.list_id(actions)
 
-        cond do
-          posted.list_id == list_id -> state
-          is_nil(posted.list_id) and actions == [] -> state
-          rate_limited?(posted, settings, state) -> state
-          true -> post(state, project_id, posted, actions)
-        end
+        if post?(posted, Update.list_id(actions, report), actions == [] and is_nil(report), {settings, state}),
+          do: post(state, project_id, posted, actions, report),
+          else: state
 
       {:error, reason} ->
         Logger.warning("Human actions: could not read the last update of project #{project_id}: #{inspect(reason)}")
@@ -176,6 +180,11 @@ defmodule SymphonyElixir.HumanActions do
       :error -> recover(state, project_id, project_name(collected))
     end
   end
+
+  # A list that changed and is not empty, or a report, outside the per-project interval.
+  defp post?(%{list_id: list_id}, list_id, _nothing, _context), do: false
+  defp post?(%{list_id: nil}, _list_id, true = _nothing, _context), do: false
+  defp post?(posted, _list_id, _nothing, {settings, state}), do: not rate_limited?(posted, settings, state)
 
   defp project_name(%{project: %{name: name}}), do: name
   defp project_name(nil), do: nil
@@ -209,8 +218,8 @@ defmodule SymphonyElixir.HumanActions do
 
   defp rate_limited?(_posted, _settings, _state), do: false
 
-  defp post(state, project_id, posted, actions) do
-    {body, patterns} = Update.render(actions)
+  defp post(state, project_id, posted, actions, report) do
+    {body, patterns} = render(state, actions, report)
     SecretScanner.audit_redaction(patterns, %{}, "human_actions", "project_update", Keyword.get(state.opts, :audit_opts, []))
     input = %{"projectId" => project_id, "body" => body, "health" => Update.health(actions)}
 
@@ -218,13 +227,26 @@ defmodule SymphonyElixir.HumanActions do
       {:ok, %{"data" => %{"projectUpdateCreate" => %{"success" => true}}}} ->
         Logger.info("Human actions: posted #{length(actions)} open action(s) to project #{posted.name || project_id}")
         notify_new(state, actions, posted)
-        posted = %{posted | list_id: Update.list_id(actions), posted_at_ms: now_ms(state), keys: MapSet.new(actions, & &1.key)}
+        posted = %{posted | list_id: Update.list_id(actions, report), posted_at_ms: now_ms(state), keys: MapSet.new(actions, & &1.key)}
         put_in(state.projects[project_id], posted)
 
       other ->
         Logger.warning("Human actions: could not post the update to project #{posted.name || project_id}: #{inspect(other)}")
         state
     end
+  end
+
+  defp render(_state, actions, nil), do: Update.render(actions)
+
+  defp render(state, actions, report) do
+    # A store that can't say which tickets the report cites leaves its sentences without links.
+    cited =
+      case Keyword.get(state.opts, :cited_tickets, &Reports.cited_tickets/1).(report) do
+        %{} = cited -> cited
+        {:error, _reason} -> %{}
+      end
+
+    Update.render_report(report, actions, cited)
   end
 
   # After a restart the previous keys are unknown, so every listed action counts as new.
