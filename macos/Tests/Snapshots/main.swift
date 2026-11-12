@@ -1638,6 +1638,40 @@ func journalPage(_ file: String, query: JournalQuery = JournalQuery(), window: C
     .background(DesignTokens.Surface.content.color)
 }
 
+/// The Journal with its reports (TP-1462): the `journal` fixture's night, its two reports pinned at the end of their
+/// periods, the newer one's citations resolved by the night's events and the older one's by the read of its period, and
+/// the newer one's Question open from the fixture's Inbox; with `reportsOnly`, the reports alone.
+@MainActor
+func journalReportsPage(window: CGFloat, reportsOnly: Bool = false) -> some View {
+    func read(_ file: String) -> Data { try! Data(contentsOf: journalAPI.appendingPathComponent("\(file).json")) }
+    guard let page = JournalPayload.decode(read("events")),
+          let reports = JournalReportsPayload.decode(read("reports")),
+          let period = JournalPayload.decode(read("events.limit=200&notable=true&since=2026-11-11T15:00:00Z&until=2026-11-11T21:00:00Z")),
+          let inbox = InboxPayload.decode(read("inbox")),
+          let initiatives = InitiativesPayload.decode(read("initiatives"))
+    else { fatalError("The journal fixture's reports don't read") }
+    var feed = JournalFeed()
+    feed.takeNewest(page)
+    var utc = Calendar(identifier: .gregorian)
+    utc.timeZone = TimeZone(identifier: "UTC")!
+    var citations = JournalCitations(page.events)
+    citations.take(period.events)
+    let cards = reports.reports.compactMap { JournalReportCard.build($0, citations: citations, calendar: utc) }
+    var questions: [String: JournalReportQuestion] = [:]
+    for card in cards {
+        guard let item = inbox.items.first(where: { $0.review.action?.questionID == card.questionID }), let action = item.review.action else { continue }
+        questions[card.id] = JournalReportQuestion(itemID: item.id, action: action, picks: DecisionPicks(picks: [0: 0]))
+    }
+    let query = JournalQuery(reportsOnly: reportsOnly)
+    return JournalView(
+        model: JournalModel.build(feed, reports: cards, reportsOnly: reportsOnly, reference: journalNow, calendar: utc), query: .constant(query),
+        values: JournalFilterValues(repos: ["api", "docs", "symphony", "web-shop"], epics: initiatives.initiatives.map(\.identifier), query: query),
+        questions: questions, scrolls: false, calendar: utc
+    )
+    .frame(width: window - DesignTokens.Layout.sidebarWidth, alignment: .top)
+    .background(DesignTokens.Surface.content.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1834,6 +1868,10 @@ MainActor.assumeIsolated {
                    to: "journal-everything-\(name)-\(suffix).png")
             render(journalPage("events.epic=TP-1381&limit=200&notable=true", query: JournalQuery(epic: "TP-1381"), window: window), scheme,
                    to: "journal-epic-\(name)-\(suffix).png")
+            // Reports in the Journal (TP-1462): a report with its Question open and one without, among the events, and
+            // the reports alone.
+            render(journalReportsPage(window: window), scheme, to: "journal-reports-\(name)-\(suffix).png")
+            render(journalReportsPage(window: window, reportsOnly: true), scheme, to: "journal-reports-only-\(name)-\(suffix).png")
         }
         // Saved views (TP-1457): the menu with three views, and the save sheet.
         render(ticketViewsMenuOpen(), scheme, to: "ticket-views-menu-\(suffix).png")

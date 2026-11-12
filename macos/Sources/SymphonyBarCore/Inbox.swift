@@ -131,6 +131,9 @@ public struct InboxItem: Equatable, Identifiable {
     public var references: [String: Reference]
     /// Where the item's ticket sits; nil from a Symphony that doesn't say.
     public var context: TicketContext?
+    /// What a Question with no ticket is asked of (TP-1462): `symphony` (a report's Question) or `repository`; nil on a
+    /// ticket's item. Its identifier is the subject's name, and its answer names the Question alone.
+    public var subject: String? = nil
 
     public init(
         id: String,
@@ -144,8 +147,10 @@ public struct InboxItem: Equatable, Identifiable {
         url: URL? = nil,
         review: InboxReview = InboxReview(),
         references: [String: Reference] = [:],
-        context: TicketContext? = nil
+        context: TicketContext? = nil,
+        subject: String? = nil
     ) {
+        self.subject = subject
         self.id = id
         self.identifier = identifier
         self.title = title
@@ -162,6 +167,9 @@ public struct InboxItem: Equatable, Identifiable {
 
     /// False for a row that only shows what its ticket waits on: nothing about it waits on the Director.
     public var waitsOnDirector: Bool { kind != .waiting }
+
+    /// True for a Question on Symphony itself or a repository: no ticket page opens for it.
+    public var isSubject: Bool { subject != nil }
 
     /// The row's age: "3 h 12 min"; nil when unknown.
     public var age: String? { waitingSeconds.map(Overview.duration) }
@@ -193,14 +201,21 @@ public struct InboxItem: Equatable, Identifiable {
         let review: InboxReview.Payload?
         let references: [String: Reference.Payload]?
         let context: TicketContext.Payload?
+        let subject: String?
     }
 
     init?(_ payload: Payload) {
-        guard let identifier = payload.identifier ?? payload.issueId, let kind = payload.kind.flatMap(Kind.init(rawValue:)) else {
+        // A Question on a subject has no ticket: its name is the subject's ("Symphony", a repository's key), and its id
+        // the Question's, so two of them on Symphony are two items.
+        let questionID = payload.review?.questionId
+        let subject = payload.identifier == nil && payload.issueId == nil && questionID != nil ? payload.subject ?? "symphony" : nil
+        guard let identifier = payload.identifier ?? payload.issueId ?? subject.map({ _ in payload.title ?? "Symphony" }),
+              let kind = payload.kind.flatMap(Kind.init(rawValue:))
+        else {
             return nil
         }
         self.init(
-            id: payload.issueId ?? identifier,
+            id: payload.issueId ?? questionID.flatMap { subject == nil ? nil : "question:" + $0 } ?? identifier,
             identifier: identifier,
             title: payload.title,
             repoKey: payload.repoKey,
@@ -211,7 +226,8 @@ public struct InboxItem: Equatable, Identifiable {
             url: payload.url.flatMap(URL.init(string:)),
             review: payload.review.map(InboxReview.init) ?? InboxReview(),
             references: (payload.references ?? [:]).mapValues(Reference.init),
-            context: payload.context.map(TicketContext.init)
+            context: payload.context.map(TicketContext.init),
+            subject: subject
         )
     }
 }

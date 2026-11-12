@@ -241,10 +241,11 @@ public enum ControlAction: Equatable {
             return body
         case let .decide(identifier, request, picks, move):
             var body: [String: Any] = [
-                "issue_identifier": identifier,
                 request.body.key: request.body.value,
                 "picks": picks.map { ["question": $0.question, "answer": $0.answer] },
             ]
+            // No ticket for a Question on Symphony or a repository: its id alone names it.
+            if !identifier.isEmpty { body["issue_identifier"] = identifier }
             if let move { body["move"] = move }
             return body
         case let .note(repoKey, identifier, text):
@@ -296,7 +297,7 @@ public enum ControlAction: Equatable {
         case let .start(identifier, _):
             return "Couldn't start \(identifier) now"
         case let .decide(identifier, _, _, _):
-            return "Couldn't send the decision on \(identifier)"
+            return identifier.isEmpty ? "Couldn't send the decision" : "Couldn't send the decision on \(identifier)"
         case let .unblock(identifier):
             return "Couldn't unblock \(identifier)"
         case let .undo(identifier):

@@ -22,6 +22,18 @@ extension EnvironmentValues {
         set { self[OpenMentionDirectlyKey.self] = newValue }
     }
 
+    /// A click on one of a `ChipText`'s own links (`ChipTextLink`): a report's cited sentence (TP-1462).
+    public var openTextLink: TextLinkAction {
+        get { self[OpenTextLinkKey.self] }
+        set { self[OpenTextLinkKey.self] = newValue }
+    }
+
+    /// The pointer came onto one of a `ChipText`'s own links, or left it (nil).
+    public var hoverTextLink: TextLinkHoverAction {
+        get { self[HoverTextLinkKey.self] }
+        set { self[HoverTextLinkKey.self] = newValue }
+    }
+
     /// Scrolls the review a distance down, through its scroll view's position, to show the chip the keyboard is on
     /// (`ChipTextView.scrollReview`); nil outside the review's scroll view.
     public var scrollReview: ScrollReviewAction? {
@@ -44,6 +56,32 @@ private struct OpenMentionDirectlyKey: EnvironmentKey {
 
 private struct ScrollReviewKey: EnvironmentKey {
     static let defaultValue: ScrollReviewAction? = nil
+}
+
+private struct OpenTextLinkKey: EnvironmentKey {
+    static let defaultValue = TextLinkAction { _ in }
+}
+
+private struct HoverTextLinkKey: EnvironmentKey {
+    static let defaultValue = TextLinkHoverAction { _ in }
+}
+
+/// What a click on a `ChipText`'s own link does.
+public struct TextLinkAction {
+    let handler: (ChipTextLink) -> Void
+
+    public init(handler: @escaping (ChipTextLink) -> Void) { self.handler = handler }
+
+    public func callAsFunction(_ link: ChipTextLink) { handler(link) }
+}
+
+/// What the pointer onto a `ChipText`'s own link, or off it (nil), does.
+public struct TextLinkHoverAction {
+    let handler: (ChipTextLink?) -> Void
+
+    public init(handler: @escaping (ChipTextLink?) -> Void) { self.handler = handler }
+
+    public func callAsFunction(_ link: ChipTextLink?) { handler(link) }
 }
 
 /// What a click on a chip opens, as `OpenURLAction` is for a link.
@@ -75,22 +113,28 @@ public struct ChipText: View {
     var color: NSColor = .labelColor
     /// False in a control: the text can't be selected and a click outside a chip goes to the control.
     var selectable = true
+    /// Stretches of the text that are links of the caller's, with ranges in `text`.
+    var links: [ChipTextLink] = []
     @Environment(\.mentionReferences) private var references
     /// `ImageRenderer` can't draw an AppKit view, so a snapshot shows the text view drawn into an image, offscreen.
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
     /// True while the window has a sheet over it: the paragraph is drawn as that image too, so it dims with the window.
     @State private var covered = false
 
-    public init(text: String, lead: String? = nil, font: NSFont = DesignTokens.TypeStyle.body.nsFont, color: NSColor = .labelColor, selectable: Bool = true) {
+    public init(
+        text: String, lead: String? = nil, font: NSFont = DesignTokens.TypeStyle.body.nsFont, color: NSColor = .labelColor, selectable: Bool = true,
+        links: [ChipTextLink] = []
+    ) {
         self.text = text
         self.lead = lead
         self.font = font
         self.color = color
         self.selectable = selectable
+        self.links = links
     }
 
     public var body: some View {
-        if let content = ChipTextContent.chips(text, references: references, lead: lead) {
+        if let content = ChipTextContent.chips(text, references: references, lead: lead, links: links) {
             let style = ChipTextStyle(font: font, color: color, selectable: selectable)
             // An AppKit view gives SwiftUI no text baselines, so they come from TextKit's line for the font.
             let baseline = ChipTextView.baseline(of: font)
@@ -184,6 +228,10 @@ private struct ChipTextRepresentable: NSViewRepresentable {
         let openMention = context.environment.openMention
         view.openMention = { openMention($0) }
         view.openMentionDirectly = context.environment.openMentionDirectly.map { direct in { direct($0) } }
+        let openTextLink = context.environment.openTextLink
+        view.openTextLink = { openTextLink($0) }
+        let hoverTextLink = context.environment.hoverTextLink
+        view.hoverTextLink = { hoverTextLink($0) }
         view.scrollReview = context.environment.scrollReview.map { scroll in { scroll($0) } }
     }
 
