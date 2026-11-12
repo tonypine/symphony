@@ -1,0 +1,11 @@
+{
+  "issue_id": "i-TP-1457",
+  "issue_identifier": "TP-1457",
+  "repo_key": "symphony",
+  "ticket": {
+    "title": "3b (20/26): Initiatives as the epic's story",
+    "phase": "QA",
+    "priority": 1,
+    "labels": []
+  }
+}

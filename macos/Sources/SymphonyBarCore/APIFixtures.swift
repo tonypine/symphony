@@ -1,7 +1,8 @@
 import Foundation
 
 /// Symphony's local API served from files, for QA mode with `SYMPHONY_BAR_QA_API_FIXTURES=<dir>`: each GET reads
-/// `<dir>/<path>.json` (for example `api/v1/state.json`); without one it answers `<path>.png` or `<path>.jpg` with its
+/// `<dir>/<path>.json` (for example `api/v1/state.json`), or `<dir>/<path>.<query>.json` first for a GET with a query
+/// (a filtered read); without one it answers `<path>.png` or `<path>.jpg` with its
 /// image type (a screenshot's bytes), `<path>.txt` as plain text (a step's output), `<path>.410.json` with a 410 (a
 /// file Symphony no longer keeps), and 404
 /// when there is none of them (the live channel, so the app reads after each state poll); each POST is
@@ -45,7 +46,8 @@ public struct APIFixtures: Equatable {
         let file = file(forPath: url.path)
         let method = request.httpMethod?.uppercased() ?? "GET"
         let isPost = method == "POST" || method == "DELETE"
-        let fixture = (isPost ? nil : file.flatMap(afterFixture(of:))) ?? file.flatMap { try? Data(contentsOf: $0) }
+        let fixture = (isPost ? nil : file.flatMap(afterFixture(of:)) ?? file.flatMap { queryFixture(of: $0, query: url.query) })
+            ?? file.flatMap { try? Data(contentsOf: $0) }
         if isPost {
             let answer = fixture ?? file.flatMap { sequenceFile(of: $0, request: postCount(url.path) + 1) }.flatMap { try? Data(contentsOf: $0) }
             log(request, method: method, path: url.path, at: now)
@@ -77,6 +79,15 @@ public struct APIFixtures: Equatable {
             if let data = try? Data(contentsOf: url) { return (data, statusCode, contentType) }
         }
         return nil
+    }
+
+    /// The GET answer `<path>.<query>.json` gives next to `file` (`<path>.json`) for a request with `query`, the query
+    /// as the app wrote it (`api/v1/events.epic=TP-1381&limit=200&notable=true.json`): a read whose filters change its
+    /// answer. Nil without a query, or a query that would leave the directory.
+    func queryFixture(of file: URL, query: String?) -> Data? {
+        guard let query, !query.isEmpty, !query.contains("/") else { return nil }
+        let stem = file.deletingPathExtension()
+        return try? Data(contentsOf: stem.deletingLastPathComponent().appendingPathComponent("\(stem.lastPathComponent).\(query).json"))
     }
 
     /// The GET answer `<path>.after-<move>.json` gives next to `file` (`<path>.json`) once the request log holds a POST

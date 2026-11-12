@@ -35,6 +35,39 @@ final class APIFixturesTests: XCTestCase {
             .appendingPathComponent("Fixtures/director-app/running", isDirectory: true)
     }
 
+    func testAGetWithAQueryReadsItsOwnFileFirstElseThePathsFile() throws {
+        let directory = root.appendingPathComponent("fixtures/api/v1")
+        try Data(#"{"events":[]}"#.utf8).write(to: directory.appendingPathComponent("events.json"))
+        try Data(#"{"events":[{"id":"e1"}]}"#.utf8).write(to: directory.appendingPathComponent("events.epic=TP-1381&limit=200&notable=true.json"))
+        func get(_ path: String) -> String {
+            let (data, response) = fixtures.answer(URLRequest(url: URL(string: path, relativeTo: APIFixtures.baseURL)!))
+            XCTAssertEqual(response.statusCode, 200)
+            return String(decoding: data, as: UTF8.self)
+        }
+        XCTAssertEqual(get("/api/v1/events?epic=TP-1381&limit=200&notable=true"), #"{"events":[{"id":"e1"}]}"#)
+        XCTAssertEqual(get("/api/v1/events?limit=200&notable=false"), #"{"events":[]}"#)
+        XCTAssertEqual(get("/api/v1/events"), #"{"events":[]}"#)
+        // A query can't reach out of the directory.
+        XCTAssertNil(fixtures.queryFixture(of: directory.appendingPathComponent("events.json"), query: "a=/../state"))
+        XCTAssertNil(fixtures.queryFixture(of: directory.appendingPathComponent("events.json"), query: ""))
+    }
+
+    /// The Journal's fixture answers its notable read, its epic filter and its Everything with their own pages.
+    func testTheJournalFixtureAnswersEachFilterWithItsOwnPage() throws {
+        let journal = APIFixtures(
+            directory: Self.shippedRunning.deletingLastPathComponent().appendingPathComponent("journal"),
+            requestLog: root.appendingPathComponent("qa/api-requests.jsonl")
+        )
+        func count(_ query: JournalQuery) -> Int? {
+            let (data, _) = journal.answer(URLRequest(url: URL(string: "/" + query.path(), relativeTo: APIFixtures.baseURL)!))
+            return JournalPayload.decode(data)?.events.count
+        }
+        XCTAssertEqual(count(JournalQuery()), 16)
+        XCTAssertEqual(count(JournalQuery(epic: "TP-1381")), 12)
+        XCTAssertEqual(count(JournalQuery(everything: true)), 21)
+        XCTAssertEqual(count(JournalQuery(epic: "TP-1381", everything: true)), 17)
+    }
+
     func testGetReadsThePathsFile() {
         let (data, response) = fixtures.answer(request("api/v1/state"))
         XCTAssertEqual(response.statusCode, 200)

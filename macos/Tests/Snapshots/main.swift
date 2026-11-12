@@ -1614,6 +1614,30 @@ let threeChipsQuery = TicketsQuery(chips: [
     TicketFilterChip(filter: .priority, values: ["1", "2"]),
 ])
 
+// The Journal (TP-1459): the `journal` fixture's night across every ticket, at its state's clock, as the page draws it
+// in a window `window` pt wide less its sidebar, unscrolled.
+let journalAPI = here.appendingPathComponent("../Fixtures/director-app/journal/api/v1").standardizedFileURL
+let journalNow = ISO8601DateFormatter().date(from: "2026-11-12T03:30:00Z")!
+
+/// The Journal under `query`, from the fixture's page that answers it (`file`).
+@MainActor
+func journalPage(_ file: String, query: JournalQuery = JournalQuery(), window: CGFloat) -> some View {
+    guard let page = JournalPayload.decode(try! Data(contentsOf: journalAPI.appendingPathComponent("\(file).json"))),
+          let initiatives = InitiativesPayload.decode(try! Data(contentsOf: journalAPI.appendingPathComponent("initiatives.json")))
+    else { fatalError("The journal fixture's \(file) doesn't read") }
+    var feed = JournalFeed()
+    feed.takeNewest(page)
+    var utc = Calendar(identifier: .gregorian)
+    utc.timeZone = TimeZone(identifier: "UTC")!
+    return JournalView(
+        model: JournalModel.build(feed, reference: journalNow, calendar: utc), query: .constant(query),
+        values: JournalFilterValues(repos: ["api", "docs", "symphony", "web-shop"], epics: initiatives.initiatives.map(\.identifier), query: query),
+        scrolls: false, calendar: utc
+    )
+    .frame(width: window - DesignTokens.Layout.sidebarWidth, alignment: .top)
+    .background(DesignTokens.Surface.content.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1801,6 +1825,15 @@ MainActor.assumeIsolated {
             render(ticketsTable(window: window, drawer: true), scheme, to: "tickets-table-default-\(name)-\(suffix).png")
             render(ticketsTable(window: window, query: everyColumnQuery), scheme, to: "tickets-table-every-column-\(name)-\(suffix).png")
             render(ticketsTable(window: window, query: threeChipsQuery), scheme, to: "tickets-table-three-chips-\(name)-\(suffix).png")
+        }
+        // The Journal (TP-1459): a night with every notable class, the Everything view and the epic filter, at the
+        // laptop's and the desktop's widths.
+        for (window, name) in [(CGFloat(1440), "laptop"), (2560, "desktop")] {
+            render(journalPage("events", window: window), scheme, to: "journal-every-class-\(name)-\(suffix).png")
+            render(journalPage("events.limit=200&notable=false", query: JournalQuery(everything: true), window: window), scheme,
+                   to: "journal-everything-\(name)-\(suffix).png")
+            render(journalPage("events.epic=TP-1381&limit=200&notable=true", query: JournalQuery(epic: "TP-1381"), window: window), scheme,
+                   to: "journal-epic-\(name)-\(suffix).png")
         }
         // Saved views (TP-1457): the menu with three views, and the save sheet.
         render(ticketViewsMenuOpen(), scheme, to: "ticket-views-menu-\(suffix).png")

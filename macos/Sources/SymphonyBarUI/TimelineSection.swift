@@ -48,6 +48,9 @@ public struct TimelineSection: View {
     @State private var runFolds: FoldState
     /// The items on the timeline when it first drew: anything newer enters with the motion.
     @State private var seen: Set<String>
+    /// The event the page opened at (a Journal row's), and whether the timeline has shown it yet.
+    let focus: TimelineFocus?
+    @State private var focusShown = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -61,9 +64,10 @@ public struct TimelineSection: View {
     /// opens by default. The times are `calendar`'s. `idle` is the line shown in the run now's place when no run works.
     public init(
         model: TimelineModel, idle: TimelineIdleLine? = nil, transcripts: StepTranscripts, calendar: Calendar = .current,
-        selection: String? = nil, unfoldedRuns: Set<String>? = nil
+        selection: String? = nil, unfoldedRuns: Set<String>? = nil, focus: TimelineFocus? = nil
     ) {
         self.model = model
+        self.focus = focus
         self.idle = idle
         self.transcripts = transcripts
         clock = TimelineModel.clock(calendar)
@@ -71,11 +75,34 @@ public struct TimelineSection: View {
         let runs = model.items.compactMap(\.run).map(\.id)
         _runFolds = State(initialValue: unfoldedRuns.map { FoldState(ids: runs, unfolded: $0) } ?? FoldState())
         _seen = State(initialValue: Set(model.items.map(\.id)))
+        // The event opened at is selected from the first draw that holds it.
+        if selection == nil, let target = focus.flatMap(model.item(holding:)) {
+            _selection = State(initialValue: target)
+        }
     }
 
     public var body: some View {
+        ScrollViewReader { proxy in
+            column
+                .onAppear { reveal(proxy) }
+                .onChange(of: focus.flatMap(model.item(holding:))) { _, _ in reveal(proxy) }
+        }
+    }
+
+    /// Selects the item holding the event the page opened at and scrolls it to the middle, once: the history may come in
+    /// after the page drew.
+    private func reveal(_ proxy: ScrollViewProxy) {
+        guard !focusShown, let target = focus.flatMap(model.item(holding:)) else { return }
+        focusShown = true
+        selection = target
+        DispatchQueue.main.async {
+            withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { proxy.scrollTo(target, anchor: .center) }
+        }
+    }
+
+    private var column: some View {
         let idle = model.runNow == nil ? idle : nil
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+        return VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
             if model.isEmpty, let idle {
                 TimelineIdleRow(line: idle)
             }
@@ -95,6 +122,7 @@ public struct TimelineSection: View {
                         SinceLookedLine(text: TicketMarksRead.markerText(marker.lookedAt, clock: clock))
                     }
                     row(item)
+                        .id(item.id)
                         .modifier(TimelineEntering(entering: !seen.contains(item.id), reduceMotion: reduceMotion) {
                             seen.insert(item.id)
                         })
@@ -244,17 +272,29 @@ private struct SinceLookedLine: View {
 }
 
 /// A day's separator: its date (and "Today" or "Yesterday"), how long its history ran, and a rule across.
-private struct DaySeparator: View {
-    let day: TimelineDay
+struct DaySeparator: View {
+    let title: String
+    var span: String?
+    let label: String
+
+    init(day: TimelineDay) {
+        self.init(title: day.title, span: day.span, label: day.accessibilityLabel)
+    }
+
+    init(title: String, span: String? = nil, label: String) {
+        self.title = title
+        self.span = span
+        self.label = label
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
-            Text(day.title.uppercased())
+            Text(title.uppercased())
                 .font(DesignTokens.TypeStyle.caption.font.weight(.semibold))
                 .tracking(0.8)
                 .foregroundStyle(.secondary)
                 .fixedSize()
-            if let span = day.span {
+            if let span {
                 Text(span)
                     .font(DesignTokens.TypeStyle.caption.font)
                     .foregroundStyle(.tertiary)
@@ -268,7 +308,7 @@ private struct DaySeparator: View {
         .padding(.bottom, DesignTokens.Space.s1)
         .padding(.leading, TimelineSection.timeColumn + DesignTokens.Space.s2)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(day.accessibilityLabel)
+        .accessibilityLabel(label)
         .accessibilityAddTraits(.isHeader)
     }
 }
@@ -279,6 +319,8 @@ struct TimelineEntryRow: View {
     let entry: TimelineEntry
     let time: String
     let selected: Bool
+    /// The ticket the entry is on, as a chip over what happened: the Journal's rows (TP-1459), where the row opens it.
+    var ticket: TimelineTicketChip?
     let select: () -> Void
     @State private var hovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -296,6 +338,9 @@ struct TimelineEntryRow: View {
                 .frame(width: TimelineSection.markColumn)
                 .help(Self.glyphHelp(entry.kind))
             VStack(alignment: .leading, spacing: 2) {
+                if let ticket {
+                    TimelineTicketChipView(chip: ticket)
+                }
                 Text("\(newDot)\(Text(entry.lead).fontWeight(.semibold))\(entry.rest.map { " " + $0 } ?? "")")
                     .font(DesignTokens.TypeStyle.body.font)
                     .fixedSize(horizontal: false, vertical: true)
@@ -328,7 +373,8 @@ struct TimelineEntryRow: View {
         .onHover { hovered = $0 }
         .onTapGesture(perform: select)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(entry.accessibilityLabel(time: time))
+        .accessibilityLabel([ticket?.spoken, entry.accessibilityLabel(time: time)].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityHint(ticket?.hint ?? "")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { select() }
     }
@@ -354,6 +400,51 @@ struct TimelineEntryRow: View {
         case .accent: DesignTokens.SystemColor.accent.color
         case let .status(status): status.tint
         }
+    }
+}
+
+/// The ticket a Journal row is on (TP-1459): its identifier and title, in a chip over what happened.
+public struct TimelineTicketChip: Equatable {
+    public var identifier: String
+    public var title: String?
+    /// The row opens the ticket's page at the event; false on Symphony's own stream.
+    public var opens: Bool
+
+    public init(identifier: String, title: String? = nil, opens: Bool = true) {
+        self.identifier = identifier
+        self.title = title
+        self.opens = opens
+    }
+
+    /// "TP-1401, The situation read model".
+    var spoken: String { [identifier, title].compactMap { $0 }.joined(separator: ", ") }
+    /// What the row does, for VoiceOver and under the pointer.
+    var hint: String? { opens ? "Opens \(identifier) at this event" : nil }
+}
+
+/// The chip: the identifier in semibold and the title after it on one line, in a capsule.
+struct TimelineTicketChipView: View {
+    let chip: TimelineTicketChip
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s1) {
+            Text(chip.identifier)
+                .fontWeight(.semibold)
+                .monospacedDigit()
+                .foregroundStyle(chip.opens ? AnyShapeStyle(DesignTokens.SystemColor.accent.color) : AnyShapeStyle(.secondary))
+                .fixedSize()
+            if let title = chip.title {
+                Text(title)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+        }
+        .font(DesignTokens.TypeStyle.callout.font)
+        .padding(.horizontal, DesignTokens.Space.s2)
+        .padding(.vertical, 1)
+        .background(DesignTokens.Surface.separator.color.opacity(0.5), in: Capsule())
+        .help(chip.hint ?? "")
     }
 }
 

@@ -511,28 +511,40 @@ public struct TicketEventsPayload: Equatable {
         let children: [Node]
 
         enum CodingKeys: String, CodingKey {
-            case id, seq, at, type, runId, parent, actor, summary, payload, artifacts, children, new
+            case children
         }
 
         init(from decoder: Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            event = Event(
-                id: try container.decode(String.self, forKey: .id),
-                seq: try? container.decodeIfPresent(Int.self, forKey: .seq),
-                at: try? container.decodeIfPresent(String.self, forKey: .at),
-                type: (try? container.decodeIfPresent(String.self, forKey: .type)) ?? "event",
-                runID: try? container.decodeIfPresent(String.self, forKey: .runId),
-                parent: try? container.decodeIfPresent(String.self, forKey: .parent),
-                actor: try? container.decodeIfPresent(Actor.self, forKey: .actor),
-                summary: try? container.decodeIfPresent(Summary.self, forKey: .summary),
-                payload: (try? container.decodeIfPresent(Payload.self, forKey: .payload)) ?? Payload(),
-                artifacts: (try? container.decodeIfPresent([Artifact].self, forKey: .artifacts)) ?? [],
-                isNew: (try? container.decodeIfPresent(Bool.self, forKey: .new)) == true
-            )
-            children = try container.decodeIfPresent([Node].self, forKey: .children) ?? []
+            event = try Event(from: decoder)
+            children = try decoder.container(keyedBy: CodingKeys.self).decodeIfPresent([Node].self, forKey: .children) ?? []
         }
 
         var flattened: [Event] { [event] + children.flatMap(\.flattened) }
+    }
+}
+
+/// An event as the feed serves it, the Journal's read too (`GET /api/v1/events`): a field missing, or of another type,
+/// reads as nothing; only `id` is required.
+extension TicketEventsPayload.Event: Decodable {
+    enum CodingKeys: String, CodingKey {
+        case id, seq, at, type, runId, parent, actor, summary, payload, artifacts, new
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            id: try container.decode(String.self, forKey: .id),
+            seq: try? container.decodeIfPresent(Int.self, forKey: .seq),
+            at: try? container.decodeIfPresent(String.self, forKey: .at),
+            type: (try? container.decodeIfPresent(String.self, forKey: .type)) ?? "event",
+            runID: try? container.decodeIfPresent(String.self, forKey: .runId),
+            parent: try? container.decodeIfPresent(String.self, forKey: .parent),
+            actor: try? container.decodeIfPresent(TicketEventsPayload.Actor.self, forKey: .actor),
+            summary: try? container.decodeIfPresent(TicketEventsPayload.Summary.self, forKey: .summary),
+            payload: (try? container.decodeIfPresent(TicketEventsPayload.Payload.self, forKey: .payload)) ?? TicketEventsPayload.Payload(),
+            artifacts: (try? container.decodeIfPresent([TicketEventsPayload.Artifact].self, forKey: .artifacts)) ?? [],
+            isNew: (try? container.decodeIfPresent(Bool.self, forKey: .new)) == true
+        )
     }
 }
 

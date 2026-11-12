@@ -201,6 +201,22 @@ public struct TimelineMarker: Equatable {
     }
 }
 
+/// An event a ticket page opens at (the Journal's row, TP-1459): the page selects the timeline's item that holds it and
+/// scrolls it into view.
+public struct TimelineFocus: Equatable, Hashable {
+    /// The ticket whose page opens.
+    public var identifier: String
+    public var eventID: String
+    /// The run the event was recorded for, whose group holds it when no entry does.
+    public var runID: String?
+
+    public init(identifier: String, eventID: String, runID: String? = nil) {
+        self.identifier = identifier
+        self.eventID = eventID
+        self.runID = runID
+    }
+}
+
 /// The entries of one day, newest first, under its separator.
 public struct TimelineDay: Equatable, Identifiable {
     /// "2026-10-08".
@@ -257,6 +273,18 @@ public struct TimelineModel: Equatable {
     }
 
     public static let empty = "Nothing has happened to this ticket yet."
+
+    /// The item that holds `focus`'s event: the entry it folded into, else its run's group; nil while the history read
+    /// holds neither (the page selects and scrolls to it once it does).
+    public func item(holding focus: TimelineFocus) -> String? {
+        let holder = items.first { item in
+            if case let .entry(entry) = item { return entry.eventIDs.contains(focus.eventID) }
+            return false
+        }
+        if let holder { return holder.id }
+        guard let runID = focus.runID else { return nil }
+        return items.first { $0.run?.id == runID }?.id
+    }
 
     /// The selection `steps` items down (up when negative) from `selection`; the first item when nothing is selected
     /// and the keys go down, the last when they go up. It stops at either end.

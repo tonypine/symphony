@@ -183,9 +183,9 @@ public enum SidebarItem: Hashable {
     case page(SymphonyView)
 }
 
-/// The Journal (22/26 fills it): its name and what it will hold.
+/// The Journal (TP-1459): what it holds, as its subtitle says.
 public enum Journal {
-    public static let explanation = "What happened while you were away, as a story: coming soon"
+    public static let explanation = "What happened while you were away: the notable events of every ticket"
 }
 
 /// The sidebar: the five destinations in the design's order, Factory with its pages under it (TP-1455).

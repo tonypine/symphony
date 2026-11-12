@@ -58,8 +58,12 @@ extension SymphonyWindowModel {
         ticketFeed.follow(identifier: nil, repoKey: nil)
         switch history.current {
         case let .view(view):
+            ticketFocus = nil
             selection = view
+            readJournalIfDue()
         case let .ticket(identifier):
+            // A Journal row's event stays the page's focus only on its own ticket.
+            if ticketFocus?.identifier != identifier { ticketFocus = nil }
             ticketNote.show(identifier)
             ticketDecisions.show(identifier)
             ticketSources = TicketPage.Sources()
@@ -67,6 +71,7 @@ extension SymphonyWindowModel {
             readTicket(force: true)
             followTicketFeed(afterPoll: false)
         case .pullRequest:
+            ticketFocus = nil
             pullRequestResult = nil
             readPullRequest()
         }
@@ -480,6 +485,7 @@ struct TicketPageContent: View {
                     review: items.first { $0.identifier == identifier && $0.waitsOnDirector }.map { item in { model.reviewInDrawer(item.id) } }
                 ),
                 transcripts: model.stepTranscripts,
+                focus: model.ticketFocus?.identifier == identifier ? model.ticketFocus : nil,
                 note: model.ticketNote,
                 decisions: decisions.decisions,
                 restart: { model.send(.restart(page.identifier, reason: TicketPageView.restartReason)) },
@@ -505,6 +511,8 @@ struct TicketPageView: View {
     var references: [String: Reference] = [:]
     let actions: TicketPageActions
     let transcripts: StepTranscripts
+    /// The event the page opened at (a Journal row's), selected and scrolled into view once the timeline holds it.
+    var focus: TimelineFocus?
     let note: TicketNoteComposer
     var decisions: [TicketDecision] = []
     /// Restart… once confirmed.
@@ -533,7 +541,7 @@ struct TicketPageView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 TicketPageBody(
-                    page: page, questions: questions, width: width, transcripts: transcripts, note: note, decisions: decisions,
+                    page: page, questions: questions, width: width, transcripts: transcripts, focus: focus, note: note, decisions: decisions,
                     actions: actions, sheetOpen: sheetOpen, answerFocus: $answerFocused,
                     move: { handle($0, proxy: proxy) }, answer: { sheetOpen = true },
                     scroll: scroll, decisionsInRow: false
@@ -666,6 +674,8 @@ struct TicketPageBody: View {
     var answers = TicketPageAnswers()
     let width: CGFloat
     let transcripts: StepTranscripts
+    /// The event the page opened at, selected on the timeline.
+    var focus: TimelineFocus?
     let note: TicketNoteComposer
     var decisions: [TicketDecision] = []
     var actions = TicketPageActions()
@@ -745,7 +755,7 @@ struct TicketPageBody: View {
                 TimelineSection(
                     model: page.timelineModel(calendar: calendar),
                     idle: page.idleLine,
-                    transcripts: transcripts, calendar: calendar
+                    transcripts: transcripts, calendar: calendar, focus: focus
                 )
                 .id(page.identifier)
                 .environment(\.readSession, ReadSessionAction(page.identifier, actions.readSession))
