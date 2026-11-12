@@ -43,6 +43,52 @@ final class TerminationSignalsTests: XCTestCase {
         XCTAssertEqual(unsafeBitCast(action.__sigaction_u.__sa_handler, to: Int.self), unsafeBitCast(SIG_DFL, to: Int.self))
     }
 
+    /// TP-1475: the handler's queue (the app's main queue) is stuck and Symphony has already stopped, so the
+    /// fallback ends the process on its own.
+    func testFallbackEndsTheProcessWhenTheQueueIsStuckAndNothingIsLeftToStop() {
+        let stuck = DispatchQueue(label: "TerminationSignalsTests.stuck")
+        stuck.suspend()
+        defer { stuck.resume() }
+        let exited = expectation(description: "fallback exit")
+        let signals = TerminationSignals(
+            signals: [SIGUSR2],
+            queue: stuck,
+            fallback: .init(after: 0.05, canExit: { true }, exit: { number in
+                XCTAssertEqual(number, SIGUSR2)
+                exited.fulfill()
+            })
+        ) { _ in }
+        defer { signals.cancel() }
+
+        kill(getpid(), SIGUSR2)
+
+        wait(for: [exited], timeout: 5)
+    }
+
+    /// While Symphony still runs, the fallback leaves the process alone: exiting would leave Symphony running.
+    func testFallbackWaitsWhileSymphonyRuns() {
+        let stuck = DispatchQueue(label: "TerminationSignalsTests.stuck")
+        stuck.suspend()
+        defer { stuck.resume() }
+        let exited = expectation(description: "no fallback exit")
+        exited.isInverted = true
+        let checked = expectation(description: "fallback checked")
+        let signals = TerminationSignals(
+            signals: [SIGUSR2],
+            queue: stuck,
+            fallback: .init(after: 0.05, canExit: {
+                checked.fulfill()
+                return false
+            }, exit: { _ in exited.fulfill() })
+        ) { _ in }
+        defer { signals.cancel() }
+
+        kill(getpid(), SIGUSR2)
+
+        wait(for: [checked], timeout: 5)
+        wait(for: [exited], timeout: 0.3)
+    }
+
     /// What the app does on SIGTERM: stop the child, which stops its group and the agents that left it.
     func testSigtermStopsTheChildAndItsAgents() throws {
         let exited = expectation(description: "child exited")
