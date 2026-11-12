@@ -166,6 +166,7 @@ private struct RunMoreMenu: View {
 private struct RunHeaderLabel: View {
     let run: RunGroupModel
     let folded: Bool
+    @Environment(\.timelineReference) private var reference
 
     var body: some View {
         RunHeaderLayout {
@@ -209,8 +210,13 @@ private struct RunHeaderLabel: View {
                 .lineLimit(1)
                 .fixedSize()
         }
-        if let duration = run.duration {
-            Text(duration)
+        if let seconds = run.durationSeconds {
+            // The run now's time so far counts on by itself; the timeline isn't built again for it (TP-1479).
+            LiveDurationText(seconds: seconds, reference: run.isLive ? reference : nil) { seconds in
+                var run = run
+                run.durationSeconds = seconds
+                return run.duration ?? ""
+            }
                 .font(DesignTokens.TypeStyle.callout.font)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
