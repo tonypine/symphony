@@ -1700,7 +1700,6 @@ func insightsPage(_ page: SymphonyView, slice: InsightsSlice, file: String, wind
     let values = InsightsControlValues(repos: state.repos, epics: initiatives.initiatives.map(\.identifier), slice: slice)
     return VStack(spacing: 0) {
         InsightsControlBar(slice: .constant(slice), values: values, today: insightsToday, summary: Insights.summary(aggregate, slice: slice, scope: .all))
-        Divider()
         switch page {
         case .usage:
             UsageCards(usage: Usage(aggregate: aggregate, slice: slice, snapshot: state.snapshot, today: insightsToday, now: insightsNow,

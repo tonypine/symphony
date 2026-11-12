@@ -105,6 +105,24 @@ final class InsightsTests: XCTestCase {
         XCTAssertEqual(values.epics, ["BIL-300", "TP-1381"])
     }
 
+    func testClearShowsOnlyForARepoOrAnEpicAndKeepsThePeriodAndUnit() {
+        XCTAssertFalse(InsightsSlice().isFiltered)
+        XCTAssertTrue(InsightsSlice(repo: "symphony").isFiltered)
+        XCTAssertTrue(InsightsSlice(epic: "TP-1381").isFiltered)
+        var slice = InsightsSlice(period: .preset(.month), unit: .sixHours, repo: "symphony", epic: "TP-1381")
+        slice.clear()
+        XCTAssertEqual(slice, InsightsSlice(period: .preset(.month), unit: .sixHours))
+        XCTAssertEqual(slice.path(today: today), InsightsSlice(period: .preset(.month), unit: .sixHours).path(today: today))
+    }
+
+    func testTheSummarySitsUnderTheControlsOnALaptopAndBesideThemOnADesktop() {
+        // The laptop's page (1440 pt less the sidebar) and the desktop's (2560 pt less the sidebar).
+        XCTAssertFalse(Insights.summaryBeside(width: 1440 - 200))
+        XCTAssertFalse(Insights.summaryBeside(width: 1599))
+        XCTAssertTrue(Insights.summaryBeside(width: 1600))
+        XCTAssertTrue(Insights.summaryBeside(width: 2560 - 200))
+    }
+
     // MARK: - The summary line and the charts
 
     func testTheSummaryLinesFiguresEqualTheChartsTotals() throws {
@@ -147,6 +165,11 @@ final class InsightsTests: XCTestCase {
         XCTAssertEqual(fine.chart.bars.count, 28)
         XCTAssertEqual(fine.chart.title, "Tokens per 6 h")
         XCTAssertEqual(fine.chart.bars[1].label, "Nov 6 06:00")
+        // The axis labels every fourth 6 h bar, each a day's start, by its short day; a bar inside a day reads its time.
+        XCTAssertEqual(fine.chart.labelled.map(fine.chart.axisLabel), ["Nov 6", "Nov 7", "Nov 8", "Nov 9", "Nov 10", "Nov 11", "Nov 12"])
+        XCTAssertEqual(fine.chart.axisLabel(fine.chart.bars[1].id), "06:00")
+        XCTAssertEqual(fine.chart.axisLabel("nope"), "nope")
+        XCTAssertEqual(daily.chart.axisLabel(daily.chart.bars[2].id), "Nov 8")
         XCTAssertEqual(fine.chart.total, daily.chart.total)
         XCTAssertEqual(Insights.bucketLabel(fine.chart.bars[0].start, unit: .week), "Nov 6")
         XCTAssertEqual(InsightsUnit.allCases.map(\.per), ["per 30 min", "per hour", "per 6 h", "per day", "per week"])

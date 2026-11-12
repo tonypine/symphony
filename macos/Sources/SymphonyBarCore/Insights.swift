@@ -153,6 +153,15 @@ public struct InsightsSlice: Equatable, Codable {
         self.epic = epic
     }
 
+    /// Whether the slice narrows to a repo or an epic: the bar's Clear shows only then.
+    public var isFiltered: Bool { repo != nil || epic != nil }
+
+    /// Clear: back to every repo (the window's scope) and every epic; the period and the unit stay.
+    public mutating func clear() {
+        repo = nil
+        epic = nil
+    }
+
     /// The read's parameters, in a fixed order: `from`, `to`, `unit`, `repo`, `epic`, `series`. The repo control wins
     /// over the window's `scope`.
     public func parameters(today: String, scope: OverviewScope = .all) -> [(name: String, value: String)] {
@@ -556,12 +565,30 @@ public struct InsightsChart: Equatable {
     public func label(_ id: String) -> String {
         bars.first { $0.id == id }?.label ?? id
     }
+
+    /// A bar's label under the axis, short enough to fit between the labelled bars: its day ("Nov 6") when it starts
+    /// a UTC day, its time ("06:00") otherwise.
+    public func axisLabel(_ id: String) -> String {
+        guard let bar = bars.first(where: { $0.id == id }) else { return id }
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(identifier: "UTC")!
+        let time = utc.dateComponents([.hour, .minute], from: bar.start)
+        guard time.hour != 0 || time.minute != 0 else { return Insights.bucketLabel(bar.start, unit: .day) }
+        return String(format: "%02d:%02d", time.hour ?? 0, time.minute ?? 0)
+    }
 }
 
 // MARK: - The summary line
 
 public enum Insights {
     public static let bucketColumn = "Period"
+
+    /// The control bar's width from which the summary sits beside the controls (a desktop); under it, the summary has
+    /// its own line under them (a laptop), as the catalog's Control bar section draws it.
+    public static let summaryBesideWidth: Double = 1600
+
+    /// Whether a control bar `width` wide draws the summary beside its controls.
+    public static func summaryBeside(width: Double) -> Bool { width >= summaryBesideWidth }
 
     /// The summary line under the controls: "Last 7 days by day, symphony, epic TP-1381: 14 shipped, 31M tokens, 52 runs".
     /// Its figures are the charts' totals, read from the same buckets the charts draw.

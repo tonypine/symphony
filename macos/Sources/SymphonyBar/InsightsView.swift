@@ -18,7 +18,6 @@ struct InsightsPage<Content: View>: View {
                 slice: $model.insightsSlice, values: model.insightsValues, today: model.insightsToday,
                 summary: current.map { Insights.summary($0, slice: model.insightsSlice, scope: model.scope) }, scope: model.scope
             )
-            Divider()
             switch model.aggregateShown {
             case let .loaded(aggregate):
                 content(aggregate)
@@ -59,9 +58,10 @@ struct InsightsEmptyState: View {
 
 // MARK: - The control bar
 
-/// The Insights control bar (the catalog's Control bar section): the period, the unit, the repo and the epic, small
-/// (24 pt) menus on one line, and the one-line summary of what the page shows. On a laptop the summary sits under the
-/// controls; when the line has room for both (a desktop), beside them.
+/// The Insights control bar (the catalog's Control bar section): a glass bar over the page with the period, the unit,
+/// the repo and the epic as small (24 pt) labelled pop-ups, Clear when a repo or an epic is picked, and the one-line
+/// summary of what the page shows: on its own line under the controls on a laptop, right aligned beside them from
+/// 1600 pt (a desktop).
 struct InsightsControlBar: View {
     @Binding var slice: InsightsSlice
     let values: InsightsControlValues
@@ -70,22 +70,23 @@ struct InsightsControlBar: View {
     let summary: String?
     var scope: OverviewScope = .all
     @State private var showsRange = false
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: DesignTokens.Space.s4) {
-                controls
-                Spacer(minLength: DesignTokens.Space.s4)
-                summaryLine
-            }
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                controls
-                summaryLine
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
+        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
+        InsightsControlBarLayout {
+            controls
+            summaryLine
         }
-        .padding(.horizontal, DesignTokens.Space.s6)
+        .padding(.horizontal, DesignTokens.Space.s3)
         .padding(.vertical, DesignTokens.Space.s2)
+        .background(glass, in: shape)
+        .overlay { shape.strokeBorder(DesignTokens.Surface.separator.color, lineWidth: 1) }
+        .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
+        .padding(.horizontal, DesignTokens.Space.s6)
+        .padding(.vertical, DesignTokens.Space.s3)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("What the page shows")
         .popover(isPresented: $showsRange, arrowEdge: .bottom) {
             InsightsRangeEditor(period: slice.period, today: today) { period in
                 slice.choose(period, today: today)
@@ -94,42 +95,62 @@ struct InsightsControlBar: View {
         }
     }
 
+    /// The glass of the bar; an offscreen snapshot has no window behind it to blur, so it draws the raised surface.
+    private var glass: AnyShapeStyle {
+        offscreenSnapshot ? AnyShapeStyle(DesignTokens.Surface.raised.color) : AnyShapeStyle(.regularMaterial)
+    }
+
     private var controls: some View {
-        HStack(spacing: DesignTokens.Space.s2) {
-            TicketsBarMenu(title: "Period: \(slice.period.title)", help: "Change the period", kind: .secondary) {
-                ForEach(InsightsPreset.allCases) { preset in
-                    Toggle(preset.title, isOn: Binding(get: { slice.period == .preset(preset) }, set: { _ in slice.choose(.preset(preset), today: today) }))
-                }
-                Divider()
-                Button(Self.rangeTitle) { showsRange = true }
-            }
-            TicketsBarMenu(title: "Unit: \(slice.unit.title)", help: "Change how much time each bar holds", kind: .secondary) {
-                ForEach(InsightsUnit.allCases) { unit in
-                    Toggle(unit.title, isOn: Binding(get: { slice.unit == unit }, set: { _ in slice.unit = unit }))
-                        .disabled(!slice.allows(unit, today: today))
+        HStack(spacing: DesignTokens.Space.s5) {
+            group("Period") {
+                InsightsPopUp(value: slice.period.title, help: "Change the period") {
+                    ForEach(InsightsPreset.allCases) { preset in
+                        Toggle(preset.title, isOn: Binding(get: { slice.period == .preset(preset) }, set: { _ in slice.choose(.preset(preset), today: today) }))
+                    }
+                    Divider()
+                    Button(Self.rangeTitle) { showsRange = true }
                 }
             }
-            TicketsBarMenu(
-                title: "Repo: \(slice.repo ?? scope.stored ?? OverviewScope.allTitle)", help: "Change the repo",
-                kind: slice.repo == nil ? .quiet : .secondary
-            ) {
+            group("Unit") {
+                InsightsPopUp(value: slice.unit.title, help: "Change how much time each bar holds") {
+                    ForEach(InsightsUnit.allCases) { unit in
+                        Toggle(unit.title, isOn: Binding(get: { slice.unit == unit }, set: { _ in slice.unit = unit }))
+                            .disabled(!slice.allows(unit, today: today))
+                    }
+                }
+            }
+            InsightsPopUp(label: "Repo", value: slice.repo ?? scope.stored ?? OverviewScope.allTitle, help: "Change the repo") {
                 Button(OverviewScope.allTitle) { slice.repo = nil }
                 Divider()
                 ForEach(values.repos, id: \.self) { repo in
                     Toggle(repo, isOn: Binding(get: { slice.repo == repo }, set: { slice.repo = $0 ? repo : nil }))
                 }
             }
-            TicketsBarMenu(
-                title: "Epic: \(slice.epic ?? InsightsSlice.allEpics)", help: "Change the epic", kind: slice.epic == nil ? .quiet : .secondary
-            ) {
+            InsightsPopUp(label: "Epic", value: slice.epic ?? InsightsSlice.allEpics, help: "Change the epic") {
                 Button(InsightsSlice.allEpics) { slice.epic = nil }
                 Divider()
                 ForEach(values.epics, id: \.self) { epic in
                     Toggle(epic, isOn: Binding(get: { slice.epic == epic }, set: { slice.epic = $0 ? epic : nil }))
                 }
             }
+            if slice.isFiltered {
+                Button(Self.clearTitle) { slice.clear() }
+                    .directorButton(.quiet, size: .small)
+                    .help("Show every repo and every epic")
+            }
         }
         .fixedSize()
+    }
+
+    /// A control under its label, side by side: "Period [Last 7 days ⌃⌄]".
+    private func group(_ label: String, @ViewBuilder control: () -> some View) -> some View {
+        HStack(spacing: DesignTokens.Space.s2) {
+            Text(label)
+                .font(DesignTokens.TypeStyle.label.font)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            control()
+        }
     }
 
     @ViewBuilder private var summaryLine: some View {
@@ -138,11 +159,86 @@ struct InsightsControlBar: View {
             .foregroundStyle(.secondary)
             .monospacedDigit()
             .lineLimit(1)
-            .fixedSize()
+            .truncationMode(.tail)
+            .padding(.horizontal, DesignTokens.Space.s1)
             .accessibilityLabel("Showing \(summary ?? slice.title(scope: scope))")
     }
 
     static let rangeTitle = "Range…"
+    static let clearTitle = "Clear"
+}
+
+/// The bar's two parts: the controls, then the summary on its own line under them, or right aligned on their line
+/// once the bar is `Insights.summaryBesideWidth` wide and the line holds both.
+private struct InsightsControlBarLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard subviews.count == 2 else { return .zero }
+        let controls = subviews[0].sizeThatFits(.unspecified)
+        let width = proposal.width ?? controls.width
+        let summary = subviews[1].sizeThatFits(ProposedViewSize(width: width, height: nil))
+        if beside(width: width, controls: controls, summary: summary) {
+            return CGSize(width: width, height: max(controls.height, summary.height))
+        }
+        return CGSize(width: width, height: controls.height + DesignTokens.Space.s2 + summary.height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard subviews.count == 2 else { return }
+        let controls = subviews[0].sizeThatFits(.unspecified)
+        let summary = subviews[1].sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
+        subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.minY), proposal: ProposedViewSize(controls))
+        if beside(width: bounds.width, controls: controls, summary: summary) {
+            let height = max(controls.height, summary.height)
+            subviews[1].place(
+                at: CGPoint(x: bounds.maxX, y: bounds.minY + height / 2), anchor: .trailing, proposal: ProposedViewSize(summary)
+            )
+        } else {
+            subviews[1].place(
+                at: CGPoint(x: bounds.minX, y: bounds.minY + controls.height + DesignTokens.Space.s2),
+                proposal: ProposedViewSize(width: bounds.width, height: summary.height)
+            )
+        }
+    }
+
+    private func beside(width: CGFloat, controls: CGSize, summary: CGSize) -> Bool {
+        Insights.summaryBeside(width: width) && controls.width + DesignTokens.Space.s5 + summary.width <= width
+    }
+}
+
+/// A small labelled pop-up: its label, its value and the up/down chevrons, one style whatever is picked.
+private struct InsightsPopUp<Items: View>: View {
+    var label: String?
+    let value: String
+    let help: String
+    @ViewBuilder var items: Items
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    var body: some View {
+        if offscreenSnapshot {
+            ButtonFace(label: face, kind: .secondary, size: .small, state: .rest, reduceMotion: true)
+        } else {
+            Menu { items } label: { face }
+                .menuStyle(.button)
+                .menuIndicator(.hidden)
+                .directorButton(.secondary, size: .small)
+                .fixedSize()
+                .help(help)
+                .accessibilityLabel(label.map { "\($0): \(value)" } ?? value)
+        }
+    }
+
+    private var face: some View {
+        HStack(spacing: DesignTokens.Space.s1) {
+            if let label {
+                Text(label).foregroundStyle(.secondary)
+            }
+            Text(value)
+            Image(systemName: "chevron.up.chevron.down")
+                .imageScale(.small)
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+        }
+    }
 }
 
 /// The period's range: a first and a last day, in UTC as Symphony counts them, at most a year apart.
@@ -246,10 +342,11 @@ struct InsightsBarChart: View {
             .chartForegroundStyleScale(domain: chart.keys.map(\.name), range: chart.keys.map(\.tint.color))
             .chartLegend(.hidden)
             .chartXAxis {
-                // A categorical axis labels every bar: only about seven carry their label.
+                // A categorical axis marks every bar: only about seven carry their label, drawn at its full width over
+                // the empty bars beside it, so none is cut short.
                 AxisMarks { value in
-                    AxisValueLabel(centered: true) {
-                        Text(axisLabel(value.as(String.self)))
+                    AxisValueLabel(centered: true, collisionResolution: .disabled) {
+                        Text(axisLabel(value.as(String.self))).fixedSize()
                     }
                 }
             }
@@ -276,10 +373,10 @@ struct InsightsBarChart: View {
         }
     }
 
-    /// The axis label of a bar: its own for the labelled ones, none for the bars between.
+    /// The axis label of a bar: its day, or its time inside a day, for the labelled ones; none for the bars between.
     private func axisLabel(_ id: String?) -> String {
         guard let id, labelled.contains(id) else { return "" }
-        return chart.label(id)
+        return chart.axisLabel(id)
     }
 
     private var labelled: Set<String> { Set(chart.labelled) }
