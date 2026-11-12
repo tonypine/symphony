@@ -39,18 +39,20 @@ defmodule SymphonyElixir.QaDriver do
     accessibility hit test finds the app under it (the window list decides when
     the hit test has no answer), so a window that lets clicks through never
     counts as covering, and `qa_key` presses a named key with modifiers in the app's focused window.
-    `qa_click` moves the real pointer to the element first (SwiftUI buttons and
-    links check where it is when the mouse goes up) and presses the element
-    with `AXPress` when the click changed nothing; `qa_hover` moves the pointer
+    `qa_click` moves the real pointer to the element or point first (SwiftUI
+    buttons and links check where it is when the mouse goes up), clicks through
+    the HID tap as a mouse does once the app is the active app (else
+    `not_frontmost`, naming the active app), and presses an element with
+    `AXPress` when the click changed nothing; `qa_hover` moves the pointer
     over an element or point and waits for the app to settle, and
     `qa_context_menu` right-clicks one and lists the menu that opens.
     `qa_scroll` posts scroll-wheel events in the scroll area at an element or
     point, by a `dx`/`dy` delta or to an `edge`, as a trackpad does: a SwiftUI
     list answers no key that scrolls it. They pass the same checks as
     `qa_click` before the pointer moves.
-    The helper posts their mouse and key events to the app's PID alone (a
-    scroll the app took no part of is posted again where the pointer is, over
-    the app's own window);
+    The helper posts their key events, right clicks and scrolls to the app's
+    PID alone (a scroll the app took no part of is posted again where the
+    pointer is, over the app's own window);
   - screenshots land in `qa-evidence/` under the worktree, always as new files:
     a name that already exists, symlinks included, is refused rather than
     followed or replaced;
@@ -746,10 +748,10 @@ defmodule SymphonyElixir.QaDriver do
 
   defp run_tool("qa_click", driver, config, args) do
     with {:ok, pid} <- running_pid(driver, args),
-         {:ok, path} <- element_path(Map.get(args, "path")),
+         {:ok, target} <- pointer_target(args),
          {:ok, clicks} <- optional_integer(args, "clicks", 1, 2),
          {:ok, helper} <- helper(driver, config) do
-      run_helper(config, helper, ["click", Integer.to_string(pid), path, Integer.to_string(clicks || 1)])
+      run_helper(config, helper, ["click", Integer.to_string(pid), target, Integer.to_string(clicks || 1)])
     end
   end
 

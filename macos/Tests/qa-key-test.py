@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Tests the QA driver's `key` command (`qa_key`) on an app menu's shortcuts.
+"""Tests the QA driver's `key` command (`qa_key`) on an app menu's shortcuts, and its
+`click` command (`qa_click`) on SwiftUI controls.
 
 It builds priv/qa_driver/symphony-qa-driver.swift as the copy Symphony builds for a
 separate QA host (`-D SYMPHONY_QA_SSH`, which runs its commands directly) and a small
@@ -16,6 +17,18 @@ the driver's `key` command:
 
 Before TP-1469 the driver posted every key to the app's PID, and AppKit's menu never
 saw a ⌘ shortcut sent that way: each of 1 to 3 did nothing.
+
+The window also holds a SwiftUI pane, as the Director's pages are: a button, a list, a
+link inside text and a button that opens a popover, with a label naming the last thing
+clicked. Through the driver's `click` command, as a mouse sends it (`via: hid`) and with
+no AXPress fallback:
+
+5. a click on the button, a list row and the link each take effect;
+6. a click on the popover's button opens it, and a click on a point outside it closes it.
+
+Before TP-1474 the driver posted clicks to the app's PID: they never went through the
+window server, SwiftUI's controls ignored them, and the driver pressed the control
+through accessibility instead (`fallback: AXPress`), so no click path was proven.
 
 It launches windows and needs the Accessibility grant, so it runs in CI only, never
 in an agent's sandbox.
@@ -35,6 +48,46 @@ PRIV = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 FIXTURE = r"""
 import AppKit
+import SwiftUI
+
+// What the pane shows; a model rather than `@State`, which is a macro and needs the
+// compiler's plugin server.
+final class PaneState: ObservableObject {
+    @Published var last = "nothing"
+    @Published var row: String?
+    @Published var showing = false
+}
+
+// The Director's kind of controls, each naming itself in the label when it takes a click.
+struct ClickPane: View {
+    @ObservedObject var state: PaneState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Clicked: \(state.last)")
+            HStack {
+                Button("Count") { state.last = "Count" }
+                Button("Details") { state.showing = true }
+                    .popover(isPresented: $state.showing, arrowEdge: .trailing) {
+                        Text("Popover open")
+                            .padding(20)
+                            .onAppear { state.last = "Popover" }
+                            .onDisappear { state.last = "Closed" }
+                    }
+            }
+            List(["Alpha", "Beta"], id: \.self, selection: $state.row) { Text("Row \($0)") }
+                .frame(width: 240, height: 70)
+                .onChange(of: state.row) { _, value in if let value { state.last = "Row \(value)" } }
+            Text(try! AttributedString(markdown: "[the report](qa://report)"))
+                .environment(\.openURL, OpenURLAction { url in
+                    state.last = "Link \(url.host ?? "")"
+                    return .handled
+                })
+        }
+        .padding(8)
+        .frame(width: 300, alignment: .leading)
+    }
+}
 
 final class Controller: NSObject, NSWindowDelegate {
     let status = NSTextField(labelWithString: "Shown: Home")
@@ -86,10 +139,10 @@ final class Controller: NSObject, NSWindowDelegate {
     }
 
     func open() {
-        window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 480, height: 200), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 480, height: 400), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "qa-key-fixture"
         window.isReleasedWhenClosed = false
-        let stack = NSStackView(views: [status, field])
+        let stack = NSStackView(views: [status, field, NSHostingView(rootView: ClickPane(state: PaneState()))])
         stack.orientation = .vertical
         window.contentView = stack
         NSApp.setActivationPolicy(.regular)
@@ -163,6 +216,49 @@ def press(binary, pid, key, modifiers="command"):
     return None
 
 
+def clicked(binary, pid):
+    """The SwiftUI pane's label: what the last click reached."""
+    reply = driver(binary, "ax-tree", pid, 60, 20, "AXStaticText", "Clicked:")
+    for match in reply.get("matches", []):
+        value = match.get("value") or match.get("title") or match.get("description") or ""
+        if value.startswith("Clicked:"):
+            return value
+    return None
+
+
+def find(binary, pid, needle, roles):
+    """The path of the first element whose text is the needle, in the order of roles."""
+    for role in roles:
+        reply = driver(binary, "ax-tree", pid, 60, 20, role, needle)
+        for match in reply.get("matches", []):
+            texts = [match.get(key) or "" for key in ("value", "title", "description")]
+            if needle in texts and match.get("frame"):
+                return match["path"]
+    return None
+
+
+def check_click(binary, pid, target, expected, name):
+    """Clicks a path or an `x,y` point and checks the label reads `Clicked: expected`."""
+    if target is None:
+        return fail(name, "the target is not in the accessibility tree")
+    reply = driver(binary, "click", pid, target, 1)
+    if reply.get("error", {}).get("code") == "covered":
+        # The runner's session can show a system dialog (UserNotificationCenter) over the
+        # fixture. The driver is right to refuse; the test clears the dialog and retries once.
+        print(f"  covered, clearing the system dialog: {json.dumps(reply)[:300]}")
+        subprocess.run(["killall", "UserNotificationCenter"], capture_output=True)
+        time.sleep(1)
+        reply = driver(binary, "click", pid, target, 1)
+    print(f"  click {target}: {json.dumps(reply)[:400]}")
+    if "error" in reply:
+        return fail(name, f"click failed: {reply['error']}")
+    if reply.get("via") != "hid" or "fallback" in reply:
+        return fail(name, f"the click was not a mouse's: via {reply.get('via')!r}, fallback {reply.get('fallback')!r}")
+    if not wait(lambda: clicked(binary, pid) == f"Clicked: {expected}"):
+        return fail(name, f"the label reads {clicked(binary, pid)!r}")
+    print(f"ok [{name}]")
+
+
 def check_shortcut(binary, pid, key, expected):
     name = f"⌘{key} runs {expected}"
     error = press(binary, pid, key)
@@ -224,6 +320,27 @@ def main():
             fail(name, f"reply {reply}; the field holds no 'x'")
         else:
             print(f"ok [{name}]")
+
+        # 5. Real clicks on the SwiftUI pane's button, list row and link.
+        if not wait(lambda: clicked(binary, pid) == "Clicked: nothing", 10):
+            fail("click pane", f"the pane's label reads {clicked(binary, pid)!r}")
+        check_click(binary, pid, find(binary, pid, "Count", ["AXButton"]), "Count", "a click presses a button")
+        check_click(binary, pid, find(binary, pid, "Row Alpha", ["AXStaticText", "AXCell", "AXRow"]), "Row Alpha", "a click selects a row")
+
+        # 6. The popover opens on a click, and a click outside it, on the window's title
+        # bar far from the popover, closes it.
+        check_click(binary, pid, find(binary, pid, "Details", ["AXButton"]), "Popover", "a click opens the popover")
+        main = next((w for w in driver(binary, "windows", pid).get("windows", []) if w.get("title") == "qa-key-fixture"), None)
+        if main is None:
+            fail("a click outside closes the popover", "the main window is not in the window list")
+        else:
+            frame = main["frame"]
+            outside = f"{frame['x'] + frame['w'] - 40},{frame['y'] + 12}"
+            check_click(binary, pid, outside, "Closed", "a click outside closes the popover")
+
+        # 7. A link inside text. Last of the clicks: the system may put its own dialog over
+        # the window once a link is opened, and the driver refuses to click under it.
+        check_click(binary, pid, find(binary, pid, "the report", ["AXLink", "AXStaticText"]), "Link report", "a click opens a link in text")
 
         name = "⌘W closes the main window"
         error = press(binary, pid, "w")
