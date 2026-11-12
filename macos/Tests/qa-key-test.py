@@ -242,6 +242,13 @@ def check_click(binary, pid, target, expected, name):
     if target is None:
         return fail(name, "the target is not in the accessibility tree")
     reply = driver(binary, "click", pid, target, 1)
+    if reply.get("error", {}).get("code") == "covered":
+        # The runner's session can show a system dialog (UserNotificationCenter) over the
+        # fixture. The driver is right to refuse; the test clears the dialog and retries once.
+        print(f"  covered, clearing the system dialog: {json.dumps(reply)[:300]}")
+        subprocess.run(["killall", "UserNotificationCenter"], capture_output=True)
+        time.sleep(1)
+        reply = driver(binary, "click", pid, target, 1)
     print(f"  click {target}: {json.dumps(reply)[:400]}")
     if "error" in reply:
         return fail(name, f"click failed: {reply['error']}")
