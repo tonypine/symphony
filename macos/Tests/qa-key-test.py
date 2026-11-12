@@ -319,7 +319,6 @@ def main():
             fail("click pane", f"the pane's label reads {clicked(binary, pid)!r}")
         check_click(binary, pid, find(binary, pid, "Count", ["AXButton"]), "Count", "a click presses a button")
         check_click(binary, pid, find(binary, pid, "Row Alpha", ["AXStaticText", "AXCell", "AXRow"]), "Row Alpha", "a click selects a row")
-        check_click(binary, pid, find(binary, pid, "the report", ["AXLink", "AXStaticText"]), "Link report", "a click opens a link in text")
 
         # 6. The popover opens on a click, and a click outside it, on the window's title
         # bar far from the popover, closes it.
@@ -331,6 +330,10 @@ def main():
             frame = main["frame"]
             outside = f"{frame['x'] + frame['w'] - 40},{frame['y'] + 12}"
             check_click(binary, pid, outside, "Closed", "a click outside closes the popover")
+
+        # 7. A link inside text. Last of the clicks: the system may put its own dialog over
+        # the window once a link is opened, and the driver refuses to click under it.
+        check_click(binary, pid, find(binary, pid, "the report", ["AXLink", "AXStaticText"]), "Link report", "a click opens a link in text")
 
         name = "⌘W closes the main window"
         error = press(binary, pid, "w")
