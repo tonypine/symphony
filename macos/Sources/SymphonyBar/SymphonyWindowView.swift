@@ -120,12 +120,9 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
     var onInsightsSliceChange: (InsightsSlice) -> Void = { _ in }
-    /// `GET /api/v1/aggregate`'s answer for the slice, read while an Insights page shows; the three pages draw it.
-    @Published private(set) var aggregate: AggregatePayload?
-    /// The read `aggregate` answers, to tell an answer for another slice.
-    @Published private(set) var aggregatePath: String?
-    /// What the last aggregate read got when it got none, nil after one that did.
-    @Published private(set) var aggregateResult: EndpointResult?
+    /// `GET /api/v1/aggregate`'s last answer and last failure, read while an Insights page shows; the three pages
+    /// draw what it holds for the slice (`aggregateShown`).
+    @Published private(set) var aggregateRead = AggregateRead()
     /// The history's review and the runs of Quality's slice, read while Quality shows.
     @Published private(set) var quality: (history: HistoryPayload, runs: [QualityRun])?
     /// Shipped's merged tickets for its period, read while Shipped shows (D9).
@@ -349,8 +346,6 @@ final class SymphonyWindowModel: ObservableObject {
     private var readingInbox = false
     private var readingInitiatives = false
     private var readingAggregate = false
-    /// When the aggregate was last read; the run records and events it comes from change slowly.
-    private var aggregateReadAt: Date?
     private var readingQuality = false
     private var qualityReadAt: Date?
     /// The history is read again at most this often.
@@ -823,7 +818,7 @@ final class SymphonyWindowModel: ObservableObject {
     /// Opens Usage and reads its slice at once.
     func showUsage() {
         show(.usage)
-        aggregateReadAt = nil
+        aggregateRead.expire()
         readAggregateIfDue()
     }
 
@@ -833,12 +828,21 @@ final class SymphonyWindowModel: ObservableObject {
     /// The read of the slice under the window's scope.
     var aggregateReadPath: String { insightsSlice.path(today: insightsToday, scope: scope) }
 
+    /// What the Insights pages show for the slice: its answer, its failure, or that it is reading.
+    var aggregateShown: AggregateRead.Shown { aggregateRead.shown(aggregateReadPath) }
+
+    /// Try Again on a failed read: reads the slice again at once.
+    func readAggregateAgain() {
+        aggregateRead.expire()
+        readAggregateIfDue()
+    }
+
     /// Whether an Insights page shows.
     private var showsInsights: Bool { [.quality, .usage, .shipped].contains(selection) && !showsPage }
 
     /// The slice or the scope changed: the three pages read it again.
     private func insightsSliceChanged() {
-        aggregateReadAt = nil
+        aggregateRead.expire()
         readAggregateIfDue()
         qualityReadAt = nil
         readQualityIfDue()
@@ -855,22 +859,17 @@ final class SymphonyWindowModel: ObservableObject {
 
     /// Reads the slice while an Insights page shows: one read for Quality, Usage and Shipped, so a page switch reads
     /// nothing. Symphony answers from its run records and events, with no Linear request.
+    /// The run records and events it comes from change slowly, so a slice is read again at most once per
+    /// `historyInterval`, a failing one too.
     private func readAggregateIfDue() {
         let path = aggregateReadPath
         guard showsInsights, !readingAggregate, state.countsKnown,
-            path != aggregatePath || aggregateReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
+            aggregateRead.isDue(path, now: Date(), interval: Self.historyInterval)
         else { return }
         readingAggregate = true
         Task {
             let result = await client.get(path)
-            if case let .loaded(data) = result, let payload = AggregatePayload.decode(data) {
-                aggregate = payload
-                aggregatePath = path
-                aggregateResult = nil
-            } else {
-                aggregateResult = result
-            }
-            aggregateReadAt = Date()
+            aggregateRead.record(path, result, now: Date())
             readingAggregate = false
             if path != aggregateReadPath { readAggregateIfDue() }
         }

@@ -338,6 +338,70 @@ public struct AggregatePayload: Equatable {
     }
 }
 
+/// What the window knows of the aggregate read (TP-1463): the last answer and the read it answers, and the read that
+/// last failed with what it got. A slice is read again when it changes, or at most once per interval: a failing read
+/// waits the interval like any other, so it isn't sent again on every poll.
+public struct AggregateRead: Equatable {
+    /// What an Insights page shows for a read.
+    public enum Shown: Equatable {
+        /// The read hasn't answered yet.
+        case reading
+        case loaded(AggregatePayload)
+        /// Symphony predates the read (`EndpointPlaceholder.updateSymphony`).
+        case unsupported
+        /// The read failed, with what went wrong; Try Again reads it again.
+        case failed(String)
+    }
+
+    public static let undecodable = "Symphony's answer couldn't be read"
+
+    public private(set) var payload: AggregatePayload?
+    /// The read `payload` answers.
+    public private(set) var path: String?
+    /// The read that last failed, and what it got.
+    public private(set) var failedPath: String?
+    public private(set) var failure: Shown?
+    /// The last read, answered or failed, and when.
+    public private(set) var readPath: String?
+    public private(set) var readAt: Date?
+
+    public init() {}
+
+    /// Whether `path` is due a read at `now`: never read, another read than the last, or the last is `interval` old.
+    public func isDue(_ path: String, now: Date, interval: TimeInterval) -> Bool {
+        guard let readAt, path == readPath else { return true }
+        return now.timeIntervalSince(readAt) >= interval
+    }
+
+    /// Keeps what `path`'s read got at `now`.
+    public mutating func record(_ path: String, _ result: EndpointResult, now: Date) {
+        if case let .loaded(data) = result, let payload = AggregatePayload.decode(data) {
+            self.payload = payload
+            self.path = path
+            if failedPath == path { (failedPath, failure) = (nil, nil) }
+        } else {
+            failedPath = path
+            failure = switch result {
+            case let .failed(message): .failed(message)
+            case .unsupported: .unsupported
+            case .loaded: .failed(Self.undecodable)
+            }
+        }
+        readPath = path
+        readAt = now
+    }
+
+    /// Makes the next check read again at once (Try Again, a page opened).
+    public mutating func expire() { readAt = nil }
+
+    /// What a page drawing `path` shows: its answer, else its failure, else that it is reading.
+    public func shown(_ path: String) -> Shown {
+        if path == self.path, let payload { return .loaded(payload) }
+        guard path == failedPath, let failure else { return .reading }
+        return failure
+    }
+}
+
 // MARK: - A chart
 
 /// C12 over a series of the aggregate: one bar per bucket, stacked by key, at most one reference line, the value on the

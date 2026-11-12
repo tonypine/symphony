@@ -238,4 +238,39 @@ final class InsightsTests: XCTestCase {
     private static func value(_ name: String, _ slice: InsightsSlice, scope: OverviewScope = .all) -> String? {
         slice.parameters(today: "2026-11-12", scope: scope).first { $0.name == name }?.value
     }
+
+    /// A failed read shows its failure, not the spinner, and waits the read interval before it is sent again; Try Again
+    /// (`expire`) and another slice read at once, and an answer replaces the failure.
+    func testAFailedReadShowsItsFailureAndWaitsTheIntervalBeforeReadingAgain() throws {
+        let path = InsightsSlice().path(today: today)
+        let other = epicSlice.path(today: today)
+        let now = Date(timeIntervalSince1970: 1_794_470_000)
+        var read = AggregateRead()
+        XCTAssertTrue(read.isDue(path, now: now, interval: 60))
+        XCTAssertEqual(read.shown(path), .reading)
+
+        read.record(path, .failed("Symphony answered with HTTP 400"), now: now)
+        XCTAssertEqual(read.shown(path), .failed("Symphony answered with HTTP 400"))
+        XCTAssertEqual(read.shown(other), .reading)
+        XCTAssertFalse(read.isDue(path, now: now.addingTimeInterval(2), interval: 60), "a failing read waits, not every poll")
+        XCTAssertTrue(read.isDue(path, now: now.addingTimeInterval(60), interval: 60))
+        XCTAssertTrue(read.isDue(other, now: now.addingTimeInterval(2), interval: 60))
+
+        read.expire()
+        XCTAssertTrue(read.isDue(path, now: now.addingTimeInterval(2), interval: 60), "Try Again reads at once")
+
+        read.record(path, .loaded(Data("not json".utf8)), now: now)
+        XCTAssertEqual(read.shown(path), .failed(AggregateRead.undecodable))
+        read.record(path, .unsupported, now: now)
+        XCTAssertEqual(read.shown(path), .unsupported)
+
+        let answer = try data("aggregate")
+        read.record(path, .loaded(answer), now: now)
+        XCTAssertEqual(read.shown(path), .loaded(try XCTUnwrap(AggregatePayload.decode(answer))))
+        XCTAssertNil(read.failure)
+
+        // A later failed refresh keeps the slice's answer on screen.
+        read.record(path, .failed("Symphony isn't answering"), now: now.addingTimeInterval(60))
+        XCTAssertEqual(read.shown(path), .loaded(try XCTUnwrap(AggregatePayload.decode(answer))))
+    }
 }

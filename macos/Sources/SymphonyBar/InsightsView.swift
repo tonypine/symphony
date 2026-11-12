@@ -19,19 +19,25 @@ struct InsightsPage<Content: View>: View {
                 summary: current.map { Insights.summary($0, slice: model.insightsSlice, scope: model.scope) }, scope: model.scope
             )
             Divider()
-            if let aggregate = current {
+            switch model.aggregateShown {
+            case let .loaded(aggregate):
                 content(aggregate)
-            } else if model.aggregateResult == .unsupported {
+            case .unsupported:
                 EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
-            } else {
+            case let .failed(message):
+                EmptyState(
+                    title: "Symphony couldn't read these numbers: \(message)", symbol: "exclamationmark.triangle",
+                    actions: [("Try Again", model.readAggregateAgain)]
+                )
+            case .reading:
                 EmptyState(title: "Reading Symphony's numbers…", symbol: symbol, showsSpinner: true)
             }
         }
     }
 
-    /// The aggregate of the slice the bar shows; nil while its read is on its way.
+    /// The aggregate of the slice the bar shows; nil while its read is on its way or failed.
     private var current: AggregatePayload? {
-        model.aggregatePath == model.aggregateReadPath ? model.aggregate : nil
+        if case let .loaded(aggregate) = model.aggregateShown { aggregate } else { nil }
     }
 }
 
