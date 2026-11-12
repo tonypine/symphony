@@ -356,17 +356,22 @@ let modifierKeys: [(flag: CGEventFlags, code: CGKeyCode)] = [
 // them (TP-1469). The HID tap delivers to the app that owns the keyboard, so
 // `pressKey` checks the app does before calling this.
 func postShortcut(_ code: CGKeyCode, flags: CGEventFlags, text: [UniChar]) {
+    // The HID tap takes events of the hardware's own source state: a private source's
+    // events are not combined into the session's keyboard state, so the menu may not
+    // see them as a keyboard's. Each step waits long enough for the app to read it.
+    let source = CGEventSource(stateID: .hidSystemState)
+    let pause: useconds_t = 20_000
     let held = modifierKeys.filter { flags.contains($0.flag) }
     var down: CGEventFlags = []
 
     func postModifier(_ key: CGKeyCode, _ state: CGEventFlags) {
-        guard let event = CGEvent(keyboardEventSource: keySource, virtualKey: key, keyDown: true) else {
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true) else {
             fail("typing_failed", "Could not create a key event.")
         }
         event.type = .flagsChanged
         event.flags = state
         event.post(tap: .cghidEventTap)
-        usleep(keyPause)
+        usleep(pause)
     }
 
     for modifier in held {
@@ -374,13 +379,13 @@ func postShortcut(_ code: CGKeyCode, flags: CGEventFlags, text: [UniChar]) {
         postModifier(modifier.code, down)
     }
     for pressed in [true, false] {
-        guard let event = CGEvent(keyboardEventSource: keySource, virtualKey: code, keyDown: pressed) else {
+        guard let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: pressed) else {
             fail("typing_failed", "Could not create a key event.")
         }
         event.flags = flags
         if !text.isEmpty { event.keyboardSetUnicodeString(stringLength: text.count, unicodeString: text) }
         event.post(tap: .cghidEventTap)
-        usleep(keyPause)
+        usleep(pause)
     }
     for modifier in held.reversed() {
         down.remove(modifier.flag)

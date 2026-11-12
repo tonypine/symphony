@@ -157,6 +157,7 @@ def wait(condition, seconds=5):
 
 def press(binary, pid, key, modifiers="command"):
     reply = driver(binary, "key", pid, key, modifiers)
+    print(f"  key {key} ({modifiers or 'plain'}): {json.dumps(reply)[:300]}")
     if "error" in reply:
         return reply["error"]
     return None
