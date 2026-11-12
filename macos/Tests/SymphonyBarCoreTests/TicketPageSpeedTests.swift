@@ -80,6 +80,18 @@ final class TicketPageSpeedTests: XCTestCase {
         XCTAssertEqual(history.runs.values.compactMap(\.endedDate).count, 14)
     }
 
+    /// The ticket page scroll test's fixture (TP-1491) is this feed, so the app scrolls the history this test builds.
+    func testTheScrollTestFixtureIsThisFeed() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("../Fixtures/director-app/ticket-page-speed/api/v1/repos/symphony/tickets/TP-1244/events.json")
+        let fixture = try XCTUnwrap(TicketEventsPayload.decode(Data(contentsOf: url)))
+        let feed = try XCTUnwrap(TicketEventsPayload.decode(Self.feed()))
+        XCTAssertEqual(fixture.events.count, 500)
+        XCTAssertEqual(fixture.runs.count, 15)
+        XCTAssertEqual(fixture.events.map(\.id), feed.events.map(\.id))
+        XCTAssertEqual(fixture.events.map(\.date), feed.events.map(\.date))
+    }
+
     func testARunRecordsTimesAreReadOnceWhenDecoded() throws {
         struct Record: Decodable { let endedAt: TicketPage.DecodedTime? }
         func decode(_ json: String) throws -> Record { try JSONDecoder().decode(Record.self, from: Data(json.utf8)) }
