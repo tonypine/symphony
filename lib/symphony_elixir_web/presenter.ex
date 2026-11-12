@@ -1461,6 +1461,8 @@ defmodule SymphonyElixirWeb.Presenter do
       error: Map.get(entry, :error),
       utilization: Map.get(entry, :utilization),
       issue_identifier: Map.get(entry, :issue_identifier),
+      still_on: Map.get(entry, :still_on) == true,
+      condition: UsageLimit.condition(entry),
       banner: UsageLimit.banner(entry, now)
     }
   end

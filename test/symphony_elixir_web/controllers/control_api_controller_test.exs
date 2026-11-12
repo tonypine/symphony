@@ -100,6 +100,65 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
     assert calls(pid) == [:resume_dispatch]
   end
 
+  test "POST /control/resume with only a usage limit's reason answers 409 nothing_to_resume, naming it" do
+    limit = %{kind: :environment, text: "Claude's 5-hour limit until 20:02 UTC-3", since: ~U[2026-11-11 20:03:00Z], waits_on: %{condition: "usage_limit:anthropic:all"}}
+    pid = start_stub([{:error, {:nothing_to_resume, [limit]}}])
+
+    conn = send_to(build_conn(:post, "/api/v1/control/resume"), :resume, pid, %{})
+
+    assert conn.status == 409
+
+    assert json_body(conn)["error"] == %{
+             "code" => "nothing_to_resume",
+             "message" =>
+               "Nothing to resume: no pause of yours or an update's holds Symphony. It waits on Claude's 5-hour limit until 20:02 UTC-3. " <>
+                 "Try Now checks a usage limit before its reset.",
+             "reasons" => [
+               %{
+                 "kind" => "environment",
+                 "text" => "Claude's 5-hour limit until 20:02 UTC-3",
+                 "since" => "2026-11-11T20:03:00Z",
+                 "waits_on" => %{"condition" => "usage_limit:anthropic:all"}
+               }
+             ]
+           }
+
+    assert calls(pid) == [:resume_dispatch]
+  end
+
+  test "POST /control/resume names an environment's reason without offering Try Now" do
+    pid = start_stub([{:error, {:nothing_to_resume, [%{kind: :environment, text: nil, waits_on: %{condition: "github_down"}}]}}])
+
+    conn = send_to(build_conn(:post, "/api/v1/control/resume"), :resume, pid, %{})
+
+    assert conn.status == 409
+    assert json_body(conn)["error"]["message"] == "Nothing to resume: no pause of yours or an update's holds Symphony."
+  end
+
+  test "POST /control/resume with a condition is Try Now on that usage limit" do
+    pid = start_stub([{:ok, %{paused: false, usage_limit: %{phase: :canary}}}])
+    params = %{"condition" => "usage_limit:anthropic:all"}
+
+    conn = send_to(build_conn(:post, "/api/v1/control/resume", params), :resume, pid, params)
+
+    assert conn.status == 200
+    assert json_body(conn) == %{"paused" => false, "usage_limit" => %{"phase" => "canary"}}
+    assert calls(pid) == [{:try_usage_limit_now, "usage_limit:anthropic:all"}]
+  end
+
+  test "POST /control/resume with a condition no hold waits on is 404, and a headroom hold's is 409" do
+    pid = start_stub([{:error, {:usage_limit_not_found, "usage_limit:openai:all"}}, {:error, {:usage_limit_headroom, "usage_limit:anthropic:all"}}])
+
+    conn = send_to(build_conn(:post, "/api/v1/control/resume"), :resume, pid, %{"condition" => "usage_limit:openai:all"})
+    assert conn.status == 404
+    assert json_body(conn)["error"]["code"] == "usage_limit_not_found"
+
+    conn = send_to(build_conn(:post, "/api/v1/control/resume"), :resume, pid, %{"condition" => " usage_limit:anthropic:all "})
+    assert conn.status == 409
+    assert json_body(conn)["error"]["code"] == "usage_limit_headroom"
+    assert calls(pid) == [{:try_usage_limit_now, "usage_limit:openai:all"}, {:try_usage_limit_now, "usage_limit:anthropic:all"}]
+  end
+
   test "POST /control/stop requires issue_identifier" do
     pid = start_stub([])
 
