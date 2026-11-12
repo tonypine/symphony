@@ -1014,7 +1014,9 @@ func pressKey(_ pid: pid_t, _ name: String, _ modifiers: String) {
     if flags.contains(.maskCommand) {
         // A shortcut goes through the HID tap, which delivers to whichever app owns
         // the keyboard: only the app's own, never another app's.
-        guard waitUntil(2, { keyboardOwner() == pid }) else {
+        // The system-wide focused app can read empty or stale on a runner with no
+        // console user, so the app's own frontmost flag counts too.
+        guard waitUntil(5, { keyboardOwner() == pid || (attribute(app, kAXFrontmostAttribute as String) as? Bool) == true }) else {
             fail("not_frontmost", "Another app owns the keyboard, so the shortcut was not sent. Raise the app's window with qa_ax_press and AXRaise, then try again.")
         }
         postShortcut(code, flags: flags, text: Array(text.utf16))
