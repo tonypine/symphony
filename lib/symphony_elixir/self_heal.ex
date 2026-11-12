@@ -32,6 +32,11 @@ defmodule SymphonyElixir.SelfHeal do
       the same block differently each time cannot loop. A block whose fix belongs to another repo
       than the last one's is a new break, filed in its own repo rather than compared.
 
+  A CI check that is itself a protection (`protected paths`, `SymphonyElixir.CiPoller.human_only_check?/1`)
+  is never filed either: a fix ticket's goal would invite an agent to weaken the guard, so the lane
+  asks a person through the Inbox instead (a `Needs Decision` hold). The PR watcher never names
+  such a check as a red head's failure (`SymphonyElixir.PrWatch.Fetch`), so this is the backstop.
+
   A block only a person can clear (`needs_person`: a missing secret, an account, a device this host
   lacks) never reaches the filing path: the ticket's pause gets an `:environment` reason naming the
   broken component in plain words (`environment_reason/1`: "The QA machine is not reachable"),
@@ -53,7 +58,7 @@ defmodule SymphonyElixir.SelfHeal do
 
   require Logger
 
-  alias SymphonyElixir.{Config, DecisionRequest, Pauses, RuleActions, RunStore, TicketState, Verification}
+  alias SymphonyElixir.{CiPoller, Config, DecisionRequest, Pauses, RuleActions, RunStore, TicketState, Verification}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.HumanActions.{PlainWords, Request}
   alias SymphonyElixir.Linear.Issue
@@ -280,14 +285,21 @@ defmodule SymphonyElixir.SelfHeal do
 
       ctx = Map.put(ctx, :covering, covering_ticket(ctx))
 
-      case {ctx.covering, compare(previous_signature(previous, component, scope), signature)} do
-        {%{}, _change} -> open(ctx)
-        {nil, :first} -> open(ctx)
-        {nil, :same} -> escalate(ctx, :unchanged)
-        {nil, change} -> revisit(ctx, change)
+      case {protection(component), ctx.covering, compare(previous_signature(previous, component, scope), signature)} do
+        {check, _covering, _change} when is_binary(check) -> escalate(ctx, {:protection, check})
+        {nil, %{}, _change} -> open(ctx)
+        {nil, nil, :first} -> open(ctx)
+        {nil, nil, :same} -> escalate(ctx, :unchanged)
+        {nil, nil, change} -> revisit(ctx, change)
       end
     end
   end
+
+  # A CI check that is itself a protection (`protected paths`: only a person may allow the files it
+  # guards to change) is never a fix ticket's goal: a ticket that asks an agent to make it pass
+  # invites weakening the guard. Its name, so the lane asks a person instead; nil for any other.
+  defp protection(@ci_prefix <> check), do: if(CiPoller.human_only_check?(%{name: check}), do: check)
+  defp protection(_component), do: nil
 
   # No fix ticket for this component yet, or the run named an open ticket that covers the gap: wait
   # on the covering ticket, else reuse the open one another ticket already filed for the same
@@ -610,6 +622,28 @@ defmodule SymphonyElixir.SelfHeal do
 
   defp plain_component(component), do: component |> String.replace(":", " ") |> plain()
 
+  defp decision(ctx, {:protection, check} = stuck) do
+    %{
+      title: "Self-heal stopped at the #{plain(check)} guard",
+      question: question(ctx, stuck),
+      why: why(stuck),
+      if_unanswered: "#{label(ctx.issue)} stays where it is and nothing runs on it.",
+      recommendation_reason: "The guard is doing its job: it stays red until a person allows the protected files to change.",
+      options: [
+        %{
+          label: "Leave the #{plain(check)} guard as it is",
+          effect: "#{label(ctx.issue)} resumes in its phase, and its merge asks you about the protected files it changes",
+          recommended: true
+        },
+        %{
+          label: "Drop the change to the protected files",
+          effect: "#{label(ctx.issue)} goes back to Rework to take its change to the protected files out"
+        }
+      ],
+      asked_at: DateTime.utc_now()
+    }
+  end
+
   defp decision(ctx, stuck) do
     %{
       title: "Self-heal is stuck on the #{plain_component(ctx.component)} block",
@@ -632,6 +666,11 @@ defmodule SymphonyElixir.SelfHeal do
     }
   end
 
+  defp question(ctx, {:protection, check}) do
+    "CI keeps failing the #{plain(check)} check on #{label(ctx.issue)}'s pull request, and that check guards files only a person may allow to change. " <>
+      "How should it be handled?"
+  end
+
   defp question(ctx, :unchanged) do
     "The #{plain_component(ctx.component)} block on #{label(ctx.issue)} came back unchanged after #{ctx.attempts} " <>
       "attempt(s) and its fix ticket landed: #{plain(ctx.signature)}. How should it be handled?"
@@ -641,6 +680,9 @@ defmodule SymphonyElixir.SelfHeal do
     "The #{plain_component(ctx.component)} block on #{label(ctx.issue)} kept coming back over #{ctx.attempts} blocked runs " <>
       "of the same change: #{plain(ctx.signature)}. How should it be handled?"
   end
+
+  defp why({:protection, _check}),
+    do: "Self-heal files no fix ticket for a guard: the ticket would ask an agent to make the guard pass, which could weaken it."
 
   defp why(:unchanged),
     do: "Self-heal retries a changed failure on its own, but this one carries no new information, so there is no next step for the machine to try."
