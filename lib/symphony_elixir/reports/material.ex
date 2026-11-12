@@ -6,8 +6,8 @@ defmodule SymphonyElixir.Reports.Material do
   the id a sentence cites it by. It reads Symphony's store only and writes nothing.
   """
 
-  alias SymphonyElixir.{RunStore, Situation, TicketState}
   alias SymphonyElixir.Reports.Period
+  alias SymphonyElixir.{RunStore, Situation, TicketState}
   alias SymphonyElixir.TicketEvents.Journal
 
   # The most events one report reads: a period with more is told from its newest ones.

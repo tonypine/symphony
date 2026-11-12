@@ -1,9 +1,9 @@
 defmodule SymphonyElixir.ReportsTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Questions, Reports, Situation, TicketEvents}
   alias SymphonyElixir.AgentTools.Report
   alias SymphonyElixir.Config.SystemSchema
+  alias SymphonyElixir.{Questions, Reports, Situation, TicketEvents}
   alias SymphonyElixir.Reports.{Anthropic, Material, Period}
 
   @repo "fixture"
@@ -47,12 +47,14 @@ defmodule SymphonyElixir.ReportsTest do
     fn request, _opts ->
       send(self(), {:request, request})
 
-      case Agent.get_and_update(script, fn [turn | rest] -> {turn, rest} end) do
-        {:error, reason} -> {:error, reason}
-        turn -> {:ok, turn.(request)}
-      end
+      script |> Agent.get_and_update(&next_turn/1) |> answer_turn(request)
     end
   end
+
+  defp next_turn([turn | rest]), do: {turn, rest}
+
+  defp answer_turn({:error, reason}, _request), do: {:error, reason}
+  defp answer_turn(turn, request), do: {:ok, turn.(request)}
 
   defp tool_use(id, name, input), do: %{"type" => "tool_use", "id" => id, "name" => name, "input" => input}
 

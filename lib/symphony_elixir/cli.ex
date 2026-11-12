@@ -16,6 +16,7 @@ defmodule SymphonyElixir.CLI do
   }
 
   alias SymphonyElixir.Config.Migration
+  alias SymphonyElixir.Reports.Period
 
   require Logger
 
@@ -362,7 +363,7 @@ defmodule SymphonyElixir.CLI do
   # host's clock (`SymphonyElixir.Reports.Period`), so `yesterday 18:00` is the operator's.
   defp evaluate_report(args, deps) do
     with {opts, [], []} <- OptionParser.parse(args, strict: @report_switches),
-         {:ok, period} <- SymphonyElixir.Reports.Period.new(opts[:from], opts[:to] || "now") do
+         {:ok, period} <- Period.new(opts[:from], opts[:to] || "now") do
       period.from |> deps.start_report.(period.to) |> report_result(deps)
     else
       {:error, message} when is_binary(message) -> {:error, message <> "\n" <> report_usage_message()}

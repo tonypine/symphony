@@ -8,8 +8,9 @@ defmodule SymphonyElixir.Reports do
   `SymphonyElixir.AgentTools.Report`: one publishes the report, and refuses one with a sentence that
   cites no event of the period; the other asks the Director one question through the one decision
   path, which lands in the Inbox. So a report asks and never acts: nothing else in the factory
-  changes because of it. The run calls the model of `reports.model` (`SymphonyElixir.Config.report_model/0`,
-  the cheapest capable model by default) through `SymphonyElixir.Reports.Anthropic`, a turn at a time,
+  changes because of it. The run calls the model of `reports.model`
+  (`SymphonyElixir.Config.report_model/0`, the cheapest capable model by default) through
+  `SymphonyElixir.Reports.Anthropic`, a turn at a time,
   until the report is published or `@max_turns` turns have passed.
 
   `start/2` starts a run in the background (`symphony report --from --to`,
@@ -20,8 +21,8 @@ defmodule SymphonyElixir.Reports do
 
   require Logger
 
-  alias SymphonyElixir.{Config, RunStore}
   alias SymphonyElixir.AgentTools.Report
+  alias SymphonyElixir.{Config, RunStore}
   alias SymphonyElixir.Reports.{Anthropic, Material, Period}
   alias SymphonyElixir.TicketEvents.Event
 
@@ -46,7 +47,13 @@ defmodule SymphonyElixir.Reports do
   """
 
   @typedoc "What `start/2` answers: the run's id, its model, its period and how many events it reads."
-  @type started :: %{run_id: String.t(), model: String.t(), from: DateTime.t(), to: DateTime.t(), events: non_neg_integer()}
+  @type started :: %{
+          run_id: String.t(),
+          model: String.t(),
+          from: DateTime.t(),
+          to: DateTime.t(),
+          events: non_neg_integer()
+        }
 
   @doc """
   Starts a report run on `period` in the background and answers at once, or refuses a period with
@@ -108,10 +115,12 @@ defmodule SymphonyElixir.Reports do
       case call_tools(content, state) do
         {_results, %{published: %Event{} = event}} -> {:ok, event}
         {[], _state} -> {:error, :no_tool_call}
-        {results, state} -> loop(messages ++ [%{"role" => "assistant", "content" => content}, %{"role" => "user", "content" => results}], state, turn, turns_left - 1)
+        {results, state} -> loop(messages ++ exchange(content, results), state, turn, turns_left - 1)
       end
     end
   end
+
+  defp exchange(content, results), do: [%{"role" => "assistant", "content" => content}, %{"role" => "user", "content" => results}]
 
   defp call_tools(content, state) do
     Enum.flat_map_reduce(content, state, fn
