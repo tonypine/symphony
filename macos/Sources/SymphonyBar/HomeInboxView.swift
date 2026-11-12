@@ -140,8 +140,10 @@ struct HomeInboxRow: View {
                 .foregroundStyle(.primary)
             }
             .buttonStyle(.plain)
-            .help("Open \(item.identifier)")
-            .accessibilityHint("Opens the ticket page")
+            // A Question on Symphony itself (a report's) has no ticket page to open.
+            .disabled(item.isSubject)
+            .help(item.isSubject ? "" : "Open \(item.identifier)")
+            .accessibilityHint(item.isSubject ? "" : "Opens the ticket page")
             if let repo = item.repoKey {
                 Text(repo)
                     .font(DesignTokens.TypeStyle.callout.font)
@@ -230,7 +232,8 @@ struct InboxDrawer: View {
                         pick: { model.pick($0, decision: $1, itemID: item.id) },
                         writeIn: { model.writeIn($0, decision: $1, itemID: item.id) },
                         perform: { model.perform($0, on: item) },
-                        openTicket: { model.openTicket(item.identifier) },
+                        // A Question on Symphony itself opens no ticket page.
+                        openTicket: { if !item.isSubject { model.openTicket(item.identifier) } },
                         openMention: model.openPeek,
                         openMentionDirectly: model.openMentionDirectly,
                         narrow: true,

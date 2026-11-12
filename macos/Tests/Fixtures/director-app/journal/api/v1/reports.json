@@ -1,0 +1,116 @@
+{
+  "reports": [
+    {
+      "id": "rep-0300",
+      "at": "2026-11-12T03:01:30Z",
+      "run_id": "report-01M7A0300",
+      "model": "claude-haiku-5-5",
+      "period": {
+        "from": "2026-11-11T21:00:00Z",
+        "to": "2026-11-12T03:00:00Z"
+      },
+      "tickets": [
+        "TP-1454",
+        "TP-1455",
+        "TP-1457",
+        "TP-1458",
+        "TP-1456",
+        "SHOP-501"
+      ],
+      "events": [
+        "j13",
+        "j12",
+        "j11",
+        "j03",
+        "j06",
+        "j05",
+        "j04",
+        "j14"
+      ],
+      "sentences": [
+        "TP-1454 shipped, and TP-1455 moved to Merging after Code Review sent it back once.",
+        "TP-1457 is in QA, and TP-1458 starts as soon as it lands.",
+        "The QA machine lacks Xcode, so Symphony filed a fix ticket for TP-1456.",
+        "A release installed at 02:30 and lifted the update pause.",
+        "SHOP-501 is paused while CI runs."
+      ],
+      "text": "TP-1454 shipped, and TP-1455 moved to Merging after Code Review sent it back once. TP-1457 is in QA, and TP-1458 starts as soon as it lands. The QA machine lacks Xcode, so Symphony filed a fix ticket for TP-1456. A release installed at 02:30 and lifted the update pause. SHOP-501 is paused while CI runs.",
+      "citations": [
+        {
+          "sentence": 0,
+          "events": [
+            "j13",
+            "j12",
+            "j11"
+          ]
+        },
+        {
+          "sentence": 1,
+          "events": [
+            "j03",
+            "j06"
+          ]
+        },
+        {
+          "sentence": 2,
+          "events": [
+            "j05"
+          ]
+        },
+        {
+          "sentence": 3,
+          "events": [
+            "j04"
+          ]
+        },
+        {
+          "sentence": 4,
+          "events": [
+            "j14"
+          ]
+        }
+      ],
+      "question_id": "q-report-0300"
+    },
+    {
+      "id": "rep-2100",
+      "at": "2026-11-11T21:00:40Z",
+      "run_id": "report-01M79F2100",
+      "model": "claude-haiku-5-5",
+      "period": {
+        "from": "2026-11-11T15:00:00Z",
+        "to": "2026-11-11T21:00:00Z"
+      },
+      "tickets": [
+        "TP-1453",
+        "BIL-300"
+      ],
+      "events": [
+        "p01",
+        "p02",
+        "p03"
+      ],
+      "sentences": [
+        "TP-1453 shipped after one review round.",
+        "BIL-300 failed QA twice on the invoice total and is back in Rework."
+      ],
+      "text": "TP-1453 shipped after one review round. BIL-300 failed QA twice on the invoice total and is back in Rework.",
+      "citations": [
+        {
+          "sentence": 0,
+          "events": [
+            "p01"
+          ]
+        },
+        {
+          "sentence": 1,
+          "events": [
+            "p02",
+            "p03"
+          ]
+        }
+      ],
+      "question_id": null
+    }
+  ]
+}

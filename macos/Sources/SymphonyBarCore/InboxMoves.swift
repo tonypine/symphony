@@ -132,7 +132,9 @@ public struct InboxToolbar: Equatable {
             }
             // The write-in picked with nothing in it has no answer to send.
             let blankWriteIn = action.isWriteIn(picks) && action.answer(picks) == nil
-            return InboxToolbar(buttons: [move(.decide, enabled: !blankWriteIn)] + actionLinks, overflow: [.move(.sendToRework)])
+            // A Question on Symphony itself (a report's) has no ticket to send to Rework: Send Decision answers it.
+            let overflow: [InboxCommand] = item.isSubject ? [] : [.move(.sendToRework)]
+            return InboxToolbar(buttons: [move(.decide, enabled: !blankWriteIn)] + actionLinks, overflow: overflow)
         case .clarify, .waiting:
             return InboxToolbar(buttons: links, overflow: [])
         }
@@ -318,6 +320,8 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     /// The state the move is expected to put the ticket in, nil when it stays (decisions on a plan in Plan Review).
     /// The banner follows Symphony's answer instead, which knows the workflow's states.
     public var targetState: String?
+    /// True for a Question on Symphony itself or a repository (TP-1462): its answer names the Question and no ticket.
+    public var isSubject = false
 
     public var id: String { "\(itemID):\(move.rawValue)" }
     public var verb: String { move.verb }
@@ -341,6 +345,7 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         self.move = move
         itemID = item.id
         identifier = item.identifier
+        isSubject = item.isSubject
         let id = item.identifier
         // An action or a PR carrying a request is answered through `decide`, whatever the button: the answer to its
         // Question is what closes it, and a plain move would leave the hold behind. Without the Question's id or the
@@ -433,6 +438,10 @@ public struct ConsequenceSheet: Equatable, Identifiable {
                 targetState = confirm
                 happens = "Records your answer on \(id) as a reply to its request, clears the Needs Decision label and moves \(id) to \(confirm)."
                 stays = "Nothing merges while a check is red or pending. Your answer stays on the ticket as the recorded decision."
+            } else if item.isSubject {
+                targetState = nil
+                happens = picked?.effect ?? "Records your answer to \(id)'s question."
+                stays = "No ticket moves and nothing is paused: the question waited on you alone."
             } else {
                 targetState = nil
                 happens = picked?.effect
@@ -501,7 +510,8 @@ public struct ConsequenceSheet: Equatable, Identifiable {
         case .restart: return .restart(identifier, reason: answer)
         case .decide:
             guard let answeredRequest else { return nil }
-            return .decide(identifier, request: answeredRequest, picks: picks, move: nil)
+            // A subject's Question is answered by its id alone: Symphony finds it on Symphony or the repository.
+            return .decide(isSubject ? "" : identifier, request: answeredRequest, picks: picks, move: nil)
         case .unblock, .release: return .unblock(identifier)
         }
     }

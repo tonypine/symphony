@@ -72,17 +72,30 @@ public struct JournalQuery: Equatable {
     public var classes: Set<JournalClass>
     /// Every event, not only the notable ones.
     public var everything: Bool
+    /// The reports alone (TP-1462), without the events: it changes what the page shows, not what it reads.
+    public var reportsOnly: Bool
 
     /// A page of the read: the most the read serves.
     public static let pageSize = 200
     public static let path = "api/v1/events"
 
-    public init(repo: String? = nil, epic: String? = nil, classes: Set<JournalClass> = [], everything: Bool = false) {
+    public init(repo: String? = nil, epic: String? = nil, classes: Set<JournalClass> = [], everything: Bool = false, reportsOnly: Bool = false) {
         self.repo = repo
         self.epic = epic
         self.classes = classes
         self.everything = everything
+        self.reportsOnly = reportsOnly
     }
+
+    /// Whether `other` reads the same pages: Reports only reads nothing of its own.
+    public func readsAsTheSame(_ other: JournalQuery) -> Bool {
+        var other = other
+        other.reportsOnly = reportsOnly
+        return self == other
+    }
+
+    public static let reportsOnlyTitle = "Reports only"
+    public static let reportsOnlyHelp = "Show the reports alone, without the events"
 
     /// The read's parameters, in a fixed order: `classes`, `epic`, `limit`, `notable`, `repo`, `until`. The repo chip
     /// wins over the window's `scope`. Everything sends `notable=false`: the read keeps the notable ones by default.
@@ -137,7 +150,7 @@ public struct JournalQuery: Equatable {
     public static let allClasses = "All classes"
 
     /// Percent-encodes a value: `+` would read as a space, and `until`'s time zone holds one.
-    private static func encode(_ value: String) -> String {
+    static func encode(_ value: String) -> String {
         value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
     }
 
@@ -301,28 +314,75 @@ public struct JournalRow: Equatable, Identifiable {
     }
 }
 
-/// One day of the Journal, newest first, under its separator.
+/// One day of the Journal, newest first, under its separator: its events, and the reports whose period ends that day,
+/// each pinned among the events at the end of its period (TP-1462).
 public struct JournalDay: Equatable, Identifiable {
+    /// An event's row or a report's card.
+    public enum Item: Equatable, Identifiable {
+        case event(JournalRow)
+        case report(JournalReportCard)
+
+        public var id: String {
+            switch self {
+            case let .event(row): "event:" + row.id
+            case let .report(card): "report:" + card.id
+            }
+        }
+
+        /// When it sits in the day: the event's time, the end of the report's period.
+        public var at: Date {
+            switch self {
+            case let .event(row): row.entry.at
+            case let .report(card): card.at
+            }
+        }
+    }
+
     /// "2026-11-09".
     public var id: String
     /// "Today", "Yesterday", else nil.
     public var relative: String?
     /// "Mon 9 Nov".
     public var date: String
-    public var rows: [JournalRow]
+    /// Newest first.
+    public var items: [Item]
 
-    public init(id: String, relative: String?, date: String, rows: [JournalRow]) {
+    public init(id: String, relative: String?, date: String, items: [Item]) {
         self.id = id
         self.relative = relative
         self.date = date
-        self.rows = rows
+        self.items = items
+    }
+
+    public init(id: String, relative: String?, date: String, rows: [JournalRow]) {
+        self.init(id: id, relative: relative, date: date, items: rows.map(Item.event))
+    }
+
+    /// The events' rows.
+    public var rows: [JournalRow] {
+        items.compactMap { item in
+            if case let .event(row) = item { return row }
+            return nil
+        }
+    }
+
+    /// The reports' cards.
+    public var reports: [JournalReportCard] {
+        items.compactMap { item in
+            if case let .report(card) = item { return card }
+            return nil
+        }
     }
 
     /// "Today, Mon 9 Nov".
     public var title: String { [relative, date].compactMap { $0 }.joined(separator: ", ") }
 
-    /// "Today, Mon 9 Nov, 12 events".
-    public var accessibilityLabel: String { title + ", " + (rows.count == 1 ? "1 event" : "\(rows.count) events") }
+    /// "Today, Mon 9 Nov, 12 events", with ", 1 report" when it holds one.
+    public var accessibilityLabel: String {
+        let reports = reports.count
+        return title + ", " + (rows.count == 1 ? "1 event" : "\(rows.count) events")
+            + (reports == 0 ? "" : reports == 1 ? ", 1 report" : ", \(reports) reports")
+    }
 }
 
 /// The Journal as it draws: its days and whether there are earlier pages.
@@ -337,36 +397,64 @@ public struct JournalModel: Equatable {
 
     public var isEmpty: Bool { days.isEmpty }
     public var rows: [JournalRow] { days.flatMap(\.rows) }
+    public var reports: [JournalReportCard] { days.flatMap(\.reports) }
 
     public static let symphonyStream = "Symphony"
     public static let showEarlier = "Show Earlier"
     public static let empty = "Nothing notable has happened yet."
     public static let emptyEverything = "Nothing has happened yet."
     public static let noMatch = "No events match these filters."
+    public static let noReport = "No report has been published yet."
 
-    /// What the page says with no row: the filters keep nothing, or nothing happened.
+    /// What the page says with nothing to show: no report under Reports only, the filters keep nothing, or nothing
+    /// happened.
     public static func emptyTitle(_ query: JournalQuery) -> String {
+        if query.reportsOnly { return noReport }
         if query.narrows { return noMatch }
         return query.everything ? emptyEverything : empty
     }
 
-    /// `feed`'s events cut into days by `calendar`, newest first; `reference` says which is today.
-    public static func build(_ feed: JournalFeed, reference: Date, calendar: Calendar) -> JournalModel {
+    /// `feed`'s events and the `reports` cut into days by `calendar`, newest first, each report pinned among the
+    /// events at the end of its period; `reference` says which is today. A report older than the pages read waits for
+    /// Show Earlier to read its events. Reports only keeps the reports alone.
+    public static func build(
+        _ feed: JournalFeed, reports: [JournalReportCard] = [], reportsOnly: Bool = false, reference: Date, calendar: Calendar
+    ) -> JournalModel {
+        let rows: [JournalDay.Item] = reportsOnly ? [] : feed.events.compactMap { event in
+            event.event.at.flatMap(TicketPage.date).map { .event(row(event, at: $0)) }
+        }
+        let oldest = feed.events.last?.event.at.flatMap(TicketPage.date)
+        let cards = reports
+            .filter { card in !feed.canShowEarlier || oldest.map { card.at >= $0 } ?? true }
+            .sorted { $0.at > $1.at }
         var days: [JournalDay] = []
-        for event in feed.events {
-            guard let at = event.event.at.flatMap(TicketPage.date) else { continue }
-            let id = TimelineModel.dayID(at, calendar)
-            let row = row(event, at: at)
+        for item in pinned(cards, among: rows) {
+            let id = TimelineModel.dayID(item.at, calendar)
             if let index = days.firstIndex(where: { $0.id == id }) {
-                days[index].rows.append(row)
+                days[index].items.append(item)
             } else {
                 days.append(JournalDay(
-                    id: id, relative: TimelineModel.relative(at, reference: reference, calendar: calendar),
-                    date: TimelineModel.dayDate(at, calendar), rows: [row]
+                    id: id, relative: TimelineModel.relative(item.at, reference: reference, calendar: calendar),
+                    date: TimelineModel.dayDate(item.at, calendar), items: [item]
                 ))
             }
         }
         return JournalModel(days: days, canShowEarlier: feed.canShowEarlier)
+    }
+
+    /// The rows, newest first, with each card (newest first) above the first row older than the end of its period:
+    /// the events at or after that end came after the report's period.
+    static func pinned(_ cards: [JournalReportCard], among rows: [JournalDay.Item]) -> [JournalDay.Item] {
+        var items: [JournalDay.Item] = []
+        var cards = cards[...]
+        for row in rows {
+            while let card = cards.first, card.at > row.at {
+                items.append(.report(card))
+                cards = cards.dropFirst()
+            }
+            items.append(row)
+        }
+        return items + cards.map(JournalDay.Item.report)
     }
 
     /// The row of `event`: the Timeline's class and glyph, what happened, who did it, and its ticket's chip.

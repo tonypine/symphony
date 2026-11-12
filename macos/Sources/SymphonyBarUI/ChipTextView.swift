@@ -13,13 +13,22 @@ public struct ChipTextContent: Equatable {
     public var mentions: [Mention]
     /// The files the text points at, each a link, with ranges in `source`.
     public var fileLocations: [FileLocation]
+    /// The caller's own links (TP-1462: a report's cited sentences), with ranges in `source`.
+    public var links: [ChipTextLink]
 
-    public init(_ text: String, references: [String: Reference], lead: String? = nil) {
+    public init(_ text: String, references: [String: Reference], lead: String? = nil, links: [ChipTextLink] = []) {
         let prefix = lead.map { "\($0) " } ?? ""
         let offset = (prefix as NSString).length
         self.lead = lead
         self.text = text
         source = prefix + text
+        let length = (text as NSString).length
+        self.links = links.compactMap { link in
+            guard link.range.location >= 0, NSMaxRange(link.range) <= length, link.range.length > 0 else { return nil }
+            var link = link
+            link.range.location += offset
+            return link
+        }
         let locations = FileLocations.find(in: text).map { location in
             var location = location
             location.range.location += offset
@@ -37,12 +46,26 @@ public struct ChipTextContent: Equatable {
     /// The content of a text whose item resolved its mentions; nil when it has no `references` (an older Symphony, or
     /// a ticket page whose ticket isn't in the Inbox) and no file location, so the text is drawn as plain text, as it
     /// was before chips. A text with file locations and no `references` shows its links and no chips.
-    public static func chips(_ text: String, references: [String: Reference], lead: String? = nil) -> ChipTextContent? {
-        var content = ChipTextContent(text, references: references, lead: lead)
+    public static func chips(_ text: String, references: [String: Reference], lead: String? = nil, links: [ChipTextLink] = []) -> ChipTextContent? {
+        var content = ChipTextContent(text, references: references, lead: lead, links: links)
         guard references.isEmpty else { return content }
-        guard !content.fileLocations.isEmpty else { return nil }
+        guard !content.fileLocations.isEmpty || !content.links.isEmpty else { return nil }
         content.mentions = []
         return content
+    }
+}
+
+/// A stretch of a `ChipText`'s text that is a link of the caller's: a click on it calls the environment's
+/// `openTextLink` with it, and the pointer over it calls `hoverTextLink`.
+public struct ChipTextLink: Equatable {
+    /// Where it sits in the text, in UTF-16 units.
+    public var range: NSRange
+    /// What the caller knows it by.
+    public var id: String
+
+    public init(range: NSRange, id: String) {
+        self.range = range
+        self.id = id
     }
 }
 
@@ -89,6 +112,10 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     public var openURL: (URL) -> Void = { NSWorkspace.shared.open($0) }
     /// A click on a file location's link: an HTML file in the default browser, anything else shown in Finder.
     public var openFileLocation: (FileLocation) -> Void = { $0.open(in: NSWorkspace.shared) }
+    /// A click on one of the caller's links.
+    public var openTextLink: (ChipTextLink) -> Void = { _ in }
+    /// The pointer came onto one of the caller's links, or left it (nil).
+    public var hoverTextLink: (ChipTextLink?) -> Void = { _ in }
     public var popover: ChipPopoverPresenting?
     public var hoverDelay: TimeInterval = DesignTokens.Chip.hoverDelay
     /// Scrolls the review a distance down, in points, through its SwiftUI scroll view's own position: that scroll view
@@ -102,13 +129,29 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         didSet {
             guard drawsText != oldValue else { return }
             alphaValue = drawsText ? 1 : 0
-            if !drawsText { pointerMoved(to: nil) }
+            // Under a sheet nothing is lit; once it ends, what the pointer rests on lights without waiting for it to
+            // move.
+            let point = drawsText ? pointerLocation : nil
+            pointerMoved(to: point)
+            hoveredLink = point.flatMap(linkIndex(at:))
         }
     }
 
     /// The chip under the pointer.
     public private(set) var hoveredChip: Int? {
         didSet { if hoveredChip != oldValue { redrawChips() } }
+    }
+
+    /// The caller's link under the pointer, drawn in the link color.
+    public private(set) var hoveredLink: Int? {
+        didSet {
+            guard hoveredLink != oldValue else { return }
+            apply()
+            // After the update that moved the pointer's link, so SwiftUI's state changes outside it.
+            let link = hoveredLink.flatMap { content.links.indices.contains($0) ? content.links[$0] : nil }
+            let hover = hoverTextLink
+            DispatchQueue.main.async { hover(link) }
+        }
     }
 
     /// The chip the keyboard is on, after Tab entered the paragraph. A chip that takes the keyboard scrolls into view.
@@ -126,12 +169,14 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
 
     private var pressedChip: Int?
     private var pressedLocation: Int?
+    private var pressedLink: Int?
     private var hoverWork: DispatchWorkItem?
     private var hoverArea: NSTrackingArea?
     private lazy var chipElements: [ChipAccessibilityElement] = makeChipElements()
 
     public static let chipAttribute = NSAttributedString.Key("SymphonyChip")
     public static let fileLocationAttribute = NSAttributedString.Key("SymphonyFileLocation")
+    public static let textLinkAttribute = NSAttributedString.Key("SymphonyTextLink")
 
     public init(content: ChipTextContent, style: ChipTextStyle) {
         self.content = content
@@ -164,6 +209,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     public func update(content: ChipTextContent, style: ChipTextStyle) {
         guard content != self.content || style != self.style else { return }
         let mentionsChanged = content.mentions != self.content.mentions
+        let linksChanged = content.links != self.content.links
         self.content = content
         self.style = style
         isSelectable = style.selectable
@@ -172,6 +218,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
             focusedChip = nil
             chipElements = makeChipElements()
         }
+        if linksChanged { hoveredLink = nil }
         apply()
     }
 
@@ -228,7 +275,32 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
                 .underlineStyle: NSUnderlineStyle.single.rawValue,
             ], range: location.range)
         }
+        // The caller's links read as text with a faint link-colored underline, so a paragraph of them still reads as
+        // prose; the one under the pointer takes the link color. A chip inside one keeps its own look.
+        for (index, link) in content.links.enumerated() {
+            for range in Self.ranges(link.range, outside: content.mentions.map(\.range)) {
+                var attributes: [NSAttributedString.Key: Any] = [
+                    Self.textLinkAttribute: index,
+                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                    .underlineColor: NSColor.linkColor.withAlphaComponent(index == hoveredLink ? 1 : 0.45),
+                ]
+                if index == hoveredLink { attributes[.foregroundColor] = NSColor.linkColor }
+                string.addAttributes(attributes, range: range)
+            }
+        }
         return string
+    }
+
+    /// The parts of `range` outside `others`, in order.
+    static func ranges(_ range: NSRange, outside others: [NSRange]) -> [NSRange] {
+        var parts: [NSRange] = []
+        var start = range.location
+        for other in others.sorted(by: { $0.location < $1.location }) where NSIntersectionRange(other, range).length > 0 {
+            if other.location > start { parts.append(NSRange(location: start, length: other.location - start)) }
+            start = max(start, NSMaxRange(other))
+        }
+        if start < NSMaxRange(range) { parts.append(NSRange(location: start, length: NSMaxRange(range) - start)) }
+        return parts
     }
 
     private func apply() {
@@ -405,6 +477,19 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         content.fileLocations.indices.first { index in fileLocationRects(index).contains { $0.contains(point) } }
     }
 
+    /// Where the caller's link `index` sits in the view: a rectangle per line it spans.
+    public func linkRects(_ index: Int) -> [CGRect] {
+        guard content.links.indices.contains(index), let manager = textLayoutManager else { return [] }
+        let origin = textContainerOrigin
+        return frames(of: content.links[index].range, room: 0, in: manager).map { $0.offsetBy(dx: origin.x, dy: origin.y) }
+    }
+
+    /// The caller's link at `point` in the view, nil elsewhere and on a chip inside it.
+    public func linkIndex(at point: CGPoint) -> Int? {
+        guard chipIndex(at: point) == nil else { return nil }
+        return content.links.indices.first { index in linkRects(index).contains { $0.contains(point) } }
+    }
+
     /// TextKit's own link click (the link attribute) opens the location as a click on it does.
     override open func clicked(onLink link: Any, at charIndex: Int) {
         guard let location = content.fileLocations.first(where: { NSLocationInRange(charIndex, $0.range) }) else {
@@ -556,6 +641,13 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + hoverDelay, execute: work)
     }
 
+    /// Where the pointer is in the view, nil when it is outside it or the view is in no window.
+    var pointerLocation: CGPoint? {
+        guard let window else { return nil }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        return bounds.contains(point) ? point : nil
+    }
+
     override open func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let hoverArea { removeTrackingArea(hoverArea) }
@@ -568,18 +660,24 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         super.mouseMoved(with: event)
         let point = convert(event.locationInWindow, from: nil)
         pointerMoved(to: point)
-        if hoveredChip != nil { NSCursor.pointingHand.set() }
+        hoveredLink = drawsText ? linkIndex(at: point) : nil
+        if hoveredChip != nil || hoveredLink != nil { NSCursor.pointingHand.set() }
     }
 
     override open func mouseExited(with event: NSEvent) {
         super.mouseExited(with: event)
         pointerMoved(to: nil)
+        hoveredLink = nil
     }
 
     override open func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
         if chipIndex(at: point) == nil, let location = fileLocationIndex(at: point) {
             pressedLocation = location
+            return
+        }
+        if let link = linkIndex(at: point) {
+            pressedLink = link
             return
         }
         guard let chip = chipIndex(at: point) else {
@@ -591,10 +689,15 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     }
 
     override open func mouseDragged(with event: NSEvent) {
-        if pressedChip == nil, pressedLocation == nil { super.mouseDragged(with: event) }
+        if pressedChip == nil, pressedLocation == nil, pressedLink == nil { super.mouseDragged(with: event) }
     }
 
     override open func mouseUp(with event: NSEvent) {
+        if let pressed = pressedLink {
+            pressedLink = nil
+            if linkIndex(at: convert(event.locationInWindow, from: nil)) == pressed { openTextLink(content.links[pressed]) }
+            return
+        }
         if let pressed = pressedLocation {
             pressedLocation = nil
             if fileLocationIndex(at: convert(event.locationInWindow, from: nil)) == pressed {
@@ -616,7 +719,7 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
     override open func hitTest(_ point: NSPoint) -> NSView? {
         guard !style.selectable else { return super.hitTest(point) }
         let local = superview.map { convert(point, from: $0) } ?? point
-        return chipIndex(at: local) == nil && fileLocationIndex(at: local) == nil ? nil : super.hitTest(point)
+        return chipIndex(at: local) == nil && fileLocationIndex(at: local) == nil && linkIndex(at: local) == nil ? nil : super.hitTest(point)
     }
 
     override open func menu(for event: NSEvent) -> NSMenu? {

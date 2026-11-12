@@ -1,0 +1,63 @@
+{
+  "items": [
+    {
+      "issue_id": null,
+      "identifier": null,
+      "title": "Symphony",
+      "repo_key": null,
+      "kind": "action",
+      "state": null,
+      "subject": "symphony",
+      "ask": "Install Xcode on the QA machine now, or wait for TP-1475?",
+      "waiting_since": "2026-11-12T03:01:20Z",
+      "waiting_seconds": 1720,
+      "url": null,
+      "references": {},
+      "review": {
+        "title": "Install Xcode on the QA machine now, or wait for TP-1475?",
+        "question": "QA can't build the Mac app because the QA machine lacks Xcode, and TP-1475 (Install Xcode on the QA machine) is filed to fix it. Should Symphony wait for TP-1475, or will you install Xcode yourself now?",
+        "why": "TP-1457 passed QA on the live server, but the next Mac app QA pass needs Xcode.\n\nIt comes from the status report on 11 November 21:00 to 12 November 03:00 UTC.",
+        "if_unanswered": "TP-1475 runs in its turn, and every Mac app QA pass waits for it.",
+        "unblocks": "the Mac app's QA passes",
+        "steps": [],
+        "options": [
+          {
+            "label": "Wait for TP-1475",
+            "effect": "TP-1475 installs Xcode in its turn; Mac app QA passes wait until it lands.",
+            "recommended": true,
+            "tradeoffs": [
+              {
+                "kind": "good",
+                "text": "Nothing for you to do."
+              },
+              {
+                "kind": "cost",
+                "text": "Mac app QA waits about an hour."
+              }
+            ]
+          },
+          {
+            "label": "I'll install it now",
+            "effect": "You install Xcode on the QA machine; TP-1475 is cancelled once QA builds again.",
+            "recommended": false,
+            "tradeoffs": [
+              {
+                "kind": "good",
+                "text": "QA builds again within minutes."
+              },
+              {
+                "kind": "cost",
+                "text": "Ten minutes of your time on the QA machine."
+              }
+            ]
+          }
+        ],
+        "recommendation_reason": "TP-1475 is next in line, so waiting costs little and needs nothing from you.",
+        "comment_id": null,
+        "question_id": "q-report-0300",
+        "confirm": null,
+        "requested_at": "2026-11-12T03:01:20Z"
+      }
+    }
+  ]
+}

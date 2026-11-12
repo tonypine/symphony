@@ -1,0 +1,93 @@
+{
+  "events": [
+    {
+      "id": "p03",
+      "seq": 1,
+      "at": "2026-11-11T19:40:00Z",
+      "type": "verdict.recorded",
+      "phase": null,
+      "run_id": "r-300-qa2",
+      "parent": null,
+      "actor": {
+        "kind": "symphony"
+      },
+      "summary": {
+        "title": "QA failed: the invoice total misses the tax",
+        "detail": null
+      },
+      "payload": {},
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "billing",
+        "identifier": "BIL-300",
+        "title": "Invoice totals in the customer's currency"
+      },
+      "class": "verdict",
+      "notable": true,
+      "by": {
+        "kind": "run",
+        "name": "qa",
+        "run_id": "r-300-qa2"
+      }
+    },
+    {
+      "id": "p01",
+      "seq": 1,
+      "at": "2026-11-11T18:10:00Z",
+      "type": "ticket.moved",
+      "phase": null,
+      "run_id": null,
+      "parent": null,
+      "actor": {
+        "kind": "symphony"
+      },
+      "summary": {
+        "title": "Shipped: moved to Done from Merging",
+        "detail": null
+      },
+      "payload": {},
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1453",
+        "title": "3b (16/26): The Home board's lanes"
+      },
+      "class": "move",
+      "notable": true,
+      "by": {
+        "kind": "symphony"
+      }
+    },
+    {
+      "id": "p02",
+      "seq": 1,
+      "at": "2026-11-11T16:05:00Z",
+      "type": "verdict.recorded",
+      "phase": null,
+      "run_id": "r-300-qa1",
+      "parent": null,
+      "actor": {
+        "kind": "symphony"
+      },
+      "summary": {
+        "title": "QA failed: the invoice total reads in dollars",
+        "detail": null
+      },
+      "payload": {},
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "billing",
+        "identifier": "BIL-300",
+        "title": "Invoice totals in the customer's currency"
+      },
+      "class": "verdict",
+      "notable": true,
+      "by": {
+        "kind": "run",
+        "name": "qa",
+        "run_id": "r-300-qa1"
+      }
+    }
+  ],
+  "next_until": null
+}

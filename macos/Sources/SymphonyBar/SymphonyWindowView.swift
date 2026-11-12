@@ -211,10 +211,18 @@ final class SymphonyWindowModel: ObservableObject {
     /// The Journal's filters (TP-1459): kept for the session, and each change reads the newest page again.
     @Published var journalQuery = JournalQuery() {
         didSet {
-            guard journalQuery != oldValue else { return }
+            // Reports only shows less of what is read: it reads nothing again.
+            guard !journalQuery.readsAsTheSame(oldValue) else { return }
             restartJournal()
         }
     }
+    /// The status reports the Journal pins among its events (TP-1462), newest first.
+    @Published var journalReports: [JournalReport] = []
+    /// The events the reports cite that the Journal's pages don't hold, read from each report's period.
+    @Published var journalCitations = JournalCitations()
+    /// The reports whose period was read for their citations, read once each.
+    var journalPeriodsRead = Set<String>()
+    var readingReports = false
     /// The Journal's pages read under its query and the window's scope, newest first.
     @Published var journalFeed = JournalFeed()
     /// What the last Journal read got when it got no page, nil after one that did.
@@ -374,6 +382,10 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var answerFailures: [String: String] = [:]
     /// Whether an answer waits for the banner's Undo, still to send.
     var holdsAnswer: Bool { held != nil }
+
+    /// Whether the Director answered the Inbox item `itemID`: held for Undo, on its way, or taken and not read back yet.
+    /// A report's Question leaves its card from that moment (TP-1462), and an Undo brings it back.
+    func answered(_ itemID: String) -> Bool { answeredItems.contains(itemID) }
     /// The Inbox items the Director answered, by issue id: they leave the Inbox without a banner of their own.
     /// It also keeps the ticket page's Send off from the answer until the read that drops it (`answering`).
     private var answeredItems = Set<String>() {

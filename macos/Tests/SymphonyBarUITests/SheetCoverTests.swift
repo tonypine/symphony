@@ -66,6 +66,34 @@ final class SheetCoverTests: XCTestCase {
         XCTAssertEqual(changes, [true], "the view that replaces it may still see the window covered")
     }
 
+    /// TP-1462: a view that left its window under a sheet and came back once the sheet ended still held the cover it
+    /// was told of, so its paragraph drew nothing live and took no hover.
+    func testBackInAWindowWithNoSheetItSaysItIsUncovered() {
+        let cover = cover()
+        hasSheet = true
+        post(NSWindow.willBeginSheetNotification)
+        cover.watch(nil, hasSheet: { true })
+        hasSheet = false
+        cover.watch(window, hasSheet: { [unowned self] in hasSheet })
+        XCTAssertFalse(cover.covered)
+        XCTAssertEqual(changes, [true, false])
+    }
+
+    /// The window can still name the sheet that ended while it posts the end: the cover asks again after it.
+    func testASheetTheWindowStillNamesAtItsEndIsAskedAgainAfter() {
+        let cover = cover()
+        hasSheet = true
+        post(NSWindow.willBeginSheetNotification)
+        post(NSWindow.didEndSheetNotification)
+        XCTAssertTrue(cover.covered)
+        hasSheet = false
+        let asked = expectation(description: "asked again")
+        DispatchQueue.main.async { asked.fulfill() }
+        wait(for: [asked], timeout: 1)
+        XCTAssertFalse(cover.covered)
+        XCTAssertEqual(changes, [true, false])
+    }
+
     func testWatchingTheSameWindowAgainChangesNothing() {
         let cover = cover()
         cover.watch(window, hasSheet: { true })
