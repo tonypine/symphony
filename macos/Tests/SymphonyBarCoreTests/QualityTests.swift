@@ -63,6 +63,45 @@ final class QualityTests: XCTestCase {
         XCTAssertEqual(gone.tiles[3].value, "—")
     }
 
+    func testAnEpicSliceKeepsOnlyItsTicketsReviewData() throws {
+        let epic = try quality(
+            InsightsSlice(period: .preset(.week), unit: .day, epic: "TP-1381"),
+            aggregate: "aggregate.from=2026-11-06&to=2026-11-12&unit=day&epic=TP-1381&series=tokens,runs,verdicts,shipped.json"
+        )
+        // SHOP-298's overturned approval is outside the epic.
+        XCTAssertTrue(epic.disagreements.isEmpty)
+        XCTAssertEqual(epic.runs.count, 27)
+        XCTAssertTrue(epic.runs.allSatisfy { $0.identifier?.hasPrefix("TP-") == true })
+        XCTAssertEqual(epic.runs.count, epic.runsChart.total)
+        // Agreement is counted by repo, so the epic's slice has none.
+        XCTAssertEqual(epic.tiles[3].value, "—")
+        XCTAssertTrue(epic.tiles[3].isEmpty)
+        XCTAssertEqual(epic.tiles[3].context, Quality.notForAnEpic)
+        XCTAssertTrue(epic.repos.isEmpty)
+        XCTAssertEqual(epic.agreementSummary, Quality.notForAnEpic)
+    }
+
+    func testAPastRangeKeepsItsTicketsAndSaysAgreementRunsToToday() throws {
+        let aggregate = AggregatePayload(series: ["verdicts": .init(total: 1, by: ["qa:pass": 1], tickets: ["TP-1": 1])])
+        let review = ReviewHistory(
+            agreement: .init(agreed: 3, disagreed: 1),
+            disagreements: [.init(identifier: "TP-1", decision: "QA failed", decidedBy: "QA"), .init(identifier: "TP-2", decision: "QA failed", decidedBy: "QA")]
+        )
+        let runs = [
+            QualityRun(id: "a", identifier: "TP-1", outcome: .prOpened, date: "2026-11-03"),
+            QualityRun(id: "b", outcome: .error, date: "2026-11-04"),
+            QualityRun(id: "c", identifier: "TP-2", outcome: .error, date: "2026-11-09"),
+        ]
+        let past = Quality(
+            aggregate: aggregate, slice: InsightsSlice(period: .range(from: "2026-11-01", to: "2026-11-07")), review: review, runs: runs,
+            today: "2026-11-12"
+        )
+        XCTAssertEqual(past.disagreements.map(\.identifier), ["TP-1"])
+        XCTAssertEqual(past.runs.map(\.id), ["a"])
+        XCTAssertEqual(past.tiles[3].context, "4 judged Code Review approvals, counted up to today")
+        XCTAssertEqual(past.agreementNote, "No Code Review approval in this period.")
+    }
+
     func testAgreementByRepoNamesTheManualReview() throws {
         let quality = try quality()
         XCTAssertEqual(quality.repos.map(\.mode), ["Manual review off", "Manual review on"])
@@ -135,10 +174,12 @@ final class QualityTests: XCTestCase {
     }
 
     /// The `insights` fixture's slice with the `attention` fixture's review.
-    private func quality(_ slice: InsightsSlice = InsightsSlice(), scope: OverviewScope = .all) throws -> Quality {
+    private func quality(
+        _ slice: InsightsSlice = InsightsSlice(), scope: OverviewScope = .all, aggregate file: String = "aggregate.json"
+    ) throws -> Quality {
         let api = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Fixtures/director-app/insights/api/v1")
-        let aggregate = try XCTUnwrap(AggregatePayload.decode(Data(contentsOf: api.appendingPathComponent("aggregate.json"))))
+        let aggregate = try XCTUnwrap(AggregatePayload.decode(Data(contentsOf: api.appendingPathComponent(file))))
         let runs = try XCTUnwrap(QualityRun.decode(Data(contentsOf: api.appendingPathComponent("runs.json"))))
         return Quality(aggregate: aggregate, slice: slice, scope: scope, review: try history().review, runs: runs, today: "2026-11-12")
     }

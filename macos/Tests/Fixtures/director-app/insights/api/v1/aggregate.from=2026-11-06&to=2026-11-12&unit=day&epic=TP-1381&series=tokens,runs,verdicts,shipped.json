@@ -87,7 +87,7 @@
         "failure": 2,
         "stopped": 1
       },
-      "tickets": {},
+      "tickets": {"TP-1458": 6, "TP-1457": 6, "TP-1459": 5, "TP-1456": 4, "TP-1461": 2, "TP-1460": 2, "TP-1455": 2},
       "buckets": [
         {
           "start": "2026-11-06T00:00:00Z",
@@ -158,7 +158,7 @@
         "code_review:request_changes": 1,
         "qa:fail": 1
       },
-      "tickets": {},
+      "tickets": {"TP-1458": 5, "TP-1457": 4, "TP-1459": 4, "TP-1456": 3, "TP-1461": 2, "TP-1460": 2, "TP-1455": 1},
       "buckets": [
         {
           "start": "2026-11-06T00:00:00Z",

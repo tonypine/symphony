@@ -134,7 +134,7 @@ private struct AgreementChart: View {
                 Button(Quality.showDataTitle) { showsData = true }
             }
             if quality.repos.isEmpty {
-                Text("No Code Review approval in this period.")
+                Text(quality.agreementNote)
                     .font(DesignTokens.TypeStyle.body.font)
                     .foregroundStyle(.secondary)
             } else {

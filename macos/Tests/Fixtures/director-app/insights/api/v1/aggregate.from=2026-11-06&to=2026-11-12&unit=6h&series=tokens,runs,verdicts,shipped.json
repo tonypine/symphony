@@ -280,7 +280,7 @@
         "timeout": 2,
         "stopped": 1
       },
-      "tickets": {},
+      "tickets": {"SHOP-321": 8, "TP-1458": 6, "TP-1457": 6, "TP-1459": 5, "API-140": 5, "SHOP-322": 4, "TP-1456": 4, "SHOP-320": 4, "API-141": 2, "TP-1461": 2, "TP-1460": 2, "TP-1455": 2},
       "buckets": [
         {
           "start": "2026-11-06T00:00:00Z",
@@ -520,7 +520,7 @@
         "code_review:request_changes": 2,
         "qa:fail": 3
       },
-      "tickets": {},
+      "tickets": {"TP-1458": 5, "TP-1457": 4, "TP-1459": 4, "TP-1456": 3, "TP-1461": 2, "TP-1460": 2, "TP-1455": 1, "SHOP-321": 5, "SHOP-322": 3, "SHOP-320": 3, "SHOP-298": 2, "API-140": 2, "API-141": 2},
       "buckets": [
         {
           "start": "2026-11-06T00:00:00Z",

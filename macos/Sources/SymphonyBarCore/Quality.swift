@@ -275,13 +275,24 @@ public struct Quality: Equatable {
     public var runs: [QualityRun]
     /// Nil while the slice has a run or a verdict.
     public var empty: InsightsEmpty?
+    /// What Review agreement by repo says without a bar: nothing judged yet, or not counted for one epic.
+    public var agreementNote: String
+
+    /// Agreement is counted by repo, so an epic's slice has none.
+    public static let notForAnEpic = "Not counted for one epic: agreement is counted by repo."
 
     public init(
         aggregate: AggregatePayload, slice: InsightsSlice, scope: OverviewScope = .all, review: ReviewHistory?, runs allRuns: [QualityRun],
         today: String
     ) {
         let (from, to) = slice.period.days(today: today)
-        runs = allRuns.filter { $0.date >= from && $0.date <= to }.sorted { ($0.date, $0.id) > ($1.date, $1.id) }
+        let repoKey = slice.repoKey(scope: scope)
+        // The history and the runs read every ticket from the period's first day to today: a repo, an epic or a
+        // period that ends before today keeps only the tickets the aggregation counted for the slice.
+        let tickets: Set<String>? = repoKey != nil || slice.epic != nil || to < today
+            ? Set(aggregate.runs.tickets.keys).union(aggregate.verdicts.tickets.keys) : nil
+        let inSlice = { (identifier: String?) in tickets.map { set in identifier.map { set.contains($0) } ?? false } ?? true }
+        runs = allRuns.filter { $0.date >= from && $0.date <= to && inSlice($0.identifier) }.sorted { ($0.date, $0.id) > ($1.date, $1.id) }
         runsChart = InsightsChart.build(
             aggregate.runs, unit: aggregate.unit, title: "Runs \(aggregate.unit.per)", measure: "Runs", format: .count, fallback: "other",
             order: Self.runKeys.map(\.key), key: Self.runKey
@@ -291,9 +302,10 @@ public struct Quality: Equatable {
             fallback: "other", order: Self.verdictKeys.map(\.key), key: Self.verdictKey
         )
 
-        let repoKey = slice.repoKey(scope: scope)
         let review = review ?? ReviewHistory()
-        let byRepo = review.byRepo.filter { repo in repoKey.map { repo.repoKey == $0 } ?? true }
+        // Agreement is counted by repo from the period's first day to today: it has no epic, and a past period's
+        // figure runs to today.
+        let byRepo = slice.epic != nil ? [] : review.byRepo.filter { repo in repoKey.map { repo.repoKey == $0 } ?? true }
         let agreement = repoKey == nil ? review.agreement : (byRepo.first?.agreement ?? ReviewHistory.Agreement())
         let runsBy = aggregate.runs.by
         let verdicts = aggregate.verdicts.by
@@ -304,8 +316,14 @@ public struct Quality: Equatable {
             Self.tile("Runs that succeeded", Self.rate(runsBy["success"] ?? 0, runCount), of: runCount, context: "runs"),
             Self.tile("Code Review approvals", Self.rate(verdicts["code_review:approve"] ?? 0, codeReview), of: codeReview, context: "Code Review verdicts"),
             Self.tile("QA passes", Self.rate(verdicts["qa:pass"] ?? 0, qa), of: qa, context: "QA verdicts"),
-            Self.tile("Review agreement", agreement.rate, of: agreement.judged, context: "judged Code Review approvals"),
+            slice.epic != nil
+                ? Tile(title: "Review agreement", value: "—", context: Self.notForAnEpic, isEmpty: true)
+                : Self.tile(
+                    "Review agreement", agreement.rate, of: agreement.judged,
+                    context: to < today ? "judged Code Review approvals, counted up to today" : "judged Code Review approvals"
+                ),
         ]
+        agreementNote = slice.epic != nil ? Self.notForAnEpic : "No Code Review approval in this period."
         repos = byRepo.map { repo in
             RepoBar(
                 repoKey: repo.repoKey, rate: repo.agreement.rate, mode: "Manual review \(repo.manualReview.title.lowercased())",
@@ -313,7 +331,7 @@ public struct Quality: Equatable {
             )
         }
         disagreements = review.disagreements
-            .filter { row in repoKey.map { row.repoKey == $0 } ?? true }
+            .filter { row in (repoKey.map { row.repoKey == $0 } ?? true) && inSlice(row.identifier) }
             .map { row in
                 DisagreementRow(
                     identifier: row.identifier, repoKey: row.repoKey, review: "Code Review: \(row.review)", decision: "\(row.decidedBy): \(row.decision)"
@@ -361,7 +379,7 @@ public struct Quality: Equatable {
 
     /// The agreement chart's accessibility summary.
     public var agreementSummary: String {
-        guard !repos.isEmpty else { return "No Code Review approval in this period." }
+        guard !repos.isEmpty else { return agreementNote }
         return repos.map { "\($0.repoKey): \(Self.percent($0.rate)), \($0.value), \($0.mode)" }.joined(separator: ". ") + "."
     }
 
