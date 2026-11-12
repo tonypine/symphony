@@ -49,8 +49,9 @@
 // grant like the other `ax-` commands. `ax-select` selects a table or outline
 // row, which answers no AXPress, and `click` and `key` send mouse and key
 // events to the app's PID alone (see `selectRow`, `click` and `pressKey`); a ⌘
-// shortcut goes through the HID tap, only while the app owns the keyboard, as
-// the menu takes it from no other route (see `postShortcut`).
+// shortcut presses the menu item that owns it through accessibility, and only
+// when none does goes through the HID tap, while the app owns the keyboard (see
+// `shortcutItem` and `postShortcut`).
 // `click`, `hover` and `context-menu` move the real pointer to the target first
 // (see `movePointer`), only once the app's own window is in front there.
 // `scroll` posts scroll-wheel events in the scroll area at the target, by a delta
@@ -986,6 +987,29 @@ func focusedDescription(_ app: AXUIElement, _ name: String) -> [String: Any]? {
     return node
 }
 
+// The enabled menu item whose key equivalent is this shortcut, found in the app's
+// menu bar. AXMenuItemCmdModifiers is a mask: 1 shift, 2 option, 4 control, 8 no ⌘.
+func shortcutItem(_ app: AXUIElement, key: String, flags: CGEventFlags) -> AXUIElement? {
+    var wanted = 0
+    if flags.contains(.maskShift) { wanted |= 1 }
+    if flags.contains(.maskAlternate) { wanted |= 2 }
+    if flags.contains(.maskControl) { wanted |= 4 }
+    func find(_ node: AXUIElement, _ depth: Int) -> AXUIElement? {
+        for child in children(node) {
+            if attribute(child, kAXRoleAttribute as String) as? String == kAXMenuItemRole as String,
+               let char = text(attribute(child, kAXMenuItemCmdCharAttribute as String))?.lowercased(), char == key.lowercased(),
+               (attribute(child, kAXMenuItemCmdModifiersAttribute as String) as? Int ?? 0) == wanted,
+               (attribute(child, kAXEnabledAttribute as String) as? Bool ?? true) {
+                return child
+            }
+            if depth < 4, let found = find(child, depth + 1) { return found }
+        }
+        return nil
+    }
+    guard let bar = element(attribute(app, kAXMenuBarAttribute as String)) else { return nil }
+    return find(bar, 0)
+}
+
 // Presses one key with its modifiers in the app's focused window: the app comes
 // to the front, and the events go to its PID alone, except a ⌘ shortcut, which
 // goes as a keyboard sends it once the app owns the keyboard (see `postShortcut`).
@@ -1021,6 +1045,19 @@ func pressKey(_ pid: pid_t, _ name: String, _ modifiers: String) {
         // the keyboard: only the app's own, never another app's.
         // The system-wide focused app can read empty or stale on a runner with no
         // console user, so the app's own frontmost flag counts too.
+        if name.count == 1, let item = shortcutItem(app, key: name, flags: flags), AXUIElementPerformAction(item, kAXPressAction as CFString) == .success {
+            // The menu item that owns the shortcut, pressed as the shortcut would.
+            usleep(clickPause)
+            emit([
+                "ok": true,
+                "via": "menu",
+                "key": name,
+                "modifiers": modifiers.split(separator: ",").map(String.init),
+                "window": focusedDescription(app, kAXFocusedWindowAttribute as String) ?? [:],
+                "focused": focusedDescription(app, kAXFocusedUIElementAttribute as String) ?? [:]
+            ])
+            return
+        }
         guard waitUntil(5, { keyboardOwner() == pid || (attribute(app, kAXFrontmostAttribute as String) as? Bool) == true }) else {
             fail("not_frontmost", "Another app owns the keyboard, so the shortcut was not sent. Raise the app's window with qa_ax_press and AXRaise, then try again.")
         }
