@@ -183,7 +183,7 @@ final class SymphonyWindowModel: ObservableObject {
     /// Builds the page shown off the main actor when its sources changed (TP-1479).
     let ticketPageBuilder = TicketPageBuilder()
     /// The page shown and its Timeline, as last built: reading it builds nothing.
-    @Published private(set) var ticketPageModel: TicketPageModel?
+    @Published var ticketPageModel: TicketPageModel?
     /// What the pull request page shown read from its endpoint, nil while it reads (D15).
     @Published var pullRequestResult: PullRequestPageResult?
     var readingPullRequest = false
