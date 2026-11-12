@@ -43,7 +43,7 @@ public struct TicketView: Equatable, Identifiable {
             let values = Self.values(filter["value"], filter: kind, savedAt: savedAt)
             if !values.isEmpty { chips.append(TicketFilterChip(filter: kind, values: values)) }
         }
-        let names = (entry["columns"] as? [String]) ?? TicketColumn.defaultColumns
+        let names = (entry["columns"] as? [String]) ?? []
         let columns = catalog.map(\.name).filter(names.contains)
         let sortEntry = entry["sort"] as? [String: Any]
         let column = sortEntry?["column"] as? String ?? TicketSort.default.column
