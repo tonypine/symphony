@@ -148,12 +148,15 @@ public struct TimelineSection: View {
     private func row(_ item: TimelineItem) -> some View {
         let selected = selection == item.id
         switch item {
+        // Each row draws again only when what it shows changed: a new event draws its own row (TP-1480).
         case let .entry(entry):
             TimelineEntryRow(entry: entry, time: clock(entry.at), selected: selected) { select(item.id) }
+                .equatable()
         case let .run(run, at):
             TimelineRunRow(run: run, time: clock(at), selected: selected, transcripts: transcripts, fold: fold(run)) {
                 select(item.id)
             }
+            .equatable()
         }
     }
 
@@ -535,5 +538,22 @@ private struct TimelineEntering: ViewModifier {
                 withAnimation(.spring(duration: duration, bounce: bounce)) { settled = true }
                 withAnimation(.easeOut(duration: DesignTokens.Motion.enterTintDuration)) { tint = 0 }
             }
+    }
+}
+
+/// A row draws again only when its entry, its time, its selection or its ticket changed; a new `select` for the same
+/// row doesn't open the gate (TP-1480).
+extension TimelineEntryRow: Equatable {
+    nonisolated static func == (lhs: TimelineEntryRow, rhs: TimelineEntryRow) -> Bool {
+        lhs.entry == rhs.entry && lhs.time == rhs.time && lhs.selected == rhs.selected && lhs.ticket == rhs.ticket
+    }
+}
+
+/// A run's row draws again only when its run, its time, its selection or its fold changed; its transcripts draw it
+/// again themselves.
+extension TimelineRunRow: Equatable {
+    nonisolated static func == (lhs: TimelineRunRow, rhs: TimelineRunRow) -> Bool {
+        lhs.run == rhs.run && lhs.time == rhs.time && lhs.selected == rhs.selected
+            && lhs.fold.wrappedValue == rhs.fold.wrappedValue && lhs.transcripts === rhs.transcripts
     }
 }

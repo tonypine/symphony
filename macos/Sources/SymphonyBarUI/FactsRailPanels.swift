@@ -440,3 +440,14 @@ struct FactRowStyle: ButtonStyle {
         }
     }
 }
+
+// The facts rail's cards draw again only when their model changed: the actions they are given are the page's, and a
+// new closure for the same action doesn't open the gate (TP-1480).
+
+extension PullRequestPanel: Equatable {
+    nonisolated public static func == (lhs: PullRequestPanel, rhs: PullRequestPanel) -> Bool { lhs.model == rhs.model }
+}
+
+extension ConnectedPanel: Equatable {
+    nonisolated public static func == (lhs: ConnectedPanel, rhs: ConnectedPanel) -> Bool { lhs.model == rhs.model }
+}

@@ -61,11 +61,10 @@ extension SymphonyWindowModel {
     func readPeek() {
         guard let identifier = peekReads.start(peek, countsKnown: state.countsKnown) else { return }
         Task {
-            if case let .loaded(data) = await client.get(TicketPage.issuePath(identifier)) {
-                peekIssues[identifier] = data
-            } else {
-                peekIssues[identifier] = nil
-            }
+            var issue: Data?
+            if case let .loaded(data) = await client.get(TicketPage.issuePath(identifier)) { issue = data }
+            // The same answer read again publishes nothing (TP-1480).
+            if peekIssues[identifier] != issue { peekIssues[identifier] = issue }
             peekReads.finish(identifier)
         }
     }

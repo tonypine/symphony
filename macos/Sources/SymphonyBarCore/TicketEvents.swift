@@ -289,6 +289,13 @@ public struct TicketEventsPayload: Equatable {
 
     public var isEmpty: Bool { events.isEmpty && runs.isEmpty }
 
+    /// The history's run headers without its events: what the facts rail reads, which an event alone doesn't change.
+    public var runsOnly: TicketEventsPayload {
+        var payload = TicketEventsPayload()
+        payload.runs = runs
+        return payload
+    }
+
     /// A feed page, nil when it isn't one.
     public static func decode(_ data: Data) -> TicketEventsPayload? {
         guard let page = try? decoder.decode(Page.self, from: data) else { return nil }

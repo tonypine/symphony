@@ -110,13 +110,14 @@ public final class TicketDecisionsEditor: ObservableObject {
     /// makes the card unavailable. An answer for a ticket no longer shown changes nothing.
     public func apply(_ data: Data?, for identifier: String) {
         guard identifier == self.identifier else { return }
+        // The same answer read again publishes nothing (TP-1480).
         guard let data, let payload = try? JSONDecoder().decode(Payload.self, from: data) else {
-            decisions = []
-            load = .unavailable
+            if !decisions.isEmpty { decisions = [] }
+            if load != .unavailable { load = .unavailable }
             return
         }
-        decisions = payload.decisions
-        load = .loaded
+        if decisions != payload.decisions { decisions = payload.decisions }
+        if load != .loaded { load = .loaded }
     }
 
     /// Whether Record would send: the card is read, the text isn't blank and nothing is on its way.
