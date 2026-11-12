@@ -141,12 +141,6 @@ public enum Destination: String, CaseIterable, Equatable, Hashable, Identifiable
     /// The number of its ⌘-shortcut.
     public var shortcut: Int { Self.allCases.firstIndex(of: self)! + 1 }
 
-    /// The destination on ⌘`number`.
-    public static func forShortcut(_ number: Int) -> Destination? {
-        guard number >= 1, number <= allCases.count else { return nil }
-        return allCases[number - 1]
-    }
-
     /// "Work (⌘3)": the sidebar row's help and the View menu's item.
     public var shortcutHelp: String { "\(title) (⌘\(shortcut))" }
 
@@ -194,6 +188,11 @@ public struct Sidebar: Equatable {
 
     public var destinations: [Destination] { Destination.allCases }
 
+    /// The View menu's destination items, in order: ⌘1–⌘5 pick them.
+    public var menuItems: [DestinationMenuItem] {
+        destinations.map { DestinationMenuItem(title: $0.title, keyEquivalent: String($0.shortcut), destination: $0) }
+    }
+
     /// The rows in order: each destination, and under Factory its pages.
     public var items: [SidebarItem] {
         destinations.flatMap { destination in
@@ -216,6 +215,19 @@ public struct Sidebar: Equatable {
 }
 
 /// Each destination's last page this session, so Work and Insights open on the tab left last (TP-1455).
+/// A View menu item that picks a destination on ⌘ and its key.
+public struct DestinationMenuItem: Equatable {
+    public let title: String
+    public let keyEquivalent: String
+    public let destination: Destination
+
+    public init(title: String, keyEquivalent: String, destination: Destination) {
+        self.title = title
+        self.keyEquivalent = keyEquivalent
+        self.destination = destination
+    }
+}
+
 public struct DestinationMemory: Equatable {
     private var last: [Destination: SymphonyView] = [:]
 

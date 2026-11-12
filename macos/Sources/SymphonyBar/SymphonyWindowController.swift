@@ -249,9 +249,9 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     /// and Forward on ⌘[ and ⌘], Find a Ticket on ⌘F, the page's search on ⌥⌘F, and Refresh on ⌘R.
     func viewMenu() -> NSMenu {
         let menu = NSMenu(title: "View")
-        for destination in Sidebar().destinations {
-            let item = NSMenuItem(title: destination.title, action: #selector(selectDestination(_:)), keyEquivalent: String(destination.shortcut))
-            item.representedObject = destination.rawValue
+        for entry in Sidebar().menuItems {
+            let item = NSMenuItem(title: entry.title, action: #selector(selectDestination(_:)), keyEquivalent: entry.keyEquivalent)
+            item.representedObject = entry.destination.rawValue
             item.target = self
             menu.addItem(item)
         }

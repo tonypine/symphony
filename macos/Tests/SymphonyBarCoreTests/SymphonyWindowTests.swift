@@ -114,12 +114,18 @@ final class SymphonyWindowTests: XCTestCase {
     }
 
     func testCommandOneToFivePickTheDestinations() {
-        XCTAssertEqual(Destination.allCases.map(\.shortcut), [1, 2, 3, 4, 5])
-        XCTAssertEqual(Destination.forShortcut(3), .work)
-        XCTAssertEqual(Destination.forShortcut(5), .factory)
-        XCTAssertNil(Destination.forShortcut(0))
-        XCTAssertNil(Destination.forShortcut(6))
+        // The View menu's items, which carry ⌘1–⌘5.
+        let items = Sidebar().menuItems
+        XCTAssertEqual(items.map(\.title), ["Home", "Journal", "Work", "Insights", "Factory"])
+        XCTAssertEqual(items.map(\.keyEquivalent), ["1", "2", "3", "4", "5"])
+        XCTAssertEqual(items.map(\.destination), [.home, .journal, .work, .insights, .factory])
         XCTAssertEqual(Destination.work.shortcutHelp, "Work (⌘3)")
+
+        // ⌘3 opens Work on Initiatives, with Tickets as its other tab.
+        let work = items.first { $0.keyEquivalent == "3" }!.destination
+        XCTAssertEqual(DestinationMemory().page(for: work), .initiatives)
+        XCTAssertEqual(work.presentation, .tabs)
+        XCTAssertEqual(work.pages, [.initiatives, .tickets])
     }
 
     func testDestinationsOpenOnTheirFirstPageThenTheLastOneThisSession() {
