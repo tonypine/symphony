@@ -6,36 +6,50 @@ import SymphonyBarCore
 // happened, and Show Earlier under the oldest day while the read has earlier pages. A row opens its ticket's page at
 // that event; one on Symphony's own stream opens nothing.
 //
-// Reports (23/26 to 25/26) have no row yet. Their slot is `reports(for:)`: a period's report pins at the top of the
-// day its period ends on, above that day's events, and draws nothing until those tickets fill it.
+// Reports (TP-1462) sit among the events at the end of their period, each drawn by `report`, the card its caller
+// builds; a new one enters with the timeline's motion. The events a citation names are lit while the pointer is on it
+// (`highlighted`).
 
-public struct JournalSection: View {
+public struct JournalSection<Report: View>: View {
     let model: JournalModel
     let clock: (Date) -> String
     let open: (JournalRow) -> Void
     let showEarlier: () -> Void
     /// Show Earlier's read is on its way: the button waits.
     let readingEarlier: Bool
+    /// The events a report's citation under the pointer names: their rows are lit.
+    let highlighted: Set<String>
+    let report: (JournalReportCard) -> Report
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     public init(
-        model: JournalModel, calendar: Calendar = .current, readingEarlier: Bool = false, open: @escaping (JournalRow) -> Void = { _ in },
-        showEarlier: @escaping () -> Void = {}
+        model: JournalModel, calendar: Calendar = .current, readingEarlier: Bool = false, highlighted: Set<String> = [],
+        open: @escaping (JournalRow) -> Void = { _ in }, showEarlier: @escaping () -> Void = {},
+        @ViewBuilder report: @escaping (JournalReportCard) -> Report
     ) {
         self.model = model
         clock = TimelineModel.clock(calendar)
         self.readingEarlier = readingEarlier
+        self.highlighted = highlighted
         self.open = open
         self.showEarlier = showEarlier
+        self.report = report
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
             ForEach(model.days) { day in
                 DaySeparator(title: day.title, label: day.accessibilityLabel)
-                reports(for: day)
-                ForEach(day.rows) { row in
-                    TimelineEntryRow(entry: row.entry, time: clock(row.entry.at), selected: false, ticket: Self.chip(row)) {
-                        if row.focus != nil { open(row) }
+                ForEach(day.items) { item in
+                    switch item {
+                    case let .event(row):
+                        TimelineEntryRow(entry: row.entry, time: clock(row.entry.at), selected: highlighted.contains(row.id), ticket: Self.chip(row)) {
+                            if row.focus != nil { open(row) }
+                        }
+                    case let .report(card):
+                        report(card)
+                            .padding(.vertical, DesignTokens.Space.s2)
+                            .transition(reduceMotion ? .opacity : .opacity.combined(with: .move(edge: .top)))
                     }
                 }
             }
@@ -54,20 +68,29 @@ public struct JournalSection: View {
                 .help("Read the 200 events before these")
             }
         }
+        // A report that comes in slides in where it pins, as an entry does on the timeline.
+        .animation(reduceMotion ? nil : .standard, value: model.reports.map(\.id))
         .frame(maxWidth: TimelineSection.maxWidth, alignment: .leading)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Self.title)
     }
 
-    public static let title = "Journal"
+    public static var title: String { "Journal" }
 
-    /// The reports pinned at the top of `day`, the day their period ends on: none until 23/26 to 25/26 write them.
-    @ViewBuilder
-    private func reports(for day: JournalDay) -> some View {
-        EmptyView()
-    }
+    /// The column of times the rows keep, which a report's card starts after: its time sits in it.
+    public static var timeColumn: CGFloat { TimelineSection.timeColumn }
 
     static func chip(_ row: JournalRow) -> TimelineTicketChip {
         TimelineTicketChip(identifier: row.chipIdentifier, title: row.ticket.title, opens: row.focus != nil)
+    }
+}
+
+extension JournalSection where Report == EmptyView {
+    /// The list without reports.
+    public init(
+        model: JournalModel, calendar: Calendar = .current, readingEarlier: Bool = false, open: @escaping (JournalRow) -> Void = { _ in },
+        showEarlier: @escaping () -> Void = {}
+    ) {
+        self.init(model: model, calendar: calendar, readingEarlier: readingEarlier, open: open, showEarlier: showEarlier) { _ in EmptyView() }
     }
 }

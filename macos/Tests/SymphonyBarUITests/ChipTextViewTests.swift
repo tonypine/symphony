@@ -786,6 +786,86 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertTrue(view.hitTest(CGPoint(x: link.midX, y: link.midY)) === view)
     }
 
+    // MARK: - The caller's links (TP-1462)
+
+    func testACallersLinkSitsInTheTextAfterTheLeadAndOneOutsideTheTextIsDropped() throws {
+        let text = "TP-891 shipped. Nothing else happened."
+        let first = NSRange(location: 0, length: 15)
+        let content = ChipTextContent(text, references: [:], lead: "Report:", links: [
+            ChipTextLink(range: first, id: "0"), ChipTextLink(range: NSRange(location: 30, length: 40), id: "far"),
+            ChipTextLink(range: NSRange(location: 3, length: 0), id: "empty"),
+        ])
+        XCTAssertEqual(content.links, [ChipTextLink(range: NSRange(location: 8, length: 15), id: "0")])
+        XCTAssertNotNil(ChipTextContent.chips(text, references: [:], links: [ChipTextLink(range: first, id: "0")]), "a link alone is drawn")
+        XCTAssertEqual(ChipTextView.ranges(NSRange(location: 0, length: 20), outside: [NSRange(location: 5, length: 3), NSRange(location: 30, length: 2)]), [
+            NSRange(location: 0, length: 5), NSRange(location: 8, length: 12),
+        ])
+        XCTAssertEqual(ChipTextView.ranges(NSRange(location: 4, length: 4), outside: [NSRange(location: 0, length: 10)]), [])
+    }
+
+    func testACallersLinkIsUnderlinedTextAndAChipInsideItKeepsItsOwnLook() throws {
+        let item = try decision()
+        let text = "TP-891 is in review. Leave it."
+        let content = ChipTextContent(text, references: item.references, links: [ChipTextLink(range: NSRange(location: 0, length: 20), id: "0")])
+        let view = ChipTextView(content: content, style: ChipTextStyle(font: font))
+        let attributed = view.attributedText()
+        let chip = try XCTUnwrap(content.mentions.first?.range)
+        XCTAssertNil(attributed.attribute(ChipTextView.textLinkAttribute, at: chip.location, effectiveRange: nil), "the chip is no part of the link's look")
+        XCTAssertEqual(attributed.attribute(ChipTextView.textLinkAttribute, at: NSMaxRange(chip) + 2, effectiveRange: nil) as? Int, 0)
+        XCTAssertNotNil(attributed.attribute(.underlineStyle, at: NSMaxRange(chip) + 2, effectiveRange: nil))
+        XCTAssertNil(attributed.attribute(.link, at: NSMaxRange(chip) + 2, effectiveRange: nil), "no TextKit link: the view opens it")
+        XCTAssertNil(attributed.attribute(ChipTextView.textLinkAttribute, at: 25, effectiveRange: nil), "after the link")
+    }
+
+    func testAClickOnACallersLinkOpensItAndThePointerOnItLightsItAndTellsTheCaller() throws {
+        let text = "Everything shipped tonight. Two tickets wait on CI."
+        let content = try XCTUnwrap(ChipTextContent.chips(text, references: [:], links: [ChipTextLink(range: NSRange(location: 28, length: 23), id: "1")]))
+        let view = ChipTextView(content: content, style: ChipTextStyle(font: font))
+        var opened: [String] = []
+        var hovered: [String?] = []
+        view.openTextLink = { opened.append($0.id) }
+        let told = expectation(description: "hover told twice")
+        told.expectedFulfillmentCount = 2
+        told.assertForOverFulfill = false
+        view.hoverTextLink = { hovered.append($0?.id); told.fulfill() }
+        view.setFrameSize(CGSize(width: 600, height: view.height(forWidth: 600)))
+        let link = try XCTUnwrap(view.linkRects(0).first)
+        let point = CGPoint(x: link.midX, y: link.midY)
+        let outside = CGPoint(x: 2, y: link.midY)
+        XCTAssertEqual(view.linkIndex(at: point), 0)
+        XCTAssertNil(view.linkIndex(at: outside))
+        XCTAssertEqual(view.linkRects(3), [])
+
+        view.mouseMoved(with: try mouse(.mouseMoved, at: point, in: view))
+        XCTAssertEqual(view.hoveredLink, 0)
+        XCTAssertEqual(view.textStorage?.attribute(.foregroundColor, at: 30, effectiveRange: nil) as? NSColor, NSColor.linkColor)
+        view.mouseExited(with: try mouse(.mouseMoved, at: outside, in: view))
+        XCTAssertNil(view.hoveredLink)
+        wait(for: [told], timeout: 1)
+        XCTAssertEqual(hovered, ["1", nil])
+
+        view.mouseDown(with: try mouse(.leftMouseDown, at: point, in: view))
+        view.mouseDragged(with: try mouse(.leftMouseDragged, at: point, in: view))
+        view.mouseUp(with: try mouse(.leftMouseUp, at: point, in: view))
+        XCTAssertEqual(opened, ["1"])
+        view.mouseDown(with: try mouse(.leftMouseDown, at: point, in: view))
+        view.mouseUp(with: try mouse(.leftMouseUp, at: outside, in: view))
+        XCTAssertEqual(opened, ["1"], "released off the link")
+
+        // In a control's text the link takes the click; the text around it doesn't.
+        let host = NSView(frame: CGRect(x: 0, y: 0, width: 600, height: 100))
+        let control = ChipTextView(content: content, style: ChipTextStyle(font: font, selectable: false))
+        host.addSubview(control)
+        control.frame = CGRect(x: 0, y: 0, width: 600, height: control.height(forWidth: 600))
+        XCTAssertNil(control.hitTest(outside))
+        XCTAssertTrue(control.hitTest(point) === control)
+
+        // New links forget the one under the pointer.
+        view.mouseMoved(with: try mouse(.mouseMoved, at: point, in: view))
+        view.update(content: ChipTextContent(text, references: [:]), style: ChipTextStyle(font: font))
+        XCTAssertNil(view.hoveredLink)
+    }
+
     // MARK: - Helpers
 
     /// The What happened paragraph about #448, TP-880 and TP-891, at the body size.
