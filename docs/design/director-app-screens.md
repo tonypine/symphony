@@ -16,6 +16,10 @@
 
 ## 0. The window
 
+> **Changed on 2026-11-12.** The window's structure, sidebar, toolbar and status line, and the Home, Initiatives
+> and Tickets pages, are designed in [The window, Home, Work and the ticket page's top](director-window-and-home.md),
+> which wins where the two differ. The Director draws its own toolbar and sidebar; the system's are not used.
+
 One main window, **Symphony**, next to the menu bar item that exists today. Settings (⌘,) and Repos stay their own
 windows; Repos is also reachable from the sidebar.
 

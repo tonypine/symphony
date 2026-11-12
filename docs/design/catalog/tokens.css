@@ -91,6 +91,9 @@
   --type-label: 550 11px/14px var(--font-text);
   --type-caption: 500 10px/13px var(--font-text);
   --type-mono: 450 12px/16px var(--font-mono);
+  /* Reading: a text the Director reads through, such as a ticket's brief */
+  --type-reading: 400 16px/1.4 var(--font-text);
+  --tracking-reading: 0.02em;
   --tracking-display: -0.022em;
   --tracking-label: 0.02em;
 

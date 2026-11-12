@@ -1,5 +1,9 @@
 # The Director's ticket page
 
+> **Changed on 2026-11-12.** The brief's place, the note, the Details and Decisions panels and the Connected
+> panel changed: see [The window, Home, Work and the ticket page's top](director-window-and-home.md), which
+> wins where the two differ.
+
 Design research for the ticket page, and the prototype built on it (TP-1383, second design ticket of
 Phase 3b, TP-1381). The page is designed again from scratch around one question: **where does this
 ticket stand, and why?**

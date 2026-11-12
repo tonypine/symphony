@@ -20,6 +20,15 @@ window.CATALOG = (function () {
   const INNER_FILL = 'style="fill:var(--glyph-inner,#fff)"';
 
   const ICONS = {
+    note: '<path d="M3 2.5h10v8l-3 3H3z"/><path d="M10 13.5v-3h3M5.5 6h5M5.5 8.5h3"/>',
+    home: '<path d="M2.5 7.5 8 2.8l5.5 4.7v6H9.9V9.8H6.1v3.7H2.5z"/>',
+    journal: '<rect x="3" y="2" width="10" height="12" rx="1.5"/><path d="M5.8 5.5h4.4M5.8 8h4.4M5.8 10.5h2.6"/>',
+    grid: '<rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/>',
+    chart: '<path d="M2.5 13.5h11"/><path d="m3 10.5 3.2-3.6 2.6 2.2L13 4"/>',
+    factory: '<path d="M2.5 13.5V7l3.5 2V7l3.5 2V3.5h3v10z"/><path d="M5 11.2h1.2M8.2 11.2h1.2"/>',
+    wrench: '<path d="M10.8 2.2a3.3 3.3 0 0 0-3 4.6L2.6 12a1 1 0 0 0 1.4 1.4l5.2-5.2a3.3 3.3 0 0 0 4.6-3l-2 1.9-1.9-.5-.5-1.9z"/>',
+    pulse: '<path d="M1.8 8.5h2.7l1.6-4 2.6 8 1.7-4h3.8"/>',
+    sidebar: '<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M6 3v10"/>',
     you: '<circle cx="6.5" cy="5" r="2.5"/><path d="M2 13.5c0-2.5 2-4 4.5-4s4.5 1.5 4.5 4"/><path d="M13.5 2.8v4"/><circle cx="13.5" cy="9.6" r=".7" fill="currentColor" stroke="none"/>',
     working: '<circle cx="8" cy="8" r="6" stroke-dasharray="2 2.2"/><circle cx="8" cy="8" r="2.4" fill="currentColor" stroke="none"/>',
     problem: '<path d="M8 1.6 15.2 14.2H.8z" fill="currentColor" stroke="none"/><path d="M8 6v3.6" ' + INNER + '/><circle cx="8" cy="11.8" r=".8" stroke="none" ' + INNER_FILL + "/>",
@@ -217,6 +226,7 @@ window.CATALOG = (function () {
     "run-stopped": { glyph: "run-end", role: "idle", word: "Run ended: stopped" },
     person: { glyph: "hand", role: "accent", word: "Person action" },
     rule: { glyph: "gear", role: "idle", word: "Rule action" },
+    message: { glyph: "note", role: "accent", word: "You wrote to the ticket" },
   };
 
   const TL_OPTIONS = Object.keys(TL).map((k) => ({ value: k, label: TL[k].word }));
@@ -1513,7 +1523,7 @@ window.CATALOG = (function () {
     /* Desktop shows the destructive move in the rail; laptop keeps it in More, last */
     moves.push('<span class="only-wide rail-sep" aria-hidden="true"></span>');
     moves.push('<span class="only-wide">' + button({ label: "Stop Run…", variant: "destructive", disabled: !!p.noRun, reason: "No run is working." }) + "</span>");
-    const items = [["Move to…", ""], ["Restart…", ""], ["Copy Link", "⌘ L"], ["sep"], ["Stop Run…", "", "destructive only-narrow"]];
+    const items = [["Move to…", ""], ["Restart…", ""], ["sep"], ["Copy Link", "⌘ L"], ["Copy Workspace Path", ""], ["Open in Linear", ""], ["sep"], ["Stop Run…", "", "destructive only-narrow"]];
     const menu = p.more ? '<ul class="menu" role="menu">' + items.map((it) => it[0] === "sep" ? '<li class="menu-sep" role="separator"></li>' :
       '<li class="menu-item' + (it[2] ? " " + it[2] : "") + '" role="menuitem" tabindex="-1"' + (it[0] === "Stop Run…" && p.noRun ? ' aria-disabled="true"' : "") + ">" + esc(it[0]) + (it[1] ? kbd(it[1], true) : "") + "</li>").join("") + "</ul>" : "";
     moves.push('<span class="menu-wrap"><button type="button" class="menu-btn" aria-haspopup="menu" aria-expanded="' + !!p.more + '" data-toggle="more" data-key="rail-more">More' + icon("chevron-down", "chev") + "</button>" + menu + "</span>");
@@ -1523,7 +1533,8 @@ window.CATALOG = (function () {
   function pageHeader(p) {
     const s = p.role === "you" ? { role: "you", word: "Waiting on you", cause: "A question: review the design catalog.", waits: "Answer it in the Inbox.", age: "3 h 12 min" } :
       { role: "working", word: "Waiting for CI", cause: "Checks are running on PR #812.", waits: "Code Review starts when they pass.", age: "6 min" };
-    return '<header class="page-header"><div class="head-main"><div class="ident-line"><span class="ident">' + esc(p.ident) + "</span>" + chip({ kind: "repo", text: "symphony", interactive: false }) + chip({ kind: "epic", text: "Phase 3b", interactive: false }) + "</div>" +
+    return '<header class="page-header"><div class="head-main"><div class="ident-line"><span class="ident">' + esc(p.ident) + "</span>" + chip({ kind: "repo", text: "symphony", interactive: false }) + chip({ kind: "epic", text: "Phase 3b", interactive: false }) +
+      ('<span class="ident-sep" aria-hidden="true"></span><span class="prio" title="Priority">' + icon("forced") + "Urgent</span>" + chip({ kind: "label", text: "design", role: "working", interactive: false }) + chip({ kind: "label", text: "mac", role: "idle", interactive: false })) + "</div>" +
       "<h1>" + esc(p.title) + "</h1>" + '<div class="head-status">' + situation(Object.assign({ size: "large" }, s)) +
       "</div></div>" + actionRail(p) + "</header>";
   }
@@ -1594,10 +1605,11 @@ window.CATALOG = (function () {
     return '<section class="facts-group"><h3 class="zone-title">Pull request</h3><div class="panel pr-panel">' + body + "</div></section>";
   }
 
-  function relRow(t, note, self) {
+  /* One line per ticket: the highlight says which one this page is, the badge says where each stands. No second line. */
+  function relRow(t, self) {
     const tag = self ? "div" : "button";
     return "<li><" + tag + (self ? "" : ' type="button"') + ' class="rel-row' + (self ? " is-self" : "") + '"' + (self ? ' aria-current="true"' : "") + '><span class="dot role-' + esc(t.role) + '"></span><span class="rel-ident">' + esc(t.ident) + "</span>" +
-      '<span class="rel-title">' + esc(t.title) + (note ? '<span class="rel-note">' + esc(note) + "</span>" : "") + "</span>" + badge(t.role, t.word, "small") + (self ? "" : icon("chevron-right", "rel-go")) + "</" + tag + "></li>";
+      '<span class="rel-title">' + esc(t.title) + "</span>" + badge(t.role, t.word, "small") + (self ? "" : icon("chevron-right", "rel-go")) + "</" + tag + "></li>";
   }
 
   function connectedPanel(p) {
@@ -1605,17 +1617,50 @@ window.CATALOG = (function () {
     const next = { ident: "TP-1383", title: "Three ticket page prototypes", role: "idle", word: "Todo" };
     const later = { ident: "TP-1384", title: "Ticket page built in the app", role: "idle", word: "Backlog" };
     const blocker = { ident: "TP-1375", title: "First dispatch waits for its relations", role: "problem", word: "Checks failed" };
-    const epic = p.noEpic ? '<div class="panel-sub"><h4>Epic</h4><p class="empty-line">Not part of an epic.</p></div>' :
+    /* A block is drawn only when it has something to say: no epic, nothing holding it up, nothing held up means no block, never an empty one. */
+    const epic = p.noEpic ? "" :
       '<div class="panel-sub"><h4>Epic</h4><button type="button" class="epic-head"><span class="epic-ident">TP-1381</span><span class="epic-title">Phase 3b: the Director redesigned around a ticket’s situation</span>' + icon("chevron-right", "rel-go") + "</button>" +
       '<div class="epic-progress"><div class="epic-track" role="img" aria-label="0 of 3 done, 1 in progress, 2 waiting"><span class="seg role-working"></span><span class="seg role-idle"></span><span class="seg role-idle"></span></div><span class="t-secondary">0 of 3 done · this is the 1st</span></div>' +
-      '<ol class="rel-list">' + relRow(self, "This ticket", true) + relRow(next, "Waits for this one") + relRow(later, "") + "</ol></div>";
-    const held = '<div class="panel-sub"><h4>Waiting on</h4>' + (p.blockedBy ? '<ol class="rel-list">' + relRow(blocker, "Must land before this one starts its next run") + "</ol>" : '<p class="empty-line">Nothing: no ticket holds this one up.</p>') + "</div>";
-    const holds = '<div class="panel-sub"><h4>Holding up</h4><ol class="rel-list">' + relRow(next, "Starts when this one lands") + "</ol></div>";
+      '<ol class="rel-list">' + relRow(self, true) + relRow(next) + relRow(later) + "</ol></div>";
+    const held = p.blockedBy ? '<div class="panel-sub"><h4>Waiting on</h4><ol class="rel-list">' + relRow(blocker) + "</ol></div>" : "";
+    const holds = p.holdsNothing ? "" : '<div class="panel-sub"><h4>Holding up</h4><ol class="rel-list">' + relRow(next) + "</ol></div>";
+    if (!epic && !held && !holds) return "";
     return '<section class="facts-group"><h3 class="zone-title">Connected</h3><div class="panel connected-panel">' + epic + held + holds + "</div></section>";
   }
 
+
+  /* The brief: what the ticket did and how to see it, in the words of the run that wrote it. It sits at
+     the top of the main column at the reading measure, a few lines until the Director asks for all of it. */
+  function briefBlock(p, open) {
+    const asked = !!p.noBrief;
+    const text = asked ?
+      "<p>Every Director component and section, drawn once as HTML in every state, so a design can be reviewed in a browser before any Swift is written. The catalog has controls for theme, width and motion.</p>" :
+      "<p>Every component and section of the Director now exists once, as a story per state, in an HTML catalog that opens from disk. The catalog has its own controls for theme, width and motion, so a design can be reviewed in a browser before any Swift is written.</p>" +
+      "<p>The tokens moved into one file that the catalog and the prototypes share. Sixteen components gained the states they lacked (hover, pressed, focused, disabled with its reason), and the Page layout section shows the ticket page at laptop and desktop widths.</p>";
+    const more = asked ? "" : '<div class="brief-part"><h4>Walkthrough</h4><p>Open <span class="t-mono">docs/design/catalog/index.html</span>. Pick Sections, Page layout: the ticket page draws at 1180 pt. Switch the theme to Dark and the width to Desktop: the page redraws in three columns. Turn on Reduce motion: nothing slides.</p></div>' +
+      '<div class="brief-part"><h4>What was asked</h4><p class="soft-text">A Storybook-shaped design catalog as plain HTML: every Director component and section as stories per state, with live controls, reviewed from the workspace and approved in the Inbox.</p></div>';
+    return '<section class="panel brief' + (open ? " is-open" : "") + '"><div class="brief-text">' + text + "</div>" + (open ? more : "") +
+      (asked ? "" : '<button type="button" class="story-more brief-more" data-toggle="briefOpen" data-key="brief-more">' + icon(open ? "chevron-down" : "chevron-right") + (open ? "Show less" : "Read all of it, with the walkthrough") + "</button>") + "</section>";
+  }
+  const briefTitle = (p) => '<h3 class="zone-title">' + (p.noBrief ? 'Asked for <span class="zone-note">no run has written a brief yet</span>' : 'Brief <span class="zone-note">written by Implementation run 2 at 11:20</span>') + "</h3>";
+
+  /* Writing to the ticket: one box above the timeline. What is sent becomes an entry of the ticket's history,
+     and the next run reads it first. There is no separate note panel. */
+  function composer(p) {
+    const draft = !!p.noteDraft;
+    return '<div class="tl-compose' + (draft ? " has-draft" : "") + '"><div class="input"><textarea rows="' + (draft ? 2 : 1) + '" aria-label="Write to the ticket" placeholder="Write to the ticket. The next run reads it first.">' + (draft ? "Use the catalog’s chip in the header, not a new one." : "") + "</textarea></div>" +
+      (draft ? '<div class="tl-compose-foot">' + kbd("⌘ ↩") + button({ label: "Send", variant: "primary", size: "small" }) + "</div>" : "") + "</div>";
+  }
+
+  /* Decisions: drawn only when the Director has answered something on this ticket */
+  function decisionsPanel(p) {
+    if (!p.decisions) return "";
+    const rows = [["Ship the catalog without the motion page", "You · 10:42"], ["Dark is the default theme of the stories", "You · yesterday, 18:05"]];
+    return '<section class="facts-group"><h3 class="zone-title">Decisions</h3><div class="panel"><ol class="decision-list">' + rows.map((r) => "<li>" + icon("answered") + "<div><b>" + esc(r[0]) + '</b><span class="t-secondary">' + esc(r[1]) + "</span></div></li>").join("") + "</ol></div></section>";
+  }
+
   function factsRail(p) {
-    return '<aside class="facts-rail" aria-label="Facts">' + prPanel(p) + connectedPanel(p) + "</aside>";
+    return '<aside class="facts-rail" aria-label="Facts">' + prPanel(p) + connectedPanel(p) + decisionsPanel(p) + "</aside>";
   }
 
   const QUESTIONS = [
@@ -1772,7 +1817,8 @@ window.CATALOG = (function () {
     const index = '<nav class="tl-index only-wide" aria-label="Days"><h4>Days</h4>' + [["Today", 12, true], ["Yesterday", 7], ["Mon 2 Nov", 4], ["Fri 30 Oct", 9]].map((d) =>
       '<button type="button"' + (d[2] ? ' aria-current="true"' : "") + "><span>" + esc(d[0]) + '</span><span class="n">' + d[1] + "</span></button>").join("") + "</nav>";
     const now = p.noRun ? "" : runGroup({ title: "Implementation run 2", verdict: "running", time: "11:45", duration: "42 min so far", expanded: p.runNowOpen, entries: RUN_NOW, steps: RUN_NOW_STEPS, foldKey: "tl-now" }).replace('data-toggle="expanded"', 'data-toggle="runNowOpen"');
-    return '<div class="timeline-layout">' + index + '<section class="timeline-section"><div class="tl-day">Today<span class="t-secondary">newest first</span></div>' + now + '<ol class="timeline">' + DAY.slice(3).reverse().map(tlEntry).join("") + "</ol>" +
+    return '<div class="timeline-layout">' + index + '<section class="timeline-section"><div class="tl-day">Today<span class="t-secondary">newest first</span></div>' +
+      (p.note && p.note !== "none" ? '<ol class="timeline">' + tlEntry({ kind: "message", time: "11:50", headHtml: head("You wrote:", "“Keep the button word Release, not Unblock.”"), detail: p.note === "read" ? "Read by Implementation run 2 at 11:51" : "The next run reads it first", actor: "Tony" }) + "</ol>" : "") + now + '<ol class="timeline">' + DAY.slice(3).reverse().map(tlEntry).join("") + "</ol>" +
       runGroup({ title: "Implementation run 1", verdict: "failed", time: "09:02", duration: "22 min", tokens: "", expanded: p.runOpen, entries: DAY.slice(1, 3), steps: RUN_ONE_STEPS, foldKey: "tl" }).replace('data-toggle="expanded"', 'data-toggle="runOpen"') +
       '<ol class="timeline">' + DAY.slice(0, 1).map(tlEntry).join("") + "</ol></section></div>";
   }
@@ -1782,8 +1828,8 @@ window.CATALOG = (function () {
     const open = asks && !!p.sheetOpen;
     return '<div class="ticket-page' + (asks ? " has-decision" : "") + (open ? " sheet-open" : "") + '"><div class="zone-head">' + pageHeader(Object.assign({}, p, { cta: asks })) + "</div>" +
       (asks ? '<div class="zone-decide only-narrow"><h3 class="zone-title">Waiting on you</h3>' + decisionCta(p) + "</div>" : "") +
-      '<div class="zone-run"><h3 class="zone-title">Lifecycle</h3>' + lifecyclePanel(p) + "</div>" +
-      '<div class="zone-timeline"><h3 class="zone-title">Timeline</h3>' + timelineSection(p) + "</div>" +
+      '<div class="zone-run"><div class="zone-brief">' + briefTitle(p) + briefBlock(p, !!p.briefOpen) + '</div><h3 class="zone-title">Lifecycle</h3>' + lifecyclePanel(p) + "</div>" +
+      '<div class="zone-timeline"><h3 class="zone-title">Timeline</h3>' + composer(p) + timelineSection(p) + "</div>" +
       '<div class="zone-facts">' + factsRail(p) + "</div>" +
       /* Laptop: the decisions open in a sheet over the page. Desktop: they are always there, a column under the header. */
       (asks ? '<div class="zone-sheet' + (open ? " is-open" : "") + '"><h3 class="zone-title only-wide">Waiting on you</h3>' + decisionSheet(p) + "</div>" : "") + "</div>";
@@ -1797,7 +1843,7 @@ window.CATALOG = (function () {
     {
       title: "Page layout",
       wide: true,
-      args: { page: "ticket", boardPick: "", ident: "TP-1382", title: "Design system catalog as HTML: every Director component and section as stories", role: "you", blocked: false, noRun: false, more: false, questions: 2, sheetOpen: false, selected: 0, text: "", selected2: 0, text2: "", runOpen: false, runNowOpen: false, ci: "running", blockedBy: false, noEpic: false, noPr: false, g1: true, g2: true, g3: true, emptyYou: false },
+      args: { chainOpen: "", briefOpen: false, noBrief: false, note: "read", noteDraft: false, decisions: true, page: "ticket", boardPick: "", ident: "TP-1382", title: "Design system catalog as HTML: every Director component and section as stories", role: "you", blocked: false, noRun: false, more: false, questions: 2, sheetOpen: false, selected: 0, text: "", selected2: 0, text2: "", runOpen: false, runNowOpen: false, ci: "running", blockedBy: false, noEpic: false, noPr: false, g1: true, g2: true, g3: true, emptyYou: false },
       controls: [
         { name: "page", label: "Page", type: "select", options: [{ value: "ticket", label: "Ticket page" }, { value: "board", label: "Board" }] },
         HEADER_CONTROLS[0],
@@ -1805,8 +1851,14 @@ window.CATALOG = (function () {
         { name: "sheetOpen", label: "Decisions sheet open (laptop)", type: "toggle", when: (p) => p.page === "ticket" && p.role === "you" },
         { name: "runNowOpen", label: "The run now unfolded", type: "toggle", when: (p) => p.page === "ticket" },
         { name: "ci", label: "Checks", type: "select", options: [{ value: "running", label: "Running" }, { value: "failed", label: "One failed" }, { value: "passed", label: "All passed" }], when: (p) => p.page === "ticket" },
+        { name: "briefOpen", label: "Brief read in full", type: "toggle" },
+        { name: "noBrief", label: "No run has written a brief yet", type: "toggle" },
+        { name: "note", label: "A message sent to the ticket", type: "select", options: [{ value: "none", label: "None" }, { value: "written", label: "Sent, not read yet" }, { value: "read", label: "Read by a run" }] },
+        { name: "noteDraft", label: "A message is being typed", type: "toggle" },
+        { name: "decisions", label: "Decisions recorded", type: "toggle" },
+        { name: "more", label: "More menu open", type: "toggle" },
       ],
-      render: (p) => frame(p.page === "board" ? board(Object.assign({}, p, { selected: p.boardPick })).replace(/data-set="selected=/g, 'data-set="boardPick=') : ticketPage(p)),
+      render: (p) => frame(p.page === "board" ? homePage(p) : ticketPage(p)),
       docs: {
         what: "Where every section goes on a whole page, at both widths. The ticket page reads top to bottom in the order the Director needs it: who and where it stands (the header, one row across the page), what waits on them (the decisions), where the ticket is on its way to landing (the lifecycle: its stages with the time each took, and one token bar split by stage), then what happened (the timeline, newest first, the run now at the top with its steps folded into its line). The facts rail is the reference beside them: the pull request with every check, and the ticket's connections. A wider window gives the same structure more room; it never moves sections around.",
         when: ["The header is always one row across the whole page; every column starts under it.", "On a laptop the decisions never sit in the page itself: the page shows one line saying what waits, and Answer opens them in a side sheet on the right, where several Questions scroll on their own. On a desktop there is room for them, so they are always there as a column and the page needs no such line.", "The lifecycle always sits directly on top of the timeline: the stages say where the ticket is, the timeline says how it got there.", "Each fact appears once: time and tokens in the lifecycle, the checks in the pull request panel, a run's steps on the run's own line of the timeline."],
@@ -1878,13 +1930,14 @@ window.CATALOG = (function () {
     {
       title: "Facts rail",
       wide: true,
-      args: { role: "working", noPr: false, ci: "running", noEpic: false, blockedBy: false },
+      args: { role: "working", noPr: false, ci: "running", noEpic: false, blockedBy: false, holdsNothing: false },
       controls: [
         { name: "role", label: "Situation", type: "select", options: [{ value: "working", label: "Waiting for CI" }, { value: "you", label: "Waiting on you" }] },
         { name: "noPr", label: "No pull request yet", type: "toggle" },
         { name: "ci", label: "Checks", type: "select", options: [{ value: "running", label: "Running" }, { value: "failed", label: "One failed" }, { value: "passed", label: "All passed" }], when: (p) => !p.noPr },
         { name: "noEpic", label: "Not part of an epic", type: "toggle" },
         { name: "blockedBy", label: "Another ticket holds it up", type: "toggle" },
+        { name: "holdsNothing", label: "It holds no ticket up", type: "toggle" },
       ],
       render: (p) => frame(factsRail(p)),
       docs: {
@@ -1903,6 +1956,7 @@ window.CATALOG = (function () {
         { name: "All checks passed", viewport: "desktop", args: { ci: "passed" } },
         { name: "No pull request yet", viewport: "laptop", args: { noPr: true } },
         { name: "Not part of an epic", viewport: "laptop", args: { noEpic: true } },
+        { name: "Nothing connected: no Connected panel", viewport: "laptop", args: { noEpic: true, holdsNothing: true } },
       ],
     },
     {
@@ -1999,6 +2053,285 @@ window.CATALOG = (function () {
       stories: VIEWPORT_STORIES([{ name: "Filtered", viewport: "laptop", args: { repo: "symphony", epic: "Phase 3b", summary: "Mar 3 to Mar 9 · 6.2M tokens in Phase 3b" } }]),
     },
   ];
+
+
+
+
+  /* ---------- Home: what is in progress, and the queue behind it ---------- */
+
+  /* Two lists. "In progress" is every ticket that has started and has not landed, whatever it is doing right now
+     (a run is working, CI is running, it waits on the Director, it retries later), under its epic when it has one:
+     an epic with a ticket in progress is in progress too. "Queue" is every ticket that has not started, as the tree
+     Symphony holds: a ticket sits under the ticket it waits on. A chain runs straight down; a fork indents. */
+  const T = (ident, title, o) => Object.assign({ ident: ident, title: title, role: "idle" }, o || {});
+  const PROGRESS = [
+    { epic: T("SHOP-280", "Checkout that survives a reload", { parts: [["done", 4], ["working", 2], ["idle", 3]] }), kids: [
+      { t: T("SHOP-305", "Checkout total rounding", { role: "working", live: true, badge: "Coding", age: "14 min" }) },
+      { t: T("SHOP-301", "Saved carts", { role: "working", badge: "Waiting for CI", age: "6 min" }) }] },
+    { epic: T("BIL-300", "Annual plans", { parts: [["done", 1], ["you", 1], ["working", 1], ["idle", 1]] }), kids: [
+      { t: T("BIL-306", "Proration when a plan changes mid-cycle", { role: "you", badge: "Question", fix: "Answer", age: "3 h 12 min" }) },
+      { t: T("BIL-307", "Invoice PDF shows the plan’s period", { role: "working", live: true, badge: "Code Review", age: "4 min" }) }] },
+    { t: T("TP-1492", "Symphony tells the Director when a ticket changed", { role: "working", live: true, badge: "QA", age: "9 min" }) },
+    { t: T("TP-1480", "A poll that changes nothing redraws nothing", { role: "you", badge: "Stopped by you", fix: "Unblock…", age: "5 min" }) },
+    { t: T("TP-1376", "A CI-wait pause lifts itself when the commit’s CI finishes", { badge: "Retrying at 16:02", age: "40 min" }) },
+  ];
+  const QUEUE = [
+    { t: T("TP-1481", "A long timeline draws only the rows on screen", { after: "TP-1480" }), kids: [
+      { t: T("TP-1482", "A sheet that puts each native snapshot beside the prototype"), kids: [
+        { t: T("TP-1483", "The catalog’s type scale, surfaces and elevation in Swift"), kids: [
+          { t: T("TP-1493", "Design guard: no raw font, colour or spacing number"), kids: [
+            { t: T("TP-1484", "The catalog’s panel, zone title and chip as shared components"), kids: [
+              { t: T("TP-1485", "Header, moves and window toolbar as designed"), kids: [
+                { t: T("TP-1486", "The lifecycle card says where the ticket is in a sentence"), kids: [
+                  { t: T("TP-1487", "Timeline rows as designed, in a person’s words"), kids: [
+                    { t: T("TP-1488", "The Pull request and Connected cards as designed") }] }] }] }] }] }] }] }] },
+    { t: T("SHOP-311", "Gift card balance on the receipt", { after: "SHOP-305", epicName: "Checkout" }), kids: [
+      { t: T("SHOP-312", "Gift card as a payment method at checkout", { epicName: "Checkout" }), kids: [
+        { t: T("SHOP-314", "Split a payment between a card and a gift card", { epicName: "Checkout" }) }] },
+      { t: T("SHOP-313", "Gift card balance in the account page", { epicName: "Checkout" }) }] },
+    { t: T("BIL-308", "A refund follows the plan’s proration", { after: "BIL-307", epicName: "Annual plans" }) },
+    { t: T("MOT-93", "Translate Cycle into Brazilian Portuguese, Spanish and German", { badge: "Waiting for a slot" }), kids: [
+      { t: T("MOT-94", "Choose Cycle’s language in Settings"), kids: [{ t: T("MOT-95", "Final verification: Language settings") }] }] },
+  ];
+
+  /* One line per ticket: state glyph, identifier, title; then the ticket it comes after (when that one is in progress),
+     its epic, its state as a badge, the move when it needs the Director, and for how long. Nothing under the line. */
+  function homeRow(t) {
+    const trail = (t.after ? '<span class="q-after" title="Starts when ' + esc(t.after) + ' lands">' + icon("arrow") + esc(t.after) + "</span>" : "") +
+      (t.epicName ? chip({ kind: "epic", text: t.epicName, interactive: false }) : "") + (t.badge ? badge(t.role, t.badge, "small") : "") +
+      (t.fix ? button({ label: t.fix, variant: "primary", size: "small" }) : "") + (t.age ? '<span class="age">' + esc(t.age) + "</span>" : "");
+    return '<div role="option" tabindex="0" class="row role-' + esc(t.role) + '"><span class="lead">' + (t.live ? '<span class="dot live role-working"></span>' : icon(t.badge || t.role !== "idle" ? ROLES[t.role].glyph : "clock")) + "</span>" +
+      '<span class="main"><span class="line1"><span class="ident">' + esc(t.ident) + '</span><span class="title">' + esc(t.title) + '</span></span></span><span class="trail">' + trail + "</span></div>";
+  }
+
+  function epicRow(e) {
+    const total = e.parts.reduce((n, x) => n + x[1], 0);
+    const done = (e.parts.find((x) => x[0] === "done") || [0, 0])[1];
+    return '<div role="option" tabindex="0" class="row epic-row"><span class="lead">' + icon("epic") + '</span><span class="main"><span class="line1"><span class="ident">' + esc(e.ident) + '</span><span class="title">' + esc(e.title) + "</span></span></span>" +
+      '<span class="trail">' + epicStrip(e.parts, true) + '<span class="age">' + done + " of " + total + "</span></span></div>";
+  }
+
+  /* The tickets under one are the tickets that wait on it, each indented one step: the tree is the dependencies, so
+     a chain steps down and to the right, and two tickets on the same rail both wait on the ticket above the rail.
+     Past two steps the rest is folded into a count until asked for. */
+  const countUnder = (node) => (node.kids || []).reduce((n, k) => n + 1 + countUnder(k), 0);
+  function homeKids(node, p, rootIdent, depth) {
+    const kids = node.kids || [];
+    if (!kids.length) return "";
+    if (depth >= 2 && p.chainOpen !== rootIdent) return '<ul class="t-kids"><li class="t-more"><button type="button" class="q-behind" title="Show the ' + countUnder(node) + ' behind it" data-set="chainOpen=' + esc(rootIdent) + '" data-key="more-' + esc(rootIdent) + '">+' + countUnder(node) + icon("chevron-right") + "</button></li></ul>";
+    return '<ul class="t-kids">' + kids.map((k) => "<li>" + homeRow(k.t) + homeKids(k, p, rootIdent, depth + 1) + "</li>").join("") + "</ul>";
+  }
+
+  function homePage(p) {
+    const progress = PROGRESS.map((n) => n.epic ? '<li class="t-epic">' + epicRow(n.epic) + '<ul class="t-kids">' + n.kids.map((k) => "<li>" + homeRow(k.t) + "</li>").join("") + "</ul></li>" : "<li>" + homeRow(n.t) + "</li>").join("");
+    const queue = QUEUE.map((n) => "<li>" + homeRow(n.t) + homeKids(n, p, n.t.ident, 0) + "</li>").join("");
+    return '<div class="home"><h2 class="home-title">In progress</h2><ul class="t-root" role="listbox" aria-label="In progress">' + progress + "</ul>" +
+      '<h2 class="home-title">Queue</h2><ul class="t-root" role="listbox" aria-label="Queue">' + queue + "</ul></div>";
+  }
+
+  /* ---------- Work: Initiatives and Tickets ---------- */
+
+  const STORY_TITLES = ["The shared styles", "The Situation line", "The Action rail", "The Situation line everywhere", "The Question block", "The Run group and the Step list", "The Timeline", "The ticket page at laptop width", "The ticket page at desktop width", "The Lifecycle section", "The facts rail", "The decisions editor", "The labels and priority editors", "Home’s board", "Home’s top", "The five destinations", "Tickets as the table", "Saved views on Tickets", "The Inbox drawer", "Initiatives as the epic’s story", "The Journal page", "Insights", "Factory", "The menu bar", "Keyboard pass", "Accessibility pass"];
+  const EPICS = [
+    { ident: "TP-1381", title: "Phase 3b: the Director redesigned around a ticket’s situation", group: "Active", parts: [["done", 3], ["working", 1], ["idle", 22]] },
+    { ident: "BIL-300", title: "Annual plans", group: "Active", parts: [["done", 1], ["you", 1], ["idle", 2]] },
+    { ident: "SHOP-280", title: "Checkout that survives a reload", group: "Active", parts: [["done", 4], ["problem", 1], ["working", 1], ["idle", 3]] },
+    { ident: "SHOP-500", title: "Gift cards", group: "Done recently", parts: [["done", 3]] },
+  ];
+  const PART_WORD = { done: "done", working: "working", you: "waits on you", problem: "needs a fix", idle: "waiting" };
+
+  const epicStrip = (parts, live) => '<div class="epic-strip" role="img" aria-label="Progress">' + parts.map((x) =>
+    new Array(x[1] + 1).join('<i class="' + x[0] + (live && x[0] === "working" ? " live" : "") + '"></i>')).join("") + "</div>";
+  const epicTotal = (e) => e.parts.reduce((n, x) => n + x[1], 0);
+  const epicDone = (e) => (e.parts.find((x) => x[0] === "done") || [0, 0])[1];
+
+  function epicItem(e, p) {
+    const here = p.epic === e.ident;
+    return '<button type="button" class="ini-item' + (p.focused ? "" : " unfocused") + '"' + (here ? ' aria-selected="true"' : "") + ' data-set="epic=' + esc(e.ident) + '" data-key="epic-' + esc(e.ident) + '">' +
+      '<span class="top"><span class="ident">' + esc(e.ident) + '</span><span class="n">' + epicDone(e) + " of " + epicTotal(e) + " done</span></span>" +
+      '<span class="name">' + esc(e.title) + "</span>" + epicStrip(e.parts) +
+      '<span class="legend">' + e.parts.filter((x) => x[0] !== "done").map((x) => '<span><span class="dot role-' + x[0] + '"></span>' + x[1] + " " + PART_WORD[x[0]] + "</span>").join("") +
+      (e.parts.length === 1 ? "<span>Landed Mon 9 Nov</span>" : "") + "</span></button>";
+  }
+
+  function storyRow(i, p) {
+    const n = i + 1;
+    const ident = "TP-" + (1438 + i);
+    const title = STORY_TITLES[i];
+    const open = ' data-toggle="ticketOpen" data-key="story-' + n + '"';
+    if (i < 3) return '<div class="story-row done" role="link" tabindex="0"' + open + '><span class="n">' + n + '</span><span class="mark role-done">' + icon("done") + '</span><span class="what"><span class="line1"><span class="ident">' + ident + '</span><span class="title">' + esc(title) + '</span></span></span>' +
+      '<span class="trail">Landed ' + ["Tue 10 Nov", "Wed 11 Nov", "Wed 11 Nov"][i] + " · PR #" + (859 + i) + "</span>" + icon("chevron-right", "go") + "</div>";
+    if (i === 3) return '<div class="story-row current role-working" role="link" tabindex="0" aria-current="step"' + open + '><span class="n">' + n + '</span><span class="mark role-working"><span class="dot live role-working"></span></span><span class="what"><span class="line1"><span class="ident">' + ident + '</span><span class="title">' + esc(title) + "</span></span>" +
+      situation({ role: "working", word: "Working", cause: "Implementation run 1 is writing the code.", waits: "Code Review starts when it pushes.", compact: false }) + '</span>' +
+      '<span class="trail">' + '<span class="mini-steps" aria-label="Steps">' + "passed current pending pending pending".split(" ").map((k) => '<i class="' + k + '"></i>').join("") + '</span><span class="age">25 min</span></span>' + icon("chevron-right", "go") + "</div>";
+    return '<div class="story-row waiting" role="link" tabindex="0"' + open + '><span class="n">' + n + '</span><span class="mark role-idle">' + icon(i === 4 ? "clock" : "idle") + '</span><span class="what"><span class="line1"><span class="ident">' + ident + '</span><span class="title">' + esc(title) + "</span></span></span>" +
+      '<span class="trail">' + (i === 4 ? "Next: starts when TP-1441 lands" : "Waits for TP-" + (1437 + i)) + "</span>" + icon("chevron-right", "go") + "</div>";
+  }
+
+  function initiativesPage(p) {
+    const groups = ["Active", "Done recently"].map((g) => '<h3 class="zone-title">' + g + '</h3><div class="ini-list">' + EPICS.filter((e) => e.group === g).map((e) => epicItem(e, p)).join("") + "</div>").join("");
+    const e = EPICS.find((x) => x.ident === p.epic) || EPICS[0];
+    const main = e.ident !== "TP-1381" ?
+      '<div class="story-head"><div class="idline"><span class="ident">' + esc(e.ident) + "</span></div><h2>" + esc(e.title) + '</h2><p class="sentence">' + epicDone(e) + " of " + epicTotal(e) + " done.</p>" + epicStrip(e.parts, true) + '</div><p class="t-secondary">Pick Phase 3b to see a whole story drawn.</p>' :
+      '<div class="story-head"><div class="idline"><span class="ident">TP-1381</span>' + chip({ kind: "repo", text: "symphony", interactive: false }) + '<span class="grow"></span>' + button({ label: "Open TP-1441", variant: "secondary", size: "small", glyph: "arrow" }) + "</div>" +
+      "<h2>" + esc(e.title) + '</h2><p class="sentence">3 of 26 done. <span class="soft">TP-1441 is being worked on; 22 wait behind it, in order.</span></p>' + epicStrip(e.parts, true) +
+      '<p class="strip-note">Started Tue 10 Nov · 2 days so far · 14.6M tokens</p></div>' +
+      '<h3 class="zone-title">Sub-tickets <span class="zone-note">in landing order</span></h3><section class="panel story">' +
+      [0, 1, 2, 3, 4, 5].map((i) => storyRow(i, p)).join("") +
+      (p.allRows ? STORY_TITLES.slice(6).map((t, k) => storyRow(k + 6, p)).join("") : "") +
+      '<button type="button" class="story-more" data-toggle="allRows" data-key="story-more">' + icon(p.allRows ? "chevron-down" : "chevron-right") + (p.allRows ? "Show only what is near" : "20 more wait in line, in this order") + "</button></section>";
+    return '<div class="ini"><aside class="ini-side">' + groups + '</aside><div class="ini-main">' + main + "</div></div>";
+  }
+
+  const TICKET_ROWS = [
+    { ident: "TP-1441", title: "The Situation line everywhere", repo: "symphony", epic: "Phase 3b", role: "working", word: "Working", cause: "Implementation run 1 is writing the code.", since: "25 min", labels: [["mac", "working"]], priority: "Urgent" },
+    { ident: "BIL-306", title: "Proration when a plan changes mid-cycle", repo: "billing", epic: "Annual plans", role: "you", word: "Waiting on you", cause: "A question: which day does the new price start?", since: "3 h 12 min", labels: [["billing", "forced"], ["decision", "you"]], priority: "High" },
+    { ident: "SHOP-305", title: "Checkout total rounding", repo: "web-shop", epic: "Checkout", role: "problem", word: "Needs a fix", cause: "Two checks failed on PR #812.", since: "22 min", labels: [["checkout", "idle"], ["bug", "problem"]], priority: "Urgent" },
+    { ident: "SHOP-301", title: "Saved carts", repo: "web-shop", epic: "Checkout", role: "working", word: "Waiting for CI", cause: "Checks are running on PR #790.", since: "6 min", labels: [["checkout", "idle"]], priority: "High" },
+    { ident: "TP-1442", title: "The Question block", repo: "symphony", epic: "Phase 3b", role: "idle", word: "Blocked", cause: "Starts when TP-1441 lands.", since: "1 day", labels: [["mac", "working"]], priority: "Urgent" },
+    { ident: "TP-1480", title: "A poll that changes nothing redraws nothing", repo: "symphony", epic: "", role: "working", word: "Code Review", cause: "Review run 2 is reading the change.", since: "9 min", labels: [["speed", "done"]], priority: "Urgent" },
+    { ident: "BIL-307", title: "Invoice PDF shows the plan’s period", repo: "billing", epic: "Annual plans", role: "idle", word: "Queued", cause: "Waits for a slot.", since: "40 min", labels: [["billing", "forced"]], priority: "Medium" },
+    { ident: "SHOP-311", title: "Gift card balance on the receipt", repo: "web-shop", epic: "", role: "forced", word: "Forced", cause: "You pushed it ahead of the queue.", since: "2 min", labels: [], priority: "High" },
+    { ident: "TP-1443", title: "The Run group and the Step list", repo: "symphony", epic: "Phase 3b", role: "idle", word: "Blocked", cause: "Starts when TP-1442 lands.", since: "1 day", labels: [["mac", "working"]], priority: "Urgent" },
+    { ident: "SHOP-298", title: "Address form remembers the country", repo: "web-shop", epic: "Checkout", role: "done", word: "Merging", cause: "PR #781 is green and merges next.", since: "1 min", labels: [["checkout", "idle"]], priority: "Medium" },
+  ];
+
+  function ticketsPage(p) {
+    const sel = Number(p.ticketRow);
+    const fchip = (text, key) => '<span class="fchip"><button type="button" class="chip chip-filter" aria-haspopup="menu">' + text + '</button><button type="button" class="fchip-x" aria-label="Remove this filter" data-toggle="' + key + '" data-key="x-' + key + '">' + icon("close") + "</button></span>";
+    const rows = TICKET_ROWS.filter((r) => !p.filtered || r.epic === "Phase 3b");
+    const bar = '<div class="tk-bar">' +
+      '<button type="button" class="popup sz-sm" aria-haspopup="listbox"><span class="popup-label"><span>View</span><span>All open' + (p.filtered ? '<i class="unsaved" title="This view has changes that are not saved"></i>' : "") + "</span></span>" + icon("updown", "chev") + "</button>" +
+      '<span class="sep"></span>' + (p.filtered ? fchip("<span>Epic is</span> <b>Phase 3b</b>", "filtered") : "") +
+      '<button type="button" class="menu-btn sz-sm quiet"' + (p.filtered ? "" : ' data-toggle="filtered" data-key="add-filter"') + ">" + icon("plus") + "Filter</button>" +
+      (p.filtered ? button({ label: "Save View", variant: "quiet", size: "small" }) : "") +
+      '<span class="grow"></span><span class="tk-count">' + rows.length + " tickets</span>" +
+      '<button type="button" class="menu-btn sz-sm" aria-haspopup="menu">' + icon("columns") + "Columns" + icon("chevron-down", "chev") + "</button>" +
+      iconBtn("inspector", p.inspector ? "Hide the details" : "Show the details", { toggle: "inspector", on: p.inspector, size: "sm" }) + "</div>";
+    const th = (label, cls, sorted) => "<th" + (cls ? ' class="' + cls + '"' : "") + (sorted ? ' aria-sort="descending"' : "") + '><button type="button">' + label + (sorted ? icon("sort-down", "sort") : "") + "</button></th>";
+    const table = '<table class="table tk-table"><thead><tr>' + th("Ticket") + th("Title") + th("Repo", "col-wide") + th("Epic") + th("Situation") + th("Since", "num", true) + th("Labels", "col-wide") + th("Priority") + "</tr></thead><tbody>" +
+      rows.map((r, i) => '<tr class="role-' + r.role + '"' + (i === sel ? ' aria-selected="true"' : "") + ' data-set="ticketRow=' + (i === sel ? -1 : i) + '" data-key="tk-' + i + '">' +
+        "<td><b>" + esc(r.ident) + '</b></td><td class="tk-title">' + esc(r.title) + '</td><td class="col-wide">' + chip({ kind: "repo", text: r.repo, interactive: false }) + "</td><td>" + (r.epic ? chip({ kind: "epic", text: r.epic, interactive: false }) : '<span class="muted">None</span>') + "</td>" +
+        '<td class="tk-sit">' + situation({ role: r.role, word: r.word, cause: r.cause, compact: true }) + '</td><td class="num">' + esc(r.since) + '</td><td class="col-wide">' + (r.labels.map((l) => chip({ kind: "label", text: l[0], role: l[1], interactive: false })).join(" ") || '<span class="muted">None</span>') + "</td>" +
+        '<td class="' + (r.priority === "Urgent" ? "tk-urgent" : "") + '">' + esc(r.priority) + "</td></tr>").join("") + "</tbody></table>";
+    const r = rows[sel];
+    const inspector = !p.inspector ? "" : '<aside class="panel tk-inspector">' + (!r ? '<p class="empty-line">Pick a ticket to see where it stands.</p>' :
+      '<div class="idline"><span class="ident">' + esc(r.ident) + "</span>" + chip({ kind: "repo", text: r.repo, interactive: false }) + (r.epic ? chip({ kind: "epic", text: r.epic, interactive: false }) : "") + "</div>" +
+      '<h3 class="tk-name">' + esc(r.title) + "</h3>" + situation({ role: r.role, word: r.word, cause: r.cause }) +
+      '<dl class="facts"><dt>Since</dt><dd>' + esc(r.since) + '</dd><dt>Phase</dt><dd>' + esc(r.role === "you" ? "In Progress" : r.word === "Code Review" ? "Code Review" : r.role === "idle" ? "Todo" : "In Progress") + "</dd><dt>Pull request</dt><dd>" + (r.role === "idle" ? "None yet" : "PR #812 · 14 files") + "</dd><dt>Priority</dt><dd>" + esc(r.priority) + "</dd><dt>Tokens</dt><dd>" + (r.role === "idle" ? "0" : "1.8M of 8M") + "</dd></dl>" +
+      '<div class="tk-moves">' + button({ label: "Open Ticket", variant: "primary", size: "medium", key: "open-ticket" }).replace("<button", '<button data-toggle="ticketOpen"') + button({ label: "Force…", variant: "secondary", size: "medium", glyph: "forced" }) + "</div>") + "</aside>";
+    return '<div class="tk' + (p.inspector ? " with-inspector" : "") + '"><div class="tk-main">' + bar + '<section class="panel tk-wrap">' + table + "</section></div>" + inspector + "</div>";
+  }
+
+  /* ---------- The window: sidebar, toolbar, status bar and background around a page ---------- */
+
+  const DESTINATIONS = [
+    { id: "home", label: "Home", glyph: "home", key: "⌘ 1", count: 2, role: "you" },
+    { id: "journal", label: "Journal", glyph: "journal", key: "⌘ 2" },
+    { id: "work", label: "Work", glyph: "grid", key: "⌘ 3" },
+    { id: "insights", label: "Insights", glyph: "chart", key: "⌘ 4" },
+    { id: "factory", label: "Factory", glyph: "factory", key: "⌘ 5", count: 2, role: "problem", children: [
+      { id: "setup", label: "Setup", glyph: "wrench" }, { id: "repos", label: "Repos", glyph: "repo" },
+      { id: "diagnostics", label: "Diagnostics", glyph: "pulse" }, { id: "settings", label: "Settings", glyph: "gear" }] },
+  ];
+
+  function navRow(d, p, child) {
+    const here = p.dest === d.id;
+    const count = d.count ? '<span class="count' + " role-" + esc(d.role) + '" aria-label="' + d.count + ' waiting">' + d.count + "</span>" : "";
+    return '<button type="button" class="nav-row' + (child ? " child" : "") + (p.navHover === d.id && !here ? " is-hover" : "") + '"' + (here ? ' aria-current="page"' : "") +
+      ' data-set="dest=' + esc(d.id) + '" data-key="nav-' + esc(d.id) + '" title="' + esc(d.label + (d.key ? "  " + d.key.replace(" ", "") : "")) + '">' +
+      icon(d.glyph) + '<span class="label">' + esc(d.label) + "</span>" + count + "</button>";
+  }
+
+  function winSidebar(p) {
+    const rows = DESTINATIONS.map((d) => navRow(d, p) + (d.children ? d.children.map((c) => navRow(c, p, true)).join("") : "")).join("");
+    return '<aside class="win-side" aria-label="Destinations"><div class="win-lights" aria-hidden="true"><i></i><i></i><i></i></div>' +
+      '<nav class="win-nav">' + rows + "</nav></aside>";
+  }
+
+  const dispatchControl = (p) => '<button type="button" class="dispatch" title="Dispatch: pause or resume starting new runs"><span class="dot role-' + (p.paused ? "you" : "done") + (p.paused ? "" : " live") + '"></span><span>' +
+    (p.paused ? "Dispatch paused" : "Dispatch on") + "</span>" + icon("chevron-down", "chev") + "</button>";
+
+  const iconBtn = (glyph, label, o) => '<button type="button" class="icon-btn sz-' + ((o && o.size) || "md") + '" aria-label="' + esc(label) + '" title="' + esc(label) + '"' +
+    (o && o.toggle ? ' aria-pressed="' + !!o.on + '" data-toggle="' + esc(o.toggle) + '" data-key="ib-' + esc(o.toggle) + '"' : "") + (o && o.disabled ? ' aria-disabled="true"' : "") + ">" + icon(glyph) + "</button>";
+
+  function winToolbar(p) {
+    const onTicket = p.dest === "work" && !!p.ticketOpen;
+    const tabs = p.dest === "work" && !p.ticketOpen ? segmented(["Initiatives", "Tickets"], p.workTab, { size: "small", prop: "workTab", anim: "worktab", label: "Work shows" }) : "";
+    const place = (DESTINATIONS.concat(DESTINATIONS[4].children).find((d) => d.id === p.dest) || {}).label || "Home";
+    const crumbs = '<nav class="win-crumbs" aria-label="Where you are">' + (onTicket ?
+      '<a class="win-crumb" href="#" onclick="return false">Work</a>' + icon("chevron-right") + '<a class="win-crumb" href="#" onclick="return false">' + icon("epic") + "Phase 3b</a>" + icon("chevron-right") + '<span class="here">' + esc(p.ident) + "</span>" :
+      '<span class="here">' + esc(place) + "</span>") + "</nav>";
+    const search = '<div class="field sz-sm win-search"><div class="input search">' + icon("search") + '<input type="search" aria-label="Find a ticket" placeholder="Find a ticket">' + kbd("⌘ F") + "</div></div>";
+    const inbox = '<span class="with-count">' + iconBtn("tray", "Inbox: 2 need you", { toggle: "inboxOpen", on: p.inboxOpen }) + '<span class="count role-you">2</span></span>';
+    return '<header class="win-bar" role="toolbar" aria-label="Window">' +
+      iconBtn("sidebar", p.collapsed ? "Show the sidebar" : "Hide the sidebar", { toggle: "collapsed", on: false }) +
+      '<span class="nav-pair">' + (onTicket ? iconBtn("chevron-left", "Back  ⌘[").replace("<button", '<button data-toggle="ticketOpen" data-key="back"') : iconBtn("chevron-left", "Back  ⌘[")) + iconBtn("chevron-right", "Forward  ⌘]", { disabled: true }) + "</span>" +
+      '<span class="sep"></span>' + crumbs + tabs +
+      '<span class="grow"></span>' + search + inbox + iconBtn("refresh", "Refresh  ⌘R") + "</header>";
+  }
+
+  function winStatus(p) {
+    return '<footer class="win-status">' + dispatchControl(p) + '<span class="sep"></span><span>7 in progress</span><span>18 in the queue</span><span>2 need you</span>' +
+      '<span class="grow"></span><span class="build">Symphony 0.0.1.926</span><span class="dot-label"><span class="dot role-done"></span><span>Connected</span></span></footer>';
+  }
+
+  function windowShell(p) {
+    const body = p.dest === "home" ? homePage(p) :
+      p.dest === "work" ? (p.ticketOpen ? ticketPage(p) : Number(p.workTab) ? ticketsPage(p) : initiativesPage(p)) :
+      '<div class="empty"><span class="glyph-wrap">' + icon("doc") + "</span><h3>" + esc((DESTINATIONS.concat(DESTINATIONS[4].children).find((d) => d.id === p.dest) || {}).label) + '</h3><p>This page has its own section. The window around it is what this story shows.</p></div>';
+    return '<div class="win' + (p.collapsed ? " side-collapsed" : "") + (p.focused ? "" : " unfocused") + '">' +
+      winSidebar(p) + '<div class="win-main">' + winToolbar(p) + '<div class="win-body">' + frame(body) + "</div>" + winStatus(p) + "</div></div>";
+  }
+
+  sections.push({
+    title: "Window",
+    wide: true,
+    args: Object.assign({}, sections[0].args, { dest: "work", workTab: 0, ticketOpen: false, epic: "TP-1381", allRows: false, filtered: false, inspector: false, ticketRow: -1, role: "working", collapsed: false, focused: true, paused: false, inboxOpen: false, navHover: "" }),
+    controls: [
+      { name: "dest", label: "Destination", type: "select", options: [{ value: "home", label: "Home (the board)" }, { value: "work", label: "Work (a ticket page)" }, { value: "journal", label: "Journal" }, { value: "insights", label: "Insights" }, { value: "factory", label: "Factory" }, { value: "settings", label: "Factory › Settings" }] },
+      { name: "workTab", label: "Work shows", type: "select", options: [{ value: 0, label: "Initiatives" }, { value: 1, label: "Tickets" }], when: (p) => p.dest === "work" },
+      { name: "ticketOpen", label: "A ticket is open", type: "toggle", when: (p) => p.dest === "work" },
+      { name: "chainOpen", label: "A long chain shown whole", type: "select", options: [{ value: "", label: "None" }, { value: "TP-1481", label: "TP-1481’s" }], when: (p) => p.dest === "home" },
+      { name: "briefOpen", label: "Brief read in full", type: "toggle" },
+      { name: "noBrief", label: "No run has written a brief yet", type: "toggle" },
+      { name: "note", label: "A message sent to the ticket", type: "select", options: [{ value: "none", label: "None" }, { value: "written", label: "Sent, not read yet" }, { value: "read", label: "Read by a run" }] },
+      { name: "noteDraft", label: "A message is being typed", type: "toggle" },
+      { name: "decisions", label: "Decisions recorded", type: "toggle" },
+      { name: "more", label: "More menu open", type: "toggle" },
+      { name: "allRows", label: "Every sub-ticket shown", type: "toggle", when: (p) => p.dest === "work" && !p.ticketOpen && !Number(p.workTab) },
+      { name: "filtered", label: "A filter is on", type: "toggle", when: (p) => p.dest === "work" && !p.ticketOpen && !!Number(p.workTab) },
+      { name: "inspector", label: "Details beside the table", type: "toggle", when: (p) => p.dest === "work" && !p.ticketOpen && !!Number(p.workTab) },
+      { name: "collapsed", label: "Sidebar collapsed", type: "toggle" },
+      { name: "focused", label: "Window focused", type: "toggle" },
+      { name: "paused", label: "Dispatch paused", type: "toggle" },
+    ],
+    render: (p) => windowShell(p),
+    docs: {
+      what: "The window around every page: the sidebar with the five destinations, the toolbar, the status line and the background the page sits on. The Director draws all of it; macOS draws only the three window buttons.",
+      when: ["The sidebar holds destinations, never actions. A count beside a destination is coloured only for what waits on the Director (orange) or a problem (red).", "The toolbar holds what is true on every page: show or hide the sidebar, back and forward, where you are, Find a ticket, the Inbox and Refresh. Where you are is a breadcrumb, never the page's title: the page's own header carries that. On Work the Initiatives and Tickets switch sits right after it. Any other control a page needs lives in the page.", "The status line says whether Symphony dispatches and how many tickets are in each state; the dispatch control pauses and resumes."],
+      responsive: ["Laptop (1440 × 900 window): the sidebar is 232 pt, the page gets about 1180 pt.", "Desktop (2460 × 1360 window): the same sidebar; the page gets about 2200 pt and uses its desktop layout.", "Collapsed, the sidebar is 60 pt of glyphs with their counts as dots; the names are the help text."],
+      motion: "The sidebar folds on the fold spring. The selection slides from the old destination to the new one. The toolbar and the status line are glass: the page scrolls under them.",
+      tokens: ["--surface-window", "--backdrop-glow", "--material-glass", "--stroke-separator", "--accent-tint", "--control-md", "--radius-control-md", "icon button, search field, count badge and status dot tokens"],
+      access: "The sidebar is a navigation landmark; the current destination is announced as the current page. ⌘1 to ⌘5 pick a destination, ⌘F finds a ticket, ⌘[ and ⌘] go back and forward.",
+    },
+    stories: [
+      { name: "Ticket page, laptop", viewport: "laptop", args: { dest: "work", ticketOpen: true } },
+      { name: "Initiatives, laptop", viewport: "laptop", args: { dest: "work", workTab: 0 } },
+      { name: "Initiatives, every sub-ticket", viewport: "laptop", args: { dest: "work", workTab: 0, allRows: true } },
+      { name: "Tickets, laptop", viewport: "laptop", args: { dest: "work", workTab: 1 } },
+      { name: "Tickets, filtered, with the details", viewport: "laptop", args: { dest: "work", workTab: 1, filtered: true, inspector: true, ticketRow: 0 } },
+      { name: "Tickets, desktop", viewport: "desktop", args: { dest: "work", workTab: 1, inspector: true, ticketRow: 2 } },
+      { name: "Initiatives, desktop", viewport: "desktop", args: { dest: "work", workTab: 0 } },
+      { name: "Home, laptop", viewport: "laptop", args: { dest: "home" } },
+      { name: "Home, a long chain shown whole", viewport: "laptop", args: { dest: "home", chainOpen: "TP-1481" } },
+      { name: "Home, desktop", viewport: "desktop", args: { dest: "home" } },
+      { name: "Ticket page, desktop", viewport: "desktop", args: { dest: "work", ticketOpen: true, role: "you" } },
+      { name: "Sidebar collapsed", viewport: "laptop", args: { collapsed: true, ticketOpen: true } },
+      { name: "Window not focused", viewport: "laptop", args: { focused: false, ticketOpen: true } },
+      { name: "Dispatch paused", viewport: "laptop", args: { paused: true, dest: "home" } },
+    ],
+  });
 
   return {
     esc: esc,

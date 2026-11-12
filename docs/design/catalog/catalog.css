@@ -105,7 +105,8 @@ body {
 .tree .none { padding: var(--space-3); color: var(--text-secondary); font: var(--type-secondary); }
 
 /* ---------- Main column ---------- */
-.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 8px; gap: 8px; }
+/* Scoped to the catalog's own shell: a bare .main also matched the Row component's .main and padded every row by 8 pt */
+.shell > .main { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 8px; gap: 8px; }
 
 .toolbar {
   display: flex;
@@ -315,3 +316,9 @@ body {
 .glass-over { position: absolute; display: grid; gap: 2px; width: 260px; padding: 14px 16px; border-radius: 14px; -webkit-backdrop-filter: var(--material-blur); backdrop-filter: var(--material-blur); box-shadow: var(--elevation-3), inset 0 0 0 1px var(--material-edge); }
 .glass-over { top: 40px; left: 40px; }
 .glass-over.thick { top: 150px; left: 330px; }
+
+/* The Window section draws a whole window, wider than the page inside it */
+.stage:has(.win) { width: max-content; max-width: none; }
+.stage.vp-fit:has(.win) { width: 100%; }
+.stage.vp-laptop .win { width: 1440px; height: 900px; }
+.stage.vp-desktop .win { width: 2460px; height: 1360px; }

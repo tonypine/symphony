@@ -308,7 +308,7 @@
   function relRow(t, note, self) {
     const tag = self ? "div" : "button";
     return "<li><" + tag + (self ? "" : ' type="button" ' + later("Opens " + t.ident)) + ' class="rel-row' + (self ? " is-self" : "") + '"' + (self ? ' aria-current="true"' : "") + '><span class="dot role-' + esc(t.role) + '"></span><span class="rel-ident">' + esc(t.ident) + "</span>" +
-      '<span class="rel-title">' + esc(t.title) + (note ? '<span class="rel-note">' + esc(note) + "</span>" : "") + "</span>" + K.badge(t.role, t.state, "small") + (self ? "" : icon("chevron-right", "rel-go")) + "</" + tag + "></li>";
+      '<span class="rel-title">' + esc(t.title) + "</span>" + K.badge(t.role, t.state, "small") + (self ? "" : icon("chevron-right", "rel-go")) + "</" + tag + "></li>";
   }
 
   function connectedPanel(v) {
@@ -324,9 +324,9 @@
     return '<section class="facts-group"><h3 class="zone-title">Connected</h3><div class="panel connected-panel">' +
       '<div class="panel-sub"><h4>Epic</h4><button type="button" class="epic-head" ' + later("Opens the epic") + '><span class="epic-ident">Epic</span><span class="epic-title">' + esc(t.epic.title) + "</span>" + icon("chevron-right", "rel-go") + "</button>" +
       '<div class="epic-progress"><div class="epic-track" role="img" aria-label="' + epicDone + " of " + t.epic.total + ' done">' + segs.join("") + '</div><span class="t-secondary">' + epicDone + " of " + t.epic.total + " done · this is the " + ordinal(t.epic.done + 1) + "</span></div>" +
-      '<ol class="rel-list">' + relRow(blocker, "") + relRow(self, "This ticket", true) + relRow(next, "") + "</ol></div>" +
-      '<div class="panel-sub"><h4>Waiting on</h4><p class="empty-line">Nothing now. It waited on ' + esc(blocker.ident) + " until " + esc(hm(blocker.resolvedAt)) + ", when it landed as PR #728.</p></div>" +
-      '<div class="panel-sub"><h4>Holding up</h4><ol class="rel-list">' + relRow(next, done ? "Can start now" : "Starts when this one lands") + "</ol></div></div></section>";
+      '<ol class="rel-list">' + relRow(blocker, "") + relRow(self, "", true) + relRow(next, "") + "</ol></div>" +
+      /* Nothing holds this ticket up at any of the three moments, so there is no "Waiting on" block: a block is drawn only when it has something to say. */
+      '<div class="panel-sub"><h4>Holding up</h4><ol class="rel-list">' + relRow(next, "") + "</ol></div></div></section>";
   }
 
   /* The note the next run reads before it starts, and the last one, with who read it. */
