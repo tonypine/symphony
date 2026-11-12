@@ -1408,11 +1408,19 @@ coverage or CI to pass by CI's runs on the base branch head it tests, read with 
 the sandbox allows `gh`, else through GitHub's public API: green runs make the step `pass` with the
 run URLs, a failed run makes it `fail` naming the failing job and the run (so it is filed as a gap),
 and it is `skipped` only when no run can be read or a run is still in progress. Symphony waits for
-CI before it starts the epic review's agent: while a run on that commit is unfinished, the review
-starts again a minute later, without a verdict or a retry attempt, so a review that starts the
-moment the last sub-ticket merges does not judge a commit CI is still testing. A run still
-unfinished after two hours is not waited on, and these restarts don't count as a dispatch loop. The
-wait on one commit is bounded: once it has lasted an hour, Symphony starts the review no more and
+CI before it dispatches the epic review: while a workflow run on the head of the base branch is
+unfinished, the epic is not dispatched. It is paused on that commit with a reason that names the
+branch, the commit and the workflows still running ("Waiting for CI on main at <commit>: release,
+macos still running"), listed under `dispatch_skipped` with that line, and no run starts. The
+completion of the last of those runs, as GitHub's `workflow_run` or `check_suite` delivery tells
+Symphony, lifts the pause and dispatches the review at once; the dispatch reads the base branch
+again, so a branch that moved on to a commit with CI still going makes the epic wait on that commit.
+At boot the waits are checked once, so an epic whose CI finished while Symphony was stopped is
+dispatched; `Unblock` lets the epic go before CI finishes. A run still unfinished after two hours is
+not waited on, and nothing the check can't read (no GitHub repository, a failed read) is either.
+Should CI start between that check and the run, the review starts again a minute later, without a
+verdict or a retry attempt, and these restarts don't count as a dispatch loop. That wait on one
+commit is bounded: once it has lasted an hour, Symphony starts the review no more and
 puts the epic on a `Blocked` hold whose reason names the commit and the workflows still running; the
 Inbox lists it, and `Unblock` starts the wait again from zero. The public API is
 `api.github.com`, which is not in the built-in network allowlist; add it to

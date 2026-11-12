@@ -61,7 +61,11 @@ if config_env() == :test do
     # A move into `Plan Review` captures the plan's brief from Linear in a task
     # (`SymphonyElixir.PlanBrief`); in tests it would race the records a test asserts, so it runs
     # only where a test turns it on.
-    plan_brief_capture: false
+    plan_brief_capture: false,
+    # The orchestrator's check of CI on an epic's base branch before dispatch
+    # (`SymphonyElixir.EpicReview.MainCi`) would read the checkout's GitHub repository with `gh`; in
+    # tests it reads none, so no epic waits, unless a test gives it its own options.
+    main_ci_opts: [github_repo: nil]
 
   # No test reaches the network: every Req request goes through the guard, which lets 127.0.0.1 and
   # localhost through and raises `SymphonyElixir.OutboundConnectionInTest` for any other host. A test

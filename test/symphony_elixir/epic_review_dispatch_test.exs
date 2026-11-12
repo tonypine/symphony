@@ -85,4 +85,68 @@ defmodule SymphonyElixir.EpicReviewDispatchTest do
       refute Orchestrator.should_dispatch_issue_for_test(replanning, state())
     end
   end
+
+  @sha "b98572e58594a4f0c3b1e2d3c4b5a69788796a5b"
+
+  # `gh` for a base branch at `@sha` whose `release` and `macos` runs are in the status `ci` holds.
+  defp gh(ci) do
+    fn
+      ["api", "repos/acme/app/commits/main" | _rest], _opts ->
+        {@sha, 0}
+
+      ["run", "list", "--commit", @sha | _rest], _opts ->
+        status = Agent.get(ci, & &1)
+        {Jason.encode!(for name <- ["release", "macos"], do: %{"databaseId" => 1, "workflowName" => name, "status" => status, "createdAt" => DateTime.to_iso8601(DateTime.utc_now())}), 0}
+    end
+  end
+
+  describe "the wait for CI on the base branch before the epic review (TP-1476)" do
+    setup do
+      :ok = SymphonyElixir.RunStore.clear()
+      {:ok, ci} = Agent.start_link(fn -> "in_progress" end)
+      defaults = Application.get_env(:symphony_elixir, :main_ci_opts)
+      Application.put_env(:symphony_elixir, :main_ci_opts, github_repo: "acme/app", branch: "main", gh_runner: gh(ci))
+
+      on_exit(fn ->
+        Application.put_env(:symphony_elixir, :main_ci_opts, defaults)
+        SymphonyElixir.RunStore.clear()
+      end)
+
+      %{ci: ci}
+    end
+
+    test "an epic whose base branch CI is still running is not dispatched; it is listed with the commit and the workflows, and the completion of CI frees it",
+         %{ci: ci} do
+      parent = epic(@designed_repo, state: "Epic Review")
+      todo = %Issue{id: "issue-todo", identifier: "TP-900", title: "Plain", state: "Todo", repo_key: @designed_repo}
+
+      assert [{^parent, @designed_repo}] = Orchestrator.hold_for_main_ci_for_test(state(), [parent, todo], :poll)
+
+      next = Orchestrator.dispatch_chosen_issues_for_test([parent], state())
+      refute Map.has_key?(next.running, @issue_id)
+      assert %{reason: "Waiting for CI on main at b98572e58594: release, macos still running", rule: nil} = next.dispatch_skipped[@issue_id]
+      refute Orchestrator.should_dispatch_issue_for_test(parent, state())
+
+      # A run finishing while another is still going lifts nothing; the last one's completion does.
+      assert SymphonyElixir.CiWait.finished(@sha) == []
+      Agent.update(ci, fn _status -> "completed" end)
+      assert SymphonyElixir.CiWait.finished(@sha) == [@issue_id]
+      assert Orchestrator.should_dispatch_issue_for_test(parent, state())
+
+      # The next check finds CI done and holds nothing.
+      assert [{^parent, @designed_repo}] = Orchestrator.hold_for_main_ci_for_test(state(), [parent], :poll)
+      assert Orchestrator.should_dispatch_issue_for_test(parent, state())
+    end
+
+    test "a retry of the epic review checks CI too; another ticket's retry does not" do
+      parent = epic(@designed_repo, state: "Epic Review")
+      todo = %Issue{id: "issue-todo", identifier: "TP-900", title: "Plain", state: "Todo", repo_key: @designed_repo}
+
+      assert [{^parent, @designed_repo}] =
+               Orchestrator.hold_for_main_ci_for_test(state(), [parent], {:active_retry, parent, 1, %{}})
+
+      refute Orchestrator.should_dispatch_issue_for_test(parent, state())
+      assert Orchestrator.hold_for_main_ci_for_test(state(), [todo], {:active_retry, todo, 1, %{}}) == []
+    end
+  end
 end
