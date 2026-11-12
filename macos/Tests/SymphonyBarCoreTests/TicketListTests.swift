@@ -63,8 +63,7 @@ final class TicketListTests: XCTestCase {
         review.stage = .review
         review.waitsOn = "the reviewer"
         XCTAssertEqual(review.line, Situation(kind: .working, cause: "Waits on the reviewer."))
-        XCTAssertFalse(TicketList.Filter.waitingForCI.matches(review))
-        XCTAssertTrue(TicketList.Filter.working.matches(review))
+        XCTAssertEqual(review.kind, .working)
     }
 
     func testForcedAndAttentionRowsCarryTheirFlagsAndFacts() throws {
@@ -103,56 +102,15 @@ final class TicketListTests: XCTestCase {
         XCTAssertEqual(row.line.word, "Paused")
     }
 
-    func testTheScopeBarSearchAndRepoScopeFilter() throws {
+    func testTheRepoScopeFiltersTheRowsAndTheDefaultOrderIsByKindThenOldest() throws {
         let list = try tickets("tickets")
-        XCTAssertEqual(Set(list.rows(filter: .working, search: "").map(\.identifier)), ["SHOP-305", "API-131", "SHOP-298", "API-127"])
-        XCTAssertEqual(Set(list.rows(filter: .waitingForCI, search: "").map(\.identifier)), ["SHOP-301", "API-119"])
-        XCTAssertEqual(list.rows(filter: .waitingOnYou, search: "").map(\.identifier), ["DOCS-40", "SHOP-290"])
-        XCTAssertEqual(Set(list.rows(filter: .waitingForSlot, search: "").map(\.identifier)), ["SHOP-320", "API-133", "SHOP-325", "DOCS-41"])
-        XCTAssertEqual(list.rows(filter: .held, search: "").map(\.identifier), ["SHOP-322", "API-140"])
-        XCTAssertEqual(list.count(.retrying), 2)
-        XCTAssertEqual(list.rows(filter: .needsAttention, search: "").map(\.identifier), ["SHOP-311", "DOCS-41"])
-        XCTAssertEqual(list.rows(filter: .forced, search: "").map(\.identifier), ["SHOP-325"])
-        XCTAssertEqual(list.count(.shipped), 3)
-        XCTAssertEqual(list.count(.all), 19)
-
-        XCTAssertEqual(list.rows(filter: .all, search: "bil-206").map(\.identifier), ["SHOP-322"])
-        XCTAssertEqual(list.rows(filter: .all, search: "  checkout  express ").map(\.identifier), ["SHOP-325"])
-        XCTAssertEqual(Set(list.rows(filter: .working, search: "api").map(\.identifier)), ["API-131", "API-127"])
-        XCTAssertEqual(list.rows(filter: .all, search: "pr #741").map(\.identifier), ["SHOP-301"], "the situation's cause is searched")
-        XCTAssertTrue(list.rows(filter: .forced, search: "nothing like this").isEmpty)
+        XCTAssertEqual(list.rows.count, 19)
+        let order = list.rows.map { ($0.kindSort, $0.sinceSort) }
+        XCTAssertEqual(order.map(\.0), order.map(\.0).sorted())
+        XCTAssertEqual(list.rows.prefix(2).map(\.identifier), ["DOCS-40", "SHOP-290"])
 
         let scoped = try tickets("tickets", scope: .repo("api"))
         XCTAssertEqual(Set(scoped.rows.compactMap(\.repoKey)), ["api"])
-        XCTAssertEqual(Set(scoped.rows(filter: .working, search: "").map(\.identifier)), ["API-131", "API-127"])
-    }
-
-    func testSortsOnEveryColumnBothWays() throws {
-        let list = try tickets("tickets")
-        let rows = list.rows(filter: .waitingOnYou, search: "") + ["SHOP-305", "API-131"].compactMap(list.row)
-        let ids: ([KeyPathComparator<TicketList.Row>]) -> [String] = { rows.sorted(using: $0).map(\.identifier) }
-        XCTAssertEqual(ids([KeyPathComparator(\.identifier)]), ["API-131", "DOCS-40", "SHOP-290", "SHOP-305"])
-        XCTAssertEqual(ids([KeyPathComparator(\.identifier, order: .reverse)]), ["SHOP-305", "SHOP-290", "DOCS-40", "API-131"])
-        XCTAssertEqual(ids([KeyPathComparator(\.titleText)]).first, "SHOP-290")
-        XCTAssertEqual(ids([KeyPathComparator(\.repoText)]).first, "API-131")
-        XCTAssertEqual(ids([KeyPathComparator(\.waitsOn, order: .reverse)]).first, "DOCS-40")
-        XCTAssertEqual(ids([KeyPathComparator(\.sinceSort)]).first, "DOCS-40")
-        XCTAssertEqual(ids([KeyPathComparator(\.kindSort)]).prefix(2), ["DOCS-40", "SHOP-290"])
-        XCTAssertEqual(ids(TicketList.defaultSort), ["DOCS-40", "SHOP-290", "SHOP-305", "API-131"])
-        XCTAssertEqual(list.rows.sorted(using: TicketList.defaultSort).map(\.kind), list.rows.map(\.kind))
-    }
-
-    func testTheScopeBarFoldsIntoMoreWhileTheInspectorIsOpen() {
-        XCTAssertEqual(TicketList.Filter.bar(inspectorShown: false).map(\.title),
-                       ["All", "Waiting on you", "Working", "Waiting for CI", "Waiting for a slot", "Blocked or paused", "Retrying", "Needs attention"])
-        XCTAssertEqual(TicketList.Filter.more(inspectorShown: false), [.forced, .shipped])
-        XCTAssertEqual(TicketList.Filter.more(inspectorShown: false).map(\.title), ["Forced", "Shipped"])
-        XCTAssertEqual(TicketList.Filter.bar(inspectorShown: true), [.all, .waitingOnYou, .working, .waitingForCI])
-        XCTAssertEqual(TicketList.Filter.more(inspectorShown: true), [.waitingForSlot, .held, .retrying, .needsAttention, .forced, .shipped])
-        // Each choice is one or more situation kinds, or none for the choices about something else.
-        XCTAssertEqual(TicketList.Filter.allCases.map(\.kinds), [
-            nil, [.you], [.working], [.ci, .build], [.slot], [.blocked, .paused], [.retrying], nil, nil, [.done],
-        ])
     }
 
     func testEachStageHasItsStatusAndTitle() {
@@ -175,7 +133,7 @@ final class TicketListTests: XCTestCase {
         XCTAssertEqual(forced.title, "Fix the release")
         XCTAssertEqual(forced.repoKey, "web")
         XCTAssertTrue(forced.facts.contains(TicketList.Fact(label: "Repo", value: "web")))
-        XCTAssertEqual(list.rows(filter: .all, search: "release").map(\.identifier), ["TP-1"])
+        XCTAssertEqual(list.rows.map(\.identifier), ["TP-1"])
         XCTAssertEqual(TicketList(state: state, scope: .repo("web"), now: now, timeZone: utc).rows.map(\.identifier), ["TP-1"])
         XCTAssertEqual(ForceSheet.summary("TP-1", in: list), "Fix the release\nTodo · Queued · already forced")
     }
