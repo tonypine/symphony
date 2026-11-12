@@ -768,14 +768,16 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_click",
       "description" =>
-        "Click the centre of an element's frame in the launched app, for controls no accessibility action reaches. The app and the element's window come to the front first; fails when the element is off screen or another app would take the click there, naming that app. The pointer moves to the element, then the click goes to the app alone. Returns `under_pointer` (the element the pointer is over) and `changed` (whether the tree or windows changed); when a single click changed nothing and the element answers AXPress, it is pressed that way and `fallback` says AXPress.",
+        "Click the centre of an element's frame (`path`) or a point on screen (`x`, `y`, in the points of qa_ax_tree's frames, such as a point outside an open sheet or popover) in the launched app, as a person's mouse does. The app and the element's window come to the front first; fails with `covered` when another app would take the click there and `not_frontmost` when another app stays the active app, naming that app. The pointer moves there, then the click goes through the system's mouse route (`via: hid`). Returns `under_pointer` (the element the pointer is over) and `changed` (whether the tree or windows changed); when a single click on an element changed nothing and the element answers AXPress, it is pressed that way and `fallback` says AXPress, which is a finding against the QA harness.",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,
-        "required" => ["pid", "path"],
+        "required" => ["pid"],
         "properties" => %{
           "pid" => @pid_property,
           "path" => @element_path_property,
+          "x" => @screen_x_property,
+          "y" => @screen_y_property,
           "clicks" => %{"type" => "integer", "minimum" => 1, "maximum" => 2, "default" => 1, "description" => "2 for a double click."}
         }
       }
@@ -1171,7 +1173,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_ax_press" => ["pid", "path", "action"],
     "qa_ax_set_value" => ["pid", "path", "value"],
     "qa_ax_select" => ["pid", "path"],
-    "qa_click" => ["pid", "path", "clicks"],
+    "qa_click" => ["pid", "path", "x", "y", "clicks"],
     "qa_hover" => ["pid", "path", "x", "y"],
     "qa_context_menu" => ["pid", "path", "x", "y"],
     "qa_scroll" => ["pid", "path", "x", "y", "edge", "dx", "dy", "unit"],

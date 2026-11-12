@@ -47,13 +47,15 @@
 // `ax-resize` sizes a window for the playbook's wide pass (see `resizeWindow`)
 // and `ax-ping` tells a hung app from a busy one; both use the Accessibility
 // grant like the other `ax-` commands. `ax-select` selects a table or outline
-// row, which answers no AXPress, and `click` and `key` send mouse and key
-// events to the app's PID alone (see `selectRow`, `click` and `pressKey`); a ⌘
+// row, which answers no AXPress, `key` sends key events to the app's PID alone
+// and `click` clicks as a mouse does (see `selectRow`, `pressKey` and `click`); a ⌘
 // shortcut presses the menu item that owns it through accessibility, and only
 // when none does goes through the HID tap, while the app owns the keyboard (see
 // `shortcutItem` and `postShortcut`).
 // `click`, `hover` and `context-menu` move the real pointer to the target first
-// (see `movePointer`), only once the app's own window is in front there.
+// (see `movePointer`), only once the app's own window is in front there; `click`
+// then presses the mouse through the HID tap, as a mouse does, once the app is
+// the active app (see `postClick`).
 // `scroll` posts scroll-wheel events in the scroll area at the target, by a delta
 // or to an edge (see `scroll`).
 //
@@ -765,13 +767,20 @@ func reach(_ app: AXUIElement, _ pid: pid_t, _ target: PointerTarget) -> Int {
 
 func capitalized(_ text: String) -> String { text.prefix(1).uppercased() + text.dropFirst() }
 
+// Pointer events of the hardware's own source state, as a mouse's: the window
+// server combines them into the session's mouse state, routes them to the window
+// under the pointer and counts their clicks.
+let pointerSource = CGEventSource(stateID: .hidSystemState)
+// How long the mouse button stays down, and the gap between two clicks.
+let buttonPause: useconds_t = 30_000
+
 // Moves the real pointer, as a person's mouse would. The window server keeps
 // the pointer's position: hover (tracking areas, SwiftUI `onHover`) follows it,
 // and a SwiftUI button or link checks it when the mouse goes up, so a click
 // posted away from it does nothing. `reach` has checked that the app's own
 // window is in front at the point, so the move reaches no other app.
 func movePointer(to point: CGPoint) {
-    guard let event = CGEvent(mouseEventSource: keySource, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
+    guard let event = CGEvent(mouseEventSource: pointerSource, mouseType: .mouseMoved, mouseCursorPosition: point, mouseButton: .left) else {
         fail("pointer_failed", "Could not create a mouse event.")
     }
     event.post(tap: .cghidEventTap)
@@ -798,6 +807,39 @@ func postMouse(_ pid: pid_t, _ types: [CGEventType], at point: CGPoint, button: 
         event.setIntegerValueField(.mouseEventWindowUnderMousePointerThatCanHandleThisEvent, value: Int64(window))
         event.postToPid(pid)
         usleep(keyPause)
+    }
+}
+
+// The app that owns the keyboard and the mouse button, by name, for a refusal.
+func activeAppName() -> String {
+    guard let owner = keyboardOwner() else { return "another app" }
+    let name = NSRunningApplication(processIdentifier: owner)?.localizedName ?? "process \(owner)"
+    return "\(name) (pid \(owner))"
+}
+
+// Whether the app is the active app: the one the window server gives a click to
+// as a click, rather than as the click that activates its window.
+func isActive(_ app: AXUIElement, _ pid: pid_t) -> Bool {
+    keyboardOwner() == pid || (attribute(app, kAXFrontmostAttribute as String) as? Bool) == true
+}
+
+// A left click at the pointer, sent as a mouse sends it: button down, button up,
+// through the HID tap. Posted to the app's PID instead, a click never went
+// through the window server: the app was not activated by it, an inactive
+// window took it as the click that activates it, and SwiftUI buttons, rows and
+// links did nothing, so `click` fell back to AXPress (TP-1474). The HID tap
+// delivers to the window under the pointer, so `click` checks first that it is
+// the app's own (`reach`) and that the app is active.
+func postClick(at point: CGPoint, clicks: Int) {
+    for count in 1...clicks {
+        for type in [CGEventType.leftMouseDown, .leftMouseUp] {
+            guard let event = CGEvent(mouseEventSource: pointerSource, mouseType: type, mouseCursorPosition: point, mouseButton: .left) else {
+                fail("click_failed", "Could not create a mouse event.")
+            }
+            event.setIntegerValueField(.mouseEventClickState, value: Int64(count))
+            event.post(tap: .cghidEventTap)
+            usleep(buttonPause)
+        }
     }
 }
 
@@ -845,41 +887,46 @@ func actionNames(_ element: AXUIElement) -> [String] {
     return (names as? [String]) ?? []
 }
 
-// Clicks the centre of the element's frame. The pointer moves there first and
-// the click goes only to the app's PID, and only when the app's own window is
-// on screen at that point and nothing else would take the click there, so a
-// covered or off-screen element fails rather than clicking something else.
-// When a single click changed nothing the tree or the window list reports and
-// the element answers AXPress, it is pressed that way instead, and the result
-// says so.
-func click(_ pid: pid_t, _ path: String, clicks: Int) {
+// Clicks the centre of an element's frame or a point on screen, as a person's
+// mouse does: the app and the element's window come forward, the pointer moves
+// there, and the click goes through the HID tap (see `postClick`). It clicks only
+// when the app's own window is on screen at that point, nothing else would take
+// the click there, and the app is the active app; otherwise it fails naming the
+// app in the way, rather than clicking something else.
+// When a single click on an element changed nothing the tree or the window list
+// reports and the element answers AXPress, it is pressed that way instead, and
+// the result says so: QA files that as a finding against the harness.
+func click(_ pid: pid_t, _ argument: String, clicks: Int) {
     let app = application(pid)
-    let element = resolve(app, path)
-    let target = elementTarget(element, path)
-    let window = reach(app, pid, target)
+    let target = pointerTarget(app, argument)
+    _ = reach(app, pid, target)
+    guard waitUntil(5, { isActive(app, pid) }) else {
+        fail("not_frontmost", "\(activeAppName()) is the active app, so a click on \(target.label) would only activate the app's window; the click was not sent. Raise the app's window with qa_ax_press and AXRaise, then try again.")
+    }
     movePointer(to: target.point)
     let under = elementUnder(app, target.point)
     let before = settle(app, pid, within: 1).fingerprint
 
-    for count in 1...clicks {
-        postMouse(pid, [.leftMouseDown, .leftMouseUp], at: target.point, button: .left, window: window, clickState: count)
-    }
+    postClick(at: target.point, clicks: clicks)
 
     usleep(clickPause)
     let changed = waitUntil(1) { fingerprint(app, pid) != before }
     var result: [String: Any] = [
         "ok": true,
+        "via": "hid",
         "clicked": ["x": Int(target.point.x), "y": Int(target.point.y)],
         "clicks": clicks,
-        "changed": changed,
-        "element": describe(element, path: path)
+        "changed": changed
     ]
     result["under_pointer"] = under
 
-    if !changed, clicks == 1, actionNames(element).contains(kAXPressAction as String),
-       AXUIElementPerformAction(element, kAXPressAction as CFString) == .success {
-        result["fallback"] = "AXPress"
-        result["note"] = "The click changed nothing in the app's accessibility tree or windows, so qa_click pressed the element with AXPress instead. Read qa_ax_tree to see what the press did."
+    if let element = target.element {
+        result["element"] = describe(element, path: target.path)
+        if !changed, clicks == 1, actionNames(element).contains(kAXPressAction as String),
+           AXUIElementPerformAction(element, kAXPressAction as CFString) == .success {
+            result["fallback"] = "AXPress"
+            result["note"] = "The click changed nothing in the app's accessibility tree or windows, so qa_click pressed the element with AXPress instead. Read qa_ax_tree to see what the press did, and file the fallback as a finding against the QA harness: the click path was not walked."
+        }
     }
 
     emit(result)

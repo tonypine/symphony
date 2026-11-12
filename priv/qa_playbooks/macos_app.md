@@ -40,14 +40,25 @@ worktree's configured app and on apps you launched:
   `modifiers: ["command"]`; it reaches the app's menu as a person's keyboard does, so a shortcut
   that does nothing through `qa_key` does nothing for a person either. It returns the `window` and
   `focused` element the key went to.
-- `qa_click`: clicks the centre of an element's frame (`clicks: 2` double-clicks), for a control
-  no accessibility action reaches. The pointer moves there first, as a person's mouse would, and
-  the result names the element under it (`under_pointer`) and whether the tree or the windows
-  `changed`. When a single click changed nothing and the element answers `AXPress`, it is
-  pressed that way instead and `fallback` is `AXPress`: say so in the step's `details`. It fails
-  with `not_on_screen` when the element is scrolled out of the app's window, and with `covered`
-  when another app would take the click at that point; the message names that app, so quote it
-  in the step's `details`.
+- `qa_click`: clicks the centre of an element's frame (`path`) or a point on screen (`x`, `y`,
+  in the points of `qa_ax_tree`'s frames; a point outside an open sheet or popover, to close it
+  as a person would), `clicks: 2` double-clicks. It is the click path: hit targets, links inside
+  text, rows, click-outside-to-close and hover-then-click are proven with it, not with
+  `qa_ax_press`. The pointer moves there first and the click goes as a person's mouse sends it
+  (`via: "hid"`); the result names the element under the pointer (`under_pointer`) and whether
+  the tree or the windows `changed`. When a single click on an element changed nothing and the
+  element answers `AXPress`, it is pressed that way instead and `fallback` is `AXPress`: the click
+  path was not walked. It fails with `not_on_screen` when the element is scrolled out of the app's
+  window, with `covered` when another app would take the click at that point, and with
+  `not_frontmost` when another app stays the active app; each message names that app.
+- A click that fell back to `AXPress`, or that `covered` or `not_frontmost` refused because of an
+  app that is not the one under test, is a finding against the QA harness, never a silent
+  workaround and never the ticket's defect. Do not walk the step again with `qa_ax_press` to pass
+  it: mark the steps whose click it was `blocked`, quoting the tool's result (`fallback`, `note`,
+  or the message naming the app) in `details`, and answer `blocked` with that result as `reason`
+  once for the pass, after the other steps. When an open ticket already tracks it, put that
+  ticket in `covered_by`; otherwise Symphony's self-heal lane files the harness fix ticket. Either
+  way it is filed once, and the ticket waits on it.
 - `qa_hover`: moves the pointer over an element's centre (`path`) or a point on screen (`x`,
   `y`, in the points of `qa_ax_tree`'s frames) and waits for the app to settle (`settled`). The
   pointer stays there, so a hover state (a button that only shows on hover, a highlight) is in

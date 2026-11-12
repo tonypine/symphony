@@ -920,6 +920,10 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:ok, %{"ok" => true}} = QaDriver.call_tool(driver, "qa_click", %{"pid" => pid, "path" => "0.3.1", "clicks" => 2})
       assert_received {:cmd, @helper, ["click", ^pid_arg, "0.3.1", "2"], _opts}
 
+      # A point, such as one outside an open sheet or popover (TP-1474).
+      assert {:ok, %{"ok" => true}} = QaDriver.call_tool(driver, "qa_click", %{"pid" => pid, "x" => 40, "y" => -12})
+      assert_received {:cmd, @helper, ["click", ^pid_arg, "40,-12", "1"], _opts}
+
       assert {:ok, %{"focused" => %{"role" => "AXOutline"}}} = QaDriver.call_tool(driver, "qa_key", %{"pid" => pid, "key" => "return"})
       assert_received {:cmd, @helper, ["key", ^pid_arg, "return", ""], _opts}
 
@@ -935,6 +939,10 @@ defmodule SymphonyElixir.QaDriverTest do
 
       for args <- [%{}, %{"path" => "0..1"}, %{"path" => 3}] do
         assert error_code(QaDriver.call_tool(driver, "qa_ax_select", Map.put(args, "pid", pid))) == "invalid_arguments"
+        assert error_code(QaDriver.call_tool(driver, "qa_click", Map.put(args, "pid", pid))) == "invalid_arguments"
+      end
+
+      for args <- [%{"x" => 1}, %{"path" => "0", "x" => 1, "y" => 1}, %{"x" => "1", "y" => 1}] do
         assert error_code(QaDriver.call_tool(driver, "qa_click", Map.put(args, "pid", pid))) == "invalid_arguments"
       end
 
