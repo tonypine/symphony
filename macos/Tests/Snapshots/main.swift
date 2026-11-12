@@ -403,6 +403,34 @@ func repoPausedSidebar() -> some View {
     .background(DesignTokens.Surface.window.color)
 }
 
+/// The sidebar's five destinations (TP-1455), Factory's pages under it: with Home's waiting-on-you count and Factory's
+/// setup problems, and with neither.
+@MainActor
+func destinationsSidebar() -> some View {
+    func column(waiting: Int, setup: SetupSummary) -> some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+            ForEach(Sidebar().items, id: \.self) { item in
+                switch item {
+                case let .destination(destination):
+                    SidebarRowContent(
+                        title: destination.title, symbol: destination.symbol,
+                        badge: destination.badge(waitingOnYou: waiting, setup: setup)
+                    )
+                case let .page(page):
+                    SidebarRowContent(title: page.title, symbol: page.symbol, badge: nil, indented: true)
+                }
+            }
+        }
+        .frame(width: DesignTokens.Layout.sidebarWidth - 2 * DesignTokens.Space.s3, alignment: .leading)
+        .padding(DesignTokens.Space.s3)
+    }
+    return HStack(alignment: .top, spacing: DesignTokens.Space.s6) {
+        column(waiting: 4, setup: SetupSummary(errors: 1, warnings: 2))
+        column(waiting: 0, setup: SetupSummary())
+    }
+    .background(DesignTokens.Surface.window.color)
+}
+
 /// Ten drifts, as many as Symphony keeps, newest first; every third move back failed.
 let reconcileDrifts: [ReconcileReport.Drift] = (0..<10).map { index in
     let at = githubNow.addingTimeInterval(TimeInterval(-40 - index * 120))
@@ -1699,6 +1727,8 @@ MainActor.assumeIsolated {
         render(repoPauseSection(width: 500), scheme, to: "repo-pause-repos-narrow-\(suffix).png")
         render(repoPauseSection(width: 1220), scheme, to: "repo-pause-repos-laptop-\(suffix).png")
         render(repoPausedSidebar(), scheme, to: "repo-pause-sidebar-\(suffix).png")
+        // The five destinations (TP-1455): Home's and Factory's badges, and none.
+        render(destinationsSidebar(), scheme, to: "sidebar-destinations-\(suffix).png")
         // Move to… (TP-1328): the move's sheet, also with a refusal.
         render(moveSheet(), scheme, to: "move-sheet-\(suffix).png")
         render(moveSheet(error: "Couldn't move SHOP-430 to In Progress: Symphony has no record of SHOP-430 yet, so it can't move it (HTTP 409)"),

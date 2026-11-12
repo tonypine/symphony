@@ -32,20 +32,21 @@ extension SymphonyWindowModel {
         show(.tickets)
     }
 
-    /// ⌘F: Audit's search on Audit, Learnings' on Shipped, else Tickets' search, from any view.
-    func searchTickets() {
+    /// ⌥⌘F: the search field of the page shown, Audit's, Learnings' on Shipped or Tickets'; ⌘F finds a ticket from any
+    /// page (TP-1455).
+    func searchPage() {
         if searchesAudit {
             auditSearchRequested = true
-            return
-        }
-        if searchesLearnings {
+        } else if searchesLearnings {
             shippedTab = .learnings
             learningsSearchRequested = true
-            return
+        } else if hasPageSearch {
+            searchRequested = true
         }
-        if showsPage || selection != .tickets { show(.tickets) }
-        searchRequested = true
     }
+
+    /// Whether the page shown has a search field for ⌥⌘F.
+    var hasPageSearch: Bool { !showsPage && [.tickets, .shipped, .audit].contains(selection) }
 
     /// Whether ⌘F searches Learnings rather than Tickets: on Shipped, whichever tab shows.
     var searchesLearnings: Bool { selection == .shipped && !showsPage }
@@ -53,7 +54,7 @@ extension SymphonyWindowModel {
     /// Whether ⌘F searches Audit's records.
     var searchesAudit: Bool { selection == .audit && !showsPage }
 
-    /// The menu item ⌘F presses: "Search Audit Records", "Search Learnings" or "Search Tickets".
+    /// The menu item ⌥⌘F presses: "Search Audit Records", "Search Learnings" or "Search Tickets".
     var searchTitle: String {
         searchesAudit ? "Search Audit Records" : searchesLearnings ? "Search Learnings" : "Search Tickets"
     }

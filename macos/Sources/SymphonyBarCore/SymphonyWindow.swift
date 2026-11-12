@@ -1,23 +1,29 @@
 import Foundation
 
-/// A view of the Symphony window, in sidebar order (`docs/design/director-app-screens.md` §0).
-public enum SymphonyView: String, CaseIterable, Equatable {
-    /// `overview` is Home (TP-1453); the raw value stays, so the view the window remembers still opens.
-    case inbox, overview, initiatives, tickets, quality, usage, shipped, audit, repos, setup, diagnostics
+/// A page of the Symphony window, in sidebar order (`docs/design/director-app-screens.md` §0). Each belongs to one of the
+/// five destinations (TP-1455).
+public enum SymphonyView: String, CaseIterable, Equatable, Hashable, Identifiable {
+    /// `overview` is Home (TP-1453); the raw value stays, so the view the window remembers still opens. The Inbox is
+    /// Home's drawer (TP-1454): a window that remembers it opens on Home.
+    case inbox, overview, journal, initiatives, tickets, quality, usage, shipped, audit, setup, repos, diagnostics, settings
+
+    public var id: String { rawValue }
 
     public var title: String {
         switch self {
         case .inbox: "Inbox"
         case .overview: "Home"
+        case .journal: "Journal"
         case .initiatives: "Initiatives"
         case .tickets: "Tickets"
         case .quality: "Quality"
         case .usage: "Usage"
         case .shipped: "Shipped"
         case .audit: "Audit"
-        case .repos: "Repos"
         case .setup: "Setup"
+        case .repos: "Repos"
         case .diagnostics: "Diagnostics"
+        case .settings: "Settings"
         }
     }
 
@@ -26,15 +32,17 @@ public enum SymphonyView: String, CaseIterable, Equatable {
         switch self {
         case .inbox: "What waits on you"
         case .overview: "Every open ticket, by where it stands"
+        case .journal: Journal.explanation
         case .initiatives: "Plans and their sub-tickets"
         case .tickets: "Every ticket Symphony sees"
         case .quality: "How far to trust the crew"
         case .usage: "Tokens and limits"
         case .shipped: "What shipped and what the crew learned"
         case .audit: "Every move on record, hash-chained"
-        case .repos: "Repositories Symphony works on"
         case .setup: "What's wrong with the setup, and how to fix it"
+        case .repos: "Repositories Symphony works on"
         case .diagnostics: "Symphony's own health"
+        case .settings: "The app's and Symphony's settings"
         }
     }
 
@@ -43,85 +51,197 @@ public enum SymphonyView: String, CaseIterable, Equatable {
         switch self {
         case .inbox: "tray.full"
         case .overview: "house"
+        case .journal: Destination.journal.symbol
         case .initiatives: "flag.pattern.checkered"
         case .tickets: "list.bullet.rectangle"
         case .quality: "checkmark.seal"
         case .usage: "chart.bar.xaxis"
         case .shipped: "shippingbox"
         case .audit: "checklist"
-        case .repos: "square.stack.3d.up"
         case .setup: "wrench.and.screwdriver"
+        case .repos: "square.stack.3d.up"
         case .diagnostics: "stethoscope"
+        case .settings: "gearshape"
         }
     }
 
-    public var section: SidebarSection {
+    /// The destination it belongs to.
+    public var destination: Destination {
         switch self {
-        case .inbox, .overview, .initiatives, .tickets: .main
-        case .quality, .usage: .insights
-        case .shipped, .audit: .records
-        case .repos, .setup, .diagnostics: .factory
+        case .inbox, .overview: .home
+        case .journal: .journal
+        case .initiatives, .tickets: .work
+        case .quality, .usage, .shipped, .audit: .insights
+        case .setup, .repos, .diagnostics, .settings: .factory
         }
     }
 
-    /// Repos opens its own window rather than showing in this one.
-    public var opensOwnWindow: Bool { self == .repos }
+    /// Repos and Settings open their own windows rather than showing in this one.
+    public var opensOwnWindow: Bool { self == .repos || self == .settings }
+
+    /// The toolbar's title: a tabbed destination's name, as its tabs name the page; else the page's.
+    public var toolbarTitle: String { destination.presentation == .tabs ? destination.title : title }
 }
 
-/// A group of the sidebar; the first has no heading.
-public enum SidebarSection: String, CaseIterable, Equatable {
-    case main, insights, records, factory
+/// One of the sidebar's five destinations (analysis §6.4), on ⌘1 to ⌘5.
+public enum Destination: String, CaseIterable, Equatable, Hashable, Identifiable {
+    case home, journal, work, insights, factory
 
-    public var title: String? {
+    /// How a destination shows its pages.
+    public enum Presentation: Equatable {
+        /// One page.
+        case single
+        /// Its pages as tabs over the page, the first one first.
+        case tabs
+        /// Its pages listed under it in the sidebar.
+        case list
+    }
+
+    public var id: String { rawValue }
+
+    public var title: String {
         switch self {
-        case .main: nil
+        case .home: "Home"
+        case .journal: "Journal"
+        case .work: "Work"
         case .insights: "Insights"
-        case .records: "Records"
         case .factory: "Factory"
         }
     }
+
+    public var symbol: String {
+        switch self {
+        case .home: SymphonyView.overview.symbol
+        case .journal: "book.pages"
+        case .work: "square.grid.2x2"
+        case .insights: "chart.line.uptrend.xyaxis"
+        case .factory: "building.2"
+        }
+    }
+
+    /// Its pages, in order: the first is where it opens.
+    public var pages: [SymphonyView] {
+        switch self {
+        case .home: [.overview]
+        case .journal: [.journal]
+        case .work: [.initiatives, .tickets]
+        case .insights: [.quality, .usage, .shipped, .audit]
+        case .factory: [.setup, .repos, .diagnostics, .settings]
+        }
+    }
+
+    public var presentation: Presentation {
+        switch self {
+        case .home, .journal: .single
+        case .work, .insights: .tabs
+        case .factory: .list
+        }
+    }
+
+    /// The number of its ⌘-shortcut.
+    public var shortcut: Int { Self.allCases.firstIndex(of: self)! + 1 }
+
+    /// "Work (⌘3)": the sidebar row's help and the View menu's item.
+    public var shortcutHelp: String { "\(title) (⌘\(shortcut))" }
+
+    /// The page it opens on first: its first one that shows in the window.
+    public var firstPage: SymphonyView { pages.first { !$0.opensOwnWindow }! }
+
+    /// C1's badge (TP-1455): Home's what waits on the Director in `status.you`, Factory's setup problems in
+    /// `status.problem`; no other destination has one, and a count of 0 hides it.
+    public func badge(waitingOnYou: Int, setup: SetupSummary) -> DestinationBadge? {
+        switch self {
+        case .home where waitingOnYou > 0:
+            DestinationBadge(count: waitingOnYou, status: .you, accessibilityValue: "\(waitingOnYou) waiting")
+        case .factory where setup.errors + setup.warnings > 0:
+            DestinationBadge(
+                count: setup.errors + setup.warnings, status: .problem,
+                accessibilityValue: "Setup: " + SetupSummary.counts(errors: setup.errors, warnings: setup.warnings)
+            )
+        default:
+            nil
+        }
+    }
 }
 
-/// The sidebar: only the views built so far, in the design's order, with ⌘1–⌘8 following that order.
+/// A destination's count in the sidebar, in its status colour.
+public struct DestinationBadge: Equatable {
+    public var count: Int
+    public var status: DesignTokens.Status
+    public var accessibilityValue: String
+}
+
+/// A row of the sidebar: a destination, or a page Factory lists under it.
+public enum SidebarItem: Hashable {
+    case destination(Destination)
+    case page(SymphonyView)
+}
+
+/// The Journal (22/26 fills it): its name and what it will hold.
+public enum Journal {
+    public static let explanation = "What happened while you were away, as a story: coming soon"
+}
+
+/// The sidebar: the five destinations in the design's order, Factory with its pages under it (TP-1455).
 public struct Sidebar: Equatable {
-    /// The views this version of the app has. Later views join here, in place. The Inbox is no longer one (TP-1454): its
-    /// items are on Home, and its review is Home's drawer; a window that remembers it opens on Home.
-    public static let builtViews: [SymphonyView] = [.overview, .initiatives, .tickets, .quality, .usage, .shipped, .audit, .repos, .setup, .diagnostics]
-    public static let maxShortcuts = 8
+    public init() {}
 
-    public let views: [SymphonyView]
+    public var destinations: [Destination] { Destination.allCases }
 
-    public init(built: [SymphonyView] = Sidebar.builtViews) {
-        views = SymphonyView.allCases.filter(built.contains)
+    /// The View menu's destination items, in order: ⌘1–⌘5 pick them.
+    public var menuItems: [DestinationMenuItem] {
+        destinations.map { DestinationMenuItem(title: $0.title, keyEquivalent: String($0.shortcut), destination: $0) }
     }
 
-    /// The sections that hold a view, each with its views.
-    public var sections: [(section: SidebarSection, views: [SymphonyView])] {
-        SidebarSection.allCases.compactMap { section in
-            let views = views.filter { $0.section == section }
-            return views.isEmpty ? nil : (section, views)
+    /// The rows in order: each destination, and under Factory its pages.
+    public var items: [SidebarItem] {
+        destinations.flatMap { destination in
+            [.destination(destination)] + (destination.presentation == .list ? destination.pages.map(SidebarItem.page) : [])
         }
     }
 
-    /// The number of the view's ⌘-shortcut, nil past ⌘8 or for a view not in the sidebar.
-    public func shortcut(for view: SymphonyView) -> Int? {
-        guard let index = views.firstIndex(of: view), index < Self.maxShortcuts else { return nil }
-        return index + 1
+    /// The row selected while `view` shows: Factory's page itself, else its destination.
+    public func item(for view: SymphonyView) -> SidebarItem {
+        view.destination.presentation == .list ? .page(view) : .destination(view.destination)
     }
 
-    /// The view on ⌘`number`.
-    public func view(forShortcut number: Int) -> SymphonyView? {
-        guard number >= 1, number <= min(views.count, Self.maxShortcuts) else { return nil }
-        return views[number - 1]
-    }
-
-    /// The view the window opens on: the saved one while it is in the sidebar and shows in the window, else the
-    /// first such view.
+    /// The view the window opens on: the saved one while it shows in the window, Home for the Inbox, else Home.
     public func restoredView(saved: String?) -> SymphonyView {
-        if let saved = saved.flatMap(SymphonyView.init(rawValue:)), views.contains(saved), !saved.opensOwnWindow {
-            return saved
+        guard let saved = saved.flatMap(SymphonyView.init(rawValue:)), !saved.opensOwnWindow, saved != .inbox else {
+            return .overview
         }
-        return views.first { !$0.opensOwnWindow } ?? .diagnostics
+        return saved
+    }
+}
+
+/// A View menu item that picks a destination on ⌘ and its key.
+public struct DestinationMenuItem: Equatable {
+    public let title: String
+    public let keyEquivalent: String
+    public let destination: Destination
+
+    public init(title: String, keyEquivalent: String, destination: Destination) {
+        self.title = title
+        self.keyEquivalent = keyEquivalent
+        self.destination = destination
+    }
+}
+
+/// Each destination's last page this session, so Work and Insights open on the tab left last (TP-1455).
+public struct DestinationMemory: Equatable {
+    private var last: [Destination: SymphonyView] = [:]
+
+    public init() {}
+
+    /// The window shows `view`; a page that opens its own window is never left on.
+    public mutating func remember(_ view: SymphonyView) {
+        guard !view.opensOwnWindow else { return }
+        last[view.destination] = view
+    }
+
+    /// Where `destination` opens: the page shown last this session, else its first.
+    public func page(for destination: Destination) -> SymphonyView {
+        last[destination] ?? destination.firstPage
     }
 }
 

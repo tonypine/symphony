@@ -1059,10 +1059,15 @@ one, quit the app and run the install script with `SYMPHONY_RELEASE_TAG` set to 
 **Open Symphony** (⌘O) opens one window, **Symphony**, next to the menu bar item. It has a sidebar of views
 and, in the toolbar, **Back** and **Forward** (⌘[ and ⌘], between the views and the ticket pages shown), the
 view's title, Symphony's connection state (quiet while Symphony answers; the time of the last update is in its
-help), the scope pop-up and **Refresh** (⌘R). The sidebar lists the views this
-version has, in the order they will keep as more arrive, on ⌘1 to ⌘8: **Inbox**, **Home**, **Initiatives**, then under
-**Factory**, **Repos** (which opens the Repos window), **Setup** and **Diagnostics**. Its foot shows Symphony's version and
-state. The window opens on the Inbox the first time.
+help), the scope pop-up, **Find a Ticket** and **Refresh** (⌘R). The sidebar has five destinations, on ⌘1 to ⌘5:
+**Home** (its badge counts what waits on you, in orange), **Journal** (its name and a line saying what it will hold,
+for now), **Work** (**Initiatives** and **Tickets** as two tabs), **Insights** (**Quality**, **Usage**, **Shipped** and
+**Audit** as tabs) and **Factory** (its badge counts the setup problems, in red), with its pages listed under it:
+**Setup**, **Repos** (which opens the Repos window), **Diagnostics** and **Settings** (which opens the Settings window).
+Work and Insights open on their first tab and come back to the tab shown last while the app runs. **Find a Ticket**
+(⌘F, from any page) finds a ticket by its identifier or title as you type; Return opens its page, and **Back** returns
+to where you were. ⌥⌘F puts the focus in the search field of Tickets, Shipped's Learnings or Audit. The window opens on
+Home the first time, and on the page it showed last after that.
 
 - **Inbox** lists everything that waits on you (`/api/v1/inbox`), grouped as Plans, Pull requests, Final
   verifications, Actions, Clarify and Blocked, oldest first in each group, each row with its ticket, title, one-line ask
@@ -1146,11 +1151,11 @@ state. The window opens on the Inbox the first time.
   and row of Home (the sidebar badge still counts every repo), and the app remembers it across
   relaunches.
 
-- **Audit** (⌘8, under Records) lists the local audit records newest first (`/api/v1/audit`, the newest 1,000
+- **Audit** (a tab of Insights) lists the local audit records newest first (`/api/v1/audit`, the newest 1,000
   under the filters): time, kind, ticket, repo, who acted (you, the agent or Symphony) and what happened. Your
   moves from the app (approve, merge, rework, decisions, Backlog, Stop Run) are recorded like any
   other; older records may still show a sign-off, a move retired with `Final verification:` tickets.
-  The kind and date pop-ups (the last 7 days, or one of them), the search (⌘F) and the scope pop-up filter
+  The kind and date pop-ups (the last 7 days, or one of them), the search (⌥⌘F) and the scope pop-up filter
   it; a ticket page's **Show Audit Records** filters it to that ticket. Above the table each shown day says
   whether its hash chain verified (`/api/v1/audit/verify`): "Chain verified" with a seal, or the line and record
   that broke it with a crossed seal, which is also marked in its row. The inspector (⌥⌘I, Space) shows the

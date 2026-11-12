@@ -497,9 +497,9 @@ final class PRWatchTests: XCTestCase {
         XCTAssertEqual(row.fixes.map(\.title), ["Check Now", "Open Ticket"])
         XCTAssertEqual(row.ticketIdentifier, "T-5")
 
-        // Under one repo's scope only its own; the badge counts every repo.
+        // Under one repo's scope only its own; every repo's counts them all.
         XCTAssertEqual(Overview.problems(state, scope: .repo("web"), now: reference).map(\.id), ["T-5", "T-7"])
-        XCTAssertEqual(Overview.badgeCount(state, now: reference), 3)
+        XCTAssertEqual(Overview.problems(state, now: reference).count, 3)
 
         let one = Overview.problems(OverviewState(generatedAt: reference, silentWaits: [state.silentWaits[0]]), now: reference)
         XCTAssertEqual(one.count, 1)

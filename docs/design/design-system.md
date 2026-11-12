@@ -360,10 +360,10 @@ PR's story, Diagnostics for Symphony's own internals.
 
 ### P10. Navigation and keyboard
 
-Sidebar views on ⌘1–⌘8 in sidebar order; ⌘[ / ⌘] go back and forward between a list and a ticket or pull request
+The five sidebar destinations on ⌘1–⌘5 in sidebar order; ⌘[ / ⌘] go back and forward between a list and a ticket or pull request
 page (⌘[ pops the
 peek's page first while it has one); Return opens
-the selection; Space toggles the inspector; ⌘F searches the current view; ⌘R refreshes; ⇧⌘F forces a ticket; ⌘W
+the selection; Space toggles the inspector; ⌘F finds a ticket from any page and ⌥⌘F searches the current view; ⌘R refreshes; ⇧⌘F forces a ticket; ⌘W
 closes the window and leaves the app in the menu bar.
 
 ### P11. Notifications
