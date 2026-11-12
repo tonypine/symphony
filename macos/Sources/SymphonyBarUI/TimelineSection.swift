@@ -460,14 +460,30 @@ struct TimelineTicketChipView: View {
 
 /// A run on the timeline: its start in the column of times, then its Run group; selected, it takes the accent tint
 /// and ring around the whole group.
-private struct TimelineRunRow: View {
+struct TimelineRunRow: View {
     let run: RunGroupModel
     let time: String
     let selected: Bool
     @ObservedObject var transcripts: StepTranscripts
     let fold: Binding<Bool>
+    /// Whether the run was unfolded when the row was made. The fold's getter reads the timeline's current state, so
+    /// the old row and the new one would always agree on it; the gate compares this value instead (TP-1480).
+    let unfolded: Bool
     let select: () -> Void
     @Environment(\.colorScheme) private var colorScheme
+
+    init(
+        run: RunGroupModel, time: String, selected: Bool, transcripts: StepTranscripts, fold: Binding<Bool>,
+        select: @escaping () -> Void
+    ) {
+        self.run = run
+        self.time = time
+        self.selected = selected
+        self.transcripts = transcripts
+        self.fold = fold
+        unfolded = fold.wrappedValue
+        self.select = select
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -554,6 +570,6 @@ extension TimelineEntryRow: Equatable {
 extension TimelineRunRow: Equatable {
     nonisolated static func == (lhs: TimelineRunRow, rhs: TimelineRunRow) -> Bool {
         lhs.run == rhs.run && lhs.time == rhs.time && lhs.selected == rhs.selected
-            && lhs.fold.wrappedValue == rhs.fold.wrappedValue && lhs.transcripts === rhs.transcripts
+            && lhs.unfolded == rhs.unfolded && lhs.transcripts === rhs.transcripts
     }
 }

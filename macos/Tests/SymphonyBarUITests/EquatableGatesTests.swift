@@ -1,4 +1,5 @@
 import Foundation
+import SwiftUI
 import SymphonyBarCore
 import XCTest
 @testable import SymphonyBarUI
@@ -49,5 +50,22 @@ final class EquatableGatesTests: XCTestCase {
         XCTAssertEqual(row, TimelineEntryRow(entry: entry, time: "09:00", selected: false) { XCTFail() })
         XCTAssertNotEqual(row, TimelineEntryRow(entry: entry, time: "09:00", selected: true) {})
         XCTAssertNotEqual(row, TimelineEntryRow(entry: entry, time: "09:01", selected: false) {})
+    }
+
+    /// The run's fold is a binding over the timeline's state, so both rows would read its current value: the row keeps
+    /// the value it was made with, and a fold or unfold opens the gate.
+    func testARunRowOpensItsGateWhenItsFoldChanges() {
+        let run = RunGroupModel(id: "run-1", title: "Implementation run 1", state: .failed, word: "Failed", steps: [])
+        let transcripts = StepTranscripts { _ in .unreachable }
+        var unfolded = false
+        let fold = Binding(get: { unfolded }, set: { unfolded = $0 })
+        let folded = TimelineRunRow(run: run, time: "09:00", selected: false, transcripts: transcripts, fold: fold) {}
+        XCTAssertEqual(folded, TimelineRunRow(run: run, time: "09:00", selected: false, transcripts: transcripts, fold: fold) { XCTFail() })
+
+        fold.wrappedValue = true
+        let opened = TimelineRunRow(run: run, time: "09:00", selected: false, transcripts: transcripts, fold: fold) {}
+        XCTAssertNotEqual(folded, opened)
+        XCTAssertNotEqual(folded, TimelineRunRow(run: run, time: "09:00", selected: true, transcripts: transcripts, fold: .constant(false)) {})
+        XCTAssertNotEqual(folded, TimelineRunRow(run: run, time: "09:01", selected: false, transcripts: transcripts, fold: .constant(false)) {})
     }
 }
