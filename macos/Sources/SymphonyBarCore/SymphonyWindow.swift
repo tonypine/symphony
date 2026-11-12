@@ -214,7 +214,6 @@ public struct Sidebar: Equatable {
     }
 }
 
-/// Each destination's last page this session, so Work and Insights open on the tab left last (TP-1455).
 /// A View menu item that picks a destination on ⌘ and its key.
 public struct DestinationMenuItem: Equatable {
     public let title: String
@@ -228,6 +227,7 @@ public struct DestinationMenuItem: Equatable {
     }
 }
 
+/// Each destination's last page this session, so Work and Insights open on the tab left last (TP-1455).
 public struct DestinationMemory: Equatable {
     private var last: [Destination: SymphonyView] = [:]
 
