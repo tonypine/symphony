@@ -135,12 +135,14 @@ defmodule SymphonyElixir.WorkspaceSync do
 
   @doc """
   The unpushed head the newest run of the ticket `issue_id` recorded when it ended, or nil when that
-  run left everything pushed (or no run ended yet).
+  run left everything pushed (or no run ended yet). The newest by when it ended, not by when its
+  event was written: a run closed late at a boot (`SymphonyElixir.TicketEvents.RunEnds`) never hides
+  the end of a run after it.
   """
   @spec recorded_unpushed_head(String.t() | nil) :: String.t() | nil
   def recorded_unpushed_head(issue_id) when is_binary(issue_id) do
     case RunStore.list_ticket_events(issue_id, types: ["run.ended"]) do
-      [_ | _] = events -> events |> Enum.max_by(& &1.seq) |> Map.get(:payload) |> unpushed_head()
+      [_ | _] = events -> events |> List.last() |> Map.get(:payload) |> unpushed_head()
       _none -> nil
     end
   end

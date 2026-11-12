@@ -48,6 +48,9 @@ if config_env() == :test do
     # (`SymphonyElixir.IdlePark.Backfill`) runs in a task too, and would write questions under the
     # tests of the store; it runs where a test starts it.
     park_backfill: false,
+    # The boot's close of runs left without an end (`SymphonyElixir.TicketEvents.RunEnds`) would
+    # write `run.ended` into the runs a suite records and asserts; its own test turns it on.
+    close_unended_runs: false,
     # The pause projector (`SymphonyElixir.Pauses.Projector`) writes the labels and the Decisions
     # section in place of the holds and the decision store. Its tests and the ones that prove its
     # gates turn it on; off here, the suites of the holds and the decisions keep their own writes.

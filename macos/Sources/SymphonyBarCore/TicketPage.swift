@@ -414,7 +414,9 @@ public struct TicketPage: Equatable {
         factsRead = sources.issue.flatMap(TicketFactsRead.decode)
         detailsRead = sources.issue.flatMap(TicketDetailsRead.decode)
         marksRead = sources.issue.flatMap(TicketMarksRead.decode)
-        self.history = sources.events
+        // A ticket that shipped or was cancelled has no run working, whatever the feed says: none is pinned or unfolded.
+        let settled = situation.map { [.done, .cancelled].contains($0.kind) } ?? false
+        self.history = settled ? sources.events?.closingLiveRuns() : sources.events
         self.reference = reference
         // Symphony's one answer to why it doesn't move: the ticket's own payload, else its entry in the state. A
         // Symphony that predates it sends no `open_questions`, and the page derives the phase from the lists.
@@ -565,7 +567,7 @@ public struct TicketPage: Equatable {
                 result: .done, resultWord: nil, durationSeconds: nil, tokens: nil, detail: pullRequest?.absoluteString
             ))
         }
-        if let feed = sources.events, !feed.isEmpty {
+        if let feed = self.history, !feed.isEmpty {
             // The feed tells every run and event itself; a stop made from the app shows until the feed has caught up.
             let newest = feed.newestEventAt ?? .distantPast
             let stops = sources.stops.filter { $0.identifier == identifier && $0.at > newest }

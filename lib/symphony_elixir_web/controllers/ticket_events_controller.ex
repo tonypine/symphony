@@ -16,7 +16,9 @@ defmodule SymphonyElixirWeb.TicketEventsController do
   by run and by parent (`SymphonyElixirWeb.Presenter.ticket_timeline_json/4`). Each run's header is
   read from the ticket's whole history, so a page that holds a run's newest events answers the
   run's header as it is now, and a run whose events span two pages shows on each with that page's
-  events; a client merges them by `run_id`.
+  events; a client merges them by `run_id`. A run reads `running` only while the orchestrator holds
+  it, by its snapshot (`SymphonyElixir.Orchestrator.snapshot/2`); a run without its `run.ended` that
+  it doesn't hold reads as ended.
 
   Every event of either shape carries `new`: whether it is later than when the person last looked
   at the ticket (`SymphonyElixir.Marks`, set by `POST /api/v1/control/looked`), true on a ticket they
@@ -31,9 +33,9 @@ defmodule SymphonyElixirWeb.TicketEventsController do
   use Phoenix.Controller, formats: [:json]
 
   alias Plug.Conn
-  alias SymphonyElixir.{Marks, RunStore, TicketEvents, TicketState}
+  alias SymphonyElixir.{Marks, Orchestrator, RunStore, TicketEvents, TicketState}
   alias SymphonyElixir.TicketEvents.Types
-  alias SymphonyElixirWeb.Presenter
+  alias SymphonyElixirWeb.{Endpoint, Presenter}
 
   # The events a run's header is read from.
   @run_header_types ["run.started", "run.ended", "verdict.recorded", "step.started", "step.completed"]
@@ -44,7 +46,7 @@ defmodule SymphonyElixirWeb.TicketEventsController do
          {:ok, opts} <- query_opts(params),
          {:ok, group} <- group(params["group"]),
          events when is_list(events) <- TicketEvents.query(record.issue_id, opts) do
-      json(conn, record |> page_json(events, group) |> Map.put(:next_since, next_since(events, opts[:since])))
+      json(conn, conn |> page_json(record, events, group) |> Map.put(:next_since, next_since(events, opts[:since])))
     else
       # A store error that is neither raises, as any read of a store that failed does.
       {:error, :not_found} -> error_response(conn, 404, "ticket_not_found", "No ticket #{issue_identifier} in #{repo_key}")
@@ -118,17 +120,41 @@ defmodule SymphonyElixirWeb.TicketEventsController do
   defp group("run"), do: {:ok, :run}
   defp group(_value), do: {:error, {:invalid, "group must be run"}}
 
-  defp page_json(record, events, nil) do
+  defp page_json(_conn, record, events, nil) do
     looked_at = Marks.looked_at(record)
     %{events: Presenter.ticket_events_json(record.repo_key, record.issue_id, events, looked_at: looked_at)}
   end
 
   # A store error on the history read raises, as the page's own read does.
-  defp page_json(record, events, :run) do
+  defp page_json(conn, record, events, :run) do
     history = RunStore.list_ticket_events(record.issue_id, types: @run_header_types)
-    looked_at = Marks.looked_at(record)
-    %{timeline: Presenter.ticket_timeline_json(record.repo_key, record.issue_id, events, history, looked_at: looked_at)}
+    opts = [looked_at: Marks.looked_at(record), held: held_run_ids(conn)]
+    %{timeline: Presenter.ticket_timeline_json(record.repo_key, record.issue_id, events, history, opts)}
   end
+
+  # The run ids the orchestrator holds, by its snapshot, and when that snapshot was taken: the
+  # published one's own time, else the time before asking for a fresh one. `:unknown` when it can't
+  # be read.
+  defp held_run_ids(conn) do
+    orchestrator = setting(conn, :orchestrator) || Orchestrator
+
+    case Orchestrator.snapshot_cache_entry(orchestrator) do
+      {:ok, %{snapshot: snapshot, system_ms: system_ms}} ->
+        held_run_ids(snapshot, DateTime.from_unix!(system_ms, :millisecond))
+
+      :missing ->
+        taken_at = DateTime.utc_now()
+        held_run_ids(Orchestrator.snapshot(orchestrator, setting(conn, :snapshot_timeout_ms) || 15_000), taken_at)
+    end
+  end
+
+  defp held_run_ids(%{running: running}, taken_at) when is_list(running),
+    do: {for(%{run_id: run_id} when is_binary(run_id) <- running, into: MapSet.new(), do: run_id), taken_at}
+
+  defp held_run_ids(_unavailable, _taken_at), do: :unknown
+
+  # A conn's assign wins over the endpoint's config, as in the control API.
+  defp setting(conn, key), do: Map.get_lazy(conn.assigns, key, fn -> Endpoint.config(key) end)
 
   defp next_since([], since), do: since && DateTime.to_iso8601(since)
   defp next_since(events, _since), do: events |> List.last() |> Map.fetch!(:at) |> DateTime.to_iso8601()

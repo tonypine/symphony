@@ -79,6 +79,7 @@ defmodule SymphonyElixir.Orchestrator do
   alias SymphonyElixir.QaDriver.DevServerLease
   alias SymphonyElixir.Routing.PollLog
   alias SymphonyElixir.Situation.Recorder, as: SituationRecorder
+  alias SymphonyElixir.TicketEvents.RunEnds
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @continuation_retry_delay_ms 1_000
@@ -288,6 +289,9 @@ defmodule SymphonyElixir.Orchestrator do
     sync_usage_limit_reasons(state)
 
     mark_interrupted_runs_for_configured_repos(repo_key)
+    # Before the first tick, while it holds no run: a run the last Symphony held when it quit (to
+    # install an update, say) never got its `run.ended`, and is closed in the ticket's record now.
+    RunEnds.close_at_boot()
     TicketStateReconciler.reconcile_all()
     TicketPullRequest.Backfill.run(configured_repo_keys(repo_key))
     # The ledger's one-time history backfill runs in a task: startup never waits for it. The pause
