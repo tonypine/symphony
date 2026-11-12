@@ -176,8 +176,9 @@ final class UpdateController {
     }
 
     /// Records what the relaunched app must do and starts the helper, which waits for this app to quit. The caller
-    /// quits next. Throws an `UpdateError` when the helper can't start; nothing is recorded then.
-    func handOff(_ update: PreparedUpdate, symphonyStopped: Bool, resumeDispatch: Bool) throws {
+    /// quits next. Returns the helper's pid. Throws an `UpdateError` when the helper can't start; nothing is recorded
+    /// then.
+    func handOff(_ update: PreparedUpdate, symphonyStopped: Bool, resumeDispatch: Bool) throws -> pid_t {
         let files = FileManager.default
         guard let bundled = Bundle.main.url(forResource: UpdateHelper.resourceName, withExtension: nil) else {
             throw UpdateError.helper("\(UpdateHelper.resourceName) is missing from the app")
@@ -217,12 +218,20 @@ final class UpdateController {
         // Before the helper starts, so the log's folder exists for its output.
         log.append("handing v\(update.release.version) over to the update helper; quitting")
         do {
-            try ChildProcess.spawnDetached(launch, logURL: log.url)
+            return try ChildProcess.spawnDetached(launch, logURL: log.url)
         } catch {
             pending.clear()
             log.append("couldn't start the update helper: \(error.localizedDescription)")
             throw UpdateError.helper(error.localizedDescription)
         }
+    }
+
+    /// The update helper exited while this app still runs, so it swapped nothing: the app didn't quit in time. The
+    /// relaunch record goes, and the menu says the update didn't apply.
+    func helperGaveUp(_ exit: ChildExit, version: String) {
+        pending.clear()
+        log.append("the update helper \(exit.summary) while the app still ran")
+        fail(UpdateLaunch.notQuitReason(logPath: logPath), version: version)
     }
 
     /// The file number of this app's bundle, which tells a failed rollback swap from a reinstall of the failed build.
