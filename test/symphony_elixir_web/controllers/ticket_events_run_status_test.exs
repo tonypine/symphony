@@ -18,6 +18,8 @@ defmodule SymphonyElixirWeb.TicketEventsRunStatusTest do
   defmodule SnapshotOrchestrator do
     use GenServer
 
+    @snapshot_table :symphony_orchestrator_snapshot
+
     def start_link(name), do: GenServer.start_link(__MODULE__, nil, name: name)
 
     @impl true
@@ -26,6 +28,15 @@ defmodule SymphonyElixirWeb.TicketEventsRunStatusTest do
     @impl true
     def handle_call(:snapshot, _from, snapshot), do: {:reply, snapshot, snapshot}
     def handle_call({:hold, run_ids}, _from, snapshot), do: {:reply, :ok, %{snapshot | running: Enum.map(run_ids, &%{run_id: &1, issue_id: "issue"})}}
+
+    # Publishes the snapshot as the orchestrator does, taken at `taken_at`, in a table it owns.
+    def handle_call({:publish, run_ids, taken_at}, _from, snapshot) do
+      if :ets.info(@snapshot_table, :owner) == :undefined, do: :ets.new(@snapshot_table, [:named_table, :public])
+      published = %{snapshot | running: Enum.map(run_ids, &%{run_id: &1, issue_id: "issue"})}
+      system_ms = DateTime.to_unix(taken_at, :millisecond)
+      :ets.insert(@snapshot_table, {:current, published, System.monotonic_time(:millisecond), system_ms})
+      {:reply, :ok, snapshot}
+    end
   end
 
   setup do
@@ -81,14 +92,30 @@ defmodule SymphonyElixirWeb.TicketEventsRunStatusTest do
     refute Enum.any?(timeline, &(&1["kind"] == "run" and &1["status"] == "running"))
   end
 
-  test "a run the boot closed reads its recorded end", %{orchestrator: _orchestrator} do
-    capture_log(fn -> RunEnds.close_unended(at(60)) end)
+  test "a run the boot closed reads its recorded end, the same end the feed gave it before", %{orchestrator: _orchestrator} do
+    before = json_response(get(build_conn(), @path), 200)["timeline"]
+    capture_log(fn -> RunEnds.close_unended() end)
     timeline = json_response(get(build_conn(), @path), 200)["timeline"]
 
     assert %{"status" => "ended", "ended_at" => impl_end} = run(timeline, "run-impl-1")
     assert impl_end == DateTime.to_iso8601(at(22))
     assert %{"status" => "ended", "ended_at" => review_end, "exit" => "ended; no end was recorded"} = run(timeline, "run-review-1")
-    assert review_end == DateTime.to_iso8601(at(60))
+    assert review_end == DateTime.to_iso8601(at(27))
+    assert review_end == run(before, "run-review-1")["ended_at"]
+  end
+
+  test "a run that started after the published snapshot was taken reads as running", %{orchestrator: orchestrator} do
+    # The snapshot was published at minute 23, before the Code Review run started at minute 26.
+    :ok = GenServer.call(orchestrator, {:publish, [], at(23)})
+    timeline = json_response(get(build_conn(), @path), 200)["timeline"]
+
+    assert %{"status" => "running", "ended_at" => nil} = run(timeline, "run-review-1")
+    assert %{"status" => "ended", "exit" => "ended; no end was recorded"} = run(timeline, "run-impl-1")
+
+    # Once a snapshot taken after its start doesn't hold it, it reads as ended.
+    :ok = GenServer.call(orchestrator, {:publish, [], at(30)})
+    timeline = json_response(get(build_conn(), @path), 200)["timeline"]
+    assert %{"status" => "ended", "exit" => "ended; no end was recorded"} = run(timeline, "run-review-1")
   end
 
   defp run(timeline, run_id), do: Enum.find(timeline, &(&1["kind"] == "run" and &1["run_id"] == run_id))

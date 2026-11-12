@@ -709,10 +709,12 @@ defmodule SymphonyElixirWeb.Presenter do
   status, verdict, started_at, ended_at, exit, head, summary, events}`, its header read from
   `history` (the ticket's `run.started`, `run.ended`, `verdict.recorded` and step events, oldest
   first), not from the page: `status` is `ended` once its `run.ended` is written, `running` before
-  that only while the orchestrator holds a run with its id (`opts[:held]`, the run ids its snapshot
-  holds; `:unknown`, the default, when it could not be read), and otherwise `ended` too, with the
-  `ended_at` the record proves (the ticket's next `run.started`, else the run's last event) and the
-  exit `SymphonyElixir.TicketEvents.RunEnds.unrecorded_exit/0`. `verdict` is
+  that only while the orchestrator holds a run with its id (`opts[:held]`, `{run_ids, taken_at}`: the
+  run ids its snapshot holds and when that snapshot was taken; `:unknown`, the default, when it could
+  not be read) or the run started after that snapshot was taken, and otherwise `ended` too, with the
+  `ended_at` `SymphonyElixir.TicketEvents.RunEnds.open/1` gives it (the ticket's next `run.started`,
+  else the run's last step) and the exit `SymphonyElixir.TicketEvents.RunEnds.unrecorded_exit/0`.
+  `verdict` is
   the newest verdict naming the run (`{kind, outcome, head, at}`), else null, and `summary` is the
   run's line (`SymphonyElixir.TicketEvents.Summary.run_group/1`), which names the step a running run
   is on. `opts[:looked_at]` adds `new` to each event, as `ticket_events_json/4`'s does.
@@ -781,24 +783,26 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.new(fn {run_id, events} -> {run_id, run_header(run_id, events, Map.get(verdicts, run_id), run_end(run_id, events, unended, held))} end)
   end
 
-  # How the run ended: its `run.ended`; nil while the orchestrator holds it (or can't say); else the
-  # end the record proves, as `RunEnds` writes it at the next boot.
+  # How the run ended: its `run.ended`; nil while the orchestrator holds it, started after its
+  # snapshot was taken, or can't say; else the end `RunEnds` writes at the next boot.
   defp run_end(run_id, events, unended, held) do
     ended = events |> Enum.filter(&(&1.type == "run.ended")) |> List.last()
+    started = Enum.find(events, &(&1.type == "run.started"))
 
     cond do
-      ended ->
-        ended
-
-      held == :unknown or MapSet.member?(held, run_id) ->
-        nil
-
-      true ->
-        started = Enum.find(events, &(&1.type == "run.started"))
-        at = Map.get(unended, run_id) || List.last(events).at
-        %Event{type: "run.ended", run_id: run_id, at: at, payload: RunEnds.end_payload(started, at)}
+      ended -> ended
+      held?(held, run_id, started) -> nil
+      true -> unrecorded_end(run_id, started, Map.fetch!(unended, run_id))
     end
   end
+
+  defp held?(:unknown, _run_id, _started), do: true
+
+  defp held?({run_ids, %DateTime{} = taken_at}, run_id, %Event{at: started_at}),
+    do: MapSet.member?(run_ids, run_id) or DateTime.compare(started_at, taken_at) == :gt
+
+  defp unrecorded_end(run_id, started, at),
+    do: %Event{type: "run.ended", run_id: run_id, at: at, payload: RunEnds.end_payload(started, at)}
 
   defp run_header(run_id, events, verdict, ended) do
     started = Enum.find(events, &(&1.type == "run.started"))

@@ -6284,12 +6284,12 @@ Minimum endpoints:
     history: `model` and `effort` are the ones its run profile resolved when it was dispatched (its
     `run.started`, else its `run.ended`; null when the profile resolved none and the runtime kept its
     own default), `status` is `ended` once its `run.ended` is written and `running` before that
-    only while the orchestrator holds a run with its id; a run with no `run.ended` the orchestrator
-    doesn't hold reads `ended` too, with the `ended_at` its record proves (the ticket's next
-    `run.started`, else the run's last event) and the exit `ended; no end was recorded`. Each boot,
-    before its first tick, writes that `run.ended` for every run left without one (a run Symphony
-    held when it quit, say to install an update), once, at the ticket's next `run.started`, else
-    the boot, with `counted: false`. `verdict` is the
+    only while the orchestrator holds a run with its id (or the run started after the snapshot
+    read was taken); a run with no `run.ended` the orchestrator doesn't hold reads `ended` too,
+    with the `ended_at` its record proves (the ticket's next `run.started`, else the run's last
+    step, else its start) and the exit `ended; no end was recorded`. Each boot, before its first
+    tick, writes that `run.ended` for every run left without one (a run Symphony held when it quit,
+    say to install an update), once, at that same time, with `counted: false`. `verdict` is the
     newest `verdict.recorded` naming the run (`{kind, outcome, head, at}`), else null. A run whose events span two pages shows
     on each with that page's events and its whole header; the client merges by `run_id`.
   - `since` (ISO 8601, exclusive) pages: `next_since` is the `at` of the last event returned (the

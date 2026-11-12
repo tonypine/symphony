@@ -132,18 +132,26 @@ defmodule SymphonyElixirWeb.TicketEventsController do
     %{timeline: Presenter.ticket_timeline_json(record.repo_key, record.issue_id, events, history, opts)}
   end
 
-  # The run ids the orchestrator holds, by its snapshot; `:unknown` when it can't be read.
+  # The run ids the orchestrator holds, by its snapshot, and when that snapshot was taken: the
+  # published one's own time, else the time before asking for a fresh one. `:unknown` when it can't
+  # be read.
   defp held_run_ids(conn) do
     orchestrator = setting(conn, :orchestrator) || Orchestrator
 
-    case Orchestrator.snapshot(orchestrator, setting(conn, :snapshot_timeout_ms) || 15_000) do
-      %{running: running} when is_list(running) ->
-        for %{run_id: run_id} when is_binary(run_id) <- running, into: MapSet.new(), do: run_id
+    case Orchestrator.snapshot_cache_entry(orchestrator) do
+      {:ok, %{snapshot: snapshot, system_ms: system_ms}} ->
+        held_run_ids(snapshot, DateTime.from_unix!(system_ms, :millisecond))
 
-      _unavailable ->
-        :unknown
+      :missing ->
+        taken_at = DateTime.utc_now()
+        held_run_ids(Orchestrator.snapshot(orchestrator, setting(conn, :snapshot_timeout_ms) || 15_000), taken_at)
     end
   end
+
+  defp held_run_ids(%{running: running}, taken_at) when is_list(running),
+    do: {for(%{run_id: run_id} when is_binary(run_id) <- running, into: MapSet.new(), do: run_id), taken_at}
+
+  defp held_run_ids(_unavailable, _taken_at), do: :unknown
 
   # A conn's assign wins over the endpoint's config, as in the control API.
   defp setting(conn, key), do: Map.get_lazy(conn.assigns, key, fn -> Endpoint.config(key) end)
