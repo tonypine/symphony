@@ -297,7 +297,7 @@ public struct JournalRow: Equatable, Identifiable {
     /// The chip for VoiceOver and its help: "Open TP-1401, The situation read model, at this event".
     public var chipLabel: String {
         guard focus != nil else { return chipIdentifier }
-        return "Open " + [chipIdentifier, ticket.title].compactMap { $0 }.joined(separator: ", ") + " at this event"
+        return "Open " + [chipIdentifier, ticket.title].compactMap { $0 }.joined(separator: ", ") + ", at this event"
     }
 }
 
