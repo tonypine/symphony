@@ -4,6 +4,27 @@ What `GET /api/v1/:issue_identifier` serves about one ticket, and what each entr
 `GET /api/v1/state`'s `issues` shares with it. The older fields (`status`, `pause`, `watch`) stay for
 the pages that read them.
 
+## Reading again only on change
+
+`GET /api/v1/:issue_identifier` and `GET /api/v1/tickets/:issue_identifier/decisions` (the ticket's
+decisions, D1, D2…) answer with an `ETag`: a strong validator made of the SHA-256 of the answer's
+body. A read whose `If-None-Match` names that tag (or `*`) gets `304 Not Modified` with the same
+`ETag` and no body while the answer is unchanged. Any change to the answer (a state move, a label, a
+new question, an answered decision, a run's progress) changes the tag, so the next read gets the
+full answer with `200`. Errors (`404`, `503`) carry no tag.
+
+```http
+GET /api/v1/TP-1 HTTP/1.1
+If-None-Match: "3f2a9c41d0b7e6a58c21f0de94b3a7c2"
+
+HTTP/1.1 304 Not Modified
+etag: "3f2a9c41d0b7e6a58c21f0de94b3a7c2"
+```
+
+The Director's ticket page reads both after each state poll and sends the tags of the answers it
+shows, so while nothing changes Symphony sends no body and the app decodes nothing; a change reaches
+the open page on the next poll, as before. Opening a ticket's page reads both in full.
+
 ## `ticket`
 
 The ticket itself, as its record holds it: the same values the ticket list's `title`, `phase`,

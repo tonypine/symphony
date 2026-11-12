@@ -221,4 +221,79 @@ final class LiveAPIClientTests: XCTestCase {
         let unreachable = await none("api/v1/state")
         XCTAssertEqual(unreachable, .unreachable)
     }
+
+    // MARK: - Conditional reads (TP-1492)
+
+    func testConditionalFetchSendsTheTagAndReadsTheAnswersTag() async {
+        var sent: [String?] = []
+        let fetch = LiveAPIClient.conditionalFetch(base: { URL(string: "http://127.0.0.1:4010") }) { request in
+            sent.append(request.value(forHTTPHeaderField: "If-None-Match"))
+            let status = request.value(forHTTPHeaderField: "If-None-Match") == #""abc""# ? 304 : 200
+            let headers = ["ETag": #""abc""#]
+            let body = status == 304 ? Data() : Data("{}".utf8)
+            return (body, HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: headers)!)
+        }
+        let first = await fetch("api/v1/SHOP-1", nil)
+        XCTAssertEqual(first, TaggedAnswer(.answered(Data("{}".utf8), statusCode: 200), etag: #""abc""#))
+        let second = await fetch("api/v1/SHOP-1", #""abc""#)
+        XCTAssertEqual(second, TaggedAnswer(.answered(Data(), statusCode: 304), etag: #""abc""#))
+        XCTAssertEqual(sent, [nil, #""abc""#])
+
+        let none = LiveAPIClient.conditionalFetch(base: { nil }) { _ in throw URLError(.badURL) }
+        let unreachable = await none("api/v1/SHOP-1", nil)
+        XCTAssertEqual(unreachable, TaggedAnswer(.unreachable))
+        let failing = LiveAPIClient.conditionalFetch(base: { URL(string: "http://127.0.0.1:4010") }) { _ in throw URLError(.timedOut) }
+        let failed = await failing("api/v1/SHOP-1", #""abc""#)
+        XCTAssertEqual(failed, TaggedAnswer(.unreachable))
+    }
+
+    func testAConditionalResultIsUnchangedOnlyForA304ToASentTag() {
+        let body = Data("{}".utf8)
+        XCTAssertEqual(ConditionalResult(TaggedAnswer(.answered(Data(), statusCode: 304), etag: "t"), sent: "t"), .unchanged)
+        XCTAssertEqual(
+            ConditionalResult(TaggedAnswer(.answered(Data(), statusCode: 304)), sent: nil),
+            .changed(.failed("Symphony answered with HTTP 304"), etag: nil)
+        )
+        XCTAssertEqual(ConditionalResult(TaggedAnswer(.answered(body, statusCode: 200), etag: "t"), sent: nil), .changed(.loaded(body), etag: "t"))
+        XCTAssertEqual(ConditionalResult(TaggedAnswer(.answered(body, statusCode: 404), etag: "t"), sent: "s"), .changed(.unsupported, etag: nil))
+    }
+
+    func testReadsSendTheHeldTagAndKeepThePageOnA304() async {
+        let body = Data(#"{"identifier":"SHOP-1"}"#.utf8)
+        var sent: [String?] = []
+        var status = 200
+        let client = LiveAPIClient(
+            fetch: { _ in .unreachable },
+            conditional: { _, tag in
+                sent.append(tag)
+                if status == 200 { return TaggedAnswer(.answered(body, statusCode: 200), etag: "v1") }
+                if status == 304, tag == "v1" { return TaggedAnswer(.answered(Data(), statusCode: 304), etag: "v1") }
+                return TaggedAnswer(.answered(Data(), statusCode: status))
+            },
+            scheduler: scheduler
+        )
+        var reads = ConditionalReads()
+        let first = await client.read("api/v1/SHOP-1", through: &reads)
+        XCTAssertEqual(first, .changed(body))
+        XCTAssertEqual(reads.tag(for: "api/v1/SHOP-1"), "v1")
+
+        status = 304
+        let second = await client.read("api/v1/SHOP-1", through: &reads)
+        XCTAssertEqual(second, .unchanged)
+        XCTAssertEqual(reads.tag(for: "api/v1/SHOP-1"), "v1")
+
+        // A failure drops the tag: the next read is in full.
+        status = 500
+        let third = await client.read("api/v1/SHOP-1", through: &reads)
+        XCTAssertEqual(third, .changed(nil))
+        XCTAssertNil(reads.tag(for: "api/v1/SHOP-1"))
+        XCTAssertEqual(sent, [nil, "v1", "v1"])
+    }
+
+    func testWithoutAConditionalFetchEveryReadIsInFull() async {
+        let body = Data("{}".utf8)
+        let client = LiveAPIClient(fetch: { _ in .answered(body, statusCode: 200) }, scheduler: scheduler)
+        let result = await client.get("api/v1/SHOP-1", ifNoneMatch: "v1")
+        XCTAssertEqual(result, .changed(.loaded(body), etag: nil))
+    }
 }

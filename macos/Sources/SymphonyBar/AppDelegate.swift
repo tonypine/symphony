@@ -14,7 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         fetch: LiveAPIClient.fetch(base: { [weak self] in self?.apiBase() }, transport: AppStores.current.apiTransport),
         download: LiveAPIClient.fetch(
             base: { [weak self] in self?.apiBase() }, transport: AppStores.current.apiTransport, timeout: LiveAPIClient.downloadTimeout
-        )
+        ),
+        conditional: LiveAPIClient.conditionalFetch(base: { [weak self] in self?.apiBase() }, transport: AppStores.current.apiTransport)
     )
     private lazy var symphonyWindow = SymphonyWindowController(client: apiClient)
     /// SU12: the first run on this Mac, and the repos Add Repo saved while Symphony was stopped, wait here for Symphony's
