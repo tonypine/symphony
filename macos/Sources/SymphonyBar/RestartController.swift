@@ -6,6 +6,9 @@ import SymphonyBarCore
 final class RestartController {
     /// Called after every change, so the menu follows.
     var onChange: (() -> Void)?
+    /// Awaited, for at most `QuitPlan.sendTimeout`, before Symphony is stopped: it sends what only a running
+    /// Symphony can take, such as an Inbox answer held for Undo.
+    var beforeStop: (@Sendable @MainActor () async -> Void)?
 
     private(set) var machine = RestartMachine()
     private let runner: SymphonyRunner
@@ -77,7 +80,14 @@ final class RestartController {
                 poller.pollNow()
             case .stop:
                 // The exit comes back through `handle(.exited)`.
-                runner.stop()
+                guard let beforeStop else {
+                    runner.stop()
+                    break
+                }
+                Task {
+                    await Bounded.wait(seconds: QuitPlan.sendTimeout) { await beforeStop() }
+                    runner.stop()
+                }
             case .start:
                 runner.start { [weak self] error in
                     self?.handle(.startFinished(error: error?.localizedDescription))
