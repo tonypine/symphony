@@ -13,7 +13,7 @@ final class OverviewTests: XCTestCase {
 
     func testAFlowingFactoryNeedsNothing() throws {
         XCTAssertTrue(try problems("flowing").isEmpty)
-        XCTAssertEqual(Overview.badgeCount(try state("flowing"), now: wallClock), 0)
+        XCTAssertEqual(Overview.problems(try state("flowing"), now: wallClock).count, 0)
         XCTAssertTrue(try problems("paused").isEmpty)
         XCTAssertTrue(try problems("idle").isEmpty)
     }
@@ -42,7 +42,7 @@ final class OverviewTests: XCTestCase {
         XCTAssertEqual(hold.note, "Runs resume by themselves.")
         XCTAssertEqual(hold.fixes, [.openUsage])
         XCTAssertEqual(hold.fixes.map(\.title), ["Open Usage"])
-        XCTAssertEqual(Overview.badgeCount(try state("attention"), now: wallClock), 2)
+        XCTAssertEqual(Overview.problems(try state("attention"), now: wallClock).count, 2)
     }
 
     func testTodaysMetersReadTheBudgetAndTheLimits() throws {
@@ -164,10 +164,10 @@ final class OverviewTests: XCTestCase {
 
     // MARK: - Scope
 
-    func testTheScopeFiltersWhatNeedsAttentionButNotTheBadge() throws {
-        // The hold is on every repo; the stuck ticket is web-shop's. The badge counts both, whatever the scope.
+    func testTheScopeFiltersWhatNeedsAttention() throws {
+        // The hold is on every repo; the stuck ticket is web-shop's. Every repo's scope counts both.
         XCTAssertEqual(try problems("attention", scope: .repo("api")).map(\.kinds), [[.usageLimit]])
-        XCTAssertEqual(Overview.badgeCount(try state("attention"), now: wallClock), 2)
+        XCTAssertEqual(Overview.problems(try state("attention"), now: wallClock).count, 2)
     }
 
     func testAStaleForcedTicketWithNoKnownRepoShowsUnderEveryScope() {

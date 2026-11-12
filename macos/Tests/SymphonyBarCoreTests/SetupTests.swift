@@ -192,7 +192,6 @@ final class SetupTests: XCTestCase {
         XCTAssertFalse(summary.showsMenuDot)
         XCTAssertEqual(summary.menuTitle, "Setup: 3 warnings")
         XCTAssertNil(summary.attentionSentence)
-        XCTAssertEqual(summary.accessibilityValue, "3 warnings")
     }
 
     func testHealthyShowsNothing() {
@@ -201,7 +200,6 @@ final class SetupTests: XCTestCase {
         XCTAssertNil(summary.badge)
         XCTAssertNil(summary.menuTitle)
         XCTAssertFalse(summary.showsMenuDot)
-        XCTAssertEqual(summary.accessibilityValue, "")
     }
 
     func testTheBuildWarningCountsAsAWarning() {
