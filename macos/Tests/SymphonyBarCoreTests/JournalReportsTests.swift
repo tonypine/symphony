@@ -100,7 +100,8 @@ final class JournalReportsTests: XCTestCase {
     // MARK: - Citations
 
     /// Each citation resolves to its event: a cited sentence's link opens its ticket's page at the very event it
-    /// names, in the order the report cites them; an event on Symphony's own stream opens no page.
+    /// names, in the order the report cites them; an event on Symphony's own stream opens no page, and its sentence shows
+    /// the event's row in the Journal instead.
     func testEachCitationResolvesToItsEvent() throws {
         let citations = try citations()
         for report in try reports() {
@@ -110,6 +111,8 @@ final class JournalReportsTests: XCTestCase {
                 XCTAssertEqual(sentence.events, cited)
                 let onTickets = cited.filter { citations.events[$0]?.ticket.identifier != nil }
                 XCTAssertEqual(sentence.focuses.map(\.eventID), onTickets, "sentence \(sentence.index) of \(report.id)")
+                XCTAssertEqual(sentence.rows, cited.filter { citations.events[$0] != nil }, "sentence \(sentence.index) of \(report.id)")
+                XCTAssertEqual(sentence.linked, !sentence.rows.isEmpty, "a sentence citing a known event is a link")
                 for focus in sentence.focuses {
                     XCTAssertEqual(focus.identifier, citations.events[focus.eventID]?.ticket.identifier)
                 }
@@ -118,9 +121,13 @@ final class JournalReportsTests: XCTestCase {
         let night = try card("rep-0300")
         XCTAssertEqual(night.sentences[0].focus, TimelineFocus(identifier: "TP-1454", eventID: "j13", runID: nil))
         XCTAssertEqual(night.sentences[1].focuses.map(\.identifier), ["TP-1457", "TP-1458"])
-        // The release's sentence rests on Symphony's own stream: no ticket page holds it.
+        // The release's sentence rests on Symphony's own stream: no ticket page holds it, so its link shows the event's
+        // row in the Journal.
         XCTAssertNil(night.sentences[3].focus)
-        XCTAssertNil(night.sentences[3].linkLabel)
+        XCTAssertEqual(night.sentences[3].row, "j04")
+        XCTAssertTrue(night.sentences[3].linked)
+        XCTAssertEqual(night.sentences[3].linkLabel, JournalReportCard.Sentence.showLabel)
+        XCTAssertNil(night.sentences[0].row, "a sentence with a ticket page opens it")
         XCTAssertEqual(night.sentences[2].linkLabel, "Open TP-1456 at the event this sentence rests on")
         let evening = try card("rep-2100")
         XCTAssertEqual(evening.sentences[1].focuses, [
@@ -136,7 +143,7 @@ final class JournalReportsTests: XCTestCase {
         XCTAssertTrue(try citations().resolves(try report("rep-2100")))
         // Before the period is read its sentences link nothing.
         let evening = try XCTUnwrap(JournalReportCard.build(try report("rep-2100"), citations: pages, calendar: utc))
-        XCTAssertTrue(evening.sentences.allSatisfy { $0.focus == nil })
+        XCTAssertTrue(evening.sentences.allSatisfy { $0.focus == nil && !$0.linked && $0.linkLabel == nil })
         XCTAssertEqual(evening.tickets, [])
     }
 

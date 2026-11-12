@@ -866,6 +866,28 @@ final class ChipTextViewTests: XCTestCase {
         XCTAssertNil(view.hoveredLink)
     }
 
+    /// TP-1462: under a sheet no link is lit, and once the sheet ends the pointer lights a link again.
+    func testUnderASheetNoLinkIsLitAndAfterItThePointerLightsOneAgain() throws {
+        let text = "Everything shipped tonight. Two tickets wait on CI."
+        let content = try XCTUnwrap(ChipTextContent.chips(text, references: [:], links: [ChipTextLink(range: NSRange(location: 28, length: 23), id: "1")]))
+        let view = ChipTextView(content: content, style: ChipTextStyle(font: font))
+        view.setFrameSize(CGSize(width: 600, height: view.height(forWidth: 600)))
+        let link = try XCTUnwrap(view.linkRects(0).first)
+        let point = CGPoint(x: link.midX, y: link.midY)
+        view.mouseMoved(with: try mouse(.mouseMoved, at: point, in: view))
+        XCTAssertEqual(view.hoveredLink, 0)
+
+        view.drawsText = false
+        XCTAssertNil(view.hoveredLink, "the sheet takes the pointer off the link")
+        view.mouseMoved(with: try mouse(.mouseMoved, at: point, in: view))
+        XCTAssertNil(view.hoveredLink)
+        XCTAssertNil(view.pointerLocation, "out of a window the pointer is nowhere in it")
+
+        view.drawsText = true
+        view.mouseMoved(with: try mouse(.mouseMoved, at: point, in: view))
+        XCTAssertEqual(view.hoveredLink, 0)
+    }
+
     // MARK: - Helpers
 
     /// The What happened paragraph about #448, TP-880 and TP-891, at the body size.

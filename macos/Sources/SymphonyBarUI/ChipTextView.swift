@@ -129,7 +129,11 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         didSet {
             guard drawsText != oldValue else { return }
             alphaValue = drawsText ? 1 : 0
-            if !drawsText { pointerMoved(to: nil) }
+            // Under a sheet nothing is lit; once it ends, what the pointer rests on lights without waiting for it to
+            // move.
+            let point = drawsText ? pointerLocation : nil
+            pointerMoved(to: point)
+            hoveredLink = point.flatMap(linkIndex(at:))
         }
     }
 
@@ -635,6 +639,13 @@ open class ChipTextView: NSTextView, NSTextLayoutManagerDelegate {
         let work = DispatchWorkItem { [weak self] in self?.showDetails(chip, hover: true) }
         hoverWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + hoverDelay, execute: work)
+    }
+
+    /// Where the pointer is in the view, nil when it is outside it or the view is in no window.
+    var pointerLocation: CGPoint? {
+        guard let window else { return nil }
+        let point = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        return bounds.contains(point) ? point : nil
     }
 
     override open func updateTrackingAreas() {

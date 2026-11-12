@@ -169,6 +169,12 @@ public struct JournalCitations: Equatable {
         return TimelineFocus(identifier: identifier, eventID: id, runID: event.event.runID ?? event.by?.runId)
     }
 
+    /// Whether event `id` is known: a citation of it can show its row in the Journal, on a ticket or on Symphony's own
+    /// stream.
+    public func knows(_ id: String) -> Bool {
+        events[id] != nil
+    }
+
     /// The tickets the known events are on, as a text's chips find them: by identifier, with their title and repository.
     public var references: [String: Reference] {
         var references: [String: Reference] = [:]
@@ -192,17 +198,39 @@ public struct JournalReportCard: Equatable, Identifiable {
         public var events: [String]
         /// Each cited event's ticket page, for the events that resolve, in the order the report cites them.
         public var focuses: [TimelineFocus]
+        /// The cited events the Journal knows, on a ticket or on Symphony's own stream, in the order the report cites
+        /// them: their rows are where a citation with no ticket page shows its facts.
+        public var rows: [String]
 
         public var id: Int { index }
+
+        public init(index: Int, text: String, range: NSRange, events: [String], focuses: [TimelineFocus], rows: [String] = []) {
+            self.index = index
+            self.text = text
+            self.range = range
+            self.events = events
+            self.focuses = focuses
+            self.rows = rows
+        }
 
         /// The link opens the first event it cites that resolves; nil when none does.
         public var focus: TimelineFocus? { focuses.first }
 
-        /// The link's help and VoiceOver action: "Open TP-1457 at the event this sentence rests on".
+        /// The Journal row a link with no ticket page shows (an event on Symphony's own stream): nil when the sentence
+        /// opens a ticket page, or cites no event the Journal knows.
+        public var row: String? { focus == nil ? rows.first : nil }
+
+        /// Whether the sentence is a link: it opens a ticket page at its event, or shows its event's row in the Journal.
+        public var linked: Bool { focus != nil || row != nil }
+
+        /// The link's help and VoiceOver action: "Open TP-1457 at the event this sentence rests on", or "Show the event
+        /// this sentence rests on in the Journal" for one on Symphony's own stream.
         public var linkLabel: String? {
-            guard let focus else { return nil }
-            return "Open \(focus.identifier) at the event this sentence rests on"
+            if let focus { return "Open \(focus.identifier) at the event this sentence rests on" }
+            return row == nil ? nil : Self.showLabel
         }
+
+        public static let showLabel = "Show the event this sentence rests on in the Journal"
     }
 
     public var id: String
@@ -251,7 +279,10 @@ public struct JournalReportCard: Equatable, Identifiable {
             let range = NSRange(location: (text as NSString).length, length: (sentence as NSString).length)
             text += sentence
             let events = report.cited(index)
-            sentences.append(Sentence(index: index, text: sentence, range: range, events: events, focuses: events.compactMap(citations.focus)))
+            sentences.append(Sentence(
+                index: index, text: sentence, range: range, events: events, focuses: events.compactMap(citations.focus),
+                rows: events.filter(citations.knows)
+            ))
         }
         var tickets: [TimelineFocus] = []
         for focus in sentences.flatMap(\.focuses) where !tickets.contains(where: { $0.identifier == focus.identifier }) {

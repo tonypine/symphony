@@ -11,6 +11,10 @@ public final class SheetCover {
     public var watching: Bool { !observers.isEmpty }
     private var observers: [NSObjectProtocol] = []
     private weak var sender: AnyObject?
+    /// What it last said through `changed`. Out of a window it is uncovered without saying so, and back in one it says
+    /// it again when that differs from what it last said: the view's state still holds the cover it said before
+    /// (TP-1462: a paragraph left under a cover took no hover after the sheet ended).
+    private var said = false
 
     public init() {}
 
@@ -39,6 +43,8 @@ public final class SheetCover {
             center.addObserver(forName: NSWindow.didEndSheetNotification, object: sender, queue: .main) { [weak self] _ in
                 // Another sheet may still be up.
                 self?.set(hasSheet())
+                // The window can still name the sheet that ended while it posts the end: ask again after it.
+                DispatchQueue.main.async { [weak self] in self?.set(hasSheet()) }
             },
         ]
         set(hasSheet())
@@ -50,8 +56,9 @@ public final class SheetCover {
     }
 
     private func set(_ covered: Bool) {
-        guard covered != self.covered else { return }
         self.covered = covered
+        guard covered != said else { return }
+        said = covered
         changed(covered)
     }
 }

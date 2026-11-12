@@ -215,6 +215,12 @@ struct JournalView: View {
     var calendar: Calendar = .current
     /// The events the citation under the pointer names: their rows are lit.
     @State private var highlighted: Set<String> = []
+    /// The row a citation with no ticket page showed: lit for `revealedFor`, after the list scrolled to it.
+    @State private var revealed: String?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// How long the row a citation showed stays lit.
+    static let revealedFor: Duration = .seconds(2)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -224,25 +230,44 @@ struct JournalView: View {
                 EmptyState(title: JournalModel.emptyTitle(query), symbol: Destination.journal.symbol)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if scrolls {
-                ScrollView(.vertical) { list }
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical) {
+                        list { id in
+                            withAnimation(reduceMotion ? nil : .standard) { proxy.scrollTo(JournalSection<EmptyView>.rowID(id), anchor: .center) }
+                        }
+                    }
+                }
             } else {
-                list
+                list { _ in }
             }
         }
     }
 
-    private var list: some View {
+    /// The list; `scrollTo` brings an event's row into view.
+    private func list(scrollTo: @escaping (String) -> Void) -> some View {
         JournalSection(
-            model: model, calendar: calendar, readingEarlier: readingEarlier, highlighted: highlighted, open: open, showEarlier: showEarlier
+            model: model, calendar: calendar, readingEarlier: readingEarlier, highlighted: highlighted.union(revealed.map { [$0] } ?? []),
+            open: open, showEarlier: showEarlier
         ) { card in
             JournalReportCardView(
                 card: card, question: questions[card.id], sending: sending, clock: TimelineModel.clock(calendar), open: openCitation,
-                hover: { highlighted = $0 }, openMention: openMention
+                show: { id in reveal(id, scrollTo: scrollTo) }, hover: { highlighted = $0 }, openMention: openMention
             )
         }
         .padding(.horizontal, DesignTokens.Space.s5)
         .padding(.bottom, DesignTokens.Space.s5)
         .frame(maxWidth: .infinity, alignment: .top)
+    }
+
+    /// A citation with no ticket page (an event on Symphony's own stream): the list scrolls to the event's row, which
+    /// stays lit for a moment, whether or not the pointer is still on the citation.
+    private func reveal(_ id: String, scrollTo: (String) -> Void) {
+        revealed = id
+        scrollTo(id)
+        Task { @MainActor in
+            try? await Task.sleep(for: Self.revealedFor)
+            if revealed == id { revealed = nil }
+        }
     }
 }
 
@@ -349,6 +374,8 @@ struct JournalReportCardView: View {
     var sending = false
     let clock: (Date) -> String
     var open: (TimelineFocus) -> Void = { _ in }
+    /// Shows an event's row in the Journal: a citation of an event no ticket page holds.
+    var show: (String) -> Void = { _ in }
     var hover: (Set<String>) -> Void = { _ in }
     var openMention: (Mention) -> Void = { _ in }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -360,7 +387,16 @@ struct JournalReportCardView: View {
 
     /// Each cited sentence that resolves, as a link of the paragraph named by its index.
     private var links: [ChipTextLink] {
-        card.sentences.filter { $0.focus != nil }.map { ChipTextLink(range: $0.range, id: String($0.index)) }
+        card.sentences.filter(\.linked).map { ChipTextLink(range: $0.range, id: String($0.index)) }
+    }
+
+    /// A cited sentence's link: its ticket's page at the event, or the event's row in the Journal.
+    private func follow(_ sentence: JournalReportCard.Sentence) {
+        if let focus = sentence.focus {
+            open(focus)
+        } else if let row = sentence.row {
+            show(row)
+        }
     }
 
     private func sentence(_ link: ChipTextLink?) -> JournalReportCard.Sentence? {
@@ -382,7 +418,7 @@ struct JournalReportCardView: View {
                     .environment(\.openMention, OpenMentionAction(handler: openMention))
                     .environment(\.openMentionDirectly, OpenMentionAction(handler: openMention))
                     .environment(\.openTextLink, TextLinkAction { link in
-                        if let focus = sentence(link)?.focus { open(focus) }
+                        if let sentence = sentence(link) { follow(sentence) }
                     })
                     .environment(\.hoverTextLink, TextLinkHoverAction { link in hover(Set(sentence(link)?.events ?? [])) })
                 if !card.tickets.isEmpty {
@@ -410,9 +446,9 @@ struct JournalReportCardView: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(card.accessibilityLabel)
         .accessibilityActions {
-            ForEach(card.sentences.filter { $0.focus != nil }) { sentence in
-                if let focus = sentence.focus, let label = sentence.linkLabel {
-                    Button(label) { open(focus) }
+            ForEach(card.sentences.filter(\.linked)) { sentence in
+                if let label = sentence.linkLabel {
+                    Button(label) { follow(sentence) }
                 }
             }
         }

@@ -46,6 +46,7 @@ public struct JournalSection<Report: View>: View {
                         TimelineEntryRow(entry: row.entry, time: clock(row.entry.at), selected: highlighted.contains(row.id), ticket: Self.chip(row)) {
                             if row.focus != nil { open(row) }
                         }
+                        .id(Self.rowID(row.id))
                     case let .report(card):
                         report(card)
                             .padding(.vertical, DesignTokens.Space.s2)
@@ -76,6 +77,9 @@ public struct JournalSection<Report: View>: View {
     }
 
     public static var title: String { "Journal" }
+
+    /// The scroll id of event `id`'s row: a report's citation of an event no ticket page holds scrolls the list to it.
+    public static func rowID(_ id: String) -> String { "event:" + id }
 
     /// The column of times the rows keep, which a report's card starts after: its time sits in it.
     public static var timeColumn: CGFloat { TimelineSection.timeColumn }
