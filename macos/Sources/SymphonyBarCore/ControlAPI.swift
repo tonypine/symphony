@@ -68,6 +68,10 @@ public enum ControlAction: Equatable {
     /// Marks that the Director looked at the ticket now (TP-1451), in the repository `repoKey` when known: its next
     /// page shows what came after as new. A view mark, not a move: Symphony records no history for it.
     case looked(String, repoKey: String?)
+    /// Saves a view of Tickets (TP-1457): a new one, or the one the draft's id names replaced. Every client lists it.
+    case saveView(TicketViewDraft)
+    /// Deletes the saved view `id`, named `name`, for every client.
+    case deleteView(id: String, name: String)
 
     /// The request a decision answers: its Question, by the id the Inbox row carries (TP-1240), or, from a Symphony
     /// whose row names none, the request comment its answer replies under. Symphony accepts either.
@@ -169,7 +173,17 @@ public enum ControlAction: Equatable {
             return "api/v1/control/repos/\(key)/resume"
         case .looked:
             return "api/v1/control/looked"
+        case .saveView:
+            return "api/v1/control/view"
+        case let .deleteView(id, _):
+            return "api/v1/control/view/\(id)"
         }
+    }
+
+    /// The HTTP method: DELETE for a view's deletion, POST for the rest.
+    var method: String {
+        if case .deleteView = self { return "DELETE" }
+        return "POST"
     }
 
     /// The ticket a Director's move names, nil for the other controls.
@@ -183,7 +197,7 @@ public enum ControlAction: Equatable {
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
         case .pause, .pauseWithReason, .pauseForUpdate, .resume, .tryNow, .force, .stopForcing, .stop, .start, .note, .blocker,
-             .priority, .label, .decision, .pauseRepository, .resumeRepository, .looked:
+             .priority, .label, .decision, .pauseRepository, .resumeRepository, .looked, .saveView, .deleteView:
             return nil
         }
     }
@@ -197,8 +211,10 @@ public enum ControlAction: Equatable {
         case let .pauseForUpdate(version):
             // The reason's kind and its field; `reason` is the line a Symphony that reads no kind makes it from.
             return ["kind": "build", "version": version, "reason": "updating to v\(version)"]
-        case .resume, .resumeRepository:
+        case .resume, .resumeRepository, .deleteView:
             return [:]
+        case let .saveView(draft):
+            return draft.body
         case let .tryNow(condition):
             return ["condition": condition]
         case let .pauseRepository(_, reason):
@@ -301,6 +317,10 @@ public enum ControlAction: Equatable {
             return "Couldn't resume \(key)"
         case let .looked(identifier, _):
             return "Couldn't mark \(identifier) as looked at"
+        case let .saveView(draft):
+            return draft.id == nil ? "Couldn't save the view “\(draft.name)”" : "Couldn't change the view “\(draft.name)”"
+        case let .deleteView(_, name):
+            return "Couldn't delete the view “\(name)”"
         }
     }
 }
@@ -366,7 +386,7 @@ public enum ControlAPI {
             cachePolicy: .reloadIgnoringLocalCacheData,
             timeoutInterval: timeout
         )
-        request.httpMethod = "POST"
+        request.httpMethod = action.method
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")

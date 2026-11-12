@@ -1,0 +1,105 @@
+{
+  "view": {
+    "id": "view-e6a1",
+    "name": "Epic 6 needs me",
+    "filters": [
+      {
+        "column": "epic",
+        "value": [
+          "TP-1400"
+        ]
+      },
+      {
+        "column": "situation",
+        "value": [
+          "waiting_on_you"
+        ]
+      }
+    ],
+    "columns": [
+      "identifier",
+      "title",
+      "epic",
+      "situation",
+      "priority",
+      "created_at"
+    ],
+    "sort": {
+      "column": "identifier",
+      "direction": "asc"
+    },
+    "created_at": "2026-11-12T03:00:00.000000Z",
+    "updated_at": "2026-11-12T03:00:00.000000Z"
+  },
+  "filters": [
+    {
+      "column": "epic",
+      "value": [
+        "TP-1400"
+      ]
+    },
+    {
+      "column": "situation",
+      "value": [
+        "waiting_on_you"
+      ]
+    }
+  ],
+  "columns": [
+    {
+      "name": "identifier",
+      "type": "identifier",
+      "description": "The ticket's identifier."
+    },
+    {
+      "name": "title",
+      "type": "string",
+      "description": "The ticket's title."
+    },
+    {
+      "name": "epic",
+      "type": "identifier",
+      "description": "The identifier of the epic the ticket is a sub-ticket of."
+    },
+    {
+      "name": "situation",
+      "type": "situation",
+      "description": "The kind of the ticket's situation."
+    },
+    {
+      "name": "priority",
+      "type": "integer",
+      "description": "Linear's priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low."
+    },
+    {
+      "name": "created_at",
+      "type": "time",
+      "description": "When the ticket was created."
+    }
+  ],
+  "sort": {
+    "column": "identifier",
+    "direction": "asc"
+  },
+  "count": 2,
+  "tickets": [
+    {
+      "issue_id": "iss-1401",
+      "identifier": "TP-1401",
+      "title": "Situation on the ticket entity",
+      "epic": "TP-1400",
+      "situation": "waiting_on_you",
+      "priority": 1,
+      "created_at": "2026-11-01T10:00:00Z"
+    },
+    {
+      "issue_id": "iss-1405",
+      "identifier": "TP-1405",
+      "title": "Lifecycle stages",
+      "epic": "TP-1400",
+      "situation": "waiting_on_you",
+      "priority": 2,
+      "created_at": "2026-11-02T10:00:00Z"
+    }
+  ]
+}

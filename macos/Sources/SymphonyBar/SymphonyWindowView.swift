@@ -213,6 +213,14 @@ final class SymphonyWindowModel: ObservableObject {
     /// The values the filters' menus offer, learned from the rows read this session.
     @Published var ticketFilterValues = TicketFilterValues()
     var ticketCatalogRead = false
+    /// The saved views (TP-1457), as the last views read listed them, and the one in force: nil for "All open".
+    @Published var ticketViews: [TicketView] = []
+    @Published var ticketViewID: String?
+    /// Save View… or Rename…'s sheet, Delete…'s confirmation, a view call on its way and what went wrong with it.
+    @Published var ticketViewSheet: TicketViewSheet?
+    @Published var ticketViewDeleteShown = false
+    @Published var ticketViewInFlight = false
+    @Published var ticketViewError: String?
     var readingTickets = false
     var ticketsReadAgain = false
     /// When the rows were last read: a state poll reads them again at most every `ticketsInterval`.

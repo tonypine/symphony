@@ -113,6 +113,33 @@ final class APIFixturesTests: XCTestCase {
         XCTAssertEqual(state(), #"{"counts":{"running":0}}"#)
     }
 
+    /// The same move made again reads `<path>.after-<move>.<n>.json` after the `n`th time, and a DELETE is a move logged
+    /// with its method, its last path component naming it (TP-1457: a view saved, renamed, deleted).
+    func testAMoveMadeAgainReadsItsNumberedAfterFileAndADeleteIsAMove() throws {
+        let directory = root.appendingPathComponent("fixtures/api/v1", isDirectory: true)
+        try Data(#"{"views":[1]}"#.utf8).write(to: directory.appendingPathComponent("views.after-view.1.json"))
+        try Data(#"{"views":[2]}"#.utf8).write(to: directory.appendingPathComponent("views.after-view.json"))
+        try Data(#"{"views":[]}"#.utf8).write(to: directory.appendingPathComponent("views.after-view-a1.json"))
+        func views() -> String { String(decoding: fixtures.answer(request("api/v1/views")).0, as: UTF8.self) }
+
+        XCTAssertEqual(fixtures.answer(request("api/v1/views")).1.statusCode, 404)
+        _ = fixtures.answer(request("api/v1/control/view", method: "POST"))
+        XCTAssertEqual(views(), #"{"views":[1]}"#)
+        // No `.2` file: the plain after file.
+        _ = fixtures.answer(request("api/v1/control/view", method: "POST"))
+        XCTAssertEqual(views(), #"{"views":[2]}"#)
+
+        let (data, response) = fixtures.answer(request("api/v1/control/view/view-a1", method: "DELETE"))
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), #"{"ok":true}"#)
+        XCTAssertEqual(fixtures.postedMoves(), ["view", "view", "view-a1"])
+        XCTAssertEqual(views(), #"{"views":[]}"#)
+        let log = try String(contentsOf: fixtures.requestLog, encoding: .utf8).split(separator: "\n")
+        let entry = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(log[2].utf8)) as? [String: Any])
+        XCTAssertEqual(entry["method"] as? String, "DELETE")
+        XCTAssertEqual(entry["path"] as? String, "/api/v1/control/view/view-a1")
+    }
+
     func testTheLiveChannelWithoutAFixtureIsUnavailable() async throws {
         // No `api/v1/stream.json`: a 404, so the window reads the ticket's feed after each state poll.
         let connect = EventStream.buffered(fixtures.transport)

@@ -1535,10 +1535,41 @@ func ticketsTable(window: CGFloat, query: TicketsQuery = TicketsQuery(), drawer:
     values.learn(ticketsPayload.rows)
     return TicketsView(
         payload: payload, list: list, query: .constant(query), values: values, search: "", selection: .constant("SHOP-301"),
-        drawerShown: .constant(drawer), reference: situationsNow, actions: TicketsActions()
+        drawerShown: .constant(drawer), reference: situationsNow, actions: TicketsActions(),
+        viewsMenu: TicketViewsMenu(views: savedTicketViews, currentID: nil, query: query)
     )
     .frame(width: window - DesignTokens.Layout.sidebarWidth, height: 800, alignment: .top)
     .background(DesignTokens.Surface.content.color)
+}
+
+// MARK: - Saved views on Tickets (TP-1457)
+
+/// The `ticket-views` fixture's views once "Epic 6 needs me" was saved: three, by name.
+let savedTicketViews: [TicketView] = {
+    let file = situationsAPI.appendingPathComponent("ticket-views/api/v1/views.after-view.1.json")
+    guard let views = TicketView.views(fromViews: try! Data(contentsOf: file)), views.count == 3 else {
+        fatalError("The ticket-views fixture's views don't read")
+    }
+    return views
+}()
+
+/// The views menu open on "Epic 6 needs me" with a filter changed since it was saved: the dot on its face, Update
+/// View on.
+@MainActor
+func ticketViewsMenuOpen() -> some View {
+    var query = savedTicketViews[0].query
+    query.toggle(.priority, "1")
+    return TicketViewsMenuPanel(menu: TicketViewsMenu(views: savedTicketViews, currentID: savedTicketViews[0].id, query: query))
+        .padding(DesignTokens.Space.s4)
+        .frame(width: 300, height: 330, alignment: .topLeading)
+        .background(DesignTokens.Surface.content.color)
+}
+
+/// Save View… with the name typed.
+@MainActor
+func ticketViewSaveSheet() -> some View {
+    TicketViewNameSheetView(sheet: .save, name: "Epic 6 needs me", working: false, error: nil, cancel: {}, confirm: { _ in })
+        .background(DesignTokens.Surface.window.color)
 }
 
 /// Every column of the catalog shown, sorted by Age, youngest first.
@@ -1733,6 +1764,9 @@ MainActor.assumeIsolated {
             render(ticketsTable(window: window, query: everyColumnQuery), scheme, to: "tickets-table-every-column-\(name)-\(suffix).png")
             render(ticketsTable(window: window, query: threeChipsQuery), scheme, to: "tickets-table-three-chips-\(name)-\(suffix).png")
         }
+        // Saved views (TP-1457): the menu with three views, and the save sheet.
+        render(ticketViewsMenuOpen(), scheme, to: "ticket-views-menu-\(suffix).png")
+        render(ticketViewSaveSheet(), scheme, to: "ticket-views-save-sheet-\(suffix).png")
         // GitHub updates (TP-953).
         render(githubUpdatesPage(githubSection("github-updates-off")), scheme, to: "github-updates-off-\(suffix).png")
         render(githubUpdatesPage(githubSection("github-updates"), expanded: true), scheme, to: "github-updates-on-\(suffix).png")

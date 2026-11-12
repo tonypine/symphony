@@ -1,0 +1,172 @@
+{
+  "views": [
+    {
+      "id": "view-e6a1",
+      "name": "Epic 6, mine",
+      "filters": [
+        {
+          "column": "epic",
+          "value": [
+            "TP-1400"
+          ]
+        },
+        {
+          "column": "situation",
+          "value": [
+            "waiting_on_you"
+          ]
+        },
+        {
+          "column": "priority",
+          "value": [
+            1
+          ]
+        }
+      ],
+      "columns": [
+        "identifier",
+        "title",
+        "epic",
+        "situation",
+        "priority",
+        "created_at"
+      ],
+      "sort": {
+        "column": "identifier",
+        "direction": "asc"
+      },
+      "created_at": "2026-11-12T03:00:00.000000Z",
+      "updated_at": "2026-11-12T03:10:00.000000Z"
+    },
+    {
+      "id": "view-7c2d",
+      "name": "Recently updated",
+      "filters": [
+        {
+          "column": "since",
+          "value": "2026-11-11T09:00:00.000000Z"
+        }
+      ],
+      "columns": [
+        "identifier",
+        "title",
+        "phase",
+        "situation",
+        "updated_at"
+      ],
+      "sort": {
+        "column": "updated_at",
+        "direction": "desc"
+      },
+      "created_at": "2026-11-11T10:00:00.000000Z",
+      "updated_at": "2026-11-11T10:00:00.000000Z"
+    },
+    {
+      "id": "view-1b9e",
+      "name": "Urgent first",
+      "filters": [
+        {
+          "column": "priority",
+          "value": [
+            1,
+            2
+          ]
+        }
+      ],
+      "columns": [
+        "identifier",
+        "title",
+        "repo",
+        "situation",
+        "priority"
+      ],
+      "sort": {
+        "column": "priority",
+        "direction": "asc"
+      },
+      "created_at": "2026-11-10T08:00:00.000000Z",
+      "updated_at": "2026-11-10T08:00:00.000000Z"
+    }
+  ],
+  "columns": [
+    {
+      "name": "identifier",
+      "type": "identifier",
+      "description": "The ticket's identifier."
+    },
+    {
+      "name": "title",
+      "type": "string",
+      "description": "The ticket's title."
+    },
+    {
+      "name": "repo",
+      "type": "string",
+      "description": "The key of the repository the ticket lives in."
+    },
+    {
+      "name": "epic",
+      "type": "identifier",
+      "description": "The identifier of the epic the ticket is a sub-ticket of."
+    },
+    {
+      "name": "phase",
+      "type": "string",
+      "description": "The phase (state) the ticket is in."
+    },
+    {
+      "name": "situation",
+      "type": "situation",
+      "description": "The kind of the ticket's situation."
+    },
+    {
+      "name": "situation_since",
+      "type": "time",
+      "description": "Since when the ticket's situation holds."
+    },
+    {
+      "name": "labels",
+      "type": "list",
+      "description": "The ticket's labels."
+    },
+    {
+      "name": "priority",
+      "type": "integer",
+      "description": "Linear's priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low."
+    },
+    {
+      "name": "assignee",
+      "type": "string",
+      "description": "Who the ticket is assigned to."
+    },
+    {
+      "name": "url",
+      "type": "string",
+      "description": "The ticket's page in Linear."
+    },
+    {
+      "name": "created_at",
+      "type": "time",
+      "description": "When the ticket was created."
+    },
+    {
+      "name": "phase_at",
+      "type": "time",
+      "description": "When the ticket entered its phase."
+    },
+    {
+      "name": "updated_at",
+      "type": "time",
+      "description": "When Symphony last wrote the ticket's record."
+    }
+  ],
+  "filters": [
+    "repo",
+    "epic",
+    "phase",
+    "situation",
+    "label",
+    "priority",
+    "since"
+  ]
+}
