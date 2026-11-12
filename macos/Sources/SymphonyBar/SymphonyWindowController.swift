@@ -80,6 +80,12 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         model?.showInbox(selecting: id, opening: move)
     }
 
+    /// Opens the window on the page of ticket `identifier` (QA mode's `SYMPHONY_BAR_QA_OPEN_TICKET`).
+    func showTicket(_ identifier: String) {
+        show()
+        model?.openTicket(identifier)
+    }
+
     /// Opens the window with the Pause Dispatch sheet: nothing pauses until its button is pressed.
     func showPauseSheet() {
         show()

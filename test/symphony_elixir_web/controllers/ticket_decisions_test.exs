@@ -35,8 +35,9 @@ defmodule SymphonyElixirWeb.TicketDecisionsTest do
     |> ControlApiController.decision(params)
   end
 
-  defp get_decisions(identifier, ctx) do
+  defp get_decisions(identifier, ctx, tag \\ nil) do
     conn(:get, "/api/v1/tickets/#{identifier}/decisions")
+    |> then(&if(tag, do: put_req_header(&1, "if-none-match", tag), else: &1))
     |> assign(:director_rulings, records: RunStore.list_ticket_states(ctx.repo))
     |> TicketDecisionsController.index(%{"issue_identifier" => identifier})
   end
@@ -58,6 +59,25 @@ defmodule SymphonyElixirWeb.TicketDecisionsTest do
     read = get_decisions(ctx.ticket.issue_identifier, ctx)
     assert read.status == 200
     assert body(read)["decisions"] == body(conn)["decisions"]
+  end
+
+  test "GET decisions answers 304 with no body while the decisions are unchanged, and in full once one is recorded", ctx do
+    identifier = ctx.ticket.issue_identifier
+    first = get_decisions(identifier, ctx)
+    assert first.status == 200
+    [tag] = get_resp_header(first, "etag")
+
+    unchanged = get_decisions(identifier, ctx, tag)
+    assert unchanged.status == 304
+    assert unchanged.resp_body == ""
+    assert get_resp_header(unchanged, "etag") == [tag]
+
+    assert post_decision(%{"issue_identifier" => identifier, "text" => "Keep the old endpoint"}, ctx).status == 200
+
+    answered = get_decisions(identifier, ctx, tag)
+    assert answered.status == 200
+    assert [%{"answer" => "Keep the old endpoint"}] = body(answered)["decisions"]
+    assert get_resp_header(answered, "etag") != [tag]
   end
 
   test "POST /control/decision refuses an empty text with 400, writing nothing", ctx do

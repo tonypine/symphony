@@ -1402,6 +1402,14 @@ Ten more variables, read only in QA mode:
 - `SYMPHONY_BAR_QA_APPEARANCE=light` or `dark` makes the app draw in that appearance (`NSApp.appearance`
   set to Aqua or Dark Aqua at launch) whatever the Mac's own setting, so QA judges both on one Mac without
   switching the Mac's appearance. Any other value, or none, follows the Mac.
+- `SYMPHONY_BAR_QA_OPEN_TICKET=TP-123` opens the Symphony window on that ticket's page at launch.
+- In QA mode SIGUSR1 starts counting frames (a display link on the main run loop) and SIGUSR2 stops it and writes
+  the count to `frames.json` in the QA root: the frames, the seconds, the hitch time (each frame later than one
+  frame and a half, past one frame), the dropped frames and the hitch ratio in ms per second. Outside QA mode the
+  app handles neither signal and runs no display link. `Tests/ticket-page-scroll-test.py`, in CI's macos build,
+  uses both to measure the ticket page: a 5 s `sample` of the page left untouched and a scripted scroll of a
+  500-event timeline (the `ticket-page-speed` fixtures), each printed against its budget. It fails only when it
+  cannot measure until TP-1480 turns the budgets on: today's page measured 100 % idle-busy and 874 ms/s of hitch.
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
   menu item whose title the first line of a file in `commands/` holds (files are taken in name order and
   deleted; a name starting with `.` is skipped, so write one and rename it). As a click would, it presses

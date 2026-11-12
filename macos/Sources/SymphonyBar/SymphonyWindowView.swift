@@ -367,6 +367,9 @@ final class SymphonyWindowModel: ObservableObject {
     /// When Audit was last read.
     var auditReadAt: Date?
     var readingTicket = false
+    /// The tags of the ticket read and the decisions read the page shows (TP-1492): each read after a state poll sends
+    /// them, and while nothing changed Symphony answers `304` with no body. A page opened on a ticket starts without.
+    var ticketReads = ConditionalReads()
     /// When the ticket page last read its runs and audit records, which change slowly.
     var ticketSlowReadAt: Date?
     /// The runs and audit records are read again at most this often.
