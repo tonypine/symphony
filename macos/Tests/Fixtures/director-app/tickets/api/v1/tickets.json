@@ -1,0 +1,384 @@
+{
+  "view": null,
+  "filters": [],
+  "columns": [
+    {
+      "name": "identifier",
+      "type": "identifier",
+      "description": "The ticket's identifier."
+    },
+    {
+      "name": "title",
+      "type": "string",
+      "description": "The ticket's title."
+    },
+    {
+      "name": "repo",
+      "type": "string",
+      "description": "The key of the repository the ticket lives in."
+    },
+    {
+      "name": "epic",
+      "type": "identifier",
+      "description": "The identifier of the epic the ticket is a sub-ticket of."
+    },
+    {
+      "name": "phase",
+      "type": "string",
+      "description": "The phase (state) the ticket is in."
+    },
+    {
+      "name": "situation",
+      "type": "situation",
+      "description": "The kind of the ticket's situation."
+    },
+    {
+      "name": "situation_since",
+      "type": "time",
+      "description": "Since when the ticket's situation holds."
+    },
+    {
+      "name": "labels",
+      "type": "list",
+      "description": "The ticket's labels."
+    },
+    {
+      "name": "priority",
+      "type": "integer",
+      "description": "Linear's priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low."
+    },
+    {
+      "name": "assignee",
+      "type": "string",
+      "description": "Who the ticket is assigned to."
+    },
+    {
+      "name": "url",
+      "type": "string",
+      "description": "The ticket's page in Linear."
+    },
+    {
+      "name": "created_at",
+      "type": "time",
+      "description": "When the ticket was created."
+    },
+    {
+      "name": "phase_at",
+      "type": "time",
+      "description": "When the ticket entered its phase."
+    },
+    {
+      "name": "updated_at",
+      "type": "time",
+      "description": "When Symphony last wrote the ticket's record."
+    }
+  ],
+  "sort": {
+    "column": "identifier",
+    "direction": "asc"
+  },
+  "count": 16,
+  "tickets": [
+    {
+      "issue_id": "issue-shop-290",
+      "identifier": "SHOP-290",
+      "title": "Address autocomplete",
+      "repo": "web-shop",
+      "epic": "SHOP-280",
+      "phase": "QA",
+      "situation": "waiting_on_you",
+      "situation_since": "2026-10-07T11:08:00Z",
+      "labels": [
+        "checkout"
+      ],
+      "priority": 2,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/SHOP-290",
+      "created_at": "2026-09-28T09:00:00Z",
+      "phase_at": "2026-10-07T11:08:00Z",
+      "updated_at": "2026-10-07T11:08:00Z"
+    },
+    {
+      "issue_id": "issue-shop-298",
+      "identifier": "SHOP-298",
+      "title": "Gift card balance",
+      "repo": "web-shop",
+      "epic": "SHOP-280",
+      "phase": "Merging",
+      "situation": "working",
+      "situation_since": "2026-10-07T14:02:00Z",
+      "labels": [
+        "payments"
+      ],
+      "priority": 3,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/SHOP-298",
+      "created_at": "2026-09-30T10:00:00Z",
+      "phase_at": "2026-10-07T14:02:00Z",
+      "updated_at": "2026-10-07T14:02:00Z"
+    },
+    {
+      "issue_id": "issue-shop-301",
+      "identifier": "SHOP-301",
+      "title": "Saved carts",
+      "repo": "web-shop",
+      "epic": "SHOP-280",
+      "phase": "Code Review",
+      "situation": "waiting_for_ci",
+      "situation_since": "2026-10-07T14:14:00Z",
+      "labels": [
+        "checkout",
+        "agent"
+      ],
+      "priority": 2,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/SHOP-301",
+      "created_at": "2026-10-01T08:30:00Z",
+      "phase_at": "2026-10-07T14:14:00Z",
+      "updated_at": "2026-10-07T14:14:00Z"
+    },
+    {
+      "issue_id": "issue-shop-305",
+      "identifier": "SHOP-305",
+      "title": "Checkout total rounding",
+      "repo": "web-shop",
+      "epic": "SHOP-280",
+      "phase": "In Progress",
+      "situation": "working",
+      "situation_since": "2026-10-07T13:58:00Z",
+      "labels": [
+        "checkout",
+        "bug"
+      ],
+      "priority": 1,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/SHOP-305",
+      "created_at": "2026-10-03T16:00:00Z",
+      "phase_at": "2026-10-07T13:58:00Z",
+      "updated_at": "2026-10-07T13:58:00Z"
+    },
+    {
+      "issue_id": "issue-shop-311",
+      "identifier": "SHOP-311",
+      "title": "Tax by region",
+      "repo": "web-shop",
+      "epic": null,
+      "phase": "In Progress",
+      "situation": "retrying",
+      "situation_since": "2026-10-07T14:05:00Z",
+      "labels": [
+        "payments"
+      ],
+      "priority": 3,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/SHOP-311",
+      "created_at": "2026-10-04T12:00:00Z",
+      "phase_at": "2026-10-07T14:05:00Z",
+      "updated_at": "2026-10-07T14:05:00Z"
+    },
+    {
+      "issue_id": "issue-shop-320",
+      "identifier": "SHOP-320",
+      "title": "Order history filters",
+      "repo": "web-shop",
+      "epic": "SHOP-280",
+      "phase": "Todo",
+      "situation": "waiting_for_slot",
+      "situation_since": "2026-10-07T13:30:00Z",
+      "labels": [],
+      "priority": 4,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/SHOP-320",
+      "created_at": "2026-10-05T09:15:00Z",
+      "phase_at": "2026-10-07T13:30:00Z",
+      "updated_at": "2026-10-07T13:30:00Z"
+    },
+    {
+      "issue_id": "issue-shop-322",
+      "identifier": "SHOP-322",
+      "title": "Invoice download",
+      "repo": "web-shop",
+      "epic": null,
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "situation_since": "2026-10-06T17:00:00Z",
+      "labels": [
+        "billing"
+      ],
+      "priority": 3,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/SHOP-322",
+      "created_at": "2026-10-05T11:00:00Z",
+      "phase_at": "2026-10-06T17:00:00Z",
+      "updated_at": "2026-10-06T17:00:00Z"
+    },
+    {
+      "issue_id": "issue-shop-325",
+      "identifier": "SHOP-325",
+      "title": "Express checkout",
+      "repo": "web-shop",
+      "epic": "SHOP-280",
+      "phase": "Todo",
+      "situation": "waiting_for_slot",
+      "situation_since": "2026-10-07T12:40:00Z",
+      "labels": [
+        "checkout",
+        "expedite"
+      ],
+      "priority": 1,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/SHOP-325",
+      "created_at": "2026-10-06T08:00:00Z",
+      "phase_at": "2026-10-07T12:40:00Z",
+      "updated_at": "2026-10-07T12:40:00Z"
+    },
+    {
+      "issue_id": "issue-api-119",
+      "identifier": "API-119",
+      "title": "Webhook retries",
+      "repo": "api",
+      "epic": "API-100",
+      "phase": "Merging",
+      "situation": "waiting_for_ci",
+      "situation_since": "2026-10-07T14:11:00Z",
+      "labels": [
+        "webhooks"
+      ],
+      "priority": 2,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/API-119",
+      "created_at": "2026-09-25T15:00:00Z",
+      "phase_at": "2026-10-07T14:11:00Z",
+      "updated_at": "2026-10-07T14:11:00Z"
+    },
+    {
+      "issue_id": "issue-api-127",
+      "identifier": "API-127",
+      "title": "Pagination cursors",
+      "repo": "api",
+      "epic": "API-100",
+      "phase": "Code Review",
+      "situation": "working",
+      "situation_since": "2026-10-07T14:00:00Z",
+      "labels": [],
+      "priority": 3,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/API-127",
+      "created_at": "2026-09-29T10:00:00Z",
+      "phase_at": "2026-10-07T14:00:00Z",
+      "updated_at": "2026-10-07T14:00:00Z"
+    },
+    {
+      "issue_id": "issue-api-131",
+      "identifier": "API-131",
+      "title": "Rate limit headers",
+      "repo": "api",
+      "epic": "API-100",
+      "phase": "In Progress",
+      "situation": "working",
+      "situation_since": "2026-10-07T13:50:00Z",
+      "labels": [
+        "agent"
+      ],
+      "priority": 2,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/API-131",
+      "created_at": "2026-10-02T09:00:00Z",
+      "phase_at": "2026-10-07T13:50:00Z",
+      "updated_at": "2026-10-07T13:50:00Z"
+    },
+    {
+      "issue_id": "issue-api-133",
+      "identifier": "API-133",
+      "title": "Bulk export endpoint",
+      "repo": "api",
+      "epic": null,
+      "phase": "Todo",
+      "situation": "waiting_for_slot",
+      "situation_since": "2026-10-07T13:00:00Z",
+      "labels": [],
+      "priority": 0,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/API-133",
+      "created_at": "2026-10-04T14:00:00Z",
+      "phase_at": "2026-10-07T13:00:00Z",
+      "updated_at": "2026-10-07T13:00:00Z"
+    },
+    {
+      "issue_id": "issue-api-134",
+      "identifier": "API-134",
+      "title": "Retry-After on 429s",
+      "repo": "api",
+      "epic": "API-100",
+      "phase": "In Progress",
+      "situation": "retrying",
+      "situation_since": "2026-10-07T14:10:00Z",
+      "labels": [
+        "bug"
+      ],
+      "priority": 2,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/API-134",
+      "created_at": "2026-10-05T10:00:00Z",
+      "phase_at": "2026-10-07T14:10:00Z",
+      "updated_at": "2026-10-07T14:10:00Z"
+    },
+    {
+      "issue_id": "issue-api-140",
+      "identifier": "API-140",
+      "title": "Webhook delivery log",
+      "repo": "api",
+      "epic": "API-100",
+      "phase": "Todo",
+      "situation": "paused_by_rule",
+      "situation_since": "2026-10-07T09:00:00Z",
+      "labels": [
+        "webhooks"
+      ],
+      "priority": 4,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/API-140",
+      "created_at": "2026-10-06T13:00:00Z",
+      "phase_at": "2026-10-07T09:00:00Z",
+      "updated_at": "2026-10-07T09:00:00Z"
+    },
+    {
+      "issue_id": "issue-docs-40",
+      "identifier": "DOCS-40",
+      "title": "Quick start rewrite",
+      "repo": "docs",
+      "epic": null,
+      "phase": "QA",
+      "situation": "waiting_on_you",
+      "situation_since": "2026-10-07T11:08:00Z",
+      "labels": [
+        "docs"
+      ],
+      "priority": 3,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/DOCS-40",
+      "created_at": "2026-09-27T09:00:00Z",
+      "phase_at": "2026-10-07T11:08:00Z",
+      "updated_at": "2026-10-07T11:08:00Z"
+    },
+    {
+      "issue_id": "issue-docs-41",
+      "identifier": "DOCS-41",
+      "title": "Embed the shop widget",
+      "repo": "docs",
+      "epic": null,
+      "phase": "Todo",
+      "situation": "waiting_for_slot",
+      "situation_since": "2026-10-07T10:00:00Z",
+      "labels": [
+        "docs"
+      ],
+      "priority": 4,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/DOCS-41",
+      "created_at": "2026-10-06T16:00:00Z",
+      "phase_at": "2026-10-07T10:00:00Z",
+      "updated_at": "2026-10-07T10:00:00Z"
+    }
+  ]
+}

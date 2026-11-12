@@ -41,61 +41,6 @@ public struct TicketList: Equatable {
         }
     }
 
-    /// The scope bar's choices, in its order: the situation kinds (`director-ticket-page.md` §3), a few joined, then
-    /// Needs attention and Forced, which say something no kind does.
-    public enum Filter: String, CaseIterable, Equatable {
-        case all, waitingOnYou, working, waitingForCI, waitingForSlot, held, retrying, needsAttention, forced, shipped
-
-        public var title: String {
-            switch self {
-            case .all: "All"
-            case .waitingOnYou: DesignTokens.SituationKind.you.word
-            case .working: DesignTokens.SituationKind.working.word
-            case .waitingForCI: DesignTokens.SituationKind.ci.word
-            case .waitingForSlot: DesignTokens.SituationKind.slot.word
-            case .held: "Blocked or paused"
-            case .retrying: DesignTokens.SituationKind.retrying.word
-            case .needsAttention: "Needs attention"
-            case .forced: "Forced"
-            case .shipped: DesignTokens.SituationKind.done.word
-            }
-        }
-
-        /// The situation kinds the choice shows; nil for a choice that is not about a kind.
-        public var kinds: Set<DesignTokens.SituationKind>? {
-            switch self {
-            case .all, .needsAttention, .forced: nil
-            case .waitingOnYou: [.you]
-            case .working: [.working]
-            case .waitingForCI: [.ci, .build]
-            case .waitingForSlot: [.slot]
-            case .held: [.blocked, .paused]
-            case .retrying: [.retrying]
-            case .shipped: [.done]
-            }
-        }
-
-        /// The choices shown in the bar itself; the others fold into **More** while the inspector narrows the table.
-        public static func bar(inspectorShown: Bool) -> [Filter] {
-            inspectorShown ? [.all, .waitingOnYou, .working, .waitingForCI]
-                : [.all, .waitingOnYou, .working, .waitingForCI, .waitingForSlot, .held, .retrying, .needsAttention]
-        }
-
-        /// The choices under **More**.
-        public static func more(inspectorShown: Bool) -> [Filter] {
-            allCases.filter { !bar(inspectorShown: inspectorShown).contains($0) }
-        }
-
-        public func matches(_ row: Row) -> Bool {
-            switch self {
-            case .all: true
-            case .needsAttention: row.needsAttention
-            case .forced: row.forced
-            default: kinds?.contains(row.kind) ?? true
-            }
-        }
-    }
-
     /// A row of the table (C19), and what the inspector shows of it.
     public struct Row: Equatable, Identifiable {
         public var id: String { identifier }
@@ -129,10 +74,9 @@ public struct TicketList: Equatable {
         /// Symphony that serves none still reads as a line.
         public var line: Situation { situation ?? Situation(kind: stage.kind, cause: waitsOn == "nothing" ? "" : "Waits on \(waitsOn).", since: since) }
 
-        /// Values the table sorts on, never optional.
+        /// Values the default order sorts on, never optional.
         public var kindSort: Int { kind.precedence }
         public var titleText: String { title ?? "" }
-        public var repoText: String { repoKey ?? "" }
         public var sinceSort: Date { since ?? .distantFuture }
 
         /// One element for VoiceOver: "SHOP-301, Checkout total, Waiting for CI: Checks are running on PR #741."
@@ -154,7 +98,6 @@ public struct TicketList: Equatable {
         }
     }
 
-    public static let searchPrompt = "Ticket, title, repo or what it waits on"
     public static let emptyTitle = "No tickets here."
     public static let noMatchTitle = "No tickets match."
     public static let forceTitle = "Force…"
@@ -300,23 +243,6 @@ public struct TicketList: Equatable {
             .filter { scope.includes($0.repoKey) }
             .sorted(by: Self.defaultOrder)
     }
-
-    /// The rows the scope bar and the search show.
-    public func rows(filter: Filter, search: String) -> [Row] {
-        let words = search.lowercased().split(whereSeparator: \.isWhitespace).map(String.init)
-        return rows.filter { row in
-            guard filter.matches(row) else { return false }
-            let line = row.line
-            let text = [row.identifier, row.titleText, row.repoText, row.waitsOn, line.word, line.cause].joined(separator: " ").lowercased()
-            return words.allSatisfy(text.contains)
-        }
-    }
-
-    /// How many rows each choice of the scope bar shows, for its labels.
-    public func count(_ filter: Filter) -> Int { rows.filter(filter.matches).count }
-
-    /// The default order, then the columns' comparators, as the table sorts.
-    public static let defaultSort = [KeyPathComparator(\Row.kindSort), KeyPathComparator(\Row.sinceSort)]
 
     /// The row of `identifier`, case-insensitively.
     public func row(_ identifier: String) -> Row? {

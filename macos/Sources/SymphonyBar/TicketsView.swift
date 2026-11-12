@@ -25,13 +25,6 @@ extension SymphonyWindowModel {
         DispatchControl(window: state, paused: paused, state: overviewState, update: updateHold, now: Date())
     }
 
-    /// Opens Tickets on `filter`, from an Overview tile.
-    func showTickets(_ filter: TicketList.Filter) {
-        ticketFilter = filter
-        ticketSearch = ""
-        show(.tickets)
-    }
-
     /// ⌥⌘F: the search field of the page shown, Audit's, Learnings' on Shipped or Tickets'; ⌘F finds a ticket from any
     /// page (TP-1455).
     func searchPage() {
@@ -152,9 +145,49 @@ extension SymphonyWindowModel {
     }
 }
 
-// MARK: - D6: Tickets
+// MARK: - D6: Tickets, the table with filters (TP-1456)
 
-/// D6 for the window: the table under its scope bar, with the inspector, or a placeholder while it reads.
+extension SymphonyWindowModel {
+    /// Reads the rows of the query from `GET /api/v1/tickets` while Tickets shows: at once after a change of the query or
+    /// the scope, and at most every `ticketsInterval` after a state poll. The catalog is read once, from the views read.
+    func readTicketsIfDue() {
+        guard selection == .tickets, !showsPage, state.countsKnown else { return }
+        guard ticketsReadAt.map({ Date().timeIntervalSince($0) >= Self.ticketsInterval }) ?? true else { return }
+        guard !readingTickets else {
+            ticketsReadAgain = true
+            return
+        }
+        readingTickets = true
+        Task {
+            if !ticketCatalogRead, case let .loaded(data) = await client.get(TicketsPayload.viewsPath) {
+                ticketCatalog = TicketColumn.catalog(fromViews: data) ?? ticketCatalog
+                ticketCatalogRead = true
+            }
+            let query = ticketsQuery
+            let scope = scope
+            let result = await client.get(query.path(scope: scope, catalog: ticketCatalog, now: Date()))
+            // An answer to a query changed meanwhile is dropped: the read of the new one follows.
+            let current = query == ticketsQuery && scope == self.scope
+            if current {
+                if case let .loaded(data) = result, let payload = TicketsPayload.decode(data) {
+                    ticketsPayload = payload
+                    ticketsResult = nil
+                    ticketFilterValues.learn(payload.rows, repos: overviewState?.repos ?? [])
+                } else {
+                    ticketsResult = result
+                }
+                ticketsReadAt = Date()
+            }
+            readingTickets = false
+            if !current || ticketsReadAgain {
+                ticketsReadAgain = false
+                readTicketsIfDue()
+            }
+        }
+    }
+}
+
+/// D6 for the window: the filter bar over the table and its drawer, or a placeholder while it reads.
 struct TicketsContent: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
@@ -162,19 +195,26 @@ struct TicketsContent: View {
 
     var body: some View {
         Group {
-            if let list = model.ticketList {
+            if let payload = model.ticketsPayload {
                 TicketsView(
-                    list: list,
-                    filter: $model.ticketFilter,
+                    payload: payload,
+                    list: model.ticketList,
+                    catalog: model.ticketCatalog,
+                    scope: model.scope,
+                    query: $model.ticketsQuery,
+                    values: model.ticketFilterValues,
                     search: model.ticketSearch,
                     selection: $model.ticketSelection,
-                    inspectorShown: $model.inspectorShown,
+                    drawerShown: $model.inspectorShown,
+                    reference: model.overviewState?.generatedAt ?? Date(),
                     actions: actions
                 )
-            } else if client.stateResult == .unsupported {
+            } else if model.ticketsResult == .unsupported {
                 EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
+            } else if case let .failed(message)? = model.ticketsResult {
+                EmptyState(title: "Couldn't read the tickets: \(message)", symbol: DesignTokens.Status.problem.symbol)
             } else {
-                EmptyState(title: "Reading Symphony's state…", symbol: SymphonyView.tickets.symbol, showsSpinner: true)
+                EmptyState(title: "Reading the tickets…", symbol: SymphonyView.tickets.symbol, showsSpinner: true)
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -184,7 +224,7 @@ struct TicketsContent: View {
                     .padding(DesignTokens.Space.s4)
             }
         }
-        .searchable(text: $model.ticketSearch, placement: .toolbar, prompt: TicketList.searchPrompt)
+        .searchable(text: $model.ticketSearch, placement: .toolbar, prompt: TicketsView.searchPrompt)
         .searchFocused($searchFocused)
         .onChange(of: model.searchRequested, initial: true) { _, requested in
             guard requested else { return }
@@ -228,32 +268,54 @@ struct TicketsActions {
     }
 }
 
-/// The scope bar, the table (C19) and the inspector.
+/// The filter bar over the table and the drawer beside it, under the bar: opening the drawer never narrows the bar.
 struct TicketsView: View {
-    let list: TicketList
-    @Binding var filter: TicketList.Filter
+    static let searchPrompt = "Ticket or title"
+
+    let payload: TicketsPayload
+    /// The state's tickets: the forced and needs-attention marks, the situations' causes and the inspector's facts.
+    var list: TicketList?
+    var catalog = TicketColumn.catalog
+    var scope = OverviewScope.all
+    @Binding var query: TicketsQuery
+    var values = TicketFilterValues()
     let search: String
     @Binding var selection: String?
-    @Binding var inspectorShown: Bool
+    @Binding var drawerShown: Bool
+    var reference = Date()
     let actions: TicketsActions
-    @State private var sortOrder = TicketList.defaultSort
     /// The table's own selection, handed to the model after the table's delegate call returns: updating the
     /// window's model inside it re-renders the table reentrantly.
     @State private var tableSelection: String?
 
     var body: some View {
-        let rows = list.rows(filter: filter, search: search).sorted(using: sortOrder)
+        let rows = payload.rows(matching: search)
+        let columns = query.shownColumns(catalog: catalog, scope: scope)
         VStack(spacing: 0) {
-            TicketsScopeBar(list: list, filter: $filter, inspectorShown: inspectorShown)
+            TicketsFilterBar(query: $query, catalog: catalog, values: values, count: rows.count, drawerShown: $drawerShown)
             Divider()
-            if rows.isEmpty {
-                EmptyState(title: search.isEmpty ? TicketList.emptyTitle : TicketList.noMatchTitle, symbol: SymphonyView.tickets.symbol)
-            } else {
-                TicketsTable(rows: rows, reference: list.reference, selection: $tableSelection, sortOrder: $sortOrder, actions: actions)
-                    .onKeyPress(.space) {
-                        inspectorShown.toggle()
-                        return .handled
+            HStack(spacing: 0) {
+                Group {
+                    if rows.isEmpty {
+                        EmptyState(title: search.isEmpty && query.chips.isEmpty ? TicketList.emptyTitle : TicketList.noMatchTitle,
+                                   symbol: SymphonyView.tickets.symbol)
+                    } else {
+                        TicketsTable(rows: rows, columns: columns, list: list, reference: reference, sort: $query.sort,
+                                     selection: $tableSelection, actions: actions)
+                            .onKeyPress(.space) {
+                                drawerShown.toggle()
+                                return .handled
+                            }
                     }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .clipped()
+                if drawerShown {
+                    Divider()
+                    TicketsDrawer(row: drawerRow(rows), reference: reference, actions: actions, close: { drawerShown = false })
+                        .frame(width: TicketsDrawer.width)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                }
             }
         }
         .onAppear { tableSelection = selection }
@@ -264,113 +326,185 @@ struct TicketsView: View {
         .onChange(of: selection) { _, chosen in
             if chosen != tableSelection { tableSelection = chosen }
         }
-        .inspector(isPresented: $inspectorShown) {
-            TicketInspector(row: selection.flatMap(list.row), reference: list.reference, actions: actions)
-                .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
-        }
+    }
+
+    /// The selected ticket as the state has it, or as the server's columns read when the state doesn't list it.
+    private func drawerRow(_ rows: [TicketsRow]) -> TicketList.Row? {
+        guard let selection else { return nil }
+        if let tracked = list?.row(selection) { return tracked }
+        return rows.first { $0.identifier == selection }.map { TicketList.Row($0, columns: payload.columns, reference: reference) }
     }
 }
 
-/// The stages to show, with their counts; the last ones fold into More while the inspector is open.
-struct TicketsScopeBar: View {
-    let list: TicketList
-    @Binding var filter: TicketList.Filter
-    let inspectorShown: Bool
+/// The filter bar: a chip per filter set, + Filter, the row count and Columns, in one bar that wraps on a laptop.
+struct TicketsFilterBar: View {
+    @Binding var query: TicketsQuery
+    let catalog: [TicketColumn]
+    let values: TicketFilterValues
+    let count: Int
+    @Binding var drawerShown: Bool
 
     var body: some View {
-        // Scrolls rather than widening the window when the stages don't fit.
-        ScrollView(.horizontal, showsIndicators: false) {
-            bar
-        }
-    }
-
-    private var bar: some View {
-        HStack(spacing: DesignTokens.Space.s2) {
-            Picker("Situation", selection: barSelection) {
-                ForEach(TicketList.Filter.bar(inspectorShown: inspectorShown), id: \.self) { choice in
-                    Text(label(choice)).tag(Optional(choice))
+        HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
+            WrappingStack(spacing: DesignTokens.Space.s2) {
+                ForEach(query.chips) { chip in
+                    TicketFilterChipView(chip: chip, values: values.values(chip.filter, query: query),
+                                         toggle: { query.toggle(chip.filter, $0) }, remove: { query.remove(chip.filter) })
+                }
+                TicketsBarMenu(title: "Filter", symbol: "plus", help: "Add a filter") {
+                    ForEach(TicketFilter.allCases) { filter in
+                        Menu(filter.title) {
+                            ForEach(values.values(filter, query: query), id: \.self) { value in
+                                Toggle(filter.word(value), isOn: Binding(
+                                    get: { query.holds(filter, value) },
+                                    set: { _ in query.toggle(filter, value) }
+                                ))
+                            }
+                        }
+                    }
+                    if !query.chips.isEmpty {
+                        Divider()
+                        Button("Clear Filters") { query.chips = [] }
+                    }
                 }
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
-            Menu {
-                ForEach(TicketList.Filter.more(inspectorShown: inspectorShown), id: \.self) { choice in
-                    Toggle(label(choice), isOn: Binding(get: { filter == choice }, set: { if $0 { filter = choice } }))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Text(count == 1 ? "1 ticket" : "\(count) tickets")
+                .font(DesignTokens.TypeStyle.callout.font)
+                .foregroundStyle(.secondary)
+                .frame(height: DesignTokens.Control.small.height)
+                .fixedSize()
+            TicketsBarMenu(title: "Columns", symbol: "tablecells", help: "Show or hide columns") {
+                ForEach(catalog) { column in
+                    Toggle(column.title, isOn: Binding(
+                        get: { query.columns.contains(column.name) },
+                        set: { query.setColumn(column.name, shown: $0, catalog: catalog) }
+                    ))
+                    .disabled(column.name == "identifier")
                 }
-            } label: {
-                Text(barSelection.wrappedValue == nil ? "More: \(filter.title)" : "More")
             }
-            .menuStyle(.button)
-            .fixedSize()
-            .help("More situations")
-            Spacer(minLength: 0)
+            Button { drawerShown.toggle() } label: {
+                Label(drawerShown ? "Hide Inspector" : "Show Inspector", systemImage: "sidebar.trailing")
+            }
+            .labelStyle(.iconOnly)
+            .directorButton(.quiet, size: .small, selected: drawerShown)
+            .help(drawerShown ? "Hide Inspector (Space)" : "Show Inspector (Space)")
         }
         .padding(.horizontal, DesignTokens.Space.s4)
         .padding(.vertical, DesignTokens.Space.s2)
     }
+}
 
-    /// The bar's choice, nil while the filter is one under More.
-    private var barSelection: Binding<TicketList.Filter?> {
-        Binding(
-            get: { TicketList.Filter.bar(inspectorShown: inspectorShown).contains(filter) ? filter : nil },
-            set: { if let choice = $0 { filter = choice } }
-        )
-    }
+/// A filter's chip: what it reads, its values to add or take out, and × to remove it.
+struct TicketFilterChipView: View {
+    let chip: TicketFilterChip
+    let values: [String]
+    let toggle: (String) -> Void
+    let remove: () -> Void
 
-    private func label(_ choice: TicketList.Filter) -> String {
-        choice == .all ? choice.title : "\(choice.title) \(list.count(choice))"
+    var body: some View {
+        HStack(spacing: 0) {
+            TicketsBarMenu(title: chip.text, help: "Change the \(chip.filter.title) filter", kind: .secondary) {
+                ForEach(values, id: \.self) { value in
+                    Toggle(chip.filter.word(value), isOn: Binding(get: { chip.values.contains(value) }, set: { _ in toggle(value) }))
+                }
+            }
+            Button(action: remove) { Label(chip.removeLabel, systemImage: "xmark") }
+                .labelStyle(.iconOnly)
+                .directorButton(.quiet, size: .small)
+                .help(chip.removeLabel)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(chip.text)
     }
 }
 
-/// C19: ticket, title, repo and the ticket's situation line (C31), which says what it waits on and since when; Return
-/// or a double-click opens the ticket.
-struct TicketsTable: View {
-    let rows: [TicketList.Row]
-    var reference = Date()
-    @Binding var selection: String?
-    @Binding var sortOrder: [KeyPathComparator<TicketList.Row>]
-    let actions: TicketsActions
+/// A small menu button of the bar; offscreen, where a menu draws nothing, its face.
+struct TicketsBarMenu<Items: View>: View {
+    let title: String
+    var symbol: String?
+    let help: String
+    var kind: ButtonKind = .quiet
+    @ViewBuilder var items: Items
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     var body: some View {
-        Table(rows, selection: $selection, sortOrder: $sortOrder) {
-            TableColumn("Ticket", value: \.identifier) { row in
-                HStack(spacing: DesignTokens.Space.s1) {
-                    Text(row.identifier).font(DesignTokens.TypeStyle.mono.font)
-                    if row.forced {
-                        Image(systemName: DesignTokens.Status.forced.symbol)
-                            .foregroundStyle(DesignTokens.Status.forced.tint)
-                            .accessibilityLabel("Forced")
-                    }
-                    if row.needsAttention {
-                        Image(systemName: DesignTokens.Status.problem.symbol)
-                            .foregroundStyle(DesignTokens.Status.problem.tint)
-                            .accessibilityLabel("Needs attention")
-                            .help("Needs attention")
-                    }
+        if offscreenSnapshot {
+            ButtonFace(label: label, kind: kind, size: .small, state: .rest, reduceMotion: true)
+        } else {
+            Menu { items } label: { label }
+                .menuStyle(.button)
+                .directorButton(kind, size: .small)
+                .fixedSize()
+                .help(help)
+                .accessibilityLabel(title)
+        }
+    }
+
+    @ViewBuilder private var label: some View {
+        if let symbol { Label(title, systemImage: symbol) } else { Text(title) }
+    }
+}
+
+/// The sort of a column as the table's header sets it: the server sorts, so it compares nothing itself.
+struct TicketColumnSort: SortComparator, Hashable {
+    var column: String
+    var order: SortOrder = .forward
+
+    func compare(_ lhs: TicketsRow, _ rhs: TicketsRow) -> ComparisonResult { .orderedSame }
+}
+
+/// C19 over the server's rows: the columns shown, each sortable by a click on its header (a second click reverses
+/// it), which reads the rows again in that order; Return or a double-click opens the ticket.
+struct TicketsTable: View {
+    let rows: [TicketsRow]
+    let columns: [TicketColumn]
+    var list: TicketList?
+    var reference = Date()
+    @Binding var sort: TicketSort
+    @Binding var selection: String?
+    let actions: TicketsActions
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    var body: some View {
+        if offscreenSnapshot {
+            // `Table` draws nothing offscreen: the same header and cells in a grid stand in for it.
+            TicketsGrid(rows: rows, columns: columns, list: list, reference: reference, sort: sort, selection: selection)
+        } else {
+            table
+        }
+    }
+
+    private var sortOrder: Binding<[TicketColumnSort]> {
+        Binding(
+            get: { [TicketColumnSort(column: sort.column, order: sort.ascending ? .forward : .reverse)] },
+            set: { order in
+                guard let first = order.first else { return }
+                sort = TicketSort(column: first.column, ascending: first.order == .forward)
+            }
+        )
+    }
+
+    private var table: some View {
+        Table(of: TicketsRow.self, selection: $selection, sortOrder: sortOrder) {
+            TableColumnForEach(columns) { column in
+                TableColumn(column.title, sortUsing: TicketColumnSort(column: column.name)) { row in
+                    TicketCell(row: row, column: column, tracked: list?.row(row.identifier), reference: reference)
                 }
+                .width(min: TicketCell.minWidth(column), ideal: TicketCell.idealWidth(column))
             }
-            .width(min: 90, ideal: 110)
-            TableColumn("Title", value: \.titleText) { row in
-                Text(row.titleText).lineLimit(1)
-            }
-            .width(min: 140, ideal: 240)
-            TableColumn("Repo", value: \.repoText)
-                .width(min: 60, ideal: 90)
-            TableColumn("Situation", value: \.kindSort) { row in
-                SituationLine(row.line, reference: reference, size: .compact)
-                    .lineLimit(1)
-            }
-            .width(min: 220, ideal: 420)
+        } rows: {
+            ForEach(rows) { row in TableRow(row) }
         }
         .contextMenu(forSelectionType: String.self) { identifiers in
             if let identifier = identifiers.first, let row = rows.first(where: { $0.identifier == identifier }) {
+                let tracked = list?.row(identifier) ?? TicketList.Row(row, columns: columns, reference: reference)
                 Button(TicketList.openTitle) { actions.open(identifier) }
-                TicketForceButton(row: row, actions: actions)
+                TicketForceButton(row: tracked, actions: actions)
                 if let start = actions.starts[identifier] {
                     StartNowMenuItem(identifier: identifier, start: start) { actions.start(identifier) }
                 }
-                if let menu = actions.moveMenu(row) {
+                if let menu = actions.moveMenu(tracked) {
                     Menu(TicketMoveMenu.title) { MoveToMenuItems(menu: menu, move: actions.move) }
                 }
             }
@@ -378,6 +512,158 @@ struct TicketsTable: View {
             identifiers.first.map(actions.open)
         }
         .accessibilityLabel("Tickets")
+    }
+}
+
+/// The table's offscreen stand-in: the header, the sorted column's arrow, and the rows with the selected one drawn
+/// as the table draws it.
+struct TicketsGrid: View {
+    let rows: [TicketsRow]
+    let columns: [TicketColumn]
+    var list: TicketList?
+    var reference = Date()
+    var sort = TicketSort.default
+    var selection: String?
+
+    var body: some View {
+        // An overlay, so a grid wider than the table's space is cut at its right edge instead of widening the page.
+        Color.clear
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .overlay(alignment: .topLeading) { grid.fixedSize(horizontal: true, vertical: false) }
+            .clipped()
+    }
+
+    private var grid: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: DesignTokens.Space.s3) {
+                ForEach(columns) { column in
+                    HStack(spacing: DesignTokens.Space.s1) {
+                        Text(column.title)
+                        if column.name == sort.column {
+                            Image(systemName: sort.ascending ? "chevron.up" : "chevron.down").font(.caption2.weight(.semibold))
+                        }
+                    }
+                    .font(DesignTokens.TypeStyle.callout.font)
+                    .foregroundStyle(.secondary)
+                    .frame(width: TicketCell.idealWidth(column), alignment: .leading)
+                }
+            }
+            .padding(.vertical, DesignTokens.Space.s1)
+            Divider()
+            ForEach(rows) { row in
+                let selected = row.identifier == selection
+                HStack(spacing: DesignTokens.Space.s3) {
+                    ForEach(columns) { column in
+                        TicketCell(row: row, column: column, tracked: list?.row(row.identifier), reference: reference)
+                            .frame(width: TicketCell.idealWidth(column), alignment: .leading)
+                    }
+                }
+                .padding(.vertical, 3)
+                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                .background(selected ? Color.accentColor : Color.clear)
+                .environment(\.backgroundProminence, selected ? .increased : .standard)
+            }
+        }
+        .padding(.horizontal, DesignTokens.Space.s4)
+    }
+}
+
+/// A cell: the identifier with the forced and needs-attention marks, the compact Situation line, chips for the epic,
+/// the repo and the labels, and the rest as text (a time as an age).
+struct TicketCell: View {
+    let row: TicketsRow
+    let column: TicketColumn
+    var tracked: TicketList.Row?
+    var reference = Date()
+
+    var body: some View {
+        // Always a view, so an empty cell keeps its column's width.
+        HStack(spacing: 0) {
+            content
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder private var content: some View {
+        switch column.name {
+        case "identifier":
+            HStack(spacing: DesignTokens.Space.s1) {
+                Text(row.identifier).font(DesignTokens.TypeStyle.mono.font)
+                if tracked?.forced == true {
+                    Image(systemName: DesignTokens.Status.forced.symbol)
+                        .foregroundStyle(DesignTokens.Status.forced.tint)
+                        .accessibilityLabel("Forced")
+                }
+                if tracked?.needsAttention == true {
+                    Image(systemName: DesignTokens.Status.problem.symbol)
+                        .foregroundStyle(DesignTokens.Status.problem.tint)
+                        .accessibilityLabel("Needs attention")
+                        .help("Needs attention")
+                }
+            }
+        case "situation":
+            if let line = row.situation(tracked: tracked?.situation) {
+                SituationLine(line, reference: reference, size: .compact, forced: tracked?.forced ?? false)
+                    .lineLimit(1)
+            }
+        case "epic", "repo":
+            if let value = row.text(column.name) {
+                TicketValueChip(text: value, systemImage: column.name == "epic" ? SymphonyView.initiatives.symbol : SymphonyView.repos.symbol)
+            }
+        case "labels":
+            HStack(spacing: DesignTokens.Space.s1) {
+                ForEach(row.labels.prefix(3), id: \.self) { TicketValueChip(text: $0) }
+                if row.labels.count > 3 {
+                    Text("+\(row.labels.count - 3)").font(DesignTokens.TypeStyle.caption.font).foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(row.labels.joined(separator: ", "))
+        default:
+            Text(row.cell(column, reference: reference))
+                .lineLimit(1)
+                .monospacedDigit()
+        }
+    }
+
+    static func minWidth(_ column: TicketColumn) -> CGFloat {
+        switch column.name {
+        case "identifier": 90
+        case "title": 140
+        case "situation": 200
+        case "labels": 100
+        default: 60
+        }
+    }
+
+    static func idealWidth(_ column: TicketColumn) -> CGFloat {
+        switch column.name {
+        case "identifier": 110
+        case "title": 260
+        case "situation": 340
+        case "labels": 180
+        case "epic", "repo", "phase", "assignee": 100
+        case "url": 200
+        default: 80
+        }
+    }
+}
+
+/// A small capsule for a value: an epic, a repo, a label.
+struct TicketValueChip: View {
+    let text: String
+    var systemImage: String?
+
+    var body: some View {
+        Group {
+            if let systemImage { Label(text, systemImage: systemImage) } else { Text(text) }
+        }
+        .font(DesignTokens.TypeStyle.caption.font)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .padding(.horizontal, DesignTokens.Space.s2)
+        .padding(.vertical, 1)
+        .background(DesignTokens.Surface.separator.color.opacity(0.5), in: Capsule())
     }
 }
 
@@ -396,20 +682,34 @@ private struct TicketForceButton: View {
     }
 }
 
-/// The inspector: the selected ticket's facts in short, Open Ticket, and Force or Stop Forcing.
-struct TicketInspector: View {
+/// The inspector as a drawer beside the table: the selected ticket's facts in short, Open Ticket, Force or Stop
+/// Forcing, and Close.
+struct TicketsDrawer: View {
+    static let width: CGFloat = 320
+
     let row: TicketList.Row?
     var reference = Date()
     let actions: TicketsActions
+    let close: () -> Void
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     var body: some View {
-        if let row {
-            ScrollView {
+        VStack(spacing: 0) {
+            InboxDrawerHeader(title: "Ticket", close: close)
+            Divider()
+            if let row, offscreenSnapshot {
+                // A scroll view draws nothing offscreen.
                 TicketInspectorBody(row: row, reference: reference, actions: actions)
+                Spacer(minLength: 0)
+            } else if let row {
+                ScrollView {
+                    TicketInspectorBody(row: row, reference: reference, actions: actions)
+                }
+            } else {
+                EmptyState(title: "Select a ticket.", symbol: "sidebar.right")
             }
-        } else {
-            EmptyState(title: "Select a ticket.", symbol: "sidebar.right")
         }
+        .background(DesignTokens.Surface.content.color)
     }
 }
 
