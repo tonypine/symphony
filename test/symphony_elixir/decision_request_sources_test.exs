@@ -42,6 +42,8 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
 
   # Each module that asks a Question directly, and what it asks.
   @question_sources %{
+    # The report run's one Question for the Director (`SymphonyElixir.AgentTools.Report`).
+    "lib/symphony_elixir/agent_tools/report.ex" => [:report],
     # A ticket held in its phase after turns with no new commit or state change
     # (`SymphonyElixir.IdlePark.hold/5`, the agent runner's), and one an older build parked in
     # Backlog (`SymphonyElixir.IdlePark.ask/4`, the start-up backfill's).

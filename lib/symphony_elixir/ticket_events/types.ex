@@ -123,6 +123,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `note` event's id) read it (`run_id`), keyed by the note so only the first read is kept
   (`SymphonyElixir.Marks`).
 
+  `report.published` is machinery-only: a status report a report run published through its one tool
+  (`SymphonyElixir.Reports`), recorded on the reports ledger and never on a ticket's: the period, the
+  tickets and the events it rests on, its sentences, their text, each sentence's citations, the run,
+  its model and the Question it raised (`question_id`).
+
   `brief.written` is an agent's, in an implementation, rework or review-feedback run: what the ticket
   does and why, in a person's words (`text`, at most 1,200 characters), and its walkthrough as the
   steps a person takes (`walkthrough`, at most 4,000), both prose with no backtick. The newest one is
@@ -517,6 +522,26 @@ defmodule SymphonyElixir.TicketEvents.Types do
       required: [text: {:prose, 1_200}, walkthrough: {:prose, 4_000}],
       optional: [],
       idempotency: :writer
+    },
+    # A status report (`SymphonyElixir.Reports`), on the reports ledger of its own: the period it
+    # covers, the tickets and the events it rests on, its sentences and their joined text, which
+    # events each sentence cites (`citations`, by the sentence's index), the run and its model, and
+    # the Question it raised, if any.
+    "report.published" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [
+        run_id: :string,
+        model: :string,
+        period: {:map, [from: :string, to: :string]},
+        tickets: {:list, :string},
+        events: {:list, :string},
+        sentences: {:list, :string},
+        text: {:string, 20_000},
+        citations: :list
+      ],
+      optional: [question_id: :string] ++ @signal,
+      idempotency: {:fields, [:run_id]}
     },
     "note.read" => %{
       writers: [:machine],

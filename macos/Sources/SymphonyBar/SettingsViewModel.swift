@@ -160,6 +160,10 @@ final class SettingsViewModel: ObservableObject {
     @Published var promptBriefMaxTokens = LedgerSettings.defaultBriefMaxTokens
     /// Why `symphony check` rejected the changed ledger settings, shown in their section.
     @Published private(set) var ledgerError: String?
+    /// `reports.model` in the configured symphony.yml: the model a status report is written with.
+    @Published var reportModel = ReportSettings.defaultModel
+    /// Why `symphony check` rejected the changed report settings, shown in their section.
+    @Published private(set) var reportsError: String?
     /// `auto_review.playbooks.macos_app.dev_server`, `dev_server_port` and `launch_env` in the configured
     /// symphony.yml: whether a macOS app QA pass on the QA host starts the project's dev server there, on which port,
     /// and the variables the app under test gets.
@@ -204,6 +208,9 @@ final class SettingsViewModel: ObservableObject {
     /// The ledger settings read from symphony.yml, or nil when they couldn't be read. Only a setting whose control
     /// moved is written.
     private var loadedLedgerSettings: LedgerSettings?
+
+    /// The report settings read from symphony.yml, or nil when they couldn't be read. Only a model that changed is written.
+    private var loadedReportSettings: ReportSettings?
 
     /// The macOS app QA settings read from symphony.yml, or nil when they couldn't be read. Only a setting that
     /// changed is written.
@@ -287,6 +294,7 @@ final class SettingsViewModel: ObservableObject {
         loadDispatchLoopLimits()
         loadDispatchSettings()
         loadLedgerSettings()
+        loadReportSettings()
         loadMacAppQA()
         loadRunProfiles()
         // Off the main thread, so a Keychain prompt can't freeze the app while Settings opens.
@@ -573,6 +581,21 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// The report controls are off until a symphony.yml has been read, and while Save checks it.
+    var canEditReports: Bool { loadedReportSettings != nil && !isSaving }
+
+    private func loadReportSettings() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let reports = try SymphonyConfigFile(path: path).readReportSettings()
+            reportModel = reports.model
+            loadedReportSettings = reports
+        } catch {
+            configFileError = "Could not read the report settings from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
     /// The macOS app QA controls are off until a symphony.yml has been read, and while Save checks it.
     var canEditMacAppQA: Bool { loadedMacAppQA != nil && !isSaving }
 
@@ -698,7 +721,7 @@ final class SettingsViewModel: ObservableObject {
     /// Validates and saves, then calls `onSaved` when everything was stored. Changed models, token limits and
     /// timeouts are written only after `symphony check` passes on them; until then the rest isn't saved, and a
     /// failure shows in `configCheckError`, `tokenLimitsError`, `timeoutsError`, `gitHubUpdatesError`,
-    /// `linearWebhooksError`, `dispatchLoopError`, `dispatchError`, `ledgerError` or `macAppQAError`.
+    /// `linearWebhooksError`, `dispatchLoopError`, `dispatchError`, `ledgerError`, `reportsError` or `macAppQAError`.
     func save(onSaved: @escaping () -> Void) {
         guard canSave else { return }
         let settings = settings.trimmed()
@@ -760,6 +783,9 @@ final class SettingsViewModel: ObservableObject {
         ledger?.briefEnabled = promptBriefEnabled
         ledger?.briefMaxTokens = promptBriefMaxTokens
         let oldLedger = loadedLedgerSettings.flatMap { $0 != ledger ? $0 : nil }
+        reportsError = nil
+        let reports = loadedReportSettings.map { _ in ReportSettings(model: reportModel.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        let oldReports = loadedReportSettings.flatMap { $0 != reports ? $0 : nil }
         macAppQAError = nil
         let qaPlaybook = macAppQA.trimmed()
         let oldQAPlaybook = loadedMacAppQA.flatMap { $0 != qaPlaybook ? $0 : nil }
@@ -788,7 +814,7 @@ final class SettingsViewModel: ObservableObject {
         }
 
         guard loadedProfiles != nil || loadedLimits != nil || oldTimeouts != nil || oldUpdates != nil || oldWebhooks != nil
-            || oldLoopLimits != nil || oldDispatch != nil || oldLedger != nil || oldQAPlaybook != nil || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil
+            || oldLoopLimits != nil || oldDispatch != nil || oldLedger != nil || oldReports != nil || oldQAPlaybook != nil || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil
             || builtInPatternsChanged || loadedRules != nil || oldPhases != nil else {
             if saveRest(settings, secrets) { onSaved() }
             return
@@ -819,6 +845,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, let ledger, let oldLedger {
                 saved = await saveLedgerSettings(ledger, from: oldLedger, settings: settings, secrets: secrets)
+            }
+            if saved, let reports, let oldReports {
+                saved = await saveReportSettings(reports, from: oldReports, settings: settings, secrets: secrets)
             }
             if saved, let oldQAPlaybook {
                 saved = await saveMacAppQA(qaPlaybook, from: oldQAPlaybook, settings: settings, secrets: secrets)
@@ -1087,6 +1116,32 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedLedgerSettings = ledger
+        return true
+    }
+
+    /// Writes the report model to symphony.yml once `symphony check` passes on the result.
+    private func saveReportSettings(
+        _ reports: ReportSettings,
+        from loaded: ReportSettings,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeReportSettings(reports, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the report settings to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            reportsError = "symphony check rejected these settings, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        loadedReportSettings = reports
         return true
     }
 

@@ -74,6 +74,7 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.Quality,
           SymphonyElixir.QualityGate.Anthropic,
           SymphonyElixir.QualityGate.OpenAI,
+          SymphonyElixir.Reports.Anthropic,
           SymphonyElixir.Learnings.Reflection,
           SymphonyElixir.Learnings.Store,
           SymphonyElixir.RunStore,

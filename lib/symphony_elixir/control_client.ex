@@ -49,6 +49,20 @@ defmodule SymphonyElixir.ControlClient do
   end
 
   @doc """
+  Starts a report run on the period from `from` to `to` (`SymphonyElixir.Reports.start/2`) through
+  the running Symphony, which answers at once with the run's id; the report itself is published
+  once the run ends.
+  """
+  @spec start_report(DateTime.t(), DateTime.t(), keyword()) :: control_result()
+  def start_report(%DateTime{} = from, %DateTime{} = to, opts \\ []) do
+    if Keyword.get(opts, :prefer_local?, true) and local_orchestrator_alive?() do
+      SymphonyElixir.Reports.start(%{from: from, to: to})
+    else
+      remote_post("report", %{from: DateTime.to_iso8601(from), to: DateTime.to_iso8601(to)}, opts)
+    end
+  end
+
+  @doc """
   Fetches the running Symphony's terminal dashboard, rendered for `columns`
   (the server's default width when nil). Always goes over HTTP.
   """

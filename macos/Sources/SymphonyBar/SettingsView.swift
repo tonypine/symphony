@@ -399,6 +399,8 @@ struct SettingsView: View {
                 }
                 .disabled(!model.canEditLedger)
 
+                ReportsSection(model: model)
+
                 MacAppQASection(model: model)
 
                 Section {
@@ -572,6 +574,9 @@ struct SettingsView: View {
                 }
                 if model.ledgerError != nil {
                     Text("symphony check rejected the ledger settings; see Ledger.").foregroundStyle(.red)
+                }
+                if model.reportsError != nil {
+                    Text("symphony check rejected the report settings; see Reports.").foregroundStyle(.red)
                 }
                 if model.macAppQAError != nil {
                     Text("symphony check rejected the macOS app QA settings; see macOS app QA.").foregroundStyle(.red)
@@ -1148,6 +1153,35 @@ private struct LinearWebhooksSection: View {
 /// `dispatch`: whether dispatch reads its candidates from the Linear poll or from Symphony's record, how many poll
 /// cycles Setup's Dispatch shadow line counts their differences over, and `linear.reconcile_interval_ms`, how often the
 /// Linear poll reconciles the record while dispatch reads it, in minutes.
+/// `reports.model`: the model a status report is written with.
+private struct ReportsSection: View {
+    @ObservedObject var model: SettingsViewModel
+
+    var body: some View {
+        Section {
+            TextField("Report model", text: $model.reportModel, prompt: Text(ReportSettings.defaultModel))
+                .accessibilityLabel("Report model")
+                .help("The model a status report is written with (reports.model)")
+            Text(
+                "A status report reads a period's notable events and cites each one it rests on. It asks you at most "
+                    + "one question in the Inbox and changes nothing else, so the cheapest capable model is enough."
+            )
+            .foregroundStyle(.secondary)
+            if let error = model.reportsError {
+                Text(error).foregroundStyle(.red)
+            }
+        } header: {
+            Text("Reports (saved in symphony.yml)")
+        } footer: {
+            SectionFooter(
+                "reports.model (default \(ReportSettings.defaultModel)). Save checks symphony.yml with symphony check "
+                    + "first; Symphony reads it on its next report run, no restart needed."
+            )
+        }
+        .disabled(!model.canEditReports)
+    }
+}
+
 private struct DispatchSection: View {
     @ObservedObject var model: SettingsViewModel
 

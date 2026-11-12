@@ -76,6 +76,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}},
     {"note.read", %{note_id: "evt-1", run_id: "run-4"}, [], %{title: "Note read by a run", detail: "run-4"}},
     {"brief.written", %{text: "Each ticket says what it delivers.", walkthrough: "Read a ticket."}, [], %{title: "Brief written", detail: "Each ticket says what it delivers."}},
+    {"report.published", %{run_id: "report-1", text: "TP-1 merged."}, [], %{title: "Report published", detail: "TP-1 merged."}},
     {"rule.action", %{rule: "PR watcher R22", action: "rerun", text: "A check failed on PR #741: Symphony reran it once"}, [],
      %{title: "PR watcher R22 reran the failed checks", detail: "A check failed on PR #741: Symphony reran it once"}},
     {"ticket.filed", %{identifier: "TP-1500", kind: "split_off", title: "Split the parser"}, [], %{title: "Split off TP-1500", detail: "Split the parser"}}

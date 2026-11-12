@@ -30,6 +30,7 @@ Common optional sections:
 - `notifications`
 - `human_actions`
 - `ledger`
+- `reports`
 - `phases`
 - `dispatch`
 - `verification`
@@ -3150,6 +3151,24 @@ human_actions:
   one per update posted. They show as `human_actions` in the dashboard's Linear usage table.
 - `min_update_interval_ms` (default `900000`): the least time between two updates to one project. A
   change inside that window is posted once the window has passed, with whatever is open by then.
+
+### `reports`
+
+The model a status report is written with. A report run reads a period's notable events (the
+Journal's) and where each ticket they concern stands, and publishes one report on Symphony's reports
+ledger, every sentence citing the events it rests on. It changes nothing else: its only tools publish
+the report and ask the Director one question, which lands in the Inbox. Start one with
+`symphony report --from <time> --to <time>` or `POST /api/v1/control/report`; `GET /api/v1/reports`
+lists them, newest first. The setting has a control in the Mac app's Settings, under Reports.
+
+```yaml
+reports:
+  model: claude-haiku-5-5
+```
+
+- `model` (default `claude-haiku-5-5`, the cheapest capable model): the Anthropic model the report
+  run calls, with the `ANTHROPIC_API_KEY` of Symphony's environment. Read on each run, so a change
+  applies without a restart.
 
 ### `ledger`
 

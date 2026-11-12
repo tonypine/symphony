@@ -1452,6 +1452,30 @@ defmodule SymphonyElixir.RunStore do
   end
 
   @doc """
+  Appends `event` to the reports ledger (`SymphonyElixir.Reports`), a stream of its own that no
+  ticket, no subject's questions and the Journal's read across tickets never hold, in one durable
+  transaction, and returns it as stored with the ledger's next `seq`. An event whose idempotency key
+  the ledger already holds is not written: that event is returned instead.
+  """
+  @spec append_report_event(Event.t()) :: {:ok, Event.t()} | {:error, term()}
+  def append_report_event(%Event{} = event) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn ->
+        [stored] = write_subject_events(:reports, [event])
+        {:ok, stored}
+      end)
+    end
+  end
+
+  @doc "The events of the reports ledger (`append_report_event/1`), oldest first by `at`, then `seq`."
+  @spec list_report_events() :: [Event.t()] | {:error, term()}
+  def list_report_events do
+    with :ok <- ensure_started() do
+      transaction(fn -> read_subject_events(:reports) end)
+    end
+  end
+
+  @doc """
   Runs `fun` on the pause of `subject` (see `get_subject_pause/1`) in one durable transaction that
   holds its row's write lock, as `update_ticket_pause/4` does for a ticket: `{:write, pause, result}`
   writes `pause` (nil removes it) and returns `{:ok, result}`; `{:write, pause, events, result}` also

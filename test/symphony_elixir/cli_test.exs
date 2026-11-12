@@ -331,6 +331,56 @@ defmodule SymphonyElixir.CLITest do
     end
   end
 
+  test "report starts a report run on the period through the running Symphony and says how to read it" do
+    parent = self()
+
+    deps =
+      base_deps(%{
+        file_regular?: fn _path -> flunk("report must not read symphony.yml") end,
+        start_report: fn from, to ->
+          send(parent, {:report, from, to})
+          {:ok, %{run_id: "report-1", events: 4, from: DateTime.to_iso8601(from), to: DateTime.to_iso8601(to), model: "claude-haiku-5-5"}}
+        end
+      })
+
+    assert {{:halt, 0}, output} = force(deps, ["report", "--from", "2026-11-11T18:00:00Z", "--to", "2026-11-12T09:00:00Z"])
+
+    assert output ==
+             "Report run report-1 started on 4 notable events from 2026-11-11T18:00:00Z to 2026-11-12T09:00:00Z with claude-haiku-5-5; " <>
+               "GET /api/v1/reports lists the report once it is published\n"
+
+    assert_received {:report, ~U[2026-11-11 18:00:00Z], ~U[2026-11-12 09:00:00Z]}
+
+    assert {{:halt, 0}, _output} = force(deps, ["report", "--from", "2 hours ago"])
+    assert_received {:report, from, to}
+    assert DateTime.diff(to, from) == 7_200
+  end
+
+  test "report explains a period it can't read, one with nothing to cite and a Symphony it can't reach" do
+    usage = "Usage: symphony report --from <time> [--to <time>] (an ISO 8601 time, now, today or yesterday with an hour such as 18:00, or 2 hours ago)"
+    deps = base_deps(%{control_url: fn -> "http://127.0.0.1:4555" end, start_report: fn _from, _to -> Process.get(:report_result) end})
+
+    for args <- [["report"], ["report", "--from", "now", "extra"], ["report", "--since", "now"]] do
+      assert {:error, message} = CLI.evaluate(args, deps)
+      assert String.ends_with?(message, usage), inspect(args)
+    end
+
+    assert {:error, "--from \"soon\" is not a time" <> _rest} = CLI.evaluate(["report", "--from", "soon"], deps)
+
+    for {result, message} <- [
+          {{:error, :no_events}, "No notable event happened in that period, so there is nothing to report."},
+          {{:error, {:invalid_request, %{"error" => %{"message" => "No notable event happened in that period, so there is nothing to report."}}}},
+           "No notable event happened in that period, so there is nothing to report."},
+          {{:error, :control_token_unavailable}, "No control token: start Symphony first, or set SYMPHONY_CONTROL_TOKEN to the token in <state-root>/control_token"},
+          {{:error, {:connection_failed, :econnrefused}}, "Could not reach Symphony at http://127.0.0.1:4555; is it running?"},
+          {{:error, {:http_status, 500, "boom"}}, ~s(Could not start a report: {:http_status, 500, "boom"})},
+          {:unavailable, "Symphony's orchestrator is unavailable; try again once it has started"}
+        ] do
+      Process.put(:report_result, result)
+      assert {{:error, ^message}, ""} = force(deps, ["report", "--from", "yesterday"])
+    end
+  end
+
   test "openrouter-stub serves the stub and prints how to point a QA run at it" do
     test = self()
     deps = base_deps(%{start_openrouter_stub: fn port -> send(test, {:stub_port, port}) && {:ok, 4100} end})

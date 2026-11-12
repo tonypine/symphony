@@ -260,6 +260,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary("note", payload, _event), do: {"Note added", [text(payload, :text)]}
   defp summary("note.read", payload, _event), do: {"Note read by a run", [text(payload, :run_id)]}
   defp summary("brief.written", payload, _event), do: {"Brief written", [text(payload, :text)]}
+  defp summary("report.published", payload, _event), do: {"Report published", [text(payload, :text)]}
   defp summary(_type, _payload, _event), do: :unknown
 
   # What a rule did, as its line says it: "reran the failed checks", "filed TP-1501".

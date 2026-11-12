@@ -9,7 +9,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     step.started step.completed evidence finding.recorded finding.resolved finding.confirmed checklist.answered
     ticket.cancelled ticket.moved drift.detected drift.reverted drift.revert_failed
     pause.set pause.reason_added pause.reason_cleared pause.cleared
-    question.asked question.answered question.withdrawn question.reopened question.not_asked park.backfilled workspace.synced workspace.rebuilt workspace.removed situation.changed rule.action ticket.filed note.read brief.written note
+    question.asked question.answered question.withdrawn question.reopened question.not_asked park.backfilled workspace.synced workspace.rebuilt workspace.removed situation.changed rule.action ticket.filed note.read brief.written report.published note
   )
 
   describe "catalog/0" do
