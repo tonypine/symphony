@@ -1706,7 +1706,7 @@ func insightsPage(_ page: SymphonyView, slice: InsightsSlice, file: String, wind
             UsageCards(usage: Usage(aggregate: aggregate, slice: slice, snapshot: state.snapshot, today: insightsToday, now: insightsNow,
                                     timeZone: TimeZone(identifier: "UTC")!))
         case .quality:
-            QualityCards(quality: Quality(aggregate: aggregate, slice: slice, review: history.review, runs: runs, today: insightsToday))
+            QualityCards(quality: Quality(aggregate: aggregate, slice: slice, review: .loaded(history.review ?? ReviewHistory(), runs: runs), today: insightsToday))
         default:
             ShippedCards(shipped: Shipped(aggregate: aggregate, slice: slice, details: details, today: insightsToday))
         }

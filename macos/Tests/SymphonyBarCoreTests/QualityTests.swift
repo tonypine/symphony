@@ -93,7 +93,7 @@ final class QualityTests: XCTestCase {
             QualityRun(id: "c", identifier: "TP-2", outcome: .error, date: "2026-11-09"),
         ]
         let past = Quality(
-            aggregate: aggregate, slice: InsightsSlice(period: .range(from: "2026-11-01", to: "2026-11-07")), review: review, runs: runs,
+            aggregate: aggregate, slice: InsightsSlice(period: .range(from: "2026-11-01", to: "2026-11-07")), review: .loaded(review, runs: runs),
             today: "2026-11-12"
         )
         XCTAssertEqual(past.disagreements.map(\.identifier), ["TP-1"])
@@ -150,12 +150,75 @@ final class QualityTests: XCTestCase {
     }
 
     func testAnEmptySliceSaysSo() {
-        let quality = Quality(aggregate: AggregatePayload(), slice: InsightsSlice(), review: nil, runs: [], today: "2026-11-12")
+        let quality = Quality(aggregate: AggregatePayload(), slice: InsightsSlice(), review: .loaded(ReviewHistory(), runs: []), today: "2026-11-12")
         XCTAssertEqual(quality.tiles.map(\.value), ["—", "—", "—", "—"])
         XCTAssertTrue(quality.tiles.allSatisfy(\.isEmpty))
         XCTAssertEqual(quality.tiles[0].context, "Nothing to count yet")
         XCTAssertEqual(quality.agreementSummary, "No Code Review approval in this period.")
         XCTAssertEqual(quality.empty?.title, "No runs or verdicts in the last 7 days.")
+    }
+
+    // MARK: - The review read
+
+    func testTheReviewCardsSayTheyAreReadingBeforeTheHistoryAnswers() throws {
+        let quality = try quality(review: .reading)
+        XCTAssertEqual(quality.tiles[3].value, "—")
+        XCTAssertEqual(quality.tiles[3].context, Quality.reviewReading)
+        XCTAssertEqual(quality.agreementNote, Quality.reviewReading)
+        XCTAssertEqual(quality.disagreementsNote, Quality.reviewReading)
+        XCTAssertNotEqual(quality.disagreementsNote, Quality.allUpheld)
+        XCTAssertTrue(quality.disagreements.isEmpty && quality.repos.isEmpty && quality.runs.isEmpty)
+        XCTAssertFalse(quality.reviewFailed)
+        XCTAssertEqual(quality.runsChart.total, 50, "the aggregate's charts draw while the review reads")
+    }
+
+    func testAFailedReviewReadShowsItsFailureWithTryAgainNotAnUpheldReview() throws {
+        let quality = try quality(review: .failed("Symphony answered 500"))
+        let failure = "Symphony couldn't read Code Review's history: Symphony answered 500"
+        XCTAssertEqual(quality.tiles[3].value, "—")
+        XCTAssertEqual(quality.tiles[3].context, failure)
+        XCTAssertEqual(quality.agreementNote, failure)
+        XCTAssertEqual(quality.disagreementsNote, failure)
+        XCTAssertTrue(quality.reviewFailed)
+        XCTAssertEqual(try self.quality().disagreementsNote, Quality.allUpheld)
+        XCTAssertFalse(try self.quality().reviewFailed)
+    }
+
+    func testTheReviewReadKeepsItsSliceAndWaitsTheIntervalAfterAFailure() throws {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let week = QualityReviewRead.key(QualityReviewRead.key(InsightsSlice(), today: "2026-11-12"))
+        let month = QualityReviewRead.key(QualityReviewRead.key(InsightsSlice(period: .preset(.month)), today: "2026-11-12"))
+        XCTAssertEqual(
+            QualityReviewRead.key(InsightsSlice(), today: "2026-11-12").runs, "api/v1/runs?date_from=2026-11-06&limit=500"
+        )
+        var read = QualityReviewRead()
+        XCTAssertEqual(read.shown(week), .reading)
+        XCTAssertTrue(read.isDue(week, now: start, interval: 60))
+
+        read.record(week, history: .failed("timed out"), runs: nil, now: start)
+        XCTAssertEqual(read.shown(week), .failed("timed out"))
+        XCTAssertFalse(read.isDue(week, now: start.addingTimeInterval(30), interval: 60), "a failing read waits the interval")
+        XCTAssertTrue(read.isDue(week, now: start.addingTimeInterval(60), interval: 60))
+        XCTAssertTrue(read.isDue(month, now: start, interval: 60), "another slice reads at once")
+        XCTAssertEqual(read.shown(month), .reading, "one slice's review never draws under another's bar")
+        read.expire()
+        XCTAssertTrue(read.isDue(week, now: start, interval: 60), "Try Again reads at once")
+
+        let history = try fixture("history.json")
+        let runsData = try fixture("runs.json")
+        read.record(week, history: .loaded(history), runs: .loaded(runsData), now: start)
+        guard case let .loaded(review, runs) = read.shown(week) else { return XCTFail("the review loads") }
+        XCTAssertEqual(review, try XCTUnwrap(self.history().review))
+        XCTAssertEqual(runs, try self.runs())
+
+        read.record(week, history: .loaded(history), runs: .failed("refused"), now: start)
+        XCTAssertEqual(read.shown(week), .loaded(review, runs: runs), "a failed refresh keeps the slice's review")
+        read.record(month, history: .unsupported, runs: nil, now: start)
+        XCTAssertEqual(read.shown(month), .failed(EndpointPlaceholder.updateSymphony))
+        read.record(month, history: .loaded(Data("{}".utf8)), runs: nil, now: start)
+        XCTAssertEqual(read.shown(month), .failed(AggregateRead.undecodable))
+        read.record(week, history: .loaded(history), runs: .loaded(Data("nope".utf8)), now: start)
+        XCTAssertEqual(read.shown(week), .failed(AggregateRead.undecodable))
     }
 
     private func fixture(_ name: String) throws -> Data {
@@ -175,12 +238,13 @@ final class QualityTests: XCTestCase {
 
     /// The `insights` fixture's slice with the `attention` fixture's review.
     private func quality(
-        _ slice: InsightsSlice = InsightsSlice(), scope: OverviewScope = .all, aggregate file: String = "aggregate.json"
+        _ slice: InsightsSlice = InsightsSlice(), scope: OverviewScope = .all, aggregate file: String = "aggregate.json",
+        review: QualityReview? = nil
     ) throws -> Quality {
         let api = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("Fixtures/director-app/insights/api/v1")
         let aggregate = try XCTUnwrap(AggregatePayload.decode(Data(contentsOf: api.appendingPathComponent(file))))
         let runs = try XCTUnwrap(QualityRun.decode(Data(contentsOf: api.appendingPathComponent("runs.json"))))
-        return Quality(aggregate: aggregate, slice: slice, scope: scope, review: try history().review, runs: runs, today: "2026-11-12")
+        return Quality(aggregate: aggregate, slice: slice, scope: scope, review: review ?? .loaded(try XCTUnwrap(history().review), runs: runs), today: "2026-11-12")
     }
 }

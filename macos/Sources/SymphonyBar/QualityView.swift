@@ -12,11 +12,12 @@ struct QualityContent: View {
         InsightsPage(model: model, symbol: SymphonyView.quality.symbol) { aggregate in
             QualityView(
                 quality: Quality(
-                    aggregate: aggregate, slice: model.insightsSlice, scope: model.scope, review: model.quality?.history.review,
-                    runs: model.quality?.runs ?? [], today: model.insightsToday
+                    aggregate: aggregate, slice: model.insightsSlice, scope: model.scope, review: model.qualityReviewShown,
+                    today: model.insightsToday
                 ),
                 openTicket: model.openTicket,
                 changeReview: model.changeReview,
+                readReviewAgain: model.readQualityAgain,
                 widen: { model.insightsSlice.choose($0, today: model.insightsToday) }
             )
         }
@@ -27,6 +28,7 @@ struct QualityView: View {
     let quality: Quality
     var openTicket: (String) -> Void = { _ in }
     var changeReview: (String) -> Void = { _ in }
+    var readReviewAgain: () -> Void = {}
     var widen: (InsightsPeriod) -> Void = { _ in }
 
     var body: some View {
@@ -34,7 +36,7 @@ struct QualityView: View {
             InsightsEmptyState(empty: empty, symbol: SymphonyView.quality.symbol, widen: widen)
         } else {
             ScrollView {
-                QualityCards(quality: quality, openTicket: openTicket, changeReview: changeReview)
+                QualityCards(quality: quality, openTicket: openTicket, changeReview: changeReview, readReviewAgain: readReviewAgain)
             }
         }
     }
@@ -45,6 +47,7 @@ struct QualityCards: View {
     let quality: Quality
     var openTicket: (String) -> Void = { _ in }
     var changeReview: (String) -> Void = { _ in }
+    var readReviewAgain: () -> Void = {}
     @State private var showsRuns = false
 
     var body: some View {
@@ -63,9 +66,14 @@ struct QualityCards: View {
             }
             Card(title: Quality.disagreementsTitle) {
                 if quality.disagreements.isEmpty {
-                    Text("QA and you upheld every Code Review approval in this period.")
-                        .font(DesignTokens.TypeStyle.body.font)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                        Text(quality.disagreementsNote)
+                            .font(DesignTokens.TypeStyle.body.font)
+                            .foregroundStyle(.secondary)
+                        if quality.reviewFailed {
+                            Button("Try Again", action: readReviewAgain).controlSize(.small)
+                        }
+                    }
                 } else {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
                         ForEach(quality.disagreements) { row in

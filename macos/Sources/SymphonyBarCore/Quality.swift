@@ -223,6 +223,73 @@ public struct QualityRun: Equatable, Identifiable {
     }
 }
 
+/// What Quality's review cards draw from: the history's review and the slice's runs once both answered, else that they
+/// are reading or why they failed. Never an empty review in their place, which would claim every approval was upheld.
+public enum QualityReview: Equatable {
+    case reading
+    case loaded(ReviewHistory, runs: [QualityRun])
+    case failed(String)
+}
+
+/// Quality's review read (TP-1463): which slice's history and runs it holds, what they got and when, so the cards
+/// never draw another slice's review and a failing read waits the read interval like any other.
+public struct QualityReviewRead: Equatable {
+    public private(set) var key: String?
+    public private(set) var review: QualityReview = .reading
+    public private(set) var readAt: Date?
+
+    public init() {}
+
+    /// The reads a slice's review takes on `today`: its history's days and its runs' first day.
+    public static func key(_ slice: InsightsSlice, today: String) -> (history: String, runs: String) {
+        (HistoryPayload.path(days: slice.daysBack(today: today)), QualityRun.path(from: slice.period.days(today: today).from))
+    }
+
+    /// One key for both reads.
+    public static func key(_ reads: (history: String, runs: String)) -> String { "\(reads.history) \(reads.runs)" }
+
+    /// Whether `key` is due a read at `now`: never read, another slice than the last, or the last is `interval` old.
+    public func isDue(_ key: String, now: Date, interval: TimeInterval) -> Bool {
+        guard let readAt, key == self.key else { return true }
+        return now.timeIntervalSince(readAt) >= interval
+    }
+
+    /// Keeps what `key`'s reads got at `now`: the runs are read only once the history answered. A failed refresh of
+    /// the slice shown keeps its earlier review.
+    public mutating func record(_ key: String, history: EndpointResult, runs: EndpointResult?, now: Date) {
+        let got: QualityReview
+        if case let .loaded(data) = history, let payload = HistoryPayload.decode(data) {
+            if case let .loaded(runsData)? = runs, let decoded = QualityRun.decode(runsData) {
+                got = .loaded(payload.review ?? ReviewHistory(), runs: decoded)
+            } else {
+                got = .failed(Self.message(runs ?? .failed(AggregateRead.undecodable)))
+            }
+        } else {
+            got = .failed(Self.message(history))
+        }
+        switch (got, review) {
+        case (.failed, .loaded) where key == self.key: break
+        default: review = got
+        }
+        self.key = key
+        readAt = now
+    }
+
+    /// Makes the next check read again at once (Try Again, a page opened).
+    public mutating func expire() { readAt = nil }
+
+    /// What the cards drawing `key` show: its review, its failure, or that it is reading.
+    public func shown(_ key: String) -> QualityReview { key == self.key ? review : .reading }
+
+    static func message(_ result: EndpointResult) -> String {
+        switch result {
+        case let .failed(message): message
+        case .unsupported: EndpointPlaceholder.updateSymphony
+        case .loaded: AggregateRead.undecodable
+        }
+    }
+}
+
 /// D7: how far to trust the crew over the Insights slice (TP-1463). Four tiles, runs by outcome and verdicts per bucket
 /// from the aggregation, review agreement by repo and the disagreements from the history's review, and every run.
 public struct Quality: Equatable {
@@ -275,14 +342,25 @@ public struct Quality: Equatable {
     public var runs: [QualityRun]
     /// Nil while the slice has a run or a verdict.
     public var empty: InsightsEmpty?
-    /// What Review agreement by repo says without a bar: nothing judged yet, or not counted for one epic.
+    /// What Review agreement by repo says without a bar: nothing judged yet, not counted for one epic, or that the
+    /// review is reading or failed.
     public var agreementNote: String
+    /// What Disagreements says without a row: every approval upheld, or that the review is reading or failed.
+    public var disagreementsNote: String
+    /// Whether the review read failed, so the cards offer Try Again.
+    public var reviewFailed: Bool
+
+    public static let reviewReading = "Reading Code Review's history…"
+    public static let allUpheld = "QA and you upheld every Code Review approval in this period."
+
+    /// "Symphony couldn't read Code Review's history: <why>".
+    public static func reviewFailure(_ message: String) -> String { "Symphony couldn't read Code Review's history: \(message)" }
 
     /// Agreement is counted by repo, so an epic's slice has none.
     public static let notForAnEpic = "Not counted for one epic: agreement is counted by repo."
 
     public init(
-        aggregate: AggregatePayload, slice: InsightsSlice, scope: OverviewScope = .all, review: ReviewHistory?, runs allRuns: [QualityRun],
+        aggregate: AggregatePayload, slice: InsightsSlice, scope: OverviewScope = .all, review read: QualityReview,
         today: String
     ) {
         let (from, to) = slice.period.days(today: today)
@@ -292,6 +370,12 @@ public struct Quality: Equatable {
         let tickets: Set<String>? = repoKey != nil || slice.epic != nil || to < today
             ? Set(aggregate.runs.tickets.keys).union(aggregate.verdicts.tickets.keys) : nil
         let inSlice = { (identifier: String?) in tickets.map { set in identifier.map { set.contains($0) } ?? false } ?? true }
+        let (review, allRuns, pending): (ReviewHistory, [QualityRun], String?) = switch read {
+        case let .loaded(review, runs): (review, runs, nil)
+        case .reading: (ReviewHistory(), [], Self.reviewReading)
+        case let .failed(message): (ReviewHistory(), [], Self.reviewFailure(message))
+        }
+        reviewFailed = if case .failed = read { true } else { false }
         runs = allRuns.filter { $0.date >= from && $0.date <= to && inSlice($0.identifier) }.sorted { ($0.date, $0.id) > ($1.date, $1.id) }
         runsChart = InsightsChart.build(
             aggregate.runs, unit: aggregate.unit, title: "Runs \(aggregate.unit.per)", measure: "Runs", format: .count, fallback: "other",
@@ -302,7 +386,6 @@ public struct Quality: Equatable {
             fallback: "other", order: Self.verdictKeys.map(\.key), key: Self.verdictKey
         )
 
-        let review = review ?? ReviewHistory()
         // Agreement is counted by repo from the period's first day to today: it has no epic, and a past period's
         // figure runs to today.
         let byRepo = slice.epic != nil ? [] : review.byRepo.filter { repo in repoKey.map { repo.repoKey == $0 } ?? true }
@@ -316,14 +399,15 @@ public struct Quality: Equatable {
             Self.tile("Runs that succeeded", Self.rate(runsBy["success"] ?? 0, runCount), of: runCount, context: "runs"),
             Self.tile("Code Review approvals", Self.rate(verdicts["code_review:approve"] ?? 0, codeReview), of: codeReview, context: "Code Review verdicts"),
             Self.tile("QA passes", Self.rate(verdicts["qa:pass"] ?? 0, qa), of: qa, context: "QA verdicts"),
-            slice.epic != nil
-                ? Tile(title: "Review agreement", value: "—", context: Self.notForAnEpic, isEmpty: true)
+            slice.epic != nil || pending != nil
+                ? Tile(title: "Review agreement", value: "—", context: slice.epic != nil ? Self.notForAnEpic : pending ?? "", isEmpty: true)
                 : Self.tile(
                     "Review agreement", agreement.rate, of: agreement.judged,
                     context: to < today ? "judged Code Review approvals, counted up to today" : "judged Code Review approvals"
                 ),
         ]
-        agreementNote = slice.epic != nil ? Self.notForAnEpic : "No Code Review approval in this period."
+        agreementNote = slice.epic != nil ? Self.notForAnEpic : pending ?? "No Code Review approval in this period."
+        disagreementsNote = pending ?? Self.allUpheld
         repos = byRepo.map { repo in
             RepoBar(
                 repoKey: repo.repoKey, rate: repo.agreement.rate, mode: "Manual review \(repo.manualReview.title.lowercased())",

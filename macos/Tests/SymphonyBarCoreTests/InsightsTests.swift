@@ -112,7 +112,7 @@ final class InsightsTests: XCTestCase {
             let aggregate = try aggregate(slice)
             let usage = Usage(aggregate: aggregate, slice: slice, snapshot: nil, today: today)
             let shipped = Shipped(aggregate: aggregate, slice: slice, details: nil, today: today)
-            let quality = Quality(aggregate: aggregate, slice: slice, review: nil, runs: [], today: today)
+            let quality = Quality(aggregate: aggregate, slice: slice, review: .reading, today: today)
             let figures = "\(shipped.chart.total) shipped, \(Overview.tokens(usage.chart.total)) tokens, \(quality.runsChart.total) runs"
             XCTAssertEqual(Insights.summary(aggregate, slice: slice, scope: .all), "\(slice.title(scope: .all)): \(figures)")
             XCTAssertEqual(usage.chart.total, aggregate.tokens.total)
@@ -219,7 +219,7 @@ final class InsightsTests: XCTestCase {
         XCTAssertEqual(usage.empty?.actionTitle, "Show Last 30 Days")
         let shipped = Shipped(aggregate: nothing, slice: InsightsSlice(period: .preset(.today)), details: nil, today: today)
         XCTAssertEqual(shipped.empty, InsightsEmpty(title: "Nothing shipped today.", widen: .preset(.week)))
-        let quality = Quality(aggregate: nothing, slice: InsightsSlice(period: .range(from: "2026-11-01", to: "2026-11-30")), review: nil, runs: [], today: today)
+        let quality = Quality(aggregate: nothing, slice: InsightsSlice(period: .range(from: "2026-11-01", to: "2026-11-30")), review: .reading, today: today)
         XCTAssertEqual(quality.empty?.title, "No runs or verdicts from Nov 1 to Nov 30.")
         XCTAssertEqual(quality.empty?.widen, .preset(.quarter))
         let year = Usage(aggregate: nothing, slice: InsightsSlice(period: .preset(.year)), snapshot: nil, today: today)

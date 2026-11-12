@@ -123,8 +123,8 @@ final class SymphonyWindowModel: ObservableObject {
     /// `GET /api/v1/aggregate`'s last answer and last failure, read while an Insights page shows; the three pages
     /// draw what it holds for the slice (`aggregateShown`).
     @Published private(set) var aggregateRead = AggregateRead()
-    /// The history's review and the runs of Quality's slice, read while Quality shows.
-    @Published private(set) var quality: (history: HistoryPayload, runs: [QualityRun])?
+    /// The history's review and the runs of Quality's slice, read while Quality shows, or why they failed.
+    @Published private(set) var qualityReview = QualityReviewRead()
     /// Shipped's merged tickets for its period, read while Shipped shows (D9).
     @Published var shipped: ShippedPayload?
     /// What the last Shipped read got when it got none, nil after one that did.
@@ -347,7 +347,6 @@ final class SymphonyWindowModel: ObservableObject {
     private var readingInitiatives = false
     private var readingAggregate = false
     private var readingQuality = false
-    private var qualityReadAt: Date?
     /// The history is read again at most this often.
     static let historyInterval: TimeInterval = 60
     var readingShipped = false
@@ -844,7 +843,7 @@ final class SymphonyWindowModel: ObservableObject {
     private func insightsSliceChanged() {
         aggregateRead.expire()
         readAggregateIfDue()
-        qualityReadAt = nil
+        qualityReview.expire()
         readQualityIfDue()
         shippedReadAt = nil
         readShippedIfDue()
@@ -875,24 +874,34 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// Reads Quality's review history and runs while Quality shows, for the slice's days.
+    /// The reads of Quality's review for the slice shown.
+    private var qualityReviewReads: (history: String, runs: String) { QualityReviewRead.key(insightsSlice, today: insightsToday) }
+
+    /// What Quality's review cards show for the slice: its review, its failure, or that it is reading.
+    var qualityReviewShown: QualityReview { qualityReview.shown(QualityReviewRead.key(qualityReviewReads)) }
+
+    /// Try Again on a failed review read: reads it again at once.
+    func readQualityAgain() {
+        qualityReview.expire()
+        readQualityIfDue()
+    }
+
+    /// Reads Quality's review history and runs while Quality shows, for the slice's days. A slice is read again at
+    /// most once per `historyInterval`, a failing one too.
     private func readQualityIfDue() {
+        let reads = qualityReviewReads
+        let key = QualityReviewRead.key(reads)
         guard selection == .quality, !showsPage, !readingQuality, state.countsKnown,
-            qualityReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
+            qualityReview.isDue(key, now: Date(), interval: Self.historyInterval)
         else { return }
         readingQuality = true
-        let slice = insightsSlice
-        let today = insightsToday
         Task {
-            let result = await client.get(HistoryPayload.path(days: slice.daysBack(today: today)))
-            if case let .loaded(data) = result, let history = HistoryPayload.decode(data) {
-                let runsResult = await client.get(QualityRun.path(from: slice.period.days(today: today).from))
-                let runs = if case let .loaded(data) = runsResult { QualityRun.decode(data) ?? [] } else { [QualityRun]() }
-                if slice == insightsSlice { quality = (history, runs) }
-            }
-            qualityReadAt = slice == insightsSlice ? Date() : nil
+            let history = await client.get(reads.history)
+            var runs: EndpointResult?
+            if case .loaded = history { runs = await client.get(reads.runs) }
+            qualityReview.record(key, history: history, runs: runs, now: Date())
             readingQuality = false
-            if qualityReadAt == nil { readQualityIfDue() }
+            if key != QualityReviewRead.key(qualityReviewReads) { readQualityIfDue() }
         }
     }
 
