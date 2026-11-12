@@ -1,0 +1,657 @@
+{
+  "count": 50,
+  "filters": {},
+  "generated_at": "2026-11-12T03:30:00Z",
+  "runs": [
+    {
+      "eval_id": "run-2026-11-12-success-2",
+      "run_id": "run-2026-11-12-success-2",
+      "agent_kind": "claude",
+      "date": "2026-11-12",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "SHOP-322",
+      "tokens": {
+        "total_tokens": 420000
+      },
+      "duration_seconds": 1320
+    },
+    {
+      "eval_id": "run-2026-11-12-success-1",
+      "run_id": "run-2026-11-12-success-1",
+      "agent_kind": "claude",
+      "date": "2026-11-12",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1459",
+      "tokens": {
+        "total_tokens": 410000
+      },
+      "duration_seconds": 1260
+    },
+    {
+      "eval_id": "run-2026-11-12-success-0",
+      "run_id": "run-2026-11-12-success-0",
+      "agent_kind": "codex",
+      "date": "2026-11-12",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1458",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    },
+    {
+      "eval_id": "run-2026-11-11-timeout-0",
+      "run_id": "run-2026-11-11-timeout-0",
+      "agent_kind": "codex",
+      "date": "2026-11-11",
+      "outcome": "error",
+      "status": "timeout",
+      "issue_identifier": "SHOP-321",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    },
+    {
+      "eval_id": "run-2026-11-11-success-6",
+      "run_id": "run-2026-11-11-success-6",
+      "agent_kind": "codex",
+      "date": "2026-11-11",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "API-141",
+      "tokens": {
+        "total_tokens": 460000
+      },
+      "duration_seconds": 1560
+    },
+    {
+      "eval_id": "run-2026-11-11-success-5",
+      "run_id": "run-2026-11-11-success-5",
+      "agent_kind": "claude",
+      "date": "2026-11-11",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1461",
+      "tokens": {
+        "total_tokens": 450000
+      },
+      "duration_seconds": 1500
+    },
+    {
+      "eval_id": "run-2026-11-11-success-4",
+      "run_id": "run-2026-11-11-success-4",
+      "agent_kind": "claude",
+      "date": "2026-11-11",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1460",
+      "tokens": {
+        "total_tokens": 440000
+      },
+      "duration_seconds": 1440
+    },
+    {
+      "eval_id": "run-2026-11-11-success-3",
+      "run_id": "run-2026-11-11-success-3",
+      "agent_kind": "codex",
+      "date": "2026-11-11",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "SHOP-322",
+      "tokens": {
+        "total_tokens": 430000
+      },
+      "duration_seconds": 1380
+    },
+    {
+      "eval_id": "run-2026-11-11-success-2",
+      "run_id": "run-2026-11-11-success-2",
+      "agent_kind": "claude",
+      "date": "2026-11-11",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1459",
+      "tokens": {
+        "total_tokens": 420000
+      },
+      "duration_seconds": 1320
+    },
+    {
+      "eval_id": "run-2026-11-11-success-1",
+      "run_id": "run-2026-11-11-success-1",
+      "agent_kind": "claude",
+      "date": "2026-11-11",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1458",
+      "tokens": {
+        "total_tokens": 410000
+      },
+      "duration_seconds": 1260
+    },
+    {
+      "eval_id": "run-2026-11-11-success-0",
+      "run_id": "run-2026-11-11-success-0",
+      "agent_kind": "codex",
+      "date": "2026-11-11",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "SHOP-321",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    },
+    {
+      "eval_id": "run-2026-11-11-failure-0",
+      "run_id": "run-2026-11-11-failure-0",
+      "agent_kind": "codex",
+      "date": "2026-11-11",
+      "outcome": "error",
+      "status": "failure",
+      "issue_identifier": "SHOP-321",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    },
+    {
+      "eval_id": "run-2026-11-10-success-7",
+      "run_id": "run-2026-11-10-success-7",
+      "agent_kind": "claude",
+      "date": "2026-11-10",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "API-141",
+      "tokens": {
+        "total_tokens": 470000
+      },
+      "duration_seconds": 1620
+    },
+    {
+      "eval_id": "run-2026-11-10-success-6",
+      "run_id": "run-2026-11-10-success-6",
+      "agent_kind": "codex",
+      "date": "2026-11-10",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1461",
+      "tokens": {
+        "total_tokens": 460000
+      },
+      "duration_seconds": 1560
+    },
+    {
+      "eval_id": "run-2026-11-10-success-5",
+      "run_id": "run-2026-11-10-success-5",
+      "agent_kind": "claude",
+      "date": "2026-11-10",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1460",
+      "tokens": {
+        "total_tokens": 450000
+      },
+      "duration_seconds": 1500
+    },
+    {
+      "eval_id": "run-2026-11-10-success-4",
+      "run_id": "run-2026-11-10-success-4",
+      "agent_kind": "claude",
+      "date": "2026-11-10",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "SHOP-322",
+      "tokens": {
+        "total_tokens": 440000
+      },
+      "duration_seconds": 1440
+    },
+    {
+      "eval_id": "run-2026-11-10-success-3",
+      "run_id": "run-2026-11-10-success-3",
+      "agent_kind": "codex",
+      "date": "2026-11-10",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1459",
+      "tokens": {
+        "total_tokens": 430000
+      },
+      "duration_seconds": 1380
+    },
+    {
+      "eval_id": "run-2026-11-10-success-2",
+      "run_id": "run-2026-11-10-success-2",
+      "agent_kind": "claude",
+      "date": "2026-11-10",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1458",
+      "tokens": {
+        "total_tokens": 420000
+      },
+      "duration_seconds": 1320
+    },
+    {
+      "eval_id": "run-2026-11-10-success-1",
+      "run_id": "run-2026-11-10-success-1",
+      "agent_kind": "claude",
+      "date": "2026-11-10",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "SHOP-321",
+      "tokens": {
+        "total_tokens": 410000
+      },
+      "duration_seconds": 1260
+    },
+    {
+      "eval_id": "run-2026-11-10-success-0",
+      "run_id": "run-2026-11-10-success-0",
+      "agent_kind": "codex",
+      "date": "2026-11-10",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1457",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    },
+    {
+      "eval_id": "run-2026-11-10-failure-0",
+      "run_id": "run-2026-11-10-failure-0",
+      "agent_kind": "codex",
+      "date": "2026-11-10",
+      "outcome": "error",
+      "status": "failure",
+      "issue_identifier": "TP-1457",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    },
+    {
+      "eval_id": "run-2026-11-09-success-5",
+      "run_id": "run-2026-11-09-success-5",
+      "agent_kind": "claude",
+      "date": "2026-11-09",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "SHOP-322",
+      "tokens": {
+        "total_tokens": 450000
+      },
+      "duration_seconds": 1500
+    },
+    {
+      "eval_id": "run-2026-11-09-success-4",
+      "run_id": "run-2026-11-09-success-4",
+      "agent_kind": "claude",
+      "date": "2026-11-09",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1459",
+      "tokens": {
+        "total_tokens": 440000
+      },
+      "duration_seconds": 1440
+    },
+    {
+      "eval_id": "run-2026-11-09-success-3",
+      "run_id": "run-2026-11-09-success-3",
+      "agent_kind": "codex",
+      "date": "2026-11-09",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1458",
+      "tokens": {
+        "total_tokens": 430000
+      },
+      "duration_seconds": 1380
+    },
+    {
+      "eval_id": "run-2026-11-09-success-2",
+      "run_id": "run-2026-11-09-success-2",
+      "agent_kind": "claude",
+      "date": "2026-11-09",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "SHOP-321",
+      "tokens": {
+        "total_tokens": 420000
+      },
+      "duration_seconds": 1320
+    },
+    {
+      "eval_id": "run-2026-11-09-success-1",
+      "run_id": "run-2026-11-09-success-1",
+      "agent_kind": "claude",
+      "date": "2026-11-09",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1457",
+      "tokens": {
+        "total_tokens": 410000
+      },
+      "duration_seconds": 1260
+    },
+    {
+      "eval_id": "run-2026-11-09-success-0",
+      "run_id": "run-2026-11-09-success-0",
+      "agent_kind": "codex",
+      "date": "2026-11-09",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "API-140",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    },
+    {
+      "eval_id": "run-2026-11-09-stopped-0",
+      "run_id": "run-2026-11-09-stopped-0",
+      "agent_kind": "codex",
+      "date": "2026-11-09",
+      "outcome": "no_changes",
+      "status": "stopped",
+      "issue_identifier": "API-140",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    },
+    {
+      "eval_id": "run-2026-11-08-success-4",
+      "run_id": "run-2026-11-08-success-4",
+      "agent_kind": "claude",
+      "date": "2026-11-08",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1458",
+      "tokens": {
+        "total_tokens": 440000
+      },
+      "duration_seconds": 1440
+    },
+    {
+      "eval_id": "run-2026-11-08-success-3",
+      "run_id": "run-2026-11-08-success-3",
+      "agent_kind": "codex",
+      "date": "2026-11-08",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "SHOP-321",
+      "tokens": {
+        "total_tokens": 430000
+      },
+      "duration_seconds": 1380
+    },
+    {
+      "eval_id": "run-2026-11-08-success-2",
+      "run_id": "run-2026-11-08-success-2",
+      "agent_kind": "claude",
+      "date": "2026-11-08",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1457",
+      "tokens": {
+        "total_tokens": 420000
+      },
+      "duration_seconds": 1320
+    },
+    {
+      "eval_id": "run-2026-11-08-success-1",
+      "run_id": "run-2026-11-08-success-1",
+      "agent_kind": "claude",
+      "date": "2026-11-08",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "API-140",
+      "tokens": {
+        "total_tokens": 410000
+      },
+      "duration_seconds": 1260
+    },
+    {
+      "eval_id": "run-2026-11-08-success-0",
+      "run_id": "run-2026-11-08-success-0",
+      "agent_kind": "codex",
+      "date": "2026-11-08",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1456",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    },
+    {
+      "eval_id": "run-2026-11-07-timeout-0",
+      "run_id": "run-2026-11-07-timeout-0",
+      "agent_kind": "codex",
+      "date": "2026-11-07",
+      "outcome": "error",
+      "status": "timeout",
+      "issue_identifier": "SHOP-320",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    },
+    {
+      "eval_id": "run-2026-11-07-success-6",
+      "run_id": "run-2026-11-07-success-6",
+      "agent_kind": "codex",
+      "date": "2026-11-07",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1459",
+      "tokens": {
+        "total_tokens": 460000
+      },
+      "duration_seconds": 1560
+    },
+    {
+      "eval_id": "run-2026-11-07-success-5",
+      "run_id": "run-2026-11-07-success-5",
+      "agent_kind": "claude",
+      "date": "2026-11-07",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1458",
+      "tokens": {
+        "total_tokens": 450000
+      },
+      "duration_seconds": 1500
+    },
+    {
+      "eval_id": "run-2026-11-07-success-4",
+      "run_id": "run-2026-11-07-success-4",
+      "agent_kind": "claude",
+      "date": "2026-11-07",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "SHOP-321",
+      "tokens": {
+        "total_tokens": 440000
+      },
+      "duration_seconds": 1440
+    },
+    {
+      "eval_id": "run-2026-11-07-success-3",
+      "run_id": "run-2026-11-07-success-3",
+      "agent_kind": "codex",
+      "date": "2026-11-07",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1457",
+      "tokens": {
+        "total_tokens": 430000
+      },
+      "duration_seconds": 1380
+    },
+    {
+      "eval_id": "run-2026-11-07-success-2",
+      "run_id": "run-2026-11-07-success-2",
+      "agent_kind": "claude",
+      "date": "2026-11-07",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "API-140",
+      "tokens": {
+        "total_tokens": 420000
+      },
+      "duration_seconds": 1320
+    },
+    {
+      "eval_id": "run-2026-11-07-success-1",
+      "run_id": "run-2026-11-07-success-1",
+      "agent_kind": "claude",
+      "date": "2026-11-07",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1456",
+      "tokens": {
+        "total_tokens": 410000
+      },
+      "duration_seconds": 1260
+    },
+    {
+      "eval_id": "run-2026-11-07-success-0",
+      "run_id": "run-2026-11-07-success-0",
+      "agent_kind": "codex",
+      "date": "2026-11-07",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "SHOP-320",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    },
+    {
+      "eval_id": "run-2026-11-07-failure-1",
+      "run_id": "run-2026-11-07-failure-1",
+      "agent_kind": "claude",
+      "date": "2026-11-07",
+      "outcome": "error",
+      "status": "failure",
+      "issue_identifier": "TP-1456",
+      "tokens": {
+        "total_tokens": 410000
+      },
+      "duration_seconds": 1260
+    },
+    {
+      "eval_id": "run-2026-11-07-failure-0",
+      "run_id": "run-2026-11-07-failure-0",
+      "agent_kind": "codex",
+      "date": "2026-11-07",
+      "outcome": "error",
+      "status": "failure",
+      "issue_identifier": "SHOP-320",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    },
+    {
+      "eval_id": "run-2026-11-06-success-5",
+      "run_id": "run-2026-11-06-success-5",
+      "agent_kind": "claude",
+      "date": "2026-11-06",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "SHOP-321",
+      "tokens": {
+        "total_tokens": 450000
+      },
+      "duration_seconds": 1500
+    },
+    {
+      "eval_id": "run-2026-11-06-success-4",
+      "run_id": "run-2026-11-06-success-4",
+      "agent_kind": "claude",
+      "date": "2026-11-06",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1457",
+      "tokens": {
+        "total_tokens": 440000
+      },
+      "duration_seconds": 1440
+    },
+    {
+      "eval_id": "run-2026-11-06-success-3",
+      "run_id": "run-2026-11-06-success-3",
+      "agent_kind": "codex",
+      "date": "2026-11-06",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "API-140",
+      "tokens": {
+        "total_tokens": 430000
+      },
+      "duration_seconds": 1380
+    },
+    {
+      "eval_id": "run-2026-11-06-success-2",
+      "run_id": "run-2026-11-06-success-2",
+      "agent_kind": "claude",
+      "date": "2026-11-06",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1456",
+      "tokens": {
+        "total_tokens": 420000
+      },
+      "duration_seconds": 1320
+    },
+    {
+      "eval_id": "run-2026-11-06-success-1",
+      "run_id": "run-2026-11-06-success-1",
+      "agent_kind": "claude",
+      "date": "2026-11-06",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "SHOP-320",
+      "tokens": {
+        "total_tokens": 410000
+      },
+      "duration_seconds": 1260
+    },
+    {
+      "eval_id": "run-2026-11-06-success-0",
+      "run_id": "run-2026-11-06-success-0",
+      "agent_kind": "codex",
+      "date": "2026-11-06",
+      "outcome": "pr_opened",
+      "status": "success",
+      "issue_identifier": "TP-1455",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    },
+    {
+      "eval_id": "run-2026-11-06-failure-0",
+      "run_id": "run-2026-11-06-failure-0",
+      "agent_kind": "codex",
+      "date": "2026-11-06",
+      "outcome": "error",
+      "status": "failure",
+      "issue_identifier": "TP-1455",
+      "tokens": {
+        "total_tokens": 400000
+      },
+      "duration_seconds": 1200
+    }
+  ]
+}

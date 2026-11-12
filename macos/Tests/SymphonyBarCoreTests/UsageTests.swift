@@ -39,10 +39,15 @@ final class UsageTests: XCTestCase {
         XCTAssertEqual(UsageProvider.allCases.map(\.name), ["Claude", "Codex", "OpenRouter", "Other"])
         XCTAssertEqual(UsageProvider("mystery"), .unknown)
 
-        let history = HistoryPayload(days: 1, tokensPerDay: [.init(date: "2026-10-07", totalTokens: 10, providers: ["openai": 10, "anthropic": 0])])
-        let usage = Usage(history: history, snapshot: nil)
-        XCTAssertEqual(usage.providers, [.openai])
-        XCTAssertEqual(usage.providers.first?.series, .series2)
+        let aggregate = AggregatePayload(series: ["tokens": .init(total: 15, buckets: [
+            .init(start: Date(timeIntervalSince1970: 0), value: 15, by: ["openai": 10, "anthropic": 0, "mystery": 3, "other": 2]),
+        ])])
+        let usage = Usage(aggregate: aggregate, slice: InsightsSlice(), snapshot: nil, today: "1970-01-01")
+        XCTAssertEqual(usage.chart.keys.map(\.key), ["openai", "unknown"])
+        XCTAssertEqual(usage.chart.keys.first?.tint, .series(.series2))
+        XCTAssertEqual(usage.chart.bars[0].values, ["openai": 10, "unknown": 5])
+        XCTAssertNil(usage.chart.reference, "no budget without a state")
+        XCTAssertEqual(usage.today, [])
     }
 
     func testChartSeriesAreTheDesignsValidatedPairs() {
@@ -50,58 +55,26 @@ final class UsageTests: XCTestCase {
         XCTAssertEqual(DesignTokens.ChartSeries.allCases.map(\.hex.dark), [0x3D86F5, 0xCC780A, 0xAE5ADF, 0x2A9FB4])
     }
 
-    func testUsageFromTheShippedFixtures() throws {
-        let usage = try self.usage()
+    func testUsageOverTheInsightsSlice() throws {
+        let usage = try insightsUsage()
+        XCTAssertEqual(usage.chart.bars.count, 7)
+        XCTAssertEqual(usage.chart.keys.map(\.key), ["anthropic", "openai"])
+        XCTAssertEqual(usage.chart.reference?.value, 5_000_000)
+        XCTAssertEqual(usage.today.last?.id, "cap")
+        XCTAssertEqual(usage.today.last?.value, "2M tokens")
 
-        XCTAssertEqual(usage.dates.count, 14)
-        XCTAssertEqual(usage.providers, [.anthropic, .openai])
-        XCTAssertEqual(usage.dailyBudget, 5_000_000)
-        let today = try XCTUnwrap(usage.dates.last)
-        XCTAssertEqual(usage.total(on: today), 4_100_000)
-        XCTAssertEqual(usage.hoverLine(on: today), "Oct 7: Claude 2.9M, Codex 1.2M; 4.1M in all")
-
-        XCTAssertEqual(usage.today.map(\.id), ["tokens", "cap"])
-        XCTAssertEqual(usage.today[0].value, "4.1M of 5M")
-        XCTAssertEqual(usage.today[1].value, "2M tokens")
-        XCTAssertEqual(usage.limits.count, 1)
-        XCTAssertEqual(usage.limits[0].value, "100% used")
-        XCTAssertEqual(usage.limits[0].note, "resets 15:40")
-
-        XCTAssertEqual(usage.heaviest.count, Usage.heaviestLimit)
+        XCTAssertEqual(usage.heaviest.map(\.identifier), ["TP-1459", "SHOP-322", "TP-1460", "TP-1458", "TP-1461"])
         let heaviest = usage.heaviest[0]
-        XCTAssertEqual(heaviest.identifier, "SHOP-305")
-        XCTAssertEqual(heaviest.value, "1.9M of 2M, 4 attempts")
-        XCTAssertEqual(heaviest.level, .near)
-        XCTAssertEqual(heaviest.fraction ?? 0, 0.925, accuracy: 0.0001)
-        XCTAssertEqual(usage.heaviest.map(\.identifier), ["SHOP-305", "API-131", "DOCS-40", "SHOP-298", "WEB-88"])
-        XCTAssertEqual(usage.heaviest[3].value, "610K of 2M, 1 attempt")
-    }
-
-    func testShowDataIsTheChartsSeriesAsATable() throws {
-        let table = try usage().dataTable
-        XCTAssertEqual(table.first, ["Day", "Claude", "Codex", "Total"])
-        XCTAssertEqual(table.count, 15)
-        XCTAssertEqual(table[2], ["Sep 25", "2600000", "0", "2600000"])
-        XCTAssertEqual(table.last, ["Oct 7", "2900000", "1200000", "4100000"])
-    }
-
-    func testChartSummaryNamesTheSeriesThePeakAndTheBudget() throws {
-        XCTAssertEqual(
-            try usage().chartSummary,
-            "Tokens per day for Claude and Codex over 14 days. The most was 4.2M on Oct 4. The daily budget is 5M tokens."
-        )
-        let empty = Usage(history: HistoryPayload(days: 1, tokensPerDay: [.init(date: "2026-10-07", totalTokens: 0, providers: [:])]), snapshot: nil)
-        XCTAssertEqual(empty.chartSummary, "No tokens used in the last 1 days.")
-        XCTAssertEqual(empty.hoverLine(on: empty.dates[0]), "Oct 7: no tokens")
-        XCTAssertEqual(empty.today, [])
-        XCTAssertEqual(empty.dataTable, [["Day", "Total"], ["Oct 7", "0"]])
+        XCTAssertEqual(heaviest.value, "4.1M of 2M")
+        XCTAssertEqual(heaviest.fraction, 1)
+        XCTAssertEqual(heaviest.level, .atLimit)
     }
 
     func testATicketWithoutACapHasNoMeter() {
-        let history = HistoryPayload(days: 1, tickets: [.init(issueID: "i", identifier: "A-1", totalTokens: 12_000, attempts: 2)])
-        let row = Usage(history: history, snapshot: nil).heaviest[0]
+        let aggregate = AggregatePayload(series: ["tokens": .init(total: 12_000, tickets: ["A-1": 12_000])])
+        let row = Usage(aggregate: aggregate, slice: InsightsSlice(), snapshot: nil, today: "2026-11-12").heaviest[0]
         XCTAssertNil(row.fraction)
-        XCTAssertEqual(row.value, "12K, 2 attempts")
+        XCTAssertEqual(row.value, "12K")
         XCTAssertEqual(row.level, .normal)
     }
 
@@ -117,8 +90,11 @@ final class UsageTests: XCTestCase {
         try XCTUnwrap(HistoryPayload.decode(fixture("history.json")))
     }
 
-    private func usage() throws -> Usage {
-        let state = try XCTUnwrap(OverviewState.decode(fixture("state.json")))
-        return Usage(history: try history(), snapshot: state.snapshot, now: wallClock, timeZone: utc)
+    private func insightsUsage() throws -> Usage {
+        let api = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/insights/api/v1")
+        let state = try XCTUnwrap(OverviewState.decode(Data(contentsOf: api.appendingPathComponent("state.json"))))
+        let aggregate = try XCTUnwrap(AggregatePayload.decode(Data(contentsOf: api.appendingPathComponent("aggregate.json"))))
+        return Usage(aggregate: aggregate, slice: InsightsSlice(), snapshot: state.snapshot, today: "2026-11-12", now: wallClock, timeZone: utc)
     }
 }

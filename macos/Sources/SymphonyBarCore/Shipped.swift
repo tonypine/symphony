@@ -53,6 +53,9 @@ public struct ShippedPayload: Equatable {
     /// The path that asks for `days` days.
     public static func path(days: Int) -> String { "\(path)?days=\(days)" }
 
+    /// The most days the read serves, as `/api/v1/history`'s.
+    public static let maxDays = 90
+
     /// The merged tickets in a payload, nil when it isn't one (an error, or not JSON).
     public static func decode(_ data: Data) -> ShippedPayload? {
         guard let payload = try? InboxPayload.decoder.decode(Payload.self, from: data), let days = payload.days, let to = payload.to
@@ -112,16 +115,6 @@ public struct Shipped: Equatable {
         }
     }
 
-    /// The period pop-up: 7, 30 or 90 days, as on Quality.
-    public typealias Period = Quality.Period
-
-    /// A day's bar of shipped per day.
-    public struct DayBar: Equatable, Identifiable {
-        public var id: Date { date }
-        public var date: Date
-        public var shipped: Int
-    }
-
     /// A merged ticket's row.
     public struct Row: Equatable, Identifiable {
         public var id: String { identifier }
@@ -137,106 +130,52 @@ public struct Shipped: Equatable {
         public var accessibilityLabel: String
     }
 
-    /// A day's merged tickets, newest day first.
+    /// A bucket's merged tickets, newest bucket first.
     public struct DayGroup: Equatable, Identifiable {
-        public var id: Date { date }
-        public var date: Date
-        /// "Today · 5", "Yesterday · 3", "Oct 9 · 2".
+        /// The bucket's bar.
+        public var id: String
+        /// "Today · 5", "Yesterday · 3", "Nov 9 · 2"; "Nov 9 06:00 · 2" for a unit other than a day.
         public var title: String
         public var rows: [Row]
     }
 
-    /// What the view says when nothing shipped, and its way out.
-    public struct Empty: Equatable {
-        public enum Action: Equatable {
-            case widen(Period)
-            case showAllRepos
-
-            public var title: String {
-                switch self {
-                case let .widen(period): "Show Last \(period.rawValue) Days"
-                case .showAllRepos: "Show All Repos"
-                }
-            }
-        }
-
-        public var title: String
-        public var action: Action?
-
-        public init(title: String, action: Action?) {
-            self.title = title
-            self.action = action
-        }
-    }
-
-    public static let chartTitle = "Shipped per day"
     public static let showDataTitle = Quality.showDataTitle
 
-    public var period: Period
+    /// Tickets merged per bucket, in one hue, with the count on the last bar.
+    public var chart: InsightsChart
+    /// The chart's caption: "Tickets merged per day".
+    public var caption: String
     /// "14 tickets shipped in the last 7 days."
     public var sentence: String
-    /// "5 today. Half took less than 1 day 4 h from Todo to Done."; empty when nothing shipped.
+    /// "Half took less than 1 day 4 h from Todo to Done."; empty when no lead time is known.
     public var context: String
-    public var bars: [DayBar]
     public var groups: [DayGroup]
-    public var total: Int
+    public var total: Int { chart.total }
     /// Nil while something shipped.
-    public var empty: Empty?
+    public var empty: InsightsEmpty?
 
-    /// The period ends on the payload's `to`, Symphony's today, so the days match the server's whatever the Mac's
-    /// clock says.
-    public init(payload: ShippedPayload, period: Period, scope: OverviewScope) {
-        self.period = period
-        let today = Usage.utcDate(payload.to) ?? Date()
-        let dates = (0..<period.rawValue).reversed().compactMap { Self.calendar.date(byAdding: .day, value: -$0, to: today) }
-        let from = dates.first.map(Quality.isoDay) ?? payload.to
-        let tickets = payload.tickets
-            .filter { $0.date >= from && $0.date <= payload.to && scope.includes($0.repoKey) }
-            .sorted { ($0.date, $0.mergedAt ?? .distantPast) > ($1.date, $1.mergedAt ?? .distantPast) }
-        total = tickets.count
-
-        let byDay = Dictionary(grouping: tickets, by: \.date)
-        bars = dates.map { DayBar(date: $0, shipped: byDay[Quality.isoDay($0)]?.count ?? 0) }
-        groups = dates.reversed().compactMap { date in
-            guard let tickets = byDay[Quality.isoDay(date)] else { return nil }
-            return DayGroup(date: date, title: "\(Self.dayTitle(date, today: today)) · \(tickets.count)", rows: tickets.map(Self.row))
+    /// Shipped over the Insights slice (TP-1463): the aggregation's `shipped` series counts and names the tickets; the
+    /// merged tickets `/api/v1/shipped` lists (`details`) give each its title, PR and time from Todo to Done.
+    public init(aggregate: AggregatePayload, slice: InsightsSlice, details: ShippedPayload?, today: String) {
+        let unit = aggregate.unit
+        chart = InsightsChart.build(
+            aggregate.shipped, unit: unit, title: "Shipped \(unit.per)", measure: "Tickets", format: .count, fallback: "shipped"
+        ) { _ in InsightsChart.Key(key: "shipped", name: "Shipped", tint: .series(.series1)) }
+        caption = "Tickets merged \(unit.per)"
+        let known = Dictionary((details?.tickets ?? []).map { ($0.identifier, $0) }, uniquingKeysWith: { first, _ in first })
+        let todayDate = Usage.utcDate(today) ?? Date()
+        groups = aggregate.shipped.buckets.reversed().compactMap { bucket in
+            guard !bucket.tickets.isEmpty else { return nil }
+            let label = unit == .day ? Self.dayTitle(bucket.start, today: todayDate) : Insights.bucketLabel(bucket.start, unit: unit)
+            let rows = bucket.tickets.map { identifier in
+                Self.row(known[identifier] ?? ShippedPayload.Ticket(issueID: identifier, identifier: identifier, date: today))
+            }
+            return DayGroup(id: Insights.iso(bucket.start), title: "\(label) · \(rows.count)", rows: rows)
         }
-
-        let todayCount = byDay[payload.to]?.count ?? 0
-        let leadTimes = tickets.compactMap(\.todoToDoneSeconds).sorted()
-        sentence = "\(Self.count(total)) shipped in the last \(period.rawValue) days."
-        var context: [String] = []
-        if total > 0 { context.append("\(todayCount) today.") }
-        if !leadTimes.isEmpty {
-            context.append("Half took less than \(Self.leadTime(Self.median(leadTimes))) from Todo to Done.")
-        }
-        self.context = context.joined(separator: " ")
-
-        if total > 0 {
-            empty = nil
-        } else {
-            let wider = Period.allCases.first { $0.rawValue > period.rawValue }
-            let action: Empty.Action? = wider.map(Empty.Action.widen) ?? (scope == .all ? nil : .showAllRepos)
-            empty = Empty(title: "Nothing shipped in the last \(period.rawValue) days.", action: action)
-        }
-    }
-
-    /// The hover line of a day's bar: "Oct 13: 5 tickets".
-    public func hoverLine(on date: Date) -> String {
-        "\(Usage.dayLabel(date)): \(Self.count(bars.first { $0.date == date }?.shipped ?? 0))"
-    }
-
-    /// Show Data's table: one row per day.
-    public var dataTable: [[String]] {
-        [["Day", "Shipped"]] + bars.map { [Usage.dayLabel($0.date), String($0.shipped)] }
-    }
-
-    /// The chart's accessibility summary, for its `AXChartDescriptor`.
-    public var chartSummary: String {
-        guard let peak = bars.max(by: { $0.shipped < $1.shipped }), peak.shipped > 0 else {
-            return "Nothing shipped in the last \(bars.count) days."
-        }
-        return "\(Self.count(total)) shipped over \(bars.count) days. The most was \(peak.shipped) on \(Usage.dayLabel(peak.date))."
+        sentence = "\(Self.count(chart.total)) shipped \(slice.period.phrase)."
+        let leadTimes = groups.flatMap(\.rows).compactMap { known[$0.identifier]?.todoToDoneSeconds }.sorted()
+        context = leadTimes.isEmpty ? "" : "Half took less than \(Self.leadTime(Self.median(leadTimes))) from Todo to Done."
+        empty = chart.total > 0 ? nil : slice.empty("Nothing shipped", today: today)
     }
 
     /// "1 ticket", "14 tickets".

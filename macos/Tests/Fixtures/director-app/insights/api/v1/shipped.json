@@ -1,0 +1,184 @@
+{
+  "days": 8,
+  "to": "2026-11-12",
+  "tickets": [
+    {
+      "issue_id": "i-SHOP-323",
+      "identifier": "SHOP-323",
+      "title": "Address autocomplete",
+      "repo_key": "web-shop",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/web-shop/pull/933",
+      "merged_at": "2026-11-12T02:00:00Z",
+      "date": "2026-11-12",
+      "todo_to_done_seconds": 9000
+    },
+    {
+      "issue_id": "i-TP-1462",
+      "identifier": "TP-1462",
+      "title": "Reports in the Journal",
+      "repo_key": "symphony",
+      "initiative": {
+        "identifier": "TP-1381",
+        "title": "Phase 3b"
+      },
+      "pr_url": "https://github.com/tonypine/symphony/pull/892",
+      "merged_at": "2026-11-12T01:00:00Z",
+      "date": "2026-11-12",
+      "todo_to_done_seconds": 33000
+    },
+    {
+      "issue_id": "i-API-141",
+      "identifier": "API-141",
+      "title": "Webhooks retry with backoff",
+      "repo_key": "api",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/api/pull/515",
+      "merged_at": "2026-11-11T22:00:00Z",
+      "date": "2026-11-11",
+      "todo_to_done_seconds": 18000
+    },
+    {
+      "issue_id": "i-TP-1461",
+      "identifier": "TP-1461",
+      "title": "The report schedule",
+      "repo_key": "symphony",
+      "initiative": {
+        "identifier": "TP-1381",
+        "title": "Phase 3b"
+      },
+      "pr_url": "https://github.com/tonypine/symphony/pull/891",
+      "merged_at": "2026-11-11T13:00:00Z",
+      "date": "2026-11-11",
+      "todo_to_done_seconds": 25200
+    },
+    {
+      "issue_id": "i-TP-1460",
+      "identifier": "TP-1460",
+      "title": "The report run",
+      "repo_key": "symphony",
+      "initiative": {
+        "identifier": "TP-1381",
+        "title": "Phase 3b"
+      },
+      "pr_url": "https://github.com/tonypine/symphony/pull/890",
+      "merged_at": "2026-11-11T07:00:00Z",
+      "date": "2026-11-11",
+      "todo_to_done_seconds": 28800
+    },
+    {
+      "issue_id": "i-SHOP-322",
+      "identifier": "SHOP-322",
+      "title": "Coupon stacking rules",
+      "repo_key": "web-shop",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/web-shop/pull/930",
+      "merged_at": "2026-11-10T19:00:00Z",
+      "date": "2026-11-10",
+      "todo_to_done_seconds": 21600
+    },
+    {
+      "issue_id": "i-TP-1459",
+      "identifier": "TP-1459",
+      "title": "The Journal page",
+      "repo_key": "symphony",
+      "initiative": {
+        "identifier": "TP-1381",
+        "title": "Phase 3b"
+      },
+      "pr_url": "https://github.com/tonypine/symphony/pull/889",
+      "merged_at": "2026-11-10T10:00:00Z",
+      "date": "2026-11-10",
+      "todo_to_done_seconds": 36000
+    },
+    {
+      "issue_id": "i-TP-1458",
+      "identifier": "TP-1458",
+      "title": "Initiatives as the epic's story",
+      "repo_key": "symphony",
+      "initiative": {
+        "identifier": "TP-1381",
+        "title": "Phase 3b"
+      },
+      "pr_url": "https://github.com/tonypine/symphony/pull/888",
+      "merged_at": "2026-11-09T16:00:00Z",
+      "date": "2026-11-09",
+      "todo_to_done_seconds": 64800
+    },
+    {
+      "issue_id": "i-SHOP-321",
+      "identifier": "SHOP-321",
+      "title": "Gift card refunds",
+      "repo_key": "web-shop",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/web-shop/pull/925",
+      "merged_at": "2026-11-08T14:00:00Z",
+      "date": "2026-11-08",
+      "todo_to_done_seconds": 7200
+    },
+    {
+      "issue_id": "i-TP-1457",
+      "identifier": "TP-1457",
+      "title": "Saved views on the server",
+      "repo_key": "symphony",
+      "initiative": {
+        "identifier": "TP-1381",
+        "title": "Phase 3b"
+      },
+      "pr_url": "https://github.com/tonypine/symphony/pull/886",
+      "merged_at": "2026-11-08T08:00:00Z",
+      "date": "2026-11-08",
+      "todo_to_done_seconds": 52200
+    },
+    {
+      "issue_id": "i-API-140",
+      "identifier": "API-140",
+      "title": "Rate limit headers on every answer",
+      "repo_key": "api",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/api/pull/512",
+      "merged_at": "2026-11-07T20:00:00Z",
+      "date": "2026-11-07",
+      "todo_to_done_seconds": 12600
+    },
+    {
+      "issue_id": "i-TP-1456",
+      "identifier": "TP-1456",
+      "title": "Tickets as the table with filters",
+      "repo_key": "symphony",
+      "initiative": {
+        "identifier": "TP-1381",
+        "title": "Phase 3b"
+      },
+      "pr_url": "https://github.com/tonypine/symphony/pull/885",
+      "merged_at": "2026-11-07T11:00:00Z",
+      "date": "2026-11-07",
+      "todo_to_done_seconds": 41400
+    },
+    {
+      "issue_id": "i-SHOP-320",
+      "identifier": "SHOP-320",
+      "title": "Saved carts across devices",
+      "repo_key": "web-shop",
+      "initiative": null,
+      "pr_url": "https://github.com/acme/web-shop/pull/921",
+      "merged_at": "2026-11-06T15:00:00Z",
+      "date": "2026-11-06",
+      "todo_to_done_seconds": 93600
+    },
+    {
+      "issue_id": "i-TP-1455",
+      "identifier": "TP-1455",
+      "title": "Five destinations in the sidebar",
+      "repo_key": "symphony",
+      "initiative": {
+        "identifier": "TP-1381",
+        "title": "Phase 3b"
+      },
+      "pr_url": "https://github.com/tonypine/symphony/pull/879",
+      "merged_at": "2026-11-06T09:00:00Z",
+      "date": "2026-11-06",
+      "todo_to_done_seconds": 30600
+    }
+  ]
+}

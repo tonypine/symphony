@@ -14,17 +14,17 @@ extension SymphonyWindowModel {
         readShippedIfDue()
     }
 
-    /// Reads Shipped's merged tickets for its period and every learning while Shipped shows. Symphony answers both
-    /// from its own records, with no Linear request.
+    /// Reads the merged tickets of the Insights slice's days, for their titles and PRs, and every learning while
+    /// Shipped shows. Symphony answers both from its own records, with no Linear request.
     func readShippedIfDue() {
         guard selection == .shipped, !showsPage, !readingShipped, state.countsKnown,
             shippedReadAt.map({ Date().timeIntervalSince($0) >= Self.historyInterval }) ?? true
         else { return }
         readingShipped = true
-        let period = shippedPeriod
+        let days = insightsSlice.daysBack(today: insightsToday)
         Task {
-            let result = await client.get(ShippedPayload.path(days: period.rawValue))
-            if period == shippedPeriod {
+            let result = await client.get(ShippedPayload.path(days: days))
+            if days == insightsSlice.daysBack(today: insightsToday) {
                 if case let .loaded(data) = result, let payload = ShippedPayload.decode(data) {
                     shipped = payload
                     shippedResult = nil
@@ -39,17 +39,9 @@ extension SymphonyWindowModel {
             } else {
                 self.learningsResult = learningsResult
             }
-            shippedReadAt = period == shippedPeriod ? Date() : nil
+            shippedReadAt = days == insightsSlice.daysBack(today: insightsToday) ? Date() : nil
             readingShipped = false
             if shippedReadAt == nil { readShippedIfDue() }
-        }
-    }
-
-    /// The way out of Shipped's empty state.
-    func perform(_ action: Shipped.Empty.Action) {
-        switch action {
-        case let .widen(period): shippedPeriod = period
-        case .showAllRepos: scope = .all
         }
     }
 
@@ -89,19 +81,14 @@ struct ShippedContent: View {
         }
     }
 
-    @ViewBuilder private var shippedTab: some View {
-        if let payload = model.shipped {
+    private var shippedTab: some View {
+        InsightsPage(model: model, symbol: SymphonyView.shipped.symbol) { aggregate in
             ShippedView(
-                shipped: Shipped(payload: payload, period: model.shippedPeriod, scope: model.scope),
-                period: $model.shippedPeriod,
+                shipped: Shipped(aggregate: aggregate, slice: model.insightsSlice, details: model.shipped, today: model.insightsToday),
                 openTicket: model.openTicket,
                 openURL: model.onOpenURL,
-                perform: model.perform
+                widen: { model.insightsSlice.choose($0, today: model.insightsToday) }
             )
-        } else if model.shippedResult == .unsupported {
-            EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
-        } else {
-            EmptyState(title: "Reading what shipped…", symbol: SymphonyView.shipped.symbol, showsSpinner: true)
         }
     }
 
@@ -124,55 +111,29 @@ struct ShippedContent: View {
 
 struct ShippedView: View {
     let shipped: Shipped
-    @Binding var period: Shipped.Period
     var openTicket: (String) -> Void = { _ in }
     var openURL: (URL) -> Void = { _ in }
-    var perform: (Shipped.Empty.Action) -> Void = { _ in }
+    var widen: (InsightsPeriod) -> Void = { _ in }
 
     var body: some View {
         if let empty = shipped.empty {
-            VStack(spacing: 0) {
-                PeriodBar(period: $period).padding([.horizontal, .top], DesignTokens.Space.s6)
-                EmptyState(
-                    title: empty.title,
-                    symbol: SymphonyView.shipped.symbol,
-                    actions: empty.action.map { action in [(action.title, { perform(action) })] } ?? []
-                )
-            }
+            InsightsEmptyState(empty: empty, symbol: SymphonyView.shipped.symbol, widen: widen)
         } else {
             ScrollView {
-                ShippedCards(shipped: shipped, period: $period, openTicket: openTicket, openURL: openURL)
+                ShippedCards(shipped: shipped, openTicket: openTicket, openURL: openURL)
             }
         }
     }
 }
 
-/// The period pop-up.
-private struct PeriodBar: View {
-    @Binding var period: Shipped.Period
-
-    var body: some View {
-        HStack {
-            Picker("Period", selection: $period) {
-                ForEach(Shipped.Period.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.menu)
-            .fixedSize()
-            Spacer()
-        }
-    }
-}
-
-/// Shipped's sentence, chart and days, outside the scroll view so they also render offscreen.
+/// Shipped's sentence, chart and buckets, outside the scroll view so they also render offscreen.
 struct ShippedCards: View {
     let shipped: Shipped
-    @Binding var period: Shipped.Period
     var openTicket: (String) -> Void = { _ in }
     var openURL: (URL) -> Void = { _ in }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-            PeriodBar(period: $period)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                 Text(shipped.sentence)
                     .font(DesignTokens.TypeStyle.sentence.font)
@@ -183,8 +144,8 @@ struct ShippedCards: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Card(title: Shipped.chartTitle) {
-                ShippedChart(shipped: shipped)
+            Card(title: shipped.chart.title) {
+                InsightsBarChart(chart: shipped.chart, caption: shipped.caption, height: 180)
             }
             ForEach(shipped.groups) { group in
                 Card(title: group.title) {
@@ -251,124 +212,6 @@ private struct LinkButton: View {
             Text(title).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(Color.accentColor)
         }
         .buttonStyle(.plain)
-    }
-}
-
-/// C12: shipped per day in one hue, with the count on the last bar; hover values, Show Data and a chart
-/// description.
-private struct ShippedChart: View {
-    let shipped: Shipped
-    @State private var hovered: Date?
-    @State private var showsData = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            HStack {
-                Text("Tickets merged each day")
-                    .font(DesignTokens.TypeStyle.caption.font)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button(Shipped.showDataTitle) { showsData = true }
-            }
-            Chart {
-                ForEach(shipped.bars) { bar in
-                    BarMark(
-                        x: .value("Day", Self.plotted(bar.date), unit: .day),
-                        y: .value("Shipped", bar.shipped),
-                        width: .fixed(min(24, 600 / Double(max(shipped.bars.count, 1))))
-                    )
-                    .foregroundStyle(DesignTokens.ChartSeries.series1.color)
-                    .clipShape(UnevenRoundedRectangle(topLeadingRadius: DesignTokens.Radius.mark, topTrailingRadius: DesignTokens.Radius.mark))
-                    .annotation(position: .top) {
-                        if bar.id == shipped.bars.last?.id, bar.shipped > 0 {
-                            Text("\(bar.shipped)")
-                                .font(DesignTokens.TypeStyle.caption.font)
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                if let hovered {
-                    RuleMark(x: .value("Day", Self.plotted(hovered), unit: .day))
-                        .foregroundStyle(DesignTokens.Surface.separator.color)
-                        .annotation(position: .top, overflowResolution: .init(x: .fit, y: .disabled)) {
-                            Text(shipped.hoverLine(on: hovered))
-                                .font(DesignTokens.TypeStyle.caption.font)
-                                .padding(DesignTokens.Space.s1)
-                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.mark))
-                        }
-                }
-            }
-            .chartXAxis {
-                AxisMarks(values: labelled.map { Self.plotted($0.date) }) { value in
-                    AxisValueLabel(centered: true) {
-                        if let date = value.as(Date.self) { Text(Usage.dayLabel(Self.day(of: date))) }
-                    }
-                }
-            }
-            .chartYAxis {
-                AxisMarks { _ in
-                    AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
-                    AxisValueLabel()
-                }
-            }
-            .chartOverlay { proxy in
-                Rectangle().fill(.clear).contentShape(Rectangle())
-                    .onContinuousHover { phase in
-                        switch phase {
-                        case let .active(location):
-                            hovered = proxy.value(atX: location.x, as: Date.self).flatMap { date in
-                                shipped.bars.last { Self.plotted($0.date) <= date }?.date
-                            }
-                        case .ended:
-                            hovered = nil
-                        }
-                    }
-            }
-            .frame(height: 180)
-            .accessibilityChartDescriptor(ShippedChartDescriptor(shipped: shipped))
-        }
-        .sheet(isPresented: $showsData) {
-            DataTable(title: Shipped.chartTitle, rows: shipped.dataTable) { showsData = false }
-        }
-    }
-
-    /// About seven labelled days, whatever the period.
-    private var labelled: [Shipped.DayBar] {
-        let step = max(shipped.bars.count / 7, 1)
-        return shipped.bars.enumerated().filter { $0.offset % step == 0 }.map(\.element)
-    }
-
-    /// The bars' days are UTC midnights; Swift Charts bins by the Mac's own days, so each is plotted at the local
-    /// midnight of the same calendar day.
-    static func plotted(_ day: Date) -> Date {
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = TimeZone(identifier: "UTC")!
-        return Calendar.current.date(from: utc.dateComponents([.year, .month, .day], from: day)) ?? day
-    }
-
-    /// The UTC midnight of the local day `date` falls on: the inverse of `plotted`.
-    static func day(of date: Date) -> Date {
-        var utc = Calendar(identifier: .gregorian)
-        utc.timeZone = TimeZone(identifier: "UTC")!
-        return utc.date(from: Calendar.current.dateComponents([.year, .month, .day], from: date)) ?? date
-    }
-}
-
-private struct ShippedChartDescriptor: AXChartDescriptorRepresentable {
-    let shipped: Shipped
-
-    func makeChartDescriptor() -> AXChartDescriptor {
-        let labels = shipped.bars.map { Usage.dayLabel($0.date) }
-        let peak = shipped.bars.map(\.shipped).max() ?? 0
-        let xAxis = AXCategoricalDataAxisDescriptor(title: "Day", categoryOrder: labels)
-        let yAxis = AXNumericDataAxisDescriptor(title: "Tickets", range: 0...Double(max(peak, 1)), gridlinePositions: []) { "\(Int($0))" }
-        let series = AXDataSeriesDescriptor(
-            name: Shipped.chartTitle, isContinuous: false,
-            dataPoints: shipped.bars.map { AXDataPoint(x: Usage.dayLabel($0.date), y: Double($0.shipped)) }
-        )
-        return AXChartDescriptor(
-            title: Shipped.chartTitle, summary: shipped.chartSummary, xAxis: xAxis, yAxis: yAxis, additionalAxes: [], series: [series]
-        )
     }
 }
 

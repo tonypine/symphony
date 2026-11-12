@@ -141,6 +141,8 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             model.onOpenRepos = { [weak self] key in self?.openRepos(key) }
             model.scope = OverviewScope.load(from: AppStores.current.defaults)
             model.onScopeChange = { scope in scope.save(to: AppStores.current.defaults) }
+            model.insightsSlice = InsightsSlice.load(from: AppStores.current.defaults)
+            model.onInsightsSliceChange = { slice in slice.save(to: AppStores.current.defaults) }
             model.onControl = { [weak self] action in
                 guard let self else { return .done }
                 let result = await AppStores.current.sendControl(action, stateRoot: stateRoot())

@@ -1,0 +1,361 @@
+{
+  "generated_at": "2026-11-12T03:30:00Z",
+  "from": "2026-11-06T00:00:00Z",
+  "to": "2026-11-13T00:00:00Z",
+  "unit": "day",
+  "repo": null,
+  "epic": null,
+  "series": {
+    "tokens": {
+      "total": 31100000,
+      "by": {
+        "anthropic": 25800000,
+        "openai": 5300000
+      },
+      "tickets": {
+        "TP-1459": 4100000,
+        "TP-1460": 3300000,
+        "TP-1458": 2900000,
+        "TP-1461": 2400000,
+        "TP-1457": 1900000,
+        "SHOP-322": 3800000,
+        "API-141": 1200000
+      },
+      "buckets": [
+        {
+          "start": "2026-11-06T00:00:00Z",
+          "end": "2026-11-07T00:00:00Z",
+          "value": 4000000,
+          "by": {
+            "anthropic": 3100000,
+            "openai": 900000
+          }
+        },
+        {
+          "start": "2026-11-07T00:00:00Z",
+          "end": "2026-11-08T00:00:00Z",
+          "value": 5300000,
+          "by": {
+            "anthropic": 4200000,
+            "openai": 1100000
+          }
+        },
+        {
+          "start": "2026-11-08T00:00:00Z",
+          "end": "2026-11-09T00:00:00Z",
+          "value": 3000000,
+          "by": {
+            "anthropic": 2600000,
+            "openai": 400000
+          }
+        },
+        {
+          "start": "2026-11-09T00:00:00Z",
+          "end": "2026-11-10T00:00:00Z",
+          "value": 3900000,
+          "by": {
+            "anthropic": 3900000
+          }
+        },
+        {
+          "start": "2026-11-10T00:00:00Z",
+          "end": "2026-11-11T00:00:00Z",
+          "value": 6500000,
+          "by": {
+            "anthropic": 5200000,
+            "openai": 1300000
+          }
+        },
+        {
+          "start": "2026-11-11T00:00:00Z",
+          "end": "2026-11-12T00:00:00Z",
+          "value": 5300000,
+          "by": {
+            "anthropic": 4400000,
+            "openai": 900000
+          }
+        },
+        {
+          "start": "2026-11-12T00:00:00Z",
+          "end": "2026-11-13T00:00:00Z",
+          "value": 3100000,
+          "by": {
+            "anthropic": 2400000,
+            "openai": 700000
+          }
+        }
+      ]
+    },
+    "runs": {
+      "total": 50,
+      "by": {
+        "success": 42,
+        "failure": 5,
+        "timeout": 2,
+        "stopped": 1
+      },
+      "tickets": {"SHOP-321": 8, "TP-1458": 6, "TP-1457": 6, "TP-1459": 5, "API-140": 5, "SHOP-322": 4, "TP-1456": 4, "SHOP-320": 4, "API-141": 2, "TP-1461": 2, "TP-1460": 2, "TP-1455": 2},
+      "buckets": [
+        {
+          "start": "2026-11-06T00:00:00Z",
+          "end": "2026-11-07T00:00:00Z",
+          "value": 7,
+          "by": {
+            "success": 6,
+            "failure": 1
+          }
+        },
+        {
+          "start": "2026-11-07T00:00:00Z",
+          "end": "2026-11-08T00:00:00Z",
+          "value": 10,
+          "by": {
+            "success": 7,
+            "failure": 2,
+            "timeout": 1
+          }
+        },
+        {
+          "start": "2026-11-08T00:00:00Z",
+          "end": "2026-11-09T00:00:00Z",
+          "value": 5,
+          "by": {
+            "success": 5
+          }
+        },
+        {
+          "start": "2026-11-09T00:00:00Z",
+          "end": "2026-11-10T00:00:00Z",
+          "value": 7,
+          "by": {
+            "success": 6,
+            "stopped": 1
+          }
+        },
+        {
+          "start": "2026-11-10T00:00:00Z",
+          "end": "2026-11-11T00:00:00Z",
+          "value": 9,
+          "by": {
+            "success": 8,
+            "failure": 1
+          }
+        },
+        {
+          "start": "2026-11-11T00:00:00Z",
+          "end": "2026-11-12T00:00:00Z",
+          "value": 9,
+          "by": {
+            "success": 7,
+            "failure": 1,
+            "timeout": 1
+          }
+        },
+        {
+          "start": "2026-11-12T00:00:00Z",
+          "end": "2026-11-13T00:00:00Z",
+          "value": 3,
+          "by": {
+            "success": 3
+          }
+        }
+      ]
+    },
+    "verdicts": {
+      "total": 38,
+      "by": {
+        "code_review:approve": 19,
+        "qa:pass": 14,
+        "code_review:request_changes": 2,
+        "qa:fail": 3
+      },
+      "tickets": {"TP-1458": 5, "TP-1457": 4, "TP-1459": 4, "TP-1456": 3, "TP-1461": 2, "TP-1460": 2, "TP-1455": 1, "SHOP-321": 5, "SHOP-322": 3, "SHOP-320": 3, "SHOP-298": 2, "API-140": 2, "API-141": 2},
+      "buckets": [
+        {
+          "start": "2026-11-06T00:00:00Z",
+          "end": "2026-11-07T00:00:00Z",
+          "value": 5,
+          "by": {
+            "code_review:approve": 3,
+            "qa:pass": 2
+          }
+        },
+        {
+          "start": "2026-11-07T00:00:00Z",
+          "end": "2026-11-08T00:00:00Z",
+          "value": 7,
+          "by": {
+            "code_review:approve": 3,
+            "code_review:request_changes": 1,
+            "qa:pass": 2,
+            "qa:fail": 1
+          }
+        },
+        {
+          "start": "2026-11-08T00:00:00Z",
+          "end": "2026-11-09T00:00:00Z",
+          "value": 4,
+          "by": {
+            "code_review:approve": 2,
+            "qa:pass": 2
+          }
+        },
+        {
+          "start": "2026-11-09T00:00:00Z",
+          "end": "2026-11-10T00:00:00Z",
+          "value": 4,
+          "by": {
+            "code_review:approve": 2,
+            "qa:pass": 1,
+            "qa:fail": 1
+          }
+        },
+        {
+          "start": "2026-11-10T00:00:00Z",
+          "end": "2026-11-11T00:00:00Z",
+          "value": 7,
+          "by": {
+            "code_review:approve": 3,
+            "code_review:request_changes": 1,
+            "qa:pass": 3
+          }
+        },
+        {
+          "start": "2026-11-11T00:00:00Z",
+          "end": "2026-11-12T00:00:00Z",
+          "value": 8,
+          "by": {
+            "code_review:approve": 4,
+            "qa:pass": 3,
+            "qa:fail": 1
+          }
+        },
+        {
+          "start": "2026-11-12T00:00:00Z",
+          "end": "2026-11-13T00:00:00Z",
+          "value": 3,
+          "by": {
+            "code_review:approve": 2,
+            "qa:pass": 1
+          }
+        }
+      ]
+    },
+    "shipped": {
+      "total": 14,
+      "by": {
+        "symphony": 8,
+        "web-shop": 4,
+        "api": 2
+      },
+      "tickets": {
+        "TP-1455": 1,
+        "SHOP-320": 1,
+        "TP-1456": 1,
+        "API-140": 1,
+        "TP-1457": 1,
+        "SHOP-321": 1,
+        "TP-1458": 1,
+        "TP-1459": 1,
+        "SHOP-322": 1,
+        "TP-1460": 1,
+        "TP-1461": 1,
+        "API-141": 1,
+        "TP-1462": 1,
+        "SHOP-323": 1
+      },
+      "buckets": [
+        {
+          "start": "2026-11-06T00:00:00Z",
+          "end": "2026-11-07T00:00:00Z",
+          "value": 2,
+          "by": {
+            "symphony": 1,
+            "web-shop": 1
+          },
+          "tickets": [
+            "TP-1455",
+            "SHOP-320"
+          ]
+        },
+        {
+          "start": "2026-11-07T00:00:00Z",
+          "end": "2026-11-08T00:00:00Z",
+          "value": 2,
+          "by": {
+            "symphony": 1,
+            "api": 1
+          },
+          "tickets": [
+            "TP-1456",
+            "API-140"
+          ]
+        },
+        {
+          "start": "2026-11-08T00:00:00Z",
+          "end": "2026-11-09T00:00:00Z",
+          "value": 2,
+          "by": {
+            "symphony": 1,
+            "web-shop": 1
+          },
+          "tickets": [
+            "TP-1457",
+            "SHOP-321"
+          ]
+        },
+        {
+          "start": "2026-11-09T00:00:00Z",
+          "end": "2026-11-10T00:00:00Z",
+          "value": 1,
+          "by": {
+            "symphony": 1
+          },
+          "tickets": [
+            "TP-1458"
+          ]
+        },
+        {
+          "start": "2026-11-10T00:00:00Z",
+          "end": "2026-11-11T00:00:00Z",
+          "value": 2,
+          "by": {
+            "symphony": 1,
+            "web-shop": 1
+          },
+          "tickets": [
+            "TP-1459",
+            "SHOP-322"
+          ]
+        },
+        {
+          "start": "2026-11-11T00:00:00Z",
+          "end": "2026-11-12T00:00:00Z",
+          "value": 3,
+          "by": {
+            "symphony": 2,
+            "api": 1
+          },
+          "tickets": [
+            "TP-1460",
+            "TP-1461",
+            "API-141"
+          ]
+        },
+        {
+          "start": "2026-11-12T00:00:00Z",
+          "end": "2026-11-13T00:00:00Z",
+          "value": 2,
+          "by": {
+            "symphony": 1,
+            "web-shop": 1
+          },
+          "tickets": [
+            "TP-1462",
+            "SHOP-323"
+          ]
+        }
+      ]
+    }
+  }
+}

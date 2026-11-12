@@ -1,0 +1,125 @@
+{
+  "filters": {
+    "repo": null,
+    "tag": null,
+    "q": null
+  },
+  "repos": [
+    "api",
+    "web-shop"
+  ],
+  "tags": [
+    "conventions",
+    "docs",
+    "domain",
+    "gift-cards",
+    "rate-limits",
+    "testing",
+    "time",
+    "ui"
+  ],
+  "records": [
+    {
+      "id": "l-1",
+      "repo_key": "web-shop",
+      "repo": "github.com/acme/web-shop",
+      "rule": "Gift card balances come from the ledger. Never compute them in the cart; read them through GiftCards.balance/1.",
+      "tags": [
+        "gift-cards",
+        "domain"
+      ],
+      "evidence_quote": "Please don't sum transactions in the view, the ledger already has the balance.",
+      "issue_identifier": "SHOP-288",
+      "issue_url": "https://linear.app/acme/issue/SHOP-288",
+      "pr_number": 912,
+      "pr_url": "https://github.com/acme/web-shop/pull/912",
+      "run_id": "run-l-1",
+      "created_at": "2026-10-07T13:42:00Z"
+    },
+    {
+      "id": "l-2",
+      "repo_key": "api",
+      "repo": "github.com/acme/api",
+      "rule": "Idempotency keys expire after 24 hours; tests that replay a request must freeze the clock.",
+      "tags": [
+        "testing",
+        "time"
+      ],
+      "evidence_quote": "The replay test fails after midnight because the key expired.",
+      "issue_identifier": "API-125",
+      "issue_url": "https://linear.app/acme/issue/API-125",
+      "pr_number": 341,
+      "pr_url": "https://github.com/acme/api/pull/341",
+      "run_id": "run-l-2",
+      "created_at": "2026-10-07T12:05:00Z"
+    },
+    {
+      "id": "l-4",
+      "repo_key": "api",
+      "repo": "github.com/acme/api",
+      "rule": "Rate limit counters live in Redis; reset them in setup or tests leak limits into each other.",
+      "tags": [
+        "testing",
+        "rate-limits"
+      ],
+      "evidence_quote": "Flaky 429s in the suite came from a counter left by the previous test.",
+      "issue_identifier": "API-124",
+      "issue_url": "https://linear.app/acme/issue/API-124",
+      "pr_number": 339,
+      "pr_url": "https://github.com/acme/api/pull/339",
+      "run_id": "run-l-4",
+      "created_at": "2026-10-06T16:33:00Z"
+    },
+    {
+      "id": "l-3",
+      "repo_key": "web-shop",
+      "repo": "github.com/acme/web-shop",
+      "rule": "Checkout tests read the system clock for the tax date. Freeze the clock before asserting totals.",
+      "tags": [
+        "testing",
+        "time"
+      ],
+      "evidence_quote": "Totals were off by one cent around midnight.",
+      "issue_identifier": "SHOP-286",
+      "issue_url": "https://linear.app/acme/issue/SHOP-286",
+      "pr_number": 905,
+      "pr_url": "https://github.com/acme/web-shop/pull/905",
+      "run_id": "run-l-3",
+      "created_at": "2026-10-06T11:08:00Z"
+    },
+    {
+      "id": "l-5",
+      "repo_key": "web-shop",
+      "repo": "github.com/acme/web-shop",
+      "rule": "Admin pages use the shared table component; don't hand-roll tables.",
+      "tags": [
+        "ui",
+        "conventions"
+      ],
+      "evidence_quote": "Reviewer: we have a table component for this.",
+      "issue_identifier": "SHOP-284",
+      "issue_url": "https://linear.app/acme/issue/SHOP-284",
+      "pr_number": 901,
+      "pr_url": "https://github.com/acme/web-shop/pull/901",
+      "run_id": "run-l-5",
+      "created_at": "2026-10-04T17:25:00Z"
+    },
+    {
+      "id": "l-6",
+      "repo_key": "api",
+      "repo": "github.com/acme/api",
+      "rule": "Document every new response header in docs/headers.md in the same PR.",
+      "tags": [
+        "docs",
+        "conventions"
+      ],
+      "evidence_quote": "Docs for the limit headers were missing from the PR.",
+      "issue_identifier": "API-122",
+      "issue_url": "https://linear.app/acme/issue/API-122",
+      "pr_number": 333,
+      "pr_url": "https://github.com/acme/api/pull/333",
+      "run_id": "run-l-6",
+      "created_at": "2026-10-04T09:35:00Z"
+    }
+  ]
+}

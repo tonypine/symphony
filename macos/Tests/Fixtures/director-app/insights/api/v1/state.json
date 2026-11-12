@@ -1,0 +1,849 @@
+{
+  "auto_merge": [],
+  "awaiting_clarification": [],
+  "blocked": [],
+  "budget": {
+    "daily_limit": 5000000,
+    "daily_paused": false,
+    "daily_remaining": 1900000,
+    "daily_used": 3100000,
+    "per_issue_limit": 2000000
+  },
+  "build": {
+    "sha": "9f54098c3a1e5b7d2f4c6a8e0b1d3f5a7c9e1b3d",
+    "version": "0.0.1.412"
+  },
+  "codex_totals": {
+    "cache_creation_input_tokens": 6568666,
+    "cached_input_tokens": 149857148,
+    "input_tokens": 156430436,
+    "output_tokens": 629302,
+    "seconds_running": 23413,
+    "total_tokens": 156465114,
+    "uncached_input_tokens": 4622
+  },
+  "concurrency": {
+    "finishing_max": 2,
+    "forced_max": 1,
+    "max_total": 10
+  },
+  "conflicts": [],
+  "counts": {
+    "claimed": 1,
+    "conflicts": 0,
+    "forced": 0,
+    "retrying": 0,
+    "running": 1,
+    "shipped_today": 0,
+    "waiting_on_you": 0,
+    "watching": 0
+  },
+  "dispatch_skipped": [],
+  "dispatch_state": {
+    "active?": true,
+    "blockers": []
+  },
+  "epic_lanes": {
+    "lanes": [
+      {
+        "id": "p-1381",
+        "identifier": "TP-1381",
+        "status": "running",
+        "sub_issue": {
+          "identifier": "TP-1441",
+          "issue_id": "i-TP-1441",
+          "state": "In Progress",
+          "via": "blocked_by"
+        },
+        "title": "Phase 3b: the Director redesigned around a ticket's situation"
+      },
+      {
+        "id": "p-300",
+        "identifier": "BIL-300",
+        "status": "waiting",
+        "sub_issue": {
+          "identifier": "BIL-304",
+          "issue_id": "i-304",
+          "state": "Todo",
+          "via": "dispatch"
+        },
+        "title": "Annual plans"
+      }
+    ],
+    "max_total": 10,
+    "queued_epics": [],
+    "shared": {
+      "slots": 8,
+      "used": 2
+    }
+  },
+  "finishing": {
+    "running": [
+      {
+        "identifier": "SHOP-298",
+        "issue_id": "i-298",
+        "state": "Merging"
+      }
+    ],
+    "slots": 2,
+    "used": 1
+  },
+  "forced": [],
+  "generated_at": "2026-11-12T03:30:00Z",
+  "linear_usage": {
+    "callers": [
+      {
+        "caller": "poll",
+        "requests": 720
+      },
+      {
+        "caller": "reconcile",
+        "requests": 402
+      },
+      {
+        "caller": "agent_tool",
+        "requests": 151
+      },
+      {
+        "caller": "qa",
+        "requests": 11
+      }
+    ],
+    "queries": [
+      {
+        "query": "CandidateIssues",
+        "requests": 720
+      }
+    ],
+    "total": 1284,
+    "window_ms": 3600000
+  },
+  "orchestrator": {
+    "message_queue_len": 0,
+    "snapshot_age_ms": 420,
+    "snapshot_build_ms": 12,
+    "snapshot_parts_ms": {}
+  },
+  "pause": {
+    "paused": false,
+    "paused_at": null,
+    "reason": null
+  },
+  "pollers": {
+    "ci": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": {
+        "enabled": true,
+        "events_received": 214,
+        "last_event_at": "2026-10-07T13:58:40Z",
+        "rejected": 2,
+        "relay": "smee.io",
+        "results_via_poll": 7,
+        "results_via_webhook": 96
+      }
+    },
+    "pr_review": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": null
+    }
+  },
+  "qa": {
+    "queued": [],
+    "running": [
+      {
+        "forced": false,
+        "identifier": "SHOP-301",
+        "issue_id": "i-301",
+        "sha": "4be1c0d9"
+      }
+    ]
+  },
+  "rate_limits": null,
+  "repos": [
+    "api",
+    "docs",
+    "symphony",
+    "web-shop"
+  ],
+  "retrying": [],
+  "run_history": [],
+  "running": [
+    {
+      "issue_id": "i-TP-1441",
+      "issue_identifier": "TP-1441",
+      "title": "3b (4/26): The Situation line everywhere",
+      "state": "In Progress",
+      "repo_key": "symphony",
+      "started_at": "2026-11-12T03:05:00Z",
+      "session_id": "session-TP-1441",
+      "run_kind": "implementation",
+      "turn_count": 3,
+      "last_event": "notification",
+      "last_event_at": "2026-11-12T03:29:00Z",
+      "last_message": "Writing the code",
+      "tokens": {
+        "total_tokens": 412000
+      }
+    }
+  ],
+  "shipped_today": [],
+  "skipped": [],
+  "slot_waiting": [],
+  "stray_processes": [],
+  "uptime_seconds": 11580,
+  "usage_limits": [],
+  "waiting_on_you": [],
+  "watching": [],
+  "order": {
+    "computed_at": "2026-11-12T03:30:00Z",
+    "next": "BIL-304",
+    "queue": [],
+    "groups": [
+      {
+        "kind": "waiting_on_you",
+        "tickets": []
+      },
+      {
+        "kind": "retrying",
+        "tickets": []
+      },
+      {
+        "kind": "blocked_by_ticket",
+        "tickets": [
+          {
+            "issue_id": "i-TP-1442",
+            "identifier": "TP-1442",
+            "title": "3b (5/26): The Question block",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1441",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1441",
+              "cause": "TP-1441 is in In Progress.",
+              "next": "It starts once TP-1441 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1443",
+            "identifier": "TP-1443",
+            "title": "3b (6/26): The Run group and the Step list",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1442",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1442",
+              "cause": "TP-1442 is in Todo.",
+              "next": "It starts once TP-1442 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1444",
+            "identifier": "TP-1444",
+            "title": "3b (7/26): The Timeline",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1443",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1443",
+              "cause": "TP-1443 is in Todo.",
+              "next": "It starts once TP-1443 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1445",
+            "identifier": "TP-1445",
+            "title": "3b (8/26): The ticket page at laptop width",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1444",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1444",
+              "cause": "TP-1444 is in Todo.",
+              "next": "It starts once TP-1444 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1446",
+            "identifier": "TP-1446",
+            "title": "3b (9/26): The ticket page at desktop width",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1445",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1445",
+              "cause": "TP-1445 is in Todo.",
+              "next": "It starts once TP-1445 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1447",
+            "identifier": "TP-1447",
+            "title": "3b (10/26): The Lifecycle section",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1446",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1446",
+              "cause": "TP-1446 is in Todo.",
+              "next": "It starts once TP-1446 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1448",
+            "identifier": "TP-1448",
+            "title": "3b (11/26): The facts rail",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1447",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1447",
+              "cause": "TP-1447 is in Todo.",
+              "next": "It starts once TP-1447 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1449",
+            "identifier": "TP-1449",
+            "title": "3b (12/26): The decisions editor",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1448",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1448",
+              "cause": "TP-1448 is in Todo.",
+              "next": "It starts once TP-1448 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1450",
+            "identifier": "TP-1450",
+            "title": "3b (13/26): The labels and priority editors",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1449",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1449",
+              "cause": "TP-1449 is in Todo.",
+              "next": "It starts once TP-1449 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1451",
+            "identifier": "TP-1451",
+            "title": "3b (14/26): Home's board",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1450",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1450",
+              "cause": "TP-1450 is in Todo.",
+              "next": "It starts once TP-1450 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1452",
+            "identifier": "TP-1452",
+            "title": "3b (15/26): Home's top",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1451",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1451",
+              "cause": "TP-1451 is in Todo.",
+              "next": "It starts once TP-1451 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1453",
+            "identifier": "TP-1453",
+            "title": "3b (16/26): The five destinations",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1452",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1452",
+              "cause": "TP-1452 is in Todo.",
+              "next": "It starts once TP-1452 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1454",
+            "identifier": "TP-1454",
+            "title": "3b (17/26): Tickets as the table",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1453",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1453",
+              "cause": "TP-1453 is in Todo.",
+              "next": "It starts once TP-1453 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1455",
+            "identifier": "TP-1455",
+            "title": "3b (18/26): Saved views on Tickets",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1454",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1454",
+              "cause": "TP-1454 is in Todo.",
+              "next": "It starts once TP-1454 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1456",
+            "identifier": "TP-1456",
+            "title": "3b (19/26): The Inbox drawer",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1455",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1455",
+              "cause": "TP-1455 is in Todo.",
+              "next": "It starts once TP-1455 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1457",
+            "identifier": "TP-1457",
+            "title": "3b (20/26): Initiatives as the epic's story",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1456",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1456",
+              "cause": "TP-1456 is in Todo.",
+              "next": "It starts once TP-1456 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1458",
+            "identifier": "TP-1458",
+            "title": "3b (21/26): The Journal page",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1457",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1457",
+              "cause": "TP-1457 is in Todo.",
+              "next": "It starts once TP-1457 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1459",
+            "identifier": "TP-1459",
+            "title": "3b (22/26): Insights",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1458",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1458",
+              "cause": "TP-1458 is in Todo.",
+              "next": "It starts once TP-1458 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1460",
+            "identifier": "TP-1460",
+            "title": "3b (23/26): Factory",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1459",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1459",
+              "cause": "TP-1459 is in Todo.",
+              "next": "It starts once TP-1459 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1461",
+            "identifier": "TP-1461",
+            "title": "3b (24/26): The menu bar",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1460",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1460",
+              "cause": "TP-1460 is in Todo.",
+              "next": "It starts once TP-1460 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1462",
+            "identifier": "TP-1462",
+            "title": "3b (25/26): Keyboard pass",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1461",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1461",
+              "cause": "TP-1461 is in Todo.",
+              "next": "It starts once TP-1461 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-TP-1463",
+            "identifier": "TP-1463",
+            "title": "3b (26/26): Accessibility pass",
+            "state": "Todo",
+            "repo_key": "symphony",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for TP-1462",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by TP-1462",
+              "cause": "TP-1462 is in Todo.",
+              "next": "It starts once TP-1462 is done.",
+              "since": "2026-11-10T13:59:55Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "issue_id": "i-305",
+            "identifier": "BIL-305",
+            "title": "Prorate a switch to annual",
+            "state": "Todo",
+            "repo_key": "api",
+            "outcome": "held",
+            "position": null,
+            "reason": "waits for BIL-302",
+            "forced": false,
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked by BIL-302",
+              "cause": "BIL-302 is in Code Review.",
+              "next": "It starts once BIL-302 is done.",
+              "since": "2026-11-09T15:31:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "paused_by_rule",
+        "tickets": []
+      },
+      {
+        "kind": "waiting_for_ci",
+        "tickets": [
+          {
+            "issue_id": "i-302",
+            "identifier": "BIL-302",
+            "title": "Charge the year up front",
+            "state": "Code Review",
+            "repo_key": "api",
+            "outcome": "not_a_candidate",
+            "position": null,
+            "reason": null,
+            "forced": false,
+            "situation": {
+              "kind": "waiting_for_ci",
+              "word": "Waiting for CI",
+              "cause": "Code Review judges the pull request.",
+              "next": null,
+              "since": "2026-11-12T02:40:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "waiting_for_build",
+        "tickets": []
+      },
+      {
+        "kind": "waiting_for_slot",
+        "tickets": [
+          {
+            "issue_id": "i-304",
+            "identifier": "BIL-304",
+            "title": "Annual plan FAQ page",
+            "state": "Todo",
+            "repo_key": "api",
+            "outcome": "waits",
+            "position": 1,
+            "reason": "next: work slots full",
+            "forced": false,
+            "situation": {
+              "kind": "waiting_for_slot",
+              "word": "Waiting for a slot",
+              "cause": "Both work slots are taken.",
+              "next": "It starts when a run ends.",
+              "since": "2026-11-12T01:00:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      },
+      {
+        "kind": "working",
+        "tickets": [
+          {
+            "issue_id": "i-TP-1441",
+            "identifier": "TP-1441",
+            "title": "3b (4/26): The Situation line everywhere",
+            "state": "In Progress",
+            "repo_key": "symphony",
+            "outcome": "running",
+            "position": null,
+            "reason": null,
+            "forced": false,
+            "situation": {
+              "kind": "working",
+              "word": "Working",
+              "cause": "Implementation run 1 is writing the code.",
+              "next": null,
+              "since": "2026-11-12T03:05:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": {
+                "id": "r-1441",
+                "kind": "implementation",
+                "number": 1,
+                "label": "Implementation run 1"
+              },
+              "retry": null
+            }
+          }
+        ]
+      }
+    ]
+  }
+}
