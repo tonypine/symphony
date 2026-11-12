@@ -34,6 +34,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   require Schema.Polling
   require Schema.PrReview
   require Schema.QualityGate
+  require Schema.Reports
   require Schema.ReviewAgent
   require Schema.Server
   require Schema.Tickets
