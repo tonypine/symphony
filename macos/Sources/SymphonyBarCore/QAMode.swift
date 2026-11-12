@@ -9,7 +9,9 @@ import Foundation
 /// `SYMPHONY_BAR_QA_OPEN_PANEL_DIR` the sheet's folder picker opens in that folder. With `SYMPHONY_BAR_QA_APPEARANCE`
 /// the app draws in light or dark whatever the Mac's own appearance, which QA never changes. With
 /// `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTROL_TOKEN` it talks to a live Symphony, the QA pass's own server,
-/// instead of the fixtures (see `LiveControl`).
+/// instead of the fixtures (see `LiveControl`). With `SYMPHONY_BAR_QA_OPEN_TICKET` the app opens its window on that
+/// ticket's page at launch, and in QA mode SIGUSR1 and SIGUSR2 start and stop counting frames (`FrameMeter`), for the
+/// ticket page scroll test.
 public struct QAMode: Equatable {
     /// The directory QA mode keeps everything under. QA mode is on while it is set and not blank.
     public static let environmentKey = "SYMPHONY_BAR_QA_ROOT"
@@ -36,6 +38,8 @@ public struct QAMode: Equatable {
     public static let controlURLKey = "SYMPHONY_BAR_CONTROL_URL"
     /// The bearer token the live Symphony at `SYMPHONY_BAR_CONTROL_URL` takes control requests with.
     public static let controlTokenKey = "SYMPHONY_BAR_CONTROL_TOKEN"
+    /// A ticket identifier, such as `TP-9001`: the app opens its window on that ticket's page at launch.
+    public static let openTicketKey = "SYMPHONY_BAR_QA_OPEN_TICKET"
     /// Where Symphony writes its logs (`SymphonyElixir.Paths`).
     public static let symphonyLogsRootKey = "SYMPHONY_LOGS_ROOT"
 
@@ -93,6 +97,8 @@ public struct QAMode: Equatable {
     public let appearance: Appearance?
     /// The live Symphony from `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTROL_TOKEN`, nil for the fixtures.
     public let liveControl: LiveControl?
+    /// The ticket from `SYMPHONY_BAR_QA_OPEN_TICKET` whose page the window opens on at launch, nil for none.
+    public let openTicket: String?
 
     public init(
         root: URL,
@@ -104,7 +110,8 @@ public struct QAMode: Equatable {
         linearURL: URL? = nil,
         openPanelDirectory: URL? = nil,
         appearance: Appearance? = nil,
-        liveControl: LiveControl? = nil
+        liveControl: LiveControl? = nil,
+        openTicket: String? = nil
     ) {
         self.root = root.standardizedFileURL
         self.scripted = scripted
@@ -116,6 +123,7 @@ public struct QAMode: Equatable {
         self.openPanelDirectory = openPanelDirectory
         self.appearance = appearance
         self.liveControl = liveControl
+        self.openTicket = openTicket
     }
 
     /// QA mode from `SYMPHONY_BAR_QA_ROOT`, or nil when it is unset or blank. `~` is expanded.
@@ -134,7 +142,8 @@ public struct QAMode: Equatable {
             linearURL: environment[linearURLKey].flatMap(loopbackURL),
             openPanelDirectory: environment[openPanelDirectoryKey].flatMap(absoluteFolder),
             appearance: environment[appearanceKey].flatMap { Appearance(rawValue: $0.trimmingWhitespace()) },
-            liveControl: LiveControl.detect(environment: environment)
+            liveControl: LiveControl.detect(environment: environment),
+            openTicket: environment[openTicketKey].map { $0.trimmingWhitespace() }.flatMap { $0.isEmpty ? nil : $0 }
         )
     }
 
@@ -170,6 +179,8 @@ public struct QAMode: Equatable {
     public var symphonyLogsRoot: URL { root.appendingPathComponent(Self.symphonyLogsFolder, isDirectory: true) }
     public var updateCacheDirectory: URL { root.appendingPathComponent(Self.updatesFolder, isDirectory: true) }
     public var stateRoot: URL { root.appendingPathComponent(Self.stateFolder, isDirectory: true) }
+    /// Where the frame count a SIGUSR2 ends is written (`FrameMeter.Summary`).
+    public var framesFile: URL { root.appendingPathComponent(FrameMeter.fileName) }
 
     /// The fixtures the app reads Symphony's API from, logging control requests under the QA root; nil without
     /// `SYMPHONY_BAR_QA_API_FIXTURES`, and nil with a live Symphony, which answers in their place.
