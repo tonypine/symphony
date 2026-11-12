@@ -66,9 +66,9 @@ defmodule SymphonyElixir.EpicReview.MainCi do
   review is dispatched. With workflow runs still going, pauses the epic on that commit and returns
   `{:waiting, info}`; otherwise, or when the read or the pause fails, `:ready`.
   """
-  @spec hold(Issue.t(), String.t() | nil, keyword()) :: :ready | {:waiting, CiWait.info()}
   def hold(issue, repo_key, opts \\ [])
 
+  @spec hold(Issue.t(), String.t() | nil, keyword()) :: :ready | {:waiting, CiWait.info()}
   def hold(%Issue{id: issue_id} = issue, repo_key, opts) when is_binary(issue_id) and is_binary(repo_key) do
     opts = with_defaults(opts)
 
