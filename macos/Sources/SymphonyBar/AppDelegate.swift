@@ -29,6 +29,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private let statusTitleItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private let sourceItem = NSMenuItem(title: "", action: nil, keyEquivalent: "")
     private lazy var restartNowItem = menuItem(StatusMenu.restartNowTitle, action: #selector(restartNow(_:)))
+    /// Try Now, under Resume Dispatch while a usage limit holds runs: Symphony checks the limit at once.
+    private lazy var tryNowItem = menuItem(StatusMenu.tryNowTitle, action: #selector(tryUsageLimitNow(_:)))
     private lazy var cancelRestartItem = menuItem(StatusMenu.cancelRestartTitle, action: #selector(cancelRestart(_:)))
     private var detailItems: [NSMenuItem] = []
     /// The "Waiting on you" heading, a row per waiting ticket and "N more…", under the status lines.
@@ -125,6 +127,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         menu.addItem(.separator())
         menu.addItem(menuItem(StatusMenu.pauseTitle, action: #selector(pauseDispatch(_:))))
         menu.addItem(menuItem(StatusMenu.resumeTitle, action: #selector(resumeDispatch(_:))))
+        tryNowItem.toolTip = StatusMenu.tryNowHelp
+        tryNowItem.isHidden = true
+        menu.addItem(tryNowItem)
         menu.addItem(.separator())
         forcedTitleItem.isEnabled = false
         menu.addItem(forcedTitleItem)
@@ -495,6 +500,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case #selector(resumeDispatch(_:)):
             menuItem.title = controlInFlight == .resume ? StatusMenu.resumingTitle : StatusMenu.resumeTitle
             return controlInFlight == nil && !restarting && StatusMenu.canResume(machine.status)
+        case #selector(tryUsageLimitNow(_:)):
+            if case .tryNow? = controlInFlight { menuItem.title = StatusMenu.tryingNowTitle } else { menuItem.title = StatusMenu.tryNowTitle }
+            return controlInFlight == nil && !restarting && StatusMenu.tryNowLimit(machine.status) != nil
         case #selector(forceTicket(_:)):
             if case let .force(identifier)? = forceInFlight {
                 menuItem.title = StatusMenu.forcingTitle(identifier)
@@ -616,6 +624,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     @objc private func resumeDispatch(_ sender: Any?) {
         send(.resume)
+    }
+
+    @objc private func tryUsageLimitNow(_ sender: Any?) {
+        guard let limit = StatusMenu.tryNowLimit(machine.status) else { return }
+        send(.tryNow(condition: limit.condition))
     }
 
     /// Sends Pause or Resume to Symphony's control API, then polls so the icon and menu follow.
@@ -1083,6 +1096,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         cancelRestartItem.title = updating ? UpdateMenu.cancelUpdateTitle : StatusMenu.cancelRestartTitle
         restartNowItem.isHidden = !restarter.machine.offersRestartNow
         cancelRestartItem.isHidden = !offersCancel
+        tryNowItem.isHidden = StatusMenu.tryNowLimit(status) == nil
         detailItems = StatusMenu.detailLines(
             status,
             slowToAnswer: machine.slowToAnswer,

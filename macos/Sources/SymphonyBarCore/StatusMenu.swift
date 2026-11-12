@@ -331,7 +331,8 @@ public enum StatusMenu {
         case .canary where limit.isAPIUnreachable:
             return "Resuming: checking \(provider) API…"
         case .paused:
-            return "Paused: \(provider) limit" + approximateTime(", resumes", limit.resumeAt, now: now, timeZone: timeZone)
+            return "Paused: \(provider) limit" + (limit.stillOn ? " still on" : "")
+                + approximateTime(", resumes", limit.resumeAt, now: now, timeZone: timeZone)
         case .canary:
             return "Resuming: checking \(provider) limit…"
         case .headroom:
@@ -440,6 +441,23 @@ public enum StatusMenu {
         switch action {
         case .pause, .pauseWithReason, .pauseForUpdate: true
         default: false
+        }
+    }
+
+    /// Title of Try Now, wherever a usage-limit pause offers it, and its title while the request is under way.
+    public static let tryNowTitle = "Try Now"
+    public static let tryingNowTitle = "Checking the Limit…"
+    /// What Try Now does, for its tooltip and accessibility hint.
+    public static let tryNowHelp = "The limit is back? One held run goes out first; if the provider allows it, every held run starts."
+
+    /// The usage-limit hold Try Now checks: the first paused one, nil when none is paused (none, one already checking,
+    /// a headroom hold) or Symphony doesn't answer.
+    public static func tryNowLimit(_ status: SymphonyStatus) -> StateSnapshot.UsageLimit? {
+        switch status {
+        case let .running(snapshot, _), let .paused(snapshot, _):
+            return snapshot.usageLimits.first(where: \.canTryNow)
+        case .stopped, .starting, .error:
+            return nil
         }
     }
 

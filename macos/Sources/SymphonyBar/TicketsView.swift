@@ -116,6 +116,12 @@ extension SymphonyWindowModel {
         sendDispatch(.resume) { $0.dispatchPopoverShown = false }
     }
 
+    /// Try Now needs no sheet either: Symphony checks the limit with one held run, and lets the rest go only if the
+    /// provider allows it.
+    func tryUsageLimitNow(_ limit: StateSnapshot.UsageLimit) {
+        sendDispatch(.tryNow(condition: limit.condition)) { $0.dispatchPopoverShown = false }
+    }
+
     /// Cancel Update or Update Now Anyway, from the popover: the menu's item does it, so both do the same.
     func performUpdateAction(_ action: WindowState.Action) {
         dispatchPopoverShown = false
@@ -467,6 +473,7 @@ struct DispatchControlButton: View {
                 actions: DispatchPopover.Actions(
                     pause: model.openPauseSheet,
                     resume: model.resumeDispatch,
+                    tryNow: model.tryUsageLimitNow,
                     force: { model.openForceSheet() },
                     cancelUpdate: { model.performUpdateAction(.cancelUpdate) },
                     updateNow: { model.performUpdateAction(.updateNow) }
@@ -503,6 +510,7 @@ struct DispatchPopover: View {
     struct Actions {
         var pause: () -> Void = {}
         var resume: () -> Void = {}
+        var tryNow: (StateSnapshot.UsageLimit) -> Void = { _ in }
         var force: () -> Void = {}
         var cancelUpdate: () -> Void = {}
         var updateNow: () -> Void = {}
@@ -549,7 +557,16 @@ struct DispatchPopover: View {
                 }
             }
             if !control.limits.isEmpty {
-                section("Held by", lines: control.limits, more: 0, empty: "")
+                HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
+                    section("Held by", lines: control.limits, more: 0, empty: "")
+                    Spacer(minLength: 0)
+                    if control.canTryNow, let limit = control.tryNow {
+                        Button(DispatchControl.tryNowTitle) { actions.tryNow(limit) }
+                            .help(StatusMenu.tryNowHelp)
+                            .accessibilityHint(StatusMenu.tryNowHelp)
+                            .disabled(working)
+                    }
+                }
             }
             section("Working", lines: control.working, more: control.moreWorking, empty: "Nothing is running.")
             section("Queued", lines: control.queued, more: control.moreQueued, empty: "Nothing is queued.")

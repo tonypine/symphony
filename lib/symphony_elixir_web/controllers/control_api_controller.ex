@@ -13,6 +13,15 @@ defmodule SymphonyElixirWeb.ControlApiController do
   already working on it, Backlog's "move it first") — the same reason each ticket payload's
   `start` field shows.
 
+  `resume` clears the Director's pause and an update's. A pause held only by reasons Resume can't
+  clear (a usage limit's) answers 409 `nothing_to_resume`, naming them in `reasons`, and lifts
+  nothing. With `condition` (a usage limit's, as its reason's `waits_on.condition` names it:
+  `usage_limit:anthropic:all`) `resume` is Try Now (`SymphonyElixir.Orchestrator.try_usage_limit_now/2`):
+  the paused hold starts its canary at once, and the answer is Symphony's pause with the hold as it
+  now stands (`usage_limit`, null once it cleared). No hold on `condition` is 404
+  `usage_limit_not_found`; a headroom hold, which the provider never refused, is 409
+  `usage_limit_headroom`.
+
   `repos/:repo_key/pause` (with an optional `reason`) and `repos/:repo_key/resume` pause and resume
   dispatch for one configured repository (`SymphonyElixir.Orchestrator.pause_repository/3`): each
   answers 200 with the repository and its pause (null once resumed), writes a `repository_paused`
@@ -107,9 +116,39 @@ defmodule SymphonyElixirWeb.ControlApiController do
   end
 
   @spec resume(Conn.t(), map()) :: Conn.t()
-  def resume(conn, _params) do
-    respond(conn, Orchestrator.resume_dispatch(orchestrator(conn)))
+  def resume(conn, params) do
+    case string_param(params["condition"]) do
+      nil -> respond_resume(conn, Orchestrator.resume_dispatch(orchestrator(conn)))
+      condition -> respond_resume(conn, Orchestrator.try_usage_limit_now(orchestrator(conn), condition))
+    end
   end
+
+  defp respond_resume(conn, {:error, {:nothing_to_resume, reasons}}) do
+    texts = reasons |> Enum.map(& &1.text) |> Enum.reject(&(&1 in [nil, ""]))
+    waits = if texts == [], do: "", else: " It waits on " <> Enum.join(texts, "; ") <> "."
+    try_now = if Enum.any?(reasons, &usage_limit_reason?/1), do: " Try Now checks a usage limit before its reset.", else: ""
+
+    conn
+    |> put_status(409)
+    |> json(%{
+      error: %{
+        code: "nothing_to_resume",
+        message: "Nothing to resume: no pause of yours or an update's holds Symphony." <> waits <> try_now,
+        reasons: reasons
+      }
+    })
+  end
+
+  defp respond_resume(conn, {:error, {:usage_limit_not_found, condition}}),
+    do: error_response(conn, 404, "usage_limit_not_found", "No usage limit holds Symphony on #{condition}")
+
+  defp respond_resume(conn, {:error, {:usage_limit_headroom, condition}}),
+    do: error_response(conn, 409, "usage_limit_headroom", "The hold on #{condition} keeps headroom; the provider never refused a run, so there is nothing to try")
+
+  defp respond_resume(conn, result), do: respond(conn, result)
+
+  defp usage_limit_reason?(%{waits_on: %{condition: "usage_limit:" <> _key}}), do: true
+  defp usage_limit_reason?(_reason), do: false
 
   @spec pause_repository(Conn.t(), map()) :: Conn.t()
   def pause_repository(conn, %{"repo_key" => repo_key} = params) do

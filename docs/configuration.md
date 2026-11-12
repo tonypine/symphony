@@ -937,6 +937,13 @@ agent:
 - At the resume time one held run (the first in dispatch order) goes out alone. If Claude accepts
   it, the other held runs follow; if it hits the limit again, the hold starts over from the new
   reset time (or `unknown_reset_retry_seconds`). New Claude work stays held meanwhile.
+- When the limit comes back before its recorded reset, **Try Now** (the Director's status-bar
+  menu, the dispatch control's popover and Home's pause notice, or `POST /api/v1/control/resume`
+  with the hold's `condition`, see `docs/control-api.md`) sends that first held run out at once.
+  The provider decides as at the resume time: allowed, every held run follows; refused, the hold
+  pauses again on the provider's latest reset and reads `Claude's 5-hour limit is still on, until
+  23:02 UTC-3`. Resume Dispatch never lifts a usage limit; with only a hold in place it answers that
+  nothing was lifted.
 - The hold is kept across restarts and is separate from the operator pause: resuming never
   clears a pause you set.
 - While a hold is in place, the dashboards show `Paused: Claude 5-hour limit, resumes ~14:05`
