@@ -45,6 +45,7 @@ defmodule SymphonyElixir.CLI do
   @config_migrate_switches [config: :string]
   @dashboard_switches [url: :string]
   @force_switches [clear: :boolean]
+  @report_switches [from: :string, to: :string]
   @openrouter_stub_switches [port: :integer]
   @default_symphony_file "symphony.yml"
 
@@ -73,7 +74,8 @@ defmodule SymphonyElixir.CLI do
           control_url: (-> String.t()),
           run_dashboard: ((-> String.t()) -> :ok),
           start_openrouter_stub: (non_neg_integer() -> {:ok, :inet.port_number()} | {:error, term()}),
-          force_issue: (String.t(), boolean() -> ControlClient.control_result())
+          force_issue: (String.t(), boolean() -> ControlClient.control_result()),
+          start_report: (DateTime.t(), DateTime.t() -> ControlClient.control_result())
         }
 
   @spec main([String.t()]) :: no_return()
@@ -118,6 +120,7 @@ defmodule SymphonyElixir.CLI do
   defp dispatch(["force" | force_args], deps), do: evaluate_force(force_args, deps)
   defp dispatch(["init" | init_args], deps), do: evaluate_init(init_args, deps)
   defp dispatch(["pr" | pr_args], _deps), do: dispatch_pr(pr_args)
+  defp dispatch(["report" | report_args], deps), do: evaluate_report(report_args, deps)
   defp dispatch(["run" | run_args], deps), do: evaluate_run(run_args, deps)
   defp dispatch(["workflow" | workflow_args], _deps), do: evaluate_workflow(workflow_args)
   defp dispatch(args, deps), do: evaluate_service(args, deps)
@@ -355,6 +358,38 @@ defmodule SymphonyElixir.CLI do
 
   defp force_error_message(reason, identifier, _deps), do: "Could not force #{identifier}: #{inspect(reason)}"
 
+  # A report run on the period, started through the running Symphony: the times are read on this
+  # host's clock (`SymphonyElixir.Reports.Period`), so `yesterday 18:00` is the operator's.
+  defp evaluate_report(args, deps) do
+    with {opts, [], []} <- OptionParser.parse(args, strict: @report_switches),
+         {:ok, period} <- SymphonyElixir.Reports.Period.new(opts[:from], opts[:to] || "now") do
+      period.from |> deps.start_report.(period.to) |> report_result(deps)
+    else
+      {:error, message} when is_binary(message) -> {:error, message <> "\n" <> report_usage_message()}
+      _invalid -> {:error, report_usage_message()}
+    end
+  end
+
+  defp report_result({:ok, started}, _deps) do
+    IO.puts(
+      "Report run #{started.run_id} started on #{started.events} notable events from #{started.from} to #{started.to} with #{started.model}; " <>
+        "GET /api/v1/reports lists the report once it is published"
+    )
+
+    {:halt, 0}
+  end
+
+  defp report_result(:unavailable, _deps), do: {:error, "Symphony's orchestrator is unavailable; try again once it has started"}
+
+  defp report_result({:error, reason}, deps), do: {:error, report_error_message(reason, deps)}
+
+  defp report_error_message(:no_events, _deps), do: "No notable event happened in that period, so there is nothing to report."
+  defp report_error_message(reason, deps), do: force_error_message(reason, "a report", deps) |> String.replace("Could not force a report", "Could not start a report")
+
+  defp report_usage_message do
+    "Usage: symphony report --from <time> [--to <time>] (an ISO 8601 time, now, today or yesterday with an hour such as 18:00, or 2 hours ago)"
+  end
+
   defp check_config(path, deps) do
     case deps.check_config.() do
       :ok ->
@@ -447,7 +482,7 @@ defmodule SymphonyElixir.CLI do
       :not_packaged ->
         :ok
 
-      [command | _args] = args when command in ["check", "config", "dashboard", "force"] ->
+      [command | _args] = args when command in ["check", "config", "dashboard", "force", "report"] ->
         args |> evaluate() |> halt()
 
       args ->
@@ -457,7 +492,7 @@ defmodule SymphonyElixir.CLI do
     end
   end
 
-  # Only the service takes the node name; `check`, `config`, `dashboard` and `force` above run
+  # Only the service takes the node name; `check`, `config`, `dashboard`, `force` and `report` above run
   # undistributed so they work next to a running Symphony.
   defp configure_service(args) do
     with :ok <- configure(args), do: ReleaseNode.start(ReleaseNode.runtime_deps())
@@ -602,6 +637,7 @@ defmodule SymphonyElixir.CLI do
       "       symphony openrouter-stub [--port <port>]\n" <>
       "       symphony [--config <path-to-symphony.yml>] [--state-root <path>] [--logs-root <path>] [--host <host>|unix:<socket>] [--port <port>] [--qa-seed <dir>]\n" <>
       "       symphony pr <url-or-number> [--intent \"address review comments\"]\n" <>
+      "       symphony report --from <time> [--to <time>]\n" <>
       "       symphony run <issue-identifier> [--config <path-to-symphony.yml>] [--timeout <duration>] [--no-retry] [--state-root <path>] [--logs-root <path>]\n" <>
       "       symphony workflow preview [--file WORKFLOW.md] [--agent codex|claude] [--repo REPO_KEY] [--kind RUN_KIND]"
   end
@@ -652,6 +688,7 @@ defmodule SymphonyElixir.CLI do
       control_url: fn -> ControlClient.control_url() end,
       run_dashboard: &run_dashboard/1,
       force_issue: &ControlClient.force_issue/2,
+      start_report: &ControlClient.start_report/2,
       start_openrouter_stub: &start_openrouter_stub/1
     }
   end

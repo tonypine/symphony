@@ -51,7 +51,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
                                 "the ticket on a Needs Decision hold, and a plan waits in `issues.states.plan_review`"
   @allowed_keys ~w(
     agent auto_review code_review dashboard dependency_audit dispatch github human_actions issue_gate issues ledger linear notifications
-    phases poller pull_requests
+    phases poller pull_requests reports
     repositories tickets verification watchdog workers workspaces
   )
 
@@ -128,6 +128,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "dependency_audit" => ~w(allow_registries allow_git_sources allow_path_sources),
     "human_actions" => ~w(enabled interval_ms min_update_interval_ms),
     "ledger" => ~w(artifact_max_bytes prompt_brief_enabled prompt_brief_max_tokens),
+    "reports" => ~w(model),
     "dispatch" => ~w(source shadow_window),
     # A run kind's step list (`Schema.Phases`); each kind holds one setting, its `steps` list.
     "phases" => Schema.Phases.kinds(),
@@ -480,6 +481,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     embeds_one(:notifications, Schema.Notifications, on_replace: :update, defaults_to_struct: true)
     embeds_one(:human_actions, Schema.HumanActions, on_replace: :update, defaults_to_struct: true)
     embeds_one(:ledger, Schema.Ledger, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:reports, Schema.Reports, on_replace: :update, defaults_to_struct: true)
     embeds_one(:dispatch, Schema.Dispatch, on_replace: :update, defaults_to_struct: true)
     embeds_one(:phases, Schema.Phases, on_replace: :update, defaults_to_struct: true)
     embeds_many(:repos, Repo, on_replace: :delete)
@@ -729,6 +731,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     |> cast_embed(:notifications, with: &Schema.Notifications.changeset/2)
     |> cast_embed(:human_actions, with: &Schema.HumanActions.changeset/2)
     |> cast_embed(:ledger, with: &Schema.Ledger.changeset/2)
+    |> cast_embed(:reports, with: &Schema.Reports.changeset/2)
     |> cast_embed(:dispatch, with: &Schema.Dispatch.changeset/2)
     |> cast_embed(:phases, with: &Schema.Phases.changeset/2)
     |> Schema.validate_profile_command_flags()
@@ -789,6 +792,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, dashboard} <- normalize_dashboard(Map.get(config, "dashboard", %{})),
          {:ok, human_actions} <- normalize_human_actions(Map.get(config, "human_actions", %{})),
          {:ok, ledger} <- normalize_ledger(Map.get(config, "ledger", %{})),
+         {:ok, reports} <- normalize_reports(Map.get(config, "reports", %{})),
          {:ok, dispatch} <- normalize_dispatch(Map.get(config, "dispatch", %{})),
          {:ok, phases} <- normalize_phases(Map.get(config, "phases", %{})) do
       workspace = merge_section(workspace, "sandbox", Map.get(agent_config, "workspace_sandbox"))
@@ -815,6 +819,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("notifications", Map.get(config, "notifications"))
        |> maybe_put("human_actions", human_actions)
        |> maybe_put("ledger", ledger)
+       |> maybe_put("reports", reports)
        |> maybe_put("dispatch", dispatch)
        |> maybe_put("phases", phases)}
     end
@@ -1376,6 +1381,13 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp normalize_ledger(config) do
     with {:ok, config} <- section_map(config, "ledger"),
          :ok <- reject_unknown_section_keys(config, section_keys("ledger"), "ledger") do
+      {:ok, config}
+    end
+  end
+
+  defp normalize_reports(config) do
+    with {:ok, config} <- section_map(config, "reports"),
+         :ok <- reject_unknown_section_keys(config, section_keys("reports"), "reports") do
       {:ok, config}
     end
   end

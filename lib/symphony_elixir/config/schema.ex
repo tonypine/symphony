@@ -2317,6 +2317,36 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Reports do
+    @moduledoc """
+    `symphony.yml`'s `reports` section: the model a report run writes with (`model`,
+    `SymphonyElixir.Reports`), the cheapest capable model by default. A report reads a period's
+    notable events and cites them, which a small model does well.
+    """
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @type t :: %__MODULE__{}
+
+    @primary_key false
+    @default_model "claude-haiku-5-5"
+
+    embedded_schema do
+      field(:model, :string, default: @default_model)
+    end
+
+    @doc "The model a report run uses when `reports.model` is missing or null."
+    @spec default_model() :: String.t()
+    def default_model, do: @default_model
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:model], empty_values: [])
+      |> Schema.validate_present([:model], message: "must name a model")
+    end
+  end
+
   defmodule Dispatch do
     @moduledoc """
     `symphony.yml`'s `dispatch` section: where the dispatcher reads its candidates from (`source`:

@@ -585,6 +585,18 @@ defmodule SymphonyElixir.Config do
   def artifact_max_bytes, do: ledger_setting(:artifact_max_bytes)
 
   @doc """
+  The model a report run writes with (`SymphonyElixir.Reports`): symphony.yml's `reports.model`,
+  read on each call, else the cheapest capable model (`Schema.Reports.default_model/0`).
+  """
+  @spec report_model() :: String.t()
+  def report_model do
+    case system() do
+      {:ok, %{reports: %Schema.Reports{model: model}}} -> model
+      {:error, _reason} -> Schema.Reports.default_model()
+    end
+  end
+
+  @doc """
   Whether agents' prompts carry the summary of the ticket's history
   (`SymphonyElixir.TicketEvents.Brief`): symphony.yml's `ledger.prompt_brief_enabled`, read on each
   call, else true.
