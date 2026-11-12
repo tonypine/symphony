@@ -792,7 +792,7 @@ defmodule SymphonyElixirWeb.Presenter do
     cond do
       ended -> ended
       held?(held, run_id, started) -> nil
-      true -> unrecorded_end(run_id, started, Map.fetch!(unended, run_id))
+      true -> unrecorded_end(run_id, started, Map.get(unended, run_id, started.at))
     end
   end
 
