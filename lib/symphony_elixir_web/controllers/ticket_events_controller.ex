@@ -128,9 +128,8 @@ defmodule SymphonyElixirWeb.TicketEventsController do
   # A store error on the history read raises, as the page's own read does.
   defp page_json(record, events, :run) do
     history = RunStore.list_ticket_events(record.issue_id, types: @run_header_types)
-    looked_at = Marks.looked_at(record)
-    held = held_run_ids()
-    %{timeline: Presenter.ticket_timeline_json(record.repo_key, record.issue_id, events, history, looked_at: looked_at, held: held)}
+    opts = [looked_at: Marks.looked_at(record), held: held_run_ids()]
+    %{timeline: Presenter.ticket_timeline_json(record.repo_key, record.issue_id, events, history, opts)}
   end
 
   # The run ids the orchestrator holds, by its snapshot; `:unknown` when it can't be read.
@@ -138,8 +137,11 @@ defmodule SymphonyElixirWeb.TicketEventsController do
     orchestrator = Endpoint.config(:orchestrator) || Orchestrator
 
     case Orchestrator.snapshot(orchestrator, Endpoint.config(:snapshot_timeout_ms) || 15_000) do
-      %{running: running} when is_list(running) -> for(%{run_id: run_id} when is_binary(run_id) <- running, into: MapSet.new(), do: run_id)
-      _unavailable -> :unknown
+      %{running: running} when is_list(running) ->
+        for %{run_id: run_id} when is_binary(run_id) <- running, into: MapSet.new(), do: run_id
+
+      _unavailable ->
+        :unknown
     end
   end
 

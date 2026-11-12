@@ -57,7 +57,9 @@ defmodule SymphonyElixir.TicketEvents.RunEndsTest do
              } = run_1_end.payload
 
       assert run_2_end.payload.exit == "handoff"
-      assert [%{at: @boot, payload: %{run_id: "run-5", exit: "ended; no end was recorded"}}] = TicketEvents.query(@other_issue, types: ["run.ended"])
+
+      assert [%{at: @boot, payload: %{run_id: "run-5", exit: "ended; no end was recorded"}}] =
+               TicketEvents.query(@other_issue, types: ["run.ended"])
 
       # The next boot finds nothing left to close.
       assert RunEnds.close_unended(DateTime.add(@boot, 3600)) == 0
@@ -65,7 +67,8 @@ defmodule SymphonyElixir.TicketEvents.RunEndsTest do
     end
 
     test "a store that can't be read closes none" do
-      log = capture_log(fn -> assert RunEnds.close_unended(@boot, read: fn _opts -> {:error, :unavailable} end) == 0 end)
+      unreadable = fn _opts -> {:error, :unavailable} end
+      log = capture_log(fn -> assert RunEnds.close_unended(@boot, read: unreadable) == 0 end)
       assert log =~ "Failed to read the runs that ended without a recorded end"
     end
   end
