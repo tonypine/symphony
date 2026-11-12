@@ -2010,11 +2010,13 @@ The QA agent:
   `qa_ax_set_value` MUST enter a text field's value so the app registers the edit, with key events
   sent to that app alone, and the tools MUST NOT return a secure field's value.
   `qa_ax_select` selects a table or outline row through accessibility, `qa_click` clicks an
-  element's frame centre and `qa_key` presses a key with modifiers in the app's focused window; their
-  mouse and key events MUST go to that app alone, and `qa_click` MUST refuse a point where the
-  window in front is not the app's own. `qa_click` moves the pointer to the point before it clicks
-  and MAY press the element through accessibility when the click changed nothing, saying so in its
-  result; `qa_hover` moves the pointer over an element or point and waits for the app to settle,
+  element's frame centre or a point and `qa_key` presses a key with modifiers in the app's focused
+  window; their mouse and key events MUST go to that app alone, and `qa_click` MUST refuse a point
+  where the window in front is not the app's own and, naming the active app, a click while another
+  app is the active app. `qa_click` moves the pointer to the point before it clicks, sends the click
+  as a mouse does (through the system's event route, so the app takes it as a click and not as the
+  click that activates its window) and MAY press the element through accessibility when the click
+  changed nothing, saying so in its result; `qa_hover` moves the pointer over an element or point and waits for the app to settle,
   and `qa_context_menu` right-clicks one and lists the menu that opens; `qa_scroll` scrolls the
   scroll area at an element or point by a delta or to an edge with scroll-wheel events, and MAY
   post them again at the pointer, over the app's own window, when the app took none of them. They
