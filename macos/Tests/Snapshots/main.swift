@@ -1714,6 +1714,23 @@ func insightsPage(_ page: SymphonyView, slice: InsightsSlice, file: String, wind
     .background(DesignTokens.Surface.content.color)
 }
 
+/// An Insights page whose Symphony predates the aggregate read (TP-1490), at the laptop's full page height: the control
+/// bar stays at the top and "Update Symphony" sits centred below it.
+@MainActor
+func insightsUnavailablePage(window: CGFloat) -> some View {
+    guard let state = OverviewState.decode(insightsRead("state")), let initiatives = InitiativesPayload.decode(insightsRead("initiatives"))
+    else { fatalError("The insights fixture's state doesn't read") }
+    let slice = insightsSlices[0].slice
+    let values = InsightsControlValues(repos: state.repos, epics: initiatives.initiatives.map(\.identifier), slice: slice)
+    return PinnedBarPage {
+        InsightsControlBar(slice: .constant(slice), values: values, today: insightsToday, summary: nil)
+    } content: {
+        EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
+    }
+    .frame(width: window - DesignTokens.Layout.sidebarWidth, height: 800)
+    .background(DesignTokens.Surface.content.color)
+}
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1925,6 +1942,7 @@ MainActor.assumeIsolated {
                 }
             }
         }
+        render(insightsUnavailablePage(window: 1440), scheme, to: "insights-unavailable-laptop-\(suffix).png")
         // Saved views (TP-1457): the menu with three views, and the save sheet.
         render(ticketViewsMenuOpen(), scheme, to: "ticket-views-menu-\(suffix).png")
         render(ticketViewSaveSheet(), scheme, to: "ticket-views-save-sheet-\(suffix).png")
