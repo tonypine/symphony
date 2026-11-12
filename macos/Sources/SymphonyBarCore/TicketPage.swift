@@ -567,7 +567,7 @@ public struct TicketPage: Equatable {
                 result: .done, resultWord: nil, durationSeconds: nil, tokens: nil, detail: pullRequest?.absoluteString
             ))
         }
-        if let feed = history, !feed.isEmpty {
+        if let feed = self.history, !feed.isEmpty {
             // The feed tells every run and event itself; a stop made from the app shows until the feed has caught up.
             let newest = feed.newestEventAt ?? .distantPast
             let stops = sources.stops.filter { $0.identifier == identifier && $0.at > newest }
