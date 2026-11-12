@@ -70,7 +70,16 @@ defmodule SymphonyElixirWeb.MarksReadTest do
   end
 
   defp timeline do
-    conn = call(TicketEventsController, :index, %{"repo_key" => @repo, "issue_identifier" => @identifier, "group" => "run"})
+    params = %{"repo_key" => @repo, "issue_identifier" => @identifier, "group" => "run"}
+
+    conn =
+      conn(:get, "/")
+      |> assign(:orchestrator, orchestrator())
+      |> assign(:snapshot_timeout_ms, 1_000)
+      |> Phoenix.Controller.put_view(SymphonyElixirWeb.ErrorJSON)
+      |> Map.put(:params, params)
+      |> TicketEventsController.index(params)
+
     Jason.decode!(conn.resp_body)["timeline"]
   end
 
