@@ -80,6 +80,11 @@ public enum UpdateLaunch {
         return true
     }
 
+    /// Why an update didn't apply when the helper gave up waiting for the app to quit, for the menu line.
+    public static func notQuitReason(logPath: String) -> String {
+        "the app didn't quit in time, so this version stays and Symphony starts again; see \(logPath)"
+    }
+
     /// The rollback's reason, for the menu line and the notification of the build put back.
     public static func failureReason(logPath: String) -> String {
         "the app didn't start within \(timeout) seconds of the update; see \(logPath)"

@@ -13,7 +13,9 @@ final class SymphonyRunner {
     let secrets: SecretsReader
     private let logDirectory = AppStores.current.logDirectory
     private var child: ChildProcess?
-    private var stopWaiters: [() -> Void] = []
+    private var stopWaiters = StopWaiters()
+    /// Whether a Symphony child runs, read off the main queue by the signal fallback.
+    nonisolated let ownsChild = LockedFlag()
     // SYMPHONY_STATE_ROOT from the last start, which may come from the stored variables.
     private var launchedStateRoot: String?
     // Settings of the running Symphony, so the menu names the binary that runs even after Settings change.
@@ -108,6 +110,7 @@ final class SymphonyRunner {
             MainActor.assumeIsolated { self?.childExited(exit, requested: requested) }
         }
         launchedSettings = settings
+        ownsChild.set(true)
         onEvent?(.started)
     }
 
@@ -184,13 +187,10 @@ final class SymphonyRunner {
         )
     }
 
-    /// Stops Symphony, calling `completion` once it has exited (straight away if it isn't running).
+    /// Stops Symphony, calling `completion` once it has exited (straight away if it isn't running, or has already
+    /// exited).
     func stop(completion: (() -> Void)? = nil) {
-        guard let child else {
-            completion?()
-            return
-        }
-        if let completion { stopWaiters.append(completion) }
+        guard stopWaiters.add(completion, running: child != nil), let child else { return }
 
         let range = AppSettings.stopTimeoutRange
         let timeout = min(max(store.loadSettings().stopTimeoutSeconds, range.lowerBound), range.upperBound)
@@ -205,14 +205,13 @@ final class SymphonyRunner {
 
     private func childExited(_ exit: ChildExit, requested: Bool) {
         child = nil
+        ownsChild.set(false)
         writeExit(exit, requested: requested)
         launchedSettings = nil
         if !requested {
             notify(title: "Symphony stopped unexpectedly", body: StatusMenu.unexpectedExitMessage(exit, logPath: logPath))
         }
-        let waiters = stopWaiters
-        stopWaiters = []
-        waiters.forEach { $0() }
+        stopWaiters.exited().forEach { $0() }
         onEvent?(.exited(exit, requested: requested))
     }
 

@@ -85,6 +85,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// Stops an owned Symphony before the app exits on SIGTERM, SIGINT or SIGHUP.
     private var terminationSignals: TerminationSignals?
     private var exitingOnSignal = false
+    /// True once the app stopped Symphony itself to quit (an update's hand-off, a rollback): the quit then sends
+    /// nothing and waits for nothing.
+    private var stoppedToQuit = false
+    /// True while `applicationShouldTerminate` waits to reply.
+    private var quitPending = false
+    /// Watches the update helper after the hand-off: its exit while the app still runs means the update didn't apply.
+    private var helperWatch: ProcessExitWatch?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // First, so the update helper that relaunched this app knows it started and doesn't put the previous one back.
@@ -97,7 +104,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             ),
             view: symphonyWindow.viewMenu()
         )
-        terminationSignals = TerminationSignals(queue: .main) { [weak self] number in
+        let ownsChild = runner.ownsChild
+        terminationSignals = TerminationSignals(
+            queue: .main,
+            // Ends the app on a signal even when the main queue is stuck, once no Symphony is left to stop.
+            fallback: .init(after: QuitPlan.sendTimeout, canExit: { !ownsChild.isSet })
+        ) { [weak self] number in
             MainActor.assumeIsolated { self?.terminate(onSignal: number) }
         }
 
@@ -184,6 +196,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
         runner.onEvent = { [weak self] event in self?.handle(event) }
         runner.onKeychainChange = { [weak self] in self?.showStatus() }
+        // An Inbox answer held for Undo goes before a restart or an update's drain stops Symphony.
+        restarter.beforeStop = { [weak self] in await self?.symphonyWindow.sendHeldAnswer() }
         restarter.onChange = { [weak self] in
             guard let self else { return }
             showStatus()
@@ -423,7 +437,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             if let problem = updater.rollBack(record) {
                 rollbackFailed(record, problem)
             } else {
-                NSApp.terminate(nil)
+                quit(symphonyStopped: true)
             }
         }
     }
@@ -446,27 +460,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
 
     /// Quitting stops an owned Symphony first, after confirming when agent runs are active. An Inbox answer held for
     /// Undo, and the look of the ticket page shown, are sent before, while Symphony still runs to take them.
+    /// Once the app stopped Symphony itself to quit, nothing is left to take them, and the quit ends at once.
+    /// Each send waits at most `QuitPlan.sendTimeout`.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard runner.isRunning || symphonyWindow.holdsAnswer || symphonyWindow.holdsLook else { return .terminateNow }
+        let plan = QuitPlan(
+            symphonyRunning: runner.isRunning,
+            symphonyStopping: runner.isStopping,
+            stoppedToQuit: stoppedToQuit,
+            holdsAnswer: symphonyWindow.holdsAnswer,
+            holdsLook: symphonyWindow.holdsLook
+        )
+        guard !plan.endsNow else { return .terminateNow }
 
+        quitPending = true
         Task {
-            if runner.isRunning, !runner.isStopping, let message = StatusMenu.quitConfirmation(activeRuns: await runner.activeRunCount()) {
+            let reply: (Bool) -> Void = { [weak self] quits in
+                guard let self, quitPending else { return }
+                quitPending = false
+                sender.reply(toApplicationShouldTerminate: quits)
+            }
+            if plan.confirmsActiveRuns, let message = StatusMenu.quitConfirmation(activeRuns: await runner.activeRunCount()) {
                 let alert = NSAlert()
                 alert.messageText = "Quit Symphony?"
                 alert.informativeText = message
                 alert.addButton(withTitle: "Quit")
                 alert.addButton(withTitle: "Cancel")
-                guard SymphonyRunner.confirm(alert) else {
-                    sender.reply(toApplicationShouldTerminate: false)
-                    return
-                }
+                guard SymphonyRunner.confirm(alert) else { return reply(false) }
             }
-            await symphonyWindow.sendHeldAnswer()
-            await symphonyWindow.sendLook()
-            guard runner.isRunning else { return sender.reply(toApplicationShouldTerminate: true) }
-            runner.stop { sender.reply(toApplicationShouldTerminate: true) }
+            if plan.sendsHeldAnswer {
+                await Bounded.wait(seconds: QuitPlan.sendTimeout) { @MainActor in await self.symphonyWindow.sendHeldAnswer() }
+            }
+            if plan.sendsLook {
+                await Bounded.wait(seconds: QuitPlan.sendTimeout) { @MainActor in await self.symphonyWindow.sendLook() }
+            }
+            runner.stop { reply(true) }
         }
         return .terminateLater
+    }
+
+    /// Quits once the current main-queue block has returned. `NSApp.terminate` spins a nested run loop while
+    /// `applicationShouldTerminate` waits; called from inside a main-queue block (a child-exit callback), that loop
+    /// can't run main-queue work, so the quit's own sends and the signal handler never ran (TP-1475). A run-loop
+    /// block runs outside the main queue's blocks.
+    private func quit(symphonyStopped: Bool) {
+        stoppedToQuit = symphonyStopped
+        RunLoop.main.perform(inModes: [.common]) { MainActor.assumeIsolated { NSApp.terminate(nil) } }
     }
 
     /// A signal skips `applicationShouldTerminate`, so stop Symphony here, without asking, then exit. The exit runs
@@ -873,8 +911,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     /// Starts the update helper and quits. When the helper can't start, Symphony comes back as it was.
     private func handOff(_ update: PreparedUpdate, symphonyStopped: Bool, resumeDispatch: Bool) {
         do {
-            try updater.handOff(update, symphonyStopped: symphonyStopped, resumeDispatch: resumeDispatch)
-            NSApp.terminate(nil)
+            let helper = try updater.handOff(update, symphonyStopped: symphonyStopped, resumeDispatch: resumeDispatch)
+            helperWatch = ProcessExitWatch(pid: helper, queue: .main) { [weak self] exit in
+                MainActor.assumeIsolated {
+                    self?.helperGaveUp(exit, update: update, symphonyStopped: symphonyStopped, resumeDispatch: resumeDispatch)
+                }
+            }
+            quit(symphonyStopped: symphonyStopped)
         } catch {
             updater.fail(error.localizedDescription)
             guard symphonyStopped else { return }
@@ -882,6 +925,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             resumeWhenAnswering = resumeDispatch
             startSymphony(nil)
         }
+    }
+
+    /// The update helper exited while the app still runs: it gave up waiting for the app to quit and swapped
+    /// nothing. A quit still waiting is called off, the menu says the update didn't apply, and a Symphony the drain
+    /// stopped starts again.
+    private func helperGaveUp(_ exit: ChildExit, update: PreparedUpdate, symphonyStopped: Bool, resumeDispatch: Bool) {
+        helperWatch = nil
+        stoppedToQuit = false
+        if quitPending {
+            quitPending = false
+            NSApp.reply(toApplicationShouldTerminate: false)
+        }
+        updater.helperGaveUp(exit, version: update.release.version)
+        guard symphonyStopped, !runner.isRunning else { return }
+        // Cleared again when the start fails; resumes only once the started Symphony answers.
+        resumeWhenAnswering = resumeDispatch
+        startSymphony(nil)
     }
 
     /// Why Update is off, nil when it is available.
