@@ -183,9 +183,10 @@ public enum SidebarItem: Hashable {
     case page(SymphonyView)
 }
 
-/// The Journal (TP-1459): what it holds, as its subtitle says.
+/// The Journal (TP-1459): what it holds, as its subtitle says. One line within the toolbar title's width (design
+/// system: at most 260 pt), so it reads whole (TP-1489).
 public enum Journal {
-    public static let explanation = "What happened while you were away: the notable events of every ticket"
+    public static let explanation = "What happened while you were away"
 }
 
 /// The sidebar: the five destinations in the design's order, Factory with its pages under it (TP-1455).
