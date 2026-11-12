@@ -312,8 +312,8 @@ public struct TimelineModel: Equatable {
         }
         let runItems: [TimelineItem] = runs.compactMap { run in
             let header = history.runs[run.id]
-            let first = history.events.lazy.filter { $0.runID == run.id }.compactMap { $0.at.flatMap(TicketPage.date) }.first
-            guard let at = header?.startedAt.flatMap(TicketPage.date) ?? first else { return nil }
+            let first = history.events.lazy.filter { $0.runID == run.id }.compactMap(\.date).first
+            guard let at = header?.startedDate ?? first else { return nil }
             return .run(run, at: at)
         }
         let entries = self.entries(history, reference: reference).map { entry in
@@ -388,22 +388,12 @@ public struct TimelineModel: Equatable {
 
     /// "Thu 8 Oct".
     static func dayDate(_ date: Date, _ calendar: Calendar) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.dateFormat = "EEE d MMM"
-        return formatter.string(from: date)
+        SharedDateFormatter.string(date, format: "EEE d MMM", calendar: calendar)
     }
 
     /// "09:02", in `calendar`'s time zone.
     public static func clock(_ calendar: Calendar) -> (Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.dateFormat = "HH:mm"
-        return { formatter.string(from: $0) }
+        { SharedDateFormatter.string($0, format: "HH:mm", calendar: calendar) }
     }
 
     // MARK: - Entries
@@ -433,7 +423,7 @@ public struct TimelineModel: Equatable {
         var rules: [(event: TicketEventsPayload.Event, at: Date, order: Int)] = []
 
         for (order, event) in history.events.enumerated() {
-            guard let at = event.at.flatMap(TicketPage.date), !silentTypes.contains(event.type) else { continue }
+            guard let at = event.date, !silentTypes.contains(event.type) else { continue }
             if let runID = event.runID, history.runs[runID] != nil, runTypes.contains(event.type) { continue }
             if event.type == "situation.changed", !situationsShown.contains(event.payload.to ?? "") { continue }
             if event.type == "rule.action", ruleCauses.contains(event.payload.action ?? "") {

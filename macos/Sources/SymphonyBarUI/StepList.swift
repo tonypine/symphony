@@ -212,11 +212,7 @@ struct TranscriptLineRow: View {
 
     /// "14:02:07".
     static func clock(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = NSTimeZone.default
-        formatter.dateFormat = "HH:mm:ss"
-        return formatter.string(from: date)
+        SharedDateFormatter.string(date, format: "HH:mm:ss", timeZone: NSTimeZone.default)
     }
 }
 

@@ -127,16 +127,12 @@ public struct ContextCard: Equatable {
     /// "05:48" for a time today in `calendar`'s time zone, else its date with the time: "Oct 7, 05:48", and the year
     /// once it isn't this one.
     static func time(_ date: Date, now: Date, calendar: Calendar) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.locale = calendar.locale ?? .current
-        formatter.dateFormat = "HH:mm"
-        let clock = formatter.string(from: date)
+        let locale = calendar.locale ?? .current
+        let clock = SharedDateFormatter.string(date, format: "HH:mm", locale: locale, calendar: calendar)
         guard !calendar.isDate(date, inSameDayAs: now) else { return clock }
         let sameYear = calendar.component(.year, from: date) == calendar.component(.year, from: now)
-        formatter.setLocalizedDateFormatFromTemplate(sameYear ? "MMMd" : "yMMMd")
-        return "\(formatter.string(from: date)), \(clock)"
+        let day = SharedDateFormatter.string(date, format: sameYear ? "MMMd" : "yMMMd", template: true, locale: locale, calendar: calendar)
+        return "\(day), \(clock)"
     }
 }
 

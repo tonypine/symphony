@@ -16,7 +16,9 @@ public struct TranscriptLine: Equatable, Hashable, Decodable {
     public var kind: Kind
     public var text: String
     /// When it happened, as Symphony wrote it; nil when the source gave no time.
-    public var at: String?
+    public var at: String? { didSet { date = at.flatMap(TicketPage.date) } }
+    /// `at` read once, when the line is made or its `at` changes.
+    public private(set) var date: Date?
     /// How long the tool took, on a result.
     public var durationMs: Int?
     /// True on a result whose tool failed.
@@ -28,6 +30,7 @@ public struct TranscriptLine: Equatable, Hashable, Decodable {
         self.kind = kind
         self.text = text
         self.at = at
+        self.date = at.flatMap(TicketPage.date)
         self.durationMs = durationMs
         self.failed = failed
     }
@@ -37,6 +40,7 @@ public struct TranscriptLine: Equatable, Hashable, Decodable {
         kind = try container.decode(Kind.self, forKey: .kind)
         text = try container.decode(String.self, forKey: .text)
         at = try? container.decodeIfPresent(String.self, forKey: .at)
+        date = at.flatMap(TicketPage.date)
         durationMs = try? container.decodeIfPresent(Int.self, forKey: .durationMs)
         failed = (try? container.decodeIfPresent(Bool.self, forKey: .failed)) == true
     }
@@ -48,8 +52,6 @@ public struct TranscriptLine: Equatable, Hashable, Decodable {
             .split(whereSeparator: \.isNewline)
             .compactMap { try? decoder.decode(TranscriptLine.self, from: Data($0.utf8)) }
     }
-
-    public var date: Date? { at.flatMap(TicketPage.date) }
 
     /// A tool call's tool: "Bash" of "Bash: mix test". Nil on another kind, or a call with no name before a colon.
     public var toolName: String? {
@@ -102,12 +104,26 @@ public struct RunNow: Equatable {
     public struct CurrentStep: Equatable, Decodable {
         public var id: String
         public var title: String?
-        public var startedAt: String?
+        public var startedAt: String? { didSet { startedDate = startedAt.flatMap(TicketPage.date) } }
+        /// `startedAt` read once, when the step is made or its `startedAt` changes.
+        public private(set) var startedDate: Date?
+
+        enum CodingKeys: String, CodingKey { case id, title, startedAt }
 
         public init(id: String, title: String? = nil, startedAt: String? = nil) {
             self.id = id
             self.title = title
             self.startedAt = startedAt
+            self.startedDate = startedAt.flatMap(TicketPage.date)
+        }
+
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.init(
+                id: try container.decode(String.self, forKey: .id),
+                title: try container.decodeIfPresent(String.self, forKey: .title),
+                startedAt: try container.decodeIfPresent(String.self, forKey: .startedAt)
+            )
         }
     }
 
@@ -394,8 +410,8 @@ public struct RunGroupModel: Equatable, Identifiable {
         }
         let started = events.first { $0.type == "run.started" }
         let ended = events.last { $0.type == "run.ended" }
-        let startedAt = run.startedAt.flatMap(TicketPage.date) ?? started?.at.flatMap(TicketPage.date)
-        let endedAt = run.endedAt.flatMap(TicketPage.date) ?? ended?.at.flatMap(TicketPage.date)
+        let startedAt = run.startedDate ?? started?.date
+        let endedAt = run.endedDate ?? ended?.date
         let duration: Int? = if let ms = ended?.payload.durationMs {
             ms / 1_000
         } else if let startedAt, let end = endedAt ?? (state == .running ? reference : nil) {
@@ -438,7 +454,7 @@ public struct RunGroupModel: Equatable, Identifiable {
 
         for event in events where event.type == "step.started" || event.type == "step.completed" {
             guard let stepID = event.payload.stepID?.trimmingWhitespace().nonEmpty else { continue }
-            let at = event.at.flatMap(TicketPage.date)
+            let at = event.date
             if event.type == "step.started" {
                 _ = begin(stepID, title: event.payload.title, at: at)
                 continue
@@ -458,7 +474,7 @@ public struct RunGroupModel: Equatable, Identifiable {
 
         // The run now's step, written to the read before the feed has its start.
         if live, let current = runNow?.currentStep, !steps.contains(where: { $0.stepID == current.id && $0.state == .current }) {
-            _ = begin(current.id, title: current.title, at: current.startedAt.flatMap(TicketPage.date))
+            _ = begin(current.id, title: current.title, at: current.startedDate)
         }
 
         for index in steps.indices where steps[index].state == .current {

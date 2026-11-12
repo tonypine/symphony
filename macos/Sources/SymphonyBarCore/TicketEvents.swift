@@ -197,7 +197,10 @@ public struct TicketEventsPayload: Equatable {
     public struct Event: Equatable {
         public var id: String
         public var seq: Int?
-        public var at: String?
+        /// When it happened, as Symphony wrote it; `date` holds it read, so no view parses it again.
+        public var at: String? { didSet { date = at.flatMap(TicketPage.date) } }
+        /// `at` read once, when the event is made or its `at` changes; nil when it has none or it doesn't read.
+        public private(set) var date: Date?
         public var type: String
         public var runID: String?
         public var parent: String?
@@ -207,6 +210,24 @@ public struct TicketEventsPayload: Equatable {
         public var artifacts: [Artifact]
         /// Later than when the person last looked at the ticket (`new`), or they never did.
         public var isNew: Bool = false
+
+        public init(
+            id: String, seq: Int?, at: String?, type: String, runID: String?, parent: String?, actor: Actor?,
+            summary: Summary?, payload: Payload, artifacts: [Artifact], isNew: Bool = false
+        ) {
+            self.id = id
+            self.seq = seq
+            self.at = at
+            self.date = at.flatMap(TicketPage.date)
+            self.type = type
+            self.runID = runID
+            self.parent = parent
+            self.actor = actor
+            self.summary = summary
+            self.payload = payload
+            self.artifacts = artifacts
+            self.isNew = isNew
+        }
     }
 
     /// A run's verdict, when one names it.
@@ -226,12 +247,35 @@ public struct TicketEventsPayload: Equatable {
         public var status: String?
         public var exit: String?
         public var verdict: Verdict?
-        public var startedAt: String?
-        public var endedAt: String?
+        public var startedAt: String? { didSet { startedDate = startedAt.flatMap(TicketPage.date) } }
+        public var endedAt: String? { didSet { endedDate = endedAt.flatMap(TicketPage.date) } }
+        /// `startedAt` and `endedAt` read once, when the header is made or they change.
+        public private(set) var startedDate: Date?
+        public private(set) var endedDate: Date?
         public var head: String?
         /// The model the run used and its effort, nil when Symphony didn't say.
         public var model: String? = nil
         public var effort: String? = nil
+
+        public init(
+            runID: String, runKind: String? = nil, runNumber: Int? = nil, status: String? = nil, exit: String? = nil,
+            verdict: Verdict? = nil, startedAt: String? = nil, endedAt: String? = nil, head: String? = nil,
+            model: String? = nil, effort: String? = nil
+        ) {
+            self.runID = runID
+            self.runKind = runKind
+            self.runNumber = runNumber
+            self.status = status
+            self.exit = exit
+            self.verdict = verdict
+            self.startedAt = startedAt
+            self.endedAt = endedAt
+            self.startedDate = startedAt.flatMap(TicketPage.date)
+            self.endedDate = endedAt.flatMap(TicketPage.date)
+            self.head = head
+            self.model = model
+            self.effort = effort
+        }
     }
 
     /// The headers of the runs the history holds, by run id.
@@ -303,7 +347,7 @@ public struct TicketEventsPayload: Equatable {
     }
 
     /// When the newest event the history holds happened.
-    public var newestEventAt: Date? { events.compactMap { $0.at.flatMap(TicketPage.date) }.max() }
+    public var newestEventAt: Date? { events.compactMap(\.date).max() }
 
     // MARK: - The timeline
 
@@ -353,8 +397,7 @@ public struct TicketEventsPayload: Equatable {
                 let inside = (members[.run(runID)] ?? []).filter { !Self.headerTypes.contains($0.type) }
                 // The verdict closes its run: the last row, whenever it was written.
                 let ordered = inside.filter { $0.type != "verdict.recorded" } + inside.filter { $0.type == "verdict.recorded" }
-                let started = run.startedAt.flatMap(TicketPage.date)
-                    ?? (members[.run(runID)] ?? []).lazy.compactMap { $0.at.flatMap(TicketPage.date) }.first
+                let started = run.startedDate ?? (members[.run(runID)] ?? []).lazy.compactMap(\.date).first
                 guard let started else { continue }
                 steps.append(Self.runStep(run, started: started, children: ordered.map(step), reference: reference, clock: clock))
             }
@@ -415,7 +458,7 @@ public struct TicketEventsPayload: Equatable {
         _ run: Run, started: Date, children: [TicketPage.Step], reference: Date, clock: (Date) -> String
     ) -> TicketPage.Step {
         let (result, word) = runState(run)
-        let ended = run.endedAt.flatMap(TicketPage.date)
+        let ended = run.endedDate
         let end = ended ?? (run.status?.lowercased() == "running" ? reference : nil)
         return TicketPage.Step(
             id: "run-\(run.runID)", time: started, timeText: clock(started),
@@ -426,7 +469,7 @@ public struct TicketEventsPayload: Equatable {
     }
 
     static func eventStep(_ event: Event, children: [TicketPage.Step], clock: (Date) -> String) -> TicketPage.Step {
-        let at = event.at.flatMap(TicketPage.date) ?? Date(timeIntervalSince1970: 0)
+        let at = event.date ?? Date(timeIntervalSince1970: 0)
         let personNote = event.type == "note" && event.actor?.kind == "person"
         let title = personNote ? TicketPage.noteByYou : event.summary?.title?.trimmedNonEmpty ?? event.type
         return TicketPage.Step(
@@ -473,7 +516,7 @@ public struct TicketEventsPayload: Equatable {
             let left = lhs.element, right = rhs.element
             if let l = left.seq, let r = right.seq, l != r { return l < r }
             if left.seq == nil || right.seq == nil,
-               let l = left.at.flatMap(TicketPage.date), let r = right.at.flatMap(TicketPage.date), l != r {
+               let l = left.date, let r = right.date, l != r {
                 return l < r
             }
             return lhs.offset < rhs.offset

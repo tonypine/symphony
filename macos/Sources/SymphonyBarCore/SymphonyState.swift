@@ -954,9 +954,10 @@ public enum SymphonyState {
         return decoder
     }()
 
-    /// Symphony writes whole-second UTC timestamps, for example `2026-10-02T12:16:02Z`.
+    /// Symphony writes whole-second UTC timestamps, for example `2026-10-02T12:16:02Z`; read with the shared style, so
+    /// no formatter is made per call.
     static func parseDate(_ text: String) -> Date? {
-        ISO8601DateFormatter().date(from: text)
+        TicketPage.date(text)
     }
 
     /// An unknown phase reads as paused, the hold every Symphony with `usage_limits` reports.
