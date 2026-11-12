@@ -46,7 +46,11 @@ defmodule SymphonyElixir.TicketEvents.RunEnds do
     starts = Enum.filter(events, &(&1.type == "run.started" and is_binary(Map.get(&1.payload, :run_id))))
 
     last_seen =
-      for %Event{type: type, run_id: run_id, at: at} <- events, type in @activity_types, is_binary(run_id), into: %{}, do: {run_id, at}
+      for %Event{type: type, run_id: run_id, at: at} <- events,
+          type in @activity_types,
+          is_binary(run_id),
+          into: %{},
+          do: {run_id, at}
 
     starts
     |> Enum.with_index()
