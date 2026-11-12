@@ -1,0 +1,41 @@
+{
+  "issue_identifier": "SHOP-501",
+  "issue_id": "i-SHOP-501",
+  "connected": {
+    "epic": {
+      "identifier": "SHOP-500",
+      "title": "Gift cards",
+      "done": 3,
+      "total": 3,
+      "incomplete": false,
+      "tickets": [
+        {
+          "identifier": "SHOP-501",
+          "title": "Gift card balance",
+          "state": "Done",
+          "situation": "done",
+          "current": true
+        },
+        {
+          "identifier": "SHOP-502",
+          "title": "Redeem a gift card at checkout",
+          "state": "Done",
+          "situation": "done",
+          "current": false
+        },
+        {
+          "identifier": "SHOP-503",
+          "title": "Gift card emails",
+          "state": "Done",
+          "situation": "done",
+          "current": false
+        }
+      ]
+    },
+    "blocked_by": [],
+    "blocks": [],
+    "parent": null,
+    "sub_tickets": [],
+    "related": []
+  }
+}

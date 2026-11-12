@@ -165,6 +165,16 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertNil(Destination.factory.badge(waitingOnYou: 4, setup: SetupSummary()))
     }
 
+    func testWorkCountsTheEpicsWaitingOnAPerson() {
+        XCTAssertEqual(
+            Destination.work.badge(waitingOnYou: 4, setup: SetupSummary(), epicsWaiting: 2),
+            DestinationBadge(count: 2, status: .you, accessibilityValue: "2 epics waiting on you")
+        )
+        XCTAssertEqual(Destination.work.badge(waitingOnYou: 0, setup: SetupSummary(), epicsWaiting: 1)?.accessibilityValue, "1 epic waiting on you")
+        XCTAssertNil(Destination.work.badge(waitingOnYou: 4, setup: SetupSummary(), epicsWaiting: 0))
+        XCTAssertNil(Destination.journal.badge(waitingOnYou: 4, setup: SetupSummary(), epicsWaiting: 2))
+    }
+
     func testRestoresTheSavedViewWhenItShowsInTheWindow() {
         let sidebar = Sidebar()
         XCTAssertEqual(sidebar.restoredView(saved: "diagnostics"), .diagnostics)

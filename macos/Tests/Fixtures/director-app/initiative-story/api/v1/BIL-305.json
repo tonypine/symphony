@@ -1,0 +1,56 @@
+{
+  "issue_identifier": "BIL-305",
+  "issue_id": "i-BIL-305",
+  "connected": {
+    "epic": {
+      "identifier": "BIL-300",
+      "title": "Annual plans",
+      "done": 1,
+      "total": 4,
+      "incomplete": false,
+      "tickets": [
+        {
+          "identifier": "BIL-301",
+          "title": "Annual price in the plan catalog",
+          "state": "Done",
+          "situation": "done",
+          "current": false
+        },
+        {
+          "identifier": "BIL-304",
+          "title": "Annual plan FAQ page",
+          "state": "Todo",
+          "situation": "waiting_for_slot",
+          "current": false
+        },
+        {
+          "identifier": "BIL-302",
+          "title": "Charge the year up front",
+          "state": "Code Review",
+          "situation": "waiting_for_ci",
+          "current": false
+        },
+        {
+          "identifier": "BIL-305",
+          "title": "Prorate a switch to annual",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": true
+        }
+      ]
+    },
+    "blocked_by": [
+      {
+        "identifier": "BIL-302",
+        "title": "Charge the year up front",
+        "state": "Code Review",
+        "status": "open",
+        "resolved_at": null
+      }
+    ],
+    "blocks": [],
+    "parent": null,
+    "sub_tickets": [],
+    "related": []
+  }
+}
