@@ -8,7 +8,6 @@ defmodule SymphonyElixir.EpicReview.MainCiTest do
   alias SymphonyElixir.{Pauses, RunStore}
 
   @repo_key "default"
-  @issue_id "issue-epic"
   @ticket {:ticket, "default", "issue-epic"}
   @sha "b98572e58594a4f0c3b1e2d3c4b5a69788796a5b"
   @new_sha "c0ffee58594a4f0c3b1e2d3c4b5a69788796a5bb"
@@ -103,7 +102,7 @@ defmodule SymphonyElixir.EpicReview.MainCiTest do
     end
 
     test "dispatches the epic when the pause can't be written" do
-      log = capture_log(fn -> assert MainCi.hold(@epic, @repo_key, opts(gh(@sha, %{@sha => [run("release", "in_progress")]}), pauses: RefusingPauses)) == :ready end)
+      log = capture_log(fn -> assert MainCi.hold(@epic, @repo_key, opts(gh(@sha, %{@sha => [run("release", "in_progress")]}), pauses: __MODULE__.RefusingPauses)) == :ready end)
       assert log =~ "Could not hold the epic review for TP-1381 on CI: :store_down; dispatching it"
     end
   end
@@ -148,11 +147,11 @@ defmodule SymphonyElixir.EpicReview.MainCiTest do
     end
 
     test "checks nothing when the store can't be read" do
-      assert MainCi.recheck(run_store: DownStore) == []
+      assert MainCi.recheck(run_store: __MODULE__.DownStore) == []
     end
 
     test "runs in a task of its own, and a supervisor that isn't there is logged" do
-      assert {:ok, pid} = MainCi.start_recheck(run_store: DownStore)
+      assert {:ok, pid} = MainCi.start_recheck(run_store: __MODULE__.DownStore)
       ref = Process.monitor(pid)
       assert_receive {:DOWN, ^ref, :process, ^pid, _reason}
 
