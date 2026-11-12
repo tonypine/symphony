@@ -27,10 +27,12 @@ defmodule SymphonyElixir.EpicReview do
        when the parent is already there.
     3. The **agent pass**: `SymphonyElixir.QaAgent` in its epic-review mode, journey-driven, in a
        throwaway worktree at the head of the base branch — the epic's intent against what actually
-       shipped on the default branch, with every checklist row reported. It waits for CI: while a
-       workflow run on that commit is still going, the agent does not start and the run ends with
-       `{:error, {:ci_pending, info}}`, which the orchestrator retries after a short wait without
-       counting an attempt. The parent stays in `Epic Review`, nothing is recorded, and no block
+       shipped on the default branch, with every checklist row reported. It waits for CI: the
+       orchestrator does not dispatch the review while a workflow run on the base branch's head is
+       still going (`SymphonyElixir.EpicReview.MainCi`, checked before dispatch and lifted by the
+       completion of CI on the commit). Should CI start between that check and the run, the agent
+       does not start and the run ends with `{:error, {:ci_pending, info}}`, which the orchestrator
+       retries after a short wait without counting an attempt. The parent stays in `Epic Review`, nothing is recorded, and no block
        reaches the self-heal lane: a review started the moment the last sub-ticket merged would
        otherwise judge a commit CI has not finished with. A run still unfinished after two hours
        is not waited on: the review runs and reports it, so stuck CI blocks and self-heals as any
@@ -86,7 +88,7 @@ defmodule SymphonyElixir.EpicReview do
   }
 
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
-  alias SymphonyElixir.EpicReview.CiRerun
+  alias SymphonyElixir.EpicReview.{CiRerun, MainCi}
   alias SymphonyElixir.GitHub.{CiLog, PullRequest}
   alias SymphonyElixir.Linear.{Issue, TransientRetry}
   alias SymphonyElixir.QaAgent
@@ -110,9 +112,6 @@ defmodule SymphonyElixir.EpicReview do
   # Longer than the review a lost verdict would redo, so a rate limit that outlasts the default
   # five-minute wait does not throw the verdict away.
   @verdict_move_max_wait_ms 30 * 60_000
-  # How long the review waits for a workflow run on the commit under review to finish. Longer than
-  # any healthy run of CI; a run still going after it is stuck, and the review reports it.
-  @ci_wait_limit_seconds 2 * 3600
   # A follow-up about CI quotes the failed jobs of at most this many runs, each job's last lines,
   # at most this many characters of them: enough for the cause, small enough for a ticket.
   @ci_log_runs 3
@@ -338,7 +337,7 @@ defmodule SymphonyElixir.EpicReview do
   # every run finished, a failed one is rerun once per commit before it can become a gap
   # (`SymphonyElixir.EpicReview.CiRerun`), and the review waits for that rerun too. Anything that
   # keeps the wait from being sure is not waited on, and the review runs as it would without the
-  # wait: runs that cannot be read, and a run still unfinished after `@ci_wait_limit_seconds`, which
+  # wait: runs that cannot be read, and a run still unfinished after `MainCi.stuck_seconds/0`, which
   # the agent then reports.
   defp ci_gate(issue, workspace, sha, opts) do
     case PullRequest.list_commit_runs(sha, [cwd: workspace] ++ Keyword.take(opts, [:gh_runner])) do
@@ -361,15 +360,7 @@ defmodule SymphonyElixir.EpicReview do
     CiRerun.check(repo_key(issue, opts), issue.id, sha, runs, [workspace: workspace] ++ Keyword.take(opts, [:gh_runner]))
   end
 
-  defp pending_ci_runs(runs, opts) do
-    now = Keyword.get_lazy(opts, :now, &DateTime.utc_now/0)
-    Enum.filter(runs, &(unfinished_run?(&1) and not stuck_run?(&1, now)))
-  end
-
-  defp unfinished_run?(%{status: status}), do: is_binary(status) and status != "COMPLETED"
-
-  defp stuck_run?(%{created_at: %DateTime{} = created_at}, now), do: DateTime.diff(now, created_at) > @ci_wait_limit_seconds
-  defp stuck_run?(_run, _now), do: false
+  defp pending_ci_runs(runs, opts), do: MainCi.pending_runs(runs, Keyword.get_lazy(opts, :now, &DateTime.utc_now/0))
 
   defp run_label(run), do: "#{run.workflow_name || "a workflow"} (#{run.url || run.id})"
 

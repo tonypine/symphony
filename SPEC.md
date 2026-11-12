@@ -3334,7 +3334,11 @@ Rules:
   as its competitor lands or leaves the race, and `Unblock` clears every one of them and no other
   reason. Beside a CI-wait hold, the pause waits on an `environment` reason ("Waiting for CI on
   <commit> to finish"), which clears when CI on that commit completes or the epic review finds CI
-  settled on its commit; beside
+  settled on its commit. An epic review is not dispatched while a workflow run on the head of its
+  base branch is unfinished: the epic is paused on an `environment` reason of the same condition
+  ("Waiting for CI on <branch> at <commit>: <workflows> still running"), which clears once no
+  workflow run on that commit is unfinished, on the completion delivery of its last run or at boot,
+  and the dispatch that follows reads the base branch again; beside
   self-heal's access hold, on one naming the broken QA component ("The QA machine is not
   reachable"), which clears when a QA pass or an epic review reaches a pass or fail verdict. `Unblock`
   clears both. A ticket stopped, held back by its blockers or on a hold is listed under

@@ -33,6 +33,7 @@ defmodule SymphonyElixir.CiWait do
   require Logger
 
   alias SymphonyElixir.{Pauses, TicketState}
+  alias SymphonyElixir.EpicReview.MainCi
 
   @signal "ci_wait"
   @start_signal "ci_wait_started"
@@ -141,8 +142,10 @@ defmodule SymphonyElixir.CiWait do
   CI on commit `sha` completed (success or failure): clears the CI-wait reason naming that commit
   from every ticket's pause in the store, by the CI-wait rule, and returns the ids of the tickets it
   lifted. Tickets waiting on another commit, and reasons backfilled from holds (which name no
-  commit), stay. `opts`: `:run_store` (default `SymphonyElixir.RunStore`) and `:pauses` (default
-  `SymphonyElixir.Pauses`).
+  commit), stay. An epic's wait before dispatch (`SymphonyElixir.EpicReview.MainCi`) lifts only once
+  no workflow run on the commit is still going (`MainCi.settled?/3`). `opts`: `:run_store` (default
+  `SymphonyElixir.RunStore`), `:pauses` (default `SymphonyElixir.Pauses`), `:main_ci` (default
+  `SymphonyElixir.EpicReview.MainCi`) and those of `MainCi.settled?/3`.
   """
   @spec finished(String.t() | nil, keyword()) :: [String.t()]
   def finished(sha, opts) when is_binary(sha) and sha != "" do
@@ -150,7 +153,9 @@ defmodule SymphonyElixir.CiWait do
 
     for %{issue_id: issue_id, repo_key: repo_key} = record <- ticket_records(opts),
         is_binary(issue_id) and is_binary(repo_key),
-        Enum.any?(TicketState.pause_reasons(record), &names?(&1, sha)),
+        reasons <- [Enum.filter(TicketState.pause_reasons(record), &names?(&1, sha))],
+        reasons != [],
+        settled?(reasons, sha, repo_key, opts),
         lifted?(Keyword.get(opts, :pauses, Pauses), repo_key, issue_id, sha) do
       Logger.info("CI on #{String.slice(sha, 0, 12)} finished; lifted the CI wait of issue_id=#{issue_id} issue_identifier=#{record.issue_identifier}")
       issue_id
@@ -158,6 +163,16 @@ defmodule SymphonyElixir.CiWait do
   end
 
   def finished(_sha, _opts), do: []
+
+  # An epic waiting before dispatch for CI on the base branch (`SymphonyElixir.EpicReview.MainCi`)
+  # waits for every workflow run on the commit, so one run finishing among several lifts nothing
+  # while another is still going; the completion of the last one does.
+  defp settled?(reasons, sha, repo_key, opts) do
+    not Enum.any?(reasons, &main_ci_reason?/1) or Keyword.get(opts, :main_ci, MainCi).settled?(sha, repo_key, opts)
+  end
+
+  defp main_ci_reason?(%{waits_on: %{head: head}}), do: is_binary(head)
+  defp main_ci_reason?(_reason), do: false
 
   defp ticket_records(opts) do
     case Keyword.get(opts, :run_store, SymphonyElixir.RunStore).list_all_ticket_states() do

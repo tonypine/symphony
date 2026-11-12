@@ -122,6 +122,17 @@ defmodule SymphonyElixir.CiWaitPauseTest do
     def list_all_ticket_states, do: {:error, :store_down}
   end
 
+  defmodule StillRunning do
+    def settled?(sha, repo_key, _opts) do
+      send(self(), {:settled?, sha, repo_key})
+      false
+    end
+  end
+
+  defmodule AllDone do
+    def settled?(_sha, _repo_key, _opts), do: true
+  end
+
   defmodule RefusingPauses do
     def clear_reasons(_subject, _match, _opts), do: {:error, :store_down}
   end
@@ -159,6 +170,18 @@ defmodule SymphonyElixir.CiWaitPauseTest do
       assert :ok = CiWait.clear_pause("default", "issue-1", @director)
       assert {:ok, nil} = Pauses.get(@ticket)
       assert CiWait.finished(@sha) == []
+    end
+
+    test "an epic waiting before dispatch is lifted only once no workflow run on the commit is still going (TP-1476)" do
+      reason = SymphonyElixir.EpicReview.MainCi.reason("main", @sha, [%{workflow_name: "release"}])
+      {:ok, _pause} = Pauses.set(@ticket, reason, set_by: %{kind: :rule, name: "CI wait"})
+
+      assert CiWait.finished(@sha, main_ci: StillRunning) == []
+      assert_received {:settled?, @sha, "default"}
+      assert Pauses.paused?(@ticket)
+
+      assert CiWait.finished(@sha, main_ci: AllDone) == ["issue-1"]
+      assert {:ok, nil} = Pauses.get(@ticket)
     end
 
     test "a store that can't be read lifts nothing, and a pause that can't be cleared is logged" do

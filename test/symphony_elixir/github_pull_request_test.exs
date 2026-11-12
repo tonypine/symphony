@@ -1451,6 +1451,28 @@ defmodule SymphonyElixir.GitHub.PullRequestTest do
     end
   end
 
+  describe "branch_head/3" do
+    test "reads the commit the branch is at, lowercase" do
+      sha = "B98572E58594A4F0C3B1E2D3C4B5A69788796A5B"
+
+      runner = fn
+        ["api", "repos/acme/symphony/commits/main", "--jq", ".sha"], _opts -> {sha <> "\n", 0}
+        ["api", "--hostname", "ghe.example", "repos/acme/symphony/commits/release%2F1", "--jq", ".sha"], _opts -> {sha, 0}
+      end
+
+      assert PullRequest.branch_head("acme/symphony", "main", gh_runner: runner) == {:ok, String.downcase(sha)}
+      assert PullRequest.branch_head("ghe.example/acme/symphony", "release/1", gh_runner: runner) == {:ok, String.downcase(sha)}
+    end
+
+    test "reports an unreadable head or repository" do
+      head = fn repo, result -> PullRequest.branch_head(repo, "main", gh_runner: fn _args, _opts -> result end) end
+
+      assert {:error, :invalid_branch_head_payload} = head.("acme/symphony", {"null\n", 0})
+      assert {:error, {:gh_failed, _args, 1, "Not Found"}} = head.("acme/symphony", {"Not Found", 1})
+      assert {:error, :invalid_github_repo} = head.("symphony", {"", 0})
+    end
+  end
+
   describe "fetch_diff/2" do
     test "reads the pull request's head and base branch, then counts the files the compare changes" do
       pr_url = "https://github.com/acme/symphony/pull/132"
