@@ -825,7 +825,7 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     %{
       "name" => "qa_key",
       "description" =>
-        "Press a key, with modifiers, in the launched app's focused window (the app comes to the front first; the key goes to the app alone). Returns the focused window and element. For a keyboard shortcut such as ⌘[ pass key `[` and modifiers [\"command\"].",
+        "Press a key, with modifiers, in the launched app's focused window (the app comes to the front first; the key goes to the app alone, and a ⌘ shortcut goes as a keyboard sends it, so the app's menu runs it). Returns the focused window and element. For a keyboard shortcut such as ⌘[ pass key `[` and modifiers [\"command\"].",
       "inputSchema" => %{
         "type" => "object",
         "additionalProperties" => false,

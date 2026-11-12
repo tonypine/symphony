@@ -152,6 +152,13 @@ jobs:
         timeout-minutes: 10
         run: time python3 -I Tests/qa-scroll-test.py
 
+      # `qa_key`: the QA driver's ⌘ shortcuts reach a fixture app's menu (Back, Inbox, Settings,
+      # Close), and a plain key still types into the focused field.
+      - name: Test the QA driver's key shortcuts
+        working-directory: macos
+        timeout-minutes: 10
+        run: time python3 -I Tests/qa-key-test.py
+
   install-script:
     name: install script
     runs-on: macos-26
