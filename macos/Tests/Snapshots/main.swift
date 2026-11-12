@@ -1502,6 +1502,55 @@ func ticketPageWide(_ identifier: String, width: CGFloat = TicketPageLayout.desk
     .background(DesignTokens.Surface.content.color)
 }
 
+// MARK: - Work › Tickets as the table with filters (TP-1456)
+
+/// The `tickets` fixture's answer to `GET /api/v1/tickets`, and its state for the forced marks and the drawer.
+let ticketsPayload: TicketsPayload = {
+    guard let payload = TicketsPayload.decode(try! Data(contentsOf: situationsAPI.appendingPathComponent("tickets/api/v1/tickets.json"))) else {
+        fatalError("The tickets fixture's tickets read doesn't read")
+    }
+    return payload
+}()
+
+/// Tickets in a window `window` wide less its sidebar and 800 pt tall: the filter bar over the table, with the drawer
+/// on SHOP-301 when `drawer` is set. With chips, the rows are the ones the server lets through, as it would answer.
+@MainActor
+func ticketsTable(window: CGFloat, query: TicketsQuery = TicketsQuery(), drawer: Bool = false) -> some View {
+    let list = TicketList(state: situationsState("tickets"), now: situationsNow, timeZone: TimeZone(identifier: "UTC")!)
+    var payload = ticketsPayload
+    payload.rows = payload.rows.filter { row in
+        query.chips.allSatisfy { chip in
+            switch chip.filter {
+            case .epic: chip.values.contains(row.epic ?? "")
+            case .situation: chip.values.contains(row.text("situation") ?? "")
+            case .priority: chip.values.contains(row.number("priority").map(String.init) ?? "")
+            case .repo: chip.values.contains(row.repoKey ?? "")
+            case .phase: chip.values.contains(row.phase ?? "")
+            case .label: !Set(chip.values).isDisjoint(with: row.labels)
+            case .since: true
+            }
+        }
+    }
+    var values = TicketFilterValues()
+    values.learn(ticketsPayload.rows)
+    return TicketsView(
+        payload: payload, list: list, query: .constant(query), values: values, search: "", selection: .constant("SHOP-301"),
+        drawerShown: .constant(drawer), reference: situationsNow, actions: TicketsActions()
+    )
+    .frame(width: window - DesignTokens.Layout.sidebarWidth, height: 800, alignment: .top)
+    .background(DesignTokens.Surface.content.color)
+}
+
+/// Every column of the catalog shown, sorted by Age, youngest first.
+let everyColumnQuery = TicketsQuery(columns: TicketColumn.catalog.map(\.name), sort: TicketSort(column: "created_at"))
+
+/// Three chips: SHOP-280's sub-tickets, waiting for CI or working, urgent or high.
+let threeChipsQuery = TicketsQuery(chips: [
+    TicketFilterChip(filter: .epic, values: ["SHOP-280"]),
+    TicketFilterChip(filter: .situation, values: ["waiting_for_ci", "working"]),
+    TicketFilterChip(filter: .priority, values: ["1", "2"]),
+])
+
 @MainActor
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     let view = view
@@ -1677,6 +1726,13 @@ MainActor.assumeIsolated {
         render(addRepoCheck(.checked(addRepoAnswer("add-repo-setup-warning", "refresh.1.json"))), scheme, to: "add-repo-check-warning-\(suffix).png")
         render(addRepoCheck(.onNextStart), scheme, to: "add-repo-check-stopped-\(suffix).png")
         render(firstLaunchSetup(), scheme, to: "setup-first-launch-\(suffix).png")
+        // Tickets as the table with filters (TP-1456): the default columns with the drawer, every column, and three
+        // chips set, at the laptop's and the desktop's widths.
+        for (window, name) in [(CGFloat(1440), "laptop"), (2560, "desktop")] {
+            render(ticketsTable(window: window, drawer: true), scheme, to: "tickets-table-default-\(name)-\(suffix).png")
+            render(ticketsTable(window: window, query: everyColumnQuery), scheme, to: "tickets-table-every-column-\(name)-\(suffix).png")
+            render(ticketsTable(window: window, query: threeChipsQuery), scheme, to: "tickets-table-three-chips-\(name)-\(suffix).png")
+        }
         // GitHub updates (TP-953).
         render(githubUpdatesPage(githubSection("github-updates-off")), scheme, to: "github-updates-off-\(suffix).png")
         render(githubUpdatesPage(githubSection("github-updates"), expanded: true), scheme, to: "github-updates-on-\(suffix).png")

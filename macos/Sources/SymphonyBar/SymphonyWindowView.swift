@@ -15,6 +15,7 @@ final class SymphonyWindowModel: ObservableObject {
             guard selection != oldValue else { return }
             destinationMemory.remember(selection)
             onSelect(selection)
+            readTicketsIfDue()
             readHistoryIfDue()
             readQualityIfDue()
             readShippedIfDue()
@@ -57,9 +58,11 @@ final class SymphonyWindowModel: ObservableObject {
         didSet {
             guard scope != oldValue else { return }
             onScopeChange(scope)
-            // Audit asks Symphony for the scope's records.
+            // Audit and Tickets ask Symphony for the scope's records.
             auditReadAt = nil
             readAuditIfDue()
+            ticketsReadAt = nil
+            readTicketsIfDue()
         }
     }
     /// The control request a view sent and Symphony hasn't answered yet.
@@ -193,8 +196,29 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var startInFlight: String?
     /// Stops made from the app, shown on the timeline until their audit record arrives.
     @Published var localStops: [TicketPage.LocalStop] = []
-    /// Tickets' scope bar choice, search and selected row (D6).
-    @Published var ticketFilter: TicketList.Filter = .all
+    /// Tickets' filter chips, columns and sort (TP-1456): kept for the session, and each change reads the rows again.
+    @Published var ticketsQuery = TicketsQuery() {
+        didSet {
+            guard ticketsQuery != oldValue else { return }
+            ticketsReadAt = nil
+            readTicketsIfDue()
+        }
+    }
+    /// The rows `GET /api/v1/tickets` served for the query, read while Tickets shows.
+    @Published var ticketsPayload: TicketsPayload?
+    /// What the last tickets read got when it got no rows, nil after one that did.
+    @Published var ticketsResult: EndpointResult?
+    /// The ticket entity's columns, as `GET /api/v1/views` names them; the documented catalog until it answers.
+    @Published var ticketCatalog = TicketColumn.catalog
+    /// The values the filters' menus offer, learned from the rows read this session.
+    @Published var ticketFilterValues = TicketFilterValues()
+    var ticketCatalogRead = false
+    var readingTickets = false
+    var ticketsReadAgain = false
+    /// When the rows were last read: a state poll reads them again at most every `ticketsInterval`.
+    var ticketsReadAt: Date?
+    static let ticketsInterval: TimeInterval = 5
+    /// Tickets' search, which narrows the rows by identifier and title, and its selected row (D6).
     @Published var ticketSearch = ""
     @Published var ticketSelection: String?
     /// Tickets' inspector (⌥⌘I, Space).
@@ -343,6 +367,7 @@ final class SymphonyWindowModel: ObservableObject {
                 readReposIfDue()
                 readInbox()
                 readInitiatives()
+                readTicketsIfDue()
                 readHistoryIfDue()
                 readQualityIfDue()
                 readShippedIfDue()
