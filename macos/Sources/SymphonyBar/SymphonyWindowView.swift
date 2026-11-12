@@ -21,6 +21,7 @@ final class SymphonyWindowModel: ObservableObject {
             readQualityIfDue()
             readShippedIfDue()
             readAuditIfDue()
+            readJournalIfDue()
         }
     }
 
@@ -64,6 +65,7 @@ final class SymphonyWindowModel: ObservableObject {
             readAuditIfDue()
             ticketsReadAt = nil
             readTicketsIfDue()
+            restartJournal()
         }
     }
     /// The control request a view sent and Symphony hasn't answered yet.
@@ -206,6 +208,24 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var startInFlight: String?
     /// Stops made from the app, shown on the timeline until their audit record arrives.
     @Published var localStops: [TicketPage.LocalStop] = []
+    /// The Journal's filters (TP-1459): kept for the session, and each change reads the newest page again.
+    @Published var journalQuery = JournalQuery() {
+        didSet {
+            guard journalQuery != oldValue else { return }
+            restartJournal()
+        }
+    }
+    /// The Journal's pages read under its query and the window's scope, newest first.
+    @Published var journalFeed = JournalFeed()
+    /// What the last Journal read got when it got no page, nil after one that did.
+    @Published var journalResult: EndpointResult?
+    /// Show Earlier's read on its way.
+    @Published var journalReadingEarlier = false
+    var readingJournal = false
+    /// When the newest page was last read: a state poll reads it again at most every `ticketSlowInterval`.
+    var journalReadAt: Date?
+    /// The event a ticket page opens at, from a Journal row (TP-1459): the page selects it and scrolls to it.
+    @Published var ticketFocus: TimelineFocus?
     /// Tickets' filter chips, columns and sort (TP-1456): kept for the session, and each change reads the rows again.
     @Published var ticketsQuery = TicketsQuery() {
         didSet {
@@ -391,6 +411,7 @@ final class SymphonyWindowModel: ObservableObject {
                 readQualityIfDue()
                 readShippedIfDue()
                 readAuditIfDue()
+                readJournalIfDue()
                 readTicket()
                 followTicketFeed(afterPoll: true)
                 readPeek()
@@ -1240,7 +1261,7 @@ struct SymphonyDetail: View {
         case .setup:
             SetupContent(model: model)
         case .journal:
-            JournalContent()
+            JournalContent(model: model)
         default:
             EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
         }
@@ -1266,17 +1287,6 @@ struct DestinationTabs: View {
             Divider()
         }
         .frame(maxWidth: .infinity)
-    }
-}
-
-/// The Journal (22/26 fills it): its name and what it will hold.
-struct JournalContent: View {
-    var body: some View {
-        ContentUnavailableView {
-            Label(Destination.journal.title, systemImage: Destination.journal.symbol)
-        } description: {
-            Text(Journal.explanation)
-        }
     }
 }
 

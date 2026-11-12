@@ -1,0 +1,141 @@
+{
+  "timeline": [
+    {
+      "id": "j03",
+      "seq": 3,
+      "at": "2026-11-12T02:48:00Z",
+      "type": "phase.entered",
+      "run_id": null,
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "from": "Code Review",
+        "to": "QA"
+      },
+      "summary": {
+        "title": "Entered QA from Code Review",
+        "detail": null
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "id": "j02",
+      "seq": 2,
+      "at": "2026-11-12T03:05:00Z",
+      "type": "rule.action",
+      "run_id": null,
+      "actor": {
+        "kind": "machine"
+      },
+      "payload": {
+        "rule": "PR watcher R22",
+        "action": "rerun"
+      },
+      "summary": {
+        "title": "PR watcher R22 reran the failed checks",
+        "detail": "A check failed on PR #887: macos-e2e lost its runner."
+      },
+      "artifacts": [],
+      "children": []
+    },
+    {
+      "kind": "run",
+      "run_id": "r-1457-qa1",
+      "run_kind": "qa",
+      "run_number": 1,
+      "status": "ended",
+      "exit": "handoff",
+      "verdict": {
+        "kind": "qa",
+        "outcome": "pass",
+        "at": "2026-11-12T03:20:00Z"
+      },
+      "started_at": "2026-11-12T02:50:00Z",
+      "ended_at": "2026-11-12T03:20:00Z",
+      "events": [
+        {
+          "id": "x03",
+          "seq": 19,
+          "at": "2026-11-12T02:50:00Z",
+          "type": "run.started",
+          "run_id": "r-1457-qa1",
+          "actor": {
+            "kind": "agent",
+            "run_id": "r-1457-qa1",
+            "run_kind": "qa"
+          },
+          "payload": {},
+          "summary": {
+            "title": "QA run 1 started",
+            "detail": null
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "x02",
+          "seq": 18,
+          "at": "2026-11-12T03:10:00Z",
+          "type": "note",
+          "run_id": "r-1457-qa1",
+          "actor": {
+            "kind": "agent",
+            "run_id": "r-1457-qa1",
+            "run_kind": "qa"
+          },
+          "payload": {},
+          "summary": {
+            "title": "Note: QA walked the live server",
+            "detail": null
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "x01",
+          "seq": 17,
+          "at": "2026-11-12T03:15:00Z",
+          "type": "finding.recorded",
+          "run_id": "r-1457-qa1",
+          "actor": {
+            "kind": "agent",
+            "run_id": "r-1457-qa1",
+            "run_kind": "qa"
+          },
+          "payload": {},
+          "summary": {
+            "title": "Finding: the epic's chip clips at 1440 pt",
+            "detail": "Fixed on the same head before the verdict."
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "j01",
+          "seq": 1,
+          "at": "2026-11-12T03:20:00Z",
+          "type": "verdict.recorded",
+          "run_id": "r-1457-qa1",
+          "actor": {
+            "kind": "agent",
+            "run_id": "r-1457-qa1",
+            "run_kind": "qa"
+          },
+          "payload": {
+            "kind": "qa",
+            "outcome": "pass"
+          },
+          "summary": {
+            "title": "QA passed",
+            "detail": "Every walkthrough step passed on the live server."
+          },
+          "artifacts": [],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "next_since": null
+}

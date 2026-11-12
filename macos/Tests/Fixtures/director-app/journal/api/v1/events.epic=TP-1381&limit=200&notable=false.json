@@ -1,0 +1,552 @@
+{
+  "events": [
+    {
+      "id": "j01",
+      "seq": 1,
+      "at": "2026-11-12T03:20:00Z",
+      "type": "verdict.recorded",
+      "phase": "QA",
+      "run_id": "r-1457-qa1",
+      "parent": null,
+      "actor": {
+        "kind": "agent",
+        "run_id": "r-1457-qa1",
+        "run_kind": "qa"
+      },
+      "summary": {
+        "title": "QA passed",
+        "detail": "Every walkthrough step passed on the live server."
+      },
+      "payload": {
+        "kind": "qa",
+        "outcome": "pass"
+      },
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1457",
+        "title": "3b (20/26): Initiatives as the epic's story"
+      },
+      "class": "verdict",
+      "notable": true,
+      "by": {
+        "kind": "run",
+        "name": "qa",
+        "run_id": "r-1457-qa1"
+      }
+    },
+    {
+      "id": "x01",
+      "seq": 17,
+      "at": "2026-11-12T03:15:00Z",
+      "type": "finding.recorded",
+      "phase": "QA",
+      "run_id": "r-1457-qa1",
+      "parent": null,
+      "actor": {
+        "kind": "agent",
+        "run_id": "r-1457-qa1",
+        "run_kind": "qa"
+      },
+      "summary": {
+        "title": "Finding: the epic's chip clips at 1440 pt",
+        "detail": "Fixed on the same head before the verdict."
+      },
+      "payload": {},
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1457",
+        "title": "3b (20/26): Initiatives as the epic's story"
+      },
+      "class": "finding",
+      "notable": false,
+      "by": {
+        "kind": "run",
+        "name": "qa",
+        "run_id": "r-1457-qa1"
+      }
+    },
+    {
+      "id": "x02",
+      "seq": 18,
+      "at": "2026-11-12T03:10:00Z",
+      "type": "note",
+      "phase": "QA",
+      "run_id": "r-1457-qa1",
+      "parent": null,
+      "actor": {
+        "kind": "agent",
+        "run_id": "r-1457-qa1",
+        "run_kind": "qa"
+      },
+      "summary": {
+        "title": "Note: QA walked the live server",
+        "detail": null
+      },
+      "payload": {},
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1457",
+        "title": "3b (20/26): Initiatives as the epic's story"
+      },
+      "class": "note",
+      "notable": false,
+      "by": {
+        "kind": "run",
+        "name": "qa",
+        "run_id": "r-1457-qa1"
+      }
+    },
+    {
+      "id": "j02",
+      "seq": 2,
+      "at": "2026-11-12T03:05:00Z",
+      "type": "rule.action",
+      "phase": "QA",
+      "run_id": null,
+      "parent": null,
+      "actor": {
+        "kind": "machine"
+      },
+      "summary": {
+        "title": "PR watcher R22 reran the failed checks",
+        "detail": "A check failed on PR #887: macos-e2e lost its runner."
+      },
+      "payload": {
+        "rule": "PR watcher R22",
+        "action": "rerun"
+      },
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1457",
+        "title": "3b (20/26): Initiatives as the epic's story"
+      },
+      "class": "rule",
+      "notable": true,
+      "by": {
+        "kind": "rule",
+        "name": "PR watcher R22"
+      }
+    },
+    {
+      "id": "x03",
+      "seq": 19,
+      "at": "2026-11-12T02:50:00Z",
+      "type": "run.started",
+      "phase": "QA",
+      "run_id": "r-1457-qa1",
+      "parent": null,
+      "actor": {
+        "kind": "agent",
+        "run_id": "r-1457-qa1",
+        "run_kind": "qa"
+      },
+      "summary": {
+        "title": "QA run 1 started",
+        "detail": null
+      },
+      "payload": {},
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1457",
+        "title": "3b (20/26): Initiatives as the epic's story"
+      },
+      "class": "run",
+      "notable": false,
+      "by": {
+        "kind": "run",
+        "name": "qa",
+        "run_id": "r-1457-qa1"
+      }
+    },
+    {
+      "id": "j03",
+      "seq": 3,
+      "at": "2026-11-12T02:48:00Z",
+      "type": "phase.entered",
+      "phase": "QA",
+      "run_id": null,
+      "parent": null,
+      "actor": {
+        "kind": "machine"
+      },
+      "summary": {
+        "title": "Entered QA from Code Review",
+        "detail": null
+      },
+      "payload": {
+        "from": "Code Review",
+        "to": "QA"
+      },
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1457",
+        "title": "3b (20/26): Initiatives as the epic's story"
+      },
+      "class": "move",
+      "notable": true,
+      "by": {
+        "kind": "symphony",
+        "name": "Symphony"
+      }
+    },
+    {
+      "id": "j05",
+      "seq": 5,
+      "at": "2026-11-12T02:10:00Z",
+      "type": "ticket.filed",
+      "phase": "QA",
+      "run_id": null,
+      "parent": null,
+      "actor": {
+        "kind": "machine"
+      },
+      "summary": {
+        "title": "Self-heal filed TP-1475: the QA machine lacks Xcode",
+        "detail": "TP-1456 waits on it."
+      },
+      "payload": {},
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1456",
+        "title": "3b (19/26): The Inbox drawer"
+      },
+      "class": "ticket",
+      "notable": true,
+      "by": {
+        "kind": "rule",
+        "name": "Self-heal"
+      }
+    },
+    {
+      "id": "j06",
+      "seq": 6,
+      "at": "2026-11-12T01:50:00Z",
+      "type": "rule.action",
+      "phase": "Todo",
+      "run_id": null,
+      "parent": null,
+      "actor": {
+        "kind": "machine"
+      },
+      "summary": {
+        "title": "Blocked-by links lifted the pause: TP-1457 is done",
+        "detail": null
+      },
+      "payload": {
+        "rule": "Blocked-by links",
+        "action": "lifted_pause"
+      },
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1458",
+        "title": "3b (21/26): The Journal page"
+      },
+      "class": "rule",
+      "notable": true,
+      "by": {
+        "kind": "rule",
+        "name": "Blocked-by links"
+      }
+    },
+    {
+      "id": "j07",
+      "seq": 7,
+      "at": "2026-11-12T01:40:00Z",
+      "type": "question.answered",
+      "phase": "In Progress",
+      "run_id": null,
+      "parent": null,
+      "actor": {
+        "kind": "person",
+        "name": "Tony"
+      },
+      "summary": {
+        "title": "Answered: Keep the drawer at 420 pt",
+        "detail": "Narrower clips the decision's options."
+      },
+      "payload": {},
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1456",
+        "title": "3b (19/26): The Inbox drawer"
+      },
+      "class": "question",
+      "notable": true,
+      "by": {
+        "kind": "person",
+        "name": "Tony"
+      }
+    },
+    {
+      "id": "x04",
+      "seq": 20,
+      "at": "2026-11-12T01:20:00Z",
+      "type": "step.completed",
+      "phase": "In Progress",
+      "run_id": "r-1456-impl2",
+      "parent": null,
+      "actor": {
+        "kind": "agent",
+        "run_id": "r-1456-impl2",
+        "run_kind": "implementation"
+      },
+      "summary": {
+        "title": "Write the code: passed",
+        "detail": null
+      },
+      "payload": {
+        "outcome": "passed"
+      },
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1456",
+        "title": "3b (19/26): The Inbox drawer"
+      },
+      "class": "run",
+      "notable": false,
+      "by": {
+        "kind": "run",
+        "name": "implementation",
+        "run_id": "r-1456-impl2"
+      }
+    },
+    {
+      "id": "j08",
+      "seq": 8,
+      "at": "2026-11-12T01:12:00Z",
+      "type": "situation.changed",
+      "phase": "In Progress",
+      "run_id": null,
+      "parent": null,
+      "actor": {
+        "kind": "machine"
+      },
+      "summary": {
+        "title": "Waiting on you: how wide the Inbox drawer is",
+        "detail": null
+      },
+      "payload": {
+        "from": "running",
+        "to": "waiting_on_you"
+      },
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1456",
+        "title": "3b (19/26): The Inbox drawer"
+      },
+      "class": "situation",
+      "notable": true,
+      "by": {
+        "kind": "symphony",
+        "name": "Symphony"
+      }
+    },
+    {
+      "id": "j09",
+      "seq": 9,
+      "at": "2026-11-12T01:11:00Z",
+      "type": "question.asked",
+      "phase": "In Progress",
+      "run_id": "r-1456-impl2",
+      "parent": null,
+      "actor": {
+        "kind": "agent",
+        "run_id": "r-1456-impl2",
+        "run_kind": "implementation"
+      },
+      "summary": {
+        "title": "Asked: How wide should the Inbox drawer be?",
+        "detail": "420 pt keeps the options on one line; 360 pt leaves the page more room."
+      },
+      "payload": {},
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1456",
+        "title": "3b (19/26): The Inbox drawer"
+      },
+      "class": "question",
+      "notable": true,
+      "by": {
+        "kind": "run",
+        "name": "implementation",
+        "run_id": "r-1456-impl2"
+      }
+    },
+    {
+      "id": "j10",
+      "seq": 10,
+      "at": "2026-11-12T00:35:00Z",
+      "type": "pause.set",
+      "phase": "Todo",
+      "run_id": null,
+      "parent": null,
+      "actor": {
+        "kind": "machine"
+      },
+      "summary": {
+        "title": "Paused: waiting for TP-1457 to finish",
+        "detail": "Lasted 1 h 15 min"
+      },
+      "payload": {
+        "set_by": {
+          "kind": "rule",
+          "name": "Blocked-by links"
+        }
+      },
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1458",
+        "title": "3b (21/26): The Journal page"
+      },
+      "class": "pause",
+      "notable": true,
+      "by": {
+        "kind": "rule",
+        "name": "Blocked-by links"
+      }
+    },
+    {
+      "id": "j11",
+      "seq": 11,
+      "at": "2026-11-12T00:20:00Z",
+      "type": "person.action",
+      "phase": "QA",
+      "run_id": null,
+      "parent": null,
+      "actor": {
+        "kind": "person",
+        "name": "Tony"
+      },
+      "summary": {
+        "title": "Moved to Merging from QA",
+        "detail": "Merge it tonight."
+      },
+      "payload": {
+        "action": "move",
+        "to": "Merging"
+      },
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1455",
+        "title": "3b (18/26): Saved views on Tickets"
+      },
+      "class": "person",
+      "notable": true,
+      "by": {
+        "kind": "person",
+        "name": "Tony"
+      }
+    },
+    {
+      "id": "j12",
+      "seq": 12,
+      "at": "2026-11-12T00:05:00Z",
+      "type": "verdict.recorded",
+      "phase": "Code Review",
+      "run_id": "r-1455-cr2",
+      "parent": null,
+      "actor": {
+        "kind": "agent",
+        "run_id": "r-1455-cr2",
+        "run_kind": "code_review"
+      },
+      "summary": {
+        "title": "Code Review sent it back",
+        "detail": "The rename sheet keeps the old name after a failed save."
+      },
+      "payload": {
+        "kind": "code_review",
+        "outcome": "rework"
+      },
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1455",
+        "title": "3b (18/26): Saved views on Tickets"
+      },
+      "class": "verdict",
+      "notable": true,
+      "by": {
+        "kind": "run",
+        "name": "code_review",
+        "run_id": "r-1455-cr2"
+      }
+    },
+    {
+      "id": "x05",
+      "seq": 21,
+      "at": "2026-11-11T23:55:00Z",
+      "type": "pause.set",
+      "phase": "QA",
+      "run_id": null,
+      "parent": null,
+      "actor": {
+        "kind": "machine"
+      },
+      "summary": {
+        "title": "Paused: waiting for a slot",
+        "detail": "Lasted 2 min"
+      },
+      "payload": {},
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1455",
+        "title": "3b (18/26): Saved views on Tickets"
+      },
+      "class": "pause",
+      "notable": false,
+      "by": {
+        "kind": "symphony",
+        "name": "Symphony"
+      }
+    },
+    {
+      "id": "j13",
+      "seq": 13,
+      "at": "2026-11-11T23:40:00Z",
+      "type": "ticket.moved",
+      "phase": "Done",
+      "run_id": null,
+      "parent": null,
+      "actor": {
+        "kind": "machine"
+      },
+      "summary": {
+        "title": "Shipped: moved to Done from Merging",
+        "detail": "PR #885 merged."
+      },
+      "payload": {
+        "from": "Merging",
+        "to": "Done"
+      },
+      "artifacts": [],
+      "ticket": {
+        "repo_key": "symphony",
+        "identifier": "TP-1454",
+        "title": "3b (17/26): Tickets as the table"
+      },
+      "class": "move",
+      "notable": true,
+      "by": {
+        "kind": "symphony",
+        "name": "Symphony"
+      }
+    }
+  ],
+  "next_until": null
+}
