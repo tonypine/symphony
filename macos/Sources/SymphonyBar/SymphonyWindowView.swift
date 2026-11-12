@@ -1247,6 +1247,7 @@ struct OverviewContent: View {
                     board: HomeBoard(state: state, scope: model.scope, updating: model.updateHold != nil, now: Date()),
                     actions: HomeActions(
                         resume: { model.send(.resume) },
+                        tryNow: { model.send(.tryNow(condition: $0.condition)) },
                         controlInFlight: model.controlInFlight,
                         openTicket: model.openTicket
                     ),

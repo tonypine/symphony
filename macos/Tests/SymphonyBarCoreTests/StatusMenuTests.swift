@@ -441,6 +441,22 @@ final class StatusMenuTests: XCTestCase {
         .init(window: "five_hour", phase: .paused, resetsAt: pausedAt, resumeAt: pausedAt.addingTimeInterval(120))
     }
 
+    /// Try Now is offered for the first paused usage limit, and for nothing while Symphony doesn't answer (TP-1471).
+    func testTryNowChecksTheFirstPausedLimit() {
+        var canary = claudeLimit
+        canary.phase = .canary
+        let headroom = StateSnapshot.UsageLimit(phase: .headroom)
+        let opus = StateSnapshot.UsageLimit(scope: "opus", window: "seven_day_opus", phase: .paused)
+        let snapshot = StateSnapshot(usageLimits: [canary, headroom, opus])
+
+        XCTAssertEqual(StatusMenu.tryNowLimit(.running(snapshot, external: false))?.condition, "usage_limit:anthropic:opus")
+        XCTAssertEqual(StatusMenu.tryNowLimit(.paused(snapshot, external: true)), opus)
+        XCTAssertNil(StatusMenu.tryNowLimit(.running(StateSnapshot(usageLimits: [canary, headroom]), external: false)))
+        XCTAssertNil(StatusMenu.tryNowLimit(.stopped))
+        XCTAssertNil(StatusMenu.tryNowLimit(.error("down")))
+        XCTAssertEqual(StatusMenu.tryNowTitle, "Try Now")
+    }
+
     func testUsageLimitLines() {
         let sameDay = pausedAt.addingTimeInterval(-3600)
         let dayBefore = pausedAt.addingTimeInterval(-86_400)
@@ -459,6 +475,10 @@ final class StatusMenuTests: XCTestCase {
         var canary = claudeLimit
         canary.phase = .canary
         XCTAssertEqual(StatusMenu.usageLimitLine(canary, now: sameDay, timeZone: utc), "Resuming: checking Claude limit…")
+
+        var stillOn = claudeLimit
+        stillOn.stillOn = true
+        XCTAssertEqual(StatusMenu.usageLimitLine(stillOn, now: sameDay, timeZone: utc), "Paused: Claude limit still on, resumes ~12:18")
 
         let headroom = StateSnapshot.UsageLimit(window: "five_hour", phase: .headroom, resetsAt: pausedAt, utilization: 0.906)
         XCTAssertEqual(

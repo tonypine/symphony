@@ -173,15 +173,26 @@ public struct HomeBoard: Equatable {
     public var reference: Date
     /// Whether the state carried the dispatch order; a Symphony that predates it shows `olderSymphony`.
     public var hasOrder: Bool
-    /// While dispatch is paused, the sentence that says so; nil otherwise.
+    /// While dispatch is paused, the sentence that says so, or while only a usage limit holds runs `heldSentence`;
+    /// nil otherwise.
     public var pauseSentence: String?
+    /// The Director's pause or an update's holds dispatch, which Resume Dispatch lifts.
+    public var dispatchPaused: Bool
+    /// The paused usage-limit hold the notice offers **Try Now** for, nil when none is paused.
+    public var tryNow: StateSnapshot.UsageLimit?
     /// Under it: one line per reason of Symphony's pause, then "All repositories paused" when every repository is.
     public var pauseLines: [String]
     /// An update is under way: it resumes the dispatch it paused, or Cancel Update does.
     public var updating: Bool
 
     /// The sentence offers Resume Dispatch while dispatch is paused, unless an update holds it.
-    public var showsResume: Bool { pauseSentence != nil && !updating }
+    public var showsResume: Bool { dispatchPaused && pauseSentence != nil && !updating }
+    /// The notice offers Try Now while a usage limit is paused: Symphony checks it with one held run.
+    public var showsTryNow: Bool { pauseSentence != nil && tryNow != nil }
+
+    /// The notice's sentence while no pause of the Director's or an update's holds dispatch, but a usage limit holds
+    /// new runs.
+    public static let heldSentence = "New runs are held."
     /// Every row, top to bottom, which the arrow keys walk.
     public var rowIDs: [String] { groups.flatMap { $0.rows.map(\.identifier) } }
     /// The rows of the whole board: the sum of the groups' counts.
@@ -197,6 +208,9 @@ public struct HomeBoard: Equatable {
         groups = Self.groups(state.order, scope: scope, reference: reference)
 
         pauseLines = []
+        let holds = state.snapshot.usageLimits.filter { $0.phase != .canary }
+        tryNow = holds.first(where: \.canTryNow)
+        dispatchPaused = state.snapshot.pause != nil
         if let pause = state.snapshot.pause {
             if let reasons = state.snapshot.pauseReasons {
                 pauseSentence = "Dispatch is paused."
@@ -204,6 +218,9 @@ public struct HomeBoard: Equatable {
             } else {
                 pauseSentence = Overview.pauseSentence(pause, reference: reference, timeZone: timeZone)
             }
+        } else if !holds.isEmpty {
+            pauseSentence = Self.heldSentence
+            pauseLines = holds.map { StatusMenu.usageLimitLine($0, now: reference, timeZone: timeZone) }
         } else {
             pauseSentence = nil
         }

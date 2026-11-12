@@ -641,13 +641,17 @@ joined by `; `. The log line names the kind too (`Dispatch pause active kind=bui
 - The Director's Pause (`POST /api/v1/control/pause`) sets a `person` reason that waits on
   `unblock`, its line the given reason cut to 300 characters (`You paused Symphony` without one).
   The menu bar app's update pause (reason `updating to v<version>`) sets a `build` reason that waits
-  on that version instead. Resume (`POST /api/v1/control/resume`) clears both.
+  on that version instead. Resume (`POST /api/v1/control/resume`) clears both. A pause holding
+  neither answers `409` `nothing_to_resume` with its reasons and lifts nothing.
 - A Symphony that starts on the version a `build` reason waits on, or a later one, clears that
   reason, so the pause of a finished update lifts by itself.
 - Each usage-limit hold (Sections 8.4.1 and 8.4.2) is an `environment` reason waiting on condition
-  `usage_limit:<provider>:<scope>`, its line the hold's (`Claude's 5-hour limit until 14:30`): set
-  with the hold, its line refreshed when the hold changes, cleared when the hold ends. It holds only
-  the runs its hold covers; only a `person` or `build` reason stops all dispatch.
+  `usage_limit:<provider>:<scope>`, its line the hold's (`Claude's 5-hour limit until 14:30 UTC-3`,
+  its local time naming its zone): set with the hold, its line refreshed when the hold changes,
+  cleared when the hold ends. It holds only the runs its hold covers; only a `person` or `build`
+  reason stops all dispatch. Resume with the reason's `condition` is Try Now: a paused hold starts
+  its canary at once, as at its resume time, and the provider's answer clears it or pauses it again
+  on its latest reset (`Claude's 5-hour limit is still on, until …`).
 - Every dispatch check reads the pause from the store, so it is in force across restarts. At start,
   before the first poll tick, the operator pause's old store row, which the release before wrote,
   is moved onto Symphony's pause (an `updating to v…` row as a `build` reason) and deleted, whether

@@ -36,6 +36,33 @@ final class ControlAPITests: XCTestCase {
         XCTAssertEqual(try json(request), [:])
     }
 
+    /// Try Now is Resume with the usage limit's condition (TP-1471).
+    func testTryNowRequestNamesTheLimitsCondition() throws {
+        let request = ControlAPI.request(.tryNow(condition: "usage_limit:anthropic:all"), base: base, token: "secret")
+
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/resume")
+        XCTAssertEqual(try json(request), ["condition": "usage_limit:anthropic:all"])
+        XCTAssertNil(ControlAction.tryNow(condition: "usage_limit:anthropic:all").moveIdentifier)
+        XCTAssertEqual(
+            ControlAPI.result(
+                .tryNow(condition: "usage_limit:openai:all"),
+                statusCode: 404,
+                data: Data(#"{"error":{"code":"usage_limit_not_found","message":"No usage limit holds Symphony on usage_limit:openai:all"}}"#.utf8)
+            ),
+            .failed("Couldn't check the usage limit: No usage limit holds Symphony on usage_limit:openai:all (HTTP 404)")
+        )
+    }
+
+    /// A Resume that lifts nothing says why, instead of succeeding quietly (TP-1471).
+    func testAResumeThatLiftsNothingSaysWhy() {
+        let body = #"{"error":{"code":"nothing_to_resume","message":"Nothing to resume: no pause of yours or an update's holds Symphony."}}"#
+        XCTAssertEqual(
+            ControlAPI.result(.resume, statusCode: 409, data: Data(body.utf8)),
+            .failed("Couldn't resume Symphony: Nothing to resume: no pause of yours or an update's holds Symphony. (HTTP 409)")
+        )
+    }
+
     func testForceRequests() throws {
         let force = ControlAPI.request(.force("TP-123"), base: base, token: "secret")
         XCTAssertEqual(force.httpMethod, "POST")

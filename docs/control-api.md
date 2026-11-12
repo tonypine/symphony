@@ -756,3 +756,42 @@ sorts by one; when the orchestrator's snapshot can't be read they come from the 
 answer carries an `error` (`snapshot_timeout` or `snapshot_unavailable`). An unknown view is `404`
 `view_not_found`; a malformed query, or `view` with inline parameters, is `400` `invalid_query`. It
 reads Symphony's store only, makes no Linear request and needs no token.
+
+# Resume and Try Now
+
+    POST /api/v1/control/resume
+    POST /api/v1/control/resume  {"condition": "usage_limit:anthropic:all"}
+
+Without a body, Resume clears the Director's pause and an update's, and answers 200 with Symphony's
+pause as `GET /api/v1/state`'s `pause` reads it. A usage limit's reason (`kind: environment`) stays
+with its hold: when every reason Symphony's pause holds is one Resume can't clear, it lifts nothing
+and answers `409` `nothing_to_resume`, its `message` naming what Symphony waits on and its
+`reasons` listing them, each with its `waits_on.condition`.
+
+```json
+{
+  "error": {
+    "code": "nothing_to_resume",
+    "message": "Nothing to resume: no pause of yours or an update's holds Symphony. It waits on Claude's 5-hour limit until 20:02 UTC-3. Try Now checks a usage limit before its reset.",
+    "reasons": [
+      { "kind": "environment", "text": "Claude's 5-hour limit until 20:02 UTC-3", "since": "2026-11-11T20:03:00Z", "waits_on": { "condition": "usage_limit:anthropic:all" } }
+    ]
+  }
+}
+```
+
+With `condition`, the usage limit's reason's `waits_on.condition`, Resume is **Try Now**: the person
+says the limit is back, and Symphony checks it the way it does at the hold's `resume_at`. The paused
+hold moves to its canary phase at once and one held run goes out alone. When the provider allows
+it, the hold clears and every held run dispatches; when the provider refuses it, the hold pauses
+again on the provider's latest reset, and its reason reads `Claude's 5-hour limit is still on,
+until 23:02 UTC-3`. With no run held, the hold clears and the next run is the check. A person's word
+is a trigger, never a bypass: no run goes past a limit the provider still enforces.
+
+The answer is Symphony's pause with `usage_limit`, the hold as `GET /api/v1/state`'s `usage_limits`
+lists it (`phase: "canary"` while it checks), or null once it cleared. A hold already checking
+answers the same, and starts nothing more. No hold on `condition` is `404` `usage_limit_not_found`;
+a headroom hold, which the provider never refused, is `409` `usage_limit_headroom`.
+
+The reason's time is local to Symphony's host and names its zone (`UTC-3`), so it reads in one clock
+beside the hold's UTC `resume_at` and `resets_at`.

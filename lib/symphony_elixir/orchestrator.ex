@@ -7948,6 +7948,27 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp symphony_pause_status, do: Pauses.dispatch_status(symphony_pause())
 
+  defp resume_dispatch_reasons(%State{} = state) do
+    case Pauses.clear_reasons(:symphony, &(&1.kind in [:person, :build]), by: @director_setter) do
+      {:ok, _pause} ->
+        pause = symphony_pause_status()
+        Logger.warning("Operator resumed dispatch")
+        notify_dashboard()
+        {:reply, {:ok, pause}, schedule_tick(release_pause_held_retries(%{state | operator_pause_logged: false}), 0)}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
+  # Symphony's pause when every reason it holds is one Resume can't clear (a usage limit's, an
+  # environment's); nil when it isn't paused or Resume has a reason to clear.
+  defp unliftable_pause(%{reasons: [_reason | _more] = reasons} = pause) do
+    if Enum.any?(reasons, &(&1.kind in [:person, :build])), do: nil, else: pause
+  end
+
+  defp unliftable_pause(_none), do: nil
+
   defp configured_repository(repo_key) do
     if repo_key in configured_repo_keys(), do: :ok, else: {:error, :repository_not_found}
   end
@@ -8791,6 +8812,27 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc """
+  Checks the usage-limit hold waiting on `condition` (`UsageLimit.condition/1`, for example
+  `usage_limit:anthropic:all`) now rather than at its `resume_at`, because a person says the limit
+  is back: a paused hold starts its canary at once, as it would at `resume_at`. A canary the
+  provider allows clears the hold and every held run dispatches; a refused one pauses the hold
+  again on the provider's latest reset. A person's word is a trigger, never a bypass.
+
+  Returns Symphony's pause with the hold as it now stands (`usage_limit`, nil once it cleared:
+  nothing was held, so nothing needed a canary). A hold already checking answers as it stands.
+  `{:error, {:usage_limit_not_found, condition}}` when no hold waits on `condition`, and
+  `{:error, {:usage_limit_headroom, condition}}` for a headroom hold, which the provider never
+  refused.
+  """
+  @spec try_usage_limit_now(String.t()) :: {:ok, map()} | :unavailable | {:error, term()}
+  def try_usage_limit_now(condition), do: try_usage_limit_now(__MODULE__, condition)
+
+  @spec try_usage_limit_now(GenServer.server(), String.t()) :: {:ok, map()} | :unavailable | {:error, term()}
+  def try_usage_limit_now(server, condition) when is_binary(condition) do
+    if server_available?(server), do: GenServer.call(server, {:try_usage_limit_now, condition}), else: :unavailable
+  end
+
+  @doc """
   Pauses dispatch for one configured repository on the Director's `reason`
   (`SymphonyElixir.Pauses.repository_reason/1`): its candidates are skipped, its running tickets
   finish their run and are not dispatched again. Returns the repository's pause as the state
@@ -9115,17 +9157,31 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   # Resume clears the Director's reason and an update's: the app resumes once its update installed
-  # or was postponed. A usage limit's reason stays with its hold.
+  # or was postponed. A usage limit's reason stays with its hold, so a pause held only by reasons
+  # Resume can't clear answers that nothing was lifted, with those reasons, rather than an ok that
+  # changed nothing. Try Now (`try_usage_limit_now/2`) is what checks a usage limit early.
   defp handle_call_message(:resume_dispatch, _from, state) do
-    case Pauses.clear_reasons(:symphony, &(&1.kind in [:person, :build]), by: @director_setter) do
-      {:ok, _pause} ->
-        pause = symphony_pause_status()
-        Logger.warning("Operator resumed dispatch")
-        notify_dashboard()
-        {:reply, {:ok, pause}, schedule_tick(release_pause_held_retries(%{state | operator_pause_logged: false}), 0)}
+    case unliftable_pause(symphony_pause()) do
+      nil -> resume_dispatch_reasons(state)
+      pause -> {:reply, {:error, {:nothing_to_resume, Pauses.dispatch_status(pause).reasons}}, state}
+    end
+  end
 
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
+  defp handle_call_message({:try_usage_limit_now, condition}, _from, state) do
+    case Enum.find(state.usage_limits, fn {_key, entry} -> UsageLimit.condition(entry) == condition end) do
+      {key, %{phase: :paused} = entry} ->
+        state = check_usage_limit_now(state, key, entry, &Tracker.fetch_issue_states_by_ids/1)
+        notify_dashboard()
+        {:reply, {:ok, usage_limit_check_payload(state, key)}, state}
+
+      {key, %{phase: :canary}} ->
+        {:reply, {:ok, usage_limit_check_payload(state, key)}, state}
+
+      {_key, _headroom} ->
+        {:reply, {:error, {:usage_limit_headroom, condition}}, state}
+
+      nil ->
+        {:reply, {:error, {:usage_limit_not_found, condition}}, state}
     end
   end
 
@@ -10418,6 +10474,37 @@ defmodule SymphonyElixir.Orchestrator do
     else
       start_usage_limit_canary(state, key, entry, &Tracker.fetch_issue_states_by_ids/1)
     end
+  end
+
+  # Try Now: a person says the limit is back, so the paused hold starts its canary now instead of
+  # at `resume_at`. The hold moves to the canary phase with none picked yet, so it keeps every run
+  # back while its held issues are read; its pending timer is dropped, as at `resume_at`.
+  defp check_usage_limit_now(%State{} = state, key, entry, issue_fetcher) do
+    case Map.get(state.usage_limit_timers, key) do
+      timer_ref when is_reference(timer_ref) -> Process.cancel_timer(timer_ref)
+      nil -> :ok
+    end
+
+    Logger.warning(
+      "Usage limit check requested provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)} " <>
+        "resume_at=#{DateTime.to_iso8601(entry.resume_at)}; starting the canary now"
+    )
+
+    entry = UsageLimit.checking(entry)
+
+    state
+    |> put_usage_limits(Map.put(state.usage_limits, key, entry))
+    |> start_usage_limit_canary(key, entry, issue_fetcher)
+  end
+
+  defp usage_limit_check_payload(%State{} = state, key) do
+    usage_limit =
+      case Map.fetch(state.usage_limits, key) do
+        {:ok, entry} -> %{key => entry} |> UsageLimit.snapshot(state.usage_windows) |> hd()
+        :error -> nil
+      end
+
+    Map.put(symphony_pause_status(), :usage_limit, usage_limit)
   end
 
   # At `resume_at` one held run goes out alone as the canary, first in dispatch order, while the

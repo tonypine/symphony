@@ -32,6 +32,8 @@ public struct DispatchControl: Equatable {
     public var pauseFacts: [TicketList.Fact]
     /// While a limit holds: which one and when it resets, one line each.
     public var limits: [String]
+    /// The paused usage-limit hold **Try Now** checks at once, nil when none is paused.
+    public var tryNow: StateSnapshot.UsageLimit?
     /// The update under way (S3a, S3b): it takes the place of Pause and Resume Dispatch with the menu's update
     /// actions.
     public var update: UpdateHold?
@@ -41,6 +43,7 @@ public struct DispatchControl: Equatable {
     public static let listLimit = 5
     public static let pauseTitle = "Pause Dispatch…"
     public static let resumeTitle = Overview.resumeTitle
+    public static let tryNowTitle = StatusMenu.tryNowTitle
     public static let forceTitle = "Force a Ticket…"
     public static let startTitle = StatusMenu.startTitle
     public static let cancelUpdateTitle = UpdateMenu.cancelUpdateTitle
@@ -48,6 +51,8 @@ public struct DispatchControl: Equatable {
 
     public var canPause: Bool { update == nil && (mode == .on || mode == .holding) }
     public var canResume: Bool { update == nil && mode == .paused }
+    /// Try Now sits beside the limits it checks; a stopped Symphony has none.
+    public var canTryNow: Bool { mode != .stopped && tryNow != nil }
     public var canForce: Bool { mode != .stopped }
     /// Cancel Update, before and after the restart timeout; never while the release downloads or Symphony stops.
     public var canCancelUpdate: Bool { update?.canCancel == true }
@@ -104,6 +109,7 @@ public struct DispatchControl: Equatable {
 
         let holds = (state?.snapshot.usageLimits ?? []).filter { $0.phase != .canary }
         limits = holds.map { StatusMenu.usageLimitLine($0, now: reference, timeZone: timeZone) }
+        tryNow = holds.first(where: \.canTryNow)
         if state?.snapshot.budget?.dailyPaused == true { limits.append("Daily token budget used up, resets at midnight UTC") }
 
         if let pause = state?.snapshot.pause ?? (paused ? StateSnapshot.Pause() : nil) {
