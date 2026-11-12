@@ -418,6 +418,30 @@ defmodule SymphonyElixir.SelfHealTest do
       assert :escalated = SelfHeal.heal(issue(), heal_opts(ci))
     end
 
+    test "TP-1473: a protection check red at three heads files nothing and asks a person; a required check still files" do
+      guard = fn head ->
+        outcome({:ci_check_failed, "protected paths", "Protected paths changed"}, %{reason: "CI keeps failing", pr_url: "https://github.com/acme/app/pull/7", head_sha: head})
+      end
+
+      for head <- ["d6a6e7d000", "ad515b6000", "21f4e1d000"] do
+        assert :escalated = SelfHeal.heal(issue(), heal_opts(guard.(head), attempts: 3))
+      end
+
+      assert Process.get(:fixer_create) == nil
+      assert Process.get(:fixer_block) == nil
+      assert Process.get(:recorded_self_heal) == nil
+      assert filed_ticket_actions() == []
+
+      assert %{title: "Self-heal stopped at the protected paths guard", question: question, why: why, options: options} = deciding()
+      assert question =~ "CI keeps failing the protected paths check on TP-816's pull request"
+      assert why =~ "files no fix ticket for a guard"
+      assert [%{label: "Leave the protected paths guard as it is", recommended?: true}, %{label: "Drop the change to the protected files", recommended?: false}] = options
+
+      # A required check red at three heads still files its fix ticket.
+      assert :filed = SelfHeal.heal(issue(), heal_opts(outcome({:ci_check_failed, "macos build", "error: shortcut test failed"}), attempts: 3))
+      assert %{component: "ci:macos build", title: "Self-heal: CI keeps failing the macos build check"} = Process.get(:fixer_create)
+    end
+
     test "a failed check's signature is its name and first error line, the same failure the PR watcher's streak counts" do
       assert SelfHeal.signature(%{cause: {:ci_check_failed, "specs", "  ERROR:\tboom  "}}) == "specs: ERROR: boom"
 

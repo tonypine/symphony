@@ -448,6 +448,28 @@ defmodule SymphonyElixir.PrWatch.FetchTest do
       assert Fetch.failures([%{name: "e2e", conclusion: "CANCELLED"}]) == [%{name: "e2e", conclusion: "CANCELLED"}]
     end
 
+    test "TP-1473: a check only a person clears beside a real failure never names the head's failure, and a required check comes first" do
+      protected = check("protected paths", "FAILURE", workflow: "protected-paths", run: 400, job: 9)
+      build = check("macos build", "FAILURE", workflow: "macos", run: 100, job: 8)
+      rest = %{:runs => base_runs([]), {:log, "100"} => failed_log([{"macos build", "error: shortcut test failed"}])}
+
+      # Listed first, the guard is still never the failure CI Fix repairs and the backstop counts.
+      assert {:ok, read} = read({response(pull(rollup([protected, build]))), 0}, rest)
+      assert %{ci: :red, red_kind: :failure, failing_check: "macos build"} = read
+
+      # Its log is not read for the failure either: the signature is the real failure's.
+      read = Fetch.failure(read, nil, gh_runner: runner({response(pull(rollup([protected, build]))), 0}, rest))
+      assert %{failure: %{check: "macos build", error: "error: shortcut test failed"}} = read
+      assert_received {:gh, ["run", "view", "100", "--log-failed" | _rest]}
+      refute_received {:gh, ["run", "view", "400", "--log-failed" | _rest]}
+
+      # Between real failures, one the base branch requires comes before one it doesn't.
+      lint = check("lint", "FAILURE", workflow: "lint", run: 200, job: 3)
+      both = rollup([lint, build])
+      assert {:ok, %{failing_check: "macos build"}} = read({response(pull(both)), 0}, rest, required_checks: %{"main" => ["macos build"]})
+      assert {:ok, %{failing_check: "lint"}} = read({response(pull(both)), 0}, rest, required_checks: %{"main" => []})
+    end
+
     test "TP-1170: a head red only on cancellations reads the required checks, to set aside the ones the base doesn't require" do
       rest = %{
         @rules => {Jason.encode!([%{"type" => "required_status_checks", "parameters" => %{"required_status_checks" => [%{"context" => "make all"}]}}]), 0},
