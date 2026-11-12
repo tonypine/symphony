@@ -1,0 +1,8685 @@
+{
+ "timeline": [
+  {
+   "id": "e1",
+   "seq": 1,
+   "at": "2026-10-26T07:37:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 1"
+   }
+  },
+  {
+   "id": "e2",
+   "seq": 2,
+   "at": "2026-10-26T07:41:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 2"
+   }
+  },
+  {
+   "id": "e3",
+   "seq": 3,
+   "at": "2026-10-26T07:45:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 3"
+   }
+  },
+  {
+   "id": "e4",
+   "seq": 4,
+   "at": "2026-10-26T07:49:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 3",
+    "detail": "Event 4"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-1",
+   "run_kind": "implementation",
+   "run_number": 1,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T07:50:20Z",
+   "ended_at": "2026-10-26T08:37:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e5",
+     "seq": 5,
+     "at": "2026-10-26T07:50:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 5"
+     }
+    },
+    {
+     "id": "e6",
+     "seq": 6,
+     "at": "2026-10-26T07:51:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 6"
+     }
+    },
+    {
+     "id": "e7",
+     "seq": 7,
+     "at": "2026-10-26T07:53:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 7"
+     }
+    },
+    {
+     "id": "e8",
+     "seq": 8,
+     "at": "2026-10-26T07:55:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 8"
+     }
+    },
+    {
+     "id": "e9",
+     "seq": 9,
+     "at": "2026-10-26T07:57:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 9"
+     }
+    },
+    {
+     "id": "e10",
+     "seq": 10,
+     "at": "2026-10-26T07:58:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 10"
+     }
+    },
+    {
+     "id": "e11",
+     "seq": 11,
+     "at": "2026-10-26T08:00:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 11"
+     }
+    },
+    {
+     "id": "e12",
+     "seq": 12,
+     "at": "2026-10-26T08:02:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 12"
+     }
+    },
+    {
+     "id": "e13",
+     "seq": 13,
+     "at": "2026-10-26T08:04:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 13"
+     }
+    },
+    {
+     "id": "e14",
+     "seq": 14,
+     "at": "2026-10-26T08:05:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 14"
+     }
+    },
+    {
+     "id": "e15",
+     "seq": 15,
+     "at": "2026-10-26T08:07:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 15"
+     }
+    },
+    {
+     "id": "e16",
+     "seq": 16,
+     "at": "2026-10-26T08:09:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 16"
+     }
+    },
+    {
+     "id": "e17",
+     "seq": 17,
+     "at": "2026-10-26T08:11:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 17"
+     }
+    },
+    {
+     "id": "e18",
+     "seq": 18,
+     "at": "2026-10-26T08:12:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 18"
+     }
+    },
+    {
+     "id": "e19",
+     "seq": 19,
+     "at": "2026-10-26T08:14:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 19"
+     }
+    },
+    {
+     "id": "e20",
+     "seq": 20,
+     "at": "2026-10-26T08:16:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 20"
+     }
+    },
+    {
+     "id": "e21",
+     "seq": 21,
+     "at": "2026-10-26T08:18:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 21"
+     }
+    },
+    {
+     "id": "e22",
+     "seq": 22,
+     "at": "2026-10-26T08:19:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 22"
+     }
+    },
+    {
+     "id": "e23",
+     "seq": 23,
+     "at": "2026-10-26T08:21:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 23"
+     }
+    },
+    {
+     "id": "e24",
+     "seq": 24,
+     "at": "2026-10-26T08:23:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 24"
+     }
+    },
+    {
+     "id": "e25",
+     "seq": 25,
+     "at": "2026-10-26T08:25:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 25"
+     }
+    },
+    {
+     "id": "e26",
+     "seq": 26,
+     "at": "2026-10-26T08:26:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 26"
+     }
+    },
+    {
+     "id": "e27",
+     "seq": 27,
+     "at": "2026-10-26T08:28:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 27"
+     }
+    },
+    {
+     "id": "e28",
+     "seq": 28,
+     "at": "2026-10-26T08:30:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 28"
+     }
+    },
+    {
+     "id": "e29",
+     "seq": 29,
+     "at": "2026-10-26T08:32:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 29"
+     }
+    },
+    {
+     "id": "e30",
+     "seq": 30,
+     "at": "2026-10-26T08:33:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 30"
+     }
+    },
+    {
+     "id": "e31",
+     "seq": 31,
+     "at": "2026-10-26T08:35:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 31"
+     }
+    },
+    {
+     "id": "e32",
+     "seq": 32,
+     "at": "2026-10-26T08:36:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 32"
+     }
+    },
+    {
+     "id": "e33",
+     "seq": 33,
+     "at": "2026-10-26T08:36:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 33"
+     }
+    },
+    {
+     "id": "e34",
+     "seq": 34,
+     "at": "2026-10-26T08:37:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 34"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e35",
+   "seq": 35,
+   "at": "2026-10-26T08:41:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 35"
+   }
+  },
+  {
+   "id": "e36",
+   "seq": 36,
+   "at": "2026-10-26T08:45:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 36"
+   }
+  },
+  {
+   "id": "e37",
+   "seq": 37,
+   "at": "2026-10-26T08:49:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 37"
+   }
+  },
+  {
+   "id": "e38",
+   "seq": 38,
+   "at": "2026-10-26T08:53:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 3",
+    "detail": "Event 38"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-2",
+   "run_kind": "implementation",
+   "run_number": 2,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T08:54:20Z",
+   "ended_at": "2026-10-26T09:41:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e39",
+     "seq": 39,
+     "at": "2026-10-26T08:54:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 39"
+     }
+    },
+    {
+     "id": "e40",
+     "seq": 40,
+     "at": "2026-10-26T08:55:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 40"
+     }
+    },
+    {
+     "id": "e41",
+     "seq": 41,
+     "at": "2026-10-26T08:57:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 41"
+     }
+    },
+    {
+     "id": "e42",
+     "seq": 42,
+     "at": "2026-10-26T08:59:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 42"
+     }
+    },
+    {
+     "id": "e43",
+     "seq": 43,
+     "at": "2026-10-26T09:01:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 43"
+     }
+    },
+    {
+     "id": "e44",
+     "seq": 44,
+     "at": "2026-10-26T09:02:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 44"
+     }
+    },
+    {
+     "id": "e45",
+     "seq": 45,
+     "at": "2026-10-26T09:04:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 45"
+     }
+    },
+    {
+     "id": "e46",
+     "seq": 46,
+     "at": "2026-10-26T09:06:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 46"
+     }
+    },
+    {
+     "id": "e47",
+     "seq": 47,
+     "at": "2026-10-26T09:08:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 47"
+     }
+    },
+    {
+     "id": "e48",
+     "seq": 48,
+     "at": "2026-10-26T09:09:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 48"
+     }
+    },
+    {
+     "id": "e49",
+     "seq": 49,
+     "at": "2026-10-26T09:11:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 49"
+     }
+    },
+    {
+     "id": "e50",
+     "seq": 50,
+     "at": "2026-10-26T09:13:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 50"
+     }
+    },
+    {
+     "id": "e51",
+     "seq": 51,
+     "at": "2026-10-26T09:15:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 51"
+     }
+    },
+    {
+     "id": "e52",
+     "seq": 52,
+     "at": "2026-10-26T09:16:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 52"
+     }
+    },
+    {
+     "id": "e53",
+     "seq": 53,
+     "at": "2026-10-26T09:18:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 53"
+     }
+    },
+    {
+     "id": "e54",
+     "seq": 54,
+     "at": "2026-10-26T09:20:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 54"
+     }
+    },
+    {
+     "id": "e55",
+     "seq": 55,
+     "at": "2026-10-26T09:22:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 55"
+     }
+    },
+    {
+     "id": "e56",
+     "seq": 56,
+     "at": "2026-10-26T09:23:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 56"
+     }
+    },
+    {
+     "id": "e57",
+     "seq": 57,
+     "at": "2026-10-26T09:25:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 57"
+     }
+    },
+    {
+     "id": "e58",
+     "seq": 58,
+     "at": "2026-10-26T09:27:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 58"
+     }
+    },
+    {
+     "id": "e59",
+     "seq": 59,
+     "at": "2026-10-26T09:29:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 59"
+     }
+    },
+    {
+     "id": "e60",
+     "seq": 60,
+     "at": "2026-10-26T09:30:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 60"
+     }
+    },
+    {
+     "id": "e61",
+     "seq": 61,
+     "at": "2026-10-26T09:32:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 61"
+     }
+    },
+    {
+     "id": "e62",
+     "seq": 62,
+     "at": "2026-10-26T09:34:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 62"
+     }
+    },
+    {
+     "id": "e63",
+     "seq": 63,
+     "at": "2026-10-26T09:36:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 63"
+     }
+    },
+    {
+     "id": "e64",
+     "seq": 64,
+     "at": "2026-10-26T09:37:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 64"
+     }
+    },
+    {
+     "id": "e65",
+     "seq": 65,
+     "at": "2026-10-26T09:39:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 65"
+     }
+    },
+    {
+     "id": "e66",
+     "seq": 66,
+     "at": "2026-10-26T09:40:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 66"
+     }
+    },
+    {
+     "id": "e67",
+     "seq": 67,
+     "at": "2026-10-26T09:40:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 67"
+     }
+    },
+    {
+     "id": "e68",
+     "seq": 68,
+     "at": "2026-10-26T09:41:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 68"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e69",
+   "seq": 69,
+   "at": "2026-10-26T09:45:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 69"
+   }
+  },
+  {
+   "id": "e70",
+   "seq": 70,
+   "at": "2026-10-26T09:49:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 70"
+   }
+  },
+  {
+   "id": "e71",
+   "seq": 71,
+   "at": "2026-10-26T09:53:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 71"
+   }
+  },
+  {
+   "id": "e72",
+   "seq": 72,
+   "at": "2026-10-26T09:57:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 3",
+    "detail": "Event 72"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-3",
+   "run_kind": "implementation",
+   "run_number": 3,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T09:58:20Z",
+   "ended_at": "2026-10-26T10:45:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e73",
+     "seq": 73,
+     "at": "2026-10-26T09:58:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 73"
+     }
+    },
+    {
+     "id": "e74",
+     "seq": 74,
+     "at": "2026-10-26T09:59:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 74"
+     }
+    },
+    {
+     "id": "e75",
+     "seq": 75,
+     "at": "2026-10-26T10:01:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 75"
+     }
+    },
+    {
+     "id": "e76",
+     "seq": 76,
+     "at": "2026-10-26T10:03:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 76"
+     }
+    },
+    {
+     "id": "e77",
+     "seq": 77,
+     "at": "2026-10-26T10:05:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 77"
+     }
+    },
+    {
+     "id": "e78",
+     "seq": 78,
+     "at": "2026-10-26T10:06:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 78"
+     }
+    },
+    {
+     "id": "e79",
+     "seq": 79,
+     "at": "2026-10-26T10:08:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 79"
+     }
+    },
+    {
+     "id": "e80",
+     "seq": 80,
+     "at": "2026-10-26T10:10:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 80"
+     }
+    },
+    {
+     "id": "e81",
+     "seq": 81,
+     "at": "2026-10-26T10:12:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 81"
+     }
+    },
+    {
+     "id": "e82",
+     "seq": 82,
+     "at": "2026-10-26T10:13:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 82"
+     }
+    },
+    {
+     "id": "e83",
+     "seq": 83,
+     "at": "2026-10-26T10:15:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 83"
+     }
+    },
+    {
+     "id": "e84",
+     "seq": 84,
+     "at": "2026-10-26T10:17:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 84"
+     }
+    },
+    {
+     "id": "e85",
+     "seq": 85,
+     "at": "2026-10-26T10:19:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 85"
+     }
+    },
+    {
+     "id": "e86",
+     "seq": 86,
+     "at": "2026-10-26T10:20:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 86"
+     }
+    },
+    {
+     "id": "e87",
+     "seq": 87,
+     "at": "2026-10-26T10:22:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 87"
+     }
+    },
+    {
+     "id": "e88",
+     "seq": 88,
+     "at": "2026-10-26T10:24:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 88"
+     }
+    },
+    {
+     "id": "e89",
+     "seq": 89,
+     "at": "2026-10-26T10:26:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 89"
+     }
+    },
+    {
+     "id": "e90",
+     "seq": 90,
+     "at": "2026-10-26T10:27:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 90"
+     }
+    },
+    {
+     "id": "e91",
+     "seq": 91,
+     "at": "2026-10-26T10:29:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 91"
+     }
+    },
+    {
+     "id": "e92",
+     "seq": 92,
+     "at": "2026-10-26T10:31:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 92"
+     }
+    },
+    {
+     "id": "e93",
+     "seq": 93,
+     "at": "2026-10-26T10:33:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 93"
+     }
+    },
+    {
+     "id": "e94",
+     "seq": 94,
+     "at": "2026-10-26T10:34:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 94"
+     }
+    },
+    {
+     "id": "e95",
+     "seq": 95,
+     "at": "2026-10-26T10:36:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 95"
+     }
+    },
+    {
+     "id": "e96",
+     "seq": 96,
+     "at": "2026-10-26T10:38:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 96"
+     }
+    },
+    {
+     "id": "e97",
+     "seq": 97,
+     "at": "2026-10-26T10:40:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 97"
+     }
+    },
+    {
+     "id": "e98",
+     "seq": 98,
+     "at": "2026-10-26T10:41:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 98"
+     }
+    },
+    {
+     "id": "e99",
+     "seq": 99,
+     "at": "2026-10-26T10:43:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 99"
+     }
+    },
+    {
+     "id": "e100",
+     "seq": 100,
+     "at": "2026-10-26T10:44:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 100"
+     }
+    },
+    {
+     "id": "e101",
+     "seq": 101,
+     "at": "2026-10-26T10:44:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 101"
+     }
+    },
+    {
+     "id": "e102",
+     "seq": 102,
+     "at": "2026-10-26T10:45:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 102"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e103",
+   "seq": 103,
+   "at": "2026-10-26T10:49:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 103"
+   }
+  },
+  {
+   "id": "e104",
+   "seq": 104,
+   "at": "2026-10-26T10:53:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 104"
+   }
+  },
+  {
+   "id": "e105",
+   "seq": 105,
+   "at": "2026-10-26T10:57:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 105"
+   }
+  },
+  {
+   "id": "e106",
+   "seq": 106,
+   "at": "2026-10-26T11:01:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 3",
+    "detail": "Event 106"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-4",
+   "run_kind": "implementation",
+   "run_number": 4,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T11:02:20Z",
+   "ended_at": "2026-10-26T11:49:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e107",
+     "seq": 107,
+     "at": "2026-10-26T11:02:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 107"
+     }
+    },
+    {
+     "id": "e108",
+     "seq": 108,
+     "at": "2026-10-26T11:03:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 108"
+     }
+    },
+    {
+     "id": "e109",
+     "seq": 109,
+     "at": "2026-10-26T11:05:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 109"
+     }
+    },
+    {
+     "id": "e110",
+     "seq": 110,
+     "at": "2026-10-26T11:07:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 110"
+     }
+    },
+    {
+     "id": "e111",
+     "seq": 111,
+     "at": "2026-10-26T11:09:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 111"
+     }
+    },
+    {
+     "id": "e112",
+     "seq": 112,
+     "at": "2026-10-26T11:10:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 112"
+     }
+    },
+    {
+     "id": "e113",
+     "seq": 113,
+     "at": "2026-10-26T11:12:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 113"
+     }
+    },
+    {
+     "id": "e114",
+     "seq": 114,
+     "at": "2026-10-26T11:14:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 114"
+     }
+    },
+    {
+     "id": "e115",
+     "seq": 115,
+     "at": "2026-10-26T11:16:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 115"
+     }
+    },
+    {
+     "id": "e116",
+     "seq": 116,
+     "at": "2026-10-26T11:17:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 116"
+     }
+    },
+    {
+     "id": "e117",
+     "seq": 117,
+     "at": "2026-10-26T11:19:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 117"
+     }
+    },
+    {
+     "id": "e118",
+     "seq": 118,
+     "at": "2026-10-26T11:21:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 118"
+     }
+    },
+    {
+     "id": "e119",
+     "seq": 119,
+     "at": "2026-10-26T11:23:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 119"
+     }
+    },
+    {
+     "id": "e120",
+     "seq": 120,
+     "at": "2026-10-26T11:24:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 120"
+     }
+    },
+    {
+     "id": "e121",
+     "seq": 121,
+     "at": "2026-10-26T11:26:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 121"
+     }
+    },
+    {
+     "id": "e122",
+     "seq": 122,
+     "at": "2026-10-26T11:28:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 122"
+     }
+    },
+    {
+     "id": "e123",
+     "seq": 123,
+     "at": "2026-10-26T11:30:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 123"
+     }
+    },
+    {
+     "id": "e124",
+     "seq": 124,
+     "at": "2026-10-26T11:31:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 124"
+     }
+    },
+    {
+     "id": "e125",
+     "seq": 125,
+     "at": "2026-10-26T11:33:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 125"
+     }
+    },
+    {
+     "id": "e126",
+     "seq": 126,
+     "at": "2026-10-26T11:35:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 126"
+     }
+    },
+    {
+     "id": "e127",
+     "seq": 127,
+     "at": "2026-10-26T11:37:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 127"
+     }
+    },
+    {
+     "id": "e128",
+     "seq": 128,
+     "at": "2026-10-26T11:38:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 128"
+     }
+    },
+    {
+     "id": "e129",
+     "seq": 129,
+     "at": "2026-10-26T11:40:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 129"
+     }
+    },
+    {
+     "id": "e130",
+     "seq": 130,
+     "at": "2026-10-26T11:42:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 130"
+     }
+    },
+    {
+     "id": "e131",
+     "seq": 131,
+     "at": "2026-10-26T11:44:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 131"
+     }
+    },
+    {
+     "id": "e132",
+     "seq": 132,
+     "at": "2026-10-26T11:45:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 132"
+     }
+    },
+    {
+     "id": "e133",
+     "seq": 133,
+     "at": "2026-10-26T11:47:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 133"
+     }
+    },
+    {
+     "id": "e134",
+     "seq": 134,
+     "at": "2026-10-26T11:48:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 134"
+     }
+    },
+    {
+     "id": "e135",
+     "seq": 135,
+     "at": "2026-10-26T11:48:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 135"
+     }
+    },
+    {
+     "id": "e136",
+     "seq": 136,
+     "at": "2026-10-26T11:49:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 136"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e137",
+   "seq": 137,
+   "at": "2026-10-26T11:53:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 137"
+   }
+  },
+  {
+   "id": "e138",
+   "seq": 138,
+   "at": "2026-10-26T11:57:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 138"
+   }
+  },
+  {
+   "id": "e139",
+   "seq": 139,
+   "at": "2026-10-26T12:01:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 139"
+   }
+  },
+  {
+   "id": "e140",
+   "seq": 140,
+   "at": "2026-10-26T12:05:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 3",
+    "detail": "Event 140"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-5",
+   "run_kind": "implementation",
+   "run_number": 5,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T12:06:20Z",
+   "ended_at": "2026-10-26T12:53:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e141",
+     "seq": 141,
+     "at": "2026-10-26T12:06:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 141"
+     }
+    },
+    {
+     "id": "e142",
+     "seq": 142,
+     "at": "2026-10-26T12:07:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 142"
+     }
+    },
+    {
+     "id": "e143",
+     "seq": 143,
+     "at": "2026-10-26T12:09:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 143"
+     }
+    },
+    {
+     "id": "e144",
+     "seq": 144,
+     "at": "2026-10-26T12:11:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 144"
+     }
+    },
+    {
+     "id": "e145",
+     "seq": 145,
+     "at": "2026-10-26T12:13:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 145"
+     }
+    },
+    {
+     "id": "e146",
+     "seq": 146,
+     "at": "2026-10-26T12:14:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 146"
+     }
+    },
+    {
+     "id": "e147",
+     "seq": 147,
+     "at": "2026-10-26T12:16:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 147"
+     }
+    },
+    {
+     "id": "e148",
+     "seq": 148,
+     "at": "2026-10-26T12:18:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 148"
+     }
+    },
+    {
+     "id": "e149",
+     "seq": 149,
+     "at": "2026-10-26T12:20:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 149"
+     }
+    },
+    {
+     "id": "e150",
+     "seq": 150,
+     "at": "2026-10-26T12:21:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 150"
+     }
+    },
+    {
+     "id": "e151",
+     "seq": 151,
+     "at": "2026-10-26T12:23:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 151"
+     }
+    },
+    {
+     "id": "e152",
+     "seq": 152,
+     "at": "2026-10-26T12:25:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 152"
+     }
+    },
+    {
+     "id": "e153",
+     "seq": 153,
+     "at": "2026-10-26T12:27:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 153"
+     }
+    },
+    {
+     "id": "e154",
+     "seq": 154,
+     "at": "2026-10-26T12:28:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 154"
+     }
+    },
+    {
+     "id": "e155",
+     "seq": 155,
+     "at": "2026-10-26T12:30:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 155"
+     }
+    },
+    {
+     "id": "e156",
+     "seq": 156,
+     "at": "2026-10-26T12:32:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 156"
+     }
+    },
+    {
+     "id": "e157",
+     "seq": 157,
+     "at": "2026-10-26T12:34:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 157"
+     }
+    },
+    {
+     "id": "e158",
+     "seq": 158,
+     "at": "2026-10-26T12:35:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 158"
+     }
+    },
+    {
+     "id": "e159",
+     "seq": 159,
+     "at": "2026-10-26T12:37:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 159"
+     }
+    },
+    {
+     "id": "e160",
+     "seq": 160,
+     "at": "2026-10-26T12:39:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 160"
+     }
+    },
+    {
+     "id": "e161",
+     "seq": 161,
+     "at": "2026-10-26T12:41:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 161"
+     }
+    },
+    {
+     "id": "e162",
+     "seq": 162,
+     "at": "2026-10-26T12:42:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 162"
+     }
+    },
+    {
+     "id": "e163",
+     "seq": 163,
+     "at": "2026-10-26T12:44:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 163"
+     }
+    },
+    {
+     "id": "e164",
+     "seq": 164,
+     "at": "2026-10-26T12:46:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 164"
+     }
+    },
+    {
+     "id": "e165",
+     "seq": 165,
+     "at": "2026-10-26T12:48:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 165"
+     }
+    },
+    {
+     "id": "e166",
+     "seq": 166,
+     "at": "2026-10-26T12:49:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 166"
+     }
+    },
+    {
+     "id": "e167",
+     "seq": 167,
+     "at": "2026-10-26T12:51:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 167"
+     }
+    },
+    {
+     "id": "e168",
+     "seq": 168,
+     "at": "2026-10-26T12:52:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 168"
+     }
+    },
+    {
+     "id": "e169",
+     "seq": 169,
+     "at": "2026-10-26T12:52:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 169"
+     }
+    },
+    {
+     "id": "e170",
+     "seq": 170,
+     "at": "2026-10-26T12:53:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 170"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e171",
+   "seq": 171,
+   "at": "2026-10-26T12:57:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 171"
+   }
+  },
+  {
+   "id": "e172",
+   "seq": 172,
+   "at": "2026-10-26T13:01:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 172"
+   }
+  },
+  {
+   "id": "e173",
+   "seq": 173,
+   "at": "2026-10-26T13:05:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 173"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-6",
+   "run_kind": "implementation",
+   "run_number": 6,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T13:06:20Z",
+   "ended_at": "2026-10-26T13:53:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e174",
+     "seq": 174,
+     "at": "2026-10-26T13:06:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 174"
+     }
+    },
+    {
+     "id": "e175",
+     "seq": 175,
+     "at": "2026-10-26T13:07:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 175"
+     }
+    },
+    {
+     "id": "e176",
+     "seq": 176,
+     "at": "2026-10-26T13:09:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 176"
+     }
+    },
+    {
+     "id": "e177",
+     "seq": 177,
+     "at": "2026-10-26T13:11:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 177"
+     }
+    },
+    {
+     "id": "e178",
+     "seq": 178,
+     "at": "2026-10-26T13:13:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 178"
+     }
+    },
+    {
+     "id": "e179",
+     "seq": 179,
+     "at": "2026-10-26T13:14:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 179"
+     }
+    },
+    {
+     "id": "e180",
+     "seq": 180,
+     "at": "2026-10-26T13:16:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 180"
+     }
+    },
+    {
+     "id": "e181",
+     "seq": 181,
+     "at": "2026-10-26T13:18:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 181"
+     }
+    },
+    {
+     "id": "e182",
+     "seq": 182,
+     "at": "2026-10-26T13:20:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 182"
+     }
+    },
+    {
+     "id": "e183",
+     "seq": 183,
+     "at": "2026-10-26T13:21:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 183"
+     }
+    },
+    {
+     "id": "e184",
+     "seq": 184,
+     "at": "2026-10-26T13:23:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 184"
+     }
+    },
+    {
+     "id": "e185",
+     "seq": 185,
+     "at": "2026-10-26T13:25:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 185"
+     }
+    },
+    {
+     "id": "e186",
+     "seq": 186,
+     "at": "2026-10-26T13:27:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 186"
+     }
+    },
+    {
+     "id": "e187",
+     "seq": 187,
+     "at": "2026-10-26T13:28:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 187"
+     }
+    },
+    {
+     "id": "e188",
+     "seq": 188,
+     "at": "2026-10-26T13:30:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 188"
+     }
+    },
+    {
+     "id": "e189",
+     "seq": 189,
+     "at": "2026-10-26T13:32:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 189"
+     }
+    },
+    {
+     "id": "e190",
+     "seq": 190,
+     "at": "2026-10-26T13:34:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 190"
+     }
+    },
+    {
+     "id": "e191",
+     "seq": 191,
+     "at": "2026-10-26T13:35:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 191"
+     }
+    },
+    {
+     "id": "e192",
+     "seq": 192,
+     "at": "2026-10-26T13:37:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 192"
+     }
+    },
+    {
+     "id": "e193",
+     "seq": 193,
+     "at": "2026-10-26T13:39:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 193"
+     }
+    },
+    {
+     "id": "e194",
+     "seq": 194,
+     "at": "2026-10-26T13:41:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 194"
+     }
+    },
+    {
+     "id": "e195",
+     "seq": 195,
+     "at": "2026-10-26T13:42:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 195"
+     }
+    },
+    {
+     "id": "e196",
+     "seq": 196,
+     "at": "2026-10-26T13:44:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 196"
+     }
+    },
+    {
+     "id": "e197",
+     "seq": 197,
+     "at": "2026-10-26T13:46:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 197"
+     }
+    },
+    {
+     "id": "e198",
+     "seq": 198,
+     "at": "2026-10-26T13:48:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 198"
+     }
+    },
+    {
+     "id": "e199",
+     "seq": 199,
+     "at": "2026-10-26T13:49:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 199"
+     }
+    },
+    {
+     "id": "e200",
+     "seq": 200,
+     "at": "2026-10-26T13:51:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 200"
+     }
+    },
+    {
+     "id": "e201",
+     "seq": 201,
+     "at": "2026-10-26T13:52:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 201"
+     }
+    },
+    {
+     "id": "e202",
+     "seq": 202,
+     "at": "2026-10-26T13:52:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 202"
+     }
+    },
+    {
+     "id": "e203",
+     "seq": 203,
+     "at": "2026-10-26T13:53:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 203"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e204",
+   "seq": 204,
+   "at": "2026-10-26T13:57:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 204"
+   }
+  },
+  {
+   "id": "e205",
+   "seq": 205,
+   "at": "2026-10-26T14:01:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 205"
+   }
+  },
+  {
+   "id": "e206",
+   "seq": 206,
+   "at": "2026-10-26T14:05:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 206"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-7",
+   "run_kind": "implementation",
+   "run_number": 7,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T14:06:20Z",
+   "ended_at": "2026-10-26T14:53:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e207",
+     "seq": 207,
+     "at": "2026-10-26T14:06:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 207"
+     }
+    },
+    {
+     "id": "e208",
+     "seq": 208,
+     "at": "2026-10-26T14:07:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 208"
+     }
+    },
+    {
+     "id": "e209",
+     "seq": 209,
+     "at": "2026-10-26T14:09:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 209"
+     }
+    },
+    {
+     "id": "e210",
+     "seq": 210,
+     "at": "2026-10-26T14:11:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 210"
+     }
+    },
+    {
+     "id": "e211",
+     "seq": 211,
+     "at": "2026-10-26T14:13:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 211"
+     }
+    },
+    {
+     "id": "e212",
+     "seq": 212,
+     "at": "2026-10-26T14:14:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 212"
+     }
+    },
+    {
+     "id": "e213",
+     "seq": 213,
+     "at": "2026-10-26T14:16:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 213"
+     }
+    },
+    {
+     "id": "e214",
+     "seq": 214,
+     "at": "2026-10-26T14:18:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 214"
+     }
+    },
+    {
+     "id": "e215",
+     "seq": 215,
+     "at": "2026-10-26T14:20:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 215"
+     }
+    },
+    {
+     "id": "e216",
+     "seq": 216,
+     "at": "2026-10-26T14:21:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 216"
+     }
+    },
+    {
+     "id": "e217",
+     "seq": 217,
+     "at": "2026-10-26T14:23:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 217"
+     }
+    },
+    {
+     "id": "e218",
+     "seq": 218,
+     "at": "2026-10-26T14:25:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 218"
+     }
+    },
+    {
+     "id": "e219",
+     "seq": 219,
+     "at": "2026-10-26T14:27:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 219"
+     }
+    },
+    {
+     "id": "e220",
+     "seq": 220,
+     "at": "2026-10-26T14:28:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 220"
+     }
+    },
+    {
+     "id": "e221",
+     "seq": 221,
+     "at": "2026-10-26T14:30:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 221"
+     }
+    },
+    {
+     "id": "e222",
+     "seq": 222,
+     "at": "2026-10-26T14:32:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 222"
+     }
+    },
+    {
+     "id": "e223",
+     "seq": 223,
+     "at": "2026-10-26T14:34:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 223"
+     }
+    },
+    {
+     "id": "e224",
+     "seq": 224,
+     "at": "2026-10-26T14:35:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 224"
+     }
+    },
+    {
+     "id": "e225",
+     "seq": 225,
+     "at": "2026-10-26T14:37:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 225"
+     }
+    },
+    {
+     "id": "e226",
+     "seq": 226,
+     "at": "2026-10-26T14:39:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 226"
+     }
+    },
+    {
+     "id": "e227",
+     "seq": 227,
+     "at": "2026-10-26T14:41:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 227"
+     }
+    },
+    {
+     "id": "e228",
+     "seq": 228,
+     "at": "2026-10-26T14:42:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 228"
+     }
+    },
+    {
+     "id": "e229",
+     "seq": 229,
+     "at": "2026-10-26T14:44:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 229"
+     }
+    },
+    {
+     "id": "e230",
+     "seq": 230,
+     "at": "2026-10-26T14:46:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 230"
+     }
+    },
+    {
+     "id": "e231",
+     "seq": 231,
+     "at": "2026-10-26T14:48:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 231"
+     }
+    },
+    {
+     "id": "e232",
+     "seq": 232,
+     "at": "2026-10-26T14:49:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 232"
+     }
+    },
+    {
+     "id": "e233",
+     "seq": 233,
+     "at": "2026-10-26T14:51:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 233"
+     }
+    },
+    {
+     "id": "e234",
+     "seq": 234,
+     "at": "2026-10-26T14:52:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 234"
+     }
+    },
+    {
+     "id": "e235",
+     "seq": 235,
+     "at": "2026-10-26T14:52:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 235"
+     }
+    },
+    {
+     "id": "e236",
+     "seq": 236,
+     "at": "2026-10-26T14:53:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 236"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e237",
+   "seq": 237,
+   "at": "2026-10-26T14:57:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 237"
+   }
+  },
+  {
+   "id": "e238",
+   "seq": 238,
+   "at": "2026-10-26T15:01:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 238"
+   }
+  },
+  {
+   "id": "e239",
+   "seq": 239,
+   "at": "2026-10-26T15:05:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 239"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-8",
+   "run_kind": "implementation",
+   "run_number": 8,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T15:06:20Z",
+   "ended_at": "2026-10-26T15:53:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e240",
+     "seq": 240,
+     "at": "2026-10-26T15:06:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 240"
+     }
+    },
+    {
+     "id": "e241",
+     "seq": 241,
+     "at": "2026-10-26T15:07:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 241"
+     }
+    },
+    {
+     "id": "e242",
+     "seq": 242,
+     "at": "2026-10-26T15:09:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 242"
+     }
+    },
+    {
+     "id": "e243",
+     "seq": 243,
+     "at": "2026-10-26T15:11:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 243"
+     }
+    },
+    {
+     "id": "e244",
+     "seq": 244,
+     "at": "2026-10-26T15:13:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 244"
+     }
+    },
+    {
+     "id": "e245",
+     "seq": 245,
+     "at": "2026-10-26T15:14:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 245"
+     }
+    },
+    {
+     "id": "e246",
+     "seq": 246,
+     "at": "2026-10-26T15:16:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 246"
+     }
+    },
+    {
+     "id": "e247",
+     "seq": 247,
+     "at": "2026-10-26T15:18:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 247"
+     }
+    },
+    {
+     "id": "e248",
+     "seq": 248,
+     "at": "2026-10-26T15:20:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 248"
+     }
+    },
+    {
+     "id": "e249",
+     "seq": 249,
+     "at": "2026-10-26T15:21:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 249"
+     }
+    },
+    {
+     "id": "e250",
+     "seq": 250,
+     "at": "2026-10-26T15:23:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 250"
+     }
+    },
+    {
+     "id": "e251",
+     "seq": 251,
+     "at": "2026-10-26T15:25:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 251"
+     }
+    },
+    {
+     "id": "e252",
+     "seq": 252,
+     "at": "2026-10-26T15:27:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 252"
+     }
+    },
+    {
+     "id": "e253",
+     "seq": 253,
+     "at": "2026-10-26T15:28:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 253"
+     }
+    },
+    {
+     "id": "e254",
+     "seq": 254,
+     "at": "2026-10-26T15:30:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 254"
+     }
+    },
+    {
+     "id": "e255",
+     "seq": 255,
+     "at": "2026-10-26T15:32:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 255"
+     }
+    },
+    {
+     "id": "e256",
+     "seq": 256,
+     "at": "2026-10-26T15:34:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 256"
+     }
+    },
+    {
+     "id": "e257",
+     "seq": 257,
+     "at": "2026-10-26T15:35:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 257"
+     }
+    },
+    {
+     "id": "e258",
+     "seq": 258,
+     "at": "2026-10-26T15:37:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 258"
+     }
+    },
+    {
+     "id": "e259",
+     "seq": 259,
+     "at": "2026-10-26T15:39:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 259"
+     }
+    },
+    {
+     "id": "e260",
+     "seq": 260,
+     "at": "2026-10-26T15:41:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 260"
+     }
+    },
+    {
+     "id": "e261",
+     "seq": 261,
+     "at": "2026-10-26T15:42:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 261"
+     }
+    },
+    {
+     "id": "e262",
+     "seq": 262,
+     "at": "2026-10-26T15:44:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 262"
+     }
+    },
+    {
+     "id": "e263",
+     "seq": 263,
+     "at": "2026-10-26T15:46:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 263"
+     }
+    },
+    {
+     "id": "e264",
+     "seq": 264,
+     "at": "2026-10-26T15:48:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 264"
+     }
+    },
+    {
+     "id": "e265",
+     "seq": 265,
+     "at": "2026-10-26T15:49:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 265"
+     }
+    },
+    {
+     "id": "e266",
+     "seq": 266,
+     "at": "2026-10-26T15:51:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 266"
+     }
+    },
+    {
+     "id": "e267",
+     "seq": 267,
+     "at": "2026-10-26T15:52:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 267"
+     }
+    },
+    {
+     "id": "e268",
+     "seq": 268,
+     "at": "2026-10-26T15:52:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 268"
+     }
+    },
+    {
+     "id": "e269",
+     "seq": 269,
+     "at": "2026-10-26T15:53:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 269"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e270",
+   "seq": 270,
+   "at": "2026-10-26T15:57:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 270"
+   }
+  },
+  {
+   "id": "e271",
+   "seq": 271,
+   "at": "2026-10-26T16:01:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 271"
+   }
+  },
+  {
+   "id": "e272",
+   "seq": 272,
+   "at": "2026-10-26T16:05:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 272"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-9",
+   "run_kind": "implementation",
+   "run_number": 9,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T16:06:20Z",
+   "ended_at": "2026-10-26T16:53:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e273",
+     "seq": 273,
+     "at": "2026-10-26T16:06:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 273"
+     }
+    },
+    {
+     "id": "e274",
+     "seq": 274,
+     "at": "2026-10-26T16:07:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 274"
+     }
+    },
+    {
+     "id": "e275",
+     "seq": 275,
+     "at": "2026-10-26T16:09:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 275"
+     }
+    },
+    {
+     "id": "e276",
+     "seq": 276,
+     "at": "2026-10-26T16:11:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 276"
+     }
+    },
+    {
+     "id": "e277",
+     "seq": 277,
+     "at": "2026-10-26T16:13:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 277"
+     }
+    },
+    {
+     "id": "e278",
+     "seq": 278,
+     "at": "2026-10-26T16:14:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 278"
+     }
+    },
+    {
+     "id": "e279",
+     "seq": 279,
+     "at": "2026-10-26T16:16:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 279"
+     }
+    },
+    {
+     "id": "e280",
+     "seq": 280,
+     "at": "2026-10-26T16:18:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 280"
+     }
+    },
+    {
+     "id": "e281",
+     "seq": 281,
+     "at": "2026-10-26T16:20:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 281"
+     }
+    },
+    {
+     "id": "e282",
+     "seq": 282,
+     "at": "2026-10-26T16:21:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 282"
+     }
+    },
+    {
+     "id": "e283",
+     "seq": 283,
+     "at": "2026-10-26T16:23:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 283"
+     }
+    },
+    {
+     "id": "e284",
+     "seq": 284,
+     "at": "2026-10-26T16:25:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 284"
+     }
+    },
+    {
+     "id": "e285",
+     "seq": 285,
+     "at": "2026-10-26T16:27:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 285"
+     }
+    },
+    {
+     "id": "e286",
+     "seq": 286,
+     "at": "2026-10-26T16:28:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 286"
+     }
+    },
+    {
+     "id": "e287",
+     "seq": 287,
+     "at": "2026-10-26T16:30:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 287"
+     }
+    },
+    {
+     "id": "e288",
+     "seq": 288,
+     "at": "2026-10-26T16:32:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 288"
+     }
+    },
+    {
+     "id": "e289",
+     "seq": 289,
+     "at": "2026-10-26T16:34:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 289"
+     }
+    },
+    {
+     "id": "e290",
+     "seq": 290,
+     "at": "2026-10-26T16:35:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 290"
+     }
+    },
+    {
+     "id": "e291",
+     "seq": 291,
+     "at": "2026-10-26T16:37:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 291"
+     }
+    },
+    {
+     "id": "e292",
+     "seq": 292,
+     "at": "2026-10-26T16:39:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 292"
+     }
+    },
+    {
+     "id": "e293",
+     "seq": 293,
+     "at": "2026-10-26T16:41:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 293"
+     }
+    },
+    {
+     "id": "e294",
+     "seq": 294,
+     "at": "2026-10-26T16:42:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 294"
+     }
+    },
+    {
+     "id": "e295",
+     "seq": 295,
+     "at": "2026-10-26T16:44:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 295"
+     }
+    },
+    {
+     "id": "e296",
+     "seq": 296,
+     "at": "2026-10-26T16:46:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 296"
+     }
+    },
+    {
+     "id": "e297",
+     "seq": 297,
+     "at": "2026-10-26T16:48:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 297"
+     }
+    },
+    {
+     "id": "e298",
+     "seq": 298,
+     "at": "2026-10-26T16:49:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 298"
+     }
+    },
+    {
+     "id": "e299",
+     "seq": 299,
+     "at": "2026-10-26T16:51:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 299"
+     }
+    },
+    {
+     "id": "e300",
+     "seq": 300,
+     "at": "2026-10-26T16:52:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 300"
+     }
+    },
+    {
+     "id": "e301",
+     "seq": 301,
+     "at": "2026-10-26T16:52:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 301"
+     }
+    },
+    {
+     "id": "e302",
+     "seq": 302,
+     "at": "2026-10-26T16:53:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 302"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e303",
+   "seq": 303,
+   "at": "2026-10-26T16:57:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 303"
+   }
+  },
+  {
+   "id": "e304",
+   "seq": 304,
+   "at": "2026-10-26T17:01:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 304"
+   }
+  },
+  {
+   "id": "e305",
+   "seq": 305,
+   "at": "2026-10-26T17:05:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 305"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-10",
+   "run_kind": "implementation",
+   "run_number": 10,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T17:06:20Z",
+   "ended_at": "2026-10-26T17:53:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e306",
+     "seq": 306,
+     "at": "2026-10-26T17:06:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 306"
+     }
+    },
+    {
+     "id": "e307",
+     "seq": 307,
+     "at": "2026-10-26T17:07:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 307"
+     }
+    },
+    {
+     "id": "e308",
+     "seq": 308,
+     "at": "2026-10-26T17:09:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 308"
+     }
+    },
+    {
+     "id": "e309",
+     "seq": 309,
+     "at": "2026-10-26T17:11:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 309"
+     }
+    },
+    {
+     "id": "e310",
+     "seq": 310,
+     "at": "2026-10-26T17:13:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 310"
+     }
+    },
+    {
+     "id": "e311",
+     "seq": 311,
+     "at": "2026-10-26T17:14:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 311"
+     }
+    },
+    {
+     "id": "e312",
+     "seq": 312,
+     "at": "2026-10-26T17:16:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 312"
+     }
+    },
+    {
+     "id": "e313",
+     "seq": 313,
+     "at": "2026-10-26T17:18:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 313"
+     }
+    },
+    {
+     "id": "e314",
+     "seq": 314,
+     "at": "2026-10-26T17:20:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 314"
+     }
+    },
+    {
+     "id": "e315",
+     "seq": 315,
+     "at": "2026-10-26T17:21:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 315"
+     }
+    },
+    {
+     "id": "e316",
+     "seq": 316,
+     "at": "2026-10-26T17:23:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 316"
+     }
+    },
+    {
+     "id": "e317",
+     "seq": 317,
+     "at": "2026-10-26T17:25:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 317"
+     }
+    },
+    {
+     "id": "e318",
+     "seq": 318,
+     "at": "2026-10-26T17:27:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 318"
+     }
+    },
+    {
+     "id": "e319",
+     "seq": 319,
+     "at": "2026-10-26T17:28:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 319"
+     }
+    },
+    {
+     "id": "e320",
+     "seq": 320,
+     "at": "2026-10-26T17:30:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 320"
+     }
+    },
+    {
+     "id": "e321",
+     "seq": 321,
+     "at": "2026-10-26T17:32:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 321"
+     }
+    },
+    {
+     "id": "e322",
+     "seq": 322,
+     "at": "2026-10-26T17:34:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 322"
+     }
+    },
+    {
+     "id": "e323",
+     "seq": 323,
+     "at": "2026-10-26T17:35:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 323"
+     }
+    },
+    {
+     "id": "e324",
+     "seq": 324,
+     "at": "2026-10-26T17:37:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 324"
+     }
+    },
+    {
+     "id": "e325",
+     "seq": 325,
+     "at": "2026-10-26T17:39:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 325"
+     }
+    },
+    {
+     "id": "e326",
+     "seq": 326,
+     "at": "2026-10-26T17:41:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 326"
+     }
+    },
+    {
+     "id": "e327",
+     "seq": 327,
+     "at": "2026-10-26T17:42:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 327"
+     }
+    },
+    {
+     "id": "e328",
+     "seq": 328,
+     "at": "2026-10-26T17:44:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 328"
+     }
+    },
+    {
+     "id": "e329",
+     "seq": 329,
+     "at": "2026-10-26T17:46:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 329"
+     }
+    },
+    {
+     "id": "e330",
+     "seq": 330,
+     "at": "2026-10-26T17:48:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 330"
+     }
+    },
+    {
+     "id": "e331",
+     "seq": 331,
+     "at": "2026-10-26T17:49:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 331"
+     }
+    },
+    {
+     "id": "e332",
+     "seq": 332,
+     "at": "2026-10-26T17:51:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 332"
+     }
+    },
+    {
+     "id": "e333",
+     "seq": 333,
+     "at": "2026-10-26T17:52:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 333"
+     }
+    },
+    {
+     "id": "e334",
+     "seq": 334,
+     "at": "2026-10-26T17:52:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 334"
+     }
+    },
+    {
+     "id": "e335",
+     "seq": 335,
+     "at": "2026-10-26T17:53:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 335"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e336",
+   "seq": 336,
+   "at": "2026-10-26T17:57:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 336"
+   }
+  },
+  {
+   "id": "e337",
+   "seq": 337,
+   "at": "2026-10-26T18:01:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 337"
+   }
+  },
+  {
+   "id": "e338",
+   "seq": 338,
+   "at": "2026-10-26T18:05:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 338"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-11",
+   "run_kind": "implementation",
+   "run_number": 11,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T18:06:20Z",
+   "ended_at": "2026-10-26T18:53:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e339",
+     "seq": 339,
+     "at": "2026-10-26T18:06:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 339"
+     }
+    },
+    {
+     "id": "e340",
+     "seq": 340,
+     "at": "2026-10-26T18:07:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 340"
+     }
+    },
+    {
+     "id": "e341",
+     "seq": 341,
+     "at": "2026-10-26T18:09:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 341"
+     }
+    },
+    {
+     "id": "e342",
+     "seq": 342,
+     "at": "2026-10-26T18:11:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 342"
+     }
+    },
+    {
+     "id": "e343",
+     "seq": 343,
+     "at": "2026-10-26T18:13:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 343"
+     }
+    },
+    {
+     "id": "e344",
+     "seq": 344,
+     "at": "2026-10-26T18:14:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 344"
+     }
+    },
+    {
+     "id": "e345",
+     "seq": 345,
+     "at": "2026-10-26T18:16:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 345"
+     }
+    },
+    {
+     "id": "e346",
+     "seq": 346,
+     "at": "2026-10-26T18:18:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 346"
+     }
+    },
+    {
+     "id": "e347",
+     "seq": 347,
+     "at": "2026-10-26T18:20:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 347"
+     }
+    },
+    {
+     "id": "e348",
+     "seq": 348,
+     "at": "2026-10-26T18:21:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 348"
+     }
+    },
+    {
+     "id": "e349",
+     "seq": 349,
+     "at": "2026-10-26T18:23:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 349"
+     }
+    },
+    {
+     "id": "e350",
+     "seq": 350,
+     "at": "2026-10-26T18:25:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 350"
+     }
+    },
+    {
+     "id": "e351",
+     "seq": 351,
+     "at": "2026-10-26T18:27:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 351"
+     }
+    },
+    {
+     "id": "e352",
+     "seq": 352,
+     "at": "2026-10-26T18:28:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 352"
+     }
+    },
+    {
+     "id": "e353",
+     "seq": 353,
+     "at": "2026-10-26T18:30:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 353"
+     }
+    },
+    {
+     "id": "e354",
+     "seq": 354,
+     "at": "2026-10-26T18:32:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 354"
+     }
+    },
+    {
+     "id": "e355",
+     "seq": 355,
+     "at": "2026-10-26T18:34:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 355"
+     }
+    },
+    {
+     "id": "e356",
+     "seq": 356,
+     "at": "2026-10-26T18:35:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 356"
+     }
+    },
+    {
+     "id": "e357",
+     "seq": 357,
+     "at": "2026-10-26T18:37:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 357"
+     }
+    },
+    {
+     "id": "e358",
+     "seq": 358,
+     "at": "2026-10-26T18:39:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 358"
+     }
+    },
+    {
+     "id": "e359",
+     "seq": 359,
+     "at": "2026-10-26T18:41:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 359"
+     }
+    },
+    {
+     "id": "e360",
+     "seq": 360,
+     "at": "2026-10-26T18:42:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 360"
+     }
+    },
+    {
+     "id": "e361",
+     "seq": 361,
+     "at": "2026-10-26T18:44:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 361"
+     }
+    },
+    {
+     "id": "e362",
+     "seq": 362,
+     "at": "2026-10-26T18:46:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 362"
+     }
+    },
+    {
+     "id": "e363",
+     "seq": 363,
+     "at": "2026-10-26T18:48:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 363"
+     }
+    },
+    {
+     "id": "e364",
+     "seq": 364,
+     "at": "2026-10-26T18:49:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 364"
+     }
+    },
+    {
+     "id": "e365",
+     "seq": 365,
+     "at": "2026-10-26T18:51:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 365"
+     }
+    },
+    {
+     "id": "e366",
+     "seq": 366,
+     "at": "2026-10-26T18:52:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 366"
+     }
+    },
+    {
+     "id": "e367",
+     "seq": 367,
+     "at": "2026-10-26T18:52:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 367"
+     }
+    },
+    {
+     "id": "e368",
+     "seq": 368,
+     "at": "2026-10-26T18:53:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 368"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e369",
+   "seq": 369,
+   "at": "2026-10-26T18:57:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 369"
+   }
+  },
+  {
+   "id": "e370",
+   "seq": 370,
+   "at": "2026-10-26T19:01:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 370"
+   }
+  },
+  {
+   "id": "e371",
+   "seq": 371,
+   "at": "2026-10-26T19:05:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 371"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-12",
+   "run_kind": "implementation",
+   "run_number": 12,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T19:06:20Z",
+   "ended_at": "2026-10-26T19:53:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e372",
+     "seq": 372,
+     "at": "2026-10-26T19:06:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 372"
+     }
+    },
+    {
+     "id": "e373",
+     "seq": 373,
+     "at": "2026-10-26T19:07:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 373"
+     }
+    },
+    {
+     "id": "e374",
+     "seq": 374,
+     "at": "2026-10-26T19:09:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 374"
+     }
+    },
+    {
+     "id": "e375",
+     "seq": 375,
+     "at": "2026-10-26T19:11:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 375"
+     }
+    },
+    {
+     "id": "e376",
+     "seq": 376,
+     "at": "2026-10-26T19:13:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 376"
+     }
+    },
+    {
+     "id": "e377",
+     "seq": 377,
+     "at": "2026-10-26T19:14:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 377"
+     }
+    },
+    {
+     "id": "e378",
+     "seq": 378,
+     "at": "2026-10-26T19:16:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 378"
+     }
+    },
+    {
+     "id": "e379",
+     "seq": 379,
+     "at": "2026-10-26T19:18:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 379"
+     }
+    },
+    {
+     "id": "e380",
+     "seq": 380,
+     "at": "2026-10-26T19:20:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 380"
+     }
+    },
+    {
+     "id": "e381",
+     "seq": 381,
+     "at": "2026-10-26T19:21:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 381"
+     }
+    },
+    {
+     "id": "e382",
+     "seq": 382,
+     "at": "2026-10-26T19:23:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 382"
+     }
+    },
+    {
+     "id": "e383",
+     "seq": 383,
+     "at": "2026-10-26T19:25:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 383"
+     }
+    },
+    {
+     "id": "e384",
+     "seq": 384,
+     "at": "2026-10-26T19:27:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 384"
+     }
+    },
+    {
+     "id": "e385",
+     "seq": 385,
+     "at": "2026-10-26T19:28:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 385"
+     }
+    },
+    {
+     "id": "e386",
+     "seq": 386,
+     "at": "2026-10-26T19:30:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 386"
+     }
+    },
+    {
+     "id": "e387",
+     "seq": 387,
+     "at": "2026-10-26T19:32:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 387"
+     }
+    },
+    {
+     "id": "e388",
+     "seq": 388,
+     "at": "2026-10-26T19:34:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 388"
+     }
+    },
+    {
+     "id": "e389",
+     "seq": 389,
+     "at": "2026-10-26T19:35:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 389"
+     }
+    },
+    {
+     "id": "e390",
+     "seq": 390,
+     "at": "2026-10-26T19:37:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 390"
+     }
+    },
+    {
+     "id": "e391",
+     "seq": 391,
+     "at": "2026-10-26T19:39:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 391"
+     }
+    },
+    {
+     "id": "e392",
+     "seq": 392,
+     "at": "2026-10-26T19:41:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 392"
+     }
+    },
+    {
+     "id": "e393",
+     "seq": 393,
+     "at": "2026-10-26T19:42:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 393"
+     }
+    },
+    {
+     "id": "e394",
+     "seq": 394,
+     "at": "2026-10-26T19:44:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 394"
+     }
+    },
+    {
+     "id": "e395",
+     "seq": 395,
+     "at": "2026-10-26T19:46:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 395"
+     }
+    },
+    {
+     "id": "e396",
+     "seq": 396,
+     "at": "2026-10-26T19:48:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 396"
+     }
+    },
+    {
+     "id": "e397",
+     "seq": 397,
+     "at": "2026-10-26T19:49:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 397"
+     }
+    },
+    {
+     "id": "e398",
+     "seq": 398,
+     "at": "2026-10-26T19:51:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 398"
+     }
+    },
+    {
+     "id": "e399",
+     "seq": 399,
+     "at": "2026-10-26T19:52:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 399"
+     }
+    },
+    {
+     "id": "e400",
+     "seq": 400,
+     "at": "2026-10-26T19:52:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 400"
+     }
+    },
+    {
+     "id": "e401",
+     "seq": 401,
+     "at": "2026-10-26T19:53:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 401"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e402",
+   "seq": 402,
+   "at": "2026-10-26T19:57:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 402"
+   }
+  },
+  {
+   "id": "e403",
+   "seq": 403,
+   "at": "2026-10-26T20:01:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 403"
+   }
+  },
+  {
+   "id": "e404",
+   "seq": 404,
+   "at": "2026-10-26T20:05:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 404"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-13",
+   "run_kind": "implementation",
+   "run_number": 13,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T20:06:20Z",
+   "ended_at": "2026-10-26T20:53:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e405",
+     "seq": 405,
+     "at": "2026-10-26T20:06:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 405"
+     }
+    },
+    {
+     "id": "e406",
+     "seq": 406,
+     "at": "2026-10-26T20:07:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 406"
+     }
+    },
+    {
+     "id": "e407",
+     "seq": 407,
+     "at": "2026-10-26T20:09:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 407"
+     }
+    },
+    {
+     "id": "e408",
+     "seq": 408,
+     "at": "2026-10-26T20:11:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 408"
+     }
+    },
+    {
+     "id": "e409",
+     "seq": 409,
+     "at": "2026-10-26T20:13:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 409"
+     }
+    },
+    {
+     "id": "e410",
+     "seq": 410,
+     "at": "2026-10-26T20:14:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 410"
+     }
+    },
+    {
+     "id": "e411",
+     "seq": 411,
+     "at": "2026-10-26T20:16:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 411"
+     }
+    },
+    {
+     "id": "e412",
+     "seq": 412,
+     "at": "2026-10-26T20:18:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 412"
+     }
+    },
+    {
+     "id": "e413",
+     "seq": 413,
+     "at": "2026-10-26T20:20:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 413"
+     }
+    },
+    {
+     "id": "e414",
+     "seq": 414,
+     "at": "2026-10-26T20:21:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 414"
+     }
+    },
+    {
+     "id": "e415",
+     "seq": 415,
+     "at": "2026-10-26T20:23:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 415"
+     }
+    },
+    {
+     "id": "e416",
+     "seq": 416,
+     "at": "2026-10-26T20:25:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 416"
+     }
+    },
+    {
+     "id": "e417",
+     "seq": 417,
+     "at": "2026-10-26T20:27:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 417"
+     }
+    },
+    {
+     "id": "e418",
+     "seq": 418,
+     "at": "2026-10-26T20:28:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 418"
+     }
+    },
+    {
+     "id": "e419",
+     "seq": 419,
+     "at": "2026-10-26T20:30:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 419"
+     }
+    },
+    {
+     "id": "e420",
+     "seq": 420,
+     "at": "2026-10-26T20:32:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 420"
+     }
+    },
+    {
+     "id": "e421",
+     "seq": 421,
+     "at": "2026-10-26T20:34:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 421"
+     }
+    },
+    {
+     "id": "e422",
+     "seq": 422,
+     "at": "2026-10-26T20:35:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 422"
+     }
+    },
+    {
+     "id": "e423",
+     "seq": 423,
+     "at": "2026-10-26T20:37:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 423"
+     }
+    },
+    {
+     "id": "e424",
+     "seq": 424,
+     "at": "2026-10-26T20:39:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 424"
+     }
+    },
+    {
+     "id": "e425",
+     "seq": 425,
+     "at": "2026-10-26T20:41:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 425"
+     }
+    },
+    {
+     "id": "e426",
+     "seq": 426,
+     "at": "2026-10-26T20:42:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 426"
+     }
+    },
+    {
+     "id": "e427",
+     "seq": 427,
+     "at": "2026-10-26T20:44:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 427"
+     }
+    },
+    {
+     "id": "e428",
+     "seq": 428,
+     "at": "2026-10-26T20:46:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 428"
+     }
+    },
+    {
+     "id": "e429",
+     "seq": 429,
+     "at": "2026-10-26T20:48:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 429"
+     }
+    },
+    {
+     "id": "e430",
+     "seq": 430,
+     "at": "2026-10-26T20:49:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 430"
+     }
+    },
+    {
+     "id": "e431",
+     "seq": 431,
+     "at": "2026-10-26T20:51:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 431"
+     }
+    },
+    {
+     "id": "e432",
+     "seq": 432,
+     "at": "2026-10-26T20:52:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 432"
+     }
+    },
+    {
+     "id": "e433",
+     "seq": 433,
+     "at": "2026-10-26T20:52:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 433"
+     }
+    },
+    {
+     "id": "e434",
+     "seq": 434,
+     "at": "2026-10-26T20:53:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 434"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e435",
+   "seq": 435,
+   "at": "2026-10-26T20:57:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 435"
+   }
+  },
+  {
+   "id": "e436",
+   "seq": 436,
+   "at": "2026-10-26T21:01:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 436"
+   }
+  },
+  {
+   "id": "e437",
+   "seq": 437,
+   "at": "2026-10-26T21:05:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 437"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-14",
+   "run_kind": "implementation",
+   "run_number": 14,
+   "status": "ended",
+   "exit": "handoff",
+   "started_at": "2026-10-26T21:06:20Z",
+   "ended_at": "2026-10-26T21:53:20Z",
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e438",
+     "seq": 438,
+     "at": "2026-10-26T21:06:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 438"
+     }
+    },
+    {
+     "id": "e439",
+     "seq": 439,
+     "at": "2026-10-26T21:07:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 439"
+     }
+    },
+    {
+     "id": "e440",
+     "seq": 440,
+     "at": "2026-10-26T21:09:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 440"
+     }
+    },
+    {
+     "id": "e441",
+     "seq": 441,
+     "at": "2026-10-26T21:11:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 441"
+     }
+    },
+    {
+     "id": "e442",
+     "seq": 442,
+     "at": "2026-10-26T21:13:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 442"
+     }
+    },
+    {
+     "id": "e443",
+     "seq": 443,
+     "at": "2026-10-26T21:14:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 443"
+     }
+    },
+    {
+     "id": "e444",
+     "seq": 444,
+     "at": "2026-10-26T21:16:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 444"
+     }
+    },
+    {
+     "id": "e445",
+     "seq": 445,
+     "at": "2026-10-26T21:18:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 445"
+     }
+    },
+    {
+     "id": "e446",
+     "seq": 446,
+     "at": "2026-10-26T21:20:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 446"
+     }
+    },
+    {
+     "id": "e447",
+     "seq": 447,
+     "at": "2026-10-26T21:21:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 447"
+     }
+    },
+    {
+     "id": "e448",
+     "seq": 448,
+     "at": "2026-10-26T21:23:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 448"
+     }
+    },
+    {
+     "id": "e449",
+     "seq": 449,
+     "at": "2026-10-26T21:25:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 449"
+     }
+    },
+    {
+     "id": "e450",
+     "seq": 450,
+     "at": "2026-10-26T21:27:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 450"
+     }
+    },
+    {
+     "id": "e451",
+     "seq": 451,
+     "at": "2026-10-26T21:28:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 451"
+     }
+    },
+    {
+     "id": "e452",
+     "seq": 452,
+     "at": "2026-10-26T21:30:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 452"
+     }
+    },
+    {
+     "id": "e453",
+     "seq": 453,
+     "at": "2026-10-26T21:32:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 453"
+     }
+    },
+    {
+     "id": "e454",
+     "seq": 454,
+     "at": "2026-10-26T21:34:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 454"
+     }
+    },
+    {
+     "id": "e455",
+     "seq": 455,
+     "at": "2026-10-26T21:35:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 455"
+     }
+    },
+    {
+     "id": "e456",
+     "seq": 456,
+     "at": "2026-10-26T21:37:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 456"
+     }
+    },
+    {
+     "id": "e457",
+     "seq": 457,
+     "at": "2026-10-26T21:39:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 457"
+     }
+    },
+    {
+     "id": "e458",
+     "seq": 458,
+     "at": "2026-10-26T21:41:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 458"
+     }
+    },
+    {
+     "id": "e459",
+     "seq": 459,
+     "at": "2026-10-26T21:42:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 459"
+     }
+    },
+    {
+     "id": "e460",
+     "seq": 460,
+     "at": "2026-10-26T21:44:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 460"
+     }
+    },
+    {
+     "id": "e461",
+     "seq": 461,
+     "at": "2026-10-26T21:46:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 461"
+     }
+    },
+    {
+     "id": "e462",
+     "seq": 462,
+     "at": "2026-10-26T21:48:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 462"
+     }
+    },
+    {
+     "id": "e463",
+     "seq": 463,
+     "at": "2026-10-26T21:49:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 463"
+     }
+    },
+    {
+     "id": "e464",
+     "seq": 464,
+     "at": "2026-10-26T21:51:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 464"
+     }
+    },
+    {
+     "id": "e465",
+     "seq": 465,
+     "at": "2026-10-26T21:52:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 465"
+     }
+    },
+    {
+     "id": "e466",
+     "seq": 466,
+     "at": "2026-10-26T21:52:50Z",
+     "type": "run.ended",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Run ended",
+      "detail": "Event 466"
+     }
+    },
+    {
+     "id": "e467",
+     "seq": 467,
+     "at": "2026-10-26T21:53:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 467"
+     }
+    }
+   ]
+  },
+  {
+   "id": "e468",
+   "seq": 468,
+   "at": "2026-10-26T21:57:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 0",
+    "detail": "Event 468"
+   }
+  },
+  {
+   "id": "e469",
+   "seq": 469,
+   "at": "2026-10-26T22:01:20Z",
+   "type": "rule.action",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 1",
+    "detail": "Event 469"
+   }
+  },
+  {
+   "id": "e470",
+   "seq": 470,
+   "at": "2026-10-26T22:05:20Z",
+   "type": "phase.entered",
+   "actor": {
+    "kind": "machine"
+   },
+   "payload": {},
+   "summary": {
+    "title": "Between runs 2",
+    "detail": "Event 470"
+   }
+  },
+  {
+   "kind": "run",
+   "run_id": "run-15",
+   "run_kind": "implementation",
+   "run_number": 15,
+   "status": "running",
+   "exit": null,
+   "started_at": "2026-10-26T22:06:20Z",
+   "ended_at": null,
+   "head": "abcdef1234567",
+   "events": [
+    {
+     "id": "e471",
+     "seq": 471,
+     "at": "2026-10-26T22:06:20Z",
+     "type": "run.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "model": "opus",
+      "effort": "high"
+     },
+     "summary": {
+      "title": "Run started",
+      "detail": "Event 471"
+     }
+    },
+    {
+     "id": "e472",
+     "seq": 472,
+     "at": "2026-10-26T22:07:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "title": "Step 1"
+     },
+     "summary": {
+      "title": "Step 1",
+      "detail": "Event 472"
+     }
+    },
+    {
+     "id": "e473",
+     "seq": 473,
+     "at": "2026-10-26T22:09:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s1",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 1 passed",
+      "detail": "Event 473"
+     }
+    },
+    {
+     "id": "e474",
+     "seq": 474,
+     "at": "2026-10-26T22:11:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "title": "Step 2"
+     },
+     "summary": {
+      "title": "Step 2",
+      "detail": "Event 474"
+     }
+    },
+    {
+     "id": "e475",
+     "seq": 475,
+     "at": "2026-10-26T22:13:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s2",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 2 passed",
+      "detail": "Event 475"
+     }
+    },
+    {
+     "id": "e476",
+     "seq": 476,
+     "at": "2026-10-26T22:14:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "title": "Step 3"
+     },
+     "summary": {
+      "title": "Step 3",
+      "detail": "Event 476"
+     }
+    },
+    {
+     "id": "e477",
+     "seq": 477,
+     "at": "2026-10-26T22:16:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s3",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 3 passed",
+      "detail": "Event 477"
+     }
+    },
+    {
+     "id": "e478",
+     "seq": 478,
+     "at": "2026-10-26T22:18:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "title": "Step 4"
+     },
+     "summary": {
+      "title": "Step 4",
+      "detail": "Event 478"
+     }
+    },
+    {
+     "id": "e479",
+     "seq": 479,
+     "at": "2026-10-26T22:20:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s4",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 4 passed",
+      "detail": "Event 479"
+     }
+    },
+    {
+     "id": "e480",
+     "seq": 480,
+     "at": "2026-10-26T22:21:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "title": "Step 5"
+     },
+     "summary": {
+      "title": "Step 5",
+      "detail": "Event 480"
+     }
+    },
+    {
+     "id": "e481",
+     "seq": 481,
+     "at": "2026-10-26T22:23:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s5",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 5 passed",
+      "detail": "Event 481"
+     }
+    },
+    {
+     "id": "e482",
+     "seq": 482,
+     "at": "2026-10-26T22:25:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "title": "Step 6"
+     },
+     "summary": {
+      "title": "Step 6",
+      "detail": "Event 482"
+     }
+    },
+    {
+     "id": "e483",
+     "seq": 483,
+     "at": "2026-10-26T22:27:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s6",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 6 passed",
+      "detail": "Event 483"
+     }
+    },
+    {
+     "id": "e484",
+     "seq": 484,
+     "at": "2026-10-26T22:28:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "title": "Step 7"
+     },
+     "summary": {
+      "title": "Step 7",
+      "detail": "Event 484"
+     }
+    },
+    {
+     "id": "e485",
+     "seq": 485,
+     "at": "2026-10-26T22:30:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s7",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 7 passed",
+      "detail": "Event 485"
+     }
+    },
+    {
+     "id": "e486",
+     "seq": 486,
+     "at": "2026-10-26T22:32:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "title": "Step 8"
+     },
+     "summary": {
+      "title": "Step 8",
+      "detail": "Event 486"
+     }
+    },
+    {
+     "id": "e487",
+     "seq": 487,
+     "at": "2026-10-26T22:34:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s8",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 8 passed",
+      "detail": "Event 487"
+     }
+    },
+    {
+     "id": "e488",
+     "seq": 488,
+     "at": "2026-10-26T22:35:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "title": "Step 9"
+     },
+     "summary": {
+      "title": "Step 9",
+      "detail": "Event 488"
+     }
+    },
+    {
+     "id": "e489",
+     "seq": 489,
+     "at": "2026-10-26T22:37:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s9",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 9 passed",
+      "detail": "Event 489"
+     }
+    },
+    {
+     "id": "e490",
+     "seq": 490,
+     "at": "2026-10-26T22:39:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "title": "Step 10"
+     },
+     "summary": {
+      "title": "Step 10",
+      "detail": "Event 490"
+     }
+    },
+    {
+     "id": "e491",
+     "seq": 491,
+     "at": "2026-10-26T22:41:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s10",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 10 passed",
+      "detail": "Event 491"
+     }
+    },
+    {
+     "id": "e492",
+     "seq": 492,
+     "at": "2026-10-26T22:42:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "title": "Step 11"
+     },
+     "summary": {
+      "title": "Step 11",
+      "detail": "Event 492"
+     }
+    },
+    {
+     "id": "e493",
+     "seq": 493,
+     "at": "2026-10-26T22:44:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s11",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 11 passed",
+      "detail": "Event 493"
+     }
+    },
+    {
+     "id": "e494",
+     "seq": 494,
+     "at": "2026-10-26T22:46:20Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "title": "Step 12"
+     },
+     "summary": {
+      "title": "Step 12",
+      "detail": "Event 494"
+     }
+    },
+    {
+     "id": "e495",
+     "seq": 495,
+     "at": "2026-10-26T22:48:20Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s12",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 12 passed",
+      "detail": "Event 495"
+     }
+    },
+    {
+     "id": "e496",
+     "seq": 496,
+     "at": "2026-10-26T22:49:50Z",
+     "type": "step.started",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "title": "Step 13"
+     },
+     "summary": {
+      "title": "Step 13",
+      "detail": "Event 496"
+     }
+    },
+    {
+     "id": "e497",
+     "seq": 497,
+     "at": "2026-10-26T22:51:50Z",
+     "type": "step.completed",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "step_id": "s13",
+      "outcome": "passed",
+      "duration_ms": 120000
+     },
+     "summary": {
+      "title": "Step 13 passed",
+      "detail": "Event 497"
+     }
+    },
+    {
+     "id": "e498",
+     "seq": 498,
+     "at": "2026-10-26T22:52:20Z",
+     "type": "evidence",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {},
+     "summary": {
+      "title": "Evidence",
+      "detail": "Event 498"
+     }
+    },
+    {
+     "id": "e499",
+     "seq": 499,
+     "at": "2026-10-26T22:52:50Z",
+     "type": "note",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "exit": "handoff"
+     },
+     "summary": {
+      "title": "Note",
+      "detail": "Event 499"
+     }
+    },
+    {
+     "id": "e500",
+     "seq": 500,
+     "at": "2026-10-26T22:53:20Z",
+     "type": "verdict.recorded",
+     "actor": {
+      "kind": "machine"
+     },
+     "payload": {
+      "kind": "code_review",
+      "outcome": "approve"
+     },
+     "summary": {
+      "title": "Verdict",
+      "detail": "Event 500"
+     }
+    }
+   ]
+  }
+ ],
+ "next_since": "2026-10-26T22:53:20Z"
+}

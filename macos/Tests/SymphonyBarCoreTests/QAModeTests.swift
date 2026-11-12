@@ -77,6 +77,17 @@ final class QAModeTests: XCTestCase {
         XCTAssertNil(qaStores([QAMode.controlURLKey: "file:///tmp", QAMode.controlTokenKey: "qa-token"]).liveControl)
     }
 
+    func testTheTicketToOpenAtLaunchIsReadTrimmedOnlyInQAMode() {
+        XCTAssertNil(AppStores(environment: [QAMode.openTicketKey: "TP-9001"], home: home).qaMode)
+        XCTAssertNil(qaStores().qaMode?.openTicket)
+        XCTAssertNil(qaStores([QAMode.openTicketKey: " \n"]).qaMode?.openTicket)
+        XCTAssertEqual(qaStores([QAMode.openTicketKey: " TP-9001\n"]).qaMode?.openTicket, "TP-9001")
+    }
+
+    func testTheFrameCountIsWrittenUnderTheQARoot() {
+        XCTAssertEqual(QAMode(root: root).framesFile, root.standardizedFileURL.appendingPathComponent("frames.json"))
+    }
+
     func testALiveControlURLIsIgnoredOutsideQAMode() {
         let stores = AppStores(
             environment: [QAMode.controlURLKey: "http://127.0.0.1:4000", QAMode.controlTokenKey: "qa-token"],

@@ -129,6 +129,7 @@ extension SymphonyWindowModel {
             ticketDecisions.show(identifier)
             ticketSources = TicketPage.Sources()
             ticketSlowReadAt = nil
+            ticketReads = ConditionalReads()
             readTicket(force: true)
             followTicketFeed(afterPoll: false)
         case .pullRequest:
@@ -160,18 +161,18 @@ extension SymphonyWindowModel {
         ticketSources = sources
     }
 
-    /// Reads the shown ticket's endpoints: `/api/v1/:issue_identifier` after each state poll, its runs and audit
-    /// records every `ticketSlowInterval` or when `force`d.
+    /// Reads the shown ticket's endpoints: `/api/v1/:issue_identifier` and its decisions after each state poll, its runs
+    /// and audit records every `ticketSlowInterval` or when `force`d. The ticket and decisions reads send the tag of the
+    /// answer the page shows (TP-1492): an unchanged one comes back `304` with no body and leaves the page as it is.
     func readTicket(force: Bool = false) {
         guard let identifier = shownTicket, !readingTicket, state.countsKnown else { return }
         let slow = force || ticketSlowReadAt.map { Date().timeIntervalSince($0) >= Self.ticketSlowInterval } ?? true
         readingTicket = true
         Task {
             var sources = ticketSources
-            if case let .loaded(data) = await client.get(TicketPage.issuePath(identifier)) {
+            var reads = ticketReads
+            if case let .changed(data) = await client.read(TicketPage.issuePath(identifier), through: &reads) {
                 sources.issue = data
-            } else {
-                sources.issue = nil
             }
             if slow {
                 if case let .loaded(data) = await client.get(TicketPage.runsPath) { sources.runs = data }
@@ -182,11 +183,12 @@ extension SymphonyWindowModel {
                 sources.audit = audit
                 ticketSlowReadAt = Date()
             }
-            let decisions = await readTicketPath(TicketDecisionsEditor.path(identifier))
+            let decisions = await client.read(TicketDecisionsEditor.path(identifier), through: &reads)
             readingTicket = false
             // A page left while its reads were out doesn't take them.
             guard shownTicket == identifier else { return }
-            ticketDecisions.apply(decisions, for: identifier)
+            ticketReads = reads
+            if case let .changed(data) = decisions { ticketDecisions.apply(data, for: identifier) }
             // A Check Now answer and the feed's events that came in meanwhile stay.
             sources.check = ticketSources.check
             sources.events = ticketSources.events
@@ -417,11 +419,6 @@ extension SymphonyWindowModel {
     private func sendLook(_ look: ControlAction?) -> Task<Void, Never>? {
         guard let look else { return nil }
         return Task { _ = await onControl(look) }
-    }
-
-    private func readTicketPath(_ path: String) async -> Data? {
-        if case let .loaded(data) = await client.get(path) { return data }
-        return nil
     }
 
     func copy(_ text: String) {
