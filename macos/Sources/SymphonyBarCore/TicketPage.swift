@@ -354,7 +354,7 @@ public struct TicketPage: Equatable {
         let audit = sources.audit.flatMap(Self.auditRecords).filter { record in
             record.issueIdentifier == identifier && record.recordHash.map { seenRecords.insert($0).inserted } ?? true
         }
-        let reference = state?.generatedAt.flatMap(Self.date) ?? now
+        let reference = state?.generatedAt?.date ?? now
 
         func matches(_ entry: Entry) -> Bool { entry.issueIdentifier == identifier }
         let running = state?.running?.first(where: matches)
@@ -433,7 +433,7 @@ public struct TicketPage: Equatable {
                                   blocked?.state, waitingOnYou?.state].lazy.compactMap { $0 }.first
         let ticketState: String? = liveState ?? (shipped == nil ? history.last?.state : "Done")
         let idle = running.flatMap { run in
-            (run.lastEventAt ?? run.startedAt).flatMap(Self.date).map { Int(reference.timeIntervalSince($0)) }
+            (run.lastEventAt?.date ?? run.startedAt?.date).map { Int(reference.timeIntervalSince($0)) }
         }
 
         // What it is doing now, the first answer that applies. With Symphony's answer a ticket is running, paused or
@@ -441,7 +441,7 @@ public struct TicketPage: Equatable {
         if running != nil {
             phase = .working
         } else if let shipped {
-            phase = .done(pullRequest: pullRequest, mergedAt: shipped.completedAt.flatMap(Self.date))
+            phase = .done(pullRequest: pullRequest, mergedAt: shipped.completedAt?.date)
         } else if paused != nil {
             phase = .paused
         } else if status == nil, waitingOnYou != nil {
@@ -451,7 +451,7 @@ public struct TicketPage: Equatable {
         } else if let watching, ["Code Review", "QA"].contains(where: { Self.isState(watching.state, $0) }) {
             phase = .inReview(qa: qaRunning ? "QA pass running" : qaQueued ? "QA pass queued" : nil)
         } else if let retry {
-            let due = retry.dueAt.flatMap(Self.date)
+            let due = retry.dueAt?.date
             phase = .waiting(on: due.map { "a retry at \(StatusMenu.clockTime($0, now: reference, timeZone: timeZone, dateFormat: "MMM d, HH:mm"))" } ?? "a retry")
         } else if status == nil, let blocked {
             let blockers = (blocked.blockedBy ?? []).compactMap(\.issueIdentifier)
@@ -497,12 +497,12 @@ public struct TicketPage: Equatable {
         // The run under way is Now's, not a past run's, whether or not the history lists it yet.
         func isCurrent(_ sessionID: String?) -> Bool { sessionID != nil && sessionID == running?.sessionId }
         for entry in history where entry.status?.lowercased() != "running" && !isCurrent(entry.sessionId) {
-            guard let started = entry.startedAt.flatMap(Self.date) else { continue }
+            guard let started = entry.startedAt?.date else { continue }
             if let id = entry.runId { seenRuns.insert(id) }
             pastRuns.append((RunItem(history: entry), started))
         }
         for record in records where !(record.runId.map(seenRuns.contains) ?? false) {
-            guard let started = record.startedAt.flatMap(Self.date), !isCurrent(record.sessionId) else { continue }
+            guard let started = record.startedAt?.date, !isCurrent(record.sessionId) else { continue }
             pastRuns.append((RunItem(record: record), started))
         }
         for (run, started) in pastRuns.sorted(by: { $0.started < $1.started }) {
@@ -521,7 +521,7 @@ public struct TicketPage: Equatable {
         if let running {
             let name = running.runKind.map(Overview.phaseName) ?? "Agent"
             let number = (counts[name] ?? 0) + 1
-            let started = running.startedAt.flatMap(Self.date)
+            let started = running.startedAt?.date
             let elapsed = started.map { max(Int(reference.timeIntervalSince($0)), 0) }
             let total = running.tokens?.totalTokens ?? 0
             let cap = state?.budget?.perIssueLimit
@@ -558,7 +558,7 @@ public struct TicketPage: Equatable {
         steps += Self.eventSteps(audit: audit, stops: sources.stops.filter { $0.identifier == identifier }, clock: clock)
         steps += (issue?.verdicts ?? []).compactMap { Self.verdictStep($0, clock: clock) }
 
-        if let shipped, let merged = shipped.completedAt.flatMap(Self.date) {
+        if let shipped, let merged = shipped.completedAt?.date {
             steps.append(Step(
                 id: "done", time: merged, timeText: clock(merged), title: pullRequest == nil ? "Done" : "Merged",
                 result: .done, resultWord: nil, durationSeconds: nil, tokens: nil, detail: pullRequest?.absoluteString
@@ -617,11 +617,11 @@ public struct TicketPage: Equatable {
     private static func eventSteps(audit: [AuditRecord], stops: [LocalStop], clock: (Date) -> String) -> [Step] {
         var steps: [Step] = []
         var moves = audit.filter { $0.eventType == "director_move" }
-        let auditStops = audit.filter { $0.eventType == "run_stopped" }.compactMap { record in record.timestamp.flatMap(date).map { (record, $0) } }
+        let auditStops = audit.filter { $0.eventType == "run_stopped" }.compactMap { record in record.timestamp?.date.map { (record, $0) } }
 
         func takeBacklogMove(after time: Date) -> AuditRecord? {
             guard let index = moves.firstIndex(where: { move in
-                guard move.move == "backlog", let at = move.timestamp.flatMap(date) else { return false }
+                guard move.move == "backlog", let at = move.timestamp?.date else { return false }
                 return at >= time.addingTimeInterval(-stopMoveWindow) && at <= time.addingTimeInterval(stopMoveWindow)
             }) else { return nil }
             return moves.remove(at: index)
@@ -637,7 +637,7 @@ public struct TicketPage: Equatable {
             steps.append(stopStep(id: "stop-local-\(stop.at.timeIntervalSince1970)", at: stop.at, movedToBacklog: stop.movedToBacklog || move != nil, note: stop.note ?? move?.comment, clock: clock))
         }
         for move in moves {
-            guard let at = move.timestamp.flatMap(date) else { continue }
+            guard let at = move.timestamp?.date else { continue }
             steps.append(Step(
                 id: "move-\(move.recordHash ?? "\(at.timeIntervalSince1970)")", time: at, timeText: clock(at),
                 title: moveTitle(move), result: .done, resultWord: nil, durationSeconds: nil, tokens: nil,
@@ -656,7 +656,7 @@ public struct TicketPage: Equatable {
 
     /// A Code Review or QA verdict as a timeline step: "Approved by Code Review", "QA failed".
     private static func verdictStep(_ verdict: IssuePayload.Verdict, clock: (Date) -> String) -> Step? {
-        guard let at = verdict.recordedAt.flatMap(date), let (title, result) = verdictTitle(verdict) else { return nil }
+        guard let at = verdict.recordedAt?.date, let (title, result) = verdictTitle(verdict) else { return nil }
         return Step(
             id: "verdict-\(verdict.kind ?? "")-\(at.timeIntervalSince1970)", time: at, timeText: clock(at),
             title: title, result: result, resultWord: nil, durationSeconds: nil, tokens: nil,
@@ -743,6 +743,20 @@ public struct TicketPage: Equatable {
 
     private static let isoTime = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
 
+    /// A payload's ISO-8601 time, read once when the payload is decoded, so building the page never parses text.
+    /// Text that doesn't read as a time is no time, as before.
+    struct DecodedTime: Decodable, Equatable {
+        let date: Date?
+
+        init(_ text: String) {
+            date = TicketPage.date(text)
+        }
+
+        init(from decoder: Decoder) throws {
+            self.init(try decoder.singleValueContainer().decode(String.self))
+        }
+    }
+
     /// The records in an NDJSON body; lines that don't read are skipped.
     static func auditRecords(_ data: Data) -> [AuditRecord] {
         String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).compactMap { line in
@@ -760,7 +774,7 @@ public struct TicketPage: Equatable {
 
     struct AuditRecord: Decodable, Equatable {
         let eventType: String?
-        let timestamp: String?
+        let timestamp: DecodedTime?
         let issueIdentifier: String?
         let move: String?
         let toState: String?
@@ -872,22 +886,22 @@ public struct TicketPage: Equatable {
         let sessionId: String?
         let workspacePath: String?
         let turnCount: Int?
-        let startedAt: String?
-        let lastEventAt: String?
+        let startedAt: DecodedTime?
+        let lastEventAt: DecodedTime?
         let pendingTool: PendingTool?
         let forced: Bool?
         let tokens: Tokens?
         let attempt: Int?
-        let dueAt: String?
+        let dueAt: DecodedTime?
         let error: String?
         let reason: String?
         let blockedBy: [Blocker]?
         let kind: String?
-        let completedAt: String?
+        let completedAt: DecodedTime?
         // A run_history entry.
         let runId: String?
         let status: String?
-        let endedAt: String?
+        let endedAt: DecodedTime?
         let runtimeSeconds: Int?
         /// Why a Code Review run stayed inconclusive, such as `invalid_verdict`.
         let reviewInconclusiveCause: String?
@@ -922,7 +936,7 @@ public struct TicketPage: Equatable {
             let lanes: [Lane]?
         }
 
-        let generatedAt: String?
+        let generatedAt: DecodedTime?
         let running: [Entry]?
         let retrying: [Entry]?
         let watching: [Entry]?
@@ -944,7 +958,7 @@ public struct TicketPage: Equatable {
             let kind: String?
             let outcome: String?
             let headSha: String?
-            let recordedAt: String?
+            let recordedAt: DecodedTime?
         }
 
         struct Workspace: Decodable {
@@ -983,8 +997,8 @@ public struct TicketPage: Equatable {
             let durationSeconds: Int?
             let sessionId: String?
             let pullRequestUrl: String?
-            let startedAt: String?
-            let endedAt: String?
+            let startedAt: DecodedTime?
+            let endedAt: DecodedTime?
         }
 
         let runs: [Run]?
@@ -1007,7 +1021,7 @@ public struct TicketPage: Equatable {
             status = entry.status
             error = entry.error
             durationSeconds = entry.runtimeSeconds.flatMap { $0 > 0 ? $0 : nil }
-            ended = entry.endedAt.flatMap(TicketPage.date)
+            ended = entry.endedAt?.date
             tokens = entry.tokens?.totalTokens
             inconclusiveCause = entry.reviewInconclusiveCause?.nonEmpty
         }
@@ -1018,7 +1032,7 @@ public struct TicketPage: Equatable {
             status = record.status
             error = record.error
             durationSeconds = record.durationSeconds.flatMap { $0 > 0 ? $0 : nil }
-            ended = record.endedAt.flatMap(TicketPage.date)
+            ended = record.endedAt?.date
             tokens = record.tokens?.totalTokens
         }
     }

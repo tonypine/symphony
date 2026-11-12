@@ -80,6 +80,15 @@ final class TicketPageSpeedTests: XCTestCase {
         XCTAssertEqual(history.runs.values.compactMap(\.endedDate).count, 14)
     }
 
+    func testARunRecordsTimesAreReadOnceWhenDecoded() throws {
+        struct Record: Decodable { let endedAt: TicketPage.DecodedTime? }
+        func decode(_ json: String) throws -> Record { try JSONDecoder().decode(Record.self, from: Data(json.utf8)) }
+        XCTAssertEqual(try decode(#"{"endedAt": "2026-10-26T07:33:00Z"}"#).endedAt?.date, Date(timeIntervalSince1970: 1_792_999_980))
+        XCTAssertNotNil(try decode(#"{"endedAt": "2026-10-26T07:33:00.123456Z"}"#).endedAt?.date)
+        XCTAssertNil(try decode(#"{"endedAt": "not a time"}"#).endedAt?.date)
+        XCTAssertNil(try decode(#"{"endedAt": null}"#).endedAt)
+    }
+
     func testASharedFormatterIsKeptPerPatternLocaleAndTimeZone() {
         let date = Self.start
         let tokyo = TimeZone(identifier: "Asia/Tokyo")!
