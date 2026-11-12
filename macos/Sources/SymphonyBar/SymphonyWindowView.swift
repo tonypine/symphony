@@ -9,10 +9,11 @@ final class SymphonyWindowModel: ObservableObject {
     let sidebar = Sidebar()
     let client: LiveAPIClient
 
-    /// The view shown; Repos never is, as it opens its own window.
+    /// The page shown; Repos and Settings never are, as they open their own windows.
     @Published var selection: SymphonyView {
         didSet {
             guard selection != oldValue else { return }
+            destinationMemory.remember(selection)
             onSelect(selection)
             readHistoryIfDue()
             readQualityIfDue()
@@ -129,7 +130,7 @@ final class SymphonyWindowModel: ObservableObject {
     }
     /// The Learnings tab's repo and tag filters and search.
     @Published var learningsFilter = Learnings.Filter()
-    /// Set by ⌘F on Shipped to put the focus in the Learnings search field.
+    /// Set by ⌥⌘F on Shipped to put the focus in the Learnings search field.
     @Published var learningsSearchRequested = false
     /// Audit's records under the filters Symphony applies, read while Audit shows (D10), newest last as served.
     @Published var auditRecords: [AuditRecord]?
@@ -147,7 +148,7 @@ final class SymphonyWindowModel: ObservableObject {
     }
     /// The audit record in the inspector, by id.
     @Published var auditSelection: String?
-    /// Set by ⌘F on Audit to put the focus in its search field.
+    /// Set by ⌥⌘F on Audit to put the focus in its search field.
     @Published var auditSearchRequested = false
     /// True while Export… reads the records; what went wrong with it, shown under the filters.
     @Published var auditExporting = false
@@ -198,8 +199,12 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var ticketSelection: String?
     /// Tickets' inspector (⌥⌘I, Space).
     @Published var inspectorShown = true
-    /// Set by ⌘F to put the focus in Tickets' search field.
+    /// Set by ⌥⌘F on Tickets to put the focus in its search field.
     @Published var searchRequested = false
+    /// ⌘F's Find a Ticket sheet, from any page (TP-1455).
+    @Published var ticketFinderShown = false
+    /// Each destination's page shown last this session: Work and Insights open on the tab left last (TP-1455).
+    private(set) var destinationMemory = DestinationMemory()
     /// The dispatch control's popover (D12a).
     @Published var dispatchPopoverShown = false
     /// The Pause Dispatch sheet (D12a) and the Force a Ticket sheet (D12b); nothing is sent until their button is pressed.
@@ -322,6 +327,7 @@ final class SymphonyWindowModel: ObservableObject {
         self.client = client
         self.eventStream = eventStream
         self.selection = selection
+        destinationMemory.remember(selection)
         ticketFeed = TicketEventsReader(get: { [client] path in TicketEventsResult(await client.answer(path)) })
         stepTranscripts = StepTranscripts(get: { [client] path in await client.answer(path) })
         history = NavigationHistory(current: .view(selection))
@@ -367,14 +373,7 @@ final class SymphonyWindowModel: ObservableObject {
         eventStream.start()
     }
 
-    /// The Overview item's badge: what needs attention in every repo, whatever the scope; 0 hides it, as do
-    /// unknown counts.
-    var attentionBadge: Int {
-        guard state.countsKnown, let overviewState = overviewWithSetup else { return 0 }
-        return Overview.badgeCount(overviewState, now: Date())
-    }
-
-    /// The Inbox item's badge: what waits on the Director in every repo, whatever the scope (P6), from the same
+    /// Home's badge: what waits on the Director in every repo, whatever the scope (P6), from the same
     /// list as the menu and the Overview's tile; 0 hides it, as do unknown counts.
     var inboxBadge: Int {
         guard state.countsKnown, let overviewState else { return 0 }
@@ -815,18 +814,47 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// Shows `view`: Repos opens its window and the selection stays where it was.
+    /// Shows `view`: Repos and Settings open their windows and the selection stays where it was.
     func show(_ view: SymphonyView) {
-        if view.opensOwnWindow {
+        switch view {
+        case .repos:
             onOpenRepos(nil)
-        } else {
+        case .settings:
+            onAction(.openSettings)
+        default:
             selection = view
             history.visit(.view(view))
         }
     }
 
-    /// The toolbar's title: the view's, the ticket's identifier on its page, or "#448 · <title>" on a pull request's.
-    var toolbarTitle: String { shownTicket ?? pullRequestScreen?.title ?? selection.title }
+    /// ⌘1 to ⌘5 and the sidebar's rows: the destination on the page it showed last this session, else its first.
+    func show(_ destination: Destination) {
+        show(destinationMemory.page(for: destination))
+    }
+
+    /// The destination shown, which the sidebar selects; a page pushed over it keeps it.
+    var destination: Destination { selection.destination }
+
+    /// C1's badge on `destination` (TP-1455): Home's what waits on you, Factory's setup problems; unknown counts hide it.
+    func badge(_ destination: Destination) -> DestinationBadge? {
+        destination.badge(waitingOnYou: inboxBadge, setup: setupSummary)
+    }
+
+    /// ⌘F: the Find a Ticket sheet, from any page.
+    func findTicket() {
+        ticketFinderShown = true
+    }
+
+    /// Return in Find a Ticket: the best match's page, pushed over the page the sheet opened on, so Back returns to it.
+    func openFound(_ query: String) {
+        guard let identifier = TicketFinder.target(query, in: allTickets) else { return }
+        ticketFinderShown = false
+        openTicket(identifier)
+    }
+
+    /// The toolbar's title: the destination's or the page's, the ticket's identifier on its page, or "#448 · <title>"
+    /// on a pull request's.
+    var toolbarTitle: String { shownTicket ?? pullRequestScreen?.title ?? selection.toolbarTitle }
 
     /// The toolbar's line under the title: the view's, the ticket's title on its page, or "<repo> · for <ticket>" on a
     /// pull request's.
@@ -891,6 +919,9 @@ struct SymphonyWindowView: View {
                 .modifier(StopRunSheetPresenter(model: model))
                 .modifier(MoveSheetPresenter(model: model))
                 .modifier(DispatchSheetsPresenter(model: model))
+                .sheet(isPresented: $model.ticketFinderShown) {
+                    TicketFinderSheet(model: model)
+                }
                 .toolbar {
                     ToolbarItemGroup(placement: .navigation) {
                         // P10: ⌘[ and ⌘] between the views and the ticket pages shown.
@@ -919,6 +950,13 @@ struct SymphonyWindowView: View {
                     }
                     ToolbarItem(placement: .automatic) {
                         ScopePicker(model: model)
+                    }
+                    ToolbarItem(placement: .automatic) {
+                        // ⌘F from any page (TP-1455).
+                        Button { model.findTicket() } label: {
+                            Label(TicketFinder.title, systemImage: "magnifyingglass")
+                        }
+                        .help("\(TicketFinder.title) (⌘F)")
                     }
                     if model.selection == .shipped, !model.showsPage {
                         ToolbarItem(placement: .principal) {
@@ -1023,72 +1061,65 @@ struct ScopePicker: View {
     }
 }
 
-/// The sidebar: views by section. Symphony's version and state are in the status bar (TP-1454).
+/// The sidebar: the five destinations, Factory with its pages under it (TP-1455). Symphony's version and state are in
+/// the status bar (TP-1454).
 struct SymphonySidebar: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
 
     var body: some View {
         List(selection: selection) {
-            ForEach(model.sidebar.sections, id: \.section) { group in
-                Section {
-                    ForEach(group.views, id: \.self) { view in
-                        HStack(spacing: DesignTokens.Space.s2) {
-                            Label(view.title, systemImage: view.symbol)
-                            Spacer(minLength: 0)
-                            if let badge = badge(view) {
-                                SidebarBadge(count: badge.count, tint: badge.status.tint)
-                            }
-                        }
-                        .accessibilityElement(children: .combine)
-                        .accessibilityValue(accessibilityValue(view))
-                        .help(shortcutHelp(view))
-                        .tag(view)
-                    }
-                } header: {
-                    if let title = group.section.title { Text(title) }
+            ForEach(model.sidebar.items, id: \.self) { item in
+                switch item {
+                case let .destination(destination):
+                    SidebarRowContent(title: destination.title, symbol: destination.symbol, badge: model.badge(destination))
+                        .help(destination.shortcutHelp)
+                        .tag(item)
+                case let .page(page):
+                    SidebarRowContent(title: page.title, symbol: page.symbol, badge: nil, indented: true)
+                        .help(page.opensOwnWindow ? "Opens the \(page.title) window" : page.title)
+                        .tag(item)
                 }
             }
         }
         .listStyle(.sidebar)
     }
 
-    /// The list's selection, which opens the Repos window instead of selecting it.
-    private var selection: Binding<SymphonyView?> {
+    /// The list's selection: a destination opens on its last page, Repos and Settings open their windows instead of
+    /// being selected.
+    private var selection: Binding<SidebarItem?> {
         Binding(
-            // On a page no view is selected, so choosing the view the page came from goes back to it.
-            get: { model.showsPage ? nil : model.selection },
-            set: { view in
-                guard let view else { return }
-                model.show(view)
+            // On a page no row is selected, so choosing the destination the page came from goes back to it.
+            get: { model.showsPage ? nil : model.sidebar.item(for: model.selection) },
+            set: { item in
+                switch item {
+                case let .destination(destination): model.show(destination)
+                case let .page(page): model.show(page)
+                case nil: break
+                }
             }
         )
     }
+}
 
-    /// C1's count and its color: Home's in `status.you` while something waits on the Director (its Inbox items, on
-    /// top), else in `status.problem` for what needs attention; Setup's errors in `status.problem` or else its warnings
-    /// in `status.you` (SU1); nil hides it.
-    private func badge(_ view: SymphonyView) -> (count: Int, status: DesignTokens.Status)? {
-        switch view {
-        case .overview where model.inboxBadge > 0: (model.inboxBadge, .you)
-        case .overview: model.attentionBadge > 0 ? (model.attentionBadge, .problem) : nil
-        case .setup: model.setupSummary.badge
-        default: nil
+/// A row of the sidebar: its label, and C1's count when it has one. One VoiceOver element: "Home, 4 waiting".
+struct SidebarRowContent: View {
+    let title: String
+    let symbol: String
+    let badge: DestinationBadge?
+    var indented = false
+
+    var body: some View {
+        HStack(spacing: DesignTokens.Space.s2) {
+            Label(title, systemImage: symbol)
+            Spacer(minLength: 0)
+            if let badge {
+                SidebarBadge(count: badge.count, tint: badge.status.tint)
+            }
         }
-    }
-
-    /// C1: "Inbox, 4 waiting".
-    private func accessibilityValue(_ view: SymphonyView) -> String {
-        switch view {
-        case .overview where model.inboxBadge > 0: "\(model.inboxBadge) waiting"
-        case .overview where model.attentionBadge > 0: "\(model.attentionBadge) need attention"
-        case .setup: model.setupSummary.accessibilityValue
-        default: ""
-        }
-    }
-
-    private func shortcutHelp(_ view: SymphonyView) -> String {
-        model.sidebar.shortcut(for: view).map { "\(view.title) (⌘\($0))" } ?? view.title
+        .padding(.leading, indented ? DesignTokens.Space.s4 : 0)
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(badge?.accessibilityValue ?? "")
     }
 }
 
@@ -1127,29 +1158,77 @@ struct SymphonyDetail: View {
         } else if model.shownPullRequest != nil {
             PullRequestPageContent(model: model)
         } else {
-            switch model.selection {
-            case .inbox, .overview:
-                // The Inbox is Home's drawer (TP-1454).
-                OverviewContent(model: model, client: client)
-            case .initiatives:
-                InitiativesContent(model: model, client: client)
-            case .tickets:
-                TicketsContent(model: model, client: client)
-            case .diagnostics:
-                DiagnosticsContent(model: model, client: client)
-            case .usage:
-                UsageContent(model: model, client: client)
-            case .quality:
-                QualityContent(model: model)
-            case .shipped:
-                ShippedContent(model: model)
-            case .audit:
-                AuditContent(model: model)
-            case .setup:
-                SetupContent(model: model)
-            default:
-                EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
+            VStack(spacing: 0) {
+                if model.destination.presentation == .tabs {
+                    DestinationTabs(model: model)
+                }
+                // The page takes the rest of the height, so the tabs stay at the top over a page that isn't full
+                // (an empty state centres in the space under them).
+                page
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        }
+    }
+
+    @ViewBuilder private var page: some View {
+        switch model.selection {
+        case .inbox, .overview:
+            // The Inbox is Home's drawer (TP-1454).
+            OverviewContent(model: model, client: client)
+        case .initiatives:
+            InitiativesContent(model: model, client: client)
+        case .tickets:
+            TicketsContent(model: model, client: client)
+        case .diagnostics:
+            DiagnosticsContent(model: model, client: client)
+        case .usage:
+            UsageContent(model: model, client: client)
+        case .quality:
+            QualityContent(model: model)
+        case .shipped:
+            ShippedContent(model: model)
+        case .audit:
+            AuditContent(model: model)
+        case .setup:
+            SetupContent(model: model)
+        case .journal:
+            JournalContent()
+        default:
+            EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
+        }
+    }
+}
+
+/// Work's and Insights' tabs over the page (TP-1455): a tab shows its page as it was, and the destination remembers it.
+struct DestinationTabs: View {
+    @ObservedObject var model: SymphonyWindowModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker(model.destination.title, selection: Binding(get: { model.selection }, set: { model.show($0) })) {
+                ForEach(model.destination.pages) { page in
+                    Text(page.title).tag(page)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .padding(.vertical, DesignTokens.Space.s2)
+            .accessibilityLabel("\(model.destination.title) tabs")
+            Divider()
+        }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+/// The Journal (22/26 fills it): its name and what it will hold.
+struct JournalContent: View {
+    var body: some View {
+        ContentUnavailableView {
+            Label(Destination.journal.title, systemImage: Destination.journal.symbol)
+        } description: {
+            Text(Journal.explanation)
         }
     }
 }
@@ -1293,5 +1372,55 @@ private struct DiagnosticsRow: View {
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// ⌘F's Find a Ticket (TP-1455): a field that finds a tracked ticket by its identifier or title as it is typed; Return
+/// opens the best match's page, or the page of the identifier typed, and Escape closes it.
+struct TicketFinderSheet: View {
+    @ObservedObject var model: SymphonyWindowModel
+    @State private var query = ""
+    @FocusState private var fieldFocused: Bool
+
+    var body: some View {
+        let matches = TicketFinder.matches(query, in: model.allTickets)
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+            Text(TicketFinder.title).font(.headline)
+            TextField(TicketFinder.title, text: $query, prompt: Text(TicketFinder.prompt))
+                .textFieldStyle(.roundedBorder)
+                .labelsHidden()
+                .focused($fieldFocused)
+                .onSubmit { model.openFound(query) }
+            if !matches.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(matches) { row in
+                        // Every row is a link to its ticket's page, with the catalog's hover (TP-1438).
+                        Button { model.openFound(row.identifier) } label: {
+                            Text(TicketFinder.line(row))
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.vertical, DesignTokens.Space.s1)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .rowStyle()
+                        .accessibilityLabel(row.accessibilityLabel(reference: model.allTickets?.reference ?? Date()))
+                    }
+                }
+            } else if !query.trimmingCharacters(in: .whitespaces).isEmpty, TicketFinder.target(query, in: model.allTickets) == nil {
+                Text(TicketFinder.noMatch).foregroundStyle(.secondary)
+            }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { model.ticketFinderShown = false }
+                    .keyboardShortcut(.cancelAction)
+                Button(TicketFinder.openTitle) { model.openFound(query) }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(TicketFinder.target(query, in: model.allTickets) == nil)
+            }
+        }
+        .padding(DesignTokens.Space.s5)
+        .frame(width: 420)
+        .onAppear { fieldFocused = true }
     }
 }

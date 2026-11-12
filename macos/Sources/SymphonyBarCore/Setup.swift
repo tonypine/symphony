@@ -436,8 +436,8 @@ public struct SetupSummary: Equatable {
 
     public var isHealthy: Bool { errors == 0 && warnings == 0 }
 
-    /// The sidebar badge: the error count in `status.problem`, else the warning count in `status.you`'s orange, else
-    /// none.
+    /// The menu bar's Setup item symbol: the error count in `status.problem`, else the warning count in `status.you`'s
+    /// orange, else none.
     public var badge: (count: Int, status: DesignTokens.Status)? {
         if errors > 0 { return (errors, .problem) }
         if warnings > 0 { return (warnings, .you) }
@@ -465,10 +465,5 @@ public struct SetupSummary: Equatable {
     public var attentionSentence: String? {
         guard errors > 0 else { return nil }
         return errors == 1 ? "Setup has 1 error." : "Setup has \(errors) errors."
-    }
-
-    /// "Setup, 1 error" for VoiceOver on the sidebar item; empty while healthy.
-    public var accessibilityValue: String {
-        isHealthy ? "" : Self.counts(errors: errors, warnings: warnings)
     }
 }

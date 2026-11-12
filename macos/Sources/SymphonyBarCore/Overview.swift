@@ -197,11 +197,6 @@ public enum Overview {
 
     public static let resumeTitle = "Resume Dispatch"
 
-    /// The count on the sidebar's Home item: what needs attention in every repo, whatever the scope (P6).
-    public static func badgeCount(_ state: OverviewState, now: Date) -> Int {
-        problems(state, now: now).count
-    }
-
     /// What needs attention under `scope` (every repo for what notifies, D14), severest first. Ages are measured against
     /// Symphony's own clock (`generated_at`), `now` only when the state has none; clock times are in `timeZone`.
     public static func problems(_ state: OverviewState, scope: OverviewScope = .all, now: Date, timeZone: TimeZone = .current) -> [Problem] {
