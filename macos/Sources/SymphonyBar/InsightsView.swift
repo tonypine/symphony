@@ -6,18 +6,20 @@ import SymphonyBarCore
 // MARK: - The page around the control bar
 
 /// An Insights page (TP-1463): the control bar Quality, Usage and Shipped share, over the page drawn from the slice's
-/// aggregate read. While the read for the slice shown hasn't answered, the page waits under the bar.
+/// aggregate read. While the read for the slice shown hasn't answered, the page waits under the bar, which stays at
+/// the top of the page in every state (TP-1490).
 struct InsightsPage<Content: View>: View {
     @ObservedObject var model: SymphonyWindowModel
     let symbol: String
     @ViewBuilder let content: (AggregatePayload) -> Content
 
     var body: some View {
-        VStack(spacing: 0) {
+        PinnedBarPage {
             InsightsControlBar(
                 slice: $model.insightsSlice, values: model.insightsValues, today: model.insightsToday,
                 summary: current.map { Insights.summary($0, slice: model.insightsSlice, scope: model.scope) }, scope: model.scope
             )
+        } content: {
             switch model.aggregateShown {
             case let .loaded(aggregate):
                 content(aggregate)
