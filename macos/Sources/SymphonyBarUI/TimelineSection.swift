@@ -139,6 +139,7 @@ public struct TimelineSection: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Self.title)
+        .environment(\.timelineReference, model.reference)
     }
 
     public static let title = "Timeline"
@@ -324,6 +325,7 @@ struct TimelineEntryRow: View {
     let select: () -> Void
     @State private var hovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.timelineReference) private var reference
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
@@ -357,8 +359,13 @@ struct TimelineEntryRow: View {
             }
             .frame(maxWidth: DesignTokens.Measure.reading, alignment: .leading)
             Spacer(minLength: DesignTokens.Space.s2)
-            if let duration = entry.duration {
-                Text(duration)
+            if let seconds = entry.durationSeconds {
+                // An ongoing pause counts on by itself; the timeline isn't built again for it (TP-1479).
+                LiveDurationText(seconds: seconds, reference: entry.isOngoing ? reference : nil) { seconds in
+                    var entry = entry
+                    entry.durationSeconds = seconds
+                    return entry.duration ?? ""
+                }
                     .font(DesignTokens.TypeStyle.callout.font)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)

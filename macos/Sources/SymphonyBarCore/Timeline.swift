@@ -251,10 +251,13 @@ public struct TimelineModel: Equatable {
     public var days: [TimelineDay]
     /// Where the person last looked; nil on a first visit, and when nothing is new or nothing was seen.
     public var marker: TimelineMarker?
+    /// The moment its durations so far count to; a live duration on the page counts on from it (TP-1479).
+    public var reference: Date?
 
-    public init(days: [TimelineDay], marker: TimelineMarker? = nil) {
+    public init(days: [TimelineDay], marker: TimelineMarker? = nil, reference: Date? = nil) {
         self.days = days
         self.marker = marker
+        self.reference = reference
     }
 
     /// Every item, top to bottom: the order the arrow keys move the selection in.
@@ -328,7 +331,8 @@ public struct TimelineModel: Equatable {
             return left.at == right.at ? lhs.offset > rhs.offset : left.at > right.at
         }.map(\.element)
         return TimelineModel(
-            days: days(ordered, reference: reference, calendar: calendar), marker: lookedAt.flatMap { marker(ordered, lookedAt: $0) }
+            days: days(ordered, reference: reference, calendar: calendar), marker: lookedAt.flatMap { marker(ordered, lookedAt: $0) },
+            reference: reference
         )
     }
 

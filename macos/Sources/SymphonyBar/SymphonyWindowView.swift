@@ -73,7 +73,10 @@ final class SymphonyWindowModel: ObservableObject {
     /// The control request a view sent and Symphony hasn't answered yet.
     @Published private(set) var controlInFlight: ControlAction?
     /// The last Inbox Symphony served, read again after each state poll.
-    @Published private(set) var inbox: InboxPayload?
+    @Published private(set) var inbox: InboxPayload? {
+        // Whether it holds a decision on the ticket shown is the page's.
+        didSet { buildTicketPage() }
+    }
     /// What the last Inbox read got when it got no Inbox, nil after one that did.
     @Published private(set) var inboxResult: EndpointResult?
     /// The Inbox item shown, by issue id; nil shows the first.
@@ -174,7 +177,13 @@ final class SymphonyWindowModel: ObservableObject {
     /// The ticket page shown and the look it sends when the person leaves it (TP-1451).
     var ticketLook = TicketLook()
     /// What the ticket page shown last read from its own endpoints; the state comes from the client's poll.
-    @Published var ticketSources = TicketPage.Sources()
+    @Published var ticketSources = TicketPage.Sources() {
+        didSet { buildTicketPage() }
+    }
+    /// Builds the page shown off the main actor when its sources changed (TP-1479).
+    let ticketPageBuilder = TicketPageBuilder()
+    /// The page shown and its Timeline, as last built: reading it builds nothing.
+    @Published private(set) var ticketPageModel: TicketPageModel?
     /// What the pull request page shown read from its endpoint, nil while it reads (D15).
     @Published var pullRequestResult: PullRequestPageResult?
     var readingPullRequest = false
@@ -200,7 +209,9 @@ final class SymphonyWindowModel: ObservableObject {
     /// The ticket whose Start now (TP-1330) is on its way to Symphony; its button shows progress meanwhile.
     @Published var startInFlight: String?
     /// Stops made from the app, shown on the timeline until their audit record arrives.
-    @Published var localStops: [TicketPage.LocalStop] = []
+    @Published var localStops: [TicketPage.LocalStop] = [] {
+        didSet { buildTicketPage() }
+    }
     /// The Journal's filters (TP-1459): kept for the session, and each change reads the newest page again.
     @Published var journalQuery = JournalQuery() {
         didSet {
@@ -415,9 +426,14 @@ final class SymphonyWindowModel: ObservableObject {
                 readAuditIfDue()
                 readJournalIfDue()
                 readTicket()
+                buildTicketPage(state: data)
                 followTicketFeed(afterPoll: true)
                 readPeek()
             }
+            .store(in: &cancellables)
+        ticketPageBuilder.$model
+            .dropFirst()
+            .sink { [weak self] model in self?.ticketPageBuilt(model) }
             .store(in: &cancellables)
         client.$diagnostics
             .map { $0?.build }

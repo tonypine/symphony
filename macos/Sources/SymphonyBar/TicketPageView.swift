@@ -14,14 +14,39 @@ extension SymphonyWindowModel {
     /// True on a ticket's or a pull request's page, where no sidebar view is selected.
     var showsPage: Bool { history.current.isPage }
 
-    /// The page of the ticket shown, from the client's last state and what the page read itself.
-    var ticketPage: TicketPage? {
-        guard let identifier = shownTicket else { return nil }
+    /// The page of the ticket shown, as last built from the client's last state and what the page read itself; nil
+    /// until its first build. Reading it builds nothing (TP-1479).
+    var ticketPage: TicketPage? { shownTicketModel?.page }
+
+    /// The shown page's Timeline, built with the page.
+    var ticketTimeline: TimelineModel? { shownTicketModel?.timeline }
+
+    /// The model built last, while it is the shown ticket's.
+    private var shownTicketModel: TicketPageModel? {
+        guard let model = ticketPageModel, model.identifier == shownTicket else { return nil }
+        return model
+    }
+
+    /// Asks for the shown page built again from its sources now; the builder builds only when they changed. `state` is
+    /// the poll's, which the client publishes before it holds it.
+    func buildTicketPage(state: Data?? = nil) {
+        let identifier = shownTicket
         var sources = ticketSources
-        sources.state = client.stateJSON
+        sources.state = state ?? client.stateJSON
         sources.stops = localStops
-        sources.inboxDecision = inbox?.items.contains { $0.identifier == identifier && $0.isDecision } ?? false
-        return TicketPage(identifier: identifier, sources: sources, now: Date())
+        sources.inboxDecision = identifier.map { identifier in
+            inbox?.items.contains { $0.identifier == identifier && $0.isDecision } ?? false
+        } ?? false
+        let builder = ticketPageBuilder
+        Task { await builder.update(identifier: identifier, sources: sources) }
+    }
+
+    /// The builder published a page: the window shows it, and its repo, now known, starts the feed and the look.
+    func ticketPageBuilt(_ model: TicketPageModel?) {
+        ticketPageModel = model
+        guard let model, model.identifier == shownTicket else { return }
+        ticketLook.repoKnown(model.repoKey, for: model.identifier)
+        followTicketFeed(afterPoll: false)
     }
 
     /// Opens the page of ticket `identifier` (D3), from any row that shows it.
@@ -60,6 +85,7 @@ extension SymphonyWindowModel {
         case let .view(view):
             ticketFocus = nil
             selection = view
+            buildTicketPage()
             readJournalIfDue()
         case let .ticket(identifier):
             // A Journal row's event stays the page's focus only on its own ticket.
@@ -73,6 +99,7 @@ extension SymphonyWindowModel {
         case .pullRequest:
             ticketFocus = nil
             pullRequestResult = nil
+            buildTicketPage()
             readPullRequest()
         }
     }
@@ -126,9 +153,8 @@ extension SymphonyWindowModel {
             sources.check = ticketSources.check
             sources.events = ticketSources.events
             sources.feedAbsence = ticketSources.feedAbsence
+            // The page is built again once the sources changed; its repo starts the feed then (`ticketPageBuilt`).
             ticketSources = sources
-            ticketLook.repoKnown(ticketPage?.repoKey, for: identifier)
-            followTicketFeed(afterPoll: false)
         }
     }
 
@@ -141,8 +167,8 @@ extension SymphonyWindowModel {
 
     /// Run `runID` of `identifier` as the page has it now; nil once the page shows another ticket or lost the run.
     func sessionRun(_ identifier: String, runID: String) -> RunGroupModel? {
-        guard shownTicket == identifier, let page = ticketPage else { return nil }
-        return page.timelineModel(calendar: .current).run(runID)
+        guard shownTicket == identifier else { return nil }
+        return ticketTimeline?.run(runID)
     }
 
     /// Opens the Stop Run sheet on `identifier`; nothing is sent until its button is pressed.
@@ -389,16 +415,6 @@ struct TicketPageActions {
     var review: (() -> Void)?
 }
 
-extension TicketPage {
-    /// The page's Timeline: its history with the run now's step, lines and tokens so far, and the marks.
-    func timelineModel(calendar: Calendar) -> TimelineModel {
-        TimelineModel.build(
-            history ?? TicketEventsPayload(), runNow: runNow, liveTokens: runTokens, reference: reference, calendar: calendar,
-            lookedAt: marksRead?.lookedAt
-        )
-    }
-}
-
 extension SymphonyWindowModel {
     /// A move the Action rail asks for on `page`: the control call sent, or its sheet opened. Answer, Restart… and
     /// Write a Note… are the page's own and never get here.
@@ -463,6 +479,7 @@ struct TicketPageContent: View {
             let open = model.ticketQuestions(identifier)
             TicketPageView(
                 page: page,
+                timeline: model.ticketTimeline,
                 questions: open.questions,
                 answers: TicketPageAnswers(
                     picks: open.picks(model.inboxPicks),
@@ -503,6 +520,8 @@ struct TicketPageContent: View {
 /// it.
 struct TicketPageView: View {
     let page: TicketPage
+    /// The page's Timeline as the window built it with the page; nil builds it from the page.
+    var timeline: TimelineModel?
     /// The ticket's open Questions with their options, from the Inbox.
     var questions: [InboxReview.Action] = []
     /// Their answers, and Send.
@@ -541,12 +560,14 @@ struct TicketPageView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 TicketPageBody(
-                    page: page, questions: questions, width: width, transcripts: transcripts, focus: focus, note: note, decisions: decisions,
+                    page: page, timeline: timeline, questions: questions, width: width, transcripts: transcripts, focus: focus, note: note, decisions: decisions,
                     actions: actions, sheetOpen: sheetOpen, answerFocus: $answerFocused,
                     move: { handle($0, proxy: proxy) }, answer: { sheetOpen = true },
                     scroll: scroll, decisionsInRow: false
                 )
                 .environment(\.mentionReferences, references)
+                // A duration so far counts on by itself; the page isn't built again for it (TP-1479).
+                .environment(\.liveDurations, true)
             }
             // The page never asks the window for more width than it gives: without this the desktop's columns held the
             // detail at their own width, so narrowing the window squeezed the sidebar instead and the page measured
@@ -669,6 +690,8 @@ final class TicketPageScroll: ObservableObject {
 /// sticky within the page's scroll.
 struct TicketPageBody: View {
     let page: TicketPage
+    /// The page's Timeline as the window built it; nil (a snapshot) builds it from the page in `calendar`'s days.
+    var timeline: TimelineModel?
     var questions: [InboxReview.Action] = []
     /// Their answers and Send, for a snapshot's decisions column drawn in its row.
     var answers = TicketPageAnswers()
@@ -753,7 +776,7 @@ struct TicketPageBody: View {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 TimelineTitle(marks: page.marksRead)
                 TimelineSection(
-                    model: page.timelineModel(calendar: calendar),
+                    model: timeline ?? page.timelineModel(calendar: calendar),
                     idle: page.idleLine,
                     transcripts: transcripts, calendar: calendar, focus: focus
                 )
@@ -907,6 +930,25 @@ struct TicketDecisionsColumn: View {
     }
 }
 
+/// The header's situation line, its age ("for 8 min") counting on by itself on the window's page while the page model
+/// stays as it was built (TP-1479); a snapshot's measures against the page's reference.
+private struct LiveSituationLine: View {
+    let situation: Situation
+    let reference: Date
+    let forced: Bool
+    @Environment(\.liveDurations) private var live
+
+    var body: some View {
+        if live {
+            TimelineView(.periodic(from: .now, by: 30)) { context in
+                SituationLine(situation, reference: max(context.date, reference), forced: forced)
+            }
+        } else {
+            SituationLine(situation, reference: reference, forced: forced)
+        }
+    }
+}
+
 /// The header across the page: the identifier with its repo and epic chips, the title, where the ticket stands and
 /// why (the Situation line), and the moves on their own row under them. On a desktop (TP-1449) the moves sit on the
 /// identifier's line, at its right, so the title has the whole width under them.
@@ -937,7 +979,7 @@ struct TicketPageHeader: View {
                     .accessibilityAddTraits(.isHeader)
             }
             if let situation = page.situation {
-                SituationLine(situation, reference: page.reference, forced: page.isForced)
+                LiveSituationLine(situation: situation, reference: page.reference, forced: page.isForced)
             } else {
                 Text(page.phaseSentence)
                     .font(DesignTokens.TypeStyle.body.font)
