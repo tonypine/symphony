@@ -73,8 +73,14 @@ defmodule SymphonyElixir.EpicReview.MainCiTest do
       assert log =~ "Epic review for TP-1381 waits for CI on main at b98572e58594: release, macos still running"
       assert Pauses.why(@ticket) == ["Waiting for CI on main at b98572e58594: release, macos still running"]
 
-      assert {:ok, %{reasons: [%{kind: :environment, waits_on: %{condition: "ci_wait:b98572e58594", head: @sha}, set_by: %{kind: :rule, name: "CI wait"}, releasable: true} = reason]}} =
-               Pauses.get(@ticket)
+      assert {:ok, %{reasons: [reason]}} = Pauses.get(@ticket)
+
+      assert %{
+               kind: :environment,
+               waits_on: %{condition: "ci_wait:b98572e58594", head: @sha},
+               set_by: %{kind: :rule, name: "CI wait"},
+               releasable: true
+             } = reason
 
       assert SymphonyElixir.CiWait.reason?(reason)
     end

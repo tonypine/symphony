@@ -64,6 +64,7 @@ defmodule SymphonyElixir.CiWaitPauseTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{CiWait, Pauses}
+  alias SymphonyElixir.EpicReview.MainCi
 
   @sha "26758a2471558f89fc0411dcf1f81aa82c0e1dc4"
   @ticket {:ticket, "default", "issue-1"}
@@ -173,7 +174,7 @@ defmodule SymphonyElixir.CiWaitPauseTest do
     end
 
     test "an epic waiting before dispatch is lifted only once no workflow run on the commit is still going (TP-1476)" do
-      reason = SymphonyElixir.EpicReview.MainCi.reason("main", @sha, [%{workflow_name: "release"}])
+      reason = MainCi.reason("main", @sha, [%{workflow_name: "release"}])
       {:ok, _pause} = Pauses.set(@ticket, reason, set_by: %{kind: :rule, name: "CI wait"})
 
       assert CiWait.finished(@sha, main_ci: StillRunning) == []

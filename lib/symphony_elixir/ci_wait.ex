@@ -32,8 +32,8 @@ defmodule SymphonyElixir.CiWait do
 
   require Logger
 
-  alias SymphonyElixir.{Pauses, TicketState}
   alias SymphonyElixir.EpicReview.MainCi
+  alias SymphonyElixir.{Pauses, TicketState}
 
   @signal "ci_wait"
   @start_signal "ci_wait_started"

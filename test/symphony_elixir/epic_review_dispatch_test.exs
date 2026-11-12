@@ -142,7 +142,9 @@ defmodule SymphonyElixir.EpicReviewDispatchTest do
       parent = epic(@designed_repo, state: "Epic Review")
       todo = %Issue{id: "issue-todo", identifier: "TP-900", title: "Plain", state: "Todo", repo_key: @designed_repo}
 
-      assert [{^parent, @designed_repo}] = Orchestrator.hold_for_main_ci_for_test(state(), [parent], {:active_retry, parent, 1, %{}})
+      assert [{^parent, @designed_repo}] =
+               Orchestrator.hold_for_main_ci_for_test(state(), [parent], {:active_retry, parent, 1, %{}})
+
       refute Orchestrator.should_dispatch_issue_for_test(parent, state())
       assert Orchestrator.hold_for_main_ci_for_test(state(), [todo], {:active_retry, todo, 1, %{}}) == []
     end
