@@ -135,6 +135,8 @@ defmodule SymphonyElixir.ReportsTest do
       fixture_period!()
       assert Reports.material(%{from: ~U[2026-11-10 00:00:00Z], to: ~U[2026-11-10 12:00:00Z]}) == {:error, :no_events}
       assert Material.prompt(%{period: @period, events: [], tickets: []}) =~ "- none"
+      assert {:ok, %{events: [], tickets: []}} = Material.read(%{from: ~U[2026-11-10 00:00:00Z], to: ~U[2026-11-10 12:00:00Z]})
+      assert Reports.start(%{from: ~U[2026-11-10 00:00:00Z], to: ~U[2026-11-10 12:00:00Z]}) == {:error, :no_events}
     end
   end
 
