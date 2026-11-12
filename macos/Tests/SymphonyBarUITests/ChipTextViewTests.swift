@@ -839,7 +839,7 @@ final class ChipTextViewTests: XCTestCase {
         view.mouseMoved(with: try mouse(.mouseMoved, at: point, in: view))
         XCTAssertEqual(view.hoveredLink, 0)
         XCTAssertEqual(view.textStorage?.attribute(.foregroundColor, at: 30, effectiveRange: nil) as? NSColor, NSColor.linkColor)
-        view.mouseExited(with: try mouse(.mouseMoved, at: outside, in: view))
+        view.mouseExited(with: try exited(at: outside, in: view))
         XCTAssertNil(view.hoveredLink)
         wait(for: [told], timeout: 1)
         XCTAssertEqual(hovered, ["1", nil])
@@ -873,6 +873,13 @@ final class ChipTextViewTests: XCTestCase {
         try XCTUnwrap(NSEvent.mouseEvent(
             with: type, location: view.convert(point, to: nil), modifierFlags: modifiers, timestamp: 0,
             windowNumber: 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1
+        ))
+    }
+
+    private func exited(at point: CGPoint, in view: NSView) throws -> NSEvent {
+        try XCTUnwrap(NSEvent.enterExitEvent(
+            with: .mouseExited, location: view.convert(point, to: nil), modifierFlags: [], timestamp: 0,
+            windowNumber: 0, context: nil, eventNumber: 0, trackingNumber: 0, userData: nil
         ))
     }
 

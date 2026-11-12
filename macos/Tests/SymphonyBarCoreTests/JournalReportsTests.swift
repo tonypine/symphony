@@ -292,11 +292,12 @@ final class JournalReportsTests: XCTestCase {
 
         // Without an option's effect, the sheet says what it records.
         var bare = item
-        bare.review.action?.options = bare.review.action?.options.map { option in
+        let bareOptions: [InboxReview.Action.Option] = bare.review.action?.options.map { option in
             var option = option
             option.effect = nil
             return option
         } ?? []
+        bare.review.action?.options = bareOptions
         XCTAssertEqual(ConsequenceSheet(move: .decide, item: bare, picks: DecisionPicks(picks: [0: 0])).happens, "Records your answer to Symphony's question.")
     }
 
