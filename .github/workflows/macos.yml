@@ -159,6 +159,14 @@ jobs:
         timeout-minutes: 10
         run: time python3 -I Tests/qa-key-test.py
 
+      # The ticket page's speed (TP-1491): the app built above, in QA mode over the ticket-page-speed fixtures
+      # (500 events over 15 runs), with the page open while polls land. Prints the idle main thread's busy share from
+      # a 5 s sample and the hitch ratio of a scroll to the bottom and back, and fails over their budgets.
+      - name: Test the ticket page's idle sample and scroll hitches
+        working-directory: macos
+        timeout-minutes: 10
+        run: time python3 -I Tests/ticket-page-scroll-test.py build/Symphony.app
+
   install-script:
     name: install script
     runs-on: macos-26
