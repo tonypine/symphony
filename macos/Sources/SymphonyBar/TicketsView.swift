@@ -147,9 +147,135 @@ extension SymphonyWindowModel {
 
 // MARK: - D6: Tickets, the table with filters (TP-1456)
 
+/// Save View… or Rename…'s sheet: what it names.
+enum TicketViewSheet: Identifiable, Equatable {
+    case save
+    case rename(TicketView)
+
+    var id: String {
+        switch self {
+        case .save: "save"
+        case let .rename(view): "rename-\(view.id)"
+        }
+    }
+}
+
+// MARK: - Saved views (TP-1457)
+
+extension SymphonyWindowModel {
+    /// The saved view in force, nil for "All open" or one the server no longer lists.
+    var currentTicketView: TicketView? {
+        ticketViewID.flatMap { id in ticketViews.first { $0.id == id } }
+    }
+
+    /// The views menu as the bar draws it.
+    var ticketViewsMenu: TicketViewsMenu {
+        TicketViewsMenu(views: ticketViews, currentID: ticketViewID, query: ticketsQuery)
+    }
+
+    /// Reads `GET /api/v1/views`: the catalog once, the saved views every time. A view in force the server no longer
+    /// lists leaves "All open" in force, with the bar as it is.
+    func readTicketViews() async {
+        guard case let .loaded(data) = await client.get(TicketsPayload.viewsPath) else { return }
+        if !ticketCatalogRead {
+            ticketCatalog = TicketColumn.catalog(fromViews: data) ?? ticketCatalog
+            ticketCatalogRead = true
+        }
+        guard let views = TicketView.views(fromViews: data, catalog: ticketCatalog) else { return }
+        ticketViews = views
+        let inForce = TicketView.inForce(ticketViewID, in: views)
+        if inForce != ticketViewID { ticketViewID = inForce }
+    }
+
+    /// A pick in the views menu: the view's chips, columns and sort, or "All open"'s.
+    func pickTicketView(_ view: TicketView?) {
+        ticketViewError = nil
+        ticketViewID = view?.id
+        if ticketsQuery == (view?.query ?? TicketsQuery()) {
+            // The same query: the path still changes, to the view's.
+            ticketsReadAt = nil
+            readTicketsIfDue()
+        } else {
+            ticketsQuery = view?.query ?? TicketsQuery()
+        }
+    }
+
+    func openSaveTicketView() {
+        ticketViewError = nil
+        ticketViewSheet = .save
+    }
+
+    func openRenameTicketView() {
+        guard let view = currentTicketView else { return }
+        ticketViewError = nil
+        ticketViewSheet = .rename(view)
+    }
+
+    func openDeleteTicketView() {
+        guard currentTicketView != nil else { return }
+        ticketViewError = nil
+        ticketViewDeleteShown = true
+    }
+
+    func cancelTicketViewSheet() {
+        guard !ticketViewInFlight else { return }
+        ticketViewSheet = nil
+        ticketViewError = nil
+    }
+
+    /// The sheet's button: Save View… saves the bar under `name` and puts the new view in force; Rename… gives the view
+    /// `name` and keeps what it saved.
+    func confirmTicketViewName(_ name: String) {
+        guard let sheet = ticketViewSheet, TicketViewDraft.canName(name) else { return }
+        switch sheet {
+        case .save:
+            let draft = TicketViewDraft(name: name, query: ticketsQuery)
+            sendTicketView(.saveView(draft)) { model in
+                model.ticketViewSheet = nil
+                if let saved = TicketView.newest(named: draft.name, in: model.ticketViews) { model.ticketViewID = saved.id }
+            }
+        case let .rename(view):
+            let draft = TicketViewDraft(id: view.id, name: name, query: view.query, savedAt: view.updatedAt ?? Date())
+            sendTicketView(.saveView(draft)) { $0.ticketViewSheet = nil }
+        }
+    }
+
+    /// Update View: the bar saved into the view in force.
+    func updateTicketView() {
+        guard let view = currentTicketView else { return }
+        sendTicketView(.saveView(TicketViewDraft(id: view.id, name: view.name, query: ticketsQuery))) { _ in }
+    }
+
+    /// Delete…'s confirmation: the view goes for every client, and "All open" is in force.
+    func deleteTicketView() {
+        guard let view = currentTicketView else { return }
+        sendTicketView(.deleteView(id: view.id, name: view.name)) { $0.pickTicketView(nil) }
+    }
+
+    /// Sends a view call; on success the views are read again and `done` runs, on failure the sheet or the bar says why.
+    private func sendTicketView(_ action: ControlAction, done: @escaping (SymphonyWindowModel) -> Void) {
+        guard !ticketViewInFlight else { return }
+        ticketViewInFlight = true
+        ticketViewError = nil
+        Task {
+            let result = await onControl(action)
+            if case let .failed(message) = result {
+                ticketViewError = message
+            } else {
+                await readTicketViews()
+                done(self)
+                ticketsReadAt = nil
+                readTicketsIfDue()
+            }
+            ticketViewInFlight = false
+        }
+    }
+}
+
 extension SymphonyWindowModel {
     /// Reads the rows of the query from `GET /api/v1/tickets` while Tickets shows: at once after a change of the query or
-    /// the scope, and at most every `ticketsInterval` after a state poll. The catalog is read once, from the views read.
+    /// the scope, and at most every `ticketsInterval` after a state poll. The views read before it lists the saved views
+    /// each time, so one deleted on another client goes; the catalog is read from it once.
     func readTicketsIfDue() {
         guard selection == .tickets, !showsPage, state.countsKnown else { return }
         guard ticketsReadAt.map({ Date().timeIntervalSince($0) >= Self.ticketsInterval }) ?? true else { return }
@@ -159,13 +285,10 @@ extension SymphonyWindowModel {
         }
         readingTickets = true
         Task {
-            if !ticketCatalogRead, case let .loaded(data) = await client.get(TicketsPayload.viewsPath) {
-                ticketCatalog = TicketColumn.catalog(fromViews: data) ?? ticketCatalog
-                ticketCatalogRead = true
-            }
+            await readTicketViews()
             let query = ticketsQuery
             let scope = scope
-            let result = await client.get(query.path(scope: scope, catalog: ticketCatalog, now: Date()))
+            let result = await client.get(query.path(view: currentTicketView, scope: scope, catalog: ticketCatalog, now: Date()))
             // An answer to a query changed meanwhile is dropped: the read of the new one follows.
             let current = query == ticketsQuery && scope == self.scope
             if current {
@@ -207,7 +330,9 @@ struct TicketsContent: View {
                     selection: $model.ticketSelection,
                     drawerShown: $model.inspectorShown,
                     reference: model.overviewState?.generatedAt ?? Date(),
-                    actions: actions
+                    actions: actions,
+                    viewsMenu: model.ticketViewsMenu,
+                    viewActions: viewActions
                 )
             } else if model.ticketsResult == .unsupported {
                 EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
@@ -224,6 +349,7 @@ struct TicketsContent: View {
                     .padding(DesignTokens.Space.s4)
             }
         }
+        .modifier(TicketViewSheetsPresenter(model: model))
         .searchable(text: $model.ticketSearch, placement: .toolbar, prompt: TicketsView.searchPrompt)
         .searchFocused($searchFocused)
         .onChange(of: model.searchRequested, initial: true) { _, requested in
@@ -231,6 +357,14 @@ struct TicketsContent: View {
             searchFocused = true
             model.searchRequested = false
         }
+    }
+
+    private var viewActions: TicketViewActions {
+        TicketViewActions(
+            pick: model.pickTicketView, save: model.openSaveTicketView, update: model.updateTicketView,
+            rename: model.openRenameTicketView, delete: model.openDeleteTicketView, working: model.ticketViewInFlight,
+            error: model.ticketViewSheet == nil ? model.ticketViewError : nil, dismissError: { model.ticketViewError = nil }
+        )
     }
 
     private var actions: TicketsActions {
@@ -284,6 +418,9 @@ struct TicketsView: View {
     @Binding var drawerShown: Bool
     var reference = Date()
     let actions: TicketsActions
+    /// The views menu at the bar's left, nil before the views were read.
+    var viewsMenu: TicketViewsMenu?
+    var viewActions = TicketViewActions()
     /// The table's own selection, handed to the model after the table's delegate call returns: updating the
     /// window's model inside it re-renders the table reentrantly.
     @State private var tableSelection: String?
@@ -292,7 +429,11 @@ struct TicketsView: View {
         let rows = payload.rows(matching: search)
         let columns = query.shownColumns(catalog: catalog, scope: scope)
         VStack(spacing: 0) {
-            TicketsFilterBar(query: $query, catalog: catalog, values: values, count: rows.count, drawerShown: $drawerShown)
+            TicketsFilterBar(query: $query, catalog: catalog, values: values, count: rows.count, drawerShown: $drawerShown,
+                             viewsMenu: viewsMenu, viewActions: viewActions)
+            if let error = viewActions.error {
+                TicketViewErrorLine(message: error, dismiss: viewActions.dismissError)
+            }
             Divider()
             HStack(spacing: 0) {
                 Group {
@@ -343,9 +484,15 @@ struct TicketsFilterBar: View {
     let values: TicketFilterValues
     let count: Int
     @Binding var drawerShown: Bool
+    var viewsMenu: TicketViewsMenu?
+    var viewActions = TicketViewActions()
 
     var body: some View {
         HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
+            if let viewsMenu {
+                TicketViewsMenuButton(menu: viewsMenu, actions: viewActions)
+                Divider().frame(height: DesignTokens.Control.small.height)
+            }
             WrappingStack(spacing: DesignTokens.Space.s2) {
                 ForEach(query.chips) { chip in
                     TicketFilterChipView(chip: chip, values: values.values(chip.filter, query: query),
@@ -392,6 +539,243 @@ struct TicketsFilterBar: View {
         }
         .padding(.horizontal, DesignTokens.Space.s4)
         .padding(.vertical, DesignTokens.Space.s2)
+    }
+}
+
+/// What the views menu does: pick a view, and the moves on the one in force.
+struct TicketViewActions {
+    var pick: (TicketView?) -> Void = { _ in }
+    var save: () -> Void = {}
+    var update: () -> Void = {}
+    var rename: () -> Void = {}
+    var delete: () -> Void = {}
+    /// A view call on its way: the menu's moves wait for it.
+    var working = false
+    /// What went wrong with Update View or Delete…, shown under the bar.
+    var error: String?
+    var dismissError: () -> Void = {}
+
+    /// Runs the move `move` of the menu.
+    func perform(_ move: TicketViewsMenu.Move) {
+        switch move {
+        case .save: save()
+        case .update: update()
+        case .rename: rename()
+        case .delete: delete()
+        }
+    }
+}
+
+/// The views menu: the view in force on its face, with a dot when the bar differs from it; "All open" and the saved
+/// views to pick, then Save View…, Update View, Rename… and Delete…. Offscreen, where a menu draws nothing, its face.
+struct TicketViewsMenuButton: View {
+    let menu: TicketViewsMenu
+    var actions = TicketViewActions()
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    var body: some View {
+        if offscreenSnapshot {
+            ButtonFace(label: TicketViewsMenuLabel(menu: menu), kind: .secondary, size: .small, state: .rest, reduceMotion: true)
+        } else {
+            Menu {
+                ForEach(menu.items) { item in
+                    switch item {
+                    case let .pick(view, title, current):
+                        Toggle(title, isOn: Binding(get: { current }, set: { _ in actions.pick(view) }))
+                    case .divider:
+                        Divider()
+                    case let .move(move, enabled):
+                        Button(move.title) { actions.perform(move) }
+                            .disabled(!enabled || actions.working)
+                            .help(enabled ? "" : menu.disabledReason(move))
+                    }
+                }
+            } label: {
+                TicketViewsMenuLabel(menu: menu)
+            }
+            .menuStyle(.button)
+            .directorButton(.secondary, size: .small)
+            .fixedSize()
+            .help(menu.help)
+            .accessibilityLabel(menu.accessibilityLabel)
+        }
+    }
+}
+
+/// The menu button's face: a stack symbol, the view's name and, when the bar differs from it, a dot.
+struct TicketViewsMenuLabel: View {
+    let menu: TicketViewsMenu
+
+    var body: some View {
+        HStack(spacing: DesignTokens.Space.s1) {
+            Image(systemName: "rectangle.stack")
+            Text(menu.title).lineLimit(1)
+            if menu.changed {
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 6, height: 6)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+/// The views menu drawn open, as the menu lists it: for the snapshots, where a menu draws nothing offscreen.
+struct TicketViewsMenuPanel: View {
+    let menu: TicketViewsMenu
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+            TicketViewsMenuButton(menu: menu)
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(menu.items) { item in
+                    switch item {
+                    case let .pick(_, title, current):
+                        row(title, checked: current, enabled: true)
+                    case .divider:
+                        Divider().padding(.vertical, DesignTokens.Space.s1)
+                    case let .move(move, enabled):
+                        row(move.title, checked: false, enabled: enabled)
+                    }
+                }
+            }
+            .padding(DesignTokens.Space.s1)
+            .frame(width: 240, alignment: .leading)
+            .background(DesignTokens.Surface.raised.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row))
+            .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.row).strokeBorder(.separator))
+            .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
+        }
+    }
+
+    private func row(_ title: String, checked: Bool, enabled: Bool) -> some View {
+        HStack(spacing: DesignTokens.Space.s1) {
+            Image(systemName: "checkmark").opacity(checked ? 1 : 0).frame(width: 14)
+            Text(title)
+            Spacer(minLength: 0)
+        }
+        .font(DesignTokens.TypeStyle.body.font)
+        .foregroundStyle(enabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
+        .padding(.horizontal, DesignTokens.Space.s2)
+        .padding(.vertical, 3)
+    }
+}
+
+/// What went wrong with a view call made without a sheet, under the bar, with × to dismiss it.
+struct TicketViewErrorLine: View {
+    let message: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        HStack(spacing: DesignTokens.Space.s2) {
+            Label(message, systemImage: DesignTokens.Status.problem.symbol)
+                .font(DesignTokens.TypeStyle.callout.font)
+                .foregroundStyle(DesignTokens.Status.problem.tint)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            Button(action: dismiss) { Label("Dismiss", systemImage: "xmark") }
+                .labelStyle(.iconOnly)
+                .directorButton(.quiet, size: .small)
+                .help("Dismiss")
+        }
+        .padding(.horizontal, DesignTokens.Space.s4)
+        .padding(.bottom, DesignTokens.Space.s2)
+    }
+}
+
+/// Save View… and Rename…: one field for the name, Cancel and Save or Rename.
+struct TicketViewNameSheetView: View {
+    let sheet: TicketViewSheet
+    let working: Bool
+    let error: String?
+    let cancel: () -> Void
+    let confirm: (_ name: String) -> Void
+    @State private var name: String
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    init(sheet: TicketViewSheet, name: String = "", working: Bool, error: String?, cancel: @escaping () -> Void,
+         confirm: @escaping (String) -> Void) {
+        self.sheet = sheet
+        self.working = working
+        self.error = error
+        self.cancel = cancel
+        self.confirm = confirm
+        if case let .rename(view) = sheet, name.isEmpty {
+            _name = State(initialValue: view.name)
+        } else {
+            _name = State(initialValue: name)
+        }
+    }
+
+    private var isSave: Bool { sheet == .save }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
+            Text(isSave ? "Save View" : "Rename View")
+                .font(DesignTokens.TypeStyle.sentence.font)
+                .accessibilityAddTraits(.isHeader)
+            Text(isSave ? "Keeps the filters, columns and sort you have set under a name. Every Director lists it."
+                        : "Gives the view a new name. What it filters, shows and sorts stays as saved.")
+                .font(DesignTokens.TypeStyle.body.font)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if offscreenSnapshot {
+                // A text field draws nothing offscreen: its face with the name in it stands in for it.
+                Text(name.isEmpty ? "Epic 6 needs me" : name)
+                    .foregroundStyle(name.isEmpty ? .tertiary : .primary)
+                    .padding(.horizontal, 6)
+                    .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
+                    .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: 5))
+                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.separator))
+            } else {
+                TextField("Name", text: $name, prompt: Text("Epic 6 needs me"))
+                    .textFieldStyle(.roundedBorder)
+                    .accessibilityLabel("Name")
+                    .onSubmit { if canSend { confirm(name) } }
+            }
+            if let error {
+                Label(error, systemImage: DesignTokens.Status.problem.symbol)
+                    .font(DesignTokens.TypeStyle.callout.font)
+                    .foregroundStyle(DesignTokens.Status.problem.tint)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            HStack(spacing: DesignTokens.Space.s2) {
+                if working { ProgressView().controlSize(.small).accessibilityLabel("Working") }
+                Spacer(minLength: 0)
+                Button("Cancel", role: .cancel, action: cancel)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(working)
+                Button(isSave ? "Save" : "Rename") { confirm(name) }
+                    .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!canSend)
+            }
+        }
+        .padding(DesignTokens.Space.s5)
+        .frame(width: 420)
+    }
+
+    private var canSend: Bool { !working && TicketViewDraft.canName(name) }
+}
+
+/// Presents Save View… and Rename…'s sheet and Delete…'s confirmation.
+struct TicketViewSheetsPresenter: ViewModifier {
+    @ObservedObject var model: SymphonyWindowModel
+
+    func body(content: Content) -> some View {
+        content
+            .sheet(item: $model.ticketViewSheet) { sheet in
+                TicketViewNameSheetView(sheet: sheet, working: model.ticketViewInFlight, error: model.ticketViewError,
+                                        cancel: model.cancelTicketViewSheet, confirm: model.confirmTicketViewName)
+            }
+            .confirmationDialog(
+                TicketViewsMenu.deleteQuestion(model.currentTicketView?.name ?? ""),
+                isPresented: $model.ticketViewDeleteShown, titleVisibility: .visible
+            ) {
+                Button("Delete", role: .destructive, action: model.deleteTicketView)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text(TicketViewsMenu.deleteMessage)
+            }
     }
 }
 

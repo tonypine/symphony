@@ -10,7 +10,10 @@ import Foundation
 /// whose answer changes from one request to the next reads `<path>.1.json` the first time, `<path>.2.json` the second,
 /// and the last one there is after that (Setup's fix, Undo, fix again). A GET whose answer changes once a move was made
 /// reads `<path>.after-<move>.json` once the request log holds a POST to `.../control/<move>` (a Question answered from
-/// the ticket page: the Inbox, the ticket and its feed as Symphony serves them after `decide`). `<dir>/github_webhook_secret` stands for the
+/// the ticket page: the Inbox, the ticket and its feed as Symphony serves them after `decide`), or
+/// `<path>.after-<move>.<n>.json` after the `n`th such POST, when the same move changes it more than once (a view saved,
+/// then renamed). A DELETE is a move like a POST: logged with its method, answered 200, and its last path component is
+/// the move (`DELETE .../control/view/view-a1` reads `<path>.after-view-a1.json`). `<dir>/github_webhook_secret` stands for the
 /// webhook secret Symphony hands off (`WebhookSecret`), a made-up value. No request leaves the app, so QA walks every
 /// view with fixed data and no Linear or model calls.
 public struct APIFixtures: Equatable {
@@ -40,11 +43,12 @@ public struct APIFixtures: Equatable {
     public func answer(_ request: URLRequest, now: Date = Date()) -> (Data, HTTPURLResponse) {
         let url = request.url ?? Self.baseURL
         let file = file(forPath: url.path)
-        let isPost = request.httpMethod?.uppercased() == "POST"
+        let method = request.httpMethod?.uppercased() ?? "GET"
+        let isPost = method == "POST" || method == "DELETE"
         let fixture = (isPost ? nil : file.flatMap(afterFixture(of:))) ?? file.flatMap { try? Data(contentsOf: $0) }
         if isPost {
             let answer = fixture ?? file.flatMap { sequenceFile(of: $0, request: postCount(url.path) + 1) }.flatMap { try? Data(contentsOf: $0) }
-            log(request, path: url.path, at: now)
+            log(request, method: method, path: url.path, at: now)
             if answer == nil, let refusal = file.flatMap(refusalFixture(of:)) {
                 return (refusal, response(url, statusCode: 409))
             }
@@ -79,8 +83,12 @@ public struct APIFixtures: Equatable {
     /// whose path ends in `<move>`; the newest such POST wins.
     func afterFixture(of file: URL) -> Data? {
         let stem = file.deletingPathExtension()
-        for move in postedMoves().reversed() {
-            if let data = try? Data(contentsOf: stem.appendingPathExtension("after-\(move)").appendingPathExtension("json")) { return data }
+        let moves = postedMoves()
+        for (index, move) in moves.enumerated().reversed() {
+            let after = stem.appendingPathExtension("after-\(move)")
+            let number = moves[...index].filter { $0 == move }.count
+            if let data = try? Data(contentsOf: after.appendingPathExtension("\(number)").appendingPathExtension("json")) { return data }
+            if let data = try? Data(contentsOf: after.appendingPathExtension("json")) { return data }
         }
         return nil
     }
@@ -146,10 +154,10 @@ public struct APIFixtures: Equatable {
     }
 
     /// Appends `{"at", "method", "path", "body"}` to the request log, creating it if needed.
-    private func log(_ request: URLRequest, path: String, at date: Date) {
+    private func log(_ request: URLRequest, method: String, path: String, at date: Date) {
         var entry: [String: Any] = [
             "at": ISO8601DateFormatter().string(from: date),
-            "method": "POST",
+            "method": method,
             "path": path,
         ]
         if let body = request.httpBody, let json = try? JSONSerialization.jsonObject(with: body) {

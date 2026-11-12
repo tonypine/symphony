@@ -1,0 +1,40 @@
+{
+  "view": {
+    "id": "view-e6a1",
+    "name": "Epic 6, mine",
+    "filters": [
+      {
+        "column": "epic",
+        "value": [
+          "TP-1400"
+        ]
+      },
+      {
+        "column": "situation",
+        "value": [
+          "waiting_on_you"
+        ]
+      },
+      {
+        "column": "priority",
+        "value": [
+          1
+        ]
+      }
+    ],
+    "columns": [
+      "identifier",
+      "title",
+      "epic",
+      "situation",
+      "priority",
+      "created_at"
+    ],
+    "sort": {
+      "column": "identifier",
+      "direction": "asc"
+    },
+    "created_at": "2026-11-12T03:00:00.000000Z",
+    "updated_at": "2026-11-12T03:10:00.000000Z"
+  }
+}
