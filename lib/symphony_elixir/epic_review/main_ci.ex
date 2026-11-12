@@ -105,7 +105,7 @@ defmodule SymphonyElixir.EpicReview.MainCi do
   fails is settled: the wait is not kept on what can't be read, and the dispatch checks again.
   """
   @spec settled?(String.t(), String.t() | nil, keyword()) :: boolean()
-  def settled?(sha, repo_key, opts \\ []) when is_binary(sha) do
+  def settled?(sha, repo_key, opts) when is_binary(sha) do
     case commit_pending(repo_key, sha, with_defaults(opts)) do
       {:ok, [_ | _]} -> false
       _settled_or_unread -> true
@@ -118,7 +118,7 @@ defmodule SymphonyElixir.EpicReview.MainCi do
   Returns the ids of the tickets lifted.
   """
   @spec recheck(keyword()) :: [String.t()]
-  def recheck(opts \\ []) do
+  def recheck(opts) do
     opts = with_defaults(opts)
 
     opts
