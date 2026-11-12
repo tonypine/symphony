@@ -261,6 +261,18 @@ defmodule SymphonyElixir.WorkspaceSyncTest do
       record_run_ended!("run-2", nil)
       assert WorkspaceSync.recorded_unpushed_head(@issue_id) == nil
     end
+
+    test "reads the run that ended last, not the end written last" do
+      record_run_ended!("run-2", String.duplicate("c", 40))
+      # An earlier run closed late, at a boot, with the time it ended.
+      {:ok, _event} =
+        TicketEvents.record(@repo_key, @issue_id, "run.ended", %{run_id: "run-1", exit: "ended; no end was recorded"},
+          run_id: "run-1",
+          at: DateTime.add(DateTime.utc_now(), -3600, :second)
+        )
+
+      assert WorkspaceSync.recorded_unpushed_head(@issue_id) == String.duplicate("c", 40)
+    end
   end
 
   defp sync(workspace, opts \\ []), do: WorkspaceSync.sync(issue(), workspace, [repo_key: @repo_key, run_kind: "qa"] ++ opts)

@@ -284,6 +284,24 @@ public struct TicketEventsPayload: Equatable {
         return added
     }
 
+    /// The words for a run Symphony closed without its end, as the feed says them.
+    public static let unrecordedExit = "ended; no end was recorded"
+
+    /// The history with no run left running: on a ticket that shipped or was cancelled no run works, whatever the feed
+    /// says. A run read as running ends at its last event (else its start), with the feed's words for an end it never
+    /// recorded.
+    public func closingLiveRuns() -> TicketEventsPayload {
+        var closed = self
+        for (runID, run) in runs where run.status?.lowercased() == "running" {
+            var run = run
+            run.status = "ended"
+            run.endedAt = run.endedAt ?? events.last { $0.runID == runID && $0.at != nil }?.at ?? run.startedAt
+            run.exit = run.exit ?? Self.unrecordedExit
+            closed.runs[runID] = run
+        }
+        return closed
+    }
+
     /// When the newest event the history holds happened.
     public var newestEventAt: Date? { events.compactMap { $0.at.flatMap(TicketPage.date) }.max() }
 

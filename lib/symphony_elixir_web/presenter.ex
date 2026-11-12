@@ -45,7 +45,7 @@ defmodule SymphonyElixirWeb.Presenter do
   alias SymphonyElixir.Pauses.Backfill, as: PauseBackfill
   alias SymphonyElixir.PhaseSteps.Transcript
   alias SymphonyElixir.Repo.Status, as: RepoStatus
-  alias SymphonyElixir.TicketEvents.{Event, Summary}
+  alias SymphonyElixir.TicketEvents.{Event, RunEnds, Summary}
   alias SymphonyElixirWeb.{PullRequestPayload, WatchPayload}
 
   @empty_codex_totals %{
@@ -708,14 +708,18 @@ defmodule SymphonyElixirWeb.Presenter do
   any other event stays at the top level. A run is `{kind: "run", run_id, run_kind, run_number,
   status, verdict, started_at, ended_at, exit, head, summary, events}`, its header read from
   `history` (the ticket's `run.started`, `run.ended`, `verdict.recorded` and step events, oldest
-  first), not from the page: `status` is `running` until its `run.ended`, then `ended`, `verdict` is
+  first), not from the page: `status` is `ended` once its `run.ended` is written, `running` before
+  that only while the orchestrator holds a run with its id (`opts[:held]`, the run ids its snapshot
+  holds; `:unknown`, the default, when it could not be read), and otherwise `ended` too, with the
+  `ended_at` the record proves (the ticket's next `run.started`, else the run's last event) and the
+  exit `SymphonyElixir.TicketEvents.RunEnds.unrecorded_exit/0`. `verdict` is
   the newest verdict naming the run (`{kind, outcome, head, at}`), else null, and `summary` is the
   run's line (`SymphonyElixir.TicketEvents.Summary.run_group/1`), which names the step a running run
   is on. `opts[:looked_at]` adds `new` to each event, as `ticket_events_json/4`'s does.
   """
   @spec ticket_timeline_json(String.t(), String.t(), [Event.t()], [Event.t()], keyword()) :: [map()]
   def ticket_timeline_json(repo_key, issue_id, events, history, opts \\ []) do
-    runs = run_headers(history)
+    runs = run_headers(history, Keyword.get(opts, :held, :unknown))
 
     {placed, _seen} =
       Enum.map_reduce(events, MapSet.new(), fn event, seen ->
@@ -762,7 +766,9 @@ defmodule SymphonyElixirWeb.Presenter do
     timeline.members |> Map.get(place, []) |> Enum.map(&timeline_entry({:event, &1}, timeline))
   end
 
-  defp run_headers(history) do
+  defp run_headers(history, held) do
+    unended = Map.new(RunEnds.open(history), fn {started, ended_at} -> {started.payload.run_id, ended_at} end)
+
     verdicts =
       history
       |> Enum.filter(&(&1.type == "verdict.recorded" and is_binary(&1.run_id)))
@@ -772,12 +778,30 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Enum.filter(&(&1.type in ["run.started", "run.ended", "step.started", "step.completed"] and is_binary(&1.run_id)))
     |> Enum.group_by(& &1.run_id)
     |> Map.filter(fn {_run_id, events} -> Enum.any?(events, &(&1.type in ["run.started", "run.ended"])) end)
-    |> Map.new(fn {run_id, events} -> {run_id, run_header(run_id, events, Map.get(verdicts, run_id))} end)
+    |> Map.new(fn {run_id, events} -> {run_id, run_header(run_id, events, Map.get(verdicts, run_id), run_end(run_id, events, unended, held))} end)
   end
 
-  defp run_header(run_id, events, verdict) do
-    started = Enum.find(events, &(&1.type == "run.started"))
+  # How the run ended: its `run.ended`; nil while the orchestrator holds it (or can't say); else the
+  # end the record proves, as `RunEnds` writes it at the next boot.
+  defp run_end(run_id, events, unended, held) do
     ended = events |> Enum.filter(&(&1.type == "run.ended")) |> List.last()
+
+    cond do
+      ended ->
+        ended
+
+      held == :unknown or MapSet.member?(held, run_id) ->
+        nil
+
+      true ->
+        started = Enum.find(events, &(&1.type == "run.started"))
+        at = Map.get(unended, run_id) || List.last(events).at
+        %Event{type: "run.ended", run_id: run_id, at: at, payload: RunEnds.end_payload(started, at)}
+    end
+  end
+
+  defp run_header(run_id, events, verdict, ended) do
+    started = Enum.find(events, &(&1.type == "run.started"))
 
     %{
       kind: "run",
@@ -792,7 +816,7 @@ defmodule SymphonyElixirWeb.Presenter do
       ended_at: ended && DateTime.to_iso8601(ended.at),
       exit: payload_field(ended, :exit),
       head: payload_field(ended, :head) || payload_field(started, :head),
-      summary: Summary.run_group(events)
+      summary: Summary.run_group(if(ended, do: events ++ [ended], else: events))
     }
   end
 
