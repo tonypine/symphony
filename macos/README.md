@@ -1410,7 +1410,8 @@ Ten more variables, read only in QA mode:
   uses both to measure the ticket page: a 5 s `sample` of the page left untouched and a scripted scroll of a
   500-event timeline (the `ticket-page-speed` fixtures), each printed against its budget. It fails when it cannot
   measure, when the scroll misses an end of the page, or over a budget: the main thread busy over 5 % while the
-  page is untouched, or a hitch ratio over 100 ms/s (before TP-1480 the page measured 100 % and 874 ms/s).
+  page is untouched, or a hitch ratio over 420 ms/s (before TP-1480 the page measured 100 % and 874 ms/s; after it
+  2.2 % and 336.5 ms/s, and TP-1481 tightens the hitch budget once the timeline draws only the rows on screen).
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the
   menu item whose title the first line of a file in `commands/` holds (files are taken in name order and
   deleted; a name starting with `.` is skipped, so write one and rename it). As a click would, it presses
