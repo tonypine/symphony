@@ -174,8 +174,8 @@ enum FactsMoment {
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: reference), calendar.isDate(date, inSameDayAs: yesterday) {
             return "yesterday at \(time)"
         }
-        formatter.dateFormat = "EEE d MMM"
-        return "\(formatter.string(from: date)) at \(time)"
+        let day = SharedDateFormatter.string(date, format: "EEE d MMM", locale: SharedDateFormatter.british, calendar: calendar)
+        return "\(day) at \(time)"
     }
 }
 
