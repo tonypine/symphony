@@ -2344,6 +2344,9 @@ defmodule SymphonyElixir.Config.Schema do
       schema
       |> cast(attrs, [:model], empty_values: [])
       |> Schema.validate_present([:model], message: "must name a model")
+      |> validate_change(:model, fn :model, model ->
+        if String.trim(model) == "", do: [model: "must name a model"], else: []
+      end)
     end
   end
 

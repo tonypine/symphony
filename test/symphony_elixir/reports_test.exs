@@ -60,7 +60,7 @@ defmodule SymphonyElixir.ReportsTest do
 
   defp decision_input do
     %{
-      "title" => "Hold the sign-in page for a person",
+      "title" => "Let a person look at the sign-in page before QA",
       "why" => "Code Review approved the sign-in page this morning. QA has not started on it.",
       "if_unanswered" => "The sign-in page waits in QA as it does now.",
       "decision" => %{
@@ -237,7 +237,7 @@ defmodule SymphonyElixir.ReportsTest do
 
       assert [question] = Questions.open(:symphony)
       assert question.id == id
-      assert question.title == "Hold the sign-in page for a person"
+      assert question.title == "Let a person look at the sign-in page before QA"
       assert question.asked_by == %{kind: :run, name: "Report run", run_id: "report-1"}
       assert question.step == "report:report-1"
       assert question.why =~ "It comes from the status report on 9 November 08:00 to 9 November 12:00 UTC."
@@ -358,12 +358,13 @@ defmodule SymphonyElixir.ReportsTest do
       assert {:ok, %{reports: %{model: "claude-haiku-5-5"}}} = SystemSchema.parse(@base)
 
       path = Workflow.symphony_file_path()
-      File.write!(path, File.read!(path) <> "reports:\n  model: claude-sonnet-5-5\n")
+      original = File.read!(path)
+      File.write!(path, original <> "reports:\n  model: claude-sonnet-5-5\n")
       Cache.clear()
       assert Config.report_model() == "claude-sonnet-5-5"
 
       # A symphony.yml Symphony can't load leaves the default.
-      File.write!(path, File.read!(path) <> "reports: 7\n")
+      File.write!(path, original <> "reports: 7\n")
       Cache.clear()
       assert Config.report_model() == "claude-haiku-5-5"
     end
