@@ -372,6 +372,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
     failing = Enum.filter(checks, &(PullRequest.check_result(&1) == :failed))
     in_progress? = PullRequest.failed_run_in_progress?(checks)
     {red_kind, base_red, comparisons} = red(elem(ci, 0), failing, in_progress?, known, base_ref, repo, opts)
+    known_required = known_required(known, base_ref, checks, opts)
 
     read = %{
       pr_url: pr_url,
@@ -393,7 +394,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       past_human_only: past_human_only(red_kind, checks),
       past_cancelled: past_cancelled(red_kind, checks, known),
       base_red: base_red,
-      failing_check: failing_check(red_kind, failing),
+      failing_check: failing_check(red_kind, failing, known_required),
       failed_checks: Enum.map(failing, &Map.take(&1, [:name, :run_id, :job_id, :workflow_name, :conclusion])),
       check_names: checks |> Enum.map(& &1.name) |> Enum.uniq(),
       run_ids: run_ids(checks),
@@ -408,7 +409,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
       comparisons: comparisons
     }
 
-    Map.put(read, :pull_request, Snapshot.build(read, pull, checks, known_required(known, base_ref, checks, opts)))
+    Map.put(read, :pull_request, Snapshot.build(read, pull, checks, known_required))
   end
 
   # The base's required checks as far as the watcher knows them, for the ticket read: a head they
@@ -543,8 +544,9 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   defp run_ids(checks), do: checks |> Enum.map(&Map.get(&1, :run_id)) |> Enum.filter(&(is_binary(&1) and &1 != "")) |> Enum.uniq()
 
   @doc """
-  The read with the red head's failure (`failure`): its first failed check and the first error line
-  of the failed log (`SymphonyElixir.GitHub.FailedLog`), the signature the same-failure streak
+  The read with the red head's failure (`failure`): the check it is named by (`failing_check`, never
+  one only a person clears) and the first error line of the failed log, read from the runs of the
+  failed checks other than those (`SymphonyElixir.GitHub.FailedLog`), the signature the same-failure streak
   compares, for a red head that is a plain failure. `known` is the failure already read for a head:
   when it is this head's, the log isn't read again. A log read now is carried too (`failed_log`),
   so a CI Fix sent on this read doesn't read it a second time. Any other read, or a log that can't
@@ -561,7 +563,7 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   def failure(read, _known, _opts), do: Map.put(read, :failure, nil)
 
   defp read_failure(read, head, opts) do
-    run_ids = read |> Map.get(:failed_checks, []) |> failures() |> run_ids()
+    run_ids = read |> Map.get(:failed_checks, []) |> failures() |> Enum.reject(&CiPoller.human_only_check?/1) |> run_ids()
     log_opts = Keyword.take(opts, [:github, :gh_runner]) ++ repo_opts(read.pr_url, opts)
 
     case FailedLog.read(run_ids, Keyword.get(opts, :line_limit, @log_lines), log_opts) do
@@ -628,10 +630,22 @@ defmodule SymphonyElixir.PrWatch.Fetch do
   defp required?(check, known), do: not is_list(known) or check.name in known
 
   # The check a red head is named by: a cancelled one for a `:cancelled` head (beside a check a
-  # person must clear, the cancellation is what R19 reruns), else a real failure before a
-  # cancellation.
-  defp failing_check(:cancelled, failing), do: failing |> Enum.sort_by(&(not cancelled?(&1))) |> Enum.map(& &1.name) |> List.first()
-  defp failing_check(_red_kind, failing), do: failing |> Enum.sort_by(&cancelled?/1) |> Enum.map(& &1.name) |> List.first()
+  # person must clear, the cancellation is what R19 reruns), the check a person must clear for a
+  # `:human_only` head (R18 names it), else the failure CI Fix repairs and the red backstop counts:
+  # never a check a person must clear (`protected paths`, red by design on a PR a person allowed to
+  # change protected files), a real failure before a cancellation, and a check the base branch
+  # requires before one it doesn't, as far as the watcher knows the base's required checks.
+  defp failing_check(:cancelled, failing, _known), do: failing |> Enum.sort_by(&(not cancelled?(&1))) |> Enum.map(& &1.name) |> List.first()
+  defp failing_check(:human_only, failing, _known), do: failing |> Enum.sort_by(&cancelled?/1) |> Enum.map(& &1.name) |> List.first()
+
+  defp failing_check(_red_kind, failing, known) do
+    failing
+    |> Enum.sort_by(&{CiPoller.human_only_check?(&1), cancelled?(&1), not listed?(&1, known)})
+    |> Enum.map(& &1.name)
+    |> List.first()
+  end
+
+  defp listed?(check, known), do: is_list(known) and check.name in known
 
   # What a head red only on checks a person must clear reads as outside `Merging`: what its other
   # checks say, `:pending` while one runs or none has reported yet, else `:green`. A cancelled check
