@@ -68,7 +68,8 @@ defmodule SymphonyElixir.HumanActionsTest do
       collect: fn _repos, _opts -> {:ok, collected(Agent.get(Keyword.fetch!(opts, :actions), & &1))} end,
       linear_client: linear(test_pid, Keyword.get(opts, :previous, no_updates())),
       now_ms: fn -> Agent.get(clock, & &1) end,
-      notify: fn event, attrs -> send(test_pid, {:notified, event, attrs}) end
+      notify: fn event, attrs -> send(test_pid, {:notified, event, attrs}) end,
+      latest_report: fn -> nil end
     ]
 
     %{opts: Keyword.merge(defaults, Keyword.drop(opts, [:actions, :clock, :previous])), projects: %{}, ci: %{}, timer: make_ref()}
@@ -86,6 +87,96 @@ defmodule SymphonyElixir.HumanActionsTest do
 
   defp collected([]), do: %{}
   defp collected(actions), do: %{@project.id => %{project: @project, actions: actions}}
+
+  defp report(id, sentences, citations) do
+    %SymphonyElixir.TicketEvents.Event{
+      id: id,
+      type: "report.published",
+      at: ~U[2026-11-12 13:00:05Z],
+      payload: %{
+        period: %{from: "2026-11-12T12:00:00Z", to: "2026-11-12T13:00:00Z"},
+        sentences: sentences,
+        citations: citations,
+        events: citations |> Enum.flat_map(&(Map.get(&1, :events) || &1["events"])) |> Enum.uniq()
+      }
+    }
+  end
+
+  describe "with a status report" do
+    test "the update is the newest report, its citations as Linear links, and a new report is a new update" do
+      {:ok, latest} = Agent.start_link(fn -> nil end)
+      actions = start_actions([action("a")])
+
+      cited = fn _report ->
+        %{
+          "ev-1" => %{identifier: "MOT-24", url: "https://linear.app/acme/issue/MOT-24"},
+          "ev-2" => %{identifier: "MOT-25", url: nil},
+          "ev-3" => %{identifier: "MOT-24", url: "https://linear.app/acme/issue/MOT-24"}
+        }
+      end
+
+      state = state(actions: actions, latest_report: fn -> Agent.get(latest, & &1) end, cited_tickets: cited) |> HumanActions.run_once()
+
+      # No report yet: the update lists the actions as before.
+      assert_received {:posted, %{"body" => body}}
+      assert body =~ "### 1. Do a"
+
+      first =
+        report("rep-1", ["MOT-24 shipped.", "MOT-25 waits on you.", "Symphony resumed."], [
+          %{sentence: 0, events: ["ev-1", "ev-3"]},
+          %{"sentence" => 1, "events" => ["ev-2"]},
+          %{sentence: 2, events: ["ev-symphony"]}
+        ])
+
+      Agent.update(latest, fn _none -> first end)
+      state = HumanActions.run_once(state)
+      refute_received {:posted, _rate_limited}
+
+      state = put_in(state.projects["project-1"].posted_at_ms, -20 * @minute)
+      state = HumanActions.run_once(state)
+      assert_received {:posted, %{"body" => body, "health" => "atRisk"}}
+
+      assert body ==
+               Enum.join(
+                 [
+                   "**Symphony's status report, 2026-11-12 12:00 to 2026-11-12 13:00 UTC**",
+                   "MOT-24 shipped. ([MOT-24](https://linear.app/acme/issue/MOT-24))",
+                   "MOT-25 waits on you. (MOT-25)",
+                   "Symphony resumed.",
+                   "---\n_Symphony posts a new update when this list changes · list `#{Update.list_id([action("a")], first)}`_"
+                 ],
+                 "\n\n"
+               )
+
+      assert Update.list_id_from_body(body) == state.projects["project-1"].list_id
+      refute Update.list_id([action("a")], first) == Update.list_id([action("a")])
+
+      # The same report is not posted again; a newer one is, even once every action closed.
+      state = HumanActions.run_once(state)
+      refute_received {:posted, _same}
+
+      Agent.update(actions, fn _actions -> [] end)
+      Agent.update(latest, fn _first -> report("rep-2", ["All quiet."], [%{sentence: 0, events: ["ev-1"]}]) end)
+      state = put_in(state.projects["project-1"].posted_at_ms, -40 * @minute)
+      _state = HumanActions.run_once(state)
+      assert_received {:posted, %{"body" => body, "health" => "onTrack"}}
+      assert body =~ "All quiet. ([MOT-24](https://linear.app/acme/issue/MOT-24))"
+    end
+
+    test "a project first seen with no action gets the report, and a period it can't read is shown as stored" do
+      bad = report("rep-1", ["Quiet."], [])
+      bad = put_in(bad.payload.period.from, "yesterday")
+      {body, []} = Update.render_report(bad, [], %{})
+      assert body =~ "**Symphony's status report, yesterday to 2026-11-12 13:00 UTC**\n\nQuiet.\n\n---"
+
+      store_down = fn _report -> {:error, :store_down} end
+      state = state(actions: start_actions([]), latest_report: fn -> bad end, cited_tickets: store_down)
+      state = %{state | projects: %{"project-9" => %{list_id: nil, posted_at_ms: nil, keys: nil, name: "Other"}}}
+      _state = HumanActions.run_once(state)
+      assert_received {:posted, %{"projectId" => "project-9", "body" => body}}
+      assert body =~ "Quiet."
+    end
+  end
 
   test "posts one update listing a new action, and nothing more while the list stays the same" do
     actions = start_actions([action("request:comment-1", %{why: "Release fails.", if_unanswered: "Releases stay red."})])

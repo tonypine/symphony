@@ -16,13 +16,14 @@ defmodule SymphonyElixir.Reports do
   `start/2` starts a run in the background (`symphony report --from --to`,
   `POST /api/v1/control/report`); `run/2` is the run itself. A published report is one
   `report.published` event on the reports ledger (`SymphonyElixir.RunStore.append_report_event/1`);
-  `list/1` reads them newest first (`GET /api/v1/reports`). This module starts no run on a schedule.
+  `list/1` reads them newest first (`GET /api/v1/reports`) and `latest/0` the newest. The schedule,
+  the cadence and the triggers of `reports`, is `SymphonyElixir.Reports.Scheduler`'s.
   """
 
   require Logger
 
   alias SymphonyElixir.AgentTools.Report
-  alias SymphonyElixir.{Config, RunStore}
+  alias SymphonyElixir.{Config, RunStore, TicketState}
   alias SymphonyElixir.Reports.{Anthropic, Material, Period}
   alias SymphonyElixir.TicketEvents.Event
 
@@ -62,15 +63,24 @@ defmodule SymphonyElixir.Reports do
   child), and `run/2`'s and `SymphonyElixir.Reports.Material.read/2`'s.
   """
   @spec start(Period.t(), keyword()) :: {:ok, started()} | {:error, term()}
-  def start(%{from: from, to: to} = period, opts \\ []) do
+  def start(period, opts \\ []) do
+    with {:ok, started, _task} <- launch(period, opts), do: {:ok, started}
+  end
+
+  @doc """
+  `start/2`, answering also what `start_task:` returned for the run: the scheduler
+  (`SymphonyElixir.Reports.Scheduler`) starts it as a task it awaits, so it knows when the run ends.
+  """
+  @spec launch(Period.t(), keyword()) :: {:ok, started(), term()} | {:error, term()}
+  def launch(%{from: from, to: to} = period, opts) do
     with {:ok, material} <- material(period, opts) do
       run_id = "report-" <> Event.ulid(DateTime.utc_now())
       model = Keyword.get_lazy(opts, :model, &Config.report_model/0)
       start_task = Keyword.get(opts, :start_task, &Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, &1))
       run_opts = Keyword.merge(opts, run_id: run_id, model: model)
-      _started = start_task.(fn -> run(material, run_opts) end)
+      task = start_task.(fn -> run(material, run_opts) end)
       Logger.info("Report run started run_id=#{run_id} model=#{model} from=#{DateTime.to_iso8601(from)} to=#{DateTime.to_iso8601(to)} events=#{length(material.events)}")
-      {:ok, %{run_id: run_id, model: model, from: from, to: to, events: length(material.events)}}
+      {:ok, %{run_id: run_id, model: model, from: from, to: to, events: length(material.events)}, task}
     end
   end
 
@@ -144,6 +154,36 @@ defmodule SymphonyElixir.Reports do
        events
        |> Enum.filter(&(&1.type == "report.published" and after?(&1.at, opts[:since]) and before?(&1.at, opts[:until])))
        |> Enum.sort_by(&{DateTime.to_unix(&1.at, :microsecond), &1.seq || 0}, :desc)}
+    end
+  end
+
+  @doc "The newest published report, or nil when there is none or the store can't be read."
+  @spec latest() :: Event.t() | nil
+  def latest do
+    case list() do
+      {:ok, [newest | _older]} -> newest
+      _none -> nil
+    end
+  end
+
+  @doc """
+  The tickets `report` cites, by event id: each of its events on a ticket's stream, with the
+  ticket's identifier and its Linear issue's URL when the record knows them. Symphony's own events
+  name no ticket and are left out. A store error is returned as it is.
+  """
+  @spec cited_tickets(Event.t()) :: %{String.t() => %{identifier: String.t(), url: String.t() | nil}} | {:error, term()}
+  def cited_tickets(%Event{payload: payload}) do
+    ids = MapSet.new(payload.events)
+
+    with events when is_list(events) <- RunStore.list_all_ticket_events([]),
+         records when is_list(records) <- RunStore.list_all_ticket_states() do
+      records = records |> Enum.map(&TicketState.normalize/1) |> Map.new(&{&1.issue_id, &1})
+
+      for %Event{id: id, issue_id: issue_id} <- events,
+          MapSet.member?(ids, id),
+          %{issue_identifier: identifier} = record when is_binary(identifier) <- [Map.get(records, issue_id)],
+          into: %{},
+          do: {id, %{identifier: identifier, url: record.url}}
     end
   end
 

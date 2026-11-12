@@ -534,6 +534,23 @@ defmodule SymphonyElixir.PausesTest do
     end
   end
 
+  describe "Symphony's own pause on the live channel" do
+    test "each event it writes goes out as a notice once it is written, and a change that writes nothing sends none" do
+      :ok = ObservabilityPubSub.subscribe_ticket_events()
+      on_exit(fn -> ObservabilityPubSub.unsubscribe_ticket_events() end)
+
+      {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("deploy window"), at: @at)
+      assert_receive {:ticket_event, %{issue_id: "symphony", type: "pause.set", event_id: id, issue_identifier: nil}}
+      assert [%{id: ^id}] = RunStore.list_subject_events(:symphony, [])
+
+      {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("deploy window"), at: @later)
+      refute_receive {:ticket_event, _notice}
+
+      {:ok, nil} = Pauses.clear(:symphony, at: @later)
+      assert_receive {:ticket_event, %{issue_id: "symphony", type: "pause.cleared"}}
+    end
+  end
+
   describe "normalize/1" do
     test "keeps each kind and waits_on once, fills defaults and reads anything else as no pause" do
       stored = %{

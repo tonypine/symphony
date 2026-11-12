@@ -1153,7 +1153,8 @@ private struct LinearWebhooksSection: View {
 /// `dispatch`: whether dispatch reads its candidates from the Linear poll or from Symphony's record, how many poll
 /// cycles Setup's Dispatch shadow line counts their differences over, and `linear.reconcile_interval_ms`, how often the
 /// Linear poll reconciles the record while dispatch reads it, in minutes.
-/// `reports.model`: the model a status report is written with.
+/// `reports.model`: the model a status report is written with; `reports.cadence`, how often one is written on its own;
+/// `reports.triggers.*`, the events that start one at once.
 private struct ReportsSection: View {
     @ObservedObject var model: SettingsViewModel
 
@@ -1167,6 +1168,27 @@ private struct ReportsSection: View {
                     + "one question in the Inbox and changes nothing else, so the cheapest capable model is enough."
             )
             .foregroundStyle(.secondary)
+            Picker("Write a report", selection: $model.reportCadence) {
+                ForEach(ReportCadence.allCases) { cadence in
+                    Text(cadence.title).tag(cadence)
+                }
+            }
+            .accessibilityLabel("Report cadence")
+            .help("How often Symphony writes a status report on its own, on the UTC clock (reports.cadence)")
+            Text("Also write a report at once when:").foregroundStyle(.secondary)
+            ForEach(ReportTrigger.allCases) { trigger in
+                Toggle(trigger.title, isOn: Binding(
+                    get: { model.reportTriggers[trigger] ?? trigger.defaultOn },
+                    set: { model.reportTriggers[trigger] = $0 }
+                ))
+                .accessibilityLabel("Report when \(trigger.title.lowercased())")
+                .help("reports.triggers.\(trigger.rawValue)")
+            }
+            Text(
+                "Each report covers the time since the previous one. Triggers within a minute of a report start no "
+                    + "second one, and the Linear project update reads the newest report."
+            )
+            .foregroundStyle(.secondary)
             if let error = model.reportsError {
                 Text(error).foregroundStyle(.red)
             }
@@ -1174,8 +1196,9 @@ private struct ReportsSection: View {
             Text("Reports (saved in symphony.yml)")
         } footer: {
             SectionFooter(
-                "reports.model (default \(ReportSettings.defaultModel)). Save checks symphony.yml with symphony check "
-                    + "first; Symphony reads it on its next report run, no restart needed."
+                "reports.model (default \(ReportSettings.defaultModel)), reports.cadence (default six_hours) and "
+                    + "reports.triggers (a ticket shipped and the factory paused by a rule on by default). Save checks "
+                    + "symphony.yml with symphony check first; Symphony reads it within the hour, no restart needed."
             )
         }
         .disabled(!model.canEditReports)

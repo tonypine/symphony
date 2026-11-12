@@ -16,6 +16,11 @@ defmodule SymphonyElixir.HumanActions.Update do
   - a footer with the list id (a hash of the action keys), which lets Symphony recognise its own
     last update after a restart instead of posting the same list again.
 
+  Once a status report exists (`SymphonyElixir.Reports`), the update is the newest report instead
+  (`render_report/3`): its sentences, each followed by links to the Linear issues of the tickets
+  whose events it cites, then the same footer. Its list id also hashes the report's id, so a new
+  report is posted as a new update.
+
   The health is `atRisk` while anything is open and `onTrack` when nothing is: an open action is a
   risk to the schedule, and Symphony cannot judge more than that, so it never says `offTrack`.
   The whole body goes through `SymphonyElixir.AgentTools.SecretScanner.redact/1` before it is
@@ -25,14 +30,22 @@ defmodule SymphonyElixir.HumanActions.Update do
   alias SymphonyElixir.AgentTools.SecretScanner
   alias SymphonyElixir.HumanActions.{Action, Request}
   alias SymphonyElixir.Pauses.Projector
+  alias SymphonyElixir.TicketEvents.Event
 
   @max_actions 25
   @list_id_pattern ~r/list `([0-9a-f]{8})`/
 
-  @doc "The id of a list of actions: the first 8 hex digits of the SHA-256 of its sorted keys."
-  @spec list_id([Action.t()]) :: String.t()
-  def list_id(actions) do
-    keys = actions |> Enum.map(& &1.key) |> Enum.sort() |> Enum.join("\n")
+  @typedoc "A ticket a report cites: its identifier and its Linear issue's URL when known."
+  @type cited :: %{identifier: String.t(), url: String.t() | nil}
+
+  @doc """
+  The id of a list of actions: the first 8 hex digits of the SHA-256 of its sorted keys, with the
+  key `report:<id>` of the report the update carries, when it carries one.
+  """
+  @spec list_id([Action.t()], Event.t() | nil) :: String.t()
+  def list_id(actions, report \\ nil) do
+    report_keys = if report, do: ["report:" <> report.id], else: []
+    keys = actions |> Enum.map(& &1.key) |> Enum.concat(report_keys) |> Enum.sort() |> Enum.join("\n")
     :sha256 |> :crypto.hash(keys) |> Base.encode16(case: :lower) |> binary_part(0, 8)
   end
 
@@ -69,6 +82,49 @@ defmodule SymphonyElixir.HumanActions.Update do
     |> List.flatten()
     |> Enum.join("\n\n")
     |> SecretScanner.redact()
+  end
+
+  @doc """
+  Renders the update as the newest `report`: its period, each sentence on its own line followed by
+  the links to the tickets its citations name (`cited`, by event id), then the footer with the list
+  id of `actions` and the report. Returns the body and the secret patterns redacted from it.
+  """
+  @spec render_report(Event.t(), [Action.t()], %{String.t() => cited()}) :: {String.t(), [atom()]}
+  def render_report(%Event{payload: payload} = report, actions, cited) do
+    citations = Map.new(payload.citations, &{citation_field(&1, :sentence), citation_field(&1, :events) || []})
+
+    lines =
+      payload.sentences
+      |> Enum.with_index()
+      |> Enum.map(fn {sentence, index} -> sentence <> links(Map.get(citations, index, []), cited) end)
+
+    [report_header(payload), lines, footer(list_id(actions, report))]
+    |> List.flatten()
+    |> Enum.join("\n\n")
+    |> SecretScanner.redact()
+  end
+
+  defp citation_field(citation, key), do: Map.get(citation, key) || Map.get(citation, Atom.to_string(key))
+
+  defp report_header(%{period: period}) do
+    from = period_time(citation_field(period, :from))
+    to = period_time(citation_field(period, :to))
+    "**Symphony's status report, #{from} to #{to} UTC**"
+  end
+
+  defp period_time(iso) when is_binary(iso) do
+    case DateTime.from_iso8601(iso) do
+      {:ok, at, _offset} -> Calendar.strftime(at, "%Y-%m-%d %H:%M")
+      {:error, _reason} -> iso
+    end
+  end
+
+  # The tickets of a sentence's cited events, once each, as Linear links.
+  defp links(event_ids, cited) do
+    case event_ids |> Enum.flat_map(&List.wrap(Map.get(cited, &1))) |> Enum.uniq_by(& &1.identifier) do
+      [] -> ""
+      tickets -> " (" <> Enum.map_join(tickets, ", ", &issue_link/1) <> ")"
+    end
   end
 
   @doc "Actions in the order an update lists them: by issue, then by key."

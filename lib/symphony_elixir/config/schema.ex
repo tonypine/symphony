@@ -2320,8 +2320,10 @@ defmodule SymphonyElixir.Config.Schema do
   defmodule Reports do
     @moduledoc """
     `symphony.yml`'s `reports` section: the model a report run writes with (`model`,
-    `SymphonyElixir.Reports`), the cheapest capable model by default. A report reads a period's
-    notable events and cites them, which a small model does well.
+    `SymphonyElixir.Reports`), the cheapest capable model by default; how often a report is written
+    on its own (`cadence`: `none`, `hourly`, `six_hours` or `daily`, every six hours by default);
+    and which events start one at once (`triggers`, `SymphonyElixir.Reports.Scheduler`). A report
+    reads a period's notable events and cites them, which a small model does well.
     """
     use Ecto.Schema
     import Ecto.Changeset
@@ -2330,23 +2332,66 @@ defmodule SymphonyElixir.Config.Schema do
 
     @primary_key false
     @default_model "claude-haiku-5-5"
+    @cadences ~w(none hourly six_hours daily)
+
+    defmodule Triggers do
+      @moduledoc """
+      `reports.triggers`: one switch per event that starts a report at once
+      (`SymphonyElixir.Reports.Scheduler.trigger/2`). A ticket shipped and the factory paused by a
+      rule are on by default; the others are off.
+      """
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @type t :: %__MODULE__{}
+
+      @primary_key false
+      @fields [:ticket_shipped, :epic_closed, :ci_fix_loop, :self_heal_filed, :release_installed, :paused_by_rule]
+
+      embedded_schema do
+        field(:ticket_shipped, :boolean, default: true)
+        field(:epic_closed, :boolean, default: false)
+        field(:ci_fix_loop, :boolean, default: false)
+        field(:self_heal_filed, :boolean, default: false)
+        field(:release_installed, :boolean, default: false)
+        field(:paused_by_rule, :boolean, default: true)
+      end
+
+      @doc "Every trigger, in the order Settings lists them."
+      @spec names() :: [atom()]
+      def names, do: @fields
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        cast(schema, attrs, @fields, empty_values: [])
+      end
+    end
 
     embedded_schema do
       field(:model, :string, default: @default_model)
+      field(:cadence, :string, default: "six_hours")
+      embeds_one(:triggers, Triggers, on_replace: :update, defaults_to_struct: true)
     end
 
     @doc "The model a report run uses when `reports.model` is missing or null."
     @spec default_model() :: String.t()
     def default_model, do: @default_model
 
+    @doc "The cadences `reports.cadence` takes."
+    @spec cadences() :: [String.t()]
+    def cadences, do: @cadences
+
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
       schema
-      |> cast(attrs, [:model], empty_values: [])
+      |> cast(attrs, [:model, :cadence], empty_values: [])
       |> Schema.validate_present([:model], message: "must name a model")
       |> validate_change(:model, fn :model, model ->
         if String.trim(model) == "", do: [model: "must name a model"], else: []
       end)
+      |> Schema.validate_present([:cadence], message: "must be one of #{Enum.join(@cadences, ", ")}")
+      |> validate_inclusion(:cadence, @cadences, message: "must be one of #{Enum.join(@cadences, ", ")}")
+      |> cast_embed(:triggers, with: &Triggers.changeset/2)
     end
   end
 
