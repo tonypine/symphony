@@ -53,7 +53,9 @@ public final class TicketPageStore: ObservableObject {
     public var onBuilt: (TicketPageModel?) -> Void = { _ in }
     private var cancellable: AnyCancellable?
 
-    public init(builder: TicketPageBuilder = TicketPageBuilder()) {
+    /// A nil `builder` makes a new one here, on the main actor: a default argument is evaluated outside it.
+    public init(builder: TicketPageBuilder? = nil) {
+        let builder = builder ?? TicketPageBuilder()
         self.builder = builder
         cancellable = builder.$model.dropFirst().sink { [weak self] model in
             guard let self else { return }
