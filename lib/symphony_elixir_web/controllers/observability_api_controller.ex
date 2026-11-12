@@ -9,7 +9,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   alias SymphonyElixir.{Config, History, Inbox, Orchestrator, PullRequestPage, Quality, Shipped, StatusDashboard}
   alias SymphonyElixir.Inbox.FromRecord
   alias SymphonyElixir.Learnings.Feed
-  alias SymphonyElixirWeb.{Endpoint, Presenter}
+  alias SymphonyElixirWeb.{ConditionalJSON, Endpoint, Presenter}
 
   # The frame is padded to the requested width inside StatusDashboard; cap it.
   @max_terminal_columns 1_000
@@ -67,7 +67,7 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   def issue(conn, %{"issue_identifier" => issue_identifier}) do
     case Presenter.issue_payload(issue_identifier, orchestrator(), snapshot_timeout_ms()) do
       {:ok, payload} ->
-        json(conn, payload)
+        ConditionalJSON.json(conn, payload)
 
       {:error, :issue_not_found} ->
         error_response(conn, 404, "issue_not_found", "Issue not found")
