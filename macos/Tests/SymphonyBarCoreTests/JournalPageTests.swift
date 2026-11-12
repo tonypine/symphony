@@ -282,6 +282,6 @@ final class JournalPageTests: XCTestCase {
     }
 
     func testTheJournalsExplanation() {
-        XCTAssertEqual(Journal.explanation, "What happened while you were away: the notable events of every ticket")
+        XCTAssertEqual(Journal.explanation, "What happened while you were away")
     }
 }
