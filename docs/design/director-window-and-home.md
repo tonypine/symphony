@@ -16,8 +16,11 @@ catalog win; the list at the end names what each replaces.
    row's badge does not already state it.
 4. **No support text.** No summary sentence over a list, no caption or hint on a divider or a group, no
    wrapper card around a single list. The list explains itself.
-5. **One component per thing.** What is meant to look the same in several places is one shared component. A
-   page may keep a private component only for something unique to it.
+5. **Style is foundational.** The order of building is tokens, then shared components, then pages. A page is
+   composed of shared components wherever one fits; it is never the place a look is first drawn.
+6. **One component per thing.** What is meant to look the same in several places is one shared component, built
+   once from the catalog with every state it has there. A page may keep a private component only for something
+   unique to it.
 
 ## The window
 
