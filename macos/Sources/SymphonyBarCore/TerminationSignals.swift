@@ -1,5 +1,6 @@
 import Darwin
 import Dispatch
+import Foundation
 
 /// Calls a handler on `queue` for SIGTERM, SIGINT and SIGHUP instead of letting them kill the process.
 ///
