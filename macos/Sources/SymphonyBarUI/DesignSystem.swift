@@ -229,6 +229,27 @@ public struct Card<Content: View>: View {
     }
 }
 
+/// A bar pinned at the top of a page over content that fills the rest (TP-1490): a short state under the bar (an empty
+/// or unavailable view, a spinner) sits centred in the space below it, and the bar stays under the tabs instead of
+/// floating to the middle of the page with the state.
+public struct PinnedBarPage<Bar: View, Content: View>: View {
+    let bar: Bar
+    let content: Content
+
+    public init(@ViewBuilder bar: () -> Bar, @ViewBuilder content: () -> Content) {
+        self.bar = bar()
+        self.content = content()
+    }
+
+    public var body: some View {
+        VStack(spacing: 0) {
+            bar
+            content.frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+    }
+}
+
 /// C20: a symbol, a sentence and its actions, for an empty or unavailable view.
 public struct EmptyState: View {
     let title: String
