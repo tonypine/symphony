@@ -930,6 +930,38 @@ func initiativesSituations() -> some View {
     .background(DesignTokens.Surface.content.color)
 }
 
+// Initiatives as the epic's story (TP-1458): the `initiative-story` fixture's TP-1381 mid-chain, SHOP-500 done and
+// BIL-300 with a canceled sub-ticket, as the tab draws them beside the list at the laptop's and the desktop's widths.
+let storyAPI = here.appendingPathComponent("../Fixtures/director-app/initiative-story/api/v1").standardizedFileURL
+
+/// `identifier`'s story beside the Initiatives list, in a window `window` pt wide less its sidebar.
+@MainActor
+func initiativeStory(_ identifier: String, window: CGFloat) -> some View {
+    func read(_ name: String) -> Data { try! Data(contentsOf: storyAPI.appendingPathComponent(name)) }
+    guard let payload = InitiativesPayload.decode(read("initiatives.json")), let state = OverviewState.decode(read("state.json")),
+          let records = TicketsPayload.decode(read("tickets.json"))?.rows
+    else { fatalError("The initiative-story fixture doesn't read") }
+    let list = InitiativesList(initiatives: payload.initiatives, state: state.snapshot)
+    guard let initiative = list.ordered.first(where: { $0.identifier == identifier }) else { fatalError("\(identifier) is missing") }
+    var connected: [String: TicketConnected] = [:]
+    for ticket in initiative.subTickets {
+        if let data = try? Data(contentsOf: storyAPI.appendingPathComponent("\(ticket.identifier).json")) {
+            connected[ticket.identifier] = TicketFactsRead.decode(data)?.connected
+        }
+    }
+    let reference = state.generatedAt ?? Date()
+    let story = InitiativeStory(initiative: initiative, records: records, connected: connected, order: state.order, reference: reference)
+    return HStack(alignment: .top, spacing: 0) {
+        InitiativesListRows(list: list, selected: initiative.id, select: { _ in })
+            .frame(width: DesignTokens.Layout.listColumnWidth, alignment: .top)
+            .background(DesignTokens.Surface.content.color)
+        Divider()
+        InitiativeDetail(initiative: initiative, story: story, actions: InitiativeActions(), reference: reference)
+    }
+    .frame(width: window - DesignTokens.Layout.sidebarWidth, alignment: .top)
+    .background(DesignTokens.Surface.content.color)
+}
+
 /// The Inbox: TP-892's context card with its line and its connected tickets' lines.
 @MainActor
 func inboxContextSituations() -> some View {
@@ -1624,6 +1656,12 @@ MainActor.assumeIsolated {
         // The Situation line everywhere (TP-1441): Tickets, Initiatives, the Inbox's context, the menu bar.
         render(ticketsSituations(), scheme, to: "situations-tickets-\(suffix).png")
         render(initiativesSituations(), scheme, to: "situations-initiatives-\(suffix).png")
+        // Initiatives as the epic's story (TP-1458): mid-chain, done, and with a canceled sub-ticket, at both widths.
+        for (window, name) in [(CGFloat(1440), "laptop"), (2560, "desktop")] {
+            render(initiativeStory("TP-1381", window: window), scheme, to: "initiative-story-mid-chain-\(name)-\(suffix).png")
+            render(initiativeStory("SHOP-500", window: window), scheme, to: "initiative-story-done-\(name)-\(suffix).png")
+            render(initiativeStory("BIL-300", window: window), scheme, to: "initiative-story-canceled-\(name)-\(suffix).png")
+        }
         render(inboxContextSituations(), scheme, to: "situations-inbox-context-\(suffix).png")
         render(menuWaitingSituations(), scheme, to: "situations-menu-waiting-\(suffix).png")
         // Home's board (TP-1453): every group populated and most empty with dispatch paused, at the laptop's and the

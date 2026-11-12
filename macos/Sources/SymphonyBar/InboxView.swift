@@ -614,7 +614,7 @@ private struct ContextLabel: View {
 
 /// N10: one 14 × 5 pt segment per sub-ticket in landing order, coloured by its state, and "4 of 7 done" beside it;
 /// one element for VoiceOver, "4 of 7 sub-tickets done".
-private struct ProgressStripView: View {
+struct ProgressStripView: View {
     let strip: ProgressStrip
 
     var body: some View {

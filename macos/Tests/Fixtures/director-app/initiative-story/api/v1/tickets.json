@@ -1,0 +1,437 @@
+{
+  "view": null,
+  "filters": [],
+  "columns": [
+    {
+      "name": "identifier",
+      "type": "identifier",
+      "description": ""
+    },
+    {
+      "name": "title",
+      "type": "string",
+      "description": ""
+    },
+    {
+      "name": "epic",
+      "type": "identifier",
+      "description": ""
+    },
+    {
+      "name": "phase",
+      "type": "string",
+      "description": ""
+    },
+    {
+      "name": "situation",
+      "type": "situation",
+      "description": ""
+    },
+    {
+      "name": "priority",
+      "type": "integer",
+      "description": ""
+    },
+    {
+      "name": "created_at",
+      "type": "time",
+      "description": ""
+    },
+    {
+      "name": "phase_at",
+      "type": "time",
+      "description": ""
+    }
+  ],
+  "sort": {
+    "column": "identifier",
+    "direction": "asc"
+  },
+  "count": 35,
+  "tickets": [
+    {
+      "issue_id": "i-TP-1438",
+      "identifier": "TP-1438",
+      "title": "3b (1/26): The shared styles",
+      "epic": "TP-1381",
+      "phase": "Done",
+      "situation": "done",
+      "priority": 1,
+      "created_at": "2026-11-10T13:10:00Z",
+      "phase_at": "2026-11-10T19:12:00Z"
+    },
+    {
+      "issue_id": "i-TP-1439",
+      "identifier": "TP-1439",
+      "title": "3b (2/26): The Situation line",
+      "epic": "TP-1381",
+      "phase": "Done",
+      "situation": "done",
+      "priority": 1,
+      "created_at": "2026-11-10T13:11:00Z",
+      "phase_at": "2026-11-11T08:40:00Z"
+    },
+    {
+      "issue_id": "i-TP-1440",
+      "identifier": "TP-1440",
+      "title": "3b (3/26): The Action rail",
+      "epic": "TP-1381",
+      "phase": "Done",
+      "situation": "done",
+      "priority": 1,
+      "created_at": "2026-11-10T13:12:00Z",
+      "phase_at": "2026-11-11T21:05:00Z"
+    },
+    {
+      "issue_id": "i-TP-1441",
+      "identifier": "TP-1441",
+      "title": "3b (4/26): The Situation line everywhere",
+      "epic": "TP-1381",
+      "phase": "In Progress",
+      "situation": "working",
+      "priority": 1,
+      "created_at": "2026-11-10T13:13:00Z",
+      "phase_at": "2026-11-12T03:05:00Z"
+    },
+    {
+      "issue_id": "i-TP-1442",
+      "identifier": "TP-1442",
+      "title": "3b (5/26): The Question block",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:14:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1443",
+      "identifier": "TP-1443",
+      "title": "3b (6/26): The Run group and the Step list",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:15:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1444",
+      "identifier": "TP-1444",
+      "title": "3b (7/26): The Timeline",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:16:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1445",
+      "identifier": "TP-1445",
+      "title": "3b (8/26): The ticket page at laptop width",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:17:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1446",
+      "identifier": "TP-1446",
+      "title": "3b (9/26): The ticket page at desktop width",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:18:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1447",
+      "identifier": "TP-1447",
+      "title": "3b (10/26): The Lifecycle section",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:19:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1448",
+      "identifier": "TP-1448",
+      "title": "3b (11/26): The facts rail",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:20:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1449",
+      "identifier": "TP-1449",
+      "title": "3b (12/26): The decisions editor",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:21:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1450",
+      "identifier": "TP-1450",
+      "title": "3b (13/26): The labels and priority editors",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:22:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1451",
+      "identifier": "TP-1451",
+      "title": "3b (14/26): Home's board",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:23:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1452",
+      "identifier": "TP-1452",
+      "title": "3b (15/26): Home's top",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:24:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1453",
+      "identifier": "TP-1453",
+      "title": "3b (16/26): The five destinations",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:25:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1454",
+      "identifier": "TP-1454",
+      "title": "3b (17/26): Tickets as the table",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:26:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1455",
+      "identifier": "TP-1455",
+      "title": "3b (18/26): Saved views on Tickets",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:27:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1456",
+      "identifier": "TP-1456",
+      "title": "3b (19/26): The Inbox drawer",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:28:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1457",
+      "identifier": "TP-1457",
+      "title": "3b (20/26): Initiatives as the epic's story",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:29:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1458",
+      "identifier": "TP-1458",
+      "title": "3b (21/26): The Journal page",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:30:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1459",
+      "identifier": "TP-1459",
+      "title": "3b (22/26): Insights",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:31:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1460",
+      "identifier": "TP-1460",
+      "title": "3b (23/26): Factory",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:32:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1461",
+      "identifier": "TP-1461",
+      "title": "3b (24/26): The menu bar",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:33:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1462",
+      "identifier": "TP-1462",
+      "title": "3b (25/26): Keyboard pass",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:34:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-TP-1463",
+      "identifier": "TP-1463",
+      "title": "3b (26/26): Accessibility pass",
+      "epic": "TP-1381",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 1,
+      "created_at": "2026-11-10T13:35:00Z",
+      "phase_at": "2026-11-10T13:59:53Z"
+    },
+    {
+      "issue_id": "i-SHOP-501",
+      "identifier": "SHOP-501",
+      "title": "Gift card balance",
+      "epic": "SHOP-500",
+      "phase": "Done",
+      "situation": "done",
+      "priority": 2,
+      "created_at": "2026-10-30T09:00:00Z",
+      "phase_at": "2026-11-03T10:00:00Z"
+    },
+    {
+      "issue_id": "i-SHOP-502",
+      "identifier": "SHOP-502",
+      "title": "Redeem a gift card at checkout",
+      "epic": "SHOP-500",
+      "phase": "Done",
+      "situation": "done",
+      "priority": 2,
+      "created_at": "2026-10-30T09:01:00Z",
+      "phase_at": "2026-11-05T16:20:00Z"
+    },
+    {
+      "issue_id": "i-SHOP-503",
+      "identifier": "SHOP-503",
+      "title": "Gift card emails",
+      "epic": "SHOP-500",
+      "phase": "Done",
+      "situation": "done",
+      "priority": 2,
+      "created_at": "2026-10-30T09:02:00Z",
+      "phase_at": "2026-11-06T09:45:00Z"
+    },
+    {
+      "issue_id": "i-301",
+      "identifier": "BIL-301",
+      "title": "Annual price in the plan catalog",
+      "epic": "BIL-300",
+      "phase": "Done",
+      "situation": "done",
+      "priority": 2,
+      "created_at": "2026-11-02T10:00:00Z",
+      "phase_at": "2026-11-09T15:30:00Z"
+    },
+    {
+      "issue_id": "i-302",
+      "identifier": "BIL-302",
+      "title": "Charge the year up front",
+      "epic": "BIL-300",
+      "phase": "Code Review",
+      "situation": "waiting_for_ci",
+      "priority": 2,
+      "created_at": "2026-11-02T10:01:00Z",
+      "phase_at": "2026-11-12T02:40:00Z"
+    },
+    {
+      "issue_id": "i-303",
+      "identifier": "BIL-303",
+      "title": "Annual plans for the free tier",
+      "epic": "BIL-300",
+      "phase": "Canceled",
+      "situation": "cancelled",
+      "priority": 3,
+      "created_at": "2026-11-02T10:02:00Z",
+      "phase_at": "2026-11-08T12:00:00Z"
+    },
+    {
+      "issue_id": "i-304",
+      "identifier": "BIL-304",
+      "title": "Annual plan FAQ page",
+      "epic": "BIL-300",
+      "phase": "Todo",
+      "situation": "waiting_for_slot",
+      "priority": 3,
+      "created_at": "2026-11-02T10:03:00Z",
+      "phase_at": "2026-11-02T10:03:00Z"
+    },
+    {
+      "issue_id": "i-305",
+      "identifier": "BIL-305",
+      "title": "Prorate a switch to annual",
+      "epic": "BIL-300",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "priority": 2,
+      "created_at": "2026-11-02T10:04:00Z",
+      "phase_at": "2026-11-02T10:04:00Z"
+    },
+    {
+      "issue_id": "p-300",
+      "identifier": "BIL-300",
+      "title": "Annual plans",
+      "epic": "BIL-300",
+      "phase": "Waiting on sub-tickets",
+      "priority": 2,
+      "created_at": "2026-11-01T09:00:00Z",
+      "phase_at": "2026-11-02T10:05:00Z"
+    }
+  ]
+}

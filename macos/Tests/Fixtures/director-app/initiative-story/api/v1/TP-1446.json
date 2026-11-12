@@ -1,0 +1,217 @@
+{
+  "issue_identifier": "TP-1446",
+  "issue_id": "i-TP-1446",
+  "connected": {
+    "epic": {
+      "identifier": "TP-1381",
+      "title": "Phase 3b: the Director redesigned around a ticket's situation",
+      "done": 3,
+      "total": 26,
+      "incomplete": false,
+      "tickets": [
+        {
+          "identifier": "TP-1438",
+          "title": "3b (1/26): The shared styles",
+          "state": "Done",
+          "situation": "done",
+          "current": false
+        },
+        {
+          "identifier": "TP-1439",
+          "title": "3b (2/26): The Situation line",
+          "state": "Done",
+          "situation": "done",
+          "current": false
+        },
+        {
+          "identifier": "TP-1440",
+          "title": "3b (3/26): The Action rail",
+          "state": "Done",
+          "situation": "done",
+          "current": false
+        },
+        {
+          "identifier": "TP-1441",
+          "title": "3b (4/26): The Situation line everywhere",
+          "state": "In Progress",
+          "situation": "working",
+          "current": false
+        },
+        {
+          "identifier": "TP-1442",
+          "title": "3b (5/26): The Question block",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1443",
+          "title": "3b (6/26): The Run group and the Step list",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1444",
+          "title": "3b (7/26): The Timeline",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1445",
+          "title": "3b (8/26): The ticket page at laptop width",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1446",
+          "title": "3b (9/26): The ticket page at desktop width",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": true
+        },
+        {
+          "identifier": "TP-1447",
+          "title": "3b (10/26): The Lifecycle section",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1448",
+          "title": "3b (11/26): The facts rail",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1449",
+          "title": "3b (12/26): The decisions editor",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1450",
+          "title": "3b (13/26): The labels and priority editors",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1451",
+          "title": "3b (14/26): Home's board",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1452",
+          "title": "3b (15/26): Home's top",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1453",
+          "title": "3b (16/26): The five destinations",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1454",
+          "title": "3b (17/26): Tickets as the table",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1455",
+          "title": "3b (18/26): Saved views on Tickets",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1456",
+          "title": "3b (19/26): The Inbox drawer",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1457",
+          "title": "3b (20/26): Initiatives as the epic's story",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1458",
+          "title": "3b (21/26): The Journal page",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1459",
+          "title": "3b (22/26): Insights",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1460",
+          "title": "3b (23/26): Factory",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1461",
+          "title": "3b (24/26): The menu bar",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1462",
+          "title": "3b (25/26): Keyboard pass",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        },
+        {
+          "identifier": "TP-1463",
+          "title": "3b (26/26): Accessibility pass",
+          "state": "Todo",
+          "situation": "blocked_by_ticket",
+          "current": false
+        }
+      ]
+    },
+    "blocked_by": [
+      {
+        "identifier": "TP-1445",
+        "title": "3b (8/26): The ticket page at laptop width",
+        "state": "Todo",
+        "status": "open",
+        "resolved_at": null
+      }
+    ],
+    "blocks": [
+      {
+        "identifier": "TP-1447",
+        "title": "3b (10/26): The Lifecycle section",
+        "state": "Todo",
+        "situation": "blocked_by_ticket"
+      }
+    ],
+    "parent": null,
+    "sub_tickets": [],
+    "related": []
+  }
+}

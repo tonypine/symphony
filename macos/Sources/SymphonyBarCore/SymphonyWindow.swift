@@ -147,12 +147,18 @@ public enum Destination: String, CaseIterable, Equatable, Hashable, Identifiable
     /// The page it opens on first: its first one that shows in the window.
     public var firstPage: SymphonyView { pages.first { !$0.opensOwnWindow }! }
 
-    /// C1's badge (TP-1455): Home's what waits on the Director in `status.you`, Factory's setup problems in
-    /// `status.problem`; no other destination has one, and a count of 0 hides it.
-    public func badge(waitingOnYou: Int, setup: SetupSummary) -> DestinationBadge? {
+    /// C1's badge (TP-1455): Home's what waits on the Director in `status.you`, Work's epics waiting on a person
+    /// (TP-1458) in `status.you`, Factory's setup problems in `status.problem`; no other destination has one, and a
+    /// count of 0 hides it.
+    public func badge(waitingOnYou: Int, setup: SetupSummary, epicsWaiting: Int = 0) -> DestinationBadge? {
         switch self {
         case .home where waitingOnYou > 0:
             DestinationBadge(count: waitingOnYou, status: .you, accessibilityValue: "\(waitingOnYou) waiting")
+        case .work where epicsWaiting > 0:
+            DestinationBadge(
+                count: epicsWaiting, status: .you,
+                accessibilityValue: "\(epicsWaiting) \(epicsWaiting == 1 ? "epic" : "epics") waiting on you"
+            )
         case .factory where setup.errors + setup.warnings > 0:
             DestinationBadge(
                 count: setup.errors + setup.warnings, status: .problem,

@@ -16,6 +16,7 @@ final class SymphonyWindowModel: ObservableObject {
             destinationMemory.remember(selection)
             onSelect(selection)
             readTicketsIfDue()
+            readInitiativeStoryIfDue()
             readHistoryIfDue()
             readQualityIfDue()
             readShippedIfDue()
@@ -98,6 +99,13 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var initiatives: InitiativesPayload?
     /// What the last Initiatives read got when it got none, nil after one that did.
     @Published private(set) var initiativesResult: EndpointResult?
+    /// The selected epic's records (`GET /api/v1/tickets?epic=`), by the epic's identifier (TP-1458).
+    @Published var initiativeRecords: [String: [TicketsRow]] = [:]
+    /// Each sub-ticket's ticket read `connected`, by identifier: its blockers and the epic's progress (TP-1458).
+    @Published var initiativeConnected: [String: TicketConnected] = [:]
+    var readingInitiativeStory = false
+    /// When the selected epic's story was last read, by the epic's identifier.
+    var initiativeStoryReadAt: [String: Date] = [:]
     /// The last history Symphony served, for Usage; read while Usage shows.
     @Published private(set) var usageHistory: HistoryPayload?
     /// What the last history read got when it got none, nil after one that did.
@@ -156,8 +164,10 @@ final class SymphonyWindowModel: ObservableObject {
     /// True while Export… reads the records; what went wrong with it, shown under the filters.
     @Published var auditExporting = false
     @Published var auditExportError: String?
-    /// The initiative shown, by issue id; nil shows the first.
-    @Published var initiativeSelection: String?
+    /// The initiative shown, by issue id; nil shows the first. A change reads its story.
+    @Published var initiativeSelection: String? {
+        didSet { if initiativeSelection != oldValue { readInitiativeStoryIfDue() } }
+    }
     /// The views and ticket pages shown, for ⌘[ and ⌘] (P10); its current place is what the window shows.
     @Published var history: NavigationHistory {
         didSet {
@@ -375,6 +385,7 @@ final class SymphonyWindowModel: ObservableObject {
                 readReposIfDue()
                 readInbox()
                 readInitiatives()
+                readInitiativeStoryIfDue()
                 readTicketsIfDue()
                 readHistoryIfDue()
                 readQualityIfDue()
@@ -474,6 +485,7 @@ final class SymphonyWindowModel: ObservableObject {
                 initiativesResult = result
             }
             readingInitiatives = false
+            readInitiativeStoryIfDue()
         }
     }
 
@@ -868,9 +880,11 @@ final class SymphonyWindowModel: ObservableObject {
     /// The destination shown, which the sidebar selects; a page pushed over it keeps it.
     var destination: Destination { selection.destination }
 
-    /// C1's badge on `destination` (TP-1455): Home's what waits on you, Factory's setup problems; unknown counts hide it.
+    /// C1's badge on `destination` (TP-1455): Home's what waits on you, Work's epics waiting on a person (TP-1458),
+    /// Factory's setup problems; unknown counts hide it.
     func badge(_ destination: Destination) -> DestinationBadge? {
-        destination.badge(waitingOnYou: inboxBadge, setup: setupSummary)
+        let epicsWaiting = state.countsKnown ? InitiativesList.waitingOnPerson(initiatives?.initiatives ?? []) : 0
+        return destination.badge(waitingOnYou: inboxBadge, setup: setupSummary, epicsWaiting: epicsWaiting)
     }
 
     /// ⌘F: the Find a Ticket sheet, from any page.
