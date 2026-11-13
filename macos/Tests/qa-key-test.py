@@ -77,8 +77,11 @@ struct ClickPane: View {
                         Text("Popover open")
                             .padding(20)
                             .onAppear { state.last = "Popover" }
-                            .onDisappear { state.last = "Closed" }
                     }
+                    // The popover closing is read from its binding, which a click outside always
+                    // clears. Its content's `onDisappear` is not called on every macOS 26 release
+                    // (26.6 keeps the closed popover's window, off screen).
+                    .onChange(of: state.showing) { _, showing in if !showing { state.last = "Closed" } }
             }
             List(["Alpha", "Beta"], id: \.self, selection: $state.row) { Text("Row \($0)") }
                 .frame(width: 240, height: 70)

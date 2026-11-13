@@ -93,13 +93,16 @@ jobs:
       - name: Select the pinned Xcode
         run: echo "DEVELOPER_DIR=$(sh scripts/ci/xcode-developer-dir.sh)" >> "$GITHUB_ENV"
 
-      # Homebrew's tools and mise's Erlang and Elixir, which the runner's service does not have on
+      # Homebrew's tools the job uses and mise's Erlang and Elixir, which the runner's service does not have on
       # its PATH, and the sources' content-made times, so a build after another branch's stays
       # incremental.
       - name: Prepare the runner
         run: |
-          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
-          export PATH="/opt/homebrew/bin:$PATH"
+          # Only the tools the job names: all of Homebrew's bin would put its Python ahead of Xcode's.
+          tools="$RUNNER_TEMP/tools"; rm -rf "$tools"; mkdir -p "$tools"
+          for tool in mise minisign shellcheck jq socat; do ln -s "/opt/homebrew/bin/$tool" "$tools/$tool"; done
+          echo "$tools" >> "$GITHUB_PATH"
+          export PATH="$tools:$PATH"
           mise trust -q && mise install -q
           echo "$(dirname "$(mise which erl)")" >> "$GITHUB_PATH"
           echo "$(dirname "$(mise which elixir)")" >> "$GITHUB_PATH"
