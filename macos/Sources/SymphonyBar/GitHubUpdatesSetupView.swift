@@ -101,27 +101,19 @@ struct GitHubUpdatesSetupView: View {
     // MARK: Footer
 
     private var footer: some View {
-        HStack(spacing: DesignTokens.Space.s2) {
+        HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
             Button(GitHubUpdatesSetup.cancelTitle, role: .cancel, action: actions.cancel)
                 .keyboardShortcut(.cancelAction)
+                .directorButton()
             Spacer(minLength: DesignTokens.Space.s2)
-            if let problem = setup.continueProblem {
-                Text(problem)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .multilineTextAlignment(.trailing)
-            }
             if setup.page != .relay {
                 Button(GitHubUpdatesSetup.backTitle, action: actions.back)
-                    .disabled(!setup.canGoBack)
+                    .directorButton(disabledReason: setup.canGoBack ? nil : "Wait until the step running now ends.")
             }
+            // Why Continue is off shows under it.
             Button(setup.continueTitle, action: actions.forward)
                 .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
-                .disabled(!setup.canContinue)
-                .help(setup.continueProblem ?? "")
+                .directorButton(.primary, disabledReason: setup.continueProblem)
         }
         .padding(DesignTokens.Space.s3)
     }
@@ -247,8 +239,7 @@ struct GitHubUpdatesSetupRows: View {
                             HStack(spacing: DesignTokens.Space.s2) {
                                 ForEach(row.buttons, id: \.self) { button in
                                     Button(button.title) { perform(button, row.id) }
-                                        .controlSize(.small)
-                                        .buttonStyle(.bordered)
+                                        .directorButton(size: .small)
                                         .accessibilityLabel("\(button.title.replacingOccurrences(of: "…", with: "")), \(row.title)")
                                 }
                             }

@@ -387,6 +387,8 @@ struct TicketsActions {
     var force: (String) -> Void = { _ in }
     var stopForcing: (String) -> Void = { _ in }
     var canForce = true
+    /// Why Force… is off: Symphony is stopped. Nil when it can force.
+    var forceReason: String? { canForce ? nil : TicketList.stoppedReason }
     /// The state payload's phases, for a row's Move to….
     var phases: [MachinePhase] = []
     /// A Move to… pick: its sheet.
@@ -738,23 +740,27 @@ struct TicketViewNameSheetView: View {
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: DesignTokens.Space.s2) {
+            HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                 if working { ProgressView().controlSize(.small).accessibilityLabel("Working") }
                 Spacer(minLength: 0)
                 Button("Cancel", role: .cancel, action: cancel)
                     .keyboardShortcut(.cancelAction)
-                    .disabled(working)
+                    .directorButton(disabledReason: working ? TicketList.waitReason : nil)
                 Button(isSave ? "Save" : "Rename") { confirm(name) }
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!canSend)
+                    .directorButton(.primary, disabledReason: sendReason)
             }
         }
         .padding(DesignTokens.Space.s5)
         .frame(width: 420)
     }
 
-    private var canSend: Bool { !working && TicketViewDraft.canName(name) }
+    private var canSend: Bool { sendReason == nil }
+
+    private var sendReason: String? {
+        if working { return TicketList.waitReason }
+        return TicketViewDraft.canName(name) ? nil : "Give the view a name first."
+    }
 }
 
 /// Presents Save View… and Rename…'s sheet and Delete…'s confirmation.
@@ -884,7 +890,17 @@ struct TicketsTable: View {
             if let identifier = identifiers.first, let row = rows.first(where: { $0.identifier == identifier }) {
                 let tracked = list?.row(identifier) ?? TicketList.Row(row, columns: columns, reference: reference)
                 Button(TicketList.openTitle) { actions.open(identifier) }
-                TicketForceButton(row: tracked, actions: actions)
+                if tracked.forced {
+                    Button(TicketList.stopForcingTitle) { actions.stopForcing(identifier) }
+                } else {
+                    Button {
+                        actions.force(identifier)
+                    } label: {
+                        Text(TicketList.forceTitle)
+                        if let reason = actions.forceReason { Text(reason) }
+                    }
+                    .disabled(actions.forceReason != nil)
+                }
                 if let start = actions.starts[identifier] {
                     StartNowMenuItem(identifier: identifier, start: start) { actions.start(identifier) }
                 }
@@ -1051,21 +1067,6 @@ struct TicketValueChip: View {
     }
 }
 
-/// Force… or Stop Forcing, whichever the row can take.
-private struct TicketForceButton: View {
-    let row: TicketList.Row
-    let actions: TicketsActions
-
-    var body: some View {
-        if row.forced {
-            Button(TicketList.stopForcingTitle) { actions.stopForcing(row.identifier) }
-        } else {
-            Button(TicketList.forceTitle) { actions.force(row.identifier) }
-                .disabled(!actions.canForce)
-        }
-    }
-}
-
 /// The inspector as a drawer beside the table: the selected ticket's facts in short, Open Ticket, Force or Stop
 /// Forcing, and Close.
 struct TicketsDrawer: View {
@@ -1120,10 +1121,17 @@ struct TicketInspectorBody: View {
                 }
             }
             .font(DesignTokens.TypeStyle.secondary.font)
-            HStack(spacing: DesignTokens.Space.s2) {
+            HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                 Button(TicketList.openTitle) { actions.open(row.identifier) }
-                    .buttonStyle(.borderedProminent)
-                TicketForceButton(row: row, actions: actions)
+                    .directorButton(.primary)
+                // Force… or Stop Forcing, whichever the row can take.
+                if row.forced {
+                    Button(TicketList.stopForcingTitle) { actions.stopForcing(row.identifier) }
+                        .directorButton()
+                } else {
+                    Button(TicketList.forceTitle) { actions.force(row.identifier) }
+                        .directorButton(disabledReason: actions.forceReason)
+                }
             }
         }
         .padding(DesignTokens.Space.s4)
@@ -1262,20 +1270,19 @@ struct DispatchPopover: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Divider()
-            HStack(spacing: DesignTokens.Space.s2) {
+            HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                 if working { ProgressView().controlSize(.small).accessibilityLabel("Working") }
                 Spacer(minLength: 0)
                 Button(DispatchControl.forceTitle, action: actions.force)
-                    .disabled(!control.canForce || working)
+                    .directorButton(disabledReason: working ? TicketList.waitReason : control.canForce ? nil : TicketList.stoppedReason)
                 // While an update is under way, Pause and Resume Dispatch wait until it ends.
                 if control.canResume {
                     Button(DispatchControl.resumeTitle, action: actions.resume)
-                        .buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
-                        .disabled(working)
+                        .directorButton(.primary, disabledReason: working ? TicketList.waitReason : nil)
                 } else if control.update == nil {
                     Button(DispatchControl.pauseTitle, action: actions.pause)
-                        .disabled(!control.canPause || working)
+                        .directorButton(disabledReason: working ? TicketList.waitReason : control.canPause ? nil : TicketList.stoppedReason)
                 }
             }
         }
@@ -1319,7 +1326,7 @@ struct PauseSheetView: View {
 
     var body: some View {
         DispatchSheet(title: PauseSheet.title, happens: PauseSheet.happens, stays: PauseSheet.stays, error: error,
-                      working: working, verb: PauseSheet.buttonTitle, canSend: true, cancel: cancel, confirm: { confirm(reason) }) {
+                      working: working, verb: PauseSheet.buttonTitle, sendReason: nil, cancel: cancel, confirm: { confirm(reason) }) {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                 TextField(PauseSheet.reasonLabel, text: $reason, prompt: Text(PauseSheet.reasonPrompt))
                     .textFieldStyle(.roundedBorder)
@@ -1351,7 +1358,9 @@ struct ForceSheetView: View {
 
     var body: some View {
         DispatchSheet(title: ForceSheet.title, happens: ForceSheet.skips, stays: ForceSheet.keeps, error: error, working: working,
-                      verb: ForceSheet.buttonTitle, canSend: ForceSheet.canForce(input, in: list), cancel: cancel, confirm: { confirm(input) }) {
+                      verb: ForceSheet.buttonTitle,
+                      sendReason: ForceSheet.canForce(input, in: list) ? nil : "Name a ticket that isn't forced yet, such as SHOP-301.",
+                      cancel: cancel, confirm: { confirm(input) }) {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 TextField(ForceSheet.fieldLabel, text: $input, prompt: Text(ForceSheet.fieldPrompt))
                     .textFieldStyle(.roundedBorder)
@@ -1364,7 +1373,7 @@ struct ForceSheetView: View {
                             Button { input = row.identifier } label: {
                                 Text("\(row.identifier)  \(row.titleText)").lineLimit(1)
                             }
-                            .buttonStyle(.link)
+                            .directorButton(.quiet, size: .small)
                         }
                     }
                     .font(DesignTokens.TypeStyle.secondary.font)
@@ -1391,7 +1400,8 @@ private struct DispatchSheet<Options: View>: View {
     let error: String?
     let working: Bool
     let verb: String
-    let canSend: Bool
+    /// Why the verb is off, nil when it can send.
+    let sendReason: String?
     let cancel: () -> Void
     let confirm: () -> Void
     @ViewBuilder var options: Options
@@ -1410,16 +1420,15 @@ private struct DispatchSheet<Options: View>: View {
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: DesignTokens.Space.s2) {
+            HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                 if working { ProgressView().controlSize(.small).accessibilityLabel("Working") }
                 Spacer(minLength: 0)
                 Button("Cancel", role: .cancel, action: cancel)
                     .keyboardShortcut(.cancelAction)
-                    .disabled(working)
+                    .directorButton(disabledReason: working ? TicketList.waitReason : nil)
                 Button(verb, action: confirm)
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(working || !canSend)
+                    .directorButton(.primary, disabledReason: working ? TicketList.waitReason : sendReason)
             }
         }
         .padding(DesignTokens.Space.s5)

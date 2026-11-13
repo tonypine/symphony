@@ -102,6 +102,10 @@ public struct TicketList: Equatable {
     public static let noMatchTitle = "No tickets match."
     public static let forceTitle = "Force…"
     public static let stopForcingTitle = "Stop Forcing"
+    /// Why a button is off while its call is on its way.
+    public static let waitReason = "Wait until Symphony answers."
+    /// Why Force… and Pause Dispatch… are off while Symphony is stopped.
+    public static let stoppedReason = "Symphony is stopped. Start it first."
     public static let openTitle = "Open Ticket"
 
     /// Every tracked ticket in the repo scope, by situation kind then oldest first.

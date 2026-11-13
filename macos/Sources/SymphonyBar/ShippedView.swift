@@ -185,7 +185,8 @@ private struct ShippedRowView: View {
             }
             Spacer(minLength: DesignTokens.Space.s2)
             if let url = row.prURL, let title = row.prTitle {
-                LinkButton(title: title) { openURL(url) }
+                Button(title) { openURL(url) }
+                    .directorButton(.quiet, size: .small)
                     .help("Open \(title) on GitHub")
                     .accessibilityLabel("Open \(title) on GitHub")
             }
@@ -199,19 +200,6 @@ private struct ShippedRowView: View {
             }
         }
         .accessibilityLabel(row.accessibilityLabel)
-    }
-}
-
-/// A text button in the accent color, drawn by SwiftUI so it also renders offscreen.
-private struct LinkButton: View {
-    let title: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            Text(title).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(Color.accentColor)
-        }
-        .buttonStyle(.plain)
     }
 }
 
@@ -306,11 +294,13 @@ private struct LearningRowView: View {
                     .foregroundStyle(.secondary)
                 Spacer(minLength: DesignTokens.Space.s2)
                 if let identifier = row.record.issueIdentifier {
-                    LinkButton(title: "Open \(identifier)") { openTicket(identifier) }
+                    Button("Open \(identifier)") { openTicket(identifier) }
+                        .directorButton(.quiet, size: .small)
                         .help("Open the ticket page of \(identifier)")
                 }
                 if let url = row.record.prURL, let title = row.record.prTitle {
-                    LinkButton(title: title) { openURL(url) }
+                    Button(title) { openURL(url) }
+                        .directorButton(.quiet, size: .small)
                         .help("Open \(title) on GitHub")
                         .accessibilityLabel("Open \(title) on GitHub")
                 }

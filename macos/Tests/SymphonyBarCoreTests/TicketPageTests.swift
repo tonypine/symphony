@@ -717,6 +717,7 @@ final class StopRunSheetTests: XCTestCase {
         XCTAssertEqual(sheet.verb, "Move to Backlog")
         XCTAssertTrue(sheet.happens(alsoBacklog: true).hasPrefix("No agent runs on API-7 right now"))
         XCTAssertFalse(sheet.canSend(alsoBacklog: false))
+        XCTAssertEqual(StopRunSheet.nothingToSendReason, "No run is working. Tick Also move to Backlog to move the ticket.")
         XCTAssertEqual(sheet.actions(alsoBacklog: true, note: "flaky"), [.backlog("API-7", note: "flaky")])
         XCTAssertEqual(sheet.actions(alsoBacklog: false, note: ""), [])
     }

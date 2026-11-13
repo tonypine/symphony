@@ -72,6 +72,12 @@ public struct InboxToolbar: Equatable {
     public struct Button: Equatable {
         public var command: InboxCommand
         public var enabled: Bool
+
+        /// Why the button is off, in plain words; nil while it is on.
+        public var reason: String? {
+            guard !enabled else { return nil }
+            return command == .move(.sendDecisions) ? "Answer every question first." : "Write your answer first."
+        }
     }
 
     public var buttons: [Button]
@@ -483,8 +489,13 @@ public struct ConsequenceSheet: Equatable, Identifiable {
     }
 
     /// Whether the sheet's button is on for `reason`; a blank write-in has nothing to send.
-    public func canSend(reason: String) -> Bool {
-        (!isWriteIn || quote != nil) && (!needsReason || !reason.trimmingWhitespace().isEmpty)
+    public func canSend(reason: String) -> Bool { sendReason(reason: reason) == nil }
+
+    /// Why the sheet's button is off for `reason`, in plain words; nil when it can send.
+    public func sendReason(reason: String) -> String? {
+        if isWriteIn, quote == nil { return "Write your answer first." }
+        if needsReason, reason.trimmingWhitespace().isEmpty { return "Write a reason first." }
+        return nil
     }
 
     /// The control request the sheet's button sends, nil while a required reason is missing.

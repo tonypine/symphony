@@ -80,13 +80,12 @@ struct GitHubUpdatesCardView: View {
             }
             if let primary = card.primary {
                 Button(primary.title) { actions.perform(primary) }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(primary == .restartRelay && actions.restarting)
+                    .directorButton(.primary, disabledReason: primary == .restartRelay && actions.restarting ? "The relay is restarting." : nil)
                     .fixedSize()
             }
             ForEach(card.secondary, id: \.self) { action in
                 Button(action.title) { actions.perform(action) }
-                    .buttonStyle(.bordered)
+                    .directorButton()
                     .fixedSize()
             }
         }
@@ -166,17 +165,16 @@ private struct GitHubUpdatesDetails: View {
             interval("Safety-net check every", minutes: $safetyNet)
             interval("Warn me after no updates for", minutes: $silenceAlert)
             if changed {
-                HStack(spacing: DesignTokens.Space.s2) {
+                HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                     Spacer(minLength: 0)
                     if saving { ProgressView().controlSize(.small).accessibilityLabel("Saving") }
                     Button("Revert") {
                         safetyNet = card.safetyNetMinutes
                         silenceAlert = card.silenceAlertMinutes
                     }
-                    .disabled(saving)
+                    .directorButton(disabledReason: saving ? TicketList.waitReason : nil)
                     Button("Save") { save() }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(saving)
+                        .directorButton(.primary, disabledReason: saving ? TicketList.waitReason : nil)
                 }
             }
         }
@@ -233,18 +231,17 @@ struct GitHubUpdatesSheetView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: DesignTokens.Space.s2) {
+            HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                 if sheet.isWorking {
                     ProgressView().controlSize(.small).accessibilityLabel("Working")
                 }
                 Spacer(minLength: 0)
                 Button(sheet.cancelTitle, role: .cancel, action: cancel)
                     .keyboardShortcut(.cancelAction)
-                    .disabled(sheet.isWorking)
+                    .directorButton(disabledReason: sheet.isWorking ? TicketList.waitReason : nil)
                 Button(sheet.confirmTitle, role: sheet.isDestructive ? .destructive : nil, action: confirm)
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!sheet.canConfirm)
+                    .directorButton(sheet.isDestructive ? .destructiveFilled : .primary, disabledReason: sheet.confirmReason)
             }
         }
         .padding(DesignTokens.Space.s5)

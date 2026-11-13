@@ -652,11 +652,7 @@ public struct EmptyState: View {
             if showsSpinner { ProgressView().controlSize(.small) }
         } actions: {
             ForEach(Array(actions.enumerated()), id: \.offset) { index, action in
-                if index == 0 {
-                    Button(action.title, action: action.perform).buttonStyle(.borderedProminent)
-                } else {
-                    Button(action.title, action: action.perform)
-                }
+                Button(action.title, action: action.perform).directorButton(index == 0 ? .primary : .secondary)
             }
         }
     }

@@ -1228,37 +1228,6 @@ struct WrappingStack: Layout {
 
 // MARK: - TP-1330: Start now
 
-/// Start Now: disabled, its tooltip Symphony's reason, whenever the payload says the start would be refused; a spinner
-/// and "Starting…" while the call is on its way.
-struct StartNowButton: View {
-    let identifier: String
-    let start: TicketStart
-    var starting = false
-    let action: () -> Void
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
-
-    var body: some View {
-        Button(action: action) {
-            if starting {
-                HStack(spacing: DesignTokens.Space.s1) {
-                    if offscreenSnapshot {
-                        // `ImageRenderer` can't draw a spinner: a still one stands in.
-                        Image(systemName: "progress.indicator").accessibilityHidden(true)
-                    } else {
-                        ProgressView().controlSize(.small).accessibilityHidden(true)
-                    }
-                    Text(TicketStart.startingTitle)
-                }
-            } else {
-                Text(TicketStart.title)
-            }
-        }
-        .disabled(!start.allowed || starting)
-        .help(start.help(identifier))
-        .accessibilityLabel(starting ? "Starting \(identifier)" : start.accessibilityLabel(identifier))
-    }
-}
-
 /// A Tickets row's Start Now entry: disabled with Symphony's reason under its title when the start would be refused.
 struct StartNowMenuItem: View {
     let identifier: String
@@ -1355,18 +1324,17 @@ struct MoveSheetView: View {
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: DesignTokens.Space.s2) {
+            HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                 if working {
                     ProgressView().controlSize(.small).accessibilityLabel("Working")
                 }
                 Spacer(minLength: 0)
                 Button("Cancel", role: .cancel, action: cancel)
                     .keyboardShortcut(.cancelAction)
-                    .disabled(working)
+                    .directorButton(disabledReason: working ? TicketList.waitReason : nil)
                 Button(sheet.verb) { confirm(note) }
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(working)
+                    .directorButton(.primary, disabledReason: working ? TicketList.waitReason : nil)
             }
         }
         .padding(DesignTokens.Space.s5)
@@ -1397,6 +1365,12 @@ struct MoveSheetPresenter: ViewModifier {
 /// C17: the Stop Run sheet. The title is the question; then what happens, what stays the same, Also move to Backlog
 /// with its note, and Cancel with Stop Run in the destructive style.
 struct StopRunSheetView: View {
+    /// Why the verb is off: the call is on its way, or nothing runs and the ticket isn't moving to Backlog either.
+    private var sendReason: String? {
+        if working { return TicketList.waitReason }
+        return sheet.canSend(alsoBacklog: alsoBacklog) ? nil : StopRunSheet.nothingToSendReason
+    }
+
     let sheet: StopRunSheet
     let working: Bool
     let error: String?
@@ -1446,19 +1420,17 @@ struct StopRunSheetView: View {
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: DesignTokens.Space.s2) {
+            HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                 if working {
                     ProgressView().controlSize(.small).accessibilityLabel("Working")
                 }
                 Spacer(minLength: 0)
                 Button("Cancel", role: .cancel, action: cancel)
                     .keyboardShortcut(.cancelAction)
-                    .disabled(working)
+                    .directorButton(disabledReason: working ? TicketList.waitReason : nil)
                 Button(sheet.verb, role: sheet.isRunning ? .destructive : nil) { confirm(alsoBacklog, note) }
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .tint(sheet.isRunning ? DesignTokens.Status.problem.tint : nil)
-                    .disabled(working || !sheet.canSend(alsoBacklog: alsoBacklog))
+                    .directorButton(sheet.isRunning ? .destructiveFilled : .primary, disabledReason: sendReason)
             }
         }
         .padding(DesignTokens.Space.s5)

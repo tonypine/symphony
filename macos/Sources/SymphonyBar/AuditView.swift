@@ -236,12 +236,10 @@ private struct AuditFilterBar: View {
             .pickerStyle(.menu)
             .fixedSize()
             if let ticket = filter.ticket {
-                Button {
+                Button("Ticket \(ticket)") {
                     filter.ticket = nil
-                } label: {
-                    Label("Ticket \(ticket)", systemImage: "xmark.circle.fill")
                 }
-                .buttonStyle(.bordered)
+                .directorButton(size: .small, glyph: "xmark.circle.fill")
                 .help("Show every ticket's records")
                 .accessibilityLabel("Filtered to \(ticket). Remove the filter")
             }
@@ -388,7 +386,7 @@ struct AuditInspectorBody: View {
             }
             if let identifier = row.record.issueIdentifier {
                 Button("Open \(identifier)") { openTicket(identifier) }
-                    .buttonStyle(.borderedProminent)
+                    .directorButton(.primary)
             }
         }
         .padding(DesignTokens.Space.s4)

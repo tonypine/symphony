@@ -585,6 +585,8 @@ public enum DesignTokens {
         public static let reducedDuration: Double = 0.01
         /// What a pressed button settles to.
         public static let pressScale: Double = 0.97
+        /// What a pressed icon button settles to (the catalog's `.icon-btn:active`).
+        public static let iconPressScale: Double = 0.92
         /// What a pressed card or option card settles to.
         public static let cardPressScale: Double = 0.99
         /// What a pressed row settles to.
@@ -695,6 +697,28 @@ public enum DesignTokens {
             case .large: 14
             }
         }
+
+        /// A button's leading glyph, in points (the catalog's `--gl`).
+        public var glyphSize: Double {
+            switch self {
+            case .small: 12
+            case .medium: 14
+            case .large: 16
+            }
+        }
+
+        /// An icon button's glyph, in points: 2 pt over a button's.
+        public var iconGlyphSize: Double { glyphSize + 2 }
+
+        /// The gap between a control's glyph and its label, and between a control and the reason under it.
+        public static let glyphGap: Double = 6
+
+        /// A button's hairline edge.
+        public static let edgeWidth: Double = 1
+
+        /// How much a filled button brightens under the pointer, and darkens when pressed.
+        public static let hoverBrightness: Double = 0.06
+        public static let pressedBrightness: Double = -0.08
     }
 
     /// What a control, row or card shows: under the pointer, pressed, selected, focused from the keyboard, or

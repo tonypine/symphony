@@ -79,19 +79,20 @@ struct ConsequenceSheetView: View {
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: DesignTokens.Space.s2) {
+            HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                 if working {
                     ProgressView().controlSize(.small).accessibilityLabel("Working")
                 }
                 Spacer(minLength: 0)
                 Button("Cancel", role: .cancel, action: cancel)
                     .keyboardShortcut(.cancelAction)
-                    .disabled(working)
+                    .directorButton(disabledReason: working ? TicketList.waitReason : nil)
                 Button(sheet.verb, role: sheet.isDestructive ? .destructive : nil) { confirm(reason) }
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .tint(sheet.isDestructive ? DesignTokens.Status.problem.tint : nil)
-                    .disabled(working || !sheet.canSend(reason: reason))
+                    .directorButton(
+                        sheet.isDestructive ? .destructiveFilled : .primary,
+                        disabledReason: working ? TicketList.waitReason : sheet.sendReason(reason: reason)
+                    )
             }
         }
         .padding(DesignTokens.Space.s5)

@@ -137,10 +137,13 @@ public struct SetupFixSheet: Equatable, Identifiable {
     public var isWorking: Bool { phase == .working }
 
     /// The verb (or Try Again) is off while the fix is on its way, and for a config edit the app can't make.
-    public var canConfirm: Bool {
-        if isWorking { return false }
-        if case .config(nil) = kind { return false }
-        return true
+    public var canConfirm: Bool { confirmReason == nil }
+
+    /// Why the verb is off, in plain words; nil while it is on.
+    public var confirmReason: String? {
+        if isWorking { return TicketList.waitReason }
+        if case .config(nil) = kind { return "The app can't make this edit. Change symphony.yml by hand." }
+        return nil
     }
 
     public mutating func start() {
