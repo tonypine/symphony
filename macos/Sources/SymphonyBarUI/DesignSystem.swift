@@ -462,6 +462,7 @@ public struct StatusDot: View {
     let live: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.liveDurations) private var onLayer
+    @State private var ringing = false
 
     public init(_ status: DesignTokens.Status, size: DesignTokens.StatusDot.Size = .regular, live: Bool = false) {
         self.status = status
@@ -493,27 +494,22 @@ public struct StatusDot: View {
         } else {
             Circle()
                 .fill(status.tint)
-                .keyframeAnimator(initialValue: RingFrame(), repeating: true) { content, frame in
-                    content.scaleEffect(frame.scale).opacity(frame.opacity)
-                } keyframes: { _ in
-                    let reach = DesignTokens.StatusDot.ringPeriod * DesignTokens.StatusDot.ringReach
-                    let rest = DesignTokens.StatusDot.ringPeriod - reach
-                    KeyframeTrack(\.scale) {
-                        CubicKeyframe(DesignTokens.StatusDot.ringScale, duration: reach)
-                        LinearKeyframe(DesignTokens.StatusDot.ringScale, duration: rest)
-                    }
-                    KeyframeTrack(\.opacity) {
-                        CubicKeyframe(0, duration: reach)
-                        LinearKeyframe(0, duration: rest)
-                    }
+                .scaleEffect(ringing ? DesignTokens.StatusDot.ringScale : 1)
+                .opacity(ringing ? 0 : DesignTokens.StatusDot.ringOpacity)
+                .onAppear {
+                    withAnimation(Self.ringAnimation) { ringing = true }
                 }
         }
     }
 
-    struct RingFrame {
-        var scale: Double = 1
-        var opacity: Double = DesignTokens.StatusDot.ringOpacity
-    }
+    /// The ring off the layer: it waits out the rest of the period behind the dot, then grows and fades over its
+    /// reach, once per period. A transaction that disables animations (a test, a snapshot) leaves it still.
+    static let ringAnimation: Animation = {
+        let reach = DesignTokens.StatusDot.ringPeriod * DesignTokens.StatusDot.ringReach
+        return Animation.easeOut(duration: reach)
+            .delay(DesignTokens.StatusDot.ringPeriod - reach)
+            .repeatForever(autoreverses: false)
+    }()
 }
 
 /// The catalog's Keyboard hint (`.kbd-hint`, TP-1506): the keys of a shortcut as key caps, on the content surface
