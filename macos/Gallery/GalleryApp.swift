@@ -228,6 +228,8 @@ struct GalleryBoard: View {
 func shortName(_ variation: GalleryVariation, in entry: GalleryEntry) -> String {
     let prefix = entry.prefixes.filter { variation.id.hasPrefix($0) }.max { $0.count < $1.count } ?? ""
     let rest = variation.id.dropFirst(prefix.count).replacingOccurrences(of: "-", with: " ").trimmingCharacters(in: .whitespaces)
+    // A component whose cases are one cell (`badge-cases`) is named by the component: two of them share a board.
+    if rest == "cases" { return prefix.replacingOccurrences(of: "-", with: " ").trimmingCharacters(in: .whitespaces) }
     return rest.isEmpty ? variation.id.replacingOccurrences(of: "-", with: " ") : rest
 }
 
