@@ -76,7 +76,7 @@ final class TicketPageLayoutTests: XCTestCase {
         let questions = TicketPage.questions(of: page.identifier, in: try inbox())
 
         XCTAssertEqual(page.situation?.kind, .you)
-        XCTAssertEqual(page.openQuestions, ["How should the paused line's times read?"])
+        XCTAssertEqual(page.openQuestions, ["How should the times on the paused line read in dark mode?"])
         XCTAssertEqual(questions.count, 1)
         XCTAssertEqual(questions.first?.options.map(\.label), ["For how long", "Since when"])
         let rail = TicketActionRail(identifier: page.identifier, moves: try XCTUnwrap(page.moves))
@@ -86,10 +86,10 @@ final class TicketPageLayoutTests: XCTestCase {
         let line = DecisionsLine(openQuestions: page.openQuestions, questions: questions)
         XCTAssertTrue(line.waiting)
         XCTAssertEqual(line.title, "A question waits on you")
-        XCTAssertEqual(line.detail, "How should the paused line's times read?")
+        XCTAssertEqual(line.detail, "How should the times on the paused line read in dark mode?")
         XCTAssertNil(line.answerReason)
-        XCTAssertEqual(line.accessibilityLabel, "A question waits on you: How should the paused line's times read?")
-        XCTAssertEqual(page.sheetSubtitle, "TP-1245 · The paused line's times")
+        XCTAssertEqual(line.accessibilityLabel, "A question waits on you: How should the times on the paused line read in dark mode?")
+        XCTAssertEqual(page.sheetSubtitle, "TP-1245 · The paused line on the ticket page")
     }
 
     func testAShippedTicketReadsDoneWithItsMergedPullRequest() throws {

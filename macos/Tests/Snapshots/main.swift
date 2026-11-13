@@ -1748,6 +1748,9 @@ func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     print("wrote \(url.path)")
 }
 
+// `make design-sheet` runs this program for its two phases (DesignSheet.swift) in place of the snapshots.
+if MainActor.assumeIsolated({ runDesignSheetPhase() }) { exit(0) }
+
 MainActor.assumeIsolated {
     for (scheme, suffix) in [(ColorScheme.light, "light"), (.dark, "dark")] {
         // The shared styles (TP-1438): the control sizes, each state of a row, a card and the buttons (a selected

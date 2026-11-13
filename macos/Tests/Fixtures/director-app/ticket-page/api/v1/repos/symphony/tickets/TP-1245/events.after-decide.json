@@ -708,11 +708,11 @@
       },
       "payload": {
         "question_id": "q-3",
-        "title": "How should the paused line's times read?",
+        "title": "How should the times on the paused line read in dark mode?",
         "question": "Should the paused line say since when, or for how long?"
       },
       "summary": {
-        "title": "Asked you: How should the paused line's times read?",
+        "title": "Asked you: How should the times on the paused line read in dark mode?",
         "detail": "Two options, one recommended"
       },
       "artifacts": [],
@@ -751,7 +751,7 @@
         "answer": "For how long"
       },
       "summary": {
-        "title": "Answered: How should the paused line's times read?",
+        "title": "Answered: How should the times on the paused line read in dark mode?",
         "detail": "For how long"
       },
       "artifacts": [],

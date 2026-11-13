@@ -10,7 +10,7 @@
   "generated_at": "2026-10-08T10:27:00Z",
   "items": [
     {
-      "ask": "How should the paused line's times read?",
+      "ask": "How should the times on the paused line read in dark mode?",
       "context": {
         "blocked_by": [],
         "blocks": [],
@@ -57,16 +57,16 @@
             ]
           }
         ],
-        "question": "TP-1245 (The paused line's times) shows when a pause started. Should the paused line say since when the ticket is paused, or for how long?",
+        "question": "TP-1245 (The paused line on the ticket page) shows when a pause started. Should the paused line say since when the ticket is paused, or for how long?",
         "recommendation_reason": "A length reads the same at any hour and needs no date.",
         "requested_at": "2026-10-08T10:04:31Z",
         "steps": [],
-        "title": "How should the paused line's times read?",
+        "title": "How should the times on the paused line read in dark mode?",
         "unblocks": "TP-1245's next run",
         "why": "QA found the line hard to read when a pause is older than a day.\n\nA clock time needs the date beside it after midnight; a length reads the same at any hour."
       },
       "state": "Rework",
-      "title": "The paused line's times",
+      "title": "The paused line on the ticket page",
       "url": "https://linear.app/acme/issue/TP-1245",
       "waiting_seconds": 1349,
       "waiting_since": "2026-10-08T10:04:31Z"
