@@ -44,13 +44,13 @@ pkill -x Terminal 2>/dev/null || true
 
 echo "== a screen of ${VM_SCREEN:=1920x1200}"
 # The VM tool sizes the display it offers (`tart set <vm> --display`), but the guest keeps the mode it last used, and a
-# fresh image starts at 1024x768: smaller than the app's laptop size. The mode is chosen here, in points with no
-# scaling, so a screenshot is as many pixels as the screen is points.
+# fresh image starts at 1024x768: smaller than the app's laptop size. The mode is chosen here, at two pixels a
+# point as a Mac's own display has: at one, text and hairlines are soft, and a fault of half a point cannot be seen.
 export PATH="/opt/homebrew/bin:$PATH"
 command -v displayplacer >/dev/null || brew install -q displayplacer >/dev/null 2>&1 || true
 if command -v displayplacer >/dev/null; then
   screen=$(displayplacer list | awk '/Persistent screen id/{print $4; exit}')
-  displayplacer "id:$screen res:$VM_SCREEN hz:60 color_depth:7 scaling:off" >/dev/null 2>&1 \
+  displayplacer "id:$screen res:$VM_SCREEN hz:60 color_depth:7 scaling:on" >/dev/null 2>&1 \
     || echo "!! the display offers no $VM_SCREEN mode: set it on the host (tart set <vm> --display $VM_SCREEN) and restart the VM"
 else
   echo "!! displayplacer is not installed; the screen keeps its size"

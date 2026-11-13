@@ -119,9 +119,11 @@ func runGallery() {
     app.run()
 }
 
-/// Cells placed left to right, wrapping at `width`: a board of small things fills its width instead of running down
-/// one column.
-struct FlowLayout: Layout {
+/// Cells in columns of one width, each cell under the shortest column so far, as a pinboard lays its cards out:
+/// variations of about one width and different heights fill the board without the gaps a row-by-row grid leaves.
+/// The columns are as wide as the widest cell, and as many as fit in `width`; a cell wider than `width` (a screen)
+/// makes one column.
+struct MasonryLayout: Layout {
     let width: CGFloat
     let spacing: CGFloat
 
@@ -130,38 +132,38 @@ struct FlowLayout: Layout {
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        for (index, point) in arrange(subviews).points.enumerated() {
-            subviews[index].place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), proposal: .unspecified)
+        let arranged = arrange(subviews)
+        for (index, point) in arranged.points.enumerated() {
+            subviews[index].place(
+                at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y),
+                proposal: ProposedViewSize(width: arranged.column, height: nil)
+            )
         }
     }
 
-    private func arrange(_ subviews: Subviews) -> (size: CGSize, points: [CGPoint]) {
+    private func arrange(_ subviews: Subviews) -> (size: CGSize, points: [CGPoint], column: CGFloat) {
+        let column = subviews.map { $0.sizeThatFits(.unspecified).width }.max() ?? 0
+        let count = max(1, Int((width + spacing) / (column + spacing)))
+        var heights = [CGFloat](repeating: 0, count: count)
         var points: [CGPoint] = []
-        var x: CGFloat = 0, y: CGFloat = 0, row: CGFloat = 0, widest: CGFloat = 0
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x > 0, x + size.width > width {
-                x = 0
-                y += row + spacing
-                row = 0
-            }
-            points.append(CGPoint(x: x, y: y))
-            x += size.width + spacing
-            row = max(row, size.height)
-            widest = max(widest, x - spacing)
+            let shortest = heights.indices.min { heights[$0] < heights[$1] } ?? 0
+            points.append(CGPoint(x: CGFloat(shortest) * (column + spacing), y: heights[shortest]))
+            heights[shortest] += subview.sizeThatFits(ProposedViewSize(width: column, height: nil)).height + spacing
         }
-        return (CGSize(width: widest, height: y + row), points)
+        let used = min(count, subviews.count)
+        return (CGSize(width: CGFloat(used) * column + CGFloat(max(used - 1, 0)) * spacing, height: max((heights.max() ?? 0) - spacing, 0)), points, column)
     }
 }
 
-/// An entry's board: every variation in a cell under its name, the cells side by side and wrapping at `width`.
+/// An entry's board: every variation in a cell under its name, the cells in columns that fill `width`.
 struct GalleryBoard: View {
     let entry: GalleryEntry
     let variations: [GalleryVariation]
     let width: CGFloat
 
     var body: some View {
-        FlowLayout(width: width, spacing: DesignTokens.Space.s5) {
+        MasonryLayout(width: width, spacing: DesignTokens.Space.s5) {
             ForEach(variations) { variation in
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                     Text(name(variation))
@@ -170,6 +172,7 @@ struct GalleryBoard: View {
                     variation.view
                 }
                 .padding(DesignTokens.Space.s4)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous))
                 .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous).strokeBorder(DesignTokens.Surface.separator.color))
                 .accessibilityElement(children: .contain)
@@ -196,29 +199,25 @@ func shoot(_ entry: GalleryEntry, into folder: URL) {
     // cells into the next picture. A variation wider than it (a screen) gets a picture to itself.
     let limit = CGSize(width: 1600, height: 2000)
     let spacing = DesignTokens.Space.s5
-    var pages: [[GalleryVariation]] = []
-    var x: CGFloat = 0, y: CGFloat = 0, row: CGFloat = 0
-    var lastAlone = false
-    for variation in variations(of: entry) {
+    let cells = variations(of: entry).map { variation -> (GalleryVariation, CGSize) in
         var size = NSHostingView(rootView: variation.view).fittingSize
         size.width += 2 * DesignTokens.Space.s4
         size.height += 2 * DesignTokens.Space.s4 + 22
-        let alone = size.width > limit.width
-        if x > 0, x + size.width > limit.width {
-            x = 0
-            y += row + spacing
-            row = 0
-        }
-        if pages.isEmpty || alone || lastAlone || y + size.height > limit.height {
+        return (variation, size)
+    }
+    let column = cells.map(\.1.width).max() ?? limit.width
+    let columns = CGFloat(max(1, Int((limit.width + spacing) / (column + spacing))))
+    var pages: [[GalleryVariation]] = []
+    var filled: CGFloat = 0
+    for (variation, size) in cells {
+        // The cells share the page's columns evenly enough that their heights, over the columns, are its height.
+        let height = (size.height + spacing) / columns
+        if pages.isEmpty || filled + height > limit.height {
             pages.append([])
-            x = 0
-            y = 0
-            row = 0
+            filled = 0
         }
         pages[pages.count - 1].append(variation)
-        x += size.width + spacing
-        row = max(row, size.height)
-        lastAlone = alone
+        filled += height
     }
     for (index, page) in pages.enumerated() {
         for (scheme, suffix) in [(ColorScheme.light, "light"), (.dark, "dark")] {
@@ -367,13 +366,17 @@ struct GalleryView: View {
 
     private var stage: some View {
         GeometryReader { geometry in
-            ScrollView([.horizontal, .vertical]) {
+            let width = max(geometry.size.width - 2 * DesignTokens.Space.s8, 320)
+            // A board scrolls down. It scrolls sideways too only when a variation is wider than the stage (a screen
+            // at the desktop's width).
+            ScrollView(entry?.kind == .screen ? [.horizontal, .vertical] : .vertical) {
                 if let entry {
-                    GalleryBoard(entry: entry, variations: variations(of: entry), width: max(geometry.size.width - 2 * DesignTokens.Space.s8 - DesignTokens.Space.s5, 320))
-                        .frame(minWidth: geometry.size.width, minHeight: geometry.size.height, alignment: .topLeading)
+                    GalleryBoard(entry: entry, variations: variations(of: entry), width: width)
+                        .frame(maxWidth: entry.kind == .screen ? nil : .infinity, alignment: .topLeading)
                         .id(entry.id)
                 }
             }
+            .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
         .accessibilityLabel("Stage")
     }
