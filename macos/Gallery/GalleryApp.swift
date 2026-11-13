@@ -243,9 +243,13 @@ func shoot(_ entry: GalleryEntry, into folder: URL) {
 struct GalleryView: View {
     @State private var picked: String?
     @State private var dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+    /// The list of entries. Opened on one entry (`--open`), the gallery starts with the list folded away, so a
+    /// picture of the screen is the board and nothing beside it.
+    @State private var showsEntries: Bool
 
     init(first: String?) {
         _picked = State(initialValue: first ?? galleryEntries.first?.id)
+        _showsEntries = State(initialValue: first == nil)
     }
 
     private var entry: GalleryEntry? { galleryEntries.first { $0.id == picked } }
@@ -253,7 +257,7 @@ struct GalleryView: View {
 
     var body: some View {
         HStack(spacing: DesignTokens.Space.s3) {
-            sidebar
+            if showsEntries { sidebar }
             VStack(spacing: DesignTokens.Space.s3) {
                 bar
                 stage
@@ -326,6 +330,14 @@ struct GalleryView: View {
 
     private var bar: some View {
         HStack(spacing: DesignTokens.Space.s3) {
+            Button { showsEntries.toggle() } label: {
+                Image(systemName: "sidebar.left")
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    .padding(DesignTokens.Space.s1)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(showsEntries ? "Hide the entries" : "Show the entries")
             Text(entry.map { $0.kind == .component ? "Components" : "Screens" } ?? "")
                 .textStyle(.body)
                 .foregroundStyle(DesignTokens.TextColor.secondary.color)

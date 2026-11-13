@@ -27,7 +27,7 @@ struct GalleryEntry {
 let galleryEntries: [GalleryEntry] = [
     // Shared components.
     GalleryEntry(
-        id: "button", title: "Button", kind: .component, prefixes: ["button-", "style-button-", "style-control-"],
+        id: "button", title: "Button", kind: .component, prefixes: ["button-"],
         files: ["SymphonyBarUI/InteractionStyles.swift"]),
     GalleryEntry(
         id: "icon-button", title: "Icon button", kind: .component, prefixes: ["icon-button-"],

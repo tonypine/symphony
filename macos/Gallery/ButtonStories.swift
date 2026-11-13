@@ -40,6 +40,56 @@ func buttonStory(
     return AnyView(ButtonFace(label: Text(label), kind: kind, size: size, glyph: glyph, state: state, reduceMotion: false))
 }
 
+/// Every kind in every state: a row a kind, a column a state.
+@MainActor
+func buttonKindsAndStates() -> AnyView {
+    let kinds: [(ButtonKind, String)] = [
+        (.primary, "Primary"), (.secondary, "Secondary"), (.destructive, "Destructive"), (.destructiveFilled, "Destructive, in a sheet"), (.quiet, "Quiet"),
+    ]
+    let states: [(DesignTokens.Interaction, String)] = [(.rest, "Rest"), (.hover, "Hover"), (.press, "Pressed"), (.focus, "Focused"), (.off, "Disabled")]
+    return AnyView(
+        Grid(alignment: .leading, horizontalSpacing: DesignTokens.Space.s4, verticalSpacing: DesignTokens.Space.s3) {
+            GridRow {
+                Text("")
+                ForEach(states, id: \.1) { state in rowLabel(state.1) }
+            }
+            ForEach(Array(kinds.enumerated()), id: \.offset) { _, kind in
+                GridRow {
+                    rowLabel(kind.1)
+                    ForEach(states, id: \.1) { state in
+                        ButtonFace(label: Text("Approve Plan"), kind: kind.0, size: .medium, state: state.0, reduceMotion: false).fixedSize()
+                    }
+                }
+            }
+        }
+    )
+}
+
+/// What the grid of kinds and states does not show: a glyph beside the label, a disabled button saying why, and a
+/// label too long for its place.
+@MainActor
+func buttonOtherCases() -> AnyView {
+    AnyView(
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
+            rowLabel("With a glyph")
+            HStack(spacing: DesignTokens.Space.s3) {
+                ButtonFace(label: Text("Run Again"), kind: .secondary, glyph: catalogGlyphs["refresh"], state: .rest, reduceMotion: false).fixedSize()
+                ButtonFace(label: Text("Open Pull Request"), kind: .primary, glyph: catalogGlyphs["pr"], state: .rest, reduceMotion: false).fixedSize()
+            }
+            rowLabel("Disabled, saying why")
+            HStack(alignment: .top, spacing: DesignTokens.Space.s5) {
+                Button("Approve and Merge…") {}.directorButton(.primary, disabledReason: buttonReason)
+                Button("Restart…") {}.directorButton(.secondary, disabledReason: "A run is still finishing. Wait for it, or stop it first.")
+            }
+            rowLabel("A label longer than its place (220 pt)")
+            ButtonFace(
+                label: Text("Approve the plan and merge every pull request it opened"), kind: .secondary, state: .rest, reduceMotion: false
+            )
+            .frame(width: 220, alignment: .leading)
+        }
+    )
+}
+
 /// Sizes side by side: each kind at the three sizes, then the icon button and the menu button.
 @MainActor
 func buttonSizesSideBySide() -> AnyView {
@@ -113,27 +163,10 @@ let componentStories: [ComponentStory] = {
         ComponentStory(component: "inline-refusal", id: id, title: "Inline refusal", width: 360, height: 64, draw: draw)
     }
     return [
-        button("primary") { buttonStory("Approve Plan") },
-        button("primary-hover") { buttonStory("Approve Plan", state: .hover) },
-        button("primary-pressed") { buttonStory("Approve Plan", state: .press) },
-        button("primary-focused") { buttonStory("Approve Plan", state: .focus) },
-        button("primary-disabled-with-reason", height: 64) { buttonStory("Approve and Merge…", reason: buttonReason) },
-        button("secondary") { buttonStory("Open Checks", kind: .secondary) },
-        button("secondary-hover") { buttonStory("Open Checks", kind: .secondary, state: .hover) },
-        button("secondary-pressed") { buttonStory("Open Checks", kind: .secondary, state: .press) },
-        button("secondary-disabled-with-reason", height: 64) {
-            buttonStory("Restart…", kind: .secondary, reason: "A run is still finishing. Wait for it, or stop it first.")
-        },
-        button("destructive") { buttonStory("Stop Run…", kind: .destructive) },
-        button("destructive-hover") { buttonStory("Stop Run…", kind: .destructive, state: .hover) },
-        button("destructive-in-a-sheet") { buttonStory("Stop Run", kind: .destructiveFilled) },
-        button("quiet") { buttonStory("Show All", kind: .quiet) },
-        button("quiet-hover") { buttonStory("Show All", kind: .quiet, state: .hover) },
-        button("with-a-glyph") { buttonStory("Run Again", kind: .secondary, glyph: catalogGlyphs["refresh"]) },
-        button("small") { buttonStory("Open", kind: .secondary, size: .small) },
-        button("medium") { buttonStory("Open Checks", kind: .secondary) },
-        button("large") { buttonStory("Send Decision…", size: .large) },
-        button("sizes-side-by-side", width: 520, height: 300) { buttonSizesSideBySide() },
+        // One board, three cells: every kind in every state, the sizes side by side, and the cases apart from those.
+        button("kinds-and-states") { buttonKindsAndStates() },
+        button("sizes-side-by-side") { buttonSizesSideBySide() },
+        button("glyph-reason-and-long-label") { buttonOtherCases() },
         icon("default") { iconButtonStory() },
         icon("hover") { iconButtonStory(state: .hover) },
         icon("pressed") { iconButtonStory(state: .press) },
@@ -155,8 +188,8 @@ let componentStories: [ComponentStory] = {
     ]
 }()
 
-/// A story on the window surface, as the catalog's canvas draws it.
+/// A story at its own size: the board gives it its cell.
 @MainActor
 func componentStorySnapshot(_ story: ComponentStory) -> some View {
-    componentStage(story.draw(), width: story.width + 2 * DesignTokens.Space.s6)
+    story.draw().fixedSize()
 }

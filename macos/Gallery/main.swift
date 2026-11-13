@@ -1801,18 +1801,13 @@ MainActor.assumeIsolated {
         // The shared styles (TP-1438): the control sizes, each state of a row, a card and the buttons (a selected
         // button, its menu or sheet open, stays pressed without shrinking), the pressed
         // and lifted ones with Reduce Motion off and on, a disabled button with its reason, and the situation kinds.
-        render(controlSizes(), scheme, to: "style-control-sizes-\(suffix).png")
         for (name, state) in interactionStates {
             render(styledRow(state), scheme, to: "style-row-\(name)-\(suffix).png")
             render(styledCard(state), scheme, to: "style-card-\(name)-\(suffix).png")
-            render(styledButtons(state), scheme, to: "style-button-\(name)-\(suffix).png")
         }
-        render(styledButtons(.off), scheme, to: "style-button-disabled-\(suffix).png")
         render(styledRow(.press, reduceMotion: true), scheme, to: "style-row-pressed-reduce-motion-\(suffix).png")
-        render(styledButtons(.press, reduceMotion: true), scheme, to: "style-button-pressed-reduce-motion-\(suffix).png")
         render(styledCard(.hover, reduceMotion: true), scheme, to: "style-card-hover-reduce-motion-\(suffix).png")
         render(styledCard(.press, reduceMotion: true), scheme, to: "style-card-pressed-reduce-motion-\(suffix).png")
-        render(disabledWithReason(), scheme, to: "style-button-disabled-reason-\(suffix).png")
         render(situationKinds(), scheme, to: "style-situation-kinds-\(suffix).png")
         // The catalog's panel, zone title and chip (TP-1484).
         render(panelStories(), scheme, to: "component-panel-\(suffix).png")
