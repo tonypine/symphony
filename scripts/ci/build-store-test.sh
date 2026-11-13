@@ -86,17 +86,17 @@ check "an unknown command is refused" 2 "$($store nonsense >/dev/null 2>&1; echo
 
 # The groups of checks a pull request needs.
 groups() { gate=$1; shift; printf '%s\n' "$@" | sh "$here/mac-check-groups.sh" "$gate" | grep '=true' | cut -d= -f1 | tr '\n' ' ' | sed 's/ $//'; }
-check "a UI source file" "any build unit speed sheet" "$(groups success macos/Sources/SymphonyBarUI/Row.swift)"
+check "a UI source file" "any build unit speed" "$(groups success macos/Sources/SymphonyBarUI/Row.swift)"
 check "a Core source file" "any build unit speed" "$(groups success macos/Sources/SymphonyBarCore/Model.swift)"
 check "a Swift test only" "any unit" "$(groups success macos/Tests/SymphonyBarUITests/RowTests.swift)"
 check "server code only" "" "$(groups success lib/symphony_elixir/orchestrator.ex test/symphony_elixir/x_test.exs README.md)"
 check "the QA driver" "any build driver speed" "$(groups success priv/qa_driver/symphony-qa-driver.swift)"
 check "the updater's sources" "any build unit speed update" "$(groups success macos/Sources/SymphonyBarCore/AutoUpdate.swift)"
 check "the release's packaging" "any update smoke" "$(groups success mix.lock)"
-check "the design files" "any sheet" "$(groups success docs/design/catalog/stories.js)"
+check "the design files alone need no Mac check" "" "$(groups success docs/design/catalog/stories.js)"
 check "the install script" "any installer" "$(groups success scripts/install-macos.sh)"
-check "a red gate on main turns every group on" "any build unit sandbox helpers driver speed sheet update smoke installer" "$(groups failure README.md)"
-check "so does a change to the checks themselves" "any build unit sandbox helpers driver speed sheet update smoke installer" "$(groups success .github/workflows/mac-checks.yml)"
+check "a red gate on main turns every group on" "any build unit sandbox helpers driver speed update smoke installer" "$(groups failure README.md)"
+check "so does a change to the checks themselves" "any build unit sandbox helpers driver speed update smoke installer" "$(groups success .github/workflows/mac-checks.yml)"
 
 if [ "$failures" -gt 0 ]; then echo "$failures failure(s)"; exit 1; fi
 echo "build-store-test: all passed"

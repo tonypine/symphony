@@ -53,10 +53,6 @@ on:
         description: The ticket page's idle sample and scroll hitches.
         type: boolean
         default: false
-      sheet:
-        description: Draw the design sheet and upload it.
-        type: boolean
-        default: false
       update:
         description: Update, restart and rollback end to end, on releases N and N+1.
         type: boolean
@@ -226,28 +222,6 @@ jobs:
         working-directory: macos
         timeout-minutes: 10
         run: time python3 -I Tests/ticket-page-scroll-test.py build/Symphony.app
-
-      # The design sheet (TP-1482): evidence for QA, not a gate. It draws from the debug build the
-      # tests made.
-      - name: Draw the design sheet
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.sheet }}
-        working-directory: macos
-        run: |
-          store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
-          scratch="$($store work "$SYMPHONY_CI_REF" debug)"
-          # The references are redrawn only when the design files change (Tests/DesignSheet/capture.py).
-          if [ -n "${SYMPHONY_CI_CACHE:-}" ]; then export DESIGN_SHEET_REFERENCE_CACHE="$SYMPHONY_CI_CACHE/design-sheet-references"; fi
-          time make design-sheet ${scratch:+SWIFT_FLAGS="--scratch-path $scratch"}
-          if [ -n "$scratch" ]; then $store save "$SYMPHONY_CI_REF" debug; fi
-
-      - name: Upload the design sheet
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.sheet }}
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
-        with:
-          name: design-sheet
-          path: macos/build/design-sheet
-          if-no-files-found: warn
-          retention-days: 30
 
       # Update, Restart and rollback end to end (macos/Tests/e2e/README.md) on releases N and N+1
       # of this commit. The app's executable and the two Symphony releases come from the store,

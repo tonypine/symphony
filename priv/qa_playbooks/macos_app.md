@@ -622,16 +622,16 @@ switched; launch the app once per appearance instead:
   design system alone. When `qa_open_status_menu` fails with `qa_status_menu_not_opened`, call
   `qa_check_app`; a menu that never opens on a healthy app is a failing step, quoted with the
   tool's message.
-- **A ticket that names a prototype** (a page under `docs/design/prototypes/`, or one of the
-  catalog's Window stories: the ticket page, Home, Initiatives, Tickets) is checked against the
-  design sheet: each design reference beside the app's page drawn from the matching fixture, at
-  the same size, at the laptop and desktop widths, in light and dark. Take it from the PR's
-  `design-sheet` CI artifact, or build it on the PR head with `make design-sheet` in `macos/`
-  (it needs a Chromium; `CHROME` names one), and open its `index.html`. Judge the rows the ticket
-  changes: the app's half should come closer to the design than on `main`'s sheet, and every
-  difference the ticket says it closes should be gone. Name each row you judged (its title) and
-  what still differs in the `Design check`. The sheet draws from fixtures; your screenshots of the
-  running app stay the evidence that the app draws the same.
+- **A ticket that brings a new design** attaches the design's reference images, drawn from the
+  catalog story or the prototype it was designed in. They are direction for that ticket, not a
+  standing check. Launch the app on its fixtures, take your own screenshots of the page or the
+  component the ticket builds, at the sizes the ticket names, in light and in dark, and compare
+  them with the attached references. In the `Design check`, name each reference you compared and
+  what still differs. Judge the running app: an image drawn off screen (a snapshot, a sheet)
+  shows a component alone and in a state it was handed, and proves nothing about the page it sits
+  in. Once a design has shipped, the app is the reference: nothing compares it with the HTML
+  again. When the ticket attaches none, judge against the Screens and the design system, as
+  above.
 
 After an update: the signed release pair. The `qa_build` app is signed ad hoc and has no update
 key, so it never installs an update. When a step judges what the app shows once an update

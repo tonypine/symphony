@@ -36,7 +36,6 @@ jobs:
       helpers: ${{ steps.groups.outputs.helpers }}
       driver: ${{ steps.groups.outputs.driver }}
       speed: ${{ steps.groups.outputs.speed }}
-      sheet: ${{ steps.groups.outputs.sheet }}
       update: ${{ steps.groups.outputs.update }}
       smoke: ${{ steps.groups.outputs.smoke }}
       installer: ${{ steps.groups.outputs.installer }}
@@ -74,7 +73,6 @@ jobs:
       helpers: ${{ needs.changes.outputs.helpers == 'true' }}
       driver: ${{ needs.changes.outputs.driver == 'true' }}
       speed: ${{ needs.changes.outputs.speed == 'true' }}
-      sheet: ${{ needs.changes.outputs.sheet == 'true' }}
       update: ${{ needs.changes.outputs.update == 'true' }}
       smoke: ${{ needs.changes.outputs.smoke == 'true' }}
       installer: ${{ needs.changes.outputs.installer == 'true' }}

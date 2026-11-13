@@ -62,7 +62,6 @@ jobs:
       helpers: true
       driver: true
       speed: true
-      sheet: false
       update: true
       smoke: true
       installer: true

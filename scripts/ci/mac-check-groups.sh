@@ -10,8 +10,8 @@
 set -eu
 
 gate="${1:-}"
-build=false unit=false sandbox=false helpers=false driver=false speed=false sheet=false update=false smoke=false installer=false
-all() { build=true unit=true sandbox=true helpers=true driver=true speed=true sheet=true update=true smoke=true installer=true; }
+build=false unit=false sandbox=false helpers=false driver=false speed=false update=false smoke=false installer=false
+all() { build=true unit=true sandbox=true helpers=true driver=true speed=true update=true smoke=true installer=true; }
 
 while IFS= read -r path; do
   case "$path" in
@@ -37,10 +37,6 @@ while IFS= read -r path; do
     priv/qa_driver/* | macos/Tests/qa-* | .xcode-version) driver=true ;;
   esac
   case "$path" in
-    macos/Sources/SymphonyBarUI/* | macos/Sources/SymphonyBar/TicketPage* | macos/Sources/SymphonyBarCore/TicketPage* | \
-      macos/Tests/Snapshots/*.swift | macos/Tests/DesignSheet/* | macos/Tests/Fixtures/director-app/* | macos/Makefile | docs/design/*) sheet=true ;;
-  esac
-  case "$path" in
     macos/Resources/update-helper.sh | macos/Sources/*/Update* | macos/Sources/*/AutoUpdate* | macos/Sources/*Updater* | macos/Tests/e2e/* | macos/Info.plist | macos/Makefile | rel/* | mix.exs | mix.lock | \
       scripts/release/* | test/support/macos_release/* | test/support/stubs/* | lib/symphony_elixir/tracker/memory.ex | .xcode-version) update=true ;;
   esac
@@ -57,10 +53,10 @@ done
 if [ "$gate" = failure ]; then all; fi
 
 any=false
-for value in $build $unit $sandbox $helpers $driver $speed $sheet $update $smoke $installer; do
+for value in $build $unit $sandbox $helpers $driver $speed $update $smoke $installer; do
   if [ "$value" = true ]; then any=true; fi
 done
 
-for group in any build unit sandbox helpers driver speed sheet update smoke installer; do
+for group in any build unit sandbox helpers driver speed update smoke installer; do
   eval "echo \"$group=\$$group\""
 done
