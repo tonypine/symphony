@@ -49,6 +49,25 @@ jobs:
           xcodebuild -version
           swift --version
 
+      # Temporary, this branch only: why the QA fixtures' windows never show in this runner's
+      # session while the real app's do (run 43445049358). It prints what qa-scroll-test and
+      # qa-key-test throw away — the fixture's output, its windows per CGWindowList, whether
+      # it answers accessibility at all — across four launch variants. Runs before the long
+      # build so its answers come early.
+      - name: Probe the QA fixture launch
+        if: ${{ !cancelled() }}
+        working-directory: macos
+        timeout-minutes: 8
+        run: time python3 -I Tests/qa-launch-probe.py
+
+      - name: Upload the probe's screenshot
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: qa-launch-probe
+          path: /tmp/qa-launch-probe.png
+          if-no-files-found: ignore
+
       # Fails on any expression the type-checker takes over 100ms on. Swift gives up on an
       # expression after a fixed budget, and the budget runs out sooner on an older Xcode than
       # on the one here, so an expression near the limit on this runner is a build failure on
