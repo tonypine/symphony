@@ -53,6 +53,8 @@ public struct TimelineSection: View {
     @State private var focusShown = false
     @FocusState private var focused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.timelineGrowth) private var growth
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     /// The column's widest (the catalog's Timeline: one column of at most 780 pt, at both widths).
     public static let maxWidth: CGFloat = 780
@@ -83,51 +85,87 @@ public struct TimelineSection: View {
 
     public var body: some View {
         ScrollViewReader { proxy in
-            column
+            column(proxy)
                 .onAppear { reveal(proxy) }
                 .onChange(of: focus.flatMap(model.item(holding:))) { _, _ in reveal(proxy) }
         }
     }
 
     /// Selects the item holding the event the page opened at and scrolls it to the middle, once: the history may come in
-    /// after the page drew.
+    /// after the page drew. The row may not be made yet: the scroll makes it.
     private func reveal(_ proxy: ScrollViewProxy) {
         guard !focusShown, let target = focus.flatMap(model.item(holding:)) else { return }
         focusShown = true
         selection = target
         DispatchQueue.main.async {
-            withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { proxy.scrollTo(target, anchor: .center) }
+            withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { TimelineScrolls.scroll(proxy, to: target, anchor: .center) }
         }
     }
 
-    private var column: some View {
+    /// One line of the timeline, in the one list the lazy stack makes rows from (TP-1481): a day's separator, the idle
+    /// line, the line where the person last looked, or an item. An item's line has the item's id, so a scroll to an item
+    /// finds its row before it is made.
+    enum Line: Identifiable, Equatable {
+        case day(TimelineDay)
+        case idle(TimelineIdleLine)
+        case marker(before: String, text: String)
+        case item(TimelineItem)
+
+        var id: String {
+            switch self {
+            case let .day(day): "day-\(day.id)"
+            case .idle: "idle"
+            case let .marker(before, _): "marker-\(before)"
+            case let .item(item): item.id
+            }
+        }
+    }
+
+    /// The timeline's lines top to bottom: each day's separator then its items, the idle line under the first day's
+    /// separator (or alone over the empty timeline's words), the marker over the newest item the person saw.
+    static func lines(_ model: TimelineModel, idle: TimelineIdleLine?, clock: (Date) -> String) -> [Line] {
+        var lines: [Line] = []
+        if model.isEmpty, let idle { lines.append(.idle(idle)) }
+        for (index, day) in model.days.enumerated() {
+            lines.append(.day(day))
+            if index == 0, let idle { lines.append(.idle(idle)) }
+            for item in day.items {
+                if let marker = model.marker, marker.before == item.id {
+                    lines.append(.marker(before: item.id, text: TicketMarksRead.markerText(marker.lookedAt, clock: clock)))
+                }
+                lines.append(.item(item))
+            }
+        }
+        return lines
+    }
+
+    /// The timeline in a lazy stack: only the lines near the scroll view's visible part are made, and a folded run makes
+    /// no step rows, so a 500-event history costs about what a short one does to open and to scroll (TP-1481). The lines
+    /// are one flat list so each item's row is the stack's own child, found by `scrollTo` before it is made.
+    private func column(_ proxy: ScrollViewProxy) -> some View {
         let idle = model.runNow == nil ? idle : nil
         let moves = Self.moves(arriving: model.items.count(where: { !seen.contains($0.id) }), seen: seen.count)
-        return VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            if model.isEmpty, let idle {
-                TimelineIdleRow(line: idle)
+        return TimelineStack(lazy: !offscreenSnapshot) {
+            ForEach(Self.lines(model, idle: idle, clock: clock)) { line in
+                switch line {
+                case let .day(day):
+                    DaySeparator(day: day)
+                case let .idle(idle):
+                    TimelineIdleRow(line: idle)
+                case let .marker(_, text):
+                    SinceLookedLine(text: text)
+                case let .item(item):
+                    row(item)
+                        .modifier(TimelineEntering(entering: moves && !seen.contains(item.id), reduceMotion: reduceMotion) {
+                            seen.insert(item.id)
+                        })
+                }
             }
             if model.isEmpty {
                 Text(TimelineModel.empty)
                     .font(DesignTokens.TypeStyle.callout.font)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, DesignTokens.Space.s2)
-            }
-            ForEach(model.days) { day in
-                DaySeparator(day: day)
-                if let idle, day.id == model.days.first?.id {
-                    TimelineIdleRow(line: idle)
-                }
-                ForEach(day.items) { item in
-                    if let marker = model.marker, marker.before == item.id {
-                        SinceLookedLine(text: TicketMarksRead.markerText(marker.lookedAt, clock: clock))
-                    }
-                    row(item)
-                        .id(item.id)
-                        .modifier(TimelineEntering(entering: moves && !seen.contains(item.id), reduceMotion: reduceMotion) {
-                            seen.insert(item.id)
-                        })
-                }
             }
         }
         .frame(maxWidth: Self.maxWidth, alignment: .leading)
@@ -136,7 +174,7 @@ public struct TimelineSection: View {
         .focused($focused)
         .onKeyPress(keys: TimelineKeys.keys, phases: .down) { press in
             guard let action = TimelineKeys.action(press.key, modifiers: press.modifiers) else { return .ignored }
-            return handle(action)
+            return handle(action, proxy: proxy)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Self.title)
@@ -146,6 +184,12 @@ public struct TimelineSection: View {
             let arriving = ids.count(where: { !seen.contains($0) })
             if arriving > 0, !Self.moves(arriving: arriving, seen: seen.count) { seen.formUnion(ids) }
         }
+        // A new event or the run now's newest lines grow the timeline at its top: the page's scroll view keeps what the
+        // person reads where it is when that top is above what it shows (TP-1481).
+        .onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY } action: { top in
+            growth?.top = top
+        }
+        .onChange(of: model.items.first) { _, _ in growth?.grew() }
     }
 
     /// The most items that enter with the motion at once: more is a history read whole, not events coming in.
@@ -182,11 +226,16 @@ public struct TimelineSection: View {
         withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { selection = id }
     }
 
-    private func handle(_ action: TimelineKeys.Action) -> KeyPress.Result {
+    private func handle(_ action: TimelineKeys.Action, proxy: ScrollViewProxy) -> KeyPress.Result {
         switch action {
         case let .move(steps):
             guard !model.isEmpty else { return .ignored }
-            withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { selection = model.moving(selection, by: steps) }
+            let next = model.moving(selection, by: steps)
+            // The page follows the selection: the row comes into view, made first when it wasn't yet (TP-1481).
+            withAnimation(.motion(.standard, reduceMotion: reduceMotion)) {
+                selection = next
+                if let next { TimelineScrolls.scroll(proxy, to: next) }
+            }
             return .handled
         case .toggle:
             guard let selection, let run = model.items.first(where: { $0.id == selection })?.run else { return .ignored }
@@ -210,6 +259,57 @@ public struct TimelineSection: View {
             }
         )
     }
+}
+
+/// The timeline's column: a lazy stack in the window; an eager one offscreen, where `ImageRenderer` has no scroll view
+/// to say what shows and a snapshot draws the whole column.
+private struct TimelineStack<Content: View>: View {
+    let lazy: Bool
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if lazy {
+            LazyVStack(alignment: .leading, spacing: DesignTokens.Space.s1, content: content)
+        } else {
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s1, content: content)
+        }
+    }
+}
+
+/// What the page's scroll view needs to keep its place when the timeline grows above what it shows (TP-1481): a new
+/// event, or the run now's newest lines, adds height at the timeline's top, and a page scrolled past that top would
+/// see everything it shows slide down. The timeline says where its top is and when it grew; the scroll view, when its
+/// content's height changes right after, scrolls by the change. Nothing here is published: it draws nothing.
+@MainActor
+public final class TimelineGrowth {
+    /// Where the timeline's top is in the scroll view: negative once the page scrolled past it.
+    var top: CGFloat = 0
+    /// When the timeline last grew while its top was above what the scroll view shows.
+    private var grewAt: Date?
+
+    /// How soon after the timeline grew the content's height change is its own; a later one is something else (a
+    /// row made as the page scrolls, a run unfolded).
+    static let window: TimeInterval = 0.5
+
+    public init() {}
+
+    /// The timeline's top item changed: a new event, or the run now read again.
+    func grew(now: Date = Date()) {
+        grewAt = top < 0 ? now : nil
+    }
+
+    /// How far the scroll view scrolls for its content's height change of `delta`: all of it right after the timeline
+    /// grew above what it shows, else nothing. A growth is answered once.
+    public func compensation(for delta: CGFloat, now: Date = Date()) -> CGFloat {
+        guard let grewAt, delta != 0 else { return 0 }
+        self.grewAt = nil
+        return now.timeIntervalSince(grewAt) <= Self.window ? delta : 0
+    }
+}
+
+public extension EnvironmentValues {
+    /// The page's scroll view's `TimelineGrowth`; nil outside the window's page (a snapshot).
+    @Entry var timelineGrowth: TimelineGrowth?
 }
 
 /// The Timeline section's title, with the count of events new since the person last looked ("3 new") beside it.
@@ -348,6 +448,7 @@ struct TimelineEntryRow: View {
     @Environment(\.timelineReference) private var reference
 
     var body: some View {
+        let _ = TimelineRowBodies.evaluated("entry-\(entry.id)")
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
             Text(time)
                 .font(DesignTokens.TypeStyle.callout.font)
@@ -503,6 +604,7 @@ struct TimelineRunRow: View {
     }
 
     var body: some View {
+        let _ = TimelineRowBodies.evaluated("run-\(run.id)")
         HStack(alignment: .top, spacing: 0) {
             Text(time)
                 .font(DesignTokens.TypeStyle.callout.font)
@@ -541,6 +643,30 @@ struct TimelineRunRow: View {
     /// The group for VoiceOver: "Started at 09:02 by Implementation run 1".
     static func accessibilityLabel(_ run: RunGroupModel, time: String) -> String {
         "Started at \(time) by \(run.title)"
+    }
+}
+
+/// The timeline rows whose bodies SwiftUI evaluated, while a test records them: the test that holds a long timeline to
+/// the rows near the screen (TP-1481). Off (nil) in the app, where it costs one check per row drawn.
+@MainActor
+enum TimelineRowBodies {
+    static var recorded: [String]?
+
+    static func evaluated(_ id: String) {
+        recorded?.append(id)
+    }
+}
+
+/// The timeline's scrolls to an item: the jump to the event the page opened at, and the page following the arrow keys'
+/// selection. A test records the ids asked for (TP-1481), since a scroll view hosted without a window never scrolls.
+/// Off (nil) in the app.
+@MainActor
+enum TimelineScrolls {
+    static var recorded: [String]?
+
+    static func scroll(_ proxy: ScrollViewProxy, to id: String, anchor: UnitPoint? = nil) {
+        recorded?.append(id)
+        proxy.scrollTo(id, anchor: anchor)
     }
 }
 

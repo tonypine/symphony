@@ -606,7 +606,7 @@ struct TicketPageView: View {
 
     var body: some View {
         ScrollViewReader { proxy in
-            ScrollView(.vertical) {
+            TicketPageScroller(insets: { scroll.update(insets: $0) }) {
                 TicketPageBody(
                     page: page, timeline: timeline, timelineStore: timelineStore, questions: questions, width: width, transcripts: transcripts, focus: focus, note: note, decisions: decisions,
                     actions: actions, sheetOpen: sheetOpen, answerFocus: $answerFocused,
@@ -621,9 +621,6 @@ struct TicketPageView: View {
             // detail at their own width, so narrowing the window squeezed the sidebar instead and the page measured
             // itself still past the breakpoint (TP-1449's QA). Its width is the window's, whatever the page holds.
             .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
-            .onScrollGeometryChange(for: EdgeInsets.self) { $0.contentInsets } action: { _, insets in
-                scroll.update(insets: insets)
-            }
             .coordinateSpace(name: TicketPageBody.viewportSpace)
             // The desktop's decisions column is pinned over the scroll view, outside the page it scrolls: its height and
             // place follow the page's scroll, and nothing they do can change the page's own layout (TP-1449's QA found a
@@ -693,6 +690,44 @@ struct TicketPageView: View {
         case .sheet(.restart): confirmingRestart = true
         case .sheet(.note): withAnimation { proxy.scrollTo(Self.noteAnchor, anchor: .top) }
         default: actions.move(request)
+        }
+    }
+}
+
+/// The page's scroll view. It says what the window covers at its edges, and keeps its place when the timeline grows
+/// above what it shows (TP-1481): a new event at the top of a page scrolled down the timeline leaves the lines the person
+/// reads where they were. Its own state is only the scroll position it sets then; the page it scrolls is built by the
+/// view around it, so setting the position draws nothing of the page again.
+private struct TicketPageScroller<Content: View>: View {
+    let insets: (EdgeInsets) -> Void
+    let content: Content
+    @State private var position = ScrollPosition()
+    @State private var growth = TimelineGrowth()
+
+    init(insets: @escaping (EdgeInsets) -> Void, @ViewBuilder content: () -> Content) {
+        self.insets = insets
+        self.content = content()
+    }
+
+    /// What the scroll view reports: its chrome, how tall its content is and where it is scrolled.
+    private struct Geometry: Equatable {
+        var insets: EdgeInsets
+        var height: CGFloat
+        var offset: CGFloat
+    }
+
+    var body: some View {
+        ScrollView(.vertical) {
+            content.environment(\.timelineGrowth, growth)
+        }
+        .scrollPosition($position)
+        .onScrollGeometryChange(for: Geometry.self) { geometry in
+            Geometry(insets: geometry.contentInsets, height: geometry.contentSize.height, offset: geometry.contentOffset.y)
+        } action: { old, new in
+            if old.insets != new.insets { insets(new.insets) }
+            guard old.height != new.height else { return }
+            let delta = growth.compensation(for: new.height - old.height)
+            if delta != 0 { position.scrollTo(y: new.offset + delta) }
         }
     }
 }

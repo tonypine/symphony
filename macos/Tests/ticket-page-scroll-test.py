@@ -42,10 +42,14 @@ TP-1480"). TP-1480 stops a poll that changes nothing from redrawing the page, an
   page after the fix: the main thread 2.2 % busy while idle, a hitch ratio of 336.5 ms/s, 1323 dropped frames, and the
   scroll reached both ends of the page. The budget is that 336.5 ms/s with about 25 % room for the shared runner's
   noise (a virtual display, the driver's synthetic scroll events, other jobs on the host), and it still sits far
-  under the 874 ms/s of a page that redraws on every poll, so that change fails here. The scroll stays far above
-  Apple's 10 ms/s because every row of the 500-event timeline is still drawn; TP-1481 (Ticket page speed 4/4) draws
-  only the rows on screen, is the change expected to bring scrolling down, and tightens this budget to its own
-  measurement.
+  under the 874 ms/s of a page that redraws on every poll, so that change fails here.
+- scroll, from TP-1481 (Ticket page speed 4/4): HITCH_BUDGET_MS_PER_S, 315 ms/s. TP-1481 draws only the timeline rows
+  near the screen. Its Mac CI build (run 43362029053, the same runner, head e4637a1c) measured a hitch ratio of
+  250.4 ms/s, 709 dropped frames, 11671 ms of hitch over 46.6 s, the longest frame 97 ms (TP-1480's longest was
+  over 1 s), and the scroll reached both ends of the page in 14 rounds each. The budget is that 250.4 ms/s with the
+  same 25 % room for the shared runner's noise, under TP-1480's 336.5 ms/s, so a change that builds every row again
+  fails here. The ratio stays above Apple's 10 ms/s: the seconds counted include the driver's synthetic scroll
+  rounds on a virtual display, and each newly built row still lays out its text as it scrolls in.
 
 It launches a window and needs the Accessibility grant (the QA driver's scroll), so it runs in the Mac CI build only,
 never in an agent's sandbox.
@@ -80,10 +84,10 @@ ENFORCE_BUDGETS = True
 IDLE_BUDGET_PERCENT = 5.0
 # Idle samples taken before the budget fails: the first under it passes.
 IDLE_SAMPLE_TRIES = 3
-# Milliseconds of hitch per second of scrolling: the 336.5 ms/s TP-1480's Mac CI build measured after the fix, with
-# about 25 % room for the CI runner's noise, far under the 874.2 ms/s main measured before TP-1480 (see the module's
-# doc comment). TP-1481 tightens it once the timeline draws only the rows on screen.
-HITCH_BUDGET_MS_PER_S = 420.0
+# Milliseconds of hitch per second of scrolling: the 250.4 ms/s TP-1481's Mac CI build measured with the timeline
+# drawing only the rows near the screen, with about 25 % room for the CI runner's noise, under the 336.5 ms/s TP-1480
+# measured with every row drawn (see the module's doc comment).
+HITCH_BUDGET_MS_PER_S = 315.0
 
 SAMPLE_SECONDS = 5
 # Polls land every 2 s while the window shows: wait for a few before measuring.
