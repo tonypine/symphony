@@ -319,6 +319,8 @@ defmodule SymphonyElixir.QaDriverTest do
       assert "qa_build" in QaDriver.tools()
       assert "qa_ax_set_value" in QaDriver.tools()
       assert "qa_put_file" in QaDriver.tools()
+      assert "qa_gallery" in QaDriver.tools()
+      assert "qa_gallery_open" in QaDriver.tools()
       assert error_code(QaDriver.call_tool(nil, "qa_build", %{})) == "qa_driver_unavailable"
     end
 
@@ -3525,6 +3527,162 @@ defmodule SymphonyElixir.QaDriverTest do
       driver = built_pair(worktree, mode)
       assert {:ok, %{"pid" => _pid}} = launch_pair(driver)
       assert {:ok, %{"mode" => "publish", "requests" => []}} = QaDriver.call_tool(driver, "qa_update_feed", %{})
+    end
+  end
+
+  describe "Component Gallery" do
+    @gallery_fixtures "macos/Tests/Fixtures/gallery"
+    @gallery_entries %{
+      "entries" => [
+        %{"id" => "button", "title" => "Button", "kind" => "component", "variations" => ["button-primary"], "follow_width" => [], "files" => ["Button.swift"]},
+        %{"id" => "home", "title" => "Home", "kind" => "screen", "variations" => ["home-empty", "home-busy"], "follow_width" => ["home-busy"], "files" => ["Home.swift"]}
+      ],
+      "widths" => %{"laptop" => 1440, "desktop" => 2560},
+      "foundation" => ["Tokens.swift"]
+    }
+
+    # A QA VM whose built bundle carries the gallery (unless `present: false`): `--entries` and
+    # `--affected` answer as the gallery does, and `--shot` writes the pictures it prints.
+    defp gallery_host(opts) do
+      host(%{
+        cmd: fn
+          "/bin/test", ["-x", _gallery], _opts ->
+            {:ok, {"", if(Keyword.get(opts, :present, true), do: 0, else: 1)}}
+
+          "/bin/sh", ["-c", script, "sh", gallery | paths] = args, cmd_opts ->
+            if script =~ "--affected" and String.ends_with?(gallery, "SymphonyGallery") do
+              {:ok, {Jason.encode!(%{"all" => false, "entries" => for("macos/Sources/SymphonyBarUI/Button.swift" <- paths, do: "button")}), 0}}
+            else
+              default_cmd("/bin/sh", args, cmd_opts, replies(%{}))
+            end
+
+          executable, args, cmd_opts ->
+            if String.ends_with?(executable, "/Contents/Helpers/SymphonyGallery") do
+              gallery_reply(args)
+            else
+              default_cmd(executable, args, cmd_opts, replies(%{}))
+            end
+        end
+      })
+    end
+
+    defp gallery_reply(["--entries"]), do: {:ok, {Jason.encode!(@gallery_entries), 0}}
+    defp gallery_reply(["--shot", "ghost" | _rest]), do: {:ok, {"No entry is named ghost. The entries: button, home\n", 2}}
+
+    defp gallery_reply(["--shot", entry | rest]) do
+      out = List.last(rest)
+      File.mkdir_p!(out)
+
+      pictures =
+        for appearance <- ~w(light dark) do
+          picture = Path.join(out, "#{entry}-1-#{appearance}.png")
+          File.write!(picture, "png #{appearance}")
+          picture
+        end
+
+      {:ok, {Enum.join(pictures, "\n") <> "\n", 0}}
+    end
+
+    # The QA decision's git: the merge base, then the paths the head changes against it.
+    defp changed_git(paths) do
+      fn
+        ["merge-base", "origin/main", "HEAD"], _cwd -> {"abc123\n", 0}
+        ["diff", "--name-only", "abc123", "HEAD"], _cwd -> {Enum.join(paths, "\n") <> "\n", 0}
+        args, cwd -> clean_git(args, cwd)
+      end
+    end
+
+    defp built_gallery(worktree, opts \\ []) do
+      driver = start_driver(worktree, host: gallery_host(opts), git: Keyword.get(opts, :git, &clean_git/2))
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      driver
+    end
+
+    test "lists the entries with the ones the PR's changed files touch", %{worktree: worktree} do
+      changed = ["macos/Sources/SymphonyBarUI/Button.swift", "README.md"]
+      driver = built_gallery(worktree, git: changed_git(changed))
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+
+      assert {:ok, payload} = QaDriver.call_tool(driver, "qa_gallery", %{})
+      assert payload == %{"entries" => @gallery_entries["entries"], "widths" => %{"laptop" => 1440, "desktop" => 2560}, "affected" => %{"all" => false, "entries" => ["button"]}}
+
+      assert_received {:cmd, gallery, ["--entries"], _opts}
+      assert Path.dirname(gallery) |> String.starts_with?(Path.join(host_dir, "builds"))
+      assert String.ends_with?(gallery, "Demo.app/Contents/Helpers/SymphonyGallery")
+      assert_received {:cmd, "/bin/sh", ["-c", _script, "sh", ^gallery | ^changed], _opts}
+    end
+
+    test "lists the entries without `affected` when git cannot list the changed files", %{worktree: worktree} do
+      git = fn
+        ["merge-base" | _rest], _cwd -> {"fatal: Not a valid object name origin/main\n", 128}
+        args, cwd -> clean_git(args, cwd)
+      end
+
+      driver = built_gallery(worktree, git: git)
+      assert {:ok, %{"entries" => [_button, _home], "affected" => nil, "note" => note}} = QaDriver.call_tool(driver, "qa_gallery", %{})
+      assert note =~ "could not be listed"
+      assert note =~ "Not a valid object name"
+    end
+
+    test "draws an entry into qa-evidence/ under the gallery's file names", %{worktree: worktree} do
+      driver = built_gallery(worktree)
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+
+      assert {:ok, %{"files" => [%{"path" => "qa-evidence/button-1-light.png"}, %{"path" => "qa-evidence/button-1-dark.png"}]}} =
+               QaDriver.call_tool(driver, "qa_gallery", %{"entry" => "button", "width" => "laptop"})
+
+      assert File.read!(Path.join(worktree, "qa-evidence/button-1-dark.png")) == "png dark"
+      assert_received {:cmd, _gallery, ["--shot", "button", "--width", "laptop", "--out", out], _opts}
+      assert Path.dirname(out) == host_dir
+      assert File.ls!(out) == []
+
+      assert {:error, {:qa_tool, "invalid_arguments", message}} = QaDriver.call_tool(driver, "qa_gallery", %{"entry" => "home"})
+      assert message =~ "home-empty, home-busy"
+      assert {:error, {:qa_tool, "qa_gallery_failed", message}} = QaDriver.call_tool(driver, "qa_gallery", %{"entry" => "ghost"})
+      assert message =~ "exit 2"
+      assert message =~ "No entry is named ghost"
+      assert error_code(QaDriver.call_tool(driver, "qa_gallery", %{"entry" => "../button"})) == "invalid_arguments"
+    end
+
+    test "opens the gallery's window as a launch of the build on the gallery's fixtures", %{worktree: worktree} do
+      File.mkdir_p!(Path.join(worktree, @gallery_fixtures))
+      File.write!(Path.join([worktree, @gallery_fixtures, "gallery.json"]), "{}")
+      driver = built_gallery(worktree)
+
+      for {args, app_args} <- [
+            {%{"entry" => "home", "variation" => "home-busy", "width" => "desktop", "appearance" => "dark"}, ["--open", "home", "--variation", "home-busy", "--width", "desktop", "--dark"]},
+            {%{"entry" => "button", "appearance" => "light"}, ["-NSRequiresAquaSystemAppearance", "YES", "--open", "button"]},
+            {%{"entry" => "button"}, ["--open", "button"]}
+          ] do
+        {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_gallery_open", args) end)
+        assert {:ok, %{"pid" => pid, "root" => 1, "api_fixtures" => copy}} = result
+        assert File.read!(Path.join(copy, "gallery.json")) == "{}"
+        assert_received {:launched, executable, launch_opts, _port, ^pid}
+        assert String.ends_with?(executable, "Demo.app/Contents/MacOS/Demo")
+        assert launch_opts[:args] == app_args
+        assert Map.new(launch_opts[:env])["SYMPHONY_BAR_QA_APPEARANCE"] == args["appearance"]
+        assert {:ok, _quit} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
+      end
+
+      assert error_code(QaDriver.call_tool(driver, "qa_gallery_open", %{})) == "invalid_arguments"
+      refute_received {:launched, _executable, _opts, _port, _pid}
+    end
+
+    test "needs a build, and a bundle that carries the gallery", %{worktree: worktree} do
+      driver = start_driver(worktree, host: gallery_host(present: false))
+
+      for {tool, args} <- [{"qa_gallery", %{}}, {"qa_gallery", %{"entry" => "button"}}, {"qa_gallery_open", %{"entry" => "button"}}] do
+        assert error_code(QaDriver.call_tool(driver, tool, args)) == "qa_not_built"
+      end
+
+      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+
+      for {tool, args} <- [{"qa_gallery", %{}}, {"qa_gallery", %{"entry" => "button"}}, {"qa_gallery_open", %{"entry" => "button"}}] do
+        assert {:error, {:qa_tool, "qa_gallery_missing", message}} = QaDriver.call_tool(driver, tool, args)
+        assert message =~ "no Component Gallery at Contents/Helpers/SymphonyGallery"
+      end
+
+      refute_received {:launched, _executable, _opts, _port, _pid}
     end
   end
 

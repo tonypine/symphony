@@ -1478,7 +1478,7 @@ playbook's live server (`live.walkthrough_mentions`) is asked for only by a step
 
 **The QA pre-check.** Before the QA agent starts, Symphony confirms each step a named test proves
 itself (`SymphonyElixir.QaPreCheck`), so whether a named test ran is never left to the agent reading
-check runs: a green head does not prove it, since a path-filtered workflow such as `macos-e2e` may
+check runs: a green head does not prove it, since a path-gated check such as the Mac checks' update test may
 not run on a PR at all. For each step it:
 
 - looks for the test in the PR's checkout: a part with a `/` (or a file name such as
@@ -2012,6 +2012,8 @@ tools for it on the QA VM, outside the sandbox, and checks every argument:
 | `qa_build_release_pair` | builds the [signed release pair](#the-signed-release-pair) (`make -C macos release-pair`) where the app runs, signed with the QA host's test signing identity, into the pass's private directory, and returns its `manifest.json` | a worktree `qa_build` would refuse; a QA host without the identity (`qa_signing_identity_missing`) or whose identity is not trusted for code signing (`qa_signing_identity_untrusted`), which the QA agent reports as `blocked`, unless a `worker_host` with passwordless `sudo` lets Symphony install it first (`signing_identity_installed: true`) |
 | `qa_relaunched_app` | waits up to `wait_seconds` (default 60) for the update helper of a release pair's app to ask for the app to start again, after an install or a rollback, starts that bundle in QA mode with the launch's environment and returns its PID, `version` and `build` | a pass that launched no `release_pair` app; a bundle no `release_pair` launch made; no request in time (`qa_no_relaunch`) |
 | `qa_update_feed` | returns the release pair's feed's `mode`, `url` and the app's `requests` to it (oldest first, at most 200), after switching it to `mode` when given: `publish` offers N+1, `none` nothing newer, `forbidden` answers 403 | a pass whose feed is not running; another `mode` |
+| `qa_gallery` | for Symphony.app: runs the Component Gallery in the built bundle (`Contents/Helpers/SymphonyGallery`) on the QA VM. Without `entry` it returns the gallery's `entries` and `widths`, and `affected`: the entries the PR's changed files (the head against its merge base with the base branch) are a reason to look at, or `null` with a `note` when git could not list them. With `entry` (and `variation`, `width`: `laptop`, `desktop` or a number of points) it draws that entry without a window and copies each picture into `qa-evidence/` under the gallery's file name | a pass with no successful `qa_build`; a bundle without the gallery (`qa_gallery_missing`); a name that is not letters, digits, `.`, `_` or `-`; a `variation` or `width` without an `entry`; a screen without a `variation`; a picture `qa-evidence/` already holds; a gallery that exits non-zero (`qa_gallery_failed`) |
+| `qa_gallery_open` | for Symphony.app: launches the built app as `qa_launch_app` does, on the fixture folder `macos/Tests/Fixtures/gallery` in the `fixture` environment, with `--open <entry>` and the `variation`, `width` and `appearance` given as the app's arguments, so the app starts the Component Gallery's window in its place; returns what a launch returns | what `qa_gallery` and `qa_launch_app` refuse; a call without `entry` |
 | `qa_api_requests` | returns the requests the apps launched with `api_fixtures` in one QA root logged to `api-requests.jsonl` there since the last call (each POST's `method`, `path` and `body`), oldest first, at most the last 500 with `dropped` counting the rest, and takes the log away so the next call returns only newer ones; it reads the log on the QA VM. `root: <n>` names the root (a number `qa_launch_app` returned); without it, the root of the last launch. The result names the `root` it read | a `root` the pass does not have (`qa_unknown_root`), a log that cannot be read |
 
 At most three launched apps run at once, and every app still running is quit when the pass ends.
@@ -2247,8 +2249,8 @@ every update (`UpdateInstaller.checkSigner`), and QA could never see what the ap
 update installed, or once a failed one was rolled back. For those steps QA builds the signed
 release pair of the [shared test helpers](../test/support/README.md#the-release-pair): release N of
 the app and its update N+1, signed with one code-signing identity. That the install works is the
-`macos-e2e` check's to prove, in its job
-update, restart and rollback (QA does not re-walk the install);
+`macos` check's to prove, in its step
+Test update, restart and rollback (QA does not re-walk the install);
 QA only judges by sight what the app shows afterwards.
 
 - `qa_build_release_pair` runs, on the QA VM, the

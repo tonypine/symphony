@@ -682,6 +682,51 @@ defmodule SymphonyElixir.Codex.DynamicTool do
       }
     },
     %{
+      "name" => "qa_gallery",
+      "description" =>
+        "Symphony.app only: the Component Gallery in the bundle the last qa_build produced, which draws the app's shared components and screens from made-up inputs. " <>
+          "Without arguments it lists the entries (id, title, kind, variations, the files each shows), the named widths, and `affected`: the entries this PR's changed files are a reason to look at " <>
+          "(`all: true` means every entry). Call it first when the PR changes shared views. " <>
+          "With entry it draws that entry without opening a window and saves the pictures in qa-evidence/ under the gallery's own file names, light and dark: " <>
+          "use it for a step that judges how a component or a screen looks. A component is drawn whole; a screen needs variation. To press, hover or type in an entry, use qa_gallery_open.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "properties" => %{
+          "entry" => %{"type" => "string", "description" => "An entry's id from the list, e.g. button. Omit it to list the entries."},
+          "variation" => %{
+            "type" => "string",
+            "description" => "One of the entry's variations, by name. Required for an entry whose kind is screen; a component draws all of its variations on one board when omitted."
+          },
+          "width" => %{
+            "type" => "string",
+            "description" => "The window width a screen is drawn for: laptop (1440 points), desktop (2560) or a number of points, e.g. 1100. Omit it for both laptop and desktop."
+          }
+        }
+      }
+    },
+    %{
+      "name" => "qa_gallery_open",
+      "description" =>
+        "Symphony.app only: launch the qa_build app as the Component Gallery's live window, open on one entry, and return its PID as qa_launch_app does. " <>
+          "Use it when a step needs the real control, not a picture: pressing, hovering, typing, Tab order, scrolling. " <>
+          "Drive the window with the qa_ax_*, qa_click, qa_key and qa_screenshot tools and quit it with qa_quit_app. It fills the screen. For pictures alone, qa_gallery is faster.",
+      "inputSchema" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["entry"],
+        "properties" => %{
+          "entry" => %{"type" => "string", "description" => "An entry's id from qa_gallery's list."},
+          "variation" => %{"type" => "string", "description" => "For a screen: the variation to open on. The first one when omitted."},
+          "width" => %{
+            "type" => "string",
+            "description" => "For a screen: draw it as a window this wide draws it: laptop (1440 points), desktop (2560) or a number of points. As wide as the stage when omitted."
+          },
+          "appearance" => %{"type" => "string", "enum" => ~w(light dark), "description" => "Draw the gallery light or dark whatever the host's appearance. Omit it to follow the host."}
+        }
+      }
+    },
+    %{
       "name" => "qa_quit_app",
       "description" => "Quit an app qa_launch_app launched and return its recent output.",
       "inputSchema" => %{
@@ -1167,6 +1212,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
     "qa_build_release_pair" => [],
     "qa_relaunched_app" => ["wait_seconds"],
     "qa_update_feed" => ["mode"],
+    "qa_gallery" => ["entry", "variation", "width"],
+    "qa_gallery_open" => ["entry", "variation", "width", "appearance"],
     "qa_quit_app" => ["pid"],
     "qa_screenshot" => ["pid", "name", "window_id"],
     "qa_ax_tree" => ["pid", "role", "text", "max_depth", "max_nodes"],

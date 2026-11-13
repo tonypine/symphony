@@ -222,6 +222,13 @@ defmodule SymphonyElixir.QaDriver do
   ones missing, and the QA pass is `blocked` before the agent starts: the QA host needs
   provisioning (`scripts/qa-vm/provision.sh`), which is not the project's defect.
 
+  Component Gallery: `qa_gallery` and `qa_gallery_open` show the second program in
+  Symphony.app's bundle (`SymphonyElixir.QaDriver.Gallery`): the first lists its entries,
+  with the ones the PR's changed files are a reason to look at, or draws one entry into
+  `qa-evidence/` without a window; the second launches the build on the gallery's fixture
+  folder, where the app starts the gallery in its place, open on one entry. Both fail with
+  `qa_gallery_missing` on a bundle without it.
+
   Dev server: `start_dev_server/3` runs the project's `verification.dev_server`
   on the QA host, beside the app (`SymphonyElixir.QaDriver.DevServer`), and the
   driver stops it when it stops, after the apps and before the run directory
@@ -238,9 +245,9 @@ defmodule SymphonyElixir.QaDriver do
 
   require Logger
 
-  alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, Workspace}
+  alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, QaPolicy, Workspace}
   alias SymphonyElixir.QaAgent.PlaybookSettings
-  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Machine, ReleasePair, Remote}
+  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Gallery, Machine, ReleasePair, Remote}
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
@@ -385,7 +392,7 @@ defmodule SymphonyElixir.QaDriver do
 
   @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_ax_select qa_click qa_key) ++
            ~w(qa_hover qa_context_menu qa_scroll qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests qa_open_status_menu) ++
-           ~w(qa_sample qa_build_release_pair qa_relaunched_app qa_update_feed)
+           ~w(qa_sample qa_build_release_pair qa_relaunched_app qa_update_feed qa_gallery qa_gallery_open)
 
   # The QA host's OS boundary: `SymphonyElixir.QaDriver.Remote.host/1`, unless a test overrides it.
   @type host :: %{
@@ -680,6 +687,25 @@ defmodule SymphonyElixir.QaDriver do
     end
   end
 
+  # Without an entry: what the gallery shows, and which entries the PR's changed files (the paths
+  # the QA decision read, `SymphonyElixir.QaPolicy.changed_paths/4`) are a reason to look at.
+  defp run_tool("qa_gallery", driver, config, args) do
+    with {:ok, arguments} <- Gallery.arguments(args),
+         {:ok, gallery} <- gallery(driver, config) do
+      case arguments do
+        %{entry: nil} -> Gallery.listing(config, gallery, QaPolicy.changed_paths(config.worktree, config.repo_key, "HEAD", git: config.git))
+        arguments -> Gallery.shoot(config, gallery, arguments)
+      end
+    end
+  end
+
+  defp run_tool("qa_gallery_open", driver, config, args) do
+    with {:ok, launch_args, app_args} <- Gallery.open(args),
+         {:ok, _gallery} <- gallery(driver, config) do
+      launch_build(driver, config, launch_args, app_args)
+    end
+  end
+
   defp run_tool("qa_screenshot", driver, config, args) do
     with {:ok, pid} <- running_pid(driver, args),
          {:ok, name} <- Checks.screenshot_name(Map.get(args, "name")),
@@ -922,7 +948,8 @@ defmodule SymphonyElixir.QaDriver do
 
   # -- launches ---------------------------------------------------------------
 
-  defp launch_build(driver, config, args) do
+  # `extra_args` follow the appearance's on the app's command line (`qa_gallery_open`'s `--open …`).
+  defp launch_build(driver, config, args, extra_args \\ []) do
     with {:ok, environment} <- environment(Map.get(args, "environment")),
          {:ok, root} <- root_choice(driver, args),
          {:ok, fixtures} <- api_fixtures(config, args),
@@ -933,7 +960,7 @@ defmodule SymphonyElixir.QaDriver do
          {:ok, reports} <- crash_reports(config, name),
          {:ok, library_env} <- appearance_library(config, Map.get(args, "appearance")),
          {:ok, fixtures_dir} <- copy_api_fixtures(config, fixtures) do
-      app_args = appearance_args(Map.get(args, "appearance"))
+      app_args = appearance_args(Map.get(args, "appearance")) ++ extra_args
       stand_ins = stand_ins ++ library_env
       info = %{name: name, crash_reports: reports, api_fixtures: fixtures_dir, stand_ins: stand_ins, args: app_args}
       info = Map.merge(info, %{root: root, environment: environment})
@@ -1148,6 +1175,15 @@ defmodule SymphonyElixir.QaDriver do
     case GenServer.call(driver, :build) do
       nil -> tool_error("qa_not_built", "Run qa_build first; qa_launch_app launches only the app the last successful qa_build produced.")
       built -> {:ok, built}
+    end
+  end
+
+  # The Component Gallery in the bundle the last qa_build produced.
+  defp gallery(driver, config) do
+    with {:ok, built} <- fetch_build(driver),
+         gallery = Gallery.path(built.executable),
+         :ok <- Gallery.ensure_present(config, gallery) do
+      {:ok, gallery}
     end
   end
 
@@ -2053,6 +2089,7 @@ defmodule SymphonyElixir.QaDriver do
       scratch_dir: Checks.private_dir("qa-driver"),
       put_roots: Checks.fixture_roots(worktree, Keyword.get(opts, :tmp_dir)),
       worker_host: worker_host,
+      repo_key: Keyword.get(opts, :repo_key),
       log_context: Keyword.get(opts, :log_context),
       host: Map.merge(base_host, Map.new(Keyword.get(opts, :host, %{}))),
       local_uuid: Keyword.get(opts, :local_uuid, &Machine.local_uuid/0),

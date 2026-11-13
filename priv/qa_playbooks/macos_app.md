@@ -94,6 +94,12 @@ worktree's configured app and on apps you launched:
   returns the main thread's heaviest stack (`stack`, outermost frame first, each with its sample
   count), with the whole report saved to `qa-evidence/<name>.txt`. Pass the `page` on screen. It
   answers `qa_no_app` when the app is not running.
+- `qa_gallery`: reads the Component Gallery the last `qa_build` built. With no arguments it
+  returns the entries, their variations and the entries the PR's changed files affect. With an
+  `entry` (and, for a screen, a `variation`; optionally a `width`: `laptop`, `desktop` or points)
+  it saves that entry's pictures to `qa-evidence/`.
+- `qa_gallery_open`: opens the gallery's window on an `entry` (optionally a `variation`, a `width`
+  and an `appearance`) and returns its PID, to drive like the app's.
 - `qa_screenshot`: saves the app's windows to `qa-evidence/<name>.png`. Each name can be used
   once; it never replaces an existing file. Pass `window_id` to save one window, such as the menu
   `qa_open_status_menu` opened.
@@ -622,32 +628,44 @@ switched; launch the app once per appearance instead:
   design system alone. When `qa_open_status_menu` fails with `qa_status_menu_not_opened`, call
   `qa_check_app`; a menu that never opens on a healthy app is a failing step, quoted with the
   tool's message.
-- **A component's look is judged on its own, in the Component Gallery.** The gallery
-  (`macos/Gallery/`) shows every shared component in each of its kinds, sizes and states, and the
-  sections and pages built from them, drawn by the app's own views from made-up inputs: the app's
-  counterpart of the design catalog. A button is a button wherever it sits, so this is where its
-  look is judged, and where a case the app rarely shows (a very long label, every size side by
-  side) can be seen at all. Open it with `qa_launch_app` and
-  `api_fixtures: macos/Tests/Fixtures/gallery`: the gallery's window opens in the app's place, and
-  every tool drives it as it drives the app. Its list names the stories (`button-primary-hover`,
-  `row-two-lines`); `Find a story` narrows it, and `Appearance` switches light and dark. For each
-  component or section the change touches, pick its stories, take a screenshot of each in light
-  and in dark, and judge it as a designer would, by sight: the content is centred in its shape,
-  with the same space above and below and on both sides; a glyph and its label sit on one line
-  with an even gap; nothing is clipped, cramped or cut by an ellipsis it has room for; the kinds
-  and states can be told apart; text keeps its contrast. The stories are live, so also do what a
-  picture cannot show: move the pointer over a control (`qa_hover`), reach it with Tab, press it.
+- **A component's or a screen's look is judged on its own, in the Component Gallery.** The gallery
+  (`macos/Gallery/`) shows the app's own views, drawn from made-up inputs, outside the running
+  app: the app's counterpart of the design catalog. `qa_build` builds it from the PR's head with
+  the app, so it always shows the change. A button is a button wherever it sits, so this is where
+  its look is judged, and where a case the app rarely shows (a very long label, every size side
+  by side) can be seen at all.
+  1. Call `qa_gallery` with no arguments. It lists the entries (a component such as `button`, a
+     screen such as `ticket-page`), each with its variations, and `affected`: the entries the
+     PR's changed files are a reason to look at. Judge every affected entry. Never make up an
+     entry's or a variation's name: use the ones it returned.
+  2. A component: call `qa_gallery` with its `entry`. It saves the entry's board to
+     `qa-evidence/`, every variation together, in light and in dark, at its true size. Read the
+     pictures.
+  3. A screen: call `qa_gallery` with its `entry` and one `variation` at a time, for each
+     variation the change can show in. It saves that variation as a laptop's window draws it and
+     as a desktop's (or pass `width`), in light and in dark.
+  4. Judge each picture as a designer would, by sight: the content is centred in its shape, with
+     the same space above and below and on both sides; a glyph and its label sit on one line with
+     an even gap; nothing is clipped, cramped or cut by an ellipsis it has room for; the kinds and
+     states can be told apart; text keeps its contrast; a screen's columns hold together at both
+     widths.
+  5. For what a picture cannot show (hover, focus with Tab, a press), call `qa_gallery_open` with
+     the `entry` (a screen: its `variation`, and `width` when it matters). The gallery's window
+     opens on it, live, and the result's `pid` is driven with `qa_hover`, `qa_key`, `qa_ax_press`
+     and `qa_screenshot` like the app's. Nothing in it is scaled, so a size read from
+     `qa_ax_tree` is the real one. Quit it with `qa_quit_app`.
   A fault is a finding even when every structural check passes: report it as a
-  `Design check: <component>` step, with the story's name and what is wrong in plain words ("the
-  label sits lower than the middle of the button"). A change that adds a component, a kind or a
-  state with no story for it is a finding too: the stories are part of the work.
+  `Design check: <entry>` step, with the variation's name and what is wrong in plain words ("the
+  label sits lower than the middle of the button"). A change that adds a component, a kind, a
+  state or a screen state with no variation for it is a finding too: the variations are part of
+  the work.
 - **The running app is judged for what the gallery cannot show**: that the app puts a component in
   the state it should (a selected row's badge is the selected one), how a page holds together at
   the window's sizes, and that the journey works. Launch the app on its fixtures for those. Do
   not repeat there what the gallery already settles.
 - **A ticket that brings a new design** attaches the design's reference images, drawn from the
   catalog story or the prototype it was designed in. They are direction for that ticket, not a
-  standing check: compare the gallery's stories and your screenshots of the running app with
+  standing check: compare the gallery's pictures and your screenshots of the running app with
   them, and name what still differs. Once a design has shipped, the app is the reference: nothing
   compares it with the HTML again. When the ticket attaches none, judge against the Screens and
   the design system, as above.
@@ -655,7 +673,7 @@ switched; launch the app once per appearance instead:
 After an update: the signed release pair. The `qa_build` app is signed ad hoc and has no update
 key, so it never installs an update. When a step judges what the app shows once an update
 installed, or once a failed one was rolled back, use the signed release pair instead. Whether the
-install works is proved by the `macos-e2e` check, not by you: do not report the install itself as a
+install works is proved by the `macos` check's update test, not by you: do not report the install itself as a
 step you proved, judge what the app shows.
 
 **One-time setup on the QA host.** The QA host gets a persistent test identity, installed and

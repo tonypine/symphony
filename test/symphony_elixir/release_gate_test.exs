@@ -143,6 +143,10 @@ defmodule SymphonyElixir.ReleaseGateTest do
 
     Process.put({:release_gate_issue, "TP-1520"}, nil)
     capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(later, opts) end)
+
+    # A ticket whose state Linear does not say is not written on either.
+    Process.put({:release_gate_issue, "TP-1520"}, :unknown)
+    capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(later, opts) end)
   end
 
   test "what GitHub cannot say is left out, and the ticket is filed all the same", %{opts: opts} do
@@ -155,6 +159,11 @@ defmodule SymphonyElixir.ReleaseGateTest do
     assert attrs.description =~ "* The job `release gate` passes on this ticket's pull request."
     refute attrs.description =~ "## The end of the failed step's log"
     refute attrs.description =~ "## What the commit changed"
+
+    # A build that names no repository still reads its run's log, from the checkout's own repository.
+    capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(%{repo: nil}), Keyword.put(opts, :gh_runner, gh())) end)
+    assert_received {:create, %{description: description}, _opts}
+    assert description =~ "## The end of the failed step's log"
 
     no_run = build(%{run_id: nil, repo: nil})
     capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(no_run, Keyword.put(opts, :gh_runner, gh(%{commit: {"HTTP 404", 1}}))) end)
