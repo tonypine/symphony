@@ -1,6 +1,6 @@
 // The catalog's Button, Icon button and Inline refusal stories (TP-1505), each drawn by the shared components under
 // the id the catalog gives the story (`docs/design/catalog/stories.js`: its name, lower-cased, with dashes). The
-// snapshots write `<component>-<story>-<light|dark>.png`; the design sheet puts each beside the catalog's story.
+// gallery shows the Button's as three composed cells, and each other component's as one cell, each story under its name.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI

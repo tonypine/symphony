@@ -1,6 +1,6 @@
 // The catalog's Badge, Count badge, Status dot and Keyboard hint stories (TP-1506), each drawn by the shared
-// components under the id the catalog gives the story (`docs/design/catalog/stories.js`). The snapshots write
-// `<component>-<story>-<light|dark>.png`; the design sheet puts each beside the catalog's story.
+// components under the id the catalog gives the story (`docs/design/catalog/stories.js`). The gallery shows each
+// component's stories as one cell, each under its name.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI

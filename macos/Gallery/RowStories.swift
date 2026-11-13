@@ -1,8 +1,7 @@
 // The catalog's Row stories (TP-1507), each drawn by the shared `Row` under the id the catalog gives the story
 // (`docs/design/catalog/stories.js`), and the tree and the progress strip drawn from the catalog's Home and Initiatives
-// data (`PROGRESS`, `QUEUE` and `EPICS` there). The snapshots write `row-<story>-<light|dark>.png`,
-// `tree-<name>-<light|dark>.png` and `progress-strip-<name>-<light|dark>.png`; the design sheet's Row page puts each
-// Row story beside the catalog's.
+// data (`PROGRESS`, `QUEUE` and `EPICS` there). The gallery shows the Row stories as one cell of its Row
+// entry, each under its name, beside the tree and the progress strips.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI

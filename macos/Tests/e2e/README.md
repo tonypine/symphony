@@ -121,6 +121,7 @@ on port 4000 and the metadata of the live state files (`control_url`, `control_t
 
 ## CI
 
-The `macos-e2e` workflow runs it nightly, on demand, and on pull requests that change the app, the release
-packaging, the shared release-pair and update feed helpers or this test. On failure it uploads the work folder's
+The Mac checks (`.github/workflows/mac-checks.yml`, on the self-hosted runner) run it on pull requests that change
+the update's paths (`scripts/ci/mac-check-groups.sh`, the `update` group) and on every merge to `main`, in the release
+gate, before anything is published. On failure they upload the work folder's
 logs and the release pair's `manifest.json`, without the apps, the feed or the keys.

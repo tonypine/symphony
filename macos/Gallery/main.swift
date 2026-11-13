@@ -769,50 +769,6 @@ func styledCard(_ state: DesignTokens.Interaction, reduceMotion: Bool = false) -
     .background(DesignTokens.Surface.content.color)
 }
 
-/// A button of each kind side by side, in one state; `reduceMotion` keeps a pressed one at full size.
-@MainActor
-func styledButtons(_ state: DesignTokens.Interaction, reduceMotion: Bool = false) -> some View {
-    styleStage(
-        HStack(spacing: DesignTokens.Space.s3) {
-            ButtonFace(label: Text("Approve Plan"), kind: .primary, state: state, reduceMotion: reduceMotion)
-            ButtonFace(label: Text("Restart…"), kind: .secondary, state: state, reduceMotion: reduceMotion)
-            ButtonFace(label: Text("Show All"), kind: .quiet, state: state, reduceMotion: reduceMotion)
-        },
-        width: 400
-    )
-}
-
-/// The three control sizes, a primary and a secondary button at each.
-@MainActor
-func controlSizes() -> some View {
-    styleStage(
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-            ForEach(DesignTokens.Control.allCases, id: \.self) { size in
-                HStack(spacing: DesignTokens.Space.s3) {
-                    Text("\(size.rawValue.capitalized), \(Int(size.height)) pt")
-                        .font(DesignTokens.TypeStyle.label.font)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 110, alignment: .leading)
-                    ButtonFace(label: Text("Send"), kind: .primary, size: size, state: .rest, reduceMotion: false)
-                    ButtonFace(label: Text("Save Note"), kind: .secondary, size: size, state: .rest, reduceMotion: false)
-                }
-            }
-        },
-        width: 400
-    )
-}
-
-/// A button off for a reason, pressed once: the reason shows under it.
-@MainActor
-func disabledWithReason() -> some View {
-    styleStage(
-        Button("Approve and Merge…") {}
-            .directorButton(.primary)
-            .disabledReason("Checks are still running on PR #812."),
-        width: 400
-    )
-}
-
 // MARK: - Panel, zone title and chip (TP-1484)
 
 /// A component on the window surface, as the catalog's canvas draws it.
