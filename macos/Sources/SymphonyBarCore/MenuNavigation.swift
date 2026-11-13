@@ -97,6 +97,12 @@ public enum MenuNavigation {
         }
     }
 
+    /// The tallest a menu may be inside `visible` (the screen's visible frame): its height less `margin` at the top and
+    /// the bottom. A taller menu shows this much and scrolls the rest, so its first items stay on the screen.
+    public static func maxHeight(visible: CGRect, margin: Double = DesignTokens.Menu.edgeMargin) -> Double {
+        max(Double(visible.height) - 2 * margin, DesignTokens.Menu.itemHeight + 2 * DesignTokens.Menu.padding)
+    }
+
     /// Which edge of the control the menu lines up with.
     public enum Alignment: Equatable {
         case leading, trailing
@@ -104,11 +110,13 @@ public enum MenuNavigation {
 
     /// Where a menu of `size` opens for a control at `anchor`, both in screen coordinates (y up), inside `visible`
     /// (the screen's visible frame): `gap` under the control with its leading (or trailing) edge on the control's,
-    /// above the control when there is no room under it, and moved in to stay `margin` inside the screen's edges.
+    /// above the control when there is no room under it, and moved in to stay `margin` inside the screen's edges. A menu
+    /// taller than `maxHeight(visible:margin:)` is cut to it (its list scrolls), so no part of it leaves the screen.
     public static func frame(
         size: CGSize, anchor: CGRect, visible: CGRect, alignment: Alignment = .leading,
         gap: Double = DesignTokens.Menu.gap, margin: Double = DesignTokens.Menu.edgeMargin
     ) -> CGRect {
+        let size = CGSize(width: size.width, height: min(size.height, maxHeight(visible: visible, margin: margin)))
         var x = alignment == .leading ? anchor.minX : anchor.maxX - size.width
         var y = anchor.minY - gap - size.height
         if y < visible.minY + margin, anchor.maxY + gap + size.height <= visible.maxY - margin {
@@ -120,10 +128,12 @@ public enum MenuNavigation {
     }
 
     /// Where a submenu of `size` opens beside its item at `item` (screen coordinates): its first item level with the
-    /// item, on the trailing side, or the leading side when there is no room there, kept on the screen.
+    /// item, on the trailing side, or the leading side when there is no room there, kept on the screen and cut to
+    /// `maxHeight(visible:margin:)` as a menu is.
     public static func submenuFrame(
         size: CGSize, item: CGRect, visible: CGRect, margin: Double = DesignTokens.Menu.edgeMargin
     ) -> CGRect {
+        let size = CGSize(width: size.width, height: min(size.height, maxHeight(visible: visible, margin: margin)))
         let inset = DesignTokens.Menu.padding
         var x = item.maxX + inset
         if x + size.width > visible.maxX - margin { x = item.minX - inset - size.width }
@@ -133,7 +143,8 @@ public enum MenuNavigation {
         return CGRect(origin: CGPoint(x: x, y: y), size: size)
     }
 
-    /// `value` inside `low`…`high`; `low` when the range is empty, so the menu's start stays on the screen.
+    /// `value` inside `low`…`high`; `low` when the range is empty. In screen coordinates (y up) `low` keeps the menu's
+    /// bottom on the screen, so callers cut a menu to `maxHeight(visible:margin:)` first and the range is never empty.
     static func clamp(_ value: CGFloat, low: CGFloat, high: CGFloat) -> CGFloat {
         max(low, min(value, high))
     }

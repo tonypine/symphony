@@ -228,6 +228,34 @@ final class MenuControlsTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(size.width, DesignTokens.Menu.minWidth)
     }
 
+    func testAListTallerThanItsRoomIsCutToItAndAShortOneIsNot() {
+        let long = (1...40).map { MenuItem("Repo \($0)") {} }
+        let cut = fittingSize(MenuList(items: long, highlighted: 39, maxHeight: 300))
+        XCTAssertEqual(cut.height, 300, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(cut.width, DesignTokens.Menu.minWidth)
+        XCTAssertEqual(MenuList(items: long, maxHeight: 300).scrollHeight, 300)
+        XCTAssertNil(MenuList(items: moves(), maxHeight: 300).scrollHeight, "a list that fits does not scroll")
+        XCTAssertNil(MenuList(items: long).scrollHeight)
+        let short = fittingSize(MenuList(items: moves(), maxHeight: 300))
+        XCTAssertEqual(short.height, MenuNavigation.height(of: moves().map(\.line)), accuracy: 0.5)
+    }
+
+    func testAnOpenListCutToTheScreenSizesItsPanelAndItsItemsScrollForVoiceOver() throws {
+        let long = (1...40).map { MenuItem("Repo \($0)") {} }
+        let session = session(long)
+        let room = MenuPresenter.shadowRoom
+        let list = MenuSessionList(session: session, minWidth: DesignTokens.Menu.minWidth, maxHeight: 300)
+        let host = MenuHostingView(rootView: AnyView(list.padding(room)), session: session, label: "Repo")
+        host.frame = CGRect(origin: .zero, size: host.fittingSize)
+        XCTAssertEqual(host.fittingSize.height - 2 * room, 300, accuracy: 0.5, "the panel is as tall as the cut list")
+        let elements = try XCTUnwrap(host.accessibilityChildren() as? [MenuItemElement])
+        let before = elements[3].accessibilityFrameInParentSpace()
+        host.scroll(to: 56)
+        XCTAssertEqual(host.scrollOffset, 56)
+        let after = elements[3].accessibilityFrameInParentSpace()
+        XCTAssertEqual(abs(after.minY - before.minY), 56, accuracy: 0.5, "the item moves up with the list")
+    }
+
     func testAMenuButtonDrawnOpenShowsItsMenuUnderIt() {
         let closed = fittingSize(MenuButton("Move to…") { self.moves() })
         let open = fittingSize(MenuButton("Move to…", drawnOpen: true) { self.moves() })

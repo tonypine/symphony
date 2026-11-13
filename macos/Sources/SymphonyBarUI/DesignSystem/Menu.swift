@@ -204,20 +204,32 @@ public struct MenuList: View {
     let items: [MenuItem]
     let highlighted: Int?
     var minWidth: Double
+    /// The tallest the list may be: a taller one shows this much and scrolls, keeping the highlighted item in view.
+    var maxHeight: Double?
     var hover: ((Int?) -> Void)?
     var pick: ((Int) -> Void)?
+    /// How far the list is scrolled from its top, as it scrolls.
+    var scrolled: ((Double) -> Void)?
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     public init(
-        items: [MenuItem], highlighted: Int? = nil, minWidth: Double = DesignTokens.Menu.minWidth,
-        hover: ((Int?) -> Void)? = nil, pick: ((Int) -> Void)? = nil
+        items: [MenuItem], highlighted: Int? = nil, minWidth: Double = DesignTokens.Menu.minWidth, maxHeight: Double? = nil,
+        hover: ((Int?) -> Void)? = nil, pick: ((Int) -> Void)? = nil, scrolled: ((Double) -> Void)? = nil
     ) {
         self.items = items
         self.highlighted = highlighted
         self.minWidth = minWidth
+        self.maxHeight = maxHeight
         self.hover = hover
         self.pick = pick
+        self.scrolled = scrolled
+    }
+
+    /// The height the list is cut to, when its items are taller than `maxHeight`.
+    var scrollHeight: Double? {
+        guard let maxHeight, MenuNavigation.height(of: items.map(\.line)) > maxHeight else { return nil }
+        return maxHeight
     }
 
     private var showsChecks: Bool { items.contains { $0.checked != nil } }
@@ -225,7 +237,26 @@ public struct MenuList: View {
     public var body: some View {
         let menu = DesignTokens.Menu.self
         let shape = RoundedRectangle(cornerRadius: menu.radius, style: .continuous)
-        VStack(alignment: .leading, spacing: 0) {
+        Group {
+            if let scrollHeight {
+                scrolling(height: scrollHeight)
+            } else {
+                stack.fixedSize()
+            }
+        }
+        .background {
+            if offscreenSnapshot || reduceTransparency {
+                shape.fill(menu.glass.solid.color)
+            } else {
+                Color.clear.glassBackground(menu.glass, in: shape)
+            }
+        }
+        .elevation(menu.elevation, in: shape)
+    }
+
+    private var stack: some View {
+        let menu = DesignTokens.Menu.self
+        return VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 if item.isSeparator {
                     Rectangle()
@@ -235,21 +266,33 @@ public struct MenuList: View {
                         .padding(.horizontal, menu.itemInset)
                         .accessibilityHidden(true)
                 } else {
-                    row(index, item)
+                    row(index, item).id(index)
                 }
             }
         }
         .padding(menu.padding)
         .frame(minWidth: minWidth, alignment: .leading)
-        .fixedSize()
-        .background {
-            if offscreenSnapshot || reduceTransparency {
-                shape.fill(menu.glass.solid.color)
-            } else {
-                Color.clear.glassBackground(menu.glass, in: shape)
+    }
+
+    /// A list taller than `maxHeight`: cut to `height`, scrolling, with the highlighted item kept in view.
+    private func scrolling(height: Double) -> some View {
+        ScrollViewReader { proxy in
+            ScrollView(.vertical) {
+                stack.fixedSize()
+            }
+            .scrollIndicators(.automatic)
+            .frame(height: height)
+            .fixedSize(horizontal: true, vertical: false)
+            .onScrollGeometryChange(for: Double.self) { Double($0.contentOffset.y) } action: { _, offset in
+                scrolled?(offset)
+            }
+            .onAppear {
+                if let highlighted { proxy.scrollTo(highlighted) }
+            }
+            .onChange(of: highlighted) { _, index in
+                if let index { proxy.scrollTo(index) }
             }
         }
-        .elevation(menu.elevation, in: shape)
     }
 
     private func row(_ index: Int, _ item: MenuItem) -> some View {
@@ -309,13 +352,15 @@ public struct MenuList: View {
 struct MenuSessionList: View {
     @ObservedObject var session: MenuSession
     let minWidth: Double
+    var maxHeight: Double?
+    var scrolled: ((Double) -> Void)?
     @State private var shown = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         MenuList(
-            items: session.items, highlighted: session.highlighted, minWidth: minWidth,
-            hover: { session.hover($0) }, pick: { session.pick($0) }
+            items: session.items, highlighted: session.highlighted, minWidth: minWidth, maxHeight: maxHeight,
+            hover: { session.hover($0) }, pick: { session.pick($0) }, scrolled: scrolled
         )
         .opacity(shown || reduceMotion ? 1 : 0)
         .offset(y: shown || reduceMotion ? 0 : DesignTokens.Menu.gap)

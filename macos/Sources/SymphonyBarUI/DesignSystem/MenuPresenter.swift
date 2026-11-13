@@ -6,7 +6,8 @@ import SymphonyBarCore
 /// its window, under its control and moved in to stay on the screen, with the keys going to it while the window keeps
 /// its focus. Up and Down move, Return picks, Escape closes, letters jump; a click outside the menu, the window losing
 /// focus or the app going to the back closes it. The panel and its items exist only while the menu is open, so a page
-/// of menu buttons builds no menu up front. VoiceOver reads the panel as a menu and each item as a menu item.
+/// of menu buttons builds no menu up front. VoiceOver reads the panel as a menu and each item as a menu item. A list
+/// taller than the screen is cut to it and scrolls, so its first items stay reachable.
 @MainActor
 public final class MenuPresenter {
     /// The menu open now: one at a time.
@@ -99,7 +100,7 @@ public final class MenuPresenter {
     }
 
     private func makePanel(_ session: MenuSession, label: String) -> MenuPanel {
-        let panel = MenuPanel(session: session, minWidth: minWidth, label: label)
+        let panel = MenuPanel(session: session, minWidth: minWidth, maxHeight: MenuNavigation.maxHeight(visible: screen), label: label)
         panels[ObjectIdentifier(session)] = panel
         return panel
     }
@@ -113,7 +114,7 @@ public final class MenuPresenter {
     private func showSubmenu(_ child: MenuSession, of session: MenuSession, at index: Int) {
         guard let parent = panels[ObjectIdentifier(session)] else { return }
         let list = parent.listFrame
-        let top = MenuNavigation.tops(of: session.lines)[index]
+        let top = MenuNavigation.tops(of: session.lines)[index] - parent.host.scrollOffset
         let item = CGRect(
             x: list.minX, y: list.maxY - top - DesignTokens.Menu.itemHeight, width: list.width, height: DesignTokens.Menu.itemHeight
         )
@@ -201,12 +202,13 @@ final class MenuPanel: NSPanel {
     let listSize: CGSize
 
     @MainActor
-    init(session: MenuSession, minWidth: Double, label: String) {
+    init(session: MenuSession, minWidth: Double, maxHeight: Double, label: String) {
         self.session = session
         let room = MenuPresenter.shadowRoom
-        host = MenuHostingView(
-            rootView: AnyView(MenuSessionList(session: session, minWidth: minWidth).padding(room)), session: session, label: label
-        )
+        let relay = MenuScrollRelay()
+        let list = MenuSessionList(session: session, minWidth: minWidth, maxHeight: maxHeight) { relay.host?.scroll(to: $0) }
+        host = MenuHostingView(rootView: AnyView(list.padding(room)), session: session, label: label)
+        relay.host = host
         let fitting = host.fittingSize
         listSize = CGSize(width: fitting.width - 2 * room, height: fitting.height - 2 * room)
         super.init(contentRect: CGRect(origin: .zero, size: fitting), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -230,11 +232,19 @@ final class MenuPanel: NSPanel {
     var listFrame: CGRect { frame.insetBy(dx: MenuPresenter.shadowRoom, dy: MenuPresenter.shadowRoom) }
 }
 
+/// Hands a scrolling list's offset to its panel's view, made after the list.
+@MainActor
+final class MenuScrollRelay {
+    weak var host: MenuHostingView?
+}
+
 /// The menu's view: a menu to VoiceOver, its items menu items that a press picks, and the first click on it counts.
 final class MenuHostingView: NSHostingView<AnyView> {
     private weak var session: MenuSession?
     private var label = ""
     private lazy var elements: [MenuItemElement] = makeElements()
+    /// How far a list cut to the screen is scrolled from its top.
+    private(set) var scrollOffset: Double = 0
 
     @MainActor
     init(rootView: AnyView, session: MenuSession, label: String) {
@@ -260,6 +270,12 @@ final class MenuHostingView: NSHostingView<AnyView> {
         elements.first { NSPointInRect(point, $0.accessibilityFrame()) } ?? self
     }
 
+    /// The list scrolled to `offset` from its top: the items' frames move with it.
+    func scroll(to offset: Double) {
+        scrollOffset = offset
+        place(elements)
+    }
+
     /// Tells VoiceOver which item is lit.
     func announce(_ index: Int?) {
         for element in elements { element.setAccessibilitySelected(element.index == index) }
@@ -270,10 +286,7 @@ final class MenuHostingView: NSHostingView<AnyView> {
 
     private func makeElements() -> [MenuItemElement] {
         guard let session else { return [] }
-        let menu = DesignTokens.Menu.self
-        let room = MenuPresenter.shadowRoom
-        let tops = MenuNavigation.tops(of: session.lines)
-        return session.items.enumerated().compactMap { index, item in
+        let elements: [MenuItemElement] = session.items.enumerated().compactMap { index, item in
             guard !item.isSeparator else { return nil }
             let element = MenuItemElement(index: index) { [weak session] in session?.pick(index) }
             element.setAccessibilityRole(.menuItem)
@@ -281,12 +294,25 @@ final class MenuHostingView: NSHostingView<AnyView> {
             element.setAccessibilityEnabled(item.enabled)
             element.setAccessibilityParent(self)
             if let reason = item.disabledReason { element.setAccessibilityHelp(reason) }
-            let fromTop = room + tops[index]
+            return element
+        }
+        place(elements)
+        return elements
+    }
+
+    /// Each item's frame: its top in the list less how far the list is scrolled, so an item scrolled out of the list
+    /// sits outside it.
+    private func place(_ elements: [MenuItemElement]) {
+        guard let session else { return }
+        let menu = DesignTokens.Menu.self
+        let room = MenuPresenter.shadowRoom
+        let tops = MenuNavigation.tops(of: session.lines)
+        for element in elements {
+            let fromTop = room + tops[element.index] - scrollOffset
             let y = isFlipped ? fromTop : bounds.height - fromTop - menu.itemHeight
             element.setAccessibilityFrameInParentSpace(CGRect(
                 x: room + menu.padding, y: y, width: max(bounds.width - 2 * (room + menu.padding), 0), height: menu.itemHeight
             ))
-            return element
         }
     }
 }

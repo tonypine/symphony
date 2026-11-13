@@ -102,6 +102,21 @@ final class MenuNavigationTests: XCTestCase {
         XCTAssertEqual(tall.minY, 8)
     }
 
+    func testAMenuTallerThanTheScreenIsCutToItSoItsFirstItemsStayOnIt() {
+        XCTAssertEqual(MenuNavigation.maxHeight(visible: screen), 900 - 16)
+        XCTAssertEqual(MenuNavigation.maxHeight(visible: CGRect(x: 0, y: 0, width: 400, height: 20)), 38, "never under one item")
+        let taller = CGSize(width: 220, height: 2000)
+        let anchors = [400.0, 860, 10].map { CGRect(x: 100, y: $0, width: 90, height: 30) }
+        for anchor in anchors {
+            let frame = MenuNavigation.frame(size: taller, anchor: anchor, visible: screen)
+            XCTAssertEqual(frame.height, 884)
+            XCTAssertTrue(screen.insetBy(dx: 8, dy: 8).contains(frame), "\(frame) inside the screen")
+        }
+        let submenu = MenuNavigation.submenuFrame(size: taller, item: CGRect(x: 100, y: 500, width: 220, height: 28), visible: screen)
+        XCTAssertEqual(submenu.height, 884)
+        XCTAssertTrue(screen.insetBy(dx: 8, dy: 8).contains(submenu))
+    }
+
     func testASubmenuOpensBesideItsItemOrOnTheOtherSideAtTheEdge() {
         let item = CGRect(x: 100, y: 500, width: 220, height: 28)
         let beside = MenuNavigation.submenuFrame(size: size, item: item, visible: screen)
