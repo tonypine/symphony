@@ -7,7 +7,8 @@ import SymphonyBarUI
 
 /// One catalog story: its component's id in the catalog's address, its own id, and the view.
 struct ComponentStory {
-    /// `button`, `icon-button` or `inline-refusal`.
+    /// `button`, `icon-button`, `inline-refusal` (TP-1505), `badge`, `count-badge`, `status-dot` or `keyboard-hint`
+    /// (TP-1506).
     let component: String
     let id: String
     /// The catalog's component title, for the sheet.
@@ -16,6 +17,9 @@ struct ComponentStory {
     let width: CGFloat
     let height: CGFloat
     let draw: @MainActor () -> AnyView
+    /// Where the sheet finds the story's reference when it is not the component's own story: its catalog address
+    /// under `components/` and the element to measure.
+    var reference: (address: String, selector: String)? = nil
 }
 
 /// The catalog's glyph names as SF Symbols.

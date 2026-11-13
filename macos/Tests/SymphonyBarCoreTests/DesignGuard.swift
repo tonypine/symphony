@@ -20,11 +20,14 @@ enum DesignGuard {
         case button
         /// A `.disabled(`: a control turned off without saying why (TP-1505).
         case disabled
+        /// A `Circle()` filled or styled with a status colour: a status dot drawn by hand instead of `StatusDot`
+        /// (TP-1506).
+        case dot
         /// A numeric literal in `.frame(`: reported only.
         case frame
 
         /// The kinds that fail the guard.
-        static let guarded: [Kind] = [.font, .color, .rawColor, .number, .button, .disabled]
+        static let guarded: [Kind] = [.font, .color, .rawColor, .number, .button, .disabled, .dot]
 
         static func < (lhs: Kind, rhs: Kind) -> Bool {
             allCases.firstIndex(of: lhs)! < allCases.firstIndex(of: rhs)!
@@ -133,6 +136,9 @@ enum DesignGuard {
         for match in matches(disabledRegex, in: text, range: 0..<code.count) {
             record(match.offset, .disabled, ".disabled(", disabledReplacement)
         }
+        for offset in statusDots(in: code, text: text) {
+            record(offset, .dot, "Circle()", dotReplacement)
+        }
         for range in arguments(of: [".frame("], in: code) {
             for match in matches(numberRegex, in: text, range: range) where !isZero(match.text) {
                 record(match.offset, .frame, match.text, "a `DesignTokens.Layout` or `DesignTokens.Control` measure")
@@ -181,6 +187,11 @@ enum DesignGuard {
     /// A button's initialiser, not a longer name (`IconButton(`) or a member (`.Button(`).
     static let buttonPattern = #"(?<![\w.])Button\s*[({]"#
     static let disabledPattern = #"\.disabled\("#
+    /// A circle's initialiser, not a longer name (`StatusDot(`).
+    static let circlePattern = #"(?<![\w.])Circle\(\s*\)"#
+    /// A status colour: anything on a status (`row.status.tint`, `DesignTokens.Status.idle`), a `.tint`, or a named
+    /// status hue.
+    static let statusColourPattern = #"\b[Ss]tatus\b|\.tint\b|\.(?:green|orange|red|blue|gray)\b"#
 
     static let fontRegex = regex(fontPattern)
     static let colorRegex = regex(colorPattern)
@@ -190,6 +201,8 @@ enum DesignGuard {
     static let numberRegex = regex(numberPattern)
     static let buttonRegex = regex(buttonPattern)
     static let disabledRegex = regex(disabledPattern)
+    static let circleRegex = regex(circlePattern)
+    static let statusColourRegex = regex(statusColourPattern)
 
     static func regex(_ pattern: String) -> NSRegularExpression {
         // The patterns are constants, checked by the tests.
@@ -237,6 +250,12 @@ enum DesignGuard {
     /// The modifiers chained onto the call whose `(` or `{` is at `open`, past its trailing closures (`{ … }` and
     /// `label: { … }` on the same line): each one's name, and for `.buttonStyle(` the type its argument starts with.
     static func modifiers(after open: Int, in code: [UInt16]) -> [String] {
+        modifierCalls(after: open, in: code).map(\.name)
+    }
+
+    /// The modifiers chained onto the call whose `(` or `{` is at `open`, each with the range inside its parentheses
+    /// (nil for a modifier written without them).
+    static func modifierCalls(after open: Int, in code: [UInt16]) -> [(name: String, arguments: Range<Int>?)] {
         guard let close = closing(code, from: open + 1, open: code[open], close: code[open] == 40 ? 41 : 125) else { return [] }
         var index = close + 1
         trailing: while true {
@@ -256,7 +275,7 @@ enum DesignGuard {
             }
             break
         }
-        var names: [String] = []
+        var calls: [(name: String, arguments: Range<Int>?)] = []
         while true {
             let dot = skipSpaces(code, from: index, newlines: true)
             guard dot < code.count, code[dot] == 46 else { break }
@@ -264,8 +283,10 @@ enum DesignGuard {
             while end < code.count, isIdentifier(code[end]) { end += 1 }
             guard end > dot + 1 else { break }
             var name = String(decoding: code[(dot + 1)..<end], as: UTF16.self)
+            var arguments: Range<Int>?
             index = end
             if index < code.count, code[index] == 40, let close = closing(code, from: index + 1, open: 40, close: 41) {
+                arguments = (index + 1)..<close
                 if name == "buttonStyle" {
                     var type = skipSpaces(code, from: index + 1, newlines: true)
                     let start = type
@@ -278,9 +299,28 @@ enum DesignGuard {
             if brace < code.count, code[brace] == 123, let close = closing(code, from: brace + 1, open: 123, close: 125) {
                 index = close + 1
             }
-            names.append(name)
+            calls.append((name, arguments))
         }
-        return names
+        return calls
+    }
+
+    // MARK: - Status dots
+
+    static let dotReplacement = "`StatusDot(_:size:live:)` beside its word, or a `Badge`"
+
+    /// The modifiers that colour a shape.
+    static let colouringModifiers: Set<String> = ["fill", "foregroundStyle", "foregroundColor", "background"]
+
+    /// The offset of each `Circle()` whose chain colours it with a status colour.
+    static func statusDots(in code: [UInt16], text: NSString) -> [Int] {
+        matches(circleRegex, in: text, range: 0..<code.count).compactMap { match in
+            guard let open = firstIndex(of: [40], in: code, from: match.offset) else { return nil }
+            let coloured = modifierCalls(after: open, in: code).contains { call in
+                guard colouringModifiers.contains(call.name), let arguments = call.arguments else { return false }
+                return !matches(statusColourRegex, in: text, range: arguments).isEmpty
+            }
+            return coloured ? match.offset : nil
+        }
     }
 
     /// The first offset from `start` that is not a space or a tab (nor a line break, with `newlines`).
@@ -380,8 +420,9 @@ enum DesignGuard {
     static let baselineHeader = """
     # The design guard's baseline (TP-1493, docs/design/design-system.md §3.11): how many raw style values each view
     # file still has, per kind, and (TP-1505) how many buttons without the shared style (`button`) and controls turned
-    # off without a reason (`disabled`). It must equal what the guard counts: lower a number in the same change that
-    # removes a bypass, and delete the line when it reaches zero. A file not listed here may have none.
+    # off without a reason (`disabled`), and (TP-1506) how many status dots drawn by hand (`dot`). It must equal what
+    # the guard counts: lower a number in the same change that removes a bypass, and delete the line when it reaches
+    # zero. A file not listed here may have none.
     """
 
     static func formatBaseline(_ counts: Counts) -> String {

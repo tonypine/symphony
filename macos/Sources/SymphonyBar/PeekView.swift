@@ -190,7 +190,7 @@ private struct TicketPeekBody: View {
                     .font(DesignTokens.TypeStyle.label.font)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: DesignTokens.Space.s2)
-                if let badge = peek.head.badge { StatusBadge(status: badge.status, word: badge.word).fixedSize() }
+                if let badge = peek.head.badge { Badge(status: badge.status, word: badge.word).fixedSize() }
             }
             if let title = peek.head.title {
                 Text(title)

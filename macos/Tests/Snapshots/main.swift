@@ -395,7 +395,13 @@ func repoPausedSidebar() -> some View {
     )
     return VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
         ForEach(window.repos) { repo in
+            // The default repo drawn selected, as the sidebar list draws it: its Default and Paused badges take the
+            // catalog's selected form on the accent (TP-1506).
+            let selected = repo.isDefault
             RepoSidebarRow(repo: repo)
+                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                .background(selected ? Color.accentColor : Color.clear)
+                .environment(\.backgroundProminence, selected ? .increased : .standard)
         }
     }
     .frame(width: DesignTokens.Layout.sidebarWidth - 2 * DesignTokens.Space.s3, alignment: .leading)
@@ -1829,7 +1835,8 @@ MainActor.assumeIsolated {
         render(panelStories(), scheme, to: "component-panel-\(suffix).png")
         render(chipVariants(), scheme, to: "component-chip-\(suffix).png")
         // The catalog's Button, Icon button and Inline refusal stories (TP-1505), one snapshot each.
-        for story in componentStories {
+        // The catalog's Badge, Count badge, Status dot and Keyboard hint stories (TP-1506), one snapshot each.
+        for story in componentStories + badgeStories {
             render(componentStorySnapshot(story), scheme, to: "\(story.component)-\(story.id)-\(suffix).png")
         }
         // The Situation line (TP-1439): every kind in the full and the compact size, and forced, "and n more", narrow.

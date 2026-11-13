@@ -185,9 +185,7 @@ struct ReposChipView: View {
 
     private func capsule(title: String, dot: ReposChip.Dot) -> some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(color(dot))
-                .frame(width: 8, height: 8)
+            StatusDot(dot.status)
             Text(title)
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -202,14 +200,6 @@ struct ReposChipView: View {
         .accessibilityLabel(title)
     }
 
-    private func color(_ dot: ReposChip.Dot) -> Color {
-        switch dot {
-        case .green: return .green
-        case .orange: return .orange
-        case .grey: return .gray
-        case .red: return .red
-        }
-    }
 }
 
 /// The restart chip's pop-over: what the restart does now, the runs it waits on, and Restart Now and Cancel Restart
@@ -253,21 +243,22 @@ struct ReposRestartPopover: View {
     }
 }
 
-/// A sidebar row: key, then `owner/repo` or the folder name (after a pause mark while paused), Default and the running
+/// A sidebar row: key, then `owner/repo` or the folder name (after a Paused badge while paused), Default and the running
 /// agents.
 struct RepoSidebarRow: View {
     let repo: RepoDetail
 
     var body: some View {
         HStack(spacing: 6) {
-            HealthGlyph(status: repo.health.status)
+            StatusDot(repo.health.status.status).help(repo.health.status.help)
             VStack(alignment: .leading, spacing: 1) {
                 Text(repo.key)
                     .lineLimit(1)
                 if repo.subtitle != nil || repo.pause?.isPaused == true {
                     HStack(spacing: 3) {
                         if let pause = repo.pause, pause.isPaused {
-                            RepoPausedMark(help: pause.line)
+                            Badge(status: .idle, word: RepoPauseControl.pausedBadge, size: .small)
+                                .help(pause.line)
                         }
                         if let subtitle = repo.subtitle {
                             Text(subtitle)
@@ -283,81 +274,14 @@ struct RepoSidebarRow: View {
             .layoutPriority(1)
             Spacer(minLength: 4)
             if repo.isDefault {
-                Badge(text: ReposList.defaultBadge)
+                Badge(status: .idle, word: ReposList.defaultBadge, size: .small, glyph: false)
                     .help(ReposList.defaultHelp)
-                    .fixedSize()
             }
-            if repo.agentCount > 0 {
-                Badge(text: "\(repo.agentCount)", prominent: true)
-                    .fixedSize()
-            }
+            CountBadge(repo.agentCount, role: .working)
         }
         .padding(.vertical, 2)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(repo.accessibilityLabel)
-    }
-}
-
-/// A paused repository's mark under its name in the sidebar: a pause symbol rather than a badge, so the row keeps its
-/// width for the name and the other badges. Its tooltip is the pause line; the row's accessibility label says "paused".
-struct RepoPausedMark: View {
-    let help: String
-
-    var body: some View {
-        Image(systemName: "pause.circle.fill")
-            .font(.system(size: 10, weight: .semibold))
-            .foregroundStyle(DesignTokens.Status.you.tint)
-            .fixedSize()
-            .help(help)
-            .accessibilityLabel(RepoPauseControl.pausedBadge)
-    }
-}
-
-/// A repo's status, told apart by shape as well as colour: a green circle, an orange triangle, a red diamond, or a
-/// hollow grey circle while nothing was checked.
-struct HealthGlyph: View {
-    let status: RepoHealth.Status
-
-    var body: some View {
-        Image(systemName: symbol)
-            .font(.system(size: 9, weight: .semibold))
-            .foregroundStyle(color)
-            .frame(width: 12)
-            .help(status.spoken.prefix(1).uppercased() + status.spoken.dropFirst())
-            .accessibilityLabel(status.spoken)
-    }
-
-    private var symbol: String {
-        switch status {
-        case .healthy: return "circle.fill"
-        case .needsAttention: return "triangle.fill"
-        case .notWorking: return "diamond.fill"
-        case .notChecked: return "circle"
-        }
-    }
-
-    private var color: Color {
-        switch status {
-        case .healthy: return .green
-        case .needsAttention: return .orange
-        case .notWorking: return .red
-        case .notChecked: return .gray
-        }
-    }
-}
-
-/// A small capsule, such as **Default** or an agent count.
-struct Badge: View {
-    let text: String
-    var prominent = false
-
-    var body: some View {
-        Text(text)
-            .font(.caption2)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .foregroundStyle(prominent ? Color.white : Color.secondary)
-            .background(Capsule().fill(prominent ? Color.accentColor : Color.secondary.opacity(0.18)))
     }
 }
 
@@ -409,7 +333,7 @@ struct RepoDetailView: View {
         VStack(alignment: .leading, spacing: 4) {
             title
             HStack(spacing: 6) {
-                HealthGlyph(status: repo.health.status)
+                StatusDot(repo.health.status.status).help(repo.health.status.help)
                 Text(repo.health.summary)
                     .foregroundStyle(.secondary)
             }
@@ -429,11 +353,11 @@ struct RepoDetailView: View {
                     .help(ReposList.openOnGitHubTitle)
             }
             if repo.isDefault {
-                Badge(text: ReposList.defaultBadge)
+                Badge(status: .idle, word: ReposList.defaultBadge, glyph: false)
                     .help(ReposList.defaultHelp)
             }
             if let pause = repo.pause, pause.isPaused {
-                Badge(text: RepoPauseControl.pausedBadge)
+                Badge(status: .idle, word: RepoPauseControl.pausedBadge)
                     .help(pause.line)
             }
         }

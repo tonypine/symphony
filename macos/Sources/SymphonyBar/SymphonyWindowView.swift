@@ -1247,7 +1247,8 @@ struct SymphonySidebar: View {
     }
 }
 
-/// A row of the sidebar: its label, and C1's count when it has one. One VoiceOver element: "Home, 4 waiting".
+/// A row of the sidebar: its label, and C1's count (`CountBadge`) when it has one. One VoiceOver element: "Home, 4
+/// waiting".
 struct SidebarRowContent: View {
     let title: String
     let symbol: String
@@ -1259,29 +1260,11 @@ struct SidebarRowContent: View {
             Label(title, systemImage: symbol)
             Spacer(minLength: 0)
             if let badge {
-                SidebarBadge(count: badge.count, tint: badge.status.tint)
+                CountBadge(badge.count, role: badge.status, spoken: badge.accessibilityValue)
             }
         }
         .padding(.leading, indented ? DesignTokens.Space.s4 : 0)
         .accessibilityElement(children: .combine)
-        .accessibilityValue(badge?.accessibilityValue ?? "")
-    }
-}
-
-/// C1's count: a filled capsule in the view's status colour (`.badge` ignores the tint in a sidebar).
-struct SidebarBadge: View {
-    let count: Int
-    let tint: Color
-
-    var body: some View {
-        Text("\(count)")
-            .font(DesignTokens.TypeStyle.secondary.font.weight(.semibold))
-            .monospacedDigit()
-            .foregroundStyle(.white)
-            .padding(.horizontal, 6)
-            .frame(minWidth: 20, minHeight: 16)
-            .background(tint, in: Capsule())
-            .accessibilityHidden(true)
     }
 }
 

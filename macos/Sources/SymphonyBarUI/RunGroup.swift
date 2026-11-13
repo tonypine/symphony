@@ -186,7 +186,7 @@ private struct RunHeaderLabel: View {
             .font(DesignTokens.TypeStyle.body.font.weight(.semibold))
             .lineLimit(1)
             .fixedSize()
-        StatusBadge(status: run.state.status, word: run.word)
+        Badge(status: run.state.status, word: run.word)
             .fixedSize()
         if !run.steps.isEmpty {
             StepBars(steps: run.steps)

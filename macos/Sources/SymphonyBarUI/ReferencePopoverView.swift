@@ -57,7 +57,7 @@ public struct TicketPopover: View {
                 .font(DesignTokens.TypeStyle.label.font)
                 .foregroundStyle(.secondary)
             Spacer(minLength: DesignTokens.Space.s2)
-            if let badge = ticket.badge { StatusBadge(status: badge.status, word: badge.word).fixedSize() }
+            if let badge = ticket.badge { Badge(status: badge.status, word: badge.word).fixedSize() }
         }
         if let title = ticket.title {
             Text(title)
@@ -103,7 +103,7 @@ public struct PullRequestPopover: View {
                     .foregroundStyle(.secondary)
             }
             Spacer(minLength: DesignTokens.Space.s2)
-            StatusBadge(status: pullRequest.state.status, word: pullRequest.state.word).fixedSize()
+            Badge(status: pullRequest.state.status, word: pullRequest.state.word).fixedSize()
         }
         if let title = pullRequest.title {
             Text(title)

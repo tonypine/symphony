@@ -161,7 +161,7 @@ private struct ReviewHeader: View {
 
     /// The kind pill, waiting time, state and repo, each kept on one line.
     @ViewBuilder private var badges: some View {
-        StatusBadge(status: item.kind.status, word: item.kindWord)
+        Badge(status: item.kind.status, word: item.kindWord)
             .fixedSize()
         if let age = item.age {
             Label("Waiting \(age)", systemImage: "clock")
@@ -573,7 +573,7 @@ private struct ContextCardView: View {
                                 ChipText(text: connection.relation, color: .secondaryLabelColor)
                             }
                         } else {
-                            if let stage = connection.stage { StatusBadge(status: stage.status, word: stage.word).fixedSize() }
+                            if let stage = connection.stage { Badge(status: stage.status, word: stage.word).fixedSize() }
                             ChipText(text: connection.relation, color: .secondaryLabelColor)
                         }
                     }

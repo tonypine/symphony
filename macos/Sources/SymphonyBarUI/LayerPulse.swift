@@ -13,23 +13,13 @@ struct LayerPulse: NSViewRepresentable, Equatable {
         case circle
     }
 
-    /// What pulses: the shape's opacity, or its scale about its centre.
+    /// What pulses: the shape's opacity or its scale about its centre, there and back; or a ring sent out from it.
     enum Motion: Equatable {
         case opacity(from: Double, to: Double)
         case scale(from: Double, to: Double)
-
-        var keyPath: String {
-            switch self {
-            case .opacity: "opacity"
-            case .scale: "transform.scale"
-            }
-        }
-
-        var values: (from: Double, to: Double) {
-            switch self {
-            case let .opacity(from, to), let .scale(from, to): (from, to)
-            }
-        }
+        /// The status dot's live ring (TP-1506): over the first `reach` of each period it grows from the shape to
+        /// `scale` times it while it fades from `opacity` to clear, then waits for the next period.
+        case ring(scale: Double, opacity: Double, reach: Double)
     }
 
     let shape: Shape
@@ -46,17 +36,42 @@ struct LayerPulse: NSViewRepresentable, Equatable {
         view.configure(self)
     }
 
-    /// The animation the layer runs, forever, there and back.
-    static func animation(_ motion: Motion, duration: Double) -> CABasicAnimation {
-        let animation = CABasicAnimation(keyPath: motion.keyPath)
-        animation.fromValue = motion.values.from
-        animation.toValue = motion.values.to
+    /// The animation the layer runs, forever: there and back for a breath, once per period for a ring.
+    static func animation(_ motion: Motion, duration: Double) -> CAAnimation {
+        switch motion {
+        case let .opacity(from, to): breath("opacity", from: from, to: to, duration: duration)
+        case let .scale(from, to): breath("transform.scale", from: from, to: to, duration: duration)
+        case let .ring(scale, opacity, reach): ring(scale: scale, opacity: opacity, reach: reach, period: duration)
+        }
+    }
+
+    static func breath(_ keyPath: String, from: Double, to: Double, duration: Double) -> CABasicAnimation {
+        let animation = CABasicAnimation(keyPath: keyPath)
+        animation.fromValue = from
+        animation.toValue = to
         animation.duration = duration
         animation.autoreverses = true
         animation.repeatCount = .infinity
         animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
         animation.isRemovedOnCompletion = false
         return animation
+    }
+
+    static func ring(scale: Double, opacity: Double, reach: Double, period: Double) -> CAAnimationGroup {
+        func track(_ keyPath: String, _ values: [Double]) -> CAKeyframeAnimation {
+            let track = CAKeyframeAnimation(keyPath: keyPath)
+            track.values = values
+            track.keyTimes = [0, NSNumber(value: reach), 1]
+            track.timingFunctions = [CAMediaTimingFunction(name: .easeOut), CAMediaTimingFunction(name: .linear)]
+            track.duration = period
+            return track
+        }
+        let group = CAAnimationGroup()
+        group.animations = [track("transform.scale", [1, scale, scale]), track("opacity", [opacity, 0, 0])]
+        group.duration = period
+        group.repeatCount = .infinity
+        group.isRemovedOnCompletion = false
+        return group
     }
 }
 

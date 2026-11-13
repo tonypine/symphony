@@ -128,7 +128,7 @@ struct HomeInboxRow: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-            StatusBadge(status: item.kind.status, word: item.kindWord).fixedSize()
+            Badge(status: item.kind.status, word: item.kindWord).fixedSize()
             Button { actions.openTicket(item.identifier) } label: {
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                     Text(item.identifier).font(DesignTokens.TypeStyle.rowTitle.font)
@@ -335,12 +335,7 @@ struct StatusBarContent<Control: View>: View {
                 control
                 ForEach(Array(line.parts.enumerated()), id: \.offset) { _, part in
                     HStack(spacing: DesignTokens.Space.s1) {
-                        if let status = part.status {
-                            Circle()
-                                .fill(status.tint)
-                                .frame(width: 7, height: 7)
-                                .accessibilityHidden(true)
-                        }
+                        if let status = part.status { StatusDot(status) }
                         Text(part.text)
                             .lineLimit(1)
                             .truncationMode(.middle)

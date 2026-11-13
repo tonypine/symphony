@@ -313,6 +313,14 @@ final class RepoHealthTests: XCTestCase {
         XCTAssertEqual(RepoHealth.Status.notChecked.spoken, "not checked")
     }
 
+    func testEachStatusHasItsDotColour() {
+        XCTAssertEqual(RepoHealth.Status.healthy.status, .done)
+        XCTAssertEqual(RepoHealth.Status.needsAttention.status, .you)
+        XCTAssertEqual(RepoHealth.Status.notWorking.status, .problem)
+        XCTAssertEqual(RepoHealth.Status.notChecked.status, .idle)
+        XCTAssertEqual(RepoHealth.Status.needsAttention.help, "Needs attention")
+    }
+
     func testAPendingWorkflowShowsWhileNothingIsChecked() {
         let pr = URL(string: "https://github.com/acme/app/pull/12")!
         let health = RepoHealth.notChecked(status: .starting, poll: nil, pending: .pullRequest(url: pr.absoluteString), baseBranch: "trunk")

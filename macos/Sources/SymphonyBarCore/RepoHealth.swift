@@ -18,6 +18,19 @@ public struct RepoHealth: Equatable {
             case .notChecked: return "not checked"
             }
         }
+
+        /// The dot's help: the spoken word, capitalised ("Needs attention").
+        public var help: String { spoken.prefix(1).uppercased() + spoken.dropFirst() }
+
+        /// The status colour of its dot: green, orange, red, or grey while nothing was checked.
+        public var status: DesignTokens.Status {
+            switch self {
+            case .healthy: .done
+            case .needsAttention: .you
+            case .notWorking: .problem
+            case .notChecked: .idle
+            }
+        }
     }
 
     public enum Severity: Equatable {

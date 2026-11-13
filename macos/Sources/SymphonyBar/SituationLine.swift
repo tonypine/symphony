@@ -52,7 +52,7 @@ struct SituationLine: View {
         SituationFlow(spacing: DesignTokens.Space.s3) {
             HStack(spacing: DesignTokens.Space.s2) {
                 pill
-                if forced { StatusBadge(status: .forced) }
+                if forced { Badge(status: .forced) }
             }
             .fixedSize()
             reading
@@ -107,7 +107,7 @@ struct SituationLine: View {
                 .fontWeight(.semibold)
                 .foregroundStyle(wordStyle)
                 .fixedSize()
-            if forced { StatusBadge(status: .forced).fixedSize() }
+            if forced { Badge(status: .forced).fixedSize() }
             Text(text.cause)
                 .frame(maxWidth: DesignTokens.Measure.reading, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)

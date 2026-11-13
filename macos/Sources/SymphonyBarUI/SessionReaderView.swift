@@ -67,7 +67,7 @@ private struct SessionReaderHeader: View {
                 .font(DesignTokens.TypeStyle.heading.font)
                 .lineLimit(1)
                 .accessibilityAddTraits(.isHeader)
-            StatusBadge(status: run.state.status, word: run.word)
+            Badge(status: run.state.status, word: run.word)
                 .fixedSize()
             Spacer(minLength: DesignTokens.Space.s2)
             ForEach([run.tokensText, run.model, run.duration].compactMap { $0 }, id: \.self) { fact in

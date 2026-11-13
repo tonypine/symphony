@@ -378,11 +378,11 @@ public struct OptionCardFace: View {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                     ChipText(text: card.label, font: DecisionType.optionLabel, selectable: false)
-                    if card.recommended && !narrow { RecommendedBadge() }
+                    if card.recommended && !narrow { Badge.recommended() }
                     Spacer(minLength: DesignTokens.Space.s2)
-                    if showsKey { KeyHint(number: card.number) }
+                    if showsKey { KeyboardHint("\(card.number)").help("Press \(card.number) to pick this option") }
                 }
-                if card.recommended && narrow { RecommendedBadge() }
+                if card.recommended && narrow { Badge.recommended() }
                 if let effect = card.effect {
                     ChipText(text: effect, color: .secondaryLabelColor, selectable: false)
                 }
@@ -503,36 +503,6 @@ public struct WriteInField: View {
             .focused(focused)
             .accessibilityLabel(OptionCard.writeInLabel)
             .accessibilityHint(OptionCard.writeInHint)
-    }
-}
-
-/// The word "Recommended" in an accent capsule.
-public struct RecommendedBadge: View {
-    public init() {}
-
-    public var body: some View {
-        Text("Recommended")
-            .font(DesignTokens.TypeStyle.label.font)
-            .padding(.horizontal, DesignTokens.Space.s2)
-            .background(Color.accentColor.opacity(0.18), in: Capsule())
-            .fixedSize()
-    }
-}
-
-/// The number key that picks an option, as a key cap.
-private struct KeyHint: View {
-    let number: Int
-
-    var body: some View {
-        Text("\(number)")
-            .font(DesignTokens.TypeStyle.caption.font.monospacedDigit())
-            .foregroundStyle(.secondary)
-            .frame(minWidth: 18, minHeight: 18)
-            .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.Radius.mark, style: .continuous)
-                    .strokeBorder(DesignTokens.Surface.separator.color)
-            )
-            .help("Press \(number) to pick this option")
     }
 }
 

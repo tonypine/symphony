@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import XCTest
+import SymphonyBarCore
 @testable import SymphonyBarUI
 
 /// TP-1480's QA: what keeps the ticket page busy with nobody touching it, and a click on a run's fold.
@@ -29,8 +30,8 @@ final class TicketPageIdleTests: XCTestCase {
 
     // MARK: - The working pulses run on Core Animation
 
-    func testThePulseRunsForeverThereAndBack() {
-        let breath = LayerPulse.animation(StepBars.breath, duration: StepBars.breathDuration)
+    func testThePulseRunsForeverThereAndBack() throws {
+        let breath = try XCTUnwrap(LayerPulse.animation(StepBars.breath, duration: StepBars.breathDuration) as? CABasicAnimation)
         XCTAssertEqual(breath.keyPath, "opacity")
         XCTAssertEqual(breath.fromValue as? Double, 1)
         XCTAssertEqual(breath.toValue as? Double, 0.45)
@@ -39,11 +40,33 @@ final class TicketPageIdleTests: XCTestCase {
         XCTAssertEqual(breath.repeatCount, .infinity)
         XCTAssertFalse(breath.isRemovedOnCompletion)
 
-        let halo = LayerPulse.animation(LiveDot.breath, duration: LiveDot.breathDuration)
-        XCTAssertEqual(halo.keyPath, "transform.scale")
-        XCTAssertEqual(halo.fromValue as? Double, 1.6)
-        XCTAssertEqual(halo.toValue as? Double, 2.2)
-        XCTAssertEqual(halo.duration, 1.2)
+        let scale = try XCTUnwrap(LayerPulse.animation(.scale(from: 1.6, to: 2.2), duration: 1.2) as? CABasicAnimation)
+        XCTAssertEqual(scale.keyPath, "transform.scale")
+        XCTAssertEqual(scale.fromValue as? Double, 1.6)
+        XCTAssertEqual(scale.toValue as? Double, 2.2)
+        XCTAssertEqual(scale.duration, 1.2)
+    }
+
+    func testTheLiveDotSendsARingOutEveryPeriodAndWaits() throws {
+        let ring = try XCTUnwrap(
+            LayerPulse.animation(StatusDot.ring, duration: DesignTokens.StatusDot.ringPeriod) as? CAAnimationGroup
+        )
+        XCTAssertEqual(ring.duration, 1.8)
+        XCTAssertEqual(ring.repeatCount, .infinity)
+        XCTAssertFalse(ring.autoreverses)
+        XCTAssertFalse(ring.isRemovedOnCompletion)
+        let tracks = try XCTUnwrap(ring.animations as? [CAKeyframeAnimation])
+        XCTAssertEqual(tracks.map(\.keyPath), ["transform.scale", "opacity"])
+        XCTAssertEqual(tracks[0].values as? [Double], [1, 2.6, 2.6])
+        XCTAssertEqual(tracks[1].values as? [Double], [0.6, 0, 0])
+        XCTAssertEqual(tracks[0].keyTimes?.map(\.doubleValue), [0, 0.7, 1])
+        XCTAssertEqual(tracks[1].duration, 1.8)
+    }
+
+    func testTheLiveDotRingsOnlyWhileLiveAndReduceMotionIsOff() {
+        XCTAssertTrue(StatusDot.rings(live: true, reduceMotion: false))
+        XCTAssertFalse(StatusDot.rings(live: true, reduceMotion: true))
+        XCTAssertFalse(StatusDot.rings(live: false, reduceMotion: false))
     }
 
     func testThePulseViewStartsItsAnimationOnceAndAgainWhenItsMotionChanges() throws {
@@ -60,9 +83,9 @@ final class TicketPageIdleTests: XCTestCase {
         XCTAssertTrue(view.shapeLayer.animation(forKey: LayerPulseView.animationKey) === first)
 
         // Another motion replaces it.
-        view.configure(LayerPulse(shape: .circle, color: .green, motion: LiveDot.breath, duration: LiveDot.breathDuration))
-        let second = try XCTUnwrap(view.shapeLayer.animation(forKey: LayerPulseView.animationKey) as? CABasicAnimation)
-        XCTAssertEqual(second.keyPath, "transform.scale")
+        view.configure(LayerPulse(shape: .circle, color: .green, motion: StatusDot.ring, duration: DesignTokens.StatusDot.ringPeriod))
+        let second = try XCTUnwrap(view.shapeLayer.animation(forKey: LayerPulseView.animationKey) as? CAAnimationGroup)
+        XCTAssertEqual(second.duration, 1.8)
         XCTAssertEqual(view.pulse?.shape, .circle)
     }
 
@@ -86,6 +109,6 @@ final class TicketPageIdleTests: XCTestCase {
     func testTwoPulsesCompareByWhatTheyDraw() {
         let pulse = LayerPulse(shape: .capsule, color: .blue, motion: StepBars.breath, duration: StepBars.breathDuration)
         XCTAssertEqual(pulse, LayerPulse(shape: .capsule, color: .blue, motion: StepBars.breath, duration: StepBars.breathDuration))
-        XCTAssertNotEqual(pulse.motion, LiveDot.breath)
+        XCTAssertNotEqual(pulse.motion, StatusDot.ring)
     }
 }
