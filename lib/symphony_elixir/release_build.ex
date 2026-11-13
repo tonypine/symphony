@@ -23,6 +23,10 @@ defmodule SymphonyElixir.ReleaseBuild do
       Symphony's pause with the failure (`waits_on: %{condition: "release_build:<repo key>:<sha>"}`).
       The reason clears once the build is rerun, a person chose to wait, or no held ticket waits on
       the commit any more.
+    * a run whose failed step is in the release gate's job (`SymphonyElixir.ReleaseGate`) asks nobody
+      and pauses nothing: Symphony files one Urgent fix ticket with the failure, or adds the failure
+      to the fix ticket still open, once per attempt of the run. A pause would hold the very ticket
+      that repairs it.
     * with no held ticket to ask, a build cancelled again or failed is logged with its commit and
       run and asked on Symphony itself (TP-1341, `SymphonyElixir.Questions` with subject
       `:symphony`, step `step_name/1`): rerun the build, or wait for a fix. The Inbox lists it with
@@ -53,6 +57,7 @@ defmodule SymphonyElixir.ReleaseBuild do
     MergeConfirmation,
     Pauses,
     Questions,
+    ReleaseGate,
     RunStore,
     TicketState,
     UpdateHold
@@ -131,7 +136,8 @@ defmodule SymphonyElixir.ReleaseBuild do
           reruns: non_neg_integer(),
           rerun_attempt: pos_integer() | nil,
           question: question() | nil,
-          answer: %{kind: :cancelled | :failed, attempt: pos_integer()} | nil
+          answer: %{kind: :cancelled | :failed, attempt: pos_integer()} | nil,
+          fix: %{identifier: String.t(), attempt: pos_integer()} | nil
         }
 
   @doc """
@@ -389,6 +395,7 @@ defmodule SymphonyElixir.ReleaseBuild do
   defp words(%{state: :superseded}, _now), do: "replaced by a newer build"
   defp words(%{state: :asked} = record, _now), do: "#{@lack_of_machine} #{record.reruns + 1} times; you were asked whether to keep retrying"
   defp words(%{state: :waiting}, _now), do: "#{@lack_of_machine}; you chose to wait"
+  defp words(%{state: :failed, fix: %{identifier: identifier}}, _now), do: "failed its release gate; #{identifier} was opened to fix it"
   defp words(%{state: :failed, answer: %{kind: :failed}}, _now), do: "failed on GitHub; waiting for a fix"
   defp words(%{state: :failed, question: nil}, _now), do: "failed on GitHub"
   defp words(%{state: :failed}, _now), do: "failed on GitHub; you were asked what to do"
@@ -428,7 +435,8 @@ defmodule SymphonyElixir.ReleaseBuild do
       reruns: 0,
       rerun_attempt: nil,
       question: nil,
-      answer: nil
+      answer: nil,
+      fix: nil
     }
   end
 
@@ -522,10 +530,33 @@ defmodule SymphonyElixir.ReleaseBuild do
   end
 
   defp failed(record, run) do
-    if asked?(record, :failed, run.attempt) or answered?(record, :failed, run.attempt),
-      do: %{record | state: :failed},
-      else: ask(record, run, :failed)
+    cond do
+      ReleaseGate.gate_failure?(record) -> gate_failed(record, run)
+      asked?(record, :failed, run.attempt) or answered?(record, :failed, run.attempt) -> %{record | state: :failed}
+      true -> ask(record, run, :failed)
+    end
   end
+
+  # The release gate failed: a fix ticket, never a question. Filed once per attempt of the run; a
+  # filing that failed is tried again on the next check.
+  defp gate_failed(record, run) do
+    attempt = run.attempt
+
+    case Map.get(record, :fix) do
+      %{attempt: ^attempt} ->
+        %{record | state: :failed}
+
+      _not_filed_for_this_attempt ->
+        opts = Map.get(record, :opts, [])
+
+        case Keyword.get(opts, :release_gate, ReleaseGate).failed(Map.drop(record, [:opts, :now]), opts) do
+          {filed, identifier} when filed in [:filed, :attached] -> Map.merge(record, %{state: :failed, fix: %{identifier: identifier, attempt: attempt}})
+          {:error, _reason} -> %{record | state: :failed}
+        end
+    end
+  end
+
+  defp fix_filed?(record), do: match?(%{identifier: _identifier}, Map.get(record, :fix))
 
   defp asked?(record, kind, attempt), do: match?(%{question: %{kind: ^kind, attempt: ^attempt}}, record)
   defp answered?(record, kind, attempt), do: match?(%{answer: %{kind: ^kind, attempt: ^attempt}}, record)
@@ -682,7 +713,7 @@ defmodule SymphonyElixir.ReleaseBuild do
   defp sync_pause(%{repo_key: repo_key} = record, opts) when is_binary(repo_key) do
     condition = condition(repo_key, record.sha)
 
-    if record.state == :failed and record.tickets != [] and not answered?(record, :failed, record.attempt) do
+    if record.state == :failed and record.tickets != [] and not answered?(record, :failed, record.attempt) and not fix_filed?(record) do
       reason = %{kind: :environment, waits_on: %{condition: condition}, text: pause_text(record)}
       _pause = pauses(opts).set(:symphony, reason, set_by: @setter)
     else
