@@ -312,7 +312,7 @@ public extension EnvironmentValues {
     @Entry var timelineGrowth: TimelineGrowth?
 }
 
-/// The Timeline section's title, with the count of events new since the person last looked ("3 new") beside it.
+/// The Timeline section's zone title, with the count of events new since the person last looked ("3 new") as its note.
 public struct TimelineTitle: View {
     let marks: TicketMarksRead?
 
@@ -321,19 +321,10 @@ public struct TimelineTitle: View {
     }
 
     public var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-            Text(TimelineSection.title)
-                .font(DesignTokens.TypeStyle.heading.font)
-                .accessibilityAddTraits(.isHeader)
-            if let new = marks?.newText {
-                Text(new)
-                    .font(DesignTokens.TypeStyle.secondary.font.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(DesignTokens.ColorToken.accent.color)
-                    .help(TimelineEntry.newHelp)
-                    .accessibilityLabel(marks?.newAccessibilityLabel ?? new)
-            }
-        }
+        ZoneTitle(
+            TimelineSection.title, note: marks?.newText, noteColor: .accentText, noteHelp: TimelineEntry.newHelp,
+            noteAccessibilityLabel: marks?.newAccessibilityLabel
+        )
     }
 }
 

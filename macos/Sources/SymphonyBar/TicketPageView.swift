@@ -1104,25 +1104,9 @@ struct TicketPageHeader: View {
                 .font(DesignTokens.TypeStyle.label.font)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
-            if let repo = page.repoKey { HeaderChip(text: repo, systemImage: SymphonyView.repos.symbol) }
-            if let epic = page.epicChip { HeaderChip(text: epic, systemImage: SymphonyView.initiatives.symbol) }
+            if let repo = page.repoKey { Chip(repo, kind: .repo) }
+            if let epic = page.epicChip { Chip(epic, kind: .epic) }
         }
-    }
-}
-
-/// A chip beside the identifier: the repo, the epic.
-private struct HeaderChip: View {
-    let text: String
-    let systemImage: String
-
-    var body: some View {
-        Label(text, systemImage: systemImage)
-            .font(DesignTokens.TypeStyle.caption.font)
-            .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .padding(.horizontal, DesignTokens.Space.s2)
-            .padding(.vertical, 2)
-            .background(DesignTokens.Surface.separator.color.opacity(0.5), in: Capsule())
     }
 }
 
