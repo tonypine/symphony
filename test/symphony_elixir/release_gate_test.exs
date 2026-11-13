@@ -51,7 +51,12 @@ defmodule SymphonyElixir.ReleaseGateTest do
   defp gh(overrides \\ %{}) do
     fn
       ["run", "view", @run_id, "--log-failed" | _rest], _opts ->
-        Map.get(overrides, :log, {"release gate\tTest the update\t2026-11-13T16:00:01.0Z ok [build]\nrelease gate\tTest the update\t2026-11-13T16:00:02.0Z 1 failed: rollback ```\nrelease gate\tTest the update\t2026-11-13T16:00:03.0Z ##[error]Process completed with exit code 1.\n", 0})
+        Map.get(
+          overrides,
+          :log,
+          {"release gate\tTest the update\t2026-11-13T16:00:01.0Z ok [build]\nrelease gate\tTest the update\t2026-11-13T16:00:02.0Z 1 failed: rollback ```\nrelease gate\tTest the update\t2026-11-13T16:00:03.0Z ##[error]Process completed with exit code 1.\n",
+           0}
+        )
 
       ["api", "repos/" <> _path, "--jq", _filter], _opts ->
         Map.get(overrides, :commit, {Jason.encode!(%{message: "TP-1507 Shared Row (#914)\n\nbody", url: "https://github.com/acme/symphony/commit/9f54098", files: ["macos/Sources/A.swift", 7]}), 0})
@@ -60,7 +65,16 @@ defmodule SymphonyElixir.ReleaseGateTest do
 
   defp build(overrides \\ %{}) do
     Map.merge(
-      %{sha: @sha, repo: @repo, repo_key: nil, url: @url, run_id: @run_id, number: 950, attempt: 1, failure: %{job: "release gate", step: "Test the update"}},
+      %{
+        sha: @sha,
+        repo: @repo,
+        repo_key: nil,
+        url: @url,
+        run_id: @run_id,
+        number: 950,
+        attempt: 1,
+        failure: %{job: "release gate", step: "Test the update"}
+      },
       overrides
     )
   end

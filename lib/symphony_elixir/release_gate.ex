@@ -71,7 +71,8 @@ defmodule SymphonyElixir.ReleaseGate do
 
   defp file(build, evidence, opts) do
     scope = Keyword.get_lazy(opts, :symphony_repo_key, fn -> Map.get(build, :repo_key) || Config.repo_key_or_nil() end)
-    attrs = %{scope: scope, repo_key: scope, component: @component, title: title(build), description: description(build, evidence)}
+    description = description(build, evidence)
+    attrs = %{scope: scope, repo_key: scope, component: @component, title: title(build), description: description}
 
     case fixer(opts).create(attrs, Keyword.put(opts, :priority, @urgent)) do
       {:ok, %{identifier: identifier}} when is_binary(identifier) ->
