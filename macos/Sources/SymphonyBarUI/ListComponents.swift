@@ -495,11 +495,20 @@ private struct StripSegment: View {
     let segment: DesignTokens.ProgressStrip.Segment
     let breathes: Bool
 
+    /// A breathing segment pulses on Core Animation's render server (`LayerPulse`, TP-1480), as a run's working bar
+    /// does. Drawn by SwiftUI on every frame (a `TimelineView`), one working sub-ticket had the hosting view lay the
+    /// whole page out each frame: an untouched ticket page kept the main thread about 24 % busy.
     var body: some View {
-        TimelineView(.animation(paused: !breathes)) { context in
-            RoundedRectangle(cornerRadius: DesignTokens.ProgressStrip.radius, style: .continuous)
-                .fill(DesignTokens.ProgressStrip.color(segment.status).color)
-                .opacity(ProgressStrip.breathOpacity(breathes: breathes, at: context.date))
+        let color = DesignTokens.ProgressStrip.color(segment.status).color
+        if breathes {
+            LayerPulse(
+                shape: .capsule,
+                color: color,
+                motion: .opacity(from: 1, to: DesignTokens.ProgressStrip.breatheOpacity),
+                duration: DesignTokens.ProgressStrip.breathePeriod / 2
+            )
+        } else {
+            RoundedRectangle(cornerRadius: DesignTokens.ProgressStrip.radius, style: .continuous).fill(color)
         }
     }
 }
