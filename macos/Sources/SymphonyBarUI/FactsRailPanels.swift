@@ -54,7 +54,7 @@ private struct PullRequestLine: View {
                     Text(model.name)
                         .font(DesignTokens.TypeStyle.rowTitle.font)
                         .fixedSize()
-                    StatusBadge(status: model.stateStatus, word: model.state)
+                    Badge(status: model.stateStatus, word: model.state)
                     Spacer(minLength: 0)
                 }
                 let meta = [model.head, model.size].compactMap { $0 }
@@ -83,7 +83,7 @@ private struct ChecksBlock: View {
                     .font(DesignTokens.TypeStyle.label.font)
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: DesignTokens.Space.s2)
-                StatusBadge(status: model.checksStatus, word: model.checksBadge)
+                Badge(status: model.checksStatus, word: model.checksBadge)
             }
             if let line = model.checksLine {
                 Text(line)
@@ -153,7 +153,7 @@ private struct CheckRow: View {
 
     @ViewBuilder private var mark: some View {
         switch check.state {
-        case .running: LiveDot(size: 7)
+        case .running: StatusDot(.working, live: true)
         case .passed: Image(systemName: "checkmark.circle.fill").font(.system(size: 11)).foregroundStyle(check.status.tint)
         case .failed: Image(systemName: "xmark.octagon.fill").font(.system(size: 11)).foregroundStyle(check.status.tint)
         case .waiting: Image(systemName: "clock").font(.system(size: 11)).foregroundStyle(.tertiary)
@@ -257,9 +257,7 @@ private struct TicketRow: View {
     var body: some View {
         FactRow(action: { open(row.identifier) }) {
             HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                Circle()
-                    .fill(row.status.tint)
-                    .frame(width: 7, height: 7)
+                StatusDot(row.status)
                     .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {

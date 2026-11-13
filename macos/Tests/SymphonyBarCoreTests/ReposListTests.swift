@@ -504,6 +504,7 @@ final class ReposListTests: XCTestCase {
             XCTAssertEqual(ReposChip(status: status).dot, dot)
             XCTAssertEqual(window(status, nil).chip, ReposChip(status: status))
         }
+        XCTAssertEqual([ReposChip.Dot.green, .orange, .grey, .red].map(\.status), [.done, .you, .idle, .problem])
     }
 
     func testShowsTheReposFromARunningSymphony() {

@@ -269,7 +269,7 @@ private struct PullRequestHeader: View {
     }
 
     @ViewBuilder private var badges: some View {
-        if let badge = page?.badge { StatusBadge(status: badge.status, word: badge.word).fixedSize() }
+        if let badge = page?.badge { Badge(status: badge.status, word: badge.word).fixedSize() }
         if let dates = page?.dates {
             Text(dates)
                 .font(DesignTokens.TypeStyle.secondary.font)
@@ -349,7 +349,7 @@ private struct ReviewHistory: View {
                                     // The badges line up whether the time has its date or not.
                                     .frame(minWidth: 84, alignment: .leading)
                             }
-                            StatusBadge(status: row.badge.status, word: row.badge.word).fixedSize()
+                            Badge(status: row.badge.status, word: row.badge.word).fixedSize()
                             Text(row.title).font(DesignTokens.TypeStyle.rowTitle.font)
                         }
                         .accessibilityElement(children: .ignore)
@@ -468,7 +468,7 @@ private struct TicketFacts: View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
             ChipText(text: ticket.text)
             HStack(spacing: DesignTokens.Space.s2) {
-                if let stage = ticket.stage { StatusBadge(status: stage.status, word: stage.word).fixedSize() }
+                if let stage = ticket.stage { Badge(status: stage.status, word: stage.word).fixedSize() }
                 if let waitingOn = ticket.waitingOn {
                     Text(waitingOn)
                         .font(DesignTokens.TypeStyle.secondary.font)

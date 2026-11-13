@@ -213,6 +213,40 @@ final class DesignGuardTests: XCTestCase {
         XCTAssertTrue(DesignGuard.formatBaseline(counts).hasSuffix("SymphonyBar/A.swift button 2\nSymphonyBar/A.swift disabled 1\n"))
     }
 
+    // MARK: - Status dots (TP-1506)
+
+    func testACircleInAStatusColourCounts() {
+        let found = scan("""
+        Circle()
+            .fill(control.status.tint)
+            .frame(width: 8, height: 8)
+        Circle().fill(DesignTokens.Status.idle.tint).frame(width: 8, height: 8)
+        .background(Circle().fill(color(.red)))
+        Circle().foregroundStyle(.green)
+        """)
+        XCTAssertEqual(found.filter { $0.kind == .dot }.map(\.line), [1, 4, 5, 6])
+        XCTAssertEqual(found.first { $0.kind == .dot }?.message, "View.swift:1: dot bypass Circle(): use \(DesignGuard.dotReplacement)")
+    }
+
+    func testACircleInAnotherColourOrTheSharedDotDoesNotCount() {
+        XCTAssertEqual(scan("""
+        Circle().fill(DesignTokens.ColorToken.accent.color).frame(width: 6, height: 6)
+        Circle().fill(.white).frame(width: 13, height: 13)
+        StatusDot(control.status, size: .large)
+        Circle()
+        Circle().stroke(DesignTokens.Surface.separator.color)
+        """).filter { $0.kind == .dot }, [])
+    }
+
+    func testTheDotKindIsABaselineKind() throws {
+        let counts: DesignGuard.Counts = ["SymphonyBar/A.swift": [.dot: 2]]
+        XCTAssertEqual(try DesignGuard.parseBaseline(DesignGuard.formatBaseline(counts)), counts)
+        XCTAssertTrue(DesignGuard.Kind.guarded.contains(.dot))
+        let failures = DesignGuard.failures(bypasses: scan("Circle().fill(row.status.tint)"), baseline: [:])
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertTrue(failures[0].hasPrefix("View.swift draws with 1 raw dot value(s) and is not in the baseline"), failures[0])
+    }
+
     // MARK: - What does not count
 
     func testTokensAndComponentsDoNotCount() {

@@ -25,7 +25,7 @@ struct PRWatchCardView: View {
     private var summary: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
             HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                StatusBadge(status: card.status, word: card.word).fixedSize()
+                Badge(status: card.status, word: card.word).fixedSize()
                 Text(card.headline)
                     .font(DesignTokens.TypeStyle.rowTitle.font)
                     .fixedSize(horizontal: false, vertical: true)

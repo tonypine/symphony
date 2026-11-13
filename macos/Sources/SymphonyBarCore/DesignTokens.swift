@@ -505,7 +505,10 @@ public enum DesignTokens {
 
         /// The weight on AppKit's scale (`NSFont.Weight`, −1 to 1), between its named weights for the catalog's
         /// in-between ones (550, 650).
-        public var systemWeight: Double {
+        public var systemWeight: Double { Self.systemWeight(css: weight) }
+
+        /// A CSS weight (100–900) on AppKit's scale, between its named weights for the in-between ones.
+        public static func systemWeight(css weight: Int) -> Double {
             let named: [(css: Double, system: Double)] = [
                 (100, -0.8), (200, -0.6), (300, -0.4), (400, 0), (500, 0.23), (600, 0.3), (700, 0.4), (800, 0.56), (900, 0.62),
             ]
@@ -561,6 +564,147 @@ public enum DesignTokens {
         public static let padding: Double = 4
         /// How long the pointer rests on a chip before its popover opens.
         public static let hoverDelay: Double = 0.5
+    }
+
+    /// The badge (`.badge`, design-system.md C7): a status glyph and word on the status tint, in a capsule.
+    public enum Badge {
+        /// The catalog's three sizes: `.badge-sm`, `.badge`, `.badge-lg`.
+        public enum Size: String, CaseIterable, Equatable {
+            case small, regular, large
+
+            /// The capsule's height.
+            public var height: Double {
+                switch self {
+                case .small: 18
+                case .regular: 20
+                case .large: 24
+                }
+            }
+
+            /// The room before the glyph (or the word, without one).
+            public var leading: Double {
+                switch self {
+                case .small: 5
+                case .regular: 6
+                case .large: 8
+                }
+            }
+
+            /// The room after the word.
+            public var trailing: Double {
+                switch self {
+                case .small: 6
+                case .regular: 8
+                case .large: 10
+                }
+            }
+
+            /// The glyph's square.
+            public var glyph: Double {
+                switch self {
+                case .small: 10
+                case .regular: 12
+                case .large: 14
+                }
+            }
+
+            /// The word's size at the system's default text size: `--type-label`, 10.5 pt small, 13 pt large.
+            public var textSize: Double {
+                switch self {
+                case .small: 10.5
+                case .regular: TypeStyle.label.size
+                case .large: 13
+                }
+            }
+
+            /// The word's CSS weight.
+            public var weight: Int {
+                switch self {
+                case .small, .regular: TypeStyle.label.weight
+                case .large: 600
+                }
+            }
+        }
+
+        /// The gap between the glyph and the word.
+        public static let gap: Double = 4
+        /// On a selected row (`.row[aria-selected="true"] .badge`): white at 20 % behind the word in `text-on-accent`.
+        public static let selectedFill: Double = 0.2
+    }
+
+    /// The count badge (`.count`): how many things wait in a place. Coloured only for "needs you" and "problem".
+    public enum CountBadge {
+        public static let height: Double = 18
+        public static let minWidth: Double = 18
+        /// The room on each side of the number.
+        public static let inset: Double = 5
+        public static let textSize: Double = 11
+        public static let weight = 650
+        /// The highest number drawn; above it the badge reads "99+".
+        public static let most = 99
+        /// Its shadow (`0 1px 2px`): the role's colour at 40 %.
+        public static let shadowOpacity: Double = 0.4
+        public static let shadowBlur: Double = 2
+        public static let shadowY: Double = 1
+        /// The dot form for the collapsed sidebar: a filled circle, no number.
+        public static let dot: Double = 8
+
+        /// The roles it is coloured for; any other count is quiet.
+        public static func isColoured(_ role: Status?) -> Bool { role == .you || role == .problem }
+
+        /// The number as drawn: 1 to 99, then "99+".
+        public static func text(_ count: Int) -> String { count > most ? "\(most)+" : "\(count)" }
+    }
+
+    /// The status dot (`.dot`): the smallest status mark, always beside a word.
+    public enum StatusDot {
+        /// `.dot` (8 pt) and `.dot-lg` (10 pt).
+        public enum Size: String, CaseIterable, Equatable {
+            case regular, large
+
+            public var diameter: Double {
+                switch self {
+                case .regular: 8
+                case .large: 10
+                }
+            }
+        }
+
+        /// The gap between the dot and its word (`.dot-label`).
+        public static let labelGap = Space.s2
+        /// The live ring (`@keyframes dot-live`): it starts at the dot at 60 % and grows to 2.6 times the dot while
+        /// it fades out, over the first 70 % of each 1.8 s period, then waits for the next.
+        public static let ringScale: Double = 2.6
+        public static let ringOpacity: Double = 0.6
+        public static let ringPeriod: Double = 1.8
+        public static let ringReach: Double = 0.7
+    }
+
+    /// The keyboard hint (`.kbd-hint`): the keys of a shortcut as key caps.
+    public enum KeyHint {
+        public static let height: Double = 20
+        public static let minWidth: Double = 20
+        /// The room on each side of a key's symbol; a plain hint's is 1 pt.
+        public static let inset: Double = 5
+        public static let plainInset: Double = 1
+        public static let radius: Double = 6
+        public static let textSize: Double = 11
+        public static let weight = 550
+        /// The gap between two keys.
+        public static let gap: Double = 3
+        /// The key cap's ring and its 1 pt bottom edge.
+        public static let edge: Double = 1
+
+        /// The keys of a shortcut written with a space between them (`"⌘ ⇧ F"`), one per cap.
+        public static func keys(_ shortcut: String) -> [String] {
+            shortcut.split(whereSeparator: \.isWhitespace).map(String.init)
+        }
+
+        /// What VoiceOver reads for the keys: each modifier's name, then the key ("Command Shift F").
+        public static func spoken(_ keys: [String]) -> String {
+            let names = ["⌘": "Command", "⇧": "Shift", "⌥": "Option", "⌃": "Control", "↩": "Return", "⎋": "Escape", "⌫": "Delete", "⇥": "Tab", "␣": "Space"]
+            return keys.map { names[$0] ?? $0 }.joined(separator: " ")
+        }
     }
 
     /// Motion (§3.8 and `director-ticket-page.md` §4): the durations, the curves built from them, and the press and

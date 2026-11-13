@@ -382,6 +382,16 @@ public enum ReposChip: Equatable {
         case orange
         case grey
         case red
+
+        /// The status colour the dot is drawn in.
+        public var status: DesignTokens.Status {
+            switch self {
+            case .green: .done
+            case .orange: .you
+            case .grey: .idle
+            case .red: .problem
+            }
+        }
     }
 
     public init(status: SymphonyStatus) {

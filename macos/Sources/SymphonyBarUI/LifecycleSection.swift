@@ -39,16 +39,8 @@ private struct LifecycleHead: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-            Group {
-                if model.live {
-                    LiveDot(size: 8)
-                } else {
-                    Circle().fill(DesignTokens.Status.idle.tint).frame(width: 8, height: 8)
-                }
-            }
-            .frame(width: 12, height: 12)
-            .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-            .accessibilityHidden(true)
+            StatusDot(model.live ? .working : .idle, live: model.live)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
             Text(model.whereLine)
                 .font(DesignTokens.TypeStyle.rowTitle.font)
                 .lineLimit(2)

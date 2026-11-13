@@ -271,32 +271,295 @@ struct GlassModifier<S: Shape>: ViewModifier {
     }
 }
 
-/// C7: a status's symbol and word in a capsule tinted with its color. The word stays in the primary text color, so
-/// contrast never depends on the hue.
-public struct StatusBadge: View {
-    let status: DesignTokens.Status
-    var word: String?
-    var small = true
+extension DesignTokens.TypeStyle {
+    /// A size and CSS weight a component sets outside the type scale (a badge's 10.5 pt, a count's 650), under the
+    /// system's text size as every style is.
+    public static func font(size: Double, weight: Int) -> Font {
+        let font = NSFont.systemFont(
+            ofSize: CGFloat(size * textScale), weight: NSFont.Weight(rawValue: CGFloat(systemWeight(css: weight)))
+        )
+        return Font(font as CTFont)
+    }
+}
 
-    public init(status: DesignTokens.Status, word: String? = nil, small: Bool = true) {
-        self.status = status
+/// C7, the catalog's Badge (`.badge`, TP-1506): a status glyph and word on the status tint, the one way the Director
+/// says what state something is in. Three sizes (18, 20 and 24 pt); the word in the status's text colour and the
+/// glyph in its colour. `recommended` is the accent form without a glyph, for a Question's option. On a selected row
+/// (`selected`) it is white at 20 % behind the word and glyph in `text-on-accent`. VoiceOver reads the word only.
+public struct Badge: View {
+    public enum Role: Equatable {
+        case status(DesignTokens.Status)
+        /// The accent, for what is not a status: Recommended.
+        case accent
+    }
+
+    let role: Role
+    let word: String
+    let size: DesignTokens.Badge.Size
+    let glyph: Bool
+    let selected: Bool
+
+    public init(
+        status: DesignTokens.Status, word: String? = nil, size: DesignTokens.Badge.Size = .regular, glyph: Bool = true,
+        selected: Bool = false
+    ) {
+        self.init(role: .status(status), word: word ?? status.word, size: size, glyph: glyph, selected: selected)
+    }
+
+    public init(role: Role, word: String, size: DesignTokens.Badge.Size = .regular, glyph: Bool = true, selected: Bool = false) {
+        self.role = role
         self.word = word
-        self.small = small
+        self.size = size
+        self.glyph = glyph
+        self.selected = selected
+    }
+
+    /// The word "Recommended" on the accent tint, without a glyph.
+    public static func recommended(_ word: String = Badge.recommendedWord, size: DesignTokens.Badge.Size = .regular) -> Badge {
+        Badge(role: .accent, word: word, size: size, glyph: false)
+    }
+
+    public static let recommendedWord = "Recommended"
+
+    /// The glyph shown, if any: a status's symbol; the accent form has none.
+    public var symbol: String? {
+        guard glyph, case let .status(status) = role else { return nil }
+        return status.symbol
     }
 
     public var body: some View {
-        Label {
-            Text(word ?? status.word).foregroundStyle(.primary)
-        } icon: {
-            Image(systemName: status.symbol).foregroundStyle(status.tint)
+        HStack(spacing: DesignTokens.Badge.gap) {
+            if let symbol {
+                Image(systemName: symbol)
+                    .symbolRenderingMode(.monochrome)
+                    .font(DesignTokens.TypeStyle.font(size: size.glyph - 1, weight: 500))
+                    .foregroundStyle(glyphColor)
+                    .frame(width: size.glyph, height: size.glyph)
+                    .accessibilityHidden(true)
+            }
+            Text(word)
+                .font(DesignTokens.TypeStyle.font(size: size.textSize, weight: size.weight))
+                .tracking(CGFloat(DesignTokens.TypeStyle.label.tracking * size.textSize * DesignTokens.TypeStyle.textScale))
+                .foregroundStyle(textColor)
+                .lineLimit(1)
         }
-        .font(small ? DesignTokens.TypeStyle.label.font : DesignTokens.TypeStyle.body.font)
-        .labelStyle(.titleAndIcon)
-        .padding(.horizontal, DesignTokens.Space.s2)
-        .padding(.vertical, DesignTokens.Space.s1 / 2)
-        .background(status.badgeFill, in: Capsule())
+        .fixedSize()
+        .padding(.leading, size.leading)
+        .padding(.trailing, size.trailing)
+        .frame(height: size.height)
+        .background(fill, in: Capsule())
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(word ?? status.word)
+        .accessibilityLabel(word)
+    }
+
+    private var fill: Color {
+        if selected { return DesignTokens.TextColor.onAccent.color.opacity(DesignTokens.Badge.selectedFill) }
+        return switch role {
+        case let .status(status): status.badgeFill
+        case .accent: DesignTokens.ColorToken.accentTint.color
+        }
+    }
+
+    private var textColor: Color {
+        if selected { return DesignTokens.TextColor.onAccent.color }
+        return switch role {
+        case let .status(status): status.text
+        case .accent: DesignTokens.ColorToken.accentText.color
+        }
+    }
+
+    private var glyphColor: Color {
+        if selected { return DesignTokens.TextColor.onAccent.color }
+        return switch role {
+        case let .status(status): status.tint
+        case .accent: DesignTokens.ColorToken.accent.color
+        }
+    }
+}
+
+/// The catalog's Count badge (`.count`, TP-1506): how many things wait in a place. 1 to 99, then "99+"; filled with
+/// its role's colour only for "needs you" (orange) and "problem" (red), quiet (secondary on the sunken surface with a
+/// hairline) otherwise; not drawn at all at zero. The dot form (8 pt, no number) is for the collapsed sidebar.
+/// VoiceOver reads it as part of its place: the place's label, then `spoken` ("Inbox, 4 waiting").
+public struct CountBadge: View {
+    public enum Form: Equatable {
+        case number
+        case dot
+    }
+
+    let count: Int
+    let role: DesignTokens.Status?
+    let form: Form
+    let spoken: String
+
+    public init(_ count: Int, role: DesignTokens.Status? = nil, form: Form = .number, spoken: String? = nil) {
+        self.count = count
+        self.role = role
+        self.form = form
+        self.spoken = spoken ?? Self.spoken(count)
+    }
+
+    /// What it reads by default: "4 waiting".
+    public static func spoken(_ count: Int) -> String { "\(count) waiting" }
+
+    /// "Inbox, 4 waiting": a place and its count, as VoiceOver reads them together.
+    public static func announcement(place: String, spoken: String) -> String { "\(place), \(spoken)" }
+
+    /// The role it is filled with, or nil when it is quiet.
+    public var colour: DesignTokens.Status? { DesignTokens.CountBadge.isColoured(role) ? role : nil }
+
+    public var body: some View {
+        if count > 0 {
+            Group {
+                switch form {
+                case .number: number
+                case .dot: dot
+                }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(spoken)
+        }
+    }
+
+    private var number: some View {
+        Text(DesignTokens.CountBadge.text(count))
+            .font(DesignTokens.TypeStyle.font(size: DesignTokens.CountBadge.textSize, weight: DesignTokens.CountBadge.weight))
+            .monospacedDigit()
+            .foregroundStyle(colour == nil ? DesignTokens.TextColor.secondary.color : DesignTokens.TextColor.onAccent.color)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.horizontal, DesignTokens.CountBadge.inset)
+            .frame(minWidth: DesignTokens.CountBadge.minWidth, minHeight: DesignTokens.CountBadge.height)
+            .background { face(Capsule()) }
+    }
+
+    private var dot: some View {
+        face(Circle()).frame(width: DesignTokens.CountBadge.dot, height: DesignTokens.CountBadge.dot)
+    }
+
+    @ViewBuilder private func face<S: Shape>(_ shape: S) -> some View {
+        if let colour {
+            shape.fill(colour.tint)
+                .shadow(
+                    color: colour.tint.opacity(DesignTokens.CountBadge.shadowOpacity),
+                    radius: DesignTokens.CountBadge.shadowBlur / 2, y: DesignTokens.CountBadge.shadowY
+                )
+        } else {
+            shape.fill(DesignTokens.Surface.sunken.color)
+                .overlay(shape.stroke(DesignTokens.Surface.separator.color, lineWidth: 1))
+        }
+    }
+}
+
+/// The catalog's Status dot (`.dot`, TP-1506): the smallest status mark, 8 or 10 pt in a status colour, for a dense
+/// place where a glyph would be too heavy. It is always beside a word, or the lead of a row whose badge carries the
+/// word, so VoiceOver skips it. The live form sends a soft ring out every 1.8 s (`DesignTokens.StatusDot`) and is
+/// still under Reduce Motion. On the window's ticket page (`liveDurations`) the ring runs on Core Animation
+/// (`LayerPulse`), off the main thread (TP-1480); a snapshot draws the dot still.
+public struct StatusDot: View {
+    let status: DesignTokens.Status
+    let size: DesignTokens.StatusDot.Size
+    let live: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.liveDurations) private var onLayer
+
+    public init(_ status: DesignTokens.Status, size: DesignTokens.StatusDot.Size = .regular, live: Bool = false) {
+        self.status = status
+        self.size = size
+        self.live = live
+    }
+
+    /// The ring's motion on Core Animation.
+    static let ring = LayerPulse.Motion.ring(
+        scale: DesignTokens.StatusDot.ringScale, opacity: DesignTokens.StatusDot.ringOpacity, reach: DesignTokens.StatusDot.ringReach
+    )
+
+    /// Whether the ring is drawn: live, and Reduce Motion off.
+    static func rings(live: Bool, reduceMotion: Bool) -> Bool { live && !reduceMotion }
+
+    public var body: some View {
+        Circle()
+            .fill(status.tint)
+            .frame(width: size.diameter, height: size.diameter)
+            .background {
+                if Self.rings(live: live, reduceMotion: reduceMotion) { ringView }
+            }
+            .accessibilityHidden(true)
+    }
+
+    @ViewBuilder private var ringView: some View {
+        if onLayer {
+            LayerPulse(shape: .circle, color: status.tint, motion: Self.ring, duration: DesignTokens.StatusDot.ringPeriod)
+        } else {
+            Circle()
+                .fill(status.tint)
+                .keyframeAnimator(initialValue: RingFrame(), repeating: true) { content, frame in
+                    content.scaleEffect(frame.scale).opacity(frame.opacity)
+                } keyframes: { _ in
+                    let reach = DesignTokens.StatusDot.ringPeriod * DesignTokens.StatusDot.ringReach
+                    let rest = DesignTokens.StatusDot.ringPeriod - reach
+                    KeyframeTrack(\.scale) {
+                        CubicKeyframe(DesignTokens.StatusDot.ringScale, duration: reach)
+                        LinearKeyframe(DesignTokens.StatusDot.ringScale, duration: rest)
+                    }
+                    KeyframeTrack(\.opacity) {
+                        CubicKeyframe(0, duration: reach)
+                        LinearKeyframe(0, duration: rest)
+                    }
+                }
+        }
+    }
+
+    struct RingFrame {
+        var scale: Double = 1
+        var opacity: Double = DesignTokens.StatusDot.ringOpacity
+    }
+}
+
+/// The catalog's Keyboard hint (`.kbd-hint`, TP-1506): the keys of a shortcut as key caps, on the content surface
+/// with a strong ring and a 1 pt bottom edge; `plain` draws the keys alone, for a menu, white on its highlighted
+/// item (`highlighted`). Modifiers in the macOS order, ⌃ ⌥ ⇧ ⌘, then the key. VoiceOver reads them as words:
+/// "Command Shift F".
+public struct KeyboardHint: View {
+    let keys: [String]
+    let plain: Bool
+    let highlighted: Bool
+
+    /// `shortcut` is the keys with a space between them: `"⌘ ⇧ F"`, `"1"`.
+    public init(_ shortcut: String, plain: Bool = false, highlighted: Bool = false) {
+        keys = DesignTokens.KeyHint.keys(shortcut)
+        self.plain = plain
+        self.highlighted = highlighted
+    }
+
+    public var body: some View {
+        HStack(spacing: DesignTokens.KeyHint.gap) {
+            ForEach(Array(keys.enumerated()), id: \.offset) { _, key in cap(key) }
+        }
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(DesignTokens.KeyHint.spoken(keys))
+    }
+
+    @ViewBuilder private func cap(_ key: String) -> some View {
+        let text = Text(key)
+            .font(DesignTokens.TypeStyle.font(size: DesignTokens.KeyHint.textSize, weight: DesignTokens.KeyHint.weight))
+            .foregroundStyle(plain && highlighted ? DesignTokens.TextColor.onAccent.color : DesignTokens.TextColor.secondary.color)
+            .lineLimit(1)
+        if plain {
+            text.padding(.horizontal, DesignTokens.KeyHint.plainInset)
+                .frame(minHeight: DesignTokens.KeyHint.height)
+        } else {
+            let shape = RoundedRectangle(cornerRadius: DesignTokens.KeyHint.radius, style: .continuous)
+            text.padding(.horizontal, DesignTokens.KeyHint.inset)
+                .frame(minWidth: DesignTokens.KeyHint.minWidth, minHeight: DesignTokens.KeyHint.height)
+                .background {
+                    shape.fill(DesignTokens.Surface.content.color)
+                        .edgeHighlight(shape)
+                        .background(shape.fill(DesignTokens.Surface.strong.color).offset(y: DesignTokens.KeyHint.edge))
+                        .overlay(shape.stroke(DesignTokens.Surface.strong.color, lineWidth: DesignTokens.KeyHint.edge))
+                }
+        }
     }
 }
 
@@ -312,10 +575,7 @@ public struct ConnectionState: View {
 
     public var body: some View {
         HStack(spacing: DesignTokens.Space.s1) {
-            Circle()
-                .fill(state.connectionStatus.tint)
-                .frame(width: 8, height: 8)
-                .accessibilityHidden(true)
+            StatusDot(state.connectionStatus)
             if let label = state.connectionLabel {
                 Text(label).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
             }

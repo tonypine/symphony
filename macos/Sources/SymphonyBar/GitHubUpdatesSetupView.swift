@@ -171,7 +171,7 @@ private struct RelayOptionRow: View {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                     HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                         Text(option.label).font(DesignTokens.TypeStyle.rowTitle.font)
-                        if option.recommended { RecommendedBadge() }
+                        if option.recommended { Badge.recommended() }
                     }
                     Text(option.summary)
                         .font(DesignTokens.TypeStyle.secondary.font)

@@ -3,13 +3,13 @@
 //
 // 1. `DESIGN_SHEET_PHASE=plan` writes `<sheet>/shots.json`, the references to draw: the ticket page prototype's three
 //    moments, and the catalog's Window stories for the ticket page, Home, Initiatives and Tickets, at the laptop's and
-//    the desktop's widths, in light and dark; then the catalog's Chip stories, and its Button, Icon button and Inline
-//    refusal stories, in light and dark.
+//    the desktop's widths, in light and dark; then the catalog's Chip stories, its Button, Icon button and Inline
+//    refusal stories, and its Badge, Count badge, Status dot and Keyboard hint stories, in light and dark.
 // 2. capture.py draws each reference into `<sheet>/reference/<id>.png` and its size in points into
 //    `<sheet>/references.json`.
 // 3. `DESIGN_SHEET_PHASE=compose` draws the native page at each reference's size, puts the two side by side in
-//    `<sheet>/<id>.png` and lists them in `<sheet>/index.html`; the Button page, `<sheet>/button.html`, lists the
-//    Button, Icon button and Inline refusal stories alone.
+//    `<sheet>/<id>.png` and lists them in `<sheet>/index.html`; each component page (`<sheet>/button.html`,
+//    `badge.html`, `count-badge.html`, `status-dot.html`, `keyboard-hint.html`) lists its stories alone.
 //
 // It is evidence, not a gate: nothing here compares pixels.
 import AppKit
@@ -115,11 +115,12 @@ func sheetShots() -> [SheetShot] {
             ))
         }
         // The catalog's Button, Icon button and Inline refusal stories beside the shared components (TP-1505).
-        for story in componentStories {
+        // Then its Badge, Count badge, Status dot and Keyboard hint stories (TP-1506).
+        for story in componentStories + badgeStories {
             shots.append(SheetShot(
                 id: "\(story.component)-\(story.id)-\(theme)", title: "Catalog › Components › \(story.title) › \(story.id) · \(theme)",
-                link: "docs/design/catalog/index.html#components/\(story.component)/\(story.id)",
-                selector: ".stage-inner > :first-child", width: story.width, height: story.height, theme: theme,
+                link: "docs/design/catalog/index.html#components/\(story.reference?.address ?? "\(story.component)/\(story.id)")",
+                selector: story.reference?.selector ?? ".stage-inner > :first-child", width: story.width, height: story.height, theme: theme,
                 native: "the shared \(story.title.lowercased())"
             ) { width, height in AnyView(story.draw().frame(width: width, height: height, alignment: .topLeading)) })
         }
@@ -127,9 +128,18 @@ func sheetShots() -> [SheetShot] {
     return shots
 }
 
-/// The rows of the Button page: the catalog's Button, Icon button and Inline refusal stories.
-func isButtonPageShot(_ id: String) -> Bool {
-    ["button-", "icon-button-", "inline-refusal-"].contains { id.hasPrefix($0) }
+/// The sheet's component pages: each page's file, its title, and the catalog components whose stories it lists.
+let sheetComponentPages: [(file: String, title: String, components: [String])] = [
+    ("button.html", "Button", ["button", "icon-button", "inline-refusal"]),
+    ("badge.html", "Badge", ["badge"]),
+    ("count-badge.html", "Count badge", ["count-badge"]),
+    ("status-dot.html", "Status dot", ["status-dot"]),
+    ("keyboard-hint.html", "Keyboard hint", ["keyboard-hint"]),
+]
+
+/// Whether the row `id` belongs to a page listing `components`.
+func isPageShot(_ id: String, components: [String]) -> Bool {
+    components.contains { id.hasPrefix($0 + "-") }
 }
 
 /// Writes the references capture.py draws.
@@ -188,7 +198,7 @@ func composeDesignSheet(_ sheet: URL) {
     let measured = (try? Data(contentsOf: sheet.appendingPathComponent("references.json")))
         .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: [String: Double]] } ?? [:]
     var rows = ""
-    var buttonRows = ""
+    var pageRows = [String](repeating: "", count: sheetComponentPages.count)
     for shot in sheetShots() {
         let size = measured[shot.id].map { CGSize(width: $0["width"] ?? shot.width, height: $0["height"] ?? shot.height) }
             ?? CGSize(width: shot.width, height: shot.height)
@@ -202,10 +212,18 @@ func composeDesignSheet(_ sheet: URL) {
 
         """
         rows += row
-        if isButtonPageShot(shot.id) { buttonRows += row }
+        for (index, page) in sheetComponentPages.enumerated() where isPageShot(shot.id, components: page.components) {
+            pageRows[index] += row
+        }
     }
-    writeSheetPage(sheet.appendingPathComponent("index.html"), title: "Design sheet", lead: "<p><a href=\"button.html\">The Button page</a>: the Button, Icon button and Inline refusal stories alone.</p>", rows: rows)
-    writeSheetPage(sheet.appendingPathComponent("button.html"), title: "Design sheet · Button", lead: "<p><a href=\"index.html\">Every row</a></p>", rows: buttonRows)
+    let pages = sheetComponentPages.map { "<a href=\"\($0.file)\">\(htmlEscape($0.title))</a>" }.joined(separator: " · ")
+    writeSheetPage(sheet.appendingPathComponent("index.html"), title: "Design sheet", lead: "<p>Component pages, each with its stories alone: \(pages)</p>", rows: rows)
+    for (index, page) in sheetComponentPages.enumerated() {
+        writeSheetPage(
+            sheet.appendingPathComponent(page.file), title: "Design sheet · \(page.title)", lead: "<p><a href=\"index.html\">Every row</a></p>",
+            rows: pageRows[index]
+        )
+    }
 }
 
 /// One page of the sheet: its rows under the title.

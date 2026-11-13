@@ -1,7 +1,8 @@
 # The design guard's baseline (TP-1493, docs/design/design-system.md §3.11): how many raw style values each view
 # file still has, per kind, and (TP-1505) how many buttons without the shared style (`button`) and controls turned
-# off without a reason (`disabled`). It must equal what the guard counts: lower a number in the same change that
-# removes a bypass, and delete the line when it reaches zero. A file not listed here may have none.
+# off without a reason (`disabled`), and (TP-1506) how many status dots drawn by hand (`dot`). It must equal what
+# the guard counts: lower a number in the same change that removes a bypass, and delete the line when it reaches
+# zero. A file not listed here may have none.
 SymphonyBar/ActionRail.swift color 4
 SymphonyBar/ActionRail.swift number 6
 SymphonyBar/ActionRail.swift button 4
@@ -38,8 +39,8 @@ SymphonyBar/HomeInboxView.swift color 7
 SymphonyBar/HomeInboxView.swift button 2
 SymphonyBar/HomeInboxView.swift disabled 2
 SymphonyBar/HomeView.swift font 2
-SymphonyBar/HomeView.swift color 13
-SymphonyBar/HomeView.swift number 3
+SymphonyBar/HomeView.swift color 11
+SymphonyBar/HomeView.swift number 1
 SymphonyBar/HomeView.swift button 1
 SymphonyBar/HomeView.swift disabled 2
 SymphonyBar/InboxMoveViews.swift color 5
@@ -73,10 +74,10 @@ SymphonyBar/PullRequestPageView.swift button 4
 SymphonyBar/QualityView.swift color 13
 SymphonyBar/QualityView.swift number 1
 SymphonyBar/QualityView.swift button 5
-SymphonyBar/ReposView.swift font 20
-SymphonyBar/ReposView.swift color 32
+SymphonyBar/ReposView.swift font 17
+SymphonyBar/ReposView.swift color 28
 SymphonyBar/ReposView.swift rawColor 1
-SymphonyBar/ReposView.swift number 44
+SymphonyBar/ReposView.swift number 42
 SymphonyBar/ReposView.swift button 18
 SymphonyBar/ReposView.swift disabled 11
 SymphonyBar/SettingsView.swift font 3
@@ -93,8 +94,8 @@ SymphonyBar/ShippedView.swift number 2
 SymphonyBar/SituationLine.swift color 2
 SymphonyBar/SituationLine.swift number 8
 SymphonyBar/SymphonyWindowView.swift font 3
-SymphonyBar/SymphonyWindowView.swift color 5
-SymphonyBar/SymphonyWindowView.swift number 2
+SymphonyBar/SymphonyWindowView.swift color 4
+SymphonyBar/SymphonyWindowView.swift number 1
 SymphonyBar/SymphonyWindowView.swift button 13
 SymphonyBar/SymphonyWindowView.swift disabled 7
 SymphonyBar/TicketPageView.swift font 2
@@ -133,7 +134,7 @@ SymphonyBarUI/LifecycleSection.swift font 6
 SymphonyBarUI/LifecycleSection.swift color 15
 SymphonyBarUI/LifecycleSection.swift number 14
 SymphonyBarUI/QuestionBlock.swift font 6
-SymphonyBarUI/QuestionBlock.swift color 13
+SymphonyBarUI/QuestionBlock.swift color 11
 SymphonyBarUI/QuestionBlock.swift rawColor 2
 SymphonyBarUI/QuestionBlock.swift number 10
 SymphonyBarUI/QuestionBlock.swift button 1

@@ -405,7 +405,7 @@ struct LineList: View {
 
 // MARK: - Marks
 
-/// A state's mark: its symbol in its tint, or the live dot while it works.
+/// A state's mark: its symbol in its tint, or the live status dot while it works.
 struct StateMark: View {
     let symbol: String
     let status: DesignTokens.Status
@@ -415,7 +415,7 @@ struct StateMark: View {
     var body: some View {
         Group {
             if live {
-                LiveDot(size: size * 0.6)
+                StatusDot(.working, size: size < 15 ? .regular : .large, live: true)
             } else {
                 Image(systemName: symbol)
                     .font(.system(size: size, weight: .medium))
@@ -427,37 +427,3 @@ struct StateMark: View {
     }
 }
 
-/// The working dot, breathing while it works; still under Reduce Motion. On the window's page its halo breathes on
-/// Core Animation (`LayerPulse`), off the main thread (TP-1480); a snapshot draws it still.
-struct LiveDot: View {
-    var size: Double = 8
-    @State private var breathing = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.liveDurations) private var live
-
-    var body: some View {
-        Circle()
-            .fill(DesignTokens.Status.working.tint)
-            .frame(width: size, height: size)
-            .background { halo }
-            .onAppear {
-                guard !reduceMotion, !live else { return }
-                withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) { breathing = true }
-            }
-    }
-
-    @ViewBuilder private var halo: some View {
-        if live, !reduceMotion {
-            LayerPulse(shape: .circle, color: Self.haloColor, motion: Self.breath, duration: Self.breathDuration)
-        } else {
-            Circle()
-                .fill(Self.haloColor)
-                .scaleEffect(breathing ? 2.2 : 1.6)
-        }
-    }
-
-    static let haloColor = DesignTokens.Status.working.tint.opacity(0.25)
-    /// The halo's breath: from 1.6 to 2.2 times the dot and back, 1.2 s each way.
-    static let breath = LayerPulse.Motion.scale(from: 1.6, to: 2.2)
-    static let breathDuration = 1.2
-}

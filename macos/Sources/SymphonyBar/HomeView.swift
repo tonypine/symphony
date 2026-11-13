@@ -258,7 +258,7 @@ private struct BoardGroup<Row: View>: View {
             Text(group.title)
                 .font(DesignTokens.TypeStyle.rowTitle.font)
                 .foregroundStyle(group.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-            if !group.isEmpty { CountPill(count: group.count, kind: group.kind) }
+            CountBadge(group.count, role: group.kind.status).accessibilityHidden(true)
             Spacer(minLength: DesignTokens.Space.s3)
             if let hint = group.isEmpty ? HomeBoard.emptyHint : group.hint {
                 Text(hint)
@@ -287,28 +287,6 @@ private struct GroupHeadingStyle: ButtonStyle {
                 .background { state.surface.map { Rectangle().fill($0.fill) } }
                 .onHover { hovered = $0 }
         }
-    }
-}
-
-/// The count of a group's rows: tinted for Waiting on you and Retrying, quiet for the others.
-private struct CountPill: View {
-    let count: Int
-    let kind: DesignTokens.SituationKind
-
-    private var tinted: Bool { kind == .you || kind == .retrying }
-
-    var body: some View {
-        Text(count, format: .number)
-            .font(DesignTokens.TypeStyle.label.font)
-            .monospacedDigit()
-            .foregroundStyle(tinted ? AnyShapeStyle(kind.tint) : AnyShapeStyle(.secondary))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 1)
-            .background(
-                tinted ? AnyShapeStyle(kind.status.badgeFill) : AnyShapeStyle(.quaternary),
-                in: Capsule()
-            )
-            .accessibilityHidden(true)
     }
 }
 

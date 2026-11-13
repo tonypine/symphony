@@ -1829,7 +1829,8 @@ MainActor.assumeIsolated {
         render(panelStories(), scheme, to: "component-panel-\(suffix).png")
         render(chipVariants(), scheme, to: "component-chip-\(suffix).png")
         // The catalog's Button, Icon button and Inline refusal stories (TP-1505), one snapshot each.
-        for story in componentStories {
+        // The catalog's Badge, Count badge, Status dot and Keyboard hint stories (TP-1506), one snapshot each.
+        for story in componentStories + badgeStories {
             render(componentStorySnapshot(story), scheme, to: "\(story.component)-\(story.id)-\(suffix).png")
         }
         // The Situation line (TP-1439): every kind in the full and the compact size, and forced, "and n more", narrow.

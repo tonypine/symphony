@@ -1182,9 +1182,7 @@ struct DispatchControlLabel: View {
 
     var body: some View {
         HStack(spacing: DesignTokens.Space.s2) {
-            Circle()
-                .fill(control.status.tint)
-                .frame(width: 8, height: 8)
+            StatusDot(control.status)
             Text(control.word)
                 // Plain colors: the quiet button's own foreground is the accent, which a hierarchical style would take.
                 .foregroundStyle(control.mode == .paused ? control.status.tint : Color.primary)
@@ -1217,7 +1215,7 @@ struct DispatchPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
             HStack(spacing: DesignTokens.Space.s2) {
-                Circle().fill(control.status.tint).frame(width: 10, height: 10).accessibilityHidden(true)
+                StatusDot(control.status, size: .large)
                 Text(control.word).font(DesignTokens.TypeStyle.rowTitle.font)
             }
             if !control.pauseFacts.isEmpty {
