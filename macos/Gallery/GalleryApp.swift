@@ -273,7 +273,7 @@ struct GalleryView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: DesignTokens.Space.s3) {
                 RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
-                    .fill(LinearGradient(colors: [DesignTokens.StateSurface.selected.color, DesignTokens.Surface.strong.color], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .fill(LinearGradient(colors: [DesignTokens.StateSurface.selected.color.color, DesignTokens.Surface.strong.color], startPoint: .topLeading, endPoint: .bottomTrailing))
                     .frame(width: 32, height: 32)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Director gallery").textStyle(.heading).foregroundStyle(DesignTokens.TextColor.primary.color)
@@ -303,7 +303,7 @@ struct GalleryView: View {
                                 .padding(.horizontal, DesignTokens.Space.s3)
                                 .padding(.vertical, 6)
                                 .background(
-                                    picked == entry.id ? DesignTokens.StateSurface.selected.color : .clear,
+                                    picked == entry.id ? DesignTokens.StateSurface.selected.color.color : .clear,
                                     in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
                                 )
                                 .contentShape(Rectangle())
