@@ -565,10 +565,16 @@ struct RepoDetailView: View {
 
     private var footer: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            // Why Disconnect is off shows under it.
-            Button(DisconnectRepo.buttonTitle, role: .destructive) { model.onDisconnect(repo.key) }
-                .help("Remove the repo from symphony.yml. No folder is deleted.")
-                .directorButton(.destructive, disabledReason: repo.actions.disconnectProblem)
+            // Why Disconnect is off shows under it and is its help. The plain help goes on only while it is on: an
+            // inner help would win over the reason's.
+            let disconnect = Button(DisconnectRepo.buttonTitle, role: .destructive) { model.onDisconnect(repo.key) }
+            if let problem = repo.actions.disconnectProblem {
+                disconnect.directorButton(.destructive, disabledReason: problem)
+            } else {
+                disconnect
+                    .help("Remove the repo from symphony.yml. No folder is deleted.")
+                    .directorButton(.destructive)
+            }
             Spacer()
         }
     }
