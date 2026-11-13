@@ -792,10 +792,13 @@ func controlSizes() -> some View {
                         .frame(width: 110, alignment: .leading)
                     ButtonFace(label: Text("Send"), kind: .primary, size: size, state: .rest, reduceMotion: false)
                     ButtonFace(label: Text("Save Note"), kind: .secondary, size: size, state: .rest, reduceMotion: false)
+                    // The catalog's Control sizes: the menu button and the segmented control share the heights (TP-1508).
+                    MenuControlFace(.menu(title: "Move to…", glyph: nil), size: size, reduceMotion: false)
+                    SegmentedFace(titles: ["Day", "Week", "Month"], selected: 1, size: size, reduceMotion: false)
                 }
             }
         },
-        width: 400
+        width: 720
     )
 }
 
@@ -1653,7 +1656,7 @@ let savedTicketViews: [TicketView] = {
 func ticketViewsMenuOpen() -> some View {
     var query = savedTicketViews[0].query
     query.toggle(.priority, "1")
-    return TicketViewsMenuPanel(menu: TicketViewsMenu(views: savedTicketViews, currentID: savedTicketViews[0].id, query: query))
+    return TicketViewsMenuButton(menu: TicketViewsMenu(views: savedTicketViews, currentID: savedTicketViews[0].id, query: query), drawnOpen: true)
         .padding(DesignTokens.Space.s4)
         .frame(width: 300, height: 330, alignment: .topLeading)
         .background(DesignTokens.Surface.content.color)
@@ -1838,7 +1841,8 @@ MainActor.assumeIsolated {
         // The catalog's Badge, Count badge, Status dot and Keyboard hint stories (TP-1506), one snapshot each.
         // The catalog's Row stories (TP-1507), one snapshot each; the tree and the progress strip from the catalog's Home
         // and Initiatives: the queue folded, its first chain opened, and the epics' strips.
-        for story in componentStories + badgeStories + rowStories {
+        // The catalog's Segmented control, Pop-up and Menu button stories (TP-1508), one snapshot each.
+        for story in componentStories + badgeStories + rowStories + menuStories {
             render(componentStorySnapshot(story), scheme, to: "\(story.component)-\(story.id)-\(suffix).png")
         }
         render(homeTree(selected: .more("TP-1483")), scheme, to: "tree-home-\(suffix).png")

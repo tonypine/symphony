@@ -4,13 +4,14 @@
 // 1. `DESIGN_SHEET_PHASE=plan` writes `<sheet>/shots.json`, the references to draw: the ticket page prototype's three
 //    moments, and the catalog's Window stories for the ticket page, Home, Initiatives and Tickets, at the laptop's and
 //    the desktop's widths, in light and dark; then the catalog's Chip stories, its Button, Icon button and Inline
-//    refusal stories, its Badge, Count badge, Status dot and Keyboard hint stories, and its Row stories, in light and
-//    dark.
+//    refusal stories, its Badge, Count badge, Status dot and Keyboard hint stories, its Row stories, and its Segmented
+//    control, Pop-up and Menu button stories, in light and dark.
 // 2. capture.py draws each reference into `<sheet>/reference/<id>.png` and its size in points into
 //    `<sheet>/references.json`.
 // 3. `DESIGN_SHEET_PHASE=compose` draws the native page at each reference's size, puts the two side by side in
 //    `<sheet>/<id>.png` and lists them in `<sheet>/index.html`; each component page (`<sheet>/button.html`,
-//    `badge.html`, `count-badge.html`, `status-dot.html`, `keyboard-hint.html`, `row.html`) lists its stories alone.
+//    `badge.html`, `count-badge.html`, `status-dot.html`, `keyboard-hint.html`, `row.html`, `segmented-control.html`,
+//    `pop-up.html`, `menu-button.html`) lists its stories alone.
 //
 // It is evidence, not a gate: nothing here compares pixels.
 import AppKit
@@ -117,7 +118,8 @@ func sheetShots() -> [SheetShot] {
         }
         // The catalog's Button, Icon button and Inline refusal stories beside the shared components (TP-1505).
         // Then its Badge, Count badge, Status dot and Keyboard hint stories (TP-1506), and its Row stories (TP-1507).
-        for story in componentStories + badgeStories + rowStories {
+        // Then its Segmented control, Pop-up and Menu button stories (TP-1508).
+        for story in componentStories + badgeStories + rowStories + menuStories {
             shots.append(SheetShot(
                 id: "\(story.component)-\(story.id)-\(theme)", title: "Catalog › Components › \(story.title) › \(story.id) · \(theme)",
                 link: "docs/design/catalog/index.html#components/\(story.reference?.address ?? "\(story.component)/\(story.id)")",
@@ -137,6 +139,9 @@ let sheetComponentPages: [(file: String, title: String, components: [String])] =
     ("status-dot.html", "Status dot", ["status-dot"]),
     ("keyboard-hint.html", "Keyboard hint", ["keyboard-hint"]),
     ("row.html", "Row", ["row"]),
+    ("segmented-control.html", "Segmented control", ["segmented-control"]),
+    ("pop-up.html", "Pop-up", ["pop-up"]),
+    ("menu-button.html", "Menu button", ["menu-button"]),
 ]
 
 /// Whether the row `id` belongs to a page listing `components`.

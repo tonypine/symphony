@@ -193,7 +193,6 @@ private struct ReviewHeader: View {
 private struct ActionButtons: View {
     let toolbar: InboxToolbar
     let perform: (InboxCommand) -> Void
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     var body: some View {
         HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
@@ -208,20 +207,10 @@ private struct ActionButtons: View {
                         .directorButton(disabledReason: button.reason)
                 }
             }
-            if !toolbar.overflow.isEmpty && offscreenSnapshot {
-                Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
-            } else if !toolbar.overflow.isEmpty {
-                Menu {
-                    ForEach(Array(toolbar.overflow.enumerated()), id: \.offset) { _, command in
-                        Button(command.title) { perform(command) }
-                    }
-                } label: {
-                    Label("More", systemImage: "ellipsis.circle")
+            if !toolbar.overflow.isEmpty {
+                MenuButton("More", glyph: "ellipsis", quiet: true, help: "More actions") {
+                    toolbar.overflow.map { command in MenuItem(command.title) { perform(command) } }
                 }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .help("More actions")
             }
         }
         .fixedSize()

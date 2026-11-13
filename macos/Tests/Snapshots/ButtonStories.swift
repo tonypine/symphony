@@ -8,7 +8,7 @@ import SymphonyBarUI
 /// One catalog story: its component's id in the catalog's address, its own id, and the view.
 struct ComponentStory {
     /// `button`, `icon-button`, `inline-refusal` (TP-1505), `badge`, `count-badge`, `status-dot` or `keyboard-hint`
-    /// (TP-1506), or `row` (TP-1507).
+    /// (TP-1506), `row` (TP-1507), or `segmented-control`, `pop-up` or `menu-button` (TP-1508).
     let component: String
     let id: String
     /// The catalog's component title, for the sheet.
@@ -69,14 +69,7 @@ func buttonSizesSideBySide() -> AnyView {
             GridRow {
                 rowLabel("Menu button")
                 ForEach(DesignTokens.Control.allCases, id: \.self) { size in
-                    ButtonFace(
-                        label: HStack(spacing: DesignTokens.Control.glyphGap) {
-                            Text("Move to…")
-                            Image(systemName: "chevron.down").font(size.glyphFont()).accessibilityHidden(true)
-                        },
-                        size: size, state: .rest, reduceMotion: false
-                    )
-                    .fixedSize()
+                    MenuControlFace(.menu(title: "Move to…", glyph: nil), size: size, reduceMotion: false).fixedSize()
                 }
             }
         }

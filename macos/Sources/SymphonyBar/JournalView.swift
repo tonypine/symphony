@@ -282,25 +282,18 @@ struct JournalFilterBar: View {
         HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
             WrappingStack(spacing: DesignTokens.Space.s2) {
                 chip(.repo) {
-                    Button(OverviewScope.allTitle) { query.repo = nil }
-                    Divider()
-                    ForEach(values.repos, id: \.self) { repo in
-                        Toggle(repo, isOn: Binding(get: { query.repo == repo }, set: { query.repo = $0 ? repo : nil }))
-                    }
+                    [MenuItem(OverviewScope.allTitle, checked: query.repo == nil) { query.repo = nil }, .separator]
+                        + values.repos.map { repo in MenuItem(repo, checked: query.repo == repo) { query.repo = repo } }
                 }
                 chip(.epic) {
-                    Button(JournalQuery.allEpics) { query.epic = nil }
-                    Divider()
-                    ForEach(values.epics, id: \.self) { epic in
-                        Toggle(epic, isOn: Binding(get: { query.epic == epic }, set: { query.epic = $0 ? epic : nil }))
-                    }
+                    [MenuItem(JournalQuery.allEpics, checked: query.epic == nil) { query.epic = nil }, .separator]
+                        + values.epics.map { epic in MenuItem(epic, checked: query.epic == epic) { query.epic = epic } }
                 }
                 chip(.classes) {
-                    Button(JournalQuery.allClasses) { query.classes = [] }
-                    Divider()
-                    ForEach(JournalClass.allCases) { value in
-                        Toggle(value.title, isOn: Binding(get: { query.classes.contains(value) }, set: { _ in query.toggle(value) }))
-                    }
+                    [MenuItem(JournalQuery.allClasses, checked: query.classes.isEmpty) { query.classes = [] }, .separator]
+                        + JournalClass.allCases.map { value in
+                            MenuItem(value.title, checked: query.classes.contains(value)) { query.toggle(value) }
+                        }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -340,10 +333,11 @@ struct JournalFilterBar: View {
         }
     }
 
-    private func chip<Items: View>(_ filter: JournalFilter, @ViewBuilder items: () -> Items) -> some View {
-        TicketsBarMenu(
-            title: query.chipText(filter) ?? filter.title, help: "Change the \(filter.title) filter",
-            kind: query.isSet(filter) ? .secondary : .quiet, items: items
+    /// A filter's chip (C54): its value on the secondary face once set, the quiet form while it isn't.
+    private func chip(_ filter: JournalFilter, items: @escaping () -> [MenuItem]) -> some View {
+        MenuButton(
+            query.chipText(filter) ?? filter.title, size: .small, quiet: !query.isSet(filter),
+            help: "Change the \(filter.title) filter", items: items
         )
     }
 }

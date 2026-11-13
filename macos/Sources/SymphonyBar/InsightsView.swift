@@ -60,10 +60,10 @@ struct InsightsEmptyState: View {
 
 // MARK: - The control bar
 
-/// The Insights control bar (the catalog's Control bar section): a glass bar over the page with the period, the unit,
-/// the repo and the epic as small (24 pt) labelled pop-ups, Clear when a repo or an epic is picked, and the one-line
-/// summary of what the page shows: on its own line under the controls on a laptop, right aligned beside them from
-/// 1600 pt (a desktop).
+/// The Insights control bar (the catalog's Control bar section): a glass bar over the page with the period as a small
+/// (24 pt) segmented control and Range… for other days, the unit, the repo and the epic as small pop-ups, Clear when a
+/// repo or an epic is picked, and the one-line summary of what the page shows: on its own line under the controls on a
+/// laptop, right aligned beside them from 1600 pt (a desktop).
 struct InsightsControlBar: View {
     @Binding var slice: InsightsSlice
     let values: InsightsControlValues
@@ -108,36 +108,35 @@ struct InsightsControlBar: View {
     private var controls: some View {
         HStack(spacing: DesignTokens.Space.s5) {
             group("Period") {
-                InsightsPopUp(value: slice.period.title, help: "Change the period") {
-                    ForEach(InsightsPreset.allCases) { preset in
-                        Toggle(preset.title, isOn: Binding(get: { slice.period == .preset(preset) }, set: { _ in slice.choose(.preset(preset), today: today) }))
-                    }
-                    Divider()
-                    Button(Self.rangeTitle) { showsRange = true }
-                }
+                SegmentedControl(
+                    "Period",
+                    selection: Binding(get: { slice.period }, set: { slice.choose($0, today: today) }),
+                    segments: InsightsPreset.allCases.map { Segment(InsightsPeriod.preset($0), $0.segment) },
+                    size: .small
+                )
+                Button(Self.rangeTitle) { showsRange = true }
+                    .directorButton(.quiet, size: .small, selected: isRange)
+                    .help(isRange ? "The days shown: \(slice.period.title). Pick other days" : "Pick the first and the last day")
             }
             group("Unit") {
-                InsightsPopUp(value: slice.unit.title, help: "Change how much time each bar holds") {
-                    ForEach(InsightsUnit.allCases) { unit in
-                        Toggle(unit.title, isOn: Binding(get: { slice.unit == unit }, set: { _ in slice.unit = unit }))
-                            .disabled(!slice.allows(unit, today: today))
-                    }
-                }
+                PopUp(
+                    nil, selection: $slice.unit,
+                    choices: InsightsUnit.allCases.map { unit in
+                        PopUpChoice(unit, unit.title, disabledReason: slice.allows(unit, today: today) ? nil : InsightsSlice.tooManyBars)
+                    },
+                    size: .small, help: "Change how much time each bar holds", accessibilityLabel: "Unit"
+                )
             }
-            InsightsPopUp(label: "Repo", value: slice.repo ?? scope.stored ?? OverviewScope.allTitle, help: "Change the repo") {
-                Button(OverviewScope.allTitle) { slice.repo = nil }
-                Divider()
-                ForEach(values.repos, id: \.self) { repo in
-                    Toggle(repo, isOn: Binding(get: { slice.repo == repo }, set: { slice.repo = $0 ? repo : nil }))
-                }
-            }
-            InsightsPopUp(label: "Epic", value: slice.epic ?? InsightsSlice.allEpics, help: "Change the epic") {
-                Button(InsightsSlice.allEpics) { slice.epic = nil }
-                Divider()
-                ForEach(values.epics, id: \.self) { epic in
-                    Toggle(epic, isOn: Binding(get: { slice.epic == epic }, set: { slice.epic = $0 ? epic : nil }))
-                }
-            }
+            PopUp(
+                "Repo", selection: $slice.repo,
+                choices: popUpChoices(all: OverviewScope.allTitle, values.repos),
+                value: slice.repo ?? scope.stored ?? OverviewScope.allTitle, size: .small, help: "Change the repo"
+            )
+            PopUp(
+                "Epic", selection: $slice.epic,
+                choices: popUpChoices(all: InsightsSlice.allEpics, values.epics),
+                size: .small, help: "Change the epic"
+            )
             if slice.isFiltered {
                 Button(Self.clearTitle) { slice.clear() }
                     .directorButton(.quiet, size: .small)
@@ -145,6 +144,11 @@ struct InsightsControlBar: View {
             }
         }
         .fixedSize()
+    }
+
+    /// Whether the period is a range of days rather than one of the segments.
+    private var isRange: Bool {
+        if case .range = slice.period { true } else { false }
     }
 
     /// A control under its label, side by side: "Period [Last 7 days ⌃⌄]".
@@ -207,42 +211,6 @@ private struct InsightsControlBarLayout: Layout {
 
     private func beside(width: CGFloat, controls: CGSize, summary: CGSize) -> Bool {
         Insights.summaryBeside(width: width) && controls.width + DesignTokens.Space.s5 + summary.width <= width
-    }
-}
-
-/// A small labelled pop-up: its label, its value and the up/down chevrons, one style whatever is picked.
-private struct InsightsPopUp<Items: View>: View {
-    var label: String?
-    let value: String
-    let help: String
-    @ViewBuilder var items: Items
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
-
-    var body: some View {
-        if offscreenSnapshot {
-            ButtonFace(label: face, kind: .secondary, size: .small, state: .rest, reduceMotion: true)
-        } else {
-            Menu { items } label: { face }
-                .menuStyle(.button)
-                .menuIndicator(.hidden)
-                .directorButton(.secondary, size: .small)
-                .fixedSize()
-                .help(help)
-                .accessibilityLabel(label.map { "\($0): \(value)" } ?? value)
-        }
-    }
-
-    private var face: some View {
-        HStack(spacing: DesignTokens.Space.s1) {
-            if let label {
-                Text(label).foregroundStyle(.secondary)
-            }
-            Text(value)
-            Image(systemName: "chevron.up.chevron.down")
-                .imageScale(.small)
-                .foregroundStyle(.secondary)
-                .accessibilityHidden(true)
-        }
     }
 }
 

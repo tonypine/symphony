@@ -102,6 +102,7 @@ final class DesignTokensTests: XCTestCase {
             .fold: .spring(duration: 0.5, bounce: 0.1),
             .sheet: .spring(duration: 0.5, bounce: 0.1),
             .lift: .spring(duration: 0.28, bounce: 0.1),
+            .slide: .spring(duration: 0.5, bounce: 0.1),
         ]
         XCTAssertEqual(Set(DesignTokens.Motion.Curve.allCases), Set(expected.keys))
         for curve in DesignTokens.Motion.Curve.allCases {

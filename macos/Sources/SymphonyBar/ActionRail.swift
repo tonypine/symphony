@@ -58,111 +58,28 @@ struct ActionRail: View {
     }
 }
 
-/// More: a menu button holding the rarer moves; Stop Run… last, under a separator, in red. A refused item stays in
-/// the menu, disabled, with the read's reason under its title. The arrow keys move between its items and Escape
-/// closes it, as every menu does.
+/// More: a menu button (C54) holding the rarer moves, opening at its trailing edge; Stop Run… last, under a separator,
+/// in red. A refused item stays in the menu, off, with the read's reason as its help. Move to… opens the phases beside
+/// it. The arrow keys move between its items and Escape closes it, as every menu does.
 private struct RailMore: View {
     let items: [TicketActionRail.Item]
     let open: Bool
     let press: (TicketActionRail.Move, String?) -> Void
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
-
-    private var common: [TicketActionRail.Item] { items.filter { !$0.destructive } }
-    private var destructive: [TicketActionRail.Item] { items.filter(\.destructive) }
 
     var body: some View {
-        if offscreenSnapshot {
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-                Button {} label: { label }
-                    .directorButton(selected: open)
-                if open { RailMoreList(common: common, destructive: destructive) }
-            }
-        } else {
-            Menu {
-                ForEach(common) { item in entry(item) }
-                if !destructive.isEmpty {
-                    Divider()
-                    ForEach(destructive) { item in entry(item) }
-                }
-            } label: {
-                label
-            }
-            .menuStyle(.button)
-            .menuIndicator(.hidden)
-            .directorButton()
-            .fixedSize()
-            .help("More moves")
-            .accessibilityLabel("More moves")
+        MenuButton(
+            "More", alignment: .trailing, help: "More moves", accessibilityLabel: "More moves", drawnOpen: open
+        ) {
+            let common = items.filter { !$0.destructive }.map(entry)
+            let destructive = items.filter(\.destructive).map(entry)
+            return destructive.isEmpty ? common : common + [.separator] + destructive
         }
     }
 
-    private var label: some View {
-        HStack(spacing: DesignTokens.Space.s1) {
-            Text("More")
-            Image(systemName: "chevron.down").imageScale(.small).accessibilityHidden(true)
-        }
-    }
-
-    @ViewBuilder private func entry(_ item: TicketActionRail.Item) -> some View {
+    private func entry(_ item: TicketActionRail.Item) -> MenuItem {
         if item.move == .moveTo, item.allowed {
-            Menu(item.title) {
-                ForEach(item.states, id: \.self) { state in
-                    Button(state) { press(.moveTo, state) }
-                }
-            }
-        } else {
-            Button(role: item.destructive ? .destructive : nil) {
-                press(item.move, nil)
-            } label: {
-                Text(item.title)
-                if let reason = item.reason { Text(reason) }
-            }
-            .disabled(!item.allowed)
-            .accessibilityLabel(TicketActionRail.accessibilityLabel(item))
+            return .submenu(item.title, items: item.states.map { state in MenuItem(state) { press(.moveTo, state) } })
         }
-    }
-}
-
-/// More drawn open for a snapshot: its items as the menu lists them, a refused one faint with its reason, Stop Run…
-/// last under a separator in red.
-private struct RailMoreList: View {
-    let common: [TicketActionRail.Item]
-    let destructive: [TicketActionRail.Item]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(common) { row($0) }
-            if !destructive.isEmpty {
-                Divider().padding(.vertical, 3)
-                ForEach(destructive) { row($0) }
-            }
-        }
-        .padding(DesignTokens.Space.s1)
-        .frame(width: 240, alignment: .leading)
-        .background(DesignTokens.Surface.raised.color, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(DesignTokens.Surface.separator.color))
-    }
-
-    private func row(_ item: TicketActionRail.Item) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            HStack(spacing: DesignTokens.Space.s1) {
-                Text(item.title)
-                if item.move == .moveTo, item.allowed {
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right").imageScale(.small).accessibilityHidden(true)
-                }
-            }
-            .foregroundStyle(item.allowed ? (item.destructive ? Color.red : Color.primary) : Color.secondary.opacity(0.6))
-            if let reason = item.reason {
-                Text(reason)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .font(DesignTokens.TypeStyle.body.font)
-        .padding(.horizontal, DesignTokens.Space.s2)
-        .padding(.vertical, 3)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        return MenuItem(item.title, destructive: item.destructive, disabledReason: item.reason) { press(item.move, nil) }
     }
 }

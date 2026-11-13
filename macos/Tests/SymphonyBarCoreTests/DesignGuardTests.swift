@@ -247,6 +247,44 @@ final class DesignGuardTests: XCTestCase {
         XCTAssertTrue(failures[0].hasPrefix("View.swift draws with 1 raw dot value(s) and is not in the baseline"), failures[0])
     }
 
+    // MARK: - Stock pickers and menus (TP-1508)
+
+    func testAStockPickerOrMenuCounts() {
+        let found = scan("""
+        Picker("Repo", selection: $repo) { Text("All") }
+        Menu {
+            Button("Open") {}
+        } label: { Text("More") }
+        Menu("Move to") { Button("Todo") {} }
+        """)
+        XCTAssertEqual(found.filter { $0.kind == .picker }.map(\.line), [1])
+        XCTAssertEqual(found.filter { $0.kind == .menu }.map(\.line), [2, 5])
+        XCTAssertEqual(found.first { $0.kind == .picker }?.message, "View.swift:1: picker bypass Picker: use \(DesignGuard.pickerReplacement)")
+        XCTAssertEqual(found.first { $0.kind == .menu }?.use, DesignGuard.menuReplacement)
+    }
+
+    func testTheSharedControlsAndLongerNamesDoNotCount() {
+        XCTAssertEqual(scan("""
+        DatePicker("From", selection: $from)
+        ScopePicker(model: model)
+        PopUp("Repo", selection: $repo, choices: choices)
+        SegmentedControl("Period", selection: $period, segments: segments)
+        MenuButton("More") { [] }
+        MenuItem("Open") {}
+        .contextMenu { Text("Open") }
+        """).filter { $0.kind == .picker || $0.kind == .menu }, [])
+    }
+
+    func testThePickerAndMenuKindsAreBaselineKinds() throws {
+        let counts: DesignGuard.Counts = ["SymphonyBar/A.swift": [.picker: 2, .menu: 1]]
+        XCTAssertEqual(try DesignGuard.parseBaseline(DesignGuard.formatBaseline(counts)), counts)
+        XCTAssertTrue(DesignGuard.Kind.guarded.contains(.picker))
+        XCTAssertTrue(DesignGuard.Kind.guarded.contains(.menu))
+        let failures = DesignGuard.failures(bypasses: scan("Menu(\"More\") {}"), baseline: [:])
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertTrue(failures[0].hasPrefix("View.swift draws with 1 raw menu value(s) and is not in the baseline"), failures[0])
+    }
+
     // MARK: - What does not count
 
     func testTokensAndComponentsDoNotCount() {

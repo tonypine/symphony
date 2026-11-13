@@ -72,6 +72,15 @@ public enum InsightsPreset: Int, CaseIterable, Codable, Identifiable {
 
     /// "Today", "Last 7 days".
     public var title: String { self == .today ? "Today" : "Last \(rawValue) days" }
+
+    /// The period control's segment: "Today", "7 days", "1 year" (TP-1508).
+    public var segment: String {
+        switch self {
+        case .today: "Today"
+        case .year: "1 year"
+        default: "\(rawValue) days"
+        }
+    }
 }
 
 /// The period: a preset, or a range of UTC days, both ends taken in.
@@ -191,6 +200,9 @@ public struct InsightsSlice: Equatable, Codable {
         let (from, _) = period.days(today: today)
         return min(max(Insights.daysBetween(from, today) + 2, 1), ShippedPayload.maxDays)
     }
+
+    /// Why the unit pop-up has a unit off: the period would draw too many bars at it.
+    public static let tooManyBars = "Too many bars for this period."
 
     /// Whether the unit pop-up offers `unit` for this period.
     public func allows(_ unit: InsightsUnit, today: String) -> Bool {

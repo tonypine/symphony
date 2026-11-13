@@ -223,18 +223,14 @@ private struct AllRunsSheet: View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
             Text("All Runs").font(DesignTokens.TypeStyle.heading.font)
             HStack {
-                Picker("Agent", selection: $filter.agent) {
-                    Text("All agents").tag(String?.none)
-                    ForEach(quality.agents, id: \.self) { Text($0).tag(String?.some($0)) }
-                }
-                Picker("Outcome", selection: $filter.outcome) {
-                    Text("All outcomes").tag(QualityRun.Outcome?.none)
-                    ForEach(QualityRun.Outcome.allCases, id: \.self) { Text($0.title).tag(QualityRun.Outcome?.some($0)) }
-                }
-                Picker("Day", selection: $filter.date) {
-                    Text("All days").tag(String?.none)
-                    ForEach(quality.runDates, id: \.self) { Text($0).tag(String?.some($0)) }
-                }
+                PopUp("Agent", selection: $filter.agent, choices: popUpChoices(all: "All agents", quality.agents), size: .small)
+                PopUp(
+                    "Outcome", selection: $filter.outcome,
+                    choices: [PopUpChoice(QualityRun.Outcome?.none, "All outcomes")]
+                        + QualityRun.Outcome.allCases.map { PopUpChoice(QualityRun.Outcome?.some($0), $0.title) },
+                    size: .small
+                )
+                PopUp("Day", selection: $filter.date, choices: popUpChoices(all: "All days", quality.runDates), size: .small)
             }
             Table(quality.runs(matching: filter)) {
                 TableColumn("Ticket") { Text($0.identifier ?? "—") }

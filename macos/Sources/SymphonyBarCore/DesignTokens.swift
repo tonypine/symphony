@@ -772,6 +772,8 @@ public enum DesignTokens {
             case sheet
             /// A clickable card or option card lifting.
             case lift
+            /// A selection sliding to its place: the segmented control's thumb (TP-1508).
+            case slide
 
             /// The curve's timing; under Reduce Motion, an eased change of `reducedDuration`.
             public func timing(reduceMotion: Bool) -> Timing {
@@ -781,7 +783,7 @@ public enum DesignTokens {
                 case .fast: .eased(duration: Motion.fastDuration)
                 case .standard: .eased(duration: Motion.standardDuration)
                 case .slow: .eased(duration: Motion.slowDuration)
-                case .fold, .sheet: .spring(duration: Motion.springDuration, bounce: Motion.springBounce)
+                case .fold, .sheet, .slide: .spring(duration: Motion.springDuration, bounce: Motion.springBounce)
                 case .lift: .spring(duration: Motion.standardDuration, bounce: Motion.springBounce)
                 }
             }
@@ -1163,6 +1165,77 @@ public enum DesignTokens {
             } + (waiting == 0 ? [] : ["\(waiting) \(word(nil))"])
             return parts.isEmpty ? "Nothing yet" : parts.joined(separator: ", ")
         }
+    }
+
+    /// The catalog's Segmented control (`.segmented`, TP-1508): two to five equal segments on a sunken capsule track,
+    /// and one raised capsule thumb that slides to the selection on the `slide` spring.
+    public enum Segmented {
+        /// The fewest and the most segments: past five, a pop-up.
+        public static let fewest = 2
+        public static let most = 5
+        /// The track's inset around the thumb.
+        public static let inset: Double = 2
+        /// The room on each side of a segment's word: 90 % of the control's padding.
+        public static let paddingScale: Double = 0.9
+        /// The thumb's hairline and the track's.
+        public static let hairline: Double = 0.5
+
+        /// The thumb's leading offset from the track's inner edge for segment `index` of `count` in `width` (the
+        /// track's inner width): each segment takes an equal share.
+        public static func thumbOffset(index: Int, count: Int, width: Double) -> Double {
+            guard count > 0 else { return 0 }
+            return Double(min(max(index, 0), count - 1)) * width / Double(count)
+        }
+    }
+
+    /// The catalog's Pop-up and Menu button (`.popup`, `.menu-btn`, TP-1508): a control of a C23 height on the
+    /// secondary button's face, its label (and a pop-up's value), and a chevron: up-down for a pop-up, down for a menu
+    /// button, which turns over while its menu is open.
+    public enum MenuControl {
+        /// The room after the label before the trailing edge: 70 % of the control's padding.
+        public static let trailingScale: Double = 0.7
+        /// The chevron's size, in points.
+        public static let chevron: Double = 10
+        public static let popUpSymbol = "chevron.up.chevron.down"
+        public static let menuSymbol = "chevron.down"
+        /// The open control's accent ring, outside its edge (the catalog's `0 0 0 4px var(--accent-tint)`).
+        public static let openRingWidth: Double = 3
+        /// The dot after a value that differs from what was saved (the catalog's `.unsaved`), and its gap.
+        public static let mark: Double = 6
+        public static let markGap: Double = 6
+    }
+
+    /// The catalog's open menu and pop-up list (`.menu`, `.menu-item`, TP-1508): glass in the menu's radius at the
+    /// third elevation, 6 pt under its control; 28 pt items whose hovered one is the accent with white words.
+    public enum Menu {
+        public static let radius: Double = 12
+        public static let padding: Double = 5
+        public static let minWidth: Double = 220
+        /// The gap between the control and the menu.
+        public static let gap: Double = 6
+        /// The least room kept between the menu and the screen's edge.
+        public static let edgeMargin = Space.s2
+        public static let itemHeight: Double = 28
+        public static let itemRadius: Double = 7
+        public static let itemInset = Space.s2
+        public static let itemGap = Space.s2
+        /// The tick's box at an item's leading edge, in points.
+        public static let check: Double = 12
+        public static let checkSymbol = "checkmark"
+        /// The room before a keyboard hint.
+        public static let hintGap = Space.s4
+        /// A separator: a hairline with 5 pt above and below and 8 pt in from each side.
+        public static let separatorMargin: Double = 5
+        public static let separatorHeight: Double = 1
+        public static let elevation = Elevation.level3
+        public static let glass = Glass.thick
+        /// How long typed letters keep adding to the search before a new one starts over.
+        public static let typeAheadTimeout: Double = 1
+        /// A submenu's symbol at its item's trailing edge.
+        public static let submenuSymbol = "chevron.right"
+
+        /// A separator's height with its margins.
+        public static var separatorSpan: Double { separatorHeight + 2 * separatorMargin }
     }
 
     /// The main window's layout (§3.5).
