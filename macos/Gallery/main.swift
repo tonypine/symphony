@@ -893,7 +893,7 @@ func situationKinds() -> some View {
 
 /// The Situation line (TP-1439): `test/fixtures/api/situations.json`, one ticket per kind, at the fixture's clock.
 let situationSample: (now: Date, lines: [Situation]) = {
-    let url = here.appendingPathComponent("../../../test/fixtures/api/situations.json").standardizedFileURL
+    let url = here.appendingPathComponent("../../test/fixtures/api/situations.json").standardizedFileURL
     guard let root = (try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any],
           let now = (root["now"] as? String).flatMap({ ISO8601DateFormatter().date(from: $0) }),
           let issues = root["issues"] as? [[String: Any]]
@@ -1130,7 +1130,7 @@ func statusBar(window: CGFloat) -> some View {
 
 /// The Action rail (TP-1440): `test/fixtures/api/ticket_moves.json`, the `moves` of a few tickets, by name.
 let actionRailSample: [String: TicketMoves] = {
-    let url = here.appendingPathComponent("../../../test/fixtures/api/ticket_moves.json").standardizedFileURL
+    let url = here.appendingPathComponent("../../test/fixtures/api/ticket_moves.json").standardizedFileURL
     guard let root = (try? JSONSerialization.jsonObject(with: Data(contentsOf: url))) as? [String: Any],
           let tickets = root["tickets"] as? [[String: Any]]
     else { fatalError("Could not read \(url.path)") }
