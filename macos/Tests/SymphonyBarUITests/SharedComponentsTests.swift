@@ -77,6 +77,15 @@ final class SharedComponentsTests: XCTestCase {
         XCTAssertEqual(ButtonKind.allCases.map(\.rawValue), ["primary", "secondary", "quiet", "destructive", "destructive-filled"])
     }
 
+    /// TP-1507 QA: Shipped's PR button sits in a row's trail; on a selected row's accent fill its words turn white,
+    /// and only a quiet button's do, since every other kind draws its own face.
+    func testAQuietButtonsWordsTurnWhiteOnASelectedRow() {
+        XCTAssertEqual(ButtonFace<Text>.foreground(.quiet, state: .rest, onAccent: true), DesignTokens.TextColor.onAccent.color)
+        XCTAssertEqual(ButtonFace<Text>.foreground(.quiet, state: .rest, onAccent: false), DesignTokens.ColorToken.accentText.color)
+        XCTAssertEqual(ButtonFace<Text>.foreground(.secondary, state: .rest, onAccent: true), DesignTokens.TextColor.primary.color)
+        XCTAssertEqual(ButtonFace<Text>.foreground(.quiet, state: .off, onAccent: true), DesignTokens.TextColor.tertiary.color)
+    }
+
     func testAButtonIsItsSizesHeightInEveryKindAndState() {
         let states: [DesignTokens.Interaction] = [.rest, .hover, .press, .focus, .off]
         for size in DesignTokens.Control.allCases {

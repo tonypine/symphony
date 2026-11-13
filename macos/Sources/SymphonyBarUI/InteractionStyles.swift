@@ -209,6 +209,7 @@ public struct ButtonFace<Label: View>: View {
     var glyph: String?
     let state: DesignTokens.Interaction
     let reduceMotion: Bool
+    @Environment(\.rowOnAccent) private var onAccent
 
     public init(
         label: Label, kind: ButtonKind = .secondary, size: DesignTokens.Control = .medium, glyph: String? = nil,
@@ -234,7 +235,7 @@ public struct ButtonFace<Label: View>: View {
         .lineHeight(.multiple(factor: 1))
         .padding(.horizontal, size.padding)
         .frame(height: size.height)
-        .foregroundStyle(foreground)
+        .foregroundStyle(Self.foreground(kind, state: state, onAccent: onAccent))
         .background { background(shape) }
         .overlay {
             if let edge { shape.strokeBorder(edge, lineWidth: DesignTokens.Control.edgeWidth) }
@@ -256,12 +257,14 @@ public struct ButtonFace<Label: View>: View {
     /// A resting or hovered face that is not quiet sits a level above the page; a pressed one sits on it.
     private var raised: Bool { !state.disabled && !pressed && kind != .quiet }
 
-    private var foreground: Color {
+    /// The label's colour. A quiet button has no face of its own, so on a selected row's accent fill its words turn
+    /// white with the row's, as the catalog's row-selected story draws its trail.
+    static func foreground(_ kind: ButtonKind, state: DesignTokens.Interaction, onAccent: Bool) -> Color {
         if state.disabled { return DesignTokens.TextColor.tertiary.color }
         return switch kind {
         case .primary, .destructiveFilled: DesignTokens.TextColor.onAccent.color
         case .secondary: DesignTokens.TextColor.primary.color
-        case .quiet: DesignTokens.ColorToken.accentText.color
+        case .quiet: onAccent ? DesignTokens.TextColor.onAccent.color : DesignTokens.ColorToken.accentText.color
         case .destructive: DesignTokens.Status.problem.text
         }
     }
@@ -350,7 +353,6 @@ public struct DirectorButtonStyle: ButtonStyle {
         let selected: Bool
         @State private var hovered = false
         @Environment(\.isEnabled) private var isEnabled
-        @Environment(\.isFocused) private var isFocused
         @Environment(\.buttonKeyboardFocus) private var keyboardFocus
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -361,7 +363,7 @@ public struct DirectorButtonStyle: ButtonStyle {
                 size: size,
                 glyph: glyph,
                 state: DesignTokens.Interaction(
-                    hovered: hovered, pressed: configuration.isPressed, selected: selected, focused: isFocused || keyboardFocus, disabled: !isEnabled
+                    hovered: hovered, pressed: configuration.isPressed, selected: selected, focused: keyboardFocus, disabled: !isEnabled
                 ),
                 reduceMotion: reduceMotion
             )
@@ -387,7 +389,8 @@ extension View {
 }
 
 /// Keyboard focus as the button holds it. A button style's body is not the focusable view, so `isFocused` read there
-/// stays false on macOS; the button's own focus state, handed down, is what lights the face's ring.
+/// stays false for the button itself on macOS, and is true when a focusable view around it (a `Row`) has focus; the
+/// button's own focus state, handed down, is what lights the face's ring, so a focused row shows one ring, not two.
 private struct ButtonKeyboardFocusKey: EnvironmentKey {
     static let defaultValue = false
 }
@@ -477,14 +480,13 @@ private struct IconButtonStyle: ButtonStyle {
         let on: Bool
         @State private var hovered = false
         @Environment(\.isEnabled) private var isEnabled
-        @Environment(\.isFocused) private var isFocused
         @Environment(\.buttonKeyboardFocus) private var keyboardFocus
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
         var body: some View {
             IconButtonFace(
                 symbol, size: size, on: on,
-                state: DesignTokens.Interaction(hovered: hovered, pressed: configuration.isPressed, focused: isFocused || keyboardFocus, disabled: !isEnabled),
+                state: DesignTokens.Interaction(hovered: hovered, pressed: configuration.isPressed, focused: keyboardFocus, disabled: !isEnabled),
                 reduceMotion: reduceMotion
             )
             .onHover { hovered = $0 }
