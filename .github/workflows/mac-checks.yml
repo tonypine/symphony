@@ -162,7 +162,7 @@ jobs:
           store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
           scratch="$($store work "$SYMPHONY_CI_REF" debug)"
           time make build-gallery ${scratch:+SWIFT_FLAGS="--scratch-path $scratch"}
-          build/SymphonyGallery --list | wc -l
+          build/SymphonyGallery --check
 
       # An agent's sandbox can't write the per-user temp dir, where a sandboxed Foundation stages
       # its atomic writes, so a plain `swift build` fails there. Symphony gives a local macOS

@@ -186,8 +186,8 @@ release-pair:
 # pages built from them, drawn by the app's own views in a window, one story at a time. It is compiled apart from the
 # app (the app's views, minus main.swift, with the gallery's stories), so the app pays nothing for it.
 #   make gallery                        builds $(GALLERY) and opens it
-#   $(GALLERY) --list                   prints the stories
-#   $(GALLERY) --shot 'button-*' --out /tmp/shots   draws those stories to files, in light and dark
+#   $(GALLERY) --entries                the entries, as JSON
+#   $(GALLERY) --shot button --out /tmp/shots   draws that entry's board to files, in light and dark
 # `make qa-app` puts it inside the QA build's bundle, where a launch on Tests/Fixtures/gallery starts it in the
 # app's place (Sources/SymphonyBar/GalleryLaunch.swift), so QA drives it with the tools it drives the app with.
 # `-disable-sandbox` lets the SwiftUI macros' plugin server run inside an agent sandbox.
