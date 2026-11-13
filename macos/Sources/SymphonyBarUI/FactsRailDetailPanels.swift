@@ -251,7 +251,7 @@ public struct DetailsPanel: View {
         FactsPanel(title: DetailsPanelModel.title) {
             KeyValueList {
                 if let repo = model.repo {
-                    KeyValueRow(label: "Repo") { Chip(text: repo, systemImage: "shippingbox") }
+                    KeyValueRow(label: "Repo") { Chip(repo, kind: .repo) }
                 }
                 if let priority = model.priority {
                     KeyValueRow(label: "Priority") { valueText(priority) }
@@ -261,7 +261,7 @@ public struct DetailsPanel: View {
                         valueText(DetailsPanelModel.noLabelsLine, secondary: true)
                     } else {
                         FlowLayout(spacing: DesignTokens.Space.s1, lineSpacing: DesignTokens.Space.s1) {
-                            ForEach(model.labels, id: \.self) { Chip(text: $0, systemImage: nil) }
+                            ForEach(model.labels, id: \.self) { Chip($0, kind: .label(.idle)) }
                         }
                     }
                 }
@@ -470,34 +470,6 @@ struct KeyValueRow<Value: View>: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(label)
-    }
-}
-
-/// A chip: a repo or a label, on the raised surface.
-private struct Chip: View {
-    let text: String
-    let systemImage: String?
-
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.row - 2, style: .continuous)
-        HStack(spacing: 3) {
-            if let systemImage {
-                Image(systemName: systemImage)
-                    .font(.system(size: 10))
-                    .foregroundStyle(.secondary)
-                    .accessibilityHidden(true)
-            }
-            Text(text)
-                .font(.system(size: 11, weight: .medium))
-                .lineLimit(1)
-        }
-        .fixedSize()
-        .padding(.horizontal, 6)
-        .padding(.vertical, 2)
-        .background(shape.fill(DesignTokens.Surface.raised.color))
-        .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(text)
     }
 }
 

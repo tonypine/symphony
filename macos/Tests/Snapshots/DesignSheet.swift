@@ -3,7 +3,7 @@
 //
 // 1. `DESIGN_SHEET_PHASE=plan` writes `<sheet>/shots.json`, the references to draw: the ticket page prototype's three
 //    moments, and the catalog's Window stories for the ticket page, Home, Initiatives and Tickets, at the laptop's and
-//    the desktop's widths, in light and dark.
+//    the desktop's widths, in light and dark; then the catalog's Chip stories, in light and dark.
 // 2. capture.py draws each reference into `<sheet>/reference/<id>.png` and its size in points into
 //    `<sheet>/references.json`.
 // 3. `DESIGN_SHEET_PHASE=compose` draws the native page at each reference's size, puts the two side by side in
@@ -63,7 +63,12 @@ let sheetSizes: [(name: String, title: String, page: CGSize, window: CGSize)] = 
     ("desktop", "Desktop", CGSize(width: 2200, height: 1360), CGSize(width: 2460, height: 1360)),
 ]
 
-/// Every row: the prototype's moments first, then the catalog's Window stories.
+/// A chip of `kind` at the leading edge of a cell `width` × `height`.
+func sheetChip(_ text: String, kind: Chip.Kind) -> @MainActor (CGFloat, CGFloat) -> AnyView {
+    { width, height in AnyView(Chip(text, kind: kind).frame(width: width, height: height, alignment: .leading)) }
+}
+
+/// Every row: the prototype's moments first, then the catalog's Window stories, then its chips.
 @MainActor
 func sheetShots() -> [SheetShot] {
     var shots: [SheetShot] = []
@@ -97,6 +102,15 @@ func sheetShots() -> [SheetShot] {
                     selector: ".win-body", width: size.window.width, height: size.window.height, theme: theme, native: native, draw: draw
                 ))
             }
+        }
+        // The catalog's Chip stories beside the chip (TP-1484).
+        for story in chipStories {
+            shots.append(SheetShot(
+                id: "chip-\(story.id)-\(theme)", title: "Catalog › Components › Chip › \(story.id) · \(theme)",
+                link: "docs/design/catalog/index.html#components/chip/\(story.id)",
+                selector: ".stage-inner .chip", width: 120, height: 24, theme: theme, native: "Chip(\(story.text))",
+                draw: sheetChip(story.text, kind: story.kind)
+            ))
         }
     }
     return shots

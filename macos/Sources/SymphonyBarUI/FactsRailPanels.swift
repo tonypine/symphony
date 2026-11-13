@@ -295,30 +295,13 @@ private struct TicketRow: View {
 
 // MARK: - Shared pieces
 
-/// A panel: its title outside the card, then the card with its parts one under the other.
+/// A panel of the facts rail: its zone title above it (`TitledPanel`).
 struct FactsPanel<Content: View>: View {
     let title: String
     @ViewBuilder let content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            Text(title)
-                .font(DesignTokens.TypeStyle.heading.font)
-                .accessibilityAddTraits(.isHeader)
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-                content
-            }
-            .padding(DesignTokens.Space.s4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
-                    .strokeBorder(DesignTokens.Surface.separator.color)
-            )
-            .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel(title)
-        }
+        TitledPanel(title: title) { content }
     }
 }
 

@@ -331,10 +331,10 @@ public struct ConnectionState: View {
     }
 }
 
-/// C10: a titled section on the solid content surface.
+/// C10: a titled section: its zone title above a panel (the catalog's `.zone-title` over `.panel`). The hint is the
+/// title's trailing note, such as the keys that work in the card.
 public struct Card<Content: View>: View {
     let title: String
-    /// A quiet line at the title's trailing end, such as the keys that work in the card.
     var hint: String?
     @ViewBuilder var content: Content
 
@@ -345,32 +345,268 @@ public struct Card<Content: View>: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                Text(title)
-                    .font(DesignTokens.TypeStyle.heading.font)
-                    .accessibilityAddTraits(.isHeader)
-                    .layoutPriority(1)
-                if let hint {
-                    Spacer(minLength: DesignTokens.Space.s2)
-                    Text(hint)
-                        .font(DesignTokens.TypeStyle.secondary.font)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+        TitledPanel(title: title, note: hint) { content }
+    }
+}
+
+// MARK: - Panel, zone title and chip (the catalog's `.panel`, `.zone-title` and `.chip`, TP-1484)
+
+extension View {
+    /// `.panel`'s surface in `shape`: the content surface with `--elevation-1` around it and `--edge-highlight`
+    /// along its top, and no stroke.
+    public func panelSurface<S: Shape>(in shape: S) -> some View {
+        background(DesignTokens.Surface.content.color, in: shape)
+            .edgeHighlight(shape)
+            .elevation(.level1, in: shape)
+    }
+}
+
+/// `.panel`'s shape and padding, for a view that draws its own panel (a card with a fold, a row group).
+public enum PanelStyle {
+    public static let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
+    /// `--space-4` above and below, `--space-5` at the sides.
+    public static let padding = EdgeInsets(
+        top: DesignTokens.Space.s4, leading: DesignTokens.Space.s5, bottom: DesignTokens.Space.s4, trailing: DesignTokens.Space.s5
+    )
+}
+
+/// `.panel`: content one part under the other on the content surface, 16 pt corners, 16 pt padding above and below
+/// and 20 pt at the sides, raised by `--elevation-1` with the edge highlight, without a stroke.
+public struct Panel<Content: View>: View {
+    var spacing: Double
+    @ViewBuilder var content: Content
+
+    /// `spacing` is the gap between the parts, `--space-4` as the catalog's.
+    public init(spacing: Double = DesignTokens.Space.s4, @ViewBuilder content: () -> Content) {
+        self.spacing = spacing
+        self.content = content()
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: spacing) { content }
+            .padding(PanelStyle.padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .panelSurface(in: PanelStyle.shape)
+    }
+}
+
+/// `.zone-title`: a section's name above its panel, in the caption style, upper case, tracked 0.08 em, in the
+/// secondary colour, inset 4 pt; an optional note follows it in the tertiary colour, as written ("8 new since you
+/// looked at 16:50"). VoiceOver reads it as one heading.
+public struct ZoneTitle: View {
+    /// The letter spacing, as a fraction of the size.
+    public static let tracking = 0.08
+    /// The gap between the title and the panel under it (`margin-bottom: var(--space-2)`).
+    public static let gap = DesignTokens.Space.s2
+
+    let title: String
+    var note: String?
+    var noteColor: DesignTokens.ColorToken
+    var noteHelp: String?
+    var noteAccessibilityLabel: String?
+
+    public init(
+        _ title: String, note: String? = nil, noteColor: DesignTokens.ColorToken = .textTertiary, noteHelp: String? = nil,
+        noteAccessibilityLabel: String? = nil
+    ) {
+        self.title = title
+        self.note = note
+        self.noteColor = noteColor
+        self.noteHelp = noteHelp
+        self.noteAccessibilityLabel = noteAccessibilityLabel
+    }
+
+    /// What VoiceOver reads: the title, then the note.
+    public var accessibilityText: String {
+        guard let note = noteAccessibilityLabel ?? note else { return title }
+        return "\(title), \(note)"
+    }
+
+    public var body: some View {
+        let style = DesignTokens.TypeStyle.caption
+        let scale = DesignTokens.TypeStyle.textScale
+        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+            Text(title)
+                .textCase(.uppercase)
+                .font(style.font)
+                .lineHeight(.exact(points: CGFloat(style.scaledLineHeight(by: scale))))
+                .tracking(CGFloat(Self.tracking * style.scaledSize(by: scale)))
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                .layoutPriority(1)
+            if let note {
+                Text(note)
+                    .textStyle(style)
+                    .foregroundStyle(noteColor.color)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                    .help(noteHelp ?? note)
             }
-            content
         }
-        .padding(DesignTokens.Space.s4)
+        .padding(.leading, DesignTokens.Space.s1)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            DesignTokens.Surface.content.color,
-            in: RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
-                .strokeBorder(DesignTokens.Surface.separator.color)
-        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityText)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// A zone title above its panel: every titled section of a page. The panel is one accessibility container named by
+/// the title.
+public struct TitledPanel<Content: View>: View {
+    let title: ZoneTitle
+    let label: String
+    var spacing: Double
+    @ViewBuilder var content: Content
+
+    public init(
+        title: String, note: String? = nil, spacing: Double = DesignTokens.Space.s4, @ViewBuilder content: () -> Content
+    ) {
+        self.init(ZoneTitle(title, note: note), label: title, spacing: spacing, content: content)
+    }
+
+    /// `label` names the panel for VoiceOver: the section's name, without its note.
+    public init(_ title: ZoneTitle, label: String, spacing: Double = DesignTokens.Space.s4, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.label = label
+        self.spacing = spacing
+        self.content = content()
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: ZoneTitle.gap) {
+            title
+            Panel(spacing: spacing) { content }
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(label)
+        }
+    }
+}
+
+/// `.chip`: a compact tag for what a ticket is or where it belongs. One height, 24 pt (`--control-sm`), in the label
+/// style, on a capsule: plain and repo on the content surface with a hairline ring, epic transparent with a strong
+/// ring, status on its tint with its glyph in its colour. A label chip (`.chip-label`) is 20 pt on the raised
+/// surface, with its role's swatch.
+public struct Chip: View {
+    public enum Kind: Equatable {
+        case plain
+        case repo
+        case epic
+        case status(DesignTokens.Status)
+        case label(DesignTokens.Status)
+
+        /// The glyph before the text; a label chip has its swatch instead.
+        public var symbol: String? {
+            switch self {
+            case .plain, .label: nil
+            case .repo: SymphonyView.repos.symbol
+            case .epic: SymphonyView.initiatives.symbol
+            case let .status(status): status.symbol
+            }
+        }
+
+        public var height: Double {
+            if case .label = self { return Chip.labelHeight }
+            return Chip.height
+        }
+    }
+
+    /// `--control-sm`.
+    public static let height = DesignTokens.Control.small.height
+    /// `.chip-label`'s height.
+    public static let labelHeight: Double = 20
+    /// Letter spacing as a fraction of the size (`letter-spacing: 0.005em`).
+    public static let tracking = 0.005
+    static let gap: Double = 5
+    static let glyph: Double = 12
+    static let swatch: Double = 7
+    static let inset: Double = 10
+    static let labelInset: Double = 7
+    /// A status chip's ring: its colour at 18 %.
+    static let statusRing = 0.18
+
+    let text: String
+    let kind: Kind
+
+    public init(_ text: String, kind: Kind = .plain) {
+        self.text = text
+        self.kind = kind
+    }
+
+    public var body: some View {
+        HStack(spacing: Self.gap) {
+            lead
+            Text(text)
+                .font(DesignTokens.TypeStyle.label.font)
+                .tracking(CGFloat(Self.tracking * DesignTokens.TypeStyle.label.scaledSize(by: DesignTokens.TypeStyle.textScale)))
+                .foregroundStyle(textColor.color)
+                .lineLimit(1)
+        }
+        .fixedSize()
+        .padding(.horizontal, isLabel ? Self.labelInset : Self.inset)
+        .frame(height: kind.height)
+        .background { face }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(text)
+    }
+
+    private var isLabel: Bool {
+        if case .label = kind { return true }
+        return false
+    }
+
+    private var textColor: DesignTokens.ColorToken {
+        isLabel ? .textSecondary : .textPrimary
+    }
+
+    @ViewBuilder private var lead: some View {
+        switch kind {
+        case let .label(role):
+            Circle()
+                .fill(role.tint)
+                .frame(width: Self.swatch, height: Self.swatch)
+                .background(Circle().fill(role.tint.opacity(0.22)).padding(-2))
+                .accessibilityHidden(true)
+        default:
+            if let symbol = kind.symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: Self.glyph - 1, weight: .medium))
+                    .foregroundStyle(glyphColor)
+                    .frame(width: Self.glyph, height: Self.glyph)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    private var glyphColor: Color {
+        if case let .status(status) = kind { return status.tint }
+        return DesignTokens.TextColor.secondary.color
+    }
+
+    @ViewBuilder private var face: some View {
+        switch kind {
+        case .plain, .repo:
+            Capsule()
+                .fill(DesignTokens.Surface.content.color)
+                .shadow(color: DesignTokens.ColorToken.shadowNear.color, radius: 0.5, y: 1)
+                .overlay(Capsule().stroke(DesignTokens.Surface.separator.color, lineWidth: 2).clipShape(OutsideCapsule()))
+        case .epic:
+            Capsule().strokeBorder(DesignTokens.Surface.strong.color, lineWidth: 1)
+        case let .status(status):
+            Capsule()
+                .fill(status.badgeFill)
+                .overlay(Capsule().strokeBorder(status.tint.opacity(Self.statusRing), lineWidth: 1))
+        case .label:
+            let shape = RoundedRectangle(cornerRadius: DesignTokens.Chip.radius, style: .continuous)
+            shape.fill(DesignTokens.Surface.raised.color)
+                .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color, lineWidth: 1))
+        }
+    }
+}
+
+/// Everything but the capsule it rings: an outer ring (`box-shadow: 0 0 0 1px`) draws outside the shape only.
+private struct OutsideCapsule: Shape {
+    func path(in rect: CGRect) -> Path {
+        Path(rect.insetBy(dx: -4, dy: -4)).subtracting(Capsule().path(in: rect))
     }
 }
 

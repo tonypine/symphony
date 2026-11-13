@@ -17,31 +17,17 @@ public struct LifecycleSection: View {
     /// The section's widest on a laptop's main column and on a desktop's (the catalog's Lifecycle).
     public static let laptopWidth: CGFloat = 780
     public static let desktopWidth: CGFloat = 1040
+    public static let title = "Lifecycle"
 
     public init(model: LifecycleModel) {
         self.model = model
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            Text("Lifecycle")
-                .font(DesignTokens.TypeStyle.heading.font)
-                .accessibilityAddTraits(.isHeader)
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-                LifecycleHead(model: model)
-                StageStrip(stages: model.stages)
-                TokenBarView(bar: model.tokens)
-            }
-            .padding(DesignTokens.Space.s4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
-                    .strokeBorder(DesignTokens.Surface.separator.color)
-            )
-            .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
-            .accessibilityElement(children: .contain)
-            .accessibilityLabel("Lifecycle")
+        TitledPanel(title: Self.title) {
+            LifecycleHead(model: model)
+            StageStrip(stages: model.stages)
+            TokenBarView(bar: model.tokens)
         }
         .frame(maxWidth: Self.desktopWidth, alignment: .leading)
     }

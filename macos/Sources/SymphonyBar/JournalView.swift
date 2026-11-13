@@ -435,10 +435,9 @@ struct JournalReportCardView: View {
                     ))
                 }
             }
-            .padding(DesignTokens.Space.s4)
+            .padding(PanelStyle.padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(DesignTokens.Surface.content.color, in: shape)
-            .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color))
+            .panelSurface(in: shape)
             // The Question leaves with the Inbox's motion once it is answered.
             .animation(reduceMotion ? nil : .standard, value: question?.itemID)
         }

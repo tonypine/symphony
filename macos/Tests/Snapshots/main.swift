@@ -756,7 +756,8 @@ func styledRow(_ state: DesignTokens.Interaction, reduceMotion: Bool = false) ->
 @MainActor
 func styledCard(_ state: DesignTokens.Interaction, reduceMotion: Bool = false) -> some View {
     styleStage(
-        Card(title: "Answer in my own words", hint: "4") {
+        Panel {
+            Text("Answer in my own words").textStyle(.heading)
             Text("Tell the agent what to do instead.").font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
         }
         .modifier(CardFace(state: state, reduceMotion: reduceMotion)),
@@ -807,6 +808,68 @@ func disabledWithReason() -> some View {
             .directorButton(.primary)
             .disabledReason("Checks are still running on PR #812.", revealed: true),
         width: 400
+    )
+}
+
+// MARK: - Panel, zone title and chip (TP-1484)
+
+/// A component on the window surface, as the catalog's canvas draws it.
+@MainActor
+func componentStage(_ view: some View, width: CGFloat) -> some View {
+    view
+        .padding(DesignTokens.Space.s6)
+        .frame(width: width, alignment: .leading)
+        .background(DesignTokens.Surface.window.color)
+}
+
+/// The catalog's panel under its zone title: a facts panel, a zone title with a note over its panel, and a card (a
+/// titled panel with its hint as the note).
+@MainActor
+func panelStories() -> some View {
+    componentStage(
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s6) {
+            TitledPanel(title: "Pull request") {
+                Text("PR #812 · checks passing").textStyle(.body)
+                Text("9 files · +505 −52").textStyle(.secondary).foregroundStyle(DesignTokens.TextColor.secondary.color)
+            }
+            VStack(alignment: .leading, spacing: ZoneTitle.gap) {
+                ZoneTitle("Timeline", note: "8 new since you looked at 16:50")
+                Panel { Text("Implementation run 2 opened PR #812.").textStyle(.body) }
+            }
+            Card(title: "What happened") {
+                Text("Code Review sent PR #812 back once: the timeline missed the run that was stopped. Run 2 added it, and the checks pass.")
+                    .textStyle(.body)
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        },
+        width: 520
+    )
+}
+
+/// The catalog's Chip stories (Status, Status working, Repo, Epic, Label), a plain chip, and a status chip of every
+/// status.
+let chipStories: [(id: String, text: String, kind: Chip.Kind)] = [
+    ("status", "Waiting on you", .status(.you)),
+    ("status-working", "Working", .status(.working)),
+    ("repo", "symphony", .repo),
+    ("epic", "Phase 3b · The Director redesigned", .epic),
+    ("label", "qa:skip", .label(.idle)),
+]
+
+@MainActor
+func chipVariants() -> some View {
+    componentStage(
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+            HStack(spacing: DesignTokens.Space.s2) {
+                ForEach(chipStories, id: \.id) { story in Chip(story.text, kind: story.kind) }
+                Chip("design")
+            }
+            HStack(spacing: DesignTokens.Space.s2) {
+                ForEach(DesignTokens.Status.allCases, id: \.self) { status in Chip(status.word, kind: .status(status)) }
+            }
+        },
+        width: 820
     )
 }
 
@@ -1769,6 +1832,9 @@ MainActor.assumeIsolated {
         render(styledCard(.press, reduceMotion: true), scheme, to: "style-card-pressed-reduce-motion-\(suffix).png")
         render(disabledWithReason(), scheme, to: "style-button-disabled-reason-\(suffix).png")
         render(situationKinds(), scheme, to: "style-situation-kinds-\(suffix).png")
+        // The catalog's panel, zone title and chip (TP-1484).
+        render(panelStories(), scheme, to: "component-panel-\(suffix).png")
+        render(chipVariants(), scheme, to: "component-chip-\(suffix).png")
         // The Situation line (TP-1439): every kind in the full and the compact size, and forced, "and n more", narrow.
         render(situationLines(.full), scheme, to: "situation-line-full-\(suffix).png")
         render(situationLines(.compact), scheme, to: "situation-line-compact-\(suffix).png")

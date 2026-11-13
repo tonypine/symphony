@@ -228,11 +228,14 @@ private struct BoardGroup<Row: View>: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            if !group.isEmpty { shape.fill(DesignTokens.Surface.content.color) }
-        }
-        .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color))
         .clipShape(shape)
+        // A group with rows is a panel; an empty one keeps its hairline on the window.
+        .background {
+            if !group.isEmpty { Color.clear.panelSurface(in: shape) }
+        }
+        .overlay {
+            if group.isEmpty { shape.strokeBorder(DesignTokens.Surface.separator.color) }
+        }
         // The heading spans the card's top edge, so its keyboard focus rings the card, outside its rounded corners.
         .focusRing(headingFocused && keyboardFocus, shape)
         .accessibilityElement(children: .contain)
