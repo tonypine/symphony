@@ -622,16 +622,30 @@ switched; launch the app once per appearance instead:
   design system alone. When `qa_open_status_menu` fails with `qa_status_menu_not_opened`, call
   `qa_check_app`; a menu that never opens on a healthy app is a failing step, quoted with the
   tool's message.
+- **A component's look is judged on its own, from its snapshots.** `macos/Tests/Snapshots/` holds a
+  picture of every shared component in each of its kinds, sizes and states, and of whole sections
+  and pages, drawn from made-up inputs without launching the app. A button is a button wherever it
+  sits, so this is where its look is judged, and where a variation the app rarely shows (a very
+  long label, every size side by side) can be seen at all. For each component or section the
+  change touches, open the snapshots the pull request changed or added (`git diff --name-only`
+  against the base, under `macos/Tests/Snapshots/`), in light and in dark, and look at each one
+  enlarged. Judge it as a designer would, by sight: the content is centred in its shape, with the
+  same space above and below and on both sides; a glyph and its label sit on one line with an even
+  gap; nothing is clipped, cramped or cut by an ellipsis it has room for; the kinds and states can
+  be told apart; text keeps its contrast. A fault here is a finding even when every structural
+  check passes: report it as a `Design check: <component>` step, with the snapshot's name and what
+  is wrong in plain words ("the label sits lower than the middle of the button").
+- **The running app is judged for what a snapshot cannot show**: that the app puts a component in
+  the state it should (a selected row's badge is the selected one, Tab draws a focus ring), how it
+  behaves under the pointer and the keyboard (the cursor over a button, hover, press), and how a
+  page holds together at the window's sizes. Launch the app on its fixtures for those. Do not
+  repeat there what the snapshots already settle.
 - **A ticket that brings a new design** attaches the design's reference images, drawn from the
   catalog story or the prototype it was designed in. They are direction for that ticket, not a
-  standing check. Launch the app on its fixtures, take your own screenshots of the page or the
-  component the ticket builds, at the sizes the ticket names, in light and in dark, and compare
-  them with the attached references. In the `Design check`, name each reference you compared and
-  what still differs. Judge the running app: an image drawn off screen (a snapshot, a sheet)
-  shows a component alone and in a state it was handed, and proves nothing about the page it sits
-  in. Once a design has shipped, the app is the reference: nothing compares it with the HTML
-  again. When the ticket attaches none, judge against the Screens and the design system, as
-  above.
+  standing check: compare the snapshots and your screenshots of the running app with them, and
+  name what still differs. Once a design has shipped, the app is the reference: nothing compares
+  it with the HTML again. When the ticket attaches none, judge against the Screens and the design
+  system, as above.
 
 After an update: the signed release pair. The `qa_build` app is signed ad hoc and has no update
 key, so it never installs an update. When a step judges what the app shows once an update
