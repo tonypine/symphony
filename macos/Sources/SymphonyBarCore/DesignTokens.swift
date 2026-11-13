@@ -1122,6 +1122,9 @@ public enum DesignTokens {
         public static let rest = ColorToken.surfacePressed
         public static let breatheOpacity: Double = 0.45
         public static let breathePeriod: Double = 1.8
+        /// How each half of the breath moves, down and back up alike: the catalog's `--ease-standard`,
+        /// `cubic-bezier(0.2, 0, 0, 1)` (`.epic-strip i.live { animation: ds-breathe 1.8s var(--ease-standard) infinite }`).
+        public static let breatheCurve: [Double] = [0.2, 0, 0, 1]
 
         /// The order the states share a strip past `most`, and VoiceOver reads them in.
         static let order: [Status?] = [.done, .problem, .you, .working, .forced, .idle, nil]

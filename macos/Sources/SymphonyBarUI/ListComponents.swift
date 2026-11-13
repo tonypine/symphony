@@ -458,15 +458,12 @@ public struct ProgressStrip: View {
     /// Whether a live segment breathes: live, and neither Reduce Motion nor a snapshot.
     static func breathes(live: Bool, reduceMotion: Bool, offscreen: Bool) -> Bool { live && !reduceMotion && !offscreen }
 
-    /// A segment's opacity at `date`: full when it does not breathe; otherwise it eases down to `breatheOpacity` and
-    /// back once every `breathePeriod`.
-    static func breathOpacity(breathes: Bool, at date: Date) -> Double {
-        guard breathes else { return 1 }
-        let period = DesignTokens.ProgressStrip.breathePeriod
-        let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
-        let depth = (1 - cos(2 * Double.pi * phase)) / 2
-        return 1 - (1 - DesignTokens.ProgressStrip.breatheOpacity) * depth
-    }
+    /// The breath of a segment whose item is worked on, as the catalog draws it: to `breatheOpacity` and back over
+    /// `breathePeriod`, each half on `--ease-standard`.
+    static let breath = LayerPulse.Motion.breathe(
+        to: DesignTokens.ProgressStrip.breatheOpacity,
+        curve: DesignTokens.ProgressStrip.breatheCurve
+    )
 
     public var body: some View {
         let segments = DesignTokens.ProgressStrip.segments(items)
@@ -488,9 +485,9 @@ public struct ProgressStrip: View {
     }
 }
 
-/// One segment: its state's colour, breathing while its item is worked on. The breath is read off the clock each
-/// frame rather than started once, so a segment whose item starts work while the strip is on screen, or whose Reduce
-/// Motion is turned off, begins breathing at once, and one that stops goes back to full colour.
+/// One segment: its state's colour, breathing while its item is worked on. Which of the two it draws follows
+/// `breathes`, so a segment whose item starts work while the strip is on screen, or whose Reduce Motion is turned off,
+/// begins breathing at once, and one that stops goes back to full colour.
 private struct StripSegment: View {
     let segment: DesignTokens.ProgressStrip.Segment
     let breathes: Bool
@@ -501,12 +498,7 @@ private struct StripSegment: View {
     var body: some View {
         let color = DesignTokens.ProgressStrip.color(segment.status).color
         if breathes {
-            LayerPulse(
-                shape: .capsule,
-                color: color,
-                motion: .opacity(from: 1, to: DesignTokens.ProgressStrip.breatheOpacity),
-                duration: DesignTokens.ProgressStrip.breathePeriod / 2
-            )
+            LayerPulse(shape: .capsule, color: color, motion: ProgressStrip.breath, duration: DesignTokens.ProgressStrip.breathePeriod)
         } else {
             RoundedRectangle(cornerRadius: DesignTokens.ProgressStrip.radius, style: .continuous).fill(color)
         }
