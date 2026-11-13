@@ -336,10 +336,13 @@ struct GalleryScreen: View {
     let variation: GalleryVariation
     let window: CGFloat
     let stage: CGFloat
+    /// Told the width it drew at, so the stage scrolls sideways only for a screen wider than it.
+    let drawn: (CGFloat) -> Void
 
     var body: some View {
         (variation.sized?(window) ?? variation.view)
             .fixedSize()
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { drawn($0) }
             .frame(minWidth: stage, alignment: .top)
             .accessibilityElement(children: .contain)
             .accessibilityLabel(variation.id)
@@ -358,6 +361,8 @@ struct GalleryView: View {
     /// The variation shown, when the picked entry is a screen.
     @State private var variation: String?
 
+    /// How wide the screen shown drew.
+    @State private var drawn: CGFloat = 0
     /// The window a screen is drawn for: a named width, or nil for one whose page is as wide as the stage.
     @State private var window: CGFloat?
 
@@ -559,11 +564,11 @@ struct GalleryView: View {
 
     private var stage: some View {
         GeometryReader { geometry in
-            // A board packs into the stage's width and scrolls down. A screen scrolls sideways too, when its window is
-            // wider than the stage.
-            ScrollView(shown == nil ? .vertical : [.horizontal, .vertical]) {
+            // A board packs into the stage's width and scrolls down. A screen scrolls sideways too, while it is wider
+            // than the stage.
+            ScrollView(shown != nil && drawn > geometry.size.width + 0.5 ? [.horizontal, .vertical] : .vertical) {
                 if let shown {
-                    GalleryScreen(variation: shown, window: window ?? geometry.size.width + DesignTokens.Layout.sidebarWidth, stage: geometry.size.width)
+                    GalleryScreen(variation: shown, window: window ?? geometry.size.width + DesignTokens.Layout.sidebarWidth, stage: geometry.size.width) { drawn = $0 }
                         .id(shown.id)
                 } else if let entry {
                     GalleryBoard(entry: entry, variations: variations(of: entry), width: max(geometry.size.width - 2 * DesignTokens.Space.s8, 320))
@@ -571,9 +576,10 @@ struct GalleryView: View {
                         .id(entry.id)
                 }
             }
-            // A screen's stage shows no scroll bar: one that is always drawn (no trackpad) would take its width from the
-            // screen, and a window that fills the stage would no longer fit it.
-            .scrollIndicators(shown == nil ? .automatic : .hidden)
+            // A screen's stage has no bar on its side: one that is always drawn (no trackpad) would take its width from
+            // the screen, and a window that fills the stage would no longer fit it. The bar along the bottom is there
+            // only while the screen is wider than the stage.
+            .scrollIndicators(shown == nil ? .automatic : .never, axes: .vertical)
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
         .accessibilityLabel("Stage")
