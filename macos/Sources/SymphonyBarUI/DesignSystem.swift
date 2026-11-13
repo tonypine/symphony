@@ -285,7 +285,8 @@ extension DesignTokens.TypeStyle {
 /// C7, the catalog's Badge (`.badge`, TP-1506): a status glyph and word on the status tint, the one way the Director
 /// says what state something is in. Three sizes (18, 20 and 24 pt); the word in the status's text colour and the
 /// glyph in its colour. `recommended` is the accent form without a glyph, for a Question's option. On a selected row
-/// (`selected`) it is white at 20 % behind the word and glyph in `text-on-accent`. VoiceOver reads the word only.
+/// (`selected`, or a list row SwiftUI draws selected: `backgroundProminence` `.increased`) it is white at 20 % behind
+/// the word and glyph in `text-on-accent`. VoiceOver reads the word only.
 public struct Badge: View {
     public enum Role: Equatable {
         case status(DesignTokens.Status)
@@ -298,6 +299,7 @@ public struct Badge: View {
     let size: DesignTokens.Badge.Size
     let glyph: Bool
     let selected: Bool
+    @Environment(\.backgroundProminence) private var prominence
 
     public init(
         status: DesignTokens.Status, word: String? = nil, size: DesignTokens.Badge.Size = .regular, glyph: Bool = true,
@@ -352,8 +354,11 @@ public struct Badge: View {
         .accessibilityLabel(word)
     }
 
+    /// Selected by its caller, or by the list row it sits in: a selected sidebar or table row draws the accent behind it.
+    private var onSelection: Bool { selected || prominence == .increased }
+
     private var fill: Color {
-        if selected { return DesignTokens.TextColor.onAccent.color.opacity(DesignTokens.Badge.selectedFill) }
+        if onSelection { return DesignTokens.TextColor.onAccent.color.opacity(DesignTokens.Badge.selectedFill) }
         return switch role {
         case let .status(status): status.badgeFill
         case .accent: DesignTokens.ColorToken.accentTint.color
@@ -361,7 +366,7 @@ public struct Badge: View {
     }
 
     private var textColor: Color {
-        if selected { return DesignTokens.TextColor.onAccent.color }
+        if onSelection { return DesignTokens.TextColor.onAccent.color }
         return switch role {
         case let .status(status): status.text
         case .accent: DesignTokens.ColorToken.accentText.color
@@ -369,7 +374,7 @@ public struct Badge: View {
     }
 
     private var glyphColor: Color {
-        if selected { return DesignTokens.TextColor.onAccent.color }
+        if onSelection { return DesignTokens.TextColor.onAccent.color }
         return switch role {
         case let .status(status): status.tint
         case .accent: DesignTokens.ColorToken.accent.color

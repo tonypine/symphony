@@ -395,7 +395,13 @@ func repoPausedSidebar() -> some View {
     )
     return VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
         ForEach(window.repos) { repo in
+            // The default repo drawn selected, as the sidebar list draws it: its Default and Paused badges take the
+            // catalog's selected form on the accent (TP-1506).
+            let selected = repo.isDefault
             RepoSidebarRow(repo: repo)
+                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
+                .background(selected ? Color.accentColor : Color.clear)
+                .environment(\.backgroundProminence, selected ? .increased : .standard)
         }
     }
     .frame(width: DesignTokens.Layout.sidebarWidth - 2 * DesignTokens.Space.s3, alignment: .leading)
