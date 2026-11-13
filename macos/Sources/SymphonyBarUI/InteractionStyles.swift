@@ -351,6 +351,7 @@ public struct DirectorButtonStyle: ButtonStyle {
         @State private var hovered = false
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.isFocused) private var isFocused
+        @Environment(\.buttonKeyboardFocus) private var keyboardFocus
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
         var body: some View {
@@ -360,7 +361,7 @@ public struct DirectorButtonStyle: ButtonStyle {
                 size: size,
                 glyph: glyph,
                 state: DesignTokens.Interaction(
-                    hovered: hovered, pressed: configuration.isPressed, selected: selected, focused: isFocused, disabled: !isEnabled
+                    hovered: hovered, pressed: configuration.isPressed, selected: selected, focused: isFocused || keyboardFocus, disabled: !isEnabled
                 ),
                 reduceMotion: reduceMotion
             )
@@ -380,7 +381,32 @@ extension View {
     ) -> some View {
         buttonStyle(DirectorButtonStyle(kind: kind, size: size, glyph: glyph, selected: selected))
             .focusEffectDisabled()
+            .modifier(ReportsKeyboardFocus())
             .disabledReason(disabledReason)
+    }
+}
+
+/// Keyboard focus as the button holds it. A button style's body is not the focusable view, so `isFocused` read there
+/// stays false on macOS; the button's own focus state, handed down, is what lights the face's ring.
+private struct ButtonKeyboardFocusKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    var buttonKeyboardFocus: Bool {
+        get { self[ButtonKeyboardFocusKey.self] }
+        set { self[ButtonKeyboardFocusKey.self] = newValue }
+    }
+}
+
+/// Tracks whether the button it wraps has keyboard focus and hands that to the button's style.
+private struct ReportsKeyboardFocus: ViewModifier {
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .environment(\.buttonKeyboardFocus, focused)
+            .focused($focused)
     }
 }
 
@@ -452,12 +478,13 @@ private struct IconButtonStyle: ButtonStyle {
         @State private var hovered = false
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.isFocused) private var isFocused
+        @Environment(\.buttonKeyboardFocus) private var keyboardFocus
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
         var body: some View {
             IconButtonFace(
                 symbol, size: size, on: on,
-                state: DesignTokens.Interaction(hovered: hovered, pressed: configuration.isPressed, focused: isFocused, disabled: !isEnabled),
+                state: DesignTokens.Interaction(hovered: hovered, pressed: configuration.isPressed, focused: isFocused || keyboardFocus, disabled: !isEnabled),
                 reduceMotion: reduceMotion
             )
             .onHover { hovered = $0 }
@@ -476,25 +503,27 @@ public struct IconButton: View {
     var isOn: Binding<Bool>?
     var shortcut: KeyboardShortcut?
     var disabledReason: String?
+    var reasonAlignment: HorizontalAlignment
     let action: () -> Void
 
     /// An icon button that runs `action`, also on `shortcut`.
     public init(
         _ symbol: String, help: String, size: DesignTokens.Control = .medium, shortcut: KeyboardShortcut? = nil, disabledReason: String? = nil,
-        action: @escaping () -> Void
+        reasonAlignment: HorizontalAlignment = .center, action: @escaping () -> Void
     ) {
         self.symbol = symbol
         self.help = help
         self.size = size
         self.shortcut = shortcut
         self.disabledReason = disabledReason
+        self.reasonAlignment = reasonAlignment
         self.action = action
     }
 
     /// A toggle: pressing it flips `isOn`, and it shows on in the accent tint.
     public init(
         _ symbol: String, help: String, size: DesignTokens.Control = .medium, isOn: Binding<Bool>, shortcut: KeyboardShortcut? = nil,
-        disabledReason: String? = nil
+        disabledReason: String? = nil, reasonAlignment: HorizontalAlignment = .center
     ) {
         self.symbol = symbol
         self.help = help
@@ -502,6 +531,7 @@ public struct IconButton: View {
         self.isOn = isOn
         self.shortcut = shortcut
         self.disabledReason = disabledReason
+        self.reasonAlignment = reasonAlignment
         self.action = { isOn.wrappedValue.toggle() }
     }
 
@@ -512,13 +542,14 @@ public struct IconButton: View {
         .buttonStyle(IconButtonStyle(symbol: symbol, size: size, on: isOn?.wrappedValue ?? false))
         .keyboardShortcut(shortcut)
         .focusEffectDisabled()
+        .modifier(ReportsKeyboardFocus())
         .accessibilityLabel(help)
         .accessibilityAddTraits(isOn == nil ? [] : .isToggle)
         .accessibilityValue(isOn.map { $0.wrappedValue ? "On" : "Off" } ?? "")
         if disabledReason == nil {
             button.help(help)
         } else {
-            button.disabledReason(disabledReason, alignment: .center)
+            button.disabledReason(disabledReason, alignment: reasonAlignment)
         }
     }
 }
@@ -560,7 +591,9 @@ public struct Refusal: View {
     }
 }
 
-/// Wraps its content at `width` (the narrow measure) without taking more room than the content needs.
+/// Wraps its content at `width` (the narrow measure) without taking more room than the content needs. Its size is the
+/// same whatever its container proposes: a narrow probe would otherwise wrap it a word a line, and that height would
+/// become the window's minimum height and push the window's bottom bar off screen.
 private struct CappedWidth: ViewModifier {
     let width: Double
 
@@ -574,7 +607,8 @@ private struct CappedWidthLayout: Layout {
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard let content = subviews.first else { return .zero }
-        return content.sizeThatFits(ProposedViewSize(width: min(proposal.width ?? width, width), height: proposal.height))
+        let ideal = content.sizeThatFits(.unspecified).width
+        return content.sizeThatFits(ProposedViewSize(width: min(ideal, width), height: nil))
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {

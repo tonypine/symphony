@@ -77,7 +77,8 @@ struct ReposView: View {
                     }
                     IconButton(
                         "minus", help: DisconnectRepo.buttonTitle, size: .small, shortcut: KeyboardShortcut(.delete, modifiers: []),
-                        disabledReason: model.selected == nil ? "Select a repo first." : model.selected?.actions.disconnectProblem
+                        disabledReason: model.selected == nil ? "Select a repo first." : model.selected?.actions.disconnectProblem,
+                        reasonAlignment: .leading
                     ) {
                         model.selection.map(model.onDisconnect)
                     }

@@ -111,4 +111,18 @@ final class SharedComponentsTests: XCTestCase {
         XCTAssertEqual(icon.height, DesignTokens.Control.medium.height, accuracy: 0.5)
         XCTAssertGreaterThan(iconOff.height, icon.height + DesignTokens.Control.glyphGap)
     }
+    /// A reason keeps its size in a narrow place: squeezed, it would wrap a word a line, and that height would become
+    /// the window's minimum and push its bottom bar off screen (the Repos window at its opening size).
+    func testAReasonKeepsItsHeightWhenItsContainerIsNarrow() {
+        let free = fittingSize(Refusal(reason: "Select a repo first."))
+        let squeezed = fittingSize(Refusal(reason: "Select a repo first.").frame(width: 12))
+        XCTAssertEqual(squeezed.height, free.height, accuracy: 0.5)
+        let bar = fittingSize(
+            HStack(alignment: .top) {
+                IconButton("minus", help: "Disconnect", size: .small, disabledReason: "Select a repo first.", reasonAlignment: .leading) {}
+            }
+            .frame(width: 40)
+        )
+        XCTAssertLessThan(bar.height, DesignTokens.Control.small.height + DesignTokens.Control.glyphGap + 2 * free.height)
+    }
 }
