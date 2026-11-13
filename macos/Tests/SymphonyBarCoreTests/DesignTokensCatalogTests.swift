@@ -35,7 +35,7 @@ final class DesignTokensCatalogTests: XCTestCase {
                 XCTFail("\(name) is in tokens.css with no Swift counterpart: add it to DesignTokens, or to notInSwift with why")
                 continue
             }
-            check(value, name)
+            do { try check(value, name) } catch { XCTFail("\(name): can't read \(value): \(error)") }
         }
         // Each Swift token named after the CSS is still there.
         for name in checks.keys.sorted() { XCTAssertNotNil(base[name], "\(name) is no longer in tokens.css") }
@@ -149,7 +149,7 @@ final class DesignTokensCatalogTests: XCTestCase {
 
     // MARK: - The checks
 
-    typealias Check = (_ value: String, _ name: String) -> Void
+    typealias Check = (_ value: String, _ name: String) throws -> Void
 
     /// Each CSS token's check against its Swift value.
     static func checks() -> [String: Check] {

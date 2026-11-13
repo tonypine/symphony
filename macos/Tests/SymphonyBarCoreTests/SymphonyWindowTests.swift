@@ -292,7 +292,8 @@ final class SymphonyWindowTests: XCTestCase {
              DesignTokens.Space.s5, DesignTokens.Space.s6, DesignTokens.Space.s8],
             [4, 8, 12, 16, 20, 24, 32]
         )
-        XCTAssertEqual(DesignTokens.Radius.card - DesignTokens.Space.s1, DesignTokens.Radius.row)
+        // Concentric: a row inset 6 pt in a card keeps the card's curve (tokens.css: card 16, row 10).
+        XCTAssertEqual(DesignTokens.Radius.card - 6, DesignTokens.Radius.row)
     }
 
     /// The design system maps tokens to system colors only: no hex or RGB literal anywhere in the app's sources, but
