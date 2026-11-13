@@ -369,7 +369,7 @@ struct GalleryView: View {
         GeometryReader { geometry in
             ScrollView([.horizontal, .vertical]) {
                 if let entry {
-                    GalleryBoard(entry: entry, variations: variations(of: entry), width: max(geometry.size.width - 2 * DesignTokens.Space.s8, 320))
+                    GalleryBoard(entry: entry, variations: variations(of: entry), width: max(geometry.size.width - 2 * DesignTokens.Space.s8 - DesignTokens.Space.s5, 320))
                         .frame(minWidth: geometry.size.width, minHeight: geometry.size.height, alignment: .topLeading)
                         .id(entry.id)
                 }
