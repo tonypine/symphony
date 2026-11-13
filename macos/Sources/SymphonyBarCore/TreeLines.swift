@@ -78,16 +78,21 @@ public enum TreeLines {
     }
 
     /// The Left arrow on `key` in an opened chain: it folds again, and a row it hides gives the selection to the pill
-    /// that now stands for it. Nil when `key` is in no opened chain.
+    /// that now stands for it, the one under its ancestor at `foldDepth`. Nil when `key` is in no opened chain.
     public static func close<ID: Hashable>(
         _ key: TreeKey<ID>?, in nodes: [TreeNode<ID>], foldDepth: Int, opened: Set<ID>
     ) -> (opened: Set<ID>, selection: TreeKey<ID>?)? {
         let current = lines(nodes, foldDepth: foldDepth, opened: opened)
-        guard let key, let line = current.first(where: { $0.key == key }), opened.contains(line.root) else { return nil }
-        let folded = opened.subtracting([line.root])
+        guard let key, let index = current.firstIndex(where: { $0.key == key }), opened.contains(current[index].root) else {
+            return nil
+        }
+        let folded = opened.subtracting([current[index].root])
         let after = lines(nodes, foldDepth: foldDepth, opened: folded)
         if after.contains(where: { $0.key == key }) { return (folded, key) }
-        let pill = after.first { if case .more = $0.key { $0.root == line.root } else { false } }
-        return (folded, pill?.key)
+        // A hidden row sits under its ancestor at `foldDepth`, and that ancestor's pill is the one that stands for it.
+        guard let fold = current[..<index].last(where: { $0.depth == foldDepth }), case let .row(id) = fold.key else {
+            return (folded, nil)
+        }
+        return (folded, .more(id))
     }
 }

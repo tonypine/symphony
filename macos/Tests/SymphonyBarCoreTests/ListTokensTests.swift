@@ -117,6 +117,19 @@ final class ListTokensTests: XCTestCase {
         XCTAssertNil(TreeLines.close(nil, in: Self.queue, foldDepth: 2, opened: ["TP-1481"]))
     }
 
+    func testTheLeftArrowOnAHiddenRowHandsTheSelectionToThePillOfItsOwnBranch() throws {
+        let tree = [TreeNode("R", children: [TreeNode("A", children: [
+            TreeNode("B", children: [TreeNode("B1")]), TreeNode("C", children: [TreeNode("C1", children: [TreeNode("C2")])]),
+        ])])]
+        let folded = TreeLines.lines(tree, foldDepth: 2).map(\.key)
+        XCTAssertEqual(folded, [.row("R"), .row("A"), .row("B"), .more("B"), .row("C"), .more("C")])
+        let fromC1 = try XCTUnwrap(TreeLines.close(.row("C1"), in: tree, foldDepth: 2, opened: ["R"]))
+        XCTAssertEqual(fromC1.opened, [])
+        XCTAssertEqual(fromC1.selection, .more("C"))
+        XCTAssertEqual(try XCTUnwrap(TreeLines.close(.row("C2"), in: tree, foldDepth: 2, opened: ["R"])).selection, .more("C"))
+        XCTAssertEqual(try XCTUnwrap(TreeLines.close(.row("B1"), in: tree, foldDepth: 2, opened: ["R"])).selection, .more("B"))
+    }
+
     // MARK: - Progress strip
 
     func testUpToThirtyItemsDrawOneSegmentEachInOrder() {
