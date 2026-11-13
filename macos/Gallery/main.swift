@@ -1796,7 +1796,6 @@ func insightsUnavailablePage(window: CGFloat) -> some View {
     .background(DesignTokens.Surface.content.color)
 }
 
-@MainActor
 MainActor.assumeIsolated {
     for (scheme, suffix) in [(ColorScheme.light, "light"), (.dark, "dark")] {
         // The shared styles (TP-1438): the control sizes, each state of a row, a card and the buttons (a selected
