@@ -69,6 +69,10 @@ PRIV = os.path.normpath(os.path.join(HERE, "..", "..", "priv", "qa_driver"))
 FIXTURES = os.path.join(HERE, "Fixtures", "director-app", "ticket-page-speed")
 TICKET = "TP-1244"
 TITLE = "The paused line on the ticket page"
+# A short ticket of the same fixtures, for the fold check: the driver's click judges whether it changed anything from a
+# fingerprint of the first 1500 elements of the tree, and a run far down a 500-event page lies past them, so the
+# driver read a click that did fold as one that changed nothing and pressed the fold with AXPress.
+SHORT_TICKET = "TP-1245"
 
 # On from TP-1480 (the Director's decision D2 on TP-1491): over either budget, or short of an end of the page, fails.
 ENFORCE_BUDGETS = True
@@ -106,10 +110,10 @@ def driver(binary, *args, timeout=90):
         return {"error": {"code": "unreadable", "message": result.stdout[-500:] + result.stderr[-500:]}}
 
 
-def page_scroll_area(binary, pid):
-    """The ticket page's scroll area once its title shows: the widest scroll area of the window (the sidebar's is
-    narrow), or None."""
-    if not driver(binary, "ax-tree", pid, 40, 5, "", TITLE).get("matches"):
+def page_scroll_area(binary, pid, title=TITLE):
+    """The ticket page's scroll area once its title shows (any page's, with no title): the widest scroll area of the
+    window (the sidebar's is narrow), or None."""
+    if title and not driver(binary, "ax-tree", pid, 40, 5, "", title).get("matches"):
         return None
     areas = driver(binary, "ax-tree", pid, 40, 20, "AXScrollArea", "").get("matches", [])
     areas = [a for a in areas if (a.get("frame") or {}).get("w", 0) >= 300 and (a.get("frame") or {}).get("h", 0) >= 200]
@@ -128,8 +132,8 @@ def timeline_rows(binary, pid):
     return len(reply.get("matches", []))
 
 
-def open_from_find(binary, pid):
-    """Opens TICKET's page as a person does once the window has its state: Home (⌘1), then Find a Ticket (⌘F), its
+def open_from_find(binary, pid, ticket=TICKET):
+    """Opens `ticket`'s page as a person does once the window has its state: Home (⌘1), then Find a Ticket (⌘F), its
     identifier and Return. QA found the page opened this way, its feed read after it drew, hanging the app with its
     timeline empty (TP-1480), while the launch's own open never did. Returns why it could not, or None."""
     reply = driver(binary, "key", pid, "1", "command")
@@ -149,9 +153,9 @@ def open_from_find(binary, pid):
         time.sleep(0.5)
     if not field:
         return "Find a Ticket's field never showed"
-    reply = driver(binary, "ax-set-value", pid, field["path"], TICKET)
+    reply = driver(binary, "ax-set-value", pid, field["path"], ticket)
     if "error" in reply:
-        return f"typing {TICKET}: {reply['error']}"
+        return f"typing {ticket}: {reply['error']}"
     reply = driver(binary, "key", pid, "return", "")
     if "error" in reply:
         return f"Return: {reply['error']}"
@@ -442,8 +446,16 @@ def main():
                 else:
                     print(f"over budget [hitch ratio]: {over} (reported; ENFORCE_BUDGETS is off)")
         # 3. A run's fold follows a click.
-        area = page_scroll_area(binary, pid) or area
-        why = click_folds_a_run(binary, pid, area)
+        why = open_from_find(binary, pid, SHORT_TICKET)
+        area = None
+        for _ in range(30):
+            if timeline_rows(binary, pid):
+                area = page_scroll_area(binary, pid, None)
+                if area:
+                    break
+            time.sleep(1)
+        why = why or (None if area else f"{SHORT_TICKET}'s page opened from Find a Ticket shows no run on its timeline")
+        why = why or click_folds_a_run(binary, pid, area)
         if why:
             failures.append("fold")
             print(f"FAIL [fold]: {why}")
