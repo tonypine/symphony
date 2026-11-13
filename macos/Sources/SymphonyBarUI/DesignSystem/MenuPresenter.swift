@@ -60,11 +60,14 @@ public final class MenuPresenter {
         let panel = makePanel(session, label: label)
         let frame = MenuNavigation.frame(size: panel.listSize, anchor: anchor, visible: screen, alignment: alignment)
         place(panel, list: frame)
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]) {
-            [weak self] event in
+        let handler: (NSEvent) -> NSEvent? = { [weak self] event in
             guard let self else { return event }
-            return MainActor.assumeIsolated { self.route(event) }
+            nonisolated(unsafe) let pressed = event
+            let passes: Bool = MainActor.assumeIsolated { self.passes(pressed) }
+            return passes ? event : nil
         }
+        let kinds: NSEvent.EventTypeMask = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]
+        monitor = NSEvent.addLocalMonitorForEvents(matching: kinds, handler: handler)
         let center = NotificationCenter.default
         let close: @Sendable (Notification) -> Void = { [weak self] _ in
             MainActor.assumeIsolated { self?.session.close() }
@@ -142,22 +145,23 @@ public final class MenuPresenter {
     // MARK: - Events
 
     /// A key goes to the menu; a click inside it goes on to its item, one outside closes it and goes nowhere.
-    private func route(_ event: NSEvent) -> NSEvent? {
+    /// True when the event goes on to the app.
+    private func passes(_ event: NSEvent) -> Bool {
         switch event.type {
         case .keyDown:
             if event.modifierFlags.contains(.command) {
                 session.close()
-                return event
+                return true
             }
-            guard let key = Self.key(event) else { return event }
-            return session.handle(key) ? nil : event
+            guard let key = Self.key(event) else { return true }
+            return !session.handle(key)
         case .scrollWheel:
             if !inside(NSEvent.mouseLocation) { session.close() }
-            return event
+            return true
         default:
-            if inside(NSEvent.mouseLocation) { return event }
+            if inside(NSEvent.mouseLocation) { return true }
             session.close()
-            return nil
+            return false
         }
     }
 
