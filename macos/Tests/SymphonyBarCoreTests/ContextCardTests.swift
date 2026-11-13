@@ -119,7 +119,7 @@ final class ContextCardTests: XCTestCase {
         XCTAssertEqual(card.partOf?.text, "P-1")
         let strip = try XCTUnwrap(card.partOf?.progress)
         XCTAssertEqual(strip.segments, [.done, .working, .waitingOnYou, .notStarted])
-        XCTAssertEqual(strip.segments.map(\.color), [.green, .blue, .orange, .separator])
+        XCTAssertEqual(strip.segments.map(\.color), [.statusDone, .statusWorking, .statusYou, .strokeSeparator])
         XCTAssertEqual(ProgressStrip(TicketContext.Parent(identifier: "P", title: nil, done: 1, total: 1, children: ["completed"]))?.accessibilityLabel, "1 of 1 sub-ticket done")
 
         // A parent without sub-tickets has no strip.

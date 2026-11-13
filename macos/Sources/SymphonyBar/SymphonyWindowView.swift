@@ -1058,7 +1058,7 @@ struct SymphonyWindowView: View {
             VStack(spacing: 0) {
                 SymphonyDetail(model: model, client: client)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(DesignTokens.Surface.window.color)
+                    .windowBackdrop()
                 WindowStatusBar(model: model, client: client)
             }
                 .modifier(StopRunSheetPresenter(model: model))
@@ -1275,7 +1275,7 @@ struct SidebarBadge: View {
 
     var body: some View {
         Text("\(count)")
-            .font(DesignTokens.TypeStyle.callout.font.weight(.semibold))
+            .font(DesignTokens.TypeStyle.secondary.font.weight(.semibold))
             .monospacedDigit()
             .foregroundStyle(.white)
             .padding(.horizontal, 6)

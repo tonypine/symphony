@@ -66,7 +66,7 @@ public struct TicketPopover: View {
         }
         if let summary = ticket.summary {
             Text(summary)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -82,7 +82,7 @@ public struct TicketPopover: View {
                     .accessibilityElement(children: .combine)
                 }
             }
-            .font(DesignTokens.TypeStyle.callout.font)
+            .font(DesignTokens.TypeStyle.secondary.font)
         }
     }
 }
@@ -112,7 +112,7 @@ public struct PullRequestPopover: View {
         }
         if let summary = pullRequest.summary {
             Text(summary)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -127,7 +127,7 @@ public struct PullRequestPopover: View {
                     }
                 }
             }
-            .font(DesignTokens.TypeStyle.callout.font)
+            .font(DesignTokens.TypeStyle.secondary.font)
         }
     }
 }

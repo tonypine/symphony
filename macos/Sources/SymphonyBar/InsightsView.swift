@@ -73,6 +73,7 @@ struct InsightsControlBar: View {
     var scope: OverviewScope = .all
     @State private var showsRange = false
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
@@ -97,9 +98,11 @@ struct InsightsControlBar: View {
         }
     }
 
-    /// The glass of the bar; an offscreen snapshot has no window behind it to blur, so it draws the raised surface.
+    /// The glass of the bar; an offscreen snapshot has no window behind it to blur, and Reduce Transparency wants none,
+    /// so either draws the glass's solid surface.
     private var glass: AnyShapeStyle {
-        offscreenSnapshot ? AnyShapeStyle(DesignTokens.Surface.raised.color) : AnyShapeStyle(.regularMaterial)
+        offscreenSnapshot || reduceTransparency
+            ? AnyShapeStyle(DesignTokens.Glass.glass.solid.color) : AnyShapeStyle(.regularMaterial)
     }
 
     private var controls: some View {
@@ -157,7 +160,7 @@ struct InsightsControlBar: View {
 
     @ViewBuilder private var summaryLine: some View {
         Text(summary ?? slice.title(scope: scope))
-            .font(DesignTokens.TypeStyle.callout.font)
+            .font(DesignTokens.TypeStyle.secondary.font)
             .foregroundStyle(.secondary)
             .monospacedDigit()
             .lineLimit(1)
@@ -321,7 +324,7 @@ struct InsightsBarChart: View {
                 }
                 if let reference = chart.reference {
                     RuleMark(y: .value(reference.title, reference.value))
-                        .foregroundStyle(DesignTokens.SystemColor.secondary.color)
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
                         .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
                         .annotation(position: .top, alignment: .leading) {
                             Text("\(reference.title) \(chart.value(reference.value))")
@@ -336,7 +339,7 @@ struct InsightsBarChart: View {
                             Text(chart.hoverLine(hovered))
                                 .font(DesignTokens.TypeStyle.caption.font)
                                 .padding(DesignTokens.Space.s1)
-                                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.mark))
+                                .glassBackground(.thick, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.mark))
                         }
                 }
             }
@@ -424,7 +427,7 @@ struct DataTable: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-            Text(title).font(DesignTokens.TypeStyle.section.font)
+            Text(title).font(DesignTokens.TypeStyle.heading.font)
             ScrollView {
                 Grid(alignment: .trailing, horizontalSpacing: DesignTokens.Space.s4, verticalSpacing: DesignTokens.Space.s1) {
                     ForEach(Array(rows.enumerated()), id: \.offset) { index, row in

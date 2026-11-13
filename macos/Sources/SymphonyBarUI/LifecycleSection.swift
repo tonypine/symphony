@@ -25,7 +25,7 @@ public struct LifecycleSection: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
             Text("Lifecycle")
-                .font(DesignTokens.TypeStyle.section.font)
+                .font(DesignTokens.TypeStyle.heading.font)
                 .accessibilityAddTraits(.isHeader)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
                 LifecycleHead(model: model)
@@ -68,7 +68,7 @@ private struct LifecycleHead: View {
                 .lineLimit(2)
             Spacer(minLength: DesignTokens.Space.s3)
             Text(model.summary)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .lineLimit(1)
@@ -259,11 +259,11 @@ struct TokenBarView: View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
             HStack(alignment: .firstTextBaseline) {
                 Text("Tokens")
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: DesignTokens.Space.s3)
                 Text(bar.value)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(levelTint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.primary))
                     .fontWeight(levelTint == nil ? .regular : .semibold)
                     .monospacedDigit()
@@ -273,7 +273,7 @@ struct TokenBarView: View {
             legend
             if let note = bar.note {
                 Text(note)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(levelTint.map { AnyShapeStyle($0) } ?? AnyShapeStyle(.secondary))
             }
         }
@@ -321,7 +321,7 @@ struct TokenBarView: View {
                         .foregroundStyle(.primary)
                         .monospacedDigit()
                 }
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .fixedSize()
             }
         }
@@ -360,7 +360,7 @@ public struct PhasePath: View {
             .accessibilityElement(children: .contain)
             .accessibilityLabel(model.accessibilityLabel)
             Text(model.summary)
-                .font(compact ? DesignTokens.TypeStyle.caption.font : DesignTokens.TypeStyle.callout.font)
+                .font(compact ? DesignTokens.TypeStyle.caption.font : DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
         }

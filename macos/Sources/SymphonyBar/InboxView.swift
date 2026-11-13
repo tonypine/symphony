@@ -302,7 +302,7 @@ private struct ReviewLineView: View {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                     ChipText(text: line.text)
                     ForEach(line.links, id: \.self) { link in
-                        LinkText(label: link.label, url: link.url).font(DesignTokens.TypeStyle.callout.font)
+                        LinkText(label: link.label, url: link.url).font(DesignTokens.TypeStyle.secondary.font)
                     }
                 }
             }
@@ -325,7 +325,7 @@ private struct PlanWarning: View {
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .font(DesignTokens.TypeStyle.callout.font)
+        .font(DesignTokens.TypeStyle.secondary.font)
     }
 }
 
@@ -417,7 +417,7 @@ private struct SubTicketsCard: View {
                         Text(ticket.title ?? "").lineLimit(1)
                         Spacer(minLength: DesignTokens.Space.s2)
                         if let state = ticket.state {
-                            Text(state).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+                            Text(state).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
                         }
                     }
                     .accessibilityElement(children: .combine)
@@ -476,7 +476,7 @@ private struct CheckRow: View {
                     Image(systemName: status.symbol).foregroundStyle(status.tint).accessibilityLabel(status.word)
                 }
                 Text(value).foregroundStyle(status == .problem ? AnyShapeStyle(DesignTokens.Status.problem.tint) : AnyShapeStyle(.primary))
-                if let link { LinkText(label: link.0, url: link.1).font(DesignTokens.TypeStyle.callout.font) }
+                if let link { LinkText(label: link.0, url: link.1).font(DesignTokens.TypeStyle.secondary.font) }
             }
         }
         .font(DesignTokens.TypeStyle.body.font)
@@ -497,7 +497,7 @@ private struct EvidenceCard: View {
                 ForEach(Array(evidence.rows.enumerated()), id: \.offset) { _, row in
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                         Text(row.label)
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)
                         ForEach(Array(row.values.enumerated()), id: \.offset) { _, value in
                             Text(value)
@@ -629,7 +629,7 @@ struct ProgressStripView: View {
             }
             .frame(maxWidth: ProgressStrip.segmentWidth * Double(strip.segments.count) + ProgressStrip.gap * Double(max(strip.segments.count - 1, 0)))
             Text(strip.line)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .fixedSize()
@@ -651,7 +651,7 @@ private struct ClarifyCards: View {
                     if let score = clarify.scoreLine { Label("Score \(score)", systemImage: "gauge.with.needle") }
                     if let round = clarify.roundLine { Label(round, systemImage: "arrow.trianglehead.2.clockwise") }
                 }
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
             }
         }
@@ -675,7 +675,7 @@ private struct BlockedCards: View {
                 } else if let line = blocked.reasonLines.first {
                     ChipText(text: line)
                 }
-                ChipText(text: blocked.nextLine, font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
+                ChipText(text: blocked.nextLine, font: DesignTokens.TypeStyle.secondary.nsFont, color: .secondaryLabelColor)
             }
         }
     }
@@ -689,7 +689,7 @@ private struct WaitingCard: View {
         Card(title: "What it waits on") {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 if let reason = wait.reason { ChipText(text: reason) }
-                ChipText(text: wait.waitLine, font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
+                ChipText(text: wait.waitLine, font: DesignTokens.TypeStyle.secondary.nsFont, color: .secondaryLabelColor)
             }
         }
     }

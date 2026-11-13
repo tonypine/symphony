@@ -707,7 +707,7 @@ func startDisabledReasons() -> some View {
             HStack(spacing: DesignTokens.Space.s3) {
                 StartNowButton(identifier: "SHOP-320", start: start, action: {})
                 Text(start.help("SHOP-320"))
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .padding(.horizontal, DesignTokens.Space.s2)
                     .padding(.vertical, DesignTokens.Space.s1)
                     .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: 4))
@@ -743,10 +743,10 @@ func styledRow(_ state: DesignTokens.Interaction, reduceMotion: Bool = false) ->
             DesignTokens.SituationKind.ci.glyph
             VStack(alignment: .leading, spacing: 2) {
                 Text("SHOP-305 · Checkout total rounding").font(DesignTokens.TypeStyle.rowTitle.font)
-                Text("Checks are running on PR #741.").font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+                Text("Checks are running on PR #741.").font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
             }
             Spacer(minLength: DesignTokens.Space.s2)
-            Text("6 min").font(DesignTokens.TypeStyle.callout.font).monospacedDigit().foregroundStyle(.secondary)
+            Text("6 min").font(DesignTokens.TypeStyle.secondary.font).monospacedDigit().foregroundStyle(.secondary)
         }
         .modifier(RowFace(state: state, reduceMotion: reduceMotion))
     )
@@ -757,7 +757,7 @@ func styledRow(_ state: DesignTokens.Interaction, reduceMotion: Bool = false) ->
 func styledCard(_ state: DesignTokens.Interaction, reduceMotion: Bool = false) -> some View {
     styleStage(
         Card(title: "Answer in my own words", hint: "4") {
-            Text("Tell the agent what to do instead.").font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+            Text("Tell the agent what to do instead.").font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
         }
         .modifier(CardFace(state: state, reduceMotion: reduceMotion)),
         width: 400
@@ -1094,7 +1094,7 @@ func actionRails(_ rails: [(String, TicketMoves)], width: CGFloat, revealsReason
             ForEach(Array(rails.enumerated()), id: \.offset) { _, rail in
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                     Text(rail.0)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                     ActionRail(rail: TicketActionRail(identifier: "TP-1", moves: rail.1), perform: { _ in },
                                moreOpen: moreOpen, revealsReasons: revealsReasons)

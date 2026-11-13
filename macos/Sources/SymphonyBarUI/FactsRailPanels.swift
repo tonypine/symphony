@@ -60,7 +60,7 @@ private struct PullRequestLine: View {
                 let meta = [model.head, model.size].compactMap { $0 }
                 if !meta.isEmpty {
                     Text(meta.joined(separator: " · "))
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                         .fixedSize(horizontal: false, vertical: true)
@@ -123,7 +123,7 @@ private struct CheckRow: View {
                     .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
                     .accessibilityHidden(true)
                 Text(check.name)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .fontWeight(check.state == .failed ? .semibold : .regular)
                     .foregroundStyle(check.state == .skipped ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                     .fixedSize(horizontal: false, vertical: true)
@@ -214,11 +214,11 @@ private struct EpicRow: View {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                     Text(epic.identifier)
-                        .font(DesignTokens.TypeStyle.callout.font.weight(.semibold))
+                        .font(DesignTokens.TypeStyle.secondary.font.weight(.semibold))
                         .monospacedDigit()
                         .fixedSize()
                     Text(epic.title)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: DesignTokens.Space.s2)
                     RowArrow()
@@ -236,7 +236,7 @@ private struct EpicRow: View {
                         .frame(maxWidth: ProgressStrip.segmentWidth * Double(strip.segments.count) + ProgressStrip.gap * Double(max(strip.segments.count - 1, 0)))
                     }
                     Text(epic.progress)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                         .fixedSize()
@@ -265,13 +265,13 @@ private struct TicketRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                         Text(row.identifier)
-                            .font(DesignTokens.TypeStyle.callout.font.weight(.semibold))
+                            .font(DesignTokens.TypeStyle.secondary.font.weight(.semibold))
                             .monospacedDigit()
                             .strikethrough(row.struck)
                             .foregroundStyle(row.struck ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                             .fixedSize()
                         Text(row.title)
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                             .strikethrough(row.struck)
                             .foregroundStyle(row.struck ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                             .fixedSize(horizontal: false, vertical: true)
@@ -303,7 +303,7 @@ struct FactsPanel<Content: View>: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
             Text(title)
-                .font(DesignTokens.TypeStyle.section.font)
+                .font(DesignTokens.TypeStyle.heading.font)
                 .accessibilityAddTraits(.isHeader)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
                 content
@@ -345,7 +345,7 @@ struct EmptyLine: View {
 
     var body: some View {
         Text(text)
-            .font(DesignTokens.TypeStyle.callout.font)
+            .font(DesignTokens.TypeStyle.secondary.font)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
     }

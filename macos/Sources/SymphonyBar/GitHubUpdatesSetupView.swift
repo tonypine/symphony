@@ -61,7 +61,7 @@ struct GitHubUpdatesSetupView: View {
                 .font(DesignTokens.TypeStyle.caption.font)
                 .foregroundStyle(.secondary)
             Text(setup.page.title)
-                .font(DesignTokens.TypeStyle.section.font)
+                .font(DesignTokens.TypeStyle.heading.font)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
             GitHubUpdatesSetupIndicator(current: setup.page, done: setup.donePages)
@@ -90,7 +90,7 @@ struct GitHubUpdatesSetupView: View {
             }
             if let error = setup.turnOnError {
                 Label(error, systemImage: DesignTokens.Status.problem.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -107,7 +107,7 @@ struct GitHubUpdatesSetupView: View {
             Spacer(minLength: DesignTokens.Space.s2)
             if let problem = setup.continueProblem {
                 Text(problem)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -148,7 +148,7 @@ struct GitHubUpdatesSetupIndicator: View {
                     }
                     Text(page.shortName)
                 }
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .fontWeight(page == current ? .semibold : .regular)
                 .foregroundStyle(page == current ? .primary : .secondary)
                 .lineLimit(1)
@@ -182,7 +182,7 @@ private struct RelayOptionRow: View {
                         if option.recommended { RecommendedBadge() }
                     }
                     Text(option.summary)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -224,20 +224,20 @@ struct GitHubUpdatesSetupRows: View {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                             Text(row.title).font(DesignTokens.TypeStyle.rowTitle.font)
-                            Text(row.word).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(row.tone.status.tint)
+                            Text(row.word).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(row.tone.status.tint)
                         }
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(row.accessibilityLabel)
                         if let detail = row.detail {
                             Text(detail)
-                                .font(DesignTokens.TypeStyle.callout.font)
+                                .font(DesignTokens.TypeStyle.secondary.font)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                                 .accessibilityHidden(true)
                         }
                         if let fix = row.fix {
                             Text(fix)
-                                .font(DesignTokens.TypeStyle.callout.font)
+                                .font(DesignTokens.TypeStyle.secondary.font)
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)

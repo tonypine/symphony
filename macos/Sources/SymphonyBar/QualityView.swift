@@ -109,7 +109,7 @@ private struct QualityTile: View {
                 .foregroundStyle(tile.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
                 .monospacedDigit()
             Text(tile.context)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(tile.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.secondary))
                 .lineLimit(2, reservesSpace: true)
         }
@@ -178,7 +178,7 @@ private struct AgreementChart: View {
                 ForEach(quality.repos) { repo in
                     HStack {
                         Text(repo.repoKey).font(DesignTokens.TypeStyle.rowTitle.font)
-                        Text(repo.mode).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+                        Text(repo.mode).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
                         Spacer()
                         Button(Quality.changeReviewTitle) { changeReview(repo.repoKey) }
                             .accessibilityLabel("\(Quality.changeReviewTitle) \(repo.repoKey)")
@@ -200,12 +200,12 @@ private struct DisagreementRowView: View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
             Text(row.identifier).font(DesignTokens.TypeStyle.rowTitle.font)
             if let repo = row.repoKey {
-                Text(repo).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+                Text(repo).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
             }
             Spacer(minLength: DesignTokens.Space.s2)
-            Text(row.review).font(DesignTokens.TypeStyle.callout.font)
+            Text(row.review).font(DesignTokens.TypeStyle.secondary.font)
             Image(systemName: "arrow.right").foregroundStyle(.tertiary).accessibilityHidden(true)
-            Text(row.decision).font(DesignTokens.TypeStyle.callout.font)
+            Text(row.decision).font(DesignTokens.TypeStyle.secondary.font)
         }
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
@@ -221,7 +221,7 @@ private struct AllRunsSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-            Text("All Runs").font(DesignTokens.TypeStyle.section.font)
+            Text("All Runs").font(DesignTokens.TypeStyle.heading.font)
             HStack {
                 Picker("Agent", selection: $filter.agent) {
                     Text("All agents").tag(String?.none)

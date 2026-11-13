@@ -140,7 +140,7 @@ struct ShippedCards: View {
                     .accessibilityAddTraits(.isHeader)
                 if !shipped.context.isEmpty {
                     Text(shipped.context)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -178,7 +178,7 @@ private struct ShippedRowView: View {
                 }
                 if !row.detail.isEmpty {
                     Text(row.detail)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -191,7 +191,7 @@ private struct ShippedRowView: View {
             }
             if let leadTime = row.leadTime {
                 Text(leadTime)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .frame(minWidth: 72, alignment: .trailing)
@@ -209,7 +209,7 @@ private struct LinkButton: View {
 
     var body: some View {
         Button(action: action) {
-            Text(title).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(Color.accentColor)
+            Text(title).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(Color.accentColor)
         }
         .buttonStyle(.plain)
     }
@@ -259,7 +259,7 @@ private struct LearningsFilterBar: View {
             .fixedSize()
             Spacer()
             Text("\(learnings.count) \(learnings.count == 1 ? "learning" : "learnings")")
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
         }
@@ -302,7 +302,7 @@ private struct LearningRowView: View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
             HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                 Text(row.context)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                 Spacer(minLength: DesignTokens.Space.s2)
                 if let identifier = row.record.issueIdentifier {
@@ -321,7 +321,7 @@ private struct LearningRowView: View {
                 .textSelection(.enabled)
             if let evidence = row.record.evidence, !evidence.isEmpty {
                 Text("“\(evidence)”")
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

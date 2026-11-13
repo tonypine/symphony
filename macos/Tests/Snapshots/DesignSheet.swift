@@ -55,7 +55,7 @@ func sheetTicketPage(_ identifier: String, width: CGFloat, height: CGFloat) -> A
 /// `view`, a page drawn in a window `width` plus the sidebar wide, as its first `width` × `height` points.
 @MainActor
 func sheetWindowPage(_ view: some View, width: CGFloat, height: CGFloat) -> AnyView {
-    AnyView(view.frame(width: width, height: height, alignment: .topLeading).clipped().background(DesignTokens.Surface.window.color))
+    AnyView(view.frame(width: width, height: height, alignment: .topLeading).clipped().windowBackdrop())
 }
 
 let sheetSizes: [(name: String, title: String, page: CGSize, window: CGSize)] = [

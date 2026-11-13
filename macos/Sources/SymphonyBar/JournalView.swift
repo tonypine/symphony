@@ -305,12 +305,12 @@ struct JournalFilterBar: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             filterSwitch(JournalQuery.reportsOnlyTitle, isOn: $query.reportsOnly)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .fixedSize()
                 .frame(height: DesignTokens.Control.small.height)
                 .help(JournalQuery.reportsOnlyHelp)
             filterSwitch(JournalFilter.everything.title, isOn: $query.everything)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .fixedSize()
                 .frame(height: DesignTokens.Control.small.height)
                 .help(Self.everythingHelp)
@@ -327,7 +327,7 @@ struct JournalFilterBar: View {
             HStack(spacing: DesignTokens.Space.s2) {
                 Text(title)
                 Capsule()
-                    .fill(isOn.wrappedValue ? DesignTokens.SystemColor.accent.color : DesignTokens.Surface.separator.color)
+                    .fill(isOn.wrappedValue ? DesignTokens.ColorToken.accent.color : DesignTokens.Surface.separator.color)
                     .frame(width: 26, height: 15)
                     .overlay(alignment: isOn.wrappedValue ? .trailing : .leading) {
                         Circle().fill(.white).frame(width: 13, height: 13).padding(1)
@@ -406,7 +406,7 @@ struct JournalReportCardView: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
             Text(clock(card.at))
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .frame(width: JournalSection<EmptyView>.timeColumn, alignment: .trailing)
@@ -458,18 +458,18 @@ struct JournalReportCardView: View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
             Image(systemName: Self.symbol)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(DesignTokens.SystemColor.accent.color)
+                .foregroundStyle(DesignTokens.ColorToken.accent.color)
                 .accessibilityHidden(true)
             Text(JournalReportCard.kicker)
                 .font(DesignTokens.TypeStyle.rowTitle.font)
             Text(card.period)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
             Spacer(minLength: DesignTokens.Space.s2)
             if let model = card.modelLine {
                 Text(model)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.tertiary)
                     .lineLimit(1)
                     .truncationMode(.middle)
@@ -484,15 +484,15 @@ struct JournalReportCardView: View {
     private var tickets: some View {
         WrappingStack(spacing: DesignTokens.Space.s2) {
             Text(Self.restsOn)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
             ForEach(card.tickets, id: \.identifier) { focus in
                 Button { open(focus) } label: {
                     Text(focus.identifier)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .fontWeight(.semibold)
                         .monospacedDigit()
-                        .foregroundStyle(DesignTokens.SystemColor.accent.color)
+                        .foregroundStyle(DesignTokens.ColorToken.accent.color)
                         .padding(.horizontal, DesignTokens.Space.s2)
                         .padding(.vertical, 1)
                         .background(DesignTokens.Surface.separator.color.opacity(0.5), in: Capsule())

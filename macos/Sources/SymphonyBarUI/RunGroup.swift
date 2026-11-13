@@ -13,7 +13,6 @@ public struct RunGroup: View {
     /// The fold, when the view around it keeps it (the timeline, whose Return folds the selected run).
     let fold: Binding<Bool>?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.readSession) private var readSession
 
     /// `unfolded` and `unfoldedSteps` say what is open to start with; nil opens what opens by default. `fold`, when
@@ -46,7 +45,7 @@ public struct RunGroup: View {
                 Group {
                     if run.steps.isEmpty {
                         Text(Self.noSteps)
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)
                     } else {
                         StepList(steps: run.steps, transcripts: transcripts, unfolded: unfoldedSteps)
@@ -68,7 +67,7 @@ public struct RunGroup: View {
         .background {
             if unfolded {
                 RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
-                    .fill(DesignTokens.StateSurface.hover.fill(dark: colorScheme == .dark).opacity(0.6))
+                    .fill(DesignTokens.StateSurface.hover.fill.opacity(0.6))
             }
         }
         .clipped()
@@ -144,7 +143,7 @@ private struct RunMoreMenu: View {
                 .disabled(!canRead)
                 if !canRead {
                     Text(SessionReader.nothingToRead)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -179,7 +178,7 @@ private struct RunHeaderLabel: View {
         StateMark(symbol: run.state.symbol, status: run.state.status, live: run.isLive, size: 15)
         if run.showsNewDot {
             Circle()
-                .fill(DesignTokens.SystemColor.accent.color)
+                .fill(DesignTokens.ColorToken.accent.color)
                 .frame(width: 6, height: 6)
                 .help(TimelineEntry.newHelp)
         }
@@ -194,7 +193,7 @@ private struct RunHeaderLabel: View {
         }
         if folded, let whereText = run.whereText {
             Text(whereText)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
@@ -205,7 +204,7 @@ private struct RunHeaderLabel: View {
     @ViewBuilder private var facts: some View {
         ForEach([run.tokensText, run.model].compactMap { $0 }, id: \.self) { fact in
             Text(fact)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize()
@@ -217,7 +216,7 @@ private struct RunHeaderLabel: View {
                 run.durationSeconds = seconds
                 return run.duration ?? ""
             }
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
                 .lineLimit(1)

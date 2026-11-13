@@ -153,7 +153,7 @@ public struct ProgressStrip: Equatable {
         }
 
         /// `status.done`, `status.working`, `status.you`, or `surface.separator` for one not started.
-        public var color: DesignTokens.SystemColor {
+        public var color: DesignTokens.ColorToken {
             switch self {
             case .done: DesignTokens.Status.done.color
             case .working: DesignTokens.Status.working.color

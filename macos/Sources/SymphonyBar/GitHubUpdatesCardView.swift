@@ -34,7 +34,7 @@ struct GitHubUpdatesCardView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if let requests = card.requests {
                     Label {
-                        Text(requests.sentence).font(DesignTokens.TypeStyle.callout.font).fixedSize(horizontal: false, vertical: true)
+                        Text(requests.sentence).font(DesignTokens.TypeStyle.secondary.font).fixedSize(horizontal: false, vertical: true)
                     } icon: {
                         Image(systemName: requests.tone.symbol).foregroundStyle(requests.tone.status.tint)
                     }
@@ -51,7 +51,7 @@ struct GitHubUpdatesCardView: View {
                         withAnimation(.standard) { expanded.toggle() }
                     } label: {
                         Label(SetupPage.detailsTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
@@ -102,11 +102,11 @@ struct GitHubUpdatesCardView: View {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
                         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                             Text(row.title).font(DesignTokens.TypeStyle.rowTitle.font)
-                            Text(row.word).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(row.tone.status.tint)
+                            Text(row.word).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(row.tone.status.tint)
                         }
                         if let detail = row.detail {
                             Text(detail)
-                                .font(DesignTokens.TypeStyle.callout.font)
+                                .font(DesignTokens.TypeStyle.secondary.font)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -144,7 +144,7 @@ private struct GitHubUpdatesDetails: View {
                 ForEach(card.details) { detail in
                     GridRow {
                         Text(detail.label)
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)
                         Text(detail.value)
                             .font(detail.label == "Address" || detail.label == "Events" ? DesignTokens.TypeStyle.mono.font : DesignTokens.TypeStyle.body.font)
@@ -228,7 +228,7 @@ struct GitHubUpdatesSheetView: View {
                 .fixedSize(horizontal: false, vertical: true)
             if let error = sheet.error {
                 Label(error, systemImage: DesignTokens.Status.problem.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
@@ -262,7 +262,7 @@ struct GitHubUpdatesSheetView: View {
             .disabled(sheet.isWorking)
             if let option = sheet.option {
                 Text(option.note)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

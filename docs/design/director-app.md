@@ -345,7 +345,7 @@ D10); see the build plan in [Screens](director-app-screens.md#5-build-plan).
 | Fits the smallest supported screen | Minimum 960×600; sheets ≤ 560 pt tall with a fixed footer |
 | Keyboard for everything | Sidebar ⌘1–⌘8, ↑↓ in lists, Return to open, ⌘[ back, ⌘F, ⌘R, ⌥⌘I, Esc in sheets |
 | VoiceOver | Every row reads its ticket, title, state and age; status is never color alone |
-| Light, dark, Increase Contrast, Reduce Transparency, Reduce Motion | System colors and materials only ([Design system](design-system.md)) |
+| Light, dark, Increase Contrast, Reduce Transparency, Reduce Motion | The catalog's tokens with their Increase Contrast values; glass turns solid under Reduce Transparency ([Design system](design-system.md) §3, §6) |
 | Empty, loading and error states with a way out | **D0**, **D1** idle, **D2e** |
 | Destructive actions confirmed and named | Stop Run, Send to Rework, Pause (**D12**) |
 | Notification control | Notifications are on per kind in Settings; macOS Focus respected (**D14**) |

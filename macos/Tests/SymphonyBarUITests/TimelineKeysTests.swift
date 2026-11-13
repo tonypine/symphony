@@ -28,7 +28,7 @@ final class TimelineKeysTests: XCTestCase {
     func testEachEntrySaysWhatItsGlyphMeansAndItsToneIsItsClasssColour() {
         XCTAssertEqual(TimelineEntryRow.glyphHelp(.phase), "Phase move")
         XCTAssertEqual(TimelineEntryRow.glyphHelp(.questionAsked), "Question asked")
-        XCTAssertEqual(TimelineEntryRow.color(.accent), DesignTokens.SystemColor.accent.color)
+        XCTAssertEqual(TimelineEntryRow.color(.accent), DesignTokens.ColorToken.accent.color)
         XCTAssertEqual(TimelineEntryRow.color(.status(.problem)), DesignTokens.Status.problem.tint)
         XCTAssertEqual(TimelineSection.maxWidth, 780)
     }

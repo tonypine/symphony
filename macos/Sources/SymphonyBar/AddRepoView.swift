@@ -1018,7 +1018,7 @@ struct AddRepoCheckPage: View {
             }
             if let fixMessage {
                 Label(fixMessage, systemImage: DesignTokens.Status.done.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1037,7 +1037,7 @@ struct AddRepoCheckPage: View {
                     .accessibilityAddTraits(.isHeader)
                 if let detail = check.detail {
                     Text(detail)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1245,7 +1245,7 @@ struct AddRepoInstantUpdatesPage: View {
             GitHubUpdatesSetupRows(rows: step.rows) { _, rowID in retry(rowID) }
             if let skipError {
                 Label(skipError, systemImage: DesignTokens.Status.problem.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)

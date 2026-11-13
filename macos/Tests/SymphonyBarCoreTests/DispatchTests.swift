@@ -30,7 +30,7 @@ final class DispatchTests: XCTestCase {
         XCTAssertEqual(control.mode, .paused)
         XCTAssertEqual(control.word, "Paused · Deploy freeze")
         XCTAssertEqual(control.status, .you)
-        XCTAssertEqual(control.status.color, .orange)
+        XCTAssertEqual(control.status.color, .statusYou)
         XCTAssertEqual(control.pauseFacts, [
             TicketList.Fact(label: "By", value: "You"),
             TicketList.Fact(label: "Since", value: "14:03"),

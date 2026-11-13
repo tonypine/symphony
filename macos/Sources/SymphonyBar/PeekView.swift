@@ -143,7 +143,7 @@ struct PeekPage: View {
                         .help("Back (⌘[)")
                 }
                 Text(entry.title)
-                    .font(DesignTokens.TypeStyle.section.font)
+                    .font(DesignTokens.TypeStyle.heading.font)
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: DesignTokens.Space.s2)
                 Button(action: actions.close) { Label(PeekNavigation.closeTitle, systemImage: "xmark") }
@@ -218,7 +218,7 @@ private struct TicketPeekBody: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let summary = peek.head.summary {
-                ChipText(text: summary, font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
+                ChipText(text: summary, font: DesignTokens.TypeStyle.secondary.nsFont, color: .secondaryLabelColor)
             }
         }
         if !peek.head.facts.isEmpty {
@@ -237,11 +237,11 @@ private struct TicketPeekBody: View {
                 ForEach(connected.groups, id: \.label) { group in
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                         Text(group.label)
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)
                         ForEach(group.rows, id: \.text) { row in
                             HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                                ChipText(text: row.text, font: DesignTokens.TypeStyle.callout.nsFont)
+                                ChipText(text: row.text, font: DesignTokens.TypeStyle.secondary.nsFont)
                                 if let state = row.state {
                                     Text(state)
                                         .font(DesignTokens.TypeStyle.caption.font)
@@ -256,7 +256,7 @@ private struct TicketPeekBody: View {
         }
         if let headline = peek.headline {
             PeekSection(title: TicketPeek.headlineTitle) {
-                ChipText(text: headline, font: DesignTokens.TypeStyle.callout.nsFont)
+                ChipText(text: headline, font: DesignTokens.TypeStyle.secondary.nsFont)
             }
         }
         Divider()
@@ -279,9 +279,9 @@ private struct ParentRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
             Text("Part of")
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
-            ChipText(text: parent.text, font: DesignTokens.TypeStyle.callout.nsFont)
+            ChipText(text: parent.text, font: DesignTokens.TypeStyle.secondary.nsFont)
             if let progress = parent.progress {
                 HStack(spacing: DesignTokens.Space.s2) {
                     if !parent.children.isEmpty {
@@ -370,10 +370,10 @@ private struct PeekFacts: View {
             ForEach(facts, id: \.label) { fact in
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
                     Text(fact.label)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                         .frame(width: 72, alignment: .leading)
-                    ChipText(text: fact.value, font: DesignTokens.TypeStyle.callout.nsFont)
+                    ChipText(text: fact.value, font: DesignTokens.TypeStyle.secondary.nsFont)
                 }
             }
         }

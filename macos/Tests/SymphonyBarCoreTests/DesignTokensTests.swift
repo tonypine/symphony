@@ -2,7 +2,8 @@ import XCTest
 @testable import SymphonyBarCore
 
 /// The catalog's shared tokens (`docs/design/catalog/tokens.css`, `director-ticket-page.md` §3 and §4): control
-/// sizes, state surfaces, the focus ring, the situation kinds and the motion rules with Reduce Motion.
+/// sizes, states, the focus ring, the situation kinds and the motion rules with Reduce Motion. Their values against
+/// `tokens.css` are `DesignTokensCatalogTests`'.
 final class DesignTokensTests: XCTestCase {
     // MARK: - Controls
 
@@ -37,23 +38,16 @@ final class DesignTokensTests: XCTestCase {
         XCTAssertFalse(DesignTokens.Interaction(selected: true, focused: true, disabled: true).showsFocusRing)
     }
 
-    func testStateSurfacesMapToSystemColorsAtTheCatalogsOpacities() {
-        XCTAssertEqual(DesignTokens.StateSurface.hover.color, .primary)
-        XCTAssertEqual(DesignTokens.StateSurface.pressed.color, .primary)
-        XCTAssertEqual(DesignTokens.StateSurface.selected.color, .accent)
-        XCTAssertEqual(DesignTokens.StateSurface.allCases.map { $0.opacity(dark: false) }, [0.05, 0.09, 0.1])
-        XCTAssertEqual(DesignTokens.StateSurface.allCases.map { $0.opacity(dark: true) }, [0.06, 0.1, 0.18])
+    func testSelectionRingsAreTheAccent() {
         XCTAssertEqual(DesignTokens.Selection.color, .accent)
         XCTAssertEqual(DesignTokens.Selection.rowRingWidth, 1.5)
         XCTAssertEqual(DesignTokens.Selection.cardRingWidth, 2)
     }
 
-    func testTheFocusRingIsTheAccentTwoPointsOutside() {
-        XCTAssertEqual(DesignTokens.FocusRing.color, .accent)
+    func testTheFocusRingIsTheIrisTwoPointsOutside() {
+        XCTAssertEqual(DesignTokens.FocusRing.color, .focusRing)
         XCTAssertEqual(DesignTokens.FocusRing.width, 2)
         XCTAssertEqual(DesignTokens.FocusRing.offset, 2)
-        XCTAssertEqual(DesignTokens.FocusRing.opacity(dark: false), 0.55)
-        XCTAssertEqual(DesignTokens.FocusRing.opacity(dark: true), 0.7)
     }
 
     // MARK: - Situation kinds
@@ -94,7 +88,7 @@ final class DesignTokensTests: XCTestCase {
 
     func testReadingTextStopsAtTheMeasure() {
         XCTAssertEqual(DesignTokens.Measure.characters, 68)
-        XCTAssertEqual(DesignTokens.Measure.reading, 480)
+        XCTAssertEqual(DesignTokens.Measure.narrowCharacters, 52)
     }
 
     // MARK: - Motion

@@ -75,7 +75,7 @@ struct ConsequenceSheetView: View {
             }
             if let error {
                 Label(error, systemImage: DesignTokens.Status.problem.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .fixedSize(horizontal: false, vertical: true)
             }
