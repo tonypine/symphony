@@ -4,7 +4,8 @@
 // pressed and reached with Tab. The entries are in Entries.swift; their variations in main.swift and *Stories.swift.
 //
 //   SymphonyGallery                       the window: the entries on the left, the picked one's board on the right
-//   SymphonyGallery --open <entry>        the window, on that entry (`--dark` for the dark appearance)
+//   SymphonyGallery --open <entry>        the window, on that entry (`--dark` for the dark appearance). It fills the
+//                                         screen, over the menu bar and the Dock; `--window` keeps it a window
 //   SymphonyGallery --entries             the entries, as JSON: id, title, kind, variations, the files each shows
 //   SymphonyGallery --affected            the entries a change is a reason to look at, as JSON; the changed files'
 //                                         repository paths come one per line on standard input
@@ -99,7 +100,14 @@ func runGallery() {
     )
     window.title = "Component Gallery"
     window.contentView = NSHostingView(rootView: GalleryView(first: first))
-    window.center()
+    // The whole screen, with no menu bar and no Dock over it: nothing but the gallery is in a picture of the screen.
+    // `--window` keeps an ordinary window, for a person working beside it.
+    if arguments.contains("--window") {
+        window.center()
+    } else {
+        app.presentationOptions = [.hideDock, .hideMenuBar]
+        if let screen = NSScreen.main { window.setFrame(screen.frame, display: true) }
+    }
     window.makeKeyAndOrderFront(nil)
     app.activate(ignoringOtherApps: true)
     app.run()

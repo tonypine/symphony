@@ -202,7 +202,7 @@ build-gallery:
 		"$$(swift build $(SWIFT_FLAGS) --show-bin-path)"/SymphonyBarUI.build/*.o
 
 gallery: build-gallery
-	$(GALLERY)
+	$(GALLERY) --window
 
 clean:
 	rm -rf $(BUILD_DIR) .build
