@@ -4,7 +4,7 @@
   "repo_key": "symphony",
   "last_error": null,
   "ticket": {
-    "title": "The paused line in the Inbox",
+    "title": "The paused line on the ticket page",
     "phase": "Done",
     "priority": 1,
     "labels": [
@@ -190,16 +190,16 @@
     "title": "TP-1244 The paused line on the ticket page",
     "state": "merged",
     "draft": false,
-    "head_sha": "4c1d2e9a0ffee0123456789abcdef0123456789a",
-    "head_short": "4c1d2e9",
+    "head_sha": "da40282a0ffee0123456789abcdef0123456789a",
+    "head_short": "da40282",
     "base": "main",
     "mergeable": "clean",
     "behind_base": false,
     "review_state": "approved",
     "review_rounds": 1,
-    "files_changed": 14,
-    "additions": 412,
-    "deletions": 88,
+    "files_changed": 9,
+    "additions": 505,
+    "deletions": 52,
     "checks": [
       {
         "workflow": "Elixir checks",

@@ -210,7 +210,7 @@
       "issue_id": "i-1246",
       "issue_identifier": "TP-1246",
       "repo_key": "symphony",
-      "title": "The paused line in the Inbox",
+      "title": "The paused line on the ticket page",
       "pull_request_url": "https://github.com/acme/symphony/pull/741"
     }
   ],
@@ -221,13 +221,13 @@
   "usage_limits": [],
   "waiting_on_you": [
     {
-      "headline": "The paused line's times",
+      "headline": "The paused line on the ticket page",
       "issue_id": "i-1245",
       "issue_identifier": "TP-1245",
       "kind": "action",
       "repo_key": "symphony",
       "state": "Rework",
-      "title": "The paused line's times",
+      "title": "The paused line on the ticket page",
       "url": "https://linear.app/acme/issue/TP-1245",
       "waiting_seconds": 1349,
       "waiting_since": "2026-10-08T10:04:31Z"

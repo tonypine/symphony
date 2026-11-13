@@ -1,0 +1,55 @@
+name: design-sheet
+
+# The design sheet (TP-1482): each design reference (the ticket page prototype's moments and the
+# catalog's Window stories) beside the app's page drawn from the matching fixture, at the same size,
+# at the laptop and desktop widths, in light and dark. It is evidence, not a gate: nothing compares
+# pixels, so the job fails only when the sheet cannot be drawn. Download the `design-sheet` artifact
+# and open its index.html.
+on:
+  pull_request:
+    paths:
+      - "macos/Sources/SymphonyBarUI/**"
+      - "macos/Sources/SymphonyBar/TicketPage*"
+      - "macos/Sources/SymphonyBarCore/TicketPage*"
+      - "macos/Tests/Snapshots/*.swift"
+      - "macos/Tests/DesignSheet/**"
+      - "macos/Tests/Fixtures/director-app/**"
+      - "macos/Makefile"
+      - "docs/design/**"
+      - ".github/workflows/design-sheet.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: design-sheet-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sheet:
+    name: design sheet
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Select the pinned Xcode
+        run: echo "DEVELOPER_DIR=$(sh scripts/ci/xcode-developer-dir.sh)" >> "$GITHUB_ENV"
+
+      # The runner's Google Chrome draws the references (Tests/DesignSheet/capture.py finds it).
+      - name: Draw the design sheet
+        working-directory: macos
+        run: time make design-sheet
+
+      - name: Upload the design sheet
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: design-sheet
+          path: macos/build/design-sheet
+          if-no-files-found: warn
+          retention-days: 30

@@ -4,7 +4,7 @@
   "repo_key": "symphony",
   "last_error": null,
   "ticket": {
-    "title": "The paused line's times",
+    "title": "The paused line on the ticket page",
     "phase": "Rework",
     "priority": 1,
     "labels": [
@@ -132,7 +132,7 @@
   "open_questions": [
     {
       "id": "q-3",
-      "title": "How should the paused line's times read?"
+      "title": "How should the times on the paused line read in dark mode?"
     }
   ],
   "pause": {
@@ -216,15 +216,15 @@
     "title": "TP-1244 The paused line on the ticket page",
     "state": "open",
     "draft": false,
-    "head_sha": "8b03e51c0ffee0123456789abcdef0123456789a",
-    "head_short": "8b03e51",
+    "head_sha": "5d2e7a0c0ffee0123456789abcdef0123456789a",
+    "head_short": "5d2e7a0",
     "base": "main",
     "mergeable": "unstable",
     "behind_base": false,
     "review_state": "changes_requested",
     "review_rounds": 2,
     "files_changed": 9,
-    "additions": 486,
+    "additions": 503,
     "deletions": 52,
     "checks": [
       {

@@ -35,7 +35,7 @@ MIX ?= mix
 ERL ?= erl
 QA_SYMPHONY := $(BUILD_DIR)/qa-symphony
 
-.PHONY: all build app bundle qa-app install run test e2e release-pair snapshots clean
+.PHONY: all build app bundle qa-app install run test e2e release-pair snapshots render-snapshots design-sheet clean
 
 # The slow type-check guard. `make guarded-<target>` makes <target> with the Swift compiler
 # warning on every expression it takes longer than TYPE_CHECK_LIMIT_MS to type-check, and fails
@@ -180,15 +180,29 @@ release-pair:
 # Renders the snapshots in Tests/Snapshots offscreen with ImageRenderer (no NSApplication, no window) and
 # writes their PNGs there: the app's views, minus main.swift, compiled with the snapshot program.
 # `-disable-sandbox` lets the SwiftUI macros' plugin server run inside an agent sandbox.
-snapshots:
+snapshots: render-snapshots
+	$(BUILD_DIR)/render-snapshots
+
+render-snapshots:
 	swift build $(SWIFT_FLAGS) --product SymphonyBarUI
 	mkdir -p $(BUILD_DIR)
 	swiftc -disable-sandbox -swift-version 5 -module-cache-path .build/snapshot-module-cache \
 		-I "$$(swift build $(SWIFT_FLAGS) --show-bin-path)/Modules" -o $(BUILD_DIR)/render-snapshots \
-		Tests/Snapshots/main.swift $$(ls Sources/SymphonyBar/*.swift | grep -v '/main.swift$$') \
+		Tests/Snapshots/*.swift $$(ls Sources/SymphonyBar/*.swift | grep -v '/main.swift$$') \
 		"$$(swift build $(SWIFT_FLAGS) --show-bin-path)"/SymphonyBarCore.build/*.o \
 		"$$(swift build $(SWIFT_FLAGS) --show-bin-path)"/SymphonyBarUI.build/*.o
-	$(BUILD_DIR)/render-snapshots
+
+# The design sheet (TP-1482): each design reference (the ticket page prototype's three moments, and the catalog's
+# Window stories for the ticket page, Home, Initiatives and Tickets) beside the native page drawn from the matching
+# fixture at the same size, at the laptop's and the desktop's widths, in light and dark. The references are drawn in
+# a headless Chromium (Tests/DesignSheet/capture.py; CHROME names one), the native pages offscreen as the snapshots
+# are. Open $(DESIGN_SHEET)/index.html. It is evidence, not a gate: no step fails on a difference.
+DESIGN_SHEET ?= $(BUILD_DIR)/design-sheet
+design-sheet: render-snapshots
+	rm -rf "$(DESIGN_SHEET)"
+	DESIGN_SHEET_PHASE=plan DESIGN_SHEET_OUT="$(DESIGN_SHEET)" $(BUILD_DIR)/render-snapshots
+	python3 -I Tests/DesignSheet/capture.py "$(DESIGN_SHEET)"
+	DESIGN_SHEET_PHASE=compose DESIGN_SHEET_OUT="$(DESIGN_SHEET)" $(BUILD_DIR)/render-snapshots
 
 clean:
 	rm -rf $(BUILD_DIR) .build

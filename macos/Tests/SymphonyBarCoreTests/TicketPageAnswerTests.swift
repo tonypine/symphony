@@ -69,7 +69,7 @@ final class TicketPageAnswerTests: XCTestCase {
         var inboxPicks = InboxPicks()
         let item = try XCTUnwrap(open.item(0))
         XCTAssertNil(open.item(1))
-        XCTAssertEqual(QuestionSend(questions: open.questions, picks: open.picks(inboxPicks)).answer, "For how long")
+        XCTAssertEqual(QuestionSend(questions: open.questions, picks: open.picks(inboxPicks)).answer, "Use the secondary text colour")
         inboxPicks.pick(1, decision: 0, itemID: item.id)
         XCTAssertEqual(open.picks(inboxPicks).picks, [0: 1])
         inboxPicks.pick(0, decision: 0, itemID: item.id)
@@ -78,13 +78,13 @@ final class TicketPageAnswerTests: XCTestCase {
         let answered = try XCTUnwrap(open.toSend(inboxPicks))
         XCTAssertEqual(answered, item)
         let sheet = ConsequenceSheet(move: .decide, item: answered, picks: inboxPicks[answered.id])
-        XCTAssertEqual(sheet.title, "Send \"For how long\"?")
-        XCTAssertEqual(sheet.happens, "The line reads 'Paused for 2 h 10 min', and the next run changes it.")
+        XCTAssertEqual(sheet.title, "Send \"Use the secondary text colour\"?")
+        XCTAssertEqual(sheet.happens, "The times read at 7 to 1 in dark and 5.7 to 1 in light. The line looks a little busier.")
         XCTAssertTrue(sheet.holdsForUndo)
         XCTAssertEqual(sheet.heldBanner.text, "Sending your decision")
         let action = try XCTUnwrap(sheet.action())
         let question = try XCTUnwrap(item.review.action?.question)
-        XCTAssertEqual(action, .decide("TP-1245", request: .comment("c-1245-request"), picks: [.init(question: question, answer: "For how long")], move: nil))
+        XCTAssertEqual(action, .decide("TP-1245", request: .comment("c-1245-request"), picks: [.init(question: question, answer: "Use the secondary text colour")], move: nil))
         // From the confirm (held for Undo), through the send, until the read drops the Question, Send stays off: the
         // item counts as answered, so the same decide can't go a second time, even with the recommended pick back.
         let answeredIDs: Set<String> = [item.id]
@@ -97,7 +97,7 @@ final class TicketPageAnswerTests: XCTestCase {
         let entry = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: fixtures.requestLog)) as? [String: Any])
         XCTAssertEqual(entry["path"] as? String, "/api/v1/control/decide")
         XCTAssertEqual(entry["body"] as? NSDictionary, [
-            "issue_identifier": "TP-1245", "request_comment_id": "c-1245-request", "picks": [["question": question, "answer": "For how long"]],
+            "issue_identifier": "TP-1245", "request_comment_id": "c-1245-request", "picks": [["question": question, "answer": "Use the secondary text colour"]],
         ] as NSDictionary)
 
         // The next read: the Question is gone from the page and from the Inbox, the situation says a run is starting,
