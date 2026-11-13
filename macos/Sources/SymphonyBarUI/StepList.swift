@@ -40,7 +40,7 @@ struct FoldHeader<Label: View>: View {
     private var enabled: Bool { disabledReason == nil }
 
     /// How far a press may travel and still be a click, in points.
-    static let clickSlop: CGFloat = 4
+    static var clickSlop: CGFloat { 4 }
 
     /// Whether a press that moved by `translation` is a click rather than a drag.
     static func isClick(_ translation: CGSize) -> Bool {
