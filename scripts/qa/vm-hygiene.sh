@@ -7,6 +7,7 @@
 #   - no desktop widgets or icons, and a plain grey desktop;
 #   - no Dock in the way: it hides, and comes back only after a very long hover;
 #   - apps and windows are not reopened at login, so a restart starts from an empty screen;
+#   - a screen large enough for the app (1920x1200, or VM_SCREEN);
 #   - the screen never sleeps or locks.
 # The menu bar stays: the app under test lives in it.
 set -u
@@ -40,6 +41,20 @@ defaults write com.apple.loginwindow LoginwindowLaunchesRelaunchApps -bool false
 defaults write -g NSQuitAlwaysKeepsWindows -bool false
 rm -rf "$HOME/Library/Saved Application State/"*.savedState 2>/dev/null || true
 pkill -x Terminal 2>/dev/null || true
+
+echo "== a screen of ${VM_SCREEN:=1920x1200}"
+# The VM tool sizes the display it offers (`tart set <vm> --display`), but the guest keeps the mode it last used, and a
+# fresh image starts at 1024x768: smaller than the app's laptop size. The mode is chosen here, in points with no
+# scaling, so a screenshot is as many pixels as the screen is points.
+export PATH="/opt/homebrew/bin:$PATH"
+command -v displayplacer >/dev/null || brew install -q displayplacer >/dev/null 2>&1 || true
+if command -v displayplacer >/dev/null; then
+  screen=$(displayplacer list | awk '/Persistent screen id/{print $4; exit}')
+  displayplacer "id:$screen res:$VM_SCREEN hz:60 color_depth:7 scaling:off" >/dev/null 2>&1 \
+    || echo "!! the display offers no $VM_SCREEN mode: set it on the host (tart set <vm> --display $VM_SCREEN) and restart the VM"
+else
+  echo "!! displayplacer is not installed; the screen keeps its size"
+fi
 
 echo "== the screen stays on"
 defaults -currentHost write com.apple.screensaver idleTime -int 0
