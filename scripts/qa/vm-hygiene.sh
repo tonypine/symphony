@@ -7,7 +7,7 @@
 #   - no desktop widgets or icons, and a plain grey desktop;
 #   - no Dock in the way: it hides, and comes back only after a very long hover;
 #   - apps and windows are not reopened at login, so a restart starts from an empty screen;
-#   - a screen large enough for the app (1920x1200, or VM_SCREEN);
+#   - a screen large enough for the app (2560x1440, or VM_SCREEN);
 #   - the screen never sleeps or locks.
 # The menu bar stays: the app under test lives in it.
 set -u
@@ -42,7 +42,7 @@ defaults write -g NSQuitAlwaysKeepsWindows -bool false
 rm -rf "$HOME/Library/Saved Application State/"*.savedState 2>/dev/null || true
 pkill -x Terminal 2>/dev/null || true
 
-echo "== a screen of ${VM_SCREEN:=1920x1200}"
+echo "== a screen of ${VM_SCREEN:=2560x1440}"
 # The VM tool sizes the display it offers (`tart set <vm> --display`), but the guest keeps the mode it last used, and a
 # fresh image starts at 1024x768: smaller than the app's laptop size. The mode is chosen here, at two pixels a
 # point as a Mac's own display has: at one, text and hairlines are soft, and a fault of half a point cannot be seen.

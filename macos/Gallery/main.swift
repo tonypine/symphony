@@ -1536,9 +1536,8 @@ func ticketPageDecisions(_ identifier: String) -> [TicketDecision] {
 /// The whole page of `identifier` in a 1440 × 900 window beside the sidebar: about 1180 pt of content, the rail at
 /// 340 pt. The page scrolls as one, so it is drawn at its whole height, down to the rail's foot.
 @MainActor
-func ticketPageLaptop(_ identifier: String) -> some View {
+func ticketPageLaptop(_ identifier: String, width: CGFloat = TicketPageLayout.laptopPageWidth) -> some View {
     let page = ticketPageRead(identifier)
-    let width = TicketPageLayout.laptopPageWidth
     return TicketPageBody(
         page: page, questions: TicketPage.questions(of: identifier, in: ticketPageInbox.items), width: width,
         transcripts: StepTranscripts { _ in .unreachable }, note: TicketNoteComposer(identifier: identifier),
@@ -1559,10 +1558,9 @@ var ticketPageOwnWords: DecisionPicks {
 /// TP-1245's page in the 1440 × 900 window with Answer pressed: the decision sheet over the dimmed page, the
 /// recommended answer picked, or `picks`; Send on, or off with `sending` while the answer is on its way.
 @MainActor
-func ticketPageAnswering(picks: DecisionPicks = DecisionPicks(), sending: Bool = false) -> some View {
+func ticketPageAnswering(picks: DecisionPicks = DecisionPicks(), sending: Bool = false, width: CGFloat = TicketPageLayout.laptopPageWidth) -> some View {
     let identifier = "TP-1245"
     let page = ticketPageRead(identifier)
-    let width = TicketPageLayout.laptopPageWidth
     let questions = TicketPage.questions(of: identifier, in: ticketPageInbox.items)
     let answers = TicketPageAnswers(picks: picks, sending: sending)
     return TicketPageBody(
@@ -1597,6 +1595,15 @@ func ticketPageWide(_ identifier: String, width: CGFloat = TicketPageLayout.desk
     .frame(width: width, alignment: .topLeading)
     .frame(minHeight: height, alignment: .top)
     .background(DesignTokens.Surface.content.color)
+}
+
+/// `identifier`'s page as a window `window` wide draws it, beside the sidebar: under the breakpoint the laptop's
+/// arrangement (with `answering`, Answer's sheet open over it), from it on the desktop's.
+@MainActor
+func ticketPage(_ identifier: String, window: CGFloat, picks: DecisionPicks = DecisionPicks(), answering: Bool = false) -> AnyView {
+    let width = window - DesignTokens.Layout.sidebarWidth
+    if TicketPageLayout.isDesktop(page: width) { return AnyView(ticketPageWide(identifier, width: width, picks: picks)) }
+    return answering ? AnyView(ticketPageAnswering(picks: picks, width: width)) : AnyView(ticketPageLaptop(identifier, width: width))
 }
 
 // MARK: - Work › Tickets as the table with filters (TP-1456)
@@ -1839,24 +1846,24 @@ MainActor.assumeIsolated {
         render(ticketsSituations(), scheme, to: "situations-tickets-\(suffix).png")
         render(initiativesSituations(), scheme, to: "situations-initiatives-\(suffix).png")
         // Initiatives as the epic's story (TP-1458): mid-chain, done, and with a canceled sub-ticket, at both widths.
-        for (window, name) in [(CGFloat(1440), "laptop"), (2560, "desktop")] {
-            render(initiativeStory("TP-1381", window: window), scheme, to: "initiative-story-mid-chain-\(name)-\(suffix).png")
-            render(initiativeStory("SHOP-500", window: window), scheme, to: "initiative-story-done-\(name)-\(suffix).png")
-            render(initiativeStory("BIL-300", window: window), scheme, to: "initiative-story-canceled-\(name)-\(suffix).png")
+        do {
+            renderScreen(scheme, to: "initiative-story-mid-chain") { window in initiativeStory("TP-1381", window: window) }
+            renderScreen(scheme, to: "initiative-story-done") { window in initiativeStory("SHOP-500", window: window) }
+            renderScreen(scheme, to: "initiative-story-canceled") { window in initiativeStory("BIL-300", window: window) }
         }
         render(inboxContextSituations(), scheme, to: "situations-inbox-context-\(suffix).png")
         render(menuWaitingSituations(), scheme, to: "situations-menu-waiting-\(suffix).png")
         // Home's board (TP-1453): every group populated and most empty with dispatch paused, at the laptop's and the
         // desktop's widths.
-        for (window, name) in [(CGFloat(1440), "laptop"), (2560, "desktop")] {
-            render(homeBoard("home", window: window, selection: "SHOP-320"), scheme, to: "home-board-\(name)-\(suffix).png")
-            render(homeBoard("home-quiet", window: window), scheme, to: "home-board-quiet-\(name)-\(suffix).png")
+        do {
+            renderScreen(scheme, to: "home-board") { window in homeBoard("home", window: window, selection: "SHOP-320") }
+            renderScreen(scheme, to: "home-board-quiet") { window in homeBoard("home-quiet", window: window) }
         }
         // Home's top (TP-1454): two questions and a pause above the board, the drawer, the status bar, at the laptop's and
         // the desktop's widths.
-        for (window, name) in [(CGFloat(1440), "laptop"), (2560, "desktop")] {
-            render(homeWithQuestions(window: window), scheme, to: "home-questions-\(name)-\(suffix).png")
-            render(statusBar(window: window), scheme, to: "status-bar-\(name)-\(suffix).png")
+        do {
+            renderScreen(scheme, to: "home-questions") { window in homeWithQuestions(window: window) }
+            renderScreen(scheme, to: "status-bar") { window in statusBar(window: window) }
         }
         render(inboxDrawer(), scheme, to: "inbox-drawer-\(suffix).png")
         // The Action rail (TP-1440): every move allowed, and each refusal with its reason and More open, at the
@@ -1917,22 +1924,19 @@ MainActor.assumeIsolated {
             render(factsDetails(name, width: FactsRail.desktopWidth), scheme, to: "facts-rail-\(name)-desktop-\(suffix).png")
         }
         // The ticket page at laptop width (TP-1448): a run working, waiting on you, shipped; and Answer's sheet open.
+        // The ticket page (TP-1448, TP-1449): a run working, waiting on you, shipped. In a laptop's window the page is
+        // one column beside the rail; from the 1600 pt breakpoint on, the desktop's arrangement.
         for (identifier, moment) in ticketPageMoments {
-            render(ticketPageLaptop(identifier), scheme, to: "ticket-page-\(moment)-laptop-\(suffix).png")
+            renderScreen(scheme, to: "ticket-page-\(moment)") { ticketPage(identifier, window: $0) }
         }
+        // Answering from the page (TP-1450): another option picked, and the Director's own words. In a laptop's window
+        // they are in Answer's sheet; in a desktop's, in the column on the far right.
+        renderScreen(scheme, to: "ticket-page-answer-picked") { ticketPage("TP-1245", window: $0, picks: ticketPagePicked, answering: true) }
+        renderScreen(scheme, to: "ticket-page-answer-own-words") { ticketPage("TP-1245", window: $0, picks: ticketPageOwnWords, answering: true) }
+        // Answer's sheet, which only a laptop's window has: open, and while the answer is on its way, Send off.
         render(ticketPageAnswering(), scheme, to: "ticket-page-answer-sheet-laptop-\(suffix).png")
-        // Answering from the page (TP-1450): the sheet and the desktop's column with another option picked and with
-        // the Director's own words, and the sheet while the answer is on its way, Send off.
-        render(ticketPageAnswering(picks: ticketPagePicked), scheme, to: "ticket-page-answer-picked-laptop-\(suffix).png")
-        render(ticketPageAnswering(picks: ticketPageOwnWords), scheme, to: "ticket-page-answer-own-words-laptop-\(suffix).png")
         render(ticketPageAnswering(sending: true), scheme, to: "ticket-page-answer-sending-laptop-\(suffix).png")
-        render(ticketPageWide("TP-1245", picks: ticketPagePicked), scheme, to: "ticket-page-answer-picked-desktop-\(suffix).png")
-        render(ticketPageWide("TP-1245", picks: ticketPageOwnWords), scheme, to: "ticket-page-answer-own-words-desktop-\(suffix).png")
-        // The ticket page at desktop width (TP-1449): the three moments at 2200 pt, and the waiting ticket on either
-        // side of the 1600 pt breakpoint.
-        for (identifier, moment) in ticketPageMoments {
-            render(ticketPageWide(identifier), scheme, to: "ticket-page-\(moment)-desktop-\(suffix).png")
-        }
+        // The waiting ticket on either side of the 1600 pt breakpoint.
         for width in [CGFloat(1590), 1610] {
             render(ticketPageWide("TP-1245", width: width), scheme, to: "ticket-page-waiting-\(Int(width))-\(suffix).png")
         }
@@ -1979,35 +1983,32 @@ MainActor.assumeIsolated {
         render(firstLaunchSetup(), scheme, to: "setup-first-launch-\(suffix).png")
         // Tickets as the table with filters (TP-1456): the default columns with the drawer, every column, and three
         // chips set, at the laptop's and the desktop's widths.
-        for (window, name) in [(CGFloat(1440), "laptop"), (2560, "desktop")] {
-            render(ticketsTable(window: window, drawer: true), scheme, to: "tickets-table-default-\(name)-\(suffix).png")
-            render(ticketsTable(window: window, query: everyColumnQuery), scheme, to: "tickets-table-every-column-\(name)-\(suffix).png")
-            render(ticketsTable(window: window, query: threeChipsQuery), scheme, to: "tickets-table-three-chips-\(name)-\(suffix).png")
+        do {
+            renderScreen(scheme, to: "tickets-table-default") { window in ticketsTable(window: window, drawer: true) }
+            renderScreen(scheme, to: "tickets-table-every-column") { window in ticketsTable(window: window, query: everyColumnQuery) }
+            renderScreen(scheme, to: "tickets-table-three-chips") { window in ticketsTable(window: window, query: threeChipsQuery) }
         }
         // The Journal (TP-1459): a night with every notable class, the Everything view and the epic filter, at the
         // laptop's and the desktop's widths.
-        for (window, name) in [(CGFloat(1440), "laptop"), (2560, "desktop")] {
-            render(journalPage("events", window: window), scheme, to: "journal-every-class-\(name)-\(suffix).png")
-            render(journalPage("events.limit=200&notable=false", query: JournalQuery(everything: true), window: window), scheme,
-                   to: "journal-everything-\(name)-\(suffix).png")
-            render(journalPage("events.epic=TP-1381&limit=200&notable=true", query: JournalQuery(epic: "TP-1381"), window: window), scheme,
-                   to: "journal-epic-\(name)-\(suffix).png")
+        do {
+            renderScreen(scheme, to: "journal-every-class") { window in journalPage("events", window: window) }
+            renderScreen(scheme, to: "journal-everything") { window in journalPage("events.limit=200&notable=false", query: JournalQuery(everything: true), window: window) }
+            renderScreen(scheme, to: "journal-epic") { window in journalPage("events.epic=TP-1381&limit=200&notable=true", query: JournalQuery(epic: "TP-1381"), window: window) }
             // Reports in the Journal (TP-1462): a report with its Question open and one without, among the events, and
             // the reports alone.
-            render(journalReportsPage(window: window), scheme, to: "journal-reports-\(name)-\(suffix).png")
-            render(journalReportsPage(window: window, reportsOnly: true), scheme, to: "journal-reports-only-\(name)-\(suffix).png")
+            renderScreen(scheme, to: "journal-reports") { window in journalReportsPage(window: window) }
+            renderScreen(scheme, to: "journal-reports-only") { window in journalReportsPage(window: window, reportsOnly: true) }
         }
         // The Insights control bar (TP-1463): Quality, Usage and Shipped by day, by 6 h and with an epic set, at the
         // laptop's and the desktop's widths.
-        for (window, name) in [(CGFloat(1440), "laptop"), (2560, "desktop")] {
+        do {
             for (sliceName, slice, file) in insightsSlices {
                 for page in [SymphonyView.quality, .usage, .shipped] {
-                    render(insightsPage(page, slice: slice, file: file, window: window), scheme,
-                           to: "insights-\(page.rawValue)-\(sliceName)-\(name)-\(suffix).png")
+                    renderScreen(scheme, to: "insights-\(page.rawValue)-\(sliceName)") { window in insightsPage(page, slice: slice, file: file, window: window) }
                 }
             }
         }
-        render(insightsUnavailablePage(window: 1440), scheme, to: "insights-unavailable-laptop-\(suffix).png")
+        renderScreen(scheme, to: "insights-unavailable") { insightsUnavailablePage(window: $0) }
         // Saved views (TP-1457): the menu with three views, and the save sheet.
         render(ticketViewsMenuOpen(), scheme, to: "ticket-views-menu-\(suffix).png")
         render(ticketViewSaveSheet(), scheme, to: "ticket-views-save-sheet-\(suffix).png")
@@ -2021,20 +2022,16 @@ MainActor.assumeIsolated {
         render(githubSheet(.recreateSecret), scheme, to: "github-updates-recreate-secret-sheet-\(suffix).png")
         // The Linear webhooks line (TP-1212): every state at the laptop viewport, and deliveries arriving at the desktop's.
         for (name, health) in linearWebhookStates {
-            render(linearWebhooksPage(health), scheme, to: "linear-webhooks-\(name)-laptop-\(suffix).png")
+            renderScreen(scheme, to: "linear-webhooks-\(name)") { linearWebhooksPage(health, window: $0) }
         }
-        render(linearWebhooksPage(linearWebhookStates[2].1, window: 2560), scheme, to: "linear-webhooks-arriving-desktop-\(suffix).png")
         // The Dispatch shadow line (TP-1220): every state at the laptop viewport, and the ten differences at the desktop's.
         for (name, report, expanded) in dispatchShadowStates {
-            render(dispatchShadowPage(report, expanded: expanded), scheme, to: "dispatch-shadow-\(name)-laptop-\(suffix).png")
+            renderScreen(scheme, to: "dispatch-shadow-\(name)") { dispatchShadowPage(report, expanded: expanded, window: $0) }
         }
-        render(dispatchShadowPage(dispatchShadowStates[4].1, expanded: true, window: 2560), scheme,
-               to: "dispatch-shadow-poll-differences-open-desktop-\(suffix).png")
         // The Reconcile line (TP-1228): every state at the laptop viewport, and the ten drifts at the desktop's.
         for (name, report, expanded) in reconcileStates {
-            render(reconcilePage(report, expanded: expanded), scheme, to: "reconcile-\(name)-laptop-\(suffix).png")
+            renderScreen(scheme, to: "reconcile-\(name)") { reconcilePage(report, expanded: expanded, window: $0) }
         }
-        render(reconcilePage(reconcileStates[5].1, expanded: true, window: 2560), scheme, to: "reconcile-failing-open-desktop-\(suffix).png")
         // The guided setup and Add Repo's Instant updates (TP-954).
         render(githubSetup(.relay), scheme, to: "github-setup-relay-\(suffix).png")
         render(githubSetup(.gitHubCLI, answer: "github_updates/run_step.2.json"), scheme, to: "github-setup-permission-\(suffix).png")
@@ -2046,18 +2043,17 @@ MainActor.assumeIsolated {
         render(addRepoInstantUpdates(steps: AddRepoStep.allCases), scheme, to: "add-repo-instant-updates-six-steps-\(suffix).png")
         render(addRepoSixSteps(), scheme, to: "add-repo-six-steps-\(suffix).png")
         // The pull request page (TP-961): #448 at 1200 and 960 pt, then its states.
-        render(pullRequestPage(pullRequest()), scheme, to: "pr-page-\(suffix).png")
+        renderScreen(scheme, to: "pr-page") { pullRequestPage(pullRequest(), window: $0) }
         render(pullRequestPage(pullRequest(), window: 960), scheme, to: "pr-page-960-\(suffix).png")
-        render(pullRequestPage(nil), scheme, to: "pr-page-loading-\(suffix).png")
-        render(pullRequestPage(mergedPullRequest), scheme, to: "pr-page-merged-\(suffix).png")
-        render(pullRequestPage(closedPullRequest), scheme, to: "pr-page-closed-\(suffix).png")
-        render(pullRequestPage(unavailablePullRequest), scheme, to: "pr-page-github-unavailable-\(suffix).png")
-        render(pullRequestPage(untrackedPullRequest), scheme, to: "pr-page-untracked-\(suffix).png")
-        render(pullRequestPage(.notFound), scheme, to: "pr-page-not-found-\(suffix).png")
+        renderScreen(scheme, to: "pr-page-loading") { pullRequestPage(nil, window: $0) }
+        renderScreen(scheme, to: "pr-page-merged") { pullRequestPage(mergedPullRequest, window: $0) }
+        renderScreen(scheme, to: "pr-page-closed") { pullRequestPage(closedPullRequest, window: $0) }
+        renderScreen(scheme, to: "pr-page-github-unavailable") { pullRequestPage(unavailablePullRequest, window: $0) }
+        renderScreen(scheme, to: "pr-page-untracked") { pullRequestPage(untrackedPullRequest, window: $0) }
+        renderScreen(scheme, to: "pr-page-not-found") { pullRequestPage(.notFound, window: $0) }
         // Pause one repository (TP-1238): Setup's Repositories card, the Repos window's Dispatch section at its
         // narrowest and at a laptop's width, and the sidebar.
-        render(repositoriesPage(), scheme, to: "repo-pause-setup-laptop-\(suffix).png")
-        render(repositoriesPage(window: 2560), scheme, to: "repo-pause-setup-desktop-\(suffix).png")
+        renderScreen(scheme, to: "repo-pause-setup") { repositoriesPage(window: $0) }
         render(repoPauseSection(width: 500), scheme, to: "repo-pause-repos-narrow-\(suffix).png")
         render(repoPauseSection(width: 1220), scheme, to: "repo-pause-repos-laptop-\(suffix).png")
         render(repoPausedSidebar(), scheme, to: "repo-pause-sidebar-\(suffix).png")
@@ -2071,8 +2067,7 @@ MainActor.assumeIsolated {
         render(startDisabledReasons(), scheme, to: "start-now-disabled-reasons-\(suffix).png")
         // A blocked Inbox row's pause (TP-1253): stopped by the Director, and two reasons, one releasable.
         for (identifier, name) in [("TP-897", "stopped"), ("TP-899", "two-reasons")] {
-            render(blockedReview(identifier, window: 1440), scheme, to: "inbox-blocked-\(name)-laptop-\(suffix).png")
-            render(blockedReview(identifier, window: 2560), scheme, to: "inbox-blocked-\(name)-desktop-\(suffix).png")
+            renderScreen(scheme, to: "inbox-blocked-\(name)") { blockedReview(identifier, window: $0) }
         }
     }
 }

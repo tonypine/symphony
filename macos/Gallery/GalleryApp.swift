@@ -4,21 +4,25 @@
 // in main.swift and *Stories.swift.
 //
 // A component shows every variation together, on one board. A screen shows one variation at a time, alone on the
-// stage: its variations are listed under it, and the picked one is drawn as wide as the stage lets it be.
+// stage: its variations are listed under it, and the picked one is drawn as the app draws it in a window of the width
+// picked in the bar (a laptop's, a desktop's, or as wide as the stage), at its true size: nothing is ever scaled.
 //
 //   SymphonyGallery                       the window: the entries on the left, the picked one on the right
-//   SymphonyGallery --open <entry> [--variation <name>]
+//   SymphonyGallery --open <entry> [--variation <name>] [--width laptop|desktop|<points>]
 //                                         the window, on that entry (a screen: on that variation, the first when none
-//                                         is named; `--dark` for the dark appearance). It fills the screen, over the
-//                                         menu bar and the Dock; `--window` keeps it a window
+//                                         is named, drawn as a window that wide draws it, or as wide as the stage;
+//                                         `--dark` for the dark appearance). It fills the screen, over the menu bar
+//                                         and the Dock; `--window` keeps it a window
 //   SymphonyGallery --entries             the entries, as JSON: id, title, kind, variations, the files each shows
 //   SymphonyGallery --affected            the entries a change is a reason to look at, as JSON; the changed files'
 //                                         repository paths come one per line on standard input
-//   SymphonyGallery --shot <entry> [--variation <name>] --out <dir>
+//   SymphonyGallery --shot <entry> [--variation <name>] [--width laptop|desktop|<points>] --out <dir>
 //                                         draws the entry to files, without a window. A component: its board, as
 //                                         `<dir>/<entry>-<n>-<light|dark>.png`, one picture or a few when it is tall.
-//                                         A screen: `<dir>/<variation>-<light|dark>.png` for each variation, or for
-//                                         the named one
+//                                         A screen: each variation, or the named one, as
+//                                         `<dir>/<variation>-<laptop|desktop|points>-<light|dark>.png`, at both
+//                                         widths or at the named one; a variation of one size (a sheet) as
+//                                         `<dir>/<variation>-<light|dark>.png`
 //   SymphonyGallery --check               fails, saying why, when the entries and the variations disagree
 //
 // QA reaches it through the app: `qa_launch_app` on the fixture folder `macos/Tests/Fixtures/gallery` starts the
@@ -31,10 +35,24 @@ import SymphonyBarCore
 import SymphonyBarUI
 import UniformTypeIdentifiers
 
-/// One variation of an entry: its name (`button-primary-hover`) and the view it draws.
+/// One variation of an entry: its name (`button-primary-hover`) and the view it draws. A screen's variation that
+/// follows its window's width has `sized`, which draws it for a window that wide; `view` is then the laptop's.
 struct GalleryVariation: Identifiable {
     let id: String
     let view: AnyView
+    var sized: (@MainActor (CGFloat) -> AnyView)?
+}
+
+/// The window widths a screen is looked at in.
+enum GalleryWidth {
+    static let named: [(name: String, points: CGFloat)] = [("laptop", 1440), ("desktop", 2560)]
+
+    /// `laptop`, `desktop` or a number of points; nil for anything else.
+    static func points(_ word: String) -> CGFloat? {
+        named.first { $0.name == word }?.points ?? Double(word).map { CGFloat($0) }
+    }
+
+    static func name(_ points: CGFloat) -> String { named.first { $0.points == points }?.name ?? "\(Int(points))" }
 }
 
 @MainActor var galleryVariations: [GalleryVariation] = []
@@ -45,6 +63,13 @@ struct GalleryVariation: Identifiable {
 func render(_ view: some View, _ scheme: ColorScheme, to name: String) {
     guard scheme == .light else { return }
     galleryVariations.append(GalleryVariation(id: name.replacingOccurrences(of: "-light.png", with: ""), view: AnyView(view)))
+}
+
+/// Names one variation of a screen that follows its window's width: `draw` draws it for a window that wide.
+@MainActor
+func renderScreen<Content: View>(_ scheme: ColorScheme, to name: String, _ draw: @escaping @MainActor (CGFloat) -> Content) {
+    guard scheme == .light else { return }
+    galleryVariations.append(GalleryVariation(id: name, view: AnyView(draw(GalleryWidth.named[0].points)), sized: { AnyView(draw($0)) }))
 }
 
 @MainActor
@@ -76,11 +101,22 @@ func runGallery() {
         }
         return found
     }
+    let width = value(after: "--width").map { word -> CGFloat in
+        guard let points = GalleryWidth.points(word) else {
+            FileHandle.standardError.write("--width takes laptop, desktop or a number of points, not \(word)\n".data(using: .utf8)!)
+            exit(2)
+        }
+        return points
+    }
     if arguments.contains("--entries") {
         print(json([
             "entries": galleryEntries.map { entry in
-                ["id": entry.id, "title": entry.title, "kind": entry.kind.rawValue, "variations": variations(of: entry).map(\.id), "files": entry.files]
+                [
+                    "id": entry.id, "title": entry.title, "kind": entry.kind.rawValue, "variations": variations(of: entry).map(\.id),
+                    "follow_width": variations(of: entry).filter { $0.sized != nil }.map(\.id), "files": entry.files,
+                ]
             },
+            "widths": Dictionary(uniqueKeysWithValues: GalleryWidth.named.map { ($0.name, Int($0.points)) }),
             "foundation": galleryFoundation,
         ]))
         return
@@ -102,7 +138,7 @@ func runGallery() {
     }
     if let id = value(after: "--shot") {
         guard let out = value(after: "--out") else { fatalError("--shot needs --out <dir>") }
-        shoot(entry(id), only: value(after: "--variation").map { variation($0, of: entry(id)).id }, into: URL(fileURLWithPath: out))
+        shoot(entry(id), only: value(after: "--variation").map { variation($0, of: entry(id)).id }, width: width, into: URL(fileURLWithPath: out))
         return
     }
     let first = value(after: "--open").map { entry($0).id }
@@ -115,7 +151,7 @@ func runGallery() {
         styleMask: [.titled, .closable, .resizable, .miniaturizable], backing: .buffered, defer: false
     )
     window.title = "Component Gallery"
-    window.contentView = NSHostingView(rootView: GalleryView(first: first, variation: firstVariation))
+    window.contentView = NSHostingView(rootView: GalleryView(first: first, variation: firstVariation, width: width))
     // The whole screen, with no menu bar and no Dock over it: nothing but the gallery is in a picture of the screen.
     // `--window` keeps an ordinary window, for a person working beside it.
     if arguments.contains("--window") {
@@ -247,18 +283,24 @@ private func write(_ view: some View, scheme: ColorScheme, scale: CGFloat, to ur
 
 /// Draws the entry to files: still, in light and in dark. A component's board is drawn at twice its size, and cut
 /// between cells into a few pictures when it is taller than a picture is worth reading. A screen's variations are
-/// drawn one to a picture (`only`: that one), each at its own size.
+/// drawn one to a picture (`only`: that one), each at its true size: one that follows its window's width at `width`,
+/// or at the laptop's and at the desktop's.
 @MainActor
-func shoot(_ entry: GalleryEntry, only: String? = nil, into folder: URL) {
+func shoot(_ entry: GalleryEntry, only: String? = nil, width: CGFloat? = nil, into folder: URL) {
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
     let schemes = [(ColorScheme.light, "light"), (ColorScheme.dark, "dark")]
     let own = variations(of: entry).filter { only == nil || $0.id == only }
     if entry.kind == .screen {
         for variation in own {
-            // A screen at a desktop's width is already a large picture: twice the size only when it is narrow.
-            let width = NSHostingView(rootView: variation.view).fittingSize.width
-            for (scheme, suffix) in schemes {
-                write(variation.view.fixedSize(), scheme: scheme, scale: width > 1600 ? 1 : 2, to: folder.appendingPathComponent("\(variation.id)-\(suffix).png"))
+            let drawings: [(String, AnyView)] = variation.sized.map { sized in
+                (width.map { [$0] } ?? GalleryWidth.named.map(\.points)).map { ("\(variation.id)-\(GalleryWidth.name($0))", sized($0)) }
+            } ?? [(variation.id, variation.view)]
+            for (name, view) in drawings {
+                // A wide screen is already a large picture: twice the size only when it is narrow.
+                let scale: CGFloat = NSHostingView(rootView: view).fittingSize.width > 1600 ? 1 : 2
+                for (scheme, suffix) in schemes {
+                    write(view.fixedSize(), scheme: scheme, scale: scale, to: folder.appendingPathComponent("\(name)-\(suffix).png"))
+                }
             }
         }
         return
@@ -288,31 +330,19 @@ func shoot(_ entry: GalleryEntry, only: String? = nil, into folder: URL) {
     }
 }
 
-/// One variation of a screen, alone: at its own size when the stage is as wide, made smaller to fit when it is not
-/// (a desktop's width on a laptop's stage). It stays live either way.
+/// One variation of a screen, alone, at its true size: as a window `window` wide draws it when it follows its
+/// window's width, else at its own size. Narrower than the stage it sits in the middle; wider, the stage scrolls.
 struct GalleryScreen: View {
     let variation: GalleryVariation
-    let width: CGFloat
-    @State private var natural = CGSize.zero
-
-    private var scale: CGFloat { natural.width > width ? width / natural.width : 1 }
+    let window: CGFloat
+    let stage: CGFloat
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            if scale < 1 {
-                Text("Shown at \(Int((scale * 100).rounded())) %: it is \(Int(natural.width)) points wide")
-                    .textStyle(.label)
-                    .foregroundStyle(DesignTokens.TextColor.tertiary.color)
-            }
-            variation.view
-                .fixedSize()
-                .onGeometryChange(for: CGSize.self) { $0.size } action: { natural = $0 }
-                .scaleEffect(scale, anchor: .topLeading)
-                .frame(width: natural.width * scale, height: natural.height * scale, alignment: .topLeading)
-        }
-        .frame(maxWidth: .infinity, alignment: .top)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(variation.id)
+        (variation.sized?(window) ?? variation.view)
+            .fixedSize()
+            .frame(minWidth: stage, alignment: .top)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(variation.id)
     }
 }
 
@@ -328,7 +358,11 @@ struct GalleryView: View {
     /// The variation shown, when the picked entry is a screen.
     @State private var variation: String?
 
-    init(first: String?, variation: String? = nil) {
+    /// The window a screen is drawn for: a named width, or nil for one whose page is as wide as the stage.
+    @State private var window: CGFloat?
+
+    init(first: String?, variation: String? = nil, width: CGFloat? = nil) {
+        _window = State(initialValue: width)
         let picked = first ?? galleryEntries.first?.id
         _picked = State(initialValue: picked)
         _variation = State(initialValue: variation ?? galleryEntries.first { $0.id == picked && $0.kind == .screen }.flatMap { variations(of: $0).first?.id })
@@ -352,14 +386,15 @@ struct GalleryView: View {
     private var panel: RoundedRectangle { RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous) }
 
     var body: some View {
-        HStack(spacing: DesignTokens.Space.s3) {
-            if showsEntries { sidebar }
+        // A screen's stage runs from edge to edge, so a desktop's window fits a 2560 pt display whole.
+        HStack(spacing: 0) {
+            if showsEntries { sidebar.padding(.leading, DesignTokens.Space.s3) }
             VStack(spacing: DesignTokens.Space.s3) {
-                bar
-                stage
+                bar.padding(.horizontal, DesignTokens.Space.s3)
+                stage.padding(.horizontal, shown == nil ? DesignTokens.Space.s3 : 0)
             }
         }
-        .padding(DesignTokens.Space.s3)
+        .padding(.vertical, DesignTokens.Space.s3)
         .background(DesignTokens.Surface.window.color)
         .environment(\.colorScheme, dark ? .dark : .light)
         .onChange(of: dark, initial: true) { _, dark in
@@ -487,25 +522,12 @@ struct GalleryView: View {
                 Text("\(variations(of: entry).count) variations").textStyle(.secondary).foregroundStyle(DesignTokens.TextColor.tertiary.color)
             }
             Spacer()
-            Text("Theme").textStyle(.label).foregroundStyle(DesignTokens.TextColor.secondary.color)
-            HStack(spacing: 2) {
-                ForEach([(false, "Light"), (true, "Dark")], id: \.1) { value, title in
-                    Button { dark = value } label: {
-                        Text(title)
-                            .textStyle(.rowTitle)
-                            .foregroundStyle(DesignTokens.TextColor.primary.color)
-                            .padding(.horizontal, DesignTokens.Space.s3)
-                            .padding(.vertical, 5)
-                            .background(dark == value ? DesignTokens.Surface.raised.color : .clear, in: Capsule())
-                            .contentShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("\(title) theme")
-                    .accessibilityAddTraits(dark == value ? .isSelected : [])
-                }
+            if shown?.sized != nil {
+                Text("Window").textStyle(.label).foregroundStyle(DesignTokens.TextColor.secondary.color)
+                segments(GalleryWidth.named.map { (Optional($0.points), "\($0.name.capitalized) \(Int($0.points))", "\($0.name.capitalized) window") } + [(nil, "Fill", "Window that fills the stage")], picked: window) { window = $0 }
             }
-            .padding(3)
-            .background(DesignTokens.Surface.sunken.color, in: Capsule())
+            Text("Theme").textStyle(.label).foregroundStyle(DesignTokens.TextColor.secondary.color)
+            segments([(false, "Light", "Light theme"), (true, "Dark", "Dark theme")], picked: dark) { dark = $0 }
         }
         .padding(.horizontal, DesignTokens.Space.s4)
         .padding(.vertical, DesignTokens.Space.s2)
@@ -513,12 +535,35 @@ struct GalleryView: View {
         .overlay(panel.strokeBorder(DesignTokens.Surface.separator.color))
     }
 
+    /// A row of choices, one picked: the theme, a screen's window.
+    private func segments<Value: Hashable>(_ choices: [(Value, String, String)], picked: Value, pick: @escaping (Value) -> Void) -> some View {
+        HStack(spacing: 2) {
+            ForEach(choices, id: \.0) { value, title, label in
+                Button { pick(value) } label: {
+                    Text(title)
+                        .textStyle(.rowTitle)
+                        .foregroundStyle(DesignTokens.TextColor.primary.color)
+                        .padding(.horizontal, DesignTokens.Space.s3)
+                        .padding(.vertical, 5)
+                        .background(picked == value ? DesignTokens.Surface.raised.color : .clear, in: Capsule())
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(label)
+                .accessibilityAddTraits(picked == value ? .isSelected : [])
+            }
+        }
+        .padding(3)
+        .background(DesignTokens.Surface.sunken.color, in: Capsule())
+    }
+
     private var stage: some View {
         GeometryReader { geometry in
-            // Down only: a board packs into the stage's width, and a screen wider than the stage is made to fit it.
-            ScrollView(.vertical) {
-                if let entry, let shown {
-                    GalleryScreen(variation: shown, width: geometry.size.width)
+            // A board packs into the stage's width and scrolls down. A screen scrolls sideways too, when its window is
+            // wider than the stage.
+            ScrollView(shown == nil ? .vertical : [.horizontal, .vertical]) {
+                if let shown {
+                    GalleryScreen(variation: shown, window: window ?? geometry.size.width + DesignTokens.Layout.sidebarWidth, stage: geometry.size.width)
                         .id(shown.id)
                 } else if let entry {
                     GalleryBoard(entry: entry, variations: variations(of: entry), width: max(geometry.size.width - 2 * DesignTokens.Space.s8, 320))
