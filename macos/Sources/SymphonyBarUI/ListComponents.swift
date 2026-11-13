@@ -504,3 +504,4 @@ private struct StripSegment: View {
         }
     }
 }
+// A sample change, to time a typical pull request's Mac checks.
