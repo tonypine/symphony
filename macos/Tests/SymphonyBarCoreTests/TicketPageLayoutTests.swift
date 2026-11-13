@@ -78,7 +78,7 @@ final class TicketPageLayoutTests: XCTestCase {
         XCTAssertEqual(page.situation?.kind, .you)
         XCTAssertEqual(page.openQuestions, ["How should the times on the paused line read in dark mode?"])
         XCTAssertEqual(questions.count, 1)
-        XCTAssertEqual(questions.first?.options.map(\.label), ["For how long", "Since when"])
+        XCTAssertEqual(questions.first?.options.map(\.label), ["Use the secondary text colour", "Keep the light colour, one size up", "Drop the times from the line"])
         let rail = TicketActionRail(identifier: page.identifier, moves: try XCTUnwrap(page.moves))
         XCTAssertEqual(rail.primary?.move, .answer)
         XCTAssertEqual(rail.request(.answer), .sheet(.answer))

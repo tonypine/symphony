@@ -1488,7 +1488,7 @@ func ticketPageLaptop(_ identifier: String) -> some View {
 let ticketPagePicked = DecisionPicks(picks: [0: 1])
 var ticketPageOwnWords: DecisionPicks {
     let action = TicketPage.questions(of: "TP-1245", in: ticketPageInbox.items)[0]
-    return DecisionPicks(picks: [0: action.writeInIndex], writeIns: [0: "Say for how long, and add the clock time on hover."])
+    return DecisionPicks(picks: [0: action.writeInIndex], writeIns: [0: "Use the secondary colour, and keep the times at 11 pt."])
 }
 
 /// TP-1245's page in the 1440 × 900 window with Answer pressed: the decision sheet over the dimmed page, the
