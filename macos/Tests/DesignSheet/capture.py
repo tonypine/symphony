@@ -15,13 +15,20 @@ runs in one process: an agent's sandbox refuses the Mach port its child processe
 
 `CHROME` names the browser; without it, the first of Playwright's headless shell and Google Chrome
 that is installed.
+
+`DESIGN_SHEET_REFERENCE_CACHE` names a folder that keeps the drawn references between runs (a CI
+runner that keeps its disk sets it). The references depend only on the shots asked for, the design
+files and this script, so a set drawn once is filed there under a key made from those and copied
+back while none of them changes, with no browser started. Drawing them is most of the sheet's time.
 """
 
 import base64
 import fcntl
 import glob
+import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -173,6 +180,55 @@ def shoot(browser, shot, out):
         browser.send("Target.closeTarget", {"targetId": target})
 
 
+DESIGN = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "docs", "design"))
+KEPT_SETS = 3
+
+
+def references_key(shots):
+    """What a drawn set depends on: the shots, every design file's content and this script."""
+    digest = hashlib.sha256(json.dumps(shots, sort_keys=True).encode())
+    paths = [__file__]
+    for folder, folders, files in os.walk(DESIGN):
+        folders.sort()
+        paths += [os.path.join(folder, name) for name in sorted(files)]
+    for path in paths:
+        digest.update(os.path.relpath(path, DESIGN).encode())
+        with open(path, "rb") as f:
+            digest.update(hashlib.sha256(f.read()).digest())
+    return digest.hexdigest()[:32]
+
+
+def reuse(cache, key, shots, sheet):
+    """Copies the set filed under `key` into the sheet; False when there is none, or it misses a shot."""
+    kept = os.path.join(cache, key)
+    try:
+        with open(os.path.join(kept, "references.json")) as f:
+            drawn = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if any(shot["id"] not in drawn or not os.path.isfile(os.path.join(kept, shot["id"] + ".png")) for shot in shots):
+        return False
+    for shot in shots:
+        shutil.copyfile(os.path.join(kept, shot["id"] + ".png"), os.path.join(sheet, "reference", shot["id"] + ".png"))
+    shutil.copyfile(os.path.join(kept, "references.json"), os.path.join(sheet, "references.json"))
+    os.utime(kept)
+    return True
+
+
+def keep(cache, key, shots, sheet):
+    """Files the sheet's drawn set under `key`, and drops all but the newest sets."""
+    os.makedirs(cache, exist_ok=True)
+    staged = tempfile.mkdtemp(prefix=".keep-", dir=cache)
+    for shot in shots:
+        shutil.copyfile(os.path.join(sheet, "reference", shot["id"] + ".png"), os.path.join(staged, shot["id"] + ".png"))
+    shutil.copyfile(os.path.join(sheet, "references.json"), os.path.join(staged, "references.json"))
+    shutil.rmtree(os.path.join(cache, key), ignore_errors=True)
+    os.rename(staged, os.path.join(cache, key))
+    sets = sorted((entry for entry in os.scandir(cache) if entry.is_dir()), key=lambda entry: entry.stat().st_mtime, reverse=True)
+    for old in sets[KEPT_SETS:]:
+        shutil.rmtree(old.path, ignore_errors=True)
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit("usage: capture.py <sheet dir>")
@@ -180,6 +236,11 @@ def main():
     with open(os.path.join(sheet, "shots.json")) as f:
         shots = json.load(f)
     os.makedirs(os.path.join(sheet, "reference"), exist_ok=True)
+    cache = os.environ.get("DESIGN_SHEET_REFERENCE_CACHE")
+    key = references_key(shots) if cache else None
+    if cache and reuse(cache, key, shots, sheet):
+        print("reused the %d references drawn before for these design files (%s)" % (len(shots), key))
+        return
     drawn = {}
     with tempfile.TemporaryDirectory(prefix="design-sheet-chrome-") as profile:
         browser = Browser(find_chrome(), profile)
@@ -192,6 +253,8 @@ def main():
             browser.close()
     with open(os.path.join(sheet, "references.json"), "w") as f:
         json.dump(drawn, f, indent=2, sort_keys=True)
+    if cache:
+        keep(cache, key, shots, sheet)
 
 
 if __name__ == "__main__":

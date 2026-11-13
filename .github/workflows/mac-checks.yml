@@ -235,6 +235,8 @@ jobs:
         run: |
           store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
           scratch="$($store work "$SYMPHONY_CI_REF" debug)"
+          # The references are redrawn only when the design files change (Tests/DesignSheet/capture.py).
+          if [ -n "${SYMPHONY_CI_CACHE:-}" ]; then export DESIGN_SHEET_REFERENCE_CACHE="$SYMPHONY_CI_CACHE/design-sheet-references"; fi
           time make design-sheet ${scratch:+SWIFT_FLAGS="--scratch-path $scratch"}
           if [ -n "$scratch" ]; then $store save "$SYMPHONY_CI_REF" debug; fi
 
