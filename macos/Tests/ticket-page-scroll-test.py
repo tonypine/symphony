@@ -158,25 +158,34 @@ def open_from_find(binary, pid):
     return None
 
 
-def fold_header(binary, pid, verb, run=None):
+def on_screen(node, area):
+    """Whether the node's frame lies inside the scroll area's frame (a click on a row scrolled out of view fails with
+    not_on_screen). Without frames, true."""
+    frame, box = node.get("frame"), (area or {}).get("frame")
+    if not frame or not box:
+        return True
+    return frame["y"] >= box["y"] and frame["y"] + frame["h"] <= box["y"] + box["h"]
+
+
+def fold_header(binary, pid, verb, run=None, area=None):
     """The fold header of a run on the timeline whose label starts with `verb` ("Collapse " or "Expand "), of `run`'s
-    title when given, or None."""
+    title when given, and inside `area` when given, or None."""
     reply = driver(binary, "ax-tree", pid, 40, 40, "", verb, timeout=30)
     for node in reply.get("matches", []):
         label = node.get("description") or node.get("title") or ""
         if not label.startswith(verb) or " run " not in label:
             continue
         title = label[len(verb):].split(",")[0]
-        if run is None or title == run:
+        if (run is None or title == run) and on_screen(node, area):
             return node, title
     return None, None
 
 
-def click_folds_a_run(binary, pid):
+def click_folds_a_run(binary, pid, area):
     """A mouse click on a run's fold header folds it, and a second unfolds it: the click, not an accessibility press.
     QA found a click only selecting the run (TP-1480). Returns why not, or None."""
     for verb, flipped in (("Collapse ", "Expand "), ("Expand ", "Collapse ")):
-        header, run = fold_header(binary, pid, verb)
+        header, run = fold_header(binary, pid, verb, area=area)
         if not header:
             continue
         for _ in range(2):
@@ -187,7 +196,7 @@ def click_folds_a_run(binary, pid):
                 return f"a click on {run}'s fold changed nothing; the driver pressed it with {reply['fallback']} instead"
             changed = None
             for _ in range(10):
-                changed, _ = fold_header(binary, pid, flipped, run)
+                changed, _ = fold_header(binary, pid, flipped, run, area)
                 if changed:
                     break
                 time.sleep(0.3)
@@ -365,9 +374,19 @@ def main():
         for attempt in range(1, IDLE_SAMPLE_TRIES + 1):
             idle, report = sample_idle(pid, root)
             if idle is None:
-                failures.append("idle sample")
-                print(f"FAIL [idle sample]: no main thread in the sample ({report})")
-                break
+                # A report without a main thread (the app mid-transition, or the sample tool failing) is no measure:
+                # print its head and take the next sample; only a run with no usable sample fails.
+                head = ""
+                if os.path.exists(report):
+                    with open(report, errors="replace") as handle:
+                        head = handle.read()[:1500]
+                print(f"no main thread in idle sample {attempt} ({report}):\n{head}")
+                if attempt == IDLE_SAMPLE_TRIES:
+                    failures.append("idle sample")
+                    print("FAIL [idle sample]: no main thread in any of the samples")
+                else:
+                    time.sleep(SETTLE_SECONDS)
+                continue
             busy, samples = idle
             print(f"idle main thread, sample {attempt}: {busy:.1f} % busy over {SAMPLE_SECONDS} s ({samples} samples), budget {IDLE_BUDGET_PERCENT:.0f} %")
             if busy <= IDLE_BUDGET_PERCENT:
@@ -415,7 +434,8 @@ def main():
                 else:
                     print(f"over budget [hitch ratio]: {over} (reported; ENFORCE_BUDGETS is off)")
         # 3. A run's fold follows a click.
-        why = click_folds_a_run(binary, pid)
+        area = page_scroll_area(binary, pid) or area
+        why = click_folds_a_run(binary, pid, area)
         if why:
             failures.append("fold")
             print(f"FAIL [fold]: {why}")
