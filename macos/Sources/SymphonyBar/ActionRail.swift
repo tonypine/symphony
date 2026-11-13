@@ -5,7 +5,7 @@ import SymphonyBarCore
 /// C31, the Action rail (TP-1440): a ticket's moves in one row of medium buttons, drawn from the ticket read's
 /// `moves` and nothing else. The expected move first and primary, then the common ones, then More for the rest with
 /// Stop Run… last and in red. A move the read refuses stays in its place, faint, with a not-allowed pointer, and shows
-/// the read's reason under it when pressed. The rail keeps no state of its own: it changes when the read does.
+/// the read's reason under it. The rail keeps no state of its own: it changes when the read does.
 ///
 /// Pressing a move hands `perform` its request: a control call to send, or the consequence sheet to show first. Cancel
 /// Ticket… asks here before its call goes. The rail wraps onto a second line before any button shrinks.
@@ -14,17 +14,15 @@ struct ActionRail: View {
     let perform: (TicketActionRail.Request) -> Void
     /// Snapshots only: More drawn open, as a list under its button (`ImageRenderer` can't draw a menu).
     var moreOpen = false
-    /// Snapshots only: each refused move's reason shown as if it was pressed.
-    var revealsReasons = false
     @State private var confirming: TicketActionRail.Confirmation?
 
     var body: some View {
         WrappingStack(spacing: DesignTokens.Space.s2) {
             if let primary = rail.primary {
-                RailButton(item: primary, kind: .primary, revealed: revealsReasons, press: press)
+                move(primary, kind: .primary)
             }
             ForEach(rail.secondary) { item in
-                RailButton(item: item, kind: .secondary, revealed: revealsReasons, press: press)
+                move(item, kind: .secondary)
             }
             if !rail.more.isEmpty {
                 RailMore(items: rail.more, open: moreOpen, press: press)
@@ -44,28 +42,19 @@ struct ActionRail: View {
         }
     }
 
+    /// A move on the rail: the catalog's medium button, disabled with the read's reason under it.
+    private func move(_ item: TicketActionRail.Item, kind: ButtonKind) -> some View {
+        Button(item.title) { press(item.move, nil) }
+            .accessibilityLabel(TicketActionRail.accessibilityLabel(item))
+            .directorButton(item.allowed ? kind : .secondary, disabledReason: item.reason)
+    }
+
     private func press(_ move: TicketActionRail.Move, _ state: String?) {
         switch rail.request(move, state: state) {
         case let .confirm(confirmation)?: confirming = confirmation
         case let request?: perform(request)
         case nil: break
         }
-    }
-}
-
-/// A move on the rail: the catalog's medium button, disabled with the read's reason under it when pressed.
-private struct RailButton: View {
-    let item: TicketActionRail.Item
-    let kind: ButtonKind
-    let revealed: Bool
-    let press: (TicketActionRail.Move, String?) -> Void
-
-    var body: some View {
-        Button(item.title) { press(item.move, nil) }
-            .directorButton(item.allowed ? kind : .secondary)
-            .accessibilityLabel(TicketActionRail.accessibilityLabel(item))
-            .disabledReason(item.reason, revealed: revealed)
-            .notAllowedPointer(!item.allowed)
     }
 }
 
@@ -175,45 +164,5 @@ private struct RailMoreList: View {
         .padding(.horizontal, DesignTokens.Space.s2)
         .padding(.vertical, 3)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-extension View {
-    /// The pointer says not allowed over a control that can't act.
-    func notAllowedPointer(_ notAllowed: Bool) -> some View {
-        modifier(NotAllowedPointer(notAllowed: notAllowed))
-    }
-}
-
-/// Pushes the not-allowed cursor while the pointer is over a refused control, and pops exactly what it pushed: on
-/// hover-exit whatever the read says now, when a new read allows the move under the pointer, and when the control
-/// leaves the view tree without a hover-exit (a move changing place on the rail).
-private struct NotAllowedPointer: ViewModifier {
-    let notAllowed: Bool
-    @State private var hovering = false
-    @State private var pushed = false
-
-    func body(content: Content) -> some View {
-        content
-            .onHover { inside in
-                hovering = inside
-                update()
-            }
-            .onChange(of: notAllowed) { update() }
-            .onDisappear {
-                hovering = false
-                update()
-            }
-    }
-
-    private func update() {
-        let want = hovering && notAllowed
-        if want, !pushed {
-            NSCursor.operationNotAllowed.push()
-            pushed = true
-        } else if !want, pushed {
-            NSCursor.pop()
-            pushed = false
-        }
     }
 }

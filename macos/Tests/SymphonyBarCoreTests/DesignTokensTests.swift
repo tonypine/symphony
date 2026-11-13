@@ -117,6 +117,8 @@ final class DesignTokensTests: XCTestCase {
         XCTAssertEqual(DesignTokens.Motion.scale(DesignTokens.Motion.cardPressScale, pressed: true, reduceMotion: false), 0.99)
         XCTAssertEqual(DesignTokens.Motion.scale(DesignTokens.Motion.rowPressScale, pressed: true, reduceMotion: false), 0.995)
         XCTAssertEqual(DesignTokens.Motion.scale(DesignTokens.Motion.pressScale, pressed: true, reduceMotion: true), 1)
+        XCTAssertEqual(DesignTokens.Motion.scale(DesignTokens.Motion.iconPressScale, pressed: true, reduceMotion: false), 0.92)
+        XCTAssertEqual(DesignTokens.Motion.scale(DesignTokens.Motion.iconPressScale, pressed: true, reduceMotion: true), 1)
         XCTAssertEqual(DesignTokens.Motion.scale(DesignTokens.Motion.pressScale, pressed: false, reduceMotion: false), 1)
         XCTAssertEqual(DesignTokens.Motion.lift(hovered: true, reduceMotion: false), 1)
         XCTAssertEqual(DesignTokens.Motion.lift(hovered: true, reduceMotion: true), 0)

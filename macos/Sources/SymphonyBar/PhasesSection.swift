@@ -232,15 +232,9 @@ private struct PhaseAnswerFields: View {
                             .fixedSize()
                             .pointerStyle(.link)
                             .accessibilityLabel("Type of the answer field \(field.name)")
-                            Button {
+                            IconButton("minus.circle", help: "Remove the answer field \(field.name)", size: .small) {
                                 step.removeAnswerField(field.id)
-                            } label: {
-                                Image(systemName: "minus.circle")
                             }
-                            .buttonStyle(.borderless)
-                            .pointerStyle(.link)
-                            .help("Remove this field")
-                            .accessibilityLabel("Remove the answer field \(field.name)")
                         }
                         if let reason = PhaseValidation.answerReason(for: field, in: step.answer) {
                             Text(reason)
@@ -296,14 +290,9 @@ private struct PhaseStepFields: View {
                         .labelsHidden()
                         .fixedSize()
                         .pointerStyle(.link)
-                        Button {
+                        IconButton("minus.circle", help: "Remove this command", size: .small) {
                             step.commands.removeAll { $0.id == command.id }
-                        } label: {
-                            Image(systemName: "minus.circle")
                         }
-                        .buttonStyle(.borderless)
-                        .pointerStyle(.link)
-                        .accessibilityLabel("Remove this command")
                     }
                 }
                 Button("Add command") { step.commands.append(StepCommand(run: "")) }

@@ -15,11 +15,16 @@ enum DesignGuard {
         case rawColor
         /// A numeric literal in `.padding(`, `spacing:`, `cornerRadius`, `.shadow(` or `lineWidth:`.
         case number
+        /// A `Button(` or `Button {` whose modifiers take neither the shared button style (`.directorButton(`,
+        /// `.buttonStyle(DirectorButtonStyle(`) nor stand in for the shared icon button (TP-1505).
+        case button
+        /// A `.disabled(`: a control turned off without saying why (TP-1505).
+        case disabled
         /// A numeric literal in `.frame(`: reported only.
         case frame
 
         /// The kinds that fail the guard.
-        static let guarded: [Kind] = [.font, .color, .rawColor, .number]
+        static let guarded: [Kind] = [.font, .color, .rawColor, .number, .button, .disabled]
 
         static func < (lhs: Kind, rhs: Kind) -> Bool {
             allCases.firstIndex(of: lhs)! < allCases.firstIndex(of: rhs)!
@@ -122,6 +127,12 @@ enum DesignGuard {
                 }
             }
         }
+        for offset in unstyledButtons(in: code, text: text) {
+            record(offset, .button, "Button", buttonReplacement)
+        }
+        for match in matches(disabledRegex, in: text, range: 0..<code.count) {
+            record(match.offset, .disabled, ".disabled(", disabledReplacement)
+        }
         for range in arguments(of: [".frame("], in: code) {
             for match in matches(numberRegex, in: text, range: range) where !isZero(match.text) {
                 record(match.offset, .frame, match.text, "a `DesignTokens.Layout` or `DesignTokens.Control` measure")
@@ -167,6 +178,9 @@ enum DesignGuard {
     static let rawColorPattern =
         #"\bNSColor\.\w+|\b(?:Color|SwiftUI\.Color)\(\s*(?:nsColor|red|white|hue|hex|cgColor|\.sRGB\w*|\.displayP3)\b"#
     static let numberPattern = #"(?<![\w.])\d+(?:\.\d+)?(?![\w.])"#
+    /// A button's initialiser, not a longer name (`IconButton(`) or a member (`.Button(`).
+    static let buttonPattern = #"(?<![\w.])Button\s*[({]"#
+    static let disabledPattern = #"\.disabled\("#
 
     static let fontRegex = regex(fontPattern)
     static let colorRegex = regex(colorPattern)
@@ -174,6 +188,8 @@ enum DesignGuard {
     static let fontAnywhereRegex = regex(fontAnywherePattern)
     static let colorAnywhereRegex = regex(colorAnywherePattern)
     static let numberRegex = regex(numberPattern)
+    static let buttonRegex = regex(buttonPattern)
+    static let disabledRegex = regex(disabledPattern)
 
     static func regex(_ pattern: String) -> NSRegularExpression {
         // The patterns are constants, checked by the tests.
@@ -197,6 +213,84 @@ enum DesignGuard {
             "`DesignTokens.Selection.rowRingWidth`, `.cardRingWidth` or `DesignTokens.FocusRing.width`, or a new width token"
         }),
     ]
+
+    // MARK: - Buttons
+
+    static let buttonReplacement =
+        "`.directorButton(_:size:glyph:selected:disabledReason:)` for a labelled button, or `IconButton` for a glyph alone"
+    static let disabledReplacement =
+        "`.directorButton(…, disabledReason:)`, `IconButton(…, disabledReason:)` or `.disabledReason(_:)`: a control that is off says why"
+
+    /// The modifiers that give a button the shared style.
+    static func isSharedStyle(_ modifier: String) -> Bool {
+        modifier == "directorButton" || modifier == "buttonStyle(DirectorButtonStyle"
+    }
+
+    /// The offset of each button whose chain of modifiers takes no shared style.
+    static func unstyledButtons(in code: [UInt16], text: NSString) -> [Int] {
+        matches(buttonRegex, in: text, range: 0..<code.count).compactMap { match in
+            let open = match.offset + match.text.utf16.count - 1
+            return modifiers(after: open, in: code).contains(where: isSharedStyle) ? nil : match.offset
+        }
+    }
+
+    /// The modifiers chained onto the call whose `(` or `{` is at `open`, past its trailing closures (`{ … }` and
+    /// `label: { … }` on the same line): each one's name, and for `.buttonStyle(` the type its argument starts with.
+    static func modifiers(after open: Int, in code: [UInt16]) -> [String] {
+        guard let close = closing(code, from: open + 1, open: code[open], close: code[open] == 40 ? 41 : 125) else { return [] }
+        var index = close + 1
+        trailing: while true {
+            let probe = skipSpaces(code, from: index, newlines: false)
+            if probe < code.count, code[probe] == 123, let end = closing(code, from: probe + 1, open: 123, close: 125) {
+                index = end + 1
+                continue
+            }
+            var name = probe
+            while name < code.count, isIdentifier(code[name]) { name += 1 }
+            if name > probe, name < code.count, code[name] == 58 {
+                let brace = skipSpaces(code, from: name + 1, newlines: false)
+                if brace < code.count, code[brace] == 123, let end = closing(code, from: brace + 1, open: 123, close: 125) {
+                    index = end + 1
+                    continue trailing
+                }
+            }
+            break
+        }
+        var names: [String] = []
+        while true {
+            let dot = skipSpaces(code, from: index, newlines: true)
+            guard dot < code.count, code[dot] == 46 else { break }
+            var end = dot + 1
+            while end < code.count, isIdentifier(code[end]) { end += 1 }
+            guard end > dot + 1 else { break }
+            var name = String(decoding: code[(dot + 1)..<end], as: UTF16.self)
+            index = end
+            if index < code.count, code[index] == 40, let close = closing(code, from: index + 1, open: 40, close: 41) {
+                if name == "buttonStyle" {
+                    var type = skipSpaces(code, from: index + 1, newlines: true)
+                    let start = type
+                    while type < close, isIdentifier(code[type]) { type += 1 }
+                    name += "(" + String(decoding: code[start..<type], as: UTF16.self)
+                }
+                index = close + 1
+            }
+            let brace = skipSpaces(code, from: index, newlines: false)
+            if brace < code.count, code[brace] == 123, let close = closing(code, from: brace + 1, open: 123, close: 125) {
+                index = close + 1
+            }
+            names.append(name)
+        }
+        return names
+    }
+
+    /// The first offset from `start` that is not a space or a tab (nor a line break, with `newlines`).
+    static func skipSpaces(_ code: [UInt16], from start: Int, newlines: Bool) -> Int {
+        var index = start
+        while index < code.count, code[index] == 32 || code[index] == 9 || (newlines && (code[index] == 10 || code[index] == 13)) {
+            index += 1
+        }
+        return index
+    }
 
     // MARK: - Replacements
 
@@ -285,8 +379,9 @@ enum DesignGuard {
 
     static let baselineHeader = """
     # The design guard's baseline (TP-1493, docs/design/design-system.md §3.11): how many raw style values each view
-    # file still has, per kind. It must equal what the guard counts: lower a number in the same change that removes a
-    # bypass, and delete the line when it reaches zero. A file not listed here may have none.
+    # file still has, per kind, and (TP-1505) how many buttons without the shared style (`button`) and controls turned
+    # off without a reason (`disabled`). It must equal what the guard counts: lower a number in the same change that
+    # removes a bypass, and delete the line when it reaches zero. A file not listed here may have none.
     """
 
     static func formatBaseline(_ counts: Counts) -> String {
@@ -443,14 +538,18 @@ enum DesignGuard {
 
     /// The offset of the `)` that closes the parenthesis opened just before `open`.
     static func closing(_ code: [UInt16], from open: Int) -> Int? {
-        var depth = 1, index = open
+        closing(code, from: open, open: 40, close: 41)
+    }
+
+    /// The offset of the `close` that closes the `open` just before `start`.
+    static func closing(_ code: [UInt16], from start: Int, open: UInt16, close: UInt16) -> Int? {
+        var depth = 1, index = start
         while index < code.count {
-            switch code[index] {
-            case 40: depth += 1
-            case 41:
+            if code[index] == open {
+                depth += 1
+            } else if code[index] == close {
                 depth -= 1
                 if depth == 0 { return index }
-            default: break
             }
             index += 1
         }

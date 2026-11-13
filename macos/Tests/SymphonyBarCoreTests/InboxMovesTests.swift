@@ -171,6 +171,8 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.blocked)).defaultCommand, .move(.unblock))
         XCTAssertEqual(InboxToolbar.toolbar(for: item(.blocked)).overflow, [.move(.restart)])
         XCTAssertNil(InboxToolbar(buttons: [.init(command: .move(.sendDecisions), enabled: false)], overflow: []).defaultCommand)
+        XCTAssertEqual(InboxToolbar.Button(command: .move(.sendDecisions), enabled: false).reason, "Answer every question first.")
+        XCTAssertNil(InboxToolbar.Button(command: .move(.sendDecisions), enabled: true).reason)
         XCTAssertEqual(
             InboxMove.allCases.map(\.verb),
             [
@@ -344,6 +346,8 @@ final class InboxMovesTests: XCTestCase {
         XCTAssertTrue(blankSheet.isWriteIn)
         XCTAssertNil(blankSheet.quote)
         XCTAssertFalse(blankSheet.canSend(reason: ""))
+        XCTAssertEqual(blankSheet.sendReason(reason: ""), "Write your answer first.")
+        XCTAssertEqual(blank.buttons.first?.reason, "Write your answer first.")
         XCTAssertNil(blankSheet.action())
 
         // Spaces and new lines alone are still blank.

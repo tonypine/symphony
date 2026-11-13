@@ -3,11 +3,13 @@
 //
 // 1. `DESIGN_SHEET_PHASE=plan` writes `<sheet>/shots.json`, the references to draw: the ticket page prototype's three
 //    moments, and the catalog's Window stories for the ticket page, Home, Initiatives and Tickets, at the laptop's and
-//    the desktop's widths, in light and dark; then the catalog's Chip stories, in light and dark.
+//    the desktop's widths, in light and dark; then the catalog's Chip stories, and its Button, Icon button and Inline
+//    refusal stories, in light and dark.
 // 2. capture.py draws each reference into `<sheet>/reference/<id>.png` and its size in points into
 //    `<sheet>/references.json`.
 // 3. `DESIGN_SHEET_PHASE=compose` draws the native page at each reference's size, puts the two side by side in
-//    `<sheet>/<id>.png` and lists them in `<sheet>/index.html`.
+//    `<sheet>/<id>.png` and lists them in `<sheet>/index.html`; the Button page, `<sheet>/button.html`, lists the
+//    Button, Icon button and Inline refusal stories alone.
 //
 // It is evidence, not a gate: nothing here compares pixels.
 import AppKit
@@ -112,8 +114,22 @@ func sheetShots() -> [SheetShot] {
                 draw: sheetChip(story.text, kind: story.kind)
             ))
         }
+        // The catalog's Button, Icon button and Inline refusal stories beside the shared components (TP-1505).
+        for story in componentStories {
+            shots.append(SheetShot(
+                id: "\(story.component)-\(story.id)-\(theme)", title: "Catalog › Components › \(story.title) › \(story.id) · \(theme)",
+                link: "docs/design/catalog/index.html#components/\(story.component)/\(story.id)",
+                selector: ".stage-inner > :first-child", width: story.width, height: story.height, theme: theme,
+                native: "the shared \(story.title.lowercased())"
+            ) { width, height in AnyView(story.draw().frame(width: width, height: height, alignment: .topLeading)) })
+        }
     }
     return shots
+}
+
+/// The rows of the Button page: the catalog's Button, Icon button and Inline refusal stories.
+func isButtonPageShot(_ id: String) -> Bool {
+    ["button-", "icon-button-", "inline-refusal-"].contains { id.hasPrefix($0) }
 }
 
 /// Writes the references capture.py draws.
@@ -172,34 +188,44 @@ func composeDesignSheet(_ sheet: URL) {
     let measured = (try? Data(contentsOf: sheet.appendingPathComponent("references.json")))
         .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: [String: Double]] } ?? [:]
     var rows = ""
+    var buttonRows = ""
     for shot in sheetShots() {
         let size = measured[shot.id].map { CGSize(width: $0["width"] ?? shot.width, height: $0["height"] ?? shot.height) }
             ?? CGSize(width: shot.width, height: shot.height)
         let reference = NSImage(contentsOf: sheet.appendingPathComponent("reference/\(shot.id).png"))
         reference?.size = size
         renderSheet(sheetPair(shot, reference: reference, size: size), shot.theme == "dark" ? .dark : .light, to: sheet.appendingPathComponent("\(shot.id).png"))
-        rows += """
+        let row = """
         <section id="\(shot.id)"><h2><a href="#\(shot.id)">\(htmlEscape(shot.title))</a></h2>
         <p>Design: <code>\(htmlEscape(shot.link))</code> · App: \(htmlEscape(shot.native)) · \(Int(size.width)) × \(Int(size.height)) pt\(reference == nil ? " · <b>no reference drawn</b>" : "")</p>
         <a href="\(shot.id).png"><img src="\(shot.id).png" alt="\(htmlEscape(shot.title))" loading="lazy"></a></section>
 
         """
+        rows += row
+        if isButtonPageShot(shot.id) { buttonRows += row }
     }
+    writeSheetPage(sheet.appendingPathComponent("index.html"), title: "Design sheet", lead: "<p><a href=\"button.html\">The Button page</a>: the Button, Icon button and Inline refusal stories alone.</p>", rows: rows)
+    writeSheetPage(sheet.appendingPathComponent("button.html"), title: "Design sheet · Button", lead: "<p><a href=\"index.html\">Every row</a></p>", rows: buttonRows)
+}
+
+/// One page of the sheet: its rows under the title.
+func writeSheetPage(_ url: URL, title: String, lead: String, rows: String) {
     let html = """
     <!doctype html>
-    <html lang="en"><head><meta charset="utf-8"><title>Design sheet</title>
+    <html lang="en"><head><meta charset="utf-8"><title>\(title)</title>
     <style>
     body { font: 14px/1.4 -apple-system, system-ui, sans-serif; margin: 24px; color: #1d1d1f; background: #f5f5f7; }
     section { margin: 0 0 40px; } h2 { font-size: 17px; margin: 0 0 4px; } h2 a { color: inherit; text-decoration: none; }
     p { margin: 0 0 8px; color: #6e6e73; } img { width: 100%; height: auto; border: 1px solid #d2d2d7; background: #fff; }
     </style></head><body>
-    <h1>Design sheet</h1>
+    <h1>\(title)</h1>
+    \(lead)
     <p>Each row: the design on the left, the app's page from the matching fixture on the right, at the same size in points. It is evidence, not a gate: nothing here fails on a difference.</p>
     \(rows)</body></html>
 
     """
-    try! html.write(to: sheet.appendingPathComponent("index.html"), atomically: true, encoding: .utf8)
-    print("wrote \(sheet.appendingPathComponent("index.html").path)")
+    try! html.write(to: url, atomically: true, encoding: .utf8)
+    print("wrote \(url.path)")
 }
 
 func htmlEscape(_ text: String) -> String {

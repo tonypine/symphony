@@ -1177,11 +1177,10 @@ struct SetupRowView: View {
     }
 
     @ViewBuilder private func actionButton(_ title: String, _ action: SetupPage.Action) -> some View {
-        let button = Button(title) { actions.perform(action, row, nil) }.fixedSize()
         if case .fix = action {
-            button.buttonStyle(.borderedProminent)
+            Button(title) { actions.perform(action, row, nil) }.directorButton(.primary).fixedSize()
         } else {
-            button.buttonStyle(.bordered)
+            Button(title) { actions.perform(action, row, nil) }.directorButton().fixedSize()
         }
     }
 
@@ -1232,21 +1231,21 @@ struct SetupFixSheetView: View {
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: DesignTokens.Space.s2) {
+            HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                 if sheet.isWorking {
                     ProgressView().controlSize(.small).accessibilityLabel("Working")
                 }
                 if let destination = sheet.failedDestination {
                     Button(destination.title) { open(destination) }
+                        .directorButton()
                 }
                 Spacer(minLength: 0)
                 Button(sheet.cancelTitle, role: .cancel, action: cancel)
                     .keyboardShortcut(.cancelAction)
-                    .disabled(sheet.isWorking)
+                    .directorButton(disabledReason: sheet.isWorking ? TicketList.waitReason : nil)
                 Button(sheet.confirmTitle, action: confirm)
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!sheet.canConfirm)
+                    .directorButton(.primary, disabledReason: sheet.confirmReason)
             }
         }
         .padding(DesignTokens.Space.s5)

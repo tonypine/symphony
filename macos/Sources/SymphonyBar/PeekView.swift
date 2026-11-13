@@ -136,20 +136,17 @@ struct PeekPage: View {
         VStack(spacing: 0) {
             HStack(spacing: DesignTokens.Space.s2) {
                 if canGoBack {
-                    Button(action: actions.back) { Label(PeekNavigation.backTitle, systemImage: "chevron.left") }
-                        .buttonStyle(PeekHeaderButtonStyle())
-                        // Its own ⌘[: a sheet is key while it shows, which turns off the View menu's Back.
-                        .keyboardShortcut(KeyEquivalent(NavigationHistory.backKey), modifiers: .command)
-                        .help("Back (⌘[)")
+                    // Its own ⌘[: a sheet is key while it shows, which turns off the View menu's Back.
+                    IconButton(
+                        "chevron.left", help: PeekNavigation.backTitle, size: .small,
+                        shortcut: KeyboardShortcut(KeyEquivalent(NavigationHistory.backKey), modifiers: .command), action: actions.back
+                    )
                 }
                 Text(entry.title)
                     .font(DesignTokens.TypeStyle.heading.font)
                     .accessibilityAddTraits(.isHeader)
                 Spacer(minLength: DesignTokens.Space.s2)
-                Button(action: actions.close) { Label(PeekNavigation.closeTitle, systemImage: "xmark") }
-                    .buttonStyle(PeekHeaderButtonStyle())
-                    .keyboardShortcut(.cancelAction)
-                    .help("Close (Esc)")
+                IconButton("xmark", help: PeekNavigation.closeTitle, size: .small, shortcut: .cancelAction, action: actions.close)
             }
             .padding(.horizontal, DesignTokens.Space.s4)
             .padding(.vertical, DesignTokens.Space.s3)
@@ -177,23 +174,6 @@ struct PeekPage: View {
         }
         .padding(DesignTokens.Space.s4)
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-/// The header's Back and Close: a symbol in a circle that lights under the pointer, drawn by SwiftUI so a snapshot
-/// shows it.
-private struct PeekHeaderButtonStyle: ButtonStyle {
-    @State private var hovering = false
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .labelStyle(.iconOnly)
-            .font(DesignTokens.TypeStyle.body.font.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .frame(width: 24, height: 24)
-            .background(Circle().fill(Color.primary.opacity(configuration.isPressed ? 0.16 : hovering ? 0.08 : 0)))
-            .contentShape(Circle())
-            .onHover { hovering = $0 }
     }
 }
 
@@ -262,13 +242,13 @@ private struct TicketPeekBody: View {
         Divider()
         HStack(spacing: DesignTokens.Space.s2) {
             Button(TicketPeek.openTicketPageTitle) { actions.openTicketPage(peek.identifier) }
-                .buttonStyle(.borderedProminent)
+                .directorButton(.primary, size: .small)
                 .help("Open \(peek.identifier)'s page; ⌘[ comes back here")
             if let url = peek.linearURL {
                 Button(TicketPeek.openInLinearTitle) { actions.openURL(url) }
+                    .directorButton(size: .small)
             }
         }
-        .controlSize(.small)
     }
 }
 
@@ -330,18 +310,14 @@ private struct OtherPeekBody: View {
             HStack(spacing: DesignTokens.Space.s2) {
                 if let page {
                     Button(PullRequestScreen.openPageTitle) { actions.openPullRequestPage(page, popover.link?.url) }
-                        .buttonStyle(.borderedProminent)
+                        .directorButton(.primary, size: .small)
                         .help("Open #\(page.number)'s page; ⌘[ comes back here")
                 }
                 if let link = popover.link {
-                    if page == nil {
-                        Button(link.title) { actions.openURL(link.url) }.buttonStyle(.borderedProminent)
-                    } else {
-                        Button(link.title) { actions.openURL(link.url) }
-                    }
+                    Button(link.title) { actions.openURL(link.url) }
+                        .directorButton(page == nil ? .primary : .secondary, size: .small)
                 }
             }
-            .controlSize(.small)
         }
     }
 }

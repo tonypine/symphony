@@ -348,7 +348,7 @@ private struct StoryRow: View {
             Spacer(minLength: DesignTokens.Space.s2)
             if let issueID = reviewIssueID {
                 Button("Review") { actions.review(issueID) }
-                    .buttonStyle(.borderedProminent)
+                    .directorButton(.primary, size: .small)
                     .help("Open it in the Inbox")
             } else {
                 Image(systemName: "chevron.right").foregroundStyle(.tertiary).accessibilityHidden(true)

@@ -71,23 +71,19 @@ struct ReposView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 Divider()
-                HStack(spacing: 2) {
-                    Button { model.onAddRepo() } label: {
-                        Image(systemName: "plus").frame(width: 22, height: 18)
+                HStack(alignment: .top, spacing: 2) {
+                    IconButton("plus", help: AddRepo.buttonTitle, size: .small, shortcut: KeyboardShortcut("n", modifiers: .command)) {
+                        model.onAddRepo()
                     }
-                    .keyboardShortcut("n", modifiers: .command)
-                    .help(AddRepo.buttonTitle)
-                    .accessibilityLabel(AddRepo.buttonTitle)
-                    Button { model.selection.map(model.onDisconnect) } label: {
-                        Image(systemName: "minus").frame(width: 22, height: 18)
+                    IconButton(
+                        "minus", help: DisconnectRepo.buttonTitle, size: .small, shortcut: KeyboardShortcut(.delete, modifiers: []),
+                        disabledReason: model.selected == nil ? "Select a repo first." : model.selected?.actions.disconnectProblem,
+                        reasonAlignment: .leading
+                    ) {
+                        model.selection.map(model.onDisconnect)
                     }
-                    .keyboardShortcut(.delete, modifiers: [])
-                    .disabled(model.selected == nil || model.selected?.actions.disconnectProblem != nil)
-                    .help(model.selected?.actions.disconnectProblem ?? DisconnectRepo.buttonTitle)
-                    .accessibilityLabel(DisconnectRepo.buttonTitle)
                     Spacer()
                 }
-                .buttonStyle(.borderless)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
             }
@@ -154,12 +150,7 @@ struct ReposBannerView: View {
                 .textSelection(.enabled)
                 .help(banner.text)
                 .frame(maxWidth: .infinity, alignment: .leading)
-            Button(action: dismiss) {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(.borderless)
-            .help(ReposBanner.dismissTitle)
-            .accessibilityLabel(ReposBanner.dismissTitle)
+            IconButton("xmark", help: ReposBanner.dismissTitle, size: .small, action: dismiss)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -575,17 +566,15 @@ struct RepoDetailView: View {
 
     private var footer: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            // A bordered macOS button ignores the role and the label's colour; a red tint on a prominent one shows.
-            Button(DisconnectRepo.buttonTitle, role: .destructive) { model.onDisconnect(repo.key) }
-                .buttonStyle(.borderedProminent)
-                .tint(.red)
-                .disabled(repo.actions.disconnectProblem != nil)
-                .help(repo.actions.disconnectProblem ?? "Remove the repo from symphony.yml. No folder is deleted.")
+            // Why Disconnect is off shows under it and is its help. The plain help goes on only while it is on: an
+            // inner help would win over the reason's.
             if let problem = repo.actions.disconnectProblem {
-                Text(problem)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
+                Button(DisconnectRepo.buttonTitle, role: .destructive) { model.onDisconnect(repo.key) }
+                    .directorButton(.destructive, disabledReason: problem)
+            } else {
+                Button(DisconnectRepo.buttonTitle, role: .destructive) { model.onDisconnect(repo.key) }
+                    .help("Remove the repo from symphony.yml. No folder is deleted.")
+                    .directorButton(.destructive)
             }
             Spacer()
         }

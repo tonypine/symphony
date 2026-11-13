@@ -156,6 +156,63 @@ final class DesignGuardTests: XCTestCase {
         XCTAssertEqual(DesignGuard.counts(found, kinds: [.frame]), ["View.swift": [.frame: 2]])
     }
 
+    // MARK: - Buttons and disabled controls (TP-1505)
+
+    func testAButtonWithoutTheSharedStyleCounts() {
+        let found = scan("""
+        Button("Open") { open() }
+            .buttonStyle(.borderedProminent)
+        Button {
+            close()
+        } label: {
+            Image(systemName: "xmark")
+        }
+        .help("Close")
+        """)
+        XCTAssertEqual(found.map(\.kind), [.button, .button])
+        XCTAssertEqual(found.map(\.line), [1, 3])
+        XCTAssertEqual(found.first?.message, "View.swift:1: button bypass Button: use \(DesignGuard.buttonReplacement)")
+    }
+
+    func testTheSharedButtonStyleAndTheIconButtonDoNotCount() {
+        XCTAssertEqual(scan("""
+        Button("Approve Plan") { approve() }
+            .keyboardShortcut(.defaultAction)
+            .directorButton(.primary, disabledReason: reason)
+        Button {
+            close()
+        } label: {
+            Text("Close")
+        }
+        .onHover { hovering = $0 }
+        .buttonStyle(DirectorButtonStyle(kind: .quiet))
+        IconButton("xmark", help: "Close") { close() }
+        let label = makeButton(title)
+        """), [])
+    }
+
+    func testADisabledControlCounts() {
+        let found = scan("Toggle(\"On\", isOn: $on)\n    .disabled(working)\nText(\"x\").disabledReason(reason)")
+        XCTAssertEqual(found.map(\.kind), [.disabled])
+        XCTAssertEqual(found.first?.line, 2)
+        XCTAssertEqual(found.first?.use, DesignGuard.disabledReplacement)
+    }
+
+    /// A new unstyled button and a new `.disabled(` each fail a file whose baseline has fewer.
+    func testANewUnstyledButtonOrDisabledControlFails() {
+        let bypasses = scan("Button(\"A\") {}\nButton(\"B\") {}.disabled(true)")
+        let failures = DesignGuard.failures(bypasses: bypasses, baseline: ["View.swift": [.button: 1]])
+        XCTAssertEqual(failures.count, 2, failures.joined(separator: "\n"))
+        XCTAssertTrue(failures[0].hasPrefix("View.swift has 2 button bypass(es), above its baseline of 1"), failures[0])
+        XCTAssertTrue(failures[1].hasPrefix("View.swift draws with 1 raw disabled value(s) and is not in the baseline"), failures[1])
+    }
+
+    func testTheNewKindsAreBaselineKinds() throws {
+        let counts: DesignGuard.Counts = ["SymphonyBar/A.swift": [.button: 2, .disabled: 1]]
+        XCTAssertEqual(try DesignGuard.parseBaseline(DesignGuard.formatBaseline(counts)), counts)
+        XCTAssertTrue(DesignGuard.formatBaseline(counts).hasSuffix("SymphonyBar/A.swift button 2\nSymphonyBar/A.swift disabled 1\n"))
+    }
+
     // MARK: - What does not count
 
     func testTokensAndComponentsDoNotCount() {

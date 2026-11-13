@@ -63,15 +63,14 @@ struct DisconnectRepoView: View {
                 Spacer()
                 Button("Cancel", role: .cancel, action: cancel)
                     .keyboardShortcut(.cancelAction)
-                // A bordered macOS button ignores the role and the label's colour; a red tint on a prominent one shows.
+                    .directorButton()
                 Button(DisconnectRepo.confirmTitle, role: .destructive) {
                     // Deletes the clone only when the box shows checked: a clone that turned busy shows it off.
                     if clone?.isEnabled != true { sheet.deleteClone = false }
                     confirm()
                 }
                     .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .tint(.red)
+                    .directorButton(.destructiveFilled)
             }
             .padding(.top, 4)
         }

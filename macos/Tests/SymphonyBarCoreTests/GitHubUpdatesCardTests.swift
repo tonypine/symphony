@@ -378,6 +378,7 @@ final class GitHubUpdatesCardTests: XCTestCase {
         change.relay = "smee"
         XCTAssertTrue(change.needsURL)
         XCTAssertFalse(change.canConfirm)
+        XCTAssertEqual(change.confirmReason, "Enter the address first.")
         XCTAssertEqual(change.option?.note, "Free, no account. Anyone with the channel URL can read the updates.")
         change.relay = "cloudflare_tunnel"
         change.url = "  https://hooks.example.com "
@@ -399,6 +400,7 @@ final class GitHubUpdatesCardTests: XCTestCase {
         sheet.start()
         XCTAssertTrue(sheet.isWorking)
         XCTAssertFalse(sheet.canConfirm)
+        XCTAssertEqual(sheet.confirmReason, TicketList.waitReason)
         sheet.fail("Couldn't turn off instant updates: gh isn't signed in.")
         XCTAssertFalse(sheet.isWorking)
         XCTAssertTrue(sheet.canConfirm)

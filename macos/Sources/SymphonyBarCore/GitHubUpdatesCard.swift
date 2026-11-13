@@ -432,9 +432,12 @@ public struct GitHubUpdatesSheet: Equatable, Identifiable {
     /// The verb, or Try Again once it failed.
     public var confirmTitle: String { error == nil ? verb : "Try Again" }
 
-    public var canConfirm: Bool {
-        guard !isWorking else { return false }
-        return !needsURL || !url.trimmingWhitespace().isEmpty
+    public var canConfirm: Bool { confirmReason == nil }
+
+    /// Why the verb is off, in plain words; nil while it is on.
+    public var confirmReason: String? {
+        if isWorking { return TicketList.waitReason }
+        return needsURL && url.trimmingWhitespace().isEmpty ? "Enter the address first." : nil
     }
 
     /// What the button sends.

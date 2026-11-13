@@ -687,8 +687,7 @@ func moveSheet(error: String? = nil) -> some View {
 let startAPI = here.appendingPathComponent("../Fixtures/director-app/start-now/api/v1").standardizedFileURL
 let startPausedAPI = here.appendingPathComponent("../Fixtures/director-app/start-now-paused/api/v1").standardizedFileURL
 
-/// Start Now disabled for each reason Symphony refuses a start with, its tooltip standing in beside it (`ImageRenderer`
-/// draws no tooltip), then the Tickets row menu's entry with its reason under the title.
+/// Start Now disabled for each reason Symphony refuses a start with, the reason under it (also its tooltip).
 @MainActor
 func startDisabledReasons() -> some View {
     let reasons = [
@@ -704,15 +703,9 @@ func startDisabledReasons() -> some View {
     return VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
         ForEach(reasons, id: \.self) { reason in
             let start = TicketStart(allowed: false, reason: reason)
-            HStack(spacing: DesignTokens.Space.s3) {
-                StartNowButton(identifier: "SHOP-320", start: start, action: {})
-                Text(start.help("SHOP-320"))
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .padding(.horizontal, DesignTokens.Space.s2)
-                    .padding(.vertical, DesignTokens.Space.s1)
-                    .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: 4))
-                    .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(DesignTokens.Surface.separator.color))
-            }
+            Button(TicketStart.title) {}
+                .accessibilityLabel(start.accessibilityLabel("SHOP-320"))
+                .directorButton(disabledReason: start.help("SHOP-320"))
         }
     }
     .padding(DesignTokens.Space.s5)
@@ -806,7 +799,7 @@ func disabledWithReason() -> some View {
     styleStage(
         Button("Approve and Merge…") {}
             .directorButton(.primary)
-            .disabledReason("Checks are still running on PR #812.", revealed: true),
+            .disabledReason("Checks are still running on PR #812."),
         width: 400
     )
 }
@@ -1151,7 +1144,7 @@ let everyMoveAllowed = TicketMoves(Dictionary(uniqueKeysWithValues: TicketAction
 /// Each rail under a caption naming the ticket it is drawn for, at the laptop's header width (1180 pt) or the
 /// desktop's (2200 pt).
 @MainActor
-func actionRails(_ rails: [(String, TicketMoves)], width: CGFloat, revealsReasons: Bool = false, moreOpen: Bool = false) -> some View {
+func actionRails(_ rails: [(String, TicketMoves)], width: CGFloat, moreOpen: Bool = false) -> some View {
     styleStage(
         VStack(alignment: .leading, spacing: DesignTokens.Space.s5) {
             ForEach(Array(rails.enumerated()), id: \.offset) { _, rail in
@@ -1160,7 +1153,7 @@ func actionRails(_ rails: [(String, TicketMoves)], width: CGFloat, revealsReason
                         .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                     ActionRail(rail: TicketActionRail(identifier: "TP-1", moves: rail.1), perform: { _ in },
-                               moreOpen: moreOpen, revealsReasons: revealsReasons)
+                               moreOpen: moreOpen)
                 }
             }
         },
@@ -1174,14 +1167,14 @@ func actionRailAllowed(width: CGFloat) -> some View {
     actionRails([("Every move allowed", everyMoveAllowed)], width: width)
 }
 
-/// Each refusal the read gives, its reason shown under its move as if pressed, and More open on each.
+/// Each refusal the read gives, its reason shown under its move, and More open on each.
 @MainActor
 func actionRailRefusals(width: CGFloat) -> some View {
     actionRails(
         [("A run is working", actionRailSample["working"]!), ("Waiting on you", actionRailSample["waiting_on_you"]!),
          ("Held for a person", actionRailSample["held"]!), ("Nothing running", actionRailSample["nothing_running"]!),
          ("Done", actionRailSample["done"]!)],
-        width: width, revealsReasons: true, moreOpen: true
+        width: width, moreOpen: true
     )
 }
 
@@ -1835,6 +1828,10 @@ MainActor.assumeIsolated {
         // The catalog's panel, zone title and chip (TP-1484).
         render(panelStories(), scheme, to: "component-panel-\(suffix).png")
         render(chipVariants(), scheme, to: "component-chip-\(suffix).png")
+        // The catalog's Button, Icon button and Inline refusal stories (TP-1505), one snapshot each.
+        for story in componentStories {
+            render(componentStorySnapshot(story), scheme, to: "\(story.component)-\(story.id)-\(suffix).png")
+        }
         // The Situation line (TP-1439): every kind in the full and the compact size, and forced, "and n more", narrow.
         render(situationLines(.full), scheme, to: "situation-line-full-\(suffix).png")
         render(situationLines(.compact), scheme, to: "situation-line-compact-\(suffix).png")

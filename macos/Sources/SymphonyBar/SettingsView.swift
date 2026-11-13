@@ -480,13 +480,9 @@ struct SettingsView: View {
                                 .labelsHidden()
                             SecureField("Value", text: $row.value, prompt: Text("Value"))
                                 .labelsHidden()
-                            Button {
+                            IconButton("minus.circle", help: "Remove this variable", size: .small) {
                                 model.removeRow(id: row.id)
-                            } label: {
-                                Image(systemName: "minus.circle")
                             }
-                            .buttonStyle(.borderless)
-                            .help("Remove this variable")
                         }
                     }
                     Button("Add Variable") { model.addRow() }
@@ -709,15 +705,12 @@ private struct RunProfileRow: View {
                 .frame(width: canReset ? 140 : 170)
                 .help(effortNote ?? "Effort for this kind of run")
                 if canReset {
-                    Button {
+                    IconButton(
+                        "arrow.uturn.backward.circle", help: "Reset to inherited", size: .small,
+                        disabledReason: profile == RunProfile() ? "It inherits already." : nil
+                    ) {
                         profile = RunProfile()
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward.circle")
                     }
-                    .buttonStyle(.borderless)
-                    .disabled(profile == RunProfile())
-                    .help("Reset to inherited")
-                    .accessibilityLabel("Reset to inherited")
                 }
             }
             .controlSize(.small)
@@ -787,7 +780,7 @@ private struct OpenRouterModelField: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .help(failure.message)
                 Button("Retry", action: retry)
-                    .buttonStyle(.borderless)
+                    .directorButton(.quiet, size: .small)
             }
         case .success(let models)?:
             Button {
@@ -959,13 +952,9 @@ private struct MacAppQASection: View {
                     .labelsHidden()
                 TextField("Value", text: $variable.value, prompt: Text("Value"))
                     .labelsHidden()
-                Button {
+                IconButton("minus.circle", help: "Remove this variable", size: .small) {
                     model.removeLaunchVariable(id: variable.id)
-                } label: {
-                    Image(systemName: "minus.circle")
                 }
-                .buttonStyle(.borderless)
-                .help("Remove this variable")
             }
         }
         Button("Add Variable") { model.addLaunchVariable() }

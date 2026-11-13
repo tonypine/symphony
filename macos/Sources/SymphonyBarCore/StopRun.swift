@@ -64,6 +64,9 @@ public struct StopRunSheet: Equatable, Identifiable {
     /// Whether the button is on: with nothing running, only the Backlog move is left to do.
     public func canSend(alsoBacklog: Bool) -> Bool { isRunning || alsoBacklog }
 
+    /// Why the button is off when nothing runs and Also move to Backlog is off.
+    public static let nothingToSendReason = "No run is working. Tick Also move to Backlog to move the ticket."
+
     /// The control requests, in order: the stop, then the Backlog move with the note.
     public func actions(alsoBacklog: Bool, note: String) -> [ControlAction] {
         let note = note.trimmingWhitespace()

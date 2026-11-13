@@ -196,17 +196,16 @@ private struct ActionButtons: View {
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     var body: some View {
-        HStack(spacing: DesignTokens.Space.s2) {
+        HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
             ForEach(Array(toolbar.buttons.enumerated()), id: \.offset) { index, button in
                 if index == 0 {
                     Button(button.command.title) { perform(button.command) }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!button.enabled)
                         // ⌘↩ sends a decision from anywhere in the Inbox.
                         .keyboardShortcut(button.command == .move(.decide) ? KeyboardShortcut(.return, modifiers: .command) : nil)
+                        .directorButton(.primary, disabledReason: button.reason)
                 } else {
                     Button(button.command.title) { perform(button.command) }
-                        .disabled(!button.enabled)
+                        .directorButton(disabledReason: button.reason)
                 }
             }
             if !toolbar.overflow.isEmpty && offscreenSnapshot {
