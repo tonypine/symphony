@@ -193,3 +193,20 @@ let componentStories: [ComponentStory] = {
 func componentStorySnapshot(_ story: ComponentStory) -> some View {
     story.draw().fixedSize()
 }
+
+/// Cases of one thing as one cell: each on a line, its name on the left.
+@MainActor
+func casesTable(_ cases: [(String, AnyView)]) -> some View {
+    Grid(alignment: .leading, horizontalSpacing: DesignTokens.Space.s5, verticalSpacing: DesignTokens.Space.s3) {
+        ForEach(Array(cases.enumerated()), id: \.offset) { _, one in
+            GridRow {
+                rowLabel(one.0.replacingOccurrences(of: "-", with: " ").capitalizedFirst)
+                one.1.fixedSize()
+            }
+        }
+    }
+}
+
+private extension String {
+    var capitalizedFirst: String { prefix(1).uppercased() + dropFirst() }
+}

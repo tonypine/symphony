@@ -1801,13 +1801,12 @@ MainActor.assumeIsolated {
         // The shared styles (TP-1438): the control sizes, each state of a row, a card and the buttons (a selected
         // button, its menu or sheet open, stays pressed without shrinking), the pressed
         // and lifted ones with Reduce Motion off and on, a disabled button with its reason, and the situation kinds.
-        for (name, state) in interactionStates {
-            render(styledRow(state), scheme, to: "style-row-\(name)-\(suffix).png")
-            render(styledCard(state), scheme, to: "style-card-\(name)-\(suffix).png")
-        }
-        render(styledRow(.press, reduceMotion: true), scheme, to: "style-row-pressed-reduce-motion-\(suffix).png")
-        render(styledCard(.hover, reduceMotion: true), scheme, to: "style-card-hover-reduce-motion-\(suffix).png")
-        render(styledCard(.press, reduceMotion: true), scheme, to: "style-card-pressed-reduce-motion-\(suffix).png")
+        // A row's and a card's states, one cell each: a state on a line under its name.
+        render(casesTable(interactionStates.map { ($0.0, AnyView(styledRow($0.1))) } + [("pressed, reduce motion", AnyView(styledRow(.press, reduceMotion: true)))]),
+               scheme, to: "style-row-states-\(suffix).png")
+        render(casesTable(interactionStates.map { ($0.0, AnyView(styledCard($0.1))) }
+                + [("hover, reduce motion", AnyView(styledCard(.hover, reduceMotion: true))), ("pressed, reduce motion", AnyView(styledCard(.press, reduceMotion: true)))]),
+               scheme, to: "style-card-states-\(suffix).png")
         render(situationKinds(), scheme, to: "style-situation-kinds-\(suffix).png")
         // The catalog's panel, zone title and chip (TP-1484).
         render(panelStories(), scheme, to: "component-panel-\(suffix).png")
@@ -1816,8 +1815,18 @@ MainActor.assumeIsolated {
         // The catalog's Badge, Count badge, Status dot and Keyboard hint stories (TP-1506), one snapshot each.
         // The catalog's Row stories (TP-1507), one snapshot each; the tree and the progress strip from the catalog's Home
         // and Initiatives: the queue folded, its first chain opened, and the epics' strips.
-        for story in componentStories + badgeStories + rowStories {
-            render(componentStorySnapshot(story), scheme, to: "\(story.component)-\(story.id)-\(suffix).png")
+        // A component's cases are one cell: each case on a line under its name. The Button's are composed by hand
+        // (ButtonStories.swift), so each of its three is a cell of its own.
+        let stories = componentStories + badgeStories + rowStories
+        var listed: [String] = []
+        for story in stories where !listed.contains(story.component) {
+            listed.append(story.component)
+            let cases = stories.filter { $0.component == story.component }
+            if story.component == "button" {
+                for one in cases { render(componentStorySnapshot(one), scheme, to: "\(one.component)-\(one.id)-\(suffix).png") }
+            } else {
+                render(casesTable(cases.map { ($0.id, $0.draw()) }), scheme, to: "\(story.component)-cases-\(suffix).png")
+            }
         }
         render(homeTree(selected: .more("TP-1483")), scheme, to: "tree-home-\(suffix).png")
         render(homeTree(opened: ["TP-1481"], selected: .row("TP-1484")), scheme, to: "tree-home-chain-open-\(suffix).png")

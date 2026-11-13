@@ -1,5 +1,6 @@
 // The gallery's entries: the things one can look at. An entry is a shared component ("Button") or a screen
-// ("Ticket page"), and shows every variation of it together, on one board. Nobody picks a variation.
+// ("Ticket page"). A component shows every variation of it together, on one board: nobody picks one. A screen shows
+// one variation at a time, alone and as wide as the stage; its variations are listed under it, by name.
 //
 // Each entry says two things, once, here:
 //   - which variations are its own: the ones main.swift and the *Stories.swift files name with one of its prefixes;
