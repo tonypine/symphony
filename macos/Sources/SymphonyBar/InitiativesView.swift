@@ -244,8 +244,7 @@ struct InitiativeDetail: View {
                 .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 if let strip = story.strip {
-                    ProgressStrip(strip.items, height: DesignTokens.ProgressStrip.headerHeight, label: strip.accessibilityLabel)
-                        .frame(maxWidth: DesignTokens.ProgressStrip.headerMaxWidth)
+                    ProgressStripView(strip: strip, header: true)
                 } else {
                     ProgressStrip(initiative.stripItems, height: DesignTokens.ProgressStrip.headerHeight, label: initiative.progress)
                         .frame(maxWidth: DesignTokens.ProgressStrip.headerMaxWidth)

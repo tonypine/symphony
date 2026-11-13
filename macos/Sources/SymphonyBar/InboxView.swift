@@ -612,14 +612,21 @@ private struct ContextLabel: View {
 }
 
 /// N10: the progress strip (C51) of the parent's sub-tickets in landing order, and "4 of 7 done" beside it; one element
-/// for VoiceOver, "4 of 7 sub-tickets done", then its counts.
+/// for VoiceOver, "4 of 7 sub-tickets done", then its counts. `header` draws the taller strip of an epic's header on
+/// Initiatives, up to its wider width.
 struct ProgressStripView: View {
     let strip: SubTicketStrip
+    var header = false
 
     var body: some View {
         HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
-            ProgressStrip(strip.items, label: strip.accessibilityLabel)
-                .frame(width: DesignTokens.ProgressStrip.compactWidth)
+            if header {
+                ProgressStrip(strip.items, height: DesignTokens.ProgressStrip.headerHeight, label: strip.accessibilityLabel)
+                    .frame(maxWidth: DesignTokens.ProgressStrip.headerMaxWidth)
+            } else {
+                ProgressStrip(strip.items, label: strip.accessibilityLabel)
+                    .frame(width: DesignTokens.ProgressStrip.compactWidth)
+            }
             Text(strip.line)
                 .textStyle(.secondary)
                 .foregroundStyle(DesignTokens.TextColor.secondary.color)
