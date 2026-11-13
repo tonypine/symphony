@@ -719,6 +719,12 @@ let settlePause: useconds_t = 150_000
 // Nodes the change check reads: enough for a window's controls, few enough to
 // read several times a second.
 let fingerprintLimit = 1500
+// Nodes the click's own check reads inside the clicked element, and how many of
+// its ancestors it reads (see `nearFingerprint`).
+let nearFingerprintLimit = 300
+let nearAncestorLevels = 8
+// How long a click has to show its effect before `click` calls it a no-op.
+let clickEffectSeconds: TimeInterval = 2
 
 // Where the pointer goes: an element's frame centre, or a point on screen in the
 // coordinates of `qa_ax_tree`'s frames (top left of the main screen is 0,0).
@@ -857,12 +863,46 @@ func fingerprint(_ app: AXUIElement, _ pid: pid_t) -> String {
         if role == kAXMenuBarRole as String { return }
 
         let kids = children(element)
-        let fields = [kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute, kAXSelectedAttribute, kAXFocusedAttribute, kAXEnabledAttribute]
-        lines.append(([String(depth), role, String(kids.count)] + fields.map { text(attribute(element, $0 as String)) ?? "" }).joined(separator: "|"))
+        lines.append(fingerprintLine(element, depth: depth, role: role, kids: kids))
         if depth < 40 { kids.forEach { walk($0, depth + 1) } }
     }
 
     walk(app, 0)
+    return lines.joined(separator: "\n")
+}
+
+// One element's line of a fingerprint: its depth, role, number of children,
+// title, value, description, state.
+func fingerprintLine(_ element: AXUIElement, depth: Int, role: String, kids: [AXUIElement]) -> String {
+    let fields = [kAXTitleAttribute, kAXValueAttribute, kAXDescriptionAttribute, kAXSelectedAttribute, kAXFocusedAttribute, kAXEnabledAttribute]
+    return ([String(depth), role, String(kids.count)] + fields.map { text(attribute(element, $0 as String)) ?? "" }).joined(separator: "|")
+}
+
+// What a click changes first, around the clicked element: the element and what it
+// holds, then its ancestors (a row's selection, a fold's opened lines). On a long
+// page the element lies past the nodes `fingerprint` reads: a click folded a run
+// of a 500-event timeline, the window's first 1500 nodes read the same, and
+// `click` pressed the run with AXPress as if the click had done nothing (TP-1513).
+// It reads in milliseconds, where `fingerprint` can take most of a second.
+func nearFingerprint(_ clicked: AXUIElement) -> String {
+    var lines: [String] = []
+    var visited = 0
+
+    func walk(_ node: AXUIElement, _ depth: Int) {
+        guard visited < nearFingerprintLimit else { return }
+        visited += 1
+        let kids = children(node)
+        lines.append(fingerprintLine(node, depth: depth, role: text(attribute(node, kAXRoleAttribute as String)) ?? "", kids: kids))
+        if depth < 40 { kids.forEach { walk($0, depth + 1) } }
+    }
+
+    walk(clicked, 0)
+    var current = clicked
+    for level in 1...nearAncestorLevels {
+        guard let parent = element(attribute(current, kAXParentAttribute as String)) else { break }
+        lines.append(fingerprintLine(parent, depth: -level, role: text(attribute(parent, kAXRoleAttribute as String)) ?? "", kids: children(parent)))
+        current = parent
+    }
     return lines.joined(separator: "\n")
 }
 
@@ -906,11 +946,16 @@ func click(_ pid: pid_t, _ argument: String, clicks: Int) {
     movePointer(to: target.point)
     let under = elementUnder(app, target.point)
     let before = settle(app, pid, within: 1).fingerprint
+    let nearBefore = target.element.map(nearFingerprint)
 
     postClick(at: target.point, clicks: clicks)
 
     usleep(clickPause)
-    let changed = waitUntil(1) { fingerprint(app, pid) != before }
+    // Around the element first, which is quick and reaches it on a long page, then
+    // the window's first nodes, for a click that opens a window or a popover.
+    let changed = waitUntil(clickEffectSeconds) {
+        (target.element.map(nearFingerprint) != nearBefore) || fingerprint(app, pid) != before
+    }
     var result: [String: Any] = [
         "ok": true,
         "via": "hid",

@@ -24,11 +24,16 @@ clicked. Through the driver's `click` command, as a mouse sends it (`via: hid`) 
 no AXPress fallback:
 
 5. a click on the button, a list row and the link each take effect;
-6. a click on the popover's button opens it, and a click on a point outside it closes it.
+6. a click on the popover's button opens it, and a click on a point outside it closes it;
+7. a click on a button past the 1500 nodes the driver's window-wide change check reads
+   (a second window holds 1800 lines before it) flips its title, and the driver sees it.
 
 Before TP-1474 the driver posted clicks to the app's PID: they never went through the
 window server, SwiftUI's controls ignored them, and the driver pressed the control
 through accessibility instead (`fallback: AXPress`), so no click path was proven.
+Before TP-1513 the driver looked for a click's effect only in those first 1500 nodes,
+so a click that folded a run deep in a long ticket page read as a no-op and the
+driver pressed the run again with AXPress.
 
 It launches windows and needs the Accessibility grant, so it runs in CI only, never
 in an agent's sandbox.
@@ -89,10 +94,36 @@ struct ClickPane: View {
     }
 }
 
+// A long page's fold: a button whose title flips on a click, after more lines than the
+// driver's window-wide change check reads, as a run's fold header sits on a 500-event
+// timeline (TP-1513). The lines are stacked on one point, so the window stays small.
+final class DeepState: ObservableObject {
+    @Published var folded = false
+}
+
+struct DeepPane: View {
+    @ObservedObject var state: DeepState
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ZStack {
+                ForEach(0..<1800, id: \.self) { line in
+                    Text("Line \(line)").font(.system(size: 1)).frame(width: 1, height: 1)
+                }
+            }
+            .frame(width: 2, height: 2)
+            Button(state.folded ? "Expand deep" : "Collapse deep") { state.folded.toggle() }
+        }
+        .padding(8)
+        .frame(width: 200, alignment: .leading)
+    }
+}
+
 final class Controller: NSObject, NSWindowDelegate {
     let status = NSTextField(labelWithString: "Shown: Home")
     let field = NSTextField(string: "")
     var window: NSWindow!
+    var deep: NSWindow!
     var settings: NSWindow?
 
     func show(_ page: String) { status.stringValue = "Shown: \(page)" }
@@ -145,6 +176,11 @@ final class Controller: NSObject, NSWindowDelegate {
         let stack = NSStackView(views: [status, field, NSHostingView(rootView: ClickPane(state: PaneState()))])
         stack.orientation = .vertical
         window.contentView = stack
+        deep = NSWindow(contentRect: NSRect(x: 720, y: 200, width: 220, height: 120), styleMask: [.titled], backing: .buffered, defer: false)
+        deep.title = "qa-key-deep"
+        deep.isReleasedWhenClosed = false
+        deep.contentView = NSHostingView(rootView: DeepPane(state: DeepState()))
+        deep.orderFront(nil)
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         window.makeKeyAndOrderFront(nil)
@@ -238,7 +274,8 @@ def find(binary, pid, needle, roles):
 
 
 def check_click(binary, pid, target, expected, name):
-    """Clicks a path or an `x,y` point and checks the label reads `Clicked: expected`."""
+    """Clicks a path or an `x,y` point as a mouse does, with no AXPress fallback, and checks the label reads
+    `Clicked: expected` (the caller checks the effect itself when `expected` is None)."""
     if target is None:
         return fail(name, "the target is not in the accessibility tree")
     reply = driver(binary, "click", pid, target, 1)
@@ -254,9 +291,10 @@ def check_click(binary, pid, target, expected, name):
         return fail(name, f"click failed: {reply['error']}")
     if reply.get("via") != "hid" or "fallback" in reply:
         return fail(name, f"the click was not a mouse's: via {reply.get('via')!r}, fallback {reply.get('fallback')!r}")
-    if not wait(lambda: clicked(binary, pid) == f"Clicked: {expected}"):
+    if expected is not None and not wait(lambda: clicked(binary, pid) == f"Clicked: {expected}"):
         return fail(name, f"the label reads {clicked(binary, pid)!r}")
-    print(f"ok [{name}]")
+    if expected is not None:
+        print(f"ok [{name}]")
 
 
 def check_shortcut(binary, pid, key, expected):
@@ -338,7 +376,18 @@ def main():
             outside = f"{frame['x'] + frame['w'] - 40},{frame['y'] + 12}"
             check_click(binary, pid, outside, "Closed", "a click outside closes the popover")
 
-        # 7. A link inside text. Last of the clicks: the system may put its own dialog over
+        # 7. A fold past the nodes the driver's window-wide change check reads: the click
+        # flips it, and the driver sees that around the button instead of pressing it again
+        # with AXPress (TP-1513).
+        name = "a click folds a control deep in a long pane"
+        check_click(binary, pid, find(binary, pid, "Collapse deep", ["AXButton"]), None, name)
+        if name not in failures:
+            if wait(lambda: find(binary, pid, "Expand deep", ["AXButton"]) is not None):
+                print(f"ok [{name}]")
+            else:
+                fail(name, "the button still reads 'Collapse deep'")
+
+        # 8. A link inside text. Last of the clicks: the system may put its own dialog over
         # the window once a link is opened, and the driver refuses to click under it.
         check_click(binary, pid, find(binary, pid, "the report", ["AXLink", "AXStaticText"]), "Link report", "a click opens a link in text")
 
