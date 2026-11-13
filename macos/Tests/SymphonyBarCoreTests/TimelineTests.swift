@@ -398,6 +398,6 @@ final class TimelineTests: XCTestCase {
         XCTAssertNil(DesignTokens.Motion.entering(reduceMotion: true))
         XCTAssertEqual(DesignTokens.Motion.enterOffset, 12)
         XCTAssertEqual(DesignTokens.Motion.enterTintDuration, 1.2)
-        XCTAssertEqual(DesignTokens.Motion.enterTint(dark: true), DesignTokens.StateSurface.selected.opacity(dark: true))
+        XCTAssertEqual(DesignTokens.Motion.enterTint, DesignTokens.StateSurface.selected.color)
     }
 }

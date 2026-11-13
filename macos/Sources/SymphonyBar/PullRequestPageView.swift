@@ -272,7 +272,7 @@ private struct PullRequestHeader: View {
         if let badge = page?.badge { StatusBadge(status: badge.status, word: badge.word).fixedSize() }
         if let dates = page?.dates {
             Text(dates)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
         }
     }
@@ -343,7 +343,7 @@ private struct ReviewHistory: View {
                         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                             if let time = row.timeText {
                                 Text(time)
-                                    .font(DesignTokens.TypeStyle.callout.font)
+                                    .font(DesignTokens.TypeStyle.secondary.font)
                                     .monospacedDigit()
                                     .foregroundStyle(.secondary)
                                     // The badges line up whether the time has its date or not.
@@ -355,7 +355,7 @@ private struct ReviewHistory: View {
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(row.accessibilityLabel)
                         if let reason = row.reason {
-                            ChipText(text: reason, font: DesignTokens.TypeStyle.callout.nsFont, color: .secondaryLabelColor)
+                            ChipText(text: reason, font: DesignTokens.TypeStyle.secondary.nsFont, color: .secondaryLabelColor)
                         }
                     }
                 }
@@ -380,7 +380,7 @@ private struct ChangeAreas: View {
                         GridRow {
                             Text(area.name).font(DesignTokens.TypeStyle.body.font)
                             Text(area.files)
-                                .font(DesignTokens.TypeStyle.callout.font)
+                                .font(DesignTokens.TypeStyle.secondary.font)
                                 .foregroundStyle(.secondary)
                                 .gridColumnAlignment(.trailing)
                             Text(area.additions)
@@ -390,7 +390,7 @@ private struct ChangeAreas: View {
                                 .foregroundStyle(DesignTokens.Status.problem.tint)
                                 .gridColumnAlignment(.trailing)
                         }
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .monospacedDigit()
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel(area.accessibilityLabel)
@@ -416,7 +416,7 @@ private struct HealthGrid: View {
                 ForEach(facts, id: \.label) { fact in
                     GridRow {
                         Text(fact.label)
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)
                             .gridColumnAlignment(.leading)
                         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s1) {
@@ -425,7 +425,7 @@ private struct HealthGrid: View {
                                     .foregroundStyle(status.tint)
                                     .accessibilityHidden(true)
                             }
-                            ChipText(text: fact.value, font: DesignTokens.TypeStyle.callout.nsFont)
+                            ChipText(text: fact.value, font: DesignTokens.TypeStyle.secondary.nsFont)
                         }
                     }
                 }
@@ -471,7 +471,7 @@ private struct TicketFacts: View {
                 if let stage = ticket.stage { StatusBadge(status: stage.status, word: stage.word).fixedSize() }
                 if let waitingOn = ticket.waitingOn {
                     Text(waitingOn)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                 }
             }

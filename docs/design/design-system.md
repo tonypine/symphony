@@ -30,10 +30,11 @@ So we follow three rules:
    `List`, `Form`, `.sheet` and `.popover` as they come. They carry Liquid Glass and its later refinements. Never draw
    our own blur, glass or toolbar background.
 2. **Glass for navigation, solid for data.** Custom `glassEffect` only on the one floating control that belongs to the
-   navigation layer (the dispatch control in the toolbar). Tiles, lists, tables, charts and text sit on solid system
-   backgrounds.
-3. **Accessibility settings win.** Reduce Transparency, Increase Contrast and Reduce Motion are respected by using
-   system materials, colors and animations, and every status is a symbol plus a word, never color alone.
+   navigation layer (the dispatch control in the toolbar). Tiles, lists, tables, charts and text sit on the catalog's
+   solid surfaces (`surface.content`, `surface.raised`).
+3. **Accessibility settings win.** Every colour token has an Increase Contrast value, glass turns into its solid
+   surface under Reduce Transparency, every curve collapses under Reduce Motion, and every status is a symbol plus a
+   word, never color alone.
 
 On top of the system, the Director has an identity of its own, taken from the best web apps of the year (TP-1382,
 the Director's review on 2026-11-04):
@@ -61,60 +62,67 @@ the Director's review on 2026-11-04):
    reachable from any row that shows it.
 6. **Plain words.** Workflow states and ticket identifiers, not Symphony internals: "Waiting on you", not
    `human_review`; "landing slots", not `finishing_max`.
-7. **Native by default.** If a system component does the job, use it unchanged. Custom components are listed in
-   section 5, and each has a reason.
+7. **Native in behaviour.** The Director is built natively for macOS: the keyboard, focus, menus, windows, sheets and
+   the accessibility settings behave as the system's do, and a system component is used wherever it gives that
+   behaviour. Native does not mean drawn with system styles: the look (the page background, the cards, the type, the
+   shadows) is the catalog's, all of it (§3). Custom components are listed in section 5, and each has a reason.
 
 ## 3. Tokens
 
-Tokens are named roles. In SwiftUI each maps to a system value, so light, dark, Increase Contrast and macOS 27's
-refinements follow automatically. The hex values are for the HTML mock and for reviews only; code never hardcodes
-them. The catalog's `catalog/tokens.css` holds the current values; where a table below and the catalog differ, the
-catalog is the design.
+Tokens are named roles, and the catalog's values are the values in the app. `catalog/tokens.css` holds them: light
+and dark through `light-dark()`, and each colour's Increase Contrast pair under `@media (prefers-contrast: more)`. In
+Swift, `DesignTokens` mirrors `tokens.css` value for value, and code takes every colour, type style, radius, shadow
+and measure from `DesignTokens`: never from a system colour or text style, and never from a literal. A test
+(`DesignTokensCatalogTests`) parses `tokens.css` and fails when a value and its Swift counterpart differ, or when a
+CSS token has neither a Swift counterpart nor a listed reason for having none. A token changes in both files in the
+same change. Where a table below and the catalog differ, the catalog is the design.
 
 Every token group has its stories in the catalog:
 
 | Token group | What it is and when to use it | Stories | Tokens |
 | --- | --- | --- | --- |
-| [Colour](catalog/index.html#tokens/colour/docs) | Named colour roles. Every colour in the Director is one of these roles, never a raw value. In the app each role maps to a system colour, so light, dark and Increase Contrast follow by themselves. Text uses the three text roles: primary for content, secondary for metadata, tertiary for placeholders and disabled text only. Surfaces stack window → content → raised; hover and pressed are translucent overlays on whatever surface is under them. The six status colours are reserved for status. A chart or a decoration never borrows one. | [Surfaces and text](catalog/index.html#tokens/colour/surfaces-and-text), [Accent](catalog/index.html#tokens/colour/accent), [Status](catalog/index.html#tokens/colour/status), [Status tints](catalog/index.html#tokens/colour/status-tints) | `--surface-window`, `--surface-content`, `--surface-raised`, `--surface-sunken`, `--surface-hover`, `--surface-pressed`, `--stroke-separator`, `--stroke-strong`, `--text-primary`, `--text-secondary`, `--text-tertiary`, `--accent`, `--status-you … --status-forced`, `--tint-you … --tint-forced`, `--status-you-text … --status-forced-text` |
-| [Type scale](catalog/index.html#tokens/type-scale/docs) | The system font at nine sizes. Each style is a role, so a heading is always a heading wherever it appears. Title opens a page (the ticket's title). Sentence opens a view with its status. Heading names a section or a card. Body is for reading text and table cells; secondary for metadata under it. Mono is for commit hashes, paths and commands only, never for prose or numbers. | [All styles](catalog/index.html#tokens/type-scale/all-styles), [Mono for hashes and paths](catalog/index.html#tokens/type-scale/mono-for-hashes-and-paths) | `--type-title`, `--type-sentence`, `--type-heading`, `--type-row-title`, `--type-body`, `--type-secondary`, `--type-label`, `--type-caption`, `--type-mono`, `--measure` |
+| [Colour](catalog/index.html#tokens/colour/docs) | Named colour roles. Every colour in the Director is one of these roles, never a raw value. In the app each role is its `DesignTokens.ColorToken`, with the catalog's light, dark and Increase Contrast values. Text uses the three text roles: primary for content, secondary for metadata, tertiary for placeholders and disabled text only. Surfaces stack window → content → raised; hover and pressed are translucent overlays on whatever surface is under them. The six status colours are reserved for status. A chart or a decoration never borrows one. | [Surfaces and text](catalog/index.html#tokens/colour/surfaces-and-text), [Accent](catalog/index.html#tokens/colour/accent), [Status](catalog/index.html#tokens/colour/status), [Status tints](catalog/index.html#tokens/colour/status-tints) | `--surface-window`, `--surface-content`, `--surface-raised`, `--surface-sunken`, `--surface-hover`, `--surface-pressed`, `--stroke-separator`, `--stroke-strong`, `--text-primary`, `--text-secondary`, `--text-tertiary`, `--accent`, `--status-you … --status-forced`, `--tint-you … --tint-forced`, `--status-you-text … --status-forced-text` |
+| [Type scale](catalog/index.html#tokens/type-scale/docs) | The system font at ten sizes, each a size, a weight, a line height and a tracking. Each style is a role, so a heading is always a heading wherever it appears. Title opens a page (the ticket's title). Sentence opens a view with its status. Heading names a section or a card. Body is for text and table cells; secondary for metadata under it. Reading is for a text the Director reads through, such as a ticket's brief. Mono is for commit hashes, paths and commands only, never for prose or numbers. | [All styles](catalog/index.html#tokens/type-scale/all-styles), [Mono for hashes and paths](catalog/index.html#tokens/type-scale/mono-for-hashes-and-paths) | `--type-title`, `--type-sentence`, `--type-heading`, `--type-row-title`, `--type-body`, `--type-secondary`, `--type-label`, `--type-caption`, `--type-mono`, `--type-reading`, `--tracking-display`, `--tracking-label`, `--tracking-reading`, `--measure`, `--measure-narrow` |
 | [Spacing](catalog/index.html#tokens/spacing/docs) | A 4 pt grid. Every gap and padding is one of eight steps. 4 between a glyph and its word; 8 between related lines and controls; 12 row padding and the gap between cards in a stack; 16 card padding and between cards side by side; 20 card padding sideways; 24 between sections and the page inset; 32 above an empty state; 40 between the zones of a page on a desktop. | [All steps](catalog/index.html#tokens/spacing/all-steps) | `--space-1`, `--space-2`, `--space-3`, `--space-4`, `--space-5`, `--space-6`, `--space-8`, `--space-10` |
 | [Control sizes](catalog/index.html#tokens/control-sizes/docs) | Three heights that every control shares: buttons, icon buttons, menu buttons, pop-ups, segmented controls, fields. A control is small, medium or large, and never any other height. Small · 24 pt, radius 7: inside rows, toasts, table headers, dense filter bars. Chips and switches are always this height. Medium · 30 pt, radius 9: the default for rails, cards, sheets and toolbars. Large · 36 pt, radius 11: one main action where it is the whole point of the place (a Question's Send, an empty state's action). Not for: mixing sizes in one row, or setting a height on a control by hand. A container may set the size once for all of its controls. | [Three heights](catalog/index.html#tokens/control-sizes/three-heights), [One row, one size](catalog/index.html#tokens/control-sizes/one-row-one-size), [One row, small](catalog/index.html#tokens/control-sizes/one-row-small), [One row, large](catalog/index.html#tokens/control-sizes/one-row-large) | `--control-sm`, `--control-md`, `--control-lg`, `--radius-control-sm`, `--radius-control-md`, `--radius-control-lg` |
 | [Radii](catalog/index.html#tokens/radii/docs) | Continuous rounded corners, used concentrically: an inner radius is the outer radius minus the inset between them. Sheet 22; card 16 for cards and section containers; row 10 for rows, option cards and tiles inside a card; controls 7, 9 and 11 by size; mark 4 for small marks; capsule for chips, badges, segmented controls, switches, search fields and meters. | [All radii](catalog/index.html#tokens/radii/all-radii), [Concentric](catalog/index.html#tokens/radii/concentric) | `--radius-sheet`, `--radius-card`, `--radius-row`, `--radius-control-sm`, `--radius-control-md`, `--radius-control-lg`, `--radius-mark`, `--radius-capsule` |
 | [Elevation](catalog/index.html#tokens/elevation/docs) | Layered soft shadows: a hairline ring, a near shadow and a far one. Content sits flat on its card; only what rises casts more. Level 0: anything inside a card. Level 1: a card, a group, a toggle row. Level 2: a card under the pointer, a tooltip, a preview pane. Level 3: menus, pop-up lists, toasts. Level 4: sheets. Not for: a shadow on a row, a chip or a chart, or a shadow without the hairline ring (it blurs the edge in dark). | [Levels](catalog/index.html#tokens/elevation/levels) | `--elevation-0`, `--elevation-1`, `--elevation-2`, `--elevation-3`, `--elevation-4`, `--edge-highlight` |
-| [Materials](catalog/index.html#tokens/materials/docs) | Glass for what floats over content: a translucent fill, a strong blur that saturates what is behind, and a bright inner edge. Menus, pop-up lists, tooltips, toasts, sheets and bars use it; content never does. Thick glass (88 % in light) for anything with text to read: menus, toasts, sheets. Regular glass (72 %) for bars over scrolling content. The window behind carries a faint iris and blue glow, so the glass has something to refract. Not for: glass on cards or rows, or text on regular glass over a busy picture. | [Glass over content](catalog/index.html#tokens/materials/glass-over-content) | `--material-glass`, `--material-glass-thick`, `--material-blur`, `--material-edge`, `--backdrop-glow` |
+| [Materials](catalog/index.html#tokens/materials/docs) | Glass for what floats over content: a translucent fill, a strong blur that saturates what is behind, and a bright inner edge. Menus, pop-up lists, tooltips, toasts, sheets and bars use it; content never does. Thick glass (88 % in light) for anything with text to read: menus, toasts, sheets. Regular glass (72 %) for bars over scrolling content. The window behind carries a faint iris and blue glow, so the glass has something to refract. Under Reduce Transparency each glass is its solid surface. Not for: glass on cards or rows, or text on regular glass over a busy picture. | [Glass over content](catalog/index.html#tokens/materials/glass-over-content) | `--material-glass`, `--material-glass-thick`, `--material-blur`, `--material-edge`, `--backdrop-glow` |
 | [Motion](catalog/index.html#tokens/motion/docs) | Motion is part of each component, not a speed on a list. Five patterns cover the Director: press, lift, fold, slide and enter. Each uses one duration and one easing from here, and each component's docs say which. Press: a control shrinks to 97 % in 0.1 s while held and springs back. Lift: a clickable card or option rises 1 pt with a deeper shadow on hover, on a spring. Fold: a group, card or run opens to its height in 0.28 s; its rows fade down into place one after another, 35 ms apart; the chevron turns on a spring. Board groups, collapsible cards and run groups fold this way. Slide: a selection moves rather than jumps: the segmented thumb, the switch knob, a meter's fill. Enter: what floats (menus, tooltips, toasts, sheets) rises a few points and fades in on a spring; it leaves faster than it came. Values that change on a poll update in place; nothing moves under the pointer. | [Durations and easings](catalog/index.html#tokens/motion/durations-and-easings), [Spring](catalog/index.html#tokens/motion/spring), [Bounce](catalog/index.html#tokens/motion/bounce), [Fold](catalog/index.html#tokens/motion/fold), [Slide](catalog/index.html#tokens/motion/slide), [Press and lift](catalog/index.html#tokens/motion/press-and-lift), [Enter](catalog/index.html#tokens/motion/enter) | `--motion-instant`, `--motion-fast`, `--motion-standard`, `--motion-slow`, `--motion-spring`, `--motion-hover-delay`, `--motion-stagger`, `--ease-standard`, `--ease-enter`, `--ease-exit`, `--ease-spring`, `--ease-bounce`, `--press-scale`, `--lift`, `--enter-offset` |
 | [Focus ring](catalog/index.html#tokens/focus-ring/docs) | A 2 pt ring in the iris at half strength, 2 pt outside the shape and following its corners, drawn only when focus came from the keyboard. Every control, row, card and option that takes focus draws it. A pointer click never does. Fields draw an accent edge with a soft halo instead. | [On a button](catalog/index.html#tokens/focus-ring/on-a-button), [On a row](catalog/index.html#tokens/focus-ring/on-a-row), [On a field](catalog/index.html#tokens/focus-ring/on-a-field) | `--focus-ring-color`, `--focus-ring-width`, `--focus-ring-offset` |
 
 ### 3.1 Color: surfaces and text
 
-| Token | SwiftUI / AppKit | Light (mock) | Dark (mock) | Use |
+Increase Contrast values of every colour are in `tokens.css`.
+
+| Token | Swift (`DesignTokens`) | Light | Dark | Use |
 | --- | --- | --- | --- | --- |
-| `surface.window` | `.windowBackground` | `#F2F2F6` | `#121216` | Behind content, with a faint iris glow at the top |
-| `surface.content` | `NSColor.controlBackgroundColor` | `#FFFFFF` | `#1B1B21` | Cards, lists, tables, the chart surface |
-| `surface.raised` | `.background.secondary` | `#F7F7FA` | `#23232A` | Inset groups inside a card, hover on controls |
-| `surface.sunken` | `.fill.quaternary` | `#E9E9EF` | `#0C0C10` | Tracks: segmented controls, switches, meters, search fields |
-| `stroke.separator` | `.separator` | `rgba(24,24,48,.08)` | `rgba(255,255,255,.08)` | Hairlines between rows and around cards |
-| `text.primary` | `.primary` (`labelColor`) | `#16161D` | `#F2F2F6` | Titles, values |
-| `text.secondary` | `.secondary` | `#5C5C6E` | `#A5A5B4` | Metadata, captions |
-| `text.tertiary` | `.tertiary` | `#9898A8` | `#6C6C7C` | Placeholders, disabled, empty stages |
-| `accent` | `Color("Iris")`, the app's tint | `#5B4CF5` | `#6D5FF7` | Selection, links, the default button (filled, lit from above, with a glow) |
-| `accent.text` | the tint as text | `#4A3BE0` | `#AAA2FF` | Links and quiet buttons, 4.5:1 on content |
+| `surface.window` | `Surface.window` | `#F2F2F6` | `#121216` | Behind content, with a faint iris glow at the top (`WindowBackdrop`) |
+| `surface.content` | `Surface.content` | `#FFFFFF` | `#1B1B21` | Cards, lists, tables, the chart surface |
+| `surface.raised` | `Surface.raised` | `#F7F7FA` | `#23232A` | Inset groups inside a card, hover on controls |
+| `surface.sunken` | `Surface.sunken` | `#E9E9EF` | `#0C0C10` | Tracks: segmented controls, switches, meters, search fields |
+| `stroke.separator` | `Surface.separator` | `rgba(24,24,48,.08)` | `rgba(255,255,255,.08)` | Hairlines between rows and around cards |
+| `text.primary` | `TextColor.primary` | `#16161D` | `#F2F2F6` | Titles, values |
+| `text.secondary` | `TextColor.secondary` | `#5C5C6E` | `#A5A5B4` | Metadata, captions |
+| `text.tertiary` | `TextColor.tertiary` | `#9898A8` | `#6C6C7C` | Placeholders, disabled, empty stages |
+| `accent` | `ColorToken.accent` | `#5B4CF5` | `#6D5FF7` | Selection, links, the default button (filled, lit from above, with a glow) |
+| `accent.text` | `ColorToken.accentText` | `#4A3BE0` | `#AAA2FF` | Links and quiet buttons, 4.5:1 on content |
 
 ### 3.2 Color: status
 
 Status colors are reserved. Each always ships with its symbol and its word; a chart never borrows one for a series.
 
-| Token | System color | Light | Dark | Symbol | Word | Means |
+| Token | Swift (`Status.*.color`) | Light | Dark | Symbol | Word | Means |
 | --- | --- | --- | --- | --- | --- | --- |
-| `status.you` | `.orange` | `#F08A00` | `#FFA733` | `person.crop.circle.badge.exclamationmark` | Waiting on you | A decision or action only the Director can take |
-| `status.working` | `.blue` | `#1D8CFF` | `#3D9FFF` | `circle.dotted.circle` | Working | An agent, QA pass or landing is running |
-| `status.problem` | `.red` | `#EC3A4C` | `#FF5C68` | `exclamationmark.triangle.fill` | Needs attention | Stuck, failing, conflicting, held |
-| `status.done` | `.green` | `#18A957` | `#3BD47C` | `checkmark.circle.fill` | Shipped / Healthy | Merged, passed, agreed |
-| `status.idle` | `.gray` | `#8A8A99` | `#8F8F9E` | `pause.circle` / `clock` | Paused / Queued | Waiting on nothing in particular, or stopped on purpose |
-| `status.forced` | `.purple` | `#BE3BD6` | `#D567EE` | `bolt.fill` | Forced | The Director pushed it ahead of the queue |
+| `status.you` | `.statusYou` | `#F08A00` | `#FFA733` | `person.crop.circle.badge.exclamationmark` | Waiting on you | A decision or action only the Director can take |
+| `status.working` | `.statusWorking` | `#1D8CFF` | `#3D9FFF` | `circle.dotted.circle` | Working | An agent, QA pass or landing is running |
+| `status.problem` | `.statusProblem` | `#EC3A4C` | `#FF5C68` | `exclamationmark.triangle.fill` | Needs attention | Stuck, failing, conflicting, held |
+| `status.done` | `.statusDone` | `#18A957` | `#3BD47C` | `checkmark.circle.fill` | Shipped / Healthy | Merged, passed, agreed |
+| `status.idle` | `.statusIdle` | `#8A8A99` | `#8F8F9E` | `pause.circle` / `clock` | Paused / Queued | Waiting on nothing in particular, or stopped on purpose |
+| `status.forced` | `.statusForced` | `#BE3BD6` | `#D567EE` | `bolt.fill` | Forced | The Director pushed it ahead of the queue |
 
 Badges tint their background with the status color at about 12% (light) / 20% (dark) and draw the word in the
-status's text step, so contrast never depends on the hue. "Recommended" on a decision is not a status: it uses the accent tint.
+status's text step, so contrast never depends on the hue (`Status.badgeFill`, the catalog's `--tint-*`). "Recommended" on a decision is not a status: it uses the accent tint.
 When the word itself is drawn in a status colour (the situation line, a failed step), it uses that status's text
 step (`status.*.text`: the hue darkened in light, lightened in dark), which keeps 4.5:1 on content.
 
@@ -144,24 +152,29 @@ comes with a legend (in the mock: Codex on Usage's tokens per day).
 
 ### 3.4 Typography
 
-SF Pro through the macOS text styles, so the system's text size settings apply. Numbers that change live use
-`.monospacedDigit()` so they don't jitter; numbers in table columns use tabular figures; a stat value keeps
-proportional figures (dataviz rule).
+The system font (SF Pro Text, SF Pro Display for the larger styles, SF Mono) at the catalog's sizes, weights, line
+heights and tracking: `DesignTokens.TypeStyle`, never a macOS text style. Every style scales with the system's text
+size (the preferred body size over its default 13 pt). `.font(style.font)` sets the font; `.textStyle(style)` sets
+the font, the line height and the tracking together. Numbers that change live use `.monospacedDigit()` so they don't
+jitter; numbers in table columns use tabular figures; a stat value keeps proportional figures (dataviz rule).
 
-| Token | SwiftUI | Size / weight (pt) | Use |
+| Token | Swift (`TypeStyle`) | Weight, size / line height (pt) | Use |
 | --- | --- | --- | --- |
-| `type.title` | `.title.weight(.bold)` | 26 bold, tracked −2.2 % | A page's title (the ticket page header) |
-| `type.sentence` | `.title2.weight(.semibold)` | 18 semibold | The status sentence that opens a view, sheet and Question titles |
-| `type.figure` | `.system(size: 28, weight: .semibold)` | 28 semibold | Stat tile values (flow strip, Quality tiles) |
-| `type.section` | `.title3.weight(.semibold)` | 15 semibold | Section titles in content |
-| `type.rowTitle` | `.headline` | 13 semibold | Ticket identifier and title in a row |
-| `type.body` | `.body` | 13 regular | Text, table cells |
-| `type.callout` | `.callout` | 12 regular | Secondary lines in rows, sheet explanations |
-| `type.label` | `.subheadline.weight(.medium)` | 11 medium | Badges, tile labels, column headers |
-| `type.caption` | `.caption` | 10 regular | Timestamps under charts, footnotes |
-| `type.mono` | `.system(.callout, design: .monospaced)` | 12 SF Mono | Commit hashes, paths, commands, session ids, transcript; never prose or numbers |
+| `type.title` | `.title` | 700, 26 / 32, tracked −2.2 % | A page's title (the ticket page header) |
+| `type.sentence` | `.sentence` | 650, 18 / 24 | The status sentence that opens a view, sheet and Question titles |
+| `type.figure` | `.figure` | 600, 28 / 34 | Stat tile values (flow strip, Quality tiles); the app's own |
+| `type.heading` | `.heading` | 600, 15 / 20 | A section's or a card's title |
+| `type.rowTitle` | `.rowTitle` | 600, 13 / 18 | Ticket identifier and title in a row |
+| `type.body` | `.body` | 400, 13 / 19 | Text, table cells |
+| `type.secondary` | `.secondary` | 400, 12 / 16 | Secondary lines in rows, sheet explanations |
+| `type.label` | `.label` | 550, 11 / 14, tracked +2 % | Badges, tile labels, column headers |
+| `type.caption` | `.caption` | 500, 10 / 13 | Timestamps under charts, footnotes |
+| `type.mono` | `.mono` | 450, 12 / 16, SF Mono | Commit hashes, paths, commands, session ids, transcript; never prose or numbers |
+| `type.reading` | `.reading` | 400, 16 / 1.4, tracked +2 % | A text the Director reads through: a ticket's brief |
 
-Reading text never runs past a measure of 68 characters (`measure`), 52 for help lines (`measure.narrow`).
+Reading text never runs past a measure of 68 characters (`measure`), 52 for help lines (`measure.narrow`). A character
+is the width of the font's "0", as CSS's `ch`: `DesignTokens.Measure.width(_:for:)` gives it in points, and
+`Measure.reading` is 68 of them in body text.
 
 Content headings are sentence case ("Needs attention"); buttons and menu items are title case, with "…" when they ask
 for more ("Stop Run…", "Approve Plan…").
@@ -225,13 +238,18 @@ Windows, sheets, popovers, toolbars and the sidebar take their radius from the s
 | `material.glass.control` | `.glassEffect(.regular.interactive(), in: .capsule)` | The dispatch control only |
 | `material.content` | Solid `surface.content` | Everything with data |
 
-Glass is for what floats; content stays solid. In the app the glass is the system's; the catalog draws it as a
-translucent fill with a strong blur and a bright inner edge (`material.glass`, `material.glass.thick`).
+Glass is for what floats; content stays solid. The chrome's glass is the system's. Glass the app draws itself is the
+catalog's: a translucent fill over a blur with a bright inner edge (`material.glass`, `material.glass.thick`,
+`.glassBackground(_:in:)`). Under Reduce Transparency it is its solid surface instead: `surface.raised` for glass,
+`surface.content` for thick glass.
+
+The window behind every page draws `surface.window` with the backdrop glow, as the prototype does (`WindowBackdrop`,
+`.windowBackdrop()`). Increase Contrast drops the glow.
 
 Depth is five levels of layered soft shadows, each a hairline ring, a near shadow and a far one: 0 inside a card,
 1 a card, 2 a card under the pointer, a tooltip or a preview pane, 3 menus, pop-up lists and toasts, 4 sheets
-(`elevation.0`…`elevation.4`). A card also carries a faint highlight on its top edge. Rows, chips and charts never
-cast a shadow.
+(`elevation.0`…`elevation.4`, `DesignTokens.Elevation`, `.elevation(_:in:)`). A card also carries a faint highlight
+on its top edge (`edge.highlight`, `.edgeHighlight(_:)`). Rows, chips and charts never cast a shadow.
 
 ### 3.8 Motion
 
@@ -460,12 +478,12 @@ reads. Where a row and the catalog differ, the catalog is the design and the row
 | C2 | Dispatch control | `ToolbarItem` with `material.glass.control` | Status dot, word ("Dispatch on", "Paused · Deploy freeze", "Holding · Claude limit"), chevron; popover with what is working and queued, **Pause Dispatch…** / **Resume Dispatch**, **Force a Ticket…** | On, paused, held by a limit, Symphony stopped (shows **Start Symphony**) | "Dispatch on, 3 working. Button." |
 | C3 | Scope pop-up | `Picker(.menu)` in the toolbar | Repo symbol, "All repos" or the key | | "Scope, all repos" |
 | C4 | Connection state | Toolbar subtitle and sidebar footer | "Starting…", "Not answering", "Stopped" with a dot | Quiet while connected; last update time in help | "Symphony not answering" |
-| C5 | Stat tile | Custom `Button` with a `.plain` style on `surface.content` | Label (`type.label`), value (`type.figure`), context line (`type.callout`), optional 12-point sparkline | Default, hover (`surface.raised`), focused (focus ring), "Waiting on you" tinted, zero (`text.tertiary`) | "Waiting on you, 4, oldest 3 hours. Button." |
+| C5 | Stat tile | Custom `Button` with a `.plain` style on `surface.content` | Label (`type.label`), value (`type.figure`), context line (`type.secondary`), optional 12-point sparkline | Default, hover (`surface.raised`), focused (focus ring), "Waiting on you" tinted, zero (`text.tertiary`) | "Waiting on you, 4, oldest 3 hours. Button." |
 | C6 | Flow strip | `HStack` of C5 joined by `chevron.right` | 6 tiles | Stages with 0 keep their place | Reads each tile in order |
 | C7 | Status badge | `Label` in a capsule | Status symbol, word | One per `status.*` token; small (11 pt) and regular (13 pt) | The word |
-| C8 | Ticket row | `List` row, one or two lines | Identifier (`type.rowTitle`), title, repo, status badge, age (trailing, `type.callout`, monospaced digits), optional fix buttons | Default, hover, selected, working (with `motion.live`) | "SHOP-305, Checkout total rounding, web-shop, needs attention, 14 minutes" |
+| C8 | Ticket row | `List` row, one or two lines | Identifier (`type.rowTitle`), title, repo, status badge, age (trailing, `type.secondary`, monospaced digits), optional fix buttons | Default, hover, selected, working (with `motion.live`) | "SHOP-305, Checkout total rounding, web-shop, needs attention, 14 minutes" |
 | C9 | Attention row | C8 with a leading severity symbol and trailing buttons | Sentence, age, primary fix (bordered prominent), secondary (bordered) | Warning (`status.you`), problem (`status.problem`) | The sentence, then the buttons |
-| C10 | Card | `GroupBox` restyled to `surface.content`, `radius.card`, hairline | Title (`type.section`), optional trailing link ("Show All"), body | | Title as a heading |
+| C10 | Card | `GroupBox` restyled to `surface.content`, `radius.card`, hairline | Title (`type.heading`), optional trailing link ("Show All"), body | | Title as a heading |
 | C11 | Meter | `Gauge(.linearCapacity)` | Label, value text ("3.1M of 5M"), bar, threshold note | Normal (accent), near (`status.you` ≥ 75%), at limit (`status.problem` ≥ 95%) | "Tokens today, 62 percent of budget" |
 | C12 | Bar and column charts | Swift Charts `BarMark` / `RuleMark` | Bars ≤ 24 pt thick with 4 pt rounded data-ends; stacked segments split by a 2 pt gap; hairline grid; one reference line (budget); value on the last bar | Hover tooltip per bar; a table view behind **Show Data** | `AXChartDescriptor` with the series |
 | C13 | Sparkline | Swift Charts `LineMark`, no axes | 2 pt line in `text.tertiary`, last point in the accent with a surface ring | | Summarised in the tile label |
@@ -479,22 +497,22 @@ reads. Where a row and the catalog differ, the catalog is the design and the row
 | C21 | Menu bar menu | `NSStatusItem` menu (AppKit, as today) | Header (status, counts), Waiting on you items (top 5, age), Open Symphony, dispatch, force, Symphony start/stop, updates, Repos, Settings, Developer, Quit | Badge when the Inbox isn't empty (orange), or while Setup has errors (red, with a "Setup: N errors, M warnings" row) | Standard menu |
 | C22 | Notification | `UNUserNotificationCenter` with categories | Title (ticket and ask), body (title of the ticket and its state), actions | Per kind | Standard |
 | N1 | Reference chip | A range of an AppKit TextKit 2 text view (`ChipTextView`, in `ChipText`; DD-5 below), one per paragraph | The mention's own characters ("TP-891", "#448"); "TP-891 (Short name)" in the text reads `TP-891 · Short name`; `arrow.triangle.pull` before a pull request number; `accent` tint 14 % behind, `radius` 6, 4 pt each side. Spaces inside a chip don't break, so a chip never splits across lines | Hover: tint 26 % and a hairline, and after 0.5 s its popover (N2, N3) opens, closing when the pointer leaves the chip and the popover; focused: a 2 pt focus ring along the tint's edge, inside it, on the chip with the keyboard only; missing (not in `references`, or a kind the app doesn't know): no tint, a dotted underline, the "can't see" popover. Click opens the ticket page (D3) or the PR on GitHub; the menu has Copy Link and Open in Linear / Open on GitHub. Tab enters the paragraph's first chip and moves between chips, Space shows the popover, Return clicks. A selection takes a chip whole and copies the text as written | The paragraph reads as one text; each chip is a link "TP-891, Remove the retired review states, Code Review", hint "Shows details", with the custom action **Show Details** (and Show Alternate UI) opening its popover |
-| N2 | Ticket popover | `NSPopover` on the system's glass hosting SwiftUI, 330 pt | `TP-891 · symphony` (`type.label`, secondary) with its stage as C7; the title (`type.rowTitle`); the summary (`type.callout`, secondary); facts **Part of**, **Work** (its PR and checks), **Waiting on**; footer: what a click does and **Open in Linear** | Facts left out when unknown | Each fact as one element |
+| N2 | Ticket popover | `NSPopover` on the system's glass hosting SwiftUI, 330 pt | `TP-891 · symphony` (`type.label`, secondary) with its stage as C7; the title (`type.rowTitle`); the summary (`type.secondary`, secondary); facts **Part of**, **Work** (its PR and checks), **Waiting on**; footer: what a click does and **Open in Linear** | Facts left out when unknown | Each fact as one element |
 | N3 | Pull request popover | As N2 | `arrow.triangle.pull`, `#448`, "for TP-892", the review state as C7 (Open, Changes asked, Approved, Merged, Closed); title; summary; two figures a row: review rounds, files, `+added −removed` lines, checks with their status symbol; footer with **Open on GitHub**. No commit hash, branch or file name | A figure left out when unknown, review rounds while Code Review hasn't judged it | Each figure as one element: "2 review rounds" |
-| N4 | Peek | The window's `.inspector` (320–400 pt) beside the review, holding a stack of pages (no `NavigationStack`, whose pushes would land in the window's split view); a `.sheet` over the window when the review would be under 560 pt beside the inspector | Header: Back (`chevron.left`, on a pushed page), the identifier or `#448` (`type.section`), Close (`xmark`, Esc). Ticket: N2's head; **Now** (Stage, Waiting, Work: the PR as N1); **Connected** (Part of with N10's strip and "4 of 7 done", Sub-tickets, Blocked by, Blocks, Related, each an N1 chip and its stage); **Latest review brief**; **Open Ticket Page** (prominent), **Open in Linear**. PR: N3's head and figures, **Open Pull Request Page** (D15, prominent when Symphony knows its repo), **Open on GitHub** | Tracked (Now, Connected) or not (the reference's facts only); a chip inside pushes, ⌘-click opens the ticket's or the PR's page; closed keeps its pages for the toolbar toggle (⌥⌘I) | The title is a heading; each section title a heading; chips as N1 |
+| N4 | Peek | The window's `.inspector` (320–400 pt) beside the review, holding a stack of pages (no `NavigationStack`, whose pushes would land in the window's split view); a `.sheet` over the window when the review would be under 560 pt beside the inspector | Header: Back (`chevron.left`, on a pushed page), the identifier or `#448` (`type.heading`), Close (`xmark`, Esc). Ticket: N2's head; **Now** (Stage, Waiting, Work: the PR as N1); **Connected** (Part of with N10's strip and "4 of 7 done", Sub-tickets, Blocked by, Blocks, Related, each an N1 chip and its stage); **Latest review brief**; **Open Ticket Page** (prominent), **Open in Linear**. PR: N3's head and figures, **Open Pull Request Page** (D15, prominent when Symphony knows its repo), **Open on GitHub** | Tracked (Now, Connected) or not (the reference's facts only); a chip inside pushes, ⌘-click opens the ticket's or the PR's page; closed keeps its pages for the toolbar toggle (⌥⌘I) | The title is a heading; each section title a heading; chips as N1 |
 | N5 | Question callout | `VStack` on `surface.raised` tinted 10 % with `status.you`, `radius.row`, 3 pt leading bar in `status.you` | Label "YOUR DECISION" (`type.label`, `status.you`), the question (16 pt semibold) in N1 text | | A heading containing the label and the question, its chips links inside it |
 | N6 | Story card | C10 titled **What happened** | `why` split on blank lines (at most two paragraphs); a row with `exclamationmark.triangle` (`status.you`) and "If you don't answer:" + `if_unanswered`, all in N1 text | Either part left out when missing; not drawn without both | Title as a heading; each paragraph as one text with its chips |
 | N7 | Option card | Full-width `Button(.plain)`, `radius.row`, hairline | Leading radio; first line: label (13.5 pt semibold, N1 text that a click outside a chip passes to the card), **Recommended** badge, trailing key hint; effect under the label in secondary, at the label's leading edge; N8 tags; on the recommended card a tinted "Why we recommend it:" line. Never label and effect in one row | Default, selected (2 pt accent ring and 7 % accent tint), not answerable (no radio, no button); narrow: badge under the label, no key hint | The cards are a radio group; each reads "Option 1 of 3, <label>, recommended, selected. <effect>. <tags>" |
 | N8 | Trade-off tag | `Label`, 12 pt, text wraps | good `checkmark.circle` in `status.done`; cost `exclamationmark.triangle` in `status.you`; risk `xmark.circle` in `status.problem` | | "Good: <text>", "Cost: <text>", "Risk: <text>" |
 | N9 | Context card | C10 titled **Where this ticket sits**, last in the review; a two-column `Grid` (labels in secondary, values in N1 text) | **Part of**: the parent chip and title, then N10; **Its work**: the PR chip, "checks passing" / "checks failing" / "checks running", "sent back once / twice / N times"; **Connected**: one line per ticket blocked by, blocking or related, its chip, its stage as C7 and the relation ("TP-892 waits on it", "waits on TP-892", "related"); **Your answer**: "Unblocks …." from the request's `unblocks`; **Earlier calls**: `HH:mm` today, else the date and time, then the title and "You chose “…”". Chips for context tickets the text never mentions get their popover from the context | Each row only when known; no row, no card; narrow (under 560 pt): each label above its value. No time estimate (DD-2) | Title as a heading; each line reads in order, the strip as N10 |
-| N10 | Progress strip | `HStack` of 14 × 5 pt capsules, 2 pt apart (they narrow, to 3 pt, when the row is short), then "4 of 7 done" in `type.callout` secondary | One segment per sub-ticket in landing order: done `status.done`, working `status.working`, waiting on you (triage) `status.you`, not started `surface.separator` | No sub-tickets: no strip | One element, "4 of 7 sub-tickets done"; the words beside it mean color is never the only signal |
-| N11 | Write-in option | The last N7 card of a request the Inbox answers, then a `TextEditor` under the cards | Card: **Answer in my own words…**, "Tell the agent what to do instead." under it, the key after the last option's; field (`type.body`, `surface.content`, `radius.row`, accent hairline) three lines tall, growing to eight, then scrolling; hint under it in `type.callout` secondary: "The agent reads this as your answer. Name tickets by their number; they become links." | Not picked (no field); picked (field shown and focused, number keys type in it); blank (**Send Decision…** off). Not on a plan's decisions (C16) | The card reads as N7, "Option 4 of 4, Answer in my own words…, selected. Tell the agent what to do instead."; the field is labelled "Answer in my own words…" with the hint as its help |
-| N12 | Pull request page cards (D15) | A header (C7 review state, dates, then **Open on GitHub** and **Open Ticket** on the same row, or on their own row under it when narrow; the title as a sentence), then C10 cards in two columns (left flexible from 460 pt, right 330 pt), one column below 776 pt of content | **What it does** (summary in N1 text); **Review history** (time in `type.callout` monospaced digits, the verdict as C7 in words, Code Review or QA in `type.rowTitle`, the reason in N1 text); **What it changes** (a `Grid` of area, files, `+added` in `status.done`, `−removed` in `status.problem`, then "Grouped by area, not by file. Open on GitHub for the diff." in `type.caption`); **Health** (a `Grid`: Checks, Code Review, QA, Overlaps, each value with its status symbol and in N1 text, overlaps as PR chips); **Size** (files, lines, commits as figures); **Ticket** (the ticket's N1 chip, its stage as C7, "Waiting on you") | Loading (redacted placeholder lines); GitHub unavailable (`icloud.slash` "GitHub didn't answer." and **Try Again** in the cards that need it); no verdicts or areas yet (a quiet line) | Card titles are headings; a history row reads "Oct 6, 11:40, Code Review, Changes asked. <reason>"; an area "Agent instructions, 5 files, 18 lines added, 240 removed" |
+| N10 | Progress strip | `HStack` of 14 × 5 pt capsules, 2 pt apart (they narrow, to 3 pt, when the row is short), then "4 of 7 done" in `type.secondary` secondary | One segment per sub-ticket in landing order: done `status.done`, working `status.working`, waiting on you (triage) `status.you`, not started `surface.separator` | No sub-tickets: no strip | One element, "4 of 7 sub-tickets done"; the words beside it mean color is never the only signal |
+| N11 | Write-in option | The last N7 card of a request the Inbox answers, then a `TextEditor` under the cards | Card: **Answer in my own words…**, "Tell the agent what to do instead." under it, the key after the last option's; field (`type.body`, `surface.content`, `radius.row`, accent hairline) three lines tall, growing to eight, then scrolling; hint under it in `type.secondary` secondary: "The agent reads this as your answer. Name tickets by their number; they become links." | Not picked (no field); picked (field shown and focused, number keys type in it); blank (**Send Decision…** off). Not on a plan's decisions (C16) | The card reads as N7, "Option 4 of 4, Answer in my own words…, selected. Tell the agent what to do instead."; the field is labelled "Answer in my own words…" with the hint as its help |
+| N12 | Pull request page cards (D15) | A header (C7 review state, dates, then **Open on GitHub** and **Open Ticket** on the same row, or on their own row under it when narrow; the title as a sentence), then C10 cards in two columns (left flexible from 460 pt, right 330 pt), one column below 776 pt of content | **What it does** (summary in N1 text); **Review history** (time in `type.secondary` monospaced digits, the verdict as C7 in words, Code Review or QA in `type.rowTitle`, the reason in N1 text); **What it changes** (a `Grid` of area, files, `+added` in `status.done`, `−removed` in `status.problem`, then "Grouped by area, not by file. Open on GitHub for the diff." in `type.caption`); **Health** (a `Grid`: Checks, Code Review, QA, Overlaps, each value with its status symbol and in N1 text, overlaps as PR chips); **Size** (files, lines, commits as figures); **Ticket** (the ticket's N1 chip, its stage as C7, "Waiting on you") | Loading (redacted placeholder lines); GitHub unavailable (`icloud.slash` "GitHub didn't answer." and **Try Again** in the cards that need it); no verdicts or areas yet (a quiet line) | Card titles are headings; a history row reads "Oct 6, 11:40, Code Review, Changes asked. <reason>"; an area "Agent instructions, 5 files, 18 lines added, 240 removed" |
 | C23 | Control size | `DesignTokens.Control` (`.small`, `.medium`, `.large`); `controlSize` maps each to SwiftUI's | Height 24, 30 or 36 pt; corner radius 7, 9 or 11 pt; label 12, 13 or 14 pt; 10, 14 or 18 pt each side | Every button, pop-up and field is one of the three | – |
 | C24 | Row style | `.rowStyle(selected:)` on any list row (`RowFace` draws one state); `opensTicket` rows carry it | The state's surface bleeding 4 pt above and below and 8 pt each side of the row, `radius.row` | Rest (nothing), hover (`surface.hover`: primary at 5 % / 6 % dark), pressed (`surface.pressed`: 9 % / 10 %, settles to 99.5 %), selected (accent at 10 % / 18 % and a 1.5 pt accent ring), focused (`focus.ring` on the row's edge, keyboard only) | Selected adds the selected trait |
 | C25 | Card style | `.cardStyle(selected:)` on a clickable card (`CardFace` draws one state) | C10 with a shadow from the system shadow color | Rest, hover (lifts 1 pt on `motion.lift` with a deeper shadow), pressed (settles to 99 %), selected (2 pt accent ring), focused (`focus.ring` 2 pt outside its corners) | Selected adds the selected trait |
 | C26 | Button style | `.directorButton(_:size:selected:)`: `DirectorButtonStyle` (`ButtonFace` draws one state) with the system focus effect off | Label at a C23 size; primary on the accent, secondary on `surface.content` with a hairline, quiet in accent text | Hover (primary brightens; secondary takes `surface.raised`; quiet takes the hover surface), pressed (darker, settles to 97 %), selected (stays pressed while its menu or sheet is open), focused (`focus.ring`), disabled (tertiary text on `surface.raised`) | The label and "button"; "dimmed" when off |
-| C27 | Disabled with its reason | `.disabledReason(_:)` on any control | The control drawn disabled; pressing it shows a lock and the reason under it in `type.callout` secondary (the catalog's inline refusal); the reason is also its help | Off with the reason hidden, off with the reason shown; no reason: the control as it is | The control, "dimmed", then the reason as its hint |
+| C27 | Disabled with its reason | `.disabledReason(_:)` on any control | The control drawn disabled; pressing it shows a lock and the reason under it in `type.secondary` secondary (the catalog's inline refusal); the reason is also its help | Off with the reason hidden, off with the reason shown; no reason: the control as it is | The control, "dimmed", then the reason as its hint |
 | C28 | Focus ring | `.focusRing(_:_:offset:)` around any shape | 2 pt accent at 55 % (70 % dark), 2 pt outside the shape, its corners concentric | Drawn for keyboard focus only, never for a disabled control | – |
 | C29 | Situation kind | `DesignTokens.SituationKind` and its `glyph` | One of ten kinds (Waiting on you, Retrying, Blocked, Paused, Waiting for CI, Waiting for a build, Waiting for a slot, Working, Shipped, Cancelled) with its SF Symbol in its `status.*` color and its word; `shown` picks the first true by `director-ticket-page.md` §3's order | – | The word, never the glyph or color alone |
 | C30 | Motion | `DesignTokens.Motion.Curve` as `Animation.motion(_:reduceMotion:)`; `Animation.standard` is `.motion(.standard)` | Instant 0.1 s, fast 0.16 s, standard 0.28 s, slow 0.45 s (eased); fold and sheet springs 0.5 s with a 2 % overshoot; lift spring 0.28 s; rows stagger 35 ms | Reduce Motion: every curve lasts 0.01 s, no stagger, presses don't scale, nothing lifts; the states still show | – |
@@ -533,12 +551,17 @@ or a ticket page whose ticket isn't in the Inbox) is drawn as a plain `Text`, as
 ## 6. Accessibility
 
 - Every status is symbol + word; color is never the only signal, including in charts (labels, legend, data table).
-- Text contrast is at least 4.5:1 on its surface in light and dark; badges keep their word in `text.primary`.
+- Text contrast is at least 4.5:1 on the window, content and raised surfaces, in light and dark and under Increase
+  Contrast; badges keep their word in `text.primary`. Tertiary text (placeholders, disabled text) is exempt, except
+  under Increase Contrast. `DesignTokensCatalogTests` checks every pair.
 - Full keyboard path (P10); focus rings on tiles and rows; the default button in every sheet.
 - Rows and tiles are single accessibility elements with the labels in the table above; buttons inside rows are custom
   actions.
-- Increase Contrast: hairlines become `separator` at full strength; badges get an outline.
-- Reduce Transparency: system glass becomes opaque by itself; the dispatch control falls back to `surface.raised`.
+- Increase Contrast: every colour takes its Increase Contrast value (`tokens.css`, `@media (prefers-contrast: more)`):
+  text darkens in light and lightens in dark, hairlines and rings read at full strength, glass is nearly opaque and
+  the backdrop glow goes; badges get an outline.
+- Reduce Transparency: glass the app draws becomes its solid surface token (`surface.raised`, `surface.content` for
+  thick glass); the system's own glass becomes opaque by itself.
 - Reduce Motion: no looping symbol effects; cross-fades only.
 - Live updates never steal focus; VoiceOver announces a new Inbox item once.
 

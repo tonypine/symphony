@@ -259,7 +259,7 @@ private struct BoardGroup<Row: View>: View {
             Spacer(minLength: DesignTokens.Space.s3)
             if let hint = group.isEmpty ? HomeBoard.emptyHint : group.hint {
                 Text(hint)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .lineLimit(1)
@@ -277,12 +277,11 @@ private struct GroupHeadingStyle: ButtonStyle {
     private struct Face: View {
         let configuration: ButtonStyleConfiguration
         @State private var hovered = false
-        @Environment(\.colorScheme) private var colorScheme
 
         var body: some View {
             let state = DesignTokens.Interaction(hovered: hovered, pressed: configuration.isPressed)
             configuration.label
-                .background { state.surface.map { Rectangle().fill($0.fill(dark: colorScheme == .dark)) } }
+                .background { state.surface.map { Rectangle().fill($0.fill) } }
                 .onHover { hovered = $0 }
         }
     }
@@ -292,7 +291,6 @@ private struct GroupHeadingStyle: ButtonStyle {
 private struct CountPill: View {
     let count: Int
     let kind: DesignTokens.SituationKind
-    @Environment(\.colorScheme) private var colorScheme
 
     private var tinted: Bool { kind == .you || kind == .retrying }
 
@@ -304,7 +302,7 @@ private struct CountPill: View {
             .padding(.horizontal, 7)
             .padding(.vertical, 1)
             .background(
-                tinted ? AnyShapeStyle(kind.tint.opacity(DesignTokens.Status.badgeTint(dark: colorScheme == .dark))) : AnyShapeStyle(.quaternary),
+                tinted ? AnyShapeStyle(kind.status.badgeFill) : AnyShapeStyle(.quaternary),
                 in: Capsule()
             )
             .accessibilityHidden(true)
@@ -334,7 +332,7 @@ private struct BoardRow: View {
                     Image(systemName: "arrow.turn.down.right")
                 }
                 .labelStyle(.titleAndIcon)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .lineLimit(2)
             }
@@ -375,7 +373,7 @@ private struct TicketTitle: View {
             }
             if let repoKey {
                 Text(repoKey)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
@@ -420,7 +418,7 @@ struct MeterView: View {
                 Text(meter.label).font(DesignTokens.TypeStyle.body.font)
                 Spacer(minLength: DesignTokens.Space.s2)
                 Text(meter.value)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .contentTransition(.numericText())
@@ -440,7 +438,7 @@ struct MeterView: View {
 
     private var tint: Color {
         switch meter.level {
-        case .normal: DesignTokens.SystemColor.accent.color
+        case .normal: DesignTokens.ColorToken.accent.color
         case .near: DesignTokens.Status.you.tint
         case .atLimit: DesignTokens.Status.problem.tint
         }

@@ -112,7 +112,7 @@ Story: `#sections/window/ticket-page-laptop` and `#sections/page-layout/…`. Ma
 ## What this replaces
 
 - `design-system.md` §2 principle 7 ("Native by default") and §3's "In SwiftUI each maps to a system value":
-  rule 1 above. TP-1483 rewrites those lines.
+  rule 1 above. TP-1483 rewrote those lines.
 - `director-app-screens.md` §0 "The window": its Structure, Toolbar and Design rows.
 - `director-ticket-page.md`: the brief's rank ("rarely", tier 3), the Note, Decisions and Details panels, and
   the Connected panel's captions and its "Waiting on: Nothing now…" sentence.

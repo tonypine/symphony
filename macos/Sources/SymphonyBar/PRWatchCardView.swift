@@ -33,7 +33,7 @@ struct PRWatchCardView: View {
             }
             if let warning = card.warning {
                 Label(warning.prefix(1).uppercased() + warning.dropFirst(), systemImage: DesignTokens.Status.problem.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
             }
             let next = [[card.next, card.clears].compactMap { $0 }.joined(separator: ", "), card.age].compactMap { $0 }.filter { !$0.isEmpty }
@@ -45,7 +45,7 @@ struct PRWatchCardView: View {
             }
             if let updated = card.updated {
                 Text(updated)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -103,7 +103,7 @@ struct PRWatchCardView: View {
             ForEach(card.actions) { row in
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                     Text(row.timeText)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .frame(minWidth: 88, alignment: .leading)
@@ -111,7 +111,7 @@ struct PRWatchCardView: View {
                     Spacer(minLength: DesignTokens.Space.s2)
                     if let source = row.source {
                         Text(source)
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)
                     }
                 }

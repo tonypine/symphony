@@ -57,15 +57,15 @@ struct HomeInboxSection: View {
                     .foregroundStyle(DesignTokens.SituationKind.you.tint)
                     .accessibilityHidden(true)
                 Text(HomeInbox.title)
-                    .font(DesignTokens.TypeStyle.section.font)
+                    .font(DesignTokens.TypeStyle.heading.font)
                 Text(inbox.rows.count, format: .number)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                 Spacer(minLength: DesignTokens.Space.s2)
                 if let hiddenLine = inbox.hiddenLine {
                     Text(hiddenLine)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
@@ -146,14 +146,14 @@ struct HomeInboxRow: View {
             .accessibilityHint(item.isSubject ? "" : "Opens the ticket page")
             if let repo = item.repoKey {
                 Text(repo)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: DesignTokens.Space.s2)
             if let age = item.age {
                 Label("Waiting \(age)", systemImage: "clock")
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .lineLimit(1)
@@ -269,7 +269,7 @@ struct InboxDrawerHeader: View {
     var body: some View {
         HStack(spacing: DesignTokens.Space.s2) {
             Text(title)
-                .font(DesignTokens.TypeStyle.section.font)
+                .font(DesignTokens.TypeStyle.heading.font)
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: DesignTokens.Space.s2)
             Button(action: close) { Label(PeekNavigation.closeTitle, systemImage: "xmark") }
@@ -350,7 +350,7 @@ struct StatusBarContent<Control: View>: View {
                 }
                 Spacer(minLength: 0)
             }
-            .font(DesignTokens.TypeStyle.callout.font)
+            .font(DesignTokens.TypeStyle.secondary.font)
             .foregroundStyle(.secondary)
             .padding(.horizontal, DesignTokens.Space.s3)
             .frame(height: Self.height)

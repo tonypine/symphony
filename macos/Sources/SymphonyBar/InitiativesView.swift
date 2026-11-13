@@ -153,7 +153,7 @@ private struct InitiativeRow: View {
                 Text(initiative.identifier).font(DesignTokens.TypeStyle.rowTitle.font)
                 Spacer(minLength: DesignTokens.Space.s2)
                 Text(initiative.progress)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
@@ -263,7 +263,7 @@ struct InitiativeDetail: View {
                     .buttonStyle(.plain)
                     .help("Open the ticket page")
                     if let title = initiative.title {
-                        Text(title).font(DesignTokens.TypeStyle.section.font).accessibilityAddTraits(.isHeader)
+                        Text(title).font(DesignTokens.TypeStyle.heading.font).accessibilityAddTraits(.isHeader)
                     }
                 }
                 Spacer()
@@ -283,7 +283,7 @@ struct InitiativeDetail: View {
                 }
                 if let slot = initiative.slot {
                     Label(slot.line, systemImage: "square.stack.3d.up")
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -320,7 +320,7 @@ private struct StoryRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
             Text(row.number.map(String.init) ?? "")
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .monospacedDigit()
                 .foregroundStyle(row.mark == .current ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
                 .frame(width: numberWidth, alignment: .trailing)
@@ -332,7 +332,7 @@ private struct StoryRow: View {
                 .foregroundStyle(quiet ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                 if let done = row.doneLine {
                     Label(done, systemImage: DesignTokens.SituationKind.done.symbol)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.tertiary)
                 } else {
                     SituationLine(row.line, reference: reference, size: .compact)
@@ -342,7 +342,7 @@ private struct StoryRow: View {
                         HStack(spacing: DesignTokens.Space.s3) { blockerLinks }
                         VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) { blockerLinks }
                     }
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                 }
             }
             Spacer(minLength: DesignTokens.Space.s2)
@@ -436,13 +436,13 @@ struct InitiativesCard: View {
                                 Text(initiative.identifier).font(DesignTokens.TypeStyle.rowTitle.font)
                                 Text(initiative.title ?? "").lineLimit(1).foregroundStyle(.secondary)
                                 Spacer(minLength: DesignTokens.Space.s2)
-                                Text(initiative.progress).font(DesignTokens.TypeStyle.callout.font).monospacedDigit()
+                                Text(initiative.progress).font(DesignTokens.TypeStyle.secondary.font).monospacedDigit()
                             }
                             InitiativeBar(initiative: initiative, height: 6)
                             InitiativeLegend(initiative: initiative)
                             if let noLane = initiative.slot?.overviewLine {
                                 Text(noLane)
-                                    .font(DesignTokens.TypeStyle.callout.font)
+                                    .font(DesignTokens.TypeStyle.secondary.font)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(2)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -460,7 +460,7 @@ struct InitiativesCard: View {
                 }
                 if initiatives.count > Self.limit {
                     Text("\(initiatives.count - Self.limit) more in Initiatives")
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                 }
             }

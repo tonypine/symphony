@@ -697,7 +697,7 @@ struct SetupPageBody: View {
                                 VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
                                     Text(check.title).font(DesignTokens.TypeStyle.rowTitle.font)
                                     Text(check.reason)
-                                        .font(DesignTokens.TypeStyle.callout.font)
+                                        .font(DesignTokens.TypeStyle.secondary.font)
                                         .foregroundStyle(.secondary)
                                         .fixedSize(horizontal: false, vertical: true)
                                 }
@@ -753,7 +753,7 @@ struct LinearWebhooksLineView: View {
                         .font(DesignTokens.TypeStyle.rowTitle.font)
                         .foregroundStyle(line.isWarning ? SetupSeverityMark.warning.tint : Color.primary)
                     Text(line.detail)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -810,7 +810,7 @@ struct DispatchShadowLineView: View {
                             .font(DesignTokens.TypeStyle.rowTitle.font)
                             .foregroundStyle(line.isWarning ? SetupSeverityMark.warning.tint : Color.primary)
                         Text(line.detail)
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -823,7 +823,7 @@ struct DispatchShadowLineView: View {
                         withAnimation(.standard) { expanded.toggle() }
                     } label: {
                         Label(DispatchShadowLine.disclosureTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
@@ -841,7 +841,7 @@ struct DispatchShadowLineView: View {
     @ViewBuilder private var differences: some View {
         if line.rows.isEmpty {
             Text(DispatchShadowLine.emptyList)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
@@ -852,10 +852,10 @@ struct DispatchShadowLineView: View {
                             .monospaced()
                         VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
                             Text("\(row.side) · \(row.field)")
-                                .font(DesignTokens.TypeStyle.callout.font)
+                                .font(DesignTokens.TypeStyle.secondary.font)
                             if let values = row.values {
                                 Text(values)
-                                    .font(DesignTokens.TypeStyle.callout.font)
+                                    .font(DesignTokens.TypeStyle.secondary.font)
                                     .foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
                             }
@@ -863,7 +863,7 @@ struct DispatchShadowLineView: View {
                         Spacer(minLength: DesignTokens.Space.s3)
                         if let ago = row.ago {
                             Text(ago)
-                                .font(DesignTokens.TypeStyle.callout.font)
+                                .font(DesignTokens.TypeStyle.secondary.font)
                                 .foregroundStyle(.secondary)
                                 .monospacedDigit()
                         }
@@ -919,7 +919,7 @@ struct ReconcileLineView: View {
                             .font(DesignTokens.TypeStyle.rowTitle.font)
                             .foregroundStyle(line.isWarning ? SetupSeverityMark.warning.tint : Color.primary)
                         Text(line.detail)
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
@@ -932,7 +932,7 @@ struct ReconcileLineView: View {
                         withAnimation(.standard) { expanded.toggle() }
                     } label: {
                         Label(ReconcileLine.disclosureTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
@@ -950,7 +950,7 @@ struct ReconcileLineView: View {
     @ViewBuilder private var drifts: some View {
         if line.rows.isEmpty {
             Text(ReconcileLine.emptyList)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
@@ -961,17 +961,17 @@ struct ReconcileLineView: View {
                             .monospaced()
                         VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
                             Text(row.outcome)
-                                .font(DesignTokens.TypeStyle.callout.font)
+                                .font(DesignTokens.TypeStyle.secondary.font)
                                 .foregroundStyle(row.failed ? SetupSeverityMark.warning.tint : Color.primary)
                             Text(row.states)
-                                .font(DesignTokens.TypeStyle.callout.font)
+                                .font(DesignTokens.TypeStyle.secondary.font)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                         Spacer(minLength: DesignTokens.Space.s3)
                         if let ago = row.ago {
                             Text(ago)
-                                .font(DesignTokens.TypeStyle.callout.font)
+                                .font(DesignTokens.TypeStyle.secondary.font)
                                 .foregroundStyle(.secondary)
                                 .monospacedDigit()
                         }
@@ -1018,7 +1018,7 @@ private struct SetupSentence: View {
                     .accessibilityAddTraits(.isHeader)
                 if let context = page.context {
                     Text(context)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1113,10 +1113,10 @@ struct SetupRowView: View {
                 if row.reposLine != nil || !row.tickets.isEmpty {
                     HStack(spacing: DesignTokens.Space.s2) {
                         if let repos = row.reposLine {
-                            Text(repos).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+                            Text(repos).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
                         }
                         ForEach(row.tickets, id: \.identifier) { ticket in
-                            ticketLink(ticket.identifier).font(DesignTokens.TypeStyle.callout.font)
+                            ticketLink(ticket.identifier).font(DesignTokens.TypeStyle.secondary.font)
                         }
                     }
                 }
@@ -1125,7 +1125,7 @@ struct SetupRowView: View {
                         withAnimation(.standard) { expanded.toggle() }
                     } label: {
                         Label(SetupPage.detailsTitle, systemImage: expanded ? "chevron.down" : "chevron.right")
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.secondary)
@@ -1147,9 +1147,9 @@ struct SetupRowView: View {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                 ForEach(row.tickets, id: \.identifier) { ticket in
                     HStack(spacing: DesignTokens.Space.s2) {
-                        ticketLink(ticket.identifier).font(DesignTokens.TypeStyle.callout.font)
+                        ticketLink(ticket.identifier).font(DesignTokens.TypeStyle.secondary.font)
                         Text(row.detail(for: ticket.identifier) ?? "")
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)
                         Spacer(minLength: DesignTokens.Space.s2)
                         Button("Re-sync…") { actions.perform(.fix(fix), row, ticket.identifier) }
@@ -1163,7 +1163,7 @@ struct SetupRowView: View {
                 ForEach(row.details, id: \.self) { detail in
                     GridRow {
                         Text(detail.label)
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)
                         Text(detail.value)
                             .font(DesignTokens.TypeStyle.mono.font)
@@ -1222,12 +1222,12 @@ struct SetupFixSheetView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Label(sheet.undo, systemImage: "arrow.uturn.backward")
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let error = sheet.error {
                 Label(error, systemImage: DesignTokens.Status.problem.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)

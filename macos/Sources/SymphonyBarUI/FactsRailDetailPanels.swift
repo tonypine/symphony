@@ -114,7 +114,7 @@ private struct CurrentNote: View {
                     .monospacedDigit()
             }
             Text(current.confirmation)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -171,11 +171,11 @@ private struct DecisionRow: View {
             ) {
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                     Text(row.id)
-                        .font(DesignTokens.TypeStyle.callout.font.weight(.semibold))
+                        .font(DesignTokens.TypeStyle.secondary.font.weight(.semibold))
                         .monospacedDigit()
                         .fixedSize()
                     Text(row.headline)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .lineLimit(unfolded ? nil : 2)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: DesignTokens.Space.s2)
@@ -206,7 +206,7 @@ private struct DecisionRow: View {
                 .font(DesignTokens.TypeStyle.caption.font.weight(.semibold))
                 .foregroundStyle(.secondary)
             Text(text)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(secondary ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
@@ -278,7 +278,7 @@ public struct DetailsPanel: View {
                                 FactRow(url: link.url, open: open) {
                                     HStack(spacing: DesignTokens.Space.s1) {
                                         Text(link.title)
-                                            .font(DesignTokens.TypeStyle.callout.font)
+                                            .font(DesignTokens.TypeStyle.secondary.font)
                                             .foregroundStyle(Color.accentColor)
                                         Image(systemName: "arrow.up.right")
                                             .font(.system(size: 9, weight: .semibold))
@@ -301,7 +301,7 @@ public struct DetailsPanel: View {
 
     private func valueText(_ text: String, secondary: Bool = false) -> some View {
         Text(text)
-            .font(DesignTokens.TypeStyle.callout.font)
+            .font(DesignTokens.TypeStyle.secondary.font)
             .foregroundStyle(secondary ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -370,14 +370,14 @@ public struct DetailsPanel: View {
             if briefUnfolded {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
                     if let brief = model.brief {
-                        prose(brief.text)
+                        prose(brief.text, style: .reading)
                         if let walkthrough = brief.walkthrough {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(DetailsPanelModel.walkthroughTitle)
                                     .font(DesignTokens.TypeStyle.caption.font.weight(.semibold))
                                     .foregroundStyle(.secondary)
                                     .accessibilityAddTraits(.isHeader)
-                                prose(walkthrough)
+                                prose(walkthrough, style: .reading)
                             }
                         }
                     } else {
@@ -429,9 +429,11 @@ public struct DetailsPanel: View {
         }
     }
 
-    private func prose(_ text: String) -> some View {
+    /// `style` is `.reading` for the brief and its walkthrough (`--type-reading`), the text the Director reads
+    /// through.
+    private func prose(_ text: String, style: DesignTokens.TypeStyle = .secondary) -> some View {
         Text(text)
-            .font(DesignTokens.TypeStyle.callout.font)
+            .textStyle(style)
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
     }
@@ -459,7 +461,7 @@ struct KeyValueRow<Value: View>: View {
     var body: some View {
         GridRow(alignment: .firstTextBaseline) {
             Text(label)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .fixedSize()
                 .gridColumnAlignment(.leading)

@@ -184,10 +184,10 @@ struct TranscriptLineRow: View {
             if typing {
                 // The newest words, still being written: plain text with the caret after the last word.
                 (Text(line.text) + Text(" ▍").foregroundStyle(DesignTokens.Status.working.tint))
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                ChipText(text: line.text, font: DesignTokens.TypeStyle.callout.nsFont)
+                ChipText(text: line.text, font: DesignTokens.TypeStyle.secondary.nsFont)
             }
         case .tool:
             (Text(line.toolName.map { $0 + "  " } ?? "").fontWeight(.semibold) + Text(line.body))
@@ -310,11 +310,11 @@ private struct StepHeaderLabel: View {
                 .font(DesignTokens.TypeStyle.body.font.weight(step.isLive ? .semibold : .regular))
                 .lineLimit(1)
             Text(step.state.word)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(step.state == .failed ? AnyShapeStyle(DesignTokens.Status.problem.tint) : AnyShapeStyle(.secondary))
             if let reason = step.reason {
                 Text(reason)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -322,7 +322,7 @@ private struct StepHeaderLabel: View {
             Spacer(minLength: DesignTokens.Space.s2)
             if let duration = step.duration {
                 Text(duration)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -363,7 +363,7 @@ private struct StepLines: View {
     private struct Note: View {
         let text: String
         var body: some View {
-            Text(text).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+            Text(text).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
         }
     }
 }

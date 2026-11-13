@@ -201,7 +201,7 @@ struct AuditHeader: View {
             }
             if let exportError {
                 Label(exportError, systemImage: DesignTokens.Status.problem.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
             }
         }
@@ -247,7 +247,7 @@ private struct AuditFilterBar: View {
             }
             Spacer()
             Text(audit.countText)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .monospacedDigit()
         }
@@ -263,9 +263,9 @@ struct AuditChainLineView: View {
             Image(systemName: line.symbol)
                 .foregroundStyle(line.verified ? DesignTokens.Status.done.tint : DesignTokens.Status.problem.tint)
                 .accessibilityHidden(true)
-            Text(line.day).font(DesignTokens.TypeStyle.callout.font.weight(.semibold)).lineLimit(1)
+            Text(line.day).font(DesignTokens.TypeStyle.secondary.font.weight(.semibold)).lineLimit(1)
             Text(line.text)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(line.verified ? .secondary : .primary)
                 .lineLimit(3)
                 .textSelection(.enabled)
@@ -363,7 +363,7 @@ struct AuditInspectorBody: View {
             }
             if row.breaksChain {
                 Label("The day's chain breaks at this record.", systemImage: Audit.brokenSymbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
             }
             Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: DesignTokens.Space.s3, verticalSpacing: DesignTokens.Space.s2) {
@@ -375,7 +375,7 @@ struct AuditInspectorBody: View {
                     .accessibilityElement(children: .combine)
                 }
             }
-            .font(DesignTokens.TypeStyle.callout.font)
+            .font(DesignTokens.TypeStyle.secondary.font)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                 Text("Record").font(DesignTokens.TypeStyle.caption.font).foregroundStyle(.secondary)
                 Text(row.record.prettyJSON)

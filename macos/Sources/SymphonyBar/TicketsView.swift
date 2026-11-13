@@ -517,7 +517,7 @@ struct TicketsFilterBar: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             Text(count == 1 ? "1 ticket" : "\(count) tickets")
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .frame(height: DesignTokens.Control.small.height)
                 .fixedSize()
@@ -668,7 +668,7 @@ struct TicketViewErrorLine: View {
     var body: some View {
         HStack(spacing: DesignTokens.Space.s2) {
             Label(message, systemImage: DesignTokens.Status.problem.symbol)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(DesignTokens.Status.problem.tint)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
@@ -734,7 +734,7 @@ struct TicketViewNameSheetView: View {
             }
             if let error {
                 Label(error, systemImage: DesignTokens.Status.problem.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -927,7 +927,7 @@ struct TicketsGrid: View {
                             Image(systemName: sort.ascending ? "chevron.up" : "chevron.down").font(.caption2.weight(.semibold))
                         }
                     }
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .frame(width: TicketCell.idealWidth(column), alignment: .leading)
                 }
@@ -1119,7 +1119,7 @@ struct TicketInspectorBody: View {
                     .accessibilityElement(children: .combine)
                 }
             }
-            .font(DesignTokens.TypeStyle.callout.font)
+            .font(DesignTokens.TypeStyle.secondary.font)
             HStack(spacing: DesignTokens.Space.s2) {
                 Button(TicketList.openTitle) { actions.open(row.identifier) }
                     .buttonStyle(.borderedProminent)
@@ -1222,14 +1222,14 @@ struct DispatchPopover: View {
                         .accessibilityElement(children: .combine)
                     }
                 }
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 Text(control.update == nil ? "No new run starts until you resume, forced tickets included." : "No new run starts until the update ends, forced tickets included.")
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             if let line = control.update?.waitingLine {
-                Text(line).font(DesignTokens.TypeStyle.callout.font)
+                Text(line).font(DesignTokens.TypeStyle.secondary.font)
             }
             // The menu's update actions, in place of Resume Dispatch (S3a, S3b).
             if control.canCancelUpdate {
@@ -1257,7 +1257,7 @@ struct DispatchPopover: View {
             section("Queued", lines: control.queued, more: control.moreQueued, empty: "Nothing is queued.")
             if let error {
                 Label(error, systemImage: DesignTokens.Status.problem.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1287,13 +1287,13 @@ struct DispatchPopover: View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
             Text(title).font(DesignTokens.TypeStyle.label.font).foregroundStyle(.secondary).accessibilityAddTraits(.isHeader)
             if lines.isEmpty {
-                Text(empty).font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.tertiary)
+                Text(empty).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.tertiary)
             }
             ForEach(lines, id: \.self) { line in
-                Text(line).font(DesignTokens.TypeStyle.callout.font).lineLimit(1)
+                Text(line).font(DesignTokens.TypeStyle.secondary.font).lineLimit(1)
             }
             if more > 0 {
-                Text("and \(more) more").font(DesignTokens.TypeStyle.callout.font).foregroundStyle(.secondary)
+                Text("and \(more) more").font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
             }
         }
     }
@@ -1367,11 +1367,11 @@ struct ForceSheetView: View {
                             .buttonStyle(.link)
                         }
                     }
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                 }
                 if let summary = ForceSheet.summary(input, in: list) {
                     Text(summary)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .padding(DesignTokens.Space.s2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .background(DesignTokens.Surface.raised.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row))
@@ -1406,7 +1406,7 @@ private struct DispatchSheet<Options: View>: View {
             options
             if let error {
                 Label(error, systemImage: DesignTokens.Status.problem.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .fixedSize(horizontal: false, vertical: true)
             }

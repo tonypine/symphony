@@ -20,7 +20,6 @@ private struct FocusRingModifier<S: InsettableShape>: ViewModifier {
     let shown: Bool
     let shape: S
     let offset: Double
-    @Environment(\.colorScheme) private var colorScheme
 
     func body(content: Content) -> some View {
         content.overlay {
@@ -29,7 +28,7 @@ private struct FocusRingModifier<S: InsettableShape>: ViewModifier {
                 shape
                     .inset(by: -(offset + width / 2))
                     .stroke(
-                        DesignTokens.FocusRing.color.color.opacity(DesignTokens.FocusRing.opacity(dark: colorScheme == .dark)),
+                        DesignTokens.FocusRing.color.color,
                         lineWidth: width
                     )
                     .allowsHitTesting(false)
@@ -50,7 +49,6 @@ public struct RowFace: ViewModifier {
         top: DesignTokens.Space.s1, leading: DesignTokens.Space.s2,
         bottom: DesignTokens.Space.s1, trailing: DesignTokens.Space.s2
     )
-    @Environment(\.colorScheme) private var colorScheme
 
     public init(state: DesignTokens.Interaction, reduceMotion: Bool, bleed: EdgeInsets? = nil) {
         self.state = state
@@ -64,7 +62,7 @@ public struct RowFace: ViewModifier {
             .padding(bleed)
             .background {
                 if let surface = state.surface {
-                    shape.fill(surface.fill(dark: colorScheme == .dark))
+                    shape.fill(surface.fill)
                 }
             }
             .overlay {
@@ -190,7 +188,6 @@ public struct ButtonFace<Label: View>: View {
     var size: DesignTokens.Control = .medium
     let state: DesignTokens.Interaction
     let reduceMotion: Bool
-    @Environment(\.colorScheme) private var colorScheme
 
     public init(label: Label, kind: ButtonKind = .secondary, size: DesignTokens.Control = .medium, state: DesignTokens.Interaction, reduceMotion: Bool) {
         self.label = label
@@ -219,7 +216,6 @@ public struct ButtonFace<Label: View>: View {
             .animation(.motion(.instant, reduceMotion: reduceMotion), value: state)
     }
 
-    private var dark: Bool { colorScheme == .dark }
 
     /// A selected button (its menu or sheet open) stays pressed.
     private var surface: DesignTokens.StateSurface? {
@@ -227,11 +223,11 @@ public struct ButtonFace<Label: View>: View {
     }
 
     private var foreground: Color {
-        if state.disabled { return DesignTokens.SystemColor.tertiary.color }
+        if state.disabled { return DesignTokens.TextColor.tertiary.color }
         return switch kind {
         case .primary: Color(nsColor: .alternateSelectedControlTextColor)
-        case .secondary: DesignTokens.SystemColor.primary.color
-        case .quiet: DesignTokens.SystemColor.accent.color
+        case .secondary: DesignTokens.TextColor.primary.color
+        case .quiet: DesignTokens.ColorToken.accent.color
         }
     }
 
@@ -248,16 +244,16 @@ public struct ButtonFace<Label: View>: View {
             switch kind {
             case .primary:
                 // The accent brightens under the pointer and darkens when pressed.
-                shape.fill(DesignTokens.SystemColor.accent.color)
+                shape.fill(DesignTokens.ColorToken.accent.color)
                     .brightness(surface == .pressed ? -0.08 : surface == .hover ? 0.06 : 0)
             case .secondary:
                 ZStack {
                     shape.fill(DesignTokens.Surface.content.color)
                     if surface != nil { shape.fill(DesignTokens.Surface.raised.color) }
-                    if let surface { shape.fill(surface.fill(dark: dark)) }
+                    if let surface { shape.fill(surface.fill) }
                 }
             case .quiet:
-                if let surface { shape.fill(surface.fill(dark: dark)) }
+                if let surface { shape.fill(surface.fill) }
             }
         }
     }
@@ -328,7 +324,7 @@ public struct Refusal: View {
                 .foregroundStyle(.tertiary)
                 .accessibilityHidden(true)
             Text(reason)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

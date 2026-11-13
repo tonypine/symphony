@@ -1012,7 +1012,7 @@ struct TicketDecisionsColumn: View {
                     Text(DecisionsLine(openQuestions: page.openQuestions, questions: questions).title)
                         .font(DesignTokens.TypeStyle.rowTitle.font)
                     Text(DecisionsLine.readingReason)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1150,7 +1150,7 @@ struct DecisionsLineView: View {
                     .font(line.waiting ? DesignTokens.TypeStyle.rowTitle.font : DesignTokens.TypeStyle.body.font)
                     .foregroundStyle(line.waiting ? .primary : .secondary)
                 Text(line.detail)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
@@ -1367,7 +1367,7 @@ struct MoveSheetView: View {
             }
             if let error {
                 Label(error, systemImage: DesignTokens.Status.problem.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -1458,7 +1458,7 @@ struct StopRunSheetView: View {
             }
             if let error {
                 Label(error, systemImage: DesignTokens.Status.problem.symbol)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(DesignTokens.Status.problem.tint)
                     .fixedSize(horizontal: false, vertical: true)
             }

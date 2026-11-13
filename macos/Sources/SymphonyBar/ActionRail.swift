@@ -166,7 +166,7 @@ private struct RailMoreList: View {
             .foregroundStyle(item.allowed ? (item.destructive ? Color.red : Color.primary) : Color.secondary.opacity(0.6))
             if let reason = item.reason {
                 Text(reason)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

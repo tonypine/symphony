@@ -132,7 +132,7 @@ Each step names the screen that serves it (section 5).
 | VoiceOver | Each sidebar row reads "billing-api, healthy, default, 2 agents running"; dots never carry meaning by color alone (shape and text label too) |
 | Edit and delete | Section edit sheets; Disconnect |
 | Destructive actions confirmed and named | Disconnect and Remove Clone confirm, say what stays on disk, and use destructive button styling |
-| Light and dark appearance | System colors and materials only |
+| Light and dark appearance | The catalog's tokens in light and dark ([Design system](design-system.md) §3) |
 | Long text handled | Paths truncate in the middle, show in full in help and are selectable; names never wrap the toolbar |
 | Live data that doesn't jump | Polls update values in place; selection and scroll keep their position |
 

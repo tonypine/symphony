@@ -14,7 +14,6 @@ struct SituationLine: View {
     let text: SituationText
     var size: Size = .full
     var forced = false
-    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.backgroundProminence) private var prominence
 
     init(_ situation: Situation, reference: Date = Date(), size: Size = .full, forced: Bool = false) {
@@ -90,7 +89,7 @@ struct SituationLine: View {
         .padding(.leading, 10)
         .padding(.trailing, text.ageLabel == nil ? 10 : 3)
         .padding(.vertical, 3)
-        .background(kind.tint.opacity(DesignTokens.Status.badgeTint(dark: colorScheme == .dark)), in: Capsule())
+        .background(kind.status.badgeFill, in: Capsule())
     }
 
     /// The cause, then what moves it next in secondary text.
@@ -120,7 +119,7 @@ struct SituationLine: View {
                     .fixedSize()
             }
         }
-        .font(DesignTokens.TypeStyle.callout.font)
+        .font(DesignTokens.TypeStyle.secondary.font)
     }
 }
 

@@ -168,6 +168,60 @@
   --focus-ring-offset: 2px;
 }
 
+/* Increase Contrast: every colour again, chosen so text keeps 4.5:1 on each surface (tertiary too), hairlines and
+ * rings read at full strength and glass is nearly opaque. The glow behind the window goes. */
+@media (prefers-contrast: more) {
+  :root {
+    --surface-window: light-dark(#ececf2, #0a0a0d);
+    --surface-content: light-dark(#ffffff, #16161b);
+    --surface-raised: light-dark(#f4f4f8, #202027);
+    --surface-sunken: light-dark(#dcdce4, #000000);
+    --surface-hover: light-dark(rgba(28, 28, 52, 0.1), rgba(255, 255, 255, 0.12));
+    --surface-pressed: light-dark(rgba(28, 28, 52, 0.16), rgba(255, 255, 255, 0.18));
+    --surface-overlay: light-dark(rgba(18, 18, 30, 0.4), rgba(0, 0, 0, 0.75));
+    --material-glass: light-dark(rgba(255, 255, 255, 0.96), rgba(30, 30, 38, 0.96));
+    --material-glass-thick: light-dark(rgba(252, 252, 254, 0.98), rgba(28, 28, 36, 0.98));
+    --material-edge: light-dark(rgba(24, 24, 48, 0.35), rgba(255, 255, 255, 0.35));
+    --stroke-separator: light-dark(rgba(24, 24, 48, 0.45), rgba(255, 255, 255, 0.45));
+    --stroke-strong: light-dark(rgba(24, 24, 48, 0.7), rgba(255, 255, 255, 0.7));
+    --stroke-highlight: light-dark(rgba(255, 255, 255, 1), rgba(255, 255, 255, 0.16));
+    --text-primary: light-dark(#000000, #ffffff);
+    --text-secondary: light-dark(#3c3c4a, #cfcfd9);
+    --text-tertiary: light-dark(#5c5c6c, #a0a0ae);
+    --text-on-accent: light-dark(#ffffff, #ffffff);
+    --accent: light-dark(#3a2bc4, #5546e0);
+    --accent-hover: light-dark(#3123b0, #6457ee);
+    --accent-pressed: light-dark(#281c96, #4a3cd0);
+    --accent-text: light-dark(#3020b8, #c4beff);
+    --accent-tint: light-dark(rgba(58, 43, 196, 0.16), rgba(124, 112, 255, 0.3));
+    --accent-tint-strong: light-dark(rgba(58, 43, 196, 0.26), rgba(124, 112, 255, 0.42));
+    --status-you: light-dark(#c46a00, #ffbb5c);
+    --status-working: light-dark(#0a6fd6, #6cb6ff);
+    --status-problem: light-dark(#d01f33, #ff7f89);
+    --status-done: light-dark(#0b8a43, #5fe397);
+    --status-idle: light-dark(#6b6b7a, #b0b0be);
+    --status-forced: light-dark(#9e22b8, #e48cf6);
+    --status-you-text: light-dark(#7f3f00, #ffd29a);
+    --status-working-text: light-dark(#054a96, #a8d3ff);
+    --status-problem-text: light-dark(#980f22, #ffb3b8);
+    --status-done-text: light-dark(#0a5a2d, #9cf0c0);
+    --status-idle-text: light-dark(#45454f, #d0d0da);
+    --status-forced-text: light-dark(#6e1683, #f0c2fa);
+    --tint-you: light-dark(rgba(196, 106, 0, 0.2), rgba(255, 187, 92, 0.3));
+    --tint-working: light-dark(rgba(10, 111, 214, 0.2), rgba(108, 182, 255, 0.3));
+    --tint-problem: light-dark(rgba(208, 31, 51, 0.2), rgba(255, 127, 137, 0.3));
+    --tint-done: light-dark(rgba(11, 138, 67, 0.2), rgba(95, 227, 151, 0.28));
+    --tint-idle: light-dark(rgba(107, 107, 122, 0.2), rgba(176, 176, 190, 0.3));
+    --tint-forced: light-dark(rgba(158, 34, 184, 0.2), rgba(228, 140, 246, 0.3));
+    --shadow-ring: light-dark(rgba(24, 24, 48, 0.3), rgba(255, 255, 255, 0.3));
+    --shadow-near: light-dark(rgba(24, 24, 48, 0.1), rgba(0, 0, 0, 0.5));
+    --shadow-far: light-dark(rgba(24, 24, 60, 0.16), rgba(0, 0, 0, 0.7));
+    --shadow-deep: light-dark(rgba(20, 20, 60, 0.26), rgba(0, 0, 0, 0.85));
+    --focus-ring-color: light-dark(rgba(58, 43, 196, 0.9), rgba(170, 160, 255, 0.95));
+    --backdrop-glow: none;
+  }
+}
+
 :root[data-theme="light"] {
   color-scheme: light;
 }

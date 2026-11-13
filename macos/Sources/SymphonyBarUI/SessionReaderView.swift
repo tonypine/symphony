@@ -64,7 +64,7 @@ private struct SessionReaderHeader: View {
         HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
             StateMark(symbol: run.state.symbol, status: run.state.status, live: run.isLive, size: 15)
             Text(run.title)
-                .font(DesignTokens.TypeStyle.section.font)
+                .font(DesignTokens.TypeStyle.heading.font)
                 .lineLimit(1)
                 .accessibilityAddTraits(.isHeader)
             StatusBadge(status: run.state.status, word: run.word)
@@ -72,7 +72,7 @@ private struct SessionReaderHeader: View {
             Spacer(minLength: DesignTokens.Space.s2)
             ForEach([run.tokensText, run.model, run.duration].compactMap { $0 }, id: \.self) { fact in
                 Text(fact)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .lineLimit(1)
@@ -108,7 +108,7 @@ private struct SessionReaderSections: View {
                         }
                     default:
                         Text(SessionReader.note(section.content, live: section.step.isLive) ?? "")
-                            .font(DesignTokens.TypeStyle.callout.font)
+                            .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)
                             .padding(.leading, SessionLineRow.indent)
                     }
@@ -135,18 +135,18 @@ private struct SessionStepHeader: View {
                 .font(DesignTokens.TypeStyle.body.font.weight(.semibold))
                 .lineLimit(1)
             Text(step.state.word)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(step.state == .failed ? AnyShapeStyle(DesignTokens.Status.problem.tint) : AnyShapeStyle(.secondary))
             if let reason = step.reason {
                 Text(reason)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer(minLength: DesignTokens.Space.s2)
             if let duration = step.duration {
                 Text(duration)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -243,7 +243,7 @@ struct SessionLineRow: View {
             ? Text(line.line.toolName.map { $0 + "  " } ?? "").fontWeight(.semibold) + Text(line.line.body)
             : Text(line.line.text.isEmpty && line.line.kind == .result ? TranscriptLineRow.emptyResult : line.line.text)
         let styled = words
-            .font(line.line.kind == .say ? DesignTokens.TypeStyle.callout.font : .system(.callout, design: .monospaced))
+            .font(line.line.kind == .say ? DesignTokens.TypeStyle.secondary.font : .system(.callout, design: .monospaced))
             .foregroundStyle(line.line.kind == .result
                 ? (line.line.failed ? AnyShapeStyle(DesignTokens.Status.problem.tint) : AnyShapeStyle(.secondary))
                 : AnyShapeStyle(.primary))

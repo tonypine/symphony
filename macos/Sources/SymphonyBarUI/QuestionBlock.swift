@@ -395,7 +395,7 @@ public struct OptionCardFace: View {
                     .padding(.top, DesignTokens.Space.s1 / 2)
                 }
                 if let reason = card.reason {
-                    ChipText(text: reason, lead: OptionCard.reasonLead, font: DesignTokens.TypeStyle.callout.nsFont, selectable: false)
+                    ChipText(text: reason, lead: OptionCard.reasonLead, font: DesignTokens.TypeStyle.secondary.nsFont, selectable: false)
                         .padding(.horizontal, DesignTokens.Space.s2)
                         .padding(.vertical, DesignTokens.Space.s1)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -479,7 +479,7 @@ public struct WriteInField: View {
                         .strokeBorder(Color.accentColor, lineWidth: 1)
                 )
             Text(OptionCard.writeInHint)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityHidden(true)
@@ -594,7 +594,7 @@ public struct QuestionSendArea: View {
             Text(label).foregroundStyle(.secondary)
             Text(value).bold().lineLimit(2)
         }
-        .font(DesignTokens.TypeStyle.callout.font)
+        .font(DesignTokens.TypeStyle.secondary.font)
         .accessibilityElement(children: .combine)
     }
 }
@@ -771,11 +771,11 @@ public struct DecisionSheet: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(DecisionSheetLayout.title(count: questions.count))
-                    .font(DesignTokens.TypeStyle.section.font)
+                    .font(DesignTokens.TypeStyle.heading.font)
                     .accessibilityAddTraits(.isHeader)
                 if let subtitle {
                     Text(subtitle)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }

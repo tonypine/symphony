@@ -261,25 +261,25 @@ final class SymphonyWindowTests: XCTestCase {
     // MARK: - Design tokens
 
     func testEveryStatusTokenHasItsColorSymbolAndWord() {
-        let expected: [DesignTokens.Status: (DesignTokens.SystemColor, String, String)] = [
-            .you: (.orange, "person.crop.circle.badge.exclamationmark", "Waiting on you"),
-            .working: (.blue, "circle.dotted.circle", "Working"),
-            .problem: (.red, "exclamationmark.triangle.fill", "Needs attention"),
-            .done: (.green, "checkmark.circle.fill", "Healthy"),
-            .idle: (.gray, "pause.circle", "Paused"),
-            .forced: (.purple, "bolt.fill", "Forced"),
+        let expected: [DesignTokens.Status: (DesignTokens.ColorToken, String, String)] = [
+            .you: (.statusYou, "person.crop.circle.badge.exclamationmark", "Waiting on you"),
+            .working: (.statusWorking, "circle.dotted.circle", "Working"),
+            .problem: (.statusProblem, "exclamationmark.triangle.fill", "Needs attention"),
+            .done: (.statusDone, "checkmark.circle.fill", "Healthy"),
+            .idle: (.statusIdle, "pause.circle", "Paused"),
+            .forced: (.statusForced, "bolt.fill", "Forced"),
         ]
         XCTAssertEqual(Set(DesignTokens.Status.allCases), Set(expected.keys))
         for status in DesignTokens.Status.allCases {
             let (color, symbol, word) = expected[status]!
             XCTAssertEqual(status.color, color, "\(status)")
+            XCTAssertEqual(status.textColor.cssName, color.cssName + "-text", "\(status)")
+            XCTAssertEqual(status.tintColor.cssName, "--tint-" + status.rawValue, "\(status)")
             XCTAssertEqual(status.symbol, symbol, "\(status)")
             XCTAssertEqual(status.word, word, "\(status)")
         }
         // Status colors are reserved: no two statuses share one.
         XCTAssertEqual(Set(DesignTokens.Status.allCases.map(\.color)).count, DesignTokens.Status.allCases.count)
-        XCTAssertEqual(DesignTokens.Status.badgeTint(dark: false), 0.14)
-        XCTAssertEqual(DesignTokens.Status.badgeTint(dark: true), 0.22)
     }
 
     func testLayoutTokensMatchTheWindowSize() {

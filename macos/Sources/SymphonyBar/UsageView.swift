@@ -87,7 +87,7 @@ private struct HeavyTicketRow: View {
                 Text(row.identifier).font(DesignTokens.TypeStyle.rowTitle.font)
                 Spacer(minLength: DesignTokens.Space.s2)
                 Text(row.value)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
             }
@@ -102,7 +102,7 @@ private struct HeavyTicketRow: View {
 
     private var tint: Color {
         switch row.level {
-        case .normal: DesignTokens.SystemColor.accent.color
+        case .normal: DesignTokens.ColorToken.accent.color
         case .near: DesignTokens.Status.you.tint
         case .atLimit: DesignTokens.Status.problem.tint
         }

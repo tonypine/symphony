@@ -163,7 +163,7 @@ public struct TimelineSection: View {
             }
             if model.isEmpty {
                 Text(TimelineModel.empty)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.secondary)
                     .padding(.vertical, DesignTokens.Space.s2)
             }
@@ -323,13 +323,13 @@ public struct TimelineTitle: View {
     public var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
             Text(TimelineSection.title)
-                .font(DesignTokens.TypeStyle.section.font)
+                .font(DesignTokens.TypeStyle.heading.font)
                 .accessibilityAddTraits(.isHeader)
             if let new = marks?.newText {
                 Text(new)
-                    .font(DesignTokens.TypeStyle.callout.font.weight(.semibold))
+                    .font(DesignTokens.TypeStyle.secondary.font.weight(.semibold))
                     .monospacedDigit()
-                    .foregroundStyle(DesignTokens.SystemColor.accent.color)
+                    .foregroundStyle(DesignTokens.ColorToken.accent.color)
                     .help(TimelineEntry.newHelp)
                     .accessibilityLabel(marks?.newAccessibilityLabel ?? new)
             }
@@ -375,7 +375,7 @@ private struct SinceLookedLine: View {
             Text(text)
                 .font(DesignTokens.TypeStyle.caption.font.weight(.semibold))
                 .tracking(0.2)
-                .foregroundStyle(DesignTokens.SystemColor.accent.color)
+                .foregroundStyle(DesignTokens.ColorToken.accent.color)
                 .fixedSize()
             rule
         }
@@ -387,7 +387,7 @@ private struct SinceLookedLine: View {
 
     private var rule: some View {
         Rectangle()
-            .fill(DesignTokens.SystemColor.accent.color.opacity(0.4))
+            .fill(DesignTokens.ColorToken.accent.color.opacity(0.4))
             .frame(height: 1)
     }
 }
@@ -451,7 +451,7 @@ struct TimelineEntryRow: View {
         let _ = TimelineRowBodies.evaluated("entry-\(entry.id)")
         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
             Text(time)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .frame(width: TimelineSection.timeColumn, alignment: .trailing)
@@ -470,12 +470,12 @@ struct TimelineEntryRow: View {
                     .help(entry.isNew ? TimelineEntry.newHelp : "")
                 if let detail = entry.detail {
                     Text(detail)
-                        .font(DesignTokens.TypeStyle.callout.font)
+                        .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Text(entry.actor)
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.tertiary)
             }
             .frame(maxWidth: DesignTokens.Measure.reading, alignment: .leading)
@@ -487,7 +487,7 @@ struct TimelineEntryRow: View {
                     entry.durationSeconds = seconds
                     return entry.duration ?? ""
                 }
-                    .font(DesignTokens.TypeStyle.callout.font)
+                    .font(DesignTokens.TypeStyle.secondary.font)
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .fixedSize()
@@ -515,7 +515,7 @@ struct TimelineEntryRow: View {
         return Text(Image(systemName: "circle.fill"))
             .font(.system(size: 6))
             .baselineOffset(2.5)
-            .foregroundStyle(DesignTokens.SystemColor.accent.color) + Text(verbatim: "  ")
+            .foregroundStyle(DesignTokens.ColorToken.accent.color) + Text(verbatim: "  ")
     }
 
     /// What the glyph means, under the pointer: "Phase move".
@@ -525,7 +525,7 @@ struct TimelineEntryRow: View {
 
     static func color(_ tone: TimelineEntry.Tone) -> Color {
         switch tone {
-        case .accent: DesignTokens.SystemColor.accent.color
+        case .accent: DesignTokens.ColorToken.accent.color
         case let .status(status): status.tint
         }
     }
@@ -559,7 +559,7 @@ struct TimelineTicketChipView: View {
             Text(chip.identifier)
                 .fontWeight(.semibold)
                 .monospacedDigit()
-                .foregroundStyle(chip.opens ? AnyShapeStyle(DesignTokens.SystemColor.accent.color) : AnyShapeStyle(.secondary))
+                .foregroundStyle(chip.opens ? AnyShapeStyle(DesignTokens.ColorToken.accent.color) : AnyShapeStyle(.secondary))
                 .fixedSize()
             if let title = chip.title {
                 Text(title)
@@ -568,7 +568,7 @@ struct TimelineTicketChipView: View {
                     .truncationMode(.tail)
             }
         }
-        .font(DesignTokens.TypeStyle.callout.font)
+        .font(DesignTokens.TypeStyle.secondary.font)
         .padding(.horizontal, DesignTokens.Space.s2)
         .padding(.vertical, 1)
         .background(DesignTokens.Surface.separator.color.opacity(0.5), in: Capsule())
@@ -588,7 +588,6 @@ struct TimelineRunRow: View {
     /// the old row and the new one would always agree on it; the gate compares this value instead (TP-1480).
     let unfolded: Bool
     let select: () -> Void
-    @Environment(\.colorScheme) private var colorScheme
 
     init(
         run: RunGroupModel, time: String, selected: Bool, transcripts: StepTranscripts, fold: Binding<Bool>,
@@ -607,7 +606,7 @@ struct TimelineRunRow: View {
         let _ = TimelineRowBodies.evaluated("run-\(run.id)")
         HStack(alignment: .top, spacing: 0) {
             Text(time)
-                .font(DesignTokens.TypeStyle.callout.font)
+                .font(DesignTokens.TypeStyle.secondary.font)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .frame(width: TimelineSection.timeColumn, alignment: .trailing)
@@ -618,7 +617,7 @@ struct TimelineRunRow: View {
         .background {
             if selected {
                 RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
-                    .fill(DesignTokens.StateSurface.selected.fill(dark: colorScheme == .dark))
+                    .fill(DesignTokens.StateSurface.selected.fill)
             }
         }
         .overlay {
@@ -677,7 +676,6 @@ private struct TimelineEntering: ViewModifier {
     let entered: () -> Void
     @State private var settled: Bool
     @State private var tint: Double
-    @Environment(\.colorScheme) private var colorScheme
 
     init(entering: Bool, reduceMotion: Bool, entered: @escaping () -> Void) {
         self.entering = entering
@@ -692,7 +690,7 @@ private struct TimelineEntering: ViewModifier {
         content
             .background {
                 RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
-                    .fill(DesignTokens.SystemColor.accent.color.opacity(DesignTokens.Motion.enterTint(dark: colorScheme == .dark) * tint))
+                    .fill(DesignTokens.Motion.enterTint.color.opacity(tint))
             }
             .offset(y: settled ? 0 : -DesignTokens.Motion.enterOffset)
             .opacity(settled ? 1 : 0)
