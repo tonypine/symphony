@@ -571,6 +571,9 @@ struct GalleryView: View {
                         .id(entry.id)
                 }
             }
+            // A screen's stage shows no scroll bar: one that is always drawn (no trackpad) would take its width from the
+            // screen, and a window that fills the stage would no longer fit it.
+            .scrollIndicators(shown == nil ? .automatic : .hidden)
             .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
         .accessibilityLabel("Stage")
