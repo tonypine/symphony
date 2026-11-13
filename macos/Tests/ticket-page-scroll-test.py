@@ -184,6 +184,14 @@ def fold_header(binary, pid, verb, run=None, area=None):
 def click_folds_a_run(binary, pid, area):
     """A mouse click on a run's fold header folds it, and a second unfolds it: the click, not an accessibility press.
     QA found a click only selecting the run (TP-1480). Returns why not, or None."""
+    # The scroll just ended at the top, where the first run's header can lie below the first screen of a long page:
+    # scroll down in steps until one shows inside the scroll area.
+    for step in range(13):
+        if any(fold_header(binary, pid, verb, area=area)[0] for verb in ("Collapse ", "Expand ")):
+            break
+        if step < 12:
+            driver(binary, "scroll", pid, area["path"], "0,300", "pixel")
+            time.sleep(0.5)
     for verb, flipped in (("Collapse ", "Expand "), ("Expand ", "Collapse ")):
         header, run = fold_header(binary, pid, verb, area=area)
         if not header:
