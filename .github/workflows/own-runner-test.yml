@@ -1,0 +1,135 @@
+name: own-runner-test
+
+# Temporary. The steps of `macos build` (macos.yml), copied as they are, on the self-hosted
+# runner `ci-macos` (a tart VM on Tony's Mac), to prove the runner before the real workflows
+# move to it. It runs only on a push to this branch; nothing here is meant to merge.
+# Every step runs even after an earlier one fails, so one run shows everything that breaks.
+on:
+  push:
+    branches:
+      - ci/own-runner-test
+
+permissions:
+  contents: read
+
+concurrency:
+  group: own-runner-test
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: macos build on ci-macos
+    runs-on: [self-hosted, macOS, tahoe]
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+
+      - name: Test the Xcode selection script
+        if: ${{ !cancelled() }}
+        run: sh scripts/ci/xcode-developer-dir-test.sh
+
+      # The shared test helpers (test/support/README.md): the update feed, gh and Linear
+      # stand-ins and the release pair's layout, on made-up inputs. No build, no sudo.
+      - name: Test the shared test helpers
+        if: ${{ !cancelled() }}
+        run: python3 --version && make support-test
+
+      - name: Select the pinned Xcode
+        if: ${{ !cancelled() }}
+        run: echo "DEVELOPER_DIR=$(sh scripts/ci/xcode-developer-dir.sh)" >> "$GITHUB_ENV"
+
+      - name: Show toolchain
+        if: ${{ !cancelled() }}
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      # Fails on any expression the type-checker takes over 100ms on. Swift gives up on an
+      # expression after a fixed budget, and the budget runs out sooner on an older Xcode than
+      # on the one here, so an expression near the limit on this runner is a build failure on
+      # another: see TicketPage.swift's ticketState. The guard (its limit, flags and check) lives
+      # in macos/Makefile's `guarded-%`, which a run's Build step also calls (`make guarded-build`),
+      # so the two cannot drift.
+      - name: Build app
+        if: ${{ !cancelled() }}
+        working-directory: macos
+        run: time make guarded-app
+
+      - name: Run tests
+        if: ${{ !cancelled() }}
+        working-directory: macos
+        run: time swift test
+
+      # An agent's sandbox can't write the per-user temp dir, where a sandboxed Foundation stages
+      # its atomic writes, so a plain `swift build` fails there. Symphony gives a local macOS
+      # Claude session the env that routes them elsewhere (`SymphonyElixir.AgentTmpDir.env/3`);
+      # this builds and tests with that env in a sandbox that also denies those writes.
+      - name: Build and test in a sandbox like an agent's
+        if: ${{ !cancelled() }}
+        working-directory: macos
+        run: |
+          profile='(version 1)(allow default)(deny file-write* (subpath "/private/var/folders"))'
+          scratch="$RUNNER_TEMP/agent-sandbox"
+          mkdir -p "$scratch/tmp"
+          export TMPDIR="$scratch/tmp" SWIFTPM_MODULECACHE_OVERRIDE="$scratch/tmp/swiftpm-module-cache"
+          if sandbox-exec -p "$profile" swift build --disable-sandbox --build-system native --scratch-path "$scratch/build" > "$scratch/without-env.log" 2>&1; then
+            echo "swift build passed in the sandbox without DIRHELPER_USER_DIR_SUFFIX, so the sandbox no longer stands in for an agent's"
+            exit 1
+          fi
+          tail -n 3 "$scratch/without-env.log"
+          export DIRHELPER_USER_DIR_SUFFIX=symphony/none
+          time sandbox-exec -p "$profile" swift build --disable-sandbox --build-system native --scratch-path "$scratch/build"
+          time sandbox-exec -p "$profile" swift test --disable-sandbox --build-system native --scratch-path "$scratch/build"
+
+      - name: Test the update helper
+        if: ${{ !cancelled() }}
+        working-directory: macos
+        run: time sh Tests/update-helper-test.sh
+
+      # The QA host's signing identity (docs/configuration.md, QA host setup), in a temporary
+      # keychain with a fake sudo. The real trust step stays off here: the macOS 26 runner refuses
+      # to allow admin trust changes in its authorization database (-60005), and without that the
+      # trust waits for a dialog no one can answer. The timeout turns any wait into a failure.
+      - name: Test the QA signing identity script
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: |
+          time sh scripts/qa/install-test-signing-identity-test.sh
+
+      # QA's `appearance` launch: the library Symphony injects turns an ordinary AppKit app
+      # dark or light whatever this runner's appearance.
+      - name: Test the QA appearance library
+        if: ${{ !cancelled() }}
+        working-directory: macos
+        run: time sh Tests/qa-appearance-test.sh
+
+      # `qa_scroll`: the QA driver scrolls a SwiftUI ScrollView that loads pages at its end and a
+      # List to their last rows, and by a delta, in a fixture app with a window.
+      - name: Test the QA driver's scrolling
+        if: ${{ !cancelled() }}
+        working-directory: macos
+        timeout-minutes: 10
+        run: time python3 -I Tests/qa-scroll-test.py
+
+      # `qa_key`: the QA driver's ⌘ shortcuts reach a fixture app's menu (Back, Inbox, Settings,
+      # Close), and a plain key still types into the focused field.
+      - name: Test the QA driver's key shortcuts
+        if: ${{ !cancelled() }}
+        working-directory: macos
+        timeout-minutes: 10
+        run: time python3 -I Tests/qa-key-test.py
+
+      # The ticket page's speed (TP-1491): the app built above, in QA mode over the ticket-page-speed fixtures
+      # (500 events over 15 runs), with the page open while polls land. Prints the idle main thread's busy share from
+      # a 5 s sample and the hitch ratio of a scroll to the bottom and back against their budgets; it fails when it
+      # cannot measure, and over the budgets once TP-1480 turns them on.
+      - name: Test the ticket page's idle sample and scroll hitches
+        if: ${{ !cancelled() }}
+        working-directory: macos
+        timeout-minutes: 10
+        run: time python3 -I Tests/ticket-page-scroll-test.py build/Symphony.app
