@@ -304,6 +304,35 @@ A 2 pt ring in the iris at half strength, 2 pt outside the shape and following i
 when focus came from the keyboard, on every control, row, card and option that takes focus. Fields draw an accent
 edge with a soft halo instead. A pointer click never draws it, and nothing may hide it.
 
+### 3.11 The design guard
+
+Views take every style value from `DesignTokens` or a shared component: a type style through `.textStyle(_:)`, a
+colour from a `DesignTokens.ColorToken`, a gap from `DesignTokens.Space`, a radius from `DesignTokens.Radius` or a
+control size, a shadow from `.elevation(_:in:)`. A test in the app's suite enforces it (`DesignGuardTests`, TP-1493).
+It reads every file under `macos/Sources/SymphonyBar` and `macos/Sources/SymphonyBarUI` and counts, per file:
+
+| Kind | What it counts |
+| --- | --- |
+| `font` | A system text style (`.title3`, `.caption`) or a literal size (`.system(size:)`) passed to `.font(`, and any `Font.…`, `.system(size:` or AppKit system font written elsewhere |
+| `color` | A hierarchical style (`.primary`, `.secondary`, `.tertiary`…) or a named colour (`.red`, `.white`, `Color.accentColor`…) passed to `.foregroundStyle(`, `.foregroundColor(`, `.background(`, `.fill(`, `.stroke(`, `.strokeBorder(` or `.tint(`, and any `Color.…` system colour written elsewhere |
+| `rawColor` | `NSColor.…`, `Color(nsColor:`, `Color(red:` and the other raw colour initialisers |
+| `number` | A numeric literal other than 0 in `.padding(`, after `spacing:`, `cornerRadius`, in `.shadow(`, and after `lineWidth:` |
+
+Comments and string literals are not read, `Color.clear` and a zero are not style values, and the design system's
+own files are exempt: `DesignTokens.swift`, `DesignSystem.swift`, `InteractionStyles.swift` and any file under a
+`DesignSystem` folder. Nothing else is: no comment waives a line, and a value that has no token is fixed by adding the
+token. Literal sizes in `.frame(` are counted and reported in the test's output, and fail nothing yet.
+
+What the views held when the guard landed is recorded in `macos/Tests/DesignGuard/baseline.txt`, one
+`<file> <kind> <count>` line per file and kind. The guard fails when a file has more of a kind than its line (a file
+with no line may have none), and when it has fewer: the baseline always equals the count. Its message names the file,
+the line, the raw value and the token or component to use in its place.
+
+To lower the baseline, replace raw values with tokens and, in the same change, lower the file's number in
+`baseline.txt` to what the guard now counts (its failure message gives the exact line), or delete the line when it
+reaches zero. A number in the baseline never goes up. Once every line is gone, the baseline file is deleted and any
+raw value fails.
+
 ## 4. Patterns
 
 ### P1. Status sentence
