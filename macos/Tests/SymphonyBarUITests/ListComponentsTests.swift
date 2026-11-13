@@ -109,4 +109,21 @@ final class ListComponentsTests: XCTestCase {
         XCTAssertFalse(ProgressStrip.breathes(live: true, reduceMotion: false, offscreen: true))
         XCTAssertFalse(ProgressStrip.breathes(live: false, reduceMotion: false, offscreen: false))
     }
+
+    func testASegmentOnAShownStripBreathesFromTheMomentItsItemStartsWork() {
+        let period = DesignTokens.ProgressStrip.breathePeriod
+        let start = Date(timeIntervalSinceReferenceDate: period * 1000)
+        let trough = start.addingTimeInterval(period / 2)
+        // Not started yet: full colour at every moment.
+        XCTAssertEqual(ProgressStrip.breathOpacity(breathes: false, at: start), 1)
+        XCTAssertEqual(ProgressStrip.breathOpacity(breathes: false, at: trough), 1)
+        // The same segment, still on screen, once its item is worked on: it breathes down and back.
+        XCTAssertEqual(ProgressStrip.breathOpacity(breathes: true, at: start), 1, accuracy: 0.0001)
+        XCTAssertEqual(ProgressStrip.breathOpacity(breathes: true, at: trough), DesignTokens.ProgressStrip.breatheOpacity, accuracy: 0.0001)
+        let between = ProgressStrip.breathOpacity(breathes: true, at: start.addingTimeInterval(period / 4))
+        XCTAssertGreaterThan(between, DesignTokens.ProgressStrip.breatheOpacity)
+        XCTAssertLessThan(between, 1)
+        // Work stops (or Reduce Motion turns on): back to full colour at once.
+        XCTAssertEqual(ProgressStrip.breathOpacity(breathes: false, at: trough), 1)
+    }
 }

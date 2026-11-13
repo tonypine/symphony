@@ -457,6 +457,16 @@ public struct ProgressStrip: View {
     /// Whether a live segment breathes: live, and neither Reduce Motion nor a snapshot.
     static func breathes(live: Bool, reduceMotion: Bool, offscreen: Bool) -> Bool { live && !reduceMotion && !offscreen }
 
+    /// A segment's opacity at `date`: full when it does not breathe; otherwise it eases down to `breatheOpacity` and
+    /// back once every `breathePeriod`.
+    static func breathOpacity(breathes: Bool, at date: Date) -> Double {
+        guard breathes else { return 1 }
+        let period = DesignTokens.ProgressStrip.breathePeriod
+        let phase = date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+        let depth = (1 - cos(2 * Double.pi * phase)) / 2
+        return 1 - (1 - DesignTokens.ProgressStrip.breatheOpacity) * depth
+    }
+
     public var body: some View {
         let segments = DesignTokens.ProgressStrip.segments(items)
         let weights = Double(max(segments.reduce(0) { $0 + $1.weight }, 1))
@@ -477,19 +487,18 @@ public struct ProgressStrip: View {
     }
 }
 
-/// One segment: its state's colour, breathing while its item is worked on.
+/// One segment: its state's colour, breathing while its item is worked on. The breath is read off the clock each
+/// frame rather than started once, so a segment whose item starts work while the strip is on screen, or whose Reduce
+/// Motion is turned off, begins breathing at once, and one that stops goes back to full colour.
 private struct StripSegment: View {
     let segment: DesignTokens.ProgressStrip.Segment
     let breathes: Bool
-    @State private var dim = false
 
     var body: some View {
-        RoundedRectangle(cornerRadius: DesignTokens.ProgressStrip.radius, style: .continuous)
-            .fill(DesignTokens.ProgressStrip.color(segment.status).color)
-            .opacity(breathes && dim ? DesignTokens.ProgressStrip.breatheOpacity : 1)
-            .onAppear {
-                guard breathes else { return }
-                withAnimation(.easeInOut(duration: DesignTokens.ProgressStrip.breathePeriod / 2).repeatForever(autoreverses: true)) { dim = true }
-            }
+        TimelineView(.animation(paused: !breathes)) { context in
+            RoundedRectangle(cornerRadius: DesignTokens.ProgressStrip.radius, style: .continuous)
+                .fill(DesignTokens.ProgressStrip.color(segment.status).color)
+                .opacity(ProgressStrip.breathOpacity(breathes: breathes, at: context.date))
+        }
     }
 }
