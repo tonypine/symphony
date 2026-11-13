@@ -2,9 +2,10 @@
 # The build cache of a CI runner that keeps its disk between jobs (a self-hosted Mac runner).
 # Two things live under $SYMPHONY_CI_CACHE:
 #
-#   work/<toolchain>/<ref>/<flavour>   the compiler's own folders, one set per branch, so a push
-#                                      recompiles what it changed. A new branch starts as a copy
-#                                      (an APFS clone: instant, no space) of main's set.
+#   work/<toolchain>/refs/<ref>/<flavour>   the compiler's own folders, one set per branch, so a
+#                                      push recompiles what it changed. A new branch starts from
+#                                      main's set. Builds run in work/<toolchain>/active/<flavour>;
+#                                      copies between the two are APFS clones (no space until changed).
 #   store/<kind>/<key>/                finished pieces, filed under a key made from the content of
 #                                      the paths that feed them, so a job that needs a piece some
 #                                      job already built takes it instead of building it again:
@@ -16,8 +17,9 @@
 #
 #   build-store.sh key app                      the app executable's key at HEAD
 #   build-store.sh key server <build-number>    the release's key at HEAD for that build number
-#   build-store.sh work <ref> <flavour> [--fresh]   prints the working folder (created, or seeded
-#                                               from main's); --fresh empties it first
+#   build-store.sh work <ref> <flavour> [--fresh]   puts the branch's saved state (else main's) in the
+#                                               active folder and prints it; --fresh empties it
+#   build-store.sh save <ref> <flavour>         files the active folder's state under the branch
 #   build-store.sh get <kind> <key> <dest> [--clean]   copies the piece to <dest>; exit 1 on a miss.
 #                                               --clean takes only a piece from a clean build
 #   build-store.sh put <kind> <key> <src> <clean|incremental>
@@ -75,22 +77,41 @@ copy() { # APFS clones where the disk allows, a plain copy elsewhere
   cp -cR "$1" "$2" 2>/dev/null || cp -R "$1" "$2"
 }
 
+# A compiler's folder cannot be copied to another path and reused: Swift's module cache refuses
+# files compiled under another path. So every build runs in one fixed place, work/<toolchain>/active/<flavour>,
+# and each branch's state is kept beside it: `work` puts the branch's saved state (else main's) into
+# the active place, `save` files the active state back under the branch. One runner runs one job at
+# a time, so the active place has one user.
 cmd_work() {
   local ref=${1:?ref} flavour=${2:?flavour} fresh=${3:-}
   enabled || { echo ""; return 0; }
   local base="$ROOT/work/$(toolchain)"
-  local dir="$base/$(safe_ref "$ref")/$flavour" seed="$base/main/$flavour"
-  if [ "$fresh" = "--fresh" ]; then rm -rf "$dir"; fi
-  if [ ! -d "$dir" ]; then
-    if [ "$ref" != main ] && [ "$fresh" != "--fresh" ] && [ -d "$seed" ]; then
-      note "work: $ref/$flavour starts as a copy of main's"
-      copy "$seed" "$dir"
-    else
-      mkdir -p "$dir"
-    fi
+  local active="$base/active/$flavour" own="$base/refs/$(safe_ref "$ref")/$flavour" seed="$base/refs/main/$flavour"
+  mkdir -p "$base/active"
+  if [ "$(cat "$active.ref" 2>/dev/null)" = "$ref" ] && [ -d "$active" ] && [ "$fresh" != "--fresh" ]; then
+    : # the active state is already this branch's (the last job was the same branch's)
+  elif [ "$fresh" = "--fresh" ]; then
+    rm -rf "$active"; mkdir -p "$active"
+  elif [ -d "$own" ]; then
+    copy "$own" "$active"
+  elif [ -d "$seed" ]; then
+    note "work: $ref/$flavour starts from main's"
+    copy "$seed" "$active"
+  else
+    rm -rf "$active"; mkdir -p "$active"
   fi
-  touch "$base/$(safe_ref "$ref")"
-  echo "$dir"
+  echo "$ref" > "$active.ref"
+  echo "$active"
+}
+
+cmd_save() {
+  local ref=${1:?ref} flavour=${2:?flavour}
+  enabled || return 0
+  local base="$ROOT/work/$(toolchain)"
+  local active="$base/active/$flavour" own="$base/refs/$(safe_ref "$ref")/$flavour"
+  [ -d "$active" ] && [ "$(cat "$active.ref" 2>/dev/null)" = "$ref" ] || { note "save: the active $flavour is not $ref's; nothing saved"; return 0; }
+  copy "$active" "$own"
+  touch "$base/refs/$(safe_ref "$ref")"
 }
 
 cmd_get() {
@@ -145,6 +166,7 @@ cmd_app() {
   # shellcheck disable=SC2086
   bin=$(cd "$REPO/macos" && swift build -c release --show-bin-path ${scratch:+--scratch-path "$scratch"})
   mkdir -p "$(dirname "$dest")"; cp "$bin/SymphonyBar" "$dest"
+  if enabled; then if [ "$only" = "--clean" ]; then cmd_save "${SYMPHONY_CI_REF:-main}" release-clean; else cmd_save "${SYMPHONY_CI_REF:-main}" release-plain; fi; fi
   if [ -n "$key" ]; then
     if [ "$only" = "--clean" ]; then cmd_put app "$key" "$dest" clean; else cmd_put app "$key" "$dest" "$(mode_of)"; fi
   fi
@@ -170,6 +192,7 @@ cmd_server() {
   (cd "$REPO" && env -u SYMPHONY_AGENT_RUNTIME SYMPHONY_BUILD_NUMBER="$build" make release >&2)
   [ -d "$built/releases/0.0.1-$build" ] || die "server: make release did not produce build $build in $built"
   rm -rf "$dest"; mkdir -p "$(dirname "$dest")"; ditto "$built" "$dest"
+  if enabled; then cmd_save "${SYMPHONY_CI_REF:-main}" mix; fi
   if [ -n "$key" ]; then cmd_put server "$key" "$dest" "$(mode_of)"; fi
 }
 
@@ -194,7 +217,7 @@ cmd_prune() {
       [ "$(basename "$dir")" = main ] && continue
       n=$((n + 1))
       if [ "$n" -gt "$KEEP_REFS" ]; then note "prune: $dir"; rm -rf "$dir"; fi
-    done < <(ls -1dt "$kind"*/ 2>/dev/null)
+    done < <(ls -1dt "$kind"refs/*/ 2>/dev/null)
   done
 }
 
@@ -208,10 +231,11 @@ case "$command" in
     esac;;
   inputs) case "${1:-}" in app) echo "$APP_INPUTS";; server) echo "$SERVER_INPUTS";; *) die "inputs: app | server";; esac;;
   work) cmd_work "$@";;
+  save) cmd_save "$@";;
   get) cmd_get "$@";;
   put) cmd_put "$@";;
   app) cmd_app "$@";;
   server) cmd_server "$@";;
   prune) cmd_prune;;
-  *) sed -n '2,31p' "$0" >&2; exit 2;;
+  *) sed -n '2,33p' "$0" >&2; exit 2;;
 esac
