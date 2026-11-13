@@ -154,6 +154,11 @@ public struct TicketPeek: Equatable {
         public var total: Int?
         public var children: [DesignTokens.Status]
 
+        /// The progress strip's items: one per sub-ticket, waiting (idle) ones not started, working ones breathing.
+        public var stripItems: [DesignTokens.ProgressStrip.Item] {
+            children.map { DesignTokens.ProgressStrip.Item($0 == .idle ? nil : $0, live: $0 == .working) }
+        }
+
         /// "4 of 7 done", nil when the parent's sub-tickets aren't known.
         public var progress: String? {
             guard let done, let total, total > 0 else { return nil }

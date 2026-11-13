@@ -49,6 +49,8 @@ struct QualityCards: View {
     var changeReview: (String) -> Void = { _ in }
     var readReviewAgain: () -> Void = {}
     @State private var showsRuns = false
+    /// The disagreement a click selected.
+    @State var selected: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -75,9 +77,11 @@ struct QualityCards: View {
                         }
                     }
                 } else {
-                    VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+                    VStack(alignment: .leading, spacing: 0) {
                         ForEach(quality.disagreements) { row in
-                            DisagreementRowView(row: row).opensTicket(row.identifier, open: openTicket)
+                            DisagreementRowView(
+                                row: row, selected: selected == row.id, select: { selected = row.id }, open: { openTicket(row.identifier) }
+                            )
                         }
                     }
                 }
@@ -192,23 +196,19 @@ private struct AgreementChart: View {
     }
 }
 
-/// A row of Disagreements: the ticket, the Code Review decision and the one that overturned it.
+/// A row of Disagreements (C49): the ticket, the Code Review decision and the one that overturned it, and its repo in
+/// the value column.
 private struct DisagreementRowView: View {
     let row: Quality.DisagreementRow
+    let selected: Bool
+    let select: () -> Void
+    let open: () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
-            Text(row.identifier).font(DesignTokens.TypeStyle.rowTitle.font)
-            if let repo = row.repoKey {
-                Text(repo).font(DesignTokens.TypeStyle.secondary.font).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: DesignTokens.Space.s2)
-            Text(row.review).font(DesignTokens.TypeStyle.secondary.font)
-            Image(systemName: "arrow.right").foregroundStyle(.tertiary).accessibilityHidden(true)
-            Text(row.decision).font(DesignTokens.TypeStyle.secondary.font)
-        }
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .ignore)
+        Row(
+            "\(row.review) → \(row.decision)", identifier: row.identifier, lead: .glyph("arrow.uturn.backward", DesignTokens.TextColor.secondary),
+            value: row.repoKey, valueWidth: DesignTokens.Row.wideValueWidth, selected: selected, select: select, open: open
+        )
         .accessibilityLabel("\(row.identifier), \(row.review), \(row.decision)")
     }
 }

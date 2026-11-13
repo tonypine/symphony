@@ -204,7 +204,7 @@ public struct ConnectedPanel: View {
     }
 }
 
-/// The epic: its identifier and title, opening Initiatives; its progress strip (N10) and count under it.
+/// The epic: its identifier and title, opening Initiatives; its progress strip (N10, C51) and count under it.
 private struct EpicRow: View {
     let epic: ConnectedPanelModel.Epic
     let open: () -> Void
@@ -225,15 +225,8 @@ private struct EpicRow: View {
                 }
                 HStack(spacing: DesignTokens.Space.s2) {
                     if let strip = epic.strip {
-                        HStack(spacing: ProgressStrip.gap) {
-                            ForEach(Array(strip.segments.enumerated()), id: \.offset) { _, segment in
-                                RoundedRectangle(cornerRadius: ProgressStrip.segmentHeight / 2, style: .continuous)
-                                    .fill(segment.color.color)
-                                    .frame(minWidth: 3, maxWidth: ProgressStrip.segmentWidth)
-                                    .frame(height: ProgressStrip.segmentHeight)
-                            }
-                        }
-                        .frame(maxWidth: ProgressStrip.segmentWidth * Double(strip.segments.count) + ProgressStrip.gap * Double(max(strip.segments.count - 1, 0)))
+                        ProgressStrip(strip.items, label: strip.accessibilityLabel)
+                            .frame(width: DesignTokens.ProgressStrip.compactWidth)
                     }
                     Text(epic.progress)
                         .font(DesignTokens.TypeStyle.secondary.font)

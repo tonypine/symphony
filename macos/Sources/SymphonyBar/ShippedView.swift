@@ -131,6 +131,8 @@ struct ShippedCards: View {
     let shipped: Shipped
     var openTicket: (String) -> Void = { _ in }
     var openURL: (URL) -> Void = { _ in }
+    /// The row a click selected.
+    @State var selected: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -150,11 +152,11 @@ struct ShippedCards: View {
             ForEach(shipped.groups) { group in
                 Card(title: group.title) {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, row in
-                            if index > 0 { Divider() }
-                            ShippedRowView(row: row, openURL: openURL)
-                                .padding(.vertical, DesignTokens.Space.s2)
-                                .opensTicket(row.identifier, open: openTicket)
+                        ForEach(group.rows) { row in
+                            ShippedRowView(
+                                row: row, selected: selected == row.id, select: { selected = row.id },
+                                open: { openTicket(row.identifier) }, openURL: openURL
+                            )
                         }
                     }
                 }
@@ -164,39 +166,25 @@ struct ShippedCards: View {
     }
 }
 
-/// A merged ticket: identifier and title, then its repo, initiative and PR, and its time from Todo to Done.
+/// A merged ticket (C49): its identifier and title, its repo, initiative and PR under them, its PR's button, and its
+/// time from Todo to Done in the value column, so the times line up.
 private struct ShippedRowView: View {
     let row: Shipped.Row
+    let selected: Bool
+    let select: () -> Void
+    let open: () -> Void
     var openURL: (URL) -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
-                HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                    Text(row.identifier).font(DesignTokens.TypeStyle.rowTitle.font)
-                    Text(row.title).font(DesignTokens.TypeStyle.body.font).lineLimit(1)
-                }
-                if !row.detail.isEmpty {
-                    Text(row.detail)
-                        .font(DesignTokens.TypeStyle.secondary.font)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-            }
-            Spacer(minLength: DesignTokens.Space.s2)
+        Row(
+            row.title, identifier: row.identifier, lead: .status(.done), line2: row.detail.isEmpty ? nil : row.detail,
+            value: row.leadTime, valueWidth: DesignTokens.Row.wideValueWidth, selected: selected, select: select, open: open
+        ) {
             if let url = row.prURL, let title = row.prTitle {
                 Button(title) { openURL(url) }
                     .directorButton(.quiet, size: .small)
                     .help("Open \(title) on GitHub")
                     .accessibilityLabel("Open \(title) on GitHub")
-            }
-            if let leadTime = row.leadTime {
-                Text(leadTime)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .frame(minWidth: 72, alignment: .trailing)
-                    .help("Time from Todo to Done")
             }
         }
         .accessibilityLabel(row.accessibilityLabel)
@@ -260,6 +248,8 @@ struct LearningsCards: View {
     @Binding var filter: Learnings.Filter
     var openTicket: (String) -> Void = { _ in }
     var openURL: (URL) -> Void = { _ in }
+    /// The row a click selected.
+    @State var selected: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -267,10 +257,11 @@ struct LearningsCards: View {
             ForEach(learnings.groups) { group in
                 Card(title: group.repoKey) {
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, row in
-                            if index > 0 { Divider() }
-                            LearningRowView(row: row, openTicket: openTicket, openURL: openURL)
-                                .padding(.vertical, DesignTokens.Space.s2)
+                        ForEach(group.rows) { row in
+                            LearningRowView(
+                                row: row, selected: selected == row.id, select: { selected = row.id }, openTicket: openTicket,
+                                openURL: openURL
+                            )
                         }
                     }
                 }
@@ -280,54 +271,44 @@ struct LearningsCards: View {
     }
 }
 
-/// A learning: its rule, its evidence and tags, and links to its ticket and PR.
+/// A learning (C49): its rule on the first line, where it came from and its evidence on the second, its tags and links
+/// at the end; the whole rule and evidence are its help text. A double click opens its ticket.
 private struct LearningRowView: View {
     let row: Learnings.Row
+    let selected: Bool
+    let select: () -> Void
     var openTicket: (String) -> Void
     var openURL: (URL) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                Text(row.context)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .foregroundStyle(.secondary)
-                Spacer(minLength: DesignTokens.Space.s2)
-                if let identifier = row.record.issueIdentifier {
-                    Button("Open \(identifier)") { openTicket(identifier) }
-                        .directorButton(.quiet, size: .small)
-                        .help("Open the ticket page of \(identifier)")
-                }
-                if let url = row.record.prURL, let title = row.record.prTitle {
-                    Button(title) { openURL(url) }
-                        .directorButton(.quiet, size: .small)
-                        .help("Open \(title) on GitHub")
-                        .accessibilityLabel("Open \(title) on GitHub")
-                }
+        let identifier = row.record.issueIdentifier
+        Row(
+            row.record.rule, lead: .glyph("lightbulb", DesignTokens.TextColor.secondary), line2: line2, selected: selected,
+            select: select, open: identifier.map { identifier in { openTicket(identifier) } }
+        ) {
+            ForEach(row.record.tags, id: \.self) { Chip($0) }
+            if let identifier {
+                Button("Open \(identifier)") { openTicket(identifier) }
+                    .directorButton(.quiet, size: .small)
+                    .help("Open the ticket page of \(identifier)")
             }
-            Text(row.record.rule)
-                .font(DesignTokens.TypeStyle.body.font)
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-            if let evidence = row.record.evidence, !evidence.isEmpty {
-                Text("“\(evidence)”")
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if !row.record.tags.isEmpty {
-                HStack(spacing: DesignTokens.Space.s1) {
-                    ForEach(row.record.tags, id: \.self) { tag in
-                        Text(tag)
-                            .font(DesignTokens.TypeStyle.caption.font)
-                            .padding(.horizontal, DesignTokens.Space.s2)
-                            .padding(.vertical, 2)
-                            .background(DesignTokens.Surface.separator.color.opacity(0.5), in: Capsule())
-                    }
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("Tags: \(row.record.tags.joined(separator: ", "))")
+            if let url = row.record.prURL, let title = row.record.prTitle {
+                Button(title) { openURL(url) }
+                    .directorButton(.quiet, size: .small)
+                    .help("Open \(title) on GitHub")
+                    .accessibilityLabel("Open \(title) on GitHub")
             }
         }
+        .help(help)
+    }
+
+    /// "BIL-204 · today · “The evidence”".
+    private var line2: String {
+        ([row.context] + [row.record.evidence].compactMap { $0 }.filter { !$0.isEmpty }.map { "“\($0)”" }).joined(separator: " · ")
+    }
+
+    /// The rule whole, then its evidence.
+    private var help: String {
+        [row.record.rule, row.record.evidence].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: "\n\n")
     }
 }

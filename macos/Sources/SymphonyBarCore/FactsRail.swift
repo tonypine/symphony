@@ -417,7 +417,7 @@ public struct ConnectedPanelModel: Equatable {
     public struct Epic: Equatable {
         public var identifier: String
         public var title: String
-        public var strip: ProgressStrip?
+        public var strip: SubTicketStrip?
         /// "4 of 7 done".
         public var progress: String
         public var accessibilityLabel: String
@@ -461,9 +461,9 @@ public struct ConnectedPanelModel: Equatable {
     }
 
     static func epic(_ epic: TicketConnected.Epic) -> Epic {
-        let segments = epic.tickets.map(ProgressStrip.Segment.init(ticket:))
+        let segments = epic.tickets.map(SubTicketStrip.Segment.init(ticket:))
         let total = max(epic.total, segments.count)
-        let strip = segments.isEmpty ? nil : ProgressStrip(segments: segments, done: epic.done, total: total)
+        let strip = segments.isEmpty ? nil : SubTicketStrip(segments: segments, done: epic.done, total: total)
         let progress = "\(epic.done) of \(total) done"
         let title = epic.title ?? epic.identifier
         return Epic(
@@ -512,7 +512,7 @@ public struct ConnectedPanelModel: Equatable {
     }
 }
 
-extension ProgressStrip {
+extension SubTicketStrip {
     init(segments: [Segment], done: Int, total: Int) {
         self.segments = segments
         self.done = done
@@ -520,7 +520,7 @@ extension ProgressStrip {
     }
 }
 
-extension ProgressStrip.Segment {
+extension SubTicketStrip.Segment {
     /// An epic's ticket: Done, waiting on the person, under way, or not started (Todo, Backlog, or unknown).
     init(ticket: TicketConnected.Ticket) {
         if ticket.state == "Done" || ticket.situation == .done {

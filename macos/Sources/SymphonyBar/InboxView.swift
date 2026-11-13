@@ -611,30 +611,30 @@ private struct ContextLabel: View {
     }
 }
 
-/// N10: one 14 × 5 pt segment per sub-ticket in landing order, coloured by its state, and "4 of 7 done" beside it;
-/// one element for VoiceOver, "4 of 7 sub-tickets done".
+/// N10: the progress strip (C51) of the parent's sub-tickets in landing order, and "4 of 7 done" beside it; one element
+/// for VoiceOver, "4 of 7 sub-tickets done", then its counts. `header` draws the taller strip of an epic's header on
+/// Initiatives, up to its wider width.
 struct ProgressStripView: View {
-    let strip: ProgressStrip
+    let strip: SubTicketStrip
+    var header = false
 
     var body: some View {
         HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
-            HStack(spacing: ProgressStrip.gap) {
-                ForEach(Array(strip.segments.enumerated()), id: \.offset) { _, segment in
-                    RoundedRectangle(cornerRadius: ProgressStrip.segmentHeight / 2, style: .continuous)
-                        .fill(segment.color.color)
-                        .frame(minWidth: 3, maxWidth: ProgressStrip.segmentWidth)
-                        .frame(height: ProgressStrip.segmentHeight)
-                }
+            if header {
+                ProgressStrip(strip.items, height: DesignTokens.ProgressStrip.headerHeight, label: strip.accessibilityLabel)
+                    .frame(maxWidth: DesignTokens.ProgressStrip.headerMaxWidth)
+            } else {
+                ProgressStrip(strip.items, label: strip.accessibilityLabel)
+                    .frame(width: DesignTokens.ProgressStrip.compactWidth)
             }
-            .frame(maxWidth: ProgressStrip.segmentWidth * Double(strip.segments.count) + ProgressStrip.gap * Double(max(strip.segments.count - 1, 0)))
             Text(strip.line)
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .foregroundStyle(.secondary)
+                .textStyle(.secondary)
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
                 .monospacedDigit()
                 .fixedSize()
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(strip.accessibilityLabel)
+        .accessibilityLabel(ProgressStrip.accessibilityLabel(strip.items, label: strip.accessibilityLabel))
     }
 }
 

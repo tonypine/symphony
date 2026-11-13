@@ -1453,12 +1453,13 @@ struct DiagnosticsCards: View {
             }
             ForEach(report.groups, id: \.title) { group in
                 Card(title: group.title) {
-                    Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: DesignTokens.Space.s4,
-                         verticalSpacing: DesignTokens.Space.s2) {
+                    let marked = group.rows.contains { $0.status != nil }
+                    VStack(alignment: .leading, spacing: 0) {
                         ForEach(Array(group.rows.enumerated()), id: \.offset) { _, row in
-                            DiagnosticsRow(row: row)
+                            DiagnosticsRow(row: row, marked: marked)
                         }
                     }
+                    .textSelection(.enabled)
                 }
             }
         }
@@ -1466,38 +1467,18 @@ struct DiagnosticsCards: View {
     }
 }
 
+/// A line of Diagnostics (C49): what it is, its status glyph when it has one (the others in a group with marks keep its
+/// place), the detail under it, and its value in the value column.
 private struct DiagnosticsRow: View {
     let row: DiagnosticsReport.Row
+    let marked: Bool
 
     var body: some View {
-        GridRow {
-            Text(row.label)
-                .font(row.monospacedLabel ? DesignTokens.TypeStyle.mono.font : DesignTokens.TypeStyle.body.font)
-                .foregroundStyle(.secondary)
-                .gridColumnAlignment(.leading)
-                .frame(minWidth: 140, alignment: .leading)
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
-                HStack(spacing: DesignTokens.Space.s2) {
-                    if let status = row.status {
-                        Image(systemName: status.symbol)
-                            .foregroundStyle(status.tint)
-                            .accessibilityLabel(status.word)
-                    }
-                    Text(row.value)
-                        .font(row.monospacedValue ? DesignTokens.TypeStyle.mono.font : DesignTokens.TypeStyle.body.font)
-                        .monospacedDigit()
-                        .contentTransition(.numericText())
-                        .textSelection(.enabled)
-                }
-                if let detail = row.detail {
-                    Text(detail)
-                        .font(DesignTokens.TypeStyle.mono.font)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-            }
-        }
-        .accessibilityElement(children: .combine)
+        Row(
+            row.label, lead: row.status.map { RowLead.status($0) } ?? (marked ? .blank : .none), line2: row.detail, value: row.value,
+            valueWidth: DesignTokens.Row.wideValueWidth
+        )
+        .accessibilityLabel([row.label, row.status?.word, row.value, row.detail].compactMap { $0 }.joined(separator: ", "))
     }
 }
 

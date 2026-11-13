@@ -60,7 +60,7 @@ public struct InitiativeStory: Equatable {
     public var identifier: String
     public var rows: [Row]
     /// The epic read's strip; nil until a sub-ticket's ticket read names the epic.
-    public var strip: ProgressStrip?
+    public var strip: SubTicketStrip?
     /// "3 of 26 done": the epic read's count, the Initiatives' until it answers.
     public var progress: String
     /// What VoiceOver reads for the header's progress.

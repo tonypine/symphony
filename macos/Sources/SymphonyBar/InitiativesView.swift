@@ -160,7 +160,7 @@ private struct InitiativeRow: View {
             if let title = initiative.title {
                 Text(title).font(DesignTokens.TypeStyle.body.font).lineLimit(1)
             }
-            InitiativeBar(initiative: initiative)
+            ProgressStrip(initiative.stripItems, live: false, label: initiative.progress)
             InitiativeLegend(initiative: initiative)
         }
         .padding(DesignTokens.Space.s3)
@@ -174,41 +174,9 @@ private struct InitiativeRow: View {
     }
 }
 
-// MARK: - C12: the progress bar by stage
+// MARK: - C12: the progress strip's legend
 
-/// A stacked bar of the sub-tickets by stage, segments split by a 2 pt gap. VoiceOver reads each stage's count.
-struct InitiativeBar: View {
-    let initiative: Initiative
-    var height: CGFloat = 8
-
-    var body: some View {
-        let segments = initiative.legend
-        let total = max(segments.reduce(0) { $0 + $1.count }, 1)
-        GeometryReader { geometry in
-            let gaps = CGFloat(max(segments.count - 1, 0)) * 2
-            HStack(spacing: 2) {
-                if segments.isEmpty {
-                    Capsule().fill(DesignTokens.Surface.raised.color)
-                } else {
-                    ForEach(segments, id: \.stage) { segment in
-                        let opacity: Double = segment.stage.isLight ? 0.45 : 1
-                        let share = CGFloat(segment.count) / CGFloat(total)
-                        let width = max(0, (geometry.size.width - gaps) * share)
-                        RoundedRectangle(cornerRadius: height / 2, style: .continuous)
-                            .fill(segment.stage.status.tint.opacity(opacity))
-                            .frame(width: width)
-                    }
-                }
-            }
-        }
-        .frame(height: height)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Progress")
-        .accessibilityValue(initiative.barAccessibilityLabel)
-    }
-}
-
-/// The bar's legend: each stage's symbol, count and word, so the bar never relies on color alone.
+/// The strip's legend: each stage's symbol, count and word, so the strip never relies on color alone.
 struct InitiativeLegend: View {
     let initiative: Initiative
 
@@ -276,9 +244,10 @@ struct InitiativeDetail: View {
                 .fixedSize(horizontal: false, vertical: true)
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 if let strip = story.strip {
-                    ProgressStripView(strip: strip)
+                    ProgressStripView(strip: strip, header: true)
                 } else {
-                    InitiativeBar(initiative: initiative, height: 12)
+                    ProgressStrip(initiative.stripItems, height: DesignTokens.ProgressStrip.headerHeight, label: initiative.progress)
+                        .frame(maxWidth: DesignTokens.ProgressStrip.headerMaxWidth)
                     InitiativeLegend(initiative: initiative)
                 }
                 if let slot = initiative.slot {
@@ -438,7 +407,7 @@ struct InitiativesCard: View {
                                 Spacer(minLength: DesignTokens.Space.s2)
                                 Text(initiative.progress).font(DesignTokens.TypeStyle.secondary.font).monospacedDigit()
                             }
-                            InitiativeBar(initiative: initiative, height: 6)
+                            ProgressStrip(initiative.stripItems, label: initiative.progress)
                             InitiativeLegend(initiative: initiative)
                             if let noLane = initiative.slot?.overviewLine {
                                 Text(noLane)
