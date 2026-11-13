@@ -20,6 +20,7 @@
 #   build-store.sh work <ref> <flavour> [--fresh]   puts the branch's saved state (else main's) in the
 #                                               active folder and prints it; --fresh empties it
 #   build-store.sh save <ref> <flavour>         files the active folder's state under the branch
+#   build-store.sh stamp                        gives the sources content-made times (after checkout)
 #   build-store.sh get <kind> <key> <dest> [--clean]   copies the piece to <dest>; exit 1 on a miss.
 #                                               --clean takes only a piece from a clean build
 #   build-store.sh put <kind> <key> <src> <clean|incremental>
@@ -102,6 +103,22 @@ cmd_work() {
   fi
   echo "$ref" > "$active.ref"
   echo "$active"
+}
+
+# The build tools decide what to recompile from each file's time, and git gives every file it
+# writes the time of the checkout. So after one branch's job, another branch's files that differ
+# all look new, and a switch between branches recompiled nearly everything (measured: 115 s against
+# 7 s). `stamp` gives every tracked source file a time made from its content, so the same content
+# has the same time whichever job wrote it. Run it after the checkout, before the first build.
+STAMP_PATHS="macos priv/qa_driver"
+cmd_stamp() {
+  enabled || return 0
+  local mode hash stage path
+  # shellcheck disable=SC2086
+  git -C "$REPO" ls-files -s -- $STAMP_PATHS | while read -r mode hash stage path; do
+    [ -f "$REPO/$path" ] || continue
+    touch -t "$(date -r $((1500000000 + 0x${hash:0:7})) +%Y%m%d%H%M.%S)" "$REPO/$path"
+  done
 }
 
 cmd_save() {
@@ -232,10 +249,11 @@ case "$command" in
   inputs) case "${1:-}" in app) echo "$APP_INPUTS";; server) echo "$SERVER_INPUTS";; *) die "inputs: app | server";; esac;;
   work) cmd_work "$@";;
   save) cmd_save "$@";;
+  stamp) cmd_stamp;;
   get) cmd_get "$@";;
   put) cmd_put "$@";;
   app) cmd_app "$@";;
   server) cmd_server "$@";;
   prune) cmd_prune;;
-  *) sed -n '2,33p' "$0" >&2; exit 2;;
+  *) sed -n '2,34p' "$0" >&2; exit 2;;
 esac
