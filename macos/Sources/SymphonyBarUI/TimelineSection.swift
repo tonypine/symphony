@@ -98,7 +98,7 @@ public struct TimelineSection: View {
         focusShown = true
         selection = target
         DispatchQueue.main.async {
-            withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { proxy.scrollTo(target, anchor: .center) }
+            withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { TimelineScrolls.scroll(proxy, to: target, anchor: .center) }
         }
     }
 
@@ -234,7 +234,7 @@ public struct TimelineSection: View {
             // The page follows the selection: the row comes into view, made first when it wasn't yet (TP-1481).
             withAnimation(.motion(.standard, reduceMotion: reduceMotion)) {
                 selection = next
-                if let next { proxy.scrollTo(next) }
+                if let next { TimelineScrolls.scroll(proxy, to: next) }
             }
             return .handled
         case .toggle:
@@ -654,6 +654,19 @@ enum TimelineRowBodies {
 
     static func evaluated(_ id: String) {
         recorded?.append(id)
+    }
+}
+
+/// The timeline's scrolls to an item: the jump to the event the page opened at, and the page following the arrow keys'
+/// selection. A test records the ids asked for (TP-1481), since a scroll view hosted without a window never scrolls.
+/// Off (nil) in the app.
+@MainActor
+enum TimelineScrolls {
+    static var recorded: [String]?
+
+    static func scroll(_ proxy: ScrollViewProxy, to id: String, anchor: UnitPoint? = nil) {
+        recorded?.append(id)
+        proxy.scrollTo(id, anchor: anchor)
     }
 }
 

@@ -109,18 +109,23 @@ final class TimelineLazyTests: XCTestCase {
         withExtendedLifetime(host) {}
     }
 
-    func testThePageOpenedAtAnEventFarDownScrollsToItsRowBeforeItWasMade() throws {
+    /// The page opened at an event far down: the timeline asks its scroll view for that item's row, a line of the lazy
+    /// stack not made yet, and makes nothing past the screen meanwhile. A scroll view hosted without a window never
+    /// scrolls, so the scroll itself is the Mac build's scroll test's and QA's to see.
+    func testThePageOpenedAtAnEventFarDownAsksForItsRowBeforeItWasMade() throws {
         let model = Self.model()
         let target = try XCTUnwrap(model.items.dropLast(5).last)
         guard case let .entry(entry) = target else { return XCTFail("the target is not an entry") }
         TimelineRowBodies.recorded = []
+        TimelineScrolls.recorded = []
+        defer { TimelineScrolls.recorded = nil }
         let host = show(page(model, focus: TimelineFocus(identifier: "TP-1463", eventID: entry.id)))
-        spin(0.3)
-        host.layoutSubtreeIfNeeded()
+        XCTAssertEqual(TimelineScrolls.recorded, [target.id])
+        // The item's row is one of the stack's own lines, so the scroll finds it before it is made.
+        XCTAssertTrue(TimelineSection.lines(model, idle: nil, clock: { _ in "" }).contains { $0.id == target.id })
         let made = TimelineRowBodies.recorded ?? []
-        XCTAssertTrue(made.contains(target.id), "the scroll to \(target.id) never made its row")
-        // Scrolled there, not through everything above it.
-        XCTAssertLessThan(Set(made).count, 2 * Self.firstDisplayBound)
+        XCTAssertFalse(made.contains(target.id), "the row far down was made before any scroll")
+        XCTAssertLessThan(Set(made).count, Self.firstDisplayBound)
         withExtendedLifetime(host) {}
     }
 
