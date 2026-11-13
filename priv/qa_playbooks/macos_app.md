@@ -423,7 +423,7 @@ GitHub or Linear in QA:
   below about 1600 pt of content: the page becomes the laptop layout, with the decisions line
   and Answer…; widen it again: the desktop arrangement returns and no section moves elsewhere.
   Where the screen is too small for 1600 pt, the desktop width is proved by the
-  `ticket-page-*-desktop` and `ticket-page-waiting-1590`/`-1610` snapshots. Walk it in light and
+  `ticket-page-*-desktop` and `ticket-page-waiting-1590`/`-1610` stories in the Component Gallery. Walk it in light and
   dark.
 - **Answering from the ticket page (TP-1450):** the same `ticket-page` fixtures at 1440×900, on a
   fresh launch (its answer reads once Symphony took a `decide`: the fixtures then serve each
@@ -467,7 +467,7 @@ GitHub or Linear in QA:
     (HTTP 403) …" in red, **Open Settings…**, **Close** and **Try Again**; **Open Settings…** opens the
     Settings window with the sheet still open behind it, and the row is still there.
   - Look: judge the page, its Details, both sheets and the banner in light and dark against
-    `macos/Tests/Snapshots/setup-*.png`.
+    the Component Gallery's `setup-*` stories.
 - **Add Repo's Check setup and the first launch (TP-911):**
   - First launch, before any other launch of the pass: every launch in a pass shares one QA root,
     and the first one that sees Symphony's setup checked records the app's first run, so only that
@@ -475,8 +475,8 @@ GitHub or Linear in QA:
     `macos/Tests/Fixtures/director-app/setup` as `api_fixtures` and `appearance: "dark"`: the
     Symphony window opens on its own on Setup with "Welcome to Symphony on this Mac…" above
     "Setup has 1 error and 1 warning." (walkthrough step 6). Judge the welcome by sight there
-    against `macos/Tests/Snapshots/setup-first-launch-dark.png`. No later launch is a first
-    launch, so judge the light welcome from `macos/Tests/Snapshots/setup-first-launch-light.png`
+    against the Component Gallery's `setup-first-launch` story in dark. No later launch is a first
+    launch, so judge the light welcome from the Component Gallery's `setup-first-launch` story in light
     alone until a launch can start from a fresh QA root (TP-1121). That a first launch without
     errors, or a later launch with errors, opens nothing is proved by `SetupOnStartTests`.
   - Then pass `macos/Tests/Fixtures/director-app/add-repo-setup` as `api_fixtures`, with the gh
@@ -495,7 +495,7 @@ GitHub or Linear in QA:
     and add the repo the same way: `widgets is not cloned yet` is listed and **Done** is enabled.
   - Symphony stopped: launch without `api_fixtures` and add the repo: "Symphony isn't running, so
     it checks widgets when it starts." with **Start Symphony** and **Done** both enabled.
-  - Look: judge the step in light and dark against `macos/Tests/Snapshots/add-repo-check-*.png`.
+  - Look: judge the step in light and dark against the Component Gallery's `add-repo-check-*` stories.
 - **GitHub updates card (TP-953):** three fixtures stand for the QA harness API in each state.
   Each launch's `qa_api_requests` starts empty.
   - Off (walkthrough step 1): pass `macos/Tests/Fixtures/director-app/github-updates-off` as
@@ -523,7 +523,7 @@ GitHub or Linear in QA:
     presses the verb and Escape cancels. VoiceOver reads the card's state as "GitHub updates,
     Instant" and each repo row as one element ("acme/web-shop, Instant, Last update 2 min ago").
   - Look: judge the card in each state and both sheets in light and dark against
-    `macos/Tests/Snapshots/github-updates-*.png`.
+    the Component Gallery's `github-updates-*` stories.
 - **Turn on instant updates, step by step, and Add Repo's last step (TP-954):** two fixtures stand
   for Symphony. Each answers a setup request in the order the walkthrough sends them
   (`run_step.1.json`, `run_step.2.json`…), so drive the steps in order and quote each request
@@ -582,7 +582,7 @@ GitHub or Linear in QA:
     failed row as one element ("acme/docs, Failed, You need admin access to acme/docs to add a
     webhook., …"), and each row button with its repo ("Leave on Polling, acme/docs").
   - Look: judge each page and Add Repo's last step in light and dark against
-    `macos/Tests/Snapshots/github-setup-*.png`, `add-repo-instant-updates-*.png` (six steps:
+    the Component Gallery's `github-setup-*` stories, `add-repo-instant-updates-*.png` (six steps:
     `add-repo-instant-updates-six-steps-*.png`, and `add-repo-six-steps-*.png` for every page's
     step indicator), at the laptop viewport (1440×900 pt): the sheet keeps its footer in place on
     every page, and nothing is clipped.
@@ -622,30 +622,35 @@ switched; launch the app once per appearance instead:
   design system alone. When `qa_open_status_menu` fails with `qa_status_menu_not_opened`, call
   `qa_check_app`; a menu that never opens on a healthy app is a failing step, quoted with the
   tool's message.
-- **A component's look is judged on its own, from its snapshots.** `macos/Tests/Snapshots/` holds a
-  picture of every shared component in each of its kinds, sizes and states, and of whole sections
-  and pages, drawn from made-up inputs without launching the app. A button is a button wherever it
-  sits, so this is where its look is judged, and where a variation the app rarely shows (a very
-  long label, every size side by side) can be seen at all. For each component or section the
-  change touches, open the snapshots the pull request changed or added (`git diff --name-only`
-  against the base, under `macos/Tests/Snapshots/`), in light and in dark, and look at each one
-  enlarged. Judge it as a designer would, by sight: the content is centred in its shape, with the
-  same space above and below and on both sides; a glyph and its label sit on one line with an even
-  gap; nothing is clipped, cramped or cut by an ellipsis it has room for; the kinds and states can
-  be told apart; text keeps its contrast. A fault here is a finding even when every structural
-  check passes: report it as a `Design check: <component>` step, with the snapshot's name and what
-  is wrong in plain words ("the label sits lower than the middle of the button").
-- **The running app is judged for what a snapshot cannot show**: that the app puts a component in
-  the state it should (a selected row's badge is the selected one, Tab draws a focus ring), how it
-  behaves under the pointer and the keyboard (the cursor over a button, hover, press), and how a
-  page holds together at the window's sizes. Launch the app on its fixtures for those. Do not
-  repeat there what the snapshots already settle.
+- **A component's look is judged on its own, in the Component Gallery.** The gallery
+  (`macos/Gallery/`) shows every shared component in each of its kinds, sizes and states, and the
+  sections and pages built from them, drawn by the app's own views from made-up inputs: the app's
+  counterpart of the design catalog. A button is a button wherever it sits, so this is where its
+  look is judged, and where a case the app rarely shows (a very long label, every size side by
+  side) can be seen at all. Open it with `qa_launch_app` and
+  `api_fixtures: macos/Tests/Fixtures/gallery`: the gallery's window opens in the app's place, and
+  every tool drives it as it drives the app. Its list names the stories (`button-primary-hover`,
+  `row-two-lines`); `Find a story` narrows it, and `Appearance` switches light and dark. For each
+  component or section the change touches, pick its stories, take a screenshot of each in light
+  and in dark, and judge it as a designer would, by sight: the content is centred in its shape,
+  with the same space above and below and on both sides; a glyph and its label sit on one line
+  with an even gap; nothing is clipped, cramped or cut by an ellipsis it has room for; the kinds
+  and states can be told apart; text keeps its contrast. The stories are live, so also do what a
+  picture cannot show: move the pointer over a control (`qa_hover`), reach it with Tab, press it.
+  A fault is a finding even when every structural check passes: report it as a
+  `Design check: <component>` step, with the story's name and what is wrong in plain words ("the
+  label sits lower than the middle of the button"). A change that adds a component, a kind or a
+  state with no story for it is a finding too: the stories are part of the work.
+- **The running app is judged for what the gallery cannot show**: that the app puts a component in
+  the state it should (a selected row's badge is the selected one), how a page holds together at
+  the window's sizes, and that the journey works. Launch the app on its fixtures for those. Do
+  not repeat there what the gallery already settles.
 - **A ticket that brings a new design** attaches the design's reference images, drawn from the
   catalog story or the prototype it was designed in. They are direction for that ticket, not a
-  standing check: compare the snapshots and your screenshots of the running app with them, and
-  name what still differs. Once a design has shipped, the app is the reference: nothing compares
-  it with the HTML again. When the ticket attaches none, judge against the Screens and the design
-  system, as above.
+  standing check: compare the gallery's stories and your screenshots of the running app with
+  them, and name what still differs. Once a design has shipped, the app is the reference: nothing
+  compares it with the HTML again. When the ticket attaches none, judge against the Screens and
+  the design system, as above.
 
 After an update: the signed release pair. The `qa_build` app is signed ad hoc and has no update
 key, so it never installs an update. When a step judges what the app shows once an update

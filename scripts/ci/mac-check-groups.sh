@@ -19,7 +19,7 @@ while IFS= read -r path; do
     .github/workflows/macos.yml | .github/workflows/mac-checks.yml | scripts/ci/mac-check-groups.sh) all ;;
   esac
   case "$path" in
-    macos/Sources/* | macos/Package.swift | macos/Makefile | macos/Info.plist | macos/Resources/* | priv/qa_driver/* | .xcode-version) build=true ;;
+    macos/Sources/* | macos/Gallery/* | macos/Package.swift | macos/Makefile | macos/Info.plist | macos/Resources/* | priv/qa_driver/* | .xcode-version) build=true ;;
   esac
   case "$path" in
     macos/Sources/* | macos/Tests/* | macos/Package.swift | test/fixtures/api/* | .xcode-version) unit=true ;;

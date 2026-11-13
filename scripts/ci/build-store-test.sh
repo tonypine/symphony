@@ -90,6 +90,7 @@ check "a UI source file" "any build unit speed" "$(groups success macos/Sources/
 check "a Core source file" "any build unit speed" "$(groups success macos/Sources/SymphonyBarCore/Model.swift)"
 check "a Swift test only" "any unit" "$(groups success macos/Tests/SymphonyBarUITests/RowTests.swift)"
 check "server code only" "" "$(groups success lib/symphony_elixir/orchestrator.ex test/symphony_elixir/x_test.exs README.md)"
+check "the gallery's stories" "any build" "$(groups success macos/Gallery/ButtonStories.swift)"
 check "the QA driver" "any build driver speed" "$(groups success priv/qa_driver/symphony-qa-driver.swift)"
 check "the updater's sources" "any build unit speed update" "$(groups success macos/Sources/SymphonyBarCore/AutoUpdate.swift)"
 check "the release's packaging" "any update smoke" "$(groups success mix.lock)"

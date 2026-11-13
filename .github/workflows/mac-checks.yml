@@ -153,6 +153,17 @@ jobs:
           time swift test ${scratch:+--scratch-path "$scratch"}
           if [ -n "$scratch" ]; then $store save "$SYMPHONY_CI_REF" debug; fi
 
+      # The Component Gallery's stories are compiled against the app's views (macos/Gallery/), apart
+      # from the app. A change to a view that breaks a story is found here, not when QA opens it.
+      - name: Build the gallery
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.build }}
+        working-directory: macos
+        run: |
+          store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
+          scratch="$($store work "$SYMPHONY_CI_REF" debug)"
+          time make build-gallery ${scratch:+SWIFT_FLAGS="--scratch-path $scratch"}
+          build/SymphonyGallery --list | wc -l
+
       # An agent's sandbox can't write the per-user temp dir, where a sandboxed Foundation stages
       # its atomic writes, so a plain `swift build` fails there. Symphony gives a local macOS
       # Claude session the env that routes them elsewhere (`SymphonyElixir.AgentTmpDir.env/3`);

@@ -1254,10 +1254,30 @@ make          # builds an ad-hoc-signed build/Symphony.app
 make install  # builds it and copies it to ~/Applications (set INSTALL_DIR to change)
 make run      # builds and opens build/Symphony.app
 make test     # runs swift test
-make snapshots  # renders the views in Tests/Snapshots offscreen (no window) and rewrites their PNGs
+make gallery    # builds and opens the Component Gallery (Gallery/): every component, section and page as a live story
 make clean    # removes build/ and .build/
 make bundle SYMPHONY_RELEASE=../_build/prod/rel/symphony   # embeds the Symphony release (make release), as releases do
 ```
+
+### The Component Gallery
+
+`Gallery/` holds the app's stories: every shared component in each of its kinds, sizes and states,
+and the sections and pages built from them, each a view drawn from made-up inputs or a committed
+fixture. `make gallery` opens them in a window, one at a time, in light or dark; a story is live,
+so it can be hovered, pressed and reached with Tab. It is the app's counterpart of the HTML
+catalog (`docs/design/catalog/`), where a design is worked out before it is built.
+
+- **A story is part of the work.** A change that adds a component, a kind, a state, or a section
+  worth seeing on its own adds its stories in the same pull request, with the awkward cases thought
+  through once: a very long label, an empty list, every size side by side. Later work looks at
+  them instead of rebuilding the case in the running app.
+- **No picture is committed.** `build/SymphonyGallery --shot 'button-*' --out <dir>` draws the
+  matching stories to files, in light and dark, when someone needs pictures (to attach to a ticket,
+  to compare with a design).
+- **QA opens it through the app**: a launch on `Tests/Fixtures/gallery` runs the gallery in the
+  app's place (`Sources/SymphonyBar/GalleryLaunch.swift`), and `make qa-app` puts it in the bundle.
+- It is compiled apart from the app (`make build-gallery`), so the app does not carry it.
+
 
 `make` and `make bundle` sign ad hoc. Pass `SIGNING_IDENTITY="<certificate name>"` to sign with a
 certificate, `SHORT_VERSION=` / `BUILD_NUMBER=` to set the versions in `Info.plist`, and
