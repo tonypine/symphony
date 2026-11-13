@@ -43,8 +43,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The release gate: every Mac check, from a clean build of this commit, on the self-hosted runner
+  # (mac-checks.yml). Pull requests run only the groups their paths feed, so this is where the rest
+  # run. Nothing is published from a commit that fails it: the app stays on its current version,
+  # and Symphony, which reads this run on its `workflow_run` delivery, files an Urgent fix ticket
+  # (lib/symphony_elixir/release_gate.ex; the job's name is how it tells the gate from the build).
+  gate:
+    name: release gate
+    uses: ./.github/workflows/mac-checks.yml
+    permissions:
+      contents: read
+    with:
+      ref: main
+      clean: true
+      build: true
+      unit: true
+      sandbox: true
+      helpers: true
+      driver: true
+      speed: true
+      sheet: false
+      update: true
+      smoke: true
+      installer: true
+
   release:
     name: release
+    needs: gate
     # The app targets macOS 26; the whole job builds with the Xcode pinned in
     # .xcode-version. Apple silicon, so the release and the app build natively.
     runs-on: macos-26

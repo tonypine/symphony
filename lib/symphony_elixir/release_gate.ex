@@ -51,6 +51,8 @@ defmodule SymphonyElixir.ReleaseGate do
   @doc "Whether the step that failed `build`'s run is in the gate's job."
   @spec gate_failure?(build() | term()) :: boolean()
   def gate_failure?(%{failure: %{job: @job}}), do: true
+  # The gate calls a reusable workflow, whose jobs GitHub names `<calling job> / <job>`.
+  def gate_failure?(%{failure: %{job: @job <> " / " <> _called}}), do: true
   def gate_failure?(_build), do: false
 
   @doc """

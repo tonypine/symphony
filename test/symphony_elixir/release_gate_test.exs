@@ -82,6 +82,7 @@ defmodule SymphonyElixir.ReleaseGateTest do
   test "the gate's job, and which failures are the gate's" do
     assert ReleaseGate.job() == "release gate"
     assert ReleaseGate.gate_failure?(build())
+    assert ReleaseGate.gate_failure?(build(%{failure: %{job: "release gate / mac checks", step: "Run tests"}}))
     refute ReleaseGate.gate_failure?(build(%{failure: %{job: "release", step: "Build Symphony.app"}}))
     refute ReleaseGate.gate_failure?(build(%{failure: nil}))
     refute ReleaseGate.gate_failure?(nil)

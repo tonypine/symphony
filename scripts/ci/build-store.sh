@@ -102,6 +102,8 @@ cmd_work() {
     rm -rf "$active"; mkdir -p "$active"
   fi
   echo "$ref" > "$active.ref"
+  # a branch in use is the last to be pruned
+  if [ -d "$base/refs/$(safe_ref "$ref")" ]; then touch "$base/refs/$(safe_ref "$ref")"; fi
   echo "$active"
 }
 
