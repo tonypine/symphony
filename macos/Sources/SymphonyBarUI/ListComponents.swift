@@ -131,10 +131,11 @@ public struct Row<Trail: View>: View {
                     .onChanged { _ in pressed = true }
                     .onEnded { _ in pressed = false }
             )
-            .modifier(RowActions(select: select, open: open))
             .focusable(acts && listFocused == nil)
             .focusEffectDisabled()
             .focused($focused)
+            // After focus, so Return reaches it from the focused row: key presses go up from the focused view.
+            .modifier(RowActions(select: select, open: open))
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(state.selected ? .isSelected : [])
     }
