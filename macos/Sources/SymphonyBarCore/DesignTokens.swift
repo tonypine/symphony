@@ -992,6 +992,179 @@ public enum DesignTokens {
         }
     }
 
+    /// The catalog's Row (`.row`, TP-1507): one line at 34 pt, or two at 52 pt when it has a second line; a lead 18 pt
+    /// square, the identifier and the title on the first line, and a trail whose last value sits in a column of
+    /// `valueWidth` so a list's trails align. Selected, it fills with the accent and its words turn white; with the
+    /// window not in front, the selection is the pressed grey and the words keep their colours.
+    public enum Row {
+        public static let oneLineHeight: Double = 34
+        public static let twoLineHeight: Double = 52
+        /// The room above and below the content: one line's 18 pt in 34, two lines' 36 pt in 52.
+        public static let inset: Double = 8
+        /// The room before the lead and after the trail.
+        public static let sideInset = Space.s3
+        /// Between the lead, the lines and the trail.
+        public static let gap = Space.s3
+        /// The lead's square, and its glyph inside it.
+        public static let leadSize: Double = 18
+        public static let leadGlyph: Double = 14
+        /// Between the identifier and the title, and between two items of the trail.
+        public static let itemGap = Space.s2
+        /// Between the first line and the second.
+        public static let lineGap: Double = 2
+        /// The title's weight: 13 pt at 500 on the row title's 18 pt line.
+        public static let titleWeight = 500
+        /// The trail's last value's column: at least this wide, its text at the trailing edge.
+        public static let valueWidth: Double = 52
+        /// The column for a longer value: a duration ("1 day 4 h") or an amount ("182K of 500K").
+        public static let wideValueWidth: Double = 96
+        /// A selected row's secondary words, lead and values: white at 85 % on the accent.
+        public static let onAccentSecondary: Double = 0.85
+
+        /// The row's height for one line or two.
+        public static func height(twoLines: Bool) -> Double { twoLines ? twoLineHeight : oneLineHeight }
+
+        /// The row's fill: the accent when selected in the front window (the pressed grey behind it), else pressed,
+        /// else hover; none at rest or disabled.
+        public static func fill(_ state: Interaction, windowActive: Bool) -> ColorToken? {
+            if state.disabled { return nil }
+            if state.selected { return windowActive ? .accent : .surfacePressed }
+            if state.pressed { return .surfacePressed }
+            if state.hovered { return .surfaceHover }
+            return nil
+        }
+
+        /// Whether the row's words are white on the accent: selected, enabled, in the front window.
+        public static func onAccent(_ state: Interaction, windowActive: Bool) -> Bool {
+            state.selected && !state.disabled && windowActive
+        }
+    }
+
+    /// The catalog's tree (`.t-root`, `.t-kids`, `.q-behind`, TP-1507): each ticket's children one step in under it, on a
+    /// rail that starts under its lead glyph, with a tick to each child; past `foldDepth` the rest of a chain folds into
+    /// a pill that counts it ("+6").
+    public enum Tree {
+        /// How far a child's row starts in from its parent's.
+        public static let step: Double = 32
+        /// Where a level's rail runs, from its parent row's leading edge: under the lead glyph's centre.
+        public static let railOffset = Space.s3 + 8
+        public static let railWidth: Double = 1
+        public static let railColor = ColorToken.strokeStrong
+        /// The tick from the rail to a child: it starts after the rail and stops 2 pt short of the row.
+        public static let tickWidth = Space.s3 - 3
+        /// The tick's height down a child's line: the middle of a one-line row.
+        public static let tickY = Row.oneLineHeight / 2
+        /// Between two lines of the tree.
+        public static let lineGap: Double = 2
+        /// Rows past this depth (the roots are at 0) fold into the pill until their root is opened.
+        public static let foldDepth = 2
+
+        /// Where level `level`'s rail runs (1 for a root's children), from the tree's leading edge.
+        public static func railX(level: Int) -> Double { railOffset + step * Double(level - 1) }
+
+        /// The pill a folded chain shows: "+6" and a chevron, on the hover surface in a capsule.
+        public enum More {
+            public static let height: Double = 20
+            public static let leadingInset: Double = 7
+            public static let trailingInset: Double = 5
+            public static let gap: Double = 3
+            /// From its rail's tick.
+            public static let offset = Space.s2
+            public static let textSize: Double = 11
+            public static let weight = 600
+            public static let chevron: Double = 8
+            public static let symbol = "chevron.right"
+            public static let fill = ColorToken.surfaceHover
+            public static let hoverFill = ColorToken.surfacePressed
+
+            /// "+6".
+            public static func text(_ hidden: Int) -> String { "+\(hidden)" }
+
+            /// "Show the 6 behind it": its help text, and what VoiceOver reads.
+            public static func help(_ hidden: Int) -> String { "Show the \(hidden) behind it" }
+        }
+    }
+
+    /// The catalog's progress strip (`.epic-strip`, TP-1507): one segment per item in the status colour of its state,
+    /// 3 pt apart; past `most` items the states share the strip in proportion. The segment of an item being worked on
+    /// breathes (its opacity falls to `breatheOpacity` and back every `breathePeriod`), and is still under Reduce
+    /// Motion.
+    public enum ProgressStrip {
+        /// One item: its state's status, nil for one not started; `live` while it is being worked on.
+        public struct Item: Equatable {
+            public var status: Status?
+            public var live: Bool
+
+            public init(_ status: Status?, live: Bool = false) {
+                self.status = status
+                self.live = live
+            }
+        }
+
+        /// One segment drawn: its state, whether it breathes, and how many items it stands for.
+        public struct Segment: Equatable {
+            public var status: Status?
+            public var live: Bool
+            public var weight: Int
+        }
+
+        /// The most segments drawn one per item.
+        public static let most = 30
+        public static let height: Double = 5
+        /// The strip under a page's title, as wide as its column up to `headerMaxWidth`.
+        public static let headerHeight: Double = 6
+        public static let headerMaxWidth: Double = 720
+        public static let gap: Double = 3
+        public static let radius: Double = 3
+        /// The width of a strip in a row's trail or beside its count.
+        public static let compactWidth: Double = 132
+        /// A segment not started, or waiting.
+        public static let rest = ColorToken.surfacePressed
+        public static let breatheOpacity: Double = 0.45
+        public static let breathePeriod: Double = 1.8
+
+        /// The order the states share a strip past `most`, and VoiceOver reads them in.
+        static let order: [Status?] = [.done, .problem, .you, .working, .forced, .idle, nil]
+
+        /// The colour of a segment: its status's, or `rest` for one not started or waiting.
+        public static func color(_ status: Status?) -> ColorToken {
+            guard let status, status != .idle else { return rest }
+            return status.color
+        }
+
+        /// The segments of `items`: one each, in order, up to `most`; past it one per state with its count as its
+        /// weight, breathing when any of its items is live.
+        public static func segments(_ items: [Item]) -> [Segment] {
+            if items.count <= most { return items.map { Segment(status: $0.status, live: $0.live, weight: 1) } }
+            return order.compactMap { status in
+                let these = items.filter { $0.status == status }
+                return these.isEmpty ? nil : Segment(status: status, live: these.contains(where: \.live), weight: these.count)
+            }
+        }
+
+        /// The word VoiceOver reads after a state's count.
+        public static func word(_ status: Status?) -> String {
+            switch status {
+            case .done: "done"
+            case .working: "working"
+            case .you: "waiting on you"
+            case .problem: "needing a fix"
+            case .forced: "forced"
+            case .idle, nil: "waiting"
+            }
+        }
+
+        /// What the strip says: "3 done, 1 working, 22 waiting"; "Nothing yet" without items.
+        public static func spoken(_ items: [Item]) -> String {
+            let waiting = items.filter { $0.status == nil || $0.status == .idle }.count
+            let parts = order.dropLast(2).compactMap { status -> String? in
+                let count = items.filter { $0.status == status }.count
+                return count == 0 ? nil : "\(count) \(word(status))"
+            } + (waiting == 0 ? [] : ["\(waiting) \(word(nil))"])
+            return parts.isEmpty ? "Nothing yet" : parts.joined(separator: ", ")
+        }
+    }
+
     /// The main window's layout (§3.5).
     public enum Layout {
         public static let windowWidth: Double = 1200

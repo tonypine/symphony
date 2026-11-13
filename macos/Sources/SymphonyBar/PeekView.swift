@@ -252,7 +252,7 @@ private struct TicketPeekBody: View {
     }
 }
 
-/// N10 in the peek: the parent's chip, then a segment per sub-ticket in landing order, filled as each one goes.
+/// N10 in the peek: the parent's chip, then its progress strip (C51), a segment per sub-ticket in landing order.
 private struct ParentRow: View {
     let parent: TicketPeek.Parent
 
@@ -265,15 +265,9 @@ private struct ParentRow: View {
             if let progress = parent.progress {
                 HStack(spacing: DesignTokens.Space.s2) {
                     if !parent.children.isEmpty {
-                        HStack(spacing: 2) {
-                            ForEach(Array(parent.children.enumerated()), id: \.offset) { _, status in
-                                Capsule()
-                                    .fill(status == .idle ? Color.secondary.opacity(0.25) : status.tint)
-                                    .frame(height: 4)
-                            }
-                        }
-                        .frame(maxWidth: 160)
-                        .accessibilityHidden(true)
+                        ProgressStrip(parent.stripItems, label: progress)
+                            .frame(width: DesignTokens.ProgressStrip.compactWidth)
+                            .accessibilityHidden(true)
                     }
                     Text(progress)
                         .font(DesignTokens.TypeStyle.caption.font)

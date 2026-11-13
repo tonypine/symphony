@@ -11,7 +11,7 @@ public struct ContextCard: Equatable {
         /// "TP-870 · Simplify the review flow": the identifier is the chip.
         public var text: String
         /// Nil for a parent without sub-tickets.
-        public var progress: ProgressStrip?
+        public var progress: SubTicketStrip?
     }
 
     /// **Connected**: a ticket blocked by, blocking or related to this one, as a chip, its situation line (C31) and
@@ -63,7 +63,7 @@ public struct ContextCard: Equatable {
             addTicket(parent.identifier, parent.title, nil)
             return PartOf(
                 text: [parent.identifier, parent.title].compactMap { $0 }.joined(separator: " · "),
-                progress: ProgressStrip(parent)
+                progress: SubTicketStrip(parent)
             )
         }
 
@@ -138,7 +138,7 @@ public struct ContextCard: Equatable {
 
 /// N10: a parent's sub-tickets as a strip of segments in landing order, each coloured by its state, with how many
 /// are done in words beside it, so the color is never the only signal.
-public struct ProgressStrip: Equatable {
+public struct SubTicketStrip: Equatable {
     public enum Segment: Equatable {
         case done, working, waitingOnYou, notStarted
 
@@ -152,21 +152,20 @@ public struct ProgressStrip: Equatable {
             }
         }
 
-        /// `status.done`, `status.working`, `status.you`, or `surface.separator` for one not started.
-        public var color: DesignTokens.ColorToken {
+        /// The strip's item: done, working (it breathes), waiting on you, or not started.
+        public var item: DesignTokens.ProgressStrip.Item {
             switch self {
-            case .done: DesignTokens.Status.done.color
-            case .working: DesignTokens.Status.working.color
-            case .waitingOnYou: DesignTokens.Status.you.color
-            case .notStarted: DesignTokens.Surface.separator
+            case .done: DesignTokens.ProgressStrip.Item(.done)
+            case .working: DesignTokens.ProgressStrip.Item(.working, live: true)
+            case .waitingOnYou: DesignTokens.ProgressStrip.Item(.you)
+            case .notStarted: DesignTokens.ProgressStrip.Item(nil)
             }
         }
-    }
 
-    /// A segment's size and the gap between two, in points.
-    public static let segmentWidth: Double = 14
-    public static let segmentHeight: Double = 5
-    public static let gap: Double = 2
+        /// The segment's colour on the strip: `status.done`, `status.working`, `status.you`, or the strip's rest colour
+        /// for one not started.
+        public var color: DesignTokens.ColorToken { DesignTokens.ProgressStrip.color(item.status) }
+    }
 
     public var segments: [Segment]
     public var done: Int
@@ -179,6 +178,9 @@ public struct ProgressStrip: Equatable {
         done = parent.done
         total = max(parent.total, parent.children.count)
     }
+
+    /// One strip item per sub-ticket, in landing order.
+    public var items: [DesignTokens.ProgressStrip.Item] { segments.map(\.item) }
 
     /// "4 of 7 done".
     public var line: String { "\(done) of \(total) done" }

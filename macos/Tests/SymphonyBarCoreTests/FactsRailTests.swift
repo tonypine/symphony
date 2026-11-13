@@ -235,8 +235,8 @@ final class FactsRailTests: XCTestCase {
     }
 
     func testAnEpicTicketsSegmentFollowsItsStateAndSituation() {
-        func segment(_ state: String?, _ situation: DesignTokens.SituationKind? = nil) -> ProgressStrip.Segment {
-            ProgressStrip.Segment(ticket: TicketConnected.Ticket(identifier: "TP-1", state: state, situation: situation))
+        func segment(_ state: String?, _ situation: DesignTokens.SituationKind? = nil) -> SubTicketStrip.Segment {
+            SubTicketStrip.Segment(ticket: TicketConnected.Ticket(identifier: "TP-1", state: state, situation: situation))
         }
         XCTAssertEqual(segment("Done"), .done)
         XCTAssertEqual(segment("Merging", .done), .done)

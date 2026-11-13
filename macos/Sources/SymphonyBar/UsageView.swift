@@ -39,6 +39,8 @@ struct UsageView: View {
 struct UsageCards: View {
     let usage: Usage
     var openTicket: (String) -> Void = { _ in }
+    /// The heavy ticket a click selected.
+    @State var selected: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
@@ -66,9 +68,9 @@ struct UsageCards: View {
                 }
             }
             Card(title: Usage.heaviestTitle) {
-                VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+                VStack(alignment: .leading, spacing: 0) {
                     ForEach(usage.heaviest) { row in
-                        HeavyTicketRow(row: row).opensTicket(row.identifier, open: openTicket)
+                        HeavyTicketRow(row: row, selected: selected == row.id, select: { selected = row.id }, open: { openTicket(row.identifier) })
                     }
                 }
             }
@@ -77,26 +79,23 @@ struct UsageCards: View {
     }
 }
 
-/// A row of Heaviest tickets: the ticket, its tokens over the slice, and a meter against the cap.
+/// A row of Heaviest tickets (C49): the ticket, its meter against the cap, and its tokens over the slice in the value
+/// column.
 private struct HeavyTicketRow: View {
     let row: Usage.TicketRow
+    let selected: Bool
+    let select: () -> Void
+    let open: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(row.identifier).font(DesignTokens.TypeStyle.rowTitle.font)
-                Spacer(minLength: DesignTokens.Space.s2)
-                Text(row.value)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            }
+        Row(
+            row.identifier, lead: .glyph("gauge.with.needle", DesignTokens.TextColor.secondary), value: row.value,
+            valueWidth: DesignTokens.Row.wideValueWidth, selected: selected, select: select, open: open
+        ) {
             if let fraction = row.fraction {
-                MeterBar(fraction: fraction, tint: tint)
+                MeterBar(fraction: fraction, tint: tint).frame(width: DesignTokens.ProgressStrip.compactWidth)
             }
         }
-        .contentShape(Rectangle())
-        .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(row.identifier), \(row.value)")
     }
 

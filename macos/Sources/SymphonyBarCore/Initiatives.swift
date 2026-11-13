@@ -278,6 +278,19 @@ public struct Initiative: Equatable, Identifiable {
         return sentence
     }
 
+    /// The progress strip's items: one per sub-ticket in its order, done, working (breathing), waiting on you, or
+    /// waiting (queued or blocked).
+    public var stripItems: [DesignTokens.ProgressStrip.Item] {
+        subTickets.map { ticket in
+            switch ticket.waits.stage {
+            case .done: DesignTokens.ProgressStrip.Item(.done)
+            case .working: DesignTokens.ProgressStrip.Item(.working, live: true)
+            case .you: DesignTokens.ProgressStrip.Item(.you)
+            case .queued, .blocked: DesignTokens.ProgressStrip.Item(nil)
+            }
+        }
+    }
+
     /// The legend under the bar: each stage with sub-tickets in it, "3 Done".
     public var legend: [(stage: InitiativeStage, count: Int)] { counts.filter { $0.count > 0 } }
 

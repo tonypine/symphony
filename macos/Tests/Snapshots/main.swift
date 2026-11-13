@@ -1836,9 +1836,14 @@ MainActor.assumeIsolated {
         render(chipVariants(), scheme, to: "component-chip-\(suffix).png")
         // The catalog's Button, Icon button and Inline refusal stories (TP-1505), one snapshot each.
         // The catalog's Badge, Count badge, Status dot and Keyboard hint stories (TP-1506), one snapshot each.
-        for story in componentStories + badgeStories {
+        // The catalog's Row stories (TP-1507), one snapshot each; the tree and the progress strip from the catalog's Home
+        // and Initiatives: the queue folded, its first chain opened, and the epics' strips.
+        for story in componentStories + badgeStories + rowStories {
             render(componentStorySnapshot(story), scheme, to: "\(story.component)-\(story.id)-\(suffix).png")
         }
+        render(homeTree(selected: .more("TP-1483")), scheme, to: "tree-home-\(suffix).png")
+        render(homeTree(opened: ["TP-1481"], selected: .row("TP-1484")), scheme, to: "tree-home-chain-open-\(suffix).png")
+        render(progressStrips(), scheme, to: "progress-strip-initiatives-\(suffix).png")
         // The Situation line (TP-1439): every kind in the full and the compact size, and forced, "and n more", narrow.
         render(situationLines(.full), scheme, to: "situation-line-full-\(suffix).png")
         render(situationLines(.compact), scheme, to: "situation-line-compact-\(suffix).png")
