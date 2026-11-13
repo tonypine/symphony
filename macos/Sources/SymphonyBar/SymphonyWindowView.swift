@@ -49,7 +49,7 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var paused = false
     /// The app's update under way, which the dispatch control and the Overview show (S3a, S3b).
     @Published var updateHold: UpdateHold?
-    /// The Overview's reading of the last state payload.
+    /// The Overview's reading of the last state payload, decoded off the main actor and taken only when it changed.
     @Published private(set) var overviewState: OverviewState?
     /// The PR and CI watcher's reading of it: each watched ticket's block, for the Inbox's evidence (S16).
     @Published private(set) var watchState = WatchState()
@@ -176,14 +176,18 @@ final class SymphonyWindowModel: ObservableObject {
     }
     /// The ticket page shown and the look it sends when the person leaves it (TP-1451).
     var ticketLook = TicketLook()
-    /// What the ticket page shown last read from its own endpoints; the state comes from the client's poll.
-    @Published var ticketSources = TicketPage.Sources() {
-        didSet { buildTicketPage() }
+    /// What the ticket page shown last read from its own endpoints; the state comes from the client's poll. Not
+    /// `@Published`: the page observes its own store, built from these off the main actor (TP-1479, TP-1480).
+    var ticketSources = TicketPage.Sources() {
+        didSet { if ticketSources != oldValue { buildTicketPage() } }
     }
-    /// Builds the page shown off the main actor when its sources changed (TP-1479).
-    let ticketPageBuilder = TicketPageBuilder()
-    /// The page shown and its Timeline, as last built: reading it builds nothing.
-    @Published var ticketPageModel: TicketPageModel?
+    /// The ticket page's own model (TP-1480): the page observes it, not the window, and its parts publish only when
+    /// they changed.
+    let ticketPageStore = TicketPageStore()
+    /// The shown page's title, set only when it changed: the toolbar's subtitle draws again with it.
+    @Published var ticketTitle: String?
+    /// Whether the page's context is to be set again once the window's change in flight is made.
+    var ticketContextDue = false
     /// What the pull request page shown read from its endpoint, nil while it reads (D15).
     @Published var pullRequestResult: PullRequestPageResult?
     var readingPullRequest = false
@@ -411,11 +415,17 @@ final class SymphonyWindowModel: ObservableObject {
         history = NavigationHistory(current: .view(selection))
         ticketFeed.listen(to: eventStream)
         ticketFeed.onChange = { [weak self] events in self?.ticketEventsChanged(events) }
-        client.$stateJSON
+        // The client decodes the state off the main actor and publishes each part only when it changed (TP-1480).
+        client.$overviewState
+            .sink { [weak self] state in self?.overviewState = state }
+            .store(in: &cancellables)
+        client.$watchState
+            .sink { [weak self] state in self?.watchState = state }
+            .store(in: &cancellables)
+        // Every poll, changed or not, reads the other endpoints; each takes its answer only when it changed.
+        client.statePolled
             .sink { [weak self] data in
                 guard let self else { return }
-                overviewState = data.flatMap(OverviewState.decode)
-                watchState = data.map(WatchState.decode) ?? WatchState()
                 holdSetupOrder()
                 settleGitHubUpdatesAnswer()
                 readReposIfDue()
@@ -434,9 +444,11 @@ final class SymphonyWindowModel: ObservableObject {
                 readPeek()
             }
             .store(in: &cancellables)
-        ticketPageBuilder.$model
-            .dropFirst()
-            .sink { [weak self] model in self?.ticketPageBuilt(model) }
+        ticketPageStore.onBuilt = { [weak self] model in self?.ticketPageBuilt(model) }
+        // What the page shows from the rest of the window is set again after any change the window makes, and
+        // publishes only when it differs.
+        objectWillChange
+            .sink { [weak self] _ in self?.ticketContextChanging() }
             .store(in: &cancellables)
         client.$diagnostics
             .map { $0?.build }
@@ -521,9 +533,9 @@ final class SymphonyWindowModel: ObservableObject {
         Task {
             let result = await client.get(InitiativesPayload.path)
             if case let .loaded(data) = result, let payload = InitiativesPayload.decode(data) {
-                initiatives = payload
-                initiativesResult = nil
-            } else {
+                if initiatives != payload { initiatives = payload }
+                if initiativesResult != nil { initiativesResult = nil }
+            } else if initiativesResult != result {
                 initiativesResult = result
             }
             readingInitiatives = false
@@ -751,12 +763,15 @@ final class SymphonyWindowModel: ObservableObject {
         readingInbox = true
         Task {
             let result = await client.get(InboxPayload.path)
-            if case let .loaded(data) = result, let payload = InboxPayload.decode(data)?.withPauses(fromState: client.stateJSON) {
-                showDepartures(from: inbox?.items ?? [], to: payload.items)
-                inbox = payload
-                inboxResult = nil
+            if case let .loaded(data) = result, let payload = InboxPayload.decode(data)?.withPauses(fromState: client.latestStateJSON) {
+                // The same Inbox read again publishes nothing (TP-1480).
+                if inbox != payload {
+                    showDepartures(from: inbox?.items ?? [], to: payload.items)
+                    inbox = payload
+                }
+                if inboxResult != nil { inboxResult = nil }
                 openPendingSheet()
-            } else {
+            } else if inboxResult != result {
                 inboxResult = result
             }
             readingInbox = false
@@ -934,7 +949,8 @@ final class SymphonyWindowModel: ObservableObject {
         readingRepos = true
         Task {
             let result = await client.get(ReposAPI.path)
-            repos = ReposAPI.poll(result)
+            let poll = ReposAPI.poll(result)
+            if repos != poll { repos = poll }
             reposReadAt = Date()
             readingRepos = false
         }
@@ -989,6 +1005,7 @@ final class SymphonyWindowModel: ObservableObject {
     var toolbarSubtitle: String {
         if let screen = pullRequestScreen { return screen.subtitle }
         guard shownTicket != nil else { return selection.subtitle }
+        // `ticketTitle` changing is what draws it again.
         return ticketPage?.title ?? "Ticket"
     }
 
@@ -1282,7 +1299,8 @@ struct SymphonyDetail: View {
                 showsSpinner: placeholder.showsSpinner
             )
         } else if model.shownTicket != nil {
-            TicketPageContent(model: model, client: client)
+            // The page observes its own store, not the window (TP-1480).
+            TicketPageContent(model: model).equatable()
         } else if model.shownPullRequest != nil {
             PullRequestPageContent(model: model)
         } else {
@@ -1393,6 +1411,14 @@ struct OverviewContent: View {
 struct DiagnosticsContent: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
+    /// When the last state arrived: Diagnostics shows it.
+    @ObservedObject var heartbeat: StateHeartbeat
+
+    init(model: SymphonyWindowModel, client: LiveAPIClient) {
+        self.model = model
+        self.client = client
+        heartbeat = client.heartbeat
+    }
 
     var body: some View {
         if let payload = client.diagnostics {

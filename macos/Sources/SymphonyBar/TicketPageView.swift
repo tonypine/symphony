@@ -23,30 +23,65 @@ extension SymphonyWindowModel {
 
     /// The model built last, while it is the shown ticket's.
     private var shownTicketModel: TicketPageModel? {
-        guard let model = ticketPageModel, model.identifier == shownTicket else { return nil }
+        guard let model = ticketPageStore.model, model.identifier == shownTicket else { return nil }
         return model
     }
 
     /// Asks for the shown page built again from its sources now; the builder builds only when they changed. `state` is
-    /// the poll's, which the client publishes before it holds it.
+    /// the poll's.
     func buildTicketPage(state: Data?? = nil) {
         let identifier = shownTicket
         var sources = ticketSources
-        sources.state = state ?? client.stateJSON
+        sources.state = state ?? client.latestStateJSON
         sources.stops = localStops
         sources.inboxDecision = identifier.map { identifier in
             inbox?.items.contains { $0.identifier == identifier && $0.isDecision } ?? false
         } ?? false
-        let builder = ticketPageBuilder
-        Task { await builder.update(identifier: identifier, sources: sources) }
+        let store = ticketPageStore
+        Task { await store.update(identifier: identifier, sources: sources) }
     }
 
-    /// The builder published a page: the window shows it, and its repo, now known, starts the feed and the look.
+    /// The store took a built page: the toolbar takes its title, and its repo, now known, starts the feed and the look.
     func ticketPageBuilt(_ model: TicketPageModel?) {
-        ticketPageModel = model
+        let title = model.flatMap { $0.identifier == shownTicket ? $0.title : nil }
+        if ticketTitle != title { ticketTitle = title }
         guard let model, model.identifier == shownTicket else { return }
         ticketLook.repoKnown(model.repoKey, for: model.identifier)
         followTicketFeed(afterPoll: false)
+    }
+
+    /// The window is about to change: what the ticket page shows from it is set again once the change is made, once
+    /// for every change made in the same turn of the run loop.
+    func ticketContextChanging() {
+        guard !ticketContextDue else { return }
+        ticketContextDue = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            ticketContextDue = false
+            showTicketContext()
+        }
+    }
+
+    /// Sets what the ticket page shows from the window: the page draws again only when it differs (TP-1480).
+    func showTicketContext() {
+        ticketPageStore.show(ticketContext)
+    }
+
+    /// The shown ticket's open Questions and their picks, the chips, the Review, the event opened at and the banner.
+    var ticketContext: TicketPageContext {
+        guard let identifier = shownTicket else { return TicketPageContext() }
+        let items = inbox?.items ?? []
+        let open = ticketQuestions(identifier)
+        return TicketPageContext(
+            questions: open.questions,
+            picks: open.picks(inboxPicks),
+            sending: answering(identifier),
+            failure: answerFailures[identifier],
+            references: items.first { $0.identifier == identifier }?.references ?? [:],
+            reviewItemID: items.first { $0.identifier == identifier && $0.waitsOnDirector }?.id,
+            focus: ticketFocus?.identifier == identifier ? ticketFocus : nil,
+            banner: ticketBanner(identifier)
+        )
     }
 
     /// Opens the page of ticket `identifier` (D3), from any row that shows it.
@@ -119,8 +154,11 @@ extension SymphonyWindowModel {
     /// The feed's reader read: the page shows what it holds, or today's timeline without it.
     func ticketEventsChanged(_ events: TicketEventsPayload?) {
         guard let identifier = shownTicket, identifier == ticketFeed.identifier else { return }
-        ticketSources.events = events
-        ticketSources.feedAbsence = ticketFeed.absence
+        // The sources build the page again only when they changed.
+        var sources = ticketSources
+        sources.events = events
+        sources.feedAbsence = ticketFeed.absence
+        ticketSources = sources
     }
 
     /// Reads the shown ticket's endpoints: `/api/v1/:issue_identifier` and its decisions after each state poll, its runs
@@ -449,16 +487,25 @@ struct TicketPageAnswers {
     var sendOff: String? { sending ? DecisionsLine.sendingReason : nil }
 }
 
-/// D3 for the window: the page with its sheets, or a placeholder while it reads.
-struct TicketPageContent: View {
-    @ObservedObject var model: SymphonyWindowModel
-    @ObservedObject var client: LiveAPIClient
+/// D3 for the window: the page with its sheets, or a placeholder while it reads. It observes the page's own store
+/// (TP-1480), not the window: a change elsewhere in the window draws nothing here.
+struct TicketPageContent: View, Equatable {
+    let model: SymphonyWindowModel
+    /// The ticket the window shows: the page another ticket's store still holds is never drawn under it.
+    let identifier: String?
+    @ObservedObject var store: TicketPageStore
     @ObservedObject var decisions: TicketDecisionsEditor
 
-    init(model: SymphonyWindowModel, client: LiveAPIClient) {
+    init(model: SymphonyWindowModel) {
         self.model = model
-        self.client = client
+        identifier = model.shownTicket
+        store = model.ticketPageStore
         decisions = model.ticketDecisions
+    }
+
+    /// The window drawing again gives the same page: only another ticket, the store and the decisions draw it again.
+    nonisolated static func == (lhs: TicketPageContent, rhs: TicketPageContent) -> Bool {
+        lhs.identifier == rhs.identifier && lhs.model === rhs.model && lhs.store === rhs.store && lhs.decisions === rhs.decisions
     }
 
     var body: some View {
@@ -470,42 +517,44 @@ struct TicketPageContent: View {
     }
 
     @ViewBuilder private var content: some View {
-        if let page = model.ticketPage {
-            let items = model.inbox?.items ?? []
+        if let page = store.page, page.identifier == identifier {
             let identifier = page.identifier
-            let open = model.ticketQuestions(identifier)
+            let context = store.context
+            let model = model
             TicketPageView(
                 page: page,
-                timeline: model.ticketTimeline,
-                questions: open.questions,
+                timelineStore: store.timeline,
+                questions: context.questions,
                 answers: TicketPageAnswers(
-                    picks: open.picks(model.inboxPicks),
+                    picks: context.picks,
                     pick: { model.pickOnTicketPage($0, question: $1, identifier: identifier) },
                     writeIn: { model.writeInOnTicketPage($0, question: $1, identifier: identifier) },
                     send: { model.answerFromTicketPage(identifier) },
-                    sending: model.answering(identifier),
-                    failure: model.answerFailures[identifier]
+                    sending: context.sending,
+                    failure: context.failure
                 ),
-                references: items.first { $0.identifier == page.identifier }?.references ?? [:],
+                references: context.references,
                 actions: TicketPageActions(
-                    move: { model.performMove($0, on: page) },
-                    openURL: model.onOpenURL,
-                    openMention: model.openDirectly,
-                    openTicket: model.openTicket,
+                    move: { request in
+                        if let page = model.ticketPage { model.performMove(request, on: page) }
+                    },
+                    openURL: { model.onOpenURL($0) },
+                    openMention: { model.openDirectly($0) },
+                    openTicket: { model.openTicket($0) },
                     openInitiatives: { model.show(.initiatives) },
-                    copy: model.copy,
-                    saveNote: model.submitNote,
+                    copy: { model.copy($0) },
+                    saveNote: { model.submitNote() },
                     readSession: { model.readSession(identifier, run: $0) },
-                    review: items.first { $0.identifier == identifier && $0.waitsOnDirector }.map { item in { model.reviewInDrawer(item.id) } }
+                    review: context.reviewItemID.map { id in { model.reviewInDrawer(id) } }
                 ),
                 transcripts: model.stepTranscripts,
-                focus: model.ticketFocus?.identifier == identifier ? model.ticketFocus : nil,
+                focus: context.focus,
                 note: model.ticketNote,
                 decisions: decisions.decisions,
-                restart: { model.send(.restart(page.identifier, reason: TicketPageView.restartReason)) },
-                banner: model.ticketBanner(page.identifier),
-                undo: model.undoTicketBanner,
-                closeBanner: model.dismissBanner
+                restart: { model.send(.restart(identifier, reason: TicketPageView.restartReason)) },
+                banner: context.banner,
+                undo: { model.undoTicketBanner($0) },
+                closeBanner: { model.dismissBanner() }
             )
         } else {
             EmptyState(title: "Reading the ticket…", symbol: "doc.text.magnifyingglass", showsSpinner: true)
@@ -519,6 +568,8 @@ struct TicketPageView: View {
     let page: TicketPage
     /// The page's Timeline as the window built it with the page; nil builds it from the page.
     var timeline: TimelineModel?
+    /// The window's Timeline, on its own object: the Timeline section alone draws again when it changes (TP-1480).
+    var timelineStore: TicketTimelineStore?
     /// The ticket's open Questions with their options, from the Inbox.
     var questions: [InboxReview.Action] = []
     /// Their answers, and Send.
@@ -557,7 +608,7 @@ struct TicketPageView: View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
                 TicketPageBody(
-                    page: page, timeline: timeline, questions: questions, width: width, transcripts: transcripts, focus: focus, note: note, decisions: decisions,
+                    page: page, timeline: timeline, timelineStore: timelineStore, questions: questions, width: width, transcripts: transcripts, focus: focus, note: note, decisions: decisions,
                     actions: actions, sheetOpen: sheetOpen, answerFocus: $answerFocused,
                     move: { handle($0, proxy: proxy) }, answer: { sheetOpen = true },
                     scroll: scroll, decisionsInRow: false
@@ -689,6 +740,8 @@ struct TicketPageBody: View {
     let page: TicketPage
     /// The page's Timeline as the window built it; nil (a snapshot) builds it from the page in `calendar`'s days.
     var timeline: TimelineModel?
+    /// The window's Timeline on its own object, observed by the Timeline section alone (TP-1480).
+    var timelineStore: TicketTimelineStore?
     var questions: [InboxReview.Action] = []
     /// Their answers and Send, for a snapshot's decisions column drawn in its row.
     var answers = TicketPageAnswers()
@@ -769,14 +822,23 @@ struct TicketPageBody: View {
             }
             if let lifecycle = page.lifecycleRead?.lifecycle {
                 LifecycleSection(model: LifecycleModel.build(lifecycle, phase: page.lifecycleRead?.phasePath?.current))
+                    .equatable()
             }
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                 TimelineTitle(marks: page.marksRead)
-                TimelineSection(
-                    model: timeline ?? page.timelineModel(calendar: calendar),
-                    idle: page.idleLine,
-                    transcripts: transcripts, calendar: calendar, focus: focus
-                )
+                Group {
+                    if let timelineStore {
+                        StoredTimelineSection(
+                            store: timelineStore, idle: page.idleLine, transcripts: transcripts, calendar: calendar, focus: focus
+                        )
+                    } else {
+                        TimelineSection(
+                            model: timeline ?? page.timelineModel(calendar: calendar),
+                            idle: page.idleLine,
+                            transcripts: transcripts, calendar: calendar, focus: focus
+                        )
+                    }
+                }
                 .id(page.identifier)
                 .environment(\.readSession, ReadSessionAction(page.identifier, actions.readSession))
             }
@@ -786,19 +848,24 @@ struct TicketPageBody: View {
     private func rail(width: CGFloat?) -> some View {
         let runs = page.history?.runs ?? [:]
         return VStack(alignment: .leading, spacing: gap) {
+            // Each card draws again only when its model changed; their actions don't open the gate (TP-1480).
             PullRequestPanel(model: PullRequestPanelModel.build(page.factsRead?.pullRequest), open: actions.openURL)
+                .equatable()
             ConnectedPanel(
                 model: ConnectedPanelModel.build(page.factsRead?.connected, reference: page.reference, calendar: calendar),
                 openTicket: actions.openTicket, openInitiatives: actions.openInitiatives
             )
+            .equatable()
             NotePanel(
                 model: NotePanelModel.build(
                     note: page.detailsRead?.note, move: page.detailsRead?.noteMove, runs: runs, reference: page.reference, calendar: calendar
                 ),
                 composer: note, save: actions.saveNote
             )
+            .equatable()
             .id(TicketPageView.noteAnchor)
             DecisionsPanel(model: DecisionsPanelModel.build(decisions))
+                .equatable()
             DetailsPanel(
                 model: DetailsPanelModel.build(
                     page.detailsRead, runs: runs, linearURL: page.url, pullRequest: page.factsRead?.pullRequest, description: nil,
@@ -806,6 +873,7 @@ struct TicketPageBody: View {
                 ),
                 open: actions.openURL, copy: actions.copy, modelsUnfolded: detailsUnfolded
             )
+            .equatable()
         }
         .frame(width: width, alignment: .topLeading)
         .accessibilityElement(children: .contain)
@@ -1393,5 +1461,21 @@ struct StopRunSheetPresenter: ViewModifier {
                 confirm: { alsoBacklog, note in model.confirmStop(sheet, alsoBacklog: alsoBacklog, note: note) }
             )
         }
+    }
+}
+
+/// The Timeline section of the window's page, observing the Timeline's own object: an event that changes only the
+/// timeline draws only this (TP-1480).
+private struct StoredTimelineSection: View {
+    @ObservedObject var store: TicketTimelineStore
+    let idle: TimelineIdleLine?
+    let transcripts: StepTranscripts
+    let calendar: Calendar
+    let focus: TimelineFocus?
+
+    var body: some View {
+        TimelineSection(
+            model: store.model ?? TimelineModel(days: []), idle: idle, transcripts: transcripts, calendar: calendar, focus: focus
+        )
     }
 }

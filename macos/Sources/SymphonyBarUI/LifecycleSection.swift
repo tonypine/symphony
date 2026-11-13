@@ -479,3 +479,8 @@ struct FlowLayout: Layout {
         return rows
     }
 }
+
+/// The Lifecycle card draws again only when its model changed (TP-1480).
+extension LifecycleSection: Equatable {
+    nonisolated public static func == (lhs: LifecycleSection, rhs: LifecycleSection) -> Bool { lhs.model == rhs.model }
+}

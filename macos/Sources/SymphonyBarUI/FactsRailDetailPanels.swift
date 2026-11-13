@@ -498,3 +498,18 @@ private struct Chip: View {
         .accessibilityLabel(text)
     }
 }
+
+// The facts rail's cards draw again only when their model changed (TP-1480): the Note card's field is its composer's,
+// which it observes itself.
+
+extension NotePanel: Equatable {
+    nonisolated public static func == (lhs: NotePanel, rhs: NotePanel) -> Bool { lhs.model == rhs.model && lhs.composer === rhs.composer }
+}
+
+extension DecisionsPanel: Equatable {
+    nonisolated public static func == (lhs: DecisionsPanel, rhs: DecisionsPanel) -> Bool { lhs.model == rhs.model }
+}
+
+extension DetailsPanel: Equatable {
+    nonisolated public static func == (lhs: DetailsPanel, rhs: DetailsPanel) -> Bool { lhs.model == rhs.model }
+}

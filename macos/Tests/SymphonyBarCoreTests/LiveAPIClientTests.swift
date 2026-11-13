@@ -172,6 +172,118 @@ final class LiveAPIClientTests: XCTestCase {
         XCTAssertEqual(client.stateResult, .failed("Symphony sent a state that couldn't be read"))
     }
 
+    // MARK: - Publishing only what changed (TP-1480)
+
+    private var clock = Date(timeIntervalSince1970: 1_791_000_000)
+
+    /// A state payload with `running` entries and the time Symphony took it.
+    private func state(_ generatedAt: String, running: [String] = ["TP-1"], uptime: Int = 60) -> APIAnswer {
+        let entries = running.map { #"{"issue_identifier": "\#($0)", "state": "In Progress"}"# }.joined(separator: ",")
+        let body = #"{"generated_at": "\#(generatedAt)", "build": {"version": "0.0.1.412"}, "uptime_seconds": \#(uptime), "counts": {"running": \#(running.count)}, "running": [\#(entries)]}"#
+        return .answered(Data(body.utf8), statusCode: 200)
+    }
+
+    private func clockedClient() -> LiveAPIClient {
+        LiveAPIClient(fetch: { [unowned self] _ in answer }, scheduler: scheduler, now: { [unowned self] in clock })
+    }
+
+    func testAPollThatMovesOnlyTheTimePublishesNothingButTheHeartbeat() async throws {
+        answer = state("2026-11-12T10:00:00Z")
+        let client = clockedClient()
+        client.start()
+        await client.pollTask?.value
+        let first = try XCTUnwrap(client.stateJSON)
+        XCTAssertEqual(client.overviewState?.running.map(\.identifier), ["TP-1"])
+
+        var changes = 0
+        let changed = client.objectWillChange.sink { changes += 1 }
+        var beats = 0
+        let beat = client.heartbeat.objectWillChange.sink { beats += 1 }
+        var polled: [Data] = []
+        let polls = client.statePolled.sink { polled.append($0) }
+
+        answer = state("2026-11-12T10:00:02Z")
+        clock += 2
+        try await tick(client)
+        XCTAssertEqual(changes, 0)
+        XCTAssertEqual(beats, 1)
+        XCTAssertEqual(client.lastUpdate, clock)
+        XCTAssertEqual(client.stateJSON, first)
+        XCTAssertEqual(polled.count, 1)
+        // The newest payload is still at hand, for a read or the clipboard.
+        guard case let .answered(newest, _) = answer else { return XCTFail() }
+        XCTAssertEqual(client.latestStateJSON, newest)
+        XCTAssertTrue(try XCTUnwrap(client.stateJSONText).contains("10:00:02"))
+
+        // A changed state publishes what changed in it.
+        answer = state("2026-11-12T10:00:04Z", running: ["TP-1", "TP-2"])
+        clock += 2
+        try await tick(client)
+        XCTAssertGreaterThan(changes, 0)
+        XCTAssertEqual(client.overviewState?.running.map(\.identifier), ["TP-1", "TP-2"])
+        XCTAssertNotEqual(client.stateJSON, first)
+
+        // Diagnostics alone changed: the Overview's reading stays as it was.
+        let overview = client.overviewState
+        answer = state("2026-11-12T10:00:06Z", running: ["TP-1", "TP-2"], uptime: 66)
+        clock += 2
+        try await tick(client)
+        XCTAssertEqual(client.diagnostics?.uptimeSeconds, 66)
+        XCTAssertEqual(client.overviewState, overview)
+        XCTAssertEqual(polled.count, 3)
+        changed.cancel()
+        beat.cancel()
+        polls.cancel()
+    }
+
+    func testTheStateIsPublishedAgainOnceAMinuteSoTheCountedMinutesMove() async throws {
+        answer = state("2026-11-12T10:00:00Z")
+        let client = clockedClient()
+        client.start()
+        await client.pollTask?.value
+        let generated = client.overviewState?.generatedAt
+
+        var changes = 0
+        let changed = client.objectWillChange.sink { changes += 1 }
+        answer = state("2026-11-12T10:00:59Z")
+        clock += 59
+        try await tick(client)
+        XCTAssertEqual(changes, 0)
+
+        answer = state("2026-11-12T10:01:00Z")
+        clock += 1
+        try await tick(client)
+        XCTAssertGreaterThan(changes, 0)
+        XCTAssertNotEqual(client.overviewState?.generatedAt, generated)
+        changed.cancel()
+    }
+
+    func testAFailureRepeatedPublishesOnce() async throws {
+        answer = .unreachable
+        let client = clockedClient()
+        client.start()
+        await client.pollTask?.value
+        XCTAssertEqual(client.stateResult, .failed("Symphony isn't answering"))
+
+        var changes = 0
+        let changed = client.objectWillChange.sink { changes += 1 }
+        try await tick(client)
+        XCTAssertEqual(changes, 0)
+        changed.cancel()
+    }
+
+    func testTheStateIsReadOffTheMainThread() {
+        let read = StateRead(state("2026-11-12T10:00:00Z"))
+        XCTAssertNil(read.failure)
+        XCTAssertEqual(read.parts?.overview?.running.map(\.identifier), ["TP-1"])
+        // The time is not part of what the state says.
+        XCTAssertEqual(read.parts?.content, StateRead(state("2026-11-12T11:00:00Z")).parts?.content)
+        XCTAssertNotEqual(read.parts?.content, StateRead(state("2026-11-12T11:00:00Z", running: [])).parts?.content)
+        XCTAssertNil(StateRead.content(Data("[1]".utf8)))
+        XCTAssertTrue(LiveAPIClient.sameOverview(nil, nil))
+        XCTAssertFalse(LiveAPIClient.sameOverview(nil, read.parts?.overview))
+    }
+
     func testA404MeansUpdateSymphony() async {
         answer = .answered(Data("{}".utf8), statusCode: 404)
         let client = client()

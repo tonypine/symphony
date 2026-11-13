@@ -260,8 +260,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         inboxNotifications.start()
         // An update that started this app, or one the last run left behind, has ended.
         inboxNotifications.withdrawUpdateStarted()
-        stateSubscription = apiClient.$stateJSON
-            .compactMap { $0.flatMap(OverviewState.decode) }
+        // The client decodes the state off the main actor and publishes it when it changed (TP-1480).
+        stateSubscription = apiClient.$overviewState
+            .compactMap { $0 }
             .sink { [weak self] state in self?.inboxNotifications.update(state) }
         apiClient.start()
         poller.onPoll = { [weak self] poll in

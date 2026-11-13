@@ -306,6 +306,14 @@ struct InboxSheetPresenter: ViewModifier {
 struct WindowStatusBar: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
+    /// When the last state arrived, for the health line's help: the status bar alone draws again each poll (TP-1480).
+    @ObservedObject var heartbeat: StateHeartbeat
+
+    init(model: SymphonyWindowModel, client: LiveAPIClient) {
+        self.model = model
+        self.client = client
+        heartbeat = client.heartbeat
+    }
 
     var body: some View {
         StatusBarContent(line: model.healthLine) {

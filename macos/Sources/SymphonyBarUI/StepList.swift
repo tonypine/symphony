@@ -39,6 +39,14 @@ struct FoldHeader<Label: View>: View {
 
     private var enabled: Bool { disabledReason == nil }
 
+    /// How far a press may travel and still be a click, in points.
+    static var clickSlop: CGFloat { 4 }
+
+    /// Whether a press that moved by `translation` is a click rather than a drag.
+    static func isClick(_ translation: CGSize) -> Bool {
+        abs(translation.width) <= clickSlop && abs(translation.height) <= clickSlop
+    }
+
     var body: some View {
         HStack(spacing: DesignTokens.Space.s2) {
             Image(systemName: "chevron.right")
@@ -61,12 +69,16 @@ struct FoldHeader<Label: View>: View {
         .focusEffectDisabled()
         .focused($focused)
         .onHover { hovered = $0 }
+        // One gesture presses and clicks: a press released where it began toggles. A separate tap here lost the click
+        // to the timeline row's own select tap around it, so a click selected the run and never folded it (TP-1480's QA).
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
-                .onChanged { _ in pressed = true }
-                .onEnded { _ in pressed = false }
+                .onChanged { _ in if !pressed { pressed = true } }
+                .onEnded { value in
+                    pressed = false
+                    if enabled, Self.isClick(value.translation) { toggle() }
+                }
         )
-        .onTapGesture { if enabled { toggle() } }
         .onKeyPress(keys: FoldKeys.keys, phases: .down) { press in
             guard enabled, FoldKeys.toggles(press.key, modifiers: press.modifiers) else { return .ignored }
             toggle()
@@ -415,24 +427,37 @@ struct StateMark: View {
     }
 }
 
-/// The working dot, breathing while it works; still under Reduce Motion.
+/// The working dot, breathing while it works; still under Reduce Motion. On the window's page its halo breathes on
+/// Core Animation (`LayerPulse`), off the main thread (TP-1480); a snapshot draws it still.
 struct LiveDot: View {
     var size: Double = 8
     @State private var breathing = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.liveDurations) private var live
 
     var body: some View {
         Circle()
             .fill(DesignTokens.Status.working.tint)
             .frame(width: size, height: size)
-            .background {
-                Circle()
-                    .fill(DesignTokens.Status.working.tint.opacity(0.25))
-                    .scaleEffect(breathing ? 2.2 : 1.6)
-            }
+            .background { halo }
             .onAppear {
-                guard !reduceMotion else { return }
+                guard !reduceMotion, !live else { return }
                 withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) { breathing = true }
             }
     }
+
+    @ViewBuilder private var halo: some View {
+        if live, !reduceMotion {
+            LayerPulse(shape: .circle, color: Self.haloColor, motion: Self.breath, duration: Self.breathDuration)
+        } else {
+            Circle()
+                .fill(Self.haloColor)
+                .scaleEffect(breathing ? 2.2 : 1.6)
+        }
+    }
+
+    static let haloColor = DesignTokens.Status.working.tint.opacity(0.25)
+    /// The halo's breath: from 1.6 to 2.2 times the dot and back, 1.2 s each way.
+    static let breath = LayerPulse.Motion.scale(from: 1.6, to: 2.2)
+    static let breathDuration = 1.2
 }

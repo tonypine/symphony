@@ -102,6 +102,7 @@ public struct TimelineSection: View {
 
     private var column: some View {
         let idle = model.runNow == nil ? idle : nil
+        let moves = Self.moves(arriving: model.items.count(where: { !seen.contains($0.id) }), seen: seen.count)
         return VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
             if model.isEmpty, let idle {
                 TimelineIdleRow(line: idle)
@@ -123,7 +124,7 @@ public struct TimelineSection: View {
                     }
                     row(item)
                         .id(item.id)
-                        .modifier(TimelineEntering(entering: !seen.contains(item.id), reduceMotion: reduceMotion) {
+                        .modifier(TimelineEntering(entering: moves && !seen.contains(item.id), reduceMotion: reduceMotion) {
                             seen.insert(item.id)
                         })
                 }
@@ -140,6 +141,22 @@ public struct TimelineSection: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Self.title)
         .environment(\.timelineReference, model.reference)
+        // A history read whole (the first read of a long ticket's feed) is there at once, and marked seen in one change.
+        .onChange(of: model.items.map(\.id)) { _, ids in
+            let arriving = ids.count(where: { !seen.contains($0) })
+            if arriving > 0, !Self.moves(arriving: arriving, seen: seen.count) { seen.formUnion(ids) }
+        }
+    }
+
+    /// The most items that enter with the motion at once: more is a history read whole, not events coming in.
+    static let enteringAtMost = 5
+
+    /// Whether `arriving` items new to a timeline that has `seen` items drop in with the motion. Only a few events coming
+    /// in onto a timeline that showed some do: the first history, or a long one read whole, is there at once. Each item
+    /// that enters marks itself seen and starts two animations, so 500 events entering at once took the main thread for
+    /// minutes (TP-1480's QA: a long ticket opened from Find a Ticket, its feed read after the page drew).
+    static func moves(arriving: Int, seen: Int) -> Bool {
+        seen > 0 && arriving <= enteringAtMost
     }
 
     public static let title = "Timeline"
@@ -148,12 +165,15 @@ public struct TimelineSection: View {
     private func row(_ item: TimelineItem) -> some View {
         let selected = selection == item.id
         switch item {
+        // Each row draws again only when what it shows changed: a new event draws its own row (TP-1480).
         case let .entry(entry):
             TimelineEntryRow(entry: entry, time: clock(entry.at), selected: selected) { select(item.id) }
+                .equatable()
         case let .run(run, at):
             TimelineRunRow(run: run, time: clock(at), selected: selected, transcripts: transcripts, fold: fold(run)) {
                 select(item.id)
             }
+            .equatable()
         }
     }
 
@@ -457,14 +477,30 @@ struct TimelineTicketChipView: View {
 
 /// A run on the timeline: its start in the column of times, then its Run group; selected, it takes the accent tint
 /// and ring around the whole group.
-private struct TimelineRunRow: View {
+struct TimelineRunRow: View {
     let run: RunGroupModel
     let time: String
     let selected: Bool
     @ObservedObject var transcripts: StepTranscripts
     let fold: Binding<Bool>
+    /// Whether the run was unfolded when the row was made. The fold's getter reads the timeline's current state, so
+    /// the old row and the new one would always agree on it; the gate compares this value instead (TP-1480).
+    let unfolded: Bool
     let select: () -> Void
     @Environment(\.colorScheme) private var colorScheme
+
+    init(
+        run: RunGroupModel, time: String, selected: Bool, transcripts: StepTranscripts, fold: Binding<Bool>,
+        select: @escaping () -> Void
+    ) {
+        self.run = run
+        self.time = time
+        self.selected = selected
+        self.transcripts = transcripts
+        self.fold = fold
+        unfolded = fold.wrappedValue
+        self.select = select
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 0) {
@@ -490,7 +526,13 @@ private struct TimelineRunRow: View {
             }
         }
         .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture().onEnded { select() })
+        // A click selects the run as its fold header takes the same click: both read the press as it ends, so neither
+        // gesture waits on the other to fail (TP-1480's QA: a tap here took the click from the header's).
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0).onEnded { value in
+                if FoldHeader<EmptyView>.isClick(value.translation) { select() }
+            }
+        )
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Self.accessibilityLabel(run, time: time))
         .accessibilityAddTraits(selected ? .isSelected : [])
@@ -535,5 +577,22 @@ private struct TimelineEntering: ViewModifier {
                 withAnimation(.spring(duration: duration, bounce: bounce)) { settled = true }
                 withAnimation(.easeOut(duration: DesignTokens.Motion.enterTintDuration)) { tint = 0 }
             }
+    }
+}
+
+/// A row draws again only when its entry, its time, its selection or its ticket changed; a new `select` for the same
+/// row doesn't open the gate (TP-1480).
+extension TimelineEntryRow: Equatable {
+    nonisolated static func == (lhs: TimelineEntryRow, rhs: TimelineEntryRow) -> Bool {
+        lhs.entry == rhs.entry && lhs.time == rhs.time && lhs.selected == rhs.selected && lhs.ticket == rhs.ticket
+    }
+}
+
+/// A run's row draws again only when its run, its time, its selection or its fold changed; its transcripts draw it
+/// again themselves.
+extension TimelineRunRow: Equatable {
+    nonisolated static func == (lhs: TimelineRunRow, rhs: TimelineRunRow) -> Bool {
+        lhs.run == rhs.run && lhs.time == rhs.time && lhs.selected == rhs.selected
+            && lhs.unfolded == rhs.unfolded && lhs.transcripts === rhs.transcripts
     }
 }

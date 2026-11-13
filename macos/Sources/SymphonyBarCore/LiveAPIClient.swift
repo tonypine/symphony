@@ -137,14 +137,34 @@ public final class LiveAPIClient: ObservableObject {
     /// Sends a GET with `If-None-Match: ifNoneMatch` when given, and gives the answer's `ETag` back (TP-1492).
     public typealias ConditionalFetch = (_ path: String, _ ifNoneMatch: String?) async -> TaggedAnswer
 
-    /// The last state payload Symphony served, as it came.
+    /// The last state payload Symphony served, as it came. A poll whose payload differs from it only in its
+    /// `generated_at` publishes nothing (TP-1480), except once every `clockInterval`, so the minutes a view counts move
+    /// on; `latestStateJSON` is the newest as it came.
     @Published public private(set) var stateJSON: Data?
-    /// The parts of it Diagnostics reads.
+    /// The parts of it Diagnostics reads, published only when they changed.
     @Published public private(set) var diagnostics: DiagnosticsPayload?
-    /// When the last state payload arrived.
-    @Published public private(set) var lastUpdate: Date?
+    /// The Overview's reading of it, decoded off the main actor and published only when it changed.
+    @Published public private(set) var overviewState: OverviewState?
+    /// The PR and CI watcher's reading of it, decoded off the main actor and published only when it changed.
+    @Published public private(set) var watchState = WatchState()
     /// What the last state poll got when it got no payload, nil after one that did.
     @Published public private(set) var stateResult: EndpointResult?
+    /// When the last state payload arrived: its own object, so only the views that show the time draw again each poll.
+    public let heartbeat = StateHeartbeat()
+    /// Each state payload that arrived, changed or not, after the client published what changed in it: what the window
+    /// reads its other endpoints after. Not an event for the views.
+    public let statePolled = PassthroughSubject<Data, Never>()
+    /// The newest state payload as it came, whether or not it was published.
+    public private(set) var latestStateJSON: Data?
+
+    /// When the last state payload arrived.
+    public var lastUpdate: Date? { heartbeat.lastUpdate }
+
+    /// A state that changed only in its time is published again at most this often.
+    public static let clockInterval: TimeInterval = 60
+    /// The last payload published, without its time, and when it was.
+    private var publishedContent: Data?
+    private var publishedAt: Date?
 
     /// Whether the window is on screen; polls quicken while it is.
     public var isVisible = false {
@@ -247,7 +267,8 @@ public final class LiveAPIClient: ObservableObject {
 
     private func poll() async {
         let answer = await fetch(Self.statePath)
-        record(answer)
+        let read = await Task.detached(priority: .userInitiated) { StateRead(answer) }.value
+        record(read)
         pollTask = nil
         if pollAgain {
             pollAgain = false
@@ -257,25 +278,35 @@ public final class LiveAPIClient: ObservableObject {
         }
     }
 
-    private func record(_ answer: APIAnswer) {
-        let result = EndpointResult(answer)
-        guard case let .loaded(data) = result else {
-            stateResult = result
+    private func record(_ read: StateRead) {
+        guard let parts = read.parts else {
+            if stateResult != read.failure { stateResult = read.failure }
             return
         }
-        guard let payload = DiagnosticsPayload.decode(data) else {
-            stateResult = .failed("Symphony sent a state that couldn't be read")
-            return
+        latestStateJSON = parts.data
+        heartbeat.beat(now())
+        if stateResult != nil { stateResult = nil }
+        let changed = parts.content == nil || parts.content != publishedContent
+        let clockDue = publishedAt.map { now().timeIntervalSince($0) >= Self.clockInterval } ?? true
+        if changed || clockDue {
+            publishedContent = parts.content
+            publishedAt = now()
+            stateJSON = parts.data
+            if diagnostics != parts.diagnostics { diagnostics = parts.diagnostics }
+            // The time alone moves only the minutes the views count: the Overview takes it with the clock.
+            if changed ? !Self.sameOverview(overviewState, parts.overview) : overviewState != parts.overview {
+                overviewState = parts.overview
+            }
+            if watchState != parts.watch { watchState = parts.watch }
         }
-        // A snapshot Symphony couldn't take answers 200 with an error in place of the state.
-        if let error = payload.error {
-            stateResult = .failed(error.message ?? error.code ?? "Symphony reported an error")
-            return
-        }
-        stateJSON = data
-        diagnostics = payload
-        lastUpdate = now()
-        stateResult = nil
+        statePolled.send(parts.data)
+    }
+
+    /// Whether two readings of the state say the same, whatever their `generated_at`.
+    nonisolated static func sameOverview(_ lhs: OverviewState?, _ rhs: OverviewState?) -> Bool {
+        guard var lhs, let rhs else { return lhs == nil && rhs == nil }
+        lhs.generatedAt = rhs.generatedAt
+        return lhs == rhs
     }
 
     private func scheduleNext() {
@@ -287,7 +318,7 @@ public final class LiveAPIClient: ObservableObject {
 
     /// The state payload pretty-printed for the clipboard, or as it came when it isn't JSON.
     public var stateJSONText: String? {
-        guard let stateJSON else { return nil }
+        guard let stateJSON = latestStateJSON ?? stateJSON else { return nil }
         if let object = try? JSONSerialization.jsonObject(with: stateJSON),
            let pretty = try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys]) {
             return String(decoding: pretty, as: UTF8.self)
@@ -334,5 +365,61 @@ public final class LiveAPIClient: ObservableObject {
             let http = response as? HTTPURLResponse
             return TaggedAnswer(.answered(data, statusCode: http?.statusCode ?? 0), etag: http?.value(forHTTPHeaderField: "ETag"))
         }
+    }
+}
+
+/// When the client last read a state payload (TP-1480): the status bar's line and Diagnostics show it, and nothing
+/// else draws again each poll.
+@MainActor
+public final class StateHeartbeat: ObservableObject {
+    @Published public private(set) var lastUpdate: Date?
+
+    public init() {}
+
+    func beat(_ date: Date) { lastUpdate = date }
+}
+
+/// A state poll's answer, read off the main actor (TP-1480): why it holds no state, or the state's parts.
+struct StateRead {
+    /// The parts of a state payload the window reads, decoded once.
+    struct Parts {
+        var data: Data
+        /// The payload without `generated_at`, as sorted JSON: two polls that differ only in their time give the same
+        /// bytes. Nil when it isn't a JSON object.
+        var content: Data?
+        var diagnostics: DiagnosticsPayload
+        var overview: OverviewState?
+        var watch: WatchState
+    }
+
+    var failure: EndpointResult?
+    var parts: Parts?
+
+    init(_ answer: APIAnswer) {
+        let result = EndpointResult(answer)
+        guard case let .loaded(data) = result else {
+            failure = result
+            return
+        }
+        guard let payload = DiagnosticsPayload.decode(data) else {
+            failure = .failed("Symphony sent a state that couldn't be read")
+            return
+        }
+        // A snapshot Symphony couldn't take answers 200 with an error in place of the state.
+        if let error = payload.error {
+            failure = .failed(error.message ?? error.code ?? "Symphony reported an error")
+            return
+        }
+        parts = Parts(
+            data: data, content: Self.content(data), diagnostics: payload, overview: OverviewState.decode(data),
+            watch: WatchState.decode(data)
+        )
+    }
+
+    /// `data` without its `generated_at`, as sorted JSON; nil when it isn't a JSON object.
+    static func content(_ data: Data) -> Data? {
+        guard var object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return nil }
+        object["generated_at"] = nil
+        return try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 }
