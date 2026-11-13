@@ -1407,9 +1407,11 @@ Ten more variables, read only in QA mode:
   the count to `frames.json` in the QA root: the frames, the seconds, the hitch time (each frame later than one
   frame and a half, past one frame), the dropped frames and the hitch ratio in ms per second. Outside QA mode the
   app handles neither signal and runs no display link. `Tests/ticket-page-scroll-test.py`, in CI's macos build,
-  uses both to measure the ticket page: a 5 s `sample` of the page left untouched and a scripted scroll of a
-  500-event timeline (the `ticket-page-speed` fixtures), each printed against its budget. It fails when it cannot
-  measure, when the scroll misses an end of the page, or over a budget: the main thread busy over 5 % while the
+  uses both to measure the ticket page, opened as a person opens it (Home, then Find a Ticket) and with its
+  timeline's runs drawn: a 5 s `sample` of the page left untouched and a scripted scroll of a 500-event timeline
+  (the `ticket-page-speed` fixtures), each printed against its budget, then a mouse click that folds and unfolds a
+  run. It fails when it cannot measure, when the timeline draws no run, when the scroll misses an end of the page,
+  when a click does not fold the run, or over a budget: the main thread busy over 5 % while the
   page is untouched, or a hitch ratio over 420 ms/s (before TP-1480 the page measured 100 % and 874 ms/s; after it
   2.2 % and 336.5 ms/s, and TP-1481 tightens the hitch budget once the timeline draws only the rows on screen).
 - `SYMPHONY_BAR_QA_SCRIPTED=1` lets a script drive the app without Accessibility access. The app presses the

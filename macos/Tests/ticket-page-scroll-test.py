@@ -15,9 +15,14 @@ while the window shows, reading the ticket and its feed after each poll. Then:
    second counted, in ms/s, Apple's measure (under 5 ms/s reads smooth, over 10 ms/s a person feels it). The seconds
    counted include the driver's pauses between its rounds of scroll events, when the page settles.
 
-It prints both numbers on every run, and fails when it cannot measure (the page never shows, the sample has no main
-thread, the app counts no frames or exits), when the scroll does not reach an end of the page, or when either number
-goes over its budget, naming the number and the budget.
+Before it measures, it opens the page again the way a person does, from Home through Find a Ticket, and waits for
+the timeline's runs to draw (TP-1480's QA: the page opened that way hung the app with its timeline empty, and an
+empty timeline measures as idle). After the scroll, a mouse click on a run's fold header must fold the run and a
+second unfold it (QA found a click only selecting the run).
+
+It prints both numbers on every run, and fails when it cannot measure (the page never shows, its timeline draws no
+run, the sample has no main thread, the app counts no frames or exits), when the scroll does not reach an end of the
+page, when a click does not fold a run, or when either number goes over its budget, naming the number and the budget.
 
 The budgets. Main before TP-1480 (Ticket page speed 3/4) measured at the ceiling, in PR #903's first Mac CI build
 (GitHub's macos-26 runner):
@@ -90,7 +95,11 @@ def compile_swift(root, source, output, flags=()):
 
 
 def driver(binary, *args, timeout=90):
-    result = subprocess.run([binary, *map(str, args)], capture_output=True, text=True, timeout=timeout)
+    try:
+        result = subprocess.run([binary, *map(str, args)], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # An app whose main thread never comes back answers no accessibility call.
+        return {"error": {"code": "timeout", "message": f"the driver's {args[0]} got no answer in {timeout} s"}}
     try:
         return json.loads(result.stdout)
     except json.JSONDecodeError:
@@ -105,6 +114,89 @@ def page_scroll_area(binary, pid):
     areas = driver(binary, "ax-tree", pid, 40, 20, "AXScrollArea", "").get("matches", [])
     areas = [a for a in areas if (a.get("frame") or {}).get("w", 0) >= 300 and (a.get("frame") or {}).get("h", 0) >= 200]
     return max(areas, key=lambda a: a["frame"]["w"] * a["frame"]["h"], default=None)
+
+
+# A run's line on the timeline reads "Started at 09:02 by Implementation run 1" (TimelineRunRow).
+RUN_ROW = "Started at "
+
+
+def timeline_rows(binary, pid):
+    """How many of the timeline's run rows the window holds (at most 3), or None when the app does not answer."""
+    reply = driver(binary, "ax-tree", pid, 40, 3, "", RUN_ROW, timeout=30)
+    if "error" in reply:
+        return None
+    return len(reply.get("matches", []))
+
+
+def open_from_find(binary, pid):
+    """Opens TICKET's page as a person does once the window has its state: Home (⌘1), then Find a Ticket (⌘F), its
+    identifier and Return. QA found the page opened this way, its feed read after it drew, hanging the app with its
+    timeline empty (TP-1480), while the launch's own open never did. Returns why it could not, or None."""
+    reply = driver(binary, "key", pid, "1", "command")
+    if "error" in reply:
+        return f"⌘1 (Home): {reply['error']}"
+    time.sleep(3)
+    reply = driver(binary, "key", pid, "f", "command")
+    if "error" in reply:
+        return f"⌘F (Find a Ticket): {reply['error']}"
+    field = None
+    for _ in range(10):
+        fields = driver(binary, "ax-tree", pid, 40, 5, "AXTextField", "").get("matches", [])
+        field = next((f for f in fields if "Find a Ticket" in " ".join(str(f.get(k) or "") for k in ("title", "description", "help", "value"))), None)
+        field = field or (fields[0] if fields else None)
+        if field:
+            break
+        time.sleep(0.5)
+    if not field:
+        return "Find a Ticket's field never showed"
+    reply = driver(binary, "ax-set-value", pid, field["path"], TICKET)
+    if "error" in reply:
+        return f"typing {TICKET}: {reply['error']}"
+    reply = driver(binary, "key", pid, "return", "")
+    if "error" in reply:
+        return f"Return: {reply['error']}"
+    return None
+
+
+def fold_header(binary, pid, verb, run=None):
+    """The fold header of a run on the timeline whose label starts with `verb` ("Collapse " or "Expand "), of `run`'s
+    title when given, or None."""
+    reply = driver(binary, "ax-tree", pid, 40, 40, "", verb, timeout=30)
+    for node in reply.get("matches", []):
+        label = node.get("description") or node.get("title") or ""
+        if not label.startswith(verb) or " run " not in label:
+            continue
+        title = label[len(verb):].split(",")[0]
+        if run is None or title == run:
+            return node, title
+    return None, None
+
+
+def click_folds_a_run(binary, pid):
+    """A mouse click on a run's fold header folds it, and a second unfolds it: the click, not an accessibility press.
+    QA found a click only selecting the run (TP-1480). Returns why not, or None."""
+    for verb, flipped in (("Collapse ", "Expand "), ("Expand ", "Collapse ")):
+        header, run = fold_header(binary, pid, verb)
+        if not header:
+            continue
+        for _ in range(2):
+            reply = driver(binary, "click", pid, header["path"], 1)
+            if "error" in reply:
+                return f"clicking {verb.strip().lower()} on {run}: {reply['error']}"
+            if reply.get("fallback"):
+                return f"a click on {run}'s fold changed nothing; the driver pressed it with {reply['fallback']} instead"
+            changed = None
+            for _ in range(10):
+                changed, _ = fold_header(binary, pid, flipped, run)
+                if changed:
+                    break
+                time.sleep(0.3)
+            if not changed:
+                return f"a click on {run}'s fold left it as it was (its label still starts with {verb.strip()!r})"
+            header, verb, flipped = changed, flipped, verb
+        print(f"ok [fold]: a click folds and unfolds {run}")
+        return None
+    return "no run's fold header on the timeline"
 
 
 # -- the idle sample ------------------------------------------------------------------------------------------------
@@ -243,6 +335,28 @@ def main():
         print(f"ok [launch]: {TICKET}'s page shows, its scroll area at {area.get('frame')}")
         time.sleep(SETTLE_SECONDS)
 
+        # The page opened again as a person opens it, and its timeline drawn before anything is measured: a page whose
+        # timeline is empty measures as idle.
+        why = open_from_find(binary, pid)
+        if why:
+            sys.exit(f"FAIL [find]: could not open {TICKET} from Find a Ticket: {why}")
+        rows = None
+        for _ in range(60):
+            if process.poll() is not None:
+                break
+            rows = timeline_rows(binary, pid)
+            if rows:
+                break
+            time.sleep(1)
+        if not rows:
+            state = "stopped answering" if rows is None else "shows no run on its timeline"
+            sys.exit(f"FAIL [timeline]: {TICKET}'s page opened from Find a Ticket {state} after 60 s")
+        area = page_scroll_area(binary, pid)
+        if not area:
+            sys.exit(f"FAIL [find]: {TICKET}'s page opened from Find a Ticket has no scroll area")
+        print(f"ok [find]: {TICKET}'s page opened from Find a Ticket draws its timeline's runs")
+        time.sleep(SETTLE_SECONDS)
+
         # 1. The page open and untouched while polls land.
         # A page that redraws on every poll is busy in every sample; a shared runner's one-off burst (the page still
         # settling after launch, another job on the host) is busy in one. So up to IDLE_SAMPLE_TRIES samples, and the
@@ -300,6 +414,11 @@ def main():
                     print(f"FAIL [hitch ratio]: {over}")
                 else:
                     print(f"over budget [hitch ratio]: {over} (reported; ENFORCE_BUDGETS is off)")
+        # 3. A run's fold follows a click.
+        why = click_folds_a_run(binary, pid)
+        if why:
+            failures.append("fold")
+            print(f"FAIL [fold]: {why}")
         if process.poll() is not None:
             failures.append("app")
             print(f"FAIL [app]: the app exited ({process.returncode}) during the test")

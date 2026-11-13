@@ -291,27 +291,36 @@ struct RunHeaderLayout: Layout {
     }
 }
 
-/// A short bar per step, in its state's tint; the one it is on breathes while it works, still under Reduce Motion.
+/// A short bar per step, in its state's tint; the one it is on breathes while it works, still under Reduce Motion. On
+/// the window's page it breathes on Core Animation (`LayerPulse`), off the main thread (TP-1480); a snapshot draws it
+/// still.
 struct StepBars: View {
     let steps: [RunStep]
-    @State private var flowing = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.liveDurations) private var live
 
     var body: some View {
         HStack(spacing: 3) {
             ForEach(steps) { step in
-                Capsule()
-                    .fill(step.state == .skipped ? AnyShapeStyle(.quaternary) : AnyShapeStyle(step.state.status.tint))
+                bar(step)
                     .frame(width: 14, height: 4)
-                    .opacity(step.isLive && flowing ? 0.45 : 1)
                     .help("\(step.title): \(step.state.word.lowercased())")
             }
         }
         .fixedSize()
         .accessibilityHidden(true)
-        .onAppear {
-            guard !reduceMotion, steps.contains(where: \.isLive) else { return }
-            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { flowing = true }
+    }
+
+    @ViewBuilder private func bar(_ step: RunStep) -> some View {
+        if live, step.isLive, !reduceMotion {
+            LayerPulse(shape: .capsule, color: step.state.status.tint, motion: Self.breath, duration: Self.breathDuration)
+        } else {
+            Capsule()
+                .fill(step.state == .skipped ? AnyShapeStyle(.quaternary) : AnyShapeStyle(step.state.status.tint))
         }
     }
+
+    /// The working bar's breath: down to 45 % and back, 0.9 s each way.
+    static let breath = LayerPulse.Motion.opacity(from: 1, to: 0.45)
+    static let breathDuration = 0.9
 }

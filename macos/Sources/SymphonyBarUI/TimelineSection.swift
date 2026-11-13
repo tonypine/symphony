@@ -102,6 +102,7 @@ public struct TimelineSection: View {
 
     private var column: some View {
         let idle = model.runNow == nil ? idle : nil
+        let moves = Self.moves(arriving: model.items.count(where: { !seen.contains($0.id) }), seen: seen.count)
         return VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
             if model.isEmpty, let idle {
                 TimelineIdleRow(line: idle)
@@ -123,7 +124,7 @@ public struct TimelineSection: View {
                     }
                     row(item)
                         .id(item.id)
-                        .modifier(TimelineEntering(entering: !seen.contains(item.id), reduceMotion: reduceMotion) {
+                        .modifier(TimelineEntering(entering: moves && !seen.contains(item.id), reduceMotion: reduceMotion) {
                             seen.insert(item.id)
                         })
                 }
@@ -140,6 +141,22 @@ public struct TimelineSection: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Self.title)
         .environment(\.timelineReference, model.reference)
+        // A history read whole (the first read of a long ticket's feed) is there at once, and marked seen in one change.
+        .onChange(of: model.items.map(\.id)) { _, ids in
+            let arriving = ids.count(where: { !seen.contains($0) })
+            if arriving > 0, !Self.moves(arriving: arriving, seen: seen.count) { seen.formUnion(ids) }
+        }
+    }
+
+    /// The most items that enter with the motion at once: more is a history read whole, not events coming in.
+    static let enteringAtMost = 5
+
+    /// Whether `arriving` items new to a timeline that has `seen` items drop in with the motion. Only a few events coming
+    /// in onto a timeline that showed some do: the first history, or a long one read whole, is there at once. Each item
+    /// that enters marks itself seen and starts two animations, so 500 events entering at once took the main thread for
+    /// minutes (TP-1480's QA: a long ticket opened from Find a Ticket, its feed read after the page drew).
+    static func moves(arriving: Int, seen: Int) -> Bool {
+        seen > 0 && arriving <= enteringAtMost
     }
 
     public static let title = "Timeline"
@@ -509,7 +526,13 @@ struct TimelineRunRow: View {
             }
         }
         .contentShape(Rectangle())
-        .simultaneousGesture(TapGesture().onEnded { select() })
+        // A click selects the run as its fold header takes the same click: both read the press as it ends, so neither
+        // gesture waits on the other to fail (TP-1480's QA: a tap here took the click from the header's).
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0).onEnded { value in
+                if FoldHeader<EmptyView>.isClick(value.translation) { select() }
+            }
+        )
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Self.accessibilityLabel(run, time: time))
         .accessibilityAddTraits(selected ? .isSelected : [])
