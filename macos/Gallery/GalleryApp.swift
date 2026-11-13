@@ -109,26 +109,81 @@ func runGallery() {
         if let screen = NSScreen.main { window.setFrame(screen.frame, display: true) }
     }
     window.makeKeyAndOrderFront(nil)
+    // The screen's size can change while the gallery is open (a VM's display mode): it keeps filling it.
+    if !arguments.contains("--window") {
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { if let screen = NSScreen.main { window.setFrame(screen.frame, display: true) } }
+        }
+    }
     app.activate(ignoringOtherApps: true)
     app.run()
 }
 
-/// An entry's board: each variation under its name, one below the other.
+/// Cells placed left to right, wrapping at `width`: a board of small things fills its width instead of running down
+/// one column.
+struct FlowLayout: Layout {
+    let width: CGFloat
+    let spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(subviews).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (index, point) in arrange(subviews).points.enumerated() {
+            subviews[index].place(at: CGPoint(x: bounds.minX + point.x, y: bounds.minY + point.y), proposal: .unspecified)
+        }
+    }
+
+    private func arrange(_ subviews: Subviews) -> (size: CGSize, points: [CGPoint]) {
+        var points: [CGPoint] = []
+        var x: CGFloat = 0, y: CGFloat = 0, row: CGFloat = 0, widest: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0, x + size.width > width {
+                x = 0
+                y += row + spacing
+                row = 0
+            }
+            points.append(CGPoint(x: x, y: y))
+            x += size.width + spacing
+            row = max(row, size.height)
+            widest = max(widest, x - spacing)
+        }
+        return (CGSize(width: widest, height: y + row), points)
+    }
+}
+
+/// An entry's board: every variation in a cell under its name, the cells side by side and wrapping at `width`.
 struct GalleryBoard: View {
+    let entry: GalleryEntry
     let variations: [GalleryVariation]
+    let width: CGFloat
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 28) {
+        FlowLayout(width: width, spacing: DesignTokens.Space.s5) {
             ForEach(variations) { variation in
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(variation.id)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                    Text(name(variation))
+                        .textStyle(.label)
+                        .foregroundStyle(DesignTokens.TextColor.tertiary.color)
                     variation.view
                 }
+                .padding(DesignTokens.Space.s4)
+                .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous))
+                .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous).strokeBorder(DesignTokens.Surface.separator.color))
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel(name(variation))
             }
         }
-        .padding(32)
+        .padding(DesignTokens.Space.s8)
+    }
+
+    /// The variation's name without its entry's prefix: `button-primary-hover` reads "primary hover".
+    private func name(_ variation: GalleryVariation) -> String {
+        let prefix = entry.prefixes.filter { variation.id.hasPrefix($0) }.max { $0.count < $1.count } ?? ""
+        let rest = variation.id.dropFirst(prefix.count).replacingOccurrences(of: "-", with: " ").trimmingCharacters(in: .whitespaces)
+        return rest.isEmpty ? variation.id.replacingOccurrences(of: "-", with: " ") : rest
     }
 }
 
@@ -137,26 +192,37 @@ struct GalleryBoard: View {
 @MainActor
 func shoot(_ entry: GalleryEntry, into folder: URL) {
     try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    let limit = CGSize(width: 2700, height: 2400)
+    // A picture an agent can read whole: the cells wrap at this width, and a board taller than this is cut between
+    // cells into the next picture. A variation wider than it (a screen) gets a picture to itself.
+    let limit = CGSize(width: 1600, height: 2000)
+    let spacing = DesignTokens.Space.s5
     var pages: [[GalleryVariation]] = []
-    var height: CGFloat = 0
+    var x: CGFloat = 0, y: CGFloat = 0, row: CGFloat = 0
     var lastAlone = false
     for variation in variations(of: entry) {
-        let size = NSHostingView(rootView: variation.view).fittingSize
-        // A variation as large as a screen gets a picture to itself.
-        let alone = size.width > limit.width / 2 || size.height > limit.height / 2
-        if pages.isEmpty || alone || lastAlone || height + size.height > limit.height {
-            pages.append([variation])
-            height = size.height
-        } else {
-            pages[pages.count - 1].append(variation)
-            height += size.height + 60
+        var size = NSHostingView(rootView: variation.view).fittingSize
+        size.width += 2 * DesignTokens.Space.s4
+        size.height += 2 * DesignTokens.Space.s4 + 22
+        let alone = size.width > limit.width
+        if x > 0, x + size.width > limit.width {
+            x = 0
+            y += row + spacing
+            row = 0
         }
+        if pages.isEmpty || alone || lastAlone || y + size.height > limit.height {
+            pages.append([])
+            x = 0
+            y = 0
+            row = 0
+        }
+        pages[pages.count - 1].append(variation)
+        x += size.width + spacing
+        row = max(row, size.height)
         lastAlone = alone
     }
     for (index, page) in pages.enumerated() {
         for (scheme, suffix) in [(ColorScheme.light, "light"), (.dark, "dark")] {
-            let board = GalleryBoard(variations: page)
+            let board = GalleryBoard(entry: entry, variations: page, width: limit.width)
                 .background(DesignTokens.Surface.window.color)
                 .environment(\.colorScheme, scheme)
                 .environment(\.offscreenSnapshot, true)
@@ -173,7 +239,8 @@ func shoot(_ entry: GalleryEntry, into folder: URL) {
     }
 }
 
-/// The window: the entries on the left, the picked one's board on the right in the appearance chosen.
+/// The window, laid out as the design catalog is: the entries in a panel on the left, a bar with the appearance on
+/// top, and the picked entry's board on the stage.
 struct GalleryView: View {
     @State private var picked: String?
     @State private var dark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
@@ -183,56 +250,131 @@ struct GalleryView: View {
     }
 
     private var entry: GalleryEntry? { galleryEntries.first { $0.id == picked } }
+    private var panel: RoundedRectangle { RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous) }
 
     var body: some View {
-        HStack(spacing: 0) {
-            List(selection: $picked) {
-                ForEach([GalleryEntry.Kind.component, .screen], id: \.self) { kind in
-                    Section(kind == .component ? "Components" : "Screens") {
-                        ForEach(galleryEntries.filter { $0.kind == kind }, id: \.id) { entry in
-                            Text(entry.title).tag(Optional(entry.id))
-                        }
-                    }
-                }
-            }
-            .accessibilityLabel("Entries")
-            .frame(width: 300)
-            Divider()
-            VStack(spacing: 0) {
-                HStack {
-                    Text(entry?.title ?? "No entry picked")
-                        .font(.headline)
-                        .accessibilityIdentifier("gallery.entry")
-                    if let entry {
-                        Text("\(variations(of: entry).count) variations")
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Picker("Appearance", selection: $dark) {
-                        Text("Light").tag(false)
-                        Text("Dark").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .fixedSize()
-                    .accessibilityLabel("Appearance")
-                }
-                .padding(8)
-                Divider()
-                ScrollView([.horizontal, .vertical]) {
-                    if let entry {
-                        GalleryBoard(variations: variations(of: entry))
-                            .id(entry.id)
-                    }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(DesignTokens.Surface.window.color)
-                .environment(\.colorScheme, dark ? .dark : .light)
+        HStack(spacing: DesignTokens.Space.s3) {
+            sidebar
+            VStack(spacing: DesignTokens.Space.s3) {
+                bar
+                stage
             }
         }
+        .padding(DesignTokens.Space.s3)
+        .background(DesignTokens.Surface.window.color)
+        .environment(\.colorScheme, dark ? .dark : .light)
         .onChange(of: dark, initial: true) { _, dark in
             // AppKit-backed pieces (menus, text views, the focus ring) follow the app's appearance, not the environment.
             NSApp.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
         }
+    }
+
+    private var sidebar: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: DesignTokens.Space.s3) {
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
+                    .fill(LinearGradient(colors: [DesignTokens.StateSurface.selected.color, DesignTokens.Surface.strong.color], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .frame(width: 32, height: 32)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Director gallery").textStyle(.heading).foregroundStyle(DesignTokens.TextColor.primary.color)
+                    Text("Components and screens, every variation on one board")
+                        .textStyle(.secondary)
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(DesignTokens.Space.s4)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach([GalleryEntry.Kind.component, .screen], id: \.self) { kind in
+                        Text(kind == .component ? "COMPONENTS" : "SCREENS")
+                            .textStyle(.label)
+                            .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                            .padding(.horizontal, DesignTokens.Space.s3)
+                            .padding(.top, DesignTokens.Space.s4)
+                            .padding(.bottom, DesignTokens.Space.s1)
+                        ForEach(galleryEntries.filter { $0.kind == kind }, id: \.id) { entry in
+                            Button { picked = entry.id } label: {
+                                HStack {
+                                    Text(entry.title).textStyle(.body).foregroundStyle(DesignTokens.TextColor.primary.color)
+                                    Spacer(minLength: DesignTokens.Space.s2)
+                                    Text("\(variations(of: entry).count)").textStyle(.label).foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                                }
+                                .padding(.horizontal, DesignTokens.Space.s3)
+                                .padding(.vertical, 6)
+                                .background(
+                                    picked == entry.id ? DesignTokens.StateSurface.selected.color : .clear,
+                                    in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
+                                )
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(entry.title)
+                            .accessibilityIdentifier("gallery.entry.\(entry.id)")
+                            .accessibilityAddTraits(picked == entry.id ? .isSelected : [])
+                        }
+                    }
+                }
+                .padding(.horizontal, DesignTokens.Space.s2)
+                .padding(.bottom, DesignTokens.Space.s3)
+            }
+        }
+        .frame(width: 300)
+        .frame(maxHeight: .infinity, alignment: .top)
+        .background(DesignTokens.Surface.content.color, in: panel)
+        .overlay(panel.strokeBorder(DesignTokens.Surface.separator.color))
+    }
+
+    private var bar: some View {
+        HStack(spacing: DesignTokens.Space.s3) {
+            Text(entry.map { $0.kind == .component ? "Components" : "Screens" } ?? "")
+                .textStyle(.body)
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
+            Text("/").textStyle(.body).foregroundStyle(DesignTokens.TextColor.tertiary.color)
+            Text(entry?.title ?? "No entry picked")
+                .textStyle(.heading)
+                .foregroundStyle(DesignTokens.TextColor.primary.color)
+                .accessibilityIdentifier("gallery.entry")
+            if let entry {
+                Text("\(variations(of: entry).count) variations").textStyle(.secondary).foregroundStyle(DesignTokens.TextColor.tertiary.color)
+            }
+            Spacer()
+            Text("Theme").textStyle(.label).foregroundStyle(DesignTokens.TextColor.secondary.color)
+            HStack(spacing: 2) {
+                ForEach([(false, "Light"), (true, "Dark")], id: \.1) { value, title in
+                    Button { dark = value } label: {
+                        Text(title)
+                            .textStyle(.rowTitle)
+                            .foregroundStyle(DesignTokens.TextColor.primary.color)
+                            .padding(.horizontal, DesignTokens.Space.s3)
+                            .padding(.vertical, 5)
+                            .background(dark == value ? DesignTokens.Surface.raised.color : .clear, in: Capsule())
+                            .contentShape(Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(title) theme")
+                    .accessibilityAddTraits(dark == value ? .isSelected : [])
+                }
+            }
+            .padding(3)
+            .background(DesignTokens.Surface.sunken.color, in: Capsule())
+        }
+        .padding(.horizontal, DesignTokens.Space.s4)
+        .padding(.vertical, DesignTokens.Space.s2)
+        .background(DesignTokens.Surface.content.color, in: panel)
+        .overlay(panel.strokeBorder(DesignTokens.Surface.separator.color))
+    }
+
+    private var stage: some View {
+        GeometryReader { geometry in
+            ScrollView([.horizontal, .vertical]) {
+                if let entry {
+                    GalleryBoard(entry: entry, variations: variations(of: entry), width: max(geometry.size.width - 2 * DesignTokens.Space.s8, 320))
+                        .frame(minWidth: geometry.size.width, minHeight: geometry.size.height, alignment: .topLeading)
+                        .id(entry.id)
+                }
+            }
+        }
+        .accessibilityLabel("Stage")
     }
 }
