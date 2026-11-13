@@ -11,7 +11,8 @@ name: mac-checks
 # A group a pull request skips still runs on main, in the gate. A failed gate publishes nothing,
 # and Symphony files a fix ticket for it (lib/symphony_elixir/release_gate.ex).
 #
-# A step that fails does not stop the groups after it: one run shows everything that is broken.
+# A pull request stops at the first step that fails (`fail_fast`), so the runner is free for the
+# next job. The gate runs every group whatever fails: its fix ticket names everything broken.
 
 on:
   workflow_call:
@@ -22,6 +23,10 @@ on:
         required: true
       clean:
         description: Build from nothing and file the pieces as clean builds (main).
+        type: boolean
+        default: false
+      fail_fast:
+        description: Stop at the first step that fails, so the runner is free for the next job. Off, every group runs and one run shows everything that is broken.
         type: boolean
         default: false
       build:
@@ -105,17 +110,17 @@ jobs:
           echo "build cache: ${SYMPHONY_CI_CACHE:-none}; ref: $SYMPHONY_CI_REF; clean: $CLEAN"
 
       - name: Test the Xcode selection script
-        if: ${{ !cancelled() && inputs.helpers }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
         run: sh scripts/ci/xcode-developer-dir-test.sh
 
       # The shared test helpers (test/support/README.md): the update feed, gh and Linear
       # stand-ins and the release pair's layout, on made-up inputs. No build, no sudo.
       - name: Test the shared test helpers
-        if: ${{ !cancelled() && inputs.helpers }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
         run: python3 --version && make support-test
 
       - name: Test the build store
-        if: ${{ !cancelled() && inputs.helpers }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
         run: bash scripts/ci/build-store-test.sh
 
       # Fails on any expression the type-checker takes over 100ms on (macos/Makefile's `guarded-%`,
@@ -124,7 +129,7 @@ jobs:
       # for the steps and jobs that need the app.
       - name: Build app
         id: build
-        if: ${{ !cancelled() && inputs.build }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.build }}
         working-directory: macos
         run: |
           store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
@@ -140,7 +145,7 @@ jobs:
           fi
 
       - name: Run tests
-        if: ${{ !cancelled() && inputs.unit }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.unit }}
         working-directory: macos
         run: |
           store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
@@ -155,7 +160,7 @@ jobs:
       # this builds and tests with that env in a sandbox that also denies those writes. The build
       # that must fail runs in an empty folder: in a built one it has nothing to write.
       - name: Build and test in a sandbox like an agent's
-        if: ${{ !cancelled() && inputs.sandbox }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.sandbox }}
         working-directory: macos
         run: |
           store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
@@ -176,28 +181,28 @@ jobs:
           $store save "$SYMPHONY_CI_REF" sandbox
 
       - name: Test the update helper
-        if: ${{ !cancelled() && inputs.helpers }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
         working-directory: macos
         run: time sh Tests/update-helper-test.sh
 
       # The QA host's signing identity (docs/configuration.md, QA host setup), in a temporary
       # keychain with a fake sudo. The timeout turns any wait for a dialog into a failure.
       - name: Test the QA signing identity script
-        if: ${{ !cancelled() && inputs.helpers }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
         timeout-minutes: 5
         run: time sh scripts/qa/install-test-signing-identity-test.sh
 
       # QA's `appearance` launch: the library Symphony injects turns an ordinary AppKit app
       # dark or light whatever this runner's appearance.
       - name: Test the QA appearance library
-        if: ${{ !cancelled() && inputs.driver }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.driver }}
         working-directory: macos
         run: time sh Tests/qa-appearance-test.sh
 
       # `qa_scroll`: the QA driver scrolls a SwiftUI ScrollView that loads pages at its end and a
       # List to their last rows, and by a delta, in a fixture app with a window.
       - name: Test the QA driver's scrolling
-        if: ${{ !cancelled() && inputs.driver }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.driver }}
         working-directory: macos
         timeout-minutes: 10
         run: time python3 -I Tests/qa-scroll-test.py
@@ -205,7 +210,7 @@ jobs:
       # `qa_key`: the QA driver's ⌘ shortcuts reach a fixture app's menu (Back, Inbox, Settings,
       # Close), and a plain key still types into the focused field.
       - name: Test the QA driver's key shortcuts
-        if: ${{ !cancelled() && inputs.driver }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.driver }}
         working-directory: macos
         timeout-minutes: 10
         run: time python3 -I Tests/qa-key-test.py
@@ -214,7 +219,7 @@ jobs:
       # ticket-page-speed fixtures, with the page open while polls land. Nothing else runs on the
       # runner while it measures.
       - name: Test the ticket page's idle sample and scroll hitches
-        if: ${{ !cancelled() && inputs.speed && steps.build.outcome == 'success' }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.speed && steps.build.outcome == 'success' }}
         working-directory: macos
         timeout-minutes: 10
         run: time python3 -I Tests/ticket-page-scroll-test.py build/Symphony.app
@@ -222,7 +227,7 @@ jobs:
       # The design sheet (TP-1482): evidence for QA, not a gate. It draws from the debug build the
       # tests made.
       - name: Draw the design sheet
-        if: ${{ !cancelled() && inputs.sheet }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.sheet }}
         working-directory: macos
         run: |
           store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
@@ -231,7 +236,7 @@ jobs:
           if [ -n "$scratch" ]; then $store save "$SYMPHONY_CI_REF" debug; fi
 
       - name: Upload the design sheet
-        if: ${{ !cancelled() && inputs.sheet }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.sheet }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
         with:
           name: design-sheet
@@ -243,7 +248,7 @@ jobs:
       # of this commit. The app's executable and the two Symphony releases come from the store,
       # and are built and filed there when it has none.
       - name: Test update, restart and rollback
-        if: ${{ !cancelled() && inputs.update }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.update }}
         env:
           # The runner may trust the throwaway signing certificate for code signing (with sudo)
           # until the test ends.
@@ -279,7 +284,7 @@ jobs:
       # release smoke test on the app's launcher: the service-instance step (the release running
       # as the service under symphony@127.0.0.1, registered with epmd) runs nowhere else.
       - name: Smoke-test the release
-        if: ${{ !cancelled() && inputs.smoke }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.smoke }}
         env:
           SYMPHONY_BUILD_NUMBER: ${{ github.run_number }}
           SYMPHONY_BUILD_SHA: ${{ github.sha }}
@@ -304,7 +309,7 @@ jobs:
           echo "Symphony.zip: $(stat -f %z "$RUNNER_TEMP/Symphony.zip") bytes" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Test the install script
-        if: ${{ !cancelled() && inputs.installer }}
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.installer }}
         env:
           INSTALL_DIR: ${{ runner.temp }}/Applications
           SYMPHONY_NO_OPEN: "1"

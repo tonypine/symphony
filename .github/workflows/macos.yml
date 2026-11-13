@@ -67,6 +67,7 @@ jobs:
     uses: ./.github/workflows/mac-checks.yml
     with:
       ref: ${{ github.head_ref }}
+      fail_fast: true
       build: ${{ needs.changes.outputs.build == 'true' }}
       unit: ${{ needs.changes.outputs.unit == 'true' }}
       sandbox: ${{ needs.changes.outputs.sandbox == 'true' }}
