@@ -261,13 +261,9 @@ private struct PhaseStepFields: View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
             TextField("Title", text: $step.title, prompt: Text(step.stepID))
             TextField("Id", text: $step.stepID, prompt: Text("lowercase_with_underscores"))
-            Picker("Kind", selection: $step.mode) {
-                ForEach(StepMode.allCases) { mode in
-                    Text(mode.title).tag(mode)
-                }
+            LabeledContent("Kind") {
+                SegmentedControl("Kind", selection: $step.mode, segments: StepMode.allCases.map { Segment($0, $0.title) })
             }
-            .pickerStyle(.segmented)
-            .pointerStyle(.link)
             Text(step.mode.explanation).foregroundStyle(.secondary)
 
             switch step.mode {

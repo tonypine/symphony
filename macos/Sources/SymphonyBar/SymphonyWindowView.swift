@@ -1105,11 +1105,10 @@ struct SymphonyWindowView: View {
                     }
                     if model.selection == .shipped, !model.showsPage {
                         ToolbarItem(placement: .principal) {
-                            Picker("Shipped or Learnings", selection: $model.shippedTab) {
-                                ForEach(Shipped.Tab.allCases) { Text($0.title).tag($0) }
-                            }
-                            .pickerStyle(.segmented)
-                            .fixedSize()
+                            SegmentedControl(
+                                "Shipped or Learnings", selection: $model.shippedTab,
+                                segments: Shipped.Tab.allCases.map { Segment($0, $0.title) }, size: .small
+                            )
                         }
                     }
                     if model.selection == .audit, !model.showsPage {
@@ -1188,21 +1187,17 @@ struct SymphonyWindowView: View {
     }
 }
 
-/// C3: the scope pop-up, all repos or one of the repos Symphony has tickets in.
+/// C3: the scope pop-up (C53), all repos or one of the repos Symphony has tickets in.
 struct ScopePicker: View {
     @ObservedObject var model: SymphonyWindowModel
 
     var body: some View {
-        Picker(selection: $model.scope) {
-            ForEach(OverviewScope.choices(repos: model.overviewState?.repos ?? [], current: model.scope), id: \.self) { scope in
-                Text(scope.title).tag(scope)
-            }
-        } label: {
-            Label("Scope", systemImage: SymphonyView.repos.symbol)
-        }
-        .pickerStyle(.menu)
-        .help("Show all repos or one")
-        .accessibilityLabel(model.scope.accessibilityLabel)
+        let choices = OverviewScope.choices(repos: model.overviewState?.repos ?? [], current: model.scope)
+        PopUp(
+            nil, selection: $model.scope,
+            choices: choices.enumerated().map { PopUpChoice($1, $1.title, separatorBefore: $0 == 1) },
+            size: .small, help: "Show all repos or one", accessibilityLabel: model.scope.accessibilityLabel
+        )
     }
 }
 
@@ -1335,16 +1330,11 @@ struct DestinationTabs: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker(model.destination.title, selection: Binding(get: { model.selection }, set: { model.show($0) })) {
-                ForEach(model.destination.pages) { page in
-                    Text(page.title).tag(page)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .fixedSize()
+            SegmentedControl(
+                "\(model.destination.title) tabs", selection: Binding(get: { model.selection }, set: { model.show($0) }),
+                segments: model.destination.pages.map { Segment($0, $0.title) }, size: .small
+            )
             .padding(.vertical, DesignTokens.Space.s2)
-            .accessibilityLabel("\(model.destination.title) tabs")
             Divider()
         }
         .frame(maxWidth: .infinity)

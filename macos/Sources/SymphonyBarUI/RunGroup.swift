@@ -108,46 +108,20 @@ public extension EnvironmentValues {
     @Entry var readSession: ReadSessionAction?
 }
 
-/// The run's More: "Read the whole session", off with its reason while the run has nothing to read.
-///
-/// A plain button that opens a small popover, not a SwiftUI `Menu`: a `Menu` is an AppKit pop-up button with its menu
-/// built up front, one per run, and on a long timeline with the run now live (its breathing step bar and flowing mark
-/// redrawing the page all the time) those pop-ups kept the page from answering accessibility reads and keys (TP-1452's
-/// QA on TP-1244). The popover and its one button exist only while it is open.
+/// The run's More (C54): "Read the whole session", off with its reason while the run has nothing to read. A quiet
+/// small menu button whose menu exists only while it is open, so a long timeline with the run now live builds none up
+/// front (a stock `Menu` built an AppKit pop-up per run and kept the page from answering, TP-1452's QA on TP-1244).
 private struct RunMoreMenu: View {
     let run: RunGroupModel
     let readSession: ReadSessionAction
 
-    @State private var open = false
-
-    private var canRead: Bool { SessionReader.canRead(run) }
-
     var body: some View {
-        Button { open = true } label: {
-            Image(systemName: "ellipsis.circle")
-                .font(.system(size: 13, weight: .regular))
-                .foregroundStyle(.secondary)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .fixedSize()
-        .help(canRead ? Self.title : SessionReader.nothingToRead)
-        .accessibilityLabel(Self.title + ", " + run.title)
-        .accessibilityHint(canRead ? SessionReader.menuTitle : SessionReader.nothingToRead)
-        .popover(isPresented: $open, arrowEdge: .bottom) {
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-                Button(SessionReader.menuTitle) {
-                    open = false
-                    readSession(run)
-                }
-                .disabled(!canRead)
-                if !canRead {
-                    Text(SessionReader.nothingToRead)
-                        .font(DesignTokens.TypeStyle.secondary.font)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .padding(DesignTokens.Space.s3)
+        MenuButton(
+            Self.title, glyph: "ellipsis", size: .small, quiet: true, alignment: .trailing,
+            help: SessionReader.canRead(run) ? Self.title : SessionReader.nothingToRead,
+            accessibilityLabel: Self.title + ", " + run.title
+        ) {
+            [MenuItem(SessionReader.menuTitle, disabledReason: SessionReader.canRead(run) ? nil : SessionReader.nothingToRead) { readSession(run) }]
         }
     }
 
