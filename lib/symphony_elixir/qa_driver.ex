@@ -13,7 +13,11 @@ defmodule SymphonyElixir.QaDriver do
     `qa-evidence/` and the folders Symphony itself creates there (see
     `SymphonyElixir.AgentEnv.owned_dirs/0`). Gitignored files count too (the
     build reads caches such as SwiftPM's `.build/`): none may exist before the first build, and after a
-    build none may appear or change until the next one;
+    build none may appear or change until the next one. When Symphony already built the app for
+    the tree the worktree's `HEAD` holds (the QA pre-build, `SymphonyElixir.QaBuild`), `qa_build`
+    builds nothing: the stored app becomes the pass's build, and its result says so
+    (`prebuilt: true`). A pre-build still running is waited for; one that failed while the pass
+    waited is the tool's result. With no usable pre-build the build runs in the pass;
   - a successful `qa_build` copies the configured `app` bundle, which must be a
     real `.app` directory that resolves inside the build directory, into the
     pass's run directory on the QA host;
@@ -245,9 +249,9 @@ defmodule SymphonyElixir.QaDriver do
 
   require Logger
 
-  alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, QaPolicy, Workspace}
+  alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, QaBuild, QaPolicy, Workspace}
   alias SymphonyElixir.QaAgent.PlaybookSettings
-  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Gallery, Machine, ReleasePair, Remote}
+  alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Gallery, Machine, ReleasePair, Remote, SafeHost}
 
   @evidence_dir "qa-evidence"
   @qa_root_env "SYMPHONY_BAR_QA_ROOT"
@@ -388,8 +392,6 @@ defmodule SymphonyElixir.QaDriver do
   printf 'symphony-qa-app:%s\\n' "$executable"
   """
 
-  @qa_vm_docs "docs/configuration.md#running-qa-in-a-qa-vm"
-
   @tools ~w(qa_build qa_launch_app qa_quit_app qa_screenshot qa_ax_tree qa_ax_press qa_ax_set_value qa_ax_select qa_click qa_key) ++
            ~w(qa_hover qa_context_menu qa_scroll qa_resize_window qa_check_app qa_put_file qa_put_checkout qa_api_requests qa_open_status_menu) ++
            ~w(qa_sample qa_build_release_pair qa_relaunched_app qa_update_feed qa_gallery qa_gallery_open)
@@ -459,8 +461,9 @@ defmodule SymphonyElixir.QaDriver do
   `:start_stub` (a `fn -> {:ok, pid, port} | {:error, reason}` that starts the
   OpenRouter stub, default `SymphonyElixir.OpenRouter.Stub.start_link/0`) and
   `:status_menu_poll` (`{attempts, interval_ms}` for `qa_open_status_menu`,
-  default `{40, 250}`) and `:dev_server_lease` (the lease manager
-  `start_dev_server/3` asks, default `SymphonyElixir.QaDriver.DevServerLease`).
+  default `{40, 250}`), `:dev_server_lease` (the lease manager
+  `start_dev_server/3` asks, default `SymphonyElixir.QaDriver.DevServerLease`) and `:qa_build`
+  (where `qa_build` reads what Symphony built ahead of the pass, default `SymphonyElixir.QaBuild`).
   """
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts)
@@ -629,11 +632,12 @@ defmodule SymphonyElixir.QaDriver do
   # -- tools ------------------------------------------------------------------
 
   defp run_tool("qa_build", driver, config, _args) do
-    with :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)),
-         :ok <- ship(config),
-         {:ok, {output, status}} <- run_build(config, build_env(driver)) |> rebaseline_on_timeout(driver, config),
-         {:ok, ignored, _dirty} <- worktree_status(config) do
-      record_build(driver, config, status, tail(output, @output_limit), ignored_signatures(config, ignored))
+    with :ok <- ensure_clean_worktree(config, GenServer.call(driver, :ignored)) do
+      case prebuilt(config) do
+        %{status: :ready} = record -> use_prebuilt(driver, config, record)
+        %{status: :failed} = record -> prebuild_failed(driver, config, record)
+        _none -> build_in_pass(driver, config)
+      end
     end
   end
 
@@ -1001,6 +1005,54 @@ defmodule SymphonyElixir.QaDriver do
 
   # -- build and bundle checks ------------------------------------------------
 
+  defp build_in_pass(driver, config) do
+    with :ok <- ship(config),
+         {:ok, {output, status}} <- run_build(config, build_env(driver)) |> rebaseline_on_timeout(driver, config),
+         {:ok, ignored, _dirty} <- worktree_status(config) do
+      record_build(driver, config, status, tail(output, @output_limit), ignored_signatures(config, ignored))
+    end
+  end
+
+  # What Symphony built ahead of the pass for the tree the worktree's HEAD holds
+  # (`SymphonyElixir.QaBuild`): its record once the build is no longer running, so a pass that
+  # starts while its build runs waits for it. Nil when there is none to use, and for a build that
+  # failed before the pass started, which the pass builds itself.
+  defp prebuilt(%{repo_key: repo_key} = config) when is_binary(repo_key) do
+    with {output, 0} <- config.git.(["rev-parse", "--verify", "--quiet", "HEAD^{tree}"], config.worktree),
+         tree = String.trim(to_string(output)),
+         %{status: :building} <- config.qa_build.get(repo_key, tree) do
+      Logger.info("QA driver waits for the build Symphony runs for this commit #{config.log_context} repo_key=#{repo_key} tree=#{tree}")
+      config.qa_build.await(repo_key, tree)
+    else
+      %{status: :ready} = record -> record
+      _none -> nil
+    end
+  end
+
+  defp prebuilt(_config), do: nil
+
+  # The stored app becomes the pass's build through the same check and copy a build in the pass
+  # gets, so every later tool reads it alike. A stored app that is gone is built in the pass.
+  defp use_prebuilt(driver, config, record) do
+    with {:ok, built} <- built_app(config, Path.dirname(record.app), Path.basename(record.app)),
+         {:ok, ignored, _dirty} <- worktree_status(config) do
+      GenServer.call(driver, {:record_build, built, ignored_signatures(config, ignored)})
+      Logger.info("QA driver uses the build Symphony made ahead of the pass #{config.log_context} repo_key=#{config.repo_key} tree=#{record.tree}")
+      output = "Symphony built this commit's app ahead of the pass (tree #{record.tree}); that build is this pass's build, and nothing was built now."
+      {:ok, %{"exit_status" => 0, "output" => output, "app" => config.app, "prebuilt" => true}}
+    else
+      {:error, {:qa_tool, "qa_app_missing", _message}} -> build_in_pass(driver, config)
+      {:error, _reason} = error -> error
+    end
+  end
+
+  # The build the pass waited for failed: its result is the pass's, as a build in the pass would be.
+  defp prebuild_failed(driver, config, record) do
+    with {:ok, ignored, _dirty} <- worktree_status(config) do
+      record_build(driver, config, record.exit_status, tail(record.output, @output_limit), ignored_signatures(config, ignored))
+    end
+  end
+
   # Ignored files are inputs too: the host build reads caches such as SwiftPM's
   # `.build/`, which the sandboxed agent can write. `baseline` holds the ignored
   # files the last build left (empty before the first build); any other ignored
@@ -1129,9 +1181,11 @@ defmodule SymphonyElixir.QaDriver do
 
   # Only Symphony writes the build directory on the QA host, so the bundle is
   # checked and copied by one script there.
-  defp built_app(config) do
+  defp built_app(config), do: built_app(config, config.build_dir, config.app)
+
+  defp built_app(config, build_dir, app) do
     destination = Path.join(config.host_dir, "builds/#{System.unique_integer([:positive])}")
-    args = ["-c", @remote_bundle_script, "sh", config.build_dir, config.app, destination]
+    args = ["-c", @remote_bundle_script, "sh", build_dir, app, destination]
 
     case config.host.cmd.("/bin/sh", args, timeout_ms: @helper_timeout_ms, output_limit: @output_limit) do
       {:ok, {output, 0}} ->
@@ -2100,7 +2154,8 @@ defmodule SymphonyElixir.QaDriver do
       relaunch_poll_ms: Keyword.get(opts, :relaunch_poll_ms, @relaunch_poll_ms),
       feed_poll: Keyword.get(opts, :feed_poll, @feed_poll),
       launch_env: PlaybookSettings.launch_env(playbook),
-      dev_server_lease: Keyword.get(opts, :dev_server_lease, DevServerLease)
+      dev_server_lease: Keyword.get(opts, :dev_server_lease, DevServerLease),
+      qa_build: Keyword.get(opts, :qa_build, QaBuild)
     }
 
     state = %{config: host_dirs(config, worker_host), build: nil, ignored: %{}, apps: %{}, helper: nil, stub: nil}
@@ -2171,66 +2226,12 @@ defmodule SymphonyElixir.QaDriver do
 
   # `host_dir` is the pass's run directory on the QA host: bundle copies,
   # screenshot staging and the app's QA root; `build_dir` is where the build runs.
-  # PR code never runs on the Symphony host, so without a QA host nothing runs.
-  defp host_dirs(config, nil) do
-    Logger.warning("QA driver has no worker_host: macos_app QA runs only in a QA VM")
-
-    unavailable(
-      config,
-      "qa_worker_missing",
-      "No QA VM is set up: `auto_review.worker_host` is unset, and Symphony never builds or runs a PR's macOS app on its own host. " <>
-        "#{Checks.blocked_hint()} An operator sets up a QA VM and names it in `auto_review.worker_host` (see #{@qa_vm_docs})."
-    )
-  end
-
-  # The same hardware is the Symphony Mac under another name (`localhost`, its
-  # `.local` name, a LAN address), whichever user it logs in as.
+  # PR code never runs on the Symphony host, so without a QA host that passes
+  # `SafeHost.open/3` nothing runs.
   defp host_dirs(config, worker_host) do
-    case Machine.same_machine?(config.host.cmd, config.local_uuid) do
-      {:ok, false} ->
-        prepare(config, worker_host)
-
-      {:ok, true} ->
-        Logger.warning("QA driver refused worker_host=#{worker_host}: it is the Symphony host")
-
-        unavailable(
-          config,
-          "qa_worker_same_machine",
-          "The QA host #{worker_host} is this Mac (the same IOPlatformUUID): QA must run in a VM, never on the Symphony host, " <>
-            "where PR code would run beside the operator's credentials. #{Checks.blocked_hint()} " <>
-            "An operator points `auto_review.worker_host` at a QA VM (see #{@qa_vm_docs})."
-        )
-
-      {:error, reason} ->
-        Logger.warning("QA driver could not tell worker_host=#{worker_host} from the Symphony host: #{reason}")
-        unavailable(config, "qa_worker_unreachable", "The QA host #{worker_host} could not be checked: #{reason}. #{Checks.blocked_hint()}")
-    end
-  end
-
-  # Only the operator can read the canary, so a QA host that reads it runs as the operator.
-  defp prepare(config, worker_host) do
-    canary = Path.join(config.scratch_dir, "canary")
-    File.write!(canary, "")
-    File.chmod!(canary, 0o600)
-
-    case config.host.prepare.(System.user_home!(), canary) do
-      {:ok, dir} ->
-        Logger.info("QA driver runs on worker_host=#{worker_host} dir=#{dir}")
-        Map.merge(config, %{host_dir: dir, build_dir: Path.join(dir, "src"), qa_root: Path.join(dir, "app-root")})
-
-      {:error, {:unsafe, problems}} ->
-        Logger.warning("QA driver refused worker_host=#{worker_host}: #{problems}")
-
-        unavailable(
-          config,
-          "qa_worker_unsafe",
-          "The QA host #{worker_host} #{problems}. QA must not run where PR code can reach push credentials. " <>
-            "#{Checks.blocked_hint()} An operator fixes the QA host (see docs/configuration.md, macOS app QA)."
-        )
-
-      {:error, {:unreachable, reason}} ->
-        Logger.warning("QA driver could not reach worker_host=#{worker_host}: #{reason}")
-        unavailable(config, "qa_worker_unreachable", "The QA host #{worker_host} could not be prepared: #{reason}. #{Checks.blocked_hint()}")
+    case SafeHost.open(config.host, worker_host, local_uuid: config.local_uuid, scratch_dir: config.scratch_dir) do
+      {:ok, dir} -> Map.merge(config, %{host_dir: dir, build_dir: Path.join(dir, "src"), qa_root: Path.join(dir, "app-root")})
+      {:error, {code, message}} -> unavailable(config, code, message)
     end
   end
 

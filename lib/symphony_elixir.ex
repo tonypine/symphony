@@ -103,7 +103,10 @@ defmodule SymphonyElixir.Application do
            [
              SymphonyElixir.RunStore,
              # After the run store, before the orchestrator: it starts with the seeded runs and pauses.
-             qa_seed_child_spec()
+             qa_seed_child_spec(),
+             # After the run store, where it keeps its records, and before the orchestrator, which
+             # asks it for builds.
+             qa_build_child_spec()
            ] ++
            verification_child_specs(system_config) ++
            [
@@ -199,6 +202,11 @@ defmodule SymphonyElixir.Application do
     if Enum.any?(repos, &pr_review_enabled_for_repo?/1) do
       SymphonyElixir.PrReviewPoller
     end
+  end
+
+  # Off in tests (`config/config.exs`): a test that moves a ticket would start a build.
+  defp qa_build_child_spec do
+    if Application.get_env(:symphony_elixir, :qa_build, true), do: SymphonyElixir.QaBuild
   end
 
   # Off in tests (`config/config.exs`): its events would join the ones each test asserts.

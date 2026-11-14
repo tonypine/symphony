@@ -273,7 +273,7 @@ defmodule SymphonyElixir.QaDriverTest do
           host: Keyword.get(opts, :host, host()),
           local_uuid: fn -> {:ok, @symphony_mac} end,
           git: Keyword.get(opts, :git, &clean_git/2)
-        ] ++ Keyword.take(opts, [:start_stub, :status_menu_poll, :release_pair_timeout_ms, :relaunch_poll_ms, :feed_poll])
+        ] ++ Keyword.take(opts, [:start_stub, :status_menu_poll, :release_pair_timeout_ms, :relaunch_poll_ms, :feed_poll, :repo_key, :qa_build, :log_context])
       )
 
     on_exit(fn -> QaDriver.stop(driver) end)
@@ -398,6 +398,162 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:error, {:qa_tool, "qa_worktree_modified", message}} = QaDriver.call_tool(driver, "qa_build", %{})
       assert message =~ "stray.swift"
       QaDriver.stop(driver)
+    end
+  end
+
+  # The QA pre-build as the driver reads it: the record the test put for the tree, and the one
+  # `await` returns for a build still running.
+  defmodule Prebuilt do
+    @moduledoc false
+    def get(repo_key, tree) do
+      send(self(), {:prebuilt_get, repo_key, tree})
+      Process.get(:prebuilt_record)
+    end
+
+    def await(repo_key, tree) do
+      send(self(), {:prebuilt_await, repo_key, tree})
+      Process.get(:prebuilt_awaited)
+    end
+  end
+
+  describe "qa_build with a build Symphony made ahead of the pass" do
+    @tree "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    # A stored build on the QA host: `builds/<tree>/Demo.app`.
+    defp stored_app!(root) do
+      stored = Path.join([root, "store", "builds", @tree])
+      File.mkdir_p!(Path.join(stored, "Demo.app/Contents/MacOS"))
+      File.write!(Path.join(stored, "Demo.app/Contents/MacOS/Demo"), "stored-binary")
+      Path.join(stored, "Demo.app")
+    end
+
+    defp tree_git(["rev-parse", "--verify", "--quiet", "HEAD^{tree}"], _cwd), do: {@tree <> "\n", 0}
+    defp tree_git(args, cwd), do: clean_git(args, cwd)
+
+    defp prebuilt_driver(worktree, opts \\ []) do
+      defaults = [repo_key: "demo", qa_build: Prebuilt, git: &tree_git/2, log_context: "issue_id=issue-1 issue_identifier=TP-1"]
+      start_driver(worktree, Keyword.merge(defaults, opts))
+    end
+
+    test "uses the stored app as the pass's build and builds nothing", %{root: root, worktree: worktree} do
+      Process.put(:prebuilt_record, %{status: :ready, tree: @tree, app: stored_app!(root)})
+      driver = prebuilt_driver(worktree)
+
+      {result, log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
+
+      assert {:ok, %{"exit_status" => 0, "app" => @app, "prebuilt" => true, "output" => output}} = result
+      assert output =~ "Symphony built this commit's app ahead of the pass (tree #{@tree})"
+      assert log =~ "QA driver uses the build Symphony made ahead of the pass issue_id=issue-1 issue_identifier=TP-1 repo_key=demo tree=#{@tree}"
+      assert_received {:prebuilt_get, "demo", @tree}
+      refute_received {:prebuilt_await, _repo_key, _tree}
+      refute_received {:cmd, "/bin/sh", ["-c", "make app"], _opts}
+
+      # The pass's build is a copy in its run directory, as after a build in the pass.
+      %{host_dir: host_dir} = GenServer.call(driver, :config)
+      assert %{executable: executable} = GenServer.call(driver, :build)
+      assert String.starts_with?(executable, Path.join(host_dir, "builds/"))
+      assert File.read!(executable) == "stored-binary"
+      assert %{built: true} = QaDriver.app_check(driver)
+
+      {launched, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
+      assert {:ok, %{"pid" => _pid, "qa_mode" => true}} = launched
+      assert_received {:launched, ^executable, _opts, _port, _pid}
+    end
+
+    test "waits for a build still running, then uses it", %{root: root, worktree: worktree} do
+      Process.put(:prebuilt_record, %{status: :building, tree: @tree})
+      Process.put(:prebuilt_awaited, %{status: :ready, tree: @tree, app: stored_app!(root)})
+      driver = prebuilt_driver(worktree)
+
+      {result, log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
+
+      assert {:ok, %{"exit_status" => 0, "prebuilt" => true}} = result
+      assert log =~ "QA driver waits for the build Symphony runs for this commit issue_id=issue-1 issue_identifier=TP-1 repo_key=demo tree=#{@tree}"
+      assert_received {:prebuilt_await, "demo", @tree}
+      refute_received {:cmd, "/bin/sh", ["-c", "make app"], _opts}
+    end
+
+    test "a build that failed while the pass waited is the tool's result", %{worktree: worktree} do
+      Process.put(:prebuilt_record, %{status: :building, tree: @tree})
+      Process.put(:prebuilt_awaited, %{status: :failed, tree: @tree, exit_status: 65, output: "error: no such module\n"})
+      driver = prebuilt_driver(worktree)
+
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
+
+      assert result == {:ok, %{"exit_status" => 65, "output" => "error: no such module\n"}}
+      refute_received {:cmd, "/bin/sh", ["-c", "make app"], _opts}
+      assert GenServer.call(driver, :build) == nil
+      assert error_code(QaDriver.call_tool(driver, "qa_launch_app", %{})) == "qa_not_built"
+    end
+
+    test "builds in the pass when there is no stored build to use", %{root: root, worktree: worktree} do
+      gone = Path.join(root, "store/builds/#{@tree}/Demo.app")
+
+      for {record, awaited} <- [
+            {nil, nil},
+            {%{status: :failed, tree: @tree, exit_status: 1, output: "old"}, nil},
+            {%{status: :unavailable, tree: @tree, reason: "ssh"}, nil},
+            {%{status: :building, tree: @tree}, %{status: :unavailable, tree: @tree, reason: "timeout"}},
+            {%{status: :building, tree: @tree}, nil},
+            # The stored app was removed from the QA host since.
+            {%{status: :ready, tree: @tree, app: gone}, nil}
+          ] do
+        Process.put(:prebuilt_record, record)
+        Process.put(:prebuilt_awaited, awaited)
+        driver = prebuilt_driver(worktree)
+
+        {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
+
+        assert {:ok, %{"exit_status" => 0, "output" => "Build complete!\n", "app" => @app} = payload} = result
+        refute Map.has_key?(payload, "prebuilt")
+        assert_received {:cmd, "/bin/sh", ["-c", "make app"], _opts}
+      end
+    end
+
+    test "builds in the pass when the tree can't be read or the pass has no repo key", %{root: root, worktree: worktree} do
+      Process.put(:prebuilt_record, %{status: :ready, tree: @tree, app: stored_app!(root)})
+
+      no_tree = fn
+        ["rev-parse" | _rest], _cwd -> {"fatal: bad revision", 128}
+        args, cwd -> clean_git(args, cwd)
+      end
+
+      no_repo_key = start_driver(worktree, qa_build: Prebuilt, git: &tree_git/2)
+
+      for driver <- [prebuilt_driver(worktree, git: no_tree), no_repo_key] do
+        assert {:ok, %{"exit_status" => 0, "output" => "Build complete!\n"}} = QaDriver.call_tool(driver, "qa_build", %{})
+        assert_received {:cmd, "/bin/sh", ["-c", "make app"], _opts}
+      end
+
+      refute_received {:prebuilt_get, _repo_key, _tree}
+    end
+
+    test "keeps the worktree checks: a dirty worktree is refused, and a git failure after the copy is reported", %{root: root, worktree: worktree} do
+      Process.put(:prebuilt_record, %{status: :ready, tree: @tree, app: stored_app!(root)})
+
+      dirty = fn
+        ["status" | _rest], _cwd -> {" M macos/Sources/App.swift\0", 0}
+        args, cwd -> tree_git(args, cwd)
+      end
+
+      assert error_code(QaDriver.call_tool(prebuilt_driver(worktree, git: dirty), "qa_build", %{})) == "qa_worktree_modified"
+      refute_received {:prebuilt_get, _repo_key, _tree}
+
+      # `git status` answers the first check and fails the next one.
+      {:ok, statuses} = Agent.start_link(fn -> 0 end)
+
+      failing = fn
+        ["status" | _rest], _cwd -> if Agent.get_and_update(statuses, &{&1, &1 + 1}) == 0, do: {"", 0}, else: {"fatal: index locked", 128}
+        args, cwd -> tree_git(args, cwd)
+      end
+
+      for record <- [Process.get(:prebuilt_record), %{status: :building, tree: @tree}] do
+        Agent.update(statuses, fn _count -> 0 end)
+        Process.put(:prebuilt_record, record)
+        Process.put(:prebuilt_awaited, %{status: :failed, tree: @tree, exit_status: 65, output: "error"})
+        {result, _log} = with_log(fn -> QaDriver.call_tool(prebuilt_driver(worktree, git: failing), "qa_build", %{}) end)
+        assert error_code(result) == "qa_git_failed"
+      end
     end
   end
 

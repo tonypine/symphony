@@ -115,6 +115,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     PrDecision,
     ProtectedPathsGate,
     PrReviewPoller,
+    QaBuild,
     Questions,
     RunStore,
     TicketObservation,
@@ -1030,6 +1031,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
       _ = IdlePark.settle({:ticket, state.repo_key, entry.issue.id}, entry.record, watch)
       announce_dispatch(watch, previous, entry, state)
       announce_situation(watch, previous, entry)
+      request_qa_build(watch, previous, entry, state)
       watch
     end
   end
@@ -1074,6 +1076,24 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   defp announce_dispatch(_watch, _previous, _entry, _state), do: :ok
+
+  # A new head of a ticket in Code Review or QA (branch upkeep, a person's push), and the head a
+  # ticket comes back to one of them with (a CI Fix return), is built for QA at once
+  # (`SymphonyElixir.QaBuild`), so its build runs beside the review and CI. Asking again for a head
+  # already asked for changes nothing.
+  defp request_qa_build(%{head_sha: head}, previous, %{phase: phase, issue: %{identifier: identifier} = issue}, state)
+       when is_binary(head) and is_binary(identifier) and phase in [:code_review, :qa] do
+    if carried(previous, :head_sha, nil) != head or not built_phase?(previous) do
+      Keyword.get(state.opts, :qa_build, QaBuild).request(state.repo_key, head, %{identifier: identifier, issue_id: issue.id})
+    end
+
+    :ok
+  end
+
+  defp request_qa_build(_watch, _previous, _entry, _state), do: :ok
+
+  # Reached only with the record of an earlier read, which holds the phase it was read in.
+  defp built_phase?(%{facts: %{phase: phase}}), do: phase in [:code_review, :qa]
 
   # A ticket's situation reads the PR, its CI and the phase they were read in: a read that changed any
   # of them is a reason to compute it.

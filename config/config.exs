@@ -65,6 +65,10 @@ if config_env() == :test do
     # (`SymphonyElixir.PlanBrief`); in tests it would race the records a test asserts, so it runs
     # only where a test turns it on.
     plan_brief_capture: false,
+    # The QA pre-build (`SymphonyElixir.QaBuild`) would build on a QA host for the tickets a test
+    # moves into Code Review or QA; off here, nothing asks it and no ticket is held for it. Its own
+    # tests start it with fakes.
+    qa_build: false,
     # The orchestrator's check of CI on an epic's base branch before dispatch
     # (`SymphonyElixir.EpicReview.MainCi`) would read the checkout's GitHub repository with `gh`; in
     # tests it reads none, so no epic waits, unless a test gives it its own options.

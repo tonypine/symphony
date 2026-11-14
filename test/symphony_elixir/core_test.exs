@@ -663,6 +663,18 @@ defmodule SymphonyElixir.CoreTest do
     assert index.(SymphonyElixir.Orchestrator) > index.({SymphonyElixir.QaSeed, dir: "/tmp/qa-seed"})
   end
 
+  test "application starts the QA pre-build between the run store and the orchestrator, and not in tests" do
+    refute SymphonyElixir.QaBuild in SymphonyElixir.Application.child_specs_for_runtime(%{})
+
+    Application.put_env(:symphony_elixir, :qa_build, true)
+    on_exit(fn -> Application.put_env(:symphony_elixir, :qa_build, false) end)
+    children = SymphonyElixir.Application.child_specs_for_runtime(%{})
+    index = &Enum.find_index(children, fn child -> child == &1 end)
+
+    assert index.(SymphonyElixir.QaBuild) > index.(SymphonyElixir.RunStore)
+    assert index.(SymphonyElixir.QaBuild) < index.(SymphonyElixir.Orchestrator)
+  end
+
   test "application starts PR review poller and the PR watcher only in polling mode" do
     write_workflow_file!(Workflow.workflow_file_path(), pr_review_mode: "tracker")
     tracker_children = SymphonyElixir.Application.child_specs_for_runtime(%{})

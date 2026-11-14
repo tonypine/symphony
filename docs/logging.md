@@ -48,6 +48,12 @@ When logging Codex execution lifecycle events, include:
 - `WorkspaceCleanup`: removes ended issues' workspaces outside the orchestrator. A removal task that crashes logs `Workspace cleanup failed:`, and one that cannot start logs `Failed to start workspace cleanup:`, both with issue context, `worker_host=` and `reason=`.
 - `PrWatch.Repo`: a ticket that turns silent logs one `pr_watch.silent_wait` line with issue context, `repo_key=`, `phase=`, `since=`, `rule=`, `bound=` and `reason=` (`docs/pr-ci-decisions.md#silent-waits`); a read that leaves under a tenth of GitHub's rate limit logs `pr_watch.rate_limit_low`.
   Each branch upkeep action the watcher applies or fails (`docs/pr-ci-decisions.md#upkeep`) logs one `pr_watch.upkeep` line with issue context, `repo_key=`, `phase=`, `rule=` (`U1` or `U2`), `action=` (`update_branch` or `rerun_failed`), `head_sha=`, `outcome=` (`applied` or `error`) and `reason=`; an upkeep already applied (on the head, or for U2 on the cancellation) logs nothing.
+- `QaBuild` (the QA pre-build): `QA build queued`, `QA build started`, `QA build ready`,
+  `QA build failed` (with `exit_status=`) and `QA build unavailable` (with `reason=`), each with
+  `repo_key=`, `tree=`, `head_sha=` and the ticket that asked (`issue_identifier=`); a build asked
+  for again at startup logs `QA build asked for again after a restart`. `QaBuildHold` logs
+  `Holding QA for its build:` and `Released from the QA build hold:` with issue context, and
+  `QA build failed; moving the ticket to Rework` with `outcome=`.
 - `QaVerification`: a blocked QA pass logs `QA blocked for` with issue context, `head=`, `model=`,
   `needs_person=`, `playbooks=`, the attempt, `retrying` or `self-healing`, and the block's reason.
 - `Codex.AppServer`: log session start/completion/error with issue context and `session_id`.
