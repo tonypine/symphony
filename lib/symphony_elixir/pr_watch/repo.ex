@@ -1083,8 +1083,10 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # already asked for changes nothing.
   defp request_qa_build(%{head_sha: head}, previous, %{phase: phase, issue: %{identifier: identifier} = issue}, state)
        when is_binary(head) and is_binary(identifier) and phase in [:code_review, :qa] do
-    if carried(previous, :head_sha, nil) != head or not built_phase?(previous) do
-      Keyword.get(state.opts, :qa_build, QaBuild).request(state.repo_key, head, %{identifier: identifier, issue_id: issue.id})
+    new_head? = carried(previous, :head_sha, nil) != head
+
+    if new_head? or not built_phase?(previous) do
+      Keyword.get(state.opts, :qa_build, QaBuild).request(state.repo_key, head, %{identifier: identifier, issue_id: issue.id, new_head: new_head?})
     end
 
     :ok

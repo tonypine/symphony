@@ -51,7 +51,11 @@ When logging Codex execution lifecycle events, include:
 - `QaBuild` (the QA pre-build): `QA build queued`, `QA build started`, `QA build ready`,
   `QA build failed` (with `exit_status=`) and `QA build unavailable` (with `reason=`), each with
   `repo_key=`, `tree=`, `head_sha=` and the ticket that asked (`issue_identifier=`); a build asked
-  for again at startup logs `QA build asked for again after a restart`. `QaBuildHold` logs
+  for again at startup logs `QA build asked for again after a restart`, by a person's Unblock
+  `QA build asked for again by a person`, and for a stored app that is gone `QA build asked for
+  again: its stored app is gone`. A head that moved logs `QA build cancelled: the head moved`, then
+  `QA build stopped on the QA host` with `worker_host=` and `outcome=` once the build is killed
+  there. `QaBuildHold` logs
   `Holding QA for its build:` and `Released from the QA build hold:` with issue context, and
   `QA build failed; moving the ticket to Rework` with `outcome=`.
 - `QaVerification`: a blocked QA pass logs `QA blocked for` with issue context, `head=`, `model=`,

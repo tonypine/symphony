@@ -102,11 +102,12 @@ defmodule SymphonyElixir.QaBuild.StoreTest do
     assert File.exists?(Path.join(store(ctx), "builds/#{ctx.first.tree}/.complete"))
     assert File.read!(Path.join(store(ctx), "work/kept.txt")) == "kept\n"
 
-    # The build ran in `work/`, with no `QA_HOST_PORTS`, and the run directory is gone.
-    assert_received {:cmd, ["-c", @build], opts}
-    assert opts[:cd] == Path.join(store(ctx), "work")
-    assert opts[:remote_env] == []
+    # The build ran in `work/` (its log is there), with the playbook's timeout, no pid file is left
+    # and the run directory is gone.
+    assert_received {:cmd, ["-c", _script, "sh", "build", "demo", @build], opts}
     assert opts[:timeout_ms] == 60_000
+    assert File.exists?(Path.join(store(ctx), "work/built.log"))
+    refute File.exists?(Path.join(store(ctx), "build.pid"))
     assert_received {:run_dir, dir}
     assert_received {:cleaned, ^dir}
     refute File.exists?(dir)
@@ -163,16 +164,98 @@ defmodule SymphonyElixir.QaBuild.StoreTest do
     assert byte_size(tail) == 4_000
   end
 
-  test "a build that timed out or could not start is unavailable", ctx do
+  test "a build that timed out is killed on the QA host, and one that could not start is unavailable", ctx do
     fail = fn reason ->
       fn
-        ["-c", @build], _run -> {:error, reason}
+        ["-c", _script, "sh", "build" | _rest], _run -> {:error, reason}
         _args, run -> run.()
       end
     end
 
     assert {:unavailable, "the build did not finish within 60000 ms"} = build(ctx, ctx.first, %{}, %{cmd: fail.(:timeout)})
+    assert_received {:cmd, ["-c", _script, "sh", "cancel", "demo"], _opts}
     assert {:unavailable, "the build command could not start: :enoent"} = build(ctx, ctx.first, %{}, %{cmd: fail.(:enoent)})
+    refute_received {:cmd, ["-c", _script, "sh", "cancel", "demo"], _opts}
+
+    # The script itself refused to run it, or ended without its exit line.
+    refused = fn
+      ["-c", _script, "sh", "build" | _rest], _run -> {:ok, {"cd: no such directory\n", 1}}
+      _args, run -> run.()
+    end
+
+    assert {:unavailable, "the build could not start on the QA host (exit 1): cd: no such directory"} = build(ctx, ctx.first, %{}, %{cmd: refused})
+
+    cut = fn
+      ["-c", _script, "sh", "build" | _rest], _run -> {:ok, {"compiling\n", 0}}
+      _args, run -> run.()
+    end
+
+    assert {:unavailable, "the build ended on the QA host without saying how: compiling"} = build(ctx, ctx.first, %{}, %{cmd: cut})
+  end
+
+  # A process group as a build leaves it: its leader's pid, which `build.pid` names with its start
+  # time.
+  defp leftover_build!(ctx) do
+    File.mkdir_p!(store(ctx))
+    {output, 0} = System.cmd("/bin/sh", ["-c", "set -m; (sleep 60; sleep 60) > /dev/null 2>&1 & echo $!"])
+    pid = String.trim(output)
+    on_exit(fn -> System.cmd("/bin/sh", ["-c", "kill -s KILL -- -#{pid} 2>/dev/null; true"]) end)
+    {started, 0} = System.cmd("/bin/sh", ["-c", "set -- $(ps -o lstart= -p #{pid}); echo \"$*\""])
+    File.write!(Path.join(store(ctx), "build.pid"), "#{pid} #{String.trim(started)}\n")
+    pid
+  end
+
+  defp running?(pid), do: match?({_output, 0}, System.cmd("/bin/sh", ["-c", "kill -0 -- -#{pid} 2>/dev/null"]))
+
+  test "a build still running in the checkout is killed before the next one touches it", ctx do
+    pid = leftover_build!(ctx)
+    assert running?(pid)
+
+    assert {:ready, _app} = build(ctx, ctx.first)
+    refute running?(pid)
+    refute File.exists?(Path.join(store(ctx), "build.pid"))
+  end
+
+  test "a pid file whose process is gone, or another process now, kills nothing", ctx do
+    pid = leftover_build!(ctx)
+    File.write!(Path.join(store(ctx), "build.pid"), "#{pid} Mon Jan  1 00:00:00 2001\n")
+    assert {:ready, _app} = build(ctx, ctx.first)
+    assert running?(pid)
+
+    File.write!(Path.join(store(ctx), "build.pid"), "not-a-pid\n")
+    assert {:ready, _app} = build(ctx, ctx.first)
+    refute File.exists?(Path.join(store(ctx), "build.pid"))
+  end
+
+  test "cancel/3 kills the running build's whole process group on the QA host", ctx do
+    host = fn "qa-vm" -> host(ctx.home, %{}) end
+    slow = "sleep 30 & sleep 31; echo late"
+    builder = Task.async(fn -> Store.build(job(ctx, ctx.first, %{plan: %{build: slow}}), host: host, local_uuid: fn -> {:ok, @symphony_mac} end) end)
+
+    pid_file = Path.join(store(ctx), "build.pid")
+    wait_until(fn -> File.exists?(pid_file) end)
+    [pid | _started] = pid_file |> File.read!() |> String.split(" ", parts: 2)
+    assert running?(pid)
+
+    plan = %{worker_host: "qa-vm", build: slow, app: @app, build_timeout_ms: 60_000}
+    assert :ok = Store.cancel("demo", plan, host: host)
+    refute running?(pid)
+    assert {:failed, 143, _output} = Task.await(builder, 10_000)
+    refute File.exists?(pid_file)
+
+    # Nothing running: nothing to kill. A QA host that does not answer says so.
+    assert :ok = Store.cancel("demo", plan, host: host)
+
+    down = fn "qa-vm" -> host(ctx.home, %{cmd: fn _args, _run -> {:error, :closed} end}) end
+    assert {:unavailable, "the QA host could not stop the build: :closed"} = Store.cancel("demo", plan, host: down)
+  end
+
+  defp wait_until(fun, attempts \\ 200) do
+    cond do
+      fun.() -> :ok
+      attempts == 0 -> flunk("condition never held")
+      true -> Process.sleep(25) && wait_until(fun, attempts - 1)
+    end
   end
 
   test "a QA host Symphony refuses builds nothing", ctx do
@@ -209,16 +292,16 @@ defmodule SymphonyElixir.QaBuild.StoreTest do
     assert {:unavailable, "the QA host could not store the built app (exit 2): invalid tree"} = build(ctx, %{ctx.first | tree: "not a tree"})
   end
 
-  test "a build that leaves no usable app is unavailable", ctx do
-    assert {:unavailable, "the QA host could not store the built app (exit 1): build/Demo.app is not a directory after the build"} =
+  test "a build that exits 0 but leaves no usable app failed, and says so", ctx do
+    assert {:failed, 0, "The build command finished, but it made no app at build/Demo.app: build/Demo.app is not a directory after the build."} =
              build(ctx, ctx.first, %{plan: %{build: "true"}})
 
-    assert {:unavailable, "the QA host could not store the built app (exit 1): build/Demo is not an .app bundle"} =
+    assert {:failed, 0, "The build command finished, but it made no app at build/Demo: build/Demo is not an .app bundle."} =
              build(ctx, ctx.first, %{plan: %{app: "build/Demo"}})
 
     outside = "mkdir -p ../../outside/Demo.app && ln -s ../../outside out"
-    assert {:unavailable, reason} = build(ctx, ctx.first, %{plan: %{build: outside, app: "out/Demo.app"}})
-    assert reason =~ "out/Demo.app resolves outside the checkout"
+    assert {:failed, 0, output} = build(ctx, ctx.first, %{plan: %{build: outside, app: "out/Demo.app"}})
+    assert output =~ "out/Demo.app resolves outside the checkout"
   end
 
   test "a script the QA host does not answer is unavailable", ctx do

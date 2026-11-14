@@ -19,6 +19,15 @@ defmodule SymphonyElixir.QaBuildTest do
     @moduledoc false
     def get_github_updates(_key), do: {:error, :down}
     def put_github_updates(_key, _value), do: {:error, :down}
+    def delete_github_updates(_key), do: {:error, :down}
+  end
+
+  # The run store, but one that forgets nothing.
+  defmodule KeepingStore do
+    @moduledoc false
+    defdelegate get_github_updates(key), to: SymphonyElixir.RunStore
+    defdelegate put_github_updates(key, value), to: SymphonyElixir.RunStore
+    def delete_github_updates(_key), do: {:error, :read_only}
   end
 
   setup do
@@ -63,6 +72,10 @@ defmodule SymphonyElixir.QaBuildTest do
       workspace: fn repo_key, identifier -> {:ok, "/workspaces/#{repo_key}/#{identifier}"} end,
       tree: tree,
       build: build,
+      cancel: fn repo_key, plan, [] ->
+        send(test, {:cancelling, repo_key, plan.worker_host, self()})
+        receive(do: ({:stopped, outcome} -> outcome))
+      end,
       release: fn repo_key, issue_id, identifier -> send(test, {:released, repo_key, issue_id, identifier}) end
     ]
 
@@ -151,9 +164,10 @@ defmodule SymphonyElixir.QaBuildTest do
       server = start_builder!()
       QaBuild.request(@repo_key, @sha, @ticket, server: server)
       assert_receive {:building, %{tree: @tree}, first}
-      QaBuild.request(@repo_key, @sha2, @ticket, server: server)
-      QaBuild.request("other", @sha, @ticket, server: server)
+      QaBuild.request(@repo_key, @sha2, %{identifier: "TP-2", issue_id: "issue-2"}, server: server)
+      QaBuild.request("other", @sha, %{identifier: "TP-3", issue_id: "issue-3"}, server: server)
       assert_receive {:building, %{repo_key: "other", plan: %{worker_host: "qa-vm-2"}}, other}
+      assert_receive {:reading, _workspace, @sha2, _reader}
       refute_receive {:building, %{tree: @tree2}, _builder}, 20
       assert %{status: :building} = QaBuild.get(@repo_key, @tree2)
 
@@ -161,8 +175,8 @@ defmodule SymphonyElixir.QaBuildTest do
       assert_receive {:building, %{tree: @tree2}, second}
       send(second, {:outcome, {:ready, @app}})
       send(other, {:outcome, {:ready, @app}})
-      assert %{status: :ready} = QaBuild.await("other", @tree, server: server)
-      assert %{status: :ready} = QaBuild.await(@repo_key, @tree2, server: server)
+      assert %{status: :ready} = QaBuild.fetch("other", @sha, @ticket, server: server)
+      assert %{status: :ready} = QaBuild.fetch(@repo_key, @sha2, @ticket, server: server)
     end
 
     test "a build command that failed is recorded with its command and output" do
@@ -178,7 +192,7 @@ defmodule SymphonyElixir.QaBuildTest do
 
       assert log =~ "QA build failed repo_key=demo tree=#{@tree} head_sha=#{@sha} issue_identifier=TP-1 exit_status=65"
 
-      assert %{status: :failed, command: "make app", exit_status: 65, output: "error: no such module 'Foo'\n", reworked: []} =
+      assert %{status: :failed, command: "make app", exit_status: 65, output: "error: no such module 'Foo'\n", reworked: %{}} =
                QaBuild.lookup(@repo_key, @sha)
     end
 
@@ -285,7 +299,7 @@ defmodule SymphonyElixir.QaBuildTest do
       assert_receive {:reading, ^workspace, @sha, _reader}
       assert_receive {:building, %{workspace: ^workspace}, builder}
       send(builder, {:outcome, {:ready, @app}})
-      assert %{status: :ready} = QaBuild.await(@repo_key, @tree, server: server)
+      assert %{status: :ready} = QaBuild.fetch(@repo_key, @sha, @ticket, server: server)
     end
 
     test "does nothing without the builder" do
@@ -304,6 +318,11 @@ defmodule SymphonyElixir.QaBuildTest do
       :ok = RunStore.put_github_updates({:qa_build, "no-playbook", @tree}, %{building | repo_key: "no-playbook"})
       keys = [{@repo_key, @tree}, {@repo_key, @tree2}, {"no-playbook", @tree}, {"gone", @tree}]
       :ok = RunStore.put_github_updates({:qa_build, :building}, %{keys: keys})
+      unavailable = "cccccccccccccccccccccccccccccccccccccccc"
+      :ok = RunStore.put_github_updates({:qa_build, @repo_key, unavailable}, Map.merge(building, %{tree: unavailable, status: :unavailable, reason: "ssh"}))
+      :ok = RunStore.put_github_updates({:qa_build_head, @repo_key, @sha2}, %{status: :unavailable, reason: "bad object"})
+      gone = [{:qa_build, @repo_key, unavailable}, {:qa_build_head, @repo_key, @sha2}]
+      :ok = RunStore.put_github_updates({:qa_build, :unavailable}, %{keys: gone})
 
       log =
         capture_log(fn ->
@@ -318,43 +337,249 @@ defmodule SymphonyElixir.QaBuildTest do
         end)
 
       assert log =~ "QA build asked for again after a restart repo_key=demo tree=#{@tree} issue_identifier=TP-1"
+      # The builds that could not run before the restart are forgotten, so the gate asks again.
+      assert QaBuild.get(@repo_key, "cccccccccccccccccccccccccccccccccccccccc") == nil
+      assert QaBuild.lookup(@repo_key, @sha2) == nil
+      assert RunStore.get_github_updates({:qa_build, :unavailable}) == %{keys: [{:qa_build, "no-playbook", @tree}]}
       assert %{status: :ready} = QaBuild.get(@repo_key, @tree)
       assert %{status: :unavailable, reason: "the repository no longer has a macos_app playbook" <> _rest} = QaBuild.get("no-playbook", @tree)
     end
   end
 
-  describe "await/3" do
-    test "returns when the build ends, and at once when none runs" do
+  describe "fetch/4" do
+    test "waits for the build, asking for it first, and calls the heartbeat while it waits" do
       server = start_builder!()
-      assert QaBuild.await(@repo_key, @tree, server: server) == nil
+      test = self()
+      heartbeat = fn -> send(test, :heartbeat) end
+      waiter = Task.async(fn -> QaBuild.fetch(@repo_key, @sha, @ticket, server: server, heartbeat: heartbeat, heartbeat_ms: 10) end)
 
-      QaBuild.request(@repo_key, @sha, @ticket, server: server)
-      assert_receive {:building, _job, builder}
-      waiter = Task.async(fn -> QaBuild.await(@repo_key, @tree, server: server) end)
-      refute Task.yield(waiter, 50)
-
+      assert_receive {:building, %{tree: @tree}, builder}
+      assert_receive :heartbeat
       send(builder, {:outcome, {:ready, @app}})
       assert %{status: :ready, app: @app} = Task.await(waiter)
-      assert %{status: :ready} = QaBuild.await(@repo_key, @tree, server: server)
-      assert %{status: :ready} = QaBuild.await(@repo_key, @tree, server: Module.concat(__MODULE__, "NotRunning"))
+
+      # A final record answers at once, by commit; so does a repository with nothing to build.
+      assert %{status: :ready} = QaBuild.fetch(@repo_key, @sha, @ticket, server: server)
+      assert QaBuild.fetch("no-playbook", @sha, @ticket, server: server) == nil
+      assert QaBuild.fetch(@repo_key, @sha, @ticket, server: Module.concat(__MODULE__, "NotRunning")) == nil
+    end
+
+    test "a pass that waits while the tree is read gets the record, or the commit's own" do
+      server = start_builder!(trees: %{@sha => :wait, @sha2 => :wait})
+      first = Task.async(fn -> QaBuild.fetch(@repo_key, @sha, @ticket, server: server) end)
+      assert_receive {:reading, _workspace, @sha, reader}
+      send(reader, {:tree, {:ok, @tree}})
+      assert_receive {:building, _job, builder}
+      send(builder, {:outcome, {:failed, 2, "error"}})
+      assert %{status: :failed} = Task.await(first)
+
+      second = Task.async(fn -> QaBuild.fetch(@repo_key, @sha2, @ticket, server: server) end)
+      assert_receive {:reading, _workspace, @sha2, reader}
+      capture_log(fn -> send(reader, {:tree, {:error, "bad object"}}) && assert(%{status: :unavailable} = Task.await(second)) end)
+    end
+
+    test "a builder that goes down while a pass waits answers nil" do
+      server = start_builder!()
+      waiter = Task.async(fn -> QaBuild.fetch(@repo_key, @sha, @ticket, server: server) end)
+      assert_receive {:building, _job, _builder}
+      stop_supervised!(server)
+      assert Task.await(waiter) == nil
+    end
+
+    test "rebuild: true builds again a ready tree whose stored app is gone, and only that" do
+      server = start_builder!()
+      QaBuild.request(@repo_key, @sha, @ticket, server: server)
+      assert_receive {:building, _job, builder}
+      send(builder, {:outcome, {:ready, @app}})
+      assert %{status: :ready} = QaBuild.fetch(@repo_key, @sha, @ticket, server: server)
+
+      log =
+        capture_log(fn ->
+          waiter = Task.async(fn -> QaBuild.fetch(@repo_key, @sha, @ticket, server: server, rebuild: true) end)
+          assert_receive {:building, %{tree: @tree}, builder}
+          send(builder, {:outcome, {:ready, @app <> "-2"}})
+          assert %{status: :ready, app: app} = Task.await(waiter)
+          assert app == @app <> "-2"
+        end)
+
+      assert log =~ "QA build asked for again: its stored app is gone repo_key=demo tree=#{@tree} head_sha=#{@sha}"
+
+      # A failed tree, or a commit with no record, is not built again for it.
+      QaBuild.request(@repo_key, @sha2, @ticket, server: server)
+      assert_receive {:building, %{tree: @tree2}, builder}
+      send(builder, {:outcome, {:failed, 1, "error"}})
+      assert %{status: :failed} = QaBuild.fetch(@repo_key, @sha2, @ticket, server: server, rebuild: true)
+      refute_receive {:building, _job, _builder}, 20
     end
   end
 
-  describe "mark_reworked/4" do
-    test "is :ok once for a ticket and a failed tree" do
+  describe "a head that moves" do
+    test "cancels the build of the tree no other head needs, kills it on the QA host, and starts the new one after" do
+      server = start_builder!()
+      QaBuild.request(@repo_key, @sha, @held, server: server)
+      assert_receive {:building, %{tree: @tree}, old}
+      old_monitor = Process.monitor(old)
+
+      log =
+        capture_log(fn ->
+          QaBuild.request(@repo_key, @sha2, @ticket, server: server)
+          assert_receive {:cancelling, @repo_key, "qa-vm", stopper}
+          assert_receive {:DOWN, ^old_monitor, :process, ^old, _reason}
+          # The old tree is left with no record, and the ticket waiting on it is let go.
+          assert QaBuild.get(@repo_key, @tree) == nil
+          assert_receive {:released, @repo_key, "issue-1", "TP-1"}
+          # The new build waits until the old one is dead on the QA host.
+          refute_receive {:building, _job, _builder}, 20
+          send(stopper, {:stopped, :ok})
+          assert_receive {:building, %{tree: @tree2}, new}
+          send(new, {:outcome, {:ready, @app}})
+          assert %{status: :ready} = QaBuild.fetch(@repo_key, @sha2, @ticket, server: server)
+        end)
+
+      assert log =~ "QA build cancelled: the head moved repo_key=demo tree=#{@tree}"
+      assert log =~ "QA build stopped on the QA host repo_key=demo tree=#{@tree} worker_host=qa-vm outcome=:ok"
+      assert RunStore.get_github_updates({:qa_build, :building}) == %{keys: []}
+    end
+
+    test "keeps a build another ticket's head or a waiting pass needs, and drops a queued one at once" do
+      :ok = RunStore.put_github_updates({:qa_build_head, @repo_key, @sha}, %{tree: @tree})
+      :ok = RunStore.put_github_updates({:qa_build_head, @repo_key, @sha2}, %{tree: @tree2})
+      server = start_builder!()
+      QaBuild.request(@repo_key, @sha, @ticket, server: server)
+      QaBuild.request(@repo_key, @sha, %{identifier: "TP-2", issue_id: "issue-2"}, server: server)
+      assert_receive {:building, %{tree: @tree}, running}
+
+      # TP-1 moves on, TP-2 still needs the tree.
+      QaBuild.request(@repo_key, @sha2, @ticket, server: server)
+      settled(server)
+      refute_received {:cancelling, _repo_key, _host, _stopper}
+      assert %{status: :building} = QaBuild.get(@repo_key, @tree2)
+
+      # TP-1 moves again: its queued build of @tree2 goes without a kill; @tree stays for TP-2.
+      :ok = RunStore.put_github_updates({:qa_build_head, @repo_key, "3333333333333333333333333333333333333333"}, %{tree: @tree})
+      capture_log(fn -> QaBuild.request(@repo_key, "3333333333333333333333333333333333333333", @ticket, server: server) && settled(server) end)
+      refute_received {:cancelling, _repo_key, _host, _stopper}
+      assert QaBuild.get(@repo_key, @tree2) == nil
+
+      # A pass waiting on the running build keeps it too.
+      waiter = Task.async(fn -> QaBuild.fetch(@repo_key, @sha, %{identifier: "TP-3"}, server: server) end)
+      eventually(fn -> settled(server).jobs[{@repo_key, @tree}].awaiting != [] end)
+      QaBuild.request(@repo_key, @sha2, %{identifier: "TP-2", issue_id: "issue-2"}, server: server)
+      QaBuild.request(@repo_key, @sha2, @ticket, server: server)
+      settled(server)
+      refute_received {:cancelling, _repo_key, _host, _stopper}
+      send(running, {:outcome, {:ready, @app}})
+      assert %{status: :ready} = Task.await(waiter)
+    end
+
+    test "a cancel whose stop dies, or can't start, lets the next build go" do
+      name = Module.concat(__MODULE__, "Builds#{System.unique_integer([:positive])}")
+      {:ok, _supervisor} = Task.Supervisor.start_link(name: name)
+      server = start_builder!(task_supervisor: name)
+      QaBuild.request(@repo_key, @sha, @ticket, server: server)
+      assert_receive {:building, %{tree: @tree}, _old}
+
+      # The stop task itself dies: the QA host is free again.
+      capture_log(fn ->
+        QaBuild.request(@repo_key, @sha2, @ticket, server: server)
+        assert_receive {:cancelling, @repo_key, "qa-vm", stopper}
+        Process.exit(stopper, :kill)
+        assert_receive {:building, %{tree: @tree2}, _new}
+      end)
+
+      # No task can start for the stop: the build is dropped all the same.
+      Process.unregister(name)
+      Process.register(spawn(fn -> receive(do: (_call -> :ok)) end), name)
+      :ok = RunStore.put_github_updates({:qa_build_head, @repo_key, "3333333333333333333333333333333333333333"}, %{tree: @tree})
+      log = capture_log(fn -> QaBuild.request(@repo_key, "3333333333333333333333333333333333333333", @ticket, server: server) && settled(server) end)
+      assert log =~ "QA build cancelled: the head moved repo_key=demo tree=#{@tree2}"
+      assert QaBuild.get(@repo_key, @tree2) == nil
+      refute_received {:cancelling, _repo_key, _host, _stopper}
+    end
+  end
+
+  describe "retry/4" do
+    test "forgets a build that could not run and asks for it again, for a person's Unblock" do
+      server = start_builder!()
+      QaBuild.request(@repo_key, @sha, @ticket, server: server)
+      assert_receive {:building, _job, builder}
+      capture_log(fn -> send(builder, {:outcome, {:unavailable, "ssh: timeout"}}) && settled(server) end)
+      assert %{status: :unavailable} = QaBuild.lookup(@repo_key, @sha)
+
+      # A gate request does not build it again.
+      QaBuild.request(@repo_key, @sha, @held, server: server)
+      assert_receive {:released, @repo_key, "issue-1", "TP-1"}
+      refute_receive {:building, _job, _builder}, 20
+
+      log = capture_log(fn -> assert :ok = QaBuild.retry(@repo_key, @sha, @ticket, server: server) end)
+      assert log =~ "QA build asked for again by a person repo_key=demo head_sha=#{@sha} issue_id=issue-1 issue_identifier=TP-1"
+      assert %{status: :building} = QaBuild.lookup(@repo_key, @sha)
+      assert_receive {:building, %{tree: @tree}, builder}
+      send(builder, {:outcome, {:ready, @app}})
+      assert_receive {:released, @repo_key, "issue-1", "TP-1"}
+    end
+
+    test "reads again a commit whose tree could not be read, and leaves a final build as it is" do
+      server = start_builder!(trees: %{@sha2 => @tree2})
+      capture_log(fn -> QaBuild.request(@repo_key, @sha, @ticket, server: server) && settled(server) end)
+      assert %{status: :unavailable} = QaBuild.lookup(@repo_key, @sha)
+
+      capture_log(fn -> assert :ok = QaBuild.retry(@repo_key, @sha, @ticket, server: server) end)
+      assert_receive {:reading, _workspace, @sha, _reader}
+
+      QaBuild.request(@repo_key, @sha2, @ticket, server: server)
+      assert_receive {:building, _job, builder}
+      send(builder, {:outcome, {:failed, 1, "error"}})
+      settled(server)
+      capture_log(fn -> assert :ok = QaBuild.retry(@repo_key, @sha2, @ticket, server: server) end)
+      assert %{status: :failed} = QaBuild.lookup(@repo_key, @sha2)
+
+      capture_log(fn -> assert :ok = QaBuild.retry(@repo_key, "4444444444444444444444444444444444444444", @ticket, server: server) end)
+      assert :ok = QaBuild.retry(@repo_key, @sha, @ticket, server: Module.concat(__MODULE__, "NotRunning"))
+    end
+
+    test "a new head asks again for a tree or a commit that could not be built" do
+      server = start_builder!()
+      QaBuild.request(@repo_key, @sha, @ticket, server: server)
+      assert_receive {:building, _job, builder}
+      capture_log(fn -> send(builder, {:outcome, {:unavailable, "ssh: timeout"}}) && settled(server) end)
+
+      QaBuild.request(@repo_key, @sha, Map.put(@ticket, :new_head, true), server: server)
+      assert_receive {:building, %{tree: @tree}, builder}
+      send(builder, {:outcome, {:ready, @app}})
+
+      broken = start_builder!(trees: %{})
+
+      capture_log(fn ->
+        QaBuild.request("other", @sha, @ticket, server: broken)
+        assert_receive {:reading, _workspace, @sha, _reader}
+      end)
+
+      capture_log(fn -> settled(broken) && Process.sleep(20) end)
+      assert %{status: :unavailable} = QaBuild.lookup("other", @sha)
+      capture_log(fn -> QaBuild.request("other", @sha, Map.put(@ticket, :new_head, true), server: broken) && settled(broken) end)
+      assert_receive {:reading, _workspace, @sha, _reader}
+    end
+  end
+
+  describe "mark_reworked/5" do
+    test "is :ok once for each arrival of a ticket in QA on a failed tree" do
       server = start_builder!()
       QaBuild.request(@repo_key, @sha, @ticket, server: server)
       assert_receive {:building, _job, builder}
       send(builder, {:outcome, {:failed, 1, "error"}})
-      assert %{status: :failed} = QaBuild.await(@repo_key, @tree, server: server)
+      assert %{status: :failed} = QaBuild.fetch(@repo_key, @sha, @ticket, server: server)
+      first = ~U[2026-11-13 10:00:00Z]
 
-      assert :ok = QaBuild.mark_reworked(@repo_key, @tree, "issue-1", server: server)
-      assert :already = QaBuild.mark_reworked(@repo_key, @tree, "issue-1", server: server)
-      assert :ok = QaBuild.mark_reworked(@repo_key, @tree, "issue-2", server: server)
-      assert %{reworked: ["issue-2", "issue-1"]} = QaBuild.get(@repo_key, @tree)
+      assert :ok = QaBuild.mark_reworked(@repo_key, @tree, "issue-1", first, server: server)
+      assert :already = QaBuild.mark_reworked(@repo_key, @tree, "issue-1", first, server: server)
+      assert :ok = QaBuild.mark_reworked(@repo_key, @tree, "issue-2", first, server: server)
+      # Back in QA later on the same tree: sent back again.
+      assert :ok = QaBuild.mark_reworked(@repo_key, @tree, "issue-1", ~U[2026-11-13 11:00:00Z], server: server)
+      assert %{reworked: %{"issue-1" => ~U[2026-11-13 11:00:00Z], "issue-2" => ^first}} = QaBuild.get(@repo_key, @tree)
 
-      assert :already = QaBuild.mark_reworked(@repo_key, @tree2, "issue-1", server: server)
-      assert :already = QaBuild.mark_reworked(@repo_key, @tree, "issue-3", server: Module.concat(__MODULE__, "NotRunning"))
+      assert :already = QaBuild.mark_reworked(@repo_key, @tree2, "issue-1", first, server: server)
+      assert :already = QaBuild.mark_reworked(@repo_key, @tree, "issue-3", first, server: Module.concat(__MODULE__, "NotRunning"))
     end
   end
 
@@ -444,6 +669,12 @@ defmodule SymphonyElixir.QaBuildTest do
         end)
 
       assert log =~ "QA build could not write its record key={:qa_build, \"demo\", \"#{@tree}\"} reason=:down"
+
+      # A record it can't forget is logged too.
+      :ok = RunStore.put_github_updates({:qa_build_head, @repo_key, @sha}, %{status: :unavailable, reason: "bad object"})
+      kept = start_builder!(run_store: KeepingStore)
+      log = capture_log(fn -> QaBuild.retry(@repo_key, @sha, @ticket, server: kept) end)
+      assert log =~ "QA build could not forget its record key={:qa_build_head, \"demo\", \"#{@sha}\"} reason=:read_only"
     end
 
     test "ignores messages that are not its tasks'" do

@@ -318,6 +318,24 @@ defmodule SymphonyElixir.QaDispatchTest do
       assert Orchestrator.should_dispatch_issue_for_test(qa_ticket, state())
     end
 
+    test "a build that could not run keeps QA held, with its reason, until something asks again" do
+      start_builder!()
+      record_ci!(@designed_repo, @head, "green")
+      qa_ticket = issue(@designed_repo, "QA")
+      :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
+
+      capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state()) end)
+      assert_receive {:building, _job, builder}
+      capture_log(fn -> send(builder, {:outcome, {:unavailable, "qa_worker_unreachable: ssh: timeout"}}) end)
+      assert_receive {:ticket_record, @designed_repo, @issue_id, :changed, [:pause]}
+
+      next = Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state())
+      refute Map.has_key?(next.running, @issue_id)
+      assert %{reason: "The QA build could not run: qa_worker_unreachable: ssh: timeout"} = next.dispatch_skipped[@issue_id]
+      assert [%{kind: :environment, releasable: true}] = held()
+      refute_receive {:building, _job, _builder}, 20
+    end
+
     test "the hold counts in QA only, and a ticket already claimed is left alone" do
       start_builder!()
       record_ci!(@designed_repo, @head, "green")

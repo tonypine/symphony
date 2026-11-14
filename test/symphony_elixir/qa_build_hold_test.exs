@@ -20,7 +20,7 @@ defmodule SymphonyElixir.QaBuildHoldTest do
     command: "make app",
     exit_status: 65,
     output: "error: no such module\n",
-    reworked: []
+    reworked: %{}
   }
 
   # The builder as the hold reads it: what the test put for the record and the answers.
@@ -34,9 +34,14 @@ defmodule SymphonyElixir.QaBuildHoldTest do
       :ok
     end
 
-    def mark_reworked(repo_key, tree, issue_id) do
-      send(self(), {:marked, repo_key, tree, issue_id})
+    def mark_reworked(repo_key, tree, issue_id, arrival) do
+      send(self(), {:marked, repo_key, tree, issue_id, arrival})
       Process.get(:qa_build_mark, :ok)
+    end
+
+    def retry(repo_key, head, ticket) do
+      send(self(), {:retried, repo_key, head, ticket, QaBuildHold.reasons(repo_key, ticket.issue_id) != []})
+      :ok
     end
   end
 
@@ -52,7 +57,9 @@ defmodule SymphonyElixir.QaBuildHoldTest do
 
   defp resolve(head, opts \\ []), do: QaBuildHold.resolve(@repo_key, issue(), head, [builder: Builder] ++ opts)
 
-  defp commits, do: for(reason <- QaBuildHold.reasons(@repo_key, @issue_id), do: reason.waits_on.commit)
+  defp commits, do: for(reason <- QaBuildHold.reasons(@repo_key, @issue_id), do: Map.get(reason.waits_on, :commit) || reason.waits_on.condition)
+
+  defp texts, do: for(reason <- QaBuildHold.reasons(@repo_key, @issue_id), do: reason.text)
 
   # Runs the move where the test can see it, as the task would.
   defp inline(fun) do
@@ -96,50 +103,105 @@ defmodule SymphonyElixir.QaBuildHoldTest do
   end
 
   describe "a build that ended" do
-    test "ready or unavailable: QA dispatches and the hold goes" do
-      for status <- [:ready, :unavailable] do
-        Process.delete(:qa_build_records)
-        capture_log(fn -> assert resolve(@head) == :held end)
-        record!(@head, %{status: status, tree: @tree})
+    test "ready: QA dispatches and the hold goes" do
+      capture_log(fn -> assert resolve(@head) == :held end)
+      record!(@head, %{status: :ready, tree: @tree})
 
-        log = capture_log(fn -> assert resolve(@head) == :dispatch end)
-        assert log =~ "Released from the QA build hold: issue_id=#{@issue_id} issue_identifier=TP-7 repo_key=default"
-        assert commits() == []
-      end
-
-      refute_received {:marked, _repo_key, _tree, _issue_id}
+      log = capture_log(fn -> assert resolve(@head) == :dispatch end)
+      assert log =~ "Released from the QA build hold: issue_id=#{@issue_id} issue_identifier=TP-7 repo_key=default"
+      assert commits() == []
+      refute_received {:marked, _repo_key, _tree, _issue_id, _arrival}
     end
 
-    test "failed: the ticket goes to Rework once, held while the move is made" do
+    test "unavailable: the ticket stays held on a reason the Director may release, and nothing asks again" do
+      capture_log(fn -> assert resolve(@head) == :held end)
+      assert_received {:requested, @repo_key, @head, _ticket}
+      record!(@head, %{status: :unavailable, tree: @tree, reason: "qa_worker_unreachable: ssh: connection refused"})
+
+      capture_log(fn -> assert resolve(@head) == :held end)
+
+      assert [%{kind: :environment, releasable: true, waits_on: %{condition: condition}, text: text} = reason] =
+               QaBuildHold.reasons(@repo_key, @issue_id)
+
+      assert condition == "qa_build:" <> @head
+      assert text == "The QA build could not run: qa_worker_unreachable: ssh: connection refused"
+      assert QaBuildHold.unavailable_head(reason) == @head
+      assert QaBuildHold.reason?(reason)
+
+      # The next pass keeps it as it is and asks for nothing.
+      assert capture_log(fn -> assert resolve(@head) == :held end) == ""
+      refute_received {:requested, _repo_key, _head, _ticket}
+
+      # A reason over the line's limit is cut.
+      record!(@head, %{status: :unavailable, tree: @tree, reason: String.duplicate("x", 400)})
+      capture_log(fn -> resolve(@head) end)
+      assert [text] = texts()
+      assert String.length(text) == 300
+    end
+
+    test "unavailable: lifting the hold asks the builder again first" do
+      record!(@head, %{status: :unavailable, tree: @tree, reason: "ssh"})
+      capture_log(fn -> resolve(@head) end)
+      reasons = Pauses.get(@ticket) |> elem(1) |> Map.fetch!(:reasons)
+
+      assert :ok = QaBuildHold.lifted(@repo_key, issue(), reasons, builder: Builder)
+      assert_received {:retried, @repo_key, @head, %{identifier: "TP-7", issue_id: @issue_id}, true}
+
+      # Reasons of other holds ask for nothing.
+      assert :ok = QaBuildHold.lifted(@repo_key, issue(), [%{kind: :person, waits_on: %{action: "unblock"}}], builder: Builder)
+      refute_received {:retried, _repo_key, _head, _ticket, _held}
+      other = %{kind: :environment, waits_on: %{condition: "qa_build:" <> @head}, set_by: %{kind: :rule, name: "Other"}}
+      assert QaBuildHold.unavailable_head(other) == nil
+    end
+
+    test "failed: the ticket goes to Rework once for each arrival in QA, held until it has left" do
       record!(@head, @failed)
       test = self()
+      first = ~U[2026-11-13 10:00:00Z]
 
       rework = fn repo_key, issue, head, record ->
         send(test, {:rework, repo_key, issue.identifier, head, record, commits()})
         :ok
       end
 
-      log = capture_log(fn -> assert resolve(@head, rework: rework, start_task: &inline/1) == :held end)
+      opts = [rework: rework, start_task: &inline/1, arrival: fn @issue_id -> first end]
+      log = capture_log(fn -> assert resolve(@head, opts) == :held end)
 
-      assert_received {:marked, @repo_key, @tree, @issue_id}
+      assert_received {:marked, @repo_key, @tree, @issue_id, ^first}
       assert_received {:rework, @repo_key, "TP-7", @head, @failed, [@head]}
       refute_received {:requested, _repo_key, _head, _ticket}
       assert log =~ "QA build failed; moving the ticket to Rework issue_id=#{@issue_id} issue_identifier=TP-7 repo_key=default head_sha=#{@head} tree=#{@tree} outcome=:ok"
-      assert commits() == []
+      assert texts() == ["The app does not build on e44298c: it goes back to Rework"]
 
-      # Back in QA on the same tree, it is not sent back again: QA runs.
+      # The same arrival makes no second move, and the ticket stays held.
       Process.put(:qa_build_mark, :already)
-      assert resolve(@head, rework: rework, start_task: &inline/1) == :dispatch
+      assert resolve(@head, opts) == :held
       refute_received {:rework, _repo_key, _identifier, _head, _record, _held}
+      assert texts() == ["The app does not build on e44298c: it goes back to Rework"]
     end
 
-    test "failed: a move that can't start lets the ticket go" do
+    test "failed: the arrival is when the ticket's record entered its phase" do
+      record!(@head, @failed)
+      assert :ok = SymphonyElixir.TicketSignals.record_phase(@repo_key, @issue_id, "QA")
+      %{phase_at: phase_at} = RunStore.get_ticket_state(@issue_id)
+      Process.put(:qa_build_mark, :already)
+
+      assert resolve(@head) == :held
+      assert_received {:marked, @repo_key, @tree, @issue_id, ^phase_at}
+
+      # A ticket with no record yet arrived at no known time.
+      unrecorded = issue(%{id: "issue-never-recorded"})
+      assert QaBuildHold.resolve(@repo_key, unrecorded, @head, builder: Builder) == :held
+      assert_received {:marked, @repo_key, @tree, "issue-never-recorded", nil}
+    end
+
+    test "failed: a move that can't start is logged, and the ticket stays held" do
       record!(@head, @failed)
 
       log = capture_log(fn -> assert resolve(@head, start_task: fn _fun -> {:error, :max_children} end) == :held end)
 
       assert log =~ "QA build failed, but the move to Rework could not start issue_id=#{@issue_id} issue_identifier=TP-7 reason={:error, :max_children}"
-      assert commits() == []
+      assert commits() == [@head]
     end
 
     test "failed: the move is the QA fail move, made in a task" do
@@ -152,7 +214,6 @@ defmodule SymphonyElixir.QaBuildHoldTest do
         assert_receive {:memory_tracker_state_update, @issue_id, "Rework"}
         assert_receive {:memory_tracker_comment, @issue_id, report}
         assert report =~ "Symphony ran the build command `make app` on the QA host and it exited with status 65."
-        eventually(fn -> commits() == [] end)
       end)
     end
 
@@ -165,7 +226,6 @@ defmodule SymphonyElixir.QaBuildHoldTest do
 
       assert log =~ "QA build failed; moving the ticket to Rework"
       assert log =~ "outcome={:error,"
-      assert QaBuildHold.reasons("no-such-repo", @issue_id) == []
     end
   end
 

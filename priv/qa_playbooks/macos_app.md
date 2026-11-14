@@ -6,7 +6,8 @@ Your sandbox cannot build Swift, launch apps or read the screen, so Symphony run
 for you on the QA VM, a separate macOS machine: never on this host. They only act on this
 worktree's configured app and on apps you launched:
 
-- `qa_build`: runs the configured build command. Call it once, before anything else.
+- `qa_build`: takes the app Symphony built on the QA VM for this checkout's commit, waiting for
+  the build when it is still running. Call it once, before anything else.
 - `qa_launch_app`: launches the bundle `qa_build` produced, in QA mode (private settings and
   secrets, never the real ones), and returns its `pid`. Pass `api_fixtures`, a directory relative
   to the checkout (for example `macos/Tests/Fixtures/director-app/running`), and Symphony copies

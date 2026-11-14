@@ -74,6 +74,17 @@ defmodule SymphonyElixir.DirectorMovesTest do
     end
   end
 
+  # The QA pre-build as an Unblock asks it again: it tells the test, and whether the ticket was
+  # still held when it was asked.
+  defmodule RetryingBuilder do
+    @moduledoc false
+    def retry(repo_key, head, ticket) do
+      held? = SymphonyElixir.Pauses.paused?({:ticket, repo_key, ticket.issue_id})
+      send(self(), {:retried, repo_key, head, ticket, held?})
+      :ok
+    end
+  end
+
   setup do
     write_workflow_file!(Workflow.workflow_file_path())
     SubIssueWait.reset_for_test(@waiting)
@@ -892,6 +903,20 @@ defmodule SymphonyElixir.DirectorMovesTest do
 
       assert Pauses.why(ticket) == ["Waiting for MOT-9 to finish"]
       assert [%{payload: %{by: %{kind: :person, name: "Director"}}} | _] = RunStore.list_ticket_events("pr", types: ["pause.reason_cleared"])
+    end
+
+    test "lifts a QA hold whose build could not run, asking the builder for it again first", %{opts: opts} do
+      put_issues([%{pr("QA") | repo_key: "repo-director"}])
+      ticket = {:ticket, "repo-director", "pr"}
+      head = "26758a2471558f89fc0411dcf1f81aa82c0e1dc4"
+      reason = %{kind: :environment, waits_on: %{condition: "qa_build:" <> head}, text: "The QA build could not run: ssh: timeout", releasable: true}
+      {:ok, _pause} = Pauses.set(ticket, reason, set_by: %{kind: :rule, name: "QA build hold"})
+
+      assert {:ok, %{move: "unblock", moved: false}} = DirectorMoves.move(:unblock, "MOT-40", %{}, Keyword.put(opts, :builder, RetryingBuilder))
+
+      # The build was asked for while the hold still stood, so the dispatch the lift starts finds it.
+      assert_received {:retried, "repo-director", ^head, %{identifier: "MOT-40", issue_id: "pr"}, true}
+      refute Pauses.paused?(ticket)
     end
 
     test "releases a wait on competing PRs after the PR watcher releases them (TP-989)", %{opts: opts} do

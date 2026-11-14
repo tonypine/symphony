@@ -587,7 +587,8 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   @qa_tool_schemas [
     %{
       "name" => "qa_build",
-      "description" => "Run the configured macos_app build command on the QA VM, on a copy of the QA worktree's HEAD. Takes no arguments; fails when the worktree has edits outside qa-evidence/.",
+      "description" =>
+        "Take the app Symphony built on the QA VM for the QA worktree's HEAD, waiting while that build runs; returns its exit_status and output. Takes no arguments; fails when the worktree has edits outside qa-evidence/.",
       "inputSchema" => %{"type" => "object", "additionalProperties" => false, "properties" => %{}}
     },
     %{

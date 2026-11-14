@@ -2101,7 +2101,7 @@ defmodule SymphonyElixir.AgentRunner do
   # watcher asks when it records the head.
   defp request_qa_build(%Issue{id: issue_id, identifier: identifier} = issue, %{progress: %{head: head}} = run_context)
        when is_binary(head) and is_binary(identifier) do
-    ticket = %{identifier: identifier, issue_id: issue_id}
+    ticket = %{identifier: identifier, issue_id: issue_id, new_head: true}
 
     case run_repo_key(issue, run_context.opts) do
       repo_key when is_binary(repo_key) -> QaBuild.request(repo_key, head, ticket)
