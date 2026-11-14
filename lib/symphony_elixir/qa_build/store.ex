@@ -62,10 +62,10 @@ defmodule SymphonyElixir.QaBuild.Store do
     case "$pid" in ""|*[!0-9]*) rm -f "$store/build.pid"; return 0 ;; esac
     set -- $(ps -o lstart= -p "$pid" 2>/dev/null)
     if [ -n "$started" ] && [ "$*" = "$started" ]; then
-      kill -s TERM "-$pid" 2>/dev/null
+      /bin/kill -s TERM -- "-$pid" 2>/dev/null
       i=0
-      while [ "$i" -lt 50 ] && kill -0 "-$pid" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
-      kill -s KILL "-$pid" 2>/dev/null
+      while [ "$i" -lt 50 ] && /bin/kill -s 0 -- "-$pid" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+      /bin/kill -s KILL -- "-$pid" 2>/dev/null
       printf 'symphony-qa-killed:%s\\n' "$pid"
     fi
     rm -f "$store/build.pid"

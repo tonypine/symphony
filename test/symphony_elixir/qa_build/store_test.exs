@@ -200,13 +200,13 @@ defmodule SymphonyElixir.QaBuild.StoreTest do
     group = ~S|perl -e 'setpgrp(0, 0); exec @ARGV' /bin/sh -c 'sleep 60; sleep 60' > /dev/null 2>&1 & echo $!|
     {output, 0} = System.cmd("/bin/sh", ["-c", group])
     pid = String.trim(output)
-    on_exit(fn -> System.cmd("/bin/sh", ["-c", "kill -s KILL -#{pid} 2>/dev/null; true"]) end)
+    on_exit(fn -> System.cmd("/bin/sh", ["-c", "/bin/kill -s KILL -- -#{pid} 2>/dev/null; true"]) end)
     {started, 0} = System.cmd("/bin/sh", ["-c", "set -- $(ps -o lstart= -p #{pid}); echo \"$*\""])
     File.write!(Path.join(store(ctx), "build.pid"), "#{pid} #{String.trim(started)}\n")
     pid
   end
 
-  defp running?(pid), do: match?({_output, 0}, System.cmd("/bin/sh", ["-c", "kill -0 -#{pid} 2>/dev/null"]))
+  defp running?(pid), do: match?({_output, 0}, System.cmd("/bin/sh", ["-c", "/bin/kill -s 0 -- -#{pid} 2>/dev/null"]))
 
   test "a build still running in the checkout is killed before the next one touches it", ctx do
     pid = leftover_build!(ctx)
