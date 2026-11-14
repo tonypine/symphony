@@ -195,11 +195,15 @@ GALLERY := $(BUILD_DIR)/SymphonyGallery
 build-gallery:
 	swift build $(SWIFT_FLAGS) --product SymphonyBarUI
 	mkdir -p $(BUILD_DIR)
+	@# The libraries' modules and objects: SwiftPM's native build system (Xcode 26) puts them in
+	@# Modules/ and <target>.build/*.o; Swift Build (Xcode 27) beside the products, as <target>.o.
+	bin="$$(swift build $(SWIFT_FLAGS) --show-bin-path)"; \
+	if [ -d "$$bin/Modules" ]; then modules="$$bin/Modules"; objects="$$bin/SymphonyBarCore.build/*.o $$bin/SymphonyBarUI.build/*.o"; \
+	else modules="$$bin"; objects="$$bin/SymphonyBarCore.o $$bin/SymphonyBarUI.o"; fi; \
 	swiftc -disable-sandbox -swift-version 5 -module-cache-path .build/gallery-module-cache \
-		-I "$$(swift build $(SWIFT_FLAGS) --show-bin-path)/Modules" -o $(GALLERY) \
+		-I "$$modules" -o $(GALLERY) \
 		Gallery/*.swift $$(ls Sources/SymphonyBar/*.swift | grep -v '/main.swift$$') \
-		"$$(swift build $(SWIFT_FLAGS) --show-bin-path)"/SymphonyBarCore.build/*.o \
-		"$$(swift build $(SWIFT_FLAGS) --show-bin-path)"/SymphonyBarUI.build/*.o
+		$$objects
 
 gallery: build-gallery
 	$(GALLERY) --window
