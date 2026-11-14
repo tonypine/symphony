@@ -63,6 +63,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-appkit-mix-
 
+      # Homebrew's Node, which the self-hosted runner's service does not have on its PATH: only the
+      # tools the job names, so Homebrew's Python does not come ahead of Xcode's.
+      - name: Put Node on the PATH
+        run: |
+          tools="$RUNNER_TEMP/tools"; mkdir -p "$tools"
+          for tool in node npm npx; do ln -sf "/opt/homebrew/bin/$tool" "$tools/$tool"; done
+          echo "$tools" >> "$GITHUB_PATH"
+
       - name: Show toolchain
         run: |
           sw_vers

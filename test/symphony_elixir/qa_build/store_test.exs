@@ -197,7 +197,8 @@ defmodule SymphonyElixir.QaBuild.StoreTest do
   # time.
   defp leftover_build!(ctx) do
     File.mkdir_p!(store(ctx))
-    {output, 0} = System.cmd("/bin/sh", ["-c", "set -m; (sleep 60; sleep 60) > /dev/null 2>&1 & echo $!"])
+    group = ~S|perl -e 'setpgrp(0, 0); exec @ARGV' /bin/sh -c 'sleep 60; sleep 60' > /dev/null 2>&1 & echo $!|
+    {output, 0} = System.cmd("/bin/sh", ["-c", group])
     pid = String.trim(output)
     on_exit(fn -> System.cmd("/bin/sh", ["-c", "kill -s KILL -- -#{pid} 2>/dev/null; true"]) end)
     {started, 0} = System.cmd("/bin/sh", ["-c", "set -- $(ps -o lstart= -p #{pid}); echo \"$*\""])

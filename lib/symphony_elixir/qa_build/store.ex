@@ -78,10 +78,10 @@ defmodule SymphonyElixir.QaBuild.Store do
   build)
     kill_build
     cd "$store/work" || exit 1
-    set -m
-    /bin/sh -c "$3" &
+    # A process group of its own, led by the build's shell, whatever `sh` this is: perl's setpgrp
+    # does on every host what `set -m` does only in an interactive-capable shell.
+    perl -e 'setpgrp(0, 0) or die "setpgrp: $!\\n"; exec @ARGV or die "exec: $!\\n"' /bin/sh -c "$3" &
     pid=$!
-    set +m
     set -- $(ps -o lstart= -p "$pid")
     printf '%s %s\\n' "$pid" "$*" > "$store/build.pid"
     wait "$pid"
