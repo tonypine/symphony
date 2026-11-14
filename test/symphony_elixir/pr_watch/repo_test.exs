@@ -221,6 +221,52 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     end
   end
 
+  # The QA pre-build: every request is reported to the test.
+  defmodule FakeQaBuild do
+    def request(repo_key, head, ticket), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:qa_build, repo_key, head, ticket}) && :ok
+  end
+
+  describe "the QA pre-build" do
+    test "a head recorded for a ticket in Code Review or QA is asked for once, and a new head again", %{repo_key: repo_key} do
+      watched = [{"1", "Code Review"}, {"2", "QA"}, {"3", "Merging"}]
+      issues!(for {id, state} <- watched, do: with_pr(repo_key, issue(id, state), String.to_integer(id)))
+      pid = start_repo!(repo_key, qa_build: FakeQaBuild)
+
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert_received {:qa_build, ^repo_key, "sha-1", %{identifier: "TP-1", issue_id: "1"}}
+      assert_received {:qa_build, ^repo_key, "sha-2", %{identifier: "TP-2", issue_id: "2"}}
+      refute_received {:qa_build, _repo_key, _head, _ticket}
+
+      # The same head on the next read asks for nothing.
+      assert {:ok, _summary} = Repo.poll(pid)
+      refute_received {:qa_build, _repo_key, _head, _ticket}
+
+      # Branch upkeep or a push moved the head.
+      reads!(%{pr_url(2) => {:ok, read_of(pr_url(2), %{head_sha: "sha-2b"})}})
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert_received {:qa_build, ^repo_key, "sha-2b", %{identifier: "TP-2"}}
+      refute_received {:qa_build, _repo_key, _head, _ticket}
+    end
+
+    test "a ticket that comes back to Code Review on a head it already had is asked for, and one with no identifier is not", %{repo_key: repo_key} do
+      issues!([repo_key |> with_pr(issue("1", "Rework"), 1), repo_key |> with_pr(issue("2", "QA", identifier: nil), 2)])
+      pid = start_repo!(repo_key, qa_build: FakeQaBuild)
+      assert {:ok, _summary} = Repo.poll(pid)
+      refute_received {:qa_build, _repo_key, _head, _ticket}
+
+      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert_received {:qa_build, ^repo_key, "sha-1", %{identifier: "TP-1"}}
+    end
+
+    test "without the builder a new head asks nothing of anyone", %{repo_key: repo_key} do
+      issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
+      pid = start_repo!(repo_key)
+      assert {:ok, _summary} = Repo.poll(pid)
+      assert %{head_sha: "sha-1"} = watch(repo_key, "1")
+    end
+  end
+
   test "poll_now/1 makes a running watcher tick at once", %{repo_key: repo_key} do
     issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
     pid = start_repo!(repo_key)

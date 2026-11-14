@@ -20,12 +20,16 @@ struct LayerPulse: NSViewRepresentable, Equatable {
         /// The status dot's live ring (TP-1506): over the first `reach` of each period it grows from the shape to
         /// `scale` times it while it fades from `opacity` to clear, then waits for the next period.
         case ring(scale: Double, opacity: Double, reach: Double)
+        /// A CSS keyframe breath (`@keyframes { 50% { opacity: to } }`): over one period the opacity goes from full
+        /// to `to` and back, each half on the cubic curve `curve` (its four control values), as a browser draws it.
+        /// An autoreversed animation would run the curve backwards on the way up, which a keyframe animation doesn't.
+        case breathe(to: Double, curve: [Double])
     }
 
     let shape: Shape
     let color: Color
     let motion: Motion
-    /// One way, in seconds; it runs back as long.
+    /// One way, in seconds; it runs back as long. A ring's and a keyed breath's whole period.
     let duration: Double
 
     func makeNSView(context: Context) -> LayerPulseView {
@@ -42,7 +46,21 @@ struct LayerPulse: NSViewRepresentable, Equatable {
         case let .opacity(from, to): breath("opacity", from: from, to: to, duration: duration)
         case let .scale(from, to): breath("transform.scale", from: from, to: to, duration: duration)
         case let .ring(scale, opacity, reach): ring(scale: scale, opacity: opacity, reach: reach, period: duration)
+        case let .breathe(to, curve): breathe(to: to, curve: curve, period: duration)
         }
+    }
+
+    static func breathe(to: Double, curve: [Double], period: Double) -> CAKeyframeAnimation {
+        let half = CAMediaTimingFunction(controlPoints: Float(curve[0]), Float(curve[1]), Float(curve[2]), Float(curve[3]))
+        let animation = CAKeyframeAnimation(keyPath: "opacity")
+        let values: [Double] = [1, to, 1]
+        animation.values = values
+        animation.keyTimes = [0, 0.5, 1]
+        animation.timingFunctions = [half, half]
+        animation.duration = period
+        animation.repeatCount = .infinity
+        animation.isRemovedOnCompletion = false
+        return animation
     }
 
     static func breath(_ keyPath: String, from: Double, to: Double, duration: Double) -> CABasicAnimation {

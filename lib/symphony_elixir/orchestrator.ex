@@ -34,6 +34,7 @@ defmodule SymphonyElixir.Orchestrator do
     PrReviewPoller,
     PrRun,
     PrWatch,
+    QaBuildHold,
     Quality,
     QualityGate,
     Questions,
@@ -4269,6 +4270,7 @@ defmodule SymphonyElixir.Orchestrator do
         else: {%{}, %{}}
 
     state = ask_spent_budgets(state, issues)
+    :ok = resolve_qa_builds(issues, state)
 
     {state, _hold} =
       issues
@@ -4280,6 +4282,32 @@ defmodule SymphonyElixir.Orchestrator do
     state
     |> settle_dispatch_skipped(previous_skipped)
     |> recover_usage_limit_canaries()
+  end
+
+  # Before the pass reads its gates, each QA ticket that is not running is brought in line with the
+  # build of its head (`SymphonyElixir.QaBuildHold`): held while the app is built, sent to Rework
+  # when the build failed, free otherwise. The gate then only reads the hold (`hold_reason/3`). A
+  # ticket that left QA while it was held loses the hold here.
+  defp resolve_qa_builds(issues, %State{} = state) do
+    for %Issue{id: issue_id} = issue when is_binary(issue_id) <- issues,
+        repo_key = hold_repo_key(issue),
+        is_binary(repo_key) do
+      cond do
+        not qa_issue?(issue) -> QaBuildHold.release(repo_key, issue_id, issue.identifier)
+        issue_claimed_or_running?(state, issue_id) -> :ok
+        true -> QaBuildHold.resolve(repo_key, issue, qa_head(issue_id, repo_key))
+      end
+    end
+
+    :ok
+  end
+
+  # The head the PR watcher recorded for the ticket's PR, or nil when it has read none.
+  defp qa_head(issue_id, repo_key) do
+    case PrWatch.watch(issue_id, repo_key: repo_key) do
+      %{head_sha: head} when is_binary(head) -> head
+      _none -> nil
+    end
   end
 
   # The order a dispatch pass walks its candidates in, and the dispatch order read
@@ -4701,6 +4729,7 @@ defmodule SymphonyElixir.Orchestrator do
       waiting_on_sub_issues?(issue, terminal_states) -> "waiting on its sub-tickets"
       reason = instructions_hold_reason(repo_key, issue) -> reason
       reason = update_hold_reason(repo_key, issue, state.update_hold_cache) -> reason
+      reason = qa_build_hold_reason(repo_key, issue) -> reason
       replan_pending?(issue, state) -> "its plan waits to be replaced before it runs again"
       true -> nil
     end
@@ -4708,7 +4737,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   # A paused ticket waits for its pause to lift (`SymphonyElixir.Pauses`): stopped, held back by its
   # blockers, waiting on a fix ticket, a person or a question. A wait for an app update alone is
-  # `UpdateHold`'s, read with what its fix's release build is at (`update_hold_reason/3`).
+  # `UpdateHold`'s, read with what its fix's release build is at (`update_hold_reason/3`); a wait
+  # for the app's build for QA is `QaBuildHold`'s (`qa_build_hold_reason/2`).
   defp paused?(repo_key, %Issue{id: issue_id}) do
     {:ticket, repo_key, issue_id} |> pause_reasons() |> Enum.any?(&(&1.kind != :build))
   end
@@ -4739,6 +4769,17 @@ defmodule SymphonyElixir.Orchestrator do
     case InstructionsHold.reasons(repo_key, issue_id) do
       [] -> nil
       reasons -> reasons |> InstructionsHold.lines() |> Enum.join("; ")
+    end
+  end
+
+  # A QA ticket held while the app for its head is built (`SymphonyElixir.QaBuildHold`). The hold
+  # counts in the QA phase only: one left on a ticket that moved on holds nothing.
+  defp qa_build_hold_reason(repo_key, %Issue{id: issue_id} = issue) do
+    with true <- qa_issue?(issue),
+         [_ | _] = reasons <- QaBuildHold.reasons(repo_key, issue_id) do
+      reasons |> QaBuildHold.lines() |> Enum.join("; ")
+    else
+      _not_held -> nil
     end
   end
 
@@ -5781,6 +5822,7 @@ defmodule SymphonyElixir.Orchestrator do
       issue_held?(issue, terminal_states) -> "issue_held?"
       code_review_reviewer_disabled?(issue) -> "flow_gated?: the reviewer is turned off"
       reason = watch_gate_reason(issue) -> "flow_gated?: #{reason}"
+      reason = qa_build_hold_reason(hold_repo_key(issue), issue) -> "flow_gated?: #{reason}"
       true -> "unmoved_since?"
     end
   end
@@ -11010,7 +11052,9 @@ defmodule SymphonyElixir.Orchestrator do
   # (`SymphonyElixir.PrWatch.dispatch_reason/2`). Without it, the continuation of a reviewer run
   # that approved reads the ticket again, now in QA, and starts QA on a red head.
   defp flow_gated?(%Issue{} = issue) do
-    if code_review_reviewer_disabled?(issue) or watch_gate_reason(issue) != nil do
+    build_held? = qa_build_hold_reason(hold_repo_key(issue), issue) != nil
+
+    if code_review_reviewer_disabled?(issue) or watch_gate_reason(issue) != nil or build_held? do
       Logger.debug("Skipping dispatch; the review flow holds #{issue_context(issue)} back on its PR")
       true
     else

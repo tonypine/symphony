@@ -1254,10 +1254,49 @@ make          # builds an ad-hoc-signed build/Symphony.app
 make install  # builds it and copies it to ~/Applications (set INSTALL_DIR to change)
 make run      # builds and opens build/Symphony.app
 make test     # runs swift test
-make snapshots  # renders the views in Tests/Snapshots offscreen (no window) and rewrites their PNGs
+make gallery  # builds and opens the Component Gallery (Gallery/): the app's components and screens, live
 make clean    # removes build/ and .build/
 make bundle SYMPHONY_RELEASE=../_build/prod/rel/symphony   # embeds the Symphony release (make release), as releases do
 ```
+
+### The Component Gallery
+
+`Gallery/` is a program of its own that shows the app's own views, drawn from made-up inputs or a
+committed fixture, outside the running app. It is the app's counterpart of the HTML catalog
+(`docs/design/catalog/`), where a design is worked out before it is built. `make gallery` builds
+it from this checkout and opens it; everything in it is live, so it can be hovered, pressed and
+reached with Tab.
+
+- **Entries** (`Gallery/Entries.swift`) are the things one can look at: a shared component
+  ("Button") or a screen ("Ticket page"). Each entry names the source files it shows.
+- **A component** shows every variation together on one board: its kinds and states as one table,
+  its sizes side by side, its awkward cases (a very long label, an empty list).
+- **A screen** shows one variation at a time, alone, at its true size. Its variations are listed
+  under it; the `Window` control in the bar draws it as a laptop's window (1440 pt), a desktop's
+  (2560 pt), or one that fills the stage. Nothing is ever scaled, so a size read off the screen is
+  the real one.
+- **A variation is part of the work.** A change that adds a component, a kind, a state or a screen
+  state adds its variation in the same pull request (`render` and `renderScreen` in
+  `Gallery/main.swift`, the `*Stories.swift` files). `build/SymphonyGallery --check` fails when a
+  variation belongs to no entry, or a file under `Sources/SymphonyBarUI` is shown by none.
+- **No picture is committed.** One is drawn when somebody needs to look:
+
+  ```bash
+  build/SymphonyGallery --entries                      # the entries, their variations and files, as JSON
+  git diff --name-only origin/main | build/SymphonyGallery --affected   # the entries a change is a reason to look at
+  build/SymphonyGallery --shot button --out /tmp/shots # a component's board, light and dark
+  build/SymphonyGallery --shot ticket-page --variation ticket-page-waiting --width desktop --out /tmp/shots
+  build/SymphonyGallery --open home --variation home-board --width laptop --dark
+  ```
+
+- **It is always built from the checkout it is used on.** A person or an implementation run builds
+  it with `make build-gallery` (a few seconds after the app's own build); a QA pass gets it from
+  `qa_build`, since `make qa-app` puts it in the bundle at `Contents/Helpers/SymphonyGallery`. QA
+  reads it with `qa_gallery` and opens it with `qa_gallery_open`: the app, launched on
+  `Tests/Fixtures/gallery`, runs the gallery in its own place with the arguments it was given
+  (`Sources/SymphonyBar/GalleryLaunch.swift`), so QA's tools drive its window as they drive the
+  app's.
+- It is compiled apart from the app, so a release does not carry it.
 
 `make` and `make bundle` sign ad hoc. Pass `SIGNING_IDENTITY="<certificate name>"` to sign with a
 certificate, `SHORT_VERSION=` / `BUILD_NUMBER=` to set the versions in `Info.plist`, and

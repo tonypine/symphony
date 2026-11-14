@@ -22,7 +22,7 @@ Three things went wrong on 2026-10-14 and 2026-10-15:
    itself while a run is active) in three places: the walkthroughs of TP-983 and TP-972, and the
    end-to-end scenarios of [TP-973](https://linear.app/tonypine/issue/TP-973). The e2e harness
    ([`update_restart_e2e.py`](../../macos/Tests/e2e/update_restart_e2e.py), run in CI by
-   `macos-e2e`) can install one signed build over another. The QA build can't:
+   the Mac checks, then `macos-e2e`) can install one signed build over another. The QA build can't:
    `make -C macos qa-app` embeds no update signing key, and the build is signed ad hoc, which the
    app's installer refuses. QA ran about 90 passes on TP-983 and 133 on TP-972, each blocked on
    the same steps. TP-971 had hit the same wall the day before.

@@ -1685,7 +1685,10 @@ defmodule SymphonyElixir.QaAgent do
           playbook: playbook,
           tmp_dir: Keyword.get(opts, :qa_tmp_dir),
           worker_host: settings.auto_review.worker_host,
+          repo_key: Map.get(job, :repo_key),
           log_context: "issue_id=#{job.issue.id} issue_identifier=#{job.issue.identifier}",
+          ticket: %{identifier: job.issue.identifier, issue_id: job.issue.id},
+          heartbeat: lease_heartbeat(opts),
           git: Keyword.get(opts, :git, &default_git/2)
         ]
 

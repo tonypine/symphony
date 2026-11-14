@@ -30,6 +30,14 @@ defmodule SymphonyElixir.ReleaseBuildTest do
   @ticket %{id: "issue-1251", identifier: "TP-1251", state: "Todo"}
   @condition "release_build:#{@repo_key}:#{@sha}"
 
+  defmodule Gate do
+    @moduledoc false
+    def failed(build, _opts) do
+      send(Process.get(:release_gate_test), {:gate_failed, build})
+      Process.get(:release_gate_reply, {:filed, "TP-1520"})
+    end
+  end
+
   setup do
     :ok = RunStore.clear()
     on_exit(fn -> :ok = RunStore.clear() end)
@@ -242,6 +250,32 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       assert {:ok, %{state: :failed, answer: %{kind: :failed, attempt: 2}}} = check(opts)
       assert symphony_conditions() == []
       assert line(opts) =~ "failed on GitHub; waiting for a fix"
+    end
+
+    test "a failed release gate files a fix ticket once per attempt, asks nobody and pauses nothing", %{github: github, opts: opts} do
+      Process.put(:release_gate_test, self())
+      opts = Keyword.put(opts, :release_gate, __MODULE__.Gate)
+      set(github, :started, [%{"name" => "release gate", "conclusion" => "failure", "steps" => [%{"name" => "Test the update", "conclusion" => "failure"}]}])
+      runs(github, [run(1, "completed", "failure")])
+
+      assert {:ok, %{state: :failed, question: nil, fix: %{identifier: "TP-1520", attempt: 1}}} = check(opts)
+      assert_received {:gate_failed, %{sha: @sha, run_id: "41086214847", failure: %{job: "release gate", step: "Test the update"}} = build}
+      refute Map.has_key?(build, :opts)
+      refute_received {:asked, _ticket, _request}
+      assert symphony_conditions() == []
+      assert line(opts) == "Waiting for the v#{version()} build with TP-1238's fix: failed its release gate; TP-1520 was opened to fix it"
+
+      assert {:ok, %{state: :failed, fix: %{attempt: 1}}} = check(opts)
+      refute_received {:gate_failed, _build}
+
+      Process.put(:release_gate_reply, {:error, :linear_down})
+      runs(github, [run(2, "completed", "failure")])
+      assert {:ok, %{state: :failed, fix: %{attempt: 1}}} = check(opts)
+      assert_received {:gate_failed, _build}
+
+      Process.put(:release_gate_reply, {:attached, "TP-1520"})
+      assert {:ok, %{state: :failed, fix: %{identifier: "TP-1520", attempt: 2}}} = check(opts)
+      assert_received {:gate_failed, %{attempt: 2}}
     end
 
     test "rerun the build after a person already reran it on GitHub sends nothing", %{github: github, decisions: decisions, opts: opts} do

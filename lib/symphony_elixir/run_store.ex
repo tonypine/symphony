@@ -1605,6 +1605,14 @@ defmodule SymphonyElixir.RunStore do
 
   def put_github_updates(_key, _value), do: {:error, :invalid_github_updates}
 
+  @doc "Forgets what `put_github_updates/2` kept under `key`."
+  @spec delete_github_updates(term()) :: :ok | {:error, term()}
+  def delete_github_updates(key) do
+    with :ok <- ensure_started() do
+      durable_transaction(fn -> :mnesia.delete({@totals_table, {:github_updates, key}}) end)
+    end
+  end
+
   @doc "What `put_github_updates/2` kept under `key`, or nil."
   @spec get_github_updates(term()) :: map() | nil | {:error, term()}
   def get_github_updates(key) do
