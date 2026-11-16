@@ -114,7 +114,8 @@ situation lasted from the time of this event and of the next.
 
 Where the ticket is on its way to landing: the five stages in order and its tokens against its cap.
 `SymphonyElixir.Lifecycle` computes it from the `phase.entered`, `run.started` and `run.ended` events
-of the ticket's ledger, never from Linear's state history.
+of the ticket's ledger, never from Linear's state history, and from the orchestrator's entry for the
+run working on the ticket now.
 
 ```json
 {
@@ -137,9 +138,9 @@ of the ticket's ledger, never from Linear's state history.
 | `stages[].state` | `current`; `passed`: a stage behind the current one that it entered; `skipped`: a stage behind the current one that it never entered; `not_yet`: the stages ahead. Done reads `passed` once reached. |
 | `stages[].visits` | How many times the ticket entered the stage. |
 | `stages[].time_ms` | Wall time in the stage, summed over its visits, up to now for the phase it is in. Pauses count. Done takes none. |
-| `stages[].agent_time_ms` | How long the ended runs of the stage ran. |
-| `stages[].tokens` | The tokens of the ended runs of the stage. |
-| `tokens.total` | The tokens of the ticket's ended runs: the stages' `tokens` add up to it. |
+| `stages[].agent_time_ms` | How long the runs of the stage ran: the ended ones, and the one working now up to now. |
+| `stages[].tokens` | The tokens of the runs of the stage: the ended ones, and the one working now so far. |
+| `tokens.total` | The tokens of the ticket's runs, the one working now included: the stages' `tokens` add up to it. |
 | `tokens.cap` | The ticket's cap, `agent.limits.tokens_per_issue`; null when there is none. |
 
 Rework and CI Fix have no stage of their own; they count as visits of the stage they serve:
@@ -154,8 +155,9 @@ Rework and CI Fix have no stage of their own; they count as visits of the stage 
 
 A run belongs to the stage the ticket was in when it started, so the work a Rework run does counts in
 Code Review. A run that started outside any stage counts in Coding: a first run starts just before
-its move out of Todo, and a plan run or an epic review never enters a stage. A run still working joins
-the numbers when it ends.
+its move out of Todo, and a plan run or an epic review never enters a stage. A run still working counts
+its tokens and time so far, so the numbers move while it works; once it ends, its `run.ended` counts
+instead.
 
 Code Review, QA and CI Fix go by the names the repository configures (`issues.states.code_review`,
 `qa` and `ci_fix`); In Progress, Rework, Merging and Done are fixed. A stage's `id` and `name` stay the
