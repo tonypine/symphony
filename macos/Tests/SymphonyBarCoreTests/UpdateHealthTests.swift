@@ -301,6 +301,11 @@ final class UpdateHealthTests: XCTestCase {
             "the app didn't start within 30 seconds of the update; see ~/Library/Logs/symphony/update.log"
         )
         XCTAssertEqual(
+            UpdateLaunch.failureReason(timeoutSeconds: 5, logPath: "~/Library/Logs/symphony/update.log"),
+            "the app didn't start within 5 seconds of the update; see ~/Library/Logs/symphony/update.log",
+            "the bound the helper actually gave, as it wrote it"
+        )
+        XCTAssertEqual(
             UpdateRelaunch(pending: pending, rollback: nil, runningBuild: 42, launchFailure: reason),
             .launchFailed(
                 RollbackRecord(
