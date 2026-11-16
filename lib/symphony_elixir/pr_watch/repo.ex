@@ -1092,7 +1092,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # tick inside one adds nothing), and once it is listed the dispatch pass pauses a ticket no run can
   # start (`SymphonyElixir.PrWatch.StalledRun`).
   defp announce_dispatch(%{decision: %{kind: kind} = decision} = watch, previous, entry, state) do
-    if kind in StalledRun.run_kinds() and (not same_decision?(decision, previous && previous.decision) or quieter?(watch, previous)),
+    new_or_quieter? = not same_decision?(decision, previous && previous.decision) or quieter?(watch, previous)
+
+    if kind in StalledRun.run_kinds() and new_or_quieter?,
       do: ObservabilityPubSub.broadcast_ticket_record_changed(state.repo_key, entry.issue.id, [:pr_watch])
   end
 
