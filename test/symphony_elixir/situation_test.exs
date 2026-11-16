@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.SituationTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Pauses, Questions, Situation, TicketEvents, TicketPullRequest, TicketState, TransitionGuard}
   alias SymphonyElixir.Inbox.{FromRecord, Item}
+  alias SymphonyElixir.{Pauses, Questions, Situation, TicketEvents, TicketPullRequest, TicketState, TransitionGuard}
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.TicketEvents.{Event, Types}
 
@@ -548,7 +548,8 @@ defmodule SymphonyElixir.SituationTest do
       assert stalled.cause == "The conflict fix run is due and a slot is free, but no run started yet: PR #915 conflicts with main: conflict fix run 1 of 3."
       assert FromRecord.items([silent], %{}) == []
 
-      # The dispatch pass paused it for that: the words come from that pause, and the Inbox lists it from the same pause.
+      # The dispatch pass paused it for that: the words come from that pause, and the Inbox lists it
+      # from the same pause.
       held = %{silent | pause: pause([@stalled_reason, %{kind: :person, text: "Held by hand", releasable: true}])}
       assert %{kind: "waiting_on_you", word: "Not started", next: "It is listed in the Inbox; Unblock starts the run.", and_more: 1, since: @at} = compute(held, [], two_free)
       assert compute(held, [], two_free).cause == @stalled_reason.text <> "."
@@ -615,7 +616,8 @@ defmodule SymphonyElixir.SituationTest do
     end
 
     test "a ticket in a phase whose run waits on the watcher, which has not decided on its PR yet, reads the PR next" do
-      unread = [record(%{phase: "QA"}), record(%{phase: "Code Review"}), record(%{phase: "Merging", pr_watch: watch(%{phase: :merging, ci: :green}, %{decision: nil})})]
+      merging = record(%{phase: "Merging", pr_watch: watch(%{phase: :merging, ci: :green}, %{decision: nil})})
+      unread = [record(%{phase: "QA"}), record(%{phase: "Code Review"}), merging]
 
       for record <- unread do
         assert %{kind: "waiting_for_ci", word: "Reading the PR", cause: "The PR watcher reads its PR next.", next: "The next step follows that read.", since: @at} = compute(record)
@@ -653,7 +655,9 @@ defmodule SymphonyElixir.SituationTest do
 
       pauses = [nil, pause([@stalled_reason])]
 
-      for phase <- ["Todo", "In Progress", "QA", "CI Fix", "Merging", "Human Review"], decision <- decisions, silent <- [nil, @silent], live <- lives, held <- pauses do
+      phases = ["Todo", "In Progress", "QA", "CI Fix", "Merging", "Human Review"]
+
+      for phase <- phases, decision <- decisions, silent <- [nil, @silent], live <- lives, held <- pauses do
         # The silence is the watcher's record of its decision: a ticket with no decision has none.
         silent = if decision, do: silent
         record = if decision, do: conflicted(phase, decision, %{silent: silent}), else: record(%{phase: phase})

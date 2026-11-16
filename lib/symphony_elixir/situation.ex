@@ -37,8 +37,8 @@ defmodule SymphonyElixir.Situation do
   `waiting_for_ci`; any other slot wait reads `paused_by_rule` while Symphony's own pause lasts.
   """
 
-  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.{Config, PrDecision, RunStore, TicketEvents, TicketPullRequest, TicketState}
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.PrWatch.{SilentWait, StalledRun}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
 
