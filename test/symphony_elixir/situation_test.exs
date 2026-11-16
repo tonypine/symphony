@@ -632,6 +632,10 @@ defmodule SymphonyElixir.SituationTest do
       refute Situation.not_known?(returned, live())
       assert FromRecord.items([returned], %{}) == []
 
+      # A decision whose facts name no phase it was made in stands in the ticket's phase.
+      unread_facts = record(%{phase: "CI Fix", pr_watch: watch(%{phase: nil, ci: :green, mergeable: :dirty}, %{decision: Map.put(@conflict_fix, :since, @later)})})
+      assert %{word: "Starting", cause: "The conflict fix run is next and a slot is free: PR #915 conflicts with main: conflict fix run 1 of 3."} = compute(unread_facts)
+
       # CI Fix runs with no decision: its run is next.
       assert %{word: "Starting", cause: "The CI Fix run is next and a slot is free."} = compute(record(%{phase: "CI Fix"}))
     end
