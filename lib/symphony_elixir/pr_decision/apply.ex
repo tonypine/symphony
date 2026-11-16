@@ -31,10 +31,16 @@ defmodule SymphonyElixir.PrDecision.Apply do
       `SymphonyElixir.PrDecision.max_cancel_reruns/0`, each cancellation once and with no attempt
       spent; with no new cancellation there is nothing to do, and R19 waits on CI for the rerun.
     * `ci_fix` – sends the ticket to CI Fix for a red head or a conflict, recording its origin, and
-      spends one red or conflict attempt (`SymphonyElixir.PrWatch.Attempts`). In `Merging` auto-merge
-      goes off first. In CI Fix itself the ticket stays and the next run takes the fix; the run sent
-      when it entered the lane spends no second attempt. A red head's fix context lists the earlier
-      fix runs' failures (check, first error line, head), so the run knows what was tried.
+      records the fix as pending on the head (`SymphonyElixir.PrWatch.Attempts.pending/5`). It
+      spends no attempt: the red or conflict count is spent when a CI Fix run that started after the
+      decision ends, as the ticket's ledger says (`run.started`, `run.ended`), so a move whose run
+      never started, or a run a restart or a usage limit cut short, spends nothing. In `Merging`
+      auto-merge goes off first. In CI Fix itself the ticket stays and the orchestrator starts the
+      run: while the fix is pending on the head, the decision is recorded as it is, the run still
+      to start or to end. A ticket out of CI Fix with the fix still pending (moved back before its
+      run ended) is sent again: the ledger of a stay never stands in for the run. A red head's fix
+      context lists the earlier fix runs' failures (check, first error line, head), so the run knows
+      what was tried.
     * `return_to_origin` – a green, conflict-free CI Fix ticket goes back where it came from, with
       the approval it carried.
     * `to_code_review` (a person pushed in `Merging`, D4) and `to_rework` (a conflict back after
@@ -193,7 +199,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
     cond do
       not owned?(action, ctx) -> recorded(action, ctx)
       no_op?(action, ctx) -> recorded(action, ctx)
-      already_sent?(action, ctx) -> recorded(%{action | reason: "The CI Fix run already sent for this head takes the fix"}, ctx)
+      fix_pending?(action, ctx) -> recorded(action, ctx)
       done = already_done(action, ctx) -> recorded(done, ctx)
       true -> action |> perform(ctx) |> finish(action, ctx)
     end
@@ -209,6 +215,10 @@ defmodule SymphonyElixir.PrDecision.Apply do
   # wait on competitors may come back on the same head, and U2 is kept per cancellation: with none
   # new, the rerun it sent is still to report. Once a person chose to wait, R19a asks nothing more.
   defp already_done(%Action{kind: :wait_for_competitors}, _ctx), do: nil
+
+  # A fix is done when its run ends, not when the ticket moved: pending in CI Fix it is recorded
+  # before here (`fix_pending?/2`), and anywhere else it is sent again.
+  defp already_done(%Action{kind: :ci_fix}, _ctx), do: nil
   defp already_done(%Action{rule: "U2"} = action, ctx), do: if(cancels_due(ctx) == [], do: action)
 
   defp already_done(%Action{rule: "R19a"} = action, ctx) do
@@ -231,9 +241,10 @@ defmodule SymphonyElixir.PrDecision.Apply do
     )
   end
 
-  # In CI Fix, the run the ticket entered the lane for takes that fix: no second attempt is spent.
-  defp already_sent?(%Action{kind: :ci_fix, args: %{cause: cause}}, %{facts: %{phase: :ci_fix}} = ctx), do: Attempts.sent?(ctx.attempts, head(ctx), cause)
-  defp already_sent?(_action, _ctx), do: false
+  # In CI Fix, a fix already pending on the head waits for its run: the orchestrator starts it, and its
+  # end spends the attempt.
+  defp fix_pending?(%Action{kind: :ci_fix, args: %{cause: cause}}, %{facts: %{phase: :ci_fix}} = ctx), do: Attempts.pending?(ctx.attempts, head(ctx), cause)
+  defp fix_pending?(_action, _ctx), do: false
 
   defp owned?(%Action{rule: "R13"}, %{facts: %{phase: :merging}} = ctx), do: AutoMerge.enabled?(ctx.settings)
   defp owned?(%Action{rule: "R18"}, %{facts: %{phase: :merging}} = ctx), do: AutoMerge.enabled?(ctx.settings)
@@ -514,7 +525,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
     with {:ok, fix} <- fix_context(cause, ctx),
          :ok <- disarm_in_merging(ctx, cause),
          :ok <- enter_ci_fix(origin, ctx) do
-      attempts = cause |> spend(fix, ctx) |> Attempts.sent(head(ctx), cause)
+      attempts = Attempts.pending(ctx.attempts, head(ctx), cause, evidence(cause, fix, ctx), ctx.now)
       {:ok, %{attempts: attempts, fix: fix, moved_to: :ci_fix}}
     end
   end
@@ -590,13 +601,13 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
-  # The red run's failure is the head's signature the streak reads (`read.failure`), so the next head
-  # compares like with like; without one, the log the run reads.
-  defp spend(:red, %{ci_failure: failure}, ctx) do
-    Attempts.spend(ctx.attempts, :red, head_failure(ctx) || %{check: ctx.facts.failing_check || "a check", error: failure.first_error, head_sha: head(ctx)})
+  # What the red run spends as evidence once it ends: the head's signature the streak reads
+  # (`read.failure`), so the next head compares like with like; without one, the log the run reads.
+  defp evidence(:red, %{ci_failure: failure}, ctx) do
+    head_failure(ctx) || %{check: ctx.facts.failing_check || "a check", error: failure.first_error, head_sha: head(ctx)}
   end
 
-  defp spend(:conflict, _fix, ctx), do: Attempts.spend(ctx.attempts, :conflict)
+  defp evidence(:conflict, _fix, _ctx), do: nil
 
   # From a watched phase the ticket enters the lane, its origin recorded first so the repair has
   # somewhere to return; already in CI Fix, it stays and the next run takes the fix.

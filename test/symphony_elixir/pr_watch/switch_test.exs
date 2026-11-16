@@ -8,7 +8,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{CiFix, Inbox, Pauses, PrWatch, Questions, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{CiFix, Inbox, Pauses, PrWatch, Questions, TicketEvents, TicketPullRequest, TicketState}
   alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.PrWatch.{Attempts, Competitors, Repo}
   alias SymphonyElixirWeb.WatchPayload
@@ -320,8 +320,17 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
   # The CI Fix run pushed `head` and handed the ticket back to `origin`, as `AgentRunner` does.
   defp fix_run_returns!(issue_id, id, origin, head, attrs) do
     assert state(issue_id) == "CI Fix"
+    record_fix_run!(issue_id)
     move!(issue_id, origin)
     pr!(id, Keyword.merge([head_sha: head], attrs))
+  end
+
+  # A CI Fix run that started and ended now, as the orchestrator records it in the ticket's ledger:
+  # its end is what spends the fix attempt (TP-1518).
+  defp record_fix_run!(issue_id) do
+    run_id = "fix-#{issue_id}-#{System.unique_integer([:positive])}"
+    {:ok, _event} = TicketEvents.record(@repo_key, issue_id, "run.started", %{run_id: run_id, run_kind: "ci_fix", state: "CI Fix"}, run_id: run_id, at: now())
+    {:ok, _event} = TicketEvents.record(@repo_key, issue_id, "run.ended", %{run_id: run_id, run_kind: "ci_fix", exit: "handoff", counted: true}, run_id: run_id, at: now())
   end
 
   defp seed_attempts!(issue_id, attempts) do
@@ -404,12 +413,13 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
       assert length(World.calls(:rerun)) == 10
       assert moves(issue_id) == List.duplicate("CI Fix", 10)
+
+      # The backstop: one fix ticket for the failing check, linked as a blocker, and a Blocked hold. The
+      # read after the 10th run ended spent its count.
+      tick!(pid)
       assert %{red: 10, fix_failures: failures} = attempts(issue_id)
       assert length(failures) == 10
       assert hd(failures) == %{check: "specs", error: "ERROR: specs failed at stub_test.exs:1", head_sha: "head-1-1"}
-
-      # The backstop: one fix ticket for the failing check, linked as a blocker, and a Blocked hold.
-      tick!(pid)
       assert [{"TP-901", %{component: "ci:specs", scope: @repo_key, title: "Self-heal: CI keeps failing the specs check", description: description}}] = World.calls(:fix_ticket)
       assert description =~ "The failure may be that pull request's own rather than this repo's CI"
       assert description =~ "https://github.com/acme/app/pull/1"
@@ -474,7 +484,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid)
       assert %{red_attempts: 0, max_red_attempts: 10} = watch(issue_id).facts
       assert %{rule: "R21", reason: "The `specs` check failed on PR #1: CI Fix run 1 of 10"} = decision(issue_id)
-      assert %{red: 1, fix_ticket: nil} = attempts(issue_id)
+      assert %{red: 0, fix_ticket: nil, pending: %{cause: :red}} = attempts(issue_id)
       assert state(issue_id) == "CI Fix"
 
       # The same failure reaches the backstop again on the next head: the lane asks a person, once.
@@ -521,9 +531,9 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert %{rule: "R20"} = decision(red_id)
       assert [{"TP-901", _attrs}] = World.calls(:fix_ticket)
 
-      # In CI Fix, the run sent for the conflict takes it: no second attempt.
-      assert %{rule: "R14", reason: "The CI Fix run already sent for this head takes the fix"} = decision(conflict_id)
-      assert %{conflict: 1} = attempts(conflict_id)
+      # In CI Fix, the conflict fix stays due on the head until its run ends: no attempt spent yet (TP-1518).
+      assert %{rule: "R14", reason: "PR #2 conflicts with main: conflict fix run 1 of 3", outcome: :recorded} = decision(conflict_id)
+      assert %{conflict: 0, pending: %{cause: :conflict, head_sha: "head-2-1"}} = attempts(conflict_id)
       fix_run_returns!(conflict_id, "2", "QA", "head-2-2", dirty())
       seed_attempts!(conflict_id, %{conflict: 3})
       tick!(pid)
@@ -539,7 +549,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
 
       assert %{red_attempts: 2, conflict_attempts: 1} = watch(issue_id).facts
       assert %{rule: "R21", reason: "The `specs` check failed on PR #1: CI Fix run 3 of 10"} = decision(issue_id)
-      assert %{red: 3, conflict: 1} = attempts(issue_id)
+      assert %{red: 2, conflict: 1, pending: %{cause: :red}} = attempts(issue_id)
     end
 
     test "a conflicting PR whose checks read green resets neither count; a green, conflict-free head resets both" do
@@ -548,10 +558,12 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       tick!(pid)
       assert state(issue_id) == "CI Fix"
       fix_run_returns!(issue_id, "1", "Code Review", "head-1-10", dirty())
-      seed_attempts!(issue_id, %{red: 2, conflict: 2})
+      seed_attempts!(issue_id, %{red: 2, conflict: 1})
 
+      # The fix run that ended spends its count; the conflict still there sends conflict fix run 3.
       tick!(pid)
-      assert %{red: 2, conflict: 3} = attempts(issue_id)
+      assert %{red: 2, conflict: 2, pending: %{head_sha: "head-1-10"}} = attempts(issue_id)
+      assert %{rule: "R14", reason: "PR #1 conflicts with main: conflict fix run 3 of 3"} = decision(issue_id)
 
       fix_run_returns!(issue_id, "1", "Code Review", "head-1-11", ci: :green, mergeable: :clean)
       tick!(pid)
@@ -1021,7 +1033,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert moves(issue_id) == ["CI Fix"]
       assert World.calls(:disarm) == ["https://github.com/acme/app/pull/1"]
       assert World.calls(:arm) == []
-      assert %{conflict: 1} = attempts(issue_id)
+      assert %{conflict: 0, pending: %{cause: :conflict}} = attempts(issue_id)
       assert %{pr_conflict: %{approved: true, retry_count: 1}} = watch(issue_id).fix
     end
 
@@ -1754,7 +1766,8 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       fix_run_returns!(issue_id, "1", "QA", "head-1-1", red())
       tick!(pid)
       assert moves(issue_id) == ["CI Fix", "CI Fix"]
-      assert %{red: 2} = attempts(issue_id)
+      # The first fix run ended: one attempt spent, the second fix pending on the same head.
+      assert %{red: 1, pending: %{cause: :red, head_sha: "head-1-1"}} = attempts(issue_id)
     end
 
     test "CiPoller.await_waiver: a protected paths check that only a person clears doesn't make the head red before Merging" do
@@ -2204,19 +2217,20 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert Inbox.listing(%{}, inbox) == []
     end
 
-    test "a ticket in CI Fix that entered it for its red head spends no second attempt on the run already sent" do
+    test "a ticket in CI Fix that entered it for its red head spends no attempt until its fix run ends" do
       issue_id = ticket!("1", "QA", red())
       pid = start!()
       tick!(pid, 2)
       assert state(issue_id) == "CI Fix"
       tick!(pid, 2)
-      assert %{red: 1} = attempts(issue_id)
+      assert %{red: 0, pending: %{head_sha: "head-1-1", cause: :red}} = attempts(issue_id)
 
-      # A new red head the run pushed while the ticket stayed in the lane is another fix run, once
-      # its rerun failed too.
+      # The fix run ends, having pushed a new red head while the ticket stayed in the lane: its end
+      # spends the attempt, and the new head is another fix run once its rerun failed too.
+      record_fix_run!(issue_id)
       pr!("1", head_sha: "head-1-2")
       tick!(pid, 2)
-      assert %{red: 2, sent: %{head_sha: "head-1-2", cause: :red}} = attempts(issue_id)
+      assert %{red: 1, pending: %{head_sha: "head-1-2", cause: :red}} = attempts(issue_id)
       assert moves(issue_id) == ["CI Fix"]
     end
 

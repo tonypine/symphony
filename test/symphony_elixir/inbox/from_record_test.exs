@@ -285,6 +285,36 @@ defmodule SymphonyElixir.Inbox.FromRecordTest do
     end
   end
 
+  describe "a ticket Symphony can't tell what it waits on (TP-1518)" do
+    defp unknown_record(overrides \\ %{}) do
+      facts = struct(SymphonyElixir.PrDecision.Facts, phase: :qa, ci: :green, pr: :open)
+
+      @repo_key
+      |> TicketState.new("id-TP-8", Map.merge(%{issue_identifier: "TP-8", title: "A ticket", phase: "QA", phase_at: ~U[2026-11-16 19:11:00Z]}, overrides))
+      |> TicketState.put_pr_watch(%{facts: facts, decision: %{rule: "R15a", kind: :to_rework, reason: "x"}})
+    end
+
+    test "lists as blocked with the ticket page's words, since its phase began" do
+      assert [
+               %{
+                 identifier: "TP-8",
+                 kind: :blocked,
+                 state: "QA",
+                 ask: "Symphony can't tell what it waits on",
+                 waiting_since: ~U[2026-11-16 19:11:00Z],
+                 review: %{reason: "Symphony can't tell what it waits on", clearing_condition: "when Symphony can tell what it waits on, or a person moves it"}
+               }
+             ] = items([unknown_record()])
+
+      assert Item.on_director?(Item.from_not_known(unknown_record()))
+    end
+
+    test "lists nothing while a run works on it, or once its phase has a run" do
+      assert items([unknown_record()], %{running: [%{issue_id: "id-TP-8", run_kind: "qa"}]}) == []
+      assert items([TicketState.new(@repo_key, "id-TP-8", %{issue_identifier: "TP-8", phase: "Rework"})]) == []
+    end
+  end
+
   describe "a CI Fix ticket waiting on CI (TP-1175)" do
     @since ~U[2026-11-06 09:00:00Z]
 

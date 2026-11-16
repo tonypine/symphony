@@ -187,11 +187,14 @@ defmodule SymphonyElixir.PrDecisionTest do
       exhausted = [ci: :red, red_attempts: 10, max_red_attempts: 10]
 
       for ci <- @not_green ++ [[ci: :green], [ci: :none], [ci: :red, rerun_done: true], exhausted],
-          mergeable <- [:clean, :behind, :unstable, :blocked, :unknown] do
+          mergeable <- [:clean, :behind, :unstable, :blocked] do
         facts = changes ++ [mergeable: mergeable] ++ ci
         assert %Action{rule: "R26", kind: :dispatch} = decide(facts), inspect(facts)
         assert upkeep(facts) == [], inspect(facts)
       end
+
+      # A PR GitHub has not computed yet is not known to be conflict-free: the rework run waits for it (TP-1518).
+      assert %Action{rule: "R16", owner: :github} = decide(changes ++ [mergeable: :unknown, ci: :red])
 
       assert upkeep(changes ++ [ci: :red, red_kind: :cancelled, cancel_reruns: 1]) == []
     end
@@ -267,6 +270,56 @@ defmodule SymphonyElixir.PrDecisionTest do
     test "the same facts give the same action" do
       facts = facts(phase: :merging, mergeable: :dirty, ahead: [@tp948])
       assert PrDecision.decide(facts) == PrDecision.decide(facts)
+    end
+  end
+
+  describe "TP-1518: unknown mergeability is never conflict-free" do
+    @ci_readings [
+      [ci: :green],
+      [ci: :none],
+      [ci: :pending],
+      [ci: :required_missing, missing_checks: ["build"]],
+      [ci: :red, red_kind: :failure],
+      [ci: :red, red_kind: :failure, rerun_done: true],
+      [ci: :red, red_kind: :cancelled],
+      [ci: :red, red_kind: :human_only]
+    ]
+
+    test "in every PR phase an unknown reading waits on GitHub and is read again, whatever CI and the review say" do
+      phases = [:code_review, :qa, :rework, :ci_fix, :merging]
+
+      for phase <- phases, ci <- @ci_readings, review <- [:pending, :approved, :changes_requested] do
+        facts = [phase: phase, mergeable: :unknown, review: review, origin: :qa] ++ ci
+        action = decide(facts)
+
+        assert %Action{rule: "R16", kind: :wait, owner: :github, clears_when: "GitHub reports whether the PR can merge"} = action, inspect(facts)
+        assert action.reason == "GitHub is still computing whether PR #42 can merge: Symphony reads it again"
+      end
+    end
+
+    test "no rule written for a clean PR matches an unknown reading: a return from CI Fix, a review, QA, a rework run, a merge" do
+      clean_rules = ["R17", "R18", "R19", "R19a", "R19b", "R20", "R21", "R22", "R23", "R24", "R25", "R26", "R27", "R28", "R29", "R30", "R31", "R32", "R33"]
+
+      for %Facts{mergeable: :unknown} = facts <- Facts.combinations(), rule <- PrDecision.rules(), rule.id in clean_rules do
+        refute PrDecision.matches?(rule, facts), "#{rule.id} matched #{inspect(Map.take(facts, [:phase, :ci, :review, :run, :pr]))}"
+      end
+    end
+
+    test "R25 returns a ticket to its origin only on a reading that says the PR can merge" do
+      for mergeable <- [:clean, :behind, :unstable, :blocked] do
+        assert %Action{rule: "R25", kind: :return_to_origin} = decide(phase: :ci_fix, origin: :qa, mergeable: mergeable)
+      end
+
+      refute decide(phase: :ci_fix, origin: :qa, mergeable: :unknown).rule == "R25"
+      refute decide(phase: :ci_fix, origin: :qa, mergeable: :dirty).rule == "R25"
+    end
+
+    test "the TP-1508 reading after a long pause: green checks, unknown mergeability, in CI Fix, then dirty" do
+      after_pause = [phase: :ci_fix, origin: :qa, ci: :green, mergeable: :unknown, conflict_attempts: 0]
+      assert %Action{rule: "R16", kind: :wait} = decide(after_pause)
+
+      assert %Action{rule: "R14", kind: :ci_fix, args: %{origin: :qa, cause: :conflict}, reason: "PR #42 conflicts with main: conflict fix run 1 of 3"} =
+               decide(Keyword.put(after_pause, :mergeable, :dirty))
     end
   end
 
@@ -675,7 +728,7 @@ defmodule SymphonyElixir.PrDecisionTest do
 
   describe "user walkthrough" do
     test "step 3: Code Review, red after a rerun, 3 of 10 attempts → R21 CI Fix from Code Review" do
-      action = PrDecision.decide(%Facts{phase: :code_review, review: :approved, ci: :red, rerun_done: true, red_attempts: 3, max_red_attempts: 10})
+      action = PrDecision.decide(%Facts{phase: :code_review, review: :approved, mergeable: :clean, ci: :red, rerun_done: true, red_attempts: 3, max_red_attempts: 10})
       assert %Action{rule: "R21", kind: :ci_fix, args: %{origin: :code_review}} = action
     end
 
@@ -691,7 +744,7 @@ defmodule SymphonyElixir.PrDecisionTest do
     end
 
     test "step 6: Code Review, red after a rerun, same failure 3 times → R20 fix ticket owned by symphony" do
-      action = PrDecision.decide(%Facts{phase: :code_review, review: :approved, ci: :red, rerun_done: true, same_failure_streak: 3, failing_check: "test"})
+      action = PrDecision.decide(%Facts{phase: :code_review, review: :approved, mergeable: :clean, ci: :red, rerun_done: true, same_failure_streak: 3, failing_check: "test"})
       assert %Action{rule: "R20", kind: :file_fix_ticket, owner: :symphony, args: %{check: "test"}} = action
     end
 

@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.SituationTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Inbox.{FromRecord, Item}
   alias SymphonyElixir.{Pauses, Questions, Situation, TicketEvents, TicketPullRequest, TicketState, TransitionGuard}
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.TicketEvents.{Event, Types}
@@ -259,6 +260,13 @@ defmodule SymphonyElixir.SituationTest do
       assert %{kind: "blocked_by_ticket", word: "Blocked by TP-3", cause: "It is in QA."} = compute(record(parent))
       assert compute(record(%{parent | sub_issues: [%{id: "b", identifier: "TP-3", state: nil}]})).cause == "It is waiting on its sub-tickets."
     end
+
+    test "a parent whose sub-tickets all ended has its epic review next" do
+      ended = %{phase: "Waiting on sub-tickets", sub_issues: [%{id: "a", identifier: "TP-2", state: "Done"}]}
+
+      assert %{kind: "waiting_for_slot", word: "Starting", cause: "The epic review is next and a slot is free."} = compute(record(ended))
+      assert %{word: "Starting", cause: "The epic review is next and a slot is free."} = compute(record(%{phase: "Epic Review"}))
+    end
   end
 
   describe "paused_by_rule" do
@@ -448,7 +456,7 @@ defmodule SymphonyElixir.SituationTest do
 
       assert %{
                word: "Waiting for a slot",
-               cause: "Three runs are ahead of it; Symphony runs four at a time.",
+               cause: "The implementation run is next. Three runs are ahead of it; Symphony runs four at a time.",
                next: "Starts when a slot frees.",
                since: @later,
                waits_on: %{slot: "work slots full"}
@@ -458,26 +466,235 @@ defmodule SymphonyElixir.SituationTest do
     test "a Merging hold is no run ahead" do
       waiting = %{@id => %{since: @later}, "landing" => %{since: @at, ci_wait: true}}
 
-      assert compute(record(), [], slot_facts(%{slot_waiting: waiting})).cause == "No runs are ahead of it; Symphony runs four at a time."
+      assert compute(record(), [], slot_facts(%{slot_waiting: waiting})).cause == "The implementation run is next. No runs are ahead of it; Symphony runs four at a time."
     end
 
     test "a ticket that waited longer is ahead" do
       waiting = %{@id => %{since: @later}, "other" => %{since: @at}, "newer" => %{since: DateTime.add(@later, 60)}, "unknown" => %{}}
 
-      assert compute(record(), [], slot_facts(%{slot_waiting: waiting})).cause == "One run is ahead of it; Symphony runs four at a time."
+      assert compute(record(), [], slot_facts(%{slot_waiting: waiting})).cause == "The implementation run is next. One run is ahead of it; Symphony runs four at a time."
     end
 
     test "says none, a large count and no limit" do
-      assert compute(record(), [], slot_facts(%{})).cause == "No runs are ahead of it; Symphony runs four at a time."
-      assert compute(record(), [], slot_facts(%{limit: nil})).cause == "No runs are ahead of it."
-      assert compute(record(), [], slot_facts(%{limit: 20})).cause == "No runs are ahead of it; Symphony runs 20 at a time."
+      assert compute(record(), [], slot_facts(%{})).cause == "The implementation run is next. No runs are ahead of it; Symphony runs four at a time."
+      assert compute(record(), [], slot_facts(%{limit: nil})).cause == "The implementation run is next. No runs are ahead of it."
+      assert compute(record(), [], slot_facts(%{limit: 20})).cause == "The implementation run is next. No runs are ahead of it; Symphony runs 20 at a time."
+
+      # A decision that waits on something else names no run.
+      wait = %{kind: :wait, rule: "R28", owner: :symphony, reason: "Behind main", clears_when: "it is updated"}
+      waits = record(%{phase: "QA", pr_watch: watch(%{ci: :green}, %{decision: wait})})
+      assert compute(waits, [], slot_facts(%{})).cause == "No runs are ahead of it; Symphony runs four at a time."
     end
 
-    test "a ticket nothing holds reads it, with the watcher's reason when it has one" do
-      assert %{kind: "waiting_for_slot", cause: "No run is working on it.", since: @at, waits_on: nil} = compute(record())
+    test "a ticket nothing holds names the run it waits for, which starts on the next pass while a slot is free" do
+      assert %{kind: "waiting_for_slot", word: "Starting", cause: "The implementation run is next and a slot is free.", next: "It starts on the next dispatch pass.", since: @at} =
+               compute(record())
 
-      decided = record(%{pr_watch: watch(%{ci: :green}, %{decision: %{reason: "The head is green", since: @later}})})
-      assert %{cause: "The head is green.", since: @later} = compute(decided)
+      dispatch = %{kind: :dispatch, rule: "R27", args: %{phase: :qa}, reason: "The head is green", since: @later}
+      decided = record(%{phase: "QA", pr_watch: watch(%{ci: :green}, %{decision: dispatch})})
+      assert %{word: "Starting", cause: "The QA run is next and a slot is free: The head is green.", since: @later} = compute(decided)
+    end
+  end
+
+  describe "TP-1518: the status is always true" do
+    @conflict_fix %{kind: :ci_fix, rule: "R14", args: %{origin: :qa, cause: :conflict}, reason: "PR #915 conflicts with main: conflict fix run 1 of 3", outcome: :recorded}
+    @silent %{since: @at, ticks: 2, bound: nil, reason: "R14 decided `ci_fix`, but no run started and no wait is recorded"}
+    @stalled_reason %{
+      kind: :environment,
+      waits_on: %{condition: "run_not_started", head: "abc1234"},
+      text: "No run started: R14 decided a conflict fix run (PR #915 conflicts with main: conflict fix run 1 of 3), and no run started on it for two poll cycles",
+      releasable: true
+    }
+
+    defp conflicted(phase, decision, overrides \\ %{}) do
+      phase_key = phase |> String.downcase() |> String.replace(" ", "_") |> String.to_atom()
+      facts = %{phase: phase_key, ci: :green, mergeable: :dirty, pr_number: 915}
+      record(%{phase: phase, pr_watch: watch(facts, Map.merge(%{decision: Map.put(decision, :since, @later)}, overrides))})
+    end
+
+    test "TP-1508, 05:44 and 18:02: a conflict fix decided while dispatch is paused names the pause and the run, never a run sent" do
+      paused = live(%{symphony_pause: %{reason: "close to limit", paused_at: @at}})
+      situation = compute(conflicted("CI Fix", @conflict_fix), [], paused)
+
+      assert %{kind: "paused_by_rule", word: "Paused", next: "Starts when you resume dispatch.", since: @at} = situation
+      assert situation.cause == "Dispatch is paused: close to limit. The conflict fix run is next: PR #915 conflicts with main: conflict fix run 1 of 3."
+      refute situation.cause =~ "sent"
+
+      assert compute(conflicted("CI Fix", @conflict_fix), [], live(%{symphony_pause: %{}})).cause =~ "Dispatch is paused. The conflict fix run is next"
+    end
+
+    test "TP-1508, 19:11: the decision made while a run worked never says a run works once it ended" do
+      decision = %{kind: :wait, rule: "R9", owner: :agent, reason: "A run is working on the ticket", clears_when: "the run ends"}
+      ended = event("run.ended", %{run_id: "run-3", exit: "blocked"}, %{at: @later})
+
+      situation = compute(conflicted("QA", decision), [started(2, "qa"), ended])
+      assert %{kind: "waiting_for_ci", word: "Reading the PR", next: "The next step follows that read.", since: @later} = situation
+      assert situation.cause == "The last run ended at #{Situation.clock(@later)}; Symphony reads the PR again next."
+
+      assert compute(conflicted("QA", decision)).cause == "No run is working on it; Symphony reads the PR again next."
+    end
+
+    test "TP-1508, 19:11 onward: a conflict fix decided with two slots free is never Waiting for a slot" do
+      two_free = live(%{limit: 2})
+      situation = compute(conflicted("CI Fix", @conflict_fix), [], two_free)
+      assert %{kind: "waiting_for_slot", word: "Starting", next: "It starts on the next dispatch pass."} = situation
+      assert situation.cause == "The conflict fix run is next and a slot is free: PR #915 conflicts with main: conflict fix run 1 of 3."
+
+      # The watcher found it never started: it says so, and that Symphony tries again. No Inbox row
+      # stands yet, so the words claim none.
+      silent = conflicted("CI Fix", @conflict_fix, %{silent: @silent})
+      stalled = compute(silent, [], two_free)
+      assert %{kind: "waiting_for_slot", word: "Not started", next: "Symphony tries to start it again on its next poll."} = stalled
+      assert stalled.cause == "The conflict fix run is due and a slot is free, but no run started yet: PR #915 conflicts with main: conflict fix run 1 of 3."
+      assert FromRecord.items([silent], %{}) == []
+
+      # The dispatch pass paused it for that: the words come from that pause, and the Inbox lists it
+      # from the same pause.
+      held = %{silent | pause: pause([@stalled_reason, %{kind: :person, text: "Held by hand", releasable: true}])}
+      assert %{kind: "waiting_on_you", word: "Not started", next: "It is listed in the Inbox; Unblock starts the run.", and_more: 1, since: @at} = compute(held, [], two_free)
+      assert compute(held, [], two_free).cause == @stalled_reason.text <> "."
+      assert [%{kind: :blocked, issue_id: @id, ask: "No run started: R14" <> _rest}] = FromRecord.items([held], %{})
+
+      # Every slot in use: the slot is what it waits for, and the status names the run.
+      full = live(%{limit: 2, running: %{"a" => %{}, "b" => %{}}})
+      assert %{kind: "waiting_for_slot", word: "Waiting for a slot", cause: cause} = compute(conflicted("CI Fix", @conflict_fix), [], full)
+      assert cause == "The conflict fix run is next: PR #915 conflicts with main: conflict fix run 1 of 3. Two runs are ahead of it; Symphony runs two at a time."
+    end
+
+    test "each run a decision needs is named, and a decision that waits says on what in its own words" do
+      runs = [
+        {%{kind: :ci_fix, args: %{cause: :red}, reason: "The `test` check failed"}, "The CI Fix run"},
+        {%{kind: :land_agent, reason: "Branch protection held it"}, "The landing run"},
+        {%{kind: :dispatch, args: %{phase: :code_review}, reason: "The reviewer reads it"}, "The review"},
+        {%{kind: :dispatch, args: %{phase: :rework}, reason: "The rework run continues"}, "The rework run"},
+        {%{kind: :dispatch, args: %{phase: :in_progress}, reason: "The agent continues"}, "The implementation run"},
+        {%{kind: :dispatch, args: %{phase: :merging}, reason: "x"}, "The next run"},
+        {%{kind: :dispatch, reason: "The head is green"}, "The QA run"}
+      ]
+
+      for {decision, label} <- runs do
+        assert compute(conflicted("QA", Map.put(decision, :rule, "R")), [], live(%{limit: 1, running: %{"a" => %{}}})).cause =~ "#{label} is next", label
+      end
+
+      waits = [
+        {%{owner: :ci, reason: "Checks are running", clears_when: "the checks finish"}, "waiting_for_ci", "Waiting for CI", "It moves on when the checks finish."},
+        {%{owner: :github, reason: "GitHub is still computing whether PR #915 can merge", clears_when: "GitHub reports whether the PR can merge"}, "waiting_for_ci", "Waiting on GitHub",
+         "It moves on when GitHub reports whether the PR can merge."},
+        {%{owner: :person, reason: "A person marked PR #915 as a draft", clears_when: "the PR is marked ready for review."}, "waiting_on_you", "Waiting on you",
+         "It moves on when the PR is marked ready for review."},
+        {%{owner: :symphony, reason: "PR #915 is behind main", clears_when: nil}, "waiting_for_ci", "Waiting on Symphony", nil}
+      ]
+
+      for {wait, kind, word, next} <- waits do
+        decision = Map.merge(%{kind: :wait, rule: "R"}, wait)
+        assert %{kind: ^kind, word: ^word, cause: cause, next: ^next, since: @later} = compute(conflicted("QA", decision))
+        assert cause == wait.reason <> "."
+      end
+    end
+
+    test "when Symphony can't tell what the ticket waits on, it says exactly that, and the Inbox lists it" do
+      to_rework = conflicted("QA", %{kind: :to_rework, rule: "R15a", reason: "x"})
+      unknowns = [to_rework, record(%{phase: "Human Review"})]
+
+      for record <- unknowns do
+        assert %{kind: "waiting_on_you", word: "Not known", cause: "Symphony can't tell what it waits on.", next: "It is listed in the Inbox; check it now from its page.", since: @at} =
+                 compute(record)
+
+        assert Situation.not_known?(record, live())
+        assert [%{kind: :blocked, ask: "Symphony can't tell what it waits on", waiting_since: @at, review: %{clearing_condition: clears}}] = FromRecord.items([record], %{})
+        assert clears =~ "when Symphony can tell what it waits on"
+      end
+
+      # A record of no phase is no ticket Symphony tracks: it lists nothing and claims no row.
+      assert %{word: "Not known", next: "Check it now from its page."} = compute(record(%{phase: nil}))
+      refute Situation.not_known?(record(%{phase: nil}), live())
+
+      # A run working on it, or a known wait, is no unknown.
+      refute Situation.not_known?(to_rework, live(%{running: %{@id => %{run_kind: "qa"}}}))
+      assert FromRecord.items([to_rework], %{running: [%{issue_id: @id, run_kind: "qa"}]}) == []
+      refute Situation.not_known?(record(), live())
+    end
+
+    test "a ticket in a phase whose run waits on the watcher, which has not decided on its PR yet, reads the PR next" do
+      merging = record(%{phase: "Merging", pr_watch: watch(%{phase: :merging, ci: :green}, %{decision: nil})})
+      unread = [record(%{phase: "QA"}), record(%{phase: "Code Review"}), merging]
+
+      for record <- unread do
+        assert %{kind: "waiting_for_ci", word: "Reading the PR", cause: "The PR watcher reads its PR next.", next: "The next step follows that read.", since: @at} = compute(record)
+        refute Situation.not_known?(record, live())
+        assert FromRecord.items([record], %{}) == []
+      end
+
+      # A decision made in the phase the ticket has left (R25 moved it from CI Fix to QA) is done: the
+      # watcher reads the PR in its new phase next, and the Inbox lists nothing.
+      returned = %{conflicted("CI Fix", %{kind: :return_to_origin, rule: "R25", args: %{origin: :qa}, reason: "x"}) | phase: "QA"}
+      assert %{word: "Reading the PR", cause: "The PR watcher reads its PR next."} = compute(returned)
+      refute Situation.not_known?(returned, live())
+      assert FromRecord.items([returned], %{}) == []
+
+      # A decision whose facts name no phase it was made in stands in the ticket's phase.
+      unread_facts = record(%{phase: "CI Fix", pr_watch: watch(%{phase: nil, ci: :green, mergeable: :dirty}, %{decision: Map.put(@conflict_fix, :since, @later)})})
+      assert %{word: "Starting", cause: "The conflict fix run is next and a slot is free: PR #915 conflicts with main: conflict fix run 1 of 3."} = compute(unread_facts)
+
+      # CI Fix runs with no decision: its run is next.
+      assert %{word: "Starting", cause: "The CI Fix run is next and a slot is free."} = compute(record(%{phase: "CI Fix"}))
+    end
+
+    test "a decision that waits says what it waits on with or without what clears it" do
+      decision = %{kind: :wait, rule: "R", owner: :person, reason: "A person marked PR #915 as a draft"}
+      assert %{word: "Waiting on you", next: nil} = compute(conflicted("QA", decision))
+    end
+
+    # Each status the Director can show, and the states where its words would be false: none of them shows it.
+    test "no status is shown in a state where its words are false" do
+      decisions = [
+        nil,
+        @conflict_fix,
+        %{kind: :dispatch, rule: "R27", args: %{phase: :qa}, reason: "The head is green"},
+        %{kind: :wait, rule: "R9", owner: :agent, reason: "A run is working on the ticket", clears_when: "the run ends"},
+        %{kind: :wait, rule: "R16", owner: :github, reason: "GitHub is still computing", clears_when: "GitHub reports"},
+        %{kind: :wait, rule: "R24", owner: :ci, reason: "Checks are running", clears_when: "the checks finish"}
+      ]
+
+      lives = [
+        live(%{limit: 2}),
+        live(%{limit: 2, running: %{"a" => %{}, "b" => %{}}}),
+        live(%{limit: 2, symphony_pause: %{reason: "close to limit"}}),
+        live(%{limit: 2, slot_waiting: %{@id => %{since: @at}}, running: %{"a" => %{}, "b" => %{}}}),
+        live(%{limit: 2, running: %{@id => %{run_kind: "ci_fix", started_at: @at}}})
+      ]
+
+      pauses = [nil, pause([@stalled_reason])]
+
+      phases = ["Todo", "In Progress", "QA", "CI Fix", "Merging", "Human Review"]
+
+      for phase <- phases, decision <- decisions, silent <- [nil, @silent], live <- lives, held <- pauses do
+        # The silence is the watcher's record of its decision: a ticket with no decision has none.
+        silent = if decision, do: silent
+        record = if decision, do: conflicted(phase, decision, %{silent: silent}), else: record(%{phase: phase})
+        record = %{record | pause: held}
+        situation = compute(record, [], live)
+        state = inspect({phase, decision && decision.rule, silent != nil, live})
+        free? = map_size(live.running) < live.limit
+        running? = Map.has_key?(live.running, @id)
+
+        if situation.word == "Waiting for a slot", do: assert(not free? or Map.has_key?(live.slot_waiting, @id), state)
+        if situation.kind == "working", do: assert(running?, state)
+        if situation.word == "Paused", do: assert(live.symphony_pause != nil, state)
+        if situation.word == "Starting", do: assert(free? and live.symphony_pause == nil and silent == nil, state)
+        if situation.word == "Not started", do: assert((free? and silent != nil) or held != nil, state)
+        if situation.word == "Not known", do: assert(Situation.not_known?(record, live), state)
+        if situation.word == "Reading the PR", do: assert(match?(%{owner: :agent}, decision) or is_nil(decision), state)
+
+        # A status that says the Inbox lists the ticket is shown only where the Inbox has its row.
+        if situation.next =~ "listed in the Inbox",
+          do: assert(Situation.not_known?(record, live) or Item.from_pause(record, record.pause) != nil, state)
+
+        if situation.word == "Waiting for CI", do: assert(match?(%{owner: :ci}, decision), state)
+        refute situation.cause =~ "already sent", state
+        refute situation.cause =~ "A run is working" and not running?, state
+        if running?, do: assert(situation.kind == "working", state)
+      end
     end
   end
 
@@ -681,7 +898,13 @@ defmodule SymphonyElixir.SituationTest do
 
     test "writes one event per change, with the old and the new kind and the cause" do
       assert {:ok, %Event{payload: first}} = Situation.sync(stored_record(), live(arrange("waiting_for_slot")))
-      assert first == %{to: "waiting_for_slot", word: "Waiting for a slot", cause: "No runs are ahead of it; Symphony runs four at a time.", since: "2026-10-30T09:00:00Z"}
+
+      assert first == %{
+               to: "waiting_for_slot",
+               word: "Waiting for a slot",
+               cause: "The implementation run is next. No runs are ahead of it; Symphony runs four at a time.",
+               since: "2026-10-30T09:00:00Z"
+             }
 
       assert Situation.sync(stored_record(), live(arrange("waiting_for_slot"))) == :unchanged
 
@@ -705,6 +928,6 @@ defmodule SymphonyElixir.SituationTest do
   end
 
   test "a read of a record with no ticket reads an empty ledger" do
-    assert Situation.read(nil, live()).kind == "waiting_for_slot"
+    assert %{kind: "waiting_on_you", word: "Not known"} = Situation.read(nil, live())
   end
 end

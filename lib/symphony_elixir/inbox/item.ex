@@ -14,7 +14,8 @@ defmodule SymphonyElixir.Inbox.Item do
   - `:clarify`: a ticket the quality gate holds for clarification or skipped, with its score, its
     round and what the gate found;
   - `:blocked`: a ticket whose pause has a reason the Director may release (`SymphonyElixir.Pauses`),
-    with that reason and what clears it; the Director lifts it with `Unblock`;
+    with that reason and what clears it; the Director lifts it with `Unblock`. A ticket Symphony
+    can't tell what it waits on is listed as one too (`from_not_known/1`);
   - `:waiting`: a CI Fix ticket the watcher holds waiting on CI, with what it waits on and what clears
     it. It is the one kind that asks nothing of the Director (`on_director?/1`): the checks report and
     the ticket moves on by itself.
@@ -246,6 +247,20 @@ defmodule SymphonyElixir.Inbox.Item do
   end
 
   def from_ci_wait(_record), do: nil
+
+  @doc """
+  The `:blocked` item of `record` (a normalized `SymphonyElixir.TicketState`) when Symphony can't
+  tell what it waits on (`SymphonyElixir.Situation.not_known?/2`, which the caller checked): the
+  ticket page's "Not known" words, since its phase began, and what clears it.
+  """
+  @spec from_not_known(TicketState.t()) :: t()
+  def from_not_known(record) do
+    text = "Symphony can't tell what it waits on"
+
+    record
+    |> record_item(:blocked, text, record.phase_at)
+    |> Map.put(:review, %{reason: text, clearing_condition: "when Symphony can tell what it waits on, or a person moves it"})
+  end
 
   @doc "Whether the item waits on the Director: every kind but `:waiting`, which only shows what the ticket waits on."
   @spec on_director?(t()) :: boolean()

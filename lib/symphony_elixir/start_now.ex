@@ -12,9 +12,17 @@ defmodule SymphonyElixir.StartNow do
   Symphony's pause, the repository's pause, an open Question, and a run already working on the
   ticket. A pause answers with the line the passes that skip candidates already name it by
   (`SymphonyElixir.Pauses.dispatch_skip_reason/1`, `repository_skip_reason/1`).
+
+  Start does what the machine decided (`follow/2`): a ticket whose PR watcher decided a CI Fix run
+  (a conflict with the base, a red head) gets that run, not its phase's: the watcher reads its PR at
+  once and applies the decision, which moves it to CI Fix, and the run started there is the fix. A
+  review or QA run never starts on a PR that conflicts with its base.
   """
 
-  alias SymphonyElixir.{Config, Orchestrator, TicketMoves}
+  alias SymphonyElixir.{CiFix, Config, Orchestrator, PrWatch, TicketMoves}
+  alias SymphonyElixir.Linear.Issue
+
+  @not_sent "Its PR needs a CI Fix run first, and Symphony could not send it to CI Fix yet; try again in a moment."
 
   @typedoc """
   The facts a start is judged on: the ticket's phase, the lines of the pauses that stop it (nil
@@ -44,6 +52,63 @@ defmodule SymphonyElixir.StartNow do
       :ok -> fact_refusal(facts)
     end
   end
+
+  @doc """
+  The ticket to start, once the PR watcher's decision on it is followed (see the moduledoc): `issue`
+  as it is when the decision is its phase's own run, the ticket read again in CI Fix when the watcher
+  decided a fix and applied it on Check Now, or the refusal: a fix the watcher could not apply, or a
+  review or QA run on a PR that conflicts with its base. `opts`: `:watch` (the watcher's record of an
+  issue id), `:check` (Check Now by identifier), `:fetch` (the issue by identifier), `:settings`.
+  """
+  @spec follow(Issue.t(), keyword()) :: {:ok, Issue.t()} | {:error, {:start_refused, String.t()}} | {:error, term()}
+  def follow(%Issue{} = issue, opts) do
+    settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
+    watch = Keyword.get(opts, :watch, &PrWatch.watch/1).(issue.id)
+
+    cond do
+      CiFix.in_state?(issue.state, settings) -> {:ok, issue}
+      fix_decided?(watch) -> fix_first(issue, settings, opts)
+      true -> phase_run(issue, watch, settings)
+    end
+  end
+
+  defp phase_run(issue, watch, settings) do
+    if conflicting_review?(issue.state, watch, settings), do: {:error, {:start_refused, conflict_reason(watch)}}, else: {:ok, issue}
+  end
+
+  defp fix_decided?(%{decision: %{kind: :ci_fix}}), do: true
+  defp fix_decided?(_watch), do: false
+
+  # The watcher applies its own decision: Check Now reads the PR and moves the ticket to CI Fix. Read
+  # again, a ticket the watcher no longer sends there (someone resolved the conflict) starts its phase's
+  # run, unless its PR still conflicts.
+  defp fix_first(issue, settings, opts) do
+    check = Keyword.get(opts, :check, &PrWatch.check/1)
+    fetch = Keyword.fetch!(opts, :fetch)
+
+    with {:ok, record} <- check.(issue.identifier),
+         {:ok, %Issue{} = moved} <- fetch.(issue.identifier) do
+      watch = SymphonyElixir.TicketState.pr_watch(record)
+
+      cond do
+        CiFix.in_state?(moved.state, settings) -> {:ok, moved}
+        fix_decided?(watch) -> {:error, {:start_refused, @not_sent}}
+        true -> phase_run(moved, watch, settings)
+      end
+    else
+      _failed -> {:error, {:start_refused, @not_sent}}
+    end
+  end
+
+  defp conflicting_review?(state, %{facts: %{mergeable: :dirty}}, settings) when is_binary(state) do
+    tracker = settings.tracker
+    Enum.any?([tracker.code_review_state, tracker.qa_state], &same_phase?(normalize(state), &1))
+  end
+
+  defp conflicting_review?(_state, _watch, _settings), do: false
+
+  defp conflict_reason(%{facts: %{pr_number: number}}) when is_integer(number), do: "PR ##{number} conflicts with its base: a conflict fix runs first, never a review on it."
+  defp conflict_reason(_watch), do: "Its PR conflicts with its base: a conflict fix runs first, never a review on it."
 
   # Where the ticket stands: a phase a start cannot answer for. `nil` is a ticket the payload
   # found no record of; the rest refuse in the phase's own words.

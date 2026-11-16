@@ -320,7 +320,7 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
   end
 
   describe "ci_fix" do
-    test "a red Code Review head goes to CI Fix with its origin, its failure and one red attempt spent" do
+    test "a red Code Review head goes to CI Fix with its origin and its failure; the fix is pending, nothing spent until its run ends" do
       action = action("R21", :ci_fix, args: %{origin: :code_review, cause: :red})
 
       assert %{outcome: :applied, attempts: attempts, fix: %{ci_failure: failure}} = Apply.apply(action, ctx(:code_review))
@@ -328,8 +328,10 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert_received {:fetch_failed_log, "11", [repo: "acme/app"]}
       assert_received {:move, @issue_id, "CI Fix"}
       assert origin() == "Code Review"
-      assert %{red: 1, conflict: 0, fix_failures: [%{check: "specs", error: "ERROR: specs failed", head_sha: "head-1"}]} = attempts
-      assert attempts.streak == attempts.fix_failures
+      assert %{red: 0, conflict: 0, fix_failures: [], streak: []} = attempts
+
+      assert %{head_sha: "head-1", cause: :red, since: @now, prepaid: false, failure: %{check: "specs", error: "ERROR: specs failed", head_sha: "head-1"}} =
+               attempts.pending
 
       assert %{commit_sha: "head-1", head_ref_name: "auto/TP-7", failed_checks: [%{name: "specs"}], approved: false} = failure
       assert failure.earlier_failures == []
@@ -347,12 +349,14 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
 
       refute_received {:fetch_failed_log, _run_id, _opts}
       assert %{log_excerpt: "the log read this tick", first_error: "ERROR: the log", earlier_failures: ^earlier} = fix
-      assert attempts.fix_failures == earlier ++ [failure]
-      assert attempts.streak == earlier ++ [failure]
+      # The head's failure is what its run spends as evidence once it ends.
+      assert %{red: 1, fix_failures: ^earlier, pending: %{failure: ^failure}} = attempts
 
       # A failure read for another head is not this one's.
       ctx = ctx(:qa, read: read(failure: %{failure | head_sha: "head-0"}))
-      assert %{attempts: %{fix_failures: [%{error: "ERROR: specs failed", head_sha: "head-1"}]}} = Apply.apply(action("R21", :ci_fix, args: %{origin: :qa, cause: :red}), ctx)
+
+      assert %{attempts: %{pending: %{failure: %{error: "ERROR: specs failed", head_sha: "head-1"}}}} =
+               Apply.apply(action("R21", :ci_fix, args: %{origin: :qa, cause: :red}), ctx)
     end
 
     test "a red Merging head has auto-merge turned off first, and is marked approved" do
@@ -368,11 +372,13 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert origin() == "Merging"
     end
 
-    test "a conflicting Merging PR goes to CI Fix with the conflict, auto-merge off and one conflict attempt spent" do
+    test "a conflicting Merging PR goes to CI Fix with the conflict and auto-merge off, its conflict fix pending" do
       ctx = ctx(:merging, facts: %{auto_merge: :armed}, attempts: %{Attempts.new() | conflict: 1})
 
-      assert %{outcome: :applied, attempts: %{conflict: 2, red: 0}, fix: %{pr_conflict: conflict}} =
+      assert %{outcome: :applied, attempts: attempts, fix: %{pr_conflict: conflict}} =
                Apply.apply(action("R14", :ci_fix, args: %{origin: :merging, cause: :conflict}), ctx)
+
+      assert %{conflict: 1, red: 0, pending: %{cause: :conflict, head_sha: "head-1", failure: nil}} = attempts
 
       assert_received {:comment, @issue_id, comment}
       assert comment =~ "because it conflicts with the base branch"
@@ -383,10 +389,36 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     test "in CI Fix the ticket stays and the next run takes the fix" do
       ctx = ctx(:ci_fix, facts: %{origin: :qa})
 
-      assert %{outcome: :applied, attempts: %{red: 1}, fix: %{ci_failure: %{approved: false}}} =
-               Apply.apply(action("R21", :ci_fix, args: %{origin: :qa, cause: :red}), ctx)
+      red = action("R21", :ci_fix, args: %{origin: :qa, cause: :red})
+      assert %{outcome: :applied, attempts: %{red: 0, pending: %{cause: :red}}, fix: %{ci_failure: %{approved: false}}} = Apply.apply(red, ctx)
 
       refute_received {:move, _id, _state}
+    end
+
+    test "TP-1518: in CI Fix a fix pending on the head is recorded as it is, its run still to start or end" do
+      conflict = action("R14", :ci_fix, args: %{origin: :qa, cause: :conflict}, reason: "PR #7 conflicts with main: conflict fix run 1 of 3")
+      attempts = Attempts.pending(Attempts.new(), "head-1", :conflict, nil, @now)
+
+      assert %{outcome: :recorded, action: ^conflict, attempts: ^attempts} = Apply.apply(conflict, ctx(:ci_fix, attempts: attempts))
+      refute_received {:move, _id, _state}
+
+      # Pending for another cause or head, the fix is new and applied.
+      assert %{outcome: :applied} = Apply.apply(action("R21", :ci_fix, args: %{origin: :qa, cause: :red}), ctx(:ci_fix, attempts: attempts))
+      other_head = Attempts.pending(Attempts.new(), "head-0", :conflict, nil, @now)
+      assert %{outcome: :applied, attempts: %{pending: %{head_sha: "head-1"}}} = Apply.apply(conflict, ctx(:ci_fix, attempts: other_head))
+    end
+
+    test "TP-1518: a fix decided on a head whose run never ended is sent to CI Fix again, whatever the stay's ledger says" do
+      conflict = action("R14", :ci_fix, args: %{origin: :qa, cause: :conflict})
+      attempts = Attempts.pending(Attempts.new(), "head-1", :conflict, nil, @now)
+
+      applied = [
+        %{head_sha: "head-1", rule: "R14", kind: :ci_fix, at: @now},
+        %{head_sha: "head-1", rule: "R25", kind: :return_to_origin, at: @now}
+      ]
+
+      assert %{outcome: :applied, attempts: %{conflict: 0, pending: %{since: @now}}} = Apply.apply(conflict, ctx(:qa, attempts: attempts, applied: applied))
+      assert_received {:move, @issue_id, "CI Fix"}
     end
 
     test "a step that fails moves nothing and spends nothing" do

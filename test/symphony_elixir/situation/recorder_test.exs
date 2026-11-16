@@ -51,7 +51,8 @@ defmodule SymphonyElixir.Situation.RecorderTest do
     snapshot(pid)
 
     assert kinds() == ["waiting_for_slot"]
-    assert kinds("no-phase") == ["waiting_for_slot"]
+    # A record with no phase: Symphony can't tell what it waits on, and says so.
+    assert kinds("no-phase") == ["waiting_on_you"]
     assert kinds("shipped") == []
   end
 

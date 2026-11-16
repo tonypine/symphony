@@ -67,6 +67,7 @@ defmodule SymphonyElixir.PrDecision do
   @green [:green, :none]
   @ci_states [:pending, :red, :required_missing | @green]
   @mergeable_now [:clean, :unstable]
+  @conflict_free [:clean, :behind, :unstable, :blocked]
 
   @phase_names %{
     in_progress: "In Progress",
@@ -253,9 +254,9 @@ defmodule SymphonyElixir.PrDecision do
       },
       %{
         id: "R16",
-        phases: [:merging],
-        when: "GitHub has not computed whether the PR can merge",
-        then: "`wait` on `github`",
+        phases: @pr_phases,
+        when: "GitHub has not computed whether the PR can merge (`unknown` is never conflict-free), whatever CI says",
+        then: "`wait` on `github`; the watcher reads the PR again",
         guard: &mergeable_unknown?/1,
         build: &wait_for_mergeability/1
       },
@@ -423,7 +424,7 @@ defmodule SymphonyElixir.PrDecision do
   defp conflict_fixable?(facts), do: conflicting?(facts) and facts.conflict_attempts < @max_conflict_attempts
   defp conflict_competed?(facts), do: conflict_exhausted?(facts) and facts.competing != []
   defp conflict_alone?(facts), do: conflict_exhausted?(facts) and facts.competing == []
-  defp mergeable_unknown?(facts), do: not_red?(facts) and facts.mergeable == :unknown
+  defp mergeable_unknown?(facts), do: idle_pr?(facts) and facts.mergeable == :unknown
   defp required_missing?(facts), do: ci_decides?(facts) and facts.ci == :required_missing
   defp human_only_red?(facts), do: red?(facts, :human_only)
   defp cancelled_red?(facts), do: red?(facts, :cancelled) and facts.cancel_reruns < @max_cancel_reruns
@@ -481,10 +482,11 @@ defmodule SymphonyElixir.PrDecision do
   defp conflicting?(facts), do: idle_pr?(facts) and facts.mergeable == :dirty
   defp conflict_exhausted?(facts), do: conflicting?(facts) and facts.ahead == [] and facts.conflict_attempts >= @max_conflict_attempts
 
-  # Not conflicting: from here on a rule reads the checks, and the mergeability only in Merging.
-  defp clean_pr?(facts) do
-    idle_pr?(facts) and facts.mergeable in [:clean, :behind, :unstable, :blocked, :unknown]
-  end
+  # Not conflicting, as GitHub said: from here on a rule reads the checks, and the mergeability only in
+  # Merging. A PR GitHub has not computed yet (`unknown`) is not known to be conflict-free, so it is
+  # never clean: R16 waits on GitHub for it in every phase, and nothing written for a clean PR (a
+  # return from CI Fix, a review, a QA run) acts on it.
+  defp clean_pr?(facts), do: idle_pr?(facts) and facts.mergeable in @conflict_free
 
   defp red?(facts, kind), do: ci_decides?(facts) and facts.ci == :red and facts.red_kind == kind
 
@@ -609,7 +611,7 @@ defmodule SymphonyElixir.PrDecision do
   end
 
   defp wait_for_mergeability(facts) do
-    wait("R16", "GitHub is still computing whether #{pr(facts)} can merge", :github, "GitHub reports whether the PR can merge")
+    wait("R16", "GitHub is still computing whether #{pr(facts)} can merge: Symphony reads it again", :github, "GitHub reports whether the PR can merge")
   end
 
   defp ask_about_missing_check(facts) do
