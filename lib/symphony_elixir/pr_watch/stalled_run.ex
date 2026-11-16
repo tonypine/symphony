@@ -35,9 +35,9 @@ defmodule SymphonyElixir.PrWatch.StalledRun do
   `opts`: `:at`.
   """
   @spec hold(Pauses.subject(), map() | nil, keyword()) :: :held | :none
-  def hold(ticket, watch, opts \\ [])
+  def hold(ticket, watch, opts \\ []), do: do_hold(ticket, watch, opts)
 
-  def hold(ticket, %{decision: %{kind: kind} = decision} = watch, opts) when kind in @run_kinds do
+  defp do_hold(ticket, %{decision: %{kind: kind} = decision} = watch, opts) when kind in @run_kinds do
     if SilentWait.listed?(Map.get(watch, :silent)) do
       text = "No run started: #{decision.rule} decided #{run_words(decision)}, and no run started on it for two poll cycles"
       waits_on = Map.reject(%{condition: @condition, head: Map.get(watch, :head_sha)}, fn {_field, value} -> is_nil(value) end)
@@ -57,7 +57,7 @@ defmodule SymphonyElixir.PrWatch.StalledRun do
     end
   end
 
-  def hold(_ticket, _watch, _opts), do: :none
+  defp do_hold(_ticket, _watch, _opts), do: :none
 
   @doc """
   Lifts the pause `hold/3` set on `ticket` once the watcher's newest record (`watch`) has another
