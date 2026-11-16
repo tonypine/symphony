@@ -625,6 +625,13 @@ defmodule SymphonyElixir.SituationTest do
         assert FromRecord.items([record], %{}) == []
       end
 
+      # A decision made in the phase the ticket has left (R25 moved it from CI Fix to QA) is done: the
+      # watcher reads the PR in its new phase next, and the Inbox lists nothing.
+      returned = %{conflicted("CI Fix", %{kind: :return_to_origin, rule: "R25", args: %{origin: :qa}, reason: "x"}) | phase: "QA"}
+      assert %{word: "Reading the PR", cause: "The PR watcher reads its PR next."} = compute(returned)
+      refute Situation.not_known?(returned, live())
+      assert FromRecord.items([returned], %{}) == []
+
       # CI Fix runs with no decision: its run is next.
       assert %{word: "Starting", cause: "The CI Fix run is next and a slot is free."} = compute(record(%{phase: "CI Fix"}))
     end

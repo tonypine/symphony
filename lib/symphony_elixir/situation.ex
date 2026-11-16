@@ -534,8 +534,15 @@ defmodule SymphonyElixir.Situation do
     end
   end
 
-  defp decision(%{record: %{pr_watch: %{decision: %{} = decision}}}), do: decision
+  # The watcher's decision on the ticket in the phase it is in. A decision made in another phase (R25
+  # moved it back from CI Fix) is done: the watcher reads the PR in the new phase next.
+  defp decision(%{record: %{pr_watch: %{decision: %{} = decision}}} = ctx), do: if(decided_here?(ctx), do: decision)
   defp decision(_ctx), do: nil
+
+  defp decided_here?(%{facts: %PrDecision.Facts{phase: phase}, phase: current}) when is_atom(phase) and not is_nil(phase),
+    do: phase |> Atom.to_string() |> String.replace("_", " ") == current
+
+  defp decided_here?(_ctx), do: true
 
   defp silent?(%{record: %{pr_watch: watch}}), do: SilentWait.listed?(Map.get(watch, :silent))
 
