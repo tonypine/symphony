@@ -3277,7 +3277,13 @@ Rules:
   to `Rework` whatever CI says. The QA run MUST dispatch only on a green head, whether the poll, a
   retry or the continuation of an earlier run (the reviewer's approve moving the ticket into `QA`)
   dispatches it; a held-back run records `code_review_head_not_green` or `qa_head_not_green`, with
-  the PR watcher's reason, once per head and reason. A
+  the PR watcher's reason, once per head and reason. Where the repo's `macos_app` playbook builds
+  an app on a QA host, the QA run also waits for Symphony's build of the head (the QA pre-build,
+  `docs/configuration.md`), and the QA run never builds the app itself: a build queued or running
+  holds the ticket on a `build` pause reason that the build's end clears; a build whose command
+  failed, or made no app, sends the ticket to `Rework` with no QA run, each time it arrives in `QA`
+  on that tree; a build that could not run holds it on a reason the Director may release, and the
+  build is asked for again only by a new head, Symphony's start or that release. A
   QA `fail` or block on a head the PR watcher reads as red, missing a required check, or
   conflicting is recorded `blocked` with the component `ci` and leaves the ticket in `QA` for the
   watcher to route; it MUST NOT go to `Rework`. A red head in `Code Review` once approved, in

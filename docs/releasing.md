@@ -122,10 +122,11 @@ job) runs the same script on the escript, without the service step only the rele
 needs. Locally, `make smoke` does the same. A pull request that changes how the release is
 built or started (`rel/`, `mix.exs`, `mix.lock`, `mise.toml`, the `Makefile`, `config/`'s
 `config.exs` and `runtime.exs`, `ReleaseNode`, `ReleaseCookie`, the `CLI` entry point and
-`Paths`, `scripts/release/`, the pinned Xcode, the sample `symphony.yml`, or the `release` and
-`release-smoke` workflows) also runs the [`release-smoke`
-workflow](../.github/workflows/release-smoke.yml): it builds the release and the app on `macos-26` as
-`release` does and runs the whole script on the app's launcher, service step included.
+`Paths`, `scripts/release/`, the pinned Xcode, the sample `symphony.yml`, or the `release`
+workflow) also runs the Mac checks' `smoke` group (`scripts/ci/mac-check-groups.sh`,
+[`mac-checks.yml`](../.github/workflows/mac-checks.yml)): on the self-hosted runner it builds the
+release and the app as `release` does and runs the whole script on the app's launcher, service
+step included. Every merge to `main` runs it again in the release gate.
 
 The script gives each run a fresh `HOME` and creates an empty git repo there at every
 `repo: ~/...` path the config names, since `symphony check` rejects a `strategy: worktree`

@@ -1,249 +1,93 @@
 name: macos
 
-# `macos` is a required check, so the workflow runs on every pull request and the
-# `changes` job decides whether to build. On pushes to `main` the path filter is enough.
+# The Mac checks of a pull request. `macos` is a required check, so the workflow runs on every
+# pull request; the `changes` job reads what the pull request changed and turns on only the groups
+# of checks those paths feed (mac-checks.yml, one job on the self-hosted runner). A pull request
+# that changes none of them runs no Mac job at all.
+#
+# What a pull request skips is not skipped for good: every group runs on main, from a clean build,
+# as the release gate (release.yml), before anything is published. While that gate is red on main,
+# every pull request runs every group, so the pull request that fixes it proves the fix before the
+# merge, and no other pull request merges onto a broken main unchecked.
+
 on:
   pull_request:
-  push:
-    branches:
-      - main
-    paths:
-      - "macos/**"
-      - "priv/qa_driver/**"
-      - "scripts/install-macos.sh"
-      - "scripts/ci/xcode-developer-dir.sh"
-      - "scripts/ci/xcode-developer-dir-test.sh"
-      - "scripts/qa/**"
-      - ".xcode-version"
-      - "test/support/**/*.py"
-      - "test/support/stubs/answers/**"
-      - "test/fixtures/api/**"
-      - ".github/workflows/macos.yml"
 
 permissions:
   contents: read
 
 concurrency:
   group: macos-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   changes:
     name: changes
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     outputs:
-      macos: ${{ steps.diff.outputs.macos }}
+      any: ${{ steps.groups.outputs.any }}
+      build: ${{ steps.groups.outputs.build }}
+      unit: ${{ steps.groups.outputs.unit }}
+      sandbox: ${{ steps.groups.outputs.sandbox }}
+      helpers: ${{ steps.groups.outputs.helpers }}
+      driver: ${{ steps.groups.outputs.driver }}
+      speed: ${{ steps.groups.outputs.speed }}
+      update: ${{ steps.groups.outputs.update }}
+      smoke: ${{ steps.groups.outputs.smoke }}
+      installer: ${{ steps.groups.outputs.installer }}
 
     steps:
       - name: Checkout
-        if: ${{ github.event_name == 'pull_request' }}
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 2
           persist-credentials: false
 
-      - name: Check for macOS changes
-        id: diff
+      - name: Choose the groups of checks
+        id: groups
         env:
-          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "$EVENT_NAME" != "pull_request" ]; then
-            echo "macos=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # HEAD is the PR merged into its base, so HEAD^1 is the base.
-          changed="$(git diff --name-only HEAD^1 HEAD)"
-          echo "$changed"
-          if echo "$changed" | grep -qE '^(macos/|priv/qa_driver/|scripts/install-macos\.sh$|scripts/ci/xcode-developer-dir(-test)?\.sh$|scripts/qa/|\.xcode-version$|test/support/.*\.py$|test/support/stubs/answers/|test/fixtures/api/|\.github/workflows/macos\.yml$)'; then
-            echo "macos=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "macos=false" >> "$GITHUB_OUTPUT"
-          fi
+          # HEAD is the pull request merged into its base, so HEAD^1 is the base.
+          git diff --name-only HEAD^1 HEAD > changed.txt
+          cat changed.txt
+          gate="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow release --branch main --event push --limit 1 --json conclusion --jq '.[0].conclusion // ""' || true)"
+          echo "the release gate's last run on main: ${gate:-unknown}"
+          sh scripts/ci/mac-check-groups.sh "$gate" < changed.txt | tee -a "$GITHUB_OUTPUT"
 
-  build:
-    name: macos build
-    # The app targets macOS 26 (DD3): its tests run only on 26 or later, built with Xcode 26.
-    runs-on: macos-26
-    timeout-minutes: 30
+  checks:
+    name: checks
     needs: changes
-    if: ${{ needs.changes.outputs.macos == 'true' }}
+    if: ${{ needs.changes.outputs.any == 'true' }}
+    uses: ./.github/workflows/mac-checks.yml
+    with:
+      ref: ${{ github.head_ref }}
+      fail_fast: true
+      build: ${{ needs.changes.outputs.build == 'true' }}
+      unit: ${{ needs.changes.outputs.unit == 'true' }}
+      sandbox: ${{ needs.changes.outputs.sandbox == 'true' }}
+      helpers: ${{ needs.changes.outputs.helpers == 'true' }}
+      driver: ${{ needs.changes.outputs.driver == 'true' }}
+      speed: ${{ needs.changes.outputs.speed == 'true' }}
+      update: ${{ needs.changes.outputs.update == 'true' }}
+      smoke: ${{ needs.changes.outputs.smoke == 'true' }}
+      installer: ${{ needs.changes.outputs.installer == 'true' }}
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          persist-credentials: false
-
-      - name: Test the Xcode selection script
-        run: sh scripts/ci/xcode-developer-dir-test.sh
-
-      # The shared test helpers (test/support/README.md): the update feed, gh and Linear
-      # stand-ins and the release pair's layout, on made-up inputs. No build, no sudo.
-      - name: Test the shared test helpers
-        run: python3 --version && make support-test
-
-      - name: Select the pinned Xcode
-        run: echo "DEVELOPER_DIR=$(sh scripts/ci/xcode-developer-dir.sh)" >> "$GITHUB_ENV"
-
-      - name: Show toolchain
-        run: |
-          sw_vers
-          xcodebuild -version
-          swift --version
-
-      # Fails on any expression the type-checker takes over 100ms on. Swift gives up on an
-      # expression after a fixed budget, and the budget runs out sooner on an older Xcode than
-      # on the one here, so an expression near the limit on this runner is a build failure on
-      # another: see TicketPage.swift's ticketState. The guard (its limit, flags and check) lives
-      # in macos/Makefile's `guarded-%`, which a run's Build step also calls (`make guarded-build`),
-      # so the two cannot drift.
-      - name: Build app
-        working-directory: macos
-        run: time make guarded-app
-
-      - name: Run tests
-        working-directory: macos
-        run: time swift test
-
-      # An agent's sandbox can't write the per-user temp dir, where a sandboxed Foundation stages
-      # its atomic writes, so a plain `swift build` fails there. Symphony gives a local macOS
-      # Claude session the env that routes them elsewhere (`SymphonyElixir.AgentTmpDir.env/3`);
-      # this builds and tests with that env in a sandbox that also denies those writes.
-      - name: Build and test in a sandbox like an agent's
-        working-directory: macos
-        run: |
-          profile='(version 1)(allow default)(deny file-write* (subpath "/private/var/folders"))'
-          scratch="$RUNNER_TEMP/agent-sandbox"
-          mkdir -p "$scratch/tmp"
-          export TMPDIR="$scratch/tmp" SWIFTPM_MODULECACHE_OVERRIDE="$scratch/tmp/swiftpm-module-cache"
-          if sandbox-exec -p "$profile" swift build --disable-sandbox --build-system native --scratch-path "$scratch/build" > "$scratch/without-env.log" 2>&1; then
-            echo "swift build passed in the sandbox without DIRHELPER_USER_DIR_SUFFIX, so the sandbox no longer stands in for an agent's"
-            exit 1
-          fi
-          tail -n 3 "$scratch/without-env.log"
-          export DIRHELPER_USER_DIR_SUFFIX=symphony/none
-          time sandbox-exec -p "$profile" swift build --disable-sandbox --build-system native --scratch-path "$scratch/build"
-          time sandbox-exec -p "$profile" swift test --disable-sandbox --build-system native --scratch-path "$scratch/build"
-
-      - name: Test the update helper
-        working-directory: macos
-        run: time sh Tests/update-helper-test.sh
-
-      # The QA host's signing identity (docs/configuration.md, QA host setup), in a temporary
-      # keychain with a fake sudo. The real trust step stays off here: the macOS 26 runner refuses
-      # to allow admin trust changes in its authorization database (-60005), and without that the
-      # trust waits for a dialog no one can answer. The timeout turns any wait into a failure.
-      - name: Test the QA signing identity script
-        timeout-minutes: 5
-        run: |
-          time sh scripts/qa/install-test-signing-identity-test.sh
-
-      # QA's `appearance` launch: the library Symphony injects turns an ordinary AppKit app
-      # dark or light whatever this runner's appearance.
-      - name: Test the QA appearance library
-        working-directory: macos
-        run: time sh Tests/qa-appearance-test.sh
-
-      # `qa_scroll`: the QA driver scrolls a SwiftUI ScrollView that loads pages at its end and a
-      # List to their last rows, and by a delta, in a fixture app with a window.
-      - name: Test the QA driver's scrolling
-        working-directory: macos
-        timeout-minutes: 10
-        run: time python3 -I Tests/qa-scroll-test.py
-
-      # `qa_key`: the QA driver's ⌘ shortcuts reach a fixture app's menu (Back, Inbox, Settings,
-      # Close), and a plain key still types into the focused field.
-      - name: Test the QA driver's key shortcuts
-        working-directory: macos
-        timeout-minutes: 10
-        run: time python3 -I Tests/qa-key-test.py
-
-      # The ticket page's speed (TP-1491): the app built above, in QA mode over the ticket-page-speed fixtures
-      # (500 events over 15 runs), with the page open while polls land. Prints the idle main thread's busy share from
-      # a 5 s sample and the hitch ratio of a scroll to the bottom and back against their budgets; it fails when it
-      # cannot measure, and over the budgets once TP-1480 turns them on.
-      - name: Test the ticket page's idle sample and scroll hitches
-        working-directory: macos
-        timeout-minutes: 10
-        run: time python3 -I Tests/ticket-page-scroll-test.py build/Symphony.app
-
-  install-script:
-    name: install script
-    runs-on: macos-26
-    timeout-minutes: 15
-    needs: changes
-    if: ${{ needs.changes.outputs.macos == 'true' }}
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          persist-credentials: false
-
-      - name: Install shellcheck and minisign
-        run: brew install shellcheck minisign
-
-      - name: Shellcheck
-        run: shellcheck scripts/install-macos.sh
-
-      - name: Install the latest release
-        env:
-          INSTALL_DIR: ${{ runner.temp }}/Applications
-          SYMPHONY_NO_OPEN: "1"
-        run: |
-          bash scripts/install-macos.sh
-          # A second run finds it installed and changes nothing.
-          bash scripts/install-macos.sh
-
-      - name: Check the installed app's signature
-        env:
-          APP: ${{ runner.temp }}/Applications/Symphony.app
-        run: |
-          details="$(codesign -dvv "$APP" 2>&1)"
-          echo "$details" | grep -E '^(Identifier|Authority|Signature|TeamIdentifier)=' || true
-          case "$details" in
-            *"Identifier=com.tonypine.symphony.bar"*) ;;
-            *) echo "::error::$APP is not com.tonypine.symphony.bar"; exit 1 ;;
-          esac
-          # The runner doesn't trust the Symphony certificate, so codesign may stop
-          # at the trust check; any other failure is a broken signature.
-          # Resources/symphony is the release's launcher script, sealed by the
-          # bundle's signature; the Mach-O files inside symphony-release carry
-          # their own. An older release has a Mach-O at Resources/symphony.
-          targets=("$APP")
-          if [ -d "$APP/Contents/Resources/symphony-release" ]; then
-            while IFS= read -r file; do targets+=("$file"); done < <(
-              find "$APP/Contents/Resources/symphony-release" -type f -exec file {} + | grep Mach-O | cut -d: -f1)
-          else
-            targets+=("$APP/Contents/Resources/symphony")
-          fi
-          for target in "${targets[@]}"; do
-            if ! output="$(codesign --verify --strict "$target" 2>&1)"; then
-              echo "$output"
-              case "$output" in
-                *CSSMERR_TP_NOT_TRUSTED*) echo "$target: signed with a certificate this runner doesn't trust" ;;
-                *) echo "::error::$target has an invalid code signature"; exit 1 ;;
-              esac
-            fi
-          done
-          if [ -n "$(find "$APP" -xattrname com.apple.quarantine -print -quit)" ]; then
-            echo "::error::$APP still has the quarantine flag"
-            exit 1
-          fi
-
-  # The required check. It passes when nothing under macos/ changed (build skipped)
-  # or the build passed, and fails when change detection or the build failed. It
-  # does not run when the run is cancelled (a newer push on the PR supersedes it), so
-  # the superseded head's check reads cancelled, not failed, and the PR watcher does
-  # not rerun it or send it to CI Fix.
+  # The required check. It passes when no group was needed or the checks passed, and fails when
+  # choosing the groups or a check failed. It does not run when the run is cancelled (a newer push
+  # on the pull request supersedes it), so the superseded head's check reads cancelled, not failed,
+  # and the PR watcher does not rerun it or send it to CI Fix.
   macos:
     name: macos
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs:
       - changes
-      - build
+      - checks
     if: ${{ !cancelled() }}
     permissions:
       contents: read
@@ -254,22 +98,22 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           CHANGES_RESULT: ${{ needs.changes.result }}
-          BUILD_RESULT: ${{ needs.build.result }}
+          CHECKS_RESULT: ${{ needs.checks.result }}
         run: |
           echo "changes: $CHANGES_RESULT"
-          echo "build: $BUILD_RESULT"
+          echo "checks: $CHECKS_RESULT"
 
           if [ "$CHANGES_RESULT" != "success" ]; then
             exit 1
           fi
-          case "$BUILD_RESULT" in
+          case "$CHECKS_RESULT" in
             success | skipped) ;;
             cancelled | abandoned)
-              # The run is not cancelled, yet the build never finished (a timeout, or an
-              # attempt abandoned while queued). Cancel the run so the check reads
-              # cancelled, not failed: the PR watcher reruns it without a CI Fix run, and
-              # the required gate never passes without a build.
-              echo "::warning::The build was $BUILD_RESULT; cancelling the run"
+              # The run is not cancelled, yet the checks never finished (a timeout, or an attempt
+              # abandoned while queued). Cancel the run so the check reads cancelled, not failed:
+              # the PR watcher reruns it without a CI Fix run, and the required gate never passes
+              # without the checks.
+              echo "::warning::The checks were $CHECKS_RESULT; cancelling the run"
               gh run cancel "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" || true
               sleep 60
               exit 1

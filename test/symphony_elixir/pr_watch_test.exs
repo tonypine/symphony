@@ -115,6 +115,21 @@ defmodule SymphonyElixir.PrWatchTest do
       end
     end
 
+    test "TP-1518: in CI Fix, GitHub's unknown mergeability holds the run back unless a fix is pending on the head" do
+      settings = Config.settings!()
+      ci_fix = issue("3", "CI Fix")
+      reading = "GitHub is still computing whether PR #3 can merge: Symphony reads it again"
+      unknown = %{rule: "R16", kind: :wait, owner: :github, reason: reading}
+
+      PrWatchSupport.put_watch!(@repo_key, "3", phase: :ci_fix, facts: %{mergeable: :unknown}, decision: unknown)
+      assert PrWatch.dispatch_reason(ci_fix, settings) == "the PR watcher (R16): " <> reading
+
+      pending = Attempts.pending(Attempts.new(), "sha-head", :conflict, nil, ~U[2026-11-16 18:02:00Z])
+      facts = %{mergeable: :unknown}
+      PrWatchSupport.put_watch!(@repo_key, "3", phase: :ci_fix, facts: facts, decision: unknown, attempts: pending)
+      assert PrWatch.dispatch_reason(ci_fix, settings) == nil
+    end
+
     test "a Merging landing agent runs only when the watcher hands the PR to one, with auto-merge on" do
       settings = Config.settings!()
       merging = issue("2", "Merging")

@@ -129,6 +129,36 @@ defmodule SymphonyElixir.QaVerification do
   def run(_issue, _workspace, _opts), do: :skip
 
   @doc """
+  Fails the QA of `issue` on `head` because its app did not build: the QA pre-build
+  (`SymphonyElixir.QaBuild`) ran the playbook's build command for this commit and it exited
+  non-zero. No agent ran. It is recorded and reported as a QA pass that failed, and the ticket moves
+  to `Rework`, where the next run reads the report: the command, its exit status and the end of its
+  output (`build`'s `command`, `exit_status` and `output`).
+
+  `opts`: `:settings` (required), `:repo_key`, and those of `run/3` that name the tracker and the
+  Linear client.
+  """
+  @spec build_failed(Issue.t(), String.t(), map(), keyword()) :: :ok | {:error, term()}
+  def build_failed(%Issue{} = issue, head, %{command: command, exit_status: status, output: output}, opts) when is_binary(head) do
+    summary =
+      "The app did not build on this commit, so no QA agent ran. Symphony ran the build command `#{command}` on the QA host " <>
+        "and it exited with status #{status}. The end of its output:\n\n```\n#{String.trim(output)}\n```"
+
+    outcome = %{
+      verdict: :fail,
+      summary: summary,
+      steps: [],
+      findings: ["The app does not build on this commit: `#{command}` exits with status #{status}. Fix the build; its output is in the QA report."],
+      checks: [],
+      reason: nil,
+      needs_person: false,
+      playbooks: []
+    }
+
+    fail_to_rework(issue, opts, Keyword.fetch!(opts, :settings), head, outcome)
+  end
+
+  @doc """
   Whether `issue` is the ticket this module verifies: one in the configured QA state. Every
   other ticket belongs to the executor run (or another state's own run).
   """

@@ -35,7 +35,7 @@ MIX ?= mix
 ERL ?= erl
 QA_SYMPHONY := $(BUILD_DIR)/qa-symphony
 
-.PHONY: all build app bundle qa-app install run test e2e release-pair snapshots render-snapshots design-sheet clean
+.PHONY: all build app bundle qa-app install run test e2e release-pair gallery build-gallery clean
 
 # The slow type-check guard. `make guarded-<target>` makes <target> with the Swift compiler
 # warning on every expression it takes longer than TYPE_CHECK_LIMIT_MS to type-check, and fails
@@ -148,6 +148,11 @@ qa-app:
 		{ printf '#!%s/bin/escript\n' "$$root"; tail -n +2 ../bin/symphony; } > "$(QA_SYMPHONY)"
 	chmod 755 "$(QA_SYMPHONY)"
 	$(MAKE) bundle SYMPHONY_ESCRIPT="$(QA_SYMPHONY)"
+	$(MAKE) build-gallery
+	cp "$(GALLERY)" "$(APP)/Contents/Helpers/SymphonyGallery"
+	codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(APP)/Contents/Helpers/SymphonyGallery"
+	codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(APP)"
+	codesign --verify --strict "$(APP)"
 
 install: app
 	mkdir -p "$(INSTALL_DIR)"
@@ -177,32 +182,31 @@ release-pair:
 	python3 ../test/support/macos_release/release_pair.py --out "$(RELEASE_PAIR_OUT)" \
 		--build-n $(RELEASE_PAIR_BUILD_N) --build-n1 $(RELEASE_PAIR_BUILD_N1)
 
-# Renders the snapshots in Tests/Snapshots offscreen with ImageRenderer (no NSApplication, no window) and
-# writes their PNGs there: the app's views, minus main.swift, compiled with the snapshot program.
+# The Component Gallery (Gallery/): every shared component in its kinds, sizes and states, and the sections and
+# pages built from them, drawn by the app's own views in a window, one story at a time. It is compiled apart from the
+# app (the app's views, minus main.swift, with the gallery's stories), so the app pays nothing for it.
+#   make gallery                        builds $(GALLERY) and opens it
+#   $(GALLERY) --entries                the entries, as JSON
+#   $(GALLERY) --shot button --out /tmp/shots   draws that entry's board to files, in light and dark
+# `make qa-app` puts it inside the QA build's bundle, where a launch on Tests/Fixtures/gallery starts it in the
+# app's place (Sources/SymphonyBar/GalleryLaunch.swift), so QA drives it with the tools it drives the app with.
 # `-disable-sandbox` lets the SwiftUI macros' plugin server run inside an agent sandbox.
-snapshots: render-snapshots
-	$(BUILD_DIR)/render-snapshots
-
-render-snapshots:
+GALLERY := $(BUILD_DIR)/SymphonyGallery
+build-gallery:
 	swift build $(SWIFT_FLAGS) --product SymphonyBarUI
 	mkdir -p $(BUILD_DIR)
-	swiftc -disable-sandbox -swift-version 5 -module-cache-path .build/snapshot-module-cache \
-		-I "$$(swift build $(SWIFT_FLAGS) --show-bin-path)/Modules" -o $(BUILD_DIR)/render-snapshots \
-		Tests/Snapshots/*.swift $$(ls Sources/SymphonyBar/*.swift | grep -v '/main.swift$$') \
-		"$$(swift build $(SWIFT_FLAGS) --show-bin-path)"/SymphonyBarCore.build/*.o \
-		"$$(swift build $(SWIFT_FLAGS) --show-bin-path)"/SymphonyBarUI.build/*.o
+	@# The libraries' modules and objects: SwiftPM's native build system (Xcode 26) puts them in
+	@# Modules/ and <target>.build/*.o; Swift Build (Xcode 27) beside the products, as <target>.o.
+	bin="$$(swift build $(SWIFT_FLAGS) --show-bin-path)"; \
+	if [ -d "$$bin/Modules" ]; then modules="$$bin/Modules"; objects="$$bin/SymphonyBarCore.build/*.o $$bin/SymphonyBarUI.build/*.o"; \
+	else modules="$$bin"; objects="$$bin/SymphonyBarCore.o $$bin/SymphonyBarUI.o"; fi; \
+	swiftc -disable-sandbox -swift-version 5 -module-cache-path .build/gallery-module-cache \
+		-I "$$modules" -o $(GALLERY) \
+		Gallery/*.swift $$(ls Sources/SymphonyBar/*.swift | grep -v '/main.swift$$') \
+		$$objects
 
-# The design sheet (TP-1482): each design reference (the ticket page prototype's three moments, and the catalog's
-# Window stories for the ticket page, Home, Initiatives and Tickets) beside the native page drawn from the matching
-# fixture at the same size, at the laptop's and the desktop's widths, in light and dark. The references are drawn in
-# a headless Chromium (Tests/DesignSheet/capture.py; CHROME names one), the native pages offscreen as the snapshots
-# are. Open $(DESIGN_SHEET)/index.html. It is evidence, not a gate: no step fails on a difference.
-DESIGN_SHEET ?= $(BUILD_DIR)/design-sheet
-design-sheet: render-snapshots
-	rm -rf "$(DESIGN_SHEET)"
-	DESIGN_SHEET_PHASE=plan DESIGN_SHEET_OUT="$(DESIGN_SHEET)" $(BUILD_DIR)/render-snapshots
-	python3 -I Tests/DesignSheet/capture.py "$(DESIGN_SHEET)"
-	DESIGN_SHEET_PHASE=compose DESIGN_SHEET_OUT="$(DESIGN_SHEET)" $(BUILD_DIR)/render-snapshots
+gallery: build-gallery
+	$(GALLERY) --window
 
 clean:
 	rm -rf $(BUILD_DIR) .build

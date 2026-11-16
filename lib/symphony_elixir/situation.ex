@@ -12,9 +12,21 @@ defmodule SymphonyElixir.Situation do
   writing a `situation.changed` event when the kind differs from the last one the ledger holds. A
   read never writes; `SymphonyElixir.Situation.Recorder` is the one caller of `sync/3`.
 
-  The closed list has no place for a ticket nothing holds and no run works on (a Todo ticket between
-  two polls, a review about to start). It reads `waiting_for_slot`, with the watcher's decision as
-  its cause when it has one, since the next thing that moves it is a run taking a slot. A plan in
+  A ticket nothing holds and no run works on is read from the same record the machine acts on: the
+  run its watcher's decision needs next (`dispatch`, `ci_fix`, `land_agent`; for a ticket the watcher
+  doesn't decide on, its phase's run), named with the decision's reason. Symphony's pause reads
+  `paused_by_rule` naming that run; every slot in use reads `waiting_for_slot` naming it; a slot free
+  reads "Starting" until the watcher finds the run never started (`SymphonyElixir.PrWatch.SilentWait`),
+  then "Not started", which Symphony tries again. Once the dispatch pass paused it for that
+  (`SymphonyElixir.PrWatch.StalledRun`), the pause itself reads "Not started" (`waiting_on_you`) and
+  the Inbox lists it from that pause. "Waiting for a slot" is never said while a slot is free. A
+  decision that waits on something else says what it waits on in its own words: CI or GitHub
+  (`waiting_for_ci`), a person (`waiting_on_you`), Symphony's upkeep, or a run that already ended,
+  whose PR the watcher reads next. A ticket in `Code Review`, `QA` or `Merging` the watcher has not
+  decided on yet reads "Reading the PR", as the dispatch gate says. When Symphony can tell none of
+  that, the situation says so ("Not known", `waiting_on_you`) and never borrows another one's words;
+  `not_known?/2` is the same reading, and the Inbox lists the ticket from it
+  (`SymphonyElixir.Inbox.FromRecord`). A plan in
   `Plan Review` reads `waiting_on_you`, a parent in `Waiting on sub-tickets` `blocked_by_ticket` on
   its first open sub-ticket, and a ticket in `Backlog` `paused_by_rule`.
 
@@ -26,6 +38,8 @@ defmodule SymphonyElixir.Situation do
   """
 
   alias SymphonyElixir.{Config, PrDecision, RunStore, TicketEvents, TicketPullRequest, TicketState}
+  alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.PrWatch.{SilentWait, StalledRun}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
 
   @kinds ~w(waiting_on_you retrying blocked_by_ticket paused_by_rule waiting_for_ci waiting_for_build waiting_for_slot working done cancelled)
@@ -35,6 +49,20 @@ defmodule SymphonyElixir.Situation do
   @quiet_retries [:continuation, :linear_wait, :ci_wait]
   @handed_off [:code_review, :qa, :merging, :ci_fix]
   @max_cause 300
+  # The watcher's decisions a run carries out, which the orchestrator starts.
+  @run_kinds [:dispatch, :ci_fix, :land_agent]
+  # The phases whose next run is the phase's own when the watcher has no decision on the ticket.
+  # A parent whose sub-tickets all ended moves to Epic Review, where its epic review runs.
+  @phase_runs %{
+    "todo" => "The implementation run",
+    "in progress" => "The implementation run",
+    "rework" => "The rework run",
+    "ci fix" => "The CI Fix run",
+    "waiting on sub-tickets" => "The epic review",
+    "epic review" => "The epic review"
+  }
+  # The phases whose run waits on the watcher's decision on the PR (`SymphonyElixir.PrWatch.dispatch_reason/2`).
+  @watched_phases ["code review", "qa", "merging"]
   @numbers ~w(one two three four five six seven eight nine ten eleven twelve)
 
   @doing %{
@@ -111,11 +139,11 @@ defmodule SymphonyElixir.Situation do
 
   @doc """
   The facts `compute/4` reads from an orchestrator snapshot. `now` turns a retry's remaining time into
-  the time it starts.
+  the time it starts; `settings` give the tries and the terminal states (the workflow's by default).
   """
-  @spec live_facts(map(), DateTime.t()) :: live_facts()
-  def live_facts(snapshot, now \\ DateTime.utc_now()) do
-    settings = Config.settings!()
+  @spec live_facts(map(), DateTime.t(), Schema.t() | nil) :: live_facts()
+  def live_facts(snapshot, now \\ DateTime.utc_now(), settings \\ nil) do
+    settings = settings || Config.settings!()
 
     %{
       running: by_issue(snapshot, :running, &Map.take(&1, [:run_kind, :started_at, :step])),
@@ -248,10 +276,30 @@ defmodule SymphonyElixir.Situation do
   """
   @spec compute(TicketState.t(), [Event.t()], live_facts(), phase_of()) :: t()
   def compute(record, events, live, phase_of \\ fn _identifier -> nil end) do
+    ctx = context(record, events, live, phase_of)
+
+    (Enum.find(@kinds, &holds?(&1, ctx)) || :nothing)
+    |> situation(ctx)
+    |> finish(ctx)
+  end
+
+  @doc """
+  Whether Symphony can't tell what a normalized `record` of a ticket in a phase waits on with `live`
+  (`live_facts/2`): the "Not known" situation `compute/4` gives it, read by the same derivation
+  without its ledger, which only words a situation and never picks one. The Inbox lists such a
+  ticket.
+  """
+  @spec not_known?(TicketState.t(), live_facts()) :: boolean()
+  def not_known?(record, live) do
+    ctx = context(record, [], live, fn _identifier -> nil end)
+    is_binary(record.phase) and not Enum.any?(@kinds, &holds?(&1, ctx)) and next_of(ctx) == :unknown
+  end
+
+  defp context(record, events, live, phase_of) do
     issue_id = record.issue_id
     running = Map.get(live.running, issue_id)
 
-    ctx = %{
+    %{
       record: record,
       events: events,
       live: live,
@@ -264,10 +312,6 @@ defmodule SymphonyElixir.Situation do
       skipped: live.skipped |> Map.get(issue_id) |> rule_skip(running),
       facts: facts(record)
     }
-
-    (Enum.find(@kinds, &holds?(&1, ctx)) || :nothing)
-    |> situation(ctx)
-    |> finish(ctx)
   end
 
   defp reasons(%{pause: %{reasons: reasons}}), do: reasons
@@ -299,7 +343,8 @@ defmodule SymphonyElixir.Situation do
 
   defp reason(ctx, kind), do: Enum.find(ctx.reasons, &(&1.kind == kind))
 
-  defp rule_reason(ctx), do: Enum.find(ctx.reasons, &(&1.kind in [:person, :environment]))
+  # The pause a run that never started set says nothing once a run works on the ticket.
+  defp rule_reason(ctx), do: Enum.find(ctx.reasons, &(&1.kind in [:person, :environment] and not (ctx.running != nil and StalledRun.reason?(&1))))
 
   defp pause_holds_slot?(%{slot: %{ci_wait: true}}), do: false
   defp pause_holds_slot?(ctx), do: ctx.slot != nil and ctx.live.symphony_pause != nil
@@ -359,9 +404,10 @@ defmodule SymphonyElixir.Situation do
   end
 
   defp situation("paused_by_rule", ctx) do
-    case rule_reason(ctx) do
-      nil -> paused_without_reason(ctx)
-      reason -> base("paused_by_rule", "Paused", sentence(reason.text), lifts(reason), reason.set_at, reason.waits_on)
+    case {stalled_reason(ctx), rule_reason(ctx)} do
+      {%{} = stalled, _reason} -> not_started(stalled)
+      {nil, nil} -> paused_without_reason(ctx)
+      {nil, reason} -> base("paused_by_rule", "Paused", sentence(reason.text), lifts(reason), reason.set_at, reason.waits_on)
     end
   end
 
@@ -387,8 +433,10 @@ defmodule SymphonyElixir.Situation do
 
   defp situation("waiting_for_slot", ctx) do
     ahead = runs_ahead(ctx)
+    cause = slots_sentence(ahead, ctx.live.limit)
+    cause = if run = due_run(ctx), do: "#{next_words(run)} #{cause}", else: cause
 
-    base("waiting_for_slot", "Waiting for a slot", slots_sentence(ahead, ctx.live.limit), "Starts when a slot frees.", ctx.slot[:since], %{slot: ctx.slot[:reason]})
+    base("waiting_for_slot", "Waiting for a slot", cause, "Starts when a slot frees.", ctx.slot[:since], %{slot: ctx.slot[:reason]})
   end
 
   defp situation("working", %{running: running} = ctx) do
@@ -422,12 +470,144 @@ defmodule SymphonyElixir.Situation do
     base("cancelled", "Cancelled", cancelled_sentence(event), nil, (event && event.at) || ctx.record.phase_at)
   end
 
+  # Nothing holds the ticket and no run works on it: what it waits on is read from the watcher's
+  # decision and its outcome, the run store and the slots, the record the machine acts on.
   defp situation(:nothing, ctx) do
-    decision = (ctx.record.pr_watch && ctx.record.pr_watch.decision) || %{}
-    cause = if is_binary(decision[:reason]), do: sentence(decision[:reason]), else: "No run is working on it."
-
-    base("waiting_for_slot", "Waiting for a slot", cause, "Starts when a slot frees.", decision[:since] || ctx.record.phase_at)
+    case next_of(ctx) do
+      {:run, run} -> due(run, ctx)
+      {:wait, decision} -> undecided(decision, ctx)
+      :reading -> base("waiting_for_ci", "Reading the PR", "The PR watcher reads its PR next.", "The next step follows that read.", ctx.record.phase_at)
+      :unknown -> base("waiting_on_you", "Not known", "Symphony can't tell what it waits on.", unknown_next(ctx.record), ctx.record.phase_at)
+    end
   end
+
+  # What a ticket nothing holds waits on next: a run, a wait the decision names, the watcher's first
+  # decision on its PR (the dispatch gate's reason), or nothing Symphony can tell.
+  defp next_of(ctx) do
+    decision = decision(ctx)
+
+    cond do
+      run = due_run(ctx) -> {:run, run}
+      known_wait?(decision) -> {:wait, decision}
+      is_nil(decision) and ctx.phase in @watched_phases -> :reading
+      true -> :unknown
+    end
+  end
+
+  # A ticket with a phase is one Symphony tracks, and the Inbox lists it (`not_known?/2`).
+  defp unknown_next(%{phase: phase}) when is_binary(phase), do: "It is listed in the Inbox; check it now from its page."
+  defp unknown_next(_record), do: "Check it now from its page."
+
+  defp known_wait?(%{owner: owner, reason: reason}) when owner in [:ci, :github, :person, :symphony] and is_binary(reason), do: true
+  defp known_wait?(%{owner: :agent}), do: true
+  defp known_wait?(_decision), do: false
+
+  # The pause a dispatch pass set on a run that never started (`SymphonyElixir.PrWatch.StalledRun`):
+  # the Inbox lists the ticket from it, and the Director's Unblock starts the run.
+  defp stalled_reason(%{running: nil} = ctx), do: Enum.find(ctx.reasons, &StalledRun.reason?/1)
+  defp stalled_reason(_ctx), do: nil
+
+  defp not_started(reason) do
+    base("waiting_on_you", "Not started", sentence(reason.text), "It is listed in the Inbox; Unblock starts the run.", reason.set_at, reason.waits_on)
+  end
+
+  # The run the watcher's decision needs next and why, or the phase's own run for a ticket the watcher
+  # has no decision on (a Todo ticket, an In Progress one before its PR). Nil when the decision waits
+  # on something else.
+  defp due_run(ctx) do
+    case decision(ctx) do
+      %{kind: kind} = decision when kind in @run_kinds ->
+        %{label: run_label_for(decision, ctx), why: decision[:reason], since: decision[:since], silent?: silent?(ctx)}
+
+      nil ->
+        phase_run(ctx)
+
+      _wait ->
+        nil
+    end
+  end
+
+  defp phase_run(ctx) do
+    case Map.fetch(@phase_runs, ctx.phase) do
+      {:ok, label} -> %{label: label, why: nil, since: ctx.record.phase_at, silent?: false}
+      :error -> nil
+    end
+  end
+
+  # The watcher's decision on the ticket in the phase it is in. A decision made in another phase (R25
+  # moved it back from CI Fix) is done: the watcher reads the PR in the new phase next.
+  defp decision(%{record: %{pr_watch: %{decision: %{} = decision}}} = ctx), do: if(decided_here?(ctx), do: decision)
+  defp decision(_ctx), do: nil
+
+  defp decided_here?(%{facts: %PrDecision.Facts{phase: phase}, phase: current}) when is_atom(phase) and not is_nil(phase),
+    do: phase |> Atom.to_string() |> String.replace("_", " ") == current
+
+  defp decided_here?(_ctx), do: true
+
+  defp silent?(%{record: %{pr_watch: watch}}), do: SilentWait.listed?(Map.get(watch, :silent))
+
+  defp run_label_for(%{kind: :ci_fix, args: %{cause: :conflict}}, _ctx), do: "The conflict fix run"
+  defp run_label_for(%{kind: :ci_fix}, _ctx), do: "The CI Fix run"
+  defp run_label_for(%{kind: :land_agent}, _ctx), do: "The landing run"
+  defp run_label_for(%{args: %{phase: phase}}, _ctx), do: phase_run_label(phase)
+  defp run_label_for(_decision, ctx), do: phase_run_label(ctx.facts && ctx.facts.phase)
+
+  defp phase_run_label(:code_review), do: "The review"
+  defp phase_run_label(:qa), do: "The QA run"
+  defp phase_run_label(:rework), do: "The rework run"
+  defp phase_run_label(:in_progress), do: "The implementation run"
+  defp phase_run_label(_phase), do: "The next run"
+
+  defp next_words(%{label: label, why: why}) when is_binary(why), do: "#{label} is next: #{sentence(why)}"
+  defp next_words(%{label: label}), do: "#{label} is next."
+
+  # A run is due. Symphony's pause holds it; every slot in use holds it; with a slot free it starts on
+  # the next dispatch pass, unless the watcher found it never started.
+  defp due(run, %{live: %{symphony_pause: %{} = pause}}) do
+    stop = if pause[:reason], do: "Dispatch is paused: #{sentence(pause.reason)}", else: "Dispatch is paused."
+    base("paused_by_rule", "Paused", "#{stop} #{next_words(run)}", rule_lifts(:symphony_pause), pause[:paused_at] || run.since)
+  end
+
+  defp due(run, ctx) do
+    cond do
+      slots_full?(ctx) ->
+        base("waiting_for_slot", "Waiting for a slot", "#{next_words(run)} #{slots_sentence(map_size(ctx.live.running), ctx.live.limit)}", "Starts when a slot frees.", run.since)
+
+      run.silent? ->
+        why = if is_binary(run.why), do: ": #{sentence(run.why)}", else: "."
+        base("waiting_for_slot", "Not started", "#{run.label} is due and a slot is free, but no run started yet#{why}", "Symphony tries to start it again on its next poll.", run.since)
+
+      true ->
+        why = if is_binary(run.why), do: ": #{sentence(run.why)}", else: "."
+        base("waiting_for_slot", "Starting", "#{run.label} is next and a slot is free#{why}", "It starts on the next dispatch pass.", run.since)
+    end
+  end
+
+  defp slots_full?(%{live: %{limit: limit, running: running}}), do: is_integer(limit) and map_size(running) >= limit
+
+  # The decision waits on something that is not a run, and says on what in its own words.
+  defp undecided(%{owner: owner, reason: reason} = decision, _ctx) when owner in [:ci, :github] do
+    word = if owner == :ci, do: "Waiting for CI", else: "Waiting on GitHub"
+    base("waiting_for_ci", word, sentence(reason), clears(decision[:clears_when]), decision[:since])
+  end
+
+  defp undecided(%{owner: :person, reason: reason} = decision, _ctx) do
+    base("waiting_on_you", "Waiting on you", sentence(reason), clears(decision[:clears_when]), decision[:since])
+  end
+
+  defp undecided(%{owner: :symphony, reason: reason} = decision, _ctx) do
+    base("waiting_for_ci", "Waiting on Symphony", sentence(reason), clears(decision[:clears_when]), decision[:since])
+  end
+
+  # The decision was made while a run worked, and that run ended: the watcher reads the PR next.
+  defp undecided(%{owner: :agent} = decision, ctx) do
+    ended = last_run_end(ctx)
+    cause = if ended, do: "The last run ended at #{clock(ended)}; Symphony reads the PR again next.", else: "No run is working on it; Symphony reads the PR again next."
+    base("waiting_for_ci", "Reading the PR", cause, "The next step follows that read.", ended || decision[:since])
+  end
+
+  defp clears(when_text) when is_binary(when_text) and when_text != "", do: "It moves on when #{String.trim_trailing(when_text, ".")}."
+  defp clears(_when_text), do: nil
 
   defp base(kind, word, cause, next, since, waits_on \\ nil) do
     %{
@@ -451,7 +631,7 @@ defmodule SymphonyElixir.Situation do
 
   defp headline_reason?(%{kind: kind}, ctx) do
     case kind do
-      "waiting_on_you" -> reason(ctx, :question) != nil
+      "waiting_on_you" -> reason(ctx, :question) != nil or stalled_reason(ctx) != nil
       "blocked_by_ticket" -> reason(ctx, :ticket) != nil
       "paused_by_rule" -> rule_reason(ctx) != nil
       "waiting_for_build" -> reason(ctx, :build) != nil

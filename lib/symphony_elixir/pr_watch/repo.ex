@@ -115,6 +115,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     PrDecision,
     ProtectedPathsGate,
     PrReviewPoller,
+    QaBuild,
     Questions,
     RunStore,
     TicketObservation,
@@ -128,7 +129,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
   alias SymphonyElixir.GitHub.{PullRequest, RelaySupervisor}
   alias SymphonyElixir.Linear.{Client, Issue}
   alias SymphonyElixir.PrDecision.{Action, Apply, Facts}
-  alias SymphonyElixir.PrWatch.{Attempts, Competitors, Fetch, Health, Ingest, Release, SilentWait}
+  alias SymphonyElixir.PrWatch.{Attempts, Competitors, Fetch, Health, Ingest, Release, SilentWait, StalledRun}
   alias SymphonyElixir.Situation.Recorder, as: SituationRecorder
   alias SymphonyElixirWeb.ObservabilityPubSub
 
@@ -319,8 +320,9 @@ defmodule SymphonyElixir.PrWatch.Repo do
   def handle_info(:reread, state), do: {:noreply, %{state | reread_timer: nil}}
 
   def handle_info(:tick, state) do
+    started = now(state)
     {reply, state} = tick(state)
-    {:noreply, schedule(%{state | timer: nil}, next_tick_ms(reply, state))}
+    {:noreply, state |> reread_mergeability(started) |> then(&schedule(%{&1 | timer: nil}, next_tick_ms(reply, &1)))}
   end
 
   def handle_info({:ticket_record, repo_key, issue_id, :changed, fields}, %{repo_key: repo_key} = state) do
@@ -432,6 +434,21 @@ defmodule SymphonyElixir.PrWatch.Repo do
     else
       _settled -> %{state | reread_tries: Map.delete(state.reread_tries, issue_id)}
     end
+  end
+
+  # A timed read that found GitHub still computing whether a PR can merge (R16 waits on it) reads it
+  # again soon, as a delivery's reread does, rather than at the next tick: GitHub computes it when
+  # asked, so the second read usually knows. Only the PRs this tick read, and one already queued
+  # keeps its place and its tries.
+  defp reread_mergeability(state, started) do
+    unknown =
+      for {issue_id, record} <- ticket_states(state),
+          %{facts: %{mergeable: :unknown}, read_at: %DateTime{} = read_at} <- [TicketState.pr_watch(record)],
+          DateTime.compare(read_at, started) != :lt,
+          not Map.has_key?(state.reread_tries, issue_id),
+          do: issue_id
+
+    reread(state, unknown)
   end
 
   defp arm_reread(%{rereads: [_ | _], reread_timer: nil} = state), do: %{state | reread_timer: timer(state, :reread, @reread_gap_ms)}
@@ -1028,8 +1045,11 @@ defmodule SymphonyElixir.PrWatch.Repo do
       store(state).put_ticket_pr_watch(state.repo_key, entry.issue.id, entry.issue.identifier, watch) |> log_write(entry)
       # A hold an idle run set lifts on this read; the pause's change re-decides the ticket at once.
       _ = IdlePark.settle({:ticket, state.repo_key, entry.issue.id}, entry.record, watch)
+      # So does a pause a run that never started set, once the PR has a new head.
+      _ = StalledRun.settle({:ticket, state.repo_key, entry.issue.id}, entry.record, watch)
       announce_dispatch(watch, previous, entry, state)
       announce_situation(watch, previous, entry)
+      request_qa_build(watch, previous, entry, state)
       watch
     end
   end
@@ -1065,15 +1085,45 @@ defmodule SymphonyElixir.PrWatch.Repo do
   defp past_stale_grace?(nil, _now), do: true
   defp past_stale_grace?(since, now), do: DateTime.diff(now, since, :millisecond) > @stale_check_grace_ms
 
-  # A new decision that a run starts (the reviewer, QA, a CI Fix run) is the orchestrator's to act
-  # on: the record's change is announced once written, so it runs a dispatch cycle at once rather
-  # than at its next tick.
-  defp announce_dispatch(%{decision: %{kind: :dispatch} = decision}, previous, entry, state) do
-    unless same_decision?(decision, previous && previous.decision),
+  # A new decision that a run starts (the reviewer, QA, a CI Fix run, the landing run) is the
+  # orchestrator's to act on: the record's change is announced once written, so it runs a dispatch
+  # cycle at once rather than at its next tick. So is one that still stands with no run while the
+  # silent-wait detector finds it quiet: each poll interval that finds it so starts the run (an extra
+  # tick inside one adds nothing), and once it is listed the dispatch pass pauses a ticket no run can
+  # start (`SymphonyElixir.PrWatch.StalledRun`).
+  defp announce_dispatch(%{decision: %{kind: kind} = decision} = watch, previous, entry, state) do
+    new_or_quieter? = not same_decision?(decision, previous && previous.decision) or quieter?(watch, previous)
+
+    if kind in StalledRun.run_kinds() and new_or_quieter?,
       do: ObservabilityPubSub.broadcast_ticket_record_changed(state.repo_key, entry.issue.id, [:pr_watch])
   end
 
   defp announce_dispatch(_watch, _previous, _entry, _state), do: :ok
+
+  # The ticket went quiet on this tick, or stayed quiet into another poll interval.
+  defp quieter?(%{silent: %{ticks: ticks}}, %{silent: %{ticks: ticks}}), do: false
+  defp quieter?(%{silent: %{}}, _previous), do: true
+  defp quieter?(_watch, _previous), do: false
+
+  # A new head of a ticket in Code Review or QA (branch upkeep, a person's push), and the head a
+  # ticket comes back to one of them with (a CI Fix return), is built for QA at once
+  # (`SymphonyElixir.QaBuild`), so its build runs beside the review and CI. Asking again for a head
+  # already asked for changes nothing.
+  defp request_qa_build(%{head_sha: head}, previous, %{phase: phase, issue: %{identifier: identifier} = issue}, state)
+       when is_binary(head) and is_binary(identifier) and phase in [:code_review, :qa] do
+    new_head? = carried(previous, :head_sha, nil) != head
+
+    if new_head? or not built_phase?(previous) do
+      Keyword.get(state.opts, :qa_build, QaBuild).request(state.repo_key, head, %{identifier: identifier, issue_id: issue.id, new_head: new_head?})
+    end
+
+    :ok
+  end
+
+  defp request_qa_build(_watch, _previous, _entry, _state), do: :ok
+
+  # Reached only with the record of an earlier read, which holds the phase it was read in.
+  defp built_phase?(%{facts: %{phase: phase}}), do: phase in [:code_review, :qa]
 
   # A ticket's situation reads the PR, its CI and the phase they were read in: a read that changed any
   # of them is a reason to compute it.
@@ -1212,7 +1262,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
     prior = carried(previous, :attempts, Attempts.new())
     protected_files = protected_files(read, previous, entry, state)
     read = read |> complete(prior, entry, state) |> with_failure(prior, settings, state)
-    observed = Map.merge(ticket, %{new_stay: new_stay?, run_heads: run_heads(entry.record)})
+    observed = Map.merge(ticket, %{new_stay: new_stay?, run_heads: run_heads(entry.record), fix_runs: TicketState.fix_runs(entry.record)})
 
     attempts =
       prior
@@ -1258,7 +1308,7 @@ defmodule SymphonyElixir.PrWatch.Repo do
           decision: result.action |> with_landing_wait(entry, facts) |> decision_record(result.outcome, attempts, facts, head, now),
           upkept: upkept,
           upkeep_failure: upkeep_failure,
-          applied: result.applied,
+          applied: stay_ledger(result),
           attempts: attempts,
           fix: result.fix,
           links: result.links,
@@ -1326,6 +1376,11 @@ defmodule SymphonyElixir.PrWatch.Repo do
   end
 
   defp with_landing_wait(action, _entry, _facts), do: action
+
+  # A move starts a new stay: its ledger holds only the move, so what the stay it left applied on the
+  # head (a conflict fix sent before a return from CI Fix) never stands for what the new one does.
+  defp stay_ledger(%{moved_to: phase, applied: applied}) when not is_nil(phase), do: Enum.take(applied, -1)
+  defp stay_ledger(result), do: result.applied
 
   defp new_stay?(nil, _entry), do: true
   defp new_stay?(previous, entry), do: stay(previous) != entry.phase

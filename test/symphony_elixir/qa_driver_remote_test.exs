@@ -5,7 +5,8 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
 
   import ExUnit.CaptureLog
 
-  alias SymphonyElixir.{PathSafety, QaDriver}
+  alias SymphonyElixir.{PathSafety, QaBuild, QaDriver}
+  alias SymphonyElixir.QaBuild.Store
   alias SymphonyElixir.QaDriver.{Host, Remote}
 
   @app "macos/build/Demo.app"
@@ -132,6 +133,23 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
     worktree
   end
 
+  # The QA pre-build, running for real on the fake QA host: the builder `qa_build` asks, with its
+  # build made by `SymphonyElixir.QaBuild.Store` through SSH in the worktree's repository. Returns
+  # the driver options of the pass of ticket TP-1 on `repo_key`.
+  defp start_prebuild!(root, ssh_host, worktree) do
+    repo_key = "remote-#{System.unique_integer([:positive])}"
+    prepare = fn _operator_home, _canary -> Remote.prepare(ssh_host, Path.join(root, "operator"), Path.join(root, "no-canary")) end
+    host = fn worker_host -> Map.put(Remote.host(worker_host), :prepare, prepare) end
+    plan = %{worker_host: ssh_host, build: "sh build.sh", app: @app, build_timeout_ms: 60_000}
+
+    start_supervised!(
+      {QaBuild,
+       plan: fn ^repo_key -> {:ok, plan} end, workspace: fn ^repo_key, "TP-1" -> {:ok, worktree} end, build: fn job, [] -> Store.build(job, host: host, local_uuid: fn -> {:ok, @symphony_mac} end) end}
+    )
+
+    [repo_key: repo_key, ticket: %{identifier: "TP-1", issue_id: "issue-1"}]
+  end
+
   describe "QaDriver with a worker_host" do
     test "builds, launches, reads and captures the app on the QA host", %{root: root, qa_home: qa_home, ssh_host: ssh_host} do
       worktree = git_worktree!(root)
@@ -139,13 +157,17 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       # The fake QA host runs as this user; point the isolation checks elsewhere.
       prepare = fn _operator_home, _canary -> Remote.prepare(ssh_host, Path.join(root, "operator"), Path.join(root, "no-canary")) end
 
+      prebuild = start_prebuild!(root, ssh_host, worktree)
+
       {:ok, driver} =
         QaDriver.start_link(
-          worktree: worktree,
-          worker_host: ssh_host,
-          local_uuid: fn -> {:ok, @symphony_mac} end,
-          playbook: %{kind: "macos_app", build: "sh build.sh", app: @app},
-          host: %{prepare: prepare}
+          [
+            worktree: worktree,
+            worker_host: ssh_host,
+            local_uuid: fn -> {:ok, @symphony_mac} end,
+            playbook: %{kind: "macos_app", build: "sh build.sh", app: @app},
+            host: %{prepare: prepare}
+          ] ++ prebuild
         )
 
       %{host_dir: run_dir, scratch_dir: scratch_dir} = GenServer.call(driver, :config)
@@ -154,9 +176,16 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       assert File.stat!(run_dir).mode |> Bitwise.band(0o777) == 0o700
       assert trace() =~ "-o BatchMode=yes -o LogLevel=ERROR -T #{ssh_host} bash -lc"
 
-      assert {:ok, %{"exit_status" => 0, "output" => output, "app" => @app}} = QaDriver.call_tool(driver, "qa_build", %{})
-      assert output =~ "built on #{qa_home}"
-      assert File.regular?(Path.join([run_dir, "src", @app, "Contents/MacOS/Demo"]))
+      # The pass asks for the build of its HEAD and waits: Symphony builds it in the repository's kept
+      # checkout on the QA host, stores the app by tree, and the pass copies that into its run directory.
+      {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
+      assert {:ok, %{"exit_status" => 0, "prebuilt" => true, "app" => @app}} = result
+      {tree, 0} = System.cmd("git", ["-C", worktree, "rev-parse", "HEAD^{tree}"])
+      store = Path.join(qa_home, ".symphony-qa/store/#{prebuild[:repo_key]}")
+      assert File.regular?(Path.join([store, "builds", String.trim(tree), "Demo.app/Contents/MacOS/Demo"]))
+      assert File.regular?(Path.join([store, "work", @app, "Contents/MacOS/Demo"]))
+      refute File.exists?(Path.join(store, "build.pid"))
+      refute File.exists?(Path.join(run_dir, "src"))
       refute File.exists?(Path.join(worktree, "macos/build"))
 
       # Crash reports are read on the QA host; one from before the launch is not this app's.
@@ -219,14 +248,18 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       worktree = Path.join(root, "worktree")
       File.mkdir_p!(worktree)
 
+      prebuild = start_prebuild!(root, ssh_host, worktree)
+
       {{:ok, driver}, log} =
         with_log(fn ->
           QaDriver.start_link(
-            worktree: worktree,
-            worker_host: ssh_host,
-            local_uuid: fn -> {:ok, @symphony_mac} end,
-            playbook: %{build: "sh build.sh", app: @app},
-            host: %{prepare: prepare}
+            [
+              worktree: worktree,
+              worker_host: ssh_host,
+              local_uuid: fn -> {:ok, @symphony_mac} end,
+              playbook: %{build: "sh build.sh", app: @app},
+              host: %{prepare: prepare}
+            ] ++ prebuild
           )
         end)
 
@@ -240,7 +273,7 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
 
       stub = serve_stub(port, ~s({"jobs":[{"title":"QA stub job"}]}))
       git_worktree!(root, "curl -s --noproxy '*' --max-time 5 http://localhost:#{port}/api/jobs; echo")
-      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {{:ok, %{"exit_status" => 0}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
       {{:ok, %{"pid" => pid}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{}) end)
 
       assert_receive {:stub_request, ^stub, "GET /api/jobs HTTP/1.1"}, 5_000
@@ -264,15 +297,17 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
 
       {:ok, driver} =
         QaDriver.start_link(
-          worktree: worktree,
-          worker_host: ssh_host,
-          local_uuid: fn -> {:ok, @symphony_mac} end,
-          playbook: %{build: "sh build.sh", app: @app},
-          host: %{prepare: prepare}
+          [
+            worktree: worktree,
+            worker_host: ssh_host,
+            local_uuid: fn -> {:ok, @symphony_mac} end,
+            playbook: %{build: "sh build.sh", app: @app},
+            host: %{prepare: prepare}
+          ] ++ start_prebuild!(root, ssh_host, worktree)
         )
 
       %{host_dir: run_dir} = GenServer.call(driver, :config)
-      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {{:ok, %{"exit_status" => 0}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
 
       {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", %{"api_fixtures" => "macos/Tests/Fixtures/director-app/running"}) end)
       assert {:ok, %{"pid" => pid, "api_fixtures" => copy}} = result
@@ -303,9 +338,9 @@ defmodule SymphonyElixir.QaDriverRemoteTest do
       worktree = git_worktree!(root, first_run)
       prepare = fn _operator_home, _canary -> Remote.prepare(ssh_host, Path.join(root, "operator"), Path.join(root, "no-canary")) end
       opts = [worktree: worktree, worker_host: ssh_host, playbook: %{build: "sh build.sh", app: @app}, host: %{prepare: prepare}]
-      {:ok, driver} = QaDriver.start_link(opts)
+      {:ok, driver} = QaDriver.start_link(opts ++ start_prebuild!(root, ssh_host, worktree))
       %{host_dir: run_dir} = GenServer.call(driver, :config)
-      assert {:ok, %{"exit_status" => 0}} = QaDriver.call_tool(driver, "qa_build", %{})
+      {{:ok, %{"exit_status" => 0}}, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_build", %{}) end)
 
       launch_and_quit = fn args ->
         {result, _log} = with_log(fn -> QaDriver.call_tool(driver, "qa_launch_app", args) end)

@@ -648,6 +648,24 @@ defmodule SymphonyElixir.QaVerificationTest do
                Handoff.signals(@repo_key, @issue_id)
     end
 
+    test "a pre-build that failed carries the build command and its output to Rework, with no agent run" do
+      head = @base_head
+      build = %{command: "make app", exit_status: 65, output: "error: no such module 'Foo'\n"}
+
+      assert :ok = QaVerification.build_failed(issue(), head, build, settings: settings!(), repo_key: @repo_key)
+
+      refute_received {:qa_agent_run, _job, _settings}
+      assert_received {:memory_tracker_state_update, @issue_id, "Rework"}
+      assert_received {:memory_tracker_comment, @issue_id, report}
+      assert report =~ "**Verdict:** fail → Rework"
+      assert report =~ "Symphony ran the build command `make app` on the QA host and it exited with status 65."
+      assert report =~ "```\nerror: no such module 'Foo'\n```"
+      assert report =~ "- The app does not build on this commit: `make app` exits with status 65."
+
+      assert [%{head_sha: ^head, outcome: "fail"}] = verdicts()
+      assert [%{name: "qa", details: %{signal: "qa_fail", reason: "The app does not build on this commit" <> _rest}}] = Handoff.signals(@repo_key, @issue_id)
+    end
+
     test "a pass verdict ran on a working QA environment: the pause reason self-heal set for it clears (TP-1250)" do
       {workspace, _head} = git_workspace!()
       environment_paused!()

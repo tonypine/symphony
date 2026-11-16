@@ -61,7 +61,9 @@ defmodule SymphonyElixir.DirectorMoves do
     answered "Run it again", `SymphonyElixir.DispatchLoop`) has the question answered and those
     reasons released, and continues in place, with no state move. So does one waiting on its
     competing pull requests (`SymphonyElixir.PrWatch.Competitors`): the blocked-by links Symphony
-    added go, and it no longer waits on those pull requests. A ticket an idle run parked in Backlog
+    added go, and it no longer waits on those pull requests. So does a QA ticket held because its
+    app's QA build could not run (`SymphonyElixir.QaBuildHold`): that build is asked for again first.
+    A ticket an idle run parked in Backlog
     (`SymphonyElixir.IdlePark`) goes back to the phase it was parked from first, with its workspace
     and branch as they are, then its question is answered "Run it again", and it is dispatched at
     once. A wait on a blocker or a fix ticket lifts on its own and stays; a ticket with nothing to
@@ -151,6 +153,7 @@ defmodule SymphonyElixir.DirectorMoves do
     Pauses,
     PlanComments,
     PrWatch,
+    QaBuildHold,
     Questions,
     ReleaseBuild,
     Restart,
@@ -1119,6 +1122,7 @@ defmodule SymphonyElixir.DirectorMoves do
 
     if answered? or TicketMoves.unblockable?(reasons, held != nil) do
       if landing?, do: release_competitors(issue, opts)
+      retry_qa_builds(issue, reasons, opts)
       release = Keyword.get(opts, :release, &release/2)
       lift(issue, fn -> release.(ticket, held) end, opts)
     else
@@ -1152,6 +1156,13 @@ defmodule SymphonyElixir.DirectorMoves do
     with :ok <- answer_held(ticket, held, unblock_label(held)),
          {:ok, _pause} <- Pauses.clear_reasons(ticket, & &1.releasable, by: Pauses.director()),
          do: :ok
+  end
+
+  # A QA ticket held because its app's build could not run has that build asked for again before
+  # the hold goes (`SymphonyElixir.QaBuildHold.lifted/4`), so the dispatch it frees finds it asked for.
+  defp retry_qa_builds(%Issue{repo_key: repo_key} = issue, reasons, opts) do
+    if is_binary(repo_key) and Enum.any?(reasons, &QaBuildHold.unavailable_head/1),
+      do: QaBuildHold.lifted(repo_key, issue, reasons, Keyword.take(opts, [:builder]))
   end
 
   # A release that fails is reported: the hold still clears, and the watcher unlinks what it can on

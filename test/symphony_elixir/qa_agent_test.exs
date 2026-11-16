@@ -326,7 +326,17 @@ defmodule SymphonyElixir.QaAgentTest do
 
   defp playbooks, do: Selection.playbooks(%{playbooks: %{}})
 
-  # A QA host whose build writes the playbook's `build/App.app` and whose screen is `{w, h}`
+  # The QA pre-build, as the pass's `qa_build` takes it: the app Symphony stored for the commit, and
+  # the ticket the pass asked it for.
+  defmodule StoredBuild do
+    @moduledoc false
+    def fetch(repo_key, _head, ticket, opts) do
+      send(self(), {:stored_build_fetch, repo_key, ticket, Keyword.fetch!(opts, :heartbeat)})
+      %{status: :ready, tree: "tree", app: "/Users/qa/.symphony-qa/store/default/builds/tree/App.app"}
+    end
+  end
+
+  # A QA host whose stored build is the playbook's `App.app` and whose screen is `{w, h}`
   # points, 93 pt of its height taken by the menu bar and the Dock; the window reaches at most 1400×900.
   defp wide_pass_host({w, h}) do
     usable = h - 93
@@ -343,7 +353,7 @@ defmodule SymphonyElixir.QaAgentTest do
       "/bin/sh", ["-c", _script, "sh", "App"], _opts ->
         {:ok, {"", 0}}
 
-      "/bin/sh", ["-c", _script, "sh", _build_dir, "build/App.app", dest], _opts ->
+      "/bin/sh", ["-c", _script, "sh", _build_dir, "App.app", dest], _opts ->
         {:ok, {"symphony-qa-app:#{dest}/App.app/Contents/MacOS/App\n", 0}}
 
       "/usr/bin/plutil", _args, _opts ->
@@ -390,7 +400,12 @@ defmodule SymphonyElixir.QaAgentTest do
       executable, args, opts -> cmd.(executable, args, opts)
     end
 
-    [worker_host: "qa-vm", host: vm |> Map.merge(host) |> Map.put(:cmd, ioreg), local_uuid: fn -> {:ok, "1A2B3C4D-0000-1111-2222-333344445555"} end]
+    [
+      worker_host: "qa-vm",
+      host: vm |> Map.merge(host) |> Map.put(:cmd, ioreg),
+      local_uuid: fn -> {:ok, "1A2B3C4D-0000-1111-2222-333344445555"} end,
+      qa_build: StoredBuild
+    ]
   end
 
   defp job(attrs \\ %{}) do
@@ -2170,6 +2185,11 @@ defmodule SymphonyElixir.QaAgentTest do
                run.(AppCheckSession)
 
       assert app_check == %{built: true, launched: true, checked: true}
+
+      # Its `qa_build` took the app Symphony stored for the pass's ticket, telling the run it works
+      # while it waits.
+      assert_received {:stored_build_fetch, "default", %{identifier: "TP-900", issue_id: "issue-qa"}, heartbeat}
+      assert heartbeat.() == :ok
 
       # The agent is told when such a pass applies, and what Symphony accepts it on.
       assert_received {:qa_turn, _session, prompt, _issue, _turn_opts}

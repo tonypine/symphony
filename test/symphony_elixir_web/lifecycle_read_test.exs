@@ -22,6 +22,18 @@ defmodule SymphonyElixirWeb.LifecycleReadTest do
     def handle_call(:snapshot, _from, state), do: {:reply, %{running: [], retrying: [], rate_limits: nil}, state}
   end
 
+  defmodule RunningOrchestrator do
+    use GenServer
+
+    def start_link(snapshot), do: GenServer.start_link(__MODULE__, snapshot)
+
+    @impl true
+    def init(snapshot), do: {:ok, snapshot}
+
+    @impl true
+    def handle_call(:snapshot, _from, snapshot), do: {:reply, snapshot, snapshot}
+  end
+
   setup do
     :ok = RunStore.clear()
     on_exit(fn -> RunStore.clear() end)
@@ -109,6 +121,43 @@ defmodule SymphonyElixirWeb.LifecycleReadTest do
              %{"id" => "merging", "visits" => 0},
              %{"id" => "done", "visits" => 0}
            ] = lifecycle["stages"]
+  end
+
+  test "a run still working counts its tokens so far in its stage and in the total" do
+    :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "working", issue_identifier: "MT-4", phase: "In Progress"})
+    started_at = DateTime.add(DateTime.utc_now(), -600, :second) |> DateTime.truncate(:second)
+    moved("working", DateTime.add(started_at, -60, :second), "Todo", "In Progress")
+    {:ok, _event} = TicketEvents.record(@repo, "working", "run.started", %{run_id: "r1", run_kind: "implementation"}, at: started_at, run_id: "r1")
+
+    running = %{
+      issue_id: "working",
+      run_id: "r1",
+      identifier: "MT-4",
+      repo_key: @repo,
+      state: "In Progress",
+      session_id: "session-1",
+      started_at: started_at,
+      total_tokens: 65_000_000,
+      last_codex_event: nil,
+      last_codex_message: nil,
+      last_codex_timestamp: nil
+    }
+
+    snapshot = %{
+      running: [running],
+      retrying: [],
+      rate_limits: nil,
+      repositories: [],
+      dispatch_skipped: [],
+      watching: []
+    }
+
+    orchestrator = start_supervised!(%{id: RunningOrchestrator, start: {RunningOrchestrator, :start_link, [snapshot]}})
+
+    assert {:ok, %{lifecycle: lifecycle}} = SymphonyElixirWeb.Presenter.issue_payload("MT-4", orchestrator, 1_000)
+    assert lifecycle.tokens.total == 65_000_000
+    assert %{tokens: 65_000_000, agent_time_ms: agent_time_ms} = Enum.find(lifecycle.stages, &(&1.id == "coding"))
+    assert agent_time_ms >= 600_000
   end
 
   test "each of the state's issues carries the same lifecycle and phase path" do

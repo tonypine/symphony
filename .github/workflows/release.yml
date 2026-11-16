@@ -43,11 +43,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The release gate: every Mac check, from a clean build of this commit, on the self-hosted runner
+  # (mac-checks.yml). Pull requests run only the groups their paths feed, so this is where the rest
+  # run. Nothing is published from a commit that fails it: the app stays on its current version,
+  # and Symphony, which reads this run on its `workflow_run` delivery, files an Urgent fix ticket
+  # (lib/symphony_elixir/release_gate.ex; the job's name is how it tells the gate from the build).
+  gate:
+    name: release gate
+    uses: ./.github/workflows/mac-checks.yml
+    permissions:
+      contents: read
+    with:
+      ref: main
+      clean: true
+      build: true
+      unit: true
+      sandbox: true
+      helpers: true
+      driver: true
+      speed: true
+      update: true
+      smoke: true
+      installer: true
+
   release:
     name: release
+    needs: gate
     # The app targets macOS 26; the whole job builds with the Xcode pinned in
-    # .xcode-version. Apple silicon, so the release and the app build natively.
-    runs-on: macos-26
+    # .xcode-version. Apple silicon, so the release and the app build natively. It runs on the
+    # self-hosted runner, as the gate does, so a release never waits for one of GitHub's Macs.
+    runs-on: [self-hosted, macOS, tahoe]
+    env:
+      SYMPHONY_CI_REF: main
     timeout-minutes: 60
 
     steps:
@@ -86,12 +113,18 @@ jobs:
       - name: Select the pinned Xcode
         run: echo "DEVELOPER_DIR=$(sh scripts/ci/xcode-developer-dir.sh)" >> "$GITHUB_ENV"
 
-      - name: Set up mise tools
-        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
-        with:
-          install: true
-          install_args: "erlang elixir"
-          cache: true
+      # Homebrew's tools (minisign, jq) and mise's Erlang and Elixir, which the runner's service
+      # does not have on its PATH.
+      - name: Prepare the runner
+        run: |
+          # Only the tools the job names: all of Homebrew's bin would put its Python ahead of Xcode's.
+          tools="$RUNNER_TEMP/tools"; rm -rf "$tools"; mkdir -p "$tools"
+          for tool in mise minisign shellcheck jq socat; do ln -s "/opt/homebrew/bin/$tool" "$tools/$tool"; done
+          echo "$tools" >> "$GITHUB_PATH"
+          export PATH="$tools:$PATH"
+          mise trust -q && mise install -q
+          echo "$(dirname "$(mise which erl)")" >> "$GITHUB_PATH"
+          echo "$(dirname "$(mise which elixir)")" >> "$GITHUB_PATH"
 
       - name: Build the Symphony release
         env:
@@ -148,7 +181,10 @@ jobs:
           else
             identity=-
           fi
-          make bundle SYMPHONY_RELEASE="$GITHUB_WORKSPACE/_build/prod/rel/symphony" SIGNING_IDENTITY="$identity"
+          # The executable the gate built from nothing for this commit, from the build store; built
+          # here, from nothing, when the store has none. A release never takes an incremental build.
+          bash ../scripts/ci/build-store.sh app "$RUNNER_TEMP/release/SymphonyBar" --clean
+          make bundle PREBUILT_EXECUTABLE="$RUNNER_TEMP/release/SymphonyBar" SYMPHONY_RELEASE="$GITHUB_WORKSPACE/_build/prod/rel/symphony" SIGNING_IDENTITY="$identity"
           codesign -dvv build/Symphony.app 2>&1 | grep -E '^(Identifier|Authority|Signature)=' || true
           ../scripts/release/smoke_test.sh build/Symphony.app/Contents/Resources/symphony "$GITHUB_WORKSPACE/symphony.yml"
 
@@ -169,7 +205,7 @@ jobs:
             echo "No minisign key configured; skipping the .minisig asset."
             exit 0
           fi
-          brew install minisign
+          command -v minisign || brew install minisign
 
       - name: Package release assets
         env:

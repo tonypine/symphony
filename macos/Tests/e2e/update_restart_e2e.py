@@ -3,41 +3,25 @@
 
 Builds releases N and N+1 of Symphony.app from this checkout, installs N in a
 temporary folder, runs it in scripted QA mode against a fake Linear (the memory
-tracker) and a stub agent, and checks ten scenarios:
+tracker) and a stub agent, and checks the three things only a real install can prove:
 
-1. Update N -> N+1 while a run is active: the old Symphony drains and stops, the
-   new app starts its Symphony on its own, dispatch resumes, every Symphony BEAM
-   runs from inside the running app's bundle, and no BEAM from N is left running.
-2. Restart while a run is active, pressed after dispatch was resumed but before
-   the app polled again: it pauses dispatch itself, waits for the run, restarts
-   and resumes.
-3. Restart with a broken symphony.yml: refused with the config error, and the
-   running Symphony is left as it was.
-4. Rollback to `Symphony (previous).app`: it starts N's BEAM from its own bundle
-   and still reads its secrets.
-5. update_on_release: Automatically when released, from N with an agent run
-   active, with no menu press: once the feed publishes N+1 the app pauses
-   dispatch ("updating to vN+1") while the run goes on, records the start
-   notification with Cancel Update, waits for the run, relaunches on N+1 and
-   resumes dispatch, and N+1 notifies "Symphony updated to vN+1".
-6. update_on_release_hand_pause: a pause made by hand before N+1 is published
-   stays after the update.
-7. update_on_release_cancel: Cancel Update on that update resumes dispatch,
-   withdraws the start notification, and three later checks don't start N+1
-   again; the menu holds N+1 until Update to vN+1 installs it by hand.
-8. Automatically when idle, from N with Symphony running and no agent runs: it
-   installs N+1 by itself, which passes its health check, says so in a
-   notification, and shows "Updated to vN+1 (K changes)", which opens N+1's notes.
-9. Automatically when idle, with symphony.yml's workspaces.repo removed just
+1. Update N -> N+1 while an agent run is active: the old Symphony drains and
+   stops (the stub run is held until the test has seen the update wait for it),
+   N+1 is downloaded, verified, swapped in and relaunched from its own bundle,
+   starts its Symphony on its own, dispatch resumes, every Symphony BEAM runs
+   from inside the running app's bundle, and no BEAM from N is left running.
+2. Automatically when idle, with symphony.yml's workspaces.repo removed just
    after N+1's check passed: N+1 fails its health check and is rolled back; N
    says so in a notification naming N+1 and the failed check, and in a menu line
    that opens N+1's notes, and doesn't install N+1 again.
-9b. Retry vN+1 with a symphony.yml N+1 can't read: N+1's own check refuses it
-   before anything is touched, N keeps running and says why, and offers Retry.
-10. Retry vN+1 when N+1 can't start at all (the relaunch finds its binary not
-   executable): the update helper puts N back and N runs again within 60s of
-   the hand-over, says N+1 was rolled back, lists it as skipped, and the
-   update log names each step, the launch that failed included.
+3. Retry vN+1 when N+1 can't start at all (the relaunch finds its binary not
+   executable): the update helper, its start window shortened to a few seconds
+   for the test, puts N back, N runs again, says N+1 was rolled back, lists it
+   as skipped, and the update log names each step, the launch that failed
+   included.
+
+Everything else about Update, Restart and rollback is decided in
+SymphonyBarCore and covered by its unit tests (see Tests/e2e/README.md).
 
 It never touches the installed app: the app, its settings, secrets, logs,
 update downloads, Symphony's state and logs, HOME and the epmd port are all its
@@ -66,7 +50,6 @@ import tempfile
 import threading
 import time
 import urllib.request
-from datetime import datetime
 from pathlib import Path
 
 MACOS = Path(__file__).resolve().parents[2]
@@ -80,9 +63,9 @@ from stubs.update_feed import UpdateFeed  # noqa: E402
 
 BUILD_N = int(os.environ.get("SYMPHONY_E2E_BUILD_N", "90001"))
 BUILD_N1 = BUILD_N + 1
-STUB_SECONDS = int(os.environ.get("SYMPHONY_E2E_STUB_SECONDS", "15"))
+# The longest a held stub run waits to be released, so a stuck test can't hang CI.
+HOLD_LIMIT_SECONDS = 300
 ISSUE = "E2E-1"
-PAUSE_TITLE = "Pause Dispatch…"
 
 
 class Failure(Exception):
@@ -218,9 +201,8 @@ class Instance:
         self.config = work / "config" / "symphony.yml"
         self.stub_log = work / "logs" / "stub.log"
         self.runs_log = work / "logs" / "runs.log"
-        # How long the stub's runs take, when a scenario changes it.
-        self.stub_seconds_file = work / "config" / "stub-seconds"
-        self.stub_seconds = STUB_SECONDS
+        # While this file exists, each stub run waits for the test to remove it; without it, a run ends at once.
+        self.run_hold = work / "config" / "hold-runs"
         self.secret = secrets.token_hex(8)
         # N+1's notes as the feed serves them: the notes window shows them.
         self.release_notes = (feed.folder / "release_notes.md").read_text()
@@ -287,16 +269,20 @@ class Instance:
         stub = self.work / "bin" / "stub-claude"
         stub.write_text(
             "#!/bin/sh\n"
-            "# Stub agent: one Claude stream-json turn that takes a while, logged by session.\n"
+            "# Stub agent: one Claude stream-json turn, held while the test's hold file exists, logged by session.\n"
             "sid=\"e2e-$$\"\n"
             f"log='{self.stub_log}'\n"
-            f"seconds=\"$(cat '{self.stub_seconds_file}' 2>/dev/null || echo {STUB_SECONDS})\"\n"
+            f"hold='{self.run_hold}'\n"
+            f"deadline=$(( $(date +%s) + {HOLD_LIMIT_SECONDS} ))\n"
             "trap 'echo \"$(date +%s) killed $sid\" >> \"$log\"; exit 143' TERM INT\n"
             "echo \"$(date +%s) start $sid\" >> \"$log\"\n"
             "printf '%s\\n' \"{\\\"type\\\":\\\"system\\\",\\\"subtype\\\":\\\"init\\\",\\\"session_id\\\":\\\"$sid\\\","
             "\\\"cwd\\\":\\\"$PWD\\\",\\\"tools\\\":[],\\\"mcp_servers\\\":[],\\\"model\\\":\\\"stub\\\","
             "\\\"permissionMode\\\":\\\"default\\\",\\\"apiKeySource\\\":\\\"none\\\"}\"\n"
-            "sleep \"$seconds\" &\nwait $!\n"
+            "while [ -e \"$hold\" ]; do\n"
+            "  if [ \"$(date +%s)\" -ge \"$deadline\" ]; then echo \"$(date +%s) expired $sid\" >> \"$log\"; exit 1; fi\n"
+            "  sleep 0.2 &\n  wait $!\n"
+            "done\n"
             "echo \"$(date +%s) end $sid\" >> \"$log\"\n"
             "printf '%s\\n' \"{\\\"type\\\":\\\"result\\\",\\\"subtype\\\":\\\"success\\\",\\\"is_error\\\":false,"
             "\\\"num_turns\\\":1,\\\"result\\\":\\\"Done.\\\",\\\"session_id\\\":\\\"$sid\\\","
@@ -333,17 +319,20 @@ class Instance:
                 "restartTimeoutMinutes": 10,
                 "stopTimeoutSeconds": 30,
                 # Scenario 1 installs with Update to vX; the default, Automatically when released, would install by
-                # itself at the launch check.
+                # itself at the launch check. Scenario 2 chooses Automatically when idle.
                 "updateMode": "manual",
             }, file)
         secrets_file = self.qa / "secrets.json"
         secrets_file.write_text(json.dumps({"LINEAR_API_KEY": "e2e-not-a-real-key", "E2E_SECRET": self.secret}))
         secrets_file.chmod(0o600)
 
-    def set_stub_seconds(self, seconds):
-        """Makes the stub's next runs take `seconds`."""
-        self.stub_seconds = seconds
-        self.stub_seconds_file.write_text(f"{seconds}\n")
+    def hold_runs(self):
+        """Makes the stub's runs wait, from now on, until `release_runs`."""
+        self.run_hold.touch()
+
+    def release_runs(self):
+        """Ends the held stub runs, and lets the next ones end at once."""
+        self.run_hold.unlink(missing_ok=True)
 
     def update_settings(self, **values):
         """Changes the app's settings, as Settings… would, while the app isn't running."""
@@ -428,14 +417,6 @@ class Instance:
     def alerts(self):
         return (self.status() or {}).get("alerts", [])
 
-    def withdrawn(self):
-        """The titles of the recorded notifications the app withdrew."""
-        return (self.status() or {}).get("withdrawn", [])
-
-    def pause(self):
-        """Symphony's pause: `paused` and `reason`; empty while it doesn't answer."""
-        return (self.symphony_state() or {}).get("pause") or {}
-
     def wait_for_handoff(self, app_pid):
         """Waits for the app this script launched to quit for the update helper.
 
@@ -462,42 +443,6 @@ class Instance:
                 return json.loads(response.read())
         except (OSError, ValueError):
             return None
-
-    def control(self, action):
-        """Sends `pause` or `resume` to Symphony's control API itself, as the dashboard or another client would."""
-        state = self.qa / "state"
-        request = urllib.request.Request(
-            f"{(state / 'control_url').read_text().strip()}/api/v1/control/{action}",
-            data=b"{}",
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {(state / 'control_token').read_text().strip()}",
-                "Content-Type": "application/json",
-            },
-        )
-        with urllib.request.urlopen(request, timeout=10):
-            pass
-        log(f"sent {action} to Symphony's control API")
-
-    def pause_requests(self, since):
-        """The `POST /api/v1/control/pause` lines Symphony logged at or after `since` (epoch seconds).
-
-        The log is written late (synced every few seconds), so a line's own time tells which pause it was.
-        """
-        found = []
-        for path in (self.qa / "symphony-logs").glob("symphony.log*"):
-            if not re.fullmatch(r"symphony\.log(\.\d+)?", path.name):
-                continue  # the wrap log's .idx and .siz files
-            for line in path.read_text(errors="replace").splitlines():
-                if "POST /api/v1/control/pause" not in line:
-                    continue
-                try:
-                    logged = datetime.fromisoformat(line.split(" ", 1)[0].replace("Z", "+00:00")).timestamp()
-                except ValueError:
-                    continue
-                if logged >= since:
-                    found.append(line)
-        return found
 
     def symphony_pid(self):
         return (self.status() or {}).get("symphony_pid")
@@ -679,8 +624,10 @@ def check_drained(instance, session, symphony_pid, tracker):
 
 def scenario_update(instance):
     log("scenario 1: Update N -> N+1 while a run is active")
+    # The run is held until the test has seen the update wait for it.
+    instance.hold_runs()
     instance.press("Start Symphony", timeout=60)
-    instance.wait_for_active_run()
+    sessions = instance.wait_for_active_run()
     instance.wait_for_new_run(0, BUILD_N)
     instance.check_runs_from_bundle(instance.app, BUILD_N)
     # A settings file from before a rename: N+1's start rewrites it. Added while N runs, which keeps its last good
@@ -691,8 +638,6 @@ def scenario_update(instance):
     update_title = f"Update to v{version(BUILD_N1)}"
     wait_for(f"'{update_title}'", lambda: instance.menu().get(update_title), 60)
 
-    # Press while a run is just starting, so the drain has something to wait for.
-    sessions = wait_for("a run with time left", lambda: _fresh_session(instance), 60)
     old_app = instance.status()["pid"]
     old_symphony = instance.symphony_pid()
     runs_before = len(instance.runs())
@@ -700,6 +645,19 @@ def scenario_update(instance):
     tracker.start()
     try:
         instance.press(update_title)
+        wait_for(
+            "the update to show it waits for the agent run",
+            # "Updating to vN+1: waiting for 1 agent run…" while the update drains (or the drain's "Waiting for …").
+            lambda: any("waiting for 1 agent run" in line.lower() for line in tracker.lines),
+            120,
+        )
+        # Downloaded, verified and draining: the run goes on, under the old Symphony, until the test lets it end.
+        events = instance.stub_events(sessions[0])
+        if events.keys() & {"end", "killed", "expired"} or not alive(old_symphony) or not alive(old_app):
+            raise Failure(f"the update didn't wait for the run {sessions[0]}: {events}, "
+                          f"Symphony {old_symphony} alive {alive(old_symphony)}, app {old_app} alive {alive(old_app)}")
+        log(f"the update waits for the run {sessions[0]}; releasing it")
+        instance.release_runs()
         wait_for("the old app to quit", lambda: tracker.gone_at(old_app), 180)
         new = wait_for(
             f"build {BUILD_N1} to relaunch",
@@ -709,13 +667,13 @@ def scenario_update(instance):
         log(f"build {BUILD_N1} relaunched as pid {new['pid']}")
         instance.app_process = None
         wait_for("the new app to start Symphony", lambda: instance.symphony_pid(), 120)
-        instance.wait_for_new_run(runs_before, BUILD_N1, timeout=180)
+        secret = instance.wait_for_new_run(runs_before, BUILD_N1, timeout=180)
         wait_for("dispatch to be resumed", lambda: (s := instance.symphony_state()) and not s["pause"]["paused"], 60)
     finally:
         tracker.stop()
-    if not any(line.startswith("Waiting for") for line in tracker.lines):
-        raise Failure(f"the update never showed it was waiting for agent runs; lines seen: {sorted(tracker.lines)}")
     check_drained(instance, sessions[0], old_symphony, tracker)
+    if secret != instance.secret:
+        raise Failure(f"N+1's Symphony didn't give its run the secret stored in Settings (got {secret!r})")
 
     if alive(old_symphony) or instance.beam_pids(BUILD_N):
         raise Failure(f"build {BUILD_N}'s Symphony is still running: {instance.beam_pids(BUILD_N)}")
@@ -743,99 +701,6 @@ def scenario_update(instance):
         120,
     )
     log("scenario 1 passed")
-
-
-def _fresh_session(instance):
-    """The active sessions, once one has at least half the stub's run time left."""
-    sessions = instance.active_sessions()
-    if not sessions:
-        return None
-    started = instance.stub_events(sessions[0]).get("start")
-    return sessions if started and time.time() - started < instance.stub_seconds / 2 else None
-
-
-def scenario_restart(instance):
-    log("scenario 2: Restart while a run is active, right after dispatch was resumed")
-    sessions = wait_for("a run with time left", lambda: _fresh_session(instance), 120)
-    old_symphony = instance.symphony_pid()
-    runs_before = len(instance.runs())
-    # TP-435: the app's last poll shows dispatch paused, but it is resumed before Restart is pressed, so the restart
-    # can't count on that pause. Pause from the menu (the app polls right after), resume behind its back, and press
-    # Restart before its next poll, 5s later.
-    instance.press(PAUSE_TITLE)
-    wait_for("the menu to show dispatch paused", lambda: instance.menu().get("Resume Dispatch"), 10)
-    instance.control("resume")
-    pressed = time.time()
-    tracker = Tracker(instance, [old_symphony])
-    tracker.start()
-    try:
-        instance.press("Restart Symphony")
-        wait_for(
-            "Symphony to restart",
-            lambda: (pid := instance.symphony_pid()) and pid != old_symphony and pid,
-            180,
-        )
-        wait_for(
-            "the restart's own POST /api/v1/control/pause in Symphony's log",
-            lambda: instance.pause_requests(since=pressed),
-            30,
-        )
-        instance.wait_for_new_run(runs_before, BUILD_N1)
-        wait_for("dispatch to be resumed", lambda: (s := instance.symphony_state()) and not s["pause"]["paused"], 60)
-    finally:
-        tracker.stop()
-    if not any(line.startswith("Waiting for") for line in tracker.lines):
-        raise Failure(f"the restart never showed it was waiting for agent runs; lines seen: {sorted(tracker.lines)}")
-    check_drained(instance, sessions[0], old_symphony, tracker)
-    log("scenario 2 passed")
-
-
-def scenario_broken_config(instance):
-    log("scenario 3: Restart with a broken symphony.yml")
-    symphony = wait_for("Symphony", lambda: instance.symphony_pid(), 60)
-    alerts_before = len(instance.alerts())
-    good = instance.config.read_text()
-    instance.config.write_text(good + "issues: [\n")
-    try:
-        instance.press("Restart Symphony")
-        alert = wait_for(
-            "the restart to be refused",
-            lambda: (alerts := instance.alerts()[alerts_before:]) and alerts[0],
-            120,
-        )
-    finally:
-        instance.config.write_text(good)
-    log(f"refused: {alert['title']}: {alert['message'][:200]}")
-    if alert["title"] != "Symphony wasn't restarted" or "symphony.yml" not in alert["message"]:
-        raise Failure(f"unexpected alert: {alert}")
-    if instance.symphony_pid() != symphony or not alive(symphony):
-        raise Failure(f"Symphony {symphony} didn't keep running: now {instance.symphony_pid()}")
-    runs_before = len(instance.runs())
-    instance.wait_for_new_run(runs_before, BUILD_N1)
-    state = instance.symphony_state()
-    if not state or state["pause"]["paused"]:
-        raise Failure(f"dispatch didn't stay on: {state and state['pause']}")
-    log("scenario 3 passed")
-
-
-def scenario_rollback(instance):
-    log("scenario 4: Rollback to Symphony (previous).app")
-    instance.quit()
-    instance.app.rename(instance.applications / "Symphony (rolled back).app")
-    instance.previous.rename(instance.app)
-    log("swapped Symphony (previous).app back in")
-    status = instance.launch()
-    if status["build"] != BUILD_N:
-        raise Failure(f"the rolled-back app is build {status['build']}, not {BUILD_N}")
-    runs_before = len(instance.runs())
-    instance.press("Start Symphony", timeout=60)
-    secret = instance.wait_for_new_run(runs_before, BUILD_N, timeout=180)
-    instance.check_runs_from_bundle(instance.app, BUILD_N)
-    if secret != instance.secret:
-        raise Failure(f"the rolled-back Symphony didn't get the stored secret (got {secret!r})")
-    if instance.alerts():
-        raise Failure(f"the rolled-back app showed alerts: {instance.alerts()}")
-    log("scenario 4 passed")
 
 
 def change_count(notes):
@@ -871,317 +736,21 @@ def check_notes(instance, line, build, message=None):
     log(f"'{line}' opened the notes of {version(build)}")
 
 
-# Automatically when released (TP-970's journeys J3 and J4).
-
-CHECK_INTERVAL_KEY = "SYMPHONY_BAR_UPDATE_CHECK_INTERVAL"
-# Seconds between update checks in Automatically when released: the scenarios publish N+1 and wait for a check.
-CHECK_INTERVAL = 2
-# How long each stub run takes in those scenarios, so the run active when N+1 is published outlasts the download and
-# verification and is still going when the app pauses dispatch.
-ON_RELEASE_STUB_SECONDS = 45
-START_TITLE = f"Updating Symphony to v{version(BUILD_N1)}"
-# The update item's title while an update is under way, and the line under a release Cancel Update holds (S2e).
-UPDATING_TITLE = "Updating Symphony…"
-CANCELLED_LINE = "You cancelled this update. It waits for you; a newer release installs by itself."
-
-
-def put_n_back(instance):
-    """Makes N `Symphony.app` again, N+1 thrown away, while the app isn't running."""
-    if instance.app_build(instance.app) == BUILD_N:
-        return
-    shutil.rmtree(instance.app)
-    instance.previous.rename(instance.app)
-    log(f"put build {BUILD_N} back as Symphony.app")
-
-
-def start_on_release(instance):
-    """Quits, puts N back and launches it in Automatically when released, checking every CHECK_INTERVAL seconds, with
-    Start at launch on and the feed serving N only. Returns N's status once its Symphony runs."""
-    instance.quit()
-    put_n_back(instance)
-    instance.set_issue_state("Todo")
-    instance.set_stub_seconds(ON_RELEASE_STUB_SECONDS)
-    instance.feed.set_mode("none")
-    log(f"the feed serves v{version(BUILD_N)} only")
-    instance.update_settings(updateMode="onRelease", startOnLaunch=True)
-    instance.env[CHECK_INTERVAL_KEY] = str(CHECK_INTERVAL)
-    log(f"Automatically when released, a check every {CHECK_INTERVAL}s, Start at launch on")
-    status = instance.launch()
-    if status["build"] != BUILD_N:
-        raise Failure(f"the app is build {status['build']}, not {BUILD_N}")
-    wait_for("the app to start Symphony", lambda: instance.symphony_pid(), 120)
-    return status
-
-
-def publish(instance):
-    instance.feed.set_mode("publish")
-    log(f"published v{version(BUILD_N1)} in the feed")
-
-
-def recent_session(instance):
-    """The active sessions, once one started in the last 5 seconds: it has nearly all its run time left."""
-    sessions = instance.active_sessions()
-    started = sessions and instance.stub_events(sessions[0]).get("start")
-    return sessions if started and time.time() - started < 5 else None
-
-
-def wait_for_update_pause(instance, timeout=90):
-    """Waits for the app to pause dispatch for N+1 by itself, with the update's reason."""
-    reason = f"updating to v{version(BUILD_N1)}"
-    pause = wait_for(
-        f"dispatch to be paused with the reason '{reason}' (pause: {instance.pause()})",
-        lambda: (p := instance.pause()).get("paused") and p.get("reason") == reason and p,
-        timeout,
-    )
-    log(f"dispatch paused by the app: '{pause['reason']}'")
-    return pause
-
-
-def check_start_notification(instance):
-    """The app recorded "Updating Symphony to vN+1" for one active run, with its Cancel Update action."""
-    notice = new_alert(instance, START_TITLE, 30)
-    body = ("Dispatch is paused until 1 agent run finishes. Symphony then updates and resumes dispatch."
-            " · Cancel Update")
-    if notice["message"] != body:
-        raise Failure(f"the start notification says {notice['message']!r}, not {body!r}")
-    log(f"recorded the start notification: {notice['title']}: {notice['message']}")
-
-
-def check_run_going(instance, session, symphony):
-    """The run `session` wasn't stopped, and the Symphony running it still runs."""
-    events = instance.stub_events(session)
-    if "killed" in events:
-        raise Failure(f"the run {session} was stopped: {events}")
-    if instance.symphony_pid() != symphony or not alive(symphony):
-        raise Failure(f"Symphony {symphony} didn't keep running: now {instance.symphony_pid()}")
-
-
-def wait_for_relaunch(instance, old_app, timeout=240):
-    """Waits for N+1 to relaunch in place of the app `old_app` and start its Symphony; returns its status."""
-    new = wait_for(
-        f"build {BUILD_N1} to relaunch",
-        lambda: (s := instance.status()) and s["pid"] != old_app and s["build"] == BUILD_N1 and s,
-        timeout,
-    )
-    instance.app_process = None
-    log(f"the app relaunched on build {BUILD_N1} as pid {new['pid']}")
-    wait_for("the new app to start Symphony", lambda: instance.symphony_pid(), 120)
-    return new
-
-
-def check_updated_folder(instance):
-    if instance.beam_pids(BUILD_N):
-        raise Failure(f"build {BUILD_N}'s Symphony is still running: {instance.beam_pids(BUILD_N)}")
-    instance.check_runs_from_bundle(instance.app, BUILD_N1)
-    if instance.app_build(instance.app) != BUILD_N1 or instance.app_build(instance.previous) != BUILD_N:
-        raise Failure("the app folder doesn't hold N+1 as Symphony.app and N as Symphony (previous).app")
-
-
-def scenario_update_on_release(instance):
-    v, v1 = version(BUILD_N), version(BUILD_N1)
-    log(f"scenario 5 update_on_release: v{v} -> v{v1} by itself while a run is active, with no menu action")
-    first = start_on_release(instance)
-    sessions = wait_for("a run that just started", lambda: recent_session(instance), 120)
-    old_app, old_symphony = first["pid"], instance.symphony_pid()
-    runs_before = len(instance.runs())
-    presses_before = instance.command_count
-    tracker = Tracker(instance, [old_app, old_symphony])
-    tracker.start()
-    try:
-        publish(instance)
-        wait_for_update_pause(instance)
-        # The run active when the release came out goes on: dispatch is paused, not the run.
-        if sessions[0] not in instance.active_sessions():
-            raise Failure(f"the run {sessions[0]} isn't active once dispatch paused: {instance.active_sessions()}")
-        check_run_going(instance, sessions[0], old_symphony)
-        log(f"the run {sessions[0]} keeps going")
-        check_start_notification(instance)
-        wait_for(
-            f"the active run {sessions[0]} to finish",
-            lambda: instance.stub_events(sessions[0]).keys() & {"end", "killed"},
-            ON_RELEASE_STUB_SECONDS + 30,
-        )
-        if "killed" in instance.stub_events(sessions[0]):
-            raise Failure(f"the run {sessions[0]} was stopped: {instance.stub_events(sessions[0])}")
-        log(f"the active run {sessions[0]} finished")
-        wait_for("the old app to quit", lambda: tracker.gone_at(old_app), 180)
-        wait_for_relaunch(instance, old_app)
-        instance.wait_for_new_run(runs_before, BUILD_N1, timeout=180)
-        wait_for("dispatch to be resumed", lambda: (p := instance.pause()) and not p["paused"], 60)
-        log("dispatch resumed")
-    finally:
-        tracker.stop()
-    if not any(line.startswith("Waiting for") for line in tracker.lines):
-        raise Failure(f"the update never showed it was waiting for agent runs; lines seen: {sorted(tracker.lines)}")
-    check_drained(instance, sessions[0], old_symphony, tracker)
-    check_updated_folder(instance)
-    if instance.command_count != presses_before:
-        raise Failure("the test pressed a menu item during the update")
-    log("no menu item was pressed")
-
-    # The relaunched app says the update was automatic.
-    changes = change_count(instance.release_notes)
-    notice = new_alert(instance, f"Symphony updated to v{v1}", 240)
-    body = (f"{changes}. " if changes else "") + f"Choose Updated to v{v1} in the menu for the release notes."
-    if notice["message"] != body:
-        raise Failure(f"the update notification says {notice['message']!r}, not {body!r}")
-    log(f"notified: {notice['title']}: {notice['message']}")
-    if instance.alerts() != [notice]:
-        raise Failure(f"the updated app showed other alerts: {instance.alerts()}")
-    log("scenario 5 update_on_release: PASS")
-
-
-def scenario_update_on_release_hand_pause(instance):
-    log("scenario 6 update_on_release_hand_pause: a pause made by hand before the release stays after the update")
-    first = start_on_release(instance)
-    reason = "e2e: paused by hand before the release"
-    instance.press(PAUSE_TITLE, answer=reason)
-    wait_for(f"dispatch to be paused with '{reason}'", lambda: instance.pause().get("reason") == reason, 30)
-    # The app knows it is paused, so the update's drain leaves the pause as it is instead of making its own.
-    wait_for("the menu to show dispatch paused", lambda: instance.menu().get("Resume Dispatch"), 15)
-    log(f"dispatch paused by hand: '{reason}'")
-    publish(instance)
-    wait_for("the app to install N+1 by itself and quit", lambda: not alive(first["pid"]), 240)
-    instance.app_process = None
-    wait_for_relaunch(instance, first["pid"])
-    new_alert(instance, f"Symphony updated to v{version(BUILD_N1)}", 240)
-    check_updated_folder(instance)
-    # The new app has seen Symphony answer, and leaves the pause it didn't make: a few polls later it still holds.
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        pause = instance.pause()
-        if not pause.get("paused") or pause.get("reason") != reason:
-            raise Failure(f"the hand pause didn't stay after the update: {pause}")
-        time.sleep(0.5)
-    log(f"dispatch is still paused by hand after the update: '{reason}'")
-    instance.press("Resume Dispatch")
-    wait_for("dispatch to be resumed", lambda: (p := instance.pause()) and not p["paused"], 30)
-    log("scenario 6 update_on_release_hand_pause: PASS")
-
-
-def scenario_update_on_release_cancel(instance):
-    v1 = version(BUILD_N1)
-    log(f"scenario 7 update_on_release_cancel: Cancel Update holds v{v1}, which waits for Update to v{v1}")
-    first = start_on_release(instance)
-    sessions = wait_for("a run that just started", lambda: recent_session(instance), 120)
-    symphony = instance.symphony_pid()
-    publish(instance)
-    wait_for_update_pause(instance)
-    check_start_notification(instance)
-
-    # The menu's Cancel Update does what the notification's does (UpdateCancel); scripted QA presses the menu's.
-    instance.press("Cancel Update")
-    wait_for("dispatch to be resumed", lambda: (p := instance.pause()) and not p["paused"], 30)
-    log("dispatch resumed")
-    check_run_going(instance, sessions[0], symphony)
-    log(f"the run {sessions[0]} keeps going")
-    wait_for(f"the start notification to be withdrawn (withdrawn: {instance.withdrawn()})",
-             lambda: instance.withdrawn() == [START_TITLE], 15)
-    log("the start notification was withdrawn")
-
-    # Each check finds N+1 again; none may start it. A 4th request means the 3rd check's result was acted on.
-    checks = instance.feed.latest_requests
-    deadline = time.monotonic() + 4 * CHECK_INTERVAL + 60
-    while instance.feed.latest_requests < checks + 4:
-        status = instance.status() or {}
-        menu = {item["title"] for item in status.get("menu", [])}
-        started = [a for a in status.get("alerts", []) if a["title"] == START_TITLE]
-        if status.get("pid") != first["pid"]:
-            raise Failure(f"the app quit after Cancel Update: now pid {status.get('pid')}")
-        if menu & {UPDATING_TITLE, "Cancel Update"} or len(started) > 1 or instance.pause().get("paused"):
-            raise Failure(f"a later check started v{v1} again: menu {sorted(menu)}, start notifications {started}, "
-                          f"pause {instance.pause()}")
-        if time.monotonic() > deadline:
-            raise Failure(f"the app checked only {instance.feed.latest_requests - checks} times since Cancel Update")
-        time.sleep(0.25)
-    log(f"three checks found v{v1} and started no update")
-
-    wait_for(
-        f"the held release in the menu (menu: {instance.menu()})",
-        lambda: (menu := instance.menu()) and CANCELLED_LINE in menu
-        and menu.get(f"Update to v{v1}") and menu.get("Skip This Version"),
-        15,
-    )
-    log(f"the menu holds v{v1}: '{CANCELLED_LINE}', Update to v{v1}, Skip This Version")
-
-    # Update to vN+1 by hand: it waits for the run under way, then relaunches on N+1.
-    sessions = wait_for("a run with time left", lambda: _fresh_session(instance), 120)
-    runs_before = len(instance.runs())
-    tracker = Tracker(instance, [first["pid"], symphony])
-    tracker.start()
-    try:
-        instance.press(f"Update to v{v1}")
-        wait_for("the old app to quit", lambda: tracker.gone_at(first["pid"]), 180)
-        wait_for_relaunch(instance, first["pid"])
-        instance.wait_for_new_run(runs_before, BUILD_N1, timeout=180)
-        wait_for("dispatch to be resumed", lambda: (p := instance.pause()) and not p["paused"], 60)
-        log("dispatch resumed")
-    finally:
-        tracker.stop()
-    check_drained(instance, sessions[0], symphony, tracker)
-    check_updated_folder(instance)
-    log("scenario 7 update_on_release_cancel: PASS")
-
-
-def scenario_automatic_update(instance):
-    log("scenario 8: Automatically when idle installs N+1 by itself, notifies, and the menu line opens its notes")
-    instance.quit()
-    # Scenario 7 left N+1 as Symphony.app. The checks follow the settings again, and the feed still publishes N+1.
-    put_n_back(instance)
-    instance.env.pop(CHECK_INTERVAL_KEY, None)
-    instance.set_stub_seconds(STUB_SECONDS)
-    # Symphony runs with no agent runs: the issue leaves the active states, so nothing is dispatched.
-    instance.set_issue_state("Backlog")
-    instance.update_settings(updateMode="whenIdle", startOnLaunch=True)
-    log("Automatically when idle and Start at launch on, nothing to dispatch")
-    first = instance.launch()
-    if first["build"] != BUILD_N:
-        raise Failure(f"the app is build {first['build']}, not {BUILD_N}")
-
-    # No press: the app starts Symphony, sees it idle and installs N+1, which checks its health and starts Symphony.
-    instance.wait_for_handoff(first["pid"])
-    new = wait_for(
-        f"build {BUILD_N1} to install itself and relaunch",
-        lambda: (s := instance.status()) and s["pid"] != first["pid"] and s["build"] == BUILD_N1 and s,
-        300,
-    )
-    instance.app_process = None
-    log(f"build {BUILD_N1} relaunched as pid {new['pid']}")
-    v1 = version(BUILD_N1)
-    changes = change_count(instance.release_notes)
-    notice = new_alert(instance, f"Symphony updated to v{v1}", 240)
-    body = (f"{changes}. " if changes else "") + f"Choose Updated to v{v1} in the menu for the release notes."
-    if notice["message"] != body:
-        raise Failure(f"the update notification says {notice['message']!r}, not {body!r}")
-    log(f"notified: {notice['title']}: {notice['message']}")
-    if instance.alerts() != [notice]:
-        raise Failure(f"the updated app showed other alerts: {instance.alerts()}")
-
-    wait_for("the updated app to run Symphony", lambda: instance.symphony_pid(), 60)
-    instance.check_runs_from_bundle(instance.app, BUILD_N1)
-    wait_for("dispatch to be resumed", lambda: (s := instance.symphony_state()) and not s["pause"]["paused"], 60)
-    if instance.app_build(instance.app) != BUILD_N1 or instance.app_build(instance.previous) != BUILD_N:
-        raise Failure("the app folder doesn't hold N+1 as Symphony.app and N as Symphony (previous).app")
-
-    line = f"Updated to v{v1}" + (f" ({changes})" if changes else "")
-    wait_for(f"the enabled '{line}' line (menu: {list(instance.menu())})", lambda: instance.menu().get(line), 30)
-    check_notes(instance, line, BUILD_N1)
-    log("scenario 8 passed")
-
-
 def scenario_automatic_rollback(instance):
-    log("scenario 9: N+1 passes its check, then fails its health check (workspaces.repo is gone) and is rolled back to N")
+    log("scenario 2: N+1 passes its check, then fails its health check (workspaces.repo is gone) and is rolled back to N")
     instance.quit()
     shutil.rmtree(instance.app)
     instance.previous.rename(instance.app)
-    # Scenario 4's, so the one found afterwards is the rollback's.
+    # So the one found afterwards is the rollback's.
     rolled_back = instance.applications / "Symphony (rolled back).app"
     shutil.rmtree(rolled_back, ignore_errors=True)
     # N+1's check before the install must pass, so the repo exists until the hand-over.
     repo = instance.work / "vanishing-repo"
     subprocess.run(["git", "init", "-q", str(repo)], check=True)
     instance.write_config("worktree", repo)
-    instance.update_settings(startOnLaunch=False)
+    # Automatically when idle, with Symphony stopped and nothing to dispatch: N installs N+1 with no press.
+    instance.set_issue_state("Backlog")
+    instance.update_settings(updateMode="whenIdle", startOnLaunch=False)
     update_log = instance.qa / "logs" / "update.log"
     log_before = len(instance._read(update_log).splitlines()) if update_log.exists() else 0
     log(f"installed N again; symphony.yml's workspaces.repo is {repo}")
@@ -1241,51 +810,21 @@ def scenario_automatic_rollback(instance):
     status = instance.status()
     if status["pid"] != restored["pid"] or status["build"] != BUILD_N:
         raise Failure(f"the restored app didn't stay: now pid {status['pid']}, build {status['build']}")
-    log("scenario 9 passed")
+    # The next scenario's install checks symphony.yml again: it needs a repo that exists.
+    instance.write_config("clone", instance.work / "repo")
+    log("scenario 2 passed")
 
 
-def scenario_refused_before_install(instance):
-    v, v1 = version(BUILD_N), version(BUILD_N1)
-    log(f"scenario 9b: Retry v{v1} with a symphony.yml it can't read is refused before anything is touched")
-    status = instance.status()
-    if status["build"] != BUILD_N:
-        raise Failure(f"the app is build {status['build']}, not {BUILD_N}")
-    instance.write_config("worktree", instance.work / "missing-repo")
-    alerts_before = len(instance.alerts())
-    try:
-        instance.press(f"Retry v{v1}", timeout=60)
-        alert = new_alert(instance, "Symphony wasn't updated", 240)
-        if "workspaces.repo does not exist" not in alert["message"] or "keeps running" not in alert["message"]:
-            raise Failure(f"the refusal doesn't say why: {alert['message']!r}")
-        log(f"refused: {alert['message'][:200]}")
-        refused = wait_for(
-            f"'Update refused: v{v1}' (menu: {list(instance.menu())})",
-            lambda: any(t.startswith(f"Update refused: v{v1}") for t in instance.menu()),
-            60,
-        )
-        if not refused or f"Retry v{v1}" not in instance.menu():
-            raise Failure(f"the menu offers no Retry v{v1}: {instance.menu()}")
-        after = instance.status()
-        if after["pid"] != status["pid"] or after["build"] != BUILD_N or instance.app_build(instance.app) != BUILD_N:
-            raise Failure(f"the refusal touched the app: pid {after['pid']}, build {after['build']}")
-        # Retry's confirmation ("Update to vN?") is an alert too; the refusal is the only other one.
-        shown = [a["title"] for a in instance.alerts()[alerts_before:]]
-        if sorted(shown) != sorted([f"Update to v{v1}?", "Symphony wasn't updated"]):
-            raise Failure(f"the refusal showed other alerts: {instance.alerts()}")
-    finally:
-        # Scenario 9's repo is gone too: the next scenario's check needs a file that loads.
-        instance.write_config("clone", instance.work / "repo")
-    log(f"scenario 9b passed: v{v} keeps running")
-
-
-# The bound the update helper gives a relaunched app to start (UpdateLaunch.timeout), and the acceptance bound for
-# having the previous app running again after an update whose app can't start.
-LAUNCH_SECONDS = 30
-RESTORED_WITHIN = 60
+# The bound the update helper gives a relaunched app to start, shortened for scenario 3 from the product's 30 seconds
+# (UpdateLaunch.timeout) through the helper's SYMPHONY_UPDATE_LAUNCH_SECONDS, which QA mode passes on; and how long
+# the test waits for the previous app to run again after an update whose app can't start.
+LAUNCH_SECONDS_KEY = "SYMPHONY_UPDATE_LAUNCH_SECONDS"
+LAUNCH_SECONDS = 5
+RESTORED_WITHIN = LAUNCH_SECONDS + 30
 
 
 def scenario_unlaunchable_update(instance):
-    log("scenario 10: N+1 can't start at all; the helper puts N back and N runs within 60s, N+1 skipped")
+    log(f"scenario 3: N+1 can't start at all; the helper puts N back after {LAUNCH_SECONDS}s and N runs, N+1 skipped")
     instance.quit()
     v, v1 = version(BUILD_N), version(BUILD_N1)
     rolled_back = instance.applications / "Symphony (rolled back).app"
@@ -1304,13 +843,14 @@ def scenario_unlaunchable_update(instance):
     )
     relaunch.chmod(0o755)
     instance.env["SYMPHONY_UPDATE_OPEN"] = str(relaunch)
+    instance.env[LAUNCH_SECONDS_KEY] = str(LAUNCH_SECONDS)
     update_log = instance.qa / "logs" / "update.log"
     log_before = len(instance._read(update_log).splitlines()) if update_log.exists() else 0
     first = instance.launch()
     if first["build"] != BUILD_N:
         raise Failure(f"the app is build {first['build']}, not {BUILD_N}")
 
-    # Scenarios 9 and 9b pinned N+1; Retry installs it by hand.
+    # Scenario 2 pinned N+1; Retry installs it by hand.
     instance.press(f"Retry v{v1}", timeout=60)
     instance.wait_for_handoff(first["pid"])
     handed_over = time.monotonic()
@@ -1369,20 +909,12 @@ def scenario_unlaunchable_update(instance):
     status = instance.status()
     if status["pid"] != restored["pid"] or status["build"] != BUILD_N:
         raise Failure(f"the restored app didn't stay: now pid {status['pid']}, build {status['build']}")
-    log("scenario 10 passed")
+    log("scenario 3 passed")
 
 
 SCENARIOS = (
     scenario_update,
-    scenario_restart,
-    scenario_broken_config,
-    scenario_rollback,
-    scenario_update_on_release,
-    scenario_update_on_release_hand_pause,
-    scenario_update_on_release_cancel,
-    scenario_automatic_update,
     scenario_automatic_rollback,
-    scenario_refused_before_install,
     scenario_unlaunchable_update,
 )
 

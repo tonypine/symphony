@@ -12,7 +12,10 @@ defmodule SymphonyElixir.Inbox.FromRecord do
   - otherwise one `:blocked` item when its pause has a reason the Director may release
     (`Item.from_pause/2`);
   - otherwise one `:waiting` item when it waits in CI Fix on CI (`Item.from_ci_wait/1`), the one row
-    that asks nothing of the Director.
+    that asks nothing of the Director;
+  - otherwise one `:blocked` item when Symphony can't tell what it waits on
+    (`SymphonyElixir.Situation.not_known?/2`, with the snapshot's runs, retries and slot waits): the
+    ticket page's "Not known" status and this row are the same reading (`Item.from_not_known/1`).
 
   A record whose rows raise lists nothing and is logged with its ticket; the other records still
   list.
@@ -32,7 +35,7 @@ defmodule SymphonyElixir.Inbox.FromRecord do
 
   require Logger
 
-  alias SymphonyElixir.{Config, PlanReview, TicketState}
+  alias SymphonyElixir.{Config, PlanReview, Situation, TicketState}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Inbox.Item
 
@@ -55,7 +58,7 @@ defmodule SymphonyElixir.Inbox.FromRecord do
     records
     |> Enum.map(&TicketState.normalize/1)
     |> Enum.filter(&is_binary(&1.issue_id))
-    |> Enum.flat_map(&record_items(&1, settings_fun))
+    |> Enum.flat_map(&record_items(&1, settings_fun, snapshot))
     |> Enum.reject(&(MapSet.member?(working_ids, &1.issue_id) or left_review?(&1, watched_states, settings_fun)))
     |> Enum.map(&%{&1 | state: Map.get(watched_states, &1.issue_id, &1.state)})
     |> with_clarify(snapshot)
@@ -78,10 +81,12 @@ defmodule SymphonyElixir.Inbox.FromRecord do
 
   # One ticket's record that cannot be read as rows lists nothing, and the others still list: the
   # failure is logged with the ticket, so one bad record never takes the whole Inbox down.
-  defp record_items(record, settings_fun) do
-    case Item.from_plan_brief(record, settings_fun.(record.repo_key)) do
+  defp record_items(record, settings_fun, snapshot) do
+    settings = settings_fun.(record.repo_key)
+
+    case Item.from_plan_brief(record, settings) do
       %{} = plan -> [plan]
-      nil -> questions_or_pause(record)
+      nil -> questions_or_pause(record, fn -> Situation.live_facts(snapshot, DateTime.utc_now(), settings) end)
     end
   rescue
     error ->
@@ -90,12 +95,15 @@ defmodule SymphonyElixir.Inbox.FromRecord do
       []
   end
 
-  defp questions_or_pause(record) do
+  # `live` reads the snapshot's runs, retries and slot waits only for a ticket nothing else lists.
+  defp questions_or_pause(record, live) do
     case Enum.filter(record.questions, &(&1.state == :open)) do
-      [] -> List.wrap(Item.from_pause(record, record.pause) || Item.from_ci_wait(record))
+      [] -> List.wrap(Item.from_pause(record, record.pause) || Item.from_ci_wait(record) || not_known(record, live))
       open -> Enum.map(open, &Item.from_question(record, &1))
     end
   end
+
+  defp not_known(record, live), do: if(Situation.not_known?(record, live.()), do: Item.from_not_known(record))
 
   defp with_clarify(items, snapshot) do
     listed = MapSet.new(items, & &1.issue_id)

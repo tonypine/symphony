@@ -1,6 +1,9 @@
 import AppKit
 import SymphonyBarCore
 
+// A QA launch on the gallery's fixture folder runs the Component Gallery instead (GalleryLaunch).
+GalleryLaunch.runIfAsked()
+
 // Top-level code runs on the main thread; say so, since AppDelegate is main-actor isolated.
 MainActor.assumeIsolated {
     let app = NSApplication.shared

@@ -431,4 +431,48 @@ defmodule SymphonyElixir.LifecycleTest do
       assert Lifecycle.compute([], @facts) == Lifecycle.compute(events, @facts)
     end
   end
+
+  describe "the run working now" do
+    test "counts its tokens and time so far in the stage it started in, and in the total" do
+      events = [entered("2026-10-30T10:00", "In Progress"), ended("2026-10-30T10:20", "r1", tokens: 1_000_000, duration_ms: 20 * @minute)]
+      events = events ++ [entered("2026-10-30T10:30", "Code Review"), started("2026-10-30T10:35", "r2")]
+      running = %{run_id: "r2", started_at: at("2026-10-30T10:36"), total_tokens: 65_000_000}
+
+      result = Lifecycle.compute(events, Map.merge(@facts, %{now: at("2026-10-30T11:00"), running: running}))
+
+      assert stages(result)["coding"].tokens == 1_000_000
+      assert stages(result)["code_review"].tokens == 65_000_000
+      assert stages(result)["code_review"].agent_time_ms == 25 * @minute
+      assert result.lifecycle.tokens.total == 66_000_000
+    end
+
+    test "uses the orchestrator's start when the ledger has none, and counts once the ledger ended it" do
+      events = [entered("2026-10-30T10:00", "In Progress")]
+      running = %{run_id: "r1", started_at: at("2026-10-30T10:10"), total_tokens: 3_000_000}
+      facts = Map.merge(@facts, %{now: at("2026-10-30T10:40"), running: running})
+
+      result = Lifecycle.compute(events, facts)
+      assert %{tokens: 3_000_000, agent_time_ms: agent_time_ms} = stages(result)["coding"]
+      assert agent_time_ms == 30 * @minute
+
+      ended = Lifecycle.compute(events ++ [ended("2026-10-30T10:40", "r1", tokens: 3_500_000, duration_ms: 30 * @minute)], facts)
+      assert ended.lifecycle.tokens.total == 3_500_000
+    end
+
+    test "a run with no start anywhere and no tokens yet counts nothing" do
+      result = Lifecycle.compute(moved([{"10:00", "In Progress"}]), Map.merge(@facts, %{now: at("2026-10-30T10:40"), running: %{run_id: "r1"}}))
+
+      assert %{tokens: 0, agent_time_ms: 0} = stages(result)["coding"]
+    end
+
+    test "read counts the running run it is given" do
+      {:ok, _event} = TicketEvents.record(@repo, @id, "phase.entered", %{to: "In Progress", from: "Todo"}, at: at("2026-10-30T10:00"))
+      running = %{run_id: "r1", started_at: at("2026-10-30T10:05"), total_tokens: 59_000_000}
+
+      result = Lifecycle.read(@id, at("2026-10-30T10:25"), running)
+
+      assert result.lifecycle.tokens.total == 59_000_000
+      assert stages(result)["coding"].agent_time_ms == 20 * @minute
+    end
+  end
 end

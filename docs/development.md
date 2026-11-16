@@ -19,7 +19,7 @@ mise exec -- mix setup
 ### Xcode
 
 `.xcode-version` at the repo root pins the one Xcode every macOS workflow on `macos-26` builds
-the Mac app with (`macos.yml`, `macos-e2e.yml`), so CI and the release compile with the same
+the Mac app with (`mac-checks.yml`, `release.yml`), so CI and the release compile with the same
 Swift. The policy is the newest Xcode installed on GitHub's `macos-26` runner image.
 `scripts/ci/xcode-developer-dir.sh` prints its `/Applications/Xcode_<version>.app/Contents/Developer`
 for `DEVELOPER_DIR` and fails, naming the wanted version and the Xcodes found, when the runner

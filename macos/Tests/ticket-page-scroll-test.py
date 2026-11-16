@@ -206,6 +206,15 @@ def click_folds_a_run(binary, pid, area):
             continue
         for _ in range(2):
             reply = driver(binary, "click", pid, header["path"], 1)
+            # The timeline draws its rows as they come on screen, so a header's place in the tree can move between
+            # the read that found it and the click. The driver says so; the header is read again, a few times.
+            for _ in range(3):
+                if reply.get("error", {}).get("code") != "element_not_found":
+                    break
+                time.sleep(0.5)
+                again, _ = fold_header(binary, pid, verb, run, area)
+                if again:
+                    reply = driver(binary, "click", pid, again["path"], 1)
             if "error" in reply:
                 return f"clicking {verb.strip().lower()} on {run}: {reply['error']}"
             if reply.get("fallback"):

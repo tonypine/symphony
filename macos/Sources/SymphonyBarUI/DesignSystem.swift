@@ -58,7 +58,7 @@ extension DesignTokens.ColorToken {
 }
 
 extension EnvironmentValues {
-    /// True while a view renders offscreen with `ImageRenderer` (the snapshots in `Tests/Snapshots`), which can't
+    /// True while a view renders offscreen with `ImageRenderer` (the Component Gallery's `--shot`, `Gallery/`), which can't
     /// draw an AppKit-backed control: the few that are draw a SwiftUI stand-in of the same size instead.
     @Entry public var offscreenSnapshot = false
 }

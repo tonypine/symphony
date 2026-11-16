@@ -88,7 +88,7 @@ The flow decision: the first rule that matches decides what happens to the ticke
 | R14 | Code Review, QA, Rework, CI Fix, Merging | The PR conflicts with main, fewer than 3 conflict fix runs | `ci_fix` for the conflict |
 | R15 | Code Review, QA, Rework, CI Fix, Merging | The conflict is back after 3 fix runs and open PRs share its files | `wait_for_competitors` on every competing PR, stepping behind them |
 | R15a | Code Review, QA, Rework, CI Fix, Merging | The conflict is back after 3 fix runs and no open PR competes | `to_rework` (Rework: `dispatch`) |
-| R16 | Merging | GitHub has not computed whether the PR can merge | `wait` on `github` |
+| R16 | Code Review, QA, Rework, CI Fix, Merging | GitHub has not computed whether the PR can merge (`unknown` is never conflict-free), whatever CI says | `wait` on `github`; the watcher reads the PR again |
 | R17 | Code Review, QA, Rework, CI Fix, Merging | A required check never reported within `landing_wait_timeout_ms` | `decision`: proceed without it for this PR (this head only), rerun, or fix the workflow in Rework |
 | R18 | Code Review, QA, Rework, CI Fix, Merging | Only a check a person must clear is red (`protected paths`) | `decision`: allow the change (the option unlocks the protected paths the PR changes for the ticket), or drop the change in Rework |
 | R19 | Code Review, QA, Rework, CI Fix, Merging | Red only because every run of a workflow was cancelled, its newest attempt with nothing queued or running, and that run was rerun fewer than 2 times on the head | `wait` on `ci`: the upkeep (U2) reruns each new cancellation, no attempt spent |
@@ -170,7 +170,22 @@ instead (see [When CI keeps failing](#when-ci-keeps-failing)).
 
 While a `CI Fix` ticket's decision waits on CI (R23, R24) or reruns a check (R19, R22, U2), no CI Fix
 run starts: there is nothing to repair yet, and the next decision returns the ticket (R25) or sends
-a fix run (R14, R21). A CI Fix run already going that finds the head's checks running ends in that
+a fix run (R14, R21). Nor while GitHub has yet to say whether the PR can merge (R16), unless a fix is
+pending on the head: a mergeability GitHub hasn't computed is never read as conflict-free, in any
+phase, so R25 returns a ticket only on a reading that says the PR can merge, and a timed read that
+finds it `unknown` reads the PR again within seconds.
+
+A fix the watcher decides (R14, R21) is done when its run ends, not when the ticket moved: the
+decision is pending on the head until the ticket's ledger shows a CI Fix run that started after it
+and ended counted (`run.started`, `run.ended`). Only then is a conflict or red attempt spent, so
+`conflict fix run 1 of 3` stays 1 of 3 while no run ended, and a run a restart or a usage limit cut
+short starts again on the same head, spending nothing. A ticket out of CI Fix with its fix still
+pending is sent there again. While the fix is pending in CI Fix the decision is recorded as it is and
+the orchestrator starts its run; the watcher tells it again on each read that finds the run due and
+not started. A decision that needs a run (the reviewer, QA, a CI Fix run, the landing run) that still
+has not started once the ticket is listed as a silent wait, with nothing else holding it back, pauses
+the ticket with a reason the Director may release, which the Inbox lists among the tickets to
+unblock. A CI Fix run already going that finds the head's checks running ends in that
 wait after its first idle turn. The Inbox lists the ticket under Waiting on CI meanwhile: the row asks
 nothing of a person, so it adds no badge and no notification, and it goes when the decision changes.
 

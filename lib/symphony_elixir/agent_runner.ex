@@ -39,6 +39,7 @@ defmodule SymphonyElixir.AgentRunner do
     PrReviewPoller,
     PrWatch,
     PrWatch.HeadSync,
+    QaBuild,
     QaVerification,
     Questions,
     RuleActions,
@@ -2095,6 +2096,21 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
+  # The head a ticket enters Code Review with is built for QA at once (`SymphonyElixir.QaBuild`), so
+  # the build runs beside the review. A run whose head could not be read asks for none: the PR
+  # watcher asks when it records the head.
+  defp request_qa_build(%Issue{id: issue_id, identifier: identifier} = issue, %{progress: %{head: head}} = run_context)
+       when is_binary(head) and is_binary(identifier) do
+    ticket = %{identifier: identifier, issue_id: issue_id, new_head: true}
+
+    case run_repo_key(issue, run_context.opts) do
+      repo_key when is_binary(repo_key) -> QaBuild.request(repo_key, head, ticket)
+      _none -> :ok
+    end
+  end
+
+  defp request_qa_build(_issue, _run_context), do: :ok
+
   defp hand_off_to_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
     settings = Keyword.fetch!(run_context.opts, :settings)
 
@@ -2120,7 +2136,7 @@ defmodule SymphonyElixir.AgentRunner do
             run_context.opts
           )
 
-          :ok
+          request_qa_build(issue, run_context)
 
         error ->
           error

@@ -1,68 +1,58 @@
 # End-to-end test: Update, Restart and rollback
 
-`update_restart_e2e.py` runs the real app bundles, built from the current checkout, in an isolated instance
-and checks what TP-272 used to leave to a person on the live app:
+`update_restart_e2e.py` runs the real app bundles, built from the current checkout, in an isolated instance,
+and checks the three things only a real install can prove:
 
-1. **Update** from release N to N+1 while an agent run is active. The old Symphony waits for the run, then
-   stops; the new app starts its Symphony on its own and dispatch resumes. Afterwards every Symphony
-   `beam.smp` runs N+1's release from inside the running app's bundle, no BEAM from N runs, the app folder holds N+1 as
-   `Symphony.app` and N as `Symphony (previous).app`, and the new app's menu shows "Updated to vN+1", the
-   release carried across the relaunch.
-2. **Restart** while a run is active: it waits for the run, restarts, and dispatch resumes. The test pauses
-   dispatch from the menu, resumes it through the control API and presses Restart before the app polls again, so
-   the app still thinks dispatch is paused: the restart must pause it itself (Symphony's log shows its
-   `POST /api/v1/control/pause`) instead of waiting forever for a pause
-   ([TP-435](https://linear.app/tonypine/issue/TP-435)).
-3. **Restart with a broken `symphony.yml`**: refused with "Symphony wasn't restarted" and the config error,
-   and the running Symphony keeps its pid and keeps dispatching.
-4. **Rollback**: Quit, swap `Symphony (previous).app` back in as in [Rollback](../../README.md#rollback), open
-   it and Start: it runs N's BEAM from its own bundle, and the agent runs it starts get the secret stored in
-   Settings.
-5. **`update_on_release`** ([TP-970](https://linear.app/tonypine/issue/TP-970)'s journey J3,
-   [TP-973](https://linear.app/tonypine/issue/TP-973)): build N runs in **Automatically when released**, checking
-   every 2 seconds (`SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`), with the feed serving N only and an agent run active.
-   The feed then publishes N+1 and, with no menu press, the app pauses dispatch with the reason `updating to vN+1`
-   while the run goes on, records the start notification "Updating Symphony to vN+1" with its Cancel Update action,
-   waits for the run, relaunches on N+1 and resumes dispatch. No BEAM from N is left, and N+1 notifies "Symphony
-   updated to vN+1". It fails in Manual mode (nothing installs) and when no start notification is recorded.
-6. **`update_on_release_hand_pause`**: N is put back and dispatch paused by hand, with a reason, before N+1 is
-   published. N+1 installs by itself, and the relaunched Symphony is still paused with that reason.
-7. **`update_on_release_cancel`** (journey J4): the same start, then Cancel Update once the app paused for N+1 and
-   recorded the start notification. Dispatch resumes, the run goes on, the start notification is withdrawn, and
-   over the next three checks (counted at the feed) no update to N+1 starts and no second start notification is
-   recorded. The menu shows N+1 held: "You cancelled this update. It waits for you; a newer release installs by
-   itself.", **Update to vN+1** and **Skip This Version**. Update to vN+1, confirmed, waits for the run under way
-   and relaunches on N+1 with dispatch resumed.
-8. **Automatic update** ([TP-541](https://linear.app/tonypine/issue/TP-541)'s walkthrough, steps 1 to 3):
-   with **Automatically when idle** chosen and Symphony running with no agent runs, N installs N+1 with no
-   press. N+1 passes its health check, starts Symphony and resumes dispatch, and notifies "Symphony updated
-   to vN+1" with the change count. Its menu shows "Updated to vN+1 (K changes)", and choosing it opens N+1's
-   release notes.
-9. **Automatic rollback** (TP-541's walkthrough, step 4): N is put back and installs N+1 by itself. N+1's check
-   before the install passes, the test then removes `symphony.yml`'s `workspaces.repo`, N+1's check after the
-   relaunch fails, and the helper puts N
+1. **Update** from release N to N+1 while an agent run is active. The stub run is held until the test has seen
+   the update wait for it ("Waiting for …" in the menu, the run still going under N's Symphony), then released.
+   The old Symphony stops only after the run ended; N+1 is downloaded, verified, swapped in and relaunched from
+   its own bundle, starts its Symphony on its own and dispatch resumes. Afterwards every Symphony `beam.smp` runs
+   N+1's release from inside the running app's bundle, no BEAM from N runs, N+1's run gets the secret stored in
+   Settings, the app folder holds N+1 as `Symphony.app` and N as `Symphony (previous).app`, N+1 has migrated a
+   renamed `symphony.yml` key with a backup, and the new app's menu shows "Updated to vN+1".
+2. **Automatic rollback** ([TP-541](https://linear.app/tonypine/issue/TP-541)'s walkthrough, step 4): N is put back
+   and, in **Automatically when idle**, installs N+1 by itself. N+1's check before the install passes, the test
+   then removes `symphony.yml`'s `workspaces.repo`, N+1's check after the relaunch fails, and the helper puts N
    back as `Symphony.app` and N+1 aside as `Symphony (rolled back).app`. N notifies "Symphony rolled back to
    vN", naming vN+1 and the failed check; its menu line "vN+1 was rolled back: symphony check failed: …"
    opens N+1's notes with the rollback steps; and its next check shows N+1 rolled back with Retry vN+1,
    without installing it again.
-10. **An update that can't start** (TP-1324): Retry vN+1 from N, with a relaunch that makes N+1's binary not
-   executable before it runs it. N+1 never writes that it launched, so after 30 seconds the update helper
-   puts N back as `Symphony.app`, N+1 aside as `Symphony (rolled back).app`, and opens N. N runs again within
-   60 seconds of the hand-over, notifies "Symphony rolled back to vN", shows "vN+1 was rolled back: the app
-   didn't start within 30 seconds of the update; see …/update.log" and Update rolled back: vN+1 with Retry
-   vN+1, and the update log has a timestamped line for each step, the launch that failed included.
+3. **An update that can't start** ([TP-1324](https://linear.app/tonypine/issue/TP-1324)): Retry vN+1 from N, with a
+   relaunch that makes N+1's binary not executable before it runs it. N+1 never writes that it launched, so once
+   the update helper's start window has passed it puts N back as `Symphony.app`, N+1 aside as
+   `Symphony (rolled back).app`, and opens N. N runs again, notifies "Symphony rolled back to vN", shows
+   "vN+1 was rolled back: the app didn't start within 5 seconds of the update; see …/update.log" and Update
+   rolled back: vN+1 with Retry vN+1, and the update log has a timestamped line for each step, the launch that
+   failed included. The window is 30 seconds in the product (`UpdateLaunch.timeout`); the test shortens it to 5
+   through the helper's `SYMPHONY_UPDATE_LAUNCH_SECONDS`, which QA mode passes on to the helper.
 
 For each scenario the test checks the menu lines, the Symphony pid, the stub agent's log (a run that is
-stopped instead of finishing fails the drain checks) and a `before_run` hook's log, which records the release
+stopped instead of finishing fails the drain check) and a `before_run` hook's log, which records the release
 root and version each run came from and the stored secret Symphony was given. Scripted QA mode records the
-notifications and the release notes window in `status.json` with the alerts, and the notifications the app withdraws
-under `withdrawn`, so the test reads them there. Scripted QA presses the menu's Cancel Update, which does what the
-notification's Cancel Update does.
+notifications and the release notes window in `status.json` with the alerts, so the test reads them there.
 
-The stub ticket is dispatched again and again without a state move, so the test's `symphony.yml` sets the
-dispatch-loop guard's `watchdog.dispatch_loop_*` limits to 50 runs within one second, out of reach of one test
-run; the defaults would hold it after 4 runs in 10 minutes. When no new run starts in time, the failure says
-whether Symphony skips the ticket and why, such as a `Blocked` hold.
+The stub agent's runs end when the test says so, never after a fixed time: while `<work>/config/hold-runs` exists
+each run waits (at most 5 minutes, so a stuck test can't hang CI), and without it a run ends at once. The stub
+ticket is dispatched again and again without a state move, so the test's `symphony.yml` sets the dispatch-loop
+guard's `watchdog.dispatch_loop_*` limits to 50 runs within one second, out of reach of one test run; the
+defaults would hold it after 4 runs in 10 minutes. When no new run starts in time, the failure says whether
+Symphony skips the ticket and why, such as a `Blocked` hold.
+
+### What the unit tests cover instead
+
+The rest of Update, Restart and rollback is decided in `SymphonyBarCore` and covered by its unit tests
+(`Tests/SymphonyBarCoreTests/`), so this test no longer walks it:
+
+| Behaviour | Unit tests |
+| --- | --- |
+| Restart while a run is active drains, restarts and resumes; a pause resumed behind the app's back is made again ([TP-435](https://linear.app/tonypine/issue/TP-435)) | `RestartMachineTests`: `testRestartPausesWaitsForRunsStopsStartsAndResumes`, `testAPauseResumedBeforeTheFirstPollIsMadeAgainAndResumedAfterwards`, `testAPauseResumedWhileTheRestartWaitsIsMadeAgain` |
+| Restart with a broken `symphony.yml` is refused and Symphony keeps running | `RestartMachineTests`: `testConfigErrorAbortsWithSymphonyUntouched` |
+| An app runs Symphony from its own bundle, with the stored secrets in its environment (as after a rollback by hand) | `ChildLaunchTests`: `testEmbeddedSymphonyLivesInTheBundleResources`, `testEmbeddedModeKeepsSecretsInTheEnvironmentOnly`; scenario 1 here, for the real bundle |
+| **Automatically when released** installs with no press, pausing with "updating to vX" while runs go on, and notifies the start with Cancel Update ([TP-970](https://linear.app/tonypine/issue/TP-970)) | `AutoUpdateTests`: `testOnReleaseInstallsOnTheCheckThatFindsARelease`; `RestartMachineTests`: `testAnUpdatesPauseNamesTheVersionItInstalls`, `testUpdateDrainsThenStopsWithoutStarting`; `UpdateKindTests`: `testStartNotificationWording`, `testStartNotificationIsDueOnceWhenTheDrainKnowsItsRuns` |
+| A pause made by hand stays after an update | `RestartMachineTests`: `testUpdateKeepsAPauseTheUserMade`; `UpdateHandoffTests`: `testKeepsAPauseTheUserMade` |
+| Cancel Update resumes dispatch, withdraws the start notification and holds the release until a newer one or Update to vX | `RestartMachineTests`: `testOnReleaseUpdateCancelResumesTheDispatchItPaused`; `UpdateKindTests`: `testStartNotificationIsWithdrawnWhenTheUpdateEnds`, `testCancelUpdateOnAnOnReleaseUpdateHoldsItsRelease`; `AutoUpdateTests`: `testCancelUpdateHoldsTheReleaseUntilANewerOneComesOut`, `testInstallingOrSkippingTheHeldReleaseClearsTheHold` |
+| **Automatically when idle** installs only when no run is active, and the updated app notifies and shows "Updated to vX (K changes)", which opens the notes ([TP-541](https://linear.app/tonypine/issue/TP-541)) | `AutoUpdateTests`: `testIdleModeInstallsOnACheckWhenIdle`, `testIdleModeWaitsForRunsAndInstallsAtTheFirstIdlePoll`; `UpdateOutcomeTests`: `testUpdatedNotificationNamesTheNewVersionAndItsChanges`, `testUpdatedLineNamesTheVersionAndTheChangeCountWhenKnown`, `testTheUpdatedLineOpensTheInstalledReleasesNotes` |
+| Retry vX with a `symphony.yml` the new build can't read is refused before anything is installed | `UpdateInstallerTests`: `testAFileTheNewBuildCantReadIsRefusedBeforeAnythingIsInstalled`; `SkippedReleasesTests`: `testARefusedReleaseNamesTheLinesAndOffersRetry` |
 
 ## Run it
 
@@ -76,7 +66,7 @@ make e2e
 It takes a while: it builds the release pair, two Symphony releases (`make release` with build numbers 90001 and
 90002), the app and both bundles, with the shared helpers in [`test/support/`](../../../test/support/README.md)
 (`release_pair.py`, as `make release-pair` does, into `<work>/release-pair`), and serves N+1 with their update
-feed stand-in (`test/support/stubs/update_feed.py`, its requests logged to `<work>/logs/feed.log`). It prints each step, then `all 9 scenarios passed`, and exits 1 on the first failure with
+feed stand-in (`test/support/stubs/update_feed.py`, its requests logged to `<work>/logs/feed.log`). It prints each step, then `all 3 scenarios passed`, and exits 1 on the first failure with
 the app's status, the update helper's, app's and stub agent's logs, and the processes still running. The
 work folder is removed on success and kept on failure (or with `--keep`).
 
@@ -98,7 +88,6 @@ Other options:
 | `SYMPHONY_E2E_SYMPHONY_RELEASE_N`, `SYMPHONY_E2E_SYMPHONY_RELEASE_N1` | use these release directories (`_build/prod/rel/symphony`) instead of building them (they must be built with the matching `SYMPHONY_BUILD_NUMBER`) |
 | `SYMPHONY_E2E_APP_EXECUTABLE` | use this `SymphonyBar` executable instead of `swift build -c release` |
 | `SYMPHONY_E2E_BUILD_N` | build number of release N (default 90001); N+1 is the next number |
-| `SYMPHONY_E2E_STUB_SECONDS` | how long each stub agent run takes (default 15; 45 in scenarios 5 to 7, so the run active when N+1 is published outlasts its download) |
 | `SYMPHONY_E2E_WORK_ROOT` | where the work folder is made (default the temporary folder) |
 
 ## What it never touches
@@ -110,10 +99,9 @@ The test can run while the installed app runs Symphony. The instance gets its ow
   its logs, and a fresh `HOME`;
 - scripted QA mode, so it presses menu items by title through files instead of Accessibility access;
 - `ERL_EPMD_PORT`, since a Symphony release always takes the node name `symphony@127.0.0.1`;
-- dashboard port (`dashboard.port: 0`), and a local update feed (`SYMPHONY_BAR_UPDATE_URL`) serving N+1 (its
-  `publish` mode), or N only (`none`) until scenarios 5 to 7 publish N+1;
+- dashboard port (`dashboard.port: 0`), and a local update feed (`SYMPHONY_BAR_UPDATE_URL`) serving N+1;
 - fake Linear: the memory tracker reading one issue from a file (`issues.memory.issues_file`), and a stub
-  `claude` that answers each turn after `SYMPHONY_E2E_STUB_SECONDS`, so runs cost nothing.
+  `claude` that answers each turn when the test releases it, so runs cost nothing.
 
 Before and after, it records the installed app's processes, the Symphony BEAMs running from its bundle, what listens
 on port 4000 and the metadata of the live state files (`control_url`, `control_token`, `erlang_cookie`,
@@ -121,6 +109,7 @@ on port 4000 and the metadata of the live state files (`control_url`, `control_t
 
 ## CI
 
-The `macos-e2e` workflow runs it nightly, on demand, and on pull requests that change the app, the release
-packaging, the shared release-pair and update feed helpers or this test. On failure it uploads the work folder's
+The Mac checks (`.github/workflows/mac-checks.yml`, on the self-hosted runner) run it on pull requests that change
+the update's paths (`scripts/ci/mac-check-groups.sh`, the `update` group) and on every merge to `main`, in the release
+gate, before anything is published. On failure they upload the work folder's
 logs and the release pair's `manifest.json`, without the apps, the feed or the keys.

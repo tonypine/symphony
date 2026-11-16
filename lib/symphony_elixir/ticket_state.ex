@@ -1003,6 +1003,29 @@ defmodule SymphonyElixir.TicketState do
   def dispatches(record), do: record |> events(types: @dispatch_types) |> dispatches_in()
 
   @doc """
+  The ticket's CI Fix runs, oldest first, read from its event stream (`fix_runs_in/1`). A record
+  whose events can't be read lists none.
+  """
+  @spec fix_runs(map()) :: [SymphonyElixir.PrWatch.Attempts.fix_run()]
+  def fix_runs(record), do: record |> events(types: ["run.started", "run.ended"]) |> fix_runs_in()
+
+  @doc """
+  The CI Fix runs `events` (oldest first) hold, oldest first: each `run.started` of kind `ci_fix`
+  with the head it started on and when, whether a `run.ended` names it and whether that end counts
+  (`counted: false` is a run a usage limit, an unreachable model API or a CI wait stopped). A run
+  Symphony's restart cut short has no end.
+  """
+  @spec fix_runs_in([Event.t()]) :: [SymphonyElixir.PrWatch.Attempts.fix_run()]
+  def fix_runs_in(events) when is_list(events) do
+    ends = for %Event{type: "run.ended", payload: payload} <- events, into: %{}, do: {map_string(payload, :run_id), Map.get(payload, :counted) != false}
+
+    for %Event{type: "run.started", payload: payload, at: %DateTime{} = at} <- events, map_string(payload, :run_kind) == "ci_fix" do
+      run_id = map_string(payload, :run_id)
+      %{run_id: run_id, head: map_string(payload, :head), at: at, ended: Map.has_key?(ends, run_id), counted: Map.get(ends, run_id, false)}
+    end
+  end
+
+  @doc """
   The runs `events` (oldest first) dispatched since the ticket last made progress, newest first, at
   most #{@max_dispatches}: each `run.started`, with how its `run.ended` says it ended (its exit and
   the PR head it left; nil while it runs). A run that ended `counted: false` (stopped by a usage

@@ -989,16 +989,26 @@ defmodule SymphonyElixir.Codex.DynamicToolTest do
             {"qa_api_requests", %{"root" => 2}},
             {"qa_build_release_pair", %{}},
             {"qa_relaunched_app", %{"wait_seconds" => 30}},
-            {"qa_update_feed", %{"mode" => "none"}}
+            {"qa_update_feed", %{"mode" => "none"}},
+            {"qa_gallery", %{"entry" => "home", "variation" => "home-busy", "width" => "laptop"}},
+            {"qa_gallery_open", %{"entry" => "home", "variation" => "home-busy", "width" => "laptop", "appearance" => "dark"}}
           ] do
         response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
         assert %{"error" => %{"code" => "qa_driver_unavailable"}} = Jason.decode!(response["output"])
       end
 
-      for {tool, args} <- [{"qa_build_release_pair", %{"out" => "/tmp"}}, {"qa_update_feed", %{"port" => 1}}] do
+      for {tool, args} <- [
+            {"qa_build_release_pair", %{"out" => "/tmp"}},
+            {"qa_update_feed", %{"port" => 1}},
+            {"qa_gallery", %{"appearance" => "dark"}},
+            {"qa_gallery_open", %{"entry" => "home", "out" => "/tmp"}}
+          ] do
         response = DynamicTool.execute(tool, args, issue: %Issue{id: "issue-current"}, tool_scope: :qa)
         assert %{"error" => %{"code" => "unexpected_arguments"}} = Jason.decode!(response["output"])
       end
+
+      gallery_open = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == "qa_gallery_open"))
+      assert %{"required" => ["entry"], "properties" => %{"appearance" => %{"enum" => ["light", "dark"]}}} = gallery_open["inputSchema"]
 
       feed = Enum.find(DynamicTool.tool_specs(:qa), &(&1["name"] == "qa_update_feed"))
       assert %{"mode" => %{"enum" => ["publish", "none", "forbidden"]}} = feed["inputSchema"]["properties"]

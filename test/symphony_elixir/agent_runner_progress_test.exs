@@ -103,6 +103,17 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert_signal("handoff", %{to: "Code Review", reason: "after rework", head: "sha-rework", move: true})
   end
 
+  test "the head a ticket enters Code Review with is asked of the QA pre-build" do
+    # Stands in for the builder: the request is a cast to its name.
+    Process.register(self(), SymphonyElixir.QaBuild)
+
+    run_issue!("Rework", heads: ["sha-old", "sha-rework"], handoff: "sha-rework")
+
+    assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+    assert_received {:"$gen_cast", {:request, "default", "sha-rework", %{identifier: identifier, issue_id: "issue-progress"}}}
+    assert is_binary(identifier)
+  end
+
   describe "the designed handoff signal" do
     defp designed_repos do
       [[key: "default", workflow: Workflow.workflow_file_path(), team: "Test"]]

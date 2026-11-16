@@ -407,7 +407,7 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.put(:watch, WatchPayload.watch(record))
     |> Map.put(:plan_brief, plan_brief_payload(record))
     |> Map.put(:situation, situation_payload(record || %{issue_id: payload.issue_id, repo_key: payload.repo_key}, Situation.live_facts(snapshot), nil))
-    |> Map.merge(Lifecycle.read(payload.issue_id))
+    |> Map.merge(Lifecycle.read(payload.issue_id, DateTime.utc_now(), running_entry(snapshot, payload.issue_id)))
     |> Map.merge(Marks.read(record, events))
     |> Map.put(:brief, TicketBrief.read(events))
     |> Map.put(:pull_request, PullRequestPayload.read(record))
@@ -590,7 +590,7 @@ defmodule SymphonyElixirWeb.Presenter do
     tracked = tracked_connected(snapshot)
     connected = watched |> Enum.map(&{&1, Map.get(tracked, &1.issue_id)}) |> ConnectedRead.read_all(ConnectedRead.facts(all, live))
 
-    Enum.zip_with(watched, connected, &Map.put(watched_issue_payload(&1, live, all, pauses), :connected, &2))
+    Enum.zip_with(watched, connected, &Map.put(watched_issue_payload(&1, live, all, pauses, snapshot), :connected, &2))
   end
 
   # What the orchestrator holds of each ticket's connections, by ticket.
@@ -601,7 +601,7 @@ defmodule SymphonyElixirWeb.Presenter do
         do: {issue_id, connected}
   end
 
-  defp watched_issue_payload(record, live, records, pauses) do
+  defp watched_issue_payload(record, live, records, pauses, snapshot) do
     Map.merge(
       %{
         issue_id: record.issue_id,
@@ -619,9 +619,12 @@ defmodule SymphonyElixirWeb.Presenter do
             running?: Map.has_key?(live.running, record.issue_id)
           })
       },
-      Lifecycle.read(record.issue_id)
+      Lifecycle.read(record.issue_id, DateTime.utc_now(), running_entry(snapshot, record.issue_id))
     )
   end
+
+  # The orchestrator's entry for the run working on ticket `issue_id` now, or nil.
+  defp running_entry(snapshot, issue_id), do: snapshot |> Map.get(:running, []) |> Enum.find(&(Map.get(&1, :issue_id) == issue_id))
 
   defp situation_payload(record, live, records), do: record |> Situation.read(live, records) |> Situation.payload()
 

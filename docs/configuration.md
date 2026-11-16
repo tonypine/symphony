@@ -1478,7 +1478,7 @@ playbook's live server (`live.walkthrough_mentions`) is asked for only by a step
 
 **The QA pre-check.** Before the QA agent starts, Symphony confirms each step a named test proves
 itself (`SymphonyElixir.QaPreCheck`), so whether a named test ran is never left to the agent reading
-check runs: a green head does not prove it, since a path-filtered workflow such as `macos-e2e` may
+check runs: a green head does not prove it, since a path-gated check such as the Mac checks' update test may
 not run on a PR at all. For each step it:
 
 - looks for the test in the PR's checkout: a part with a `/` (or a file name such as
@@ -1865,9 +1865,9 @@ auto_review:
 
 | Key | Default | Does |
 | --- | --- | --- |
-| `build` | none (required) | the command `qa_build` runs in `src/` on the QA VM, the copy of the QA worktree it ships there |
+| `build` | none (required) | the command that builds the app on the QA VM, in the kept checkout, ahead of QA ([The QA pre-build](#the-qa-pre-build)); a QA pass never runs it |
 | `app` | none (required) | the `.app` bundle the build writes, relative to the repo root |
-| `build_timeout_ms` | `900000` | how long `qa_build` waits for `build` |
+| `build_timeout_ms` | `900000` | how long the pre-build waits for `build`; a build that runs longer is killed on the QA host |
 | `paths` | Swift, `Info.plist`, xib, storyboard, xcassets | the changed paths that select the playbook |
 | `dev_server` | `false` | the pass starts `verification.dev_server` on the QA VM, beside the app (see [Running QA in a QA VM](#running-qa-in-a-qa-vm)), never on the Symphony host: without a `worker_host` no server starts and the `qa_*` tools say to set up the QA VM |
 | `dev_server_port` | `8090` | the port the QA-host dev server listens on, as `SYMPHONY_VERIFICATION_PORT` |
@@ -1991,7 +1991,7 @@ tools for it on the QA VM, outside the sandbox, and checks every argument:
 
 | Tool | Does | Refuses |
 | --- | --- | --- |
-| `qa_build` | runs `build` in the QA worktree with the agent's scrubbed environment plus `QA_HOST_PORTS` (the pass's [host ports](#qa-passes), comma-separated; unset when their tunnel could not open), then copies the `app` bundle into a private directory | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first build, and none may appear or change after a build; a bundle that resolves (symlinks included) outside the worktree, or that holds an absolute symlink or one with `..` |
+| `qa_build` | builds nothing: it takes the app [the QA pre-build](#the-qa-pre-build) built for the worktree's `HEAD` and copies the stored bundle into a private directory (`prebuilt: true`). It waits for a build still queued or running, and asks for one when nobody did (the head moved after dispatch), telling the run it is working while it waits; a stored bundle gone from the QA host is built once more. A failed build is its result (`exit_status`, `output`) | a worktree with changes outside `qa-evidence/` and `.gradle-daemons/` (Symphony's own), gitignored files included: none may exist before the first `qa_build`, and none may appear or change after one; a build that could not run, or no build at all (`qa_build_unavailable`); a stored bundle that is not a usable `.app` |
 | `qa_launch_app` | starts the private copy of the bundle with `SYMPHONY_BAR_QA_ROOT` set to a private directory ([QA mode](../macos/README.md#qa-mode)) and `SYMPHONY_QA_OPENROUTER_URL` set to the pass's [OpenRouter stub](#qa-passes), and returns its PID. With `api_fixtures`, a directory relative to the PR checkout (such as `macos/Tests/Fixtures/director-app/running`), it copies that directory's files into a fresh `api-fixtures-<n>/` in the pass's private directory (the run directory on the QA VM) and sets `SYMPHONY_BAR_QA_API_FIXTURES` to the copy, so the app reads Symphony's local API from those JSON files. Optional stand-ins: `gh_stub_port` sets `SYMPHONY_BAR_GH` to Symphony's own fake `gh` (written into the run directory's `bin/`) and `SYMPHONY_QA_GH_URL` to `http://localhost:<port>`; the fake POSTs each call's arguments there as form fields (`argc`, then one `arg` per argument, in order) and prints the answer, a 200 on stdout with exit status 0 and anything else on stderr with exit status 1. `linear_stub_port` sets `SYMPHONY_QA_LINEAR_URL` to `http://localhost:<port>/graphql`, where the Add Repo sheet sends its Linear queries. The QA agent serves both with the shared stubs, `python3 -B test/support/stubs/gh.py` and `python3 -B test/support/stubs/linear.py`, which answer from committed answers files, give an unknown call a clear error and log every request (see [`test/support/README.md`](../test/support/README.md#the-gh-and-linear-stubs)). `open_panel_dir` sets `SYMPHONY_BAR_QA_OPEN_PANEL_DIR`, the folder the Add Repo sheet's folder picker opens in. `update_feed_port` sets `SYMPHONY_BAR_UPDATE_URL` to `http://localhost:<port>/releases/latest`, the release feed the app's update checks read instead of GitHub's; the QA agent serves it there with the shared feed server, `python3 -B test/support/stubs/update_feed.py` (a made-up newer release, a release pair's feed, nothing newer or a 403, every request logged; see [`test/support/README.md`](../test/support/README.md#the-update-feed)). `update_check_interval_seconds` sets `SYMPHONY_BAR_UPDATE_CHECK_INTERVAL`, the seconds between the app's background update checks. `appearance`, `light` or `dark`, makes the app draw in that appearance whatever the QA host's: it sets `SYMPHONY_BAR_QA_APPEARANCE`, which Symphony's own app reads, and injects Symphony's appearance library (`priv/qa_driver/symphony-qa-appearance.m`, built with `clang` on the machine the app runs on, once per source under the state root or once per pass in the QA host's run directory) with `DYLD_INSERT_LIBRARIES`, which reads the same variable and sets any AppKit app's appearance as it finishes launching, printing `symphony-qa-appearance: <light|dark>` to the app's output. AppKit reads the system appearance from the global defaults only, so a launch argument such as `-AppleInterfaceStyle Dark` cannot do it; a light launch also passes `-NSRequiresAquaSystemAppearance YES`. An app built with the hardened runtime ignores the library. Without `appearance` the app follows the host. The host's own appearance is never switched: a pass that died would leave it switched for the next pass, and switching it needs Apple Events, which the QA host blocks. With `release_pair: true` it starts a fresh copy of the [signed release pair](#the-signed-release-pair)'s N instead of the `qa_build` bundle, with the pair's update feed beside it. Every launch of the pass shares one QA root, root 1 (`app-root/` in the run directory on the QA VM), so its settings carry from one launch to the next. `fresh_root: true` (default `false`) starts the app in a new, empty QA root instead, `qa-root-<n>/` beside the first and numbered from 2, with the same `api_fixtures`, stand-ins and `launch_env`, for a first-launch step, a step that resets the app, or a scenario that must not see earlier settings; `root: <n>` starts it in a root the pass already has (`root: 1` is the first). The result names the app's `root`; a release pair's app is relaunched in its root, and `qa_open_status_menu` writes into it | `fresh_root` that is not a boolean, or with `root`; a `root` the pass does not have (`qa_unknown_root`, naming the pass's roots); a fresh root that cannot be made; an executable that changed since the last `qa_build`, or a worktree `qa_build` would refuse; an `api_fixtures` path that is absolute or resolves (symlinks followed) outside the checkout or into its `.git`, or not a directory, a directory holding a symlink, a special file or a file with other hard links, over 5 MB or over 1000 files, and a file replaced while it is read; a stub port that is not one of `QA_HOST_PORTS`; an `open_panel_dir` that `qa_put_checkout` did not return in the pass; an `update_check_interval_seconds` that is not a positive integer; an `appearance` other than `light` or `dark`, or an appearance library that cannot be built (`qa_appearance_unavailable`); `release_pair` before a successful `qa_build_release_pair`, or with `update_feed_port` |
 | `qa_quit_app` | quits a launched app and returns its recent output | a PID it did not launch |
 | `qa_screenshot` | saves the app's on-screen windows to new files `qa-evidence/<name>.png` | a PID it did not launch, a window of another app, a name that already exists (file or symlink) |
@@ -2012,6 +2012,8 @@ tools for it on the QA VM, outside the sandbox, and checks every argument:
 | `qa_build_release_pair` | builds the [signed release pair](#the-signed-release-pair) (`make -C macos release-pair`) where the app runs, signed with the QA host's test signing identity, into the pass's private directory, and returns its `manifest.json` | a worktree `qa_build` would refuse; a QA host without the identity (`qa_signing_identity_missing`) or whose identity is not trusted for code signing (`qa_signing_identity_untrusted`), which the QA agent reports as `blocked`, unless a `worker_host` with passwordless `sudo` lets Symphony install it first (`signing_identity_installed: true`) |
 | `qa_relaunched_app` | waits up to `wait_seconds` (default 60) for the update helper of a release pair's app to ask for the app to start again, after an install or a rollback, starts that bundle in QA mode with the launch's environment and returns its PID, `version` and `build` | a pass that launched no `release_pair` app; a bundle no `release_pair` launch made; no request in time (`qa_no_relaunch`) |
 | `qa_update_feed` | returns the release pair's feed's `mode`, `url` and the app's `requests` to it (oldest first, at most 200), after switching it to `mode` when given: `publish` offers N+1, `none` nothing newer, `forbidden` answers 403 | a pass whose feed is not running; another `mode` |
+| `qa_gallery` | for Symphony.app: runs the Component Gallery in the built bundle (`Contents/Helpers/SymphonyGallery`) on the QA VM. Without `entry` it returns the gallery's `entries` and `widths`, and `affected`: the entries the PR's changed files (the head against its merge base with the base branch) are a reason to look at, or `null` with a `note` when git could not list them. With `entry` (and `variation`, `width`: `laptop`, `desktop` or a number of points) it draws that entry without a window and copies each picture into `qa-evidence/` under the gallery's file name | a pass with no successful `qa_build`; a bundle without the gallery (`qa_gallery_missing`); a name that is not letters, digits, `.`, `_` or `-`; a `variation` or `width` without an `entry`; a screen without a `variation`; a picture `qa-evidence/` already holds; a gallery that exits non-zero (`qa_gallery_failed`) |
+| `qa_gallery_open` | for Symphony.app: launches the built app as `qa_launch_app` does, on the fixture folder `macos/Tests/Fixtures/gallery` in the `fixture` environment, with `--open <entry>` and the `variation`, `width` and `appearance` given as the app's arguments, so the app starts the Component Gallery's window in its place; returns what a launch returns | what `qa_gallery` and `qa_launch_app` refuse; a call without `entry` |
 | `qa_api_requests` | returns the requests the apps launched with `api_fixtures` in one QA root logged to `api-requests.jsonl` there since the last call (each POST's `method`, `path` and `body`), oldest first, at most the last 500 with `dropped` counting the rest, and takes the log away so the next call returns only newer ones; it reads the log on the QA VM. `root: <n>` names the root (a number `qa_launch_app` returned); without it, the root of the last launch. The result names the `root` it read | a `root` the pass does not have (`qa_unknown_root`), a log that cannot be read |
 
 At most three launched apps run at once, and every app still running is quit when the pass ends.
@@ -2086,23 +2088,64 @@ Symphony never builds or runs the PR's app on its own Mac, as you or as another 
 Setup reports both: a repo whose playbooks include `macos_app` while no `worker_host` is set, and a
 `worker_host` that is this Mac, each with a button that opens this section.
 
+##### The QA pre-build
+
+With `build`, `app` and a `worker_host` set, Symphony builds the app for a PR head itself, with no
+agent, before QA starts. There is no setting for it: it is on exactly when the playbook is.
+
+- **When.** The build of a head is asked for when its ticket enters `Code Review`, so it runs beside
+  the review and CI, when the PR watcher records a new head for a ticket in `Code Review` or `QA`
+  (branch upkeep, a CI Fix return, a person's push), and at QA dispatch for a head nobody asked for
+  yet. Builds left running when Symphony stopped are asked for again when it starts.
+- **What is built.** A build is kept by the commit's tree (`git rev-parse <sha>^{tree}`), so a head
+  whose content was already built, such as a merge of the base branch that changed nothing, is ready
+  at once. A tree that built, or whose build failed, is never built again: its files did not change.
+- **A head that moves.** When a ticket's head changes and no other ticket's head (and no waiting QA
+  pass) needs the tree being built, that build is cancelled at once: Symphony kills its whole
+  process group on the QA host (its pid is kept in `build.pid` in the repository's folder there while
+  it runs), and only then starts the next build there. The cancelled tree keeps no record, as if it
+  had never been asked for. Every build also kills a build still running in `work/` before it touches
+  it, so one a restart of Symphony left behind never writes there beside the new one.
+- **Where.** On the QA host, in `~/.symphony-qa/store/<repo key>/`. `work/` is one checkout of the
+  repository that stays between builds: Symphony brings it to the commit by writing only the files
+  whose content changed (`git archive`, then `rsync --checksum`) and removing the files the commit no
+  longer has, so the compiler's own incremental state under it still holds and a build compiles
+  only what changed. `build` runs there, one build at a time on a QA host, with the QA user's login
+  environment and `build_timeout_ms` (a build that runs longer is killed on the QA host).
+  `builds/<tree>/` holds the finished `.app`; the newest five
+  trees are kept. The QA host passes the same checks as for a pass
+  ([Running QA in a QA VM](#running-qa-in-a-qa-vm)).
+- **`QA_HOST_PORTS`.** The pre-build runs outside any pass, so no host-port tunnel is open and
+  `build` gets no `QA_HOST_PORTS`. A build that needs it (to write a stub's URL into the app) must
+  work without it too; the stand-ins `qa_launch_app` sets at launch do not depend on it.
+- **QA waits for it.** A QA ticket whose build is queued or running is not dispatched: it reads
+  "Waiting for a build" until the build ends, and then dispatches at once. A QA pass never builds
+  the app: `qa_build` takes the stored app as the pass's build and says so (`prebuilt: true`).
+- **A failed build.** When `build` exits non-zero, or exits 0 without making a usable `.app` at
+  `app` ("The build command finished, but it made no app at <app>"), the ticket goes to `Rework`
+  without a QA run, each time it reaches QA on that tree (once per arrival). Its QA report carries
+  the build command, its exit status and the end of its output, for the next run to fix.
+- **A build that could not run** (no QA host it may use, the QA host refused or unreachable, the
+  commit not copied, a timeout): the ticket stays in QA, held, reading "The QA build could not run:
+  <reason>". Nothing tries again on a timer. The build is asked for again by a new head, by
+  Symphony's start, or by a person who lifts the hold with **Unblock** in the Director.
+
 Symphony reaches the QA VM with the same SSH transport as `workers.ssh_hosts` (`SYMPHONY_SSH_CONFIG`
 applies), non-interactively, so key authentication must already work. Do not list it in
 `workers.ssh_hosts`: that list also receives coding runs. The QA agent still runs on the Symphony
 host and the worktree checks still apply there. Then:
 
-- `qa_build` copies the worktree's `HEAD` (`git archive`, so gitignored files and submodules stay
-  behind) into a fresh `src/` in a `0700` run directory under `~/.symphony-qa/runs/` on the QA
-  host, runs `build` there with the QA user's login environment plus `QA_HOST_PORTS`, and copies
-  the bundle into the run directory;
+- `qa_build` copies the bundle [the QA pre-build](#the-qa-pre-build) stored for the worktree's
+  `HEAD` into a `0700` run directory under `~/.symphony-qa/runs/` on the QA host, and builds
+  nothing there;
 - `qa_launch_app` starts that copy with only `SYMPHONY_BAR_QA_ROOT` and `SYMPHONY_QA_OPENROUTER_URL`
   set, plus `SYMPHONY_BAR_QA_API_FIXTURES` when the agent passes `api_fixtures` (the checked files
   go over SSH as a tar into a fresh `api-fixtures-<n>/` in the run directory) and the stand-ins the
   agent asks for, over an SSH session that forwards the URL's loopback port on the QA host back to the
   OpenRouter stub on the Symphony host;
 - at the start of the pass Symphony picks three free loopback ports on the Symphony host and
-  hands them to the QA agent as `QA_HOST_PORTS` (in the prompt and its environment) and to `build`
-  in its environment, so a QA build can write a stub's URL into the app. It opens one
+  hands them to the QA agent as `QA_HOST_PORTS` (in the prompt and its environment); the app was
+  built before the pass, without them ([the QA pre-build](#the-qa-pre-build)). It opens one
   SSH session to the QA host that forwards each of them from the QA host's loopback to the same
   port on the Symphony host (`ssh -o ExitOnForwardFailure=yes -R <port>:127.0.0.1:<port>`), and
   closes it when the pass ends. The agent serves the app's stubs and proxies on `127.0.0.1` at
@@ -2247,8 +2290,8 @@ every update (`UpdateInstaller.checkSigner`), and QA could never see what the ap
 update installed, or once a failed one was rolled back. For those steps QA builds the signed
 release pair of the [shared test helpers](../test/support/README.md#the-release-pair): release N of
 the app and its update N+1, signed with one code-signing identity. That the install works is the
-`macos-e2e` check's to prove, in its job
-update, restart and rollback (QA does not re-walk the install);
+`macos` check's to prove, in its step
+Test update, restart and rollback (QA does not re-walk the install);
 QA only judges by sight what the app shows afterwards.
 
 - `qa_build_release_pair` runs, on the QA VM, the

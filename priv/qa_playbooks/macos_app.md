@@ -6,7 +6,8 @@ Your sandbox cannot build Swift, launch apps or read the screen, so Symphony run
 for you on the QA VM, a separate macOS machine: never on this host. They only act on this
 worktree's configured app and on apps you launched:
 
-- `qa_build`: runs the configured build command. Call it once, before anything else.
+- `qa_build`: takes the app Symphony built on the QA VM for this checkout's commit, waiting for
+  the build when it is still running. Call it once, before anything else.
 - `qa_launch_app`: launches the bundle `qa_build` produced, in QA mode (private settings and
   secrets, never the real ones), and returns its `pid`. Pass `api_fixtures`, a directory relative
   to the checkout (for example `macos/Tests/Fixtures/director-app/running`), and Symphony copies
@@ -94,6 +95,12 @@ worktree's configured app and on apps you launched:
   returns the main thread's heaviest stack (`stack`, outermost frame first, each with its sample
   count), with the whole report saved to `qa-evidence/<name>.txt`. Pass the `page` on screen. It
   answers `qa_no_app` when the app is not running.
+- `qa_gallery`: reads the Component Gallery the last `qa_build` built. With no arguments it
+  returns the entries, their variations and the entries the PR's changed files affect. With an
+  `entry` (and, for a screen, a `variation`; optionally a `width`: `laptop`, `desktop` or points)
+  it saves that entry's pictures to `qa-evidence/`.
+- `qa_gallery_open`: opens the gallery's window on an `entry` (optionally a `variation`, a `width`
+  and an `appearance`) and returns its PID, to drive like the app's.
 - `qa_screenshot`: saves the app's windows to `qa-evidence/<name>.png`. Each name can be used
   once; it never replaces an existing file. Pass `window_id` to save one window, such as the menu
   `qa_open_status_menu` opened.
@@ -423,7 +430,7 @@ GitHub or Linear in QA:
   below about 1600 pt of content: the page becomes the laptop layout, with the decisions line
   and Answer…; widen it again: the desktop arrangement returns and no section moves elsewhere.
   Where the screen is too small for 1600 pt, the desktop width is proved by the
-  `ticket-page-*-desktop` and `ticket-page-waiting-1590`/`-1610` snapshots. Walk it in light and
+  `ticket-page-*-desktop` and `ticket-page-waiting-1590`/`-1610` stories in the Component Gallery. Walk it in light and
   dark.
 - **Answering from the ticket page (TP-1450):** the same `ticket-page` fixtures at 1440×900, on a
   fresh launch (its answer reads once Symphony took a `decide`: the fixtures then serve each
@@ -467,7 +474,7 @@ GitHub or Linear in QA:
     (HTTP 403) …" in red, **Open Settings…**, **Close** and **Try Again**; **Open Settings…** opens the
     Settings window with the sheet still open behind it, and the row is still there.
   - Look: judge the page, its Details, both sheets and the banner in light and dark against
-    `macos/Tests/Snapshots/setup-*.png`.
+    the Component Gallery's `setup-*` stories.
 - **Add Repo's Check setup and the first launch (TP-911):**
   - First launch, before any other launch of the pass: every launch in a pass shares one QA root,
     and the first one that sees Symphony's setup checked records the app's first run, so only that
@@ -475,8 +482,8 @@ GitHub or Linear in QA:
     `macos/Tests/Fixtures/director-app/setup` as `api_fixtures` and `appearance: "dark"`: the
     Symphony window opens on its own on Setup with "Welcome to Symphony on this Mac…" above
     "Setup has 1 error and 1 warning." (walkthrough step 6). Judge the welcome by sight there
-    against `macos/Tests/Snapshots/setup-first-launch-dark.png`. No later launch is a first
-    launch, so judge the light welcome from `macos/Tests/Snapshots/setup-first-launch-light.png`
+    against the Component Gallery's `setup-first-launch` story in dark. No later launch is a first
+    launch, so judge the light welcome from the Component Gallery's `setup-first-launch` story in light
     alone until a launch can start from a fresh QA root (TP-1121). That a first launch without
     errors, or a later launch with errors, opens nothing is proved by `SetupOnStartTests`.
   - Then pass `macos/Tests/Fixtures/director-app/add-repo-setup` as `api_fixtures`, with the gh
@@ -495,7 +502,7 @@ GitHub or Linear in QA:
     and add the repo the same way: `widgets is not cloned yet` is listed and **Done** is enabled.
   - Symphony stopped: launch without `api_fixtures` and add the repo: "Symphony isn't running, so
     it checks widgets when it starts." with **Start Symphony** and **Done** both enabled.
-  - Look: judge the step in light and dark against `macos/Tests/Snapshots/add-repo-check-*.png`.
+  - Look: judge the step in light and dark against the Component Gallery's `add-repo-check-*` stories.
 - **GitHub updates card (TP-953):** three fixtures stand for the QA harness API in each state.
   Each launch's `qa_api_requests` starts empty.
   - Off (walkthrough step 1): pass `macos/Tests/Fixtures/director-app/github-updates-off` as
@@ -523,7 +530,7 @@ GitHub or Linear in QA:
     presses the verb and Escape cancels. VoiceOver reads the card's state as "GitHub updates,
     Instant" and each repo row as one element ("acme/web-shop, Instant, Last update 2 min ago").
   - Look: judge the card in each state and both sheets in light and dark against
-    `macos/Tests/Snapshots/github-updates-*.png`.
+    the Component Gallery's `github-updates-*` stories.
 - **Turn on instant updates, step by step, and Add Repo's last step (TP-954):** two fixtures stand
   for Symphony. Each answers a setup request in the order the walkthrough sends them
   (`run_step.1.json`, `run_step.2.json`…), so drive the steps in order and quote each request
@@ -582,7 +589,7 @@ GitHub or Linear in QA:
     failed row as one element ("acme/docs, Failed, You need admin access to acme/docs to add a
     webhook., …"), and each row button with its repo ("Leave on Polling, acme/docs").
   - Look: judge each page and Add Repo's last step in light and dark against
-    `macos/Tests/Snapshots/github-setup-*.png`, `add-repo-instant-updates-*.png` (six steps:
+    the Component Gallery's `github-setup-*` stories, `add-repo-instant-updates-*.png` (six steps:
     `add-repo-instant-updates-six-steps-*.png`, and `add-repo-six-steps-*.png` for every page's
     step indicator), at the laptop viewport (1440×900 pt): the sheet keeps its footer in place on
     every page, and nothing is clipped.
@@ -622,21 +629,52 @@ switched; launch the app once per appearance instead:
   design system alone. When `qa_open_status_menu` fails with `qa_status_menu_not_opened`, call
   `qa_check_app`; a menu that never opens on a healthy app is a failing step, quoted with the
   tool's message.
-- **A ticket that names a prototype** (a page under `docs/design/prototypes/`, or one of the
-  catalog's Window stories: the ticket page, Home, Initiatives, Tickets) is checked against the
-  design sheet: each design reference beside the app's page drawn from the matching fixture, at
-  the same size, at the laptop and desktop widths, in light and dark. Take it from the PR's
-  `design-sheet` CI artifact, or build it on the PR head with `make design-sheet` in `macos/`
-  (it needs a Chromium; `CHROME` names one), and open its `index.html`. Judge the rows the ticket
-  changes: the app's half should come closer to the design than on `main`'s sheet, and every
-  difference the ticket says it closes should be gone. Name each row you judged (its title) and
-  what still differs in the `Design check`. The sheet draws from fixtures; your screenshots of the
-  running app stay the evidence that the app draws the same.
+- **A component's or a screen's look is judged on its own, in the Component Gallery.** The gallery
+  (`macos/Gallery/`) shows the app's own views, drawn from made-up inputs, outside the running
+  app: the app's counterpart of the design catalog. `qa_build` builds it from the PR's head with
+  the app, so it always shows the change. A button is a button wherever it sits, so this is where
+  its look is judged, and where a case the app rarely shows (a very long label, every size side
+  by side) can be seen at all.
+  1. Call `qa_gallery` with no arguments. It lists the entries (a component such as `button`, a
+     screen such as `ticket-page`), each with its variations, and `affected`: the entries the
+     PR's changed files are a reason to look at. Judge every affected entry. Never make up an
+     entry's or a variation's name: use the ones it returned.
+  2. A component: call `qa_gallery` with its `entry`. It saves the entry's board to
+     `qa-evidence/`, every variation together, in light and in dark, at its true size. Read the
+     pictures.
+  3. A screen: call `qa_gallery` with its `entry` and one `variation` at a time, for each
+     variation the change can show in. It saves that variation as a laptop's window draws it and
+     as a desktop's (or pass `width`), in light and in dark.
+  4. Judge each picture as a designer would, by sight: the content is centred in its shape, with
+     the same space above and below and on both sides; a glyph and its label sit on one line with
+     an even gap; nothing is clipped, cramped or cut by an ellipsis it has room for; the kinds and
+     states can be told apart; text keeps its contrast; a screen's columns hold together at both
+     widths.
+  5. For what a picture cannot show (hover, focus with Tab, a press), call `qa_gallery_open` with
+     the `entry` (a screen: its `variation`, and `width` when it matters). The gallery's window
+     opens on it, live, and the result's `pid` is driven with `qa_hover`, `qa_key`, `qa_ax_press`
+     and `qa_screenshot` like the app's. Nothing in it is scaled, so a size read from
+     `qa_ax_tree` is the real one. Quit it with `qa_quit_app`.
+  A fault is a finding even when every structural check passes: report it as a
+  `Design check: <entry>` step, with the variation's name and what is wrong in plain words ("the
+  label sits lower than the middle of the button"). A change that adds a component, a kind, a
+  state or a screen state with no variation for it is a finding too: the variations are part of
+  the work.
+- **The running app is judged for what the gallery cannot show**: that the app puts a component in
+  the state it should (a selected row's badge is the selected one), how a page holds together at
+  the window's sizes, and that the journey works. Launch the app on its fixtures for those. Do
+  not repeat there what the gallery already settles.
+- **A ticket that brings a new design** attaches the design's reference images, drawn from the
+  catalog story or the prototype it was designed in. They are direction for that ticket, not a
+  standing check: compare the gallery's pictures and your screenshots of the running app with
+  them, and name what still differs. Once a design has shipped, the app is the reference: nothing
+  compares it with the HTML again. When the ticket attaches none, judge against the Screens and
+  the design system, as above.
 
 After an update: the signed release pair. The `qa_build` app is signed ad hoc and has no update
 key, so it never installs an update. When a step judges what the app shows once an update
 installed, or once a failed one was rolled back, use the signed release pair instead. Whether the
-install works is proved by the `macos-e2e` check, not by you: do not report the install itself as a
+install works is proved by the `macos` check's update test, not by you: do not report the install itself as a
 step you proved, judge what the app shows.
 
 **One-time setup on the QA host.** The QA host gets a persistent test identity, installed and
