@@ -118,13 +118,15 @@ defmodule SymphonyElixir.PrWatchTest do
     test "TP-1518: in CI Fix, GitHub's unknown mergeability holds the run back unless a fix is pending on the head" do
       settings = Config.settings!()
       ci_fix = issue("3", "CI Fix")
-      unknown = %{rule: "R16", kind: :wait, owner: :github, reason: "GitHub is still computing whether PR #3 can merge: Symphony reads it again"}
+      reading = "GitHub is still computing whether PR #3 can merge: Symphony reads it again"
+      unknown = %{rule: "R16", kind: :wait, owner: :github, reason: reading}
 
       PrWatchSupport.put_watch!(@repo_key, "3", phase: :ci_fix, facts: %{mergeable: :unknown}, decision: unknown)
-      assert PrWatch.dispatch_reason(ci_fix, settings) == "the PR watcher (R16): GitHub is still computing whether PR #3 can merge: Symphony reads it again"
+      assert PrWatch.dispatch_reason(ci_fix, settings) == "the PR watcher (R16): " <> reading
 
-      pending = SymphonyElixir.PrWatch.Attempts.pending(SymphonyElixir.PrWatch.Attempts.new(), "sha-head", :conflict, nil, ~U[2026-11-16 18:02:00Z])
-      PrWatchSupport.put_watch!(@repo_key, "3", phase: :ci_fix, facts: %{mergeable: :unknown}, decision: unknown, attempts: pending)
+      pending = Attempts.pending(Attempts.new(), "sha-head", :conflict, nil, ~U[2026-11-16 18:02:00Z])
+      facts = %{mergeable: :unknown}
+      PrWatchSupport.put_watch!(@repo_key, "3", phase: :ci_fix, facts: facts, decision: unknown, attempts: pending)
       assert PrWatch.dispatch_reason(ci_fix, settings) == nil
     end
 

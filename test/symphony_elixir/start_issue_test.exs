@@ -247,14 +247,15 @@ defmodule SymphonyElixir.StartIssueTest do
     test "TP-1518: Start on a QA ticket whose PR needs a conflict fix asks the watcher to send it to CI Fix, and never starts QA on the conflict", %{server: server} do
       tracked([issue("qa-1", "MT-Q1", "QA"), issue("qa-2", "MT-Q2", "QA")])
       fix = %{rule: "R14", kind: :ci_fix, args: %{origin: :qa, cause: :conflict}, reason: "PR #1 conflicts with main: conflict fix run 1 of 3"}
-      SymphonyElixir.PrWatchSupport.put_watch!(@repo, "qa-1", phase: :qa, identifier: "MT-Q1", facts: %{mergeable: :dirty}, decision: fix)
+      dirty = %{mergeable: :dirty}
+      SymphonyElixir.PrWatchSupport.put_watch!(@repo, "qa-1", phase: :qa, identifier: "MT-Q1", facts: dirty, decision: fix)
 
       # No watcher runs here to apply it: the start is refused, and nothing reaches the orchestrator.
       assert {:error, {:start_refused, "Its PR needs a CI Fix run first, and Symphony could not send it to CI Fix yet; try again in a moment."}} =
                Orchestrator.start_issue(server, "MT-Q1", nil)
 
       wait = %{rule: "R14a", kind: :wait_for_competitors, owner: :symphony, reason: "Lands after TP-9"}
-      SymphonyElixir.PrWatchSupport.put_watch!(@repo, "qa-2", phase: :qa, identifier: "MT-Q2", facts: %{mergeable: :dirty}, decision: wait)
+      SymphonyElixir.PrWatchSupport.put_watch!(@repo, "qa-2", phase: :qa, identifier: "MT-Q2", facts: dirty, decision: wait)
 
       assert {:error, {:start_refused, "PR #1 conflicts with its base: a conflict fix runs first, never a review on it."}} = Orchestrator.start_issue(server, "MT-Q2", nil)
       refute_received {:start_issue_call, _issue, _note}

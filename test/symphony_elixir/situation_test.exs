@@ -473,7 +473,8 @@ defmodule SymphonyElixir.SituationTest do
       assert compute(record(), [], slot_facts(%{limit: 20})).cause == "The implementation run is next. No runs are ahead of it; Symphony runs 20 at a time."
 
       # A decision that waits on something else names no run.
-      waits = record(%{phase: "QA", pr_watch: watch(%{ci: :green}, %{decision: %{kind: :wait, rule: "R28", owner: :symphony, reason: "Behind main", clears_when: "it is updated"}})})
+      wait = %{kind: :wait, rule: "R28", owner: :symphony, reason: "Behind main", clears_when: "it is updated"}
+      waits = record(%{phase: "QA", pr_watch: watch(%{ci: :green}, %{decision: wait})})
       assert compute(waits, [], slot_facts(%{})).cause == "No runs are ahead of it; Symphony runs four at a time."
     end
 
@@ -481,7 +482,8 @@ defmodule SymphonyElixir.SituationTest do
       assert %{kind: "waiting_for_slot", word: "Starting", cause: "The implementation run is next and a slot is free.", next: "It starts on the next dispatch pass.", since: @at} =
                compute(record())
 
-      decided = record(%{phase: "QA", pr_watch: watch(%{ci: :green}, %{decision: %{kind: :dispatch, rule: "R27", args: %{phase: :qa}, reason: "The head is green", since: @later}})})
+      dispatch = %{kind: :dispatch, rule: "R27", args: %{phase: :qa}, reason: "The head is green", since: @later}
+      decided = record(%{phase: "QA", pr_watch: watch(%{ci: :green}, %{decision: dispatch})})
       assert %{word: "Starting", cause: "The QA run is next and a slot is free: The head is green.", since: @later} = compute(decided)
     end
   end
@@ -491,7 +493,8 @@ defmodule SymphonyElixir.SituationTest do
     @silent %{since: @at, ticks: 2, bound: nil, reason: "R14 decided `ci_fix`, but no run started and no wait is recorded"}
 
     defp conflicted(phase, decision, overrides \\ %{}) do
-      facts = %{phase: phase |> String.downcase() |> String.replace(" ", "_") |> String.to_atom(), ci: :green, mergeable: :dirty, pr_number: 915}
+      phase_key = phase |> String.downcase() |> String.replace(" ", "_") |> String.to_atom()
+      facts = %{phase: phase_key, ci: :green, mergeable: :dirty, pr_number: 915}
       record(%{phase: phase, pr_watch: watch(facts, Map.merge(%{decision: Map.put(decision, :since, @later)}, overrides))})
     end
 
@@ -566,7 +569,10 @@ defmodule SymphonyElixir.SituationTest do
     end
 
     test "when Symphony can't tell what the ticket waits on, it says exactly that" do
-      for record <- [record(%{phase: "QA"}), conflicted("QA", %{kind: :to_rework, rule: "R15a", reason: "x"}), record(%{phase: nil})] do
+      to_rework = conflicted("QA", %{kind: :to_rework, rule: "R15a", reason: "x"})
+      unknowns = [record(%{phase: "QA"}), to_rework, record(%{phase: nil})]
+
+      for record <- unknowns do
         assert %{kind: "waiting_on_you", word: "Not known", cause: "Symphony can't tell what it waits on.", next: "Check it now from its page."} = compute(record)
       end
     end

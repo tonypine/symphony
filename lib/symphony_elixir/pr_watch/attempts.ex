@@ -129,7 +129,13 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   id, the head it started on, when it started, whether it ended and whether its end counts (a usage
   limit, an unreachable model API or a CI wait ends a run uncounted).
   """
-  @type fix_run :: %{run_id: String.t() | nil, head: String.t() | nil, at: DateTime.t(), ended: boolean(), counted: boolean()}
+  @type fix_run :: %{
+          run_id: String.t() | nil,
+          head: String.t() | nil,
+          at: DateTime.t(),
+          ended: boolean(),
+          counted: boolean()
+        }
 
   @conflict_free [:clean, :behind, :unstable, :blocked]
   @green [:green, :none]

@@ -286,7 +286,9 @@ defmodule SymphonyElixir.PrDecisionTest do
     ]
 
     test "in every PR phase an unknown reading waits on GitHub and is read again, whatever CI and the review say" do
-      for phase <- [:code_review, :qa, :rework, :ci_fix, :merging], ci <- @ci_readings, review <- [:pending, :approved, :changes_requested] do
+      phases = [:code_review, :qa, :rework, :ci_fix, :merging]
+
+      for phase <- phases, ci <- @ci_readings, review <- [:pending, :approved, :changes_requested] do
         facts = [phase: phase, mergeable: :unknown, review: review, origin: :qa] ++ ci
         action = decide(facts)
 

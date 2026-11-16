@@ -791,7 +791,9 @@ defmodule SymphonyElixir.TicketStateTest do
 
   describe "fix_runs_in/1" do
     test "TP-1518: lists the CI Fix runs oldest first, with whether each ended and whether its end counts" do
-      fix = fn run_id, minute, head -> event("run.started", %{run_id: run_id, run_kind: "ci_fix", state: "CI Fix", head: head}, at: at(minute)) end
+      fix = fn run_id, minute, head ->
+        event("run.started", %{run_id: run_id, run_kind: "ci_fix", state: "CI Fix", head: head}, at: at(minute))
+      end
 
       events = [
         started("run-0", at(0)),

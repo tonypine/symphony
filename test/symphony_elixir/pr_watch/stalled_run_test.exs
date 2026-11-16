@@ -1,8 +1,8 @@
 defmodule SymphonyElixir.PrWatch.StalledRunTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Pauses, TicketState}
   alias SymphonyElixir.Inbox.Item
+  alias SymphonyElixir.{Pauses, TicketState}
   alias SymphonyElixir.PrWatch.StalledRun
 
   @repo "default"

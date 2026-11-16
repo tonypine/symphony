@@ -118,7 +118,8 @@ defmodule SymphonyElixir.StartNowTest do
       in_qa = fn "TP-1508" -> {:ok, issue("QA")} end
 
       assert ^refused = follow(issue("QA"), watch(@fix), fn _id -> {:error, :watcher_not_running} end, in_qa)
-      assert ^refused = follow(issue("QA"), watch(@fix), fn _id -> {:ok, record(@fix)} end, fn _id -> {:error, :issue_not_found} end)
+      not_found = fn _id -> {:error, :issue_not_found} end
+      assert ^refused = follow(issue("QA"), watch(@fix), fn _id -> {:ok, record(@fix)} end, not_found)
       # The watcher read the PR and still decides a fix, but the ticket did not move.
       assert ^refused = follow(issue("QA"), watch(@fix), fn _id -> {:ok, record(@fix)} end, in_qa)
 

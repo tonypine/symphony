@@ -408,13 +408,24 @@ defmodule SymphonyElixir.PrWatch.AttemptsTest do
       refute Attempts.pending?(pending, "head-1", :red)
       refute Attempts.pending?(pending, "head-2", :conflict)
 
-      # No run, a run still going, a run a restart cut short, a run a usage limit ended uncounted, a run from before the decision.
-      for runs <- [[], [fix_run(ended: false)], [fix_run(ended: false, counted: false)], [fix_run(counted: false)], [fix_run(at: DateTime.add(@now, -1, :second))]] do
-        assert %{conflict: 0, pending: %{since: @now}} = Attempts.observe(pending, conflicting(), ticket(phase: :ci_fix, fix_runs: runs), @later), inspect(runs)
+      # No run, a run still going, a run a restart cut short, a run a usage limit ended uncounted,
+      # a run from before the decision.
+      unended = [
+        [],
+        [fix_run(ended: false)],
+        [fix_run(ended: false, counted: false)],
+        [fix_run(counted: false)],
+        [fix_run(at: DateTime.add(@now, -1, :second))]
+      ]
+
+      for runs <- unended do
+        observed = Attempts.observe(pending, conflicting(), ticket(phase: :ci_fix, fix_runs: runs), @later)
+        assert %{conflict: 0, pending: %{since: @now}} = observed, inspect(runs)
       end
 
       # Its run ended: one conflict fix run spent, the fix no longer pending.
-      assert %{conflict: 1, pending: nil} = Attempts.observe(pending, conflicting(), ticket(phase: :ci_fix, fix_runs: [fix_run([])]), @later)
+      ended = ticket(phase: :ci_fix, fix_runs: [fix_run([])])
+      assert %{conflict: 1, pending: nil} = Attempts.observe(pending, conflicting(), ended, @later)
       assert %{conflict_attempts: 0} = Attempts.facts(pending, conflicting(), @settings, @later)
     end
 
@@ -439,28 +450,35 @@ defmodule SymphonyElixir.PrWatch.AttemptsTest do
     end
 
     test "a record from before TP-1518 spent its count at the move: it gives it back while its run never ended" do
-      legacy = %{conflict: 1, red: 1, fix_failures: [%{check: "a", error: "x"}], streak: [%{check: "a", error: "x"}], sent: %{head_sha: "head-1", cause: :conflict}}
+      failures = [%{check: "a", error: "x"}]
+      legacy = %{conflict: 1, red: 1, fix_failures: failures, streak: failures, sent: %{head_sha: "head-1", cause: :conflict}}
       assert %{pending: %{head_sha: "head-1", cause: :conflict, since: nil, prepaid: true}} = Attempts.normalize(legacy)
 
       # No run on its head ended: the count comes back and the fix waits for its run.
-      assert %{conflict: 0, red: 1, pending: %{prepaid: false, since: nil}} = given_back = Attempts.observe(legacy, conflicting(), ticket(fix_runs: []), @now)
+      given_back = Attempts.observe(legacy, conflicting(), ticket(fix_runs: []), @now)
+      assert %{conflict: 0, red: 1, pending: %{prepaid: false, since: nil}} = given_back
 
       # Its run ends later, on that head: spent once more, as it should be.
-      assert %{conflict: 1, pending: nil} = Attempts.observe(given_back, conflicting(), ticket(fix_runs: [fix_run([])]), @later)
-      assert %{conflict: 0, pending: %{}} = Attempts.observe(given_back, conflicting(), ticket(fix_runs: [fix_run(head: "head-0")]), @later)
+      ended = ticket(fix_runs: [fix_run([])])
+      assert %{conflict: 1, pending: nil} = Attempts.observe(given_back, conflicting(), ended, @later)
+      other_head = ticket(fix_runs: [fix_run(head: "head-0")])
+      assert %{conflict: 0, pending: %{}} = Attempts.observe(given_back, conflicting(), other_head, @later)
 
       # A run on its head had ended already: what was spent stays spent.
-      assert %{conflict: 1, pending: nil} = Attempts.observe(legacy, conflicting(), ticket(fix_runs: [fix_run([])]), @now)
+      assert %{conflict: 1, pending: nil} = Attempts.observe(legacy, conflicting(), ended, @now)
 
       # A red one gives back its count and the failure it recorded.
       red = %{legacy | sent: %{head_sha: "head-1", cause: :red}}
-      assert %{red: 0, conflict: 1, fix_failures: [], streak: []} = Attempts.observe(red, conflicting(), ticket(fix_runs: []), @now)
+      given_back_red = Attempts.observe(red, conflicting(), ticket(fix_runs: []), @now)
+      assert %{red: 0, conflict: 1, fix_failures: [], streak: []} = given_back_red
     end
 
     test "normalize/1 keeps a well-formed pending fix and drops the rest" do
-      pending = %{head_sha: "head-1", cause: :red, since: @now, failure: %{check: "a", error: "x", head_sha: "head-1"}, prepaid: true}
+      failure = %{check: "a", error: "x", head_sha: "head-1"}
+      pending = %{head_sha: "head-1", cause: :red, since: @now, failure: failure, prepaid: true}
       assert %{pending: ^pending} = Attempts.normalize(%{pending: pending})
-      assert %{pending: %{since: nil, failure: nil, prepaid: false}} = Attempts.normalize(%{pending: %{cause: :conflict, since: :bad, failure: :bad}})
+      malformed = %{pending: %{cause: :conflict, since: :bad, failure: :bad}}
+      assert %{pending: %{since: nil, failure: nil, prepaid: false}} = Attempts.normalize(malformed)
       assert %{pending: nil} = Attempts.normalize(%{pending: %{cause: :other}})
       assert %{pending: nil} = Attempts.normalize(%{sent: %{cause: :other}})
     end

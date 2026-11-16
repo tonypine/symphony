@@ -450,9 +450,14 @@ defmodule SymphonyElixir.Situation do
   # on something else.
   defp due_run(ctx) do
     case decision(ctx) do
-      %{kind: kind} = decision when kind in @run_kinds -> %{label: run_label_for(decision, ctx), why: decision[:reason], since: decision[:since], silent?: silent?(ctx)}
-      nil -> phase_run(ctx)
-      _wait -> nil
+      %{kind: kind} = decision when kind in @run_kinds ->
+        %{label: run_label_for(decision, ctx), why: decision[:reason], since: decision[:since], silent?: silent?(ctx)}
+
+      nil ->
+        phase_run(ctx)
+
+      _wait ->
+        nil
     end
   end
 

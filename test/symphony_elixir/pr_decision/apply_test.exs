@@ -375,8 +375,10 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     test "a conflicting Merging PR goes to CI Fix with the conflict and auto-merge off, its conflict fix pending" do
       ctx = ctx(:merging, facts: %{auto_merge: :armed}, attempts: %{Attempts.new() | conflict: 1})
 
-      assert %{outcome: :applied, attempts: %{conflict: 1, red: 0, pending: %{cause: :conflict, head_sha: "head-1", failure: nil}}, fix: %{pr_conflict: conflict}} =
+      assert %{outcome: :applied, attempts: attempts, fix: %{pr_conflict: conflict}} =
                Apply.apply(action("R14", :ci_fix, args: %{origin: :merging, cause: :conflict}), ctx)
+
+      assert %{conflict: 1, red: 0, pending: %{cause: :conflict, head_sha: "head-1", failure: nil}} = attempts
 
       assert_received {:comment, @issue_id, comment}
       assert comment =~ "because it conflicts with the base branch"
@@ -387,8 +389,8 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     test "in CI Fix the ticket stays and the next run takes the fix" do
       ctx = ctx(:ci_fix, facts: %{origin: :qa})
 
-      assert %{outcome: :applied, attempts: %{red: 0, pending: %{cause: :red}}, fix: %{ci_failure: %{approved: false}}} =
-               Apply.apply(action("R21", :ci_fix, args: %{origin: :qa, cause: :red}), ctx)
+      red = action("R21", :ci_fix, args: %{origin: :qa, cause: :red})
+      assert %{outcome: :applied, attempts: %{red: 0, pending: %{cause: :red}}, fix: %{ci_failure: %{approved: false}}} = Apply.apply(red, ctx)
 
       refute_received {:move, _id, _state}
     end
@@ -409,7 +411,11 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
     test "TP-1518: a fix decided on a head whose run never ended is sent to CI Fix again, whatever the stay's ledger says" do
       conflict = action("R14", :ci_fix, args: %{origin: :qa, cause: :conflict})
       attempts = Attempts.pending(Attempts.new(), "head-1", :conflict, nil, @now)
-      applied = [%{head_sha: "head-1", rule: "R14", kind: :ci_fix, at: @now}, %{head_sha: "head-1", rule: "R25", kind: :return_to_origin, at: @now}]
+
+      applied = [
+        %{head_sha: "head-1", rule: "R14", kind: :ci_fix, at: @now},
+        %{head_sha: "head-1", rule: "R25", kind: :return_to_origin, at: @now}
+      ]
 
       assert %{outcome: :applied, attempts: %{conflict: 0, pending: %{since: @now}}} = Apply.apply(conflict, ctx(:qa, attempts: attempts, applied: applied))
       assert_received {:move, @issue_id, "CI Fix"}
