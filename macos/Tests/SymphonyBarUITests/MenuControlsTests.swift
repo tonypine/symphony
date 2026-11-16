@@ -215,6 +215,20 @@ final class MenuControlsTests: XCTestCase {
         }
     }
 
+    func testEveryLabelsLineHoldsItsDescenders() {
+        for size in DesignTokens.Control.allCases {
+            let natural = fittingSize(Text("Today gypq").font(size.labelFont)).height
+            let label = fittingSize(Text("Today gypq").font(size.labelFont).lineHeight(.exact(points: size.labelLineHeight))).height
+            XCTAssertGreaterThanOrEqual(label, natural - 0.5, "\(size): no letter is cut")
+            XCTAssertGreaterThan(Double(size.labelLineHeight), size.fontSize, "\(size): taller than the font's point size")
+            XCTAssertLessThanOrEqual(Double(size.labelLineHeight), size.height)
+        }
+    }
+
+    func testNoControlHasAMenuOpenWhenNoneIs() {
+        XCTAssertNil(MenuPresenter.showing(for: MenuAnchorBox()), "a control whose menu closed opens it again")
+    }
+
     func testTheSegmentsShareTheWidthEqually() {
         let three = fittingSize(SegmentedFace(titles: ["Day", "Week", "Month"], selected: 0, reduceMotion: true)).width
         let longWord = fittingSize(SegmentedFace(titles: ["Day", "Day", "Month"], selected: 0, reduceMotion: true)).width
@@ -249,11 +263,11 @@ final class MenuControlsTests: XCTestCase {
         host.frame = CGRect(origin: .zero, size: host.fittingSize)
         XCTAssertEqual(host.fittingSize.height - 2 * room, 300, accuracy: 0.5, "the panel is as tall as the cut list")
         let elements = try XCTUnwrap(host.accessibilityChildren() as? [MenuItemElement])
-        let before = elements[3].accessibilityFrameInParentSpace()
+        let before = elements[3].accessibilityFrame()
         host.scroll(to: 56)
         XCTAssertEqual(host.scrollOffset, 56)
-        let after = elements[3].accessibilityFrameInParentSpace()
-        XCTAssertEqual(abs(after.minY - before.minY), 56, accuracy: 0.5, "the item moves up with the list")
+        let after = elements[3].accessibilityFrame()
+        XCTAssertEqual(after.minY - before.minY, 56, accuracy: 0.5, "the item moves up the screen with the list")
     }
 
     func testAMenuButtonDrawnOpenShowsItsMenuUnderIt() {
@@ -275,7 +289,10 @@ final class MenuControlsTests: XCTestCase {
         XCTAssertEqual(elements.map { $0.accessibilityRole() }, Array(repeating: .menuItem, count: 5), "no element for the separator")
         XCTAssertEqual(elements.map { $0.accessibilityLabel() ?? "" }, ["Todo", "In Progress", "Rework", "Backlog, Moves wait while a run is working.", "Canceled"])
         XCTAssertEqual(elements.map { $0.isAccessibilityEnabled() }, [true, true, true, false, true])
-        XCTAssertEqual(elements[1].accessibilityFrameInParentSpace().height, DesignTokens.Menu.itemHeight)
+        XCTAssertEqual(elements[1].accessibilityFrame().height, DesignTokens.Menu.itemHeight)
+        let frames = elements.map { $0.accessibilityFrame() }
+        XCTAssertEqual(frames.map(\.minY), frames.map(\.minY).sorted(by: >), "the first item is the top one on screen, as drawn")
+        XCTAssertEqual(Double(frames[0].maxY), Double(host.bounds.height - MenuPresenter.shadowRoom) - DesignTokens.Menu.padding, accuracy: 0.5)
         XCTAssertTrue(elements[2].accessibilityPerformPress())
         XCTAssertEqual(picked, ["Rework"])
         host.announce(1)

@@ -58,7 +58,7 @@ public struct SegmentedFace: View {
         return Text(title)
             .font(size.labelFont)
             .lineLimit(1)
-            .lineHeight(.multiple(factor: 1))
+            .lineHeight(.exact(points: size.labelLineHeight))
             .foregroundStyle(foreground(index))
             .padding(.horizontal, size.padding * DesignTokens.Segmented.paddingScale)
             .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -14,6 +14,8 @@ public final class MenuPresenter {
     public private(set) static weak var current: MenuPresenter?
 
     let session: MenuSession
+    /// The control that opened it: the one whose next press closes it rather than opens another.
+    private(set) weak var owner: AnyObject?
     private var panels: [ObjectIdentifier: MenuPanel] = [:]
     private var monitor: Any?
     private var observers: [NSObjectProtocol] = []
@@ -26,12 +28,13 @@ public final class MenuPresenter {
     static let shadowRoom: CGFloat = 40
 
     /// Opens `items` from `view`'s control, lined up with its `alignment` edge, at least `minWidth` wide, with
-    /// `highlighted` lit (a pop-up's current choice). `onClose` runs once when it closes, before a pick's move.
-    /// Nil when the view is in no window.
+    /// `highlighted` lit (a pop-up's current choice), for `owner`, the control that opens it. `onClose` runs once when it
+    /// closes, before a pick's move. Nil when the view is in no window.
     @discardableResult
     public static func open(
         _ items: [MenuItem], from view: NSView, alignment: MenuNavigation.Alignment = .leading,
-        minWidth: Double = DesignTokens.Menu.minWidth, highlighted: Int? = nil, label: String, onClose: @escaping () -> Void
+        minWidth: Double = DesignTokens.Menu.minWidth, highlighted: Int? = nil, label: String, owner: AnyObject? = nil,
+        onClose: @escaping () -> Void
     ) -> MenuPresenter? {
         current?.session.close()
         guard let window = view.window, let screen = window.screen ?? NSScreen.main else { return nil }
@@ -39,8 +42,15 @@ public final class MenuPresenter {
         let presenter = MenuPresenter(
             session: MenuSession(items: items, highlighted: highlighted), window: window, screen: screen.visibleFrame, minWidth: minWidth
         )
+        presenter.owner = owner
         presenter.show(anchor: anchor, alignment: alignment, label: label, onClose: onClose)
         return presenter
+    }
+
+    /// The menu `owner` has open now, if any: a closed one is no longer open, whatever still holds it.
+    static func showing(for owner: AnyObject) -> MenuPresenter? {
+        guard let current, current.owner === owner, !current.session.isClosed else { return nil }
+        return current
     }
 
     private init(session: MenuSession, window: NSWindow, screen: CGRect, minWidth: Double) {
@@ -288,7 +298,7 @@ final class MenuHostingView: NSHostingView<AnyView> {
         guard let session else { return [] }
         let elements: [MenuItemElement] = session.items.enumerated().compactMap { index, item in
             guard !item.isSeparator else { return nil }
-            let element = MenuItemElement(index: index) { [weak session] in session?.pick(index) }
+            let element = MenuItemElement(index: index, host: self) { [weak session] in session?.pick(index) }
             element.setAccessibilityRole(.menuItem)
             element.setAccessibilityLabel(item.accessibilityText)
             element.setAccessibilityEnabled(item.enabled)
@@ -300,8 +310,8 @@ final class MenuHostingView: NSHostingView<AnyView> {
         return elements
     }
 
-    /// Each item's frame: its top in the list less how far the list is scrolled, so an item scrolled out of the list
-    /// sits outside it.
+    /// Each item's place in this view: its top in the list less how far the list is scrolled, so an item scrolled out
+    /// of the list sits outside it. The element turns it into a frame on screen.
     private func place(_ elements: [MenuItemElement]) {
         guard let session else { return }
         let menu = DesignTokens.Menu.self
@@ -310,9 +320,9 @@ final class MenuHostingView: NSHostingView<AnyView> {
         for element in elements {
             let fromTop = room + tops[element.index] - scrollOffset
             let y = isFlipped ? fromTop : bounds.height - fromTop - menu.itemHeight
-            element.setAccessibilityFrameInParentSpace(CGRect(
+            element.rect = CGRect(
                 x: room + menu.padding, y: y, width: max(bounds.width - 2 * (room + menu.padding), 0), height: menu.itemHeight
-            ))
+            )
         }
     }
 }
@@ -320,12 +330,25 @@ final class MenuHostingView: NSHostingView<AnyView> {
 /// One item of an open menu as VoiceOver sees it: a press picks it.
 final class MenuItemElement: NSAccessibilityElement {
     let index: Int
+    /// The item's place in its menu's view, in the view's own (flipped) coordinates.
+    var rect: CGRect = .zero
+    private weak var host: NSView?
     private let press: () -> Void
 
-    init(index: Int, press: @escaping () -> Void) {
+    init(index: Int, host: NSView, press: @escaping () -> Void) {
         self.index = index
+        self.host = host
         self.press = press
         super.init()
+    }
+
+    /// The item's frame on screen, from its place in the view: the view converts it, flipped or not, so the first
+    /// item is the top one on screen as it is drawn. (A frame in the parent's space is read bottom up, which turned a
+    /// flipped view's items over.)
+    override func accessibilityFrame() -> NSRect {
+        guard let host else { return rect }
+        let inWindow = host.convert(rect, to: nil)
+        return host.window?.convertToScreen(inWindow) ?? inWindow
     }
 
     override func accessibilityPerformPress() -> Bool {

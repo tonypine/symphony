@@ -76,7 +76,7 @@ public struct MenuControlFace: View {
         }
         .font(size.labelFont)
         .lineLimit(1)
-        .lineHeight(.multiple(factor: 1))
+        .lineHeight(.exact(points: size.labelLineHeight))
         .foregroundStyle(foreground)
         .padding(.leading, size.padding)
         .padding(.trailing, quiet && !isPopUp ? size.padding : size.padding * DesignTokens.MenuControl.trailingScale)
@@ -203,9 +203,12 @@ private struct MenuTrigger: View {
     @State private var anchor = MenuAnchorBox()
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
+    /// Drawn open while its menu is: `open` redraws the face when it closes, and the presenter has the last word.
+    private var shown: Bool { open && MenuPresenter.showing(for: anchor) != nil }
+
     var body: some View {
         Button(action: toggle) { Text(label) }
-            .buttonStyle(MenuControlStyle(content: content, size: size, quiet: quiet, open: open || drawnOpen))
+            .buttonStyle(MenuControlStyle(content: content, size: size, quiet: quiet, open: shown || drawnOpen))
             .focusEffectDisabled()
             .modifier(MenuControlFocus())
             .accessibilityHidden(true)
@@ -213,7 +216,7 @@ private struct MenuTrigger: View {
                 // An offscreen snapshot can't draw an AppKit view, and needs no place on screen.
                 if !offscreenSnapshot {
                     MenuAnchor(box: anchor, access: MenuAnchorAccess(
-                        role: role, label: spokenLabel ?? label, value: spokenValue, help: reason, enabled: reason == nil, expanded: open,
+                        role: role, label: spokenLabel ?? label, value: spokenValue, help: reason, enabled: reason == nil, expanded: shown,
                         press: toggle
                     ))
                 }
@@ -227,19 +230,22 @@ private struct MenuTrigger: View {
                 return .handled
             }
             .fixedSize()
-            .onDisappear { if open { MenuPresenter.current?.session.close() } }
+            .onDisappear { MenuPresenter.showing(for: anchor)?.session.close() }
     }
 
+    /// Closes this control's menu when it is the one open, and opens it otherwise. Whether it is open is the
+    /// presenter's to say, not `open`'s: `open` only draws the face, so a close it missed (Escape, a click outside)
+    /// can never leave the control unable to open again.
     private func toggle() {
-        if open {
-            MenuPresenter.current?.session.close()
+        if let shown = MenuPresenter.showing(for: anchor) {
+            shown.session.close()
             return
         }
         guard let view = anchor.view else { return }
         let menu = items()
         let opened = MenuPresenter.open(
             menu.items, from: view, alignment: alignment, minWidth: max(DesignTokens.Menu.minWidth, view.bounds.width),
-            highlighted: menu.highlighted, label: label
+            highlighted: menu.highlighted, label: label, owner: anchor
         ) { open = false }
         open = opened != nil
     }
