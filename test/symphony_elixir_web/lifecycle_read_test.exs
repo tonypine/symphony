@@ -143,7 +143,15 @@ defmodule SymphonyElixirWeb.LifecycleReadTest do
       last_codex_timestamp: nil
     }
 
-    snapshot = %{running: [running], retrying: [], rate_limits: nil, repositories: [], dispatch_skipped: [], watching: []}
+    snapshot = %{
+      running: [running],
+      retrying: [],
+      rate_limits: nil,
+      repositories: [],
+      dispatch_skipped: [],
+      watching: []
+    }
+
     orchestrator = start_supervised!(%{id: RunningOrchestrator, start: {RunningOrchestrator, :start_link, [snapshot]}})
 
     assert {:ok, %{lifecycle: lifecycle}} = SymphonyElixirWeb.Presenter.issue_payload("MT-4", orchestrator, 1_000)

@@ -62,7 +62,13 @@ defmodule SymphonyElixir.Lifecycle do
   The run working on the ticket now, as the orchestrator's snapshot holds it: its id, when it started
   and its tokens so far. `nil` when no run works on it.
   """
-  @type running :: %{optional(:run_id) => term(), optional(:started_at) => DateTime.t() | nil, optional(:total_tokens) => term()} | nil
+  @type running ::
+          %{
+            optional(:run_id) => term(),
+            optional(:started_at) => DateTime.t() | nil,
+            optional(:total_tokens) => term()
+          }
+          | nil
 
   @typedoc "What `compute/2` needs beside the ledger; `running` is optional."
   @type facts :: %{
