@@ -28,6 +28,8 @@ cd "$work"
 
 "$helper" --entries > "$work/entries.json" || fail "--entries exited $?"
 root="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["root"])' "$work/entries.json")"
+# Foundation drops a leading /private from the paths it resolves (/private/tmp reads /tmp): compare real paths.
+root="$(cd "$root" 2>/dev/null && pwd -P || echo "$root")"
 [ "$root" = "$copy" ] || fail "--entries read its fixtures from $root, not from the copy the build carries ($copy)"
 python3 -c 'import json, sys; assert json.load(open(sys.argv[1]))["entries"], "no entries"' "$work/entries.json" ||
   fail "--entries listed no entries"
