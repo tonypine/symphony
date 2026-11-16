@@ -553,7 +553,8 @@ defmodule SymphonyElixir.SituationTest do
         {%{owner: :ci, reason: "Checks are running", clears_when: "the checks finish"}, "waiting_for_ci", "Waiting for CI", "It moves on when the checks finish."},
         {%{owner: :github, reason: "GitHub is still computing whether PR #915 can merge", clears_when: "GitHub reports whether the PR can merge"}, "waiting_for_ci", "Waiting on GitHub",
          "It moves on when GitHub reports whether the PR can merge."},
-        {%{owner: :person, reason: "A person marked PR #915 as a draft", clears_when: "the PR is marked ready for review."}, "waiting_on_you", "Waiting on you", "It moves on when the PR is marked ready for review."},
+        {%{owner: :person, reason: "A person marked PR #915 as a draft", clears_when: "the PR is marked ready for review."}, "waiting_on_you", "Waiting on you",
+         "It moves on when the PR is marked ready for review."},
         {%{owner: :symphony, reason: "PR #915 is behind main", clears_when: nil}, "waiting_for_ci", "Waiting on Symphony", nil}
       ]
 
@@ -811,6 +812,7 @@ defmodule SymphonyElixir.SituationTest do
 
     test "writes one event per change, with the old and the new kind and the cause" do
       assert {:ok, %Event{payload: first}} = Situation.sync(stored_record(), live(arrange("waiting_for_slot")))
+
       assert first == %{
                to: "waiting_for_slot",
                word: "Waiting for a slot",
