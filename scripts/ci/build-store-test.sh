@@ -98,6 +98,8 @@ check "the design files alone need no Mac check" "" "$(groups success docs/desig
 check "the install script" "any installer" "$(groups success scripts/install-macos.sh)"
 check "a red gate on main turns every group on" "any build unit sandbox helpers driver speed update smoke installer" "$(groups failure README.md)"
 check "so does a change to the checks themselves" "any build unit sandbox helpers driver speed update smoke installer" "$(groups success .github/workflows/mac-checks.yml)"
+check "and to the desktop lock" "any build unit sandbox helpers driver speed update smoke installer" "$(groups success scripts/ci/desktop-lock.sh)"
+check "but not to its test alone" "any helpers" "$(groups success scripts/ci/desktop-lock-test.sh)"
 
 if [ "$failures" -gt 0 ]; then echo "$failures failure(s)"; exit 1; fi
 echo "build-store-test: all passed"
