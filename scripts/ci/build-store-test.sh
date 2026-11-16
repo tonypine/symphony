@@ -64,18 +64,16 @@ $store save pr-a release 2>/dev/null
 check "a save for another branch than the active one saves nothing" a-state "$(cat "$($store work pr-a release 2>/dev/null)/state")"
 check "a save leaves no copy half-way" "" "$(find "$SYMPHONY_CI_CACHE"/work/*/refs/pr-a -mindepth 1 -maxdepth 1 ! -name release)"
 
-# Two runners on one VM: each builds in its own folder, from the same saved states.
-one=$(RUNNER_NAME=ci-macos $store work pr-a release 2>/dev/null)
-two=$(RUNNER_NAME=ci-macos-2 $store work pr-a release 2>/dev/null)
-check "each runner builds in a folder of its own" different "$([ "$one" != "$two" ] && echo different || echo same)"
-check "beside the plain one" "$(dirname "$a")/ci-macos/release" "$one"
-check "from the same saved state" "a-state a-state" "$(cat "$one/state") $(cat "$two/state")"
-echo two-state > "$two/state"
-check "one runner's build leaves the other's alone" a-state "$(cat "$one/state")"
-RUNNER_NAME=ci-macos-2 $store save pr-a release 2>/dev/null
-check "a runner's save is the branch's state for every runner" two-state "$(cat "$(RUNNER_NAME=ci-macos-3 $store work pr-a release 2>/dev/null)/state")"
-check "and the other runner's folder keeps its own" a-state "$(cat "$one/state")"
-check "a save puts the state it replaced aside" yes "$([ -n "$(ls -A "$SYMPHONY_CI_CACHE"/work/*/old)" ] && echo yes || echo no)"
+# Two runners on one VM: each has a work area of its own (SYMPHONY_CI_WORK), and the default is today's.
+check "the default work area is the cache's work folder" "$SYMPHONY_CI_CACHE/work" "$(dirname "$(dirname "$(dirname "$a")")")"
+two=$(SYMPHONY_CI_WORK="$tmp/work-2" $store work pr-a release 2>/dev/null)
+check "another runner builds in its own work area" "$tmp/work-2" "$(dirname "$(dirname "$(dirname "$two")")")"
+check "from nothing: saved states hold absolute paths, so they are not shared" "" "$(ls "$two")"
+echo two-state > "$two/state"; SYMPHONY_CI_WORK="$tmp/work-2" $store save pr-a release 2>/dev/null
+check "its save stays in its own area" a-state "$(cat "$($store work pr-a release 2>/dev/null)/state")"
+check "and is its own next time" two-state "$(cat "$(SYMPHONY_CI_WORK="$tmp/work-2" $store work pr-a release 2>/dev/null)/state")"
+SYMPHONY_CI_WORK="$tmp/work-2" $store save pr-a release 2>/dev/null
+check "a save puts the state it replaced aside" yes "$([ -n "$(ls -A "$tmp"/work-2/*/old)" ] && echo yes || echo no)"
 
 # Content-made times: the same content has the same time after git rewrote the file.
 $store stamp; before=$(stat -f %m "$repo/macos/Sources/App/a.swift")
