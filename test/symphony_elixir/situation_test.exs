@@ -259,6 +259,13 @@ defmodule SymphonyElixir.SituationTest do
       assert %{kind: "blocked_by_ticket", word: "Blocked by TP-3", cause: "It is in QA."} = compute(record(parent))
       assert compute(record(%{parent | sub_issues: [%{id: "b", identifier: "TP-3", state: nil}]})).cause == "It is waiting on its sub-tickets."
     end
+
+    test "a parent whose sub-tickets all ended has its epic review next" do
+      ended = %{phase: "Waiting on sub-tickets", sub_issues: [%{id: "a", identifier: "TP-2", state: "Done"}]}
+
+      assert %{kind: "waiting_for_slot", word: "Starting", cause: "The epic review is next and a slot is free."} = compute(record(ended))
+      assert %{word: "Starting", cause: "The epic review is next and a slot is free."} = compute(record(%{phase: "Epic Review"}))
+    end
   end
 
   describe "paused_by_rule" do

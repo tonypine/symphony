@@ -46,7 +46,14 @@ defmodule SymphonyElixir.Situation do
   # The watcher's decisions a run carries out, which the orchestrator starts.
   @run_kinds [:dispatch, :ci_fix, :land_agent]
   # The phases whose next run is the phase's own when the watcher has no decision on the ticket.
-  @phase_runs %{"todo" => "The implementation run", "in progress" => "The implementation run", "rework" => "The rework run"}
+  # A parent whose sub-tickets all ended moves to Epic Review, where its epic review runs.
+  @phase_runs %{
+    "todo" => "The implementation run",
+    "in progress" => "The implementation run",
+    "rework" => "The rework run",
+    "waiting on sub-tickets" => "The epic review",
+    "epic review" => "The epic review"
+  }
   @numbers ~w(one two three four five six seven eight nine ten eleven twelve)
 
   @doing %{
