@@ -23,6 +23,7 @@ store="bash $repo/scripts/ci/build-store.sh"
 commit() { git -C "$repo" add -A; git -C "$repo" -c user.email=t@t -c user.name=t commit -q -m "$1"; }
 
 export SYMPHONY_CI_CACHE="$tmp/cache"
+unset RUNNER_NAME
 app1=$($store key app); server1=$($store key server 7)
 echo "more" >> "$repo/docs/x.md"; echo "// more" >> "$repo/macos/Tests/t.swift"; commit docs
 check "a change outside a piece's inputs keeps its key" "$app1 $server1" "$($store key app) $($store key server 7)"
@@ -61,6 +62,20 @@ check "main's is untouched" main-state "$(cat "$($store work main release 2>/dev
 check "--fresh empties it" "" "$(ls "$($store work main release --fresh 2>/dev/null)")"
 $store save pr-a release 2>/dev/null
 check "a save for another branch than the active one saves nothing" a-state "$(cat "$($store work pr-a release 2>/dev/null)/state")"
+check "a save leaves no copy half-way" "" "$(find "$SYMPHONY_CI_CACHE"/work/*/refs/pr-a -mindepth 1 -maxdepth 1 ! -name release)"
+
+# Two runners on one VM: each builds in its own folder, from the same saved states.
+one=$(RUNNER_NAME=ci-macos $store work pr-a release 2>/dev/null)
+two=$(RUNNER_NAME=ci-macos-2 $store work pr-a release 2>/dev/null)
+check "each runner builds in a folder of its own" different "$([ "$one" != "$two" ] && echo different || echo same)"
+check "beside the plain one" "$(dirname "$a")/ci-macos/release" "$one"
+check "from the same saved state" "a-state a-state" "$(cat "$one/state") $(cat "$two/state")"
+echo two-state > "$two/state"
+check "one runner's build leaves the other's alone" a-state "$(cat "$one/state")"
+RUNNER_NAME=ci-macos-2 $store save pr-a release 2>/dev/null
+check "a runner's save is the branch's state for every runner" two-state "$(cat "$(RUNNER_NAME=ci-macos-3 $store work pr-a release 2>/dev/null)/state")"
+check "and the other runner's folder keeps its own" a-state "$(cat "$one/state")"
+check "a save puts the state it replaced aside" yes "$([ -n "$(ls -A "$SYMPHONY_CI_CACHE"/work/*/old)" ] && echo yes || echo no)"
 
 # Content-made times: the same content has the same time after git rewrote the file.
 $store stamp; before=$(stat -f %m "$repo/macos/Sources/App/a.swift")
@@ -73,9 +88,20 @@ check "new content has a new time" changed "$([ "$before" != "$(stat -f %m "$rep
 # Pruning keeps the newest.
 for n in 1 2 3 4; do echo "$n" > "$tmp/piece"; $store put app "old$n" "$tmp/piece" incremental 2>/dev/null; sleep 1; done
 SYMPHONY_CI_KEEP_PIECES=2 $store prune 2>/dev/null
-check "prune keeps the newest pieces" "old3 old4" "$(ls "$SYMPHONY_CI_CACHE/store/app" | tr '\n' ' ' | sed 's/ $//')"
+check "prune keeps what was used in the last 3 hours" "k1 old1 old2 old3 old4" "$(ls "$SYMPHONY_CI_CACHE/store/app" | tr '\n' ' ' | sed 's/ $//')"
+SYMPHONY_CI_KEEP_REFS=1 $store prune 2>/dev/null
+check "branches too, another runner may be building one" "feature_b main pr-a" "$(ls "$SYMPHONY_CI_CACHE"/work/*/refs | tr '\n' ' ' | sed 's/ $//')"
+mkdir -p "$SYMPHONY_CI_CACHE/work/Xcode-1.0-Build-old/active"
+$store prune 2>/dev/null
+check "and another Xcode's folders" yes "$([ -d "$SYMPHONY_CI_CACHE/work/Xcode-1.0-Build-old" ] && echo yes || echo no)"
+export SYMPHONY_CI_IN_USE_MINUTES=0
+SYMPHONY_CI_KEEP_PIECES=2 $store prune 2>/dev/null
+check "past that, prune keeps the newest pieces" "old3 old4" "$(ls "$SYMPHONY_CI_CACHE/store/app" | tr '\n' ' ' | sed 's/ $//')"
 SYMPHONY_CI_KEEP_REFS=1 $store prune 2>/dev/null
 check "and the newest branches, and main" "main pr-a" "$(ls "$SYMPHONY_CI_CACHE"/work/*/refs | tr '\n' ' ' | sed 's/ $//')"
+check "and drops the states saves put aside" "" "$(ls -A "$SYMPHONY_CI_CACHE"/work/*/old)"
+check "and another Xcode's folders" no "$([ -d "$SYMPHONY_CI_CACHE/work/Xcode-1.0-Build-old" ] && echo yes || echo no)"
+unset SYMPHONY_CI_IN_USE_MINUTES
 
 # With no cache (GitHub's own runners) nothing is kept and nothing fails.
 unset SYMPHONY_CI_CACHE
