@@ -1296,6 +1296,12 @@ reached with Tab.
   `Tests/Fixtures/gallery`, runs the gallery in its own place with the arguments it was given
   (`Sources/SymphonyBar/GalleryLaunch.swift`), so QA's tools drive its window as they drive the
   app's.
+- **Its fixtures travel with it.** In a checkout the gallery reads its stories' fixtures from the
+  source tree. A QA host has no checkout, so `make qa-app` also copies them, in the checkout's
+  layout, to `Contents/Resources/GalleryResources` (`make gallery-resources`), and a gallery that
+  finds that copy beside it reads only from it (`Gallery/Files.swift`; `--entries` names the root
+  as `root`). `make build-gallery` ends with `Tests/gallery-portable-test.sh`, which runs the built
+  gallery from a folder with no checkout, laid out as the QA build is.
 - It is compiled apart from the app, so a release does not carry it.
 
 `make` and `make bundle` sign ad hoc. Pass `SIGNING_IDENTITY="<certificate name>"` to sign with a
