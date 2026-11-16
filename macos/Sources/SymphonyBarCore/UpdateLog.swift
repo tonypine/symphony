@@ -71,13 +71,14 @@ public enum UpdateLaunch {
         try? FileManager.default.removeItem(at: directory.appendingPathComponent(failedName))
     }
 
-    /// True when the helper put this app back because the update's app didn't start; cleared, so a later launch
-    /// doesn't act on it again.
-    public static func takeFailure(in directory: URL) -> Bool {
+    /// When the helper put this app back because the update's app didn't start, the seconds it gave that app, as it
+    /// wrote them (`timeout` when it wrote none); nil otherwise. Cleared, so a later launch doesn't act on it again.
+    public static func takeFailedLaunchSeconds(in directory: URL) -> Int? {
         let file = directory.appendingPathComponent(failedName)
-        guard FileManager.default.fileExists(atPath: file.path) else { return false }
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
+        let written = (try? String(contentsOf: file, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
         try? FileManager.default.removeItem(at: file)
-        return true
+        return written.flatMap { Int($0) } ?? timeout
     }
 
     /// Why an update didn't apply when the helper gave up waiting for the app to quit, for the menu line.
@@ -86,7 +87,7 @@ public enum UpdateLaunch {
     }
 
     /// The rollback's reason, for the menu line and the notification of the build put back.
-    public static func failureReason(logPath: String) -> String {
-        "the app didn't start within \(timeout) seconds of the update; see \(logPath)"
+    public static func failureReason(timeoutSeconds: Int = timeout, logPath: String) -> String {
+        "the app didn't start within \(timeoutSeconds) seconds of the update; see \(logPath)"
     }
 }

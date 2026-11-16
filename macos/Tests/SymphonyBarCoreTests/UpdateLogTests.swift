@@ -73,13 +73,24 @@ final class UpdateLogTests: XCTestCase {
             "774\n"
         )
 
-        XCTAssertFalse(UpdateLaunch.takeFailure(in: cache))
+        XCTAssertNil(UpdateLaunch.takeFailedLaunchSeconds(in: cache))
         try Data("30\n".utf8).write(to: cache.appendingPathComponent(UpdateLaunch.failedName))
-        XCTAssertTrue(UpdateLaunch.takeFailure(in: cache))
-        XCTAssertFalse(UpdateLaunch.takeFailure(in: cache), "read once, so a later launch doesn't act on it again")
+        XCTAssertEqual(UpdateLaunch.takeFailedLaunchSeconds(in: cache), 30)
+        XCTAssertNil(
+            UpdateLaunch.takeFailedLaunchSeconds(in: cache), "read once, so a later launch doesn't act on it again"
+        )
+
+        try Data("5\n".utf8).write(to: cache.appendingPathComponent(UpdateLaunch.failedName))
+        XCTAssertEqual(
+            UpdateLaunch.takeFailedLaunchSeconds(in: cache), 5, "the helper's own bound, as a QA run sets it"
+        )
+        try Data().write(to: cache.appendingPathComponent(UpdateLaunch.failedName))
+        XCTAssertEqual(
+            UpdateLaunch.takeFailedLaunchSeconds(in: cache), UpdateLaunch.timeout, "the app's bound when none is written"
+        )
 
         try Data("30\n".utf8).write(to: cache.appendingPathComponent(UpdateLaunch.failedName))
         UpdateLaunch.clearFailure(in: cache)
-        XCTAssertFalse(UpdateLaunch.takeFailure(in: cache), "an update clears what an earlier one left")
+        XCTAssertNil(UpdateLaunch.takeFailedLaunchSeconds(in: cache), "an update clears what an earlier one left")
     }
 }

@@ -278,8 +278,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 rollback: updater.rollbacks.take(),
                 runningBuild: updates.current.build,
                 runningBundle: updater.bundleFileNumber,
-                launchFailure: UpdateLaunch.takeFailure(in: updater.cacheDirectory)
-                    ? UpdateLaunch.failureReason(logPath: updater.logPath) : nil
+                launchFailure: UpdateLaunch.takeFailedLaunchSeconds(in: updater.cacheDirectory).map {
+                    UpdateLaunch.failureReason(timeoutSeconds: $0, logPath: updater.logPath)
+                }
             )
         )
 
