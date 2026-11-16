@@ -15,7 +15,9 @@ defmodule SymphonyElixir.Lifecycle do
   the five (Backlog, Todo, Plan Review) belongs to no stage.
 
   A run belongs to the stage the ticket was in when the run started, and its tokens and time join the
-  stage when it ends. A run that started outside any stage (a first run starts before its move out of
+  stage when it ends. The run working now counts too, with its tokens and time so far, from what the
+  orchestrator holds of it, so the stages and the total move while it works. A run that started
+  outside any stage (a first run starts before its move out of
   Todo, a plan run never enters one) counts in Coding, so the stages' tokens always add up to the
   total.
 
@@ -56,25 +58,32 @@ defmodule SymphonyElixir.Lifecycle do
           }
         }
 
-  @typedoc "What `compute/2` needs beside the ledger."
+  @typedoc """
+  The run working on the ticket now, as the orchestrator's snapshot holds it: its id, when it started
+  and its tokens so far. `nil` when no run works on it.
+  """
+  @type running :: %{optional(:run_id) => term(), optional(:started_at) => DateTime.t() | nil, optional(:total_tokens) => term()} | nil
+
+  @typedoc "What `compute/2` needs beside the ledger; `running` is optional."
   @type facts :: %{
-          now: DateTime.t(),
-          terminal_states: [String.t()],
-          token_cap: non_neg_integer() | nil,
-          phase_names: %{code_review: String.t() | nil, qa: String.t() | nil, ci_fix: String.t()}
+          required(:now) => DateTime.t(),
+          required(:terminal_states) => [String.t()],
+          required(:token_cap) => non_neg_integer() | nil,
+          required(:phase_names) => %{code_review: String.t() | nil, qa: String.t() | nil, ci_fix: String.t()},
+          optional(:running) => running()
         }
 
   @doc """
   The lifecycle and the phase path of ticket `issue_id`, from its ledger and the configured token cap
-  (`agent.max_tokens_per_issue`), terminal states and phase names. A ledger that cannot be read reads
-  as empty.
+  (`agent.max_tokens_per_issue`), terminal states and phase names, and the run working on it now
+  (`t:running/0`), whose tokens and time so far count. A ledger that cannot be read reads as empty.
   """
-  @spec read(String.t() | nil, DateTime.t()) :: t()
-  def read(issue_id, now \\ DateTime.utc_now()) do
+  @spec read(String.t() | nil, DateTime.t(), running()) :: t()
+  def read(issue_id, now \\ DateTime.utc_now(), running \\ nil) do
     issue_id
     |> TicketEvents.query(limit: :all)
     |> List.wrap()
-    |> compute(facts(now))
+    |> compute(Map.put(facts(now), :running, running))
   end
 
   @doc "What `compute/2` and `stage_spans/2` need beside the ledger, from the settings, at `now`."
@@ -105,12 +114,14 @@ defmodule SymphonyElixir.Lifecycle do
 
   @doc """
   The lifecycle and the phase path of a ticket holding `events` (oldest first). The phase the ticket
-  is in counts its time up to `now`, unless it is a terminal one, which takes no time.
+  is in counts its time up to `now`, unless it is a terminal one, which takes no time. The run in
+  `running`, unless the ledger already ended it, counts its tokens so far and its time up to `now`.
   """
   @spec compute([Event.t() | term()], facts()) :: t()
-  def compute(events, %{now: now, terminal_states: terminal_states, token_cap: token_cap, phase_names: phase_names}) do
+  def compute(events, %{now: now, terminal_states: terminal_states, token_cap: token_cap, phase_names: phase_names} = facts) do
     moves = moves(events, now, Enum.map(terminal_states, &normalized/1), phases(phase_names))
-    runs = runs(events, moves)
+    started = runs_started(events)
+    runs = runs(events, started, moves) ++ running_run(events, started, moves, Map.get(facts, :running), now)
 
     %{lifecycle: lifecycle(moves, runs, token_cap), phase_path: phase_path(moves)}
   end
@@ -168,14 +179,15 @@ defmodule SymphonyElixir.Lifecycle do
 
   defp time_ms(from, to), do: max(DateTime.diff(to, from, :millisecond), 0)
 
-  # Each ended run with its stage, its tokens and how long it ran. A run still working is not here
-  # yet. A run whose start the ledger lacks counts at its end.
-  defp runs(events, moves) do
-    started =
-      for %Event{type: "run.started", payload: %{run_id: run_id}, at: %DateTime{} = at} <- events, into: %{} do
-        {run_id, at}
-      end
+  defp runs_started(events) do
+    for %Event{type: "run.started", payload: %{run_id: run_id}, at: %DateTime{} = at} <- events, into: %{} do
+      {run_id, at}
+    end
+  end
 
+  # Each ended run with its stage, its tokens and how long it ran. A run whose start the ledger lacks
+  # counts at its end.
+  defp runs(events, started, moves) do
     for %Event{type: "run.ended", payload: %{run_id: run_id} = payload, at: %DateTime{} = ended_at} <- events do
       started_at = Map.get(started, run_id, ended_at)
 
@@ -184,6 +196,22 @@ defmodule SymphonyElixir.Lifecycle do
         tokens: tokens(Map.get(payload, :tokens)),
         agent_time_ms: Map.get(payload, :duration_ms) || time_ms(started_at, ended_at)
       }
+    end
+  end
+
+  # The run working now, with its tokens and time so far, in the stage it started in. A run the ledger
+  # already ended is counted there; a start the ledger lacks is the orchestrator's.
+  defp running_run(_events, _started, _moves, nil, _now), do: []
+
+  defp running_run(events, started, moves, running, now) do
+    run_id = Map.get(running, :run_id)
+
+    if Enum.any?(events, &match?(%Event{type: "run.ended", payload: %{run_id: ^run_id}}, &1)) do
+      []
+    else
+      started_at = Map.get(started, run_id) || Map.get(running, :started_at) || now
+
+      [%{stage: stage_at(moves, started_at), tokens: tokens(Map.get(running, :total_tokens)), agent_time_ms: time_ms(started_at, now)}]
     end
   end
 
