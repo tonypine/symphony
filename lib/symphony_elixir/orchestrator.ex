@@ -77,6 +77,7 @@ defmodule SymphonyElixir.Orchestrator do
   alias SymphonyElixir.EpicReview.MainCi
   alias SymphonyElixir.Linear.{Client, Issue, RateLimit, TransientRetry, Usage}
   alias SymphonyElixir.Pauses.Dependencies
+  alias SymphonyElixir.PrWatch.StalledRun
   alias SymphonyElixir.QaDriver.DevServerLease
   alias SymphonyElixir.Routing.PollLog
   alias SymphonyElixir.Situation.Recorder, as: SituationRecorder
@@ -4282,7 +4283,27 @@ defmodule SymphonyElixir.Orchestrator do
     state
     |> settle_dispatch_skipped(previous_skipped)
     |> recover_usage_limit_canaries()
+    |> hold_stalled_runs(issues)
   end
+
+  # No silent state: a candidate the pass neither started nor left waiting for a slot, and passed over
+  # for nothing but the watcher's own gate (or for nothing at all), whose watcher decision needs a run
+  # that has not started for two poll cycles, is one no run can start. It pauses with a reason the
+  # Inbox lists (`SymphonyElixir.PrWatch.StalledRun.hold/3`). A ticket held back by a rule, a pause, a
+  # build or a run of its own waits on that, and is left as it is.
+  defp hold_stalled_runs(%State{} = state, issues) do
+    for %Issue{id: issue_id} = issue <- issues,
+        not Enum.any?([state.running, state.slot_waiting, state.retry_attempts], &Map.has_key?(&1, issue_id)),
+        stalled_skip?(Map.get(state.dispatch_skipped, issue_id), issue),
+        repo_key = hold_repo_key(issue),
+        is_binary(repo_key) do
+      StalledRun.hold({:ticket, repo_key, issue_id}, PrWatch.watch(issue_id, repo_key: repo_key))
+    end
+
+    state
+  end
+
+  defp stalled_skip?(skip, issue), do: is_nil(skip) or (is_nil(skip.rule) and skip.reason == watch_gate_reason(issue))
 
   # Before the pass reads its gates, each QA ticket that is not running is brought in line with the
   # build of its head (`SymphonyElixir.QaBuildHold`): held while the app is built, sent to Rework
@@ -9033,7 +9054,10 @@ defmodule SymphonyElixir.Orchestrator do
   first. Refused, starting nothing, while Symphony is paused, while the ticket's repository is
   paused, while the ticket has an open Question, or while a run is already working on it — the
   error names which (`SymphonyElixir.StartNow`), and a ticket in Backlog is refused with "move it
-  first". The Linear calls run in the caller, not in the orchestrator.
+  first". The run is the one the PR watcher decided: a ticket whose PR needs a CI Fix run (a
+  conflict, a red head) is sent to CI Fix by the watcher first and gets that run, and a review or QA
+  run never starts on a PR that conflicts with its base (`SymphonyElixir.StartNow.follow/2`). The
+  Linear calls run in the caller, not in the orchestrator.
   """
   @spec start_issue(String.t(), String.t() | nil) :: {:ok, map()} | :unavailable | {:error, term()}
   def start_issue(identifier, note), do: start_issue(__MODULE__, identifier, note)
@@ -9043,6 +9067,7 @@ defmodule SymphonyElixir.Orchestrator do
     if server_available?(server) do
       with {:ok, %Issue{} = issue} <- fetch_issue_to_force(identifier),
            :ok <- refute_start(issue),
+           {:ok, issue} <- StartNow.follow(issue, fetch: &fetch_issue_to_force/1),
            {:ok, issue} <- claim_for_start(issue) do
         GenServer.call(server, {:start_issue, issue, note})
       end

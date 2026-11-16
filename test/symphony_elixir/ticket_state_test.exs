@@ -789,6 +789,31 @@ defmodule SymphonyElixir.TicketStateTest do
     end
   end
 
+  describe "fix_runs_in/1" do
+    test "TP-1518: lists the CI Fix runs oldest first, with whether each ended and whether its end counts" do
+      fix = fn run_id, minute, head -> event("run.started", %{run_id: run_id, run_kind: "ci_fix", state: "CI Fix", head: head}, at: at(minute)) end
+
+      events = [
+        started("run-0", at(0)),
+        fix.("run-1", 1, "a"),
+        event("run.ended", %{run_id: "run-1", exit: "usage limit", counted: false}, at: at(2)),
+        fix.("run-2", 3, "a"),
+        event("run.ended", %{run_id: "run-2", exit: "handoff", head: "b"}, at: at(4)),
+        # A run Symphony's restart cut short has no end.
+        fix.("run-3", 5, "b"),
+        event("run.ended", %{run_id: "run-0", exit: "ended normally"}, at: at(6))
+      ]
+
+      assert TicketState.fix_runs_in(events) == [
+               %{run_id: "run-1", head: "a", at: at(1), ended: true, counted: false},
+               %{run_id: "run-2", head: "a", at: at(3), ended: true, counted: true},
+               %{run_id: "run-3", head: "b", at: at(5), ended: false, counted: false}
+             ]
+
+      assert TicketState.fix_runs(%{}) == []
+    end
+  end
+
   test "the mutators default their timestamp to now" do
     record = TicketState.new("repo-a", "issue-1")
 

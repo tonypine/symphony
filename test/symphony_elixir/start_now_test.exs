@@ -68,4 +68,70 @@ defmodule SymphonyElixir.StartNowTest do
       assert {:error, "It waits on your answer first."} = StartNow.check(%{paused | symphony_pause: nil, repository_pause: nil})
     end
   end
+
+  describe "TP-1518: follow/2, Start does what the machine decided" do
+    alias SymphonyElixir.Linear.Issue
+    alias SymphonyElixir.PrDecision.Facts
+
+    @fix %{kind: :ci_fix, rule: "R14", args: %{origin: :qa, cause: :conflict}, reason: "PR #915 conflicts with main: conflict fix run 1 of 3"}
+
+    defp issue(state), do: %Issue{id: "issue-1", identifier: "TP-1508", state: state}
+    defp watch(decision, facts \\ %{}), do: %{facts: struct(Facts, Map.merge(%{phase: :qa, pr_number: 915, mergeable: :dirty}, facts)), decision: decision}
+    defp record(decision, facts \\ %{}), do: %{repo_key: "default", issue_id: "issue-1", pr_watch: watch(decision, facts)}
+
+    defp follow(issue, watch, check \\ fn _id -> flunk("no Check Now expected") end, fetch \\ fn _id -> flunk("no read expected") end) do
+      StartNow.follow(issue, watch: fn "issue-1" -> watch end, check: check, fetch: fetch)
+    end
+
+    test "a ticket whose watcher decided a conflict fix is sent to CI Fix by the watcher and started there" do
+      check = fn "TP-1508" -> send(self(), :checked) && {:ok, record(@fix)} end
+      fetch = fn "TP-1508" -> {:ok, issue("CI Fix")} end
+
+      assert {:ok, %Issue{state: "CI Fix"}} = follow(issue("QA"), watch(@fix), check, fetch)
+      assert_received :checked
+
+      # From Merging or Code Review the same.
+      assert {:ok, %Issue{state: "CI Fix"}} = follow(issue("Merging"), watch(@fix), check, fetch)
+      assert {:ok, %Issue{state: "CI Fix"}} = follow(issue("Code Review"), watch(@fix), check, fetch)
+    end
+
+    test "a ticket in CI Fix starts its fix run as it is, and a ticket with no fix decided its phase's run" do
+      assert {:ok, %Issue{state: "CI Fix"}} = follow(issue("CI Fix"), watch(@fix))
+      assert {:ok, %Issue{state: "QA"}} = follow(issue("QA"), watch(%{kind: :dispatch, rule: "R27"}, %{mergeable: :clean}))
+      assert {:ok, %Issue{state: "In Progress"}} = follow(issue("In Progress"), nil)
+      assert {:ok, %Issue{state: "Rework"}} = follow(issue("Rework"), watch(%{kind: :dispatch, rule: "R26"}, %{mergeable: :dirty}))
+    end
+
+    test "a review or QA run never starts on a PR that conflicts with its base" do
+      wait = %{kind: :wait, rule: "R14a", owner: :symphony}
+
+      for state <- ["QA", "Code Review"] do
+        assert {:error, {:start_refused, "PR #915 conflicts with its base: a conflict fix runs first, never a review on it."}} = follow(issue(state), watch(wait))
+      end
+
+      assert {:error, {:start_refused, "Its PR conflicts with its base: a conflict fix runs first, never a review on it."}} =
+               follow(issue("QA"), watch(wait, %{pr_number: nil}))
+    end
+
+    test "a fix the watcher could not apply refuses the start, and one no longer decided starts the phase's run" do
+      refused = {:error, {:start_refused, "Its PR needs a CI Fix run first, and Symphony could not send it to CI Fix yet; try again in a moment."}}
+      in_qa = fn "TP-1508" -> {:ok, issue("QA")} end
+
+      assert ^refused = follow(issue("QA"), watch(@fix), fn _id -> {:error, :watcher_not_running} end, in_qa)
+      assert ^refused = follow(issue("QA"), watch(@fix), fn _id -> {:ok, record(@fix)} end, fn _id -> {:error, :issue_not_found} end)
+      # The watcher read the PR and still decides a fix, but the ticket did not move.
+      assert ^refused = follow(issue("QA"), watch(@fix), fn _id -> {:ok, record(@fix)} end, in_qa)
+
+      # Someone resolved the conflict meanwhile: the phase's run starts, unless the PR still conflicts.
+      clean = record(%{kind: :dispatch, rule: "R27"}, %{mergeable: :clean})
+      assert {:ok, %Issue{state: "QA"}} = follow(issue("QA"), watch(@fix), fn _id -> {:ok, clean} end, in_qa)
+
+      still = record(%{kind: :wait, rule: "R14a", owner: :symphony})
+      assert {:error, {:start_refused, "PR #915 conflicts" <> _rest}} = follow(issue("QA"), watch(@fix), fn _id -> {:ok, still} end, in_qa)
+    end
+
+    test "the defaults read the watcher's record and run Check Now" do
+      assert {:ok, %Issue{state: "In Progress"}} = StartNow.follow(issue("In Progress"), fetch: fn _id -> flunk("no read expected") end)
+    end
+  end
 end

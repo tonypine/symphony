@@ -111,6 +111,16 @@ defmodule SymphonyElixir.StartIssueTest do
       refute Map.has_key?(person_started, :note)
     end
 
+    test "TP-1518: Start on a ticket in CI Fix, its conflict fix pending, starts a ci_fix run" do
+      started = issue("fix-1", "MT-F1", "CI Fix")
+      tracked([started])
+
+      {:reply, {:ok, %{started: true}}, next_state} =
+        Orchestrator.handle_call({:start_issue, started, nil}, {self(), make_ref()}, orchestrator_state(1))
+
+      assert next_state.running["fix-1"].run_profile.kind == :ci_fix
+    end
+
     test "a ticket in Backlog is refused with move it first" do
       backlog = issue("backlog-1", "MT-B1", "Backlog")
       tracked([backlog])
@@ -231,6 +241,22 @@ defmodule SymphonyElixir.StartIssueTest do
       tracked([issue("todo-1", "MT-T1", "Todo")])
 
       assert {:error, {:start_claim, :boom}} = Orchestrator.start_issue(server, "MT-T1", nil)
+      refute_received {:start_issue_call, _issue, _note}
+    end
+
+    test "TP-1518: Start on a QA ticket whose PR needs a conflict fix asks the watcher to send it to CI Fix, and never starts QA on the conflict", %{server: server} do
+      tracked([issue("qa-1", "MT-Q1", "QA"), issue("qa-2", "MT-Q2", "QA")])
+      fix = %{rule: "R14", kind: :ci_fix, args: %{origin: :qa, cause: :conflict}, reason: "PR #1 conflicts with main: conflict fix run 1 of 3"}
+      SymphonyElixir.PrWatchSupport.put_watch!(@repo, "qa-1", phase: :qa, identifier: "MT-Q1", facts: %{mergeable: :dirty}, decision: fix)
+
+      # No watcher runs here to apply it: the start is refused, and nothing reaches the orchestrator.
+      assert {:error, {:start_refused, "Its PR needs a CI Fix run first, and Symphony could not send it to CI Fix yet; try again in a moment."}} =
+               Orchestrator.start_issue(server, "MT-Q1", nil)
+
+      wait = %{rule: "R14a", kind: :wait_for_competitors, owner: :symphony, reason: "Lands after TP-9"}
+      SymphonyElixir.PrWatchSupport.put_watch!(@repo, "qa-2", phase: :qa, identifier: "MT-Q2", facts: %{mergeable: :dirty}, decision: wait)
+
+      assert {:error, {:start_refused, "PR #1 conflicts with its base: a conflict fix runs first, never a review on it."}} = Orchestrator.start_issue(server, "MT-Q2", nil)
       refute_received {:start_issue_call, _issue, _note}
     end
 

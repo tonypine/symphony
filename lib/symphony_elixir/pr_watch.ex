@@ -195,7 +195,9 @@ defmodule SymphonyElixir.PrWatch do
   person's answer (R6). A ticket the watcher hasn't decided on yet waits for it. `CI Fix` runs unless
   the decision waits on CI or reruns a check (R19, R22, R23, R24, U2): with its checks still to report
   there is nothing to repair yet, and the next decision returns the ticket (R25) or sends a fix run
-  (R14, R21). With no decision on it, a CI Fix run still starts.
+  (R14, R21). Nor while GitHub has yet to say whether the PR can merge (R16) with no fix pending on
+  it: the next read says whether there is a conflict to fix. A fix pending on the head (decided, its
+  run not ended) still starts its run. With no decision on it, a CI Fix run still starts.
   """
   @spec dispatch_reason(Issue.t(), map()) :: String.t() | nil
   def dispatch_reason(%Issue{} = issue, settings) do
@@ -217,8 +219,8 @@ defmodule SymphonyElixir.PrWatch do
 
   defp gated_phase(_state, _settings), do: nil
 
-  defp gate(:ci_fix, %{decision: %{reason: reason, rule: rule} = decision}) do
-    if CiFix.waits_on_ci?(decision), do: "the PR watcher (#{rule}): #{reason}"
+  defp gate(:ci_fix, %{decision: %{reason: reason, rule: rule} = decision} = watch) do
+    if CiFix.waits_on_ci?(decision) or (rule == "R16" and is_nil(Attempts.normalize(watch[:attempts]).pending)), do: "the PR watcher (#{rule}): #{reason}"
   end
 
   defp gate(:ci_fix, _watch), do: nil

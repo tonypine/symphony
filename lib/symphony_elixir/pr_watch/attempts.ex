@@ -3,13 +3,18 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   What the PR and CI watcher counts per ticket, kept on its record (`TicketState.pr_watch`) from one
   tick to the next, and the facts it feeds `SymphonyElixir.PrDecision.decide/1`.
 
-  Two counts of CI Fix runs, which never spend each other's kind:
+  Two counts of CI Fix runs, which never spend each other's kind. A count is spent when a fix run
+  ends, never when the ticket moves: the fix the watcher decides is `pending` (`pending/5`) until
+  the ticket's ledger shows a CI Fix run that started after the decision and ended, counted
+  (`run.started`, `run.ended`; `observe/4` reads them as the ticket's `fix_runs`). A run cut short
+  (a usage limit, a restart, a pause with the run never started) spends nothing, and the fix stays
+  pending on the head, so its run is started again.
 
-    * **red**: a run sent for a red head (`R21`). It is held against
+    * **red**: a CI Fix run for a red head (`R21`). It is held against
       `pull_requests.checks.max_fix_attempts` (default 10): a backstop, not a budget (D15). Reaching
       it files a fix ticket for CI (`R20`). The count restarts when that fix ticket's `Blocked` hold
       clears, so the head gets CI Fix runs again.
-    * **conflict**: a run sent for a conflict with the base branch (`R14`), against a fixed
+    * **conflict**: a CI Fix run for a conflict with the base branch (`R14`), against a fixed
       #{SymphonyElixir.PrDecision.max_conflict_attempts()}.
 
   Both reset only when the PR is green **and** conflict-free: a conflicting PR keeps its last green
@@ -24,9 +29,8 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   reaches `SymphonyElixir.PrDecision.max_cancel_reruns/0` and R19a asks a person, whose answer is kept
   on the head too; each red run's failing check and first error line (`fix_failures`, the fix
   ticket's evidence); the fix ticket a backstop filed; since when a `Merging` head has been
-  blocked by branch protection on green checks (`landing_timed_out`); the head and cause the last
-  CI Fix run was sent for, so a ticket that entered CI Fix doesn't spend a second attempt on the
-  run already sent (`sent?/3`); the head an update-branch
+  blocked by branch protection on green checks (`landing_timed_out`); the fix decided and not yet
+  run to its end (`pending`: its head, cause and since when, `pending?/3`); the head an update-branch
   moved past, whose runs are cancelled once the head moves on; and the last head Symphony knows it
   put there in a `Merging` stay (`trusted_head`): the head the stay began on, one a run left, or
   the one an update-branch made. Any other head in `Merging` is a person's push (`head_origin`).
@@ -103,8 +107,29 @@ defmodule SymphonyElixir.PrWatch.Attempts do
           updated_from: String.t() | nil,
           trusted_head: String.t() | nil,
           head_origin: :symphony | :person,
-          sent: %{head_sha: String.t() | nil, cause: :red | :conflict} | nil
+          pending: pending() | nil
         }
+
+  @typedoc """
+  A CI Fix the watcher decided whose run has not ended yet: the head and cause it was decided for,
+  since when (nil for one a record from before TP-1518 kept, which matches a run on its head), the red
+  head's failure the run spends as evidence once it ends, and whether the count was already spent at
+  the move (`prepaid`, such an older record's), which the first read gives back unless its run ended.
+  """
+  @type pending :: %{
+          head_sha: String.t() | nil,
+          cause: :red | :conflict,
+          since: DateTime.t() | nil,
+          failure: Facts.failure() | nil,
+          prepaid: boolean()
+        }
+
+  @typedoc """
+  One CI Fix run of the ticket, as its ledger has it (`SymphonyElixir.TicketState.fix_runs/1`): its
+  id, the head it started on, when it started, whether it ended and whether its end counts (a usage
+  limit, an unreachable model API or a CI wait ends a run uncounted).
+  """
+  @type fix_run :: %{run_id: String.t() | nil, head: String.t() | nil, at: DateTime.t(), ended: boolean(), counted: boolean()}
 
   @conflict_free [:clean, :behind, :unstable, :blocked]
   @green [:green, :none]
@@ -126,7 +151,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
       updated_from: nil,
       trusted_head: nil,
       head_origin: :symphony,
-      sent: nil
+      pending: nil
     }
   end
 
@@ -147,7 +172,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
       updated_from: string(Map.get(attempts, :updated_from)),
       trusted_head: string(Map.get(attempts, :trusted_head)),
       head_origin: if(Map.get(attempts, :head_origin) == :person, do: :person, else: :symphony),
-      sent: sent(Map.get(attempts, :sent))
+      pending: pending_of(attempts)
     }
   end
 
@@ -160,7 +185,9 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   @doc """
   The attempts after this tick's `read` of the PR (nil when the ticket has none), before deciding.
   `ticket` gives the phase, hold and run, whether this tick begins a new stay in the phase
-  (`new_stay`), and the heads the ticket's runs left (`run_heads`). A fix ticket whose hold cleared
+  (`new_stay`), the heads the ticket's runs left (`run_heads`) and its CI Fix runs (`fix_runs`). A
+  pending fix whose run ended, counted, spends its count; one a record from before kept with its
+  count spent at the move gives it back while its run never ended. A fix ticket whose hold cleared
   restarts the red count; a green, conflict-free PR resets both counts; a green head breaks the
   same-failure streak; the merge-wait clock runs while a `Merging` head is blocked by branch
   protection on green checks, and the unreported-check clock while the head waits on a check that
@@ -172,6 +199,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   def observe(attempts, read, ticket, %DateTime{} = now) do
     attempts
     |> normalize()
+    |> settle_pending(ticket)
     |> restart_after_fix_ticket(ticket)
     |> reset_when_settled(read)
     |> clock(read, ticket, now)
@@ -197,6 +225,29 @@ defmodule SymphonyElixir.PrWatch.Attempts do
 
   defp head_origin(attempts, _read, _ticket), do: %{attempts | trusted_head: nil, head_origin: :symphony}
 
+  # The pending fix's run ended, counted: it spends its count (an older record's was spent at the
+  # move). An older record's fix whose run never ended gives its count back and waits for its run.
+  defp settle_pending(%{pending: %{} = pending} = attempts, ticket) do
+    cond do
+      Enum.any?(Map.get(ticket, :fix_runs, []), &ended_for?(&1, pending)) and pending.prepaid -> %{attempts | pending: nil}
+      Enum.any?(Map.get(ticket, :fix_runs, []), &ended_for?(&1, pending)) -> %{spent(attempts, pending.cause, pending.failure) | pending: nil}
+      pending.prepaid -> %{refund(attempts, pending.cause) | pending: %{pending | prepaid: false}}
+      true -> attempts
+    end
+  end
+
+  defp settle_pending(attempts, _ticket), do: attempts
+
+  defp ended_for?(%{ended: true, counted: true, at: %DateTime{} = at}, %{since: %DateTime{} = since}), do: DateTime.compare(at, since) != :lt
+  defp ended_for?(%{ended: true, counted: true, head: head}, %{since: nil, head_sha: head}) when is_binary(head), do: true
+  defp ended_for?(_run, _pending), do: false
+
+  defp refund(attempts, :conflict), do: %{attempts | conflict: max(attempts.conflict - 1, 0)}
+
+  defp refund(attempts, :red) do
+    %{attempts | red: max(attempts.red - 1, 0), fix_failures: Enum.drop(attempts.fix_failures, -1), streak: Enum.drop(attempts.streak, -1)}
+  end
+
   defp trust(attempts, head), do: %{attempts | trusted_head: head, head_origin: :symphony}
 
   defp restart_after_fix_ticket(%{fix_ticket: identifier} = attempts, %{hold: hold}) when is_binary(identifier) and hold != :blocked,
@@ -205,7 +256,7 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   defp restart_after_fix_ticket(attempts, _ticket), do: attempts
 
   defp reset_when_settled(attempts, %{pr: :open, ci: ci, mergeable: mergeable}) when ci in @green and mergeable in @conflict_free,
-    do: %{attempts | red: 0, conflict: 0, fix_failures: [], streak: []}
+    do: %{attempts | red: 0, conflict: 0, fix_failures: [], streak: [], pending: nil}
 
   defp reset_when_settled(attempts, _read), do: attempts
 
@@ -548,15 +599,22 @@ defmodule SymphonyElixir.PrWatch.Attempts do
   defp spent(attempts, :conflict, _failure), do: %{attempts | conflict: attempts.conflict + 1}
 
   @doc """
-  Records that a CI Fix run was sent for `cause` on `head`: once the ticket is in CI Fix, the run
-  that takes that fix is the one already sent, so it spends no second attempt (`sent?/3`).
+  Records that a CI Fix for `cause` was decided on `head` at `now`, with the red head's `failure` its
+  run spends as evidence: it spends nothing yet. The count is spent once a CI Fix run that started
+  after it ends, counted (`observe/4`). A fix already pending for the same head and cause keeps
+  since when it is.
   """
-  @spec sent(t(), String.t() | nil, :red | :conflict) :: t()
-  def sent(attempts, head, cause), do: %{normalize(attempts) | sent: %{head_sha: head, cause: cause}}
+  @spec pending(t(), String.t() | nil, :red | :conflict, Facts.failure() | nil, DateTime.t()) :: t()
+  def pending(attempts, head, cause, failure, %DateTime{} = now) do
+    case normalize(attempts) do
+      %{pending: %{head_sha: ^head, cause: ^cause}} = attempts -> attempts
+      attempts -> %{attempts | pending: %{head_sha: head, cause: cause, since: now, failure: failure, prepaid: false}}
+    end
+  end
 
-  @doc "Whether a CI Fix run was already sent for `cause` on `head`."
-  @spec sent?(t(), String.t() | nil, :red | :conflict) :: boolean()
-  def sent?(attempts, head, cause), do: normalize(attempts).sent == %{head_sha: head, cause: cause}
+  @doc "Whether a CI Fix for `cause` is pending on `head`: decided, and its run has not ended."
+  @spec pending?(t(), String.t() | nil, :red | :conflict) :: boolean()
+  def pending?(attempts, head, cause), do: match?(%{head_sha: ^head, cause: ^cause}, normalize(attempts).pending)
 
   @doc "Records the fix ticket the red backstop waits on; its hold clearing restarts the red count."
   @spec filed(t(), String.t() | nil) :: t()
@@ -609,8 +667,28 @@ defmodule SymphonyElixir.PrWatch.Attempts do
 
   defp failures(_failures), do: []
 
-  defp sent(%{cause: cause} = sent) when cause in [:red, :conflict], do: %{head_sha: string(Map.get(sent, :head_sha)), cause: cause}
-  defp sent(_sent), do: nil
+  # A record from before TP-1518 kept the fix it sent (`sent`), its count spent at the move.
+  defp pending_of(attempts) do
+    case {Map.get(attempts, :pending), Map.get(attempts, :sent)} do
+      {%{cause: cause} = pending, _sent} when cause in [:red, :conflict] ->
+        %{
+          head_sha: string(Map.get(pending, :head_sha)),
+          cause: cause,
+          since: datetime(Map.get(pending, :since)),
+          failure: pending |> Map.get(:failure) |> List.wrap() |> failures() |> List.first(),
+          prepaid: Map.get(pending, :prepaid) == true
+        }
+
+      {nil, %{cause: cause} = sent} when cause in [:red, :conflict] ->
+        %{head_sha: string(Map.get(sent, :head_sha)), cause: cause, since: nil, failure: nil, prepaid: true}
+
+      _none ->
+        nil
+    end
+  end
+
+  defp datetime(%DateTime{} = at), do: at
+  defp datetime(_at), do: nil
 
   defp unreported(%{since: %DateTime{} = since} = unreported) do
     %{

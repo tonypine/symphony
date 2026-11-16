@@ -16,7 +16,9 @@ defmodule SymphonyElixir.PrWatchParity do
       other builders) about it.
     * `{:run, id, from, to}`: the run the ticket's phase dispatched (a CI Fix run, the QA agent)
       handed the ticket from `from` to `to`, as `SymphonyElixir.AgentRunner` does; it raises when
-      the ticket isn't in `from`, so a fixture can't hide a person's move in it. Nothing reads it
+      the ticket isn't in `from`, so a fixture can't hide a person's move in it. A CI Fix run
+      leaves its `run.started` and `run.ended` in the ticket's ledger, as the orchestrator records
+      them, which is what spends its fix attempt (`SymphonyElixir.PrWatch.Attempts`). Nothing reads it
       until the next GitHub step, except a move to `Merging`, which ticks the watcher at once in
       either mode (`SymphonyElixir.TransitionGuard` asks for it).
     * `{:fix_ticket_lands, identifier}`: the fix ticket the self-heal lane filed goes to Done, the
@@ -40,7 +42,7 @@ defmodule SymphonyElixir.PrWatchParity do
   with `pr_review_mode: "polling"` first.
   """
 
-  alias SymphonyElixir.{Config, Pauses, Questions, RunStore, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{Config, Pauses, Questions, RunStore, TicketEvents, TicketPullRequest, TicketState}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses.Dependencies
   alias SymphonyElixir.PrWatch.{Ingest, Repo, SilentWait}
@@ -398,9 +400,28 @@ defmodule SymphonyElixir.PrWatchParity do
 
   defp step!(pid, {:run, id, from, to}, _mode) do
     if state(id) != from, do: raise(ArgumentError, "TP-#{id} is in #{state(id)}, not #{from}: no run of #{from} could move it")
+    if from == "CI Fix", do: record_fix_run!(id)
     move!(id, to)
     if to == "Merging", do: tick!(pid)
     nil
+  end
+
+  @doc """
+  Records a CI Fix run of ticket `id` that started and ended now, on the head its PR has, as the
+  orchestrator records a run: its `run.started` and its counted `run.ended`.
+  """
+  def record_fix_run!(id, attrs \\ []) do
+    run_id = Keyword.get_lazy(attrs, :run_id, fn -> "fix-#{id}-#{System.unique_integer([:positive])}" end)
+    head = World.get(:prs) |> Map.fetch!(pr_url(id)) |> Map.get(:head_sha)
+    started = %{run_id: run_id, run_kind: "ci_fix", state: "CI Fix", head: head}
+    {:ok, _event} = TicketEvents.record(@repo_key, issue_id(id), "run.started", started, run_id: run_id, at: now())
+
+    if Keyword.get(attrs, :ended, true) do
+      ended = %{run_id: run_id, run_kind: "ci_fix", exit: "handoff", head: head, counted: Keyword.get(attrs, :counted, true)}
+      {:ok, _event} = TicketEvents.record(@repo_key, issue_id(id), "run.ended", ended, run_id: run_id, at: now())
+    end
+
+    run_id
   end
 
   defp step!(pid, {:fix_ticket_lands, identifier}, _mode) do
