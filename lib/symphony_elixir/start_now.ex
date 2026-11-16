@@ -61,7 +61,7 @@ defmodule SymphonyElixir.StartNow do
   issue id), `:check` (Check Now by identifier), `:fetch` (the issue by identifier), `:settings`.
   """
   @spec follow(Issue.t(), keyword()) :: {:ok, Issue.t()} | {:error, {:start_refused, String.t()}} | {:error, term()}
-  def follow(%Issue{} = issue, opts \\ []) do
+  def follow(%Issue{} = issue, opts) do
     settings = Keyword.get_lazy(opts, :settings, &Config.settings!/0)
     watch = Keyword.get(opts, :watch, &PrWatch.watch/1).(issue.id)
 

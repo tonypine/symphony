@@ -98,6 +98,24 @@ defmodule SymphonyElixir.PrWatch.ConflictFixReplayTest do
     ExUnit.Callbacks.stop_supervised!({SymphonyElixir.PrWatch.Repo, "default"})
   end
 
+  test "a timed tick that reads an unknown mergeability reads the PR again soon, and a second keeps the one queued" do
+    Parity.tickets!(%{tickets: [{"1", "CI Fix", [mergeable: :unknown, ci: :green]}]})
+    pid = Parity.start!()
+
+    send(pid, :tick)
+    _state = :sys.get_state(pid)
+    assert %{rule: "R16", kind: :wait, owner: :github} = decision()
+    assert_receive {:pr_watch_timer, :reread, 1_000}
+
+    # Still unknown on the next timed tick: the reread already queued keeps its place, none is added.
+    Parity.advance!(@interval_ms)
+    send(pid, :tick)
+    _state = :sys.get_state(pid)
+    refute_receive {:pr_watch_timer, :reread, _delay_ms}
+    assert Parity.state("1") == "CI Fix"
+    ExUnit.Callbacks.stop_supervised!({SymphonyElixir.PrWatch.Repo, "default"})
+  end
+
   test "a ticket sent back to QA before its conflict fix ran is sent to CI Fix again on the same head" do
     Parity.tickets!(%{tickets: [{"1", "QA", [mergeable: :dirty]}]})
     pid = Parity.start!()
