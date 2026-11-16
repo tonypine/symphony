@@ -728,7 +728,7 @@ defmodule SymphonyElixir.PrDecisionTest do
 
   describe "user walkthrough" do
     test "step 3: Code Review, red after a rerun, 3 of 10 attempts → R21 CI Fix from Code Review" do
-      action = PrDecision.decide(%Facts{phase: :code_review, review: :approved, ci: :red, rerun_done: true, red_attempts: 3, max_red_attempts: 10})
+      action = PrDecision.decide(%Facts{phase: :code_review, review: :approved, mergeable: :clean, ci: :red, rerun_done: true, red_attempts: 3, max_red_attempts: 10})
       assert %Action{rule: "R21", kind: :ci_fix, args: %{origin: :code_review}} = action
     end
 
@@ -744,7 +744,7 @@ defmodule SymphonyElixir.PrDecisionTest do
     end
 
     test "step 6: Code Review, red after a rerun, same failure 3 times → R20 fix ticket owned by symphony" do
-      action = PrDecision.decide(%Facts{phase: :code_review, review: :approved, ci: :red, rerun_done: true, same_failure_streak: 3, failing_check: "test"})
+      action = PrDecision.decide(%Facts{phase: :code_review, review: :approved, mergeable: :clean, ci: :red, rerun_done: true, same_failure_streak: 3, failing_check: "test"})
       assert %Action{rule: "R20", kind: :file_fix_ticket, owner: :symphony, args: %{check: "test"}} = action
     end
 

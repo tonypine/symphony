@@ -1088,14 +1088,20 @@ defmodule SymphonyElixir.PrWatch.Repo do
   # A new decision that a run starts (the reviewer, QA, a CI Fix run, the landing run) is the
   # orchestrator's to act on: the record's change is announced once written, so it runs a dispatch
   # cycle at once rather than at its next tick. So is one that still stands with no run while the
-  # silent-wait detector finds it quiet: each tick that finds it starts the run, and once it is listed
-  # the dispatch pass pauses a ticket no run can start (`SymphonyElixir.PrWatch.StalledRun`).
+  # silent-wait detector finds it quiet: each poll interval that finds it so starts the run (an extra
+  # tick inside one adds nothing), and once it is listed the dispatch pass pauses a ticket no run can
+  # start (`SymphonyElixir.PrWatch.StalledRun`).
   defp announce_dispatch(%{decision: %{kind: kind} = decision} = watch, previous, entry, state) do
-    if kind in StalledRun.run_kinds() and (not same_decision?(decision, previous && previous.decision) or Map.get(watch, :silent) != nil),
+    if kind in StalledRun.run_kinds() and (not same_decision?(decision, previous && previous.decision) or quieter?(watch, previous)),
       do: ObservabilityPubSub.broadcast_ticket_record_changed(state.repo_key, entry.issue.id, [:pr_watch])
   end
 
   defp announce_dispatch(_watch, _previous, _entry, _state), do: :ok
+
+  # The ticket went quiet on this tick, or stayed quiet into another poll interval.
+  defp quieter?(%{silent: %{ticks: ticks}}, %{silent: %{ticks: ticks}}), do: false
+  defp quieter?(%{silent: %{}}, _previous), do: true
+  defp quieter?(_watch, _previous), do: false
 
   # A new head of a ticket in Code Review or QA (branch upkeep, a person's push), and the head a
   # ticket comes back to one of them with (a CI Fix return), is built for QA at once

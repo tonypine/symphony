@@ -382,6 +382,24 @@ defmodule SymphonyElixir.PrWatchParity do
     :ok = RunStore.clear()
   end
 
+  @doc """
+  Records a CI Fix run of ticket `id` that started and ended now, on the head its PR has, as the
+  orchestrator records a run: its `run.started` and its counted `run.ended`.
+  """
+  def record_fix_run!(id, attrs \\ []) do
+    run_id = Keyword.get_lazy(attrs, :run_id, fn -> "fix-#{id}-#{System.unique_integer([:positive])}" end)
+    head = World.get(:prs) |> Map.fetch!(pr_url(id)) |> Map.get(:head_sha)
+    started = %{run_id: run_id, run_kind: "ci_fix", state: "CI Fix", head: head}
+    {:ok, _event} = TicketEvents.record(@repo_key, issue_id(id), "run.started", started, run_id: run_id, at: now())
+
+    if Keyword.get(attrs, :ended, true) do
+      ended = %{run_id: run_id, run_kind: "ci_fix", exit: "handoff", head: head, counted: Keyword.get(attrs, :counted, true)}
+      {:ok, _event} = TicketEvents.record(@repo_key, issue_id(id), "run.ended", ended, run_id: run_id, at: now())
+    end
+
+    run_id
+  end
+
   @doc "Replays `fixture` by polling (`:poll`) or by deliveries (`:webhook`); see the moduledoc."
   def run(fixture, mode) do
     tickets!(fixture)
@@ -404,24 +422,6 @@ defmodule SymphonyElixir.PrWatchParity do
     move!(id, to)
     if to == "Merging", do: tick!(pid)
     nil
-  end
-
-  @doc """
-  Records a CI Fix run of ticket `id` that started and ended now, on the head its PR has, as the
-  orchestrator records a run: its `run.started` and its counted `run.ended`.
-  """
-  def record_fix_run!(id, attrs \\ []) do
-    run_id = Keyword.get_lazy(attrs, :run_id, fn -> "fix-#{id}-#{System.unique_integer([:positive])}" end)
-    head = World.get(:prs) |> Map.fetch!(pr_url(id)) |> Map.get(:head_sha)
-    started = %{run_id: run_id, run_kind: "ci_fix", state: "CI Fix", head: head}
-    {:ok, _event} = TicketEvents.record(@repo_key, issue_id(id), "run.started", started, run_id: run_id, at: now())
-
-    if Keyword.get(attrs, :ended, true) do
-      ended = %{run_id: run_id, run_kind: "ci_fix", exit: "handoff", head: head, counted: Keyword.get(attrs, :counted, true)}
-      {:ok, _event} = TicketEvents.record(@repo_key, issue_id(id), "run.ended", ended, run_id: run_id, at: now())
-    end
-
-    run_id
   end
 
   defp step!(pid, {:fix_ticket_lands, identifier}, _mode) do
