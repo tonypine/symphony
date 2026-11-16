@@ -1,8 +1,12 @@
 name: mac-checks
 
-# Every check that needs a Mac, in one job, one checkout and one build, on the self-hosted runner
-# `ci-macos` (a VM that keeps its disk, so builds are incremental: scripts/ci/build-store.sh).
-# The runner takes one job at a time, so one job that builds once is the shortest way through.
+# Every check that needs a Mac, in one job, one checkout and one build, on a self-hosted runner of
+# the `ci-macos` VM (a VM that keeps its disk, so builds are incremental: scripts/ci/build-store.sh).
+# The VM runs two runners (ci-macos, ci-macos-2), so two jobs run at once. They share one login
+# session, so a step that uses the screen, the keyboard, the keychain search list or the Symphony
+# app runs under the desktop lock (scripts/ci/desktop-lock.sh, its `shell:`): one such step at a
+# time on the VM, while builds and tests run beside it. Its timeout-minutes is the lock's wait plus
+# its run limit, so a step waiting in line never reads as a hang.
 #
 # Two workflows call it, and each says which groups of steps run:
 #   macos.yml    on a pull request: the groups whose inputs the pull request changed.
@@ -75,7 +79,8 @@ jobs:
     # The app targets macOS 26 (DD3): its tests run only on 26 or later, built with the Xcode pinned
     # in .xcode-version, which the runner has beside the image's own.
     runs-on: [self-hosted, macOS, tahoe]
-    timeout-minutes: 75
+    # Room for the desktop steps to wait for the other runner's.
+    timeout-minutes: 90
     env:
       SYMPHONY_CI_REF: ${{ inputs.ref }}
       CLEAN: ${{ inputs.clean }}
@@ -121,6 +126,13 @@ jobs:
       - name: Test the build store
         if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
         run: bash scripts/ci/build-store-test.sh
+
+      # Its own lock folder and fake apps in a temp folder: it never waits for the desktop and never
+      # stops what a desktop step runs.
+      - name: Test the desktop lock
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
+        timeout-minutes: 5
+        run: bash scripts/ci/desktop-lock-test.sh
 
       # Fails on any expression the type-checker takes over 100ms on (macos/Makefile's `guarded-%`,
       # which a run's Build step also calls). It builds in the branch's saved state, so a push
@@ -196,10 +208,13 @@ jobs:
         run: time sh Tests/update-helper-test.sh
 
       # The QA host's signing identity (docs/configuration.md, QA host setup), in a temporary
-      # keychain with a fake sudo. The timeout turns any wait for a dialog into a failure.
+      # keychain with a fake sudo. The run limit turns any wait for a dialog into a failure. It puts
+      # its keychain on the user's search list, which the update test and the release's signing also
+      # change, so it holds the desktop.
       - name: Test the QA signing identity script
         if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.helpers }}
-        timeout-minutes: 5
+        shell: bash scripts/ci/desktop-lock.sh --wait 15 --limit 5 -- bash -e {0}
+        timeout-minutes: 20
         run: time sh scripts/qa/install-test-signing-identity-test.sh
 
       # QA's `appearance` launch: the library Symphony injects turns an ordinary AppKit app
@@ -207,6 +222,8 @@ jobs:
       - name: Test the QA appearance library
         if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.driver }}
         working-directory: macos
+        shell: bash ../scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
+        timeout-minutes: 25
         run: time sh Tests/qa-appearance-test.sh
 
       # `qa_scroll`: the QA driver scrolls a SwiftUI ScrollView that loads pages at its end and a
@@ -214,7 +231,8 @@ jobs:
       - name: Test the QA driver's scrolling
         if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.driver }}
         working-directory: macos
-        timeout-minutes: 10
+        shell: bash ../scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
+        timeout-minutes: 25
         run: time python3 -I Tests/qa-scroll-test.py
 
       # `qa_key`: the QA driver's ⌘ shortcuts reach a fixture app's menu (Back, Inbox, Settings,
@@ -222,35 +240,47 @@ jobs:
       - name: Test the QA driver's key shortcuts
         if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.driver }}
         working-directory: macos
-        timeout-minutes: 10
+        shell: bash ../scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
+        timeout-minutes: 25
         run: time python3 -I Tests/qa-key-test.py
 
       # The ticket page's speed (TP-1491): the app built above, in QA mode over the
-      # ticket-page-speed fixtures, with the page open while polls land. Nothing else runs on the
-      # runner while it measures.
+      # ticket-page-speed fixtures, with the page open while polls land. No other desktop step runs
+      # while it measures; the other runner's builds may.
       - name: Test the ticket page's idle sample and scroll hitches
         if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.speed && steps.build.outcome == 'success' }}
         working-directory: macos
-        timeout-minutes: 10
+        shell: bash ../scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
+        timeout-minutes: 25
         run: time python3 -I Tests/ticket-page-scroll-test.py build/Symphony.app
 
       # Update, Restart and rollback end to end (macos/Tests/e2e/README.md) on releases N and N+1
       # of this commit. The app's executable and the two Symphony releases come from the store,
-      # and are built and filed there when it has none.
-      - name: Test update, restart and rollback
+      # and are built and filed there when it has none: a build, so outside the desktop lock.
+      - name: Get the update test's app and releases
+        id: update-pieces
         if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.update }}
+        run: |
+          store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
+          pieces="$RUNNER_TEMP/pieces"; rm -rf "$pieces"; mkdir -p "$pieces"
+          only=""; if [ "$CLEAN" = true ]; then only="--clean"; fi
+          $store app "$pieces/SymphonyBar" $only
+          $store server 90001 "$pieces/symphony-90001"
+          $store server 90002 "$pieces/symphony-90002"
+
+      # The test runs the app, signs with a throwaway identity on the keychain search list and
+      # trusts it, so it holds the desktop.
+      - name: Test update, restart and rollback
+        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.update && steps.update-pieces.outcome == 'success' }}
+        shell: bash scripts/ci/desktop-lock.sh --wait 15 --limit 15 -- bash -e {0}
+        timeout-minutes: 30
         env:
           # The runner may trust the throwaway signing certificate for code signing (with sudo)
           # until the test ends.
           SYMPHONY_E2E_TRUST_CERT: "1"
           SYMPHONY_E2E_WORK_ROOT: ${{ runner.temp }}/symphony-e2e
         run: |
-          store="bash $GITHUB_WORKSPACE/scripts/ci/build-store.sh"
-          pieces="$RUNNER_TEMP/pieces"; rm -rf "$pieces" "$SYMPHONY_E2E_WORK_ROOT"; mkdir -p "$pieces"
-          only=""; if [ "$CLEAN" = true ]; then only="--clean"; fi
-          $store app "$pieces/SymphonyBar" $only
-          $store server 90001 "$pieces/symphony-90001"
-          $store server 90002 "$pieces/symphony-90002"
+          pieces="$RUNNER_TEMP/pieces"; rm -rf "$SYMPHONY_E2E_WORK_ROOT"
           export SYMPHONY_E2E_APP_EXECUTABLE="$pieces/SymphonyBar"
           export SYMPHONY_E2E_SYMPHONY_RELEASE_N="$pieces/symphony-90001" SYMPHONY_E2E_SYMPHONY_RELEASE_N1="$pieces/symphony-90002"
           time make -C macos e2e

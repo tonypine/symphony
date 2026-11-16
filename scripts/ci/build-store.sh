@@ -6,9 +6,13 @@
 #                                      push recompiles what it changed. A new branch starts from
 #                                      main's set. Builds run in work/<toolchain>/active/<flavour>;
 #                                      copies between the two are APFS clones (no space until changed).
-#   store/<kind>/<key>/                finished pieces, filed under a key made from the content of
-#                                      the paths that feed them, so a job that needs a piece some
-#                                      job already built takes it instead of building it again:
+#                                      Each runner of a VM has a work area of its own, at
+#                                      $SYMPHONY_CI_WORK (default $SYMPHONY_CI_CACHE/work): its states
+#                                      hold absolute paths, so they can't move to another runner's.
+#   store/<kind>/<key>/                finished pieces, shared by the VM's runners, filed under a key
+#                                      made from the content of the paths that feed them, so a job
+#                                      that needs a piece some job already built takes it instead of
+#                                      building it again:
 #                                        app      macos' SymphonyBar executable (release)
 #                                        server   the Symphony release (`make release`), per build number
 #
@@ -19,7 +23,8 @@
 #   build-store.sh key server <build-number>    the release's key at HEAD for that build number
 #   build-store.sh work <ref> <flavour> [--fresh]   puts the branch's saved state (else main's) in the
 #                                               active folder and prints it; --fresh empties it
-#   build-store.sh save <ref> <flavour>         files the active folder's state under the branch
+#   build-store.sh save <ref> <flavour>         files the active folder's state under the branch (whole:
+#                                               copied beside it, then swapped in)
 #   build-store.sh stamp                        gives the sources content-made times (after checkout)
 #   build-store.sh get <kind> <key> <dest> [--clean]   copies the piece to <dest>; exit 1 on a miss.
 #                                               --clean takes only a piece from a clean build
@@ -27,7 +32,8 @@
 #   build-store.sh app <dest> [--clean]         the executable at <dest>: from the store, else built
 #                                               (in <ref>'s working folder, $SYMPHONY_CI_REF) and filed
 #   build-store.sh server <build-number> <dest> the release at <dest>: from the store, else built and filed
-#   build-store.sh prune                        drops old pieces and working folders
+#   build-store.sh prune                        drops old pieces and this runner's old working folders;
+#                                               never one used in the last $SYMPHONY_CI_IN_USE_MINUTES (180)
 #
 # The key lists (APP_INPUTS, SERVER_INPUTS) are the whole contract: a path that feeds a piece and
 # is missing from its list lets a job take a stale piece. When unsure, list it. A release never
@@ -36,8 +42,11 @@ set -euo pipefail
 
 REPO=$(cd "$(dirname "$0")/../.." && pwd)
 ROOT=${SYMPHONY_CI_CACHE:-}
+WORK=${SYMPHONY_CI_WORK:-${ROOT:+$ROOT/work}}
 KEEP_PIECES=${SYMPHONY_CI_KEEP_PIECES:-30}
 KEEP_REFS=${SYMPHONY_CI_KEEP_REFS:-20}
+# Longer than any job: a folder touched more recently may be in use by another runner's job.
+IN_USE_MINUTES=${SYMPHONY_CI_IN_USE_MINUTES:-180}
 
 # What feeds the SymphonyBar executable. Tests, snapshots, Info.plist, Resources and the QA driver
 # are not in it: `make app` assembles those around it on every build.
@@ -75,29 +84,34 @@ safe_ref() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 
 copy() { # APFS clones where the disk allows, a plain copy elsewhere
   rm -rf "$2"; mkdir -p "$(dirname "$2")"
-  cp -cR "$1" "$2" 2>/dev/null || cp -R "$1" "$2"
+  cp -cR "$1" "$2" 2>/dev/null || { rm -rf "$2"; cp -R "$1" "$2"; }
 }
 
+# Older than IN_USE_MINUTES: no job can still be using it.
+idle() { [ $(( $(date +%s) - $(stat -f %m "$1" 2>/dev/null || echo 0) )) -ge $((IN_USE_MINUTES * 60)) ]; }
+
 # A compiler's folder cannot be copied to another path and reused: Swift's module cache refuses
-# files compiled under another path. So every build runs in one fixed place, work/<toolchain>/active/<flavour>,
+# files compiled under another path. So every build runs in one fixed place, <work>/<toolchain>/active/<flavour>,
 # and each branch's state is kept beside it: `work` puts the branch's saved state (else main's) into
-# the active place, `save` files the active state back under the branch. One runner runs one job at
-# a time, so the active place has one user.
+# the active place, `save` files the active state back under the branch. A runner runs one job at
+# a time and has a work area of its own, so the active place has one user.
+
 cmd_work() {
   local ref=${1:?ref} flavour=${2:?flavour} fresh=${3:-}
   enabled || { echo ""; return 0; }
-  local base="$ROOT/work/$(toolchain)"
-  local active="$base/active/$flavour" own="$base/refs/$(safe_ref "$ref")/$flavour" seed="$base/refs/main/$flavour"
-  mkdir -p "$base/active"
+  local base active own seed
+  base="$WORK/$(toolchain)"; active="$base/active/$flavour"
+  own="$base/refs/$(safe_ref "$ref")/$flavour"; seed="$base/refs/main/$flavour"
+  mkdir -p "$(dirname "$active")"
+  touch "$base"   # a toolchain in use is never pruned
   if [ "$(cat "$active.ref" 2>/dev/null)" = "$ref" ] && [ -d "$active" ] && [ "$fresh" != "--fresh" ]; then
     : # the active state is already this branch's (the last job was the same branch's)
   elif [ "$fresh" = "--fresh" ]; then
     rm -rf "$active"; mkdir -p "$active"
-  elif [ -d "$own" ]; then
-    copy "$own" "$active"
-  elif [ -d "$seed" ]; then
-    note "work: $ref/$flavour starts from main's"
-    copy "$seed" "$active"
+  elif [ -d "$own" ] && copy "$own" "$active"; then
+    :
+  elif [ -d "$seed" ] && note "work: $ref/$flavour starts from main's" && copy "$seed" "$active"; then
+    :
   else
     rm -rf "$active"; mkdir -p "$active"
   fi
@@ -123,14 +137,25 @@ cmd_stamp() {
   done
 }
 
+# Atomic, as `put` is: the state is copied beside the saved one and swapped in with a rename, so a
+# stopped job never leaves a half-written state. The state it replaces goes to work/<toolchain>/old,
+# where a copy already reading it can finish; `prune` removes it once it is idle.
 cmd_save() {
   local ref=${1:?ref} flavour=${2:?flavour}
   enabled || return 0
-  local base="$ROOT/work/$(toolchain)"
-  local active="$base/active/$flavour" own="$base/refs/$(safe_ref "$ref")/$flavour"
+  local base active dir own tmp old
+  base="$WORK/$(toolchain)"; active="$base/active/$flavour"
+  dir="$base/refs/$(safe_ref "$ref")"; own="$dir/$flavour"
   [ -d "$active" ] && [ "$(cat "$active.ref" 2>/dev/null)" = "$ref" ] || { note "save: the active $flavour is not $ref's; nothing saved"; return 0; }
-  copy "$active" "$own"
-  touch "$base/refs/$(safe_ref "$ref")"
+  mkdir -p "$dir" "$base/old"
+  tmp=$(mktemp -d "$dir/.save.XXXXXX")
+  copy "$active" "$tmp/state"
+  if [ -d "$own" ]; then
+    old=$(mktemp -d "$base/old/$(safe_ref "$ref").$flavour.XXXXXX")
+    mv "$own" "$old/state"
+  fi
+  mv "$tmp/state" "$own"; rmdir "$tmp"
+  touch "$dir"
 }
 
 cmd_get() {
@@ -142,8 +167,8 @@ cmd_get() {
     note "get: $kind/$key is from an incremental build; a clean one is wanted"
     return 1
   fi
+  touch "$entry"   # first, so `prune` keeps the piece while it is copied
   copy "$entry/payload" "$dest"
-  touch "$entry"
   note "get: $kind/$key ($(cat "$entry/mode" 2>/dev/null)) -> $dest"
 }
 
@@ -224,19 +249,23 @@ cmd_prune() {
     # newest first; `get` touches a piece, so one in use stays
     while IFS= read -r dir; do
       n=$((n + 1))
-      if [ "$n" -gt "$KEEP_PIECES" ]; then note "prune: $dir"; rm -rf "$dir"; fi
+      if [ "$n" -gt "$KEEP_PIECES" ] && idle "$dir"; then note "prune: $dir"; rm -rf "$dir"; fi
     done < <(ls -1dt "$kind"*/ 2>/dev/null)
-    rm -rf "$kind".put.* 2>/dev/null || true
+    for dir in "$kind".put.*; do if [ -e "$dir" ] && idle "$dir"; then rm -rf "$dir"; fi; done
   done
-  for kind in "$ROOT"/work/*/; do
+  for kind in "$WORK"/*/; do
     [ -d "$kind" ] || continue
-    if [ "$(basename "$kind")" != "$(toolchain)" ]; then note "prune: $kind (another Xcode)"; rm -rf "$kind"; continue; fi
+    if [ "$(basename "$kind")" != "$(toolchain)" ]; then
+      if idle "$kind"; then note "prune: $kind (another Xcode)"; rm -rf "$kind"; fi
+      continue
+    fi
     n=0
     while IFS= read -r dir; do
       [ "$(basename "$dir")" = main ] && continue
       n=$((n + 1))
-      if [ "$n" -gt "$KEEP_REFS" ]; then note "prune: $dir"; rm -rf "$dir"; fi
+      if [ "$n" -gt "$KEEP_REFS" ] && idle "$dir"; then note "prune: $dir"; rm -rf "$dir"; fi
     done < <(ls -1dt "$kind"refs/*/ 2>/dev/null)
+    for dir in "$kind"refs/*/.save.* "$kind"old/*; do if [ -e "$dir" ] && idle "$dir"; then rm -rf "$dir"; fi; done
   done
 }
 
@@ -257,5 +286,5 @@ case "$command" in
   app) cmd_app "$@";;
   server) cmd_server "$@";;
   prune) cmd_prune;;
-  *) sed -n '2,34p' "$0" >&2; exit 2;;
+  *) sed -n '2,40p' "$0" >&2; exit 2;;
 esac

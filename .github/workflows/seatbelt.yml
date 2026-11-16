@@ -80,11 +80,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # No cache: the runner's VM keeps its disk, so the tools are already installed, and restoring
+      # a cache over them could swap files under the other runner's running jobs.
       - name: Set up mise tools
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           install: true
-          cache: true
+          cache: false
 
       # A real Python: the runner's /usr/bin/python3 is Xcode's stub, which writes a cache to the
       # temporary folder the sandbox refuses, and says so in every confined command's output.

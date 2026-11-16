@@ -15,8 +15,8 @@ all() { build=true unit=true sandbox=true helpers=true driver=true speed=true up
 
 while IFS= read -r path; do
   case "$path" in
-    # The checks themselves: prove the whole set.
-    .github/workflows/macos.yml | .github/workflows/mac-checks.yml | scripts/ci/mac-check-groups.sh) all ;;
+    # The checks themselves, and the lock the desktop steps run under: prove the whole set.
+    .github/workflows/macos.yml | .github/workflows/mac-checks.yml | scripts/ci/mac-check-groups.sh | scripts/ci/desktop-lock.sh) all ;;
   esac
   case "$path" in
     macos/Sources/* | macos/Gallery/* | macos/Package.swift | macos/Makefile | macos/Info.plist | macos/Resources/* | priv/qa_driver/* | .xcode-version) build=true ;;
