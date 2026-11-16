@@ -647,7 +647,8 @@ def scenario_update(instance):
         instance.press(update_title)
         wait_for(
             "the update to show it waits for the agent run",
-            lambda: any(line.startswith("Waiting for") for line in tracker.lines),
+            # "Updating to vN+1: waiting for 1 agent run…" while the update drains (or the drain's "Waiting for …").
+            lambda: any("waiting for 1 agent run" in line.lower() for line in tracker.lines),
             120,
         )
         # Downloaded, verified and draining: the run goes on, under the old Symphony, until the test lets it end.
