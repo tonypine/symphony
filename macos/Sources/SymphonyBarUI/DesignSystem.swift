@@ -745,6 +745,15 @@ public struct TitledPanel<Content: View>: View {
 
 /// Caps a chip's text at `width`: it takes its own width up to it, and is cut with an ellipsis past it, whatever the
 /// chip's container proposes. No width: the text as it is.
+/// The chip's tooltip, which is also its accessibility help: only a chip that stands for more than it says has one.
+private struct ChipHelp: ViewModifier {
+    let text: String?
+
+    func body(content: Content) -> some View {
+        if let text { content.help(text) } else { content }
+    }
+}
+
 private struct ChipTextCap: ViewModifier {
     let width: Double?
 
@@ -844,9 +853,11 @@ public struct Chip: View {
         .padding(.horizontal, isLabel ? Self.labelInset : Self.inset)
         .frame(height: kind.height)
         .background { face }
-        .help(fullText ?? "")
+        .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(fullText ?? text)
+        // After the element is made: a tooltip set on the children is dropped with them, so the chip had no help.
+        .modifier(ChipHelp(text: fullText))
     }
 
     private var isLabel: Bool {
