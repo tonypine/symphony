@@ -1475,8 +1475,10 @@ private struct DiagnosticsRow: View {
     }
 }
 
-/// ⌘F's Find a Ticket (TP-1455): a field that finds a tracked ticket by its identifier or title as it is typed; Return
-/// opens the best match's page, or the page of the identifier typed, and Escape closes it.
+/// ⌘F's Find a Ticket (TP-1455): the shared search field (TP-1509), which finds a tracked ticket by its identifier or
+/// title as it is typed, counts the matches and, when none matches and nothing would open, says what it searched.
+/// Return opens the best match's page, or the page of the identifier typed. Escape clears the field, then lets it go,
+/// then closes the sheet.
 struct TicketFinderSheet: View {
     @ObservedObject var model: SymphonyWindowModel
     @State private var query = ""
@@ -1486,11 +1488,11 @@ struct TicketFinderSheet: View {
         let matches = TicketFinder.matches(query, in: model.allTickets)
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
             Text(TicketFinder.title).font(.headline)
-            TextField(TicketFinder.title, text: $query, prompt: Text(TicketFinder.prompt))
-                .textFieldStyle(.roundedBorder)
-                .labelsHidden()
-                .focused($fieldFocused)
-                .onSubmit { model.openFound(query) }
+            SearchField(
+                TicketFinder.prompt, text: $query, matches: matches.count,
+                searched: TicketFinder.target(query, in: model.allTickets) == nil ? TicketFinder.searched : nil,
+                focused: $fieldFocused, onSubmit: { model.openFound(query) }
+            )
             if !matches.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(matches) { row in
@@ -1507,8 +1509,6 @@ struct TicketFinderSheet: View {
                         .accessibilityLabel(row.accessibilityLabel(reference: model.allTickets?.reference ?? Date()))
                     }
                 }
-            } else if !query.trimmingCharacters(in: .whitespaces).isEmpty, TicketFinder.target(query, in: model.allTickets) == nil {
-                Text(TicketFinder.noMatch).foregroundStyle(.secondary)
             }
             HStack {
                 Spacer()

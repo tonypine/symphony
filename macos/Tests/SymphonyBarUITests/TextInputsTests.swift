@@ -1,0 +1,104 @@
+import AppKit
+import SwiftUI
+import XCTest
+@testable import SymphonyBarCore
+@testable import SymphonyBarUI
+
+/// TP-1509: the shared Text field, Search field and Text area. Their inputs are the control heights; the area grows
+/// with its text between its fewest and most lines, then scrolls; Escape in a search field clears, then lets go.
+@MainActor
+final class TextInputsTests: XCTestCase {
+    private func fittingSize(_ view: some View) -> CGSize {
+        let host = NSHostingView(rootView: view.frame(width: 300))
+        host.layout()
+        return host.fittingSize
+    }
+
+    func testTheTextAndSearchFieldsAreTheControlHeights() {
+        for size in DesignTokens.Control.allCases {
+            let field = DirectorTextField(nil, text: .constant(""), placeholder: "Deploy freeze", size: size, drawnAs: .rest)
+            XCTAssertEqual(fittingSize(field).height, size.height, accuracy: 0.5, "\(size)")
+            let live = DirectorTextField(nil, text: .constant("Deploy freeze"), size: size)
+            XCTAssertEqual(fittingSize(live).height, size.height, accuracy: 0.5, "a live \(size) field")
+            let search = SearchField("Search tickets", text: .constant(""), size: size, drawnAs: .rest)
+            XCTAssertEqual(fittingSize(search).height, size.height, accuracy: 0.5, "\(size)")
+            let query = SearchField("Search tickets", text: .constant("catalog"), matches: 3, size: size)
+            XCTAssertEqual(fittingSize(query).height, size.height, accuracy: 0.5, "a \(size) field with a query")
+        }
+    }
+
+    func testTheLabelAndOneLineUnderItAddToTheField() {
+        let bare = fittingSize(DirectorTextField(nil, text: .constant(""), drawnAs: .rest)).height
+        let labelled = fittingSize(DirectorTextField("Reason", text: .constant(""), drawnAs: .rest)).height
+        let helped = fittingSize(DirectorTextField("Reason", text: .constant(""), help: "Shown to everyone.", drawnAs: .rest)).height
+        let both = fittingSize(
+            DirectorTextField("Reason", text: .constant(""), help: "Shown to everyone.", error: "Give a reason.", drawnAs: .focused)
+        ).height
+        XCTAssertGreaterThan(labelled, bare)
+        XCTAssertGreaterThan(helped, labelled)
+        XCTAssertEqual(both, helped, accuracy: 0.5, "the error takes the help's place, never both")
+    }
+
+    func testTheNoMatchLineShowsOnlyWithAQueryThatFoundNothing() {
+        let searched = "Search looks at identifiers and titles."
+        let found = fittingSize(SearchField("Search tickets", text: .constant("catalog"), matches: 3, searched: searched)).height
+        let none = fittingSize(SearchField("Search tickets", text: .constant("storybook"), matches: 0, searched: searched)).height
+        let empty = fittingSize(SearchField("Search tickets", text: .constant(""), matches: 0, searched: searched)).height
+        XCTAssertEqual(found, DesignTokens.Control.medium.height, accuracy: 0.5)
+        XCTAssertEqual(empty, DesignTokens.Control.medium.height, accuracy: 0.5)
+        XCTAssertGreaterThan(none, found + CGFloat(DesignTokens.Field.gap))
+    }
+
+    func testTheAreaGrowsWithItsTextBetweenItsFewestAndMostLines() {
+        func height(_ text: String, minLines: Int = 3, maxLines: Int = 8) -> CGFloat {
+            fittingSize(TextArea("Answer", text: .constant(text), minLines: minLines, maxLines: maxLines, drawnAs: .rest)).height
+        }
+        let lines = { (count: Int) in (1...count).map { "Line \($0)" }.joined(separator: "\n") }
+        let padding = CGFloat(2 * DesignTokens.Field.areaVerticalPadding)
+        XCTAssertEqual(height(""), TextArea.lineHeight * 3 + padding, accuracy: 0.5, "it starts three lines tall")
+        XCTAssertEqual(height(lines(2)), height(""), accuracy: 0.5, "two lines fit in three")
+        XCTAssertGreaterThan(height(lines(5)), height(""), "it grows as lines are added")
+        XCTAssertGreaterThan(height(lines(8)), height(lines(5)))
+        XCTAssertEqual(height(lines(20)), height(lines(8)), accuracy: 0.5, "past eight lines it scrolls")
+        XCTAssertGreaterThanOrEqual(height("", minLines: 1, maxLines: 6), TextArea.lineHeight + padding - 0.5, "one line at least")
+        XCTAssertLessThan(height("", minLines: 1, maxLines: 6), height(""), "fewer lines start shorter")
+        XCTAssertEqual(height(lines(9), minLines: 1, maxLines: 6), height(lines(6), minLines: 1, maxLines: 6), accuracy: 0.5)
+    }
+
+    func testTheAreaKeepsItsLimitsInOrder() {
+        let area = TextArea("Answer", text: .constant(""), minLines: 0, maxLines: -2)
+        XCTAssertEqual(area.minLines, 1)
+        XCTAssertEqual(area.maxLines, 1)
+        let live = fittingSize(TextArea("Answer", text: .constant("One"), minLines: 2, maxLines: 4)).height
+        XCTAssertEqual(live, TextArea.lineHeight * 2 + CGFloat(2 * DesignTokens.Field.areaVerticalPadding), accuracy: 0.5, "a live area sizes as a still one")
+    }
+
+    func testTheOwnWordsFieldIsAnAccentedTextArea() {
+        struct Host: View {
+            @FocusState var focused: Bool
+            var body: some View { WriteInField(initialText: "Leave them to TP-891.", commit: { _ in }, focused: $focused) }
+        }
+        let height = fittingSize(Host()).height
+        XCTAssertGreaterThan(height, TextArea.lineHeight * 3 + CGFloat(2 * DesignTokens.Field.areaVerticalPadding), "the area and its hint")
+    }
+
+    func testEscapeIsTakenOnlyWhileTheWatcherRuns() {
+        let watcher = EscapeWatcher()
+        var steps: [DesignTokens.Field.EscapeStep] = []
+        var query = "storybook"
+        watcher.perform = {
+            let step = DesignTokens.Field.escape(query: query)
+            steps.append(step)
+            if step == .clear { query = "" }
+            return true
+        }
+        XCTAssertTrue(watcher.perform())
+        XCTAssertTrue(watcher.perform())
+        XCTAssertEqual(steps, [.clear, .release], "Escape clears, then lets go")
+        watcher.start()
+        watcher.start()
+        watcher.stop()
+        watcher.stop()
+        XCTAssertEqual(EscapeWatcher.escapeKeyCode, 53)
+    }
+}

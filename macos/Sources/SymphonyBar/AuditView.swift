@@ -127,8 +127,14 @@ struct AuditContent: View {
                 EmptyState(title: "Reading the audit records…", symbol: SymphonyView.audit.symbol, showsSpinner: true)
             }
         }
-        .searchable(text: $model.auditFilter.search, placement: .toolbar, prompt: Audit.searchPrompt)
-        .searchFocused($searchFocused)
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                PageSearchField(
+                    prompt: Audit.searchPrompt, text: $model.auditFilter.search, matches: model.auditView?.rows.count,
+                    focused: $searchFocused
+                )
+            }
+        }
         .onChange(of: model.auditSearchRequested, initial: true) { _, requested in
             guard requested else { return }
             searchFocused = true

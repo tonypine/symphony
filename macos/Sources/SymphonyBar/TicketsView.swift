@@ -310,6 +310,23 @@ extension SymphonyWindowModel {
     }
 }
 
+/// A page's search field in the window's toolbar, Tickets', Audit's or Learnings' (TP-1509): the shared search field,
+/// small and as wide as the toolbar keeps it, with the count of what it found and ⌥⌘F, which puts the keyboard in it,
+/// while it is empty.
+struct PageSearchField: View {
+    let prompt: String
+    @Binding var text: String
+    let matches: Int?
+    var focused: FocusState<Bool>.Binding
+
+    static let shortcut = "⌥ ⌘ F"
+
+    var body: some View {
+        SearchField(prompt, text: $text, matches: matches, shortcut: Self.shortcut, size: .small, focused: focused)
+            .frame(width: DesignTokens.Field.toolbarSearchWidth)
+    }
+}
+
 /// D6 for the window: the filter bar over the table and its drawer, or a placeholder while it reads.
 struct TicketsContent: View {
     @ObservedObject var model: SymphonyWindowModel
@@ -350,8 +367,14 @@ struct TicketsContent: View {
             }
         }
         .modifier(TicketViewSheetsPresenter(model: model))
-        .searchable(text: $model.ticketSearch, placement: .toolbar, prompt: TicketsView.searchPrompt)
-        .searchFocused($searchFocused)
+        .toolbar {
+            ToolbarItem(placement: .automatic) {
+                PageSearchField(
+                    prompt: TicketsView.searchPrompt, text: $model.ticketSearch,
+                    matches: model.ticketsPayload?.rows(matching: model.ticketSearch).count, focused: $searchFocused
+                )
+            }
+        }
         .onChange(of: model.searchRequested, initial: true) { _, requested in
             guard requested else { return }
             searchFocused = true
@@ -628,7 +651,6 @@ struct TicketViewNameSheetView: View {
     let cancel: () -> Void
     let confirm: (_ name: String) -> Void
     @State private var name: String
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     init(sheet: TicketViewSheet, name: String = "", working: Bool, error: String?, cancel: @escaping () -> Void,
          confirm: @escaping (String) -> Void) {
@@ -656,20 +678,7 @@ struct TicketViewNameSheetView: View {
                 .font(DesignTokens.TypeStyle.body.font)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if offscreenSnapshot {
-                // A text field draws nothing offscreen: its face with the name in it stands in for it.
-                Text(name.isEmpty ? "Epic 6 needs me" : name)
-                    .foregroundStyle(name.isEmpty ? .tertiary : .primary)
-                    .padding(.horizontal, 6)
-                    .frame(maxWidth: .infinity, minHeight: 22, alignment: .leading)
-                    .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: 5))
-                    .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(.separator))
-            } else {
-                TextField("Name", text: $name, prompt: Text("Epic 6 needs me"))
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityLabel("Name")
-                    .onSubmit { if canSend { confirm(name) } }
-            }
+            DirectorTextField("Name", text: $name, placeholder: "Epic 6 needs me", onSubmit: { if canSend { confirm(name) } })
             if let error {
                 Label(error, systemImage: DesignTokens.Status.problem.symbol)
                     .font(DesignTokens.TypeStyle.secondary.font)
@@ -1234,12 +1243,7 @@ struct PauseSheetView: View {
     var body: some View {
         DispatchSheet(title: PauseSheet.title, happens: PauseSheet.happens, stays: PauseSheet.stays, error: error,
                       working: working, verb: PauseSheet.buttonTitle, sendReason: nil, cancel: cancel, confirm: { confirm(reason) }) {
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-                TextField(PauseSheet.reasonLabel, text: $reason, prompt: Text(PauseSheet.reasonPrompt))
-                    .textFieldStyle(.roundedBorder)
-                    .accessibilityLabel(PauseSheet.reasonLabel)
-                Text(PauseSheet.reasonHelp).font(DesignTokens.TypeStyle.caption.font).foregroundStyle(.secondary)
-            }
+            DirectorTextField(PauseSheet.reasonLabel, text: $reason, placeholder: PauseSheet.reasonPrompt, help: PauseSheet.reasonHelp)
         }
     }
 }
@@ -1269,10 +1273,7 @@ struct ForceSheetView: View {
                       sendReason: ForceSheet.canForce(input, in: list) ? nil : "Name a ticket that isn't forced yet, such as SHOP-301.",
                       cancel: cancel, confirm: { confirm(input) }) {
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                TextField(ForceSheet.fieldLabel, text: $input, prompt: Text(ForceSheet.fieldPrompt))
-                    .textFieldStyle(.roundedBorder)
-                    .font(DesignTokens.TypeStyle.mono.font)
-                    .accessibilityLabel(ForceSheet.fieldLabel)
+                DirectorTextField(ForceSheet.fieldLabel, text: $input, placeholder: ForceSheet.fieldPrompt)
                 let matches = ForceSheet.matches(input, in: list)
                 if ForceSheet.ticket(input, in: list) == nil, !matches.isEmpty {
                     VStack(alignment: .leading, spacing: 2) {

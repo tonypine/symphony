@@ -1241,6 +1241,144 @@ public enum DesignTokens {
         public static var separatorSpan: Double { separatorHeight + 2 * separatorMargin }
     }
 
+    /// The catalog's Text field, Search field and multi-line input (`.field`, `.input`, `.input.search`, `.help`,
+    /// `.own-words`, `.tl-compose`; TP-1509): a surface of a control height, its edge and, while focused, a soft halo
+    /// outside it; the label above and help, the error or the reason under it, never two of them.
+    public enum Field {
+        /// What the surface shows: at rest, under the pointer, or with the keyboard.
+        public enum State: String, CaseIterable, Equatable {
+            case rest, hover, focused
+        }
+
+        /// Which input: the text field and the text area (`.input`), or the search field's sunken capsule (`.search`).
+        public enum Kind: String, CaseIterable, Equatable {
+            case text, search
+        }
+
+        /// A colour at an opacity: the hovered edge is the primary text at 28 %.
+        public struct Tone: Equatable {
+            public var token: ColorToken
+            public var opacity: Double
+
+            public init(_ token: ColorToken, opacity: Double = 1) {
+                self.token = token
+                self.opacity = opacity
+            }
+        }
+
+        /// What sits under a field: the reason it is off, the error, or its help.
+        public enum Footnote: Equatable {
+            case reason(String)
+            case error(String)
+            case help(String)
+        }
+
+        /// Between the label, the field and the line under it.
+        public static let gap: Double = 6
+        /// The room on each side of the text: 70 % of the control's padding (the search field's 75 % before the glyph
+        /// and 60 % after the last item).
+        public static let paddingScale: Double = 0.7
+        public static let searchLeadingScale: Double = 0.75
+        public static let searchTrailingScale: Double = 0.6
+        /// Between the glyph, the text, the count and the clear button.
+        public static let itemGap = Space.s2
+        /// The edge, and the halo outside it while focused (the catalog's `0 0 0 4px`, past the 1 pt edge).
+        public static let edgeWidth = Control.edgeWidth
+        public static let haloWidth: Double = 3
+        /// The accented form's edge while focused (the own-words field's `1.5px`), and its halo past it.
+        public static let accentedFocusEdge: Double = 1.5
+        public static let accentedFocusHalo: Double = 3.5
+        /// The hovered text field's edge: the primary text at 28 %.
+        public static let hoverEdgeOpacity: Double = 0.28
+        /// The hovered search field's surface: the primary text at 3 % over the sunken surface.
+        public static let searchHoverOpacity: Double = 0.03
+        /// The surface's inner shadow at its top (`inset 0 1px 2px var(--shadow-near)`).
+        public static let innerShadowY: Double = 1
+        public static let innerShadowBlur: Double = 2
+        /// The text's weight: the catalog's 400 at the control's size.
+        public static let textWeight = 400
+        /// The search glyph and the clear button.
+        public static let searchSymbol = "magnifyingglass"
+        public static let searchGlyph: Double = 13
+        public static let clearSymbol = "xmark"
+        public static let clearSize: Double = 16
+        public static let clearGlyph: Double = 8
+        /// The search field's shortcut, shown while it is empty.
+        public static let searchShortcut = "⌘ F"
+        /// A search field's width in the window's toolbar.
+        public static let toolbarSearchWidth: Double = 220
+        /// The error's shake: the field's offsets, in points, at each fraction of `Motion.slowDuration` (the catalog's
+        /// `ds-shake`); none under Reduce Motion.
+        public static let shakeOffsets: [Double] = [-4, 3, -2, 0]
+        public static let shakeTimes: [Double] = [0.2, 0.45, 0.7, 1]
+        /// The text area: its radius, its room above and below the text, and its fewest and most lines before it
+        /// scrolls (the own-words field starts at three and grows to eight).
+        public static let areaRadius = Radius.row
+        public static let areaVerticalPadding = Space.s2
+        public static let areaMinLines = 3
+        public static let areaMaxLines = 8
+        /// The keys that send a text area's text.
+        public static let sendShortcut = "⌘ ↩"
+
+        /// The surface's colour.
+        public static func fill(_ kind: Kind, _ state: State, disabled: Bool) -> ColorToken {
+            if disabled { return .surfaceRaised }
+            if kind == .search, state != .focused { return .surfaceSunken }
+            return .surfaceContent
+        }
+
+        /// The edge's colour: the problem colour while invalid, the accent while focused (or `accented`).
+        public static func edge(_ kind: Kind, _ state: State, invalid: Bool = false, disabled: Bool = false, accented: Bool = false) -> Tone {
+            if disabled { return Tone(.strokeSeparator) }
+            if invalid { return Tone(.statusProblem) }
+            if state == .focused || accented { return Tone(.accent) }
+            switch (kind, state) {
+            case (.text, .hover): return Tone(.textPrimary, opacity: hoverEdgeOpacity)
+            case (.search, .hover): return Tone(.strokeStrong)
+            case (.search, _): return Tone(.strokeSeparator)
+            default: return Tone(.strokeStrong)
+            }
+        }
+
+        /// The halo outside the edge: the accent tint while focused (the problem tint while invalid too), the lighter
+        /// accent tint at rest on an `accented` area; none otherwise.
+        public static func halo(_ state: State, invalid: Bool = false, disabled: Bool = false, accented: Bool = false) -> ColorToken? {
+            if disabled { return nil }
+            if state == .focused { return invalid ? .tintProblem : .accentTintStrong }
+            if invalid { return nil }
+            return accented ? .accentTint : nil
+        }
+
+        /// What shows under the field: the reason while it is off, else the error, else the help; one at most.
+        public static func footnote(help: String?, error: String?, disabledReason: String?) -> Footnote? {
+            if let reason = nonBlank(disabledReason) { return .reason(reason) }
+            if let error = nonBlank(error) { return .error(error) }
+            if let help = nonBlank(help) { return .help(help) }
+            return nil
+        }
+
+        private static func nonBlank(_ text: String?) -> String? {
+            guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return text
+        }
+
+        /// The count inside a search field with a query: "3 found", or "None".
+        public static func matches(_ count: Int) -> String { count > 0 ? "\(count) found" : "None" }
+
+        /// The line under a search field that found nothing: what it searched.
+        public static func noMatch(_ query: String, searched: String) -> String {
+            "Nothing matches “\(query.trimmingCharacters(in: .whitespacesAndNewlines))”. \(searched)"
+        }
+
+        /// Whether a search field shows its count, clear button and no-match line: a query that is not only spaces.
+        public static func hasQuery(_ query: String) -> Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        /// What Escape does in a search field: clear its query, then give up the keyboard.
+        public enum EscapeStep: Equatable { case clear, release }
+
+        public static func escape(query: String) -> EscapeStep { query.isEmpty ? .release : .clear }
+    }
+
     /// The main window's layout (§3.5).
     public enum Layout {
         public static let windowWidth: Double = 1200

@@ -70,8 +70,15 @@ struct ShippedContent: View {
                 shippedTab
             case .learnings:
                 learningsTab
-                    .searchable(text: $model.learningsFilter.search, placement: .toolbar, prompt: Learnings.searchPrompt)
-                    .searchFocused($searchFocused)
+                    .toolbar {
+                        ToolbarItem(placement: .automatic) {
+                            PageSearchField(
+                                prompt: Learnings.searchPrompt, text: $model.learningsFilter.search,
+                                matches: model.learnings.map { Learnings(payload: $0, filter: model.learningsFilter, scope: model.scope).count },
+                                focused: $searchFocused
+                            )
+                        }
+                    }
             }
         }
         .onChange(of: model.learningsSearchRequested, initial: true) { _, requested in

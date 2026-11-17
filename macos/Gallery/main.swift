@@ -1792,6 +1792,11 @@ MainActor.assumeIsolated {
                 render(casesTable(cases.map { ($0.id, $0.draw()) }), scheme, to: "\(story.component)-cases-\(suffix).png")
             }
         }
+        // The catalog's Text field and Search field stories and the Text area's (TP-1509): each story a variation of its
+        // own, under the catalog's name for it.
+        for story in fieldStories {
+            render(componentStorySnapshot(story), scheme, to: "\(story.component)-\(story.id)-\(suffix).png")
+        }
         render(homeTree(selected: .more("TP-1483")), scheme, to: "tree-home-\(suffix).png")
         render(homeTree(opened: ["TP-1481"], selected: .row("TP-1484")), scheme, to: "tree-home-chain-open-\(suffix).png")
         render(progressStrips(), scheme, to: "progress-strip-initiatives-\(suffix).png")

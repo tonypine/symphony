@@ -1,0 +1,521 @@
+import AppKit
+import SwiftUI
+import SymphonyBarCore
+
+// The catalog's Text field, Search field and multi-line input (`.field`, `.input`, `.input.search`, `.help`,
+// `.own-words`, `.tl-compose`; TP-1509). Each types through the system's own text view (a plain `TextField`, or a
+// `TextEditor` for several lines), so typing, selection, undo, spelling, dictation, input methods and VoiceOver
+// behave as in any Mac field; the app draws only the surface around it, from `DesignTokens.Field`.
+
+extension DesignTokens.Field.Tone {
+    var color: Color { token.color.opacity(opacity) }
+}
+
+extension DesignTokens.Control {
+    /// An input's text: the size's font size at the catalog's 400.
+    var inputFont: Font { DesignTokens.TypeStyle.font(size: fontSize, weight: DesignTokens.Field.textWeight) }
+}
+
+/// An input's surface in one state: its fill (with the text field's inner shadow at the top), its edge, and the halo
+/// outside the edge while focused. The halo eases in on the `fast` curve.
+struct FieldSurface<S: InsettableShape>: ViewModifier {
+    let shape: S
+    let kind: DesignTokens.Field.Kind
+    let state: DesignTokens.Field.State
+    var invalid = false
+    var disabled = false
+    var accented = false
+    let reduceMotion: Bool
+
+    private var accentedFocus: Bool { accented && state == .focused && !invalid && !disabled }
+
+    func body(content: Content) -> some View {
+        let edge = DesignTokens.Field.edge(kind, state, invalid: invalid, disabled: disabled, accented: accented)
+        let edgeWidth = accentedFocus ? DesignTokens.Field.accentedFocusEdge : DesignTokens.Field.edgeWidth
+        content
+            .background { fill }
+            .overlay { shape.strokeBorder(edge.color, lineWidth: edgeWidth).allowsHitTesting(false) }
+            .background { halo }
+            .animation(.motion(.fast, reduceMotion: reduceMotion), value: state)
+            .animation(.motion(.fast, reduceMotion: reduceMotion), value: invalid)
+    }
+
+    @ViewBuilder private var fill: some View {
+        let color = DesignTokens.Field.fill(kind, state, disabled: disabled).color
+        if kind == .text, !disabled {
+            shape.fill(
+                color.shadow(.inner(
+                    color: DesignTokens.ColorToken.shadowNear.color, radius: DesignTokens.Field.innerShadowBlur / 2,
+                    y: DesignTokens.Field.innerShadowY
+                ))
+            )
+        } else {
+            ZStack {
+                shape.fill(color)
+                if kind == .search, state == .hover, !disabled {
+                    shape.fill(DesignTokens.TextColor.primary.color.opacity(DesignTokens.Field.searchHoverOpacity))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var halo: some View {
+        if let halo = DesignTokens.Field.halo(state, invalid: invalid, disabled: disabled, accented: accented) {
+            let width = accentedFocus ? DesignTokens.Field.accentedFocusHalo : DesignTokens.Field.haloWidth
+            shape.inset(by: -width / 2).stroke(halo.color, lineWidth: width).allowsHitTesting(false)
+        }
+    }
+}
+
+/// The error's shake: the catalog's `ds-shake` once each time `trigger` changes.
+private struct Shake: ViewModifier {
+    let trigger: Int
+
+    func body(content: Content) -> some View {
+        content.keyframeAnimator(initialValue: 0.0, trigger: trigger) { view, offset in
+            view.offset(x: offset)
+        } keyframes: { _ in
+            let duration = DesignTokens.Motion.slowDuration
+            let offsets = DesignTokens.Field.shakeOffsets
+            let times = DesignTokens.Field.shakeTimes
+            KeyframeTrack {
+                CubicKeyframe(offsets[0], duration: duration * times[0])
+                CubicKeyframe(offsets[1], duration: duration * (times[1] - times[0]))
+                CubicKeyframe(offsets[2], duration: duration * (times[2] - times[1]))
+                CubicKeyframe(offsets[3], duration: duration * (times[3] - times[2]))
+            }
+        }
+    }
+}
+
+/// What sits under a field: the reason it is off (the inline refusal), the error in the problem colour, which rises in,
+/// or the help in the secondary colour.
+struct FieldFootnote: View {
+    let footnote: DesignTokens.Field.Footnote
+
+    var body: some View {
+        switch footnote {
+        case let .reason(reason):
+            Refusal(reason: reason)
+        case let .error(error):
+            Text(error)
+                .font(DesignTokens.TypeStyle.secondary.font)
+                .foregroundStyle(DesignTokens.ColorToken.statusProblemText.color)
+                .fixedSize(horizontal: false, vertical: true)
+                .transition(.opacity.combined(with: .offset(y: DesignTokens.Field.gap)))
+        case let .help(help):
+            Text(help)
+                .font(DesignTokens.TypeStyle.secondary.font)
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// Watches Escape while a field has the keyboard, before the window's key equivalents see it, so a sheet's Cancel
+/// does not take the key that clears the field. A key that composes text in an input method is left to it.
+@MainActor
+final class EscapeWatcher {
+    /// What Escape does; true when it took the key.
+    var perform: () -> Bool = { false }
+    private var monitor: Any?
+
+    nonisolated static let escapeKeyCode: UInt16 = 53
+
+    func start() {
+        guard monitor == nil else { return }
+        let handler: (NSEvent) -> NSEvent? = { [weak self] event in
+            nonisolated(unsafe) let pressed = event
+            let taken: Bool = MainActor.assumeIsolated { self?.take(pressed) ?? false }
+            return taken ? nil : event
+        }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: handler)
+    }
+
+    /// Escape alone, not one an input method is composing with: what `perform` says.
+    private func take(_ event: NSEvent) -> Bool {
+        guard event.keyCode == Self.escapeKeyCode,
+              event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock).isEmpty
+        else { return false }
+        if let editor = event.window?.firstResponder as? NSTextView, editor.hasMarkedText() { return false }
+        return perform()
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+}
+
+// MARK: - Text field
+
+/// The catalog's Text field: one line of text the Director types (a reason, a name, a number) at one of the three
+/// control heights, so it lines up with a button. Its label sits above; under it the help, or the error, never both.
+/// Hover strengthens the edge; focus puts the accent edge and a soft accent halo on it; an error turns the edge red,
+/// shakes the field once (not under Reduce Motion) and shows the message; with `disabledReason` it is off on the raised
+/// surface and the reason shows under it in place of the help.
+///
+/// `drawnAs` draws the field still in a state, for the Component Gallery; the field is live otherwise, and draws its
+/// text still in an offscreen snapshot, which draws no text view.
+public struct DirectorTextField: View {
+    let label: String?
+    @Binding var text: String
+    var placeholder: String
+    var help: String?
+    var error: String?
+    var size: DesignTokens.Control
+    var disabledReason: String?
+    var focus: FocusState<Bool>.Binding?
+    var drawnAs: DesignTokens.Field.State?
+    var onSubmit: (() -> Void)?
+
+    @FocusState private var ownFocus: Bool
+    @State private var hovering = false
+    @State private var shakes = 0
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    public init(
+        _ label: String?, text: Binding<String>, placeholder: String = "", help: String? = nil, error: String? = nil,
+        size: DesignTokens.Control = .medium, disabledReason: String? = nil, focused: FocusState<Bool>.Binding? = nil,
+        drawnAs: DesignTokens.Field.State? = nil, onSubmit: (() -> Void)? = nil
+    ) {
+        self.label = label
+        _text = text
+        self.placeholder = placeholder
+        self.help = help
+        self.error = error
+        self.size = size
+        self.disabledReason = disabledReason
+        focus = focused
+        self.drawnAs = drawnAs
+        self.onSubmit = onSubmit
+    }
+
+    private var focusBinding: FocusState<Bool>.Binding { focus ?? $ownFocus }
+    private var disabled: Bool { disabledReason != nil }
+    private var footnote: DesignTokens.Field.Footnote? {
+        DesignTokens.Field.footnote(help: help, error: error, disabledReason: disabledReason)
+    }
+    private var invalid: Bool { if case .error? = footnote { true } else { false } }
+    private var state: DesignTokens.Field.State {
+        if let drawnAs { return drawnAs }
+        if disabled { return .rest }
+        return focusBinding.wrappedValue ? .focused : hovering ? .hover : .rest
+    }
+    private var still: Bool { drawnAs != nil || offscreenSnapshot }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Field.gap) {
+            if let label, !label.isEmpty {
+                Text(label)
+                    .textStyle(.label)
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    .accessibilityHidden(true)
+            }
+            input
+            if let footnote { FieldFootnote(footnote: footnote) }
+        }
+        .animation(.motion(.standard, reduceMotion: reduceMotion), value: footnote)
+        .onChange(of: error) { old, new in
+            if DesignTokens.Field.footnote(help: nil, error: new, disabledReason: nil) != nil, new != old, !reduceMotion { shakes += 1 }
+        }
+    }
+
+    private var input: some View {
+        let shape = RoundedRectangle(cornerRadius: size.radius, style: .continuous)
+        return Group {
+            if still {
+                Text(text.isEmpty ? placeholder : text)
+                    .foregroundStyle((text.isEmpty || disabled ? DesignTokens.TextColor.tertiary : DesignTokens.TextColor.primary).color)
+                    .lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                TextField(
+                    label ?? placeholder, text: $text,
+                    prompt: Text(placeholder).foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                )
+                .textFieldStyle(.plain)
+                .labelsHidden()
+                .foregroundStyle((disabled ? DesignTokens.TextColor.tertiary : DesignTokens.TextColor.primary).color)
+                .focused(focusBinding)
+                .disabled(disabled)
+                .onSubmit { onSubmit?() }
+                .accessibilityLabel(label ?? placeholder)
+                .accessibilityHint(help ?? "")
+            }
+        }
+        .font(size.inputFont)
+        .padding(.horizontal, size.padding * DesignTokens.Field.paddingScale)
+        .frame(height: size.height)
+        .modifier(FieldSurface(shape: shape, kind: .text, state: state, invalid: invalid, disabled: disabled, reduceMotion: reduceMotion))
+        .contentShape(shape)
+        .onTapGesture { if !disabled, !still { focusBinding.wrappedValue = true } }
+        .onHover { hovering = $0 }
+        .notAllowedPointer(disabled)
+        .help(disabledReason ?? "")
+        .modifier(Shake(trigger: shakes))
+    }
+}
+
+// MARK: - Search field
+
+/// The catalog's Search field: filters what it sits over as the Director types. A sunken capsule with the search
+/// glyph, the placeholder and, while empty, its shortcut as a keyboard hint; under the pointer its edge strengthens;
+/// focused it lifts to the content colour with the accent halo. With a query it shows the count of `matches` (when
+/// given) and a clear button that pops in; with a query and no match, the line under it says what it searched
+/// (`searched`). Escape clears the query, and with no query gives up the keyboard. Return calls `onSubmit`.
+public struct SearchField: View {
+    let placeholder: String
+    @Binding var text: String
+    var matches: Int?
+    var searched: String?
+    var shortcut: String?
+    var size: DesignTokens.Control
+    var focus: FocusState<Bool>.Binding?
+    var drawnAs: DesignTokens.Field.State?
+    var onSubmit: (() -> Void)?
+
+    @FocusState private var ownFocus: Bool
+    @State private var hovering = false
+    @State private var clearHovered = false
+    @State private var escape = EscapeWatcher()
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    /// The clear button's words, for VoiceOver and its help.
+    public static let clearTitle = "Clear the search"
+
+    public init(
+        _ placeholder: String, text: Binding<String>, matches: Int? = nil, searched: String? = nil,
+        shortcut: String? = DesignTokens.Field.searchShortcut, size: DesignTokens.Control = .medium,
+        focused: FocusState<Bool>.Binding? = nil, drawnAs: DesignTokens.Field.State? = nil, onSubmit: (() -> Void)? = nil
+    ) {
+        self.placeholder = placeholder
+        _text = text
+        self.matches = matches
+        self.searched = searched
+        self.shortcut = shortcut
+        self.size = size
+        focus = focused
+        self.drawnAs = drawnAs
+        self.onSubmit = onSubmit
+    }
+
+    private var focusBinding: FocusState<Bool>.Binding { focus ?? $ownFocus }
+    private var hasQuery: Bool { DesignTokens.Field.hasQuery(text) }
+    private var state: DesignTokens.Field.State {
+        drawnAs ?? (focusBinding.wrappedValue ? .focused : hovering ? .hover : .rest)
+    }
+    private var still: Bool { drawnAs != nil || offscreenSnapshot }
+    private var noMatchLine: String? {
+        guard hasQuery, matches == 0, let searched else { return nil }
+        return DesignTokens.Field.noMatch(text, searched: searched)
+    }
+
+    public var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Field.gap) {
+            capsule
+            if let noMatchLine { FieldFootnote(footnote: .help(noMatchLine)) }
+        }
+        .animation(.motion(.lift, reduceMotion: reduceMotion), value: hasQuery)
+        .onChange(of: focusBinding.wrappedValue, initial: true) { _, focused in
+            escape.perform = { [text = $text, focus = focusBinding] in
+                switch DesignTokens.Field.escape(query: text.wrappedValue) {
+                case .clear: text.wrappedValue = ""
+                case .release: focus.wrappedValue = false
+                }
+                return true
+            }
+            if focused, !still { escape.start() } else { escape.stop() }
+        }
+        .onDisappear { escape.stop() }
+    }
+
+    private var capsule: some View {
+        HStack(spacing: DesignTokens.Field.itemGap) {
+            Image(systemName: DesignTokens.Field.searchSymbol)
+                .font(DesignTokens.TypeStyle.font(size: DesignTokens.Field.searchGlyph, weight: DesignTokens.TypeStyle.label.weight))
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                .accessibilityHidden(true)
+            field
+            if hasQuery {
+                if let matches {
+                    Text(DesignTokens.Field.matches(matches))
+                        .font(DesignTokens.TypeStyle.secondary.font)
+                        .monospacedDigit()
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                        .lineLimit(1)
+                        .fixedSize()
+                }
+                clearButton.transition(.scale.combined(with: .opacity))
+            } else if let shortcut {
+                KeyboardHint(shortcut)
+            }
+        }
+        .font(size.inputFont)
+        .padding(.leading, size.padding * DesignTokens.Field.searchLeadingScale)
+        .padding(.trailing, size.padding * DesignTokens.Field.searchTrailingScale)
+        .frame(height: size.height)
+        .modifier(FieldSurface(shape: Capsule(), kind: .search, state: state, reduceMotion: reduceMotion))
+        .contentShape(Capsule())
+        .onTapGesture { if !still { focusBinding.wrappedValue = true } }
+        .onHover { hovering = $0 }
+    }
+
+    @ViewBuilder private var field: some View {
+        if still {
+            Text(text.isEmpty ? placeholder : text)
+                .foregroundStyle((text.isEmpty ? DesignTokens.TextColor.tertiary : DesignTokens.TextColor.primary).color)
+                .lineLimit(1)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            TextField(placeholder, text: $text, prompt: Text(placeholder).foregroundStyle(DesignTokens.TextColor.tertiary.color))
+                .textFieldStyle(.plain)
+                .labelsHidden()
+                .foregroundStyle(DesignTokens.TextColor.primary.color)
+                .focused(focusBinding)
+                .onSubmit { onSubmit?() }
+                .accessibilityLabel(placeholder)
+                .accessibilityValue(hasQuery ? [text, matches.map(DesignTokens.Field.matches)].compactMap { $0 }.joined(separator: ", ") : "")
+                .accessibilityAddTraits(.isSearchField)
+        }
+    }
+
+    private var clearButton: some View {
+        Button {
+            text = ""
+            if !still { focusBinding.wrappedValue = true }
+        } label: {
+            ZStack {
+                Circle().fill((clearHovered ? DesignTokens.TextColor.secondary : DesignTokens.TextColor.tertiary).color)
+                Image(systemName: DesignTokens.Field.clearSymbol)
+                    .font(DesignTokens.TypeStyle.font(size: DesignTokens.Field.clearGlyph, weight: DesignTokens.CountBadge.weight))
+                    .foregroundStyle(DesignTokens.Surface.content.color)
+            }
+            .frame(width: DesignTokens.Field.clearSize, height: DesignTokens.Field.clearSize)
+            .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { clearHovered = $0 }
+        .help(Self.clearTitle)
+        .accessibilityLabel(Self.clearTitle)
+    }
+}
+
+// MARK: - Text area
+
+/// The catalog's multi-line input (the own-words field, the box for writing to a ticket): the text field's surface for
+/// several lines. It starts `minLines` tall and grows with its text to `maxLines`, then scrolls. Return adds a line;
+/// with `send`, ⌘↩ calls it while the area has the keyboard. `accented` keeps the accent edge and its light halo at
+/// rest, as under a picked own-words card. While `still` (a sheet covers the window, an offscreen snapshot) its text is
+/// drawn as a `Text`, which dims with the window as the system's text view doesn't.
+public struct TextArea: View {
+    let label: String
+    @Binding var text: String
+    var placeholder: String
+    var hint: String?
+    var minLines: Int
+    var maxLines: Int
+    var accented: Bool
+    var still: Bool
+    var focus: FocusState<Bool>.Binding?
+    var drawnAs: DesignTokens.Field.State?
+    var send: (() -> Void)?
+
+    @FocusState private var ownFocus: Bool
+    @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    /// The type the text is set in, and one line of it in the system's text view.
+    static let typeStyle = DesignTokens.TypeStyle.body
+    static let lineHeight = NSLayoutManager().defaultLineHeight(for: TextArea.typeStyle.nsFont)
+    /// The system text view's own room on each side of a line.
+    static let textInset: CGFloat = 5
+
+    /// `label` is what VoiceOver reads it as; `hint`, what it reads after.
+    public init(
+        _ label: String, text: Binding<String>, placeholder: String = "", hint: String? = nil,
+        minLines: Int = DesignTokens.Field.areaMinLines, maxLines: Int = DesignTokens.Field.areaMaxLines, accented: Bool = false,
+        still: Bool = false, focused: FocusState<Bool>.Binding? = nil, drawnAs: DesignTokens.Field.State? = nil,
+        send: (() -> Void)? = nil
+    ) {
+        self.label = label
+        _text = text
+        self.placeholder = placeholder
+        self.hint = hint
+        let fewest = max(1, minLines)
+        self.minLines = fewest
+        self.maxLines = max(fewest, maxLines)
+        self.accented = accented
+        self.still = still
+        focus = focused
+        self.drawnAs = drawnAs
+        self.send = send
+    }
+
+    private var focusBinding: FocusState<Bool>.Binding { focus ?? $ownFocus }
+    private var drawsStill: Bool { still || drawnAs != nil || offscreenSnapshot }
+    private var state: DesignTokens.Field.State {
+        drawnAs ?? (focusBinding.wrappedValue ? .focused : hovering ? .hover : .rest)
+    }
+
+    public var body: some View {
+        let shape = RoundedRectangle(cornerRadius: DesignTokens.Field.areaRadius, style: .continuous)
+        // A hidden copy of the text sizes the area: at least `minLines`, at most `maxLines`.
+        Text(text.isEmpty || text.hasSuffix("\n") ? text + " " : text)
+            .lineLimit(maxLines)
+            .padding(.horizontal, Self.textInset)
+            .frame(maxWidth: .infinity, minHeight: Self.lineHeight * CGFloat(minLines), alignment: .topLeading)
+            .hidden()
+            .overlay(alignment: .topLeading) {
+                if text.isEmpty {
+                    Text(placeholder)
+                        .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                        .padding(.horizontal, Self.textInset)
+                        .allowsHitTesting(false)
+                        .accessibilityHidden(true)
+                }
+            }
+            .overlay(alignment: .topLeading) {
+                if drawsStill {
+                    Text(text)
+                        .foregroundStyle(DesignTokens.TextColor.primary.color)
+                        .lineLimit(maxLines)
+                        .padding(.horizontal, Self.textInset)
+                } else {
+                    editor
+                }
+            }
+            .font(Self.typeStyle.font)
+            .padding(.horizontal, DesignTokens.Control.medium.padding * DesignTokens.Field.paddingScale - Self.textInset)
+            .padding(.vertical, DesignTokens.Field.areaVerticalPadding)
+            .modifier(FieldSurface(shape: shape, kind: .text, state: state, accented: accented, reduceMotion: reduceMotion))
+            .contentShape(shape)
+            .onTapGesture { if !drawsStill { focusBinding.wrappedValue = true } }
+            .onHover { hovering = $0 }
+            .background { sendKey }
+    }
+
+    private var editor: some View {
+        TextEditor(text: $text)
+            .scrollContentBackground(.hidden)
+            .foregroundStyle(DesignTokens.TextColor.primary.color)
+            .focused(focusBinding)
+            .accessibilityLabel(label)
+            .accessibilityHint(hint ?? "")
+    }
+
+    /// ⌘↩ while the area has the keyboard: a key equivalent, which the window gives out before the text view sees
+    /// the key, so Return alone still adds a line.
+    @ViewBuilder private var sendKey: some View {
+        if let send, focusBinding.wrappedValue, !drawsStill {
+            Button("", action: send)
+                .keyboardShortcut(.return, modifiers: .command)
+                .opacity(0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+}
