@@ -12,6 +12,7 @@ defmodule SymphonyElixirWeb.Presenter do
     Initiatives,
     Lifecycle,
     Marks,
+    ModelNames,
     Orchestrator,
     Pauses,
     PlanBrief,
@@ -689,7 +690,10 @@ defmodule SymphonyElixirWeb.Presenter do
 
   @doc """
   A page of `repo_key`'s ticket `issue_id`'s events (`SymphonyElixir.TicketEvents`), as the events
-  feed answers them: each with its summary, and its artifacts as
+  feed answers them: each with its summary (`SymphonyElixir.TicketEvents.Summary.render/1`, rendered on
+  read, so an event stored with older words reads as a new one does), whether it only records
+  Symphony's bookkeeping (`bookkeeping`, `Summary.bookkeeping?/1`), the rule that did it named by
+  what it does (`rule`, `Summary.rule_name/1`, else null), and its artifacts as
   `{id, kind, mime, label, available, url}`. `available` says whether `url` (the artifact route,
   relative to the server) serves the bytes: false for an artifact the store marks expired, and for
   an id the store doesn't know, whose other fields are null. The page's artifacts are read in one
@@ -712,8 +716,9 @@ defmodule SymphonyElixirWeb.Presenter do
   An event whose `parent` names an earlier event on the page sits in that event's `children`, at any
   depth. Otherwise an event whose `run_id` names a run of `history` sits in that run's `events`, and
   any other event stays at the top level. A run is `{kind: "run", run_id, run_kind, run_number,
-  status, verdict, started_at, ended_at, exit, head, summary, events}`, its header read from
-  `history` (the ticket's `run.started`, `run.ended`, `verdict.recorded` and step events, oldest
+  model, model_name, effort, status, verdict, started_at, ended_at, exit, head, summary, events}`
+  (`model_name` the model as a person reads it, `SymphonyElixir.ModelNames.display_name/1`), its
+  header read from `history` (the ticket's `run.started`, `run.ended`, `verdict.recorded` and step events, oldest
   first), not from the page: `status` is `ended` once its `run.ended` is written, `running` before
   that only while the orchestrator holds a run with its id (`opts[:held]`, `{run_ids, taken_at}`: the
   run ids its snapshot holds and when that snapshot was taken; `:unknown`, the default, when it could
@@ -819,6 +824,7 @@ defmodule SymphonyElixirWeb.Presenter do
       run_kind: start_or_end(started, ended, :run_kind),
       run_number: start_or_end(started, ended, :run_number),
       model: start_or_end(started, ended, :model),
+      model_name: ModelNames.display_name(start_or_end(started, ended, :model)),
       effort: start_or_end(started, ended, :effort),
       status: if(ended, do: "ended", else: "running"),
       verdict: verdict && run_verdict_json(verdict),
@@ -882,7 +888,11 @@ defmodule SymphonyElixirWeb.Presenter do
       supersedes: event.supersedes,
       idempotency: event.idempotency,
       payload: event.payload,
-      summary: event.summary,
+      # Rendered on read, so an event stored with older words reads as a new one does; the store keeps
+      # what it holds.
+      summary: Summary.render(event),
+      bookkeeping: Summary.bookkeeping?(event),
+      rule: Summary.rule_name(event),
       artifacts: Enum.map(event.artifacts, &ticket_artifact_json(&1, artifacts))
     }
   end

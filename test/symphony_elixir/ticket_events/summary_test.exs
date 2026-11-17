@@ -12,14 +12,14 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
   # renders.
   @fixtures [
     {"phase.entered", %{to: "QA", from: "Code Review", via: "verdict", reason: "Code Review approved the head"}, [],
-     %{title: "Entered QA from Code Review", detail: "Code Review approved the head · via verdict"}},
+     %{title: "Entered QA from Code Review", detail: "Code Review approved the head"}},
     {"hold.set", %{kind: "blocked", reason: "Waiting on TP-12"}, [], %{title: "Blocked hold set", detail: "Waiting on TP-12"}},
     {"hold.cleared", %{kind: "blocked", by: "TP-12 done"}, [], %{title: "Blocked hold cleared", detail: "by TP-12 done"}},
     {"run.started", %{run_id: "run-3", run_kind: "rework", run_number: 3, state: "Rework", head: "e051234abcdef", model: "claude-opus-5-5", effort: "high"}, [],
-     %{title: "Rework run 3 started", detail: "claude-opus-5-5 · in Rework · at e051234"}},
+     %{title: "Rework run 3 started", detail: "Claude Opus 5.5 · in Rework · at e051234"}},
     {"run.started_by_person", %{run_id: "run-3", run_kind: "implementation", run_number: 1, by: "the Director", note: "customer demo"}, [],
      %{title: "Implementation run 1 started by the Director", detail: "customer demo"}},
-    {"run.ended", @run_ended, [@transcript], %{title: "Rework run 3 ended: handoff", detail: "claude-opus-5-5 · 21 min · 13.4M tokens · transcript"}},
+    {"run.ended", @run_ended, [@transcript], %{title: "Rework run 3 ended: handoff", detail: "Claude Opus 5.5 · 21 min · 13.4M tokens · transcript"}},
     {"attempt.pushed", %{head: "e051234abcdef", attempt: 5, intent: "Render the summary on record"}, [], %{title: "Attempt 5 pushed e051234", detail: "Render the summary on record"}},
     {"verdict.recorded", %{kind: "code_review", outcome: "approve", head: "e051234abcdef"}, [], %{title: "Code Review verdict: approve", detail: "on e051234"}},
     {"decision.requested", %{title: "Close TP-612 as a duplicate", question: "Should TP-612 close as a duplicate of TP-668?"}, [],
@@ -27,7 +27,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"decision.recorded", %{answer: "Close it", request: "01REQUEST"}, [], %{title: "The Director decided", detail: "Close it"}},
     {"decision.withdrawn", %{title: "Close TP-612 as a duplicate", request: "01REQUEST"}, [], %{title: "Decision request withdrawn", detail: "Close TP-612 as a duplicate"}},
     {"person.action", %{action: "stop"}, [], %{title: "The Director stopped the run", detail: nil}},
-    {"step.started", %{step_id: "build", title: "Build", mode: "machine", command: "mix compile --warnings-as-errors"}, [], %{title: "Build started", detail: "mix compile --warnings-as-errors"}},
+    {"step.started", %{step_id: "build", title: "Build", mode: "machine", command: "mix compile --warnings-as-errors"}, [], %{title: "Build started", detail: nil}},
     {"step.completed",
      Map.merge(%{step_id: "build", title: "Build", mode: "machine"}, %{outcome: "failed", returns_to: "code", returns_to_title: "writing the code"}) |> Map.put(:duration_ms, 240_000), ["out-1"],
      %{title: "Build failed after 4 min: back to writing the code", detail: "output kept"}},
@@ -67,18 +67,18 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"park.backfilled", %{added: ["question", "push"], question_id: "q-1", branch: "auto/TP-1248"}, [],
      %{title: "Park brought up to date at start-up", detail: "asked you whether to run it again · pushed its work to auto/TP-1248"}},
     {"workspace.synced", %{workspace_head: "aaa1111aaaa", pr_head: "bbb2222bbbb", winner: "pull_request", action: "reset", head: "bbb2222bbbb", run_kind: "qa"}, [],
-     %{title: "Workspace reset to the PR head bbb2222", detail: "workspace aaa1111, PR bbb2222"}},
+     %{title: "Workspace reset to the PR head bbb2222", detail: nil}},
     {"workspace.rebuilt", %{reason: "missing_folder", branch: "auto/TP-1", winner: "pull_request", head: "bbb2222bbbb", pr_head: "bbb2222bbbb", branch_head: "aaa1111aaaa"}, [],
-     %{title: "Workspace rebuilt on the PR head bbb2222", detail: "Its workspace folder was missing · PR bbb2222, branch aaa1111"}},
-    {"workspace.removed", %{reason: "age_gc"}, [], %{title: "Workspace removed", detail: "The age GC reclaimed it"}},
+     %{title: "Workspace rebuilt on the PR head bbb2222", detail: "Its workspace folder was missing"}},
+    {"workspace.removed", %{reason: "age_gc"}, [], %{title: "Workspace removed", detail: "It went unused too long"}},
     {"situation.changed", %{from: "working", to: "waiting_for_ci", word: "Waiting for CI", cause: "Checks are running on PR #741."}, [],
      %{title: "Waiting for CI", detail: "Checks are running on PR #741."}},
     {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}},
-    {"note.read", %{note_id: "evt-1", run_id: "run-4"}, [], %{title: "Note read by a run", detail: "run-4"}},
+    {"note.read", %{note_id: "evt-1", run_id: "run-4"}, [], %{title: "Note read by a run", detail: nil}},
     {"brief.written", %{text: "Each ticket says what it delivers.", walkthrough: "Read a ticket."}, [], %{title: "Brief written", detail: "Each ticket says what it delivers."}},
     {"report.published", %{run_id: "report-1", text: "TP-1 merged."}, [], %{title: "Report published", detail: "TP-1 merged."}},
     {"rule.action", %{rule: "PR watcher R22", action: "rerun", text: "A check failed on PR #741: Symphony reran it once"}, [],
-     %{title: "PR watcher R22 reran the failed checks", detail: "A check failed on PR #741: Symphony reran it once"}},
+     %{title: "Reran the failed checks", detail: "A check failed on PR #741: Symphony reran it once"}},
     {"ticket.filed", %{identifier: "TP-1500", kind: "split_off", title: "Split the parser"}, [], %{title: "Split off TP-1500", detail: "Split the parser"}}
   ]
 
@@ -98,26 +98,26 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     end
   end
 
-  test "a rule's action names the rule and what it did, and the ticket it filed" do
+  test "a rule's action says what it did, and the ticket it filed; the rule is who did it" do
     assert render("rule.action", %{rule: "CI wait", action: "paused", text: "Waiting for CI on abc1234 to finish"}) ==
-             %{title: "CI wait paused the ticket", detail: "Waiting for CI on abc1234 to finish"}
+             %{title: "Paused the ticket", detail: "Waiting for CI on abc1234 to finish"}
 
-    assert render("rule.action", %{rule: "Self-heal", action: "filed_ticket", filed: "TP-1501"}) == %{title: "Self-heal filed TP-1501", detail: nil}
-    assert render("rule.action", %{rule: "Self-heal", action: "filed_ticket"}).title == "Self-heal filed a fix ticket"
+    assert render("rule.action", %{rule: "Self-heal", action: "filed_ticket", filed: "TP-1501"}) == %{title: "Filed TP-1501", detail: nil}
+    assert render("rule.action", %{rule: "Self-heal", action: "filed_ticket"}).title == "Filed a fix ticket"
 
     for {action, words} <- [
-          {"parked", "parked the ticket"},
-          {"lifted_pause", "lifted a pause"},
-          {"moved", "moved the ticket"},
-          {"updated_branch", "updated the branch"},
-          {"auto_merge", "changed auto-merge"},
-          {"asked", "asked you"},
-          {"other", "acted"}
+          {"parked", "Parked the ticket"},
+          {"lifted_pause", "Lifted a pause"},
+          {"moved", "Moved the ticket"},
+          {"updated_branch", "Updated the branch"},
+          {"auto_merge", "Changed auto-merge"},
+          {"asked", "Asked you"},
+          {"other", "Acted"}
         ] do
-      assert render("rule.action", %{rule: "Idle park", action: action}).title == "Idle park " <> words, action
+      assert render("rule.action", %{rule: "Idle park", action: action}).title == words, action
     end
 
-    assert render("rule.action", %{}).title == "A rule acted"
+    assert render("rule.action", %{}).title == "Acted"
     assert render("ticket.filed", %{identifier: "TP-1502", kind: "follow_up"}) == %{title: "Follow-up TP-1502 filed", detail: nil}
     assert render("ticket.filed", %{}).title == "Split off a ticket"
   end
@@ -166,39 +166,39 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
              %{title: "Park brought up to date at start-up", detail: "paused it until you unblock it · pushed its work to its branch"}
   end
 
-  test "a workspace sync names the heads it compared and what it did" do
+  test "a workspace sync names what it did, its heads left for Diagnostics" do
     heads = %{workspace_head: "aaa1111aaaa", pr_head: "bbb2222bbbb"}
 
     assert render("workspace.synced", Map.merge(heads, %{action: "none", head: "bbb2222bbbb"})).title == "Workspace already on the PR head bbb2222"
     assert render("workspace.synced", Map.merge(heads, %{action: "pushed", head: "aaa1111aaaa"})).title == "Workspace's unpushed head aaa1111 pushed to the PR"
 
     assert render("workspace.synced", Map.merge(heads, %{action: "reset_and_pushed", head: "ccc3333cccc", recorded_head: "ccc3333cccc"})) ==
-             %{title: "Workspace reset to a run's unpushed head ccc3333 and pushed", detail: "workspace aaa1111, PR bbb2222, recorded ccc3333"}
+             %{title: "Workspace reset to a run's unpushed head ccc3333 and pushed", detail: nil}
 
     assert render("workspace.synced", Map.merge(heads, %{action: "blocked", reason: "local changes (?? notes.txt)"})) ==
-             %{title: "Workspace not synced: it holds local work", detail: "workspace aaa1111, PR bbb2222 · local changes (?? notes.txt)"}
+             %{title: "Workspace not synced: it holds local work", detail: "local changes (?? notes.txt)"}
 
     assert render("workspace.synced", Map.merge(heads, %{action: "failed", reason: ":boom"})).title == "Workspace could not be synced"
     assert render("workspace.synced", %{}) == %{title: "Workspace already on the PR head", detail: nil}
   end
 
-  test "a workspace rebuild names why, the heads it compared and the one it chose" do
+  test "a workspace rebuild names why and the head it chose" do
     assert render("workspace.rebuilt", %{reason: "reclaim", winner: "branch", head: "aaa1111aaaa", branch_head: "aaa1111aaaa"}) ==
-             %{title: "Workspace rebuilt on the branch head aaa1111", detail: "Its old workspace was reclaimed · branch aaa1111"}
+             %{title: "Workspace rebuilt on the branch head aaa1111", detail: "Its old workspace was reclaimed"}
 
     assert render("workspace.rebuilt", %{reason: "host_change", winner: "recorded", head: "ccc3333cccc", recorded_head: "ccc3333cccc"}) ==
-             %{title: "Workspace rebuilt on a run's unpushed head ccc3333", detail: "Its last run was on another host · recorded ccc3333"}
+             %{title: "Workspace rebuilt on a run's unpushed head ccc3333", detail: "Its last run was on another host"}
 
     assert render("workspace.rebuilt", %{reason: "missing_folder", winner: "main"}) ==
              %{title: "Workspace rebuilt from main: the ticket has no branch yet", detail: "Its workspace folder was missing"}
 
     assert render("workspace.rebuilt", %{reason: "stop", winner: "local", head: "ddd4444dddd", local_head: "ddd4444dddd"}) ==
-             %{title: "Workspace rebuilt on its local branch head ddd4444", detail: "Its workspace was removed when its run was stopped · local ddd4444"}
+             %{title: "Workspace rebuilt on its local branch head ddd4444", detail: "Its workspace was removed when its run was stopped"}
 
     assert render("workspace.rebuilt", %{reason: "terminal", winner: "pull_request", head: "bbb2222bbbb", pr_head: "bbb2222bbbb", orphaned_head: "eee5555eeee"}) ==
              %{
                title: "Workspace rebuilt on the PR head bbb2222",
-               detail: "Its workspace was removed when it reached a terminal state · PR bbb2222 · Its local branch head eee5555 is kept under refs/symphony/orphaned"
+               detail: "Its workspace was removed when it reached a terminal state · Its local work is kept aside"
              }
 
     assert render("workspace.rebuilt", %{reason: "cleanup", winner: "main"}).detail == "Symphony removed its workspace"
@@ -292,6 +292,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       assert render("person.action", %{action: "remove_label", label: "plan"}).title == "The Director removed the plan label"
       assert render("person.action", %{action: "add_label"}).title == "The Director added a label"
       assert render("person.action", %{action: "decide"}).title == "The Director acted: decide"
+      assert render("person.action", %{action: "set_due_date"}).title == "The Director acted: set due date"
       assert render("person.action", %{}).title == "The Director acted"
     end
 
@@ -409,6 +410,136 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       for {type, payload, artifacts, _summary} <- @fixtures do
         assert String.length(Summary.render(event(type, payload, artifacts)).title) <= 120
       end
+    end
+  end
+
+  describe "in a person's words" do
+    @sha "2c8b2528430c3d0b69cca1e740b4c563dbb66c9e"
+    @watcher_reason "the PR watcher (R24): Checks are running on PR [tonypine/symphony#894](https://linear.app/t/review/tp-1463-abc)'s head"
+    @old_note "QA waits on the PR watcher · head #{@sha} · reason #{@watcher_reason} · status running (qa_head_not_green)"
+    @rule_setter %{kind: "rule", name: "PR watcher R24"}
+
+    # Every type the feed can emit, each with the codes, rule rows and full hashes Symphony keeps in
+    # its payload.
+    @coded [
+      {"phase.entered", %{to: "Merging", from: "QA", via: "qa_pass", reason: "every journey verified", signal: "review verdict"}},
+      {"hold.set", %{kind: "blocked", reason: "Blocked by #{@watcher_reason}"}},
+      {"hold.cleared", %{kind: "blocked", by: "hold_cleared"}},
+      {"run.started", %{run_id: "run_1", run_kind: "ci_fix", run_number: 2, state: "CI Fix", head: @sha, model: "claude-opus-5-5", effort: "medium"}},
+      {"run.started_by_person", %{run_id: "run_1", by: "the Director", note: "see #{@sha}"}},
+      {"run.ended", %{run_id: "run_1", run_kind: "pre_push_review", exit: "handoff_missing", model: "claude-opus-5-5", effort: "medium", head: @sha, unpushed_head: @sha}},
+      {"attempt.pushed", %{head: @sha, attempt: 2, intent: "Push #{@sha}"}},
+      {"verdict.recorded", %{kind: "code_review", outcome: "changes_requested", head: @sha, reason: "every journey verified (qa_pass)"}},
+      {"decision.requested", %{title: "Ship it", question: "Ship #{@sha}?"}},
+      {"decision.recorded", %{answer: "Yes", request: "req_1", key: "decision_key"}},
+      {"decision.withdrawn", %{title: "Ship it", request: "req_1"}},
+      {"question.asked", %{question_id: "q_1", title: "Ship it", question: "Ship it?", step: "write_code"}},
+      {"question.answered", %{question_id: "q_1", answer: "Yes", scope: "ticket"}},
+      {"question.withdrawn", %{question_id: "q_1", reason: "The ticket moved", cause: "ticket_moved"}},
+      {"question.reopened", %{question_id: "q_1", title: "Ship it"}},
+      {"question.not_asked", %{title: "Ship it", question: "Ship it?", cap: 5}},
+      {"person.action", %{action: "add_blocker", blocker: "TP-12"}},
+      {"step.started", %{step_id: "pre_push", title: "Pre-push checks", mode: "machine", command: "mix test test/foo_bar_test.exs"}},
+      {"step.completed", %{step_id: "pre_push", title: "Pre-push checks", mode: "machine", outcome: "failed", returns_to: "write_code"}},
+      {"evidence", %{caption: "After the fix on #{@sha}", environment: "live", status: "pass"}},
+      {"finding.recorded", %{class: "visual_mismatch", severity: "major", description: "Cut at the edge", step: "Step 2"}},
+      {"finding.resolved", %{finding_id: "f_1", how: "Wrapped it", head: @sha}},
+      {"finding.confirmed", %{finding_id: "f_1", resolution: "r_1", head: @sha}},
+      {"checklist.answered", %{item: "Dark mode", answer: "Yes"}},
+      {"ticket.cancelled", %{from: "Backlog", to: "Canceled"}},
+      {"ticket.moved", %{from: "Backlog", to: "Todo"}},
+      {"drift.detected", %{record_phase: "QA", linear_phase: "Done"}},
+      {"drift.reverted", %{record_phase: "QA", linear_phase: "Done"}},
+      {"drift.revert_failed", %{record_phase: "QA", linear_phase: "Done", error: "the PR watcher (R24) timed out (linear_timeout)"}},
+      {"pause.set", %{reason: "ticket", text: "Waiting for TP-1 to finish", set_by: @rule_setter}},
+      {"pause.reason_added", %{reason: "build", text: "Waiting for the build", set_by: @rule_setter}},
+      {"pause.reason_cleared", %{reason: "build", text: "Waiting for the build", by: @rule_setter}},
+      {"pause.cleared", %{cleared: [%{reason: "build", text: "Waiting for the build of #{@sha}"}], by: @rule_setter}},
+      {"situation.changed", %{to: "waiting_for_ci", from: "working", word: "Waiting for CI", cause: "Checks are running (qa_head_not_green)"}},
+      {"park.backfilled", %{added: ["releasable_reason", "push"], branch: "auto/TP-1"}},
+      {"workspace.synced", %{workspace_head: @sha, pr_head: @sha, winner: "equal", action: "none", head: @sha, recorded_head: @sha}},
+      {"workspace.rebuilt", %{reason: "missing_folder", branch: "auto/TP-1", winner: "recorded", head: @sha, recorded_head: @sha, orphaned_head: @sha}},
+      {"workspace.removed", %{reason: "age_gc"}},
+      {"rule.action", %{rule: "PR watcher R29", action: "auto_merge", text: "#{@watcher_reason}: auto-merge on for #{@sha}", head: @sha}},
+      {"ticket.filed", %{identifier: "TP-1500", kind: "follow_up", title: "Split the parser"}},
+      {"brief.written", %{text: "Plain words.", walkthrough: "Read it."}},
+      {"report.published", %{run_id: "report_1", text: "TP-1 merged."}},
+      {"note.read", %{note_id: "evt_1", run_id: "run_4"}},
+      {"note", %{text: @old_note}}
+    ]
+
+    @log_words [~r/\bR\d+[a-z]?\b/, ~r/\b[a-z0-9]+_[a-z0-9_]+\b/, ~r/\b[0-9a-f]{40}\b/, ~r/claude-/]
+
+    test "every type's line is a sentence: no rule number, code, full hash or model id" do
+      assert @coded |> Enum.map(&elem(&1, 0)) |> Enum.sort() == Types.catalog() |> Map.keys() |> Enum.sort()
+
+      for {type, payload} <- @coded, line <- [render(type, payload).title, render(type, payload).detail], is_binary(line), pattern <- @log_words do
+        refute line =~ pattern, "#{type}: #{line}"
+      end
+    end
+
+    test "an old machine note reads in the same words, and a commit by its short hash" do
+      assert render("note", %{text: @old_note}).detail ==
+               "QA waits on the PR watcher · head 2c8b252 · reason the PR watcher: Checks are running on PR tonypine/symphony#894's head · status running"
+    end
+
+    test "a note a signal wrote says the signal's words and its reason" do
+      note = %{text: @old_note, signal: "qa_head_not_green", signal_details: %{"head" => @sha, "reason" => @watcher_reason}}
+
+      assert render("note", note) == %{title: "QA waits on the PR watcher", detail: "the PR watcher: Checks are running on PR tonypine/symphony#894's head"}
+      assert render("note", %{text: "x", signal: "ci_flake", signal_details: "none"}) == %{title: "CI passed on Symphony's rerun, a flake", detail: nil}
+      assert render("note", %{text: "x", signal: "dispatch_loop"}).title == "Symphony noted dispatch loop"
+    end
+
+    test "a review's move to Rework is a send-back; any other move enters its phase" do
+      assert render("phase.entered", %{to: "Rework", from: "QA", reason: "1 finding"}) == %{title: "Sent back to Rework by QA", detail: "1 finding"}
+      assert render("phase.entered", %{to: "Rework", from: "Code Review"}).title == "Sent back to Rework by Code Review"
+      assert render("phase.entered", %{to: "Rework", from: "In Progress"}).title == "Entered Rework from In Progress"
+      assert render("phase.entered", %{to: "Merging", from: "QA", via: "qa_pass"}) == %{title: "Entered Merging from QA", detail: nil}
+    end
+
+    test "a code a run, verdict, finding or hold carries reads as words" do
+      assert render("run.ended", %{run_id: "r", exit: "handoff_missing"}).title == "Run ended: handoff missing"
+      assert render("verdict.recorded", %{kind: "qa", outcome: "changes_requested"}).title == "QA verdict: changes requested"
+      assert render("finding.recorded", %{class: "visual_mismatch"}).title == "QA found visual mismatch"
+      assert render("hold.cleared", %{kind: "blocked", by: "hold_cleared"}).detail == "by hold cleared"
+      assert render("step.completed", %{step_id: "b", title: "Build", mode: "machine", outcome: "failed", returns_to: "write_code"}).title == "Build failed: back to step write code"
+    end
+
+    test "only Symphony's bookkeeping is bookkeeping" do
+      bookkeeping? = fn type, payload -> Summary.bookkeeping?(event(type, payload)) end
+
+      assert bookkeeping?.("note", %{text: "x", signal: "qa_head_not_green"})
+      assert bookkeeping?.("note", %{text: "x", signal: "code_review_head_not_green"})
+      assert bookkeeping?.("note", %{text: "x", signal: "stale_check"})
+      refute bookkeeping?.("note", %{text: "x", signal: "ci_flake"})
+      refute bookkeeping?.("note", %{text: "A person's note"})
+      assert bookkeeping?.("workspace.synced", %{action: "none"})
+      assert bookkeeping?.("workspace.synced", %{})
+      refute bookkeeping?.("workspace.synced", %{action: "reset"})
+      refute bookkeeping?.("phase.entered", %{to: "QA"})
+    end
+
+    test "a rule is named by what it does, a PR watcher row by what the row did" do
+      rule = fn type, payload -> Summary.rule_name(event(type, payload)) end
+
+      assert rule.("rule.action", %{rule: "PR watcher R29", action: "auto_merge"}) == "Merging lands with auto-merge"
+      assert rule.("rule.action", %{rule: "PR watcher R22", action: "updated_branch"}) == "keep the branch current"
+      assert rule.("rule.action", %{rule: "PR watcher R7b", action: "other"}) == "the PR watcher"
+      assert rule.("rule.action", %{rule: "Self-heal", action: "filed_ticket"}) == "a broken tool gets a fix ticket"
+      assert rule.("rule.action", %{rule: "Night shift (R3)", action: "other"}) == "Night shift"
+      assert rule.("rule.action", %{action: "other"}) == nil
+      assert rule.("pause.set", %{set_by: %{kind: :rule, name: "Blocked-by links"}}) == "blockers first"
+      assert rule.("pause.cleared", %{"by" => %{"kind" => "rule", "name" => "CI wait"}}) == "a red or running check holds the ticket"
+      assert rule.("pause.set", %{set_by: %{kind: :person, name: "Tony"}}) == nil
+      assert rule.("pause.set", %{}) == nil
+      assert rule.("phase.entered", %{to: "QA"}) == nil
+    end
+
+    test "a run names its model as a person reads it" do
+      assert Summary.model_name(%{model: "claude-opus-5-5"}) == "Claude Opus 5.5"
+      assert Summary.model_name(%{"model" => "claude-haiku-4-5-20251001"}) == "Claude Haiku 4.5"
+      assert Summary.model_name(%{}) == nil
     end
   end
 end

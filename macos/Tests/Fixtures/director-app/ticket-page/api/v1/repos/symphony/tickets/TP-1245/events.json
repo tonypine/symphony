@@ -35,7 +35,7 @@
       },
       "summary": {
         "title": "Entered Todo from Backlog",
-        "detail": "via move"
+        "detail": null
       },
       "artifacts": [],
       "children": []
@@ -160,7 +160,8 @@
           "artifacts": [],
           "children": []
         }
-      ]
+      ],
+      "model_name": "Claude Opus 5.5"
     },
     {
       "id": "p1",
@@ -300,11 +301,12 @@
         "text": "Waiting for TP-1443 to finish"
       },
       "summary": {
-        "title": "Blocked-by links paused the ticket",
+        "title": "Paused the ticket",
         "detail": "Waiting for TP-1443 to finish"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "rule": "blockers first"
     },
     {
       "id": "b2",
@@ -398,10 +400,11 @@
         "text": "Waiting for TP-1443 to finish"
       },
       "summary": {
-        "title": "Blocked-by links paused the ticket"
+        "title": "Paused the ticket"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "rule": "blockers first"
     },
     {
       "id": "b7",
@@ -439,10 +442,11 @@
         "action": "lifted_pause"
       },
       "summary": {
-        "title": "Blocked-by links lifted a pause"
+        "title": "Lifted a pause"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "rule": "blockers first"
     },
     {
       "id": "q1",
@@ -519,11 +523,12 @@
         "text": "Branch updated with the newest main"
       },
       "summary": {
-        "title": "PR watcher R22 updated the branch",
+        "title": "Updated the branch",
         "detail": "with the newest main"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "rule": "keep the branch current"
     },
     {
       "id": "v1",
@@ -561,7 +566,16 @@
       "summary": {
         "title": "Finding: the timeline missed a stopped run"
       },
-      "artifacts": [],
+      "artifacts": [
+        {
+          "id": "1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0",
+          "kind": "screenshot",
+          "label": "The timeline at 1440×900",
+          "mime": "image/png",
+          "url": "/api/v1/artifacts/1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0",
+          "available": true
+        }
+      ],
       "children": []
     },
     {
@@ -596,7 +610,7 @@
         "to": "Rework"
       },
       "summary": {
-        "title": "Entered Rework from QA",
+        "title": "Sent back to Rework by QA",
         "detail": "QA failed"
       },
       "artifacts": [],
@@ -615,7 +629,7 @@
         "to": "Rework"
       },
       "summary": {
-        "title": "Entered Rework from QA",
+        "title": "Sent back to Rework by QA",
         "detail": "QA failed"
       },
       "artifacts": [],
@@ -694,7 +708,8 @@
           "artifacts": [],
           "children": []
         }
-      ]
+      ],
+      "model_name": "Claude Opus 5.5"
     },
     {
       "id": "q3",

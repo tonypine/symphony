@@ -40,6 +40,8 @@ final class SymphonyWindowModel: ObservableObject {
     let ticketFeed: TicketEventsReader
     /// The transcripts of the timeline's steps a person unfolds, read through `client` and kept by artifact id.
     let stepTranscripts: StepTranscripts
+    /// The screenshots of the timeline's findings, read through `client` and kept by artifact id.
+    let artifactImages: ArtifactImages
     /// The facts rail's Note for the next run: what is typed, the note on its way, why the last one wasn't added.
     let ticketNote = TicketNoteComposer()
     /// The facts rail's Decisions panel: the decisions recorded on the shown ticket.
@@ -412,6 +414,7 @@ final class SymphonyWindowModel: ObservableObject {
         destinationMemory.remember(selection)
         ticketFeed = TicketEventsReader(get: { [client] path in TicketEventsResult(await client.answer(path)) })
         stepTranscripts = StepTranscripts(get: { [client] path in await client.answer(path) })
+        artifactImages = ArtifactImages(get: { [client] path in await client.answer(path) })
         history = NavigationHistory(current: .view(selection))
         ticketFeed.listen(to: eventStream)
         ticketFeed.onChange = { [weak self] events in self?.ticketEventsChanged(events) }

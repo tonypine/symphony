@@ -207,7 +207,7 @@ private struct StepRow: View {
             }
             if unfolded {
                 StepLines(step: step, transcripts: transcripts)
-                    .padding(.leading, 12 + DesignTokens.Space.s2 + 18 + DesignTokens.Space.s2)
+                    .padding(.leading, 12 + DesignTokens.Space.s2 + StepMark.size + DesignTokens.Space.s2)
                     .padding(.top, DesignTokens.Space.s1)
                     .padding(.bottom, DesignTokens.Space.s2)
                     .transition(.opacity)
@@ -225,35 +225,69 @@ private struct StepRow: View {
     }
 }
 
-/// A step's mark, name, state, reason and duration.
+/// A step's head (the catalog's `.sl-head`): its mark, its name with its reason after it, then its state and its
+/// duration in right-aligned columns, so the steps of a run line up.
 private struct StepHeaderLabel: View {
     let step: RunStep
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-            StateMark(symbol: step.state.symbol, status: step.state.status, live: step.isLive, size: 14)
-                .frame(width: 18)
-            Text(step.title)
-                .font(DesignTokens.TypeStyle.body.font.weight(step.isLive ? .semibold : .regular))
-                .lineLimit(1)
-            Text(step.state.word)
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .foregroundStyle(step.state == .failed ? AnyShapeStyle(DesignTokens.Status.problem.tint) : AnyShapeStyle(.secondary))
-            if let reason = step.reason {
-                Text(reason)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .foregroundStyle(.secondary)
+        HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
+            StepMark(step: step)
+            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+                Text(step.title)
+                    .font(DesignTokens.TypeStyle.body.font.weight(step.isLive ? .semibold : .medium))
                     .lineLimit(1)
-                    .truncationMode(.tail)
+                    .layoutPriority(1)
+                if let reason = step.reason {
+                    Text(reason)
+                        .font(DesignTokens.TypeStyle.secondary.font)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
             }
-            Spacer(minLength: DesignTokens.Space.s2)
-            if let duration = step.duration {
-                Text(duration)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+            .frame(maxWidth: .infinity, alignment: .leading)
+            Text(step.state.word)
+                .font(DesignTokens.TypeStyle.secondary.font.weight(.medium))
+                .foregroundStyle(step.state == .done || step.state == .skipped ? AnyShapeStyle(.secondary) : AnyShapeStyle(step.state.status.text))
+                .lineLimit(1)
+                .fixedSize()
+                .frame(minWidth: Self.stateColumn, alignment: .trailing)
+            Text(step.duration ?? "")
+                .font(DesignTokens.TypeStyle.secondary.font)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize()
+                .frame(minWidth: Self.durationColumn, alignment: .trailing)
+        }
+    }
+
+    /// The state's column, wide enough for "Asked a question" to keep the durations in one column.
+    static let stateColumn: CGFloat = 96
+    /// The duration's column (`.sl-dur`: at least 52 px, right-aligned).
+    static let durationColumn: CGFloat = 52
+}
+
+/// A step's mark (`.sl-mark`): its state's glyph in a 20 pt circle of its tint, or the live dot while it works.
+private struct StepMark: View {
+    let step: RunStep
+
+    static let size: CGFloat = 20
+
+    var body: some View {
+        Group {
+            if step.isLive {
+                StatusDot(.working, size: .regular, live: true)
+            } else {
+                Image(systemName: step.state.markSymbol)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(step.state.status.tint)
             }
         }
+        .frame(width: Self.size, height: Self.size)
+        .background(Circle().fill(step.state.status.badgeFill))
+        .accessibilityHidden(true)
     }
 }
 

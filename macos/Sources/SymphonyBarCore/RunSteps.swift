@@ -192,6 +192,17 @@ public struct RunStep: Equatable, Identifiable {
             case .skipped: "arrow.uturn.forward.circle"
             }
         }
+
+        /// The glyph inside the step's round mark (the catalog's `.sl-mark`, which draws the circle itself).
+        public var markSymbol: String {
+            switch self {
+            case .done: "checkmark"
+            case .current: "circle.dotted"
+            case .failed: "xmark"
+            case .paused: "questionmark"
+            case .skipped: "arrow.uturn.forward"
+            }
+        }
     }
 
     /// Unique in its run: the step's id, numbered from its second time in the run ("code#2").
@@ -303,6 +314,16 @@ public struct RunGroupModel: Equatable, Identifiable {
             case .stopped: "stop.circle"
             }
         }
+
+        /// The glyph inside the run's round mark (the catalog's `.run-head .mark`, which draws the circle itself).
+        public var markSymbol: String {
+            switch self {
+            case .running: "circle.dotted"
+            case .passed: "checkmark"
+            case .failed: "exclamationmark"
+            case .stopped: "stop.fill"
+            }
+        }
     }
 
     /// The run's id.
@@ -314,15 +335,17 @@ public struct RunGroupModel: Equatable, Identifiable {
     public var word: String
     public var durationSeconds: Int?
     public var tokens: Int?
-    /// "claude-opus-5-5 · high", nil when Symphony didn't say.
+    /// The model as a person reads it, "Claude Opus 5.5"; nil when Symphony didn't say.
     public var model: String?
+    /// The effort the run profile resolved, "high"; kept apart from the model's name.
+    public var effort: String?
     public var steps: [RunStep]
     /// One of its events is newer than the person's last look (TP-1451): an ended run's header carries the new dot.
     public var isNew = false
 
     public init(
         id: String, title: String, state: State, word: String, durationSeconds: Int? = nil, tokens: Int? = nil,
-        model: String? = nil, steps: [RunStep] = []
+        model: String? = nil, effort: String? = nil, steps: [RunStep] = []
     ) {
         self.id = id
         self.title = title
@@ -331,6 +354,7 @@ public struct RunGroupModel: Equatable, Identifiable {
         self.durationSeconds = durationSeconds
         self.tokens = tokens
         self.model = model
+        self.effort = effort
         self.steps = steps
     }
 
@@ -348,6 +372,15 @@ public struct RunGroupModel: Equatable, Identifiable {
     }
 
     public var tokensText: String? { tokens.flatMap { $0 > 0 ? Overview.tokens($0) + " tokens" : nil } }
+
+    /// The line under the run's head (the prototype's `.run-meta`): "Claude Opus 5.5 · 12 min · 600K tokens", the
+    /// time so far while it runs. Nil when it has none of them.
+    public var meta: String? {
+        let parts = [model, duration, tokensText].compactMap { $0 }
+        return parts.isEmpty ? nil : parts.joined(separator: Self.metaSeparator)
+    }
+
+    public static let metaSeparator = " · "
 
     /// The step the folded line names: the one it is on, else the one it stopped at (failed or asked), else its last.
     public var stoppedAt: RunStep? {
@@ -419,9 +452,9 @@ public struct RunGroupModel: Equatable, Identifiable {
         } else {
             nil
         }
-        let model = [run.model ?? started?.payload.model, run.effort ?? started?.payload.effort]
-            .compactMap { $0?.trimmingWhitespace() }
-            .filter { !$0.isEmpty }
+        let modelID = (run.model ?? started?.payload.model)?.trimmingWhitespace().nonEmpty
+        let model = run.modelName?.trimmingWhitespace().nonEmpty ?? modelID.map(ModelName.display)
+        let effort = (run.effort ?? started?.payload.effort)?.trimmingWhitespace().nonEmpty
         return RunGroupModel(
             id: run.runID,
             title: TicketEventsPayload.runTitle(kind: run.runKind, number: run.runNumber),
@@ -429,7 +462,8 @@ public struct RunGroupModel: Equatable, Identifiable {
             word: word.prefix(1).uppercased() + word.dropFirst(),
             durationSeconds: duration,
             tokens: ended?.payload.tokens ?? liveTokens,
-            model: model.isEmpty ? nil : model.joined(separator: " · "),
+            model: model,
+            effort: effort,
             steps: steps(events, live: state == .running, runNow: runNow, reference: reference)
         )
     }
@@ -501,6 +535,30 @@ public struct RunGroupModel: Equatable, Identifiable {
         case "skipped": return (.skipped, payload.reason?.trimmingWhitespace().nonEmpty)
         default: return (.done, nil)
         }
+    }
+}
+
+/// A model's name as a person reads it, for a Symphony whose feed doesn't name it (`model_name`): its id read as
+/// Symphony reads it, so `claude-opus-5-5` is "Claude Opus 5.5" and `claude-haiku-4-5-20251001` "Claude Haiku 4.5".
+public enum ModelName {
+    static let upper: [String: String] = ["gpt": "GPT", "glm": "GLM", "ai": "AI"]
+
+    public static func display(_ id: String) -> String {
+        var parts = (id.split(separator: "/").last.map(String.init) ?? id).split(separator: "-").map(String.init)
+        if let last = parts.last, last.count == 8, last.allSatisfy(\.isNumber) { parts.removeLast() }
+        var words: [String] = []
+        var version: [String] = []
+        // Numbers next to each other are one version ("5", "5" is "5.5"); any other part is a word.
+        for part in parts {
+            if part.allSatisfy(\.isNumber) {
+                version.append(part)
+                continue
+            }
+            if !version.isEmpty { words.append(version.joined(separator: ".")); version = [] }
+            words.append(upper[part] ?? (part.prefix(1).uppercased() + part.dropFirst()))
+        }
+        if !version.isEmpty { words.append(version.joined(separator: ".")) }
+        return words.joined(separator: " ")
     }
 }
 

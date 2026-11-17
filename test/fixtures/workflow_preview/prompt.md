@@ -1118,7 +1118,7 @@ Runs (3):
   - 2026-01-05T13:50:00Z Note added: The truncated labels come from a fixed column width; the next step makes it flexible.
 
 Other events, newest first (5):
-- 2026-01-05T12:02:00Z Entered Rework from QA
+- 2026-01-05T12:02:00Z Sent back to Rework by QA
 - 2026-01-05T12:01:00Z QA verdict: fail: on 4f1c2a9
 - 2026-01-05T11:00:00Z Code Review verdict: approve: on 4f1c2a9
 - 2026-01-05T10:31:00Z Attempt 1 pushed 4f1c2a9: handoff

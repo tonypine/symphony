@@ -2,8 +2,9 @@ import SwiftUI
 import SymphonyBarCore
 
 /// One run of an agent as a foldable group (the catalog's Run group): its header line (the kind and number, the state
-/// glyph and word, a short bar per step, where it stopped when folded, its tokens, model and duration), and unfolded,
-/// its steps in a `StepList`. The run now starts unfolded and live; an ended run starts folded.
+/// mark and word, a short bar per step, where it stopped when folded, and its duration), the meta line under it (the
+/// model by its name, the time and the tokens: "Claude Opus 5.5 · 12 min · 600K tokens", the prototype's `.run-meta`),
+/// and unfolded, its steps in a `StepList`. The run now starts unfolded and live; an ended run starts folded.
 public struct RunGroup: View {
     let run: RunGroupModel
     @ObservedObject var transcripts: StepTranscripts
@@ -41,6 +42,11 @@ public struct RunGroup: View {
                 }
             }
             .padding(.vertical, DesignTokens.Space.s1)
+            if run.meta != nil {
+                RunMetaLine(run: run)
+                    .padding(.leading, Self.metaIndent)
+                    .padding(.bottom, DesignTokens.Space.s1)
+            }
             if unfolded {
                 Group {
                     if run.steps.isEmpty {
@@ -81,6 +87,30 @@ public struct RunGroup: View {
     }
 
     public static let noSteps = "This run recorded no steps."
+    /// The meta line starts under the run's title: past the fold's chevron and the run's mark.
+    static let metaIndent: CGFloat = 12 + DesignTokens.Space.s2 + TimelineMark.size + DesignTokens.Space.s2
+}
+
+/// The line under a run's head: its model by name, its time (counting on while it runs) and its tokens.
+struct RunMetaLine: View {
+    let run: RunGroupModel
+    @Environment(\.timelineReference) private var reference
+
+    var body: some View {
+        LiveDurationText(seconds: run.durationSeconds ?? 0, reference: run.isLive && run.durationSeconds != nil ? reference : nil) { seconds in
+            var run = run
+            if run.durationSeconds != nil { run.durationSeconds = seconds }
+            return run.meta ?? ""
+        }
+        .font(DesignTokens.TypeStyle.secondary.font)
+        .foregroundStyle(.secondary)
+        .monospacedDigit()
+        .lineLimit(1)
+        .truncationMode(.tail)
+        .help(Self.help)
+    }
+
+    static let help = "The model, how long the run took and the tokens it spent"
 }
 
 /// Opens the session reader on a run: the window that reads its whole session (TP-1452). A Run group shows its More
@@ -149,7 +179,7 @@ private struct RunHeaderLabel: View {
     }
 
     @ViewBuilder private var lead: some View {
-        StateMark(symbol: run.state.symbol, status: run.state.status, live: run.isLive, size: 15)
+        RunMark(run: run)
         if run.showsNewDot {
             Circle()
                 .fill(DesignTokens.ColorToken.accent.color)
@@ -175,14 +205,8 @@ private struct RunHeaderLabel: View {
         }
     }
 
+    // The model and tokens are the meta line's, under the head; the head keeps the duration at its end (`.dur`).
     @ViewBuilder private var facts: some View {
-        ForEach([run.tokensText, run.model].compactMap { $0 }, id: \.self) { fact in
-            Text(fact)
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .fixedSize()
-        }
         if let seconds = run.durationSeconds {
             // The run now's time so far counts on by itself; the timeline isn't built again for it (TP-1479).
             LiveDurationText(seconds: seconds, reference: run.isLive ? reference : nil) { seconds in
@@ -202,8 +226,30 @@ private struct RunHeaderLabel: View {
     static let durationHelp = "How long the run took"
 }
 
+/// A run's mark (the catalog's `.run-head .mark`): its state's glyph in a 24 pt circle of its tint, or the live dot
+/// while it works.
+struct RunMark: View {
+    let run: RunGroupModel
+
+    var body: some View {
+        Group {
+            if run.isLive {
+                StatusDot(.working, size: .large, live: true)
+            } else {
+                Image(systemName: run.state.markSymbol)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(run.state.status.tint)
+            }
+        }
+        .frame(width: TimelineMark.size, height: TimelineMark.size)
+        .background(Circle().fill(run.state.status.badgeFill))
+        .overlay(Circle().strokeBorder(run.state.status.tint.opacity(0.2), lineWidth: 1))
+        .accessibilityHidden(true)
+    }
+}
+
 /// Lays a run's header out as two parts, its lead (the mark, title, state, step bars and where it stopped) and its
-/// facts (tokens, model, duration): on one line, the facts at the trailing edge, when both fit whole in the width
+/// facts (its duration): on one line, the facts at the trailing edge, when both fit whole in the width
 /// offered; otherwise the facts on a second line under the lead, indented past the mark, and the lead gets the width,
 /// so where it stopped is cut short first. The choice depends only on the two parts' ideal widths and the width
 /// offered, and both parts stay the same views either way.
@@ -212,8 +258,8 @@ struct RunHeaderLayout: Layout {
     static let gap: CGFloat = DesignTokens.Space.s2
     /// The room between the two lines.
     static let lineSpacing: CGFloat = DesignTokens.Space.s1
-    /// The second line starts past the header's 15 pt mark.
-    static let factsIndent: CGFloat = 15 + DesignTokens.Space.s2
+    /// The second line starts past the header's mark.
+    static let factsIndent: CGFloat = TimelineMark.size + DesignTokens.Space.s2
 
     /// Whether a lead and facts `lead` and `facts` wide sit whole on one line in `width` (nil: any width).
     static func fitsOneLine(lead: CGFloat, facts: CGFloat, width: CGFloat?) -> Bool {

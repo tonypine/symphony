@@ -10,21 +10,23 @@ import Foundation
 public struct TimelineEntry: Equatable, Identifiable {
     /// The entry's class: its glyph, and its tone, which says the outcome only where there is one.
     public enum Kind: String, CaseIterable, Equatable {
-        case phase, pause, pauseCleared, questionAsked, questionAnswered, questionClosed, runStarted, runPassed, runFailed
-        case runStopped, person, rule, finding, findingResolved, note, ticket, situation, other
+        case phase, sendBack, pause, pauseCleared, questionAsked, questionAnswered, questionClosed, runStarted, runPassed
+        case runFailed, runStopped, person, rule, finding, findingResolved, note, ticket, situation, other
 
+        /// The glyph inside the entry's round mark (the catalog's `.tl-entry .mark`, which draws the circle itself).
         public var symbol: String {
             switch self {
-            case .phase: "arrow.right.circle"
-            case .pause: "pause.circle"
-            case .pauseCleared: "play.circle"
-            case .questionAsked: "bubble.left"
+            case .phase: "arrow.right"
+            case .sendBack: "arrow.uturn.backward"
+            case .pause: "pause.fill"
+            case .pauseCleared: "play.fill"
+            case .questionAsked: "questionmark"
             case .questionAnswered: "checkmark.bubble"
             case .questionClosed: "bubble.left"
-            case .runStarted: "play.circle"
-            case .runPassed: "checkmark.circle.fill"
-            case .runFailed: "xmark.circle.fill"
-            case .runStopped: "stop.circle"
+            case .runStarted: "play.fill"
+            case .runPassed: "checkmark"
+            case .runFailed: "xmark"
+            case .runStopped: "stop.fill"
             case .person: "hand.raised"
             case .rule: "gearshape"
             case .finding: "ladybug"
@@ -32,7 +34,7 @@ public struct TimelineEntry: Equatable, Identifiable {
             case .note: "note.text"
             case .ticket: "doc.badge.plus"
             case .situation: "arrow.clockwise"
-            case .other: "circle"
+            case .other: "circle.fill"
             }
         }
 
@@ -43,7 +45,7 @@ public struct TimelineEntry: Equatable, Identifiable {
             case .pauseCleared, .runStarted: .status(.working)
             case .questionAsked: .status(.you)
             case .questionAnswered, .runPassed: .status(.done)
-            case .runFailed, .finding, .situation: .status(.problem)
+            case .runFailed, .finding, .situation, .sendBack: .status(.problem)
             }
         }
 
@@ -51,6 +53,7 @@ public struct TimelineEntry: Equatable, Identifiable {
         public var word: String {
             switch self {
             case .phase: "phase move"
+            case .sendBack: "sent back"
             case .pause: "pause"
             case .pauseCleared: "pause cleared"
             case .questionAsked: "question asked"
@@ -95,10 +98,12 @@ public struct TimelineEntry: Equatable, Identifiable {
     public var eventIDs: [String]
     /// One of its events is newer than the person's last look: it carries the new dot (TP-1451).
     public var isNew: Bool
+    /// What QA found, drawn as the finding card under the entry, with its screenshots.
+    public var finding: TimelineFinding?
 
     public init(
         id: String, kind: Kind, at: Date, title: String, detail: String? = nil, actor: String, endedAt: Date? = nil,
-        durationSeconds: Int? = nil, eventIDs: [String]? = nil, isNew: Bool = false
+        durationSeconds: Int? = nil, eventIDs: [String]? = nil, isNew: Bool = false, finding: TimelineFinding? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -110,7 +115,11 @@ public struct TimelineEntry: Equatable, Identifiable {
         self.durationSeconds = durationSeconds
         self.eventIDs = eventIDs ?? [id]
         self.isNew = isNew
+        self.finding = finding
     }
+
+    /// A send-back to Rework: the row is drawn highlighted (the prototype's send-back entry).
+    public var isHighlighted: Bool { kind == .sendBack }
 
     /// A pause that still holds the ticket.
     public var isOngoing: Bool { kind == .pause && endedAt == nil }
@@ -145,6 +154,30 @@ public struct TimelineEntry: Equatable, Identifiable {
     public static let newWords = "new since you last looked"
     /// The dot's help, under the pointer.
     public static let newHelp = "New since you last looked"
+}
+
+/// What QA found, as the finding card under its entry shows it: the finding's line, QA's description and the
+/// screenshots QA attached.
+public struct TimelineFinding: Equatable {
+    /// "QA found content clipped at laptop (1440×900): Step 2".
+    public var title: String
+    public var text: String?
+    public var screenshots: [TicketScreenshot]
+
+    public init(title: String, text: String? = nil, screenshots: [TicketScreenshot] = []) {
+        self.title = title
+        self.text = text
+        self.screenshots = screenshots
+    }
+
+    /// The card's badge word.
+    public static let word = "Finding"
+
+    /// The card for VoiceOver: "Finding, QA found content clipped, The row is cut at its right edge, 1 screenshot".
+    public var accessibilityLabel: String {
+        let shots = screenshots.isEmpty ? nil : (screenshots.count == 1 ? "1 screenshot" : "\(screenshots.count) screenshots")
+        return [Self.word, title, text, shots].compactMap { $0 }.joined(separator: ", ")
+    }
 }
 
 /// One line of the timeline: an entry, or a run folded into its group.
@@ -427,7 +460,7 @@ public struct TimelineModel: Equatable {
         var rules: [(event: TicketEventsPayload.Event, at: Date, order: Int)] = []
 
         for (order, event) in history.events.enumerated() {
-            guard let at = event.date, !silentTypes.contains(event.type) else { continue }
+            guard let at = event.date, !silentTypes.contains(event.type), !event.bookkeeping else { continue }
             if let runID = event.runID, history.runs[runID] != nil, runTypes.contains(event.type) { continue }
             if event.type == "situation.changed", !situationsShown.contains(event.payload.to ?? "") { continue }
             if event.type == "rule.action", ruleCauses.contains(event.payload.action ?? "") {
@@ -557,9 +590,13 @@ public struct TimelineModel: Equatable {
         var target: String?
 
         init(_ event: TicketEventsPayload.Event, at: Date, order: Int, kind: TimelineEntry.Kind, actor: String) {
+            let title = event.summary?.title?.trimmedNonEmpty ?? event.type
+            let finding = event.type == "finding.recorded"
+                ? TimelineFinding(title: title, text: event.payload.description?.trimmedNonEmpty, screenshots: event.screenshots)
+                : nil
             entry = TimelineEntry(
-                id: event.id, kind: kind, at: at, title: event.summary?.title?.trimmedNonEmpty ?? event.type,
-                detail: event.summary?.detail?.trimmedNonEmpty, actor: actor, isNew: event.isNew
+                id: event.id, kind: kind, at: at, title: title, detail: event.summary?.detail?.trimmedNonEmpty, actor: actor,
+                isNew: event.isNew, finding: finding
             )
             type = event.type
             self.order = order
@@ -584,6 +621,8 @@ public struct TimelineModel: Equatable {
 
     static func kind(_ event: TicketEventsPayload.Event) -> TimelineEntry.Kind {
         switch event.type {
+        case "phase.entered" where sentBack(event.payload):
+            return .sendBack
         case "phase.entered", "ticket.moved", "ticket.cancelled", "drift.detected", "drift.reverted", "drift.revert_failed":
             return .phase
         case "question.asked", "decision.requested", "question.reopened": return .questionAsked
@@ -605,6 +644,14 @@ public struct TimelineModel: Equatable {
         }
     }
 
+    /// The phases a review sends a ticket back from.
+    static let reviewPhases: Set<String> = ["Code Review", "QA"]
+
+    /// A review's move back to Rework.
+    static func sentBack(_ payload: TicketEventsPayload.Payload) -> Bool {
+        payload.to == "Rework" && reviewPhases.contains(payload.from ?? "")
+    }
+
     static func outcomeKind(_ result: TicketPage.Step.Result) -> TimelineEntry.Kind {
         switch result {
         case .failed: .runFailed
@@ -624,7 +671,7 @@ public struct TimelineModel: Equatable {
         }
         if let setter = event.payload.setter {
             switch setter.kind {
-            case "rule": return "Rule: " + (setter.name?.trimmedNonEmpty ?? "a rule")
+            case "rule": return "Rule: " + (event.rule?.trimmedNonEmpty ?? setter.name?.trimmedNonEmpty ?? "a rule")
             case "person": return setter.name?.trimmedNonEmpty ?? you
             case "run": return runName(event.runID, kind: setter.name, history: history)
             default: break
@@ -636,8 +683,10 @@ public struct TimelineModel: Equatable {
 
     static let you = "You"
 
+    /// "Rule: blockers first": the rule as the feed names it, by what it does; a Symphony that doesn't name it gives
+    /// the payload's name.
     static func ruleName(_ event: TicketEventsPayload.Event) -> String {
-        "Rule: " + (event.payload.rule?.trimmedNonEmpty ?? "a rule")
+        "Rule: " + (event.rule?.trimmedNonEmpty ?? event.payload.rule?.trimmedNonEmpty ?? "a rule")
     }
 
     static func runName(_ runID: String?, kind: String?, history: TicketEventsPayload) -> String {

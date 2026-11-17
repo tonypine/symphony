@@ -91,12 +91,15 @@ final class RunStepsTests: XCTestCase {
         XCTAssertEqual(run.duration, "22 min")
         XCTAssertEqual(run.tokens, 1_840_000)
         XCTAssertEqual(run.tokensText, "1.8M tokens")
-        XCTAssertEqual(run.model, "claude-opus-5-5 · high")
+        // The model by its name, its effort apart (TP-1487); the line under the head says the model, time and tokens.
+        XCTAssertEqual(run.model, "Claude Opus 5.5")
+        XCTAssertEqual(run.effort, "high")
+        XCTAssertEqual(run.meta, "Claude Opus 5.5 · 22 min · 1.8M tokens")
         XCTAssertFalse(run.opensByDefault)
         XCTAssertEqual(run.steps.map(\.title), ["Write the code", "Build", "Checks", "Tests"])
         XCTAssertEqual(run.steps.map(\.state), [.done, .done, .skipped, .failed])
         XCTAssertEqual(run.whereText, "stopped at Tests")
-        XCTAssertEqual(run.accessibilityLabel, "Implementation run 1, failed, stopped at Tests, 22 minutes, 1.8M tokens, claude-opus-5-5 · high")
+        XCTAssertEqual(run.accessibilityLabel, "Implementation run 1, failed, stopped at Tests, 22 minutes, 1.8M tokens, Claude Opus 5.5")
         XCTAssertEqual(run.foldAccessibilityLabel(folded: true), "Expand Implementation run 1, failed")
         XCTAssertEqual(run.foldAccessibilityLabel(folded: false), "Collapse Implementation run 1, failed")
     }
@@ -180,7 +183,8 @@ final class RunStepsTests: XCTestCase {
         XCTAssertEqual(group.state, .stopped)
         XCTAssertEqual(group.word, "Stopped")
         XCTAssertEqual(group.durationSeconds, 600)
-        XCTAssertEqual(group.model, "low")
+        XCTAssertNil(group.model)
+        XCTAssertEqual(group.effort, "low")
         XCTAssertNil(group.tokensText)
         XCTAssertEqual(group.steps.map(\.id), ["code", "code#2", "tests", "lint"])
         XCTAssertEqual(group.steps.map(\.state), [.paused, .done, .failed, .failed])
@@ -203,7 +207,8 @@ final class RunStepsTests: XCTestCase {
         XCTAssertEqual(passed.title, "Agent run")
         XCTAssertEqual(passed.state, .passed)
         XCTAssertEqual(passed.durationSeconds, 180)
-        XCTAssertEqual(passed.model, "m")
+        XCTAssertEqual(passed.model, "M")
+        XCTAssertEqual(passed.meta, "M · 3 min")
         XCTAssertEqual(passed.whereText, "ended after qa")
         XCTAssertNil(passed.steps[0].reason)
 
@@ -278,6 +283,8 @@ final class RunStepsTests: XCTestCase {
         XCTAssertEqual(states.map(\.status), [.done, .working, .problem, .you, .idle])
         XCTAssertEqual(Set(states.map(\.symbol)).count, 5)
         XCTAssertEqual(Set([RunGroupModel.State.running, .passed, .failed, .stopped].map(\.symbol)).count, 4)
+        XCTAssertEqual(Set(states.map(\.markSymbol)).count, 5)
+        XCTAssertEqual(Set([RunGroupModel.State.running, .passed, .failed, .stopped].map(\.markSymbol)).count, 4)
     }
 
     // MARK: - Reading transcripts
@@ -326,4 +333,23 @@ final class RunStepsTests: XCTestCase {
 
 private extension RunGroupModel.State {
     static var allStatuses: [DesignTokens.Status] { [RunGroupModel.State.running, .passed, .failed, .stopped].map(\.status) }
+
+    // MARK: - The model's name (TP-1487)
+
+    func testTheFeedsModelNameWinsAndAnIDReadsAsANameWithout() {
+        XCTAssertEqual(ModelName.display("claude-opus-5-5"), "Claude Opus 5.5")
+        XCTAssertEqual(ModelName.display("claude-haiku-4-5-20251001"), "Claude Haiku 4.5")
+        XCTAssertEqual(ModelName.display("anthropic/claude-sonnet-5-5"), "Claude Sonnet 5.5")
+        XCTAssertEqual(ModelName.display("gpt-5.1-codex"), "GPT 5.1 Codex")
+        XCTAssertEqual(ModelName.display("model-nightowl"), "Model Nightowl")
+
+        let named = RunGroupModel.group(
+            TicketEventsPayload.Run(runID: "n", status: "ended", exit: "handoff", model: "claude-opus-5-5", modelName: "Claude Opus 5.5 (1M)",
+                                    effort: "medium"),
+            events: [], reference: reference
+        )
+        XCTAssertEqual(named.model, "Claude Opus 5.5 (1M)")
+        XCTAssertEqual(named.effort, "medium")
+        XCTAssertNil(RunGroupModel(id: "x", title: "Run", state: .passed, word: "Passed").meta)
+    }
 }
