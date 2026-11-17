@@ -11,8 +11,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
   # One fixture per catalog type: the event's type, payload and artifacts, then the summary it
   # renders.
   @fixtures [
-    {"phase.entered", %{to: "QA", from: "Code Review", via: "verdict", reason: "Code Review approved the head"}, [],
-     %{title: "Entered QA from Code Review", detail: "Code Review approved the head"}},
+    {"phase.entered", %{to: "QA", from: "Code Review", via: "verdict", reason: "Code Review approved the head"}, [], %{title: "Entered QA from Code Review", detail: "Code Review approved the head"}},
     {"hold.set", %{kind: "blocked", reason: "Waiting on TP-12"}, [], %{title: "Blocked hold set", detail: "Waiting on TP-12"}},
     {"hold.cleared", %{kind: "blocked", by: "TP-12 done"}, [], %{title: "Blocked hold cleared", detail: "by TP-12 done"}},
     {"run.started", %{run_id: "run-3", run_kind: "rework", run_number: 3, state: "Rework", head: "e051234abcdef", model: "claude-opus-5-5", effort: "high"}, [],
