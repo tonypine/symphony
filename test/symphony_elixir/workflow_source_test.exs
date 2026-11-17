@@ -590,9 +590,12 @@ defmodule SymphonyElixir.WorkflowSourceTest do
     #{if base_branch, do: "    base_branch: #{base_branch}", else: ""}
     workspaces:
       root: #{Path.join(root, "workspaces")}
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     """)
 
     Workflow.set_symphony_file_path(path)

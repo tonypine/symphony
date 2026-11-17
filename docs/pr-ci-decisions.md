@@ -72,7 +72,7 @@ The flow decision: the first rule that matches decides what happens to the ticke
 | Rule | Phases | When | Then |
 | --- | --- | --- | --- |
 | R1 | all | GitHub's rate limit is spent, so the facts can't be read | `wait` on `github` until the limit resets |
-| R2 | all | The PR is merged, by Symphony or anyone else | `close_out` |
+| R2 | all | The PR is merged, by Symphony or anyone else | `close_ticket` |
 | R3 | In Progress, Code Review, QA, Rework, CI Fix | Auto-merge is armed and the ticket is not in Merging | `disarm` |
 | R4 | all | A Needs Decision or Blocked hold is set | `wait` on `person` (Needs Decision) or `symphony` (Blocked) until the hold clears |
 | R5 | In Progress | No PR yet | `wait` on `agent` until it opens one |

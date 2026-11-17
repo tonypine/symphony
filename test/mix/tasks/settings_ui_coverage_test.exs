@@ -42,14 +42,14 @@ defmodule Mix.Tasks.Settings.UiCoverageTest do
   end
 
   test "fails naming each setting with no control and no exemption", %{root: root, manifest: manifest} do
-    write_root!(root, manifest -- ["agent.concurrency.max_total", "repositories[].route.team"], [%{"keys" => uncovered(manifest), "reason" => "Later."}])
+    write_root!(root, manifest -- ["execution.concurrency.max_total", "repositories[].route.team"], [%{"keys" => uncovered(manifest), "reason" => "Later."}])
 
     stderr =
       capture_io(:stderr, fn ->
         assert_raise Mix.Error, ~r/2 symphony.yml setting\(s\) have no control in the macOS app/, fn -> UiCoverage.run(["--root", root]) end
       end)
 
-    assert stderr =~ "No control in the macOS app and no exemption: agent.concurrency.max_total"
+    assert stderr =~ "No control in the macOS app and no exemption: execution.concurrency.max_total"
     assert stderr =~ "No control in the macOS app and no exemption: repositories[].route.team"
   end
 
@@ -60,25 +60,25 @@ defmodule Mix.Tasks.Settings.UiCoverageTest do
     write_root!(root, manifest, [
       %{"keys" => others, "reason" => "Later."},
       %{"key" => "watchdog.*", "reason" => "Tuning.", "ticket" => "TP-1"},
-      %{"keys" => ["gone.setting", "agent.model"], "reason" => "Stale."}
+      %{"keys" => ["gone.setting", "execution.concurrency.max_total"], "reason" => "Stale."}
     ])
 
     output = capture_io(fn -> UiCoverage.run(["--root", root]) end)
 
     assert output =~ "All "
     assert output =~ "warning: exemption `gone.setting` matches no symphony.yml setting"
-    assert output =~ "warning: `agent.model` has a control in the app now"
+    assert output =~ "warning: `execution.concurrency.max_total` has a control in the app now"
   end
 
   test "fails a manifest key that is not a setting", %{root: root, manifest: manifest} do
-    write_root!(root, manifest ++ ["agent.widgets"], [%{"keys" => uncovered(manifest), "reason" => "Later."}])
+    write_root!(root, manifest ++ ["execution.widgets"], [%{"keys" => uncovered(manifest), "reason" => "Later."}])
 
     stderr =
       capture_io(:stderr, fn ->
         assert_raise Mix.Error, ~r/lists key paths that are not symphony.yml settings/, fn -> UiCoverage.run(["--root", root]) end
       end)
 
-    assert stderr =~ "Not a symphony.yml setting: agent.widgets"
+    assert stderr =~ "Not a symphony.yml setting: execution.widgets"
   end
 
   test "fails a missing or invalid file", %{root: root, manifest: manifest} do

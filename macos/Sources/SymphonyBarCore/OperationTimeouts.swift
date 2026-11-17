@@ -1,6 +1,6 @@
 import Foundation
 
-/// Why `workspaces.git_network_timeout_ms`, `agent.timeouts.mcp_tool_ms` or `watchdog.pending_tool_report_after_ms`
+/// Why `workspaces.git_network_timeout_ms`, `execution.timeouts.mcp_tool_ms` or `watchdog.pending_tool_report_after_ms`
 /// can't be read or changed by editing one line.
 public enum OperationTimeoutsError: LocalizedError, Equatable {
     /// The key holds an inline value (for example `timeouts: {mcp_tool_ms: 5}`) instead of an indented block.
@@ -18,7 +18,7 @@ public enum OperationTimeoutsError: LocalizedError, Equatable {
     }
 }
 
-/// `workspaces.git_network_timeout_ms`, `agent.timeouts.mcp_tool_ms` and `watchdog.pending_tool_report_after_ms` in
+/// `workspaces.git_network_timeout_ms`, `execution.timeouts.mcp_tool_ms` and `watchdog.pending_tool_report_after_ms` in
 /// the text of a `symphony.yml`, in milliseconds. Only the lines of the timeouts that change are rewritten, or
 /// inserted when missing, so the rest of the file stays as it is.
 public struct OperationTimeouts: Equatable {
@@ -38,7 +38,7 @@ public struct OperationTimeouts: Equatable {
     public static let minuteRange = 1...120
 
     static let gitNetworkPath = ["workspaces", "git_network_timeout_ms"]
-    static let mcpToolPath = ["agent", "timeouts", "mcp_tool_ms"]
+    static let mcpToolPath = ["execution", "timeouts", "mcp_tool_ms"]
     static let pendingToolReportPath = ["watchdog", "pending_tool_report_after_ms"]
 
     public init(

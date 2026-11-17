@@ -82,12 +82,13 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, AgentTools, Artifacts, LeftoverProcesses}
   alias SymphonyElixir.Artifacts.Transcript
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Config.Schema.Agent.Mcp.Server, as: McpServer
+  alias SymphonyElixir.Config.Schema.Execution.Mcp.Server, as: McpServer
   alias SymphonyElixir.Decisions
+  alias SymphonyElixir.Harnesses.Launcher
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.{PathSafety, PromptSafety, QaDriver, QaModeContract, ReviewAgent}
+  alias SymphonyElixir.PlaybookSettings
   alias SymphonyElixir.QaAgent.Design
-  alias SymphonyElixir.QaAgent.PlaybookSettings
   alias SymphonyElixir.QaAgent.Verdict
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.QaPreCheck
@@ -154,7 +155,7 @@ defmodule SymphonyElixir.QaAgent do
           optional(:run_id) => String.t() | nil,
           optional(:pr_url) => String.t() | nil,
           optional(:token_limit) => pos_integer() | nil,
-          optional(:run_profile) => SymphonyElixir.RunKind.profile(),
+          optional(:run_profile) => SymphonyElixir.Config.Runs.Run.t(),
           optional(:dev_server_url) => String.t() | nil,
           optional(:qa_host_dev_server_url) => String.t(),
           optional(:live_server_url) => String.t(),
@@ -253,19 +254,11 @@ defmodule SymphonyElixir.QaAgent do
     AgentTmpDir.paths(@tmp_dir_prefix, worktree, bases)
   end
 
-  @doc "The agent settings for a QA session: `auto_review` runtime, command, turns and timeout."
+  @doc "The settings for a QA session: the `qa` run's harness and command, with `auto_review`'s turns and timeout."
   @spec qa_settings(Schema.t()) :: Schema.t()
-  def qa_settings(%Schema{auto_review: config, agent: agent} = settings) do
-    %{
-      settings
-      | agent: %{
-          agent
-          | kind: config.kind || agent.kind,
-            command: config.command || agent.command,
-            max_turns: config.max_turns,
-            turn_timeout_ms: config.timeout_ms
-        }
-    }
+  def qa_settings(%Schema{auto_review: config} = settings) do
+    %Schema{execution: execution} = settings = SymphonyElixir.Config.for_run(settings, SymphonyElixir.Config.run(settings, :qa))
+    %{settings | execution: %{execution | max_turns: config.max_turns, turn_timeout_ms: config.timeout_ms}}
   end
 
   @doc """
@@ -1039,16 +1032,12 @@ defmodule SymphonyElixir.QaAgent do
     File.mkdir_p!(Path.join(worktree, @evidence_dir))
     qa_settings = qa_settings(settings)
 
-    case resolve_agent_module(opts, qa_settings.agent.kind) do
-      {:ok, agent_module} ->
-        with_dev_server(job, worktree, settings, opts, fn dev_server ->
-          job = Map.put(job, :dev_server_url, dev_server && dev_server.url)
-          run_with_tools(agent_module, job, worktree, settings, qa_settings, dev_server, opts)
-        end)
+    agent_module = Keyword.get_lazy(opts, :qa_agent_module, fn -> Launcher.module!(qa_settings.execution.harness) end)
 
-      {:error, reason} ->
-        {:error, reason, empty_tokens()}
-    end
+    with_dev_server(job, worktree, settings, opts, fn dev_server ->
+      job = Map.put(job, :dev_server_url, dev_server && dev_server.url)
+      run_with_tools(agent_module, job, worktree, settings, qa_settings, dev_server, opts)
+    end)
   end
 
   defp run_with_tools(agent_module, job, worktree, settings, qa_settings, dev_server, opts) do
@@ -1321,21 +1310,21 @@ defmodule SymphonyElixir.QaAgent do
   # The `browser` MCP server exists only in a `web` pass's session settings.
   defp put_browser_mcp(qa_settings, _job, _worktree, nil, _opts), do: {:ok, qa_settings}
 
-  defp put_browser_mcp(%Schema{agent: agent} = qa_settings, job, worktree, dev_server, opts) do
+  defp put_browser_mcp(%Schema{execution: agent} = qa_settings, job, worktree, dev_server, opts) do
     agent = %{agent | network_access: allow_localhost(agent.network_access)}
 
     case web_playbook(job) do
-      nil -> {:ok, %{qa_settings | agent: agent}}
-      web -> put_browser_mcp_server(%{qa_settings | agent: agent}, web, worktree, dev_server, opts)
+      nil -> {:ok, %{qa_settings | execution: agent}}
+      web -> put_browser_mcp_server(%{qa_settings | execution: agent}, web, worktree, dev_server, opts)
     end
   end
 
-  defp put_browser_mcp_server(%Schema{agent: agent} = qa_settings, web, worktree, dev_server, opts) do
+  defp put_browser_mcp_server(%Schema{execution: agent} = qa_settings, web, worktree, dev_server, opts) do
     with {:ok, attrs} <- browser_mcp_attrs(web, worktree, dev_server, opts),
-         attrs = attrs |> Map.put("name", @browser_mcp_name) |> Map.put_new("runtimes", [agent.kind]),
+         attrs = attrs |> Map.put("name", @browser_mcp_name) |> Map.put_new("harnesses", [agent.harness]),
          {:ok, server} <- browser_mcp_server(attrs) do
       servers = Map.put(agent.mcp.servers || %{}, @browser_mcp_name, server)
-      {:ok, %{qa_settings | agent: %{agent | mcp: %{agent.mcp | servers: servers}}}}
+      {:ok, %{qa_settings | execution: %{agent | mcp: %{agent.mcp | servers: servers}}}}
     end
   end
 
@@ -1473,13 +1462,13 @@ defmodule SymphonyElixir.QaAgent do
       issue: job.issue,
       repo_key: Map.get(job, :repo_key),
       run_id: Map.get(job, :run_id),
-      run_profile: Map.get_lazy(job, :run_profile, fn -> SymphonyElixir.Config.qa_profile(qa_settings) end),
+      run_profile: Map.get_lazy(job, :run_profile, fn -> qa_settings.execution.run end),
       tool_scope: :qa,
       qa_driver: Keyword.get(opts, :qa_driver),
       qa_android_driver: Keyword.get(opts, :qa_android_driver),
       qa_verdict_sink: self(),
       agent_tmp_dir: tmp_dir,
-      extra_env: Map.merge(AgentTmpDir.env(qa_settings.agent.kind, tmp_dir), host_ports_env(Map.get(job, :host_ports, [])))
+      extra_env: Map.merge(AgentTmpDir.env(qa_settings.execution.harness, tmp_dir), host_ports_env(Map.get(job, :host_ports, [])))
     ]
 
     case agent_module.start_session(worktree, session_opts) do
@@ -1740,13 +1729,6 @@ defmodule SymphonyElixir.QaAgent do
   defp qa_host_failure(:health_timeout), do: "did not answer its health check with 200 in time"
   defp qa_host_failure({:dev_server_unreachable, message}), do: "could not be started over SSH: #{message}"
 
-  defp resolve_agent_module(opts, kind) do
-    case Keyword.get(opts, :qa_agent_module) do
-      nil -> agent_module(kind)
-      module -> {:ok, module}
-    end
-  end
-
   @doc """
   The hold info of a `SymphonyElixir.QaAgent.run/3` error caused by a provider usage limit, or by
   a model API the agent couldn't reach (`source: :api_unreachable`), else nil.
@@ -1814,12 +1796,6 @@ defmodule SymphonyElixir.QaAgent do
   def blocked_reason({:malformed_qa_response, reason}), do: "the QA agent's answer could not be read: #{inspect(reason)}"
   def blocked_reason({:changed_files_unlisted, reason}), do: "could not list the PR's changed files: #{inspect(reason)}"
   def blocked_reason(reason), do: "the QA agent could not finish: #{inspect(reason)}"
-
-  @doc false
-  @spec agent_module(String.t() | nil) :: {:ok, module()} | {:error, term()}
-  def agent_module("codex"), do: {:ok, SymphonyElixir.Codex.AppServer}
-  def agent_module("claude"), do: {:ok, SymphonyElixir.ClaudeCode.AppServer}
-  def agent_module(other), do: {:error, {:unsupported_qa_agent_kind, other}}
 
   defp create_worktree(job, settings, git) do
     add_worktree(job, worktree_path(settings, Map.get(job, :repo_key), job.issue.identifier, job.sha), git)
@@ -1979,7 +1955,7 @@ defmodule SymphonyElixir.QaAgent do
   end
 
   defp keep_transcript(worktree, session_id, settings, where) do
-    runtime = if qa_settings(settings).agent.kind == "claude", do: :claude, else: :codex
+    runtime = if qa_settings(settings).execution.harness == "claude", do: :claude, else: :codex
     meta = Map.merge(where.meta, %{kind: "transcript", label: "QA session transcript"})
 
     with {:ok, path} <- Transcript.locate(runtime, worktree, session_id, nil),

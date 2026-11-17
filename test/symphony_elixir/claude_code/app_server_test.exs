@@ -3,7 +3,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
   alias SymphonyElixir.AgentSandboxConfig
   alias SymphonyElixir.ClaudeCode.{AppLaunchHook, AppServer}
-  alias SymphonyElixir.Config.Schema.Agent
+  alias SymphonyElixir.Config.Schema.Execution
+  alias SymphonyElixir.Harnesses.EventStream
   alias SymphonyElixir.OpenRouter.{Models, Stub}
   import Bitwise, only: [band: 2]
 
@@ -26,7 +27,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
   describe "build_sandbox_settings/1" do
     test "allowlist mode includes built-in domains and sets allowManagedDomainsOnly" do
-      network_access = %Agent.NetworkAccess{
+      network_access = %Execution.NetworkAccess{
         mode: "allowlist",
         allowed_domains: ["example.com"],
         denied_domains: []
@@ -56,7 +57,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     end
 
     test "allowlist mode excludes denied domains" do
-      network_access = %Agent.NetworkAccess{
+      network_access = %Execution.NetworkAccess{
         mode: "allowlist",
         allowed_domains: [],
         denied_domains: ["github.com"]
@@ -70,7 +71,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     end
 
     test "block mode sets empty allowedDomains" do
-      network_access = %Agent.NetworkAccess{
+      network_access = %Execution.NetworkAccess{
         mode: "block",
         allowed_domains: [],
         denied_domains: []
@@ -85,7 +86,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     end
 
     test "open mode allows local binding without domain narrowing" do
-      network_access = %Agent.NetworkAccess{
+      network_access = %Execution.NetworkAccess{
         mode: "open",
         allowed_domains: [],
         denied_domains: []
@@ -102,7 +103,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     # widen that allowlist.
     test "never opts into extra mach services or Apple Events, so the window server stays unreachable" do
       for mode <- ["allowlist", "block", "open"] do
-        network_access = %Agent.NetworkAccess{mode: mode, allowed_domains: ["example.com"], denied_domains: []}
+        network_access = %Execution.NetworkAccess{mode: mode, allowed_domains: ["example.com"], denied_domains: []}
         sandbox = network_access |> AppServer.build_sandbox_settings(["~/.npmrc"], ["/opt/cache"]) |> Map.fetch!("sandbox")
 
         refute Map.has_key?(sandbox, "allowAppleEvents")
@@ -111,7 +112,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     end
 
     test "operator allow_read_paths drops entries from sandbox denyRead" do
-      network_access = %Agent.NetworkAccess{
+      network_access = %Execution.NetworkAccess{
         mode: "allowlist",
         allowed_domains: [],
         denied_domains: []
@@ -125,7 +126,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     end
 
     test "operator allow_write_paths flow into sandbox allowWrite" do
-      network_access = %Agent.NetworkAccess{
+      network_access = %Execution.NetworkAccess{
         mode: "allowlist",
         allowed_domains: [],
         denied_domains: []
@@ -137,7 +138,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     end
 
     test "omits allowWrite when no allow_write_paths supplied" do
-      network_access = %Agent.NetworkAccess{
+      network_access = %Execution.NetworkAccess{
         mode: "allowlist",
         allowed_domains: [],
         denied_domains: []
@@ -151,7 +152,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
   describe "build_claude_settings/5" do
     test "denies the file tools on every write-protected path and on the extra deny paths" do
-      network_access = %Agent.NetworkAccess{mode: "allowlist", allowed_domains: [], denied_domains: []}
+      network_access = %Execution.NetworkAccess{mode: "allowlist", allowed_domains: [], denied_domains: []}
 
       deny = AppServer.build_claude_settings(network_access, [], [], ["./priv/skills/pull"]) |> get_in(["permissions", "deny"])
 
@@ -982,23 +983,23 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
                 command: "node",
                 args: ["/srv/stdio.js"],
                 env: %{LOG_LEVEL: "info"},
-                runtimes: ["claude", "codex"]
+                harnesses: ["claude", "codex"]
               },
               "http-server" => %{
                 transport: "http",
                 url: "https://mcp.example/http",
                 headers: %{Authorization: "Bearer test"},
-                runtimes: ["claude"]
+                harnesses: ["claude"]
               },
               "sse-server" => %{
                 transport: "sse",
                 url: "https://mcp.example/sse",
-                runtimes: ["claude"]
+                harnesses: ["claude"]
               },
               "codex-only" => %{
                 transport: "stdio",
                 command: "codex-only",
-                runtimes: ["codex"]
+                harnesses: ["codex"]
               }
             }
           }
@@ -1125,7 +1126,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
                 transport: "stdio",
                 command: "declared-node",
                 args: ["/declared/filesystem.js"],
-                runtimes: ["claude"]
+                harnesses: ["claude"]
               }
             }
           }
@@ -2546,7 +2547,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
       with_openrouter_key(key, fn ->
         with_provider_env_fake_claude("ACME-OPENROUTER", fn workspace ->
-          profile = %{kind: :landing, model: "anthropic/claude-haiku-4.5", effort: nil, provider: "openrouter"}
+          profile = %{kind: :landing, model: "anthropic/claude-haiku-4.5", effort: nil, provider: "openrouter", small_model: "openai/gpt-5-nano"}
 
           log =
             capture_log(fn ->
@@ -2564,10 +2565,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
                    "AUTH_TOKEN=#{key}",
                    "API_KEY=",
                    "SUBAGENT_MODEL=anthropic/claude-haiku-4.5",
-                   "DEFAULT_HAIKU_MODEL=anthropic/claude-haiku-4.5",
+                   "DEFAULT_HAIKU_MODEL=openai/gpt-5-nano",
                    "DEFAULT_SONNET_MODEL=anthropic/claude-haiku-4.5",
                    "DEFAULT_OPUS_MODEL=anthropic/claude-haiku-4.5",
-                   "SMALL_FAST_MODEL=anthropic/claude-haiku-4.5",
+                   "SMALL_FAST_MODEL=openai/gpt-5-nano",
                    "OPENROUTER_API_KEY=<unset>"
                  ]
 
@@ -2578,10 +2579,16 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end)
     end
 
-    test "sends an OpenRouter run's background calls to agent.small_model when it is set" do
+    test "sends an OpenRouter run's background calls to the run's small model" do
       with_openrouter_key("sk-or-v1-small", fn ->
-        with_provider_env_fake_claude("ACME-OPENROUTER-SMALL", [agent_small_model: "anthropic/claude-haiku-4.5"], fn workspace ->
-          profile = %{kind: :implementation, model: "anthropic/claude-sonnet-4.5", effort: nil, provider: "openrouter"}
+        with_provider_env_fake_claude("ACME-OPENROUTER-SMALL", fn workspace ->
+          profile = %{
+            kind: :implementation,
+            model: "anthropic/claude-sonnet-4.5",
+            effort: nil,
+            provider: "openrouter",
+            small_model: "anthropic/claude-haiku-4.5"
+          }
 
           {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
           assert {:ok, _result} = AppServer.run_turn(session, "build it", %{identifier: "ACME-OPENROUTER-SMALL"}, [])
@@ -2618,7 +2625,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
         with_openrouter_key(Stub.valid_key(), fn ->
           with_provider_env_fake_claude("ACME-OPENROUTER-QA", fn workspace ->
-            profile = %{kind: :landing, model: "symphony-qa/tools-only", effort: "high", provider: "openrouter"}
+            profile = %{
+              kind: :landing,
+              model: "symphony-qa/tools-only",
+              effort: "high",
+              provider: "openrouter",
+              small_model: "symphony-qa/reasoning-tools"
+            }
 
             log =
               capture_log(fn ->
@@ -2634,7 +2647,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
             assert log =~ "OpenRouter model symphony-qa/tools-only does not support reasoning"
             assert "BASE_URL=#{Stub.url(port)}" in provider_env_trace(workspace)
-            assert "SMALL_FAST_MODEL=symphony-qa/tools-only" in provider_env_trace(workspace)
+            assert "SMALL_FAST_MODEL=symphony-qa/reasoning-tools" in provider_env_trace(workspace)
           end)
         end)
       after
@@ -2645,10 +2658,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
-    test "launches an Anthropic profile without OpenRouter env, even when the key and agent.small_model are set" do
+    test "launches an Anthropic profile with its small model and no OpenRouter env, even when the key is set" do
       with_openrouter_key("sk-or-v1-unused", fn ->
-        with_provider_env_fake_claude("ACME-ANTHROPIC", [agent_small_model: "anthropic/claude-haiku-4.5"], fn workspace ->
-          profile = %{kind: :ci_fix, model: "claude-haiku-4-5", effort: "low", provider: "anthropic"}
+        with_provider_env_fake_claude("ACME-ANTHROPIC", fn workspace ->
+          profile = %{kind: :ci_fix, model: "claude-sonnet-4-5", effort: "low", provider: "anthropic", small_model: "claude-haiku-4-5"}
 
           {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
           assert {:ok, _result} = AppServer.run_turn(session, "fix ci", %{identifier: "ACME-ANTHROPIC"}, [])
@@ -2658,15 +2671,15 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
                    "AUTH_TOKEN=<unset>",
                    "API_KEY=<unset>",
                    "SUBAGENT_MODEL=<unset>",
-                   "DEFAULT_HAIKU_MODEL=<unset>",
+                   "DEFAULT_HAIKU_MODEL=claude-haiku-4-5",
                    "DEFAULT_SONNET_MODEL=<unset>",
                    "DEFAULT_OPUS_MODEL=<unset>",
-                   "SMALL_FAST_MODEL=<unset>",
+                   "SMALL_FAST_MODEL=claude-haiku-4-5",
                    "OPENROUTER_API_KEY=<unset>"
                  ]
 
           args = workspace |> Path.join("argv.trace") |> File.read!() |> String.split("\n", trim: true)
-          assert Enum.take(args, -7) == ["--output-format", "stream-json", "--print", "--model", "claude-haiku-4-5", "--effort", "low"]
+          assert Enum.take(args, -7) == ["--output-format", "stream-json", "--print", "--model", "claude-sonnet-4-5", "--effort", "low"]
         end)
       end)
     end
@@ -2722,7 +2735,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
             assert log =~
                      "OpenRouter run cannot start: model acme/chat-only does not support tools run_kind=landing; " <>
-                       "set agent.model to a model that lists tools"
+                       "set runs.default.model to a model that lists tools"
 
             refute File.exists?(Path.join(workspace, "argv.trace"))
           end)
@@ -2730,63 +2743,26 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end)
     end
 
-    test "names the key that set the model when a code_review run model lacks tools" do
+    test "names the entry that set the model when a run model lacks tools" do
       with_openrouter_key("sk-or-v1-REDACTED", fn ->
         with_models_api(fn ->
           with_provider_env_fake_claude("ACME-OPENROUTER-REVIEW-NOTOOLS", fn workspace ->
             settings = Config.settings!()
-            settings = %{settings | review_agent: %{settings.review_agent | model: "acme/chat-only"}}
-            profile = %{kind: :code_review, model: "acme/chat-only", effort: nil, provider: "openrouter"}
+            runs = Map.put(settings.runs, "code_review", %{"provider" => "openrouter", "model" => "acme/chat-only"})
+            repository_runs = %{"path" => "repositories[beta].runs", "runs" => %{"ci_fix" => %{"model" => "acme/chat-only"}}}
+            settings = %{settings | runs: runs, repository_runs: repository_runs}
 
-            log =
-              capture_log(fn ->
-                assert AppServer.start_session(workspace, run_profile: profile, settings: settings) ==
-                         {:error, {:openrouter_model_unsupported, "acme/chat-only", :code_review, :tools}}
-              end)
+            for {kind, key} <- [code_review: "runs.code_review.model", ci_fix: "repositories[beta].runs.ci_fix.model"] do
+              profile = %{kind: kind, model: "acme/chat-only", effort: nil, provider: "openrouter"}
 
-            assert log =~ "run_kind=code_review; set code_review.model to a model that lists tools"
-          end)
-        end)
-      end)
-    end
+              log =
+                capture_log(fn ->
+                  assert AppServer.start_session(workspace, run_profile: profile, settings: settings) ==
+                           {:error, {:openrouter_model_unsupported, "acme/chat-only", kind, :tools}}
+                end)
 
-    test "names the repository key that set the model when a run model lacks tools" do
-      with_openrouter_key("sk-or-v1-REDACTED", fn ->
-        with_models_api(fn ->
-          with_provider_env_fake_claude("ACME-OPENROUTER-REPO-NOTOOLS", fn workspace ->
-            settings = Config.settings!()
-            repository = %Config.Schema.RepoAgent{key: "beta", provider: "openrouter", model: "acme/chat-only"}
-            settings = %{settings | agent: %{settings.agent | repository: repository}}
-            profile = %{kind: :ci_fix, model: "acme/chat-only", effort: nil, provider: "openrouter"}
-
-            log =
-              capture_log(fn ->
-                assert AppServer.start_session(workspace, run_profile: profile, settings: settings) ==
-                         {:error, {:openrouter_model_unsupported, "acme/chat-only", :ci_fix, :tools}}
-              end)
-
-            assert log =~ "run_kind=ci_fix; set repositories[beta].agent.model to a model that lists tools"
-          end)
-        end)
-      end)
-    end
-
-    test "names the model key next to the provider when a run inherits a model that lacks tools" do
-      with_openrouter_key("sk-or-v1-REDACTED", fn ->
-        with_models_api(fn ->
-          with_provider_env_fake_claude("ACME-OPENROUTER-INHERITED-NOTOOLS", fn workspace ->
-            settings = Config.settings!()
-            repository = %Config.Schema.RepoAgent{key: "beta", run_profiles: %{"ci_fix" => %{"provider" => "openrouter"}}}
-            settings = %{settings | agent: %{settings.agent | model: "acme/chat-only", repository: repository}}
-            profile = %{kind: :ci_fix, model: "acme/chat-only", effort: nil, provider: "openrouter"}
-
-            log =
-              capture_log(fn ->
-                assert AppServer.start_session(workspace, run_profile: profile, settings: settings) ==
-                         {:error, {:openrouter_model_unsupported, "acme/chat-only", :ci_fix, :tools}}
-              end)
-
-            assert log =~ "run_kind=ci_fix; set repositories[beta].agent.run_profiles.ci_fix.model to a model that lists tools"
+              assert log =~ "run_kind=#{kind}; set #{key} to a model that lists tools"
+            end
           end)
         end)
       end)
@@ -2883,7 +2859,72 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
           profile = %{kind: :landing, model: "anthropic/claude-haiku-4.5", effort: nil, provider: "openrouter"}
 
           assert AppServer.start_session(workspace, worker_host: "worker-01", run_profile: profile) ==
-                   {:error, {:openrouter_remote_worker_unsupported, "worker-01"}}
+                   {:error, {:provider_remote_worker_unsupported, "openrouter", "worker-01"}}
+        end)
+      end)
+    end
+
+    test "launches an OpenCode Go profile against Console with the key only in the subprocess env" do
+      key = "oc_sk-REDACTED_#{System.unique_integer([:positive])}"
+
+      with_opencode_key(key, fn ->
+        with_provider_env_fake_claude("ACME-OPENCODE-GO", fn workspace ->
+          profile = %{kind: :landing, model: "kimi-k3", effort: nil, provider: "opencode-go", small_model: "kimi-small"}
+
+          log =
+            capture_log(fn ->
+              {:ok, session} = AppServer.start_session(workspace, run_profile: profile)
+              assert {:ok, result} = AppServer.run_turn(session, "land it", %{identifier: "ACME-OPENCODE-GO"}, [])
+              refute inspect(session, limit: :infinity) =~ key
+              refute inspect(result, limit: :infinity) =~ key
+              AppServer.stop_session(session)
+            end)
+
+          refute log =~ key
+
+          assert provider_env_trace(workspace) == [
+                   "BASE_URL=https://opencode.ai/inference/go/anthropic",
+                   "AUTH_TOKEN=#{key}",
+                   "API_KEY=",
+                   "SUBAGENT_MODEL=kimi-k3",
+                   "DEFAULT_HAIKU_MODEL=kimi-small",
+                   "DEFAULT_SONNET_MODEL=kimi-k3",
+                   "DEFAULT_OPUS_MODEL=kimi-k3",
+                   "SMALL_FAST_MODEL=kimi-small",
+                   "OPENROUTER_API_KEY=<unset>"
+                 ]
+
+          args = workspace |> Path.join("argv.trace") |> File.read!() |> String.split("\n", trim: true)
+          assert Enum.take(args, -2) == ["--model", "kimi-k3"]
+          refute Enum.any?(args, &(&1 =~ key))
+        end)
+      end)
+    end
+
+    test "fails an OpenCode Go run before launch when OPENCODE_API_KEY is unset" do
+      with_opencode_key(nil, fn ->
+        with_provider_env_fake_claude("ACME-OPENCODE-GO-NOKEY", fn workspace ->
+          profile = %{kind: :landing, model: "kimi-k3", effort: nil, provider: "opencode-go"}
+
+          log =
+            capture_log(fn ->
+              assert AppServer.start_session(workspace, run_profile: profile) ==
+                       {:error, {:missing_provider_env, "OPENCODE_API_KEY", :landing}}
+            end)
+
+          assert log =~ "OPENCODE_API_KEY is not set run_kind=landing"
+          refute File.exists?(Path.join(workspace, "argv.trace"))
+        end)
+      end)
+    end
+
+    test "rejects an OpenCode Go profile on a remote worker" do
+      with_opencode_key("oc_sk-REDACTED", fn ->
+        with_provider_env_fake_claude("ACME-OPENCODE-GO-REMOTE", fn workspace ->
+          profile = %{kind: :landing, model: "kimi-k3", effort: nil, provider: "opencode-go"}
+
+          assert AppServer.start_session(workspace, worker_host: "worker-01", run_profile: profile) ==
+                   {:error, {:provider_remote_worker_unsupported, "opencode-go", "worker-01"}}
         end)
       end)
     end
@@ -3145,7 +3186,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
-    test "returns error when agent command is empty" do
+    test "returns error when the run's command is empty" do
       test_root =
         Path.join(
           System.tmp_dir!(),
@@ -3159,13 +3200,17 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
 
         write_workflow_file!(Workflow.workflow_file_path(),
           workspace_root: workspace_root,
-          agent_kind: "claude",
-          agent_command: "   "
+          agent_kind: "claude"
         )
+
+        # symphony.yml cannot hold a blank command, so the guard is reached with a run's settings.
+        settings = Config.settings!()
+        run_settings = Config.for_run(settings, Config.run(settings, :implementation))
+        blank = %{run_settings | execution: %{run_settings.execution | command: "   "}}
 
         {:ok, session} = AppServer.start_session(workspace)
 
-        assert {:error, :empty_agent_command} = AppServer.run_turn(session, "do the thing", %{}, [])
+        assert {:error, :empty_agent_command} = AppServer.run_turn(session, "do the thing", %{}, settings: blank)
       after
         File.rm_rf(test_root)
       end
@@ -3440,13 +3485,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       assert_receive {^port, {:exit_status, 0}}, 5_000
       assert_receive {:DOWN, ^monitor_ref, :port, ^port, _reason}, 5_000
 
-      assert AppServer.safe_close_port(port) == :ok
+      assert EventStream.close(port) == :ok
     end
 
     test "closing the port stops a cli that is still running" do
       port = Port.open({:spawn_executable, System.find_executable("sh")}, [:exit_status, args: ["-c", "exec cat"]])
 
-      assert AppServer.safe_close_port(port) == :ok
+      assert EventStream.close(port) == :ok
       assert Port.info(port) == nil
     end
 
@@ -3810,8 +3855,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     end
 
     test "returns success when terminal result is emitted while a tool subprocess keeps the cli alive" do
-      Application.put_env(:symphony_elixir, :claude_post_completion_grace_ms, 50)
-      on_exit(fn -> Application.delete_env(:symphony_elixir, :claude_post_completion_grace_ms) end)
+      Application.put_env(:symphony_elixir, :post_completion_grace_ms, 50)
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :post_completion_grace_ms) end)
 
       test_root =
         Path.join(
@@ -3998,8 +4043,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     end
 
     test "returns turn_failed when terminal error result is emitted while a tool subprocess keeps the cli alive" do
-      Application.put_env(:symphony_elixir, :claude_post_completion_grace_ms, 50)
-      on_exit(fn -> Application.delete_env(:symphony_elixir, :claude_post_completion_grace_ms) end)
+      Application.put_env(:symphony_elixir, :post_completion_grace_ms, 50)
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :post_completion_grace_ms) end)
 
       test_root =
         Path.join(
@@ -4122,6 +4167,17 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       fun.()
     after
       restore_env("OPENROUTER_API_KEY", previous)
+    end
+  end
+
+  defp with_opencode_key(value, fun) do
+    previous = System.get_env("OPENCODE_API_KEY")
+    if value, do: System.put_env("OPENCODE_API_KEY", value), else: System.delete_env("OPENCODE_API_KEY")
+
+    try do
+      fun.()
+    after
+      restore_env("OPENCODE_API_KEY", previous)
     end
   end
 

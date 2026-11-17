@@ -4,7 +4,7 @@ defmodule SymphonyElixir.ProjectGuidesTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Config.Schema.Agent
+  alias SymphonyElixir.Config.Schema.Execution
   alias SymphonyElixir.ProjectGuides
 
   test "reads present guides and skips missing guides" do
@@ -236,6 +236,6 @@ defmodule SymphonyElixir.ProjectGuidesTest do
   end
 
   defp settings_with_files(files, include?) do
-    %Schema{agent: %Agent{project_guide_files: files, include_project_guides: include?}}
+    %Schema{execution: %Execution{project_guide_files: files, include_project_guides: include?}}
   end
 end

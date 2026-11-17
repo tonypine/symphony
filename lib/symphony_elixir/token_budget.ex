@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.TokenBudget do
   @moduledoc """
-  What Symphony does when a run spends its ticket's token budget (`agent.limits.tokens_per_issue`,
+  What Symphony does when a run spends its ticket's token budget (`execution.limits.tokens_per_issue`,
   `SymphonyElixir.Orchestrator`): it stops the run and asks a person what now, through the one
   path (`SymphonyElixir.Questions`, `ask/2`).
 

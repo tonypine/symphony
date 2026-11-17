@@ -1017,11 +1017,9 @@ defmodule SymphonyElixir.TestSupport do
         agent_yaml(%{
           kind: agent_kind,
           command: agent_command,
-          model: Keyword.get(config, :agent_model),
-          effort: Keyword.get(config, :agent_effort),
-          provider: Keyword.get(config, :agent_provider),
           small_model: Keyword.get(config, :agent_small_model),
-          run_profiles: Keyword.get(config, :agent_run_profiles),
+          code_review: section_run(review_agent, agent_kind),
+          qa: section_run(auto_review, agent_kind),
           max_concurrent_agents: max_concurrent_agents,
           epic_lanes: epic_lanes,
           finishing_max: finishing_max,
@@ -1051,6 +1049,16 @@ defmodule SymphonyElixir.TestSupport do
           mcp: Keyword.get(config, :agent_mcp),
           usage_limit: Keyword.get(config, :agent_usage_limit)
         }),
+        runs_yaml(%{
+          kind: agent_kind,
+          command: agent_command,
+          model: Keyword.get(config, :agent_model),
+          effort: Keyword.get(config, :agent_effort),
+          provider: Keyword.get(config, :agent_provider),
+          run_profiles: Keyword.get(config, :agent_run_profiles),
+          code_review: section_run(review_agent, agent_kind),
+          qa: section_run(auto_review, agent_kind)
+        }),
         hooks_yaml(config),
         prompts_yaml(prompts),
         dashboard_yaml(
@@ -1078,7 +1086,7 @@ defmodule SymphonyElixir.TestSupport do
         verification_yaml(verification),
         quality_gate_yaml(quality_gate),
         review_agent_yaml(review_agent),
-        auto_review && "auto_review: #{yaml_value(auto_review)}",
+        auto_review && "auto_review: #{yaml_value(without_run_keys(auto_review))}",
         dependencies && "dependency_audit: #{yaml_value(dependencies)}",
         notifications_yaml(notifications),
         repos && "repositories: #{yaml_value(normalize_test_repositories(repos))}",
@@ -1214,25 +1222,82 @@ defmodule SymphonyElixir.TestSupport do
     |> Enum.join("\n")
   end
 
-  defp agent_profile_yaml(config) do
-    [:model, :effort, :provider, :small_model, :run_profiles]
-    |> Enum.reject(&is_nil(Map.get(config, &1)))
-    |> Enum.map_join("\n", &"  #{&1}: #{yaml_value(Map.get(config, &1))}")
-    |> case do
-      "" -> nil
-      lines -> lines
-    end
+  @test_models %{"claude" => "claude-test", "codex" => "gpt-test", "opencode" => "opencode-test"}
+  @test_providers %{"claude" => "anthropic", "codex" => "openai", "opencode" => "opencode-go"}
+  @test_small_model "small-test"
+
+  # The `execution.harnesses` map: the run's harness with its command, and a small model for
+  # every provider a harness that calls one can reach.
+  defp test_harnesses(config) do
+    [config.kind, get_in(config, [:code_review, :harness]), get_in(config, [:qa, :harness])]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> Map.new(fn harness ->
+      command = if harness == config.kind, do: config.command
+      small_model? = SymphonyElixir.Harnesses.small_model?(harness)
+      small_model = if small_model?, do: test_small_models(harness, config.small_model)
+      {harness, %{} |> maybe_put(:command, command) |> maybe_put(:small_model, small_model)}
+    end)
   end
+
+  defp test_small_models(harness, small_model) do
+    Map.new(SymphonyElixir.Harnesses.providers(harness), &{&1, small_model || @test_small_model})
+  end
+
+  # The `runs:` section: `default` from the harness, provider, model and effort options, and
+  # the run kinds from `run_profiles`, Code Review's reviewer and the QA agent.
+  defp runs_yaml(config) do
+    default =
+      %{harness: config.kind, provider: config.provider || @test_providers[config.kind], model: config.model || @test_models[config.kind]}
+      |> maybe_put(:effort, config.effort)
+
+    runs =
+      (config.run_profiles || %{})
+      |> Map.new(fn {kind, entry} -> {to_string(kind), entry} end)
+      |> merge_run("code_review", config.code_review)
+      |> merge_run("qa", config.qa)
+      |> Map.put("default", default)
+
+    "runs: #{yaml_value(runs)}"
+  end
+
+  defp merge_run(runs, _kind, nil), do: runs
+  defp merge_run(runs, _kind, entry) when map_size(entry) == 0, do: runs
+  defp merge_run(runs, kind, entry), do: Map.update(runs, kind, entry, &Map.merge(map_from(&1), entry))
+
+  # A section's own run settings (`kind`, `command`, `model`, `effort`), as its `runs:` entry.
+  # A harness other than the default one brings its test provider and model with it.
+  defp section_run(nil, _default_harness), do: nil
+
+  defp section_run(section, default_harness) do
+    section = map_from(section)
+    harness = Enum.find_value([:kind, "kind", :runtime, "runtime"], &Map.get(section, &1))
+
+    %{}
+    |> maybe_put(:harness, harness)
+    |> maybe_put(:command, Map.get(section, :command) || Map.get(section, "command"))
+    |> maybe_put(:model, Map.get(section, :model) || Map.get(section, "model"))
+    |> maybe_put(:effort, Map.get(section, :effort) || Map.get(section, "effort"))
+    |> other_harness_defaults(harness, default_harness)
+  end
+
+  defp other_harness_defaults(entry, harness, default_harness) when harness in [nil, default_harness], do: entry
+
+  defp other_harness_defaults(entry, harness, _default_harness) do
+    entry |> Map.put_new(:provider, @test_providers[harness]) |> Map.put_new(:model, @test_models[harness])
+  end
+
+  @section_run_keys [:kind, :runtime, :command, :model, :effort, "kind", "runtime", "command", "model", "effort"]
+  defp without_run_keys(nil), do: nil
+  defp without_run_keys(section), do: section |> map_from() |> Map.drop(@section_run_keys)
 
   defp agent_yaml(config) do
     filesystem = normalize_agent_filesystem(config.thread_sandbox, config.turn_sandbox_policy, config.workspace_sandbox)
     outer_sandbox = normalize_outer_sandbox(config.sandbox_runtime)
 
     [
-      "agent:",
-      "  runtime: #{yaml_value(config.kind)}",
-      "  command: #{yaml_value(config.command)}",
-      agent_profile_yaml(config),
+      "execution:",
+      "  harnesses: #{yaml_value(test_harnesses(config))}",
       "  concurrency:",
       "    max_total: #{yaml_value(config.max_concurrent_agents)}",
       "    max_by_issue_state: #{yaml_value(config.max_concurrent_agents_by_state)}",
@@ -1289,7 +1354,7 @@ defmodule SymphonyElixir.TestSupport do
     sandbox_runtime = map_from(sandbox_runtime)
 
     %{}
-    |> maybe_put(:runtime, Map.get(sandbox_runtime, :kind) || Map.get(sandbox_runtime, :runtime))
+    |> maybe_put(:kind, Map.get(sandbox_runtime, :kind) || Map.get(sandbox_runtime, :runtime))
     |> maybe_put(:command, Map.get(sandbox_runtime, :command))
     |> maybe_put(:enable_weaker_network_isolation, Map.get(sandbox_runtime, :enable_weaker_network_isolation))
   end
@@ -1398,9 +1463,21 @@ defmodule SymphonyElixir.TestSupport do
     |> maybe_put(:default, repo_field(repo, :default))
     |> maybe_put(:route, route)
     |> maybe_put(:workspace, workspace)
-    |> maybe_put(:agent, repo_field(repo, :agent))
+    |> maybe_put(:runs, repo_runs(repo_field(repo, :agent)))
     |> maybe_put(:acceptance_gate, repo_field(repo, :acceptance_gate))
     |> maybe_put(:manual_review, repo_field(repo, :manual_review))
+  end
+
+  # A repository's `agent` option (`model`, `effort`, `provider`, `run_profiles`) as its `runs:`.
+  defp repo_runs(nil), do: nil
+
+  defp repo_runs(agent) do
+    agent = Map.new(map_from(agent), fn {key, value} -> {to_string(key), value} end)
+    default = Map.take(agent, ["model", "effort", "provider"])
+
+    (agent["run_profiles"] || %{})
+    |> Map.new(fn {kind, entry} -> {to_string(kind), entry} end)
+    |> maybe_put("default", default)
   end
 
   defp repo_field(repo, key), do: Map.get(repo, key) || Map.get(repo, Atom.to_string(key))
@@ -1494,11 +1571,7 @@ defmodule SymphonyElixir.TestSupport do
 
     fields =
       [
-        kv("enabled", Map.get(config, :enabled)),
-        kv("runtime", Map.get(config, :kind)),
-        kv("command", Map.get(config, :command)),
-        kv("model", Map.get(config, :model)),
-        kv("effort", Map.get(config, :effort))
+        kv("enabled", Map.get(config, :enabled))
       ]
       |> Enum.reject(&is_nil/1)
 

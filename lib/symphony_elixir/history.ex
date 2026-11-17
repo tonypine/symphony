@@ -26,7 +26,7 @@ defmodule SymphonyElixir.History do
     with {:ok, days} <- parse_days(Map.get(params, "days")) do
       today = Keyword.get_lazy(opts, :today, &Date.utc_today/0)
       runs_started_on = Keyword.get(opts, :runs_started_on, &RunStore.list_runs_started_on/1)
-      agent = Keyword.get_lazy(opts, :agent, fn -> Config.settings!().agent end)
+      agent = Keyword.get_lazy(opts, :agent, fn -> Config.settings!().execution end)
       dates = Enum.map((days - 1)..0//-1, &Date.add(today, -&1))
       runs = Enum.flat_map(dates, &list_or_empty(runs_started_on.(&1)))
       cap = Map.get(agent, :max_tokens_per_issue)

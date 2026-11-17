@@ -149,8 +149,8 @@ Symphony is easiest to port when kept in these layers:
 - Issue tracker API (Linear for `issues.provider: linear` in this specification version).
 - Local filesystem for workspaces and logs.
 - OPTIONAL workspace population tooling (for example Git CLI, if used).
-- Coding-agent executable that supports the configured `agent.runtime` (`codex` app-server or
-  `claude` CLI adapter in the Elixir implementation).
+- A coding-agent executable for each harness a run kind resolves to (`runs.<kind>.harness`): the
+  `claude` CLI, the `codex` app-server, or the `opencode` CLI in the Elixir implementation.
 - Host environment authentication for the issue tracker and coding agent.
 
 ## 4. Core Domain Model
@@ -876,8 +876,8 @@ of one id hold the row's lock while they touch its file, so they never interleav
 The current Elixir implementation splits service configuration across two files:
 
 - `symphony.yml` is the operator config. It is plain YAML and owns issue-source settings, polling,
-  global workspace root/lifecycle settings, per-repo workspace population settings, agent
-  command/runtime settings, dashboard settings, pull-request pollers, notification settings, gates,
+  global workspace root/lifecycle settings, per-repo workspace population settings, how runs are
+  executed (`execution`) and what each kind of run starts with (`runs`), dashboard settings, pull-request pollers, notification settings, gates,
   and the supervised `repositories:` list.
 - `WORKFLOW.md` is repo-local policy. It is Markdown with optional YAML front matter and owns the
   issue prompt body plus optional mode-specific prompt branches in repo-local front matter.
@@ -937,7 +937,8 @@ Top-level keys accepted by the Elixir implementation:
 - `workspaces`
 - `workers`
 - `github`
-- `agent`
+- `execution`
+- `runs`
 - `code_review`
 - `auto_review`
 - `pull_requests`
@@ -950,8 +951,9 @@ Top-level keys accepted by the Elixir implementation:
 
 Unknown top-level keys in `symphony.yml` are rejected. Pre-release aliases such as `tracker`,
 `repos`, `workspace`, `pr_review`, `ci`, `quality_gate`, `review_agent`, `dependencies`,
-`observability`, and `server` are also rejected with migration guidance, and so is
-`pre_push_review`, the removed pre-push reviewer (Section 5.4.16).
+`observability`, and `server` are also rejected with migration guidance. `agent`, the section
+that `execution` and `runs` replaced, is rejected as an unknown key (`` unknown symphony.yml key
+`agent` ``); a file that still has it is rewritten at start (Section 5.4.8d).
 
 ### 5.3 Repo `WORKFLOW.md` File Format
 
@@ -1193,7 +1195,7 @@ Fields:
   - Elixir evidence: `lib/symphony_elixir/config/schema.ex` and
     `test/symphony_elixir/workspace_and_config_test.exs`.
 
-#### 5.4.4 `agent.permissions.filesystem.allow_read_paths` (list)
+#### 5.4.4 `execution.permissions.filesystem.allow_read_paths` (list)
 
 Fields:
 
@@ -1202,7 +1204,7 @@ Fields:
   - Advanced escape hatch for exact sandbox path entries that should be subtracted from the shared
     default read-deny list when the implementation renders agent sandbox settings.
   - Empty, blank, duplicate, and non-string entries are normalized away by the Elixir implementation.
-  - This MUST NOT override the Codex runtime auth/config read denies for `~/.codex/auth.json`,
+  - This MUST NOT override the Codex auth/config read denies for `~/.codex/auth.json`,
     `~/.codex/config.toml`, and `~/.codex/AGENTS.md`.
   - Elixir evidence: `lib/symphony_elixir/config/schema.ex`,
     `lib/symphony_elixir/agent_sandbox_config.ex`, and
@@ -1464,19 +1466,31 @@ own repository: `make-all`). It is a property of the repository, so a ticket nev
   walkthroughs is a QA step (Section 5.4.17, **Walkthrough proofs**).
 - A blank value fails configuration validation. `symphony.yml` MUST NOT accept the key.
 
-#### 5.4.8 `agent` (object)
+#### 5.4.8 `execution` (object)
+
+How every run is executed. What each kind of run starts with is `runs` (Section 5.4.8c).
+
+A harness is the agent program that runs a session. The Elixir implementation has three: `claude`,
+`codex` and `opencode`. `claude` is the primary harness.
 
 Fields:
 
-- `runtime` (string)
-  - REQUIRED.
-  - Supported values: `codex`, `claude`.
-- `command` (string shell command)
-  - REQUIRED.
-  - For Codex, the command is expected to launch a compatible app-server over stdio.
-  - For Claude, the command is parsed as a CLI invocation and the runtime appends Claude Code
-    stream-json arguments for each turn.
-  - Launch semantics are adapter-specific; see Section 10.1.
+- `harnesses` (map `harness id -> object`)
+  - Keys MUST be `claude`, `codex` or `opencode`; another key fails validation with
+    `execution.harnesses.<id> is not a harness`.
+  - `command` (string shell command): the command that starts the harness for every run on it,
+    unless the run kind's own entry sets `command` (Section 5.4.8c).
+    - For `claude`, the command is parsed as a CLI invocation and the adapter appends Claude Code
+      stream-json arguments for each turn.
+    - For `codex`, the command is expected to launch a compatible app-server over stdio.
+    - For `opencode`, the adapter starts one `opencode run --format json` process per turn.
+    - The command MUST NOT pass `--model` or `--effort`: the run's entry sets both. Such a command
+      fails validation with `execution.harnesses.<id>.command must not pass --model`.
+    - Launch semantics are adapter-specific; see Section 10.1.
+  - `small_model` (map `provider -> model id`): the model the harness calls in the background,
+    for runs served by that provider. Only `claude` and `opencode` make such calls. Each key MUST
+    be a provider the harness reaches.
+  - A harness needs an entry only when some run resolves to it.
 - `concurrency.max_total` (integer)
   - Default: `10`
   - Changes SHOULD be re-applied at runtime and affect subsequent dispatch decisions.
@@ -1578,9 +1592,166 @@ Fields:
   - Implementations that resolve `@path` import lines MUST reject absolute, home-relative, and
     workspace-escaping imports and enforce bounded size/depth/file-count limits.
 
+#### 5.4.8c `runs` (object)
+
+What each kind of run starts with. Entries are `default` and the run kinds: `implementation`,
+`breakdown`, `rework`, `landing`, `code_review`, `epic_review`, `ci_fix`, `review_feedback` and
+`qa`. Another entry name fails validation with `runs.<name> is not a run kind`.
+
+Entry fields:
+
+- `harness` (string)
+  - `claude`, `codex` or `opencode`.
+- `provider` (string)
+  - The provider that serves the run's model: `anthropic`, `openai`, `openrouter` or
+    `opencode-go`. The harness MUST reach it:
+    - `claude`: `anthropic`, `openrouter`, `opencode-go`.
+    - `codex`: `openai`, `opencode-go`.
+    - `opencode`: `opencode-go`.
+  - `openrouter` reads its key from `OPENROUTER_API_KEY` and `opencode-go` from
+    `OPENCODE_API_KEY`, both in the environment of the Symphony process. A provider that needs a
+    key from Symphony MUST NOT be used with `workers.ssh_hosts`: its runs start on the local host
+    only.
+- `model` (string)
+  - The model id, as the provider names it.
+- `effort` (string)
+  - OPTIONAL. `low`, `medium`, `high`, `xhigh` or `max`.
+- `small_model` (string)
+  - OPTIONAL. The model for the harness's background calls on this entry's runs. It wins over
+    `execution.harnesses.<harness>.small_model.<provider>`.
+- `command` (string shell command)
+  - OPTIONAL. A run kind's own command, used in place of its harness's. It is read from the run
+    kind's entries only, never from a `default`: `default` MUST NOT set it. It MUST NOT pass
+    `--model` or `--effort`.
+- `fallbacks` (list of objects)
+  - OPTIONAL. Alternatives, in order. Each may set `harness`, `provider`, `model`, `effort` and
+    `small_model`, and takes the entry's resolved choice for what it leaves unset. One that
+    changes the harness or the provider MUST set `model`.
+
+Resolution:
+
+- Each field resolves on its own, first match wins: `repositories[].runs.<kind>`,
+  `repositories[].runs.default`, `runs.<kind>`, `runs.default`. A repository's block applies to
+  issues routed to that repository. Repo workflow front matter is not a source.
+- Nothing is built in. `harness`, `provider` and `model` MUST resolve for every run kind, for the
+  operator's block and for each repository's. `effort` MAY resolve to nothing.
+- The command is the run kind's own `command` (the repository's entry for the kind, then
+  `runs.<kind>`), else `execution.harnesses.<harness>.command`.
+- For a harness that calls a small model (`claude`, `opencode`), the small model is the resolved
+  `small_model`, else `execution.harnesses.<harness>.small_model.<provider>`. One MUST resolve.
+- `fallbacks` is taken whole from the first entry in the same order that sets a list. Every
+  fallback MUST resolve like a run: a harness that reaches its provider, a command, and a small
+  model when its harness calls one. A fallback that keeps the entry's harness keeps the run
+  kind's own command.
+- The run kind and what it starts with are resolved once per dispatch from the current config and
+  kept for every continuation turn of that run.
+
+Fallback selection:
+
+- A new run starts on the entry's own choice when no usage-limit hold (Section 8.4.1) covers its
+  provider for that run. Otherwise it starts on the first fallback whose provider is free.
+- When every candidate is held, the run waits on the entry's own choice.
+- A continuation of a run in progress stays on the run kind's own choice.
+
+Validation errors name the key to edit, and `symphony.yml` does not load. Elixir messages:
+
+- `runs.<kind> resolves no harness; set `harness` there or in runs.default` (the same for
+  `provider` and `model`).
+- `runs.<kind> runs the <harness> harness on <provider>, which it cannot reach; <harness> runs
+  on: <providers>`.
+- `runs.<kind> runs the <harness> harness, which has no command; set
+  execution.harnesses.<harness>.command`.
+- `runs.<kind> runs the <harness> harness on <provider> with no small model for its background
+  calls; set execution.harnesses.<harness>.small_model.<provider>`.
+- `runs.<kind>.fallbacks[<n>] changes the harness or the provider, so it must set `model``.
+- `runs.default.command is a run kind's own; a harness's command for every run is
+  execution.harnesses.<harness>.command`.
+- An unknown key in an entry, an unknown harness, provider or effort, and a blank value each name
+  their key (for example `runs.default has unknown key `runtime``).
+- A repository's block reports the same errors under `repositories[<key>].runs`.
+- An `execution` setting a run kind's harness cannot honour names the setting and the entry, for
+  example `execution.mcp.inherit="all" is not supported on the claude harness; declare MCP
+  servers explicitly (runs.implementation runs the claude harness)`.
+
+Example:
+
+```yaml
+execution:
+  harnesses:
+    claude:
+      command: claude --dangerously-skip-permissions --verbose
+      small_model:
+        anthropic: claude-haiku-4-5
+        openrouter: deepseek/deepseek-flash
+    codex:
+      command: codex app-server
+
+runs:
+  default: { harness: claude, provider: anthropic, model: claude-opus-5-5, effort: medium }
+  breakdown: { effort: xhigh }
+  ci_fix: { provider: openrouter, model: deepseek/deepseek-flash }
+  qa: { harness: codex, provider: openai, model: gpt-5.5 }
+  landing:
+    model: claude-sonnet-5-5
+    effort: low
+    fallbacks:
+      - { provider: openrouter, model: deepseek/deepseek-flash }
+```
+
+Elixir evidence: `lib/symphony_elixir/config/runs.ex`, `lib/symphony_elixir/harnesses.ex`,
+`lib/symphony_elixir/agent_providers.ex`, `test/symphony_elixir/config/runs_test.exs` and
+`test/symphony_elixir/runs_config_test.exs`.
+
+#### 5.4.8d Migration of the `agent` section
+
+`execution` and `runs` replaced the `agent` section, `repositories[].agent`, and the `runtime`,
+`command`, `model` and `effort` keys of `code_review` and `auto_review`. A file that still has an
+`agent` section, or a repository's `agent` block, MUST be rewritten on `symphony start` and
+`symphony run`. `symphony check --migrate` checks a migrated copy and leaves the file alone.
+
+The rewrite:
+
+- Renames `agent:` to `execution:` where it stands, so the keys that stay (`concurrency`,
+  `limits`, `timeouts`, `prompts`, `permissions`, `mcp`, `usage_limit`) keep their lines and
+  comments.
+- Removes the lines of the keys that move, writes `harnesses:` under `execution:`, and writes
+  `runs:` after the `execution` block. A comment on a removed line goes with it.
+- Renames `permissions.outer_sandbox.runtime` to `kind`, and each MCP server's `runtimes` to
+  `harnesses`.
+- Replaces each repository's `agent` block with a `runs` block.
+- Keeps the file as it was beside the new one, and leaves one comment naming it.
+
+What the new file holds:
+
+- `runs.default.harness` is `agent.runtime`. Its command, without any model or effort flag, is
+  `execution.harnesses.<harness>.command`.
+- `runs.default.provider` is `agent.provider`, else `anthropic` for claude and `openai` for codex.
+- `runs.default.model` is `agent.model`, else the model the command passed (claude's `--model`,
+  or codex's `model=` override), which is removed from the command. A claude command's `--effort`
+  moves the same way when `agent.effort` is unset. Codex's `model_reasoning_effort` stays in its
+  command.
+- Each `agent.run_profiles.<kind>` becomes `runs.<kind>`. Entries for names that are not run
+  kinds are dropped.
+- The run keys of `code_review` and `auto_review` become `runs.code_review` and `runs.qa`. A
+  section that named a harness other than the default one MUST name a model.
+- A claude run on `anthropic` gets Anthropic's small model under
+  `execution.harnesses.claude.small_model.anthropic`. A claude run on another provider gets
+  `small_model` set to `agent.small_model`, else to the run's own model.
+
+A file that cannot be moved is not written, and the start stops with a message that names the key
+to set: `agent.runtime` that is not `claude` or `codex`, no `agent.command`, or no model anywhere
+(`no model is set for the runs; set `agent.model`, which becomes `runs.default.model``). An
+`agent` section or a repository's `agent` block that is not written as an indented block cannot be
+rewritten either; the error names the key and its line.
+
+Elixir evidence: `lib/symphony_elixir/config/migration.ex`,
+`lib/symphony_elixir/config/migration/runs_move.ex`,
+`lib/symphony_elixir/config/migration/runs_rewrite.ex` and
+`test/symphony_elixir/config/migration/runs_move_test.exs`.
+
 #### 5.4.9 Agent Protocol Fields
 
-These fields live under `agent.permissions`. For Codex-owned config values such as
+These fields live under `execution.permissions`. For Codex-owned config values such as
 `approval_policy`, `filesystem.sandbox`, and `filesystem.turn_policy`, supported values are defined by the targeted Codex
 app-server version. Implementors SHOULD treat them as pass-through Codex config values rather than
 relying on a hand-maintained enum in this spec. To inspect the installed Codex schema, run
@@ -1594,7 +1765,7 @@ fields locally if they want stricter startup checks.
   - Elixir Codex default:
     `{"reject":{"sandbox_approval":true,"rules":true,"mcp_elicitations":true}}`.
   - Elixir accepts Codex string/object values supported by the targeted app-server, except
-    `agent.permissions.approval_policy="never"` is rejected for Codex. Use `auto_approve_all` for unattended
+    `execution.permissions.approval_policy="never"` is rejected for Codex. Use `auto_approve_all` for unattended
     auto-approval.
   - Elixir evidence: `lib/symphony_elixir/config/schema.ex` and
     `test/symphony_elixir/workspace_and_config_test.exs`.
@@ -1632,16 +1803,16 @@ fields locally if they want stricter startup checks.
       settings file generated from the effective network policy and shared filesystem deny lists.
   - `command`: shell-like command string used to invoke SRT, default `srt`.
   - `enable_weaker_network_isolation`: boolean, default `false`, passed through to SRT settings.
-  - Implementations MAY emit SRT compatibility settings required by the targeted runtime version,
+  - Implementations MAY emit SRT compatibility settings required by the targeted SRT version,
     such as enabling weaker nested sandbox compatibility for Linux/Docker paths.
   - When SRT owns command sandboxing, implementations SHOULD use the targeted Codex
     `externalSandbox` turn policy or equivalent to avoid nesting platform sandboxes.
-  - SRT settings SHOULD allow the configured Codex runtime to write its own runtime state directory
+  - SRT settings SHOULD allow Codex to write its own state directory
     while deny-writing static or sensitive Codex config files such as auth, config, and global
     instructions.
   - SRT wraps the whole Codex process tree and therefore SHOULD be documented as an additional OS
-    guardrail rather than a complete credential isolation boundary for the Codex runtime itself.
-  - Implementations MUST reject `runtime: srt` with `network.mode: open` unless the targeted
+    guardrail rather than a complete credential isolation boundary for Codex itself.
+  - Implementations MUST reject `kind: srt` with `network.mode: open` unless the targeted
     SRT version provides a valid unrestricted-network representation.
   - Implementations MUST reject `kind: srt` for non-Codex adapters and MAY reject it for remote
     worker launch modes that cannot access the generated temporary settings file.
@@ -1649,7 +1820,7 @@ fields locally if they want stricter startup checks.
     thread and turn sandbox fields for compatibility. Known Codex app-server versions fail shell
     execution when Symphony relies only on injected managed permission profiles, while native
     thread/turn sandbox fields can cause Codex to drop or bypass those injected profile deny rules.
-    Treat native Codex profile deny-listing as best-effort unless the targeted runtime is verified
+    Treat native Codex profile deny-listing as best-effort unless the targeted version is verified
     to preserve it while running shell commands.
   - Use `kind: srt` when the implementation needs the shared sensitive filesystem deny list to be
     enforced outside Codex while keeping shell command execution available.
@@ -1800,22 +1971,12 @@ Fields:
   - Default: `false`. With `enabled: false` there is no reviewer, so Symphony MUST park the repo's
     `Code Review` tickets with `code_review_reviewer_disabled` recorded and never approve one
     without a reviewer.
-- `runtime` (`codex` or `claude`)
-  - REQUIRED when `enabled` is true.
-- `command` (string)
-  - REQUIRED when `enabled` is true.
-- `model` (string), `effort` (`low`, `medium`, `high`, `xhigh`, or `max`)
-  - Optional. Each resolves to this field, else the `code_review` run profile resolved as for
-    `agent.run_profiles` (the routed repository's `repositories[].agent` first), else null
-    (nothing added). `command` MUST NOT pass `--model` /
-    `--effort` while any of them resolves.
 
-The pre-push reviewer is removed: an implementation run writes its code, runs its checks and
-pushes, with no reviewer pass before the push. A `symphony.yml` that still has `pre_push_review`
-MUST be refused at load with the reason "the pre-push reviewer is removed and Code Review owns the
-review of the code now; set Code Review's reviewer in `code_review` (enabled, runtime, command,
-model, effort) and its run profile in `agent.run_profiles.code_review`", and so MUST
-`agent.run_profiles.pre_push_review` and `repositories[].agent.run_profiles.pre_push_review`.
+`enabled` is the section's only key. The reviewer's harness, provider, model, effort and command
+are the `code_review` run kind's (`runs.code_review`, Section 5.4.8c).
+
+An implementation run writes its code, runs its checks and pushes, with no reviewer pass before
+the push.
 
 The reviewer SHOULD receive the issue context plus the pull request's committed diff, SHOULD judge
 code quality and bugs (correctness, tests for new branches, error handling, the repository's code
@@ -1864,10 +2025,10 @@ settings below, which kept their keys.
 
 Fields:
 
-- `runtime` (`codex` or `claude`, default `agent.runtime`), `command` (string, default
-  `agent.command`), `max_turns` (positive integer, default `20`), `timeout_ms` (positive integer,
-  default `1800000`)
-  - The QA agent session.
+- `max_turns` (positive integer, default `20`), `timeout_ms` (positive integer, default
+  `1800000`)
+  - The QA agent session. Its harness, provider, model, effort and command are the `qa` run
+    kind's (`runs.qa`, Section 5.4.8c).
 - `skip_globs` (list of strings, default `[]`): extra paths that, like docs and tests, never need
   QA.
 - `playbooks` (map, default `{}`): per-kind overrides. A built-in kind takes `paths` and
@@ -1882,7 +2043,7 @@ Fields:
   replaced by `dev_server_port`; names MUST match `^[A-Z][A-Z0-9_]*$`, and the variables Symphony
   sets on the app itself, `PATH`, `HOME` and `DYLD_*` fail validation, naming the key). Values are
   plain text and MUST NOT be secrets. The built-in `web` kind also takes `browser_mcp` (an MCP server definition, the shape of
-  an `agent.mcp.servers` entry) and is off unless `verification.enabled` is true and
+  an `execution.mcp.servers` entry) and is off unless `verification.enabled` is true and
   `verification.dev_server.start_cmd` is set. The built-in `android_app` kind also takes `build`
   (shell command the QA agent runs in its own sandbox), `apk_paths` (list of the APKs it writes,
   relative to the repo root; `apk_path`, one string, is a one-item list, and both may be set),
@@ -1926,8 +2087,8 @@ config naming what replaced it, and have no effect: `enabled`, `state`, `max_con
 `max_fix_attempts` and `run_on`. They are removed from the schema once the window closes.
 
 The `acceptance_gate` block is deprecated the same way. Its agent settings (`runtime`, `command`,
-`model`, `effort`, `max_turns`, `timeout_ms`, `max_concurrent`), `escalate.inconclusive_limit` and
-`agent.run_profiles.acceptance_gate` have no effect; `mode` only derives a repo's `manual_review`
+`model`, `effort`, `max_turns`, `timeout_ms`, `max_concurrent`) and `escalate.inconclusive_limit`
+have no effect; `mode` only derives a repo's `manual_review`
 when that is unset (`repositories[].manual_review`). Its `escalate` rules (and a
 `repositories[].acceptance_gate.escalate` override) are still read, by Code Review (Section 7.6,
 **Escalation rules**), until the block is removed and the rules move with it.
@@ -1972,7 +2133,7 @@ The QA agent:
   to the dev server's localhost origins and writing into `qa-evidence/`. The default server MUST
   run an exact, pinned package version and MUST NOT download it during a pass; when `npx` or the
   pinned package is missing the pass MUST be `blocked` without starting the agent. With
-  `agent.network_access.mode: allowlist` a session with a dev server also allows `localhost` and
+  `execution.permissions.network.mode: allowlist` a session with a dev server also allows `localhost` and
   `127.0.0.1`.
 - The QA agent MUST NOT judge a step against a stand-in it wrote for the system under test (the
   project's own server, API or CLI, or the database it stores in); a stand-in replaces only an
@@ -2127,7 +2288,7 @@ The QA agent:
   its turn was finalised with no answer) MUST NOT spend one of the pass's attempts: the pass runs
   again once in the same run, logged as `qa_verdict_missing`, with its tokens added to the run's.
   A run error or an answer still unreadable after that counts as `blocked`. The session stops at
-  `agent.limits.tokens_per_issue`.
+  `execution.limits.tokens_per_issue`.
 - The QA prompt and the built-in playbooks MUST tell the agent not to run the test suite, `make all`,
   coverage or static analysis such as Dialyzer: a pass starts only on green CI for the PR head, and
   the epic review judges a criterion that only asks for tests or CI to pass by CI's runs on the
@@ -2246,7 +2407,7 @@ Template input variables:
   - `null`/absent on first attempt.
   - Integer on retry or continuation run.
 - `agent` (object)
-  - `kind`: configured `agent.runtime` (`codex` or `claude`).
+  - `kind`: the run's harness (`codex` or `claude`).
   - `display_name`: human-facing agent name (`Codex` or `Claude`).
   - `update_label`: dashboard/update label such as `Codex update` or `Claude update`.
   - `workpad_heading`: Linear workpad heading such as `## Codex Workpad` or
@@ -2396,27 +2557,28 @@ Validation checks:
 - For routed dispatch, the matched repo workflow file can be loaded and parsed.
 - Repo routing rules are valid.
 - `issues.provider` is present and supported.
-- `agent.runtime` is present and supported.
-- `agent.command` is present and non-empty.
-- `agent.effort` and every `agent.run_profiles.<kind>.effort` are known effort values, and every
-  `agent.run_profiles` key is a known run kind.
-- `agent.provider` and every `agent.run_profiles.<kind>.provider` are `anthropic` or `openrouter`.
-  Every run kind that resolves to `openrouter` also resolves a model, and `openrouter` is only
-  used with `agent.runtime == "claude"` and without `workers.ssh_hosts`.
-- `agent.command` does not already pass `--model` or `--effort` when `agent.model`,
-  `agent.effort`, or `agent.run_profiles` is set.
-- Every `repositories[].agent` block passes the same checks with the `agent` section beneath it,
-  and its errors name `repositories[<key>].agent...`.
+- Every run kind resolves a harness, a provider and a model, for the operator's `runs` block and
+  for each repository's (Section 5.4.8c). Every `runs` entry name is `default` or a run kind.
+- Every resolved harness reaches its provider, has a command, and, when it calls a small model,
+  has one for that provider.
+- Every `effort` is a known effort value.
+- A provider that needs a key from Symphony (`openrouter`, `opencode-go`) is not used with
+  `workers.ssh_hosts`.
+- No harness command and no run kind's own command passes `--model` or `--effort`.
+- Every `fallbacks` entry resolves, and one that changes the harness or the provider sets `model`.
+- Every `repositories[].runs` block passes the same checks, and its errors name
+  `repositories[<key>].runs...`.
 - `issues.linear.api_key` is present after `$` resolution when `issues.provider == "linear"`.
 - At least one Linear scoping filter is present when `issues.provider == "linear"`. Core scope comes
   from `issues.linear.scope.project_slug`, `issues.linear.scope.team`, or non-empty
   `issues.linear.scope.labels`; implementations with per-repo polling MAY also count repo-level
   route selectors.
 - Blank issue-level scope entries do not count as configured Linear scoping filters.
-- `agent.permissions.approval_policy="never"` is invalid when `agent.runtime == "codex"`; use
-  `auto_approve_all` for unattended auto-approval.
-- `agent.permissions.outer_sandbox.runtime == "srt"` is valid only when `agent.runtime == "codex"`
-  and `agent.permissions.network.mode != "open"`.
+- `execution.permissions.approval_policy="never"` is invalid when any run kind resolves to the
+  `codex` harness; use `auto_approve_all` for unattended auto-approval.
+- `execution.permissions.outer_sandbox.kind == "srt"` is valid only when every run kind resolves
+  to the `codex` harness and `execution.permissions.network.mode != "open"`.
+- `execution.mcp.inherit == "all"` is invalid when any run kind resolves to the `claude` harness.
 - `workspaces.attachments.public_upload_extensions` entries must be plain file extensions.
 
 ### 6.4 Core Config Fields Summary (Cheat Sheet)
@@ -2438,8 +2600,8 @@ not require recognizing or validating extension fields unless that extension is 
 - `repositories[].route.labels`: optional list of Linear label names with route-level AND semantics
 - `repositories[].route.assignee`: optional Linear assignee selector
 - `repositories[].default`: boolean, default `false`
-- `repositories[].agent`: optional `{provider, model, effort, run_profiles}` with the same values as
-  the `agent` keys, applied to issues routed to that repository (see `agent.run_profiles`)
+- `repositories[].runs`: optional map of `default` and run kinds, with the same entry fields as
+  `runs`, applied to issues routed to that repository (see `runs`)
 - `issues.provider`: string, REQUIRED, currently `linear` or `memory`
 - `issues.linear.endpoint`: string, default `https://api.linear.app/graphql` when provider is linear
 - `issues.linear.api_key`: string or `$VAR`, canonical env `LINEAR_API_KEY` when provider is linear
@@ -2497,79 +2659,91 @@ not require recognizing or validating extension fields unless that extension is 
 - `hooks.timeout_ms`: integer, default `60000`
 - `hooks.after_create_timeout_ms`: integer or null, default `null` (the larger of `hooks.timeout_ms`
   and `600000`)
-- `agent.concurrency.max_total`: integer, default `10`
-- `agent.concurrency.max_by_issue_state`: map of positive integers, default `{}`
-- `agent.concurrency.epic_lanes`: integer between `0` and `max_total`, default `max_total`
-- `agent.concurrency.finishing_max`: integer `>= 1`, default `2`
-- `agent.concurrency.force_label`: string, default `expedite`
-- `agent.concurrency.forced_max`: integer `>= 1`, default `1`
-- `agent.concurrency.forced_stale_after_hours`: integer `>= 1`, default `72`
-- `agent.limits.max_turns`: integer, default `20`
-- `agent.limits.retry_backoff_max_ms`: integer, default `300000` (5m)
-- `agent.limits.max_consecutive_identical_tool_failures`: integer, default `5`; `0` disables
-- `agent.limits.tokens_per_issue`: integer or null, default `500000`; explicit null disables the cap
-- `agent.limits.tokens_per_day`: integer or null, default `5000000`; explicit null disables the cap
-- `agent.usage_limit.auto_pause`: boolean, default `true`
-- `agent.usage_limit.resume_margin_seconds`: integer `>= 0`, default `120`
-- `agent.usage_limit.unknown_reset_retry_seconds`: integer `>= 60`, default `900`
-- `agent.usage_limit.headroom_utilization`: number in `(0, 1]` or null, default `null`
-- `agent.runtime`: `codex` or `claude`, REQUIRED
-- `agent.command`: shell command string, REQUIRED
-- `agent.model`: model name string or null, default `null`
-- `agent.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`
-- `agent.provider`: `anthropic` or `openrouter`, default `anthropic`. The provider that serves the
-  run's model; `openrouter` requires a resolved model and `agent.runtime == "claude"`.
-- `agent.run_profiles`: map of run kind to `{model, effort, provider}`, default `{}`. Run kinds:
-  `implementation`, `breakdown`, `rework`, `landing`, `ci_fix`, `review_feedback`, `qa`,
-  `code_review`, `epic_review`. `close_out` named the retired close-out run: an entry naming it
-  still loads, and no run uses it. `pre_push_review` named the removed pre-push reviewer: an entry
-  naming it is refused at load (Section 5.4.16). `final_verification` (retired with
-  `Final verification:` tickets) and `acceptance_gate` load with a deprecation warning and do
-  nothing. Each field resolves, for the issue's routed
-  repository, to `repositories[].agent.run_profiles.<kind>`, else `repositories[].agent.<field>`,
-  else `agent.run_profiles.<kind>`, else `agent.model` / `agent.effort` / `agent.provider`, else
-  null (nothing added) for model and effort and `anthropic` for provider. Repo workflow front
-  matter is not a source. The run kind and profile are resolved
-  once per dispatch from the current config and kept for every continuation turn of that run. The
-  Claude runtime appends `--model <model>` and `--effort <effort>` to its argv; the Codex runtime
-  ignores both and logs a warning. A Claude run whose provider is `openrouter` also starts with
-  `ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN` set from the
-  `OPENROUTER_API_KEY` environment variable of the Symphony process, an empty
-  `ANTHROPIC_API_KEY`, `CLAUDE_CODE_SUBAGENT_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and
-  `ANTHROPIC_DEFAULT_OPUS_MODEL` set to `<model>`, and `ANTHROPIC_DEFAULT_HAIKU_MODEL` and
-  `ANTHROPIC_SMALL_FAST_MODEL` set to `agent.small_model` when it is set, else `<model>`. If
-  `OPENROUTER_API_KEY` is unset or blank, the run fails before the agent starts with an error
-  naming the run kind and the variable. The key MUST NOT be written to config, logs, the audit log, the run store, or
-  transcripts. Before an OpenRouter run starts, the implementation looks the model up in
-  OpenRouter's models catalog (`GET https://openrouter.ai/api/v1/models`, cached in process with
-  a TTL). A model whose `supported_parameters` lacks `tools` fails the run before the agent starts,
-  with an error naming the model, the run kind, and the missing capability. A model without
-  `reasoning` starts without `--effort`, with a warning logged once per model. If the catalog
-  cannot be read, or does not list the model, the run starts and a warning is logged. QA tests
-  these flows against a local stub OpenRouter: `SYMPHONY_QA_OPENROUTER_URL` replaces
-  `https://openrouter.ai/api` (for runs and the catalog) only while `SYMPHONY_BAR_QA_ROOT` is set
-  and only with an `http(s)` URL on a loopback host; anywhere else the implementation MUST use
-  `https://openrouter.ai/api`.
-- `agent.small_model`: OpenRouter model id string or null, default `null`. The model for the
-  agent's background calls (titles, summaries) on runs whose provider is `openrouter`; null
-  leaves them on the run's model. Runs whose provider is `anthropic` ignore it. When the
-  OpenRouter models catalog can be read, `symphony check` reports an id it does not list as an
-  error naming `agent.small_model`.
-- `agent.prompts.include_project_guides`: boolean, default `true`
-- `agent.prompts.project_guide_files`: list of relative paths or null, default `null`
-- `agent.permissions.approval_policy`: agent approval policy, default depends on `agent.runtime`
-- `agent.permissions.filesystem.sandbox`: Codex `SandboxMode` value, default `workspace-write`
-- `agent.permissions.filesystem.turn_policy`: Codex `SandboxPolicy` value, default implementation-defined
-- `agent.permissions.network.mode`: `allowlist`, `open`, or `block`, default `allowlist`
-- `agent.permissions.network.allowed_domains`: list of additional allowed domains, default `[]`
-- `agent.permissions.network.denied_domains`: list of domains removed from the effective allowlist, default `[]`
-- `agent.permissions.outer_sandbox.runtime`: `none` or `srt`, default `none`
-- `agent.permissions.outer_sandbox.command`: SRT command string, default `srt`
-- `agent.timeouts.turn_ms`: integer, default `3600000`
-- `agent.timeouts.read_ms`: integer, default `30000`
-- `agent.timeouts.stall_ms`: integer, default `300000`
-- `agent.timeouts.command_ms`: integer, default `600000`
-- `agent.timeouts.mcp_tool_ms`: positive integer, default `600000`
+- `execution.concurrency.max_total`: integer, default `10`
+- `execution.concurrency.max_by_issue_state`: map of positive integers, default `{}`
+- `execution.concurrency.epic_lanes`: integer between `0` and `max_total`, default `max_total`
+- `execution.concurrency.finishing_max`: integer `>= 1`, default `2`
+- `execution.concurrency.force_label`: string, default `expedite`
+- `execution.concurrency.forced_max`: integer `>= 1`, default `1`
+- `execution.concurrency.forced_stale_after_hours`: integer `>= 1`, default `72`
+- `execution.limits.max_turns`: integer, default `20`
+- `execution.limits.retry_backoff_max_ms`: integer, default `300000` (5m)
+- `execution.limits.max_consecutive_identical_tool_failures`: integer, default `5`; `0` disables
+- `execution.limits.tokens_per_issue`: integer or null, default `500000`; explicit null disables the cap
+- `execution.limits.tokens_per_day`: integer or null, default `5000000`; explicit null disables the cap
+- `execution.usage_limit.auto_pause`: boolean, default `true`
+- `execution.usage_limit.resume_margin_seconds`: integer `>= 0`, default `120`
+- `execution.usage_limit.unknown_reset_retry_seconds`: integer `>= 60`, default `900`
+- `execution.usage_limit.headroom_utilization`: number in `(0, 1]` or null, default `null`
+- `execution.harnesses`: map of harness (`claude`, `codex`, `opencode`) to `{command,
+  small_model}`. `command` is a shell command string, REQUIRED for every harness a run kind
+  resolves to. `small_model` is a map of provider to model id, REQUIRED for the provider of every
+  run on `claude` or `opencode` unless the run's entry sets `small_model`.
+- `runs`: map of `default` and run kinds to `{harness, provider, model, effort, small_model,
+  command, fallbacks}`. Run kinds: `implementation`, `breakdown`, `rework`, `landing`,
+  `code_review`, `epic_review`, `ci_fix`, `review_feedback`, `qa`. `harness`, `provider` and
+  `model` are REQUIRED after resolution; nothing is built in. Each field resolves, for the issue's
+  routed repository, to `repositories[].runs.<kind>`, else `repositories[].runs.default`, else
+  `runs.<kind>`, else `runs.default`. Repo workflow front matter is not a source. See Section
+  5.4.8c.
+- `runs.<entry>.harness`: `claude`, `codex` or `opencode`
+- `runs.<entry>.provider`: `anthropic`, `openai`, `openrouter` or `opencode-go`. `claude` reaches
+  `anthropic`, `openrouter` and `opencode-go`; `codex` reaches `openai` and `opencode-go`;
+  `opencode` reaches `opencode-go`.
+- `runs.<entry>.model`: model id string
+- `runs.<entry>.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or unset
+- `runs.<entry>.small_model`: model id string or unset
+- `runs.<kind>.command`: shell command string or unset; not allowed in `default`
+- `runs.<entry>.fallbacks`: list of `{harness, provider, model, effort, small_model}`, default
+  none
+- How a resolved run reaches its harness:
+  - The `claude` harness appends `--model <model>` and `--effort <effort>` to its argv, and sets
+    `ANTHROPIC_DEFAULT_HAIKU_MODEL` and `ANTHROPIC_SMALL_FAST_MODEL` to the run's small model.
+  - The `codex` harness splices the run's provider and model into its command as `--config`
+    overrides before the `app-server` subcommand (an `opencode-go` run also defines the provider
+    table that points codex at Console's OpenAI-compatible Go endpoint) and logs a warning for a
+    set effort, which has no mapping onto `model_reasoning_effort`.
+  - The `opencode` harness passes `--model <provider>/<model>` and sets the provider's key
+    variable in the process env.
+  - A `claude` run whose provider is `openrouter` also starts with
+    `ANTHROPIC_BASE_URL=https://openrouter.ai/api`, `ANTHROPIC_AUTH_TOKEN` set from the
+    `OPENROUTER_API_KEY` environment variable of the Symphony process, an empty
+    `ANTHROPIC_API_KEY`, and `CLAUDE_CODE_SUBAGENT_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL` and
+    `ANTHROPIC_DEFAULT_OPUS_MODEL` set to `<model>`. A `claude` run whose provider is
+    `opencode-go` starts with the same env shape on
+    `ANTHROPIC_BASE_URL=https://opencode.ai/inference/go/anthropic` and `ANTHROPIC_AUTH_TOKEN`
+    from `OPENCODE_API_KEY`.
+  - If the provider's key variable is unset or blank, the run fails before the agent starts with
+    an error naming the run kind and the variable. The key MUST NOT be written to config, logs,
+    the audit log, the run store, or transcripts.
+  - Before an OpenRouter run starts, the implementation looks the model up in OpenRouter's models
+    catalog (`GET https://openrouter.ai/api/v1/models`, cached in process with a TTL). A model
+    whose `supported_parameters` lacks `tools` fails the run before the agent starts, with an
+    error naming the model, the run kind, and the missing capability. A model without `reasoning`
+    starts without `--effort`, with a warning logged once per model. If the catalog cannot be
+    read, or does not list the model, the run starts and a warning is logged. When the catalog
+    can be read, `symphony check` reports a small model it does not list as an error naming the
+    key that set it (the entry's `small_model`, else
+    `execution.harnesses.<harness>.small_model.openrouter`).
+  - QA tests these flows against a local stub OpenRouter: `SYMPHONY_QA_OPENROUTER_URL` replaces
+    `https://openrouter.ai/api` (for runs and the catalog) only while `SYMPHONY_BAR_QA_ROOT` is
+    set and only with an `http(s)` URL on a loopback host; anywhere else the implementation MUST
+    use `https://openrouter.ai/api`.
+- `execution.prompts.include_project_guides`: boolean, default `true`
+- `execution.prompts.project_guide_files`: list of relative paths or null, default `null`
+- `execution.permissions.approval_policy`: agent approval policy, default depends on the run's harness
+- `execution.permissions.filesystem.sandbox`: Codex `SandboxMode` value, default `workspace-write`
+- `execution.permissions.filesystem.turn_policy`: Codex `SandboxPolicy` value, default implementation-defined
+- `execution.permissions.network.mode`: `allowlist`, `open`, or `block`, default `allowlist`
+- `execution.permissions.network.allowed_domains`: list of additional allowed domains, default `[]`
+- `execution.permissions.network.denied_domains`: list of domains removed from the effective allowlist, default `[]`
+- `execution.permissions.outer_sandbox.kind`: `none` or `srt`, default `none`
+- `execution.permissions.outer_sandbox.command`: SRT command string, default `srt`
+- `execution.timeouts.turn_ms`: integer, default `3600000`
+- `execution.timeouts.read_ms`: integer, default `30000`
+- `execution.timeouts.stall_ms`: integer, default `300000`
+- `execution.timeouts.command_ms`: integer, default `600000`
+- `execution.timeouts.mcp_tool_ms`: positive integer, default `600000`
 - `watchdog.enabled`: boolean, default `true`
 - `watchdog.tick_interval_ms`: integer, default `60000`
 - `watchdog.no_progress_threshold_ms`: integer, default `600000`
@@ -2615,17 +2789,6 @@ not require recognizing or validating extension fields unless that extension is 
 - `pull_requests.learnings.max_total_per_repo`: integer, default `500`
 - `pull_requests.learnings.max_per_run`: integer, default `3`
 - `code_review.enabled`: boolean, default `false`
-- `code_review.runtime`: `codex` or `claude`, required when enabled
-- `code_review.command`: string, required when enabled
-- `code_review.model`: string or null, default `null`; else the `code_review` run profile's model
-- `code_review.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`; else the
-  `code_review` run profile's effort
-- `auto_review.runtime`: `codex` or `claude`, optional
-- `auto_review.command`: string, optional
-- `auto_review.model`: string or null, default `null`; else the `qa` run profile's model (see
-  `agent.run_profiles`)
-- `auto_review.effort`: `low`, `medium`, `high`, `xhigh`, `max`, or null, default `null`; else the
-  `qa` run profile's effort
 - `auto_review.max_turns`: integer, default `20`
 - `auto_review.timeout_ms`: integer, default `1800000`
 - `auto_review.skip_globs`: list of strings, default `[]`
@@ -2639,8 +2802,8 @@ not require recognizing or validating extension fields unless that extension is 
 - Deprecated, loaded with one warning per key and per config, no effect: `auto_review.enabled`,
   `auto_review.state`, `auto_review.max_concurrent`, `auto_review.max_fix_attempts`,
   `auto_review.run_on`, `auto_review.acceptance_gate.runtime` / `.command` / `.model` / `.effort` /
-  `.max_turns` / `.timeout_ms` / `.max_concurrent`, `auto_review.acceptance_gate.escalate.inconclusive_limit`,
-  `agent.run_profiles.acceptance_gate` and `pull_requests.checks.escalate_to_state`
+  `.max_turns` / `.timeout_ms` / `.max_concurrent`, `auto_review.acceptance_gate.escalate.inconclusive_limit`
+  and `pull_requests.checks.escalate_to_state`
 - `auto_review.acceptance_gate.mode`: `off`, `shadow` or `enforce`, default `off`; deprecated — it
   maps onto the per-repo `manual_review` setting (`shadow` → `on`; `off`, `enforce` and `decide` →
   `off`), with a warning logged once per config
@@ -2699,7 +2862,7 @@ Important nuance:
 - The worker MAY continue through multiple back-to-back coding-agent turns before it exits.
 - After each normal turn completion, the worker re-checks the tracker issue state.
 - If the issue is still in an active state, the worker SHOULD start another turn on the same live
-  coding-agent thread in the same workspace, up to `agent.max_turns`.
+  coding-agent thread in the same workspace, up to `execution.limits.max_turns`.
 - An issue in `Rework` whose attached PR's head is the workspace `HEAD`, with no pending review,
   CI, QA or conflict signal, MUST end the run and move to the post-PR state (`Code Review`) once
   that `HEAD` differs from the head the `Rework` started
@@ -2750,7 +2913,7 @@ Important nuance:
   move to the post-PR state instead. This includes a `Rework` run whose CI failure stays pending
   until the run ends. Nor does it apply while the attached PR's head is the workspace `HEAD` and
   that head has checks still pending; such a run (one that started on that head) keeps
-  turning up to `agent.max_turns`, except in `CI Fix`: there the first idle turn with checks pending
+  turning up to `execution.limits.max_turns`, except in `CI Fix`: there the first idle turn with checks pending
   on that head MUST end the run in a wait on CI (`{:ci_pending, info}`), which counts towards no
   dispatch loop, and while the watcher's decision waits on those checks or reruns one no CI Fix run
   MAY start. Nor does it apply, outside `Rework`, to a run started by
@@ -3835,7 +3998,7 @@ Retry entry creation:
 Backoff formula:
 
 - Normal continuation retries after a clean worker exit use a short fixed delay of `1000` ms.
-- Failure-driven retries use `delay = min(10000 * 2^(attempt - 1), agent.max_retry_backoff_ms)`.
+- Failure-driven retries use `delay = min(10000 * 2^(attempt - 1), execution.limits.retry_backoff_max_ms)`.
   A setup block (a `verification_failed` before the agent's first turn) is not a failure-driven
   retry: it goes to the self-heal lane (§ Self-heal). An unreachable worker host and a failed
   workspace hook still retry, since a retry may pick another host or find the hook's cause gone.
@@ -3873,7 +4036,7 @@ Note:
 
 #### 8.4.1 Provider Usage-Limit Holds
 
-When `agent.usage_limit.auto_pause` is on and a run ends because the provider's usage limit is
+When `execution.usage_limit.auto_pause` is on and a run ends because the provider's usage limit is
 reached (for Claude, a used-up five-hour or weekly window; for Codex, an error with
 `codexErrorInfo: usageLimitExceeded`, timed from the rate-limit window at 100% or more):
 
@@ -3891,17 +4054,17 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
 - Runs of the same provider already in flight are left alone; each one is handled the same way if
   it hits the limit.
 - A limit for a provider other than the run's own records or refreshes the hold for that provider,
-  so its runs pause, but does not hold the run itself: an OpenRouter run through the Claude runtime
+  so its runs pause, but does not hold the run itself: an OpenRouter run on the `claude` harness
   can see the Claude subscription's window, and it retries with the normal backoff instead of
   waiting for the Claude reset. That run is recorded as `failure` and emits the usual `run_failed`.
 - A QA run (the `QA` state's, or an epic review's) whose agent hits the limit creates or refreshes
   the hold the same way. It records no verdict, writes no QA report and leaves the issue's state
   alone; it is held and retried as its run.
-- While a hold covers a candidate's resolved run profile (`run_profiles.<kind>.provider`, else
-  `agent.provider`, and its model for a model scope; runs of `agent.kind: codex` are provider
-  `openai`), every dispatch path skips it: the poll,
-  retries and operator PR runs. Other providers keep dispatching. Epic lanes
-  stay reserved.
+- While a hold covers a candidate's resolved run (its `provider`, and its `model` for a model
+  scope, Section 5.4.8c), a new run starts on the first of the entry's `fallbacks` whose provider
+  no hold covers. With no such fallback, every dispatch path skips the candidate: the poll,
+  retries and operator PR runs. A continuation of a run in progress is judged on the run kind's
+  own choice only. Other providers keep dispatching. Epic lanes stay reserved.
 - At `resume_at` the hold moves to `phase: canary` and exactly one held retry, the first in normal
   dispatch order (a forced issue first), is released as the canary; an immediate poll tick runs. The hold keeps covering
   every other run of that provider, so slots freed by held runs are not filled with other work on
@@ -3927,7 +4090,7 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
 
 #### 8.4.2 Usage-Limit Headroom Holds
 
-When `agent.usage_limit.headroom_utilization` is set and a running Claude agent reports a
+When `execution.usage_limit.headroom_utilization` is set and a running Claude agent reports a
 `rate_limit_event` with status `allowed_warning` whose `utilization` is at or above it, for a
 window whose `resetsAt` is still ahead, Symphony leaves the rest of the limit to the operator's own
 sessions:
@@ -3999,7 +4162,7 @@ Part A: First-turn stall detection
   the end of the run's latest wait on Linear.
 - While a workspace hook runs, compute `elapsed_ms` since the hook's deadline instead. The hook is
   bounded by its own timeout (Section 9.4), which can be longer than `stall_timeout_ms`.
-- If `elapsed_ms > agent.stall_timeout_ms` and the run is observed (see below), terminate the
+- If `elapsed_ms > execution.timeouts.stall_ms` and the run is observed (see below), terminate the
   worker and queue a retry. An unobserved run past the bound is logged, not terminated.
 - If `stall_timeout_ms <= 0`, skip stall detection entirely.
 
@@ -4282,10 +4445,10 @@ Current Elixir sandbox behavior:
   forms for home-relative deny paths as defense in depth.
 - Codex native `workspace_write` config renders command-sandbox read denies for
   `~/.codex/auth.json`, `~/.codex/config.toml`, and `~/.codex/AGENTS.md`; operator
-  `agent.permissions.filesystem.allow_read_paths` entries cannot re-allow these runtime auth/config
-  files. With `agent.permissions.outer_sandbox.runtime: none`, enforcement of the native profile deny list is
+  `execution.permissions.filesystem.allow_read_paths` entries cannot re-allow these auth/config
+  files. With `execution.permissions.outer_sandbox.kind: none`, enforcement of the native profile deny list is
   best-effort as described in Section 5.4.9.
-- SRT sandbox settings allow Codex to write its runtime state directory under `~/.codex`, but
+- SRT sandbox settings allow Codex to write its state directory under `~/.codex`, but
   deny-write the sensitive/static Codex files `auth.json`, `config.toml`, and `AGENTS.md`.
   Shell startup files are also read-denied and write-denied; non-fatal PATH update warnings from
   Codex MUST NOT be resolved by granting access to those files.
@@ -4320,18 +4483,20 @@ Elixir evidence: `lib/symphony_elixir/agent_sandbox_config.ex`,
 ## 10. Agent Runner Protocol (Coding Agent Integration)
 
 This section defines Symphony's language-neutral responsibilities when integrating the configured
-coding-agent adapter. The Elixir implementation selects the adapter from `agent.runtime`:
+coding-agent adapter. The Elixir implementation selects the adapter from the run's harness
+(`runs.<kind>.harness`, Section 5.4.8c):
 
-- `codex` uses the Codex app-server JSON-RPC stream over stdio.
 - `claude` uses the Claude Code CLI stream-json output format and writes temporary
   `.claude/settings.json` sandbox settings into the issue workspace.
+- `codex` uses the Codex app-server JSON-RPC stream over stdio.
+- `opencode` runs one `opencode run --format json` process per turn and reads its JSON events.
 
 Protocol source of truth:
 
 - Implementations MUST send messages that are valid for the configured adapter's protocol.
-- For `agent.runtime: codex`, implementations MUST consult the targeted Codex app-server
+- For the `codex` harness, implementations MUST consult the targeted Codex app-server
   documentation or generated schema instead of treating this specification as a protocol schema.
-- For `agent.runtime: claude`, implementations MUST consume Claude Code stream-json events and map
+- For the `claude` harness, implementations MUST consume Claude Code stream-json events and map
   them into Symphony runtime events.
 - If this specification appears to conflict with the targeted agent protocol, the agent protocol
   controls protocol shape and transport behavior.
@@ -4342,7 +4507,8 @@ Protocol source of truth:
 
 Subprocess launch parameters:
 
-- Command: `agent.command`
+- Command: the run's resolved command (the run kind's own `command`, else
+  `execution.harnesses.<harness>.command`)
 - Working directory: workspace path
 - Transport/framing: the protocol transport required by the configured adapter
 
@@ -4377,10 +4543,11 @@ itself or a process it started and still runs.
 
 Notes:
 
-- The Elixir implementation requires explicit `agent.runtime` and `agent.command`.
-- Codex local launch invokes `bash -lc <agent.command>` in the workspace. When
-  `agent.permissions.outer_sandbox.runtime: srt`, the local command is wrapped as
-  `<srt command> --settings <temporary-settings.json> sh -c <prelude-and-agent.command>` and
+- The Elixir implementation requires a harness and a command for every run kind; nothing is
+  built in (Section 5.4.8c).
+- Codex local launch invokes `bash -lc <command>` in the workspace. When
+  `execution.permissions.outer_sandbox.kind: srt`, the local command is wrapped as
+  `<srt command> --settings <temporary-settings.json> sh -c <prelude-and-command>` and
   launched with `bash --noprofile --norc -c` so operator shell startup files are not read under SRT.
   The SRT prelude rewrites localhost HTTP(S) proxy environment values to `127.0.0.1` and sets
   `SSL_CERT_FILE=/etc/ssl/cert.pem` only when the variable is unset. Codex remote launch runs the
@@ -4399,7 +4566,7 @@ Notes:
   a structured JSON-RPC parse error when the request ID can be recovered, and response-send failures
   are logged instead of silently closing the connection.
 - A connection serves one request at a time. A call of one of Symphony's own tools (`linear_*`,
-  `github_*`) that runs longer than `agent.timeouts.mcp_tool_ms` (10 minutes by default; unset, the
+  `github_*`) that runs longer than `execution.timeouts.mcp_tool_ms` (10 minutes by default; unset, the
   `:mcp_tool_timeout_ms` application env applies first) is
   stopped and answered with a `tool_timeout` tool error, so later calls on the connection are not
   held behind it. QA tools keep their drivers' own timeouts. While a tool runs, the server still
@@ -4413,8 +4580,9 @@ Notes:
   profile. Runtime launch paths render workspace-local filesystem entries with the validated
   workspace path so current Codex versions do not have to rely on the legacy `:project_roots`
   placeholder key, which current Codex CLI versions silently ignore.
-  Existing user-provided Codex args, such as model overrides before `app-server`, remain present.
-- Claude local launch parses `agent.command` with shell-like word splitting and runs Claude with
+  Existing user-provided Codex args before `app-server`, such as `model_reasoning_effort`, remain
+  present.
+- Claude local launch parses the command with shell-like word splitting and runs Claude with
   `--verbose --output-format stream-json --print`, feeding prompt input over stdin from a private
   temporary file. Claude remote launch streams the prompt over SSH stdin into a remote `0600`
   temporary file before running the equivalent escaped shell command.
@@ -4422,6 +4590,21 @@ Notes:
   adapter writes a local prompt file with directory mode `0700` and file mode `0600`, redirects it
   to stdin, and removes it after the turn; remote launch uses stdin to create a remote `0600`
   prompt file and cleans it up with a trap.
+- OpenCode launch appends `run --standalone --archived --auto --format json`, `--model
+  <provider>/<model>` and, for a turn after the first, `--session <id>` to the command, and feeds
+  the prompt over stdin from a file in the session's folder.
+- OpenCode has no sandbox of its own, so every turn MUST run inside Symphony's: the confinement
+  the verification dev server's build uses (Seatbelt on macOS, bwrap on Linux). The turn can write
+  the workspace and the session's own folder only, cannot read the host's credential stores, and
+  reaches the network only through a loopback egress proxy that tunnels to the allowed hosts:
+  OpenCode's own, Symphony's built-in dependency hosts and
+  `execution.permissions.network.allowed_domains`, less `denied_domains`.
+- An OpenCode session has a home of its own (config, data, state and cache under the session
+  folder), so the operator's OpenCode config, sign-ins and MCP servers never reach a run. Its
+  config holds Symphony's tools as an MCP server and the servers `execution.mcp` declares for this
+  harness. The provider's key is read from Symphony's environment at each launch and reaches the
+  process through its env only.
+- OpenCode runs start on the local host only; a run given a remote worker fails to start.
 - Approval policy, sandbox policy, cwd, prompt input, and OPTIONAL tool declarations are supplied
   using fields supported by the configured adapter.
 - The Codex adapter opts out of `turn/diff/updated`,
@@ -4869,15 +5052,15 @@ User-input-required policy:
 
 Timeouts:
 
-- `agent.timeouts.read_ms`: request/response timeout during startup and sync requests
-- `agent.timeouts.turn_ms`: total turn stream timeout
-- `agent.timeouts.stall_ms`: enforced by orchestrator for runs that have not emitted a first event
-- `agent.timeouts.command_ms`: Claude command/tool-use timeout after a streamed tool-use event
+- `execution.timeouts.read_ms`: request/response timeout during startup and sync requests
+- `execution.timeouts.turn_ms`: total turn stream timeout
+- `execution.timeouts.stall_ms`: enforced by orchestrator for runs that have not emitted a first event
+- `execution.timeouts.command_ms`: Claude command/tool-use timeout after a streamed tool-use event
 - `watchdog.no_progress_threshold_ms`: enforced by orchestrator based on last transcript event time
 
 Codex app-server implementations SHOULD classify repeated consecutive identical failed
 `commandExecution` completions and dynamic tool results as a terminal human-attention block rather
-than a retryable run failure when `agent.limits.max_consecutive_identical_tool_failures` is greater
+than a retryable run failure when `execution.limits.max_consecutive_identical_tool_failures` is greater
 than zero.
 
 Error mapping (RECOMMENDED normalized categories):
@@ -5301,7 +5484,7 @@ Rate-limit tracking:
 
 The Elixir implementation supports token budget limits under `agent` in `symphony.yml`:
 
-- `agent.max_tokens_per_issue` (positive integer or null)
+- `execution.limits.tokens_per_issue` (positive integer or null)
   - Default: `500000`.
   - Explicit `null` disables the per-issue cap.
   - When configured, an active agent whose cumulative issue token total reaches the limit SHOULD be
@@ -5323,7 +5506,7 @@ The Elixir implementation supports token budget limits under `agent` in `symphon
     ignores persisted budget-exhausted records when the current limit is raised above the recorded
     token total, when the issue has a newer run, or when a person answered the run's question since
     it started.
-- `agent.max_tokens_per_day` (positive integer or null)
+- `execution.limits.tokens_per_day` (positive integer or null)
   - Default: `5000000`.
   - Explicit `null` disables the daily cap.
   - When configured, new dispatch SHOULD pause once the UTC-day token total reaches the limit.
@@ -5848,7 +6031,7 @@ Minimum endpoints:
     or reads, in each routed team, from one labels read per team: one missing (an `error` for
     `Blocked`, `Needs Decision` and the CI labels, which count only spelled exactly; a `warning`
     for `plan` or `breakdown`, `qa:skip`, `protected-paths-approved`, `skip-update-hold`, the
-    `agent.concurrency.force_label` and each `escalate.labels` entry, which count in any case),
+    `execution.concurrency.force_label` and each `escalate.labels` entry, which count in any case),
     with a `create_label` fix for the exact name; a label close to one of them (only case or
     spaces apart, or a short edit distance) or one that is both a team and a workspace label (a
     `warning` naming both, `open` `linear`); the deprecated `human-action` label in an
@@ -6096,7 +6279,7 @@ Minimum endpoints:
     provider is the one the run recorded, else the one its model names (`unknown` when neither).
   - `tickets` lists each ticket that ran in the period, most tokens first: `issue_id`,
     `identifier`, `title`, `repo_key`, `total_tokens`, `attempts` (its runs in the period) and
-    `cap` (`agent.max_tokens_per_issue`, null when unset).
+    `cap` (`execution.limits.tokens_per_issue`, null when unset).
   - `merged_per_day` has one entry per day (`date`, `merged`): the tickets whose completion
     Symphony noted that day.
   - `review` is how far the Code Review agent can be trusted, from the tickets' verdicts and
@@ -6109,7 +6292,7 @@ Minimum endpoints:
     Code Review rework, a QA fail or the Director sent back. `disagreements` lists each overturned
     approval, newest first: `issue_id`, `identifier`, `repo_key`, `review`, `decision`,
     `decided_by` (`QA` or `Director`) and `decided_at`.
-  - The response also has `days`, `from`, `to`, `daily_budget` (`agent.max_tokens_per_day`) and
+  - The response also has `days`, `from`, `to`, `daily_budget` (`execution.limits.tokens_per_day`) and
     `per_ticket_cap`.
 
 - `GET /api/v1/shipped?days=N`
@@ -6287,9 +6470,8 @@ Minimum endpoints:
     run's `events`, and the rest at the top level. A run is `{"kind": "run", run_id, run_kind,
     run_number, model, effort, status, verdict, started_at, ended_at, exit, head, summary, events}`,
     placed where its first event on the page falls. Its header is read from the ticket's whole
-    history: `model` and `effort` are the ones its run profile resolved when it was dispatched (its
-    `run.started`, else its `run.ended`; null when the profile resolved none and the runtime kept its
-    own default), `status` is `ended` once its `run.ended` is written and `running` before that
+    history: `model` and `effort` are the ones its run kind's entry resolved when it was dispatched (its
+    `run.started`, else its `run.ended`; null when it resolved none), `status` is `ended` once its `run.ended` is written and `running` before that
     only while the orchestrator holds a run with its id (or the run started after the snapshot
     read was taken); a run with no `run.ended` the orchestrator doesn't hold reads `ended` too,
     with the `ended_at` its record proves (the ticket's next `run.started`, else the run's last
@@ -6937,7 +7119,7 @@ function run_agent_attempt(issue, attempt, orchestrator_channel, verification, r
     verification_port_pool.release(verification)
     fail_worker("agent session startup error")
 
-  max_turns = config.agent.max_turns
+  max_turns = config.execution.limits.max_turns
   turn_number = 1
 
   while true:
@@ -7112,11 +7294,12 @@ infrastructure.
 - `issues.linear.api_key` works (including `$VAR` indirection)
 - `$VAR` resolution works for issue provider API key and path values
 - `~` path expansion works
-- `agent.runtime` and `agent.command` are required
-- `agent.command` is preserved as a shell command string
-- Codex `agent.permissions.approval_policy="never"` is rejected; `auto_approve_all` is the unattended
+- Every run kind resolves a harness, a provider, a model and a command; a missing one is an error
+  that names the entry
+- A harness command is preserved as a shell command string
+- Codex `execution.permissions.approval_policy="never"` is rejected; `auto_approve_all` is the unattended
   auto-approval switch
-- `agent.permissions.outer_sandbox.runtime="srt"` is rejected for non-Codex agents and with open network mode
+- `execution.permissions.outer_sandbox.kind="srt"` is rejected for non-Codex agents and with open network mode
 - Workspace attachment public-upload extensions are normalized and validated as extensions
 - Per-state concurrency override map normalizes state names and rejects invalid values
 - Prompt template renders `issue`, `attempt`, `agent`, and `repo_key`
@@ -7225,7 +7408,7 @@ infrastructure.
 - Abnormal worker exit increments retries with 10s-based exponential backoff
 - A setup block (`verification_failed` before the first turn) is not retried: self-heal files or
   reuses the fix ticket and holds the ticket on it
-- Retry backoff cap uses configured `agent.max_retry_backoff_ms`
+- Retry backoff cap uses configured `execution.limits.retry_backoff_max_ms`
 - Retry queue entries include attempt, due time, identifier, and error
 - Completed issues in non-active, non-terminal states appear as watching rows
 - Terminal completed issues are removed from watching rows
@@ -7240,14 +7423,14 @@ infrastructure.
 
 ### 17.5 Coding-Agent Adapter Client
 
-- Launch command uses workspace cwd and follows the `agent.runtime` adapter launch semantics.
-- Codex launch invokes `bash -lc <agent.command>` locally. If wrapped by SRT through
-  `agent.permissions.outer_sandbox`, the local wrapper uses `bash --noprofile --norc -c`.
+- Launch command uses workspace cwd and follows the launch semantics of the run's harness.
+- Codex launch invokes `bash -lc <command>` locally. If wrapped by SRT through
+  `execution.permissions.outer_sandbox`, the local wrapper uses `bash --noprofile --norc -c`.
 - Codex launch preserves configured args while injecting the generated `workspace_write`
   permission profile
-- Claude launch parses `agent.command`, appends stream-json print arguments and then the run
-  profile's `--model` / `--effort` (when set), feeds prompt input over
-  stdin from a private temporary file, and enforces `agent.timeouts.command_ms` after streamed
+- Claude launch parses the command, appends stream-json print arguments and then the run's
+  `--model` / `--effort` (when set), feeds prompt input over
+  stdin from a private temporary file, and enforces `execution.timeouts.command_ms` after streamed
   tool-use events.
 - Claude prompt text is not present in local process argv or remote SSH argv
 - Session startup follows the configured adapter protocol.
@@ -7331,7 +7514,7 @@ infrastructure.
 - One-shot mode writes durable run history records with the same core fields as orchestrator-owned
   runs. It does not persist retry queue rows between attempts.
 - One-shot failure retries use the same exponential backoff formula capped by
-  `agent.max_retry_backoff_ms`, but are bounded within the process lifetime so exhausted retries can
+  `execution.limits.retry_backoff_max_ms`, but are bounded within the process lifetime so exhausted retries can
   return an exit code.
 - One-shot exit codes are `0` for successful run completion, `1` for agent failure after bounded
   retries, `2` for configuration or validation errors, and `124` for timeout.
@@ -7371,11 +7554,11 @@ Use the same validation profiles as Section 17:
 - Workspace lifecycle hooks (`after_create`, `before_run`, `after_run`, `before_remove`)
 - Hook timeout config (`hooks.timeout_ms`, default `60000`; `hooks.after_create_timeout_ms`,
   default the larger of `hooks.timeout_ms` and `600000`)
-- Coding-agent adapter client for configured `agent.runtime`
-- Agent launch command config (`agent.runtime`, `agent.command`)
+- Coding-agent adapter client for each harness a run kind resolves to
+- Harness and run config (`execution.harnesses`, `runs`)
 - Strict prompt rendering with `issue`, `attempt`, `agent`, and `repo_key` variables
 - Exponential retry queue with continuation retries after normal exit
-- Configurable retry backoff cap (`agent.limits.retry_backoff_max_ms`, default 5m)
+- Configurable retry backoff cap (`execution.limits.retry_backoff_max_ms`, default 5m)
 - Reconciliation that stops runs on terminal/non-active tracker states
 - Workspace cleanup for terminal issues (startup sweep + active transition)
 - Structured logs with `issue_id`, `issue_identifier`, and `session_id`

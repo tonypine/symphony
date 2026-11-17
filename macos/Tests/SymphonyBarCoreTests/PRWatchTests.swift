@@ -342,7 +342,7 @@ final class PRWatchTests: XCTestCase {
         XCTAssertEqual(fact(merging, "Checks"), "passing")
         XCTAssertEqual(fact(merging, "Merge"), "blocked by branch protection")
 
-        let merged = try card(["rule": "R2", "action": "close_out"], facts: ["pr": "merged"])
+        let merged = try card(["rule": "R2", "action": "close_ticket"], facts: ["pr": "merged"])
         XCTAssertEqual(merged.headline, "PR #42 was merged")
         XCTAssertEqual(merged.status, .done)
         XCTAssertEqual(try card(["rule": "R2"], facts: ["pr": "merged", "pr_number": NSNull()]).headline, "The PR was merged")
@@ -391,20 +391,20 @@ final class PRWatchTests: XCTestCase {
 
     func testTheCardListsTheLastFiveActionsNewestFirst() throws {
         let kinds = ["dispatch", "to_rework", "to_code_review", "to_in_progress", "return_to_origin", "wait_for_competitors", "decision",
-                     "rerun_failed", "file_fix_ticket", "update_branch", "merge_now", "arm", "disarm", "land_agent", "close_out", "some_new_kind"]
+                     "rerun_failed", "file_fix_ticket", "update_branch", "merge_now", "arm", "disarm", "land_agent", "close_ticket", "some_new_kind"]
         let actions: [[String: Any]] = kinds.enumerated().map { index, kind in
             ["rule": "R\(index)", "action": kind, "at": "2026-10-16T11:\(String(format: "%02d", index)):00Z", "source": index.isMultiple(of: 2) ? "poll" : "webhook"]
         }
         let card = try card(["actions": actions + [["action": NSNull()]]], facts: ["failing_check": "test"])
         XCTAssertEqual(card.actions.count, 5)
-        XCTAssertEqual(card.actions.map(\.text), ["Some new kind", "Closed out the merged PR", "Started the landing agent", "Turned auto-merge off", "Turned auto-merge on"])
+        XCTAssertEqual(card.actions.map(\.text), ["Some new kind", "Closed the ticket of the merged PR", "Started the landing agent", "Turned auto-merge off", "Turned auto-merge on"])
 
         let all = kinds.map { kind in try? self.card(["actions": [["action": kind]]], facts: ["failing_check": "test"]).actions.first?.text }
         XCTAssertEqual(all, [
             "Started a run", "Sent to Rework", "Sent back to Code Review", "Sent back to In Progress", "Returned with its approvals",
             "Waited on the competing PRs", "Asked you", "Reran the failed checks", "Filed a fix ticket for the test check",
             "Updated the branch from main", "Merged the PR", "Turned auto-merge on", "Turned auto-merge off", "Started the landing agent",
-            "Closed out the merged PR", "Some new kind",
+            "Closed the ticket of the merged PR", "Some new kind",
         ])
         let undated = try self.card(["actions": [["source": "other"]]], facts: [:]).actions.first
         XCTAssertEqual(undated?.text, "Acted")

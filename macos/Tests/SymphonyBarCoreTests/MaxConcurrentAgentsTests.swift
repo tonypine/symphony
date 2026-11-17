@@ -7,8 +7,8 @@ final class MaxConcurrentAgentsTests: XCTestCase {
         issues:
           provider: linear
 
-        agent:
-          runtime: codex
+        execution:
+          prompts: {}
           concurrency:
             # Keep this low on a personal Linear key.
             max_total: 2  # two agents
@@ -45,15 +45,15 @@ final class MaxConcurrentAgentsTests: XCTestCase {
                 max_total: 7
             concurrency:
               max_total: 8
-            agent:
-              runtime: codex
+            execution:
+              prompts: {}
             """
         XCTAssertNil(MaxConcurrentAgents.value(in: yaml))
     }
 
     func testIgnoresCommentedOutKeys() {
         let yaml = """
-            agent:
+            execution:
               concurrency:
                 # max_total: 4
                 max_by_issue_state:
@@ -64,7 +64,7 @@ final class MaxConcurrentAgentsTests: XCTestCase {
 
     func testIgnoresKeysThatOnlyStartWithMaxTotal() {
         let yaml = """
-            agent:
+            execution:
               concurrency:
                 max_total_extra: 4
             """
@@ -72,12 +72,12 @@ final class MaxConcurrentAgentsTests: XCTestCase {
     }
 
     func testNonNumericValueReadsAsNil() {
-        XCTAssertNil(MaxConcurrentAgents.value(in: "agent:\n  concurrency:\n    max_total: lots\n"))
+        XCTAssertNil(MaxConcurrentAgents.value(in: "execution:\n  concurrency:\n    max_total: lots\n"))
     }
 
     func testInsertsMissingKeyUnderConcurrency() throws {
         let yaml = """
-            agent:
+            execution:
               concurrency:
                 max_by_issue_state:
                   rework: 2
@@ -88,7 +88,7 @@ final class MaxConcurrentAgentsTests: XCTestCase {
         let updated = try MaxConcurrentAgents.setting(3, in: yaml)
 
         XCTAssertEqual(updated, """
-            agent:
+            execution:
               concurrency:
                 max_total: 3
                 max_by_issue_state:
@@ -101,59 +101,59 @@ final class MaxConcurrentAgentsTests: XCTestCase {
     }
 
     func testInsertsMissingKeyUnderAnEmptyConcurrency() throws {
-        let yaml = "agent:\n  concurrency:\n  limits:\n    max_turns: 8\n"
+        let yaml = "execution:\n  concurrency:\n  limits:\n    max_turns: 8\n"
         let updated = try MaxConcurrentAgents.setting(4, in: yaml)
 
-        XCTAssertEqual(updated, "agent:\n  concurrency:\n    max_total: 4\n  limits:\n    max_turns: 8\n")
+        XCTAssertEqual(updated, "execution:\n  concurrency:\n    max_total: 4\n  limits:\n    max_turns: 8\n")
     }
 
     func testInsertsConcurrencyWhenAgentHasNone() throws {
         let yaml = """
-            agent:
-              runtime: codex
+            execution:
+              prompts: {}
               limits:
                 max_turns: 8
             """
         let updated = try MaxConcurrentAgents.setting(2, in: yaml)
 
         XCTAssertEqual(updated, """
-            agent:
+            execution:
               concurrency:
                 max_total: 2
-              runtime: codex
+              prompts: {}
               limits:
                 max_turns: 8
             """)
     }
 
     func testInsertsUnderAnEmptyAgent() throws {
-        let updated = try MaxConcurrentAgents.setting(2, in: "agent:\nworkspaces:\n  root: ~/work\n")
+        let updated = try MaxConcurrentAgents.setting(2, in: "execution:\nworkspaces:\n  root: ~/work\n")
 
-        XCTAssertEqual(updated, "agent:\n  concurrency:\n    max_total: 2\nworkspaces:\n  root: ~/work\n")
+        XCTAssertEqual(updated, "execution:\n  concurrency:\n    max_total: 2\nworkspaces:\n  root: ~/work\n")
     }
 
-    func testAddsAnAgentSectionWhenTheFileHasNone() throws {
+    func testAddsAnExecutionSectionWhenTheFileHasNone() throws {
         let yaml = "# config\nissues:\n  provider: linear\n"
         let updated = try MaxConcurrentAgents.setting(3, in: yaml)
 
-        XCTAssertEqual(updated, "# config\nissues:\n  provider: linear\nagent:\n  concurrency:\n    max_total: 3\n")
+        XCTAssertEqual(updated, "# config\nissues:\n  provider: linear\nexecution:\n  concurrency:\n    max_total: 3\n")
         XCTAssertEqual(MaxConcurrentAgents.value(in: updated), 3)
     }
 
-    func testAddsAnAgentSectionToAFileWithoutATrailingNewline() throws {
+    func testAddsAnExecutionSectionToAFileWithoutATrailingNewline() throws {
         let updated = try MaxConcurrentAgents.setting(3, in: "issues:\n  provider: linear")
 
-        XCTAssertEqual(updated, "issues:\n  provider: linear\nagent:\n  concurrency:\n    max_total: 3")
+        XCTAssertEqual(updated, "issues:\n  provider: linear\nexecution:\n  concurrency:\n    max_total: 3")
     }
 
-    func testAddsAnAgentSectionToAnEmptyFile() throws {
-        XCTAssertEqual(try MaxConcurrentAgents.setting(3, in: ""), "agent:\n  concurrency:\n    max_total: 3\n")
+    func testAddsAnExecutionSectionToAnEmptyFile() throws {
+        XCTAssertEqual(try MaxConcurrentAgents.setting(3, in: ""), "execution:\n  concurrency:\n    max_total: 3\n")
     }
 
     func testFollowsOddIndentation() throws {
         let yaml = """
-            agent:
-                runtime: codex
+            execution:
+                prompts: {}
                 concurrency:
                        max_total: 10
                 limits:
@@ -166,68 +166,68 @@ final class MaxConcurrentAgentsTests: XCTestCase {
     }
 
     func testInsertedKeysFollowTheFilesIndentStep() throws {
-        let fourSpaces = "agent:\n    runtime: codex\n"
+        let fourSpaces = "execution:\n    prompts: {}\n"
         XCTAssertEqual(
             try MaxConcurrentAgents.setting(2, in: fourSpaces),
-            "agent:\n    concurrency:\n        max_total: 2\n    runtime: codex\n"
+            "execution:\n    concurrency:\n        max_total: 2\n    prompts: {}\n"
         )
 
-        let nestedSiblings = "agent:\n   concurrency:\n      max_by_issue_state: {}\n"
+        let nestedSiblings = "execution:\n   concurrency:\n      max_by_issue_state: {}\n"
         XCTAssertEqual(
             try MaxConcurrentAgents.setting(2, in: nestedSiblings),
-            "agent:\n   concurrency:\n      max_total: 2\n      max_by_issue_state: {}\n"
+            "execution:\n   concurrency:\n      max_total: 2\n      max_by_issue_state: {}\n"
         )
 
-        let emptyConcurrency = "agent:\n    concurrency:\n"
+        let emptyConcurrency = "execution:\n    concurrency:\n"
         XCTAssertEqual(
             try MaxConcurrentAgents.setting(2, in: emptyConcurrency),
-            "agent:\n    concurrency:\n        max_total: 2\n"
+            "execution:\n    concurrency:\n        max_total: 2\n"
         )
     }
 
     func testKeepsSpacingAndComments() throws {
         XCTAssertEqual(
-            try MaxConcurrentAgents.setting(5, in: "agent:\n  concurrency:\n    max_total:   2   # note\n"),
-            "agent:\n  concurrency:\n    max_total:   5   # note\n"
+            try MaxConcurrentAgents.setting(5, in: "execution:\n  concurrency:\n    max_total:   2   # note\n"),
+            "execution:\n  concurrency:\n    max_total:   5   # note\n"
         )
         XCTAssertEqual(
-            try MaxConcurrentAgents.setting(5, in: "agent:  # agents\n  concurrency: # caps\n    max_total: 2\n"),
-            "agent:  # agents\n  concurrency: # caps\n    max_total: 5\n"
+            try MaxConcurrentAgents.setting(5, in: "execution:  # agents\n  concurrency: # caps\n    max_total: 2\n"),
+            "execution:  # agents\n  concurrency: # caps\n    max_total: 5\n"
         )
     }
 
     func testFillsAnEmptyValue() throws {
         XCTAssertEqual(
-            try MaxConcurrentAgents.setting(3, in: "agent:\n  concurrency:\n    max_total:\n"),
-            "agent:\n  concurrency:\n    max_total: 3\n"
+            try MaxConcurrentAgents.setting(3, in: "execution:\n  concurrency:\n    max_total:\n"),
+            "execution:\n  concurrency:\n    max_total: 3\n"
         )
         XCTAssertEqual(
-            try MaxConcurrentAgents.setting(3, in: "agent:\n  concurrency:\n    max_total:   # pick one\n"),
-            "agent:\n  concurrency:\n    max_total: 3 # pick one\n"
+            try MaxConcurrentAgents.setting(3, in: "execution:\n  concurrency:\n    max_total:   # pick one\n"),
+            "execution:\n  concurrency:\n    max_total: 3 # pick one\n"
         )
     }
 
     func testKeepsWindowsLineEndings() throws {
-        let yaml = "agent:\r\n  runtime: codex\r\n  concurrency:\r\n    max_total: 2\r\n"
+        let yaml = "execution:\r\n  prompts: {}\r\n  concurrency:\r\n    max_total: 2\r\n"
         XCTAssertEqual(MaxConcurrentAgents.value(in: yaml), 2)
         XCTAssertEqual(
             try MaxConcurrentAgents.setting(3, in: yaml),
-            "agent:\r\n  runtime: codex\r\n  concurrency:\r\n    max_total: 3\r\n"
+            "execution:\r\n  prompts: {}\r\n  concurrency:\r\n    max_total: 3\r\n"
         )
         XCTAssertEqual(
-            try MaxConcurrentAgents.setting(3, in: "agent:\r\n  runtime: codex\r\n"),
-            "agent:\r\n  concurrency:\r\n    max_total: 3\r\n  runtime: codex\r\n"
+            try MaxConcurrentAgents.setting(3, in: "execution:\r\n  prompts: {}\r\n"),
+            "execution:\r\n  concurrency:\r\n    max_total: 3\r\n  prompts: {}\r\n"
         )
     }
 
     func testRefusesInlineSections() {
-        XCTAssertThrowsError(try MaxConcurrentAgents.setting(3, in: "agent: {concurrency: {max_total: 2}}\n")) { error in
-            XCTAssertEqual(error as? MaxConcurrentAgentsError, .notABlock("agent"))
+        XCTAssertThrowsError(try MaxConcurrentAgents.setting(3, in: "execution: {concurrency: {max_total: 2}}\n")) { error in
+            XCTAssertEqual(error as? MaxConcurrentAgentsError, .notABlock("execution"))
         }
-        XCTAssertThrowsError(try MaxConcurrentAgents.setting(3, in: "agent:\n  concurrency: {max_total: 2}\n")) { error in
+        XCTAssertThrowsError(try MaxConcurrentAgents.setting(3, in: "execution:\n  concurrency: {max_total: 2}\n")) { error in
             XCTAssertEqual(error as? MaxConcurrentAgentsError, .notABlock("concurrency"))
         }
-        XCTAssertNil(MaxConcurrentAgents.value(in: "agent:\n  concurrency: {max_total: 2}\n"))
+        XCTAssertNil(MaxConcurrentAgents.value(in: "execution:\n  concurrency: {max_total: 2}\n"))
         XCTAssertEqual(
             MaxConcurrentAgentsError.notABlock("concurrency").errorDescription,
             "`concurrency:` in symphony.yml is not an indented block. Change max_total by hand."

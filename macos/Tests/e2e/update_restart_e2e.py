@@ -299,8 +299,10 @@ class Instance:
             "repositories:\n  - key: e2e\n    workflow: WORKFLOW.md\n"
             f"    workspace:\n      strategy: {strategy}\n      repo: {repo}\n"
             f"workspaces:\n  root: {self.work / 'workspaces'}\n"
-            f"agent:\n  runtime: claude\n  command: {self.work / 'bin' / 'stub-claude'}\n  concurrency:\n    max_total: 1\n"
+            f"execution:\n  harnesses:\n    claude:\n      command: {self.work / 'bin' / 'stub-claude'}\n"
+            "      small_model:\n        anthropic: claude-haiku-4-5\n  concurrency:\n    max_total: 1\n"
             "  limits:\n    max_turns: 1\n"
+            "runs:\n  default: { harness: claude, provider: anthropic, model: claude-sonnet-5-5 }\n"
             # E2E-1 is dispatched again and again across the scenarios without a state move or a PR head, which
             # the dispatch-loop guard would hold on a Blocked hold after 4 runs in 10 minutes. These limits keep
             # the guard on but out of reach of one test run: 50 runs within one second.

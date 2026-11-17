@@ -5,7 +5,7 @@ defmodule SymphonyElixir.Setup.Checks.SecretsTest do
   alias SymphonyElixir.Setup
   alias SymphonyElixir.Setup.Checks.Secrets
 
-  @variables ~w(LINEAR_API_KEY SETUP_TEST_LINEAR_KEY OPENROUTER_API_KEY SETUP_TEST_SLACK_URL SETUP_TEST_BAR SETUP_TEST_TOKEN SETUP_TEST_HOOK_URL SETUP_TEST_AUTH SETUP_TEST_WEBHOOK_SECRET)
+  @variables ~w(LINEAR_API_KEY SETUP_TEST_LINEAR_KEY OPENROUTER_API_KEY OPENCODE_API_KEY SETUP_TEST_SLACK_URL SETUP_TEST_BAR SETUP_TEST_TOKEN SETUP_TEST_HOOK_URL SETUP_TEST_AUTH SETUP_TEST_WEBHOOK_SECRET)
   @settings_fix %{kind: "open", target: "settings", url: nil}
 
   # A Linear-side check, to see where Setup lists it.
@@ -89,23 +89,23 @@ defmodule SymphonyElixir.Setup.Checks.SecretsTest do
     write_workflow_file!(Workflow.workflow_file_path(),
       agent_mcp: %{
         servers: %{
-          "docs" => %{transport: "http", url: "https://docs.example/mcp", headers: %{Authorization: "$SETUP_TEST_AUTH", Plain: "value"}, runtimes: ["claude"]},
+          "docs" => %{transport: "http", url: "https://docs.example/mcp", headers: %{Authorization: "$SETUP_TEST_AUTH", Plain: "value"}, harnesses: ["claude"]},
           "search" => %{transport: "stdio", command: "node", env: %{FOO: "$SETUP_TEST_BAR", LEVEL: "info"}}
         }
       }
     )
 
     assert [headers, env] = problems()
-    assert env.id == "secret:agent.mcp.servers.search.env.FOO"
+    assert env.id == "secret:execution.mcp.servers.search.env.FOO"
     assert detail(env, "Variable") == "SETUP_TEST_BAR"
     assert env.consequence == "The search MCP server starts without a value for FOO, so its calls may fail."
-    assert headers.id == "secret:agent.mcp.servers.docs.headers.Authorization"
+    assert headers.id == "secret:execution.mcp.servers.docs.headers.Authorization"
     assert headers.consequence == "The docs MCP server is called without a value for Authorization, so its calls may fail."
-    assert Config.settings!().agent.mcp.servers["search"].env["FOO"] == "$SETUP_TEST_BAR"
+    assert Config.settings!().execution.mcp.servers["search"].env["FOO"] == "$SETUP_TEST_BAR"
 
     # An empty variable resolves to nothing too.
     System.put_env("SETUP_TEST_BAR", " ")
-    assert [_headers, %{id: "secret:agent.mcp.servers.search.env.FOO"}] = problems()
+    assert [_headers, %{id: "secret:execution.mcp.servers.search.env.FOO"}] = problems()
 
     System.put_env("SETUP_TEST_BAR", "bar")
     System.put_env("SETUP_TEST_AUTH", "Bearer sekret")
@@ -171,6 +171,30 @@ defmodule SymphonyElixir.Setup.Checks.SecretsTest do
     assert problem.fix == @settings_fix
 
     System.put_env("OPENROUTER_API_KEY", "sk-or-sekret")
+    assert problems() == []
+  end
+
+  test "an opencode-go run profile without OPENCODE_API_KEY is an error naming the run kinds" do
+    write_workflow_file!(Workflow.workflow_file_path(),
+      agent_kind: "claude",
+      agent_command: "claude",
+      agent_run_profiles: %{
+        "landing" => %{provider: "opencode-go", model: "kimi-k3"},
+        "ci_fix" => %{provider: "opencode-go", model: "kimi-k3"}
+      }
+    )
+
+    assert [problem] = problems()
+    assert problem.id == "secret:OPENCODE_API_KEY"
+    assert problem.severity == "error"
+    assert problem.repos == ["default"]
+    assert detail(problem, "Variable") == "OPENCODE_API_KEY"
+    kinds = detail(problem, "Run kinds")
+    assert kinds =~ "landing" and kinds =~ "ci_fix"
+    assert problem.consequence =~ kinds
+    assert problem.fix == @settings_fix
+
+    System.put_env("OPENCODE_API_KEY", "oc_sk-sekret")
     assert problems() == []
   end
 
@@ -253,7 +277,7 @@ defmodule SymphonyElixir.Setup.Checks.SecretsTest do
           %{kind: "slack", webhook_url: "$SETUP_TEST_HOOK_URL", events: ["run_failed"]}
         ]
       },
-      agent_mcp: %{servers: %{"docs" => %{transport: "http", url: "https://docs.example/mcp", headers: %{Authorization: "$SETUP_TEST_AUTH"}, runtimes: ["claude"]}}}
+      agent_mcp: %{servers: %{"docs" => %{transport: "http", url: "https://docs.example/mcp", headers: %{Authorization: "$SETUP_TEST_AUTH"}, harnesses: ["claude"]}}}
     )
 
     add_managed_repo!()

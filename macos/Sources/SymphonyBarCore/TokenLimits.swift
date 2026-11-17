@@ -1,6 +1,6 @@
 import Foundation
 
-/// Why `agent.limits.tokens_per_day` or `.tokens_per_issue` can't be read or changed by editing one line.
+/// Why `execution.limits.tokens_per_day` or `.tokens_per_issue` can't be read or changed by editing one line.
 public enum TokenLimitsError: LocalizedError, Equatable {
     /// The key holds an inline value (for example `limits: {tokens_per_day: 5}`) instead of an indented block.
     case notABlock(String)
@@ -23,7 +23,7 @@ public enum TokenLimit: Equatable {
     case tokens(Int)
 }
 
-/// `agent.limits.tokens_per_day` and `agent.limits.tokens_per_issue` in the text of a `symphony.yml`. Only the
+/// `execution.limits.tokens_per_day` and `execution.limits.tokens_per_issue` in the text of a `symphony.yml`. Only the
 /// lines of the limits that change are rewritten, or inserted when missing, so the rest of the file stays as it is.
 public struct TokenLimits: Equatable {
     public var perDay: TokenLimit
@@ -62,7 +62,7 @@ public struct TokenLimits: Equatable {
     }
 
     private static func limit(_ key: String, default defaultTokens: Int, in yaml: String) throws -> TokenLimit {
-        let value = try blockSection { try AgentSetting.value(key, in: section, of: yaml) }
+        let value = try blockSection { try ExecutionSetting.value(key, in: section, of: yaml) }
         guard let value else { return .tokens(defaultTokens) }
         if nullValues.contains(value) { return .off }
         guard let tokens = Int(value) else { throw TokenLimitsError.unreadable(key: key, value: value) }
@@ -77,10 +77,10 @@ public struct TokenLimits: Equatable {
         case .tokens(let tokens):
             value = String(tokens)
         }
-        return try blockSection { try AgentSetting.setting(key, in: section, to: value, in: yaml) }
+        return try blockSection { try ExecutionSetting.setting(key, in: section, to: value, in: yaml) }
     }
 
-    /// Reports an inline `agent:` or `limits:` as a token limits error.
+    /// Reports an inline `execution:` or `limits:` as a token limits error.
     private static func blockSection<T>(_ body: () throws -> T) throws -> T {
         do {
             return try body()

@@ -184,9 +184,12 @@ defmodule Mix.Tasks.Symphony.CleanupTest do
         workflow: WORKFLOW.md
     workspaces:
       root: #{workspace_root}
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     """)
 
     symphony_path

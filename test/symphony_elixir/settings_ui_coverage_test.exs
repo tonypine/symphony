@@ -23,13 +23,13 @@ defmodule SymphonyElixir.SettingsUICoverageTest do
       assert keys == Enum.sort(keys)
       assert keys == Enum.uniq(keys)
 
-      for key <- ~w(auto_review.acceptance_gate.mode agent.concurrency.max_total agent.run_profiles issues.linear.scope.team
+      for key <- ~w(auto_review.acceptance_gate.mode execution.concurrency.max_total runs execution.harnesses repositories[].runs issues.linear.scope.team
                     repositories[].route.team repositories[].acceptance_gate.escalate.busy_files.top
                     watchdog.enabled github.webhooks.secret notifications.channels[].kind verification.dev_server.start_cmd) do
         assert key in keys
       end
 
-      for section <- ~w(agent agent.limits repositories repositories[] repositories[].route github.webhooks notifications.channels[]) do
+      for section <- ~w(execution execution.limits repositories repositories[] repositories[].route github.webhooks notifications.channels[]) do
         refute section in keys
       end
     end
@@ -39,8 +39,8 @@ defmodule SymphonyElixir.SettingsUICoverageTest do
         assert_not_unknown(key, SystemSchema.parse(config_with(key)))
       end
 
-      assert SystemSchema.parse(config_with("agent.limits.max_widgets")) ==
-               {:error, {:invalid_symphony_config, "unknown symphony.yml key `agent.limits.max_widgets`"}}
+      assert SystemSchema.parse(config_with("execution.limits.max_widgets")) ==
+               {:error, {:invalid_symphony_config, "unknown symphony.yml key `execution.limits.max_widgets`"}}
     end
   end
 
@@ -65,14 +65,14 @@ defmodule SymphonyElixir.SettingsUICoverageTest do
       source = """
       public enum SettingsUIManifest {
           public static let keyPaths: [String] = [
-              "agent.model",
+              "execution.harnesses",
               "repositories[].key"
           ]
       }
       """
 
-      assert SettingsUICoverage.parse_manifest(source) == {:ok, ["agent.model", "repositories[].key"]}
-      assert "agent.concurrency.max_total" in manifest()
+      assert SettingsUICoverage.parse_manifest(source) == {:ok, ["execution.harnesses", "repositories[].key"]}
+      assert "execution.concurrency.max_total" in manifest()
     end
 
     test "fails without the list" do
@@ -87,13 +87,13 @@ defmodule SymphonyElixir.SettingsUICoverageTest do
       exemptions:
         - key: watchdog.*
           reason: Tuning.
-        - keys: [agent.runtime, agent.mcp.inherit]
+        - keys: [execution.limits.max_turns, execution.mcp.inherit]
           reason: Later.
           ticket: TP-1
       """
 
       assert SettingsUICoverage.parse_exemptions(yaml) ==
-               {:ok, [exemption(["watchdog.*"], "Tuning."), %{keys: ["agent.runtime", "agent.mcp.inherit"], reason: "Later.", ticket: "TP-1"}]}
+               {:ok, [exemption(["watchdog.*"], "Tuning."), %{keys: ["execution.limits.max_turns", "execution.mcp.inherit"], reason: "Later.", ticket: "TP-1"}]}
 
       assert [%{reason: _reason} | _rest] = exemptions()
     end
@@ -127,15 +127,15 @@ defmodule SymphonyElixir.SettingsUICoverageTest do
     end
 
     test "a setting added to the schema without a manifest entry or exemption is uncovered, by name" do
-      keys = SystemSchema.operator_key_paths() ++ ["agent.limits.max_widgets", "repositories[].route.widget"]
+      keys = SystemSchema.operator_key_paths() ++ ["execution.limits.max_widgets", "repositories[].route.widget"]
 
-      assert %{uncovered: ["agent.limits.max_widgets", "repositories[].route.widget"]} = SettingsUICoverage.check(keys, manifest(), exemptions())
+      assert %{uncovered: ["execution.limits.max_widgets", "repositories[].route.widget"]} = SettingsUICoverage.check(keys, manifest(), exemptions())
     end
 
     test "an exempt prefix covers every key under it, even new ones" do
-      keys = ["watchdog.enabled", "watchdog.new_threshold", "watchdogs.enabled", "agent.model"]
+      keys = ["watchdog.enabled", "watchdog.new_threshold", "watchdogs.enabled", "execution.harnesses"]
 
-      assert SettingsUICoverage.check(keys, ["agent.model"], [exemption(["watchdog.*"])]) == %{
+      assert SettingsUICoverage.check(keys, ["execution.harnesses"], [exemption(["watchdog.*"])]) == %{
                uncovered: ["watchdogs.enabled"],
                unknown_manifest_keys: [],
                unused_exemptions: [],
@@ -144,18 +144,18 @@ defmodule SymphonyElixir.SettingsUICoverageTest do
     end
 
     test "reports manifest keys that aren't settings, and exemptions that match nothing or have a control now" do
-      keys = ["agent.model", "agent.effort"]
-      report = SettingsUICoverage.check(keys, ["agent.model", "agent.widgets"], [exemption(["agent.*", "gone.*", "gone.key"])])
+      keys = ["execution.harnesses", "execution.limits.max_turns"]
+      report = SettingsUICoverage.check(keys, ["execution.harnesses", "execution.widgets"], [exemption(["execution.*", "gone.*", "gone.key"])])
 
       assert report.uncovered == []
-      assert report.unknown_manifest_keys == ["agent.widgets"]
+      assert report.unknown_manifest_keys == ["execution.widgets"]
       assert report.unused_exemptions == ["gone.*", "gone.key"]
-      assert report.redundant_exemptions == ["agent.model"]
+      assert report.redundant_exemptions == ["execution.harnesses"]
     end
 
     test "a manifest entry inside a map setting is known, and leaves the setting's own exemption standing" do
-      keys = ["auto_review.playbooks", "agent.model"]
-      manifest = ["agent.model", "auto_review.playbooks.macos_app.requires", "auto_review.playbooksx.requires"]
+      keys = ["auto_review.playbooks", "execution.harnesses"]
+      manifest = ["execution.harnesses", "auto_review.playbooks.macos_app.requires", "auto_review.playbooksx.requires"]
       report = SettingsUICoverage.check(keys, manifest, [exemption(["auto_review.playbooks"])])
 
       assert report.uncovered == []

@@ -5,6 +5,9 @@ defmodule SymphonyElixir.AgentRunner do
 
   require Logger
 
+  alias SymphonyElixir.ClaudeCode.AppServer, as: ClaudeAppServer
+  alias SymphonyElixir.Harnesses.Launcher
+
   alias SymphonyElixir.{
     AgentLabels,
     AgentTmpDir,
@@ -72,7 +75,7 @@ defmodule SymphonyElixir.AgentRunner do
   # Consecutive turns with no new commit, no state change and no PR change that end the run.
   @max_empty_turns IdlePark.idle_turns()
   # Fallback when settings are unavailable; the effective value comes from
-  # `agent.codex_stdio_prompt_soft_limit` (see Config.Schema.Agent).
+  # `agent.codex_stdio_prompt_soft_limit` (see Config.Schema.Execution).
   @codex_stdio_prompt_soft_limit_fallback 65_536
   @tmp_dir_prefix "symphony-run-"
 
@@ -83,8 +86,12 @@ defmodule SymphonyElixir.AgentRunner do
 
   The orchestrator resolves this once per dispatch and passes it as `:run_profile`, so every
   turn of the run, continuations included, starts the agent with the same model and effort.
+
+  A run kind may have fallbacks (`Config.runs/2`). `opts[:available?]` says whether a candidate's
+  provider can take a new run; the first one that can is the profile, and the entry's own
+  choice when none can, so a run that must wait waits on its first choice.
   """
-  @spec run_profile(Issue.t(), Config.Schema.t(), keyword()) :: RunKind.profile()
+  @spec run_profile(Issue.t(), Config.Schema.t(), keyword()) :: Config.Runs.Run.t()
   def run_profile(%Issue{} = issue, settings, opts \\ []) do
     kind =
       RunKind.classify(issue,
@@ -94,7 +101,8 @@ defmodule SymphonyElixir.AgentRunner do
         settings: settings
       )
 
-    settings |> Config.run_profile(kind) |> Map.put(:kind, kind) |> UsageLimit.for_agent_kind(settings.agent.kind)
+    [own | _fallbacks] = candidates = Config.runs(settings, kind)
+    Enum.find(candidates, own, Keyword.get(opts, :available?, fn _run -> true end))
   end
 
   @spec run(map(), pid() | nil, keyword()) :: :ok | no_return()
@@ -592,7 +600,7 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp send_codex_update(recipient, %Issue{id: issue_id}, message) when is_binary(issue_id) and is_pid(recipient) do
-    payload = SymphonyElixir.ClaudeCode.AppServer.event_to_update(message) || message
+    payload = ClaudeAppServer.event_to_update(message) || message
     send(recipient, {:codex_worker_update, issue_id, payload})
     :ok
   end
@@ -771,7 +779,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp start_codex_turns(workspace, issue, codex_update_recipient, opts, worker_host) do
     settings = Keyword.fetch!(opts, :settings)
-    max_turns = Keyword.get(opts, :max_turns, settings.agent.max_turns)
+    max_turns = Keyword.get(opts, :max_turns, settings.execution.max_turns)
     issue_state_fetcher = Keyword.get(opts, :issue_state_fetcher, &Tracker.fetch_issue_states_by_ids/1)
 
     seed_ids = AgentTools.Linear.recover_comment_registry_seeds(issue, settings.tracker.kind, Keyword.take(opts, [:linear_retry_opts]))
@@ -780,6 +788,10 @@ defmodule SymphonyElixir.AgentRunner do
       opts
       |> Keyword.put_new_lazy(:run_profile, fn -> run_profile(issue, settings, opts) end)
       |> put_path_unlocks(issue)
+
+    # From here on the settings are the run's: its harness, its command and their defaults.
+    settings = run_settings(settings, Keyword.fetch!(opts, :run_profile))
+    opts = Keyword.put(opts, :settings, settings)
 
     with {:ok, agent_module} <- agent_module(opts),
          {:ok, linear_comment_registry} <- ensure_comment_registry(opts, seed_ids) do
@@ -933,7 +945,7 @@ defmodule SymphonyElixir.AgentRunner do
       dependency_audit_module: dependency_audit_module(opts),
       dependency_audit_base_ref: Keyword.get(opts, :dependency_audit_base_ref),
       dependency_audit_command_runner: Keyword.get(opts, :dependency_audit_command_runner),
-      extra_env: AgentTmpDir.env(settings.agent.kind, Keyword.get(opts, :agent_tmp_dir)),
+      extra_env: AgentTmpDir.env(settings.execution.harness, Keyword.get(opts, :agent_tmp_dir)),
       on_tool_call: Keyword.get(opts, :on_tool_call),
       unlocked_paths: Keyword.get(opts, :unlocked_paths, []),
       agent_tmp_dir: Keyword.get(opts, :agent_tmp_dir)
@@ -1536,18 +1548,15 @@ defmodule SymphonyElixir.AgentRunner do
     end
   end
 
+  # A run profile that is not a resolved run (a caller's bare map) leaves the settings to the
+  # launcher, which knows its harness.
+  defp run_settings(settings, %Config.Runs.Run{} = run), do: Config.for_run(settings, run)
+  defp run_settings(settings, _profile), do: settings
+
   defp agent_module(opts) do
     case Keyword.get(opts, :agent_module) do
-      nil -> agent_module_for_kind()
+      nil -> {:ok, Launcher.module!(Keyword.fetch!(opts, :run_profile).harness)}
       module -> {:ok, module}
-    end
-  end
-
-  defp agent_module_for_kind do
-    case Config.settings!().agent.kind do
-      "codex" -> {:ok, SymphonyElixir.Codex.AppServer}
-      "claude" -> {:ok, SymphonyElixir.ClaudeCode.AppServer}
-      kind -> {:error, {:unknown_agent_kind, kind}}
     end
   end
 
@@ -1622,7 +1631,7 @@ defmodule SymphonyElixir.AgentRunner do
   defp render_error?(%RuntimeError{message: "template_" <> _rest}), do: true
   defp render_error?(_error), do: false
 
-  defp agent_kind_from_settings(%{agent: %{kind: kind}}), do: kind
+  defp agent_kind_from_settings(%{execution: %{harness: harness}}), do: harness
   defp agent_kind_from_settings(_settings), do: nil
 
   defp maybe_compact_codex_initial_prompt(prompt, issue, opts) when is_binary(prompt) do
@@ -1639,7 +1648,7 @@ defmodule SymphonyElixir.AgentRunner do
 
   defp codex_stdio_prompt_soft_limit(opts) do
     case Keyword.get(opts, :settings) do
-      %{agent: %{codex_stdio_prompt_soft_limit: limit}} when is_integer(limit) and limit > 0 -> limit
+      %{execution: %{codex_stdio_prompt_soft_limit: limit}} when is_integer(limit) and limit > 0 -> limit
       _settings -> @codex_stdio_prompt_soft_limit_fallback
     end
   end

@@ -42,7 +42,7 @@ defmodule SymphonyElixir.ClaudeCode.McpConfigTest do
     missing_path = Path.join(System.tmp_dir!(), "missing-claude-#{System.unique_integer([:positive])}.json")
 
     assert {:ok, %{}} = McpConfig.inherited_servers(%{}, missing_path)
-    assert {:ok, %{}} = McpConfig.inherited_servers(%Schema{agent: %{}}, missing_path)
+    assert {:ok, %{}} = McpConfig.inherited_servers(%Schema{execution: %{}}, missing_path)
   end
 
   test "host Claude config read failures return structured errors" do
@@ -102,11 +102,7 @@ defmodule SymphonyElixir.ClaudeCode.McpConfigTest do
   defp settings!(mcp) do
     {:ok, settings} =
       Schema.parse(%{
-        agent: %{
-          kind: "claude",
-          command: "claude",
-          mcp: mcp
-        }
+        execution: %{mcp: mcp}
       })
 
     settings

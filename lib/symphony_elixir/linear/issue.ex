@@ -169,12 +169,12 @@ defmodule SymphonyElixir.Linear.Issue do
   def breakdown?(_issue), do: false
 
   @doc """
-  True when the issue carries `agent.concurrency.force_label` (case-insensitive) and is not in a
+  True when the issue carries `execution.concurrency.force_label` (case-insensitive) and is not in a
   terminal state: a human wants it worked now, through to Done.
   """
   @spec forced?(t(), SymphonyElixir.Config.Schema.t()) :: boolean()
   def forced?(%__MODULE__{labels: labels, state: state}, settings) when is_list(labels) do
-    force_label = normalize_state(settings.agent.force_label)
+    force_label = normalize_state(settings.execution.force_label)
     terminal? = is_binary(state) and Enum.any?(settings.tracker.terminal_states, &(normalize_state(&1) == normalize_state(state)))
 
     not terminal? and Enum.any?(labels, &(is_binary(&1) and normalize_state(&1) == force_label))

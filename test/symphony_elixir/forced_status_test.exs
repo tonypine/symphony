@@ -6,7 +6,7 @@ defmodule SymphonyElixir.ForcedStatusTest do
   describe "describe/1" do
     test "a running agent gives its run kind as the phase and waits on nothing" do
       kinds = [:implementation, :rework, :review_feedback, :ci_fix, :landing, :code_review, :qa]
-      kinds = kinds ++ [:breakdown, :close_out, :epic_review]
+      kinds = kinds ++ [:breakdown, :epic_review]
 
       for kind <- kinds do
         assert %{phase: ^kind, running: true, waiting_on: nil, blockers: []} =
@@ -72,7 +72,7 @@ defmodule SymphonyElixir.ForcedStatusTest do
   test "labels and the one-line summary" do
     assert ForcedStatus.phase_label(:review_feedback) == "review feedback"
     assert ForcedStatus.phase_label("waiting_for_human") == "waiting for a human"
-    assert ForcedStatus.phase_label(:close_out) == "close-out"
+    assert ForcedStatus.phase_label(:close_out) == "unknown"
     assert ForcedStatus.phase_label(:breakdown) == "plan"
     assert ForcedStatus.phase_label(nil) == "unknown"
 

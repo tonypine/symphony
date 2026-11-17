@@ -5,8 +5,10 @@ defmodule SymphonyElixir.Config.Schema do
 
   import Ecto.Changeset
 
+  alias SymphonyElixir.{AgentProviders, PathSafety, RunKind, Secret}
+  alias SymphonyElixir.Config.Runs
+  alias SymphonyElixir.Config.Runs.Run
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{PathSafety, RunKind, Secret}
 
   require Logger
 
@@ -768,168 +770,20 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
-  defmodule RepoAgent do
+  defmodule Execution do
     @moduledoc false
-    # A repository's `repositories[].agent` block: run profile settings that take precedence over
-    # the `agent` section for issues routed to that repository. `key` is the repository's key,
-    # which `Config` sets so messages can name `repositories[<key>].agent.*`.
+    # The `execution:` section: how every run is executed (concurrency, limits, timeouts,
+    # prompts, permissions, MCP, usage limits) and each harness's command. What a kind of run
+    # starts with (its harness, provider and model) is the `runs:` section's
+    # (`SymphonyElixir.Config.Runs`).
+    #
+    # `harness`, `command` and `run` are nil in the operator's settings. They are set on a
+    # run's settings (`SymphonyElixir.Config.for_run/2`), with the defaults that depend on the
+    # harness.
     use Ecto.Schema
     import Ecto.Changeset
 
     alias SymphonyElixir.Config.Schema
-    alias SymphonyElixir.Config.Schema.Agent
-    alias SymphonyElixir.RunKind
-
-    @primary_key false
-
-    embedded_schema do
-      field(:model, :string)
-      field(:effort, :string)
-      field(:provider, :string)
-      field(:run_profiles, :map, default: %{})
-      field(:key, :string)
-    end
-
-    @type t :: %__MODULE__{}
-    @type sections :: %{agent: Agent.t(), review_agent: map(), auto_review: map(), worker: map()}
-
-    @spec changeset(t(), map()) :: Ecto.Changeset.t()
-    def changeset(schema, attrs) do
-      schema
-      |> cast(attrs, [:model, :effort, :provider, :run_profiles, :key], empty_values: [])
-      |> Agent.validate_run_profile_settings()
-    end
-
-    @doc """
-    Parses a repository's agent block against the operator sections it overrides. Each error is
-    a message that starts with `path`, the block's config key (`repositories[<key>].agent`).
-    """
-    @spec parse(map(), sections(), String.t()) :: {:ok, t()} | {:error, [String.t()]}
-    def parse(attrs, sections, path) do
-      case %__MODULE__{} |> changeset(attrs) |> apply_action(:validate) do
-        {:ok, repo_agent} ->
-          case openrouter_errors(repo_agent, sections, path) ++ command_flag_errors(repo_agent, sections, path) do
-            [] -> {:ok, repo_agent}
-            errors -> {:error, errors}
-          end
-
-        {:error, changeset} ->
-          {:error, field_errors(changeset, path)}
-      end
-    end
-
-    @doc """
-    The model, effort and provider a run of `kind` resolves to, field by field:
-    `repositories[].agent.run_profiles.<kind>`, `repositories[].agent`, `agent.run_profiles.<kind>`,
-    `agent`, then nil (or `"anthropic"` for the provider).
-    """
-    @spec resolve(t() | nil, Agent.t(), String.t()) :: %{
-            model: String.t() | nil,
-            effort: String.t() | nil,
-            provider: RunKind.provider()
-          }
-    def resolve(repo_agent, agent, kind) do
-      layers = [profile(repo_agent, kind), fields(repo_agent), profile(agent, kind), fields(agent)]
-
-      %{
-        model: Enum.find_value(layers, & &1["model"]),
-        effort: Enum.find_value(layers, & &1["effort"]),
-        provider: Enum.find_value(layers, & &1["provider"]) || "anthropic"
-      }
-    end
-
-    defp profile(nil, _kind), do: %{}
-    defp profile(%{run_profiles: profiles}, kind), do: Map.get(profiles, kind, %{})
-
-    defp fields(nil), do: %{}
-    defp fields(%{model: model, effort: effort, provider: provider}), do: %{"model" => model, "effort" => effort, "provider" => provider}
-
-    defp field_errors(changeset, path) do
-      changeset
-      |> traverse_errors(fn {message, opts} ->
-        Enum.reduce(opts, message, fn {key, value}, acc -> String.replace(acc, "%{#{key}}", to_string(value)) end)
-      end)
-      |> Enum.flat_map(fn {key, messages} -> Enum.map(messages, &"#{path}.#{key} #{&1}") end)
-      |> Enum.sort()
-    end
-
-    # Only the runs this block points at OpenRouter are checked here; the `agent` section checks
-    # its own. Each error names the key that picked OpenRouter.
-    defp openrouter_errors(repo_agent, %{agent: agent, worker: worker}, path) do
-      RunKind.names()
-      |> Enum.filter(&(resolve(repo_agent, agent, &1).provider == "openrouter"))
-      |> Enum.group_by(&openrouter_key(repo_agent, &1))
-      |> Map.delete(nil)
-      |> Enum.sort()
-      |> Enum.flat_map(fn {key, kinds} ->
-        missing = Enum.filter(kinds, &is_nil(resolve(repo_agent, agent, &1).model))
-
-        openrouter_runtime_errors(agent, path, key) ++
-          openrouter_worker_errors(worker, path, key) ++ openrouter_model_errors(path, key, missing)
-      end)
-    end
-
-    defp openrouter_key(repo_agent, kind) do
-      cond do
-        Map.has_key?(profile(repo_agent, kind), "provider") -> "run_profiles.#{kind}.provider"
-        repo_agent.provider == "openrouter" -> "provider"
-        true -> nil
-      end
-    end
-
-    defp openrouter_runtime_errors(%{kind: "claude"}, _path, _key), do: []
-    defp openrouter_runtime_errors(_agent, path, key), do: ["#{path}.#{key} openrouter is only supported with agent.runtime: claude"]
-
-    defp openrouter_worker_errors(%{ssh_hosts: [_ | _]}, path, key) do
-      ["#{path}.#{key} openrouter is not supported with workers.ssh_hosts; OpenRouter runs start on the local host only"]
-    end
-
-    defp openrouter_worker_errors(_worker, _path, _key), do: []
-
-    defp openrouter_model_errors(_path, _key, []), do: []
-
-    defp openrouter_model_errors(path, "provider", kinds) do
-      [
-        "#{path}.provider openrouter needs an OpenRouter model id; set #{path}.model, #{path}.run_profiles.<kind>.model or agent.model (missing for: #{Enum.join(kinds, ", ")})"
-      ]
-    end
-
-    defp openrouter_model_errors(path, key, [kind]) do
-      ["#{path}.#{key} openrouter needs an OpenRouter model id; set #{path}.run_profiles.#{kind}.model, #{path}.model or agent.model"]
-    end
-
-    # The resolved model and effort are passed as flags, so a command that already passes one
-    # would give it twice. `agent.command` serves every run kind; the reviewer and QA commands
-    # only their own.
-    defp command_flag_errors(repo_agent, sections, path) do
-      [
-        {"agent.command", sections.agent.command, Schema.profile_settings?(repo_agent, nil)},
-        {"code_review.command", sections.review_agent.command, Schema.profile_settings?(repo_agent, "code_review")},
-        {"auto_review.command", sections.auto_review.command, Schema.profile_settings?(repo_agent, "qa")}
-      ]
-      |> Enum.filter(fn {_key, _command, settings?} -> settings? end)
-      |> Enum.flat_map(fn {key, command, _settings?} ->
-        Enum.map(Agent.profile_flags_in(command), &"#{key} must not pass #{&1} when #{path} sets a model, effort or run_profiles; remove it from #{key}")
-      end)
-    end
-  end
-
-  defmodule Agent do
-    @moduledoc false
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    alias SymphonyElixir.Config.Schema
-    alias SymphonyElixir.RunKind
-
-    @efforts ["low", "medium", "high", "xhigh", "max"]
-    @providers ["anthropic", "openrouter"]
-    @run_profile_keys ["model", "effort", "provider"]
-    @run_profile_error_keys Map.new(
-                              for kind <- RunKind.names(), suffix <- ["", ".model", ".effort", ".provider"] do
-                                {kind <> suffix, :"run_profiles.#{kind}#{suffix}"}
-                              end
-                            )
 
     @default_max_tokens_per_issue 500_000
     @default_max_tokens_per_day 5_000_000
@@ -946,6 +800,12 @@ defmodule SymphonyElixir.Config.Schema do
         "mcp_elicitations" => true
       }
     }
+
+    @doc "The `execution.harnesses` map as `SymphonyElixir.Config.Runs` reads it."
+    @spec harnesses(t()) :: SymphonyElixir.Config.Runs.harnesses()
+    def harnesses(%{harnesses: harnesses}) do
+      Map.new(harnesses || %{}, fn {id, harness} -> {id, %{command: harness["command"], small_model: harness["small_model"] || %{}}} end)
+    end
 
     @doc false
     @spec codex_default_approval_policy() :: map()
@@ -1058,7 +918,7 @@ defmodule SymphonyElixir.Config.Schema do
 
         @primary_key false
         @transports ["stdio", "http", "sse"]
-        @runtimes ["claude", "codex"]
+        @harnesses SymphonyElixir.Harnesses.ids()
 
         embedded_schema do
           field(:name, :string)
@@ -1068,22 +928,22 @@ defmodule SymphonyElixir.Config.Schema do
           field(:env, :map, default: %{})
           field(:url, :string)
           field(:headers, :map, default: %{})
-          field(:runtimes, {:array, :string}, default: @runtimes)
+          field(:harnesses, {:array, :string}, default: @harnesses)
         end
 
         @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
         def changeset(schema, attrs) do
           schema
-          |> cast(attrs, [:name, :transport, :command, :args, :env, :url, :headers, :runtimes], empty_values: [])
+          |> cast(attrs, [:name, :transport, :command, :args, :env, :url, :headers, :harnesses], empty_values: [])
           |> Schema.validate_present([:name, :transport])
           |> validate_inclusion(:transport, @transports)
           |> normalize_string_list(:args)
-          |> normalize_string_list(:runtimes)
+          |> normalize_string_list(:harnesses)
           |> normalize_optional_map(:env)
           |> normalize_optional_map(:headers)
-          |> validate_runtime_values()
+          |> validate_harness_values()
           |> validate_transport_requirements()
-          |> validate_transport_runtimes()
+          |> validate_transport_harnesses()
         end
 
         defp normalize_string_list(changeset, field) do
@@ -1118,9 +978,9 @@ defmodule SymphonyElixir.Config.Schema do
 
         defp resolve_env_reference(value), do: value
 
-        defp validate_runtime_values(changeset) do
-          validate_change(changeset, :runtimes, fn :runtimes, runtimes ->
-            invalid = Enum.reject(runtimes, &(&1 in @runtimes))
+        defp validate_harness_values(changeset) do
+          validate_change(changeset, :harnesses, fn :harnesses, harnesses ->
+            invalid = Enum.reject(harnesses, &(&1 in @harnesses))
 
             case invalid do
               [] -> []
@@ -1137,15 +997,15 @@ defmodule SymphonyElixir.Config.Schema do
           end
         end
 
-        defp validate_transport_runtimes(changeset) do
+        defp validate_transport_harnesses(changeset) do
           transport = get_field(changeset, :transport)
-          runtimes = get_field(changeset, :runtimes) || []
+          harnesses = get_field(changeset, :harnesses) || []
 
-          if transport in ["http", "sse"] and "codex" in runtimes do
+          if transport in ["http", "sse"] and "codex" in harnesses do
             add_error(
               changeset,
-              :runtimes,
-              ~s(transport=#{inspect(transport)} is not supported for Codex; Codex MCP servers must use transport="stdio")
+              :harnesses,
+              ~s(transport=#{inspect(transport)} is not supported on the codex harness; its MCP servers must use transport="stdio")
             )
           else
             changeset
@@ -1186,10 +1046,10 @@ defmodule SymphonyElixir.Config.Schema do
 
         cond do
           inherit == "allowlist" and allowed_servers == [] ->
-            add_error(changeset, :allowed_servers, "must not be empty when agent.mcp.inherit is allowlist")
+            add_error(changeset, :allowed_servers, "must not be empty when execution.mcp.inherit is allowlist")
 
           inherit in ["none", "all"] and allowed_servers != [] ->
-            add_error(changeset, :allowed_servers, "must be empty unless agent.mcp.inherit is allowlist")
+            add_error(changeset, :allowed_servers, "must be empty unless execution.mcp.inherit is allowlist")
 
           true ->
             changeset
@@ -1247,7 +1107,11 @@ defmodule SymphonyElixir.Config.Schema do
 
     @primary_key false
     embedded_schema do
-      field(:kind, :string)
+      field(:harness, :string)
+      field(:command, :string)
+      field(:run, :any, virtual: true)
+      # `execution.harnesses`, parsed by `SymphonyElixir.Config.Runs.parse_harnesses/1`.
+      field(:harnesses, :map, default: %{})
       field(:max_concurrent_agents, :integer, default: 10)
       field(:epic_lanes, :integer)
       field(:finishing_max, :integer, default: 2)
@@ -1260,15 +1124,6 @@ defmodule SymphonyElixir.Config.Schema do
       field(:max_tokens_per_issue, :integer, default: @default_max_tokens_per_issue)
       field(:max_tokens_per_day, :integer, default: @default_max_tokens_per_day)
       field(:max_consecutive_identical_tool_failures, :integer, default: 5)
-      field(:command, :string)
-      field(:model, :string)
-      field(:effort, :string)
-      field(:provider, :string)
-      # The OpenRouter model for Claude Code's background calls (titles, summaries) on runs whose
-      # provider is `openrouter`; unset, they use the run's model.
-      field(:small_model, :string)
-      field(:run_profiles, :map, default: %{})
-
       field(:approval_policy, StringOrMap)
       field(:include_project_guides, :boolean, default: true)
       field(:project_guide_files, {:array, :string})
@@ -1279,8 +1134,6 @@ defmodule SymphonyElixir.Config.Schema do
       embeds_one(:network_access, NetworkAccess, on_replace: :update, defaults_to_struct: true)
       embeds_one(:sandbox_runtime, SandboxRuntime, on_replace: :update, defaults_to_struct: true)
       embeds_one(:usage_limit, UsageLimit, on_replace: :update, defaults_to_struct: true)
-      # The routed repository's `repositories[].agent` block; `Config` sets it per repository.
-      embeds_one(:repository, Schema.RepoAgent, on_replace: :update)
       field(:turn_timeout_ms, :integer, default: 3_600_000)
       field(:read_timeout_ms, :integer, default: 30_000)
       field(:stall_timeout_ms, :integer, default: 300_000)
@@ -1299,7 +1152,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> cast(
         attrs,
         [
-          :kind,
+          :harnesses,
           :max_concurrent_agents,
           :epic_lanes,
           :finishing_max,
@@ -1312,12 +1165,6 @@ defmodule SymphonyElixir.Config.Schema do
           :max_tokens_per_issue,
           :max_tokens_per_day,
           :max_consecutive_identical_tool_failures,
-          :command,
-          :model,
-          :effort,
-          :provider,
-          :small_model,
-          :run_profiles,
           :approval_policy,
           :include_project_guides,
           :project_guide_files,
@@ -1332,8 +1179,7 @@ defmodule SymphonyElixir.Config.Schema do
         ],
         empty_values: []
       )
-      |> Schema.validate_present([:kind, :command, :force_label])
-      |> validate_inclusion(:kind, ["codex", "claude"])
+      |> Schema.validate_present([:force_label])
       |> validate_number(:max_concurrent_agents, greater_than: 0)
       |> validate_epic_lanes()
       |> validate_number(:finishing_max, greater_than: 0)
@@ -1351,17 +1197,12 @@ defmodule SymphonyElixir.Config.Schema do
       |> validate_number(:mcp_tool_timeout_ms, greater_than: 0)
       |> validate_number(:codex_stdio_prompt_soft_limit, greater_than: 0)
       |> validate_project_guide_files()
-      |> validate_run_profile_settings()
-      |> validate_setting(:small_model, &check_model/1)
-      |> validate_openrouter_profiles()
-      |> validate_command_run_profile_flags()
       |> update_change(:max_concurrent_agents_by_state, &Schema.normalize_state_limits/1)
       |> Schema.validate_state_limits(:max_concurrent_agents_by_state)
       |> cast_embed(:mcp, with: &Mcp.changeset/2)
       |> cast_embed(:network_access, with: &NetworkAccess.changeset/2)
       |> cast_embed(:sandbox_runtime, with: &SandboxRuntime.changeset/2)
       |> cast_embed(:usage_limit, with: &UsageLimit.changeset/2)
-      |> cast_embed(:repository, with: &Schema.RepoAgent.changeset/2)
     end
 
     # Lanes come out of `max_total`, so there can be at most that many; unset means every slot can be a lane.
@@ -1371,178 +1212,12 @@ defmodule SymphonyElixir.Config.Schema do
           validate_number(changeset, :epic_lanes,
             greater_than_or_equal_to: 0,
             less_than_or_equal_to: max_total,
-            message: "must be between 0 and agent.concurrency.max_total (#{max_total})"
+            message: "must be between 0 and execution.concurrency.max_total (#{max_total})"
           )
 
         _max_total ->
           validate_number(changeset, :epic_lanes, greater_than_or_equal_to: 0)
       end
-    end
-
-    @doc false
-    @spec validate_profile_fields(Ecto.Changeset.t()) :: Ecto.Changeset.t()
-    def validate_profile_fields(changeset) do
-      changeset
-      |> validate_setting(:model, &check_model/1)
-      |> validate_setting(:effort, &check_effort/1)
-    end
-
-    @doc false
-    @spec validate_run_profile_settings(Ecto.Changeset.t()) :: Ecto.Changeset.t()
-    def validate_run_profile_settings(changeset) do
-      changeset
-      |> validate_profile_fields()
-      |> validate_setting(:provider, &check_provider/1)
-      |> validate_run_profiles()
-    end
-
-    @doc false
-    @spec profile_flags_in(String.t() | nil) :: [String.t()]
-    def profile_flags_in(command) when is_binary(command) do
-      Enum.filter(["--model", "--effort"], &Regex.match?(~r/(^|\s)#{&1}(=|\s|$)/, command))
-    end
-
-    def profile_flags_in(_command), do: []
-
-    defp validate_setting(changeset, field, check) do
-      case Map.fetch(changeset.changes, field) do
-        {:ok, value} ->
-          case check.(value) do
-            {:ok, value} -> put_change(changeset, field, value)
-            {:error, message} -> add_error(changeset, field, message)
-          end
-
-        :error ->
-          changeset
-      end
-    end
-
-    defp check_model(model) when is_binary(model) do
-      case String.trim(model) do
-        "" -> {:error, "must not be blank"}
-        trimmed -> {:ok, trimmed}
-      end
-    end
-
-    defp check_model(_model), do: {:error, "must be a string"}
-
-    defp check_effort(effort) when effort in @efforts, do: {:ok, effort}
-    defp check_effort(_effort), do: {:error, "must be one of: #{Enum.join(@efforts, ", ")}"}
-
-    defp check_provider(provider) when provider in @providers, do: {:ok, provider}
-    defp check_provider(_provider), do: {:error, "must be one of: #{Enum.join(@providers, ", ")}"}
-
-    defp validate_run_profiles(changeset) do
-      case Map.fetch(changeset.changes, :run_profiles) do
-        {:ok, profiles} ->
-          {changeset, normalized} = Enum.reduce(profiles, {changeset, %{}}, &cast_run_profile/2)
-          put_change(changeset, :run_profiles, normalized)
-
-        :error ->
-          changeset
-      end
-    end
-
-    defp cast_run_profile({kind, profile}, {changeset, normalized}) do
-      kind = to_string(kind)
-
-      cond do
-        not Map.has_key?(@run_profile_error_keys, kind) ->
-          message = "has unknown run kind `#{kind}`; expected one of: #{Enum.join(RunKind.names(), ", ")}"
-          {add_error(changeset, :run_profiles, message), normalized}
-
-        not is_map(profile) ->
-          {add_error(changeset, @run_profile_error_keys[kind], "must be an object with model, effort and/or provider"), normalized}
-
-        true ->
-          cast_run_profile_fields(changeset, normalized, kind, Map.new(profile, fn {key, value} -> {to_string(key), value} end))
-      end
-    end
-
-    defp cast_run_profile_fields(changeset, normalized, kind, profile) do
-      case Map.keys(profile) -- @run_profile_keys do
-        [] ->
-          {changeset, normalized_profile} = Enum.reduce(profile, {changeset, %{}}, &cast_run_profile_field(&1, &2, kind))
-          {changeset, Map.put(normalized, kind, normalized_profile)}
-
-        [unknown | _rest] ->
-          {add_error(changeset, @run_profile_error_keys[kind], "has unknown key `#{unknown}`; expected model, effort or provider"), normalized}
-      end
-    end
-
-    defp cast_run_profile_field({key, value}, {changeset, fields}, kind) do
-      case check_run_profile_field(key, value) do
-        {:ok, value} -> {changeset, Map.put(fields, key, value)}
-        {:error, message} -> {add_error(changeset, @run_profile_error_keys["#{kind}.#{key}"], message), fields}
-      end
-    end
-
-    defp check_run_profile_field("model", model), do: check_model(model)
-    defp check_run_profile_field("effort", effort), do: check_effort(effort)
-    defp check_run_profile_field("provider", provider), do: check_provider(provider)
-
-    # OpenRouter serves the model a run names, so every run it serves needs a resolved model,
-    # and only the Claude runtime can be pointed at it. Each error names the key that picked
-    # OpenRouter: the profile's `provider`, else `agent.provider`.
-    defp validate_openrouter_profiles(changeset) do
-      provider = get_field(changeset, :provider)
-      model = get_field(changeset, :model)
-      profiles = get_field(changeset, :run_profiles)
-
-      RunKind.names()
-      |> Enum.map(&{&1, Map.get(profiles, &1, %{})})
-      |> Enum.filter(fn {_kind, profile} -> Map.get(profile, "provider", provider) == "openrouter" end)
-      |> Enum.group_by(&openrouter_error_key/1, fn {kind, profile} -> {kind, Map.get(profile, "model", model)} end)
-      |> Enum.reduce(changeset, fn {key, resolved}, acc ->
-        acc
-        |> add_openrouter_runtime_error(key)
-        |> add_openrouter_model_error(key, for({kind, nil} <- resolved, do: kind))
-      end)
-    end
-
-    defp openrouter_error_key({kind, %{"provider" => _provider}}), do: @run_profile_error_keys["#{kind}.provider"]
-    defp openrouter_error_key({_kind, _profile}), do: :provider
-
-    defp add_openrouter_runtime_error(changeset, key) do
-      case get_field(changeset, :kind) do
-        "claude" -> changeset
-        _runtime -> add_error(changeset, key, "openrouter is only supported with agent.runtime: claude")
-      end
-    end
-
-    defp add_openrouter_model_error(changeset, _key, []), do: changeset
-
-    defp add_openrouter_model_error(changeset, :provider, kinds) do
-      add_error(
-        changeset,
-        :provider,
-        "openrouter needs an OpenRouter model id; set agent.model or agent.run_profiles.<kind>.model (missing for: #{Enum.join(kinds, ", ")})"
-      )
-    end
-
-    defp add_openrouter_model_error(changeset, key, [kind]) do
-      add_error(changeset, key, "openrouter needs an OpenRouter model id; set agent.run_profiles.#{kind}.model or agent.model")
-    end
-
-    # The resolved model and effort are passed as flags, so the same flag in `agent.command`
-    # would be given twice.
-    defp validate_command_run_profile_flags(changeset) do
-      command = get_field(changeset, :command)
-
-      if run_profile_settings?(changeset) do
-        command
-        |> profile_flags_in()
-        |> Enum.reduce(changeset, fn flag, acc ->
-          add_error(acc, :command, "must not pass #{flag} when agent.model, agent.effort or agent.run_profiles is set; remove it from agent.command")
-        end)
-      else
-        changeset
-      end
-    end
-
-    defp run_profile_settings?(changeset) do
-      not is_nil(get_field(changeset, :model)) or not is_nil(get_field(changeset, :effort)) or
-        get_field(changeset, :run_profiles) not in [nil, %{}]
     end
 
     defp validate_project_guide_files(changeset) do
@@ -2087,31 +1762,15 @@ defmodule SymphonyElixir.Config.Schema do
     @type t :: %__MODULE__{}
 
     @primary_key false
-    @fields [:enabled, :kind, :command, :model, :effort]
+    @fields [:enabled]
 
     embedded_schema do
       field(:enabled, :boolean, default: false)
-      field(:kind, :string)
-      field(:command, :string)
-      field(:model, :string)
-      field(:effort, :string)
     end
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
-      schema
-      |> cast(attrs, @fields, empty_values: [])
-      |> validate_inclusion(:kind, ["codex", "claude"])
-      |> Agent.validate_profile_fields()
-      |> validate_required_when_enabled()
-    end
-
-    defp validate_required_when_enabled(changeset) do
-      if get_field(changeset, :enabled) do
-        Schema.validate_present(changeset, [:kind, :command], message: "is required when review_agent.enabled is true")
-      else
-        changeset
-      end
+      cast(schema, attrs, @fields, empty_values: [])
     end
   end
 
@@ -2121,7 +1780,7 @@ defmodule SymphonyElixir.Config.Schema do
     import Ecto.Changeset
 
     alias SymphonyElixir.Config.DeprecatedGateSettings
-    alias SymphonyElixir.QaAgent.PlaybookSettings
+    alias SymphonyElixir.PlaybookSettings
 
     # Recompile when the deprecated gate block's defaults change (see the note in `SystemSchema`).
     require DeprecatedGateSettings
@@ -2164,10 +1823,6 @@ defmodule SymphonyElixir.Config.Schema do
     @primary_key false
     @fields [
       :enabled,
-      :kind,
-      :command,
-      :model,
-      :effort,
       :max_turns,
       :timeout_ms,
       :max_concurrent,
@@ -2180,10 +1835,6 @@ defmodule SymphonyElixir.Config.Schema do
 
     embedded_schema do
       field(:enabled, :boolean, default: false)
-      field(:kind, :string)
-      field(:command, :string)
-      field(:model, :string)
-      field(:effort, :string)
       field(:max_turns, :integer, default: 20)
       field(:timeout_ms, :integer, default: 1_800_000)
       field(:max_concurrent, :integer, default: 1)
@@ -2203,14 +1854,12 @@ defmodule SymphonyElixir.Config.Schema do
       |> cast_embed(:android, with: &Android.changeset/2)
       |> cast_embed(:acceptance_gate, with: &DeprecatedGateSettings.changeset/2)
       |> validate_format(:worker_host, ~r/\A[^\s-]\S*\z/, message: "must be an SSH host such as qa@qa-vm.local or qa-vm:2222")
-      |> validate_inclusion(:kind, ["codex", "claude"])
       |> validate_inclusion(:run_on, ["every_push", "first_pass"])
       |> validate_number(:max_turns, greater_than: 0)
       |> validate_number(:timeout_ms, greater_than: 0)
       |> validate_number(:max_concurrent, greater_than: 0)
       |> validate_number(:max_fix_attempts, greater_than_or_equal_to: 0)
       |> validate_change(:playbooks, &validate_playbooks/2)
-      |> Agent.validate_profile_fields()
     end
 
     defp validate_playbooks(:playbooks, playbooks) do
@@ -2447,8 +2096,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     @primary_key false
 
-    # Every run kind `RunKind.classify/2` returns; the retired `close_out` never runs.
-    @kinds RunKind.kinds() -- [:close_out]
+    @kinds RunKind.kinds()
     @kind_names Map.new(@kinds, &{Atom.to_string(&1), &1})
     @findings_command "symphony:findings"
 
@@ -3032,7 +2680,11 @@ defmodule SymphonyElixir.Config.Schema do
     embeds_one(:worker, Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:github, GitHub, on_replace: :update, defaults_to_struct: true)
     embeds_one(:linear, Linear, on_replace: :update, defaults_to_struct: true)
-    embeds_one(:agent, Agent, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:execution, Execution, on_replace: :update, defaults_to_struct: true)
+    # The `runs:` section, parsed by `SymphonyElixir.Config.Runs.parse/2`; `repository_runs` is
+    # the routed repository's block with its config key, `%{"path" => ..., "runs" => ...}`.
+    field(:runs, :map, default: %{})
+    field(:repository_runs, :map)
     embeds_one(:hooks, Hooks, on_replace: :update, defaults_to_struct: true)
     embeds_one(:push_check, PushCheck, on_replace: :update, defaults_to_struct: true)
     embeds_one(:observability, Observability, on_replace: :update, defaults_to_struct: true)
@@ -3090,7 +2742,7 @@ defmodule SymphonyElixir.Config.Schema do
   @spec resolve_turn_sandbox_policy(%__MODULE__{}, Path.t() | nil) :: map()
   def resolve_turn_sandbox_policy(settings, workspace \\ nil) do
     policy =
-      case settings.agent.turn_sandbox_policy do
+      case settings.execution.turn_sandbox_policy do
         %{} = policy ->
           policy
 
@@ -3101,14 +2753,14 @@ defmodule SymphonyElixir.Config.Schema do
           |> default_turn_sandbox_policy()
       end
 
-    apply_codex_network_access(policy, codex_network_access(settings.agent.network_access))
+    apply_codex_network_access(policy, codex_network_access(settings.execution.network_access))
   end
 
   @spec resolve_runtime_turn_sandbox_policy(%__MODULE__{}, Path.t() | nil, keyword()) ::
           {:ok, map()} | {:error, term()}
   def resolve_runtime_turn_sandbox_policy(settings, workspace \\ nil, opts \\ []) do
     policy_result =
-      case settings.agent.turn_sandbox_policy do
+      case settings.execution.turn_sandbox_policy do
         %{} = policy ->
           resolve_explicit_runtime_turn_sandbox_policy(policy, workspace, settings.workspace.root, opts)
 
@@ -3122,7 +2774,7 @@ defmodule SymphonyElixir.Config.Schema do
       {:ok,
        policy
        |> ensure_workspace_write_roots(settings, workspace, opts)
-       |> apply_codex_network_access(codex_network_access(settings.agent.network_access))}
+       |> apply_codex_network_access(codex_network_access(settings.execution.network_access))}
     end
   end
 
@@ -3141,7 +2793,7 @@ defmodule SymphonyElixir.Config.Schema do
   @doc false
   @spec codex_effective_network_allowed_domains(%__MODULE__{}) :: [String.t()]
   def codex_effective_network_allowed_domains(%__MODULE__{} = settings) do
-    network_access = codex_network_access(settings.agent.network_access)
+    network_access = codex_network_access(settings.execution.network_access)
     denied_domains = network_access.denied_domains |> normalize_domain_list() |> MapSet.new()
 
     (@codex_built_in_network_allowed_domains ++ normalize_domain_list(network_access.allowed_domains))
@@ -3152,11 +2804,11 @@ defmodule SymphonyElixir.Config.Schema do
   @doc """
   The hosts a sandboxed verification dev server may reach through its egress proxy: the
   agent's built-in dependency hosts, without the model providers, plus
-  `agent.permissions.network.allowed_domains`, less `denied_domains`. None with `mode: block`.
+  `execution.permissions.network.allowed_domains`, less `denied_domains`. None with `mode: block`.
   """
   @spec dev_server_network_allowed_domains(%__MODULE__{}) :: [String.t()]
   def dev_server_network_allowed_domains(%__MODULE__{} = settings) do
-    case codex_network_access(settings.agent.network_access) do
+    case codex_network_access(settings.execution.network_access) do
       %{mode: "block"} ->
         []
 
@@ -3172,7 +2824,7 @@ defmodule SymphonyElixir.Config.Schema do
   @doc false
   @spec resolve_codex_thread_config(%__MODULE__{}) :: map() | nil
   def resolve_codex_thread_config(%__MODULE__{} = settings) do
-    case codex_network_access(settings.agent.network_access).mode do
+    case codex_network_access(settings.execution.network_access).mode do
       "allowlist" ->
         domains =
           settings
@@ -3240,7 +2892,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [:manual_review, :proof_check], empty_values: [])
+    |> cast(attrs, [:manual_review, :proof_check, :runs, :repository_runs], empty_values: [])
     |> validate_inclusion(:manual_review, ["on", "off"])
     |> cast_embed(:tracker, with: &Tracker.changeset/2)
     |> cast_embed(:tickets, with: &Tickets.changeset/2)
@@ -3251,7 +2903,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:worker, with: &Worker.changeset/2)
     |> cast_embed(:github, with: &GitHub.changeset/2)
     |> cast_embed(:linear, with: &Linear.changeset/2)
-    |> cast_embed(:agent, with: &Agent.changeset/2)
+    |> cast_embed(:execution, with: &Execution.changeset/2)
     |> cast_embed(:hooks, with: &Hooks.changeset/2)
     |> cast_embed(:push_check, with: &PushCheck.changeset/2)
     |> cast_embed(:observability, with: &Observability.changeset/2)
@@ -3266,67 +2918,7 @@ defmodule SymphonyElixir.Config.Schema do
     |> cast_embed(:dependencies, with: &Dependencies.changeset/2)
     |> cast_embed(:notifications, with: &Notifications.changeset/2)
     |> cast_embed(:human_actions, with: &HumanActions.changeset/2)
-    |> validate_profile_command_flags()
   end
-
-  @doc """
-  Rejects `--model` / `--effort` in Code Review's reviewer and the QA agent commands when a model or
-  effort resolves for that run kind, since the resolved values are passed as those flags.
-
-  The QA agent falls back to `agent.command`; that command is only checked here when the QA
-  agent's own `model` / `effort` is what makes the flag conflict, because the `agent` section
-  already rejects it otherwise.
-  """
-  @spec validate_profile_command_flags(Ecto.Changeset.t()) :: Ecto.Changeset.t()
-  def validate_profile_command_flags(changeset) do
-    agent = get_field(changeset, :agent)
-    review_agent = get_field(changeset, :review_agent)
-    auto_review = get_field(changeset, :auto_review)
-    agent_settings? = profile_settings?(agent, nil)
-
-    changeset
-    |> reject_profile_flags(:review_agent, review_agent.command, &"must not pass #{&1} when a model or effort is set for Code Review's reviewer; remove it from the command", fn ->
-      own_profile_settings?(review_agent) or profile_settings?(agent, "code_review")
-    end)
-    |> reject_qa_profile_flags(auto_review, agent, agent_settings?)
-  end
-
-  defp reject_qa_profile_flags(changeset, %{command: command} = auto_review, agent, _agent_settings?) when is_binary(command) do
-    reject_profile_flags(changeset, :auto_review, command, &"must not pass #{&1} when a model or effort is set for the QA agent; remove it from the command", fn ->
-      own_profile_settings?(auto_review) or profile_settings?(agent, "qa")
-    end)
-  end
-
-  defp reject_qa_profile_flags(changeset, auto_review, agent, false = _agent_settings?) do
-    message = &"is not set, and agent.command passes #{&1} while auto_review.model or auto_review.effort is set; set auto_review.command without #{&1}"
-    reject_profile_flags(changeset, :auto_review, agent.command, message, fn -> own_profile_settings?(auto_review) end)
-  end
-
-  defp reject_qa_profile_flags(changeset, _auto_review, _agent, true = _agent_settings?), do: changeset
-
-  defp reject_profile_flags(changeset, section, command, message, settings?) do
-    case Agent.profile_flags_in(command) do
-      [] ->
-        changeset
-
-      flags ->
-        if settings?.() do
-          section_changeset =
-            Enum.reduce(flags, Map.get(changeset.changes, section) || change(get_field(changeset, section)), &add_error(&2, :command, message.(&1)))
-
-          %{changeset | changes: Map.put(changeset.changes, section, section_changeset), valid?: false}
-        else
-          changeset
-        end
-    end
-  end
-
-  defp own_profile_settings?(%{model: model, effort: effort}), do: not is_nil(model) or not is_nil(effort)
-
-  @doc false
-  @spec profile_settings?(Agent.t() | RepoAgent.t(), String.t() | nil) :: boolean()
-  def profile_settings?(agent, nil), do: own_profile_settings?(agent) or agent.run_profiles not in [nil, %{}]
-  def profile_settings?(agent, kind), do: own_profile_settings?(agent) or Map.has_key?(agent.run_profiles || %{}, kind)
 
   defp finalize_settings(settings) do
     tracker = %{
@@ -3344,14 +2936,10 @@ defmodule SymphonyElixir.Config.Schema do
         repo: resolve_path_value(settings.workspace.repo, nil)
     }
 
-    agent = %{
-      settings.agent
-      | approval_policy:
-          settings.agent
-          |> default_agent_approval_policy()
-          |> normalize_keys(),
-        turn_sandbox_policy: normalize_optional_map(settings.agent.turn_sandbox_policy),
-        network_access: normalize_network_access(settings.agent.network_access)
+    execution = %{
+      settings.execution
+      | turn_sandbox_policy: normalize_optional_map(settings.execution.turn_sandbox_policy),
+        network_access: normalize_network_access(settings.execution.network_access)
     }
 
     notifications = normalize_notifications(settings.notifications)
@@ -3362,7 +2950,7 @@ defmodule SymphonyElixir.Config.Schema do
       settings
       | tracker: tracker,
         workspace: workspace,
-        agent: agent,
+        execution: execution,
         notifications: notifications,
         github: github,
         linear: linear
@@ -3373,25 +2961,11 @@ defmodule SymphonyElixir.Config.Schema do
   defp resolve_webhook_secret(%{secret: secret} = webhooks), do: %{webhooks | secret: secret |> resolve_secret_setting(nil) |> Secret.wrap()}
 
   defp validate_finalized_settings(settings) do
-    with :ok <- validate_agent_approval_policy(settings.agent),
-         :ok <- validate_agent_sandbox_runtime(settings.agent),
-         :ok <- validate_agent_mcp(settings.agent),
-         :ok <- validate_openrouter_workers(settings),
-         :ok <- validate_plan_review_state_inactive(settings) do
+    with :ok <- validate_plan_review_state_inactive(settings),
+         :ok <- validate_runs(settings) do
       validate_finalized_notification_urls(settings.notifications)
     end
   end
-
-  # The OpenRouter key reaches `claude` through the local subprocess env only, so an OpenRouter
-  # run cannot start on an SSH worker. The error names the key that picked OpenRouter.
-  defp validate_openrouter_workers(%__MODULE__{worker: %Worker{ssh_hosts: [_ | _]}, agent: agent}) do
-    case openrouter_provider_keys(agent) do
-      [] -> :ok
-      [key | _rest] -> {:error, "#{key} openrouter is not supported with workers.ssh_hosts; OpenRouter runs start on the local host only"}
-    end
-  end
-
-  defp validate_openrouter_workers(_settings), do: :ok
 
   # Plan parents wait for a person in Plan Review, so dispatching from it would take the handoff
   # away from them.
@@ -3403,62 +2977,98 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp validate_plan_review_state_inactive(_settings), do: :ok
 
-  defp openrouter_provider_keys(%Agent{provider: provider, run_profiles: profiles}) do
-    Enum.flat_map(RunKind.names(), fn kind ->
-      case Map.get(profiles, kind, %{}) do
-        %{"provider" => "openrouter"} -> ["agent.run_profiles.#{kind}.provider"]
-        %{"provider" => _provider} -> []
-        _profile when provider == "openrouter" -> ["agent.provider"]
-        _profile -> []
+  # What the `execution` section sets must suit the harness of every run kind that resolves,
+  # and a provider whose key reaches the agent through the local subprocess env cannot serve
+  # an SSH worker. Loading `symphony.yml` already checked that every run kind resolves.
+  defp validate_runs(%__MODULE__{} = settings) do
+    repository = with %{"path" => path, "runs" => runs} <- settings.repository_runs, do: {path, runs}
+    harnesses = Execution.harnesses(settings.execution)
+
+    runs =
+      for kind <- RunKind.names(), {:ok, run} <- [Runs.resolve(repository, settings.runs, harnesses, kind)] do
+        {run, Runs.key(repository, settings.runs, kind, "provider")}
+      end
+
+    Enum.find_value(runs, :ok, fn {run, provider_key} ->
+      with {:ok, _settings} <- for_run(settings, run),
+           :ok <- validate_run_worker(settings.worker, run, provider_key) do
+        nil
       end
     end)
   end
 
-  defp validate_agent_approval_policy(%Agent{kind: "codex", approval_policy: "never"}) do
-    {:error, ~s(agent.permissions.approval_policy="never" is no longer supported for Codex; use "auto_approve_all" for unattended auto-approval.)}
+  defp validate_run_worker(%Worker{ssh_hosts: [_ | _]}, %Run{provider: provider}, provider_key) do
+    if AgentProviders.api_key_env(provider) do
+      {:error, "#{provider_key} #{provider} is not supported with workers.ssh_hosts; #{AgentProviders.display_name(provider)} runs start on the local host only"}
+    else
+      :ok
+    end
   end
 
-  defp validate_agent_approval_policy(_agent), do: :ok
+  defp validate_run_worker(_worker, _run, _provider_key), do: :ok
 
-  defp validate_agent_sandbox_runtime(%Agent{
-         kind: "codex",
-         sandbox_runtime: %Agent.SandboxRuntime{kind: "srt"},
-         network_access: %Agent.NetworkAccess{mode: "open"}
+  @doc """
+  `settings` for one run: its harness, its command and the run itself on `execution`, with the
+  approval policy that harness defaults to. An error when the `execution` section sets
+  something the run's harness cannot do, naming the run's entry.
+  """
+  @spec for_run(t(), Run.t()) :: {:ok, t()} | {:error, String.t()}
+  def for_run(%__MODULE__{execution: execution} = settings, %Run{} = run) do
+    execution = %{execution | harness: run.harness, command: run.command, run: run}
+    execution = %{execution | approval_policy: execution |> default_approval_policy() |> normalize_keys()}
+
+    with :ok <- validate_approval_policy(execution),
+         :ok <- validate_outer_sandbox(execution),
+         :ok <- validate_mcp(execution) do
+      {:ok, %{settings | execution: execution}}
+    else
+      {:error, message} -> {:error, "#{message} (runs.#{run.kind} runs the #{run.harness} harness)"}
+    end
+  end
+
+  defp validate_approval_policy(%Execution{harness: "codex", approval_policy: "never"}) do
+    {:error, ~s(execution.permissions.approval_policy="never" is not supported on the codex harness; use "auto_approve_all" for unattended auto-approval)}
+  end
+
+  defp validate_approval_policy(_execution), do: :ok
+
+  defp validate_outer_sandbox(%Execution{
+         harness: "codex",
+         sandbox_runtime: %Execution.SandboxRuntime{kind: "srt"},
+         network_access: %Execution.NetworkAccess{mode: "open"}
        }) do
-    {:error, "agent.permissions.outer_sandbox.runtime=\"srt\" does not support agent.permissions.network.mode=\"open\""}
+    {:error, "execution.permissions.outer_sandbox.kind=\"srt\" does not support execution.permissions.network.mode=\"open\""}
   end
 
-  defp validate_agent_sandbox_runtime(%Agent{kind: "codex"}), do: :ok
+  defp validate_outer_sandbox(%Execution{harness: "codex"}), do: :ok
 
-  defp validate_agent_sandbox_runtime(%Agent{sandbox_runtime: %Agent.SandboxRuntime{kind: kind}})
+  defp validate_outer_sandbox(%Execution{sandbox_runtime: %Execution.SandboxRuntime{kind: kind}})
        when kind in [nil, "none"],
        do: :ok
 
-  defp validate_agent_sandbox_runtime(%Agent{sandbox_runtime: %Agent.SandboxRuntime{kind: kind}}) do
-    {:error, "agent.permissions.outer_sandbox.runtime=#{inspect(kind)} is only supported for agent.runtime=codex"}
+  defp validate_outer_sandbox(%Execution{sandbox_runtime: %Execution.SandboxRuntime{kind: kind}}) do
+    {:error, "execution.permissions.outer_sandbox.kind=#{inspect(kind)} is only supported on the codex harness"}
   end
 
-  defp validate_agent_sandbox_runtime(_agent), do: :ok
-
-  defp validate_agent_mcp(%Agent{kind: "claude", mcp: %Agent.Mcp{inherit: "all"}}) do
-    {:error, ~s(agent.mcp.inherit="all" is not supported for agent.runtime=claude; declare MCP servers explicitly.)}
+  defp validate_mcp(%Execution{harness: "claude", mcp: %Execution.Mcp{inherit: "all"}}) do
+    {:error, ~s(execution.mcp.inherit="all" is not supported on the claude harness; declare MCP servers explicitly)}
   end
 
-  defp validate_agent_mcp(%Agent{kind: "codex", mcp: %Agent.Mcp{servers: servers}}) when is_map(servers) do
+  defp validate_mcp(%Execution{harness: "codex", mcp: %Execution.Mcp{servers: servers}}) when is_map(servers) do
     case Enum.find(servers, fn {_name, server} -> codex_targeted_non_stdio_mcp_server?(server) end) do
       {name, server} ->
-        {:error, "agent.mcp.servers.#{name}.transport=#{inspect(server.transport)} is not supported for Codex; Codex MCP servers must use transport=\"stdio\"."}
+        {:error, "execution.mcp.servers.#{name}.transport=#{inspect(server.transport)} is not supported on the codex harness; its MCP servers must use transport=\"stdio\""}
 
       nil ->
         :ok
     end
   end
 
-  defp validate_agent_mcp(_agent), do: :ok
+  defp validate_mcp(_execution), do: :ok
 
-  defp codex_targeted_non_stdio_mcp_server?(%Agent.Mcp.Server{transport: transport, runtimes: runtimes})
-       when transport in ["http", "sse"] and is_list(runtimes) do
-    "codex" in runtimes
+  defp codex_targeted_non_stdio_mcp_server?(%Execution.Mcp.Server{transport: transport, harnesses: harnesses})
+       when transport in ["http", "sse"] and is_list(harnesses) do
+    "codex" in harnesses
   end
 
   defp codex_targeted_non_stdio_mcp_server?(_server), do: false
@@ -3543,7 +3153,7 @@ defmodule SymphonyElixir.Config.Schema do
   defp normalize_notification_events(events) when is_list(events), do: Enum.map(events, &to_string/1)
   defp normalize_notification_events(_events), do: nil
 
-  defp normalize_network_access(%Agent.NetworkAccess{} = network_access) do
+  defp normalize_network_access(%Execution.NetworkAccess{} = network_access) do
     %{
       network_access
       | allowed_domains: normalize_domain_list(network_access.allowed_domains),
@@ -3551,14 +3161,12 @@ defmodule SymphonyElixir.Config.Schema do
     }
   end
 
-  defp codex_network_access(%Agent.NetworkAccess{} = network_access), do: network_access
-  defp codex_network_access(nil), do: %Agent.NetworkAccess{}
+  defp codex_network_access(%Execution.NetworkAccess{} = network_access), do: network_access
+  defp codex_network_access(nil), do: %Execution.NetworkAccess{}
 
-  defp default_agent_approval_policy(%Agent{approval_policy: nil, kind: "claude"}), do: "never"
-
-  defp default_agent_approval_policy(%Agent{approval_policy: nil}), do: Agent.codex_default_approval_policy()
-
-  defp default_agent_approval_policy(%Agent{approval_policy: approval_policy}), do: approval_policy
+  defp default_approval_policy(%Execution{approval_policy: nil, harness: "codex"}), do: Execution.codex_default_approval_policy()
+  defp default_approval_policy(%Execution{approval_policy: nil}), do: "never"
+  defp default_approval_policy(%Execution{approval_policy: approval_policy}), do: approval_policy
 
   defp normalize_keys(value) when is_map(value) do
     Enum.reduce(value, %{}, fn {key, raw_value}, normalized ->
@@ -3606,7 +3214,7 @@ defmodule SymphonyElixir.Config.Schema do
 
   defp put_non_nil_or_preserved_value(acc, key, _path, value), do: Map.put(acc, key, value)
 
-  defp preserve_explicit_nil_path?(["agent", key]) when key in ["max_tokens_per_issue", "max_tokens_per_day"],
+  defp preserve_explicit_nil_path?(["execution", key]) when key in ["max_tokens_per_issue", "max_tokens_per_day"],
     do: true
 
   defp preserve_explicit_nil_path?(["tracker", "waiting_on_sub_issues_state"]), do: true
@@ -3697,15 +3305,15 @@ defmodule SymphonyElixir.Config.Schema do
     }
   end
 
-  defp apply_codex_network_access(policy, %Agent.NetworkAccess{mode: "allowlist"}) do
+  defp apply_codex_network_access(policy, %Execution.NetworkAccess{mode: "allowlist"}) do
     put_known_network_access(policy, true)
   end
 
-  defp apply_codex_network_access(policy, %Agent.NetworkAccess{mode: "open"}) do
+  defp apply_codex_network_access(policy, %Execution.NetworkAccess{mode: "open"}) do
     put_known_network_access(policy, true)
   end
 
-  defp apply_codex_network_access(policy, %Agent.NetworkAccess{mode: "block"}) do
+  defp apply_codex_network_access(policy, %Execution.NetworkAccess{mode: "block"}) do
     put_known_network_access(policy, false)
   end
 

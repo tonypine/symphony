@@ -189,17 +189,17 @@ set (or, in Development mode, no checkout folder).
   update time (`updateTime`, minutes after midnight) and release check interval (`releaseCheckMinutes`) are
   stored in UserDefaults
   (`defaults read com.tonypine.symphony.bar`).
-- Max concurrent agents (1–10) is `agent.concurrency.max_total` in the `symphony.yml` itself. The window
+- Max concurrent agents (1–10) is `execution.concurrency.max_total` in the `symphony.yml` itself. The window
   reads it from the file each time it opens (10, Symphony's default, when the key is missing). Save changes
   only that line and keeps comments and indentation, adding the key when it is missing. Symphony
   reloads `symphony.yml` while it runs, so the new limit applies within a minute without a restart. More
   agents use the Linear and GitHub API budgets faster; 2–3 is a safe range on a personal Linear key.
   Each epic under way keeps one agent for its sub-tickets and the tickets blocking them
-  (`agent.concurrency.epic_lanes`, default every slot), so 3 agents can mean 3 epics at once, or 2 epics plus 1 for other work. Merge (landing) runs and
-  QA passes don't use these agents; up to `agent.concurrency.finishing_max` (default 2) of them
+  (`execution.concurrency.epic_lanes`, default every slot), so 3 agents can mean 3 epics at once, or 2 epics plus 1 for other work. Merge (landing) runs and
+  QA passes don't use these agents; up to `execution.concurrency.finishing_max` (default 2) of them
   run on top.
-- **Limit tokens per day** and **Limit tokens per ticket** are `agent.limits.tokens_per_day` and
-  `agent.limits.tokens_per_issue`, also in the `symphony.yml` itself. A switch turned off writes `null`, which
+- **Limit tokens per day** and **Limit tokens per ticket** are `execution.limits.tokens_per_day` and
+  `execution.limits.tokens_per_issue`, also in the `symphony.yml` itself. A switch turned off writes `null`, which
   turns that cap off; turned on, it shows the number of tokens, with a hint such as `1,000,000,000 = 1B`. A
   missing key shows Symphony's default (5,000,000 a day, 500,000 a ticket). While a changed value is entered,
   the window runs `symphony check` on a copy of the file with it, shows the error inline when the check rejects
@@ -221,53 +221,52 @@ set (or, in Development mode, no checkout folder).
   row. Values are saved in plain text, so they hold documented QA values only, never a secret. Save runs
   `symphony check` first, which refuses a name Symphony sets itself, `PATH`, `HOME` or `DYLD_*`, and writes only
   the changed lines.
-- **Models** sets the provider, model and effort for each kind of run, also in the `symphony.yml` itself.
-  The **Scope** picker chooses which `agent` block the rows edit: **All repositories** is the top-level
-  `agent` section, and each `repositories[]` key edits that repository's `repositories[<key>].agent`
-  overrides. The Default row is `agent.provider` / `agent.model` / `agent.effort`, and each run kind row
-  (breakdown, close-out, implementation, rework, CI fix, review feedback, landing,
-  code review, QA) is `agent.run_profiles.<kind>.provider` / `.model` / `.effort` (the same keys under
-  the repository's `agent` for a repository scope). A field left unset shows, greyed out, the value it
-  inherits, resolved the way Symphony does: the repository's kind, the repository's Default row, the
-  All repositories kind, the All repositories Default row, then `agent.command` and the `anthropic` provider.
-  In a repository scope each row has **Reset to inherited**, which removes the row's keys on save, then a
-  kind, `run_profiles:` or repository `agent:` left empty.
-  - **Provider** is Anthropic (the default) or OpenRouter. Changing it clears the row's own model.
+- **Models** sets the harness, provider, model and effort for each kind of run, also in the `symphony.yml`
+  itself. The **Scope** picker chooses which `runs` block the rows edit: **All repositories** is the top-level
+  `runs` section, and each `repositories[]` key edits that repository's `repositories[<key>].runs`
+  overrides. The Default row is the `default` entry, and each run kind row (breakdown, implementation,
+  rework, CI fix, review feedback, landing, code review, epic review, QA) is `runs.<kind>` (the same
+  entries under the repository's `runs` for a repository scope). A field left unset shows, greyed out, the
+  value it inherits, resolved the way Symphony does: the repository's kind, the repository's Default row, the
+  All repositories kind, then the All repositories Default row. Nothing is built in, so an unset field of
+  the All repositories Default row reads "none". In a repository scope each row has **Reset to inherited**,
+  which removes the row's entry on save, then a `runs:` left empty.
+  - **Harness** is the agent program that runs the session: Claude, Codex or OpenCode. Changing it clears the
+    row's own provider and model when the new harness doesn't reach that provider.
+  - **Provider** lists the ones the row's harness reaches: Anthropic, OpenRouter and OpenCode Go for Claude,
+    OpenCode Go and OpenAI for Codex, OpenCode Go for OpenCode. Changing it clears the row's own model.
   - **Model**: for Anthropic, Opus 5.5 (`claude-opus-5-5`), Sonnet 5.5 (`claude-sonnet-5-5`) and Haiku 4.5
     (`claude-haiku-4-5-20251001`), plus any other value already in the file. For OpenRouter, a searchable
     list of the OpenRouter models that support tools (loaded from `GET /api/v1/models` once an OpenRouter
-    key is entered); with no key the field points to the OpenRouter section instead.
+    key is entered); with no key the field points to the OpenRouter section instead. For OpenCode Go and
+    OpenAI, the model's id as text.
   - **Effort**: low, medium, high, xhigh and max. It is off, with a tooltip saying why, for an OpenRouter
     model that doesn't list `reasoning`.
 
+  **Harnesses** sets `execution.harnesses`: each harness's command
+  (`execution.harnesses.<harness>.command`) and, for Claude and OpenCode, the small model the harness calls
+  in the background, by provider (`execution.harnesses.<harness>.small_model.<provider>`). A harness shows
+  once a row uses it or the file sets it, with a small model for each provider its runs use. A command never
+  passes `--model` or `--effort`: Symphony rejects it, since the run's entry sets both.
+
   Save writes only the fields you changed: it rewrites that one value (keeping a trailing comment), or
-  inserts the key, the kind (as `breakdown: { effort: high }`, or as an indented block when the other kinds
-  are written that way, and always as a block in a repository) and `run_profiles:` / `agent:` when they are
-  missing. Choosing "default" removes the key, then a kind or `run_profiles:` left empty. Comments and other
-  keys stay as they are, in block or `{ ... }` style, and a file you didn't change is never rewritten. Before
-  writing, Save runs `symphony check` on a copy of the changed file next to it, with the form's settings and
-  keys; when the check fails (for example an OpenRouter model without tools), its message shows in the Models
-  section and nothing is saved. A layout the editor can't change, such as `agent: { ... }` on one line, turns
-  the pickers off with an error naming the line. Symphony rejects `--model` or `--effort` in `agent.command`
-  once any model, effort or kind is set (top-level or in a repository), so when `agent.command` passes them
-  the Default row shows their values (for example "Opus 5.5, from command"), and the first save that sets a
-  model or effort moves them out of the command (keeping the rest of the line and its comment) into
-  `agent.model` / `agent.effort`, unless you set the Default row in the same save. In the same way, once a
-  save sets the Default row or the code review row, `code_review.model` / `code_review.effort`, or
-  else `--model` / `--effort` in `code_review.command`, move into the code review row
-  (`agent.run_profiles.code_review`), and once it sets the Default row or the QA row, those of
-  `auto_review` move into the QA row. Those section keys outrank the rows and name no provider, so left in
-  place they would hide the row's choice, and an OpenRouter Default row would make Symphony look their Claude
-  model up on OpenRouter. A moved model keeps the provider it ran on, and a value you change in that row in
-  the same save wins over the moved one. A provider alone moves nothing. Higher effort and bigger models use the shared
-  5-hour usage limit faster. The next run picks the change up without a restart. The Codex runtime ignores
-  these keys (see [Run profiles](../docs/configuration.md)).
+  inserts the key, the entry (as `breakdown: { effort: high }` with its fields in the order harness,
+  provider, model, effort, small_model, command, and as an indented block in a repository) and `runs:` or
+  the `execution.harnesses` blocks when they are missing. Unsetting a field removes the key, then an entry,
+  `runs:` or harness block left empty. Comments and other keys stay as they are, in block or `{ ... }`
+  style, and a file you didn't change is never rewritten. Before writing, Save runs `symphony check` on a
+  copy of the changed file next to it, with the form's settings and keys; when the check fails (for example
+  an OpenRouter model without tools, or a harness with no small model for its provider), its message shows
+  in the Models section and nothing is saved. A layout the editor can't change, such as `runs: lots`, turns
+  the rows off with an error naming the line. Higher effort and bigger models use the shared 5-hour usage
+  limit faster. The next run picks the change up without a restart (see
+  [`runs`](../docs/configuration.md#runs)).
 - `LINEAR_API_KEY` and any extra environment variables are stored only in
   `~/Library/Application Support/symphony/release/secrets.json`, next to Symphony's `control_token`, as a
   JSON object of variable name to value. The file is readable only by you (`0600`), and agents' sandboxes
   can't read `~/Library/Application Support`. Unlike the Keychain, the file also goes into file backups such
   as Time Machine.
-- **OpenRouter** holds the optional `OPENROUTER_API_KEY`, which run profiles with `provider: openrouter`
+- **OpenRouter** holds the optional `OPENROUTER_API_KEY`, which runs with `provider: openrouter`
   need. It is stored in the secrets file like `LINEAR_API_KEY` and passed to Symphony only when set; it is
   never written to `symphony.yml` or UserDefaults. **Test connection** checks the key with OpenRouter
   (`GET /api/v1/key`) and shows its label and credit, or why it was rejected, and the **Models** line counts
@@ -415,7 +414,7 @@ The state root is found as Symphony finds it:
 
 Force a Ticket… opens a sheet that asks for a Linear identifier, for example `TP-123`, and calls `POST /api/v1/control/force`
 with `{"identifier":"TP-123"}`, like `symphony force TP-123`. Symphony adds its force label
-(`agent.concurrency.force_label`, `expedite` by default) to the ticket, which then skips the slot limits but
+(`execution.concurrency.force_label`, `expedite` by default) to the ticket, which then skips the slot limits but
 still waits for its blockers, a pause, usage limits and its reviews. It is offered while Symphony answers,
 including while dispatch is paused. If Symphony refuses (the ticket isn't in Linear or is already done, the
 label doesn't exist in Linear, the control token is wrong), an alert says why.
@@ -426,7 +425,7 @@ While any ticket is forced, a **Forced** heading lists them under Pause and Resu
 - `⚡ TP-123 · implementation · running · forced 5m`: the identifier, what the ticket does and waits on,
   as the dashboards word it, and how long it has been forced.
 - `⚡ TP-100 → TP-101 · waiting for a human · forced 3d 2h · stale`: a forced parent with the sub-ticket it
-  is on, forced for longer than `agent.concurrency.forced_stale_after_hours`.
+  is on, forced for longer than `execution.concurrency.forced_stale_after_hours`.
 
 Each row's submenu has **Stop forcing TP-123**, which removes the force label (`symphony force --clear`).
 The menu follows within one poll. A Symphony too old to report forced tickets shows no Forced heading.

@@ -3,12 +3,12 @@ defmodule SymphonyElixir.AgentMcpTest do
 
   alias SymphonyElixir.AgentMcp
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Config.Schema.Agent.Mcp.Server
+  alias SymphonyElixir.Config.Schema.Execution.Mcp.Server
 
   test "declared_servers and targets_runtime tolerate unsupported inputs" do
     assert AgentMcp.declared_servers(%{}, "codex") == []
-    refute AgentMcp.targets_runtime?(:invalid, "codex")
-    refute AgentMcp.targets_runtime?(%Server{runtimes: ["codex"]}, "unknown")
+    refute AgentMcp.targets_harness?(:invalid, "codex")
+    refute AgentMcp.targets_harness?(%Server{harnesses: ["codex"]}, "unknown")
   end
 
   test "Codex TOML rendering handles empty values, nested env maps, and quoted keys" do
@@ -134,9 +134,7 @@ defmodule SymphonyElixir.AgentMcpTest do
     test "resolves $VAR references in stdio env and drops empty/keeps missing literally" do
       {:ok, settings} =
         Schema.parse(%{
-          agent: %{
-            kind: "claude",
-            command: "claude",
+          execution: %{
             mcp: %{
               servers: %{
                 "github" => %{
@@ -149,14 +147,14 @@ defmodule SymphonyElixir.AgentMcpTest do
                     "MISSING_VAR" => "$SYMPHONY_TEST_MCP_MISSING",
                     "NOT_A_REF" => "$has space"
                   },
-                  runtimes: ["claude"]
+                  harnesses: ["claude"]
                 }
               }
             }
           }
         })
 
-      env = settings.agent.mcp.servers["github"].env
+      env = settings.execution.mcp.servers["github"].env
       assert env["GITHUB_TOKEN"] == "tok-123"
       assert env["LITERAL"] == "static"
       refute Map.has_key?(env, "EMPTY_VAR")
@@ -167,9 +165,7 @@ defmodule SymphonyElixir.AgentMcpTest do
     test "resolves $VAR references in http headers map" do
       {:ok, settings} =
         Schema.parse(%{
-          agent: %{
-            kind: "claude",
-            command: "claude",
+          execution: %{
             mcp: %{
               servers: %{
                 "docs" => %{
@@ -179,14 +175,14 @@ defmodule SymphonyElixir.AgentMcpTest do
                     "Authorization" => "Bearer $SYMPHONY_TEST_MCP_TOKEN",
                     "X-Token" => "$SYMPHONY_TEST_MCP_TOKEN"
                   },
-                  runtimes: ["claude"]
+                  harnesses: ["claude"]
                 }
               }
             }
           }
         })
 
-      headers = settings.agent.mcp.servers["docs"].headers
+      headers = settings.execution.mcp.servers["docs"].headers
       assert headers["Authorization"] == "Bearer $SYMPHONY_TEST_MCP_TOKEN"
       assert headers["X-Token"] == "tok-123"
     end
@@ -195,13 +191,11 @@ defmodule SymphonyElixir.AgentMcpTest do
   test "declared_servers filters by runtime from parsed settings" do
     {:ok, settings} =
       Schema.parse(%{
-        agent: %{
-          kind: "codex",
-          command: "codex app-server",
+        execution: %{
           mcp: %{
             servers: %{
-              "codex-server" => %{command: "codex", runtimes: ["codex"]},
-              "claude-server" => %{command: "claude", runtimes: ["claude"]}
+              "codex-server" => %{command: "codex", harnesses: ["codex"]},
+              "claude-server" => %{command: "claude", harnesses: ["claude"]}
             }
           }
         }

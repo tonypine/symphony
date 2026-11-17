@@ -188,7 +188,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
 
       assert state(issue_id) == "Done"
       assert moves(issue_id) == ["Done"]
-      assert %{rule: "R2", kind: :close_out, reason: "PR #1 was merged", outcome: :applied} = decision(issue_id)
+      assert %{rule: "R2", kind: :close_ticket, reason: "PR #1 was merged", outcome: :applied} = decision(issue_id)
       assert %{state: "merged"} = TicketPullRequest.get(@repo_key, issue_id)
 
       # Done is not watched: the record goes, nothing moves again.
@@ -209,7 +209,7 @@ defmodule SymphonyElixir.PrWatch.LifecycleTest do
         tick!(pid)
 
         assert state(issue_id) == "Done", state
-        assert %{rule: "R2", kind: :close_out} = decision(issue_id)
+        assert %{rule: "R2", kind: :close_ticket} = decision(issue_id)
       end
     end
 

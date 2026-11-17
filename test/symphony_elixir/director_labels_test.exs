@@ -178,7 +178,7 @@ defmodule SymphonyElixir.DirectorLabelsTest do
   end
 
   test "takes the escalate labels and the force label from the ticket's repository's settings", ctx do
-    settings = %{auto_review: %{acceptance_gate: %{escalate: %{labels: ["needs-human", "security"]}}}, agent: %{force_label: "rush"}}
+    settings = %{auto_review: %{acceptance_gate: %{escalate: %{labels: ["needs-human", "security"]}}}, execution: %{force_label: "rush"}}
     repo = ctx.repo
     opts = Keyword.drop(ctx.opts, [:escalate_labels, :force_label])
 

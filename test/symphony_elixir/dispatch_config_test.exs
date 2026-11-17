@@ -6,7 +6,8 @@ defmodule SymphonyElixir.DispatchConfigTest do
   @base %{
     "issues" => %{"provider" => "memory"},
     "repositories" => [%{"key" => "web"}],
-    "agent" => %{"runtime" => "codex", "command" => "codex app-server"}
+    "execution" => %{"harnesses" => %{"codex" => %{"command" => "codex app-server"}}},
+    "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}}
   }
 
   defp append_symphony_yml!(yaml) do
@@ -58,7 +59,7 @@ defmodule SymphonyElixir.DispatchConfigTest do
   end
 
   test "still refuses the retired dispatch.max_concurrent with where its setting went" do
-    assert {:error, {:invalid_symphony_config, "`dispatch.max_concurrent` is not valid; remove it; use `agent.concurrency.max_total`"}} =
+    assert {:error, {:invalid_symphony_config, "`dispatch.max_concurrent` is not valid; remove it; use `execution.concurrency.max_total`"}} =
              SystemSchema.parse(Map.put(@base, "dispatch", %{"max_concurrent" => 3, "source" => "poll"}))
   end
 

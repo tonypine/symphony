@@ -49,7 +49,7 @@ defmodule SymphonyElixir.ProjectGuides do
 
   @spec append_to_prompt(String.t(), Path.t(), Schema.t(), runner()) :: {:ok, String.t()} | {:error, term()}
   def append_to_prompt(prompt, workspace, %Schema{} = settings, runner) when is_binary(prompt) do
-    case settings.agent.include_project_guides do
+    case settings.execution.include_project_guides do
       true -> append_enabled_guides(prompt, workspace, settings, runner)
       false -> {:ok, insert_section(prompt, nil)}
     end
@@ -85,7 +85,7 @@ defmodule SymphonyElixir.ProjectGuides do
   end
 
   defp append_enabled_guides(prompt, workspace, settings, runner) do
-    files = settings.agent.project_guide_files || default_files(runner)
+    files = settings.execution.project_guide_files || default_files(runner)
 
     case read(workspace, files, runner: runner) do
       {:ok, guides} -> {:ok, insert_section(prompt, prompt_section(guides))}

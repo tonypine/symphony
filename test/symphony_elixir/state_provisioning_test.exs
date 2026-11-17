@@ -59,6 +59,8 @@ defmodule SymphonyElixir.StateProvisioningTest do
         assert {:ok, system_config} =
                  SystemSchema.parse(%{
                    "issues" => %{"provider" => "memory", "states" => %{"qa" => value}},
+                   "execution" => %{"harnesses" => %{"codex" => %{"command" => "codex app-server"}}},
+                   "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}},
                    "repositories" => repositories
                  })
 
@@ -67,6 +69,23 @@ defmodule SymphonyElixir.StateProvisioningTest do
         assert parsed.qa_state == expected
         assert parsed.code_review_state == "Code Review"
       end
+    end
+
+    test "turns waiting_on_sub_issues_state off with null, adding nothing to active_states" do
+      repositories = [%{"key" => "default", "workflow" => "WORKFLOW.md"}]
+
+      assert {:ok, system_config} =
+               SystemSchema.parse(%{
+                 "issues" => %{"provider" => "memory", "states" => %{"waiting_on_sub_issues" => nil}},
+                 "execution" => %{"harnesses" => %{"codex" => %{"command" => "codex app-server"}}},
+                 "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}},
+                 "repositories" => repositories
+               })
+
+      tracker = SystemSchema.to_config_map(system_config)["tracker"]
+      assert {:ok, %Schema{tracker: parsed}} = Schema.parse(%{"tracker" => tracker})
+      assert parsed.waiting_on_sub_issues_state == nil
+      assert parsed.active_states == ["Todo", "In Progress"]
     end
 
     test "rejects two phases sharing one name" do

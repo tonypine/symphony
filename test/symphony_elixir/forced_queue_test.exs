@@ -52,7 +52,7 @@ defmodule SymphonyElixir.ForcedQueueTest do
 
   describe "config" do
     test "defaults and validation" do
-      assert %{force_label: "expedite", forced_max: 1, forced_stale_after_hours: 72} = Config.settings!().agent
+      assert %{force_label: "expedite", forced_max: 1, forced_stale_after_hours: 72} = Config.settings!().execution
 
       for {key, value} <- [forced_max: 0, forced_stale_after_hours: 0] do
         write_workflow_file!(Workflow.workflow_file_path(), [{:tracker_kind, "memory"}, {key, value}])

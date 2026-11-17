@@ -21,7 +21,7 @@ OS / Container
         └── agent tool calls        ← restricted by settings.json
 ```
 
-`denied_domains` and other `agent.network_access` settings in `WORKFLOW.md`
+`denied_domains` and other `execution.permissions.network` settings in `symphony.yml`
 have no effect on quality gate HTTP calls.
 
 ## Prompt Injection via Issue Descriptions

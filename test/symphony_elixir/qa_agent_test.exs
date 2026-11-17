@@ -1507,18 +1507,21 @@ defmodule SymphonyElixir.QaAgentTest do
              ]
     end
 
-    test "QA settings take the auto_review runtime, turns and timeout" do
+    test "QA settings take the qa run's harness and command, and auto_review's turns and timeout" do
       write_workflow_file!(Workflow.workflow_file_path(),
-        auto_review: %{runtime: "codex", command: "codex app-server", max_turns: 3, timeout_ms: 5_000}
+        auto_review: %{runtime: "claude", command: "claude --qa", max_turns: 3, timeout_ms: 5_000}
       )
 
       settings = QaAgent.qa_settings(Config.settings!())
 
-      assert %{kind: "codex", command: "codex app-server", max_turns: 3, turn_timeout_ms: 5_000} = settings.agent
+      assert %{harness: "claude", command: "claude --qa", max_turns: 3, turn_timeout_ms: 5_000} = settings.execution
+      assert %{kind: :qa, harness: "claude", provider: "anthropic", model: "claude-test"} = settings.execution.run
 
       write_workflow_file!(Workflow.workflow_file_path())
       base = Config.settings!()
-      assert QaAgent.qa_settings(base).agent.command == base.agent.command
+      assert base.execution.command == nil
+      assert %{harness: "codex", command: "codex app-server"} = QaAgent.qa_settings(base).execution
+      assert QaAgent.qa_settings(base).execution.command == Config.run(base, :qa).command
     end
 
     test "worktrees live under the workspace root, outside the repository directories" do
@@ -1702,7 +1705,7 @@ defmodule SymphonyElixir.QaAgentTest do
     end
 
     test "gives a Claude pass its temp folder as CLAUDE_CODE_TMPDIR" do
-      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{runtime: "claude"})
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{runtime: "claude", command: "claude"})
       base = Path.join(System.tmp_dir!(), "qa-agent-test-tmp-#{System.unique_integer([:positive])}")
       File.mkdir_p!(base)
       on_exit(fn -> File.rm_rf(base) end)
@@ -2494,9 +2497,10 @@ defmodule SymphonyElixir.QaAgentTest do
       assert start_opts[:repo_key] == "default"
       assert start_opts[:settings] == settings
       assert_receive {:qa_session_started, ^worktree, session_opts}
-      assert %{servers: %{"browser" => browser}} = session_opts[:settings].agent.mcp
+      assert %{servers: %{"browser" => browser}} = session_opts[:settings].execution.mcp
       assert browser.command == "npx"
-      assert browser.runtimes == [settings.agent.kind]
+      assert browser.harnesses == [Config.run(settings, :qa).harness]
+      assert browser.harnesses == ["codex"]
 
       assert ["--no", "@playwright/mcp@0.0.83", "--browser", "chromium", "--headless", "--isolated", "--allowed-origins", origins, "--output-dir", output] =
                browser.args
@@ -2505,9 +2509,9 @@ defmodule SymphonyElixir.QaAgentTest do
       assert QaAgent.playwright_mcp_package() == "@playwright/mcp@0.0.83"
       refute Enum.any?(browser.args, &String.contains?(&1, "@latest"))
       assert output == Path.join(worktree, "qa-evidence")
-      assert settings.agent.network_access.mode == "allowlist"
-      assert ["localhost", "127.0.0.1"] -- session_opts[:settings].agent.network_access.allowed_domains == []
-      refute "localhost" in settings.agent.network_access.allowed_domains
+      assert settings.execution.network_access.mode == "allowlist"
+      assert ["localhost", "127.0.0.1"] -- session_opts[:settings].execution.network_access.allowed_domains == []
+      refute "localhost" in settings.execution.network_access.allowed_domains
 
       assert_receive {:qa_turn, _session, prompt, _issue, _opts}
       assert prompt =~ "### Playbook: web"
@@ -2520,7 +2524,7 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {:ok, _result} = QaAgent.run(job(), settings, git: fake_git(), qa_agent_module: FakeSession, verification: FakeVerification)
       refute_receive {:dev_server_started, _identifier, _run_id, _worktree, _opts}
       assert_receive {:qa_session_started, _worktree, cli_opts}
-      refute Map.has_key?(cli_opts[:settings].agent.mcp.servers, "browser")
+      refute Map.has_key?(cli_opts[:settings].execution.mcp.servers, "browser")
       refute QaAgent.prompt(job(), nil) =~ "Dev server:"
     end
 
@@ -2536,8 +2540,8 @@ defmodule SymphonyElixir.QaAgentTest do
       server_worktree = worktree <> "-dev-server"
       assert_receive {:dev_server_started, "TP-900", "qa-run-1", ^server_worktree, _start_opts}
       assert_receive {:qa_session_started, ^worktree, session_opts}
-      refute Map.has_key?(session_opts[:settings].agent.mcp.servers || %{}, "browser")
-      assert ["localhost", "127.0.0.1"] -- session_opts[:settings].agent.network_access.allowed_domains == []
+      refute Map.has_key?(session_opts[:settings].execution.mcp.servers || %{}, "browser")
+      assert ["localhost", "127.0.0.1"] -- session_opts[:settings].execution.network_access.allowed_domains == []
 
       assert_receive {:qa_turn, _session, prompt, _issue, _opts}
       flat = String.replace(prompt, ~r/\s+/, " ")
@@ -2555,7 +2559,7 @@ defmodule SymphonyElixir.QaAgentTest do
       glance = %{playbooks: %{"cli" => %{"enabled" => false}, "web" => %{"browser_mcp" => %{"command" => "glance-mcp", "args" => ["--stdio"]}}}}
       [web] = Selection.playbooks(glance, dev_server?: true)
       settings = Config.settings!()
-      open_settings = put_in(settings.agent.network_access.mode, "open")
+      open_settings = put_in(settings.execution.network_access.mode, "open")
 
       assert {:ok, _result} =
                QaAgent.run(job(%{playbooks: [web], run_id: nil, repo_key: nil}), open_settings,
@@ -2568,8 +2572,8 @@ defmodule SymphonyElixir.QaAgentTest do
       assert String.ends_with?(server_worktree, "-dev-server")
       refute Keyword.has_key?(start_opts, :repo_key)
       assert_receive {:qa_session_started, _worktree, session_opts}
-      assert %{command: "glance-mcp", args: ["--stdio"]} = session_opts[:settings].agent.mcp.servers["browser"]
-      assert session_opts[:settings].agent.network_access == open_settings.agent.network_access
+      assert %{command: "glance-mcp", args: ["--stdio"]} = session_opts[:settings].execution.mcp.servers["browser"]
+      assert session_opts[:settings].execution.network_access == open_settings.execution.network_access
       assert_receive {:dev_server_stopped, 4321}
     end
 
@@ -2586,13 +2590,13 @@ defmodule SymphonyElixir.QaAgentTest do
       refute_receive {:dev_server_stopped, _port}
 
       Application.delete_env(:symphony_elixir, :qa_test_dev_server_result)
-      remote = %{"web" => %{"browser_mcp" => %{"transport" => "http", "url" => "http://glance.test/mcp", "runtimes" => ["codex"]}}}
+      remote = %{"web" => %{"browser_mcp" => %{"transport" => "http", "url" => "http://glance.test/mcp", "harnesses" => ["codex"]}}}
       [web] = Selection.playbooks(%{playbooks: Map.put(remote, "cli", %{"enabled" => false})}, dev_server?: true)
 
       assert {:error, {:qa_browser_mcp_invalid, errors}, _tokens} =
                run_web(web)
 
-      assert errors =~ "runtimes"
+      assert errors =~ "harnesses"
       assert_receive {:dev_server_started, "TP-900", _run_id, _worktree, _opts}
       refute_receive {:qa_session_started, _worktree, _opts}
       assert_receive {:dev_server_stopped, 4321}
@@ -2957,21 +2961,9 @@ defmodule SymphonyElixir.QaAgentTest do
       refute git!.(["worktree", "list"]) =~ worktree
     end
 
-    test "maps runtimes to agent modules" do
-      assert {:ok, SymphonyElixir.Codex.AppServer} = QaAgent.agent_module("codex")
-      assert {:ok, SymphonyElixir.ClaudeCode.AppServer} = QaAgent.agent_module("claude")
-      assert {:error, {:unsupported_qa_agent_kind, nil}} = QaAgent.agent_module(nil)
-    end
-
-    test "does not run on remote workers or unknown runtimes" do
+    test "does not run on remote workers" do
       assert {:error, {:remote_worker_unsupported, "worker-1"}, %{total_tokens: 0}} =
                QaAgent.run(job(%{worker_host: "worker-1"}), Config.settings!())
-
-      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{runtime: "claude"})
-      settings = Config.settings!()
-      settings = %{settings | auto_review: %{settings.auto_review | kind: "gpt"}}
-
-      assert {:error, {:unsupported_qa_agent_kind, "gpt"}, _tokens} = QaAgent.run(job(), settings, git: fake_git())
     end
 
     test "reads the parent issue from Linear for sub-tickets and survives a failed read" do
@@ -3077,7 +3069,7 @@ defmodule SymphonyElixir.QaAgentTest do
     end
 
     test "a failing pass keeps its screenshots, uploads and transcript after the worktree is gone", %{projects: projects, outside: outside} do
-      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{runtime: "claude"})
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{runtime: "claude", command: "claude"})
       settings = Config.settings!()
       worktree = QaAgent.worktree_path(settings, "default", "TP-900", @sha)
       secret = Path.join(outside, "secret.png")
@@ -3171,7 +3163,7 @@ defmodule SymphonyElixir.QaAgentTest do
       assert {:ok, %{result: %{artifacts: %{files: files, transcript: nil}}}} = QaAgent.run(job(), Config.settings!(), run_opts)
       assert files == %{}
 
-      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{runtime: "claude"})
+      write_workflow_file!(Workflow.workflow_file_path(), auto_review: %{runtime: "claude", command: "claude"})
       settings = Config.settings!()
       transcript!(projects, QaAgent.worktree_path(settings, "default", "TP-900", @sha), "session-2", "not json lines")
 

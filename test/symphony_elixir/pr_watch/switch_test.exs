@@ -1013,7 +1013,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       # Auto-merge lands it once the checks pass, and the ticket is Done.
       pr!("1", pr: :merged)
       tick!(pid)
-      assert %{rule: "R2", kind: :close_out} = decision(issue_id)
+      assert %{rule: "R2", kind: :close_ticket} = decision(issue_id)
       assert List.last(moves(issue_id)) == "Done"
       assert %{state: "merged"} = TicketPullRequest.get(@repo_key, issue_id)
     end
@@ -2014,7 +2014,7 @@ defmodule SymphonyElixir.PrWatch.SwitchTest do
       assert World.calls(:disarm) == ["https://github.com/acme/app/pull/1"]
     end
 
-    test "PrReviewPoller.finish_merged's move to Done → R2 close_out" do
+    test "PrReviewPoller.finish_merged's move to Done → R2 close_ticket" do
       issue_id = ticket!("1", "Merging", pr: :merged)
       pid = start!()
       tick!(pid, 2)

@@ -124,7 +124,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     prompt =
       PromptBuilder.build_prompt(
         %Issue{identifier: "MT-126", repo_key: "default"},
-        settings: %{agent: %{kind: "codex"}}
+        settings: %{execution: %{harness: "codex"}}
       )
 
     assert prompt =~ "Codex transport output guard:"
@@ -142,7 +142,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     prompt =
       PromptBuilder.build_prompt(
         %Issue{identifier: "MT-127", repo_key: "default"},
-        settings: %{agent: %{kind: "claude"}}
+        settings: %{execution: %{harness: "claude"}}
       )
 
     refute prompt =~ "Codex transport output guard:"
@@ -172,7 +172,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     prompt =
       PromptBuilder.build_prompt(
         %Issue{identifier: "MT-127D", repo_key: "default"},
-        settings: %{agent: %{kind: "claude"}, pr_review: %{mode: "polling"}}
+        settings: %{execution: %{harness: "claude"}, pr_review: %{mode: "polling"}}
       )
 
     assert prompt =~ "A `Code Review` or `QA` rework verdict comes back as `Rework` on the same PR"
@@ -595,7 +595,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
     prompt =
       PromptBuilder.build_compact_prompt(
         %{identifier: "ACME-3715", title: "Compact", repo_key: "default"},
-        settings: %{agent: %{kind: "codex"}}
+        settings: %{execution: %{harness: "codex"}}
       )
 
     assert prompt =~ "Codex transport output guard:"
@@ -874,7 +874,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
 
     issue = %Issue{identifier: "MT-REWORK", title: "Rework", state: "Rework", repo_key: "default"}
 
-    prompt = PromptBuilder.build_prompt(issue, workflow: workflow, settings: %{agent: %{kind: "claude"}})
+    prompt = PromptBuilder.build_prompt(issue, workflow: workflow, settings: %{execution: %{harness: "claude"}})
 
     assert prompt =~ "## Step 4: Rework handling"
     assert prompt =~ "Continue on the **same** pull request and the same branch"
@@ -1112,8 +1112,8 @@ defmodule SymphonyElixir.PromptBuilderTest do
       {:ok, note} = TicketEvents.record("r", "i", "note", %{text: "Keep the button."}, actor: {:person, "the Director"}, at: at)
       :ok = RunStore.update_ticket_state("i", %{phase: "QA"})
 
-      {:ok, settings} =
-        Schema.parse(%{agent: %{kind: "codex", command: "codex app-server", codex_stdio_prompt_soft_limit: 1}})
+      {:ok, settings} = Schema.parse(%{execution: %{codex_stdio_prompt_soft_limit: 1}})
+      settings = %{settings | execution: %{settings.execution | harness: "codex", command: "codex app-server"}}
 
       prompt = AgentRunner.build_first_turn_prompt(issue, settings: settings, ticket_state: record, run_id: "run-codex")
 
@@ -1361,7 +1361,6 @@ defmodule SymphonyElixir.PromptBuilderTest do
       records = %{
         "implementation" => "This implementation run records the ticket's brief first, as a `brief.written`",
         "breakdown" => "This plan run records a `note` for each choice the plan makes",
-        "close_out" => "A run records `step.completed` for each delegated step",
         "rework" => "This rework run reads `ticket_events` with `open_findings: true` before it plans, records `finding.resolved`",
         "landing" => "This landing run records a `note` for what held the merge",
         "code_review" => "This code review run records `evidence` for every screenshot or output it attaches",

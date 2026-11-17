@@ -82,8 +82,8 @@ SymphonyBar/ReposView.swift rawColor 1
 SymphonyBar/ReposView.swift number 42
 SymphonyBar/ReposView.swift button 18
 SymphonyBar/ReposView.swift disabled 11
-SymphonyBar/SettingsView.swift font 3
-SymphonyBar/SettingsView.swift color 67
+SymphonyBar/SettingsView.swift font 2
+SymphonyBar/SettingsView.swift color 66
 SymphonyBar/SettingsView.swift number 7
 SymphonyBar/SettingsView.swift button 11
 SymphonyBar/SettingsView.swift disabled 27

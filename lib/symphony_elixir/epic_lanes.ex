@@ -1,11 +1,11 @@
 defmodule SymphonyElixir.EpicLanes do
   @moduledoc """
-  Splits `agent.concurrency.max_total` into one lane per active epic and a shared pool.
+  Splits `execution.concurrency.max_total` into one lane per active epic and a shared pool.
 
   An epic is a `breakdown` parent waiting on its sub-tickets. It is active once at least one
   sub-ticket is under way: not terminal and not still in a pre-approval state such as Backlog.
   Active epics are ordered by the parent's priority, then age, and the first
-  `agent.concurrency.epic_lanes` of them (default: `max_total`) each reserve one slot.
+  `execution.concurrency.epic_lanes` of them (default: `max_total`) each reserve one slot.
 
   A lane runs the tickets on its epic's path: the epic's sub-tickets, their sub-tickets at any depth,
   and the open blockers of any of those, transitively. The walk follows the candidate issues, so a

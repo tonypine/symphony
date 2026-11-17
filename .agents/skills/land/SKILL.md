@@ -40,7 +40,7 @@ asked to land a PR outside Symphony.
 
 ## When `gh` is unavailable
 
-Symphony denies raw `gh` to some runtimes (notably Claude). In that case, use
+Symphony denies raw `gh` to some harnesses (notably Claude). In that case, use
 the scoped Symphony tools in place of every `gh` command below:
 
 - PR state and mergeability: `github_get_pull_request`.
