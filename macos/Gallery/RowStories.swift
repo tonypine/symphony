@@ -33,10 +33,11 @@ let catalogTickets = [
 
 /// A row story as the catalog's `row()` draws it: the status glyph (or the live dot), the identifier and title, the
 /// second line when asked, then the small badge, a fix button (or its reason and the disabled button) and the age.
+/// `width` is the catalog's 640 px row; `nil` lets the row take the width its container gives it (a fold's body).
 @MainActor
 func rowStory(
     _ ticket: CatalogTicket, state: DesignTokens.Interaction = .rest, twoLines: Bool = false, live: Bool = false,
-    windowActive: Bool = true, fix: String? = nil, fixReason: String? = nil
+    windowActive: Bool = true, fix: String? = nil, fixReason: String? = nil, width: CGFloat? = 640
 ) -> AnyView {
     AnyView(
         Row(
@@ -53,7 +54,8 @@ func rowStory(
                 }
             }
         }
-        .frame(width: 640)
+        .frame(width: width)
+        .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
     )
 }
 

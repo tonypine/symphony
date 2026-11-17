@@ -72,7 +72,7 @@ private struct LiveCollapsible: View {
         CollapsibleCard("Earlier runs", summary: "3 runs · 1 h 12 min", expanded: $expanded, empty: empty, drawnAs: drawnAs) {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(foldTickets.enumerated()), id: \.offset) { index, ticket in
-                    rowStory(ticket).foldRow(index)
+                    rowStory(ticket, width: nil).foldRow(index)
                 }
             }
         }
