@@ -622,7 +622,7 @@ struct TimelineRunRow: View {
         // gesture waits on the other to fail (TP-1480's QA: a tap here took the click from the header's).
         .simultaneousGesture(
             DragGesture(minimumDistance: 0).onEnded { value in
-                if FoldHeader<EmptyView>.isClick(value.translation) { select() }
+                if CollapsibleHead<EmptyView>.isClick(value.translation) { select() }
             }
         )
         .accessibilityElement(children: .contain)

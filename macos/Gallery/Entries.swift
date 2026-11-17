@@ -8,9 +8,10 @@
 // `foundation` lists the files every entry is drawn with (the design's values, the shared styles): a change there is a
 // reason to look at all of them. `SymphonyGallery --affected` answers from these lists; nobody guesses.
 //
-// `SymphonyGallery --check` fails when a variation belongs to no entry or to two, when an entry has none, and when a
-// file under Sources/SymphonyBarUI is shown by no entry and is not listed as foundation or as nothing to see: a new
-// shared component brings its entry with it.
+// `SymphonyGallery --check` fails when a variation belongs to no entry or to two, when an entry has none, when a
+// file under Sources/SymphonyBarUI is shown by no entry and is not listed as foundation or as nothing to see (a new
+// shared component brings its entry with it), and when the committed list of component variations
+// (`Gallery/component-variations.txt`, which the counterpart check reads) differs from the gallery's stories.
 import Foundation
 
 struct GalleryEntry {
@@ -68,6 +69,12 @@ let galleryEntries: [GalleryEntry] = [
     GalleryEntry(
         id: "table", title: "Table", kind: .component, prefixes: ["table-header-and-row-"],
         files: ["SymphonyBarUI/DesignSystem/DataTable.swift"]),
+    GalleryEntry(
+        id: "key-value-list", title: "Key-value list", kind: .component, prefixes: ["key-value-list-"],
+        files: ["SymphonyBarUI/DesignSystem/KeyValueList.swift"]),
+    GalleryEntry(
+        id: "collapsible-card", title: "Collapsible card", kind: .component, prefixes: ["collapsible-card-"],
+        files: ["SymphonyBarUI/DesignSystem/Collapsible.swift"]),
     GalleryEntry(
         id: "mention-chips", title: "Mention chips and their popovers", kind: .component,
         prefixes: ["ticket-popover", "pr-popover", "missing-popover", "plan-chips", "pr-chips", "clarify-chips", "blocked-chips", "decision-chips-"],
@@ -183,6 +190,37 @@ func galleryProblems(variations: [String], sharedFiles: [String]) -> [String] {
         if !galleryEntries.contains(where: { $0.shows(path) }), !galleryFoundation.contains(path), !galleryNothingToSee.contains(path) {
             problems.append("\(path) is shown by no entry: give it one in Gallery/Entries.swift, with its variations, or list it as foundation or as nothing to see.")
         }
+    }
+    return problems
+}
+
+/// Where the committed list of component variations is, under `macos/`, and what heads it.
+let componentVariationsFile = "Gallery/component-variations.txt"
+let componentVariationsHeader = """
+    # The Component Gallery's component variations, one per line, sorted: every `ComponentStory` the gallery draws, named
+    # `<component>-<story>` (macos/Gallery/*Stories.swift). `SymphonyGallery --check` fails when this list and the
+    # gallery's stories differ; `SymphonyGallery --component-variations > Gallery/component-variations.txt` writes it. The
+    # counterpart check (CatalogCounterpartsTests, docs/design/catalog-counterparts.md) reads it.
+    """
+
+/// The file's whole text for `variations`: the header, then each name on its own line, sorted.
+func componentVariationsText(_ variations: [String]) -> String {
+    componentVariationsHeader + "\n" + Set(variations).sorted().joined(separator: "\n") + "\n"
+}
+
+/// What differs between the gallery's component variations and the committed list's text, in plain words; empty
+/// when they agree.
+func componentVariationProblems(variations: [String], committed: String?) -> [String] {
+    let fix = "run `SymphonyGallery --component-variations > \(componentVariationsFile)` from macos/"
+    guard let committed else { return ["\(componentVariationsFile) is missing: \(fix)."] }
+    let listed = Set(committed.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && !$0.hasPrefix("#") })
+    let drawn = Set(variations)
+    var problems: [String] = []
+    for name in drawn.subtracting(listed).sorted() {
+        problems.append("The gallery draws \(name), which \(componentVariationsFile) does not list: \(fix).")
+    }
+    for name in listed.subtracting(drawn).sorted() {
+        problems.append("\(componentVariationsFile) lists \(name), which the gallery does not draw: \(fix).")
     }
     return problems
 }

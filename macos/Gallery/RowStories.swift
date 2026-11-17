@@ -1,7 +1,7 @@
 // The catalog's Row stories (TP-1507), each drawn by the shared `Row` under the id the catalog gives the story
 // (`docs/design/catalog/stories.js`), and the tree and the progress strip drawn from the catalog's Home and Initiatives
-// data (`PROGRESS`, `QUEUE` and `EPICS` there). The gallery shows the Row stories as one cell of its Row
-// entry, each under its name, beside the tree and the progress strips.
+// data (`PROGRESS`, `QUEUE` and `EPICS` there). Each Row story is a variation of its own Row entry, beside the tree
+// and the progress strips.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI

@@ -23,7 +23,9 @@
 //                                         `<dir>/<variation>-<laptop|desktop|points>-<light|dark>.png`, at both
 //                                         widths or at the named one; a variation of one size (a sheet) as
 //                                         `<dir>/<variation>-<light|dark>.png`
-//   SymphonyGallery --check               fails, saying why, when the entries and the variations disagree
+//   SymphonyGallery --check               fails, saying why, when the entries and the variations disagree, or the
+//                                         committed list of component variations is not the gallery's
+//   SymphonyGallery --component-variations   that list, as Gallery/component-variations.txt holds it
 //
 // QA reaches it through the app: `qa_launch_app` on the fixture folder `macos/Tests/Fixtures/gallery` starts the
 // gallery in the app's place (Sources/SymphonyBar/GalleryLaunch.swift), so QA's tools drive it as they drive the app.
@@ -130,10 +132,16 @@ func runGallery() {
         print(json(["all": affected.all, "entries": affected.entries]))
         return
     }
+    if arguments.contains("--component-variations") {
+        print(componentVariationsText(componentVariationNames), terminator: "")
+        return
+    }
     if arguments.contains("--check") {
         let shared = galleryRoot.appendingPathComponent("macos/Sources/SymphonyBarUI")
         let files = ((try? FileManager.default.contentsOfDirectory(atPath: shared.path)) ?? []).filter { $0.hasSuffix(".swift") }.sorted()
+        let committed = try? String(contentsOf: galleryRoot.appendingPathComponent("macos").appendingPathComponent(componentVariationsFile), encoding: .utf8)
         let problems = galleryProblems(variations: galleryVariations.map(\.id), sharedFiles: files)
+            + componentVariationProblems(variations: componentVariationNames, committed: committed)
         for problem in problems { print(problem) }
         print(problems.isEmpty ? "gallery: \(galleryEntries.count) entries, \(galleryVariations.count) variations, every shared file shown" : "gallery: \(problems.count) problem(s)")
         exit(problems.isEmpty ? 0 : 1)
@@ -266,8 +274,6 @@ struct GalleryBoard: View {
 func shortName(_ variation: GalleryVariation, in entry: GalleryEntry) -> String {
     let prefix = entry.prefixes.filter { variation.id.hasPrefix($0) }.max { $0.count < $1.count } ?? ""
     let rest = variation.id.dropFirst(prefix.count).replacingOccurrences(of: "-", with: " ").trimmingCharacters(in: .whitespaces)
-    // A component whose cases are one cell (`badge-cases`) is named by the component: two of them share a board.
-    if rest == "cases" { return prefix.replacingOccurrences(of: "-", with: " ").trimmingCharacters(in: .whitespaces) }
     return rest.isEmpty ? variation.id.replacingOccurrences(of: "-", with: " ") : rest
 }
 

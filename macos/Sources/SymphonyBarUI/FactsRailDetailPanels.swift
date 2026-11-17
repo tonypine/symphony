@@ -131,8 +131,8 @@ public struct DecisionsPanel: View {
             } else {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
                     ForEach(model.rows) { row in
-                        DecisionRow(row: row, unfolded: unfolded.contains(row.id)) {
-                            withAnimation(.motion(.fold, reduceMotion: reduceMotion)) {
+                        decision(row, unfolded: unfolded.contains(row.id)) {
+                            withAnimation(FoldMotion.opening(reduceMotion: reduceMotion)) {
                                 if unfolded.contains(row.id) { unfolded.remove(row.id) } else { unfolded.insert(row.id) }
                             }
                         }
@@ -141,18 +141,13 @@ public struct DecisionsPanel: View {
             }
         }
     }
-}
 
-/// One decision: its label and what was decided, unfolding into the question in its own words and the answer.
-private struct DecisionRow: View {
-    let row: DecisionsPanelModel.Row
-    let unfolded: Bool
-    let toggle: () -> Void
-
-    var body: some View {
+    /// One decision: its label and what was decided, unfolding into the question in its own words and the answer.
+    private func decision(_ row: DecisionsPanelModel.Row, unfolded: Bool, toggle: @escaping () -> Void) -> some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            FoldHeader(
-                unfolded: unfolded, accessibilityLabel: row.accessibilityLabel + (unfolded ? ", expanded" : ", collapsed"), toggle: toggle
+            CollapsibleHead(
+                expanded: unfolded, style: .line, accessibilityLabel: row.accessibilityLabel + (unfolded ? ", expanded" : ", collapsed"),
+                toggle: toggle
             ) {
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                     Text(row.id)
@@ -173,31 +168,26 @@ private struct DecisionRow: View {
                     }
                 }
             }
-            if unfolded {
-                VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                    part("Question", row.question ?? DecisionsPanelModel.noQuestionLine, secondary: row.question == nil)
-                    part("Answer", row.answer, secondary: false)
-                    if let scope = row.scope { part("For the scope", scope, secondary: false) }
+            FoldBody(expanded: unfolded) {
+                KeyValueList(layout: .stacked, style: .secondary) {
+                    KeyValueRow("Question") {
+                        Text(row.question ?? DecisionsPanelModel.noQuestionLine)
+                            .foregroundStyle(row.question == nil ? DesignTokens.TextColor.secondary.color : DesignTokens.TextColor.primary.color)
+                            .textSelection(.enabled)
+                    }
+                    KeyValueRow("Answer", text: row.answer)
+                    KeyValueRow("For the scope", text: row.scope)
                 }
-                .padding(.leading, 12 + DesignTokens.Space.s2)
-                .transition(.opacity)
+                .padding(.leading, FactsFold.bodyIndent)
+                .foldRow(0)
             }
         }
     }
+}
 
-    private func part(_ label: String, _ text: String, secondary: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(label)
-                .font(DesignTokens.TypeStyle.caption.font.weight(.semibold))
-                .foregroundStyle(.secondary)
-            Text(text)
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .foregroundStyle(secondary ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                .fixedSize(horizontal: false, vertical: true)
-                .textSelection(.enabled)
-        }
-        .accessibilityElement(children: .combine)
-    }
+/// Where a facts panel's fold puts its body: under its title, past the chevron.
+enum FactsFold {
+    static let bodyIndent: Double = 12 + DesignTokens.Space.s2
 }
 
 // MARK: - The Details panel
@@ -209,7 +199,6 @@ public struct DetailsPanel: View {
     @State private var modelsUnfolded: Bool
     @State private var briefUnfolded: Bool
     @State private var descriptionUnfolded: Bool
-    @State private var copied = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// `open` opens a link out; `copy` puts the workspace path on the pasteboard (`DetailsPanel.pasteboardCopy` by
@@ -234,14 +223,14 @@ public struct DetailsPanel: View {
 
     public var body: some View {
         FactsPanel(title: DetailsPanelModel.title) {
-            KeyValueList {
+            KeyValueList(style: .secondary) {
                 if let repo = model.repo {
-                    KeyValueRow(label: "Repo") { Chip(repo, kind: .repo) }
+                    KeyValueRow("Repo") { Chip(repo, kind: .repo) }
                 }
                 if let priority = model.priority {
-                    KeyValueRow(label: "Priority") { valueText(priority) }
+                    KeyValueRow("Priority") { valueText(priority) }
                 }
-                KeyValueRow(label: "Labels") {
+                KeyValueRow("Labels") {
                     if model.labels.isEmpty {
                         valueText(DetailsPanelModel.noLabelsLine, secondary: true)
                     } else {
@@ -251,13 +240,13 @@ public struct DetailsPanel: View {
                     }
                 }
                 if let workspace = model.workspace {
-                    KeyValueRow(label: "Workspace") { workspaceValue(workspace) }
+                    KeyValueRow("Workspace") { workspaceValue(workspace) }
                 }
                 if let summary = model.modelsSummary {
-                    KeyValueRow(label: "Models") { modelsValue(summary) }
+                    KeyValueRow("Models") { modelsValue(summary) }
                 }
                 if !model.links.isEmpty {
-                    KeyValueRow(label: "Links") {
+                    KeyValueRow("Links") {
                         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                             ForEach(model.links) { link in
                                 FactRow(url: link.url, open: open) {
@@ -293,19 +282,7 @@ public struct DetailsPanel: View {
 
     private func workspaceValue(_ path: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                Text(path)
-                    .font(.system(size: 11, design: .monospaced))
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                Spacer(minLength: 0)
-                Button(copied ? DetailsPanelModel.copiedTitle : DetailsPanelModel.copyTitle) {
-                    copy(path)
-                    copied = true
-                }
-                .directorButton(.quiet, size: .small)
-                .accessibilityLabel("Copy the workspace path")
-            }
+            KeyValuePath(path, copyLabel: "Copy the workspace path", copy: copy)
             if let host = model.workspaceHost {
                 Text("On \(host)")
                     .font(DesignTokens.TypeStyle.caption.font)
@@ -316,13 +293,13 @@ public struct DetailsPanel: View {
 
     private func modelsValue(_ summary: String) -> some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            FoldHeader(
-                unfolded: modelsUnfolded, accessibilityLabel: "Each run's model, \(summary)" + (modelsUnfolded ? ", expanded" : ", collapsed"),
-                toggle: { withAnimation(.motion(.fold, reduceMotion: reduceMotion)) { modelsUnfolded.toggle() } }
+            CollapsibleHead(
+                expanded: modelsUnfolded, style: .line, accessibilityLabel: "Each run's model, \(summary)" + (modelsUnfolded ? ", expanded" : ", collapsed"),
+                toggle: { withAnimation(FoldMotion.opening(reduceMotion: reduceMotion)) { modelsUnfolded.toggle() } }
             ) {
                 valueText(summary)
             }
-            if modelsUnfolded {
+            FoldBody(expanded: modelsUnfolded) {
                 VStack(alignment: .leading, spacing: 2) {
                     ForEach(model.models) { run in
                         HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
@@ -337,8 +314,8 @@ public struct DetailsPanel: View {
                         .accessibilityElement(children: .combine)
                     }
                 }
-                .padding(.leading, 12 + DesignTokens.Space.s2)
-                .transition(.opacity)
+                .padding(.leading, FactsFold.bodyIndent)
+                .foldRow(0)
             }
         }
     }
@@ -346,13 +323,13 @@ public struct DetailsPanel: View {
     /// The brief and its walkthrough, open by default: what the ticket does and why, for a person.
     private var briefFold: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            FoldHeader(
-                unfolded: briefUnfolded, accessibilityLabel: DetailsPanelModel.briefTitle + (briefUnfolded ? ", expanded" : ", collapsed"),
-                toggle: { withAnimation(.motion(.fold, reduceMotion: reduceMotion)) { briefUnfolded.toggle() } }
+            CollapsibleHead(
+                expanded: briefUnfolded, style: .line, accessibilityLabel: DetailsPanelModel.briefTitle + (briefUnfolded ? ", expanded" : ", collapsed"),
+                toggle: { withAnimation(FoldMotion.opening(reduceMotion: reduceMotion)) { briefUnfolded.toggle() } }
             ) {
                 foldTitle(DetailsPanelModel.briefTitle, detail: model.brief?.written)
             }
-            if briefUnfolded {
+            FoldBody(expanded: briefUnfolded) {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
                     if let brief = model.brief {
                         prose(brief.text, style: .reading)
@@ -369,8 +346,8 @@ public struct DetailsPanel: View {
                         EmptyLine(text: DetailsPanelModel.noBriefLine)
                     }
                 }
-                .padding(.leading, 12 + DesignTokens.Space.s2)
-                .transition(.opacity)
+                .padding(.leading, FactsFold.bodyIndent)
+                .foldRow(0)
             }
         }
     }
@@ -378,14 +355,14 @@ public struct DetailsPanel: View {
     /// The ticket's description the agent works from, folded by default.
     private var descriptionFold: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            FoldHeader(
-                unfolded: descriptionUnfolded,
+            CollapsibleHead(
+                expanded: descriptionUnfolded, style: .line,
                 accessibilityLabel: DetailsPanelModel.agentDescriptionTitle + (descriptionUnfolded ? ", expanded" : ", collapsed"),
-                toggle: { withAnimation(.motion(.fold, reduceMotion: reduceMotion)) { descriptionUnfolded.toggle() } }
+                toggle: { withAnimation(FoldMotion.opening(reduceMotion: reduceMotion)) { descriptionUnfolded.toggle() } }
             ) {
                 foldTitle(DetailsPanelModel.agentDescriptionTitle, detail: nil)
             }
-            if descriptionUnfolded {
+            FoldBody(expanded: descriptionUnfolded) {
                 Group {
                     if let description = model.agentDescription {
                         prose(description)
@@ -393,8 +370,8 @@ public struct DetailsPanel: View {
                         EmptyLine(text: DetailsPanelModel.noDescriptionLine)
                     }
                 }
-                .padding(.leading, 12 + DesignTokens.Space.s2)
-                .transition(.opacity)
+                .padding(.leading, FactsFold.bodyIndent)
+                .foldRow(0)
             }
         }
     }
@@ -422,53 +399,4 @@ public struct DetailsPanel: View {
             .fixedSize(horizontal: false, vertical: true)
             .textSelection(.enabled)
     }
-}
-
-// MARK: - The Key-value list
-
-/// The catalog's Key-value list: labels in secondary on the left, their values beside them; a fact that is unknown is
-/// left out, never shown as a dash.
-struct KeyValueList<Content: View>: View {
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        Grid(alignment: .topLeading, horizontalSpacing: DesignTokens.Space.s4, verticalSpacing: DesignTokens.Space.s2) {
-            content
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
-struct KeyValueRow<Value: View>: View {
-    let label: String
-    @ViewBuilder let value: Value
-
-    var body: some View {
-        GridRow(alignment: .firstTextBaseline) {
-            Text(label)
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .foregroundStyle(.secondary)
-                .fixedSize()
-                .gridColumnAlignment(.leading)
-            value
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(label)
-    }
-}
-
-// The facts rail's cards draw again only when their model changed (TP-1480): the Note card's field is its composer's,
-// which it observes itself.
-
-extension NotePanel: Equatable {
-    nonisolated public static func == (lhs: NotePanel, rhs: NotePanel) -> Bool { lhs.model == rhs.model && lhs.composer === rhs.composer }
-}
-
-extension DecisionsPanel: Equatable {
-    nonisolated public static func == (lhs: DecisionsPanel, rhs: DecisionsPanel) -> Bool { lhs.model == rhs.model }
-}
-
-extension DetailsPanel: Equatable {
-    nonisolated public static func == (lhs: DetailsPanel, rhs: DetailsPanel) -> Bool { lhs.model == rhs.model }
 }

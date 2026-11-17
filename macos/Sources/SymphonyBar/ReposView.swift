@@ -624,18 +624,21 @@ struct FieldRow: View {
     let field: RepoField
 
     var body: some View {
-        LabeledContent(field.label) {
-            VStack(alignment: .trailing, spacing: 1) {
-                Text(field.value)
-                    .foregroundStyle(field.tone == .problem ? Color.red : Color.primary)
-                if let detail = field.detail {
-                    Text(detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.trailing)
-                        .lineLimit(3)
-                        .truncationMode(.middle)
-                        .textSelection(.enabled)
+        KeyValueList {
+            KeyValueRow(field.label) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(field.value)
+                        .foregroundStyle(
+                            field.tone == .problem ? DesignTokens.Status.problem.textColor.color : DesignTokens.TextColor.primary.color
+                        )
+                    if let detail = field.detail {
+                        Text(detail)
+                            .textStyle(.caption)
+                            .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                            .lineLimit(3)
+                            .truncationMode(.middle)
+                            .textSelection(.enabled)
+                    }
                 }
             }
         }

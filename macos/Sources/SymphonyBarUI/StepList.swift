@@ -20,79 +20,6 @@ public enum FoldKeys {
     }
 }
 
-// MARK: - Fold header
-
-/// A fold's header line: the chevron, then `label`. It has a row's hover, pressed and focus states, toggles on a
-/// click, Return or Space, and when it can't unfold says why under the pointer and takes no focus.
-struct FoldHeader<Label: View>: View {
-    let unfolded: Bool
-    /// Why it can't unfold, nil when it can.
-    var disabledReason: String?
-    let accessibilityLabel: String
-    let toggle: () -> Void
-    @ViewBuilder var label: Label
-
-    @State private var hovered = false
-    @State private var pressed = false
-    @FocusState private var focused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    private var enabled: Bool { disabledReason == nil }
-
-    /// How far a press may travel and still be a click, in points.
-    static var clickSlop: CGFloat { 4 }
-
-    /// Whether a press that moved by `translation` is a click rather than a drag.
-    static func isClick(_ translation: CGSize) -> Bool {
-        abs(translation.width) <= clickSlop && abs(translation.height) <= clickSlop
-    }
-
-    var body: some View {
-        HStack(spacing: DesignTokens.Space.s2) {
-            Image(systemName: "chevron.right")
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(enabled ? .secondary : .quaternary)
-                .rotationEffect(.degrees(unfolded ? 90 : 0))
-                .animation(.motion(.fold, reduceMotion: reduceMotion), value: unfolded)
-                .frame(width: 12)
-                .accessibilityHidden(true)
-            label
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(RowFace(
-            state: DesignTokens.Interaction(hovered: hovered && enabled, pressed: pressed && enabled, focused: focused),
-            reduceMotion: reduceMotion,
-            bleed: EdgeInsets(top: DesignTokens.Space.s1, leading: DesignTokens.Space.s2, bottom: DesignTokens.Space.s1, trailing: DesignTokens.Space.s2)
-        ))
-        .contentShape(Rectangle())
-        .focusable(enabled)
-        .focusEffectDisabled()
-        .focused($focused)
-        .onHover { hovered = $0 }
-        // One gesture presses and clicks: a press released where it began toggles. A separate tap here lost the click
-        // to the timeline row's own select tap around it, so a click selected the run and never folded it (TP-1480's QA).
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in if !pressed { pressed = true } }
-                .onEnded { value in
-                    pressed = false
-                    if enabled, Self.isClick(value.translation) { toggle() }
-                }
-        )
-        .onKeyPress(keys: FoldKeys.keys, phases: .down) { press in
-            guard enabled, FoldKeys.toggles(press.key, modifiers: press.modifiers) else { return .ignored }
-            toggle()
-            return .handled
-        }
-        .help(disabledReason ?? "")
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint(disabledReason ?? "")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { if enabled { toggle() } }
-    }
-}
-
 // MARK: - Line entering
 
 /// How a line comes into an unfolded step: down into place with the fold, `delay` after the one above it, or up at
@@ -271,8 +198,8 @@ private struct StepRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            FoldHeader(
-                unfolded: unfolded, disabledReason: step.cannotUnfoldReason,
+            CollapsibleHead(
+                expanded: unfolded, style: .line, disabledReason: step.cannotUnfoldReason,
                 accessibilityLabel: step.canUnfold ? step.foldAccessibilityLabel(folded: !unfolded) : step.accessibilityLabel,
                 toggle: toggle
             ) {

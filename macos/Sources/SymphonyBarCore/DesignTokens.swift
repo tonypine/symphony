@@ -1543,6 +1543,81 @@ public enum DesignTokens {
         }
     }
 
+    /// The catalog's Key-value list (`.kv` in `components.css`, TP-1511): labels in a column as wide as the longest,
+    /// values beside them; stacked, labels above their values. The Tickets details' list (`.facts`) is the same list
+    /// in the secondary style with tighter rows.
+    public enum KeyValue {
+        /// Between the label column and the values (`gap: … var(--space-4)`).
+        public static let columnGap: Double = Space.s4
+        /// Between two facts (`gap: 8px …`).
+        public static let rowGap: Double = 8
+        /// Between two facts of the Tickets details (`.facts`, `gap: 6px …`).
+        public static let compactRowGap: Double = 6
+        /// Stacked: between a label and its value (`.kv.stacked { gap: 2px }`).
+        public static let stackedLabelGap: Double = 2
+        /// Stacked: under each value (`.kv.stacked dd { margin-bottom: var(--space-2) }`).
+        public static let stackedValueGap: Double = Space.s2
+        /// Between the parts of a value that are several things, chips or a path and its button (`dd { gap: … }`).
+        public static let valueGap: Double = Space.s2
+        /// Between two groups (`.kv-group + .kv-group { margin-top: var(--space-4) }`).
+        public static let groupGap: Double = Space.s4
+        /// Under a group's heading (`.kv-group h4 { margin: 0 0 var(--space-2) }`).
+        public static let groupHeadingGap: Double = Space.s2
+        /// A group's heading's letter spacing, as a fraction of its size (`letter-spacing: 0.08em`).
+        public static let groupHeadingTracking: Double = 0.08
+        /// Narrower than this, a list is stacked ("labels above values, under 300 pt").
+        public static let stackedBelow: Double = 300
+
+        /// How a list lays its facts out.
+        public enum Layout: String, CaseIterable, Equatable {
+            /// Two columns: labels on the left in a column as wide as the longest.
+            case columns
+            /// Each label above its value, for a narrow place.
+            case stacked
+
+            /// Two columns at `width` and wider, stacked under `stackedBelow`.
+            public static func fitting(_ width: Double) -> Layout { width < stackedBelow ? .stacked : .columns }
+        }
+    }
+
+    /// The catalog's Collapsible card (`.collapsible` and `.fold` in `components.css`, TP-1511): a head with the
+    /// disclosure chevron, the title and a summary at the trailing end, over a body that folds away.
+    public enum Collapsible {
+        /// The head's least height (`min-height: 48px`).
+        public static let headMinHeight: Double = 48
+        /// The head's padding above and below (`padding: var(--space-3) …`).
+        public static let headVerticalPadding: Double = Space.s3
+        /// The head's padding at the sides (`padding: … var(--space-5)`).
+        public static let headHorizontalPadding: Double = Space.s5
+        /// Between the chevron, the title and the summary (`gap: var(--space-2)`).
+        public static let headGap: Double = Space.s2
+        /// The disclosure chevron's size (`.disclose { width: 10px }`).
+        public static let chevronSize: Double = 10
+        /// The body's padding at the leading side: under the title, past the chevron (`calc(var(--space-3) + 6px)`).
+        public static let bodyLeadingPadding: Double = Space.s3 + 6
+        /// The body's padding at the trailing side and under it (`padding: 0 var(--space-3) var(--space-3) …`).
+        public static let bodyPadding: Double = Space.s3
+        /// How far a row of an opening body comes down from (`--enter-offset`).
+        public static let rowEnterOffset: Double = 6
+        /// What the summary says when the card cannot open: there is nothing in it.
+        public static let emptySummary = "None yet"
+
+        /// The summary's opacity: there while folded, faded away while open.
+        public static func summaryOpacity(expanded: Bool) -> Double { expanded ? 0 : 1 }
+
+        /// The chevron's turn in degrees: right while folded, down while open.
+        public static func chevronDegrees(expanded: Bool) -> Double { expanded ? 90 : 0 }
+
+        /// What VoiceOver reads after the head's title: its state, then the summary ("collapsed, 3 runs"); an empty
+        /// card reads "None yet".
+        public static func spokenValue(expanded: Bool, summary: String?, empty: Bool) -> String {
+            if empty { return emptySummary }
+            let state = expanded ? "expanded" : "collapsed"
+            guard let summary, !summary.isEmpty, !expanded else { return state }
+            return "\(state), \(summary)"
+        }
+    }
+
     /// The main window's layout (§3.5).
     public enum Layout {
         public static let windowWidth: Double = 1200
