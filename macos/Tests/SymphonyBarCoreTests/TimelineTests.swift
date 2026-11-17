@@ -126,10 +126,16 @@ final class TimelineTests: XCTestCase {
         XCTAssertEqual(byID["q2"]?.actor, "Tony")
         XCTAssertEqual(byID["h1"]?.kind, .person)
         XCTAssertEqual(byID["g1"]?.kind, .rule)
-        XCTAssertEqual(byID["g1"]?.actor, "Rule: PR watcher R22")
+        // A rule by what it does, as the feed names it (TP-1487), never by a PR watcher row's number.
+        XCTAssertEqual(byID["g1"]?.actor, "Rule: keep the branch current")
+        XCTAssertEqual(byID["g1"]?.title, "Updated the branch")
         XCTAssertEqual(byID["v1"]?.kind, .runFailed)
         XCTAssertEqual(byID["v2"]?.kind, .finding)
         XCTAssertEqual(byID["v2"]?.actor, "QA run")
+        // What QA found is drawn as its card: the line and QA's description.
+        XCTAssertEqual(byID["v2"]?.finding, TimelineFinding(title: "The timeline missed a stopped run"))
+        XCTAssertEqual(byID["v2"]?.title, "QA found content missing")
+        XCTAssertNil(byID["a1"]?.finding)
         XCTAssertEqual(byID["n1"]?.kind, .note)
         // The run's own events fold into its group; the situations that restate an entry leave no row.
         XCTAssertTrue(entries.allSatisfy { !$0.eventIDs.contains { ["r1", "s1", "p2", "p6", "b3"].contains($0) } })
@@ -152,10 +158,10 @@ final class TimelineTests: XCTestCase {
         // Set, cleared, set again two seconds later and cleared, with the rule's three writes: one pause of 21 minutes,
         // by the rule that set it.
         let blocked = try XCTUnwrap(pauses.first { $0.id == "b2" })
-        XCTAssertEqual(blocked.actor, "Rule: Blocked-by links")
+        XCTAssertEqual(blocked.actor, "Rule: blockers first")
         XCTAssertEqual(Set(blocked.eventIDs), ["b1", "b2", "b4", "b5", "b6", "b7", "b8"])
         XCTAssertEqual(blocked.durationSeconds, 21 * 60)
-        XCTAssertFalse(entries.contains { $0.kind == .rule && $0.actor == "Rule: Blocked-by links" })
+        XCTAssertFalse(entries.contains { $0.kind == .rule && $0.actor == "Rule: blockers first" })
     }
 
     func testAPauseThatStillHoldsCountsItsDurationSoFar() throws {
@@ -188,8 +194,11 @@ final class TimelineTests: XCTestCase {
 
     func testDuplicateRecordWritesFoldIntoOneEntry() throws {
         let entries = self.entries(try model(lookedAt: lookedAt))
-        let rework = entries.filter { $0.title == "Entered Rework from QA" }
+        let rework = entries.filter { $0.title == "Sent back to Rework by QA" }
         XCTAssertEqual(rework.count, 1)
+        // QA's send-back is highlighted (TP-1487).
+        XCTAssertEqual(rework.first?.kind, .sendBack)
+        XCTAssertEqual(rework.first?.isHighlighted, true)
         XCTAssertEqual(rework.first?.eventIDs, ["m1", "m2"])
         // The second write was newer than the person's last look, so the entry is.
         XCTAssertEqual(rework.first?.isNew, true)
@@ -240,6 +249,8 @@ final class TimelineTests: XCTestCase {
     func testEveryClassOfEventFindsItsKind() throws {
         let kinds: [(String, String, TimelineEntry.Kind)] = [
             ("ticket.cancelled", "{}", .phase), ("drift.reverted", "{}", .phase),
+            ("phase.entered", #"{"to": "Rework", "from": "Code Review"}"#, .sendBack),
+            ("phase.entered", #"{"to": "Rework", "from": "In Progress"}"#, .phase),
             ("decision.requested", "{}", .questionAsked), ("question.reopened", "{}", .questionAsked),
             ("decision.recorded", "{}", .questionAnswered),
             ("question.withdrawn", "{}", .questionClosed), ("question.not_asked", "{}", .questionClosed),
@@ -264,6 +275,10 @@ final class TimelineTests: XCTestCase {
         let history = try page([
             event("r", "09:00:00", "note.read", title: "Note read by a run"),
             #"{"id": "u", "type": "note", "payload": {}}"#,
+            // Symphony's bookkeeping (TP-1487): a review waiting on the PR watcher, a workspace already on the PR head.
+            event("w", "09:01:00", "note", title: "QA waits on the PR watcher").replacingOccurrences(of: #""type""#, with: #""bookkeeping": true, "type""#),
+            event("s", "09:02:00", "workspace.synced", title: "Workspace already on the PR head 2c8b252")
+                .replacingOccurrences(of: #""type""#, with: #""bookkeeping": true, "type""#),
         ])
         XCTAssertTrue(TimelineModel.build(history, reference: reference, calendar: utc).isEmpty)
     }
@@ -281,6 +296,11 @@ final class TimelineTests: XCTestCase {
             event("agent", "08:03:00", "note", title: "Note added", actor: #"{"kind": "agent", "run_id": "q"}"#),
             event("person", "08:04:00", "note", title: "Note added", actor: #"{"kind": "person"}"#),
             event("rule", "08:05:00", "rule.action", title: "A rule acted", payload: #"{"action": "other"}"#),
+            event("named", "08:05:30", "rule.action", title: "Changed auto-merge", payload: #"{"rule": "PR watcher R29", "action": "auto_merge"}"#)
+                .replacingOccurrences(of: #""type""#, with: #""rule": "Merging lands with auto-merge", "type""#),
+            event("paused", "08:05:40", "pause.set", title: "Paused: waiting for TP-1 to finish",
+                  payload: #"{"reason": "ticket", "text": "Waiting for TP-1 to finish", "set_by": {"kind": "rule", "name": "Blocked-by links"}}"#)
+                .replacingOccurrences(of: #""type""#, with: #""rule": "blockers first", "type""#),
             event("setter", "08:06:00", "note", title: "Note", payload: #"{"by": {"kind": "person"}}"#),
             event("hold", "08:07:00", "hold.cleared", title: "Blocked hold cleared", payload: #"{"kind": "blocked", "by": "Tony"}"#),
         ])
@@ -292,9 +312,51 @@ final class TimelineTests: XCTestCase {
         XCTAssertEqual(actors["agent"], "QA run 3")
         XCTAssertEqual(actors["person"], "You")
         XCTAssertEqual(actors["rule"], "Rule: a rule")
+        XCTAssertEqual(actors["named"], "Rule: Merging lands with auto-merge")
+        XCTAssertEqual(actors["paused"], "Rule: blockers first")
         XCTAssertEqual(actors["setter"], "You")
         // A hold cleared with no hold set reads on its own; its `by` is a name, not a setter.
         XCTAssertEqual(actors["hold"], "Symphony")
+    }
+
+    func testAFindingCarriesItsScreenshotsToItsCard() throws {
+        let shot = #"{"id": "shot-1", "kind": "screenshot", "label": "Run header at 1440×900", "mime": "image/png", "url": "/api/v1/artifacts/shot-1"}"#
+        let log = #"{"id": "log-1", "kind": "log", "label": "QA log", "mime": "text/plain"}"#
+        let found = event("f", "09:00:00", "finding.recorded", title: "QA found content clipped: Step 2",
+                          payload: #"{"class": "content clipped", "description": "  The row is cut at its right edge "}"#)
+            .replacingOccurrences(of: #""summary""#, with: #""artifacts": [\#(shot), \#(log)], "summary""#)
+        let entry = try XCTUnwrap(entries(TimelineModel.build(try page([found]), reference: reference, calendar: utc)).first)
+        let finding = try XCTUnwrap(entry.finding)
+        XCTAssertEqual(finding.title, "The row is cut at its right edge")
+        XCTAssertNil(finding.text)
+        XCTAssertEqual(finding.screenshots, [TicketScreenshot(id: "shot-1", label: "Run header at 1440×900", path: "api/v1/artifacts/shot-1", available: true)])
+        XCTAssertEqual(finding.accessibilityLabel, "Finding, The row is cut at its right edge, 1 screenshot")
+        XCTAssertFalse(entry.isHighlighted)
+
+        // A finding without a description names itself by its entry's words.
+        let bare = event("g", "09:00:00", "finding.recorded", title: "QA found a defect", payload: #"{"class": "unclassified"}"#)
+        let unsaid = try XCTUnwrap(entries(TimelineModel.build(try page([bare]), reference: reference, calendar: utc)).first)
+        XCTAssertEqual(unsaid.finding, TimelineFinding(title: "QA found a defect"))
+
+        let two = TimelineFinding(title: "QA found it", screenshots: finding.screenshots + finding.screenshots)
+        XCTAssertEqual(two.accessibilityLabel, "Finding, QA found it, 2 screenshots")
+        XCTAssertEqual(TimelineFinding(title: "QA found it").accessibilityLabel, "Finding, QA found it")
+    }
+
+    func testTheFindingCardHeadsWithQAsFirstSentenceAndNotTheEntrysWords() {
+        let said = "Walkthrough 1-2 on fixtures at 1440x900: the Details panel shows the raw model id. Expected: the display name."
+        XCTAssertEqual(
+            TimelineFinding.card(description: said),
+            TimelineFinding(title: "The Details panel shows the raw model id", text: "Expected: the display name.")
+        )
+        XCTAssertEqual(
+            TimelineFinding.card(description: "Design check: ticket page at 1440x900: The heading doubles. Actual: twice."),
+            TimelineFinding(title: "The heading doubles", text: "Actual: twice.")
+        )
+        XCTAssertEqual(TimelineFinding.card(description: "The row is cut."), TimelineFinding(title: "The row is cut"))
+        XCTAssertEqual(TimelineFinding.card(description: "Ends on a colon: "), TimelineFinding(title: "Ends on a colon:"))
+        XCTAssertNil(TimelineFinding.card(description: "  "))
+        XCTAssertNil(TimelineFinding.card(description: nil))
     }
 
     func testTheLeadIsTheWordsUpToTheColon() {
@@ -346,7 +408,7 @@ final class TimelineTests: XCTestCase {
         XCTAssertEqual(model.items.filter(\.isNew).map(\.id), ["run-run-2", "entry-m1"])
         XCTAssertEqual(model.marker, TimelineMarker(lookedAt: lookedAt, before: "entry-n1"))
         let rework = try XCTUnwrap(entries(model).first { $0.id == "m1" })
-        XCTAssertEqual(rework.accessibilityLabel(time: "09:44"), "09:44, phase move, Entered Rework from QA, QA failed, by Symphony, new since you last looked")
+        XCTAssertEqual(rework.accessibilityLabel(time: "09:44"), "09:44, sent back, Sent back to Rework by QA, QA failed, by Symphony, new since you last looked")
         // The run now is live: it says so instead of carrying the dot.
         let run = try XCTUnwrap(model.items.first?.run)
         XCTAssertTrue(run.isNew)

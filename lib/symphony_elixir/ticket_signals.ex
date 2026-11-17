@@ -255,6 +255,13 @@ defmodule SymphonyElixir.TicketSignals do
   end
 
   @doc """
+  What a machine note of the signal `name` says, in a person's words: "QA waits on the PR watcher".
+  A signal with no words of its own reads "Symphony noted <its name in words>".
+  """
+  @spec note_title(String.t()) :: String.t()
+  def note_title(name), do: Map.get_lazy(@notes, name, fn -> "Symphony noted " <> String.replace(name, "_", " ") end)
+
+  @doc """
   Whether two texts say the same thing, ignoring case and spacing; a blank or missing text matches
   nothing.
   """

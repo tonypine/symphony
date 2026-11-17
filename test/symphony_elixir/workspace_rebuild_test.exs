@@ -118,7 +118,7 @@ defmodule SymphonyElixir.WorkspaceRebuildTest do
                  %{action: :failed, reason: :age_gc, repo_key: ctx.repo_key, identifier: "TP-91"}
                ])
 
-      assert [%{payload: %{reason: "age_gc"}, summary: %{title: "Workspace removed", detail: "The age GC reclaimed it"}}] =
+      assert [%{payload: %{reason: "age_gc"}, summary: %{title: "Workspace removed", detail: "It went unused too long"}}] =
                TicketEvents.query(issue.id, types: ["workspace.removed"])
 
       assert {:ok, %{reason: :reclaim, winner: :pull_request, head: ^pr_head}} = choose(issue)
@@ -164,8 +164,7 @@ defmodule SymphonyElixir.WorkspaceRebuildTest do
       assert git!(ctx.primary, ["rev-parse", "refs/symphony/orphaned/#{local}"]) == local
 
       assert [%{summary: %{detail: detail}}] = TicketEvents.query(issue.id, types: ["workspace.rebuilt"])
-      assert detail =~ "local #{String.slice(local, 0, 7)}"
-      assert detail =~ "Its local branch head #{String.slice(local, 0, 7)} is kept under refs/symphony/orphaned"
+      assert detail =~ "Its local work is kept aside"
     end
 
     test "a local branch head behind the chosen one is not kept", ctx do

@@ -225,11 +225,11 @@ final class FactsRailDetailsTests: XCTestCase {
         XCTAssertEqual(model.workspace, "/Users/tonypine/symphony-workspaces/symphony/TP-1447")
         XCTAssertNil(model.workspaceHost)
         XCTAssertEqual(model.models, [
-            DetailsPanelModel.RunModel(id: "run-1", run: "Implementation run 1", model: "claude-opus-5-5 · high effort"),
-            DetailsPanelModel.RunModel(id: "run-2", run: "Code Review run 1", model: "claude-sonnet-5-5"),
-            DetailsPanelModel.RunModel(id: "run-3", run: "Implementation run 3", model: "claude-opus-5-5 · high effort"),
+            DetailsPanelModel.RunModel(id: "run-1", run: "Implementation run 1", model: "Claude Opus 5.5 · high effort"),
+            DetailsPanelModel.RunModel(id: "run-2", run: "Code Review run 1", model: "Claude Sonnet 5.5"),
+            DetailsPanelModel.RunModel(id: "run-3", run: "Implementation run 3", model: "Claude Opus 5.5 · high effort"),
         ])
-        XCTAssertEqual(model.modelsSummary, "3 runs · claude-opus-5-5, claude-sonnet-5-5")
+        XCTAssertEqual(model.modelsSummary, "3 runs · Claude Opus 5.5, Claude Sonnet 5.5")
         XCTAssertEqual(model.links.map(\.title), ["Ticket in Linear", "PR #870 on GitHub"])
         XCTAssertEqual(model.links.map(\.id), ["Ticket in Linear", "PR #870 on GitHub"])
         XCTAssertEqual(model.brief?.written, "Written today at 09:12")
@@ -268,7 +268,7 @@ final class FactsRailDetailsTests: XCTestCase {
     func testOneRunsModelIsSummedUpAsOneRun() {
         let runs = ["a": TicketEventsPayload.Run(runID: "a", runKind: "implementation", runNumber: 1, model: "gpt-6", effort: " ")]
         let models = DetailsPanelModel.runModels(runs)
-        XCTAssertEqual(models.map(\.model), ["gpt-6"])
-        XCTAssertEqual(DetailsPanelModel.modelsSummary(models), "1 run · gpt-6")
+        XCTAssertEqual(models.map(\.model), ["GPT 6"])
+        XCTAssertEqual(DetailsPanelModel.modelsSummary(models), "1 run · GPT 6")
     }
 }

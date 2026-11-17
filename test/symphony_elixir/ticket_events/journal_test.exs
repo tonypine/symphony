@@ -82,7 +82,7 @@ defmodule SymphonyElixir.TicketEvents.JournalTest do
     assert moved.ticket == %{repo_key: @repo, identifier: "FIX-1", title: "The epic"}
     assert moved.by == %{kind: "person", name: "Director"}
     assert rule.by == %{kind: "rule", name: "PR watcher R22"}
-    assert rule.event.summary.title == "PR watcher R22 reran the failed checks"
+    assert rule.event.summary.title == "Reran the failed checks"
     assert answered.by == %{kind: "person", name: "Director"}
     assert asked.by == %{kind: "rule", name: "Quality gate"}
     assert verdict.by == %{kind: "run", name: nil, run_id: "run-2"}

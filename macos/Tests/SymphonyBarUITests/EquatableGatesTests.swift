@@ -50,6 +50,7 @@ final class EquatableGatesTests: XCTestCase {
         XCTAssertEqual(row, TimelineEntryRow(entry: entry, time: "09:00", selected: false) { XCTFail() })
         XCTAssertNotEqual(row, TimelineEntryRow(entry: entry, time: "09:00", selected: true) {})
         XCTAssertNotEqual(row, TimelineEntryRow(entry: entry, time: "09:01", selected: false) {})
+        XCTAssertNotEqual(row, TimelineEntryRow(entry: entry, time: "09:00", selected: false, connects: true) {})
     }
 
     /// The run's fold is a binding over the timeline's state, so both rows would read its current value: the row keeps
