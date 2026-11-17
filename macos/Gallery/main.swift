@@ -1420,6 +1420,18 @@ let ticketPageInbox: InboxPayload = {
     return inbox
 }()
 
+/// The fixture's screenshots kept as the window's reads would keep them: QA's finding on TP-1244 and TP-1245 shows its
+/// thumbnail (TP-1487).
+@MainActor
+func ticketPageImages() -> ArtifactImages {
+    let images = ArtifactImages { _ in .unreachable }
+    let artifacts = ticketPageAPI.appendingPathComponent("artifacts")
+    for file in (try? FileManager.default.contentsOfDirectory(at: artifacts, includingPropertiesForKeys: nil)) ?? [] where file.pathExtension == "png" {
+        if let data = try? Data(contentsOf: file) { images.keep(data, for: file.deletingPathExtension().lastPathComponent) }
+    }
+    return images
+}
+
 /// `identifier`'s page as the window builds it from the fixture.
 func ticketPageRead(_ identifier: String) -> TicketPage {
     func data(_ path: String) -> Data? { try? Data(contentsOf: ticketPageAPI.appendingPathComponent(path)) }
@@ -1510,6 +1522,7 @@ func ticketPageLaptop(_ identifier: String, width: CGFloat = TicketPageLayout.la
         transcripts: StepTranscripts { _ in .unreachable }, note: TicketNoteComposer(identifier: identifier),
         decisions: ticketPageDecisions(identifier), calendar: timelineCalendar
     )
+    .environment(\.artifactImages, ticketPageImages())
     .frame(width: width, alignment: .topLeading)
     .frame(minHeight: TicketPageLayout.laptopWindowHeight, alignment: .top)
     .background(DesignTokens.Surface.content.color)
@@ -1535,6 +1548,7 @@ func ticketPageAnswering(picks: DecisionPicks = DecisionPicks(), sending: Bool =
         note: TicketNoteComposer(identifier: identifier), decisions: ticketPageDecisions(identifier), sheetOpen: true,
         calendar: timelineCalendar
     )
+    .environment(\.artifactImages, ticketPageImages())
     .frame(width: width, height: TicketPageLayout.laptopWindowHeight, alignment: .top)
     .clipped()
     .background(DesignTokens.Surface.content.color)
@@ -1559,6 +1573,7 @@ func ticketPageWide(_ identifier: String, width: CGFloat = TicketPageLayout.desk
         transcripts: StepTranscripts { _ in .unreachable }, note: TicketNoteComposer(identifier: identifier),
         decisions: ticketPageDecisions(identifier), scroll: TicketPageScroll(viewport: height), calendar: timelineCalendar
     )
+    .environment(\.artifactImages, ticketPageImages())
     .frame(width: width, alignment: .topLeading)
     .frame(minHeight: height, alignment: .top)
     .background(DesignTokens.Surface.content.color)

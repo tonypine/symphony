@@ -563,7 +563,8 @@ and of Symphony's own stream (its pauses and questions), newest first and paged
   "events": [
     {
       "id": "01JC…", "at": "2026-11-09T14:02:11Z", "type": "rule.action", "phase": "Code Review",
-      "summary": { "title": "PR watcher R22 reran the failed checks", "detail": "A check failed on PR #741…" },
+      "summary": { "title": "Reran the failed checks", "detail": "A check failed on PR #741…" },
+      "rule": "a failed check runs again once", "bookkeeping": false,
       "ticket": { "repo_key": "symphony", "identifier": "TP-1401", "title": "The situation read model" },
       "class": "rule", "notable": true, "by": { "kind": "rule", "name": "PR watcher R22" },
       "...": "the ticket feed's other fields"
@@ -612,8 +613,10 @@ Each time a rule of Symphony's acts on a ticket, the ledger records one `rule.ac
 (its line in plain words) and `filed` (the ticket it filed). The writers are each action the PR and CI
 watcher applied (`PR watcher R22`), a pause reason a rule set or lifted (`CI wait`, `Release build
 watch`, `Blocked-by links`, `Self-heal`, the update and instructions holds), the dispatch-loop guard,
-the idle park and self-heal's new fix ticket. Its summary names the rule: "CI wait paused the
-ticket". The audit records the rules write stay as they are.
+the idle park and self-heal's new fix ticket. Its summary says what the rule did ("Paused the
+ticket"), and the feed's `rule` names the rule by what it does ("a red or running check holds the
+ticket"; a PR watcher row by what the row did, never by its number). The audit records the rules
+write stay as they are.
 
 # The aggregation read (Insights)
 

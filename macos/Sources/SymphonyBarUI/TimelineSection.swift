@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import SymphonyBarCore
 
@@ -60,9 +61,9 @@ public struct TimelineSection: View {
     /// timeline fills its column instead (`.ticket-page .timeline-layout`, TP-1485), so its right edge lines up with the
     /// Lifecycle card's.
     public static let maxWidth: CGFloat = 780
-    /// The column of times, and the column of marks after it.
-    static let timeColumn: CGFloat = 40
-    static let markColumn: CGFloat = 18
+    /// The column of times, and the column of marks after it (the catalog's `.tl-entry`: 48 px, then 26 px).
+    static let timeColumn: CGFloat = 48
+    static let markColumn: CGFloat = 26
 
     /// `selection` and `unfoldedRuns` say what is selected and which runs are open to start with; nil opens what
     /// opens by default. The times are `calendar`'s. `idle` is the line shown in the run now's place when no run works.
@@ -141,14 +142,26 @@ public struct TimelineSection: View {
         return lines
     }
 
+    /// The entries joined to the line under them by the rule line (the catalog's `.timeline .tl-entry::before`): an
+    /// entry whose next line is an entry of the same day. A run, a day's separator or the marker breaks the line.
+    static func connected(_ lines: [Line]) -> Set<String> {
+        var ids = Set<String>()
+        for (line, next) in zip(lines, lines.dropFirst()) {
+            if case let .item(.entry(entry)) = line, case .item(.entry) = next { ids.insert(TimelineItem.entry(entry).id) }
+        }
+        return ids
+    }
+
     /// The timeline in a lazy stack: only the lines near the scroll view's visible part are made, and a folded run makes
     /// no step rows, so a 500-event history costs about what a short one does to open and to scroll (TP-1481). The lines
     /// are one flat list so each item's row is the stack's own child, found by `scrollTo` before it is made.
     private func column(_ proxy: ScrollViewProxy) -> some View {
         let idle = model.runNow == nil ? idle : nil
         let moves = Self.moves(arriving: model.items.count(where: { !seen.contains($0.id) }), seen: seen.count)
+        let lines = Self.lines(model, idle: idle, clock: clock)
+        let connected = Self.connected(lines)
         return TimelineStack(lazy: !offscreenSnapshot) {
-            ForEach(Self.lines(model, idle: idle, clock: clock)) { line in
+            ForEach(lines) { line in
                 switch line {
                 case let .day(day):
                     DaySeparator(day: day)
@@ -157,7 +170,7 @@ public struct TimelineSection: View {
                 case let .marker(_, text):
                     SinceLookedLine(text: text)
                 case let .item(item):
-                    row(item)
+                    row(item, connects: connected.contains(item.id))
                         .modifier(TimelineEntering(entering: moves && !seen.contains(item.id), reduceMotion: reduceMotion) {
                             seen.insert(item.id)
                         })
@@ -208,12 +221,12 @@ public struct TimelineSection: View {
     public static let title = "Timeline"
 
     @ViewBuilder
-    private func row(_ item: TimelineItem) -> some View {
+    private func row(_ item: TimelineItem, connects: Bool) -> some View {
         let selected = selection == item.id
         switch item {
         // Each row draws again only when what it shows changed: a new event draws its own row (TP-1480).
         case let .entry(entry):
-            TimelineEntryRow(entry: entry, time: clock(entry.at), selected: selected) { select(item.id) }
+            TimelineEntryRow(entry: entry, time: clock(entry.at), selected: selected, connects: connects) { select(item.id) }
                 .equatable()
         case let .run(run, at):
             TimelineRunRow(run: run, time: clock(at), selected: selected, transcripts: transcripts, fold: fold(run)) {
@@ -425,30 +438,44 @@ struct DaySeparator: View {
     }
 }
 
-/// One entry: its time, its class's glyph in its tone, what happened in bold with the rest after it, its detail and
-/// who did it, and a pause's duration at the end.
+/// One entry (the catalog's `.tl-entry`): its time, its class's glyph in its tinted round mark joined to the next
+/// entry by the rule line, what happened in bold with the rest after it, its detail, the finding card when QA found
+/// something, who did it, and a pause's duration at the end. A send-back to Rework is highlighted in the problem tint.
 struct TimelineEntryRow: View {
     let entry: TimelineEntry
     let time: String
     let selected: Bool
     /// The ticket the entry is on, as a chip over what happened: the Journal's rows (TP-1459), where the row opens it.
     var ticket: TimelineTicketChip?
+    /// The rule line runs from its mark down to the next entry's.
+    var connects = false
     let select: () -> Void
     @State private var hovered = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.timelineReference) private var reference
 
+    init(
+        entry: TimelineEntry, time: String, selected: Bool, ticket: TimelineTicketChip? = nil, connects: Bool = false,
+        select: @escaping () -> Void
+    ) {
+        self.entry = entry
+        self.time = time
+        self.selected = selected
+        self.ticket = ticket
+        self.connects = connects
+        self.select = select
+    }
+
     var body: some View {
         let _ = TimelineRowBodies.evaluated("entry-\(entry.id)")
-        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+        HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
             Text(time)
                 .font(DesignTokens.TypeStyle.secondary.font)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .frame(width: TimelineSection.timeColumn, alignment: .trailing)
-            Image(systemName: entry.kind.symbol)
-                .font(.system(size: 13, weight: .medium))
-                .foregroundStyle(Self.color(entry.kind.tone))
+                .padding(.top, Self.textTop)
+            TimelineMark(symbol: entry.kind.symbol, tone: entry.kind.tone)
                 .frame(width: TimelineSection.markColumn)
                 .help(Self.glyphHelp(entry.kind))
             VStack(alignment: .leading, spacing: 2) {
@@ -465,10 +492,15 @@ struct TimelineEntryRow: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                if let finding = entry.finding {
+                    TimelineFindingCard(finding: finding)
+                        .padding(.vertical, DesignTokens.Space.s1)
+                }
                 Text(entry.actor)
                     .font(DesignTokens.TypeStyle.secondary.font)
                     .foregroundStyle(.tertiary)
             }
+            .padding(.top, Self.textTop)
             .frame(maxWidth: DesignTokens.Measure.reading, alignment: .leading)
             Spacer(minLength: DesignTokens.Space.s2)
             if let seconds = entry.durationSeconds {
@@ -482,23 +514,64 @@ struct TimelineEntryRow: View {
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
                     .fixedSize()
+                    .padding(.top, Self.textTop)
                     .help(Self.durationHelp)
             }
         }
         .padding(.vertical, DesignTokens.Space.s1)
         .frame(maxWidth: .infinity, alignment: .leading)
+        .background(alignment: .topLeading) {
+            if connects {
+                TimelineRuleLine()
+                    .padding(.leading, Self.ruleLeading)
+                    .padding(.top, Self.ruleTop)
+                    // Through the gap to the next entry's mark.
+                    .padding(.bottom, Self.ruleBottom)
+            }
+        }
+        .background {
+            if entry.isHighlighted {
+                RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
+                    .fill(DesignTokens.Status.problem.badgeFill.opacity(Self.highlightOpacity))
+                    .padding(Self.highlightInsets)
+            }
+        }
         .modifier(RowFace(state: DesignTokens.Interaction(hovered: hovered, selected: selected), reduceMotion: reduceMotion))
         .contentShape(Rectangle())
         .onHover { hovered = $0 }
         .onTapGesture(perform: select)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([ticket?.spoken, entry.accessibilityLabel(time: time)].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel(spokenLabel)
         .accessibilityHint(ticket?.hint ?? "")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { select() }
     }
 
     static let durationHelp = "How long the pause lasted"
+
+    /// What VoiceOver reads: the ticket's chip, the entry, and its finding.
+    private var spokenLabel: String {
+        let parts: [String?] = [ticket?.spoken, entry.accessibilityLabel(time: time), entry.finding?.accessibilityLabel]
+        return parts.compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// The rule line's place: under the mark's middle, from the mark's bottom through the gap to the next entry.
+    static let ruleLeading: CGFloat = {
+        let markMiddle: CGFloat = TimelineSection.markColumn / 2
+        let lineMiddle: CGFloat = TimelineRuleLine.width / 2
+        let markStart: CGFloat = TimelineSection.timeColumn + DesignTokens.Space.s2
+        return markStart + markMiddle - lineMiddle
+    }()
+    static let ruleTop: CGFloat = DesignTokens.Space.s1 + TimelineMark.size
+    static let ruleBottom: CGFloat = -2 * DesignTokens.Space.s1
+    /// The send-back's tint reaches a little past the row.
+    static let highlightInsets = EdgeInsets(
+        top: -DesignTokens.Space.s1, leading: -DesignTokens.Space.s2, bottom: -DesignTokens.Space.s1, trailing: -DesignTokens.Space.s2
+    )
+    /// How far the time and the words sit below the mark's top, so their first line meets the mark's middle.
+    static let textTop: CGFloat = 4
+    /// The send-back's tint behind the row (the problem tint, a little lighter than a badge's).
+    static let highlightOpacity = 0.7
 
     /// The small accent dot before what happened, on an entry newer than the person's last look.
     private var newDot: Text {
@@ -520,6 +593,20 @@ struct TimelineEntryRow: View {
         case let .status(status): status.tint
         }
     }
+
+    /// The mark's fill: the tone's tint (`--role-tint`).
+    static func fill(_ tone: TimelineEntry.Tone) -> Color {
+        switch tone {
+        case .accent: DesignTokens.ColorToken.accentTint.color
+        case let .status(status): status.badgeFill
+        }
+    }
+}
+
+public extension EnvironmentValues {
+    /// The page's screenshots, read through the window's API client; nil where none is given (the thumbnail holds its
+    /// place).
+    @Entry var artifactImages: ArtifactImages?
 }
 
 /// The ticket a Journal row is on (TP-1459): its identifier and title, in a chip over what happened.
@@ -699,7 +786,8 @@ private struct TimelineEntering: ViewModifier {
 /// row doesn't open the gate (TP-1480).
 extension TimelineEntryRow: Equatable {
     nonisolated static func == (lhs: TimelineEntryRow, rhs: TimelineEntryRow) -> Bool {
-        lhs.entry == rhs.entry && lhs.time == rhs.time && lhs.selected == rhs.selected && lhs.ticket == rhs.ticket
+        guard lhs.entry == rhs.entry, lhs.time == rhs.time, lhs.selected == rhs.selected else { return false }
+        return lhs.ticket == rhs.ticket && lhs.connects == rhs.connects
     }
 }
 

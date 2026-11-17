@@ -145,17 +145,19 @@ public struct TicketEventsPayload: Equatable {
         public var rule: String?
         /// Who set a pause or asked or answered a question: the first of `set_by`, `by` and `asked_by` that names one.
         public var setter: Setter?
+        /// What a finding is (`finding.recorded`), in QA's words.
+        public var description: String?
 
         enum CodingKeys: String, CodingKey {
             case kind, outcome, exit, stepId, title, reason, returnsTo, returnsToTitle, questionId, model, effort, tokens, durationMs
-            case to, from, action, rule, setBy, by, askedBy
+            case to, from, action, rule, setBy, by, askedBy, description
         }
 
         public init(
             kind: String? = nil, outcome: String? = nil, exit: String? = nil, stepID: String? = nil, title: String? = nil,
             reason: String? = nil, returnsTo: String? = nil, returnsToTitle: String? = nil, questionID: String? = nil,
             model: String? = nil, effort: String? = nil, tokens: Int? = nil, durationMs: Int? = nil, to: String? = nil,
-            from: String? = nil, action: String? = nil, rule: String? = nil, setter: Setter? = nil
+            from: String? = nil, action: String? = nil, rule: String? = nil, setter: Setter? = nil, description: String? = nil
         ) {
             self.kind = kind
             self.outcome = outcome
@@ -175,6 +177,7 @@ public struct TicketEventsPayload: Equatable {
             self.action = action
             self.rule = rule
             self.setter = setter
+            self.description = description
         }
 
         public init(from decoder: Decoder) throws {
@@ -189,7 +192,8 @@ public struct TicketEventsPayload: Equatable {
                 // `hold.cleared`'s `by` is a string, not a setter: it is skipped.
                 setter: [CodingKeys.setBy, .by, .askedBy].lazy.compactMap { key in
                     (try? container?.decodeIfPresent(Setter.self, forKey: key)) ?? nil
-                }.first
+                }.first,
+                description: text(.description)
             )
         }
     }
@@ -210,10 +214,16 @@ public struct TicketEventsPayload: Equatable {
         public var artifacts: [Artifact]
         /// Later than when the person last looked at the ticket (`new`), or they never did.
         public var isNew: Bool = false
+        /// The rule that did it, named by what it does ("blockers first"), as the feed names it; nil when no rule did.
+        public var rule: String?
+        /// It only records Symphony's bookkeeping (a review waiting on the PR watcher, a workspace already on the PR
+        /// head): the timeline leaves it out; Diagnostics keeps it.
+        public var bookkeeping: Bool = false
 
         public init(
             id: String, seq: Int?, at: String?, type: String, runID: String?, parent: String?, actor: Actor?,
-            summary: Summary?, payload: Payload, artifacts: [Artifact], isNew: Bool = false
+            summary: Summary?, payload: Payload, artifacts: [Artifact], isNew: Bool = false, rule: String? = nil,
+            bookkeeping: Bool = false
         ) {
             self.id = id
             self.seq = seq
@@ -227,7 +237,12 @@ public struct TicketEventsPayload: Equatable {
             self.payload = payload
             self.artifacts = artifacts
             self.isNew = isNew
+            self.rule = rule
+            self.bookkeeping = bookkeeping
         }
+
+        /// The screenshots it carries.
+        public var screenshots: [TicketScreenshot] { artifacts.filter(\.isImage).map(\.screenshot) }
     }
 
     /// A run's verdict, when one names it.
@@ -255,12 +270,16 @@ public struct TicketEventsPayload: Equatable {
         public var head: String?
         /// The model the run used and its effort, nil when Symphony didn't say.
         public var model: String? = nil
+        /// The model as a person reads it ("Claude Opus 5.5"), as the feed names it; nil from a Symphony that doesn't.
+        public var modelName: String? = nil
         public var effort: String? = nil
+        /// How the ended run came out, in Symphony's words ("Asked you a question", "Approved"); nil while it runs.
+        public var outcome: String? = nil
 
         public init(
             runID: String, runKind: String? = nil, runNumber: Int? = nil, status: String? = nil, exit: String? = nil,
             verdict: Verdict? = nil, startedAt: String? = nil, endedAt: String? = nil, head: String? = nil,
-            model: String? = nil, effort: String? = nil
+            model: String? = nil, modelName: String? = nil, effort: String? = nil, outcome: String? = nil
         ) {
             self.runID = runID
             self.runKind = runKind
@@ -274,7 +293,9 @@ public struct TicketEventsPayload: Equatable {
             self.endedDate = endedAt.flatMap(TicketPage.date)
             self.head = head
             self.model = model
+            self.modelName = modelName
             self.effort = effort
+            self.outcome = outcome
         }
     }
 
@@ -547,7 +568,7 @@ public struct TicketEventsPayload: Equatable {
         case event(Node)
 
         enum CodingKeys: String, CodingKey {
-            case kind, runId, runKind, runNumber, status, exit, verdict, startedAt, endedAt, head, model, effort, events
+            case kind, runId, runKind, runNumber, status, exit, verdict, startedAt, endedAt, head, model, modelName, effort, outcome, events
         }
 
         init(from decoder: Decoder) throws {
@@ -567,7 +588,9 @@ public struct TicketEventsPayload: Equatable {
                 endedAt: try? container.decodeIfPresent(String.self, forKey: .endedAt),
                 head: try? container.decodeIfPresent(String.self, forKey: .head),
                 model: try? container.decodeIfPresent(String.self, forKey: .model),
-                effort: try? container.decodeIfPresent(String.self, forKey: .effort)
+                modelName: try? container.decodeIfPresent(String.self, forKey: .modelName),
+                effort: try? container.decodeIfPresent(String.self, forKey: .effort),
+                outcome: try? container.decodeIfPresent(String.self, forKey: .outcome)
             )
             self = .run(run, try container.decodeIfPresent([Node].self, forKey: .events) ?? [])
         }
@@ -595,7 +618,7 @@ public struct TicketEventsPayload: Equatable {
 /// reads as nothing; only `id` is required.
 extension TicketEventsPayload.Event: Decodable {
     enum CodingKeys: String, CodingKey {
-        case id, seq, at, type, runId, parent, actor, summary, payload, artifacts, new
+        case id, seq, at, type, runId, parent, actor, summary, payload, artifacts, new, rule, bookkeeping
     }
 
     public init(from decoder: Decoder) throws {
@@ -611,7 +634,9 @@ extension TicketEventsPayload.Event: Decodable {
             summary: try? container.decodeIfPresent(TicketEventsPayload.Summary.self, forKey: .summary),
             payload: (try? container.decodeIfPresent(TicketEventsPayload.Payload.self, forKey: .payload)) ?? TicketEventsPayload.Payload(),
             artifacts: (try? container.decodeIfPresent([TicketEventsPayload.Artifact].self, forKey: .artifacts)) ?? [],
-            isNew: (try? container.decodeIfPresent(Bool.self, forKey: .new)) == true
+            isNew: (try? container.decodeIfPresent(Bool.self, forKey: .new)) == true,
+            rule: try? container.decodeIfPresent(String.self, forKey: .rule),
+            bookkeeping: (try? container.decodeIfPresent(Bool.self, forKey: .bookkeeping)) == true
         )
     }
 }
@@ -857,6 +882,12 @@ public final class ArtifactImages: ObservableObject {
             let answer = await get(shot.path)
             store(Self.image(answer), for: shot.id)
         }
+    }
+
+    /// Keeps `data` as `id`'s image, as a read would: the gallery and the snapshots draw a finding's screenshot without
+    /// a server.
+    public func keep(_ data: Data, for id: String) {
+        store(Self.isImage(data) ? .loaded(data) : .unavailable, for: id)
     }
 
     /// What an answer to an artifact's GET shows.
