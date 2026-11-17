@@ -58,6 +58,10 @@ story of a mapped entry has no variation of its name, naming the story.
 | `components/sheet-header` | not built |
 | `components/inline-refusal` | `Refusal` |
 | `components/keyboard-hint` | `KeyboardHint` |
+| `components/searchable-pop-up` | not built |
+| `components/reorderable-list` | not built |
+| `components/save-bar` | not built |
+| `components/list-card` | not built |
 
 ## Sections
 
