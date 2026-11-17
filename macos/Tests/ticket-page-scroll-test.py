@@ -18,11 +18,13 @@ while the window shows, reading the ticket and its feed after each poll. Then:
 Before it measures, it opens the page again the way a person does, from Home through Find a Ticket, and waits for
 the timeline's runs to draw (TP-1480's QA: the page opened that way hung the app with its timeline empty, and an
 empty timeline measures as idle). After the scroll, a mouse click on a run's fold header must fold the run and a
-second unfold it (QA found a click only selecting the run).
+second unfold it (QA found a click only selecting the run). Then a click on the page's More must open its menu every
+time: after Escape closed it, and after a click outside did (TP-1508's QA found each menu opening once only).
 
 It prints both numbers on every run, and fails when it cannot measure (the page never shows, its timeline draws no
 run, the sample has no main thread, the app counts no frames or exits), when the scroll does not reach an end of the
-page, when a click does not fold a run, or when either number goes over its budget, naming the number and the budget.
+page, when a click does not fold a run, when More does not open again, or when either number goes over its budget,
+naming the number and the budget.
 
 The budgets. Main before TP-1480 (Ticket page speed 3/4) measured at the ceiling, in PR #903's first Mac CI build
 (GitHub's macos-26 runner):
@@ -157,7 +159,14 @@ def open_from_find(binary, pid, ticket=TICKET):
         time.sleep(0.5)
     if not field:
         return "Find a Ticket's field never showed"
-    reply = driver(binary, "ax-set-value", pid, field["path"], ticket)
+    # The window can lose focus between ⌘F and the typing (the Mac CI VM's desktop is shared): the sheet's field then
+    # holds nothing. Ask for the field again, a few times, before calling it a failure.
+    for attempt in range(3):
+        reply = driver(binary, "ax-set-value", pid, field["path"], ticket)
+        if (reply.get("error") or {}).get("code") != "text_not_entered":
+            break
+        time.sleep(2)
+        driver(binary, "click", pid, field["path"], 1)
     if "error" in reply:
         return f"typing {ticket}: {reply['error']}"
     reply = driver(binary, "key", pid, "return", "")
@@ -231,6 +240,51 @@ def click_folds_a_run(binary, pid, area):
         print(f"ok [fold]: a click folds and unfolds {run}")
         return None
     return "no run's fold header on the timeline"
+
+
+# The page's More (a menu button the app draws, TP-1508) by its VoiceOver label.
+MORE = "More moves"
+
+
+def open_menus(binary, pid):
+    """The app's open menus outside the menu bar: an AXMenu with a frame on screen (a closed menu has none)."""
+    reply = driver(binary, "ax-tree", pid, 8, 20, "AXMenu", "", timeout=30)
+    return [m for m in reply.get("matches", []) if (m.get("frame") or {}).get("w", 0) > 0 and (m.get("frame") or {}).get("h", 0) > 0]
+
+
+def wait_menus(binary, pid, shown):
+    """Waits up to 3 s for a menu to show (`shown`) or for none to; True when it did."""
+    for _ in range(10):
+        if bool(open_menus(binary, pid)) == shown:
+            return True
+        time.sleep(0.3)
+    return False
+
+
+def more_reopens(binary, pid, area):
+    """A click opens the page's More every time, however its menu last closed: with Escape, then with a click outside
+    it. QA found each pop-up and menu button opening once and never again (TP-1508). Returns why not, or None."""
+    # The fold check scrolled down the page; More sits in its header, at the top.
+    driver(binary, "scroll", pid, area["path"], "top", "pixel")
+    time.sleep(0.5)
+    more = next(iter(driver(binary, "ax-tree", pid, 40, 40, "AXMenuButton", MORE).get("matches", [])), None)
+    if not more:
+        return f"no {MORE!r} button on the page"
+    box = (area or {}).get("frame") or {}
+    outside = f"{int(box.get('x', 0) + 12)},{int(box.get('y', 0) + box.get('h', 40) - 12)}"
+    for attempt, close in enumerate(("escape", "click outside", "escape"), start=1):
+        reply = driver(binary, "click", pid, more["path"], 1)
+        if "error" in reply:
+            return f"opening More ({attempt}): {reply['error']}"
+        if reply.get("fallback") or not wait_menus(binary, pid, True):
+            return f"a click on More opened no menu the {['first', 'second', 'third'][attempt - 1]} time"
+        reply = driver(binary, "key", pid, "escape", "") if close == "escape" else driver(binary, "click", pid, outside, 1)
+        if "error" in reply:
+            return f"closing More with {close} ({attempt}): {reply['error']}"
+        if not wait_menus(binary, pid, False):
+            return f"More's menu stayed open after {close} ({attempt})"
+    print("ok [more]: More opens again after Escape and after a click outside")
+    return None
 
 
 # -- the idle sample ------------------------------------------------------------------------------------------------
@@ -472,6 +526,11 @@ def main():
         if why:
             failures.append("fold")
             print(f"FAIL [fold]: {why}")
+        # 4. More opens again however its menu closed.
+        why = more_reopens(binary, pid, area) if area else "no page to find More on"
+        if why:
+            failures.append("more")
+            print(f"FAIL [more]: {why}")
         if process.poll() is not None:
             failures.append("app")
             print(f"FAIL [app]: the app exited ({process.returncode}) during the test")

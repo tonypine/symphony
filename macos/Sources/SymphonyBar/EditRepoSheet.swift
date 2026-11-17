@@ -97,10 +97,9 @@ private struct EditSourceForm: View {
     var body: some View {
         Form {
             Section {
-                Picker("Source", selection: model.mode) {
-                    ForEach(AddRepoDraft.Mode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                LabeledContent("Source") {
+                    SegmentedControl("Source", selection: model.mode, segments: AddRepoDraft.Mode.allCases.map { Segment($0, $0.rawValue) })
                 }
-                .pickerStyle(.segmented)
                 switch model.draft.mode {
                 case .gitHub:
                     TextField("GitHub repo", text: model.gitHubInput, prompt: Text(verbatim: "https://github.com/owner/repo"))
