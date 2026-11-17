@@ -29,13 +29,10 @@ struct ActionRail: View {
                 move(item, kind: .secondary)
             }
             if rail.stopOnRail, let stop = rail.stop {
-                // `.rail-sep`: a 1 pt hairline, 20 pt tall, between the common moves and the destructive one.
-                Rectangle()
-                    .fill(DesignTokens.ColorToken.strokeSeparator.color)
-                    .frame(width: 1, height: 20)
+                // `.rail-sep`: the shared hairline, 20 pt tall, between the common moves and the destructive one.
+                HairlineDivider(.vertical, length: 20)
                     .padding(.horizontal, DesignTokens.Space.s1)
                     .frame(height: DesignTokens.Control.medium.height)
-                    .accessibilityHidden(true)
                 move(stop, kind: .destructive)
             }
             if !rail.moreGroups.isEmpty {

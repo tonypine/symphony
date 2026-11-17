@@ -414,9 +414,7 @@ struct DaySeparator: View {
                     .foregroundStyle(.tertiary)
                     .fixedSize()
             }
-            Rectangle()
-                .fill(DesignTokens.Surface.separator.color)
-                .frame(height: 1)
+            HairlineDivider()
         }
         .padding(.top, DesignTokens.Space.s4)
         .padding(.bottom, DesignTokens.Space.s1)

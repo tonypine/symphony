@@ -1140,14 +1140,12 @@ struct TicketPageHeader: View {
                 Chip(epic.shortName, kind: .epic, maxTextWidth: EpicChip.maxTextWidth, fullText: epic.fullTitle)
             }
             if let priority = page.headerPriority {
-                // `.ident-sep`: a 1 pt hairline, 14 pt tall.
-                Rectangle()
-                    .fill(DesignTokens.ColorToken.strokeSeparator.color)
-                    .frame(width: 1, height: 14)
+                // `.ident-sep`: the shared hairline, 14 pt tall.
+                HairlineDivider(.vertical, length: 14)
                     .padding(.horizontal, DesignTokens.Space.s1)
                     .frame(height: Chip.height)
-                    .accessibilityHidden(true)
                 PriorityMark(priority)
+                    .frame(height: Chip.height)
             }
             ForEach(page.headerLabels, id: \.self) { label in
                 Chip(label, kind: .label(.idle))
@@ -1156,32 +1154,6 @@ struct TicketPageHeader: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilitySortPriority(Self.order.identity)
-    }
-}
-
-/// `.prio`: the ticket's priority on the identifier's line, the forced glyph before its word, in the forced text colour.
-private struct PriorityMark: View {
-    let word: String
-
-    init(_ word: String) {
-        self.word = word
-    }
-
-    var body: some View {
-        HStack(spacing: DesignTokens.Space.s1) {
-            Image(systemName: DesignTokens.Status.forced.symbol)
-                .font(DesignTokens.TypeStyle.label.font)
-                .foregroundStyle(DesignTokens.Status.forced.color.color)
-            Text(word)
-                .textStyle(.label)
-                .foregroundStyle(DesignTokens.Status.forced.textColor.color)
-                .lineLimit(1)
-        }
-        .fixedSize()
-        .frame(height: Chip.height)
-        .help("Priority")
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Priority: \(word)")
     }
 }
 

@@ -73,6 +73,12 @@ let galleryEntries: [GalleryEntry] = [
         id: "key-value-list", title: "Key-value list", kind: .component, prefixes: ["key-value-list-"],
         files: ["SymphonyBarUI/DesignSystem/KeyValueList.swift"]),
     GalleryEntry(
+        id: "hairline-divider", title: "Hairline divider", kind: .component, prefixes: ["hairline-divider-"],
+        files: ["SymphonyBarUI/DesignSystem/HairlineDivider.swift"]),
+    GalleryEntry(
+        id: "priority-mark", title: "Priority mark", kind: .component, prefixes: ["priority-mark-"],
+        files: ["SymphonyBarUI/DesignSystem/PriorityMark.swift"]),
+    GalleryEntry(
         id: "collapsible-card", title: "Collapsible card", kind: .component, prefixes: ["collapsible-card-"],
         files: ["SymphonyBarUI/DesignSystem/Collapsible.swift"]),
     GalleryEntry(

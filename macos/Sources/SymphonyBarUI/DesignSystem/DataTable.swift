@@ -437,7 +437,7 @@ private struct DataTableHeader<Item: Identifiable>: View {
         .frame(height: DesignTokens.Table.headerHeight)
         .background(surface.color)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(DesignTokens.Surface.separator.color).frame(height: DesignTokens.Table.ruleWidth)
+            HairlineDivider()
         }
     }
 }
