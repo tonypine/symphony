@@ -2294,15 +2294,8 @@ window.CATALOG = (function () {
     const reserve = Number(p.reserve);
     const usage = !windows.length ? "" : '<h3 class="zone-title">Usage</h3><section class="panel prov-usage">' + windows.map((w) => usageRow(w, reserve)).join("") +
       '<div class="use-set"><span>Stop new runs at</span><button type="button" class="popup sz-sm" aria-haspopup="listbox"><span class="popup-label"><span>' + reserve + " %</span></span>" + icon("updown", "chev") + "</button></div></section>";
-    const off = st.role !== "done";
-    const runs = !v.runs.length ? "" : '<h3 class="zone-title">Runs</h3><section class="panel tk-wrap"><table class="table prov-table"><thead><tr><th>Kind of run</th><th>Harness</th><th>Model</th><th>Effort</th><th>When it can’t take a run</th></tr></thead><tbody>' +
-      v.runs.map((r) => '<tr class="' + (r.fallbackOf ? "is-fallback" : "") + '"><td><b>' + esc(r.kind) + "</b>" + (r.repo ? " " + chip({ kind: "repo", text: r.repo, interactive: false }) : "") + (r.fallbackOf ? ' <span class="muted">fallback of ' + esc(r.fallbackOf) + "</span>" : "") + "</td><td>" + esc(r.harness) + '</td><td class="mono">' + esc(r.model) + "</td><td>" + (r.effort ? esc(r.effort) : '<span class="muted">None</span>') + "</td>" +
-        '<td class="' + (off && !r.then ? "prov-waits" : "") + '">' + (r.then ? esc(r.then) : "Waits") + "</td></tr>").join("") + "</tbody></table></section>";
-    const now = !v.now.length ? "" : '<h3 class="zone-title">Working now</h3><section class="panel prov-now">' + v.now.map((t, i) =>
-      '<div class="prov-run" role="link" tabindex="0" data-key="prov-now-' + i + '"><span class="dot live role-working"></span><span class="ident">' + esc(t[0]) + '</span><span class="title">' + esc(t[1]) + "</span>" +
-      '<span class="kind">' + esc(t[2]) + '</span><span class="age">' + esc(t[3]) + "</span>" + icon("chevron-right", "go") + "</div>").join("") + "</section>";
-    const facts = '<h3 class="zone-title">Access</h3><section class="panel">' + kv([["Key", v.key + (v.key.indexOf("_") > 0 ? " · set" : "")], ["Harnesses", v.harnesses], ["Tokens today", v.tokens || ""]]) + "</section>";
-    return '<div class="ini prov"><aside class="ini-side">' + list + '</aside><div class="ini-main">' + head + usage + runs + now + facts + "</div></div>";
+    const facts = '<h3 class="zone-title">Access</h3><section class="panel">' + kv([["Key", v.key + (v.key.indexOf("_") > 0 ? " · set" : "")], ["Harnesses", v.harnesses], ["Runs set to it", v.runs.length ? v.runs.filter((r) => !r.fallbackOf).map((r) => r.kind).join(", ") : ""], ["Fallback for", v.runs.filter((r) => r.fallbackOf).map((r) => r.kind).join(", ")], ["Working now", v.working ? v.working + (v.working === 1 ? " run" : " runs") : ""], ["Tokens today", v.tokens || ""]]) + "</section>";
+    return '<div class="ini prov"><aside class="ini-side">' + list + '</aside><div class="ini-main">' + head + usage + facts + "</div></div>";
   }
 
   /* The menu bar icon's menu, with a line per provider in use: one click pauses or resumes it */
@@ -2324,6 +2317,68 @@ window.CATALOG = (function () {
       item("<span>Settings…</span>" + kbd("⌘ ,", true)) + item("<span>Quit Symphony</span>" + kbd("⌘ Q", true)) + "</ul></div>";
   }
 
+  /* ---------- Factory › Runs: what each kind of run starts with, and where it goes when that can't take it ---------- */
+
+  const NAMES = { claude: "Claude", codex: "Codex", opencode: "OpenCode", anthropic: "Anthropic", "opencode-go": "OpenCode Go", openrouter: "OpenRouter", openai: "OpenAI" };
+  /* A step is [harness, provider, model, effort]; `own` lists the fields the kind sets itself, the rest come from Default */
+  const RUN_DEFAULT = { first: ["claude", "anthropic", "claude-opus-5-5", "medium"], then: [["opencode", "opencode-go", "kimi-k3", ""]] };
+  const RUN_KINDS = [
+    { id: "default", name: "Default", own: [0, 1, 2, 3], ownThen: true },
+    { id: "implementation", name: "Implementation" },
+    { id: "breakdown", name: "Breakdown", first: [, , , "xhigh"], own: [3] },
+    { id: "rework", name: "Rework" },
+    { id: "code_review", name: "Code Review", first: [, , , "high"], own: [3], then: [], ownThen: true },
+    { id: "qa", name: "QA", first: [, , "claude-sonnet-5-5", "high"], own: [2, 3], then: [["claude", "openrouter", "deepseek/deepseek-flash", ""], ["opencode", "opencode-go", "kimi-k3", ""]], ownThen: true },
+    { id: "ci_fix", name: "CI Fix", first: ["claude", "openrouter", "deepseek/deepseek-flash", "low"], own: [1, 2, 3] },
+    { id: "review_feedback", name: "Review Feedback" },
+    { id: "landing", name: "Landing", first: ["opencode", "opencode-go", "kimi-k3", ""], own: [0, 1, 2], then: [["claude", "anthropic", "claude-sonnet-5-5", "low"]], ownThen: true },
+    { id: "epic_review", name: "Epic Review" },
+  ];
+  const runFirst = (k) => RUN_DEFAULT.first.map((v, i) => (k.first && k.first[i] !== undefined ? k.first[i] : v));
+  const runThen = (k) => (k.ownThen && k.then ? k.then : RUN_DEFAULT.then);
+  const runProviderRole = (id, p) => (id === "anthropic" && p.provState !== "available" ? (p.provState === "held" ? "problem" : "you") : "done");
+
+  function runStep(step, own, p, n) {
+    const part = (i, text, cls) => (text ? '<span class="' + (cls || "") + (own.indexOf(i) < 0 ? " inherited" : "") + '">' + esc(text) + "</span>" : "");
+    const role = runProviderRole(step[1], p);
+    return '<span class="run-step' + (role === "done" ? "" : " is-off") + '"' + (role === "done" ? "" : ' title="' + esc(NAMES[step[1]]) + ' can’t take a run now"') + '><span class="n">' + n + '</span><span class="dot role-' + role + '"></span>' +
+      part(0, NAMES[step[0]]) + part(1, NAMES[step[1]]) + part(2, step[2], "mono") + part(3, step[3]) + "</span>";
+  }
+
+  const pop = (label, value, inherited) => '<button type="button" class="popup sz-sm' + (inherited ? " inherited" : "") + '" aria-haspopup="listbox"><span class="popup-label"><span>' + esc(label) + "</span><span>" + esc(value || "None") + "</span></span>" + icon("updown", "chev") + "</button>";
+
+  function runEditor(k, p) {
+    const line = (step, own, n, removable) => '<div class="run-edit-line"><span class="n">' + n + "</span>" + pop("Harness", NAMES[step[0]], own.indexOf(0) < 0) + pop("Provider", NAMES[step[1]], own.indexOf(1) < 0) +
+      '<div class="field sz-sm run-model' + (own.indexOf(2) < 0 ? " inherited" : "") + '"><div class="input"><input type="text" aria-label="Model" value="' + esc(step[2]) + '"></div></div>' + pop("Effort", step[3], own.indexOf(3) < 0) +
+      (removable ? iconBtn("close", "Remove this fallback", { size: "sm" }) : "") + "</div>";
+    const then = runThen(k);
+    const all = [0, 1, 2, 3];
+    return '<div class="run-edit">' + line(runFirst(k), k.own || [], 1, false) + then.map((t, i) => line(t, k.ownThen ? all : [], i + 2, true)).join("") +
+      '<div class="run-edit-foot">' + button({ label: "Add a Fallback", variant: "quiet", size: "small", glyph: "plus" }) +
+      (k.id !== "default" && (k.own || k.ownThen) ? button({ label: "Use Default’s", variant: "quiet", size: "small" }) : "") + "</div></div>";
+  }
+
+  function runRow(k, p) {
+    const open = p.runOpen === k.id;
+    const then = runThen(k);
+    const all = [0, 1, 2, 3];
+    const chain = runStep(runFirst(k), k.own || [], p, 1) + then.map((t, i) => icon("arrow", "then") + runStep(t, k.ownThen ? all : [], p, i + 2)).join("") +
+      icon("arrow", "then") + '<span class="run-waits' + (then.length ? "" : " only") + '">waits</span>';
+    return '<div class="run-row' + (open ? " open" : "") + (k.id === "default" ? " is-default" : "") + '"><button type="button" class="run-line" aria-expanded="' + open + '" data-set="runOpen=' + (open ? "" : k.id) + '" data-key="run-' + k.id + '">' +
+      icon(open ? "chevron-down" : "chevron-right", "fold-mark") + '<span class="kind">' + esc(k.name) + '</span><span class="run-chain">' + chain + "</span></button>" + (open ? runEditor(k, p) : "") + "</div>";
+  }
+
+  const HARNESS_ROWS = [["Claude", "claude --dangerously-skip-permissions", [["Anthropic", "claude-haiku-5-5"], ["OpenRouter", "deepseek/deepseek-flash"]]], ["OpenCode", "opencode", [["OpenCode Go", "hy4-flash"]]]];
+
+  function runsPage(p) {
+    const scope = '<div class="tk-bar"><button type="button" class="popup sz-sm" aria-haspopup="listbox"><span class="popup-label"><span>For</span><span>' + (p.runsRepo ? "web-shop" : "All repositories") + "</span></span>" + icon("updown", "chev") + "</button>" +
+      '<span class="grow"></span>' + (p.runsDirty ? '<span class="tk-count">2 changes</span>' + button({ label: "Revert", variant: "quiet", size: "small" }) + button({ label: "Save", variant: "primary", size: "small" }) : "") + "</div>";
+    const kinds = p.runsRepo ? RUN_KINDS.map((k) => (k.id === "qa" ? k : { id: k.id, name: k.name })) : RUN_KINDS;
+    const field = (label, value, w) => '<label class="h-field"><span>' + esc(label) + '</span><div class="field sz-sm" style="width:' + w + 'px"><div class="input"><input type="text" value="' + esc(value) + '"></div></div></label>';
+    const harnesses = '<h3 class="zone-title">Harnesses</h3><section class="panel run-harnesses">' + HARNESS_ROWS.map((h) => '<div class="h-row"><b>' + h[0] + "</b>" + field("Command", h[1], 300) + '<span class="h-models">' + h[2].map((m) => field("Small model on " + m[0], m[1], 190)).join("") + "</span></div>").join("") + "</section>";
+    return '<div class="runs-page">' + scope + '<section class="panel run-list">' + kinds.map((k) => runRow(k, p)).join("") + "</section>" + (p.runsRepo ? "" : harnesses) + "</div>";
+  }
+
   /* ---------- The window: sidebar, toolbar, status bar and background around a page ---------- */
 
   const DESTINATIONS = [
@@ -2332,7 +2387,7 @@ window.CATALOG = (function () {
     { id: "work", label: "Work", glyph: "grid", key: "⌘ 3" },
     { id: "insights", label: "Insights", glyph: "chart", key: "⌘ 4" },
     { id: "factory", label: "Factory", glyph: "factory", key: "⌘ 5", count: 2, role: "problem", children: [
-      { id: "setup", label: "Setup", glyph: "wrench" }, { id: "repos", label: "Repos", glyph: "repo" }, { id: "providers", label: "Providers", glyph: "cloud" },
+      { id: "setup", label: "Setup", glyph: "wrench" }, { id: "repos", label: "Repos", glyph: "repo" }, { id: "runs", label: "Runs", glyph: "run-start" }, { id: "providers", label: "Providers", glyph: "cloud" },
       { id: "diagnostics", label: "Diagnostics", glyph: "pulse" }, { id: "settings", label: "Settings", glyph: "gear" }] },
   ];
 
@@ -2380,6 +2435,7 @@ window.CATALOG = (function () {
   function windowShell(p) {
     const body = p.dest === "home" ? homePage(p) :
       p.dest === "providers" ? providersPage(p) :
+      p.dest === "runs" ? runsPage(p) :
       p.dest === "work" ? (p.ticketOpen ? ticketPage(p) : Number(p.workTab) ? ticketsPage(p) : initiativesPage(p)) :
       '<div class="empty"><span class="glyph-wrap">' + icon("doc") + "</span><h3>" + esc((DESTINATIONS.concat(DESTINATIONS[4].children).find((d) => d.id === p.dest) || {}).label) + '</h3><p>This page has its own section. The window around it is what this story shows.</p></div>';
     return '<div class="win' + (p.collapsed ? " side-collapsed" : "") + (p.focused ? "" : " unfocused") + '">' +
@@ -2389,11 +2445,14 @@ window.CATALOG = (function () {
   sections.push({
     title: "Window",
     wide: true,
-    args: Object.assign({}, sections[0].args, { dest: "work", workTab: 0, ticketOpen: false, epic: "TP-1381", allRows: false, filtered: false, inspector: false, ticketRow: -1, role: "working", collapsed: false, focused: true, paused: false, inboxOpen: false, navHover: "", provider: "anthropic", provState: "available", otherPaused: "", reserve: 90, menuBar: false }),
+    args: Object.assign({}, sections[0].args, { dest: "work", workTab: 0, ticketOpen: false, epic: "TP-1381", allRows: false, filtered: false, inspector: false, ticketRow: -1, role: "working", collapsed: false, focused: true, paused: false, inboxOpen: false, navHover: "", provider: "anthropic", provState: "available", otherPaused: "", reserve: 90, menuBar: false, runOpen: "", runsRepo: false, runsDirty: false }),
     controls: [
-      { name: "dest", label: "Destination", type: "select", options: [{ value: "home", label: "Home (the board)" }, { value: "work", label: "Work (a ticket page)" }, { value: "journal", label: "Journal" }, { value: "insights", label: "Insights" }, { value: "factory", label: "Factory" }, { value: "providers", label: "Factory › Providers" }, { value: "settings", label: "Factory › Settings" }] },
+      { name: "dest", label: "Destination", type: "select", options: [{ value: "home", label: "Home (the board)" }, { value: "work", label: "Work (a ticket page)" }, { value: "journal", label: "Journal" }, { value: "insights", label: "Insights" }, { value: "factory", label: "Factory" }, { value: "runs", label: "Factory › Runs" }, { value: "providers", label: "Factory › Providers" }, { value: "settings", label: "Factory › Settings" }] },
       { name: "provider", label: "Provider", type: "select", options: PROVIDERS.map((v) => ({ value: v.id, label: v.name })), when: (p) => p.dest === "providers" || p.menuBar },
-      { name: "provState", label: "The provider is", type: "select", options: [{ value: "available", label: "Available" }, { value: "paused", label: "Paused by you" }, { value: "held", label: "At its limit" }, { value: "reserve", label: "At your reserve" }], when: (p) => p.dest === "providers" || p.menuBar },
+      { name: "runOpen", label: "A kind of run is open", type: "select", options: [{ value: "", label: "None" }].concat(RUN_KINDS.map((k) => ({ value: k.id, label: k.name }))), when: (p) => p.dest === "runs" },
+      { name: "runsRepo", label: "For one repository", type: "toggle", when: (p) => p.dest === "runs" },
+      { name: "runsDirty", label: "Changes not saved", type: "toggle", when: (p) => p.dest === "runs" },
+      { name: "provState", label: "The provider is", type: "select", options: [{ value: "available", label: "Available" }, { value: "paused", label: "Paused by you" }, { value: "held", label: "At its limit" }, { value: "reserve", label: "At your reserve" }], when: (p) => p.dest === "providers" || p.dest === "runs" || p.menuBar },
       { name: "reserve", label: "Stop new runs at", type: "select", options: [{ value: 80, label: "80 %" }, { value: 90, label: "90 %" }, { value: 100, label: "100 % (no reserve)" }], when: (p) => p.dest === "providers" },
       { name: "menuBar", label: "The menu bar icon’s menu", type: "toggle" },
       { name: "workTab", label: "Work shows", type: "select", options: [{ value: 0, label: "Initiatives" }, { value: 1, label: "Tickets" }], when: (p) => p.dest === "work" },
@@ -2436,6 +2495,12 @@ window.CATALOG = (function () {
       { name: "Sidebar collapsed", viewport: "laptop", args: { collapsed: true, ticketOpen: true } },
       { name: "Window not focused", viewport: "laptop", args: { focused: false, ticketOpen: true } },
       { name: "Dispatch paused", viewport: "laptop", args: { paused: true, dest: "home" } },
+      { name: "Runs, laptop", viewport: "laptop", args: { dest: "runs" } },
+      { name: "Runs, Default open", viewport: "laptop", args: { dest: "runs", runOpen: "default" } },
+      { name: "Runs, QA open with changes", viewport: "laptop", args: { dest: "runs", runOpen: "qa", runsDirty: true } },
+      { name: "Runs, a provider paused", viewport: "laptop", args: { dest: "runs", provState: "paused" } },
+      { name: "Runs, for one repository", viewport: "laptop", args: { dest: "runs", runsRepo: true, runOpen: "qa" } },
+      { name: "Runs, desktop", viewport: "desktop", args: { dest: "runs", runOpen: "landing" } },
       { name: "Providers, laptop", viewport: "laptop", args: { dest: "providers" } },
       { name: "Providers, one paused", viewport: "laptop", args: { dest: "providers", provState: "paused" } },
       { name: "Providers, at its limit", viewport: "laptop", args: { dest: "providers", provState: "held" } },
