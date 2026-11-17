@@ -170,12 +170,12 @@ defmodule SymphonyElixir.InstructionsHoldTest do
       assert InstructionsHold.reasons(@repo_key, "fix") == []
       assert [_reason] = InstructionsHold.reasons(@repo_key, "other")
 
-      # An injected answer decides it too.
+      # An injected answer decides it too: now the other is the fix ticket.
       only_other = fn @repo_key, identifier -> identifier == "TP-other" end
       only_other_opts = opts(compare: ahead_on_renderer(), fix_ticket?: only_other)
       capture_log(fn -> InstructionsHold.resolve([fix, other], @repo_key, only_other_opts) end)
       assert [_reason] = InstructionsHold.reasons(@repo_key, "fix")
-      assert [_reason] = InstructionsHold.reasons(@repo_key, "other")
+      assert InstructionsHold.reasons(@repo_key, "other") == []
     end
 
     test "a current build leaves a ticket without the hold untouched" do
@@ -221,7 +221,7 @@ defmodule SymphonyElixir.InstructionsHoldTest do
 
   describe "the dispatch gate" do
     test "a held ticket is not dispatched and says which build it waits on, until the hold lifts" do
-      issue = %Issue{ticket("held") | identifier: "TP-1396", title: "QA report", labels: ["skip-update-hold"], state: "Todo"}
+      issue = ticket("held", identifier: "TP-1396", title: "QA report", labels: ["skip-update-hold"], state: "Todo")
       resolve([issue], ahead_on_renderer())
 
       state = Orchestrator.put_blocked_for_test(orchestrator_state(), [issue])
@@ -252,8 +252,8 @@ defmodule SymphonyElixir.InstructionsHoldTest do
     end
 
     test "a red release gate holds every ticket but its fix ticket, in the rule's words, until it turns green (TP-1528)" do
-      other = %Issue{ticket("other") | identifier: "TP-1486"}
-      fix = %Issue{ticket("fix") | identifier: "TP-1526"}
+      other = ticket("other", identifier: "TP-1486")
+      fix = ticket("fix", identifier: "TP-1526")
       :ok = RunStore.put_github_updates({:release_gate_fix, @repo_key}, %{identifier: "TP-1526", red: true})
       state = orchestrator_state()
 
