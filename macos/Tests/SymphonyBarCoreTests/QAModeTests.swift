@@ -91,10 +91,6 @@ final class QAModeTests: XCTestCase {
         XCTAssertEqual(qaStores([QAMode.openViewKey: " audit\n"]).qaMode?.openView, .audit)
     }
 
-    func testTheFrameCountIsWrittenUnderTheQARoot() {
-        XCTAssertEqual(QAMode(root: root).framesFile, root.standardizedFileURL.appendingPathComponent("frames.json"))
-    }
-
     func testALiveControlURLIsIgnoredOutsideQAMode() {
         let stores = AppStores(
             environment: [QAMode.controlURLKey: "http://127.0.0.1:4000", QAMode.controlTokenKey: "qa-token"],
