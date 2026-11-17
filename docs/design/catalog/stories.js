@@ -48,6 +48,7 @@ window.CATALOG = (function () {
     label: '<path d="M2 2.5h5.5L14 9l-5 5-6.5-6.5z"/><circle cx="5.2" cy="5.2" r=".9" fill="currentColor" stroke="none"/>',
     arrow: '<path d="M2.5 8h10M9 4.5 12.5 8 9 11.5"/>',
     pause: '<path d="M5.5 3.5v9M10.5 3.5v9"/>',
+    cloud: '<path d="M4.6 12.5a2.9 2.9 0 0 1-.4-5.8 4 4 0 0 1 7.7 1 2.4 2.4 0 0 1-.3 4.8z"/>',
     play: '<path d="M5 3.2v9.6L12.5 8z" fill="currentColor" stroke="none"/>',
     question: '<path d="M2.5 3h11v8H7.5L4.5 13.5V11h-2z"/><path d="M6.6 5.6a1.5 1.5 0 1 1 2.1 1.4c-.4.2-.7.5-.7.9"/><circle cx="8" cy="9.4" r=".6" fill="currentColor" stroke="none"/>',
     answered: '<path d="M2.5 3h11v8H7.5L4.5 13.5V11h-2z"/><path d="m5.6 7 1.6 1.6L10.4 5.4"/>',
@@ -2223,6 +2224,106 @@ window.CATALOG = (function () {
     return '<div class="tk' + (p.inspector ? " with-inspector" : "") + '"><div class="tk-main">' + bar + '<section class="panel tk-wrap">' + table + "</section></div>" + inspector + "</div>";
   }
 
+
+  /* ---------- Factory › Providers: who serves the models, how much is used, and a pause for each ---------- */
+
+  const PROVIDERS = [
+    { id: "anthropic", name: "Anthropic", group: "In use", key: "Claude sign-in", harnesses: "Claude",
+      windows: [{ label: "5 hours", pct: 41, resets: "today 16:20" }, { label: "Week", pct: 62, resets: "Thu 19 Nov, 14:00" }], tokens: "14.6M", working: 3,
+      runs: [
+        { kind: "Default", harness: "Claude", model: "claude-opus-5-5", effort: "medium", then: "OpenCode Go · kimi-k3" },
+        { kind: "Breakdown", harness: "Claude", model: "claude-opus-5-5", effort: "xhigh", then: "OpenCode Go · kimi-k3" },
+        { kind: "Code Review", harness: "Claude", model: "claude-opus-5-5", effort: "high", then: "" },
+        { kind: "QA", harness: "Claude", model: "claude-sonnet-5-5", effort: "high", then: "OpenRouter · deepseek-flash", repo: "web-shop" },
+      ],
+      now: [["TP-1441", "The Situation line everywhere", "Implementation", "25 min"], ["TP-1480", "A poll that changes nothing redraws nothing", "Code Review", "9 min"], ["SHOP-301", "Saved carts", "QA", "4 min"]] },
+    { id: "opencode-go", name: "OpenCode Go", group: "In use", key: "OPENCODE_API_KEY", harnesses: "Claude, Codex, OpenCode", tokens: "3.1M", working: 1,
+      runs: [
+        { kind: "Landing", harness: "OpenCode", model: "kimi-k3", effort: "", then: "" },
+        { kind: "Default", harness: "OpenCode", model: "kimi-k3", effort: "", then: "", fallbackOf: "Anthropic" },
+        { kind: "Breakdown", harness: "OpenCode", model: "kimi-k3", effort: "", then: "", fallbackOf: "Anthropic" },
+      ],
+      now: [["BIL-306", "Proration when a plan changes mid-cycle", "Landing", "2 min"]] },
+    { id: "openrouter", name: "OpenRouter", group: "In use", key: "OPENROUTER_API_KEY", harnesses: "Claude", tokens: "0.9M", working: 0,
+      runs: [
+        { kind: "CI Fix", harness: "Claude", model: "deepseek/deepseek-flash", effort: "low", then: "" },
+        { kind: "QA", harness: "Claude", model: "deepseek/deepseek-flash", effort: "", then: "", fallbackOf: "Anthropic", repo: "web-shop" },
+      ], now: [] },
+    { id: "openai", name: "OpenAI", group: "Not in use", key: "Codex sign-in", harnesses: "Codex", runs: [], now: [] },
+  ];
+
+  /* What a provider's state reads as: the situation's role, word and cause, what waits on it, and the list's short line */
+  function providerState(v, state) {
+    const none = v.runs.filter((r) => !r.fallbackOf && !r.then).length;
+    const waits = none ? "New runs start on their fallbacks; " + none + (none === 1 ? " kind has" : " kinds have") + " none and wait" + (none === 1 ? "s." : ".") : "New runs start on their fallbacks.";
+    if (!v.runs.length) return { role: "idle", word: "Not in use", cause: "No kind of run is set to it.", short: "Not in use" };
+    if (state === "paused") return { role: "you", word: "Paused", cause: "You paused it 12 min ago.", waits: waits, short: "Paused by you · 12 min" };
+    if (state === "held") return { role: "problem", word: "Limit reached", cause: "Its weekly limit is used up.", waits: waits + " Resumes Thu 19 Nov, 14:00.", short: "Limit reached · until Thu 14:00" };
+    if (state === "reserve") return { role: "you", word: "At your reserve", cause: "The week is at 90 %, where you stop new runs.", waits: waits + " Resumes Thu 19 Nov, 14:00.", short: "At your reserve · until Thu 14:00" };
+    return { role: "done", word: "Available", cause: v.working ? v.working + (v.working === 1 ? " run is" : " runs are") + " working on it." : "No run is on it now.", short: v.working ? v.working + " working" : "Available" };
+  }
+  const providerStateOf = (v, p) => providerState(v, v.id === p.provider ? p.provState : v.id === "openrouter" && p.otherPaused ? "paused" : "available");
+  const weekOf = (v, state) => (v.windows || []).map((w) => (w.label === "Week" && state === "held" ? Object.assign({}, w, { pct: 100 }) : w.label === "Week" && state === "reserve" ? Object.assign({}, w, { pct: 90 }) : w));
+
+  function providerItem(v, p) {
+    const st = providerStateOf(v, p);
+    const week = weekOf(v, v.id === p.provider ? p.provState : "").find((w) => w.label === "Week");
+    return '<button type="button" class="ini-item prov-item' + (p.focused ? "" : " unfocused") + '"' + (p.provider === v.id ? ' aria-selected="true"' : "") + ' data-set="provider=' + esc(v.id) + '" data-key="prov-' + esc(v.id) + '">' +
+      '<span class="top"><span class="ident">' + esc(v.name) + "</span>" + (week ? '<span class="n">' + week.pct + " % of the week</span>" : v.tokens ? '<span class="n">' + esc(v.tokens) + " today</span>" : "") + "</span>" +
+      '<span class="legend"><span><span class="dot role-' + st.role + (st.role === "done" && v.working ? " live" : "") + '"></span>' + esc(st.short) + "</span></span></button>";
+  }
+
+  function usageRow(w, reserve) {
+    const role = w.pct >= 100 ? "problem" : w.pct >= reserve ? "you" : "accent";
+    return '<div class="use-row role-' + role + '" role="meter" aria-valuenow="' + w.pct + '" aria-valuemin="0" aria-valuemax="100" aria-label="' + esc(w.label) + '"><span class="use-label">' + esc(w.label) + "</span>" +
+      '<span class="use-track"><span class="use-fill" style="width:' + w.pct + '%"></span><span class="use-stop" style="left:' + reserve + '%" title="You stop new runs at ' + reserve + ' %"></span></span>' +
+      '<span class="use-value">' + w.pct + ' %</span><span class="use-resets">resets ' + esc(w.resets) + "</span></div>";
+  }
+
+  function providersPage(p) {
+    const list = ["In use", "Not in use"].map((g) => '<h3 class="zone-title">' + g + '</h3><div class="ini-list">' + PROVIDERS.filter((v) => v.group === g).map((v) => providerItem(v, p)).join("") + "</div>").join("");
+    const v = PROVIDERS.find((x) => x.id === p.provider) || PROVIDERS[0];
+    const st = providerStateOf(v, p);
+    const paused = st.word === "Paused";
+    const move = !v.runs.length ? "" : paused ?
+      button({ label: "Resume", variant: "primary", size: "medium", glyph: "play", key: "prov-move" }).replace("<button", '<button data-set="provState=available"') :
+      button({ label: "Pause", variant: "secondary", size: "medium", glyph: "pause", key: "prov-move" }).replace("<button", '<button data-set="provState=paused"');
+    const head = '<div class="story-head"><div class="idline"><span class="ident">' + esc(v.id) + '</span><span class="grow"></span>' + move + "</div><h2>" + esc(v.name) + "</h2>" +
+      situation({ role: st.role, word: st.word, cause: st.cause, waits: st.waits, compact: false }) + "</div>";
+    const windows = weekOf(v, p.provState);
+    const reserve = Number(p.reserve);
+    const usage = !windows.length ? "" : '<h3 class="zone-title">Usage</h3><section class="panel prov-usage">' + windows.map((w) => usageRow(w, reserve)).join("") +
+      '<div class="use-set"><span>Stop new runs at</span><button type="button" class="popup sz-sm" aria-haspopup="listbox"><span class="popup-label"><span>' + reserve + " %</span></span>" + icon("updown", "chev") + "</button></div></section>";
+    const off = st.role !== "done";
+    const runs = !v.runs.length ? "" : '<h3 class="zone-title">Runs</h3><section class="panel tk-wrap"><table class="table prov-table"><thead><tr><th>Kind of run</th><th>Harness</th><th>Model</th><th>Effort</th><th>When it can’t take a run</th></tr></thead><tbody>' +
+      v.runs.map((r) => '<tr class="' + (r.fallbackOf ? "is-fallback" : "") + '"><td><b>' + esc(r.kind) + "</b>" + (r.repo ? " " + chip({ kind: "repo", text: r.repo, interactive: false }) : "") + (r.fallbackOf ? ' <span class="muted">fallback of ' + esc(r.fallbackOf) + "</span>" : "") + "</td><td>" + esc(r.harness) + '</td><td class="mono">' + esc(r.model) + "</td><td>" + (r.effort ? esc(r.effort) : '<span class="muted">None</span>') + "</td>" +
+        '<td class="' + (off && !r.then ? "prov-waits" : "") + '">' + (r.then ? esc(r.then) : "Waits") + "</td></tr>").join("") + "</tbody></table></section>";
+    const now = !v.now.length ? "" : '<h3 class="zone-title">Working now</h3><section class="panel prov-now">' + v.now.map((t, i) =>
+      '<div class="prov-run" role="link" tabindex="0" data-key="prov-now-' + i + '"><span class="dot live role-working"></span><span class="ident">' + esc(t[0]) + '</span><span class="title">' + esc(t[1]) + "</span>" +
+      '<span class="kind">' + esc(t[2]) + '</span><span class="age">' + esc(t[3]) + "</span>" + icon("chevron-right", "go") + "</div>").join("") + "</section>";
+    const facts = '<h3 class="zone-title">Access</h3><section class="panel">' + kv([["Key", v.key + (v.key.indexOf("_") > 0 ? " · set" : "")], ["Harnesses", v.harnesses], ["Tokens today", v.tokens || ""]]) + "</section>";
+    return '<div class="ini prov"><aside class="ini-side">' + list + '</aside><div class="ini-main">' + head + usage + runs + now + facts + "</div></div>";
+  }
+
+  /* The menu bar icon's menu, with a line per provider in use: one click pauses or resumes it */
+  function menuBarMenu(p) {
+    const item = (html, o) => '<li class="menu-item' + ((o && o.cls) ? " " + o.cls : "") + '" role="menuitem" tabindex="-1"' + ((o && o.set) ? ' data-set="' + o.set + '" data-key="mm-' + o.set + '"' : "") + ">" + html + "</li>";
+    const sep = '<li class="menu-sep" role="separator"></li>';
+    const title = (t) => '<li class="menu-title" role="presentation">' + esc(t) + "</li>";
+    const providers = PROVIDERS.filter((v) => v.runs.length).map((v) => {
+      const st = providerStateOf(v, p);
+      const paused = st.word === "Paused";
+      const set = v.id === p.provider ? "provState=" + (paused ? "available" : "paused") : v.id === "openrouter" ? "otherPaused=" + (paused ? "" : "1") : "provider=" + v.id;
+      return item('<span class="dot role-' + st.role + '"></span><span>' + (paused ? "Resume " : "Pause ") + esc(v.name) + '</span><span class="menu-trail">' + esc(st.short) + "</span>", { set: set, cls: v.id === p.provider ? "is-hover" : "" });
+    }).join("");
+    return '<div class="mbar-stage"><div class="mbar" aria-hidden="true"><span>Fri 13 Nov  10:42</span><span class="mbar-icon on">' + icon("factory") + '<i class="count role-you"></i></span></div>' +
+      '<ul class="menu mbar-menu" role="menu">' + title("The factory is flowing · 7 in progress, 2 need you") +
+      item("<span>Open Symphony</span>" + kbd("⌘ O", true)) + sep + title("Waiting on you") +
+      item('<span><b>BIL-306</b> Which day does the new price start?</span><span class="menu-trail">3 h 12 min</span>') + item('<span><b>TP-1382</b> Review the design catalog</span><span class="menu-trail">40 min</span>') + sep +
+      item(icon("pause") + "<span>Pause Dispatch…</span>") + sep + title("Providers") + providers + sep +
+      item("<span>Settings…</span>" + kbd("⌘ ,", true)) + item("<span>Quit Symphony</span>" + kbd("⌘ Q", true)) + "</ul></div>";
+  }
+
   /* ---------- The window: sidebar, toolbar, status bar and background around a page ---------- */
 
   const DESTINATIONS = [
@@ -2231,7 +2332,7 @@ window.CATALOG = (function () {
     { id: "work", label: "Work", glyph: "grid", key: "⌘ 3" },
     { id: "insights", label: "Insights", glyph: "chart", key: "⌘ 4" },
     { id: "factory", label: "Factory", glyph: "factory", key: "⌘ 5", count: 2, role: "problem", children: [
-      { id: "setup", label: "Setup", glyph: "wrench" }, { id: "repos", label: "Repos", glyph: "repo" },
+      { id: "setup", label: "Setup", glyph: "wrench" }, { id: "repos", label: "Repos", glyph: "repo" }, { id: "providers", label: "Providers", glyph: "cloud" },
       { id: "diagnostics", label: "Diagnostics", glyph: "pulse" }, { id: "settings", label: "Settings", glyph: "gear" }] },
   ];
 
@@ -2278,6 +2379,7 @@ window.CATALOG = (function () {
 
   function windowShell(p) {
     const body = p.dest === "home" ? homePage(p) :
+      p.dest === "providers" ? providersPage(p) :
       p.dest === "work" ? (p.ticketOpen ? ticketPage(p) : Number(p.workTab) ? ticketsPage(p) : initiativesPage(p)) :
       '<div class="empty"><span class="glyph-wrap">' + icon("doc") + "</span><h3>" + esc((DESTINATIONS.concat(DESTINATIONS[4].children).find((d) => d.id === p.dest) || {}).label) + '</h3><p>This page has its own section. The window around it is what this story shows.</p></div>';
     return '<div class="win' + (p.collapsed ? " side-collapsed" : "") + (p.focused ? "" : " unfocused") + '">' +
@@ -2287,9 +2389,13 @@ window.CATALOG = (function () {
   sections.push({
     title: "Window",
     wide: true,
-    args: Object.assign({}, sections[0].args, { dest: "work", workTab: 0, ticketOpen: false, epic: "TP-1381", allRows: false, filtered: false, inspector: false, ticketRow: -1, role: "working", collapsed: false, focused: true, paused: false, inboxOpen: false, navHover: "" }),
+    args: Object.assign({}, sections[0].args, { dest: "work", workTab: 0, ticketOpen: false, epic: "TP-1381", allRows: false, filtered: false, inspector: false, ticketRow: -1, role: "working", collapsed: false, focused: true, paused: false, inboxOpen: false, navHover: "", provider: "anthropic", provState: "available", otherPaused: "", reserve: 90, menuBar: false }),
     controls: [
-      { name: "dest", label: "Destination", type: "select", options: [{ value: "home", label: "Home (the board)" }, { value: "work", label: "Work (a ticket page)" }, { value: "journal", label: "Journal" }, { value: "insights", label: "Insights" }, { value: "factory", label: "Factory" }, { value: "settings", label: "Factory › Settings" }] },
+      { name: "dest", label: "Destination", type: "select", options: [{ value: "home", label: "Home (the board)" }, { value: "work", label: "Work (a ticket page)" }, { value: "journal", label: "Journal" }, { value: "insights", label: "Insights" }, { value: "factory", label: "Factory" }, { value: "providers", label: "Factory › Providers" }, { value: "settings", label: "Factory › Settings" }] },
+      { name: "provider", label: "Provider", type: "select", options: PROVIDERS.map((v) => ({ value: v.id, label: v.name })), when: (p) => p.dest === "providers" || p.menuBar },
+      { name: "provState", label: "The provider is", type: "select", options: [{ value: "available", label: "Available" }, { value: "paused", label: "Paused by you" }, { value: "held", label: "At its limit" }, { value: "reserve", label: "At your reserve" }], when: (p) => p.dest === "providers" || p.menuBar },
+      { name: "reserve", label: "Stop new runs at", type: "select", options: [{ value: 80, label: "80 %" }, { value: 90, label: "90 %" }, { value: 100, label: "100 % (no reserve)" }], when: (p) => p.dest === "providers" },
+      { name: "menuBar", label: "The menu bar icon’s menu", type: "toggle" },
       { name: "workTab", label: "Work shows", type: "select", options: [{ value: 0, label: "Initiatives" }, { value: 1, label: "Tickets" }], when: (p) => p.dest === "work" },
       { name: "ticketOpen", label: "A ticket is open", type: "toggle", when: (p) => p.dest === "work" },
       { name: "chainOpen", label: "A long chain shown whole", type: "select", options: [{ value: "", label: "None" }, { value: "TP-1481", label: "TP-1481’s" }], when: (p) => p.dest === "home" },
@@ -2306,7 +2412,7 @@ window.CATALOG = (function () {
       { name: "focused", label: "Window focused", type: "toggle" },
       { name: "paused", label: "Dispatch paused", type: "toggle" },
     ],
-    render: (p) => windowShell(p),
+    render: (p) => (p.menuBar ? menuBarMenu(p) : windowShell(p)),
     docs: {
       what: "The window around every page: the sidebar with the five destinations, the toolbar, the status line and the background the page sits on. The Director draws all of it; macOS draws only the three window buttons.",
       when: ["The sidebar holds destinations, never actions. A count beside a destination is coloured only for what waits on the Director (orange) or a problem (red).", "The toolbar holds what is true on every page: show or hide the sidebar, back and forward, where you are, Find a ticket, the Inbox and Refresh. Where you are is a breadcrumb, never the page's title: the page's own header carries that. On Work the Initiatives and Tickets switch sits right after it. Any other control a page needs lives in the page.", "The status line says whether Symphony dispatches and how many tickets are in each state; the dispatch control pauses and resumes."],
@@ -2330,6 +2436,15 @@ window.CATALOG = (function () {
       { name: "Sidebar collapsed", viewport: "laptop", args: { collapsed: true, ticketOpen: true } },
       { name: "Window not focused", viewport: "laptop", args: { focused: false, ticketOpen: true } },
       { name: "Dispatch paused", viewport: "laptop", args: { paused: true, dest: "home" } },
+      { name: "Providers, laptop", viewport: "laptop", args: { dest: "providers" } },
+      { name: "Providers, one paused", viewport: "laptop", args: { dest: "providers", provState: "paused" } },
+      { name: "Providers, at its limit", viewport: "laptop", args: { dest: "providers", provState: "held" } },
+      { name: "Providers, at your reserve", viewport: "laptop", args: { dest: "providers", provState: "reserve" } },
+      { name: "Providers, one with no usage to read", viewport: "laptop", args: { dest: "providers", provider: "opencode-go" } },
+      { name: "Providers, one not in use", viewport: "laptop", args: { dest: "providers", provider: "openai" } },
+      { name: "Providers, desktop", viewport: "desktop", args: { dest: "providers" } },
+      { name: "Menu bar menu, providers", viewport: "laptop", args: { menuBar: true } },
+      { name: "Menu bar menu, one paused", viewport: "laptop", args: { menuBar: true, provState: "paused" } },
     ],
   });
 
