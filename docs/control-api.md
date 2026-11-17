@@ -790,6 +790,7 @@ reads Symphony's store only, makes no Linear request and needs no token.
 # Resume and Try Now
 
     POST /api/v1/control/resume
+    POST /api/v1/control/resume  {"kind": "build", "version": "0.0.1.956"}
     POST /api/v1/control/resume  {"condition": "usage_limit:anthropic:all"}
 
 Without a body, Resume clears the Director's pause and an update's, and answers 200 with Symphony's
@@ -809,6 +810,14 @@ and answers `409` `nothing_to_resume`, its `message` naming what Symphony waits 
   }
 }
 ```
+
+With `kind`, Resume lifts that one reason and keeps every other: whoever set a reason lifts that
+reason. `{"kind": "build", "version": "<version>"}` lifts the update's pause for that version, which
+the menu bar app sends once its update installed, was rolled back or failed to launch;
+`{"kind": "person"}` lifts the Director's. A pause someone else set (the Director's reason added
+while the update waited) stays, and dispatch stays paused while it does. A reason the pause doesn't
+hold changes nothing; either way the answer is 200 with the pause as it now stands. A `build`
+without `version`, or another kind, is `422` `invalid_resume`.
 
 With `condition`, the usage limit's reason's `waits_on.condition`, Resume is **Try Now**: the person
 says the limit is back, and Symphony checks it the way it does at the hold's `resume_at`. The paused

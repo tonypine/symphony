@@ -15,7 +15,12 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   `resume` clears the Director's pause and an update's. A pause held only by reasons Resume can't
   clear (a usage limit's) answers 409 `nothing_to_resume`, naming them in `reasons`, and lifts
-  nothing. With `condition` (a usage limit's, as its reason's `waits_on.condition` names it:
+  nothing. With `kind` it lifts that one reason and keeps every other (whoever set a reason lifts
+  that reason): `kind: "build"` with `version` the update's pause for that version, which the menu
+  bar app lifts once its update installed, was rolled back or failed to launch; `kind: "person"`
+  the Director's. Dispatch stays paused while another reason remains, and a reason the pause
+  doesn't hold changes nothing: the answer is the pause as it now stands. A `build` without
+  `version`, or another kind, is 422 `invalid_resume`. With `condition` (a usage limit's, as its reason's `waits_on.condition` names it:
   `usage_limit:anthropic:all`) `resume` is Try Now (`SymphonyElixir.Orchestrator.try_usage_limit_now/2`):
   the paused hold starts its canary at once, and the answer is Symphony's pause with the hold as it
   now stands (`usage_limit`, null once it cleared). No hold on `condition` is 404
@@ -117,9 +122,24 @@ defmodule SymphonyElixirWeb.ControlApiController do
 
   @spec resume(Conn.t(), map()) :: Conn.t()
   def resume(conn, params) do
-    case string_param(params["condition"]) do
-      nil -> respond_resume(conn, Orchestrator.resume_dispatch(orchestrator(conn)))
-      condition -> respond_resume(conn, Orchestrator.try_usage_limit_now(orchestrator(conn), condition))
+    case {string_param(params["condition"]), string_param(params["kind"]), string_param(params["version"])} do
+      {nil, nil, _version} ->
+        respond_resume(conn, Orchestrator.resume_dispatch(orchestrator(conn)))
+
+      {nil, "build", nil} ->
+        error_response(conn, 422, "invalid_resume", "Lifting an update's pause needs the version it waits on")
+
+      {nil, "build", version} ->
+        respond(conn, Orchestrator.resume_dispatch(orchestrator(conn), {:build, version}))
+
+      {nil, "person", _version} ->
+        respond(conn, Orchestrator.resume_dispatch(orchestrator(conn), :person))
+
+      {nil, kind, _version} ->
+        error_response(conn, 422, "invalid_resume", "Resume lifts a pause of kind build or person, not #{kind}")
+
+      {condition, _kind, _version} ->
+        respond_resume(conn, Orchestrator.try_usage_limit_now(orchestrator(conn), condition))
     end
   end
 

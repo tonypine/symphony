@@ -8126,11 +8126,11 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp symphony_pause_status, do: Pauses.dispatch_status(symphony_pause())
 
-  defp resume_dispatch_reasons(%State{} = state) do
-    case Pauses.clear_reasons(:symphony, &(&1.kind in [:person, :build]), by: @director_setter) do
+  defp resume_dispatch_reasons(%State{} = state, lifted?) do
+    case Pauses.clear_reasons(:symphony, lifted?, by: @director_setter) do
       {:ok, _pause} ->
         pause = symphony_pause_status()
-        Logger.warning("Operator resumed dispatch")
+        log_resume(pause)
         notify_dashboard()
         {:reply, {:ok, pause}, schedule_tick(release_pause_held_retries(%{state | operator_pause_logged: false}), 0)}
 
@@ -8138,6 +8138,17 @@ defmodule SymphonyElixir.Orchestrator do
         {:reply, {:error, reason}, state}
     end
   end
+
+  defp log_resume(%{paused: false}), do: Logger.warning("Operator resumed dispatch")
+
+  defp log_resume(%{reasons: reasons}) do
+    Logger.warning("Lifted a dispatch pause reason; dispatch stays paused reasons=#{inspect(Enum.map(reasons, & &1.text))}")
+  end
+
+  # The reason a targeted resume lifts: an update's for its version, or the Director's.
+  defp lifted_by?(%{kind: :build, waits_on: %{version: version}}, {:build, version}), do: true
+  defp lifted_by?(%{kind: :person}, :person), do: true
+  defp lifted_by?(_reason, _lift), do: false
 
   # Symphony's pause when every reason it holds is one Resume can't clear (a usage limit's, an
   # environment's); nil when it isn't paused or Resume has a reason to clear.
@@ -8990,6 +9001,22 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc """
+  Lifts one reason of Symphony's pause and leaves the others: `{:build, version}` the update's
+  pause for `version` (the menu bar app's, once that update installed, was rolled back or failed to
+  launch), `:person` the Director's. Whoever set a reason lifts that reason, so a pause someone else
+  set keeps dispatch paused. A reason the pause doesn't hold changes nothing; either way the answer
+  is Symphony's pause as it now stands.
+  """
+  @spec resume_dispatch(GenServer.server(), {:build, String.t()} | :person) :: {:ok, map()} | :unavailable | {:error, term()}
+  def resume_dispatch(server, reason) do
+    if server_available?(server) do
+      GenServer.call(server, {:resume_dispatch, reason})
+    else
+      :unavailable
+    end
+  end
+
+  @doc """
   Checks the usage-limit hold waiting on `condition` (`UsageLimit.condition/1`, for example
   `usage_limit:anthropic:all`) now rather than at its `resume_at`, because a person says the limit
   is back: a paused hold starts its canary at once, as it would at `resume_at`. A canary the
@@ -9344,9 +9371,13 @@ defmodule SymphonyElixir.Orchestrator do
   # changed nothing. Try Now (`try_usage_limit_now/2`) is what checks a usage limit early.
   defp handle_call_message(:resume_dispatch, _from, state) do
     case unliftable_pause(symphony_pause()) do
-      nil -> resume_dispatch_reasons(state)
+      nil -> resume_dispatch_reasons(state, &(&1.kind in [:person, :build]))
       pause -> {:reply, {:error, {:nothing_to_resume, Pauses.dispatch_status(pause).reasons}}, state}
     end
+  end
+
+  defp handle_call_message({:resume_dispatch, reason}, _from, state) do
+    resume_dispatch_reasons(state, &lifted_by?(&1, reason))
   end
 
   defp handle_call_message({:try_usage_limit_now, condition}, _from, state) do

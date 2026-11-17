@@ -111,22 +111,22 @@ check "an unknown command is refused" 2 "$($store nonsense >/dev/null 2>&1; echo
 
 # The groups of checks a pull request needs.
 groups() { gate=$1; shift; printf '%s\n' "$@" | sh "$here/mac-check-groups.sh" "$gate" | grep '=true' | cut -d= -f1 | tr '\n' ' ' | sed 's/ $//'; }
-check "a UI source file" "any build unit speed" "$(groups success macos/Sources/SymphonyBarUI/Row.swift)"
-check "a Core source file" "any build unit speed" "$(groups success macos/Sources/SymphonyBarCore/Model.swift)"
+check "a UI source file" "any build unit" "$(groups success macos/Sources/SymphonyBarUI/Row.swift)"
+check "a Core source file" "any build unit" "$(groups success macos/Sources/SymphonyBarCore/Model.swift)"
 check "a Swift test only" "any unit" "$(groups success macos/Tests/SymphonyBarUITests/RowTests.swift)"
 check "server code only" "" "$(groups success lib/symphony_elixir/orchestrator.ex test/symphony_elixir/x_test.exs README.md)"
 check "the gallery's stories" "any build" "$(groups success macos/Gallery/ButtonStories.swift)"
-check "the QA driver" "any build driver speed" "$(groups success priv/qa_driver/symphony-qa-driver.swift)"
-check "the updater's sources" "any build unit speed update" "$(groups success macos/Sources/SymphonyBarCore/AutoUpdate.swift)"
+check "the QA driver" "any build driver" "$(groups success priv/qa_driver/symphony-qa-driver.swift)"
+check "the updater's sources" "any build unit update" "$(groups success macos/Sources/SymphonyBarCore/AutoUpdate.swift)"
 check "the release's packaging" "any update smoke" "$(groups success mix.lock)"
 check "the design notes alone need no Mac check" "" "$(groups success docs/design/director-ticket-page.md)"
 check "the catalog meets the unit tests that read it" "any unit" "$(groups success docs/design/catalog/stories.js)"
 check "so does its counterpart table" "any unit" "$(groups success docs/design/catalog-counterparts.md)"
 check "and the gallery's list of component variations" "any build unit" "$(groups success macos/Gallery/component-variations.txt)"
 check "the install script" "any installer" "$(groups success scripts/install-macos.sh)"
-check "a red gate on main turns every group on" "any build unit sandbox helpers driver speed update smoke installer" "$(groups failure README.md)"
-check "so does a change to the checks themselves" "any build unit sandbox helpers driver speed update smoke installer" "$(groups success .github/workflows/mac-checks.yml)"
-check "and to the desktop lock" "any build unit sandbox helpers driver speed update smoke installer" "$(groups success scripts/ci/desktop-lock.sh)"
+check "a red gate on main turns every group on" "any build unit sandbox helpers driver update smoke installer" "$(groups failure README.md)"
+check "so does a change to the checks themselves" "any build unit sandbox helpers driver update smoke installer" "$(groups success .github/workflows/mac-checks.yml)"
+check "and to the desktop lock" "any build unit sandbox helpers driver update smoke installer" "$(groups success scripts/ci/desktop-lock.sh)"
 check "but not to its test alone" "any helpers" "$(groups success scripts/ci/desktop-lock-test.sh)"
 
 if [ "$failures" -gt 0 ]; then echo "$failures failure(s)"; exit 1; fi

@@ -644,7 +644,10 @@ joined by `; `. The log line names the kind too (`Dispatch pause active kind=bui
   `unblock`, its line the given reason cut to 300 characters (`You paused Symphony` without one).
   The menu bar app's update pause (reason `updating to v<version>`) sets a `build` reason that waits
   on that version instead. Resume (`POST /api/v1/control/resume`) clears both. A pause holding
-  neither answers `409` `nothing_to_resume` with its reasons and lifts nothing.
+  neither answers `409` `nothing_to_resume` with its reasons and lifts nothing. Resume with `kind`
+  (`build` and its `version`, or `person`) lifts that one reason and keeps the others: after an
+  update, a rollback or a failed launch the menu bar app lifts only its own update's `build` reason,
+  so a pause the Director set meanwhile keeps dispatch paused.
 - A Symphony that starts on the version a `build` reason waits on, or a later one, clears that
   reason, so the pause of a finished update lifts by itself.
 - Each usage-limit hold (Sections 8.4.1 and 8.4.2) is an `environment` reason waiting on condition

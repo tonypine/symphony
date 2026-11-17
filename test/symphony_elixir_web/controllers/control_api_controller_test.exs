@@ -100,6 +100,42 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
     assert calls(pid) == [:resume_dispatch]
   end
 
+  test "POST /control/resume with kind build and a version lifts only that update's pause" do
+    person = %{kind: :person, waits_on: %{action: "unblock"}, text: "Agent tools crash in this build", set_at: ~U[2026-11-17 12:00:00Z]}
+    pause = SymphonyElixir.Pauses.normalize(%{subject: :symphony, reasons: [person]})
+    pid = start_stub([{:ok, SymphonyElixir.Pauses.dispatch_status(pause)}])
+    params = %{"kind" => "build", "version" => " 0.0.1.956 "}
+
+    conn = send_to(build_conn(:post, "/api/v1/control/resume", params), :resume, pid, params)
+
+    assert conn.status == 200
+    assert %{"paused" => true, "reason" => "Agent tools crash in this build"} = json_body(conn)
+    assert calls(pid) == [{:resume_dispatch, {:build, "0.0.1.956"}}]
+  end
+
+  test "POST /control/resume with kind person lifts only the Director's pause" do
+    pid = start_stub([{:ok, %{paused: false}}])
+    params = %{"kind" => "person"}
+
+    conn = send_to(build_conn(:post, "/api/v1/control/resume", params), :resume, pid, params)
+
+    assert conn.status == 200
+    assert calls(pid) == [{:resume_dispatch, :person}]
+  end
+
+  test "POST /control/resume refuses a build without its version and a kind it can't lift" do
+    pid = start_stub([])
+
+    conn = send_to(build_conn(:post, "/api/v1/control/resume"), :resume, pid, %{"kind" => "build"})
+    assert conn.status == 422
+    assert json_body(conn)["error"]["code"] == "invalid_resume"
+
+    conn = send_to(build_conn(:post, "/api/v1/control/resume"), :resume, pid, %{"kind" => "environment"})
+    assert conn.status == 422
+    assert json_body(conn)["error"]["message"] == "Resume lifts a pause of kind build or person, not environment"
+    assert calls(pid) == []
+  end
+
   test "POST /control/resume with only a usage limit's reason answers 409 nothing_to_resume, naming it" do
     limit = %{kind: :environment, text: "Claude's 5-hour limit until 20:02 UTC-3", since: ~U[2026-11-11 20:03:00Z], waits_on: %{condition: "usage_limit:anthropic:all"}}
     pid = start_stub([{:error, {:nothing_to_resume, [limit]}}])
