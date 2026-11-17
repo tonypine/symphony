@@ -13,8 +13,11 @@ defmodule SymphonyElixir.ReleaseGate do
 
   A failed gate is not a question for a person. `SymphonyElixir.ReleaseBuild` reads the `release`
   run on its `workflow_run` delivery and, when the step that failed is in this job, calls
-  `failed/2`, which files one Urgent fix ticket in Symphony's own repository through
-  `SymphonyElixir.SelfHeal.Fixer`, in Todo, so it is dispatched like any Urgent ticket. The ticket
+  `failed/2`, which files one Urgent fix ticket through `SymphonyElixir.SelfHeal.Fixer`, in Todo, so
+  it is dispatched like any Urgent ticket. The ticket is filed under the configured repo whose GitHub
+  repository sent the delivery (the build's `repo`), in that repo's Linear team and project: the gate
+  is that repository's, and only its agents can change its code. When no configured repo is that
+  repository, nothing is filed and a warning names it; the primary repo never stands in. The ticket
   carries what an agent needs to start without asking: the commit and what it changed, the step
   that failed, the first error line and the end of the step's log, and what done means.
 
@@ -28,13 +31,15 @@ defmodule SymphonyElixir.ReleaseGate do
   the `changes` job). The fix ticket's acceptance says so.
 
   Every effect is injectable: `opts[:fixer]`, `opts[:tracker]`, `opts[:run_store]`,
-  `opts[:github]` with `opts[:gh_runner]`, `opts[:symphony_repo_key]` and `opts[:terminal_states]`.
+  `opts[:github]` with `opts[:gh_runner]`, `opts[:repos]` (`{:ok, repos}`, default
+  `SymphonyElixir.Config.repos/0`) and `opts[:terminal_states]`.
   """
 
   require Logger
 
   alias SymphonyElixir.{BuildInfo, Config, RunStore}
-  alias SymphonyElixir.GitHub.{FailedLog, PullRequest}
+  alias SymphonyElixir.GitHub.{FailedLog, PullRequest, Repo}
+  alias SymphonyElixir.Repo.Status, as: RepoStatus
 
   @key {:release_gate, :fix}
   @component "release_gate"
@@ -56,23 +61,45 @@ defmodule SymphonyElixir.ReleaseGate do
   def gate_failure?(_build), do: false
 
   @doc """
-  Files the fix ticket for `build`'s failed gate, or adds the failure to the one already open:
-  `{:filed, identifier}` or `{:attached, identifier}`.
+  Files the fix ticket for `build`'s failed gate under the configured repo of the build's
+  repository, or adds the failure to the one already open: `{:filed, identifier}` or
+  `{:attached, identifier}`. `{:error, {:unknown_repo, repo}}`, with nothing filed, when no
+  configured repo is the build's repository.
   """
   @spec failed(build(), keyword()) :: {:filed | :attached, String.t()} | {:error, term()}
   def failed(%{sha: sha} = build, opts) when is_binary(sha) do
-    evidence = evidence(build, opts)
+    case repo_key(Map.get(build, :repo), opts) do
+      nil ->
+        Logger.warning("The release gate failed on #{sha}, but no configured repo is its repository #{inspect(Map.get(build, :repo))}; filed no fix ticket")
 
-    case open_ticket(opts) do
-      identifier when is_binary(identifier) -> attach(identifier, build, evidence, opts)
-      nil -> file(build, evidence, opts)
+        {:error, {:unknown_repo, Map.get(build, :repo)}}
+
+      repo_key ->
+        evidence = evidence(build, opts)
+
+        case open_ticket(opts) do
+          identifier when is_binary(identifier) -> attach(identifier, build, evidence, opts)
+          nil -> file(repo_key, build, evidence, opts)
+        end
     end
   end
 
   def failed(_build, _opts), do: {:error, :invalid_build}
 
-  defp file(build, evidence, opts) do
-    scope = Keyword.get_lazy(opts, :symphony_repo_key, fn -> Map.get(build, :repo_key) || Config.repo_key_or_nil() end)
+  # The configured repo whose GitHub repository is `repo` (`owner/name`, from the delivery's
+  # `repository.full_name`), or nil.
+  defp repo_key(repo, opts) when is_binary(repo) do
+    with {:ok, repos} <- Keyword.get_lazy(opts, :repos, &Config.repos/0),
+         %{name: name} <- Enum.find(repos, &Repo.same?(RepoStatus.github_repo(&1), repo)) do
+      name
+    else
+      _none -> nil
+    end
+  end
+
+  defp repo_key(_repo, _opts), do: nil
+
+  defp file(scope, build, evidence, opts) do
     description = description(build, evidence)
     attrs = %{scope: scope, repo_key: scope, component: @component, title: title(build), description: description}
 
@@ -151,7 +178,7 @@ defmodule SymphonyElixir.ReleaseGate do
 
   defp log(_build, _opts), do: nil
 
-  defp commit(%{sha: sha, repo: repo}, opts) when is_binary(repo) do
+  defp commit(%{sha: sha, repo: repo}, opts) do
     args = ["api", "repos/#{repo}/commits/#{sha}", "--jq", "{message: .commit.message, url: .html_url, files: [.files[].filename]}"]
 
     with {:ok, output} <- github(opts).run_gh(args, Keyword.take(opts, [:gh_runner])),
@@ -165,8 +192,6 @@ defmodule SymphonyElixir.ReleaseGate do
       _unreadable -> nil
     end
   end
-
-  defp commit(_build, _opts), do: nil
 
   defp title(build), do: "Release gate failed on main: #{place(build)} (#{build_name(build)} not published)"
 
@@ -263,8 +288,7 @@ defmodule SymphonyElixir.ReleaseGate do
   defp build_name(%{number: number}) when is_integer(number), do: "v#{BuildInfo.release_version(number)} build"
   defp build_name(_build), do: "release build"
 
-  defp gh_opts(%{repo: repo}, opts) when is_binary(repo), do: [repo: repo] ++ Keyword.take(opts, [:github, :gh_runner])
-  defp gh_opts(_build, opts), do: Keyword.take(opts, [:github, :gh_runner])
+  defp gh_opts(%{repo: repo}, opts), do: [repo: repo] ++ Keyword.take(opts, [:github, :gh_runner])
 
   defp github(opts), do: Keyword.get(opts, :github, PullRequest)
   defp fixer(opts), do: Keyword.get(opts, :fixer, SymphonyElixir.SelfHeal.Fixer)
