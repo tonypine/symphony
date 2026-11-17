@@ -21,7 +21,8 @@ defmodule SymphonyElixir.WorkspaceLifecycleTest do
 
     orchestrator_name = Module.concat(__MODULE__, "Orchestrator#{System.unique_integer([:positive])}")
     {:ok, pid} = Orchestrator.start_link(name: orchestrator_name)
-    wait_for_startup(pid)
+    wait_until_quiet(pid)
+    hold_ticks(pid)
 
     on_exit(fn ->
       stop_process(pid)
@@ -85,10 +86,24 @@ defmodule SymphonyElixir.WorkspaceLifecycleTest do
     no_pr = stale_workspace!(ctx, "MT-NO-PR")
     idle = stale_workspace!(ctx, "MT-IDLE")
 
+    {:ok, stale_entries} = Workspace.scan_stale_workspaces(Config.repo_key!(), DateTime.utc_now())
+    ref = make_ref()
+
+    result =
+      {:startup_workspace_lifecycle_result,
+       %{
+         now_ms: System.monotonic_time(:millisecond),
+         repo_results: [{Config.repo_key!(), %{orphan_sweep_result: {:ok, []}, age_gc_scan: {:ok, stale_entries}}}],
+         quota: %{configured?: false, paused: false, reason: nil}
+       }}
+
+    # The retry and watch state the GC reads and the result it acts on arrive in one step, inside
+    # the Orchestrator, so no other message can change that state in between.
     :sys.replace_state(pid, fn state ->
-      %{
+      state = %{
         state
-        | retry_attempts: %{
+        | startup_workspace_lifecycle_task_ref: ref,
+          retry_attempts: %{
             "issue-retrying" => %{
               attempt: 1,
               due_at_ms: System.monotonic_time(:millisecond) + 60_000,
@@ -102,22 +117,10 @@ defmodule SymphonyElixir.WorkspaceLifecycleTest do
             "issue-no-pr" => %{identifier: "MT-NO-PR", repo_key: Config.repo_key!(), state: "Code Review", pull_request_url: nil}
           }
       }
+
+      {:noreply, state} = Orchestrator.handle_info({ref, result}, state)
+      state
     end)
-
-    {:ok, stale_entries} = Workspace.scan_stale_workspaces(Config.repo_key!(), DateTime.utc_now())
-    ref = make_ref()
-    :sys.replace_state(pid, &%{&1 | startup_workspace_lifecycle_task_ref: ref})
-
-    send(
-      pid,
-      {ref,
-       {:startup_workspace_lifecycle_result,
-        %{
-          now_ms: System.monotonic_time(:millisecond),
-          repo_results: [{Config.repo_key!(), %{orphan_sweep_result: {:ok, []}, age_gc_scan: {:ok, stale_entries}}}],
-          quota: %{configured?: false, paused: false, reason: nil}
-        }}}
-    )
 
     assert %{startup_workspace_lifecycle_task_ref: nil} = :sys.get_state(pid)
     assert File.dir?(retrying)
@@ -210,14 +213,49 @@ defmodule SymphonyElixir.WorkspaceLifecycleTest do
     assert File.read!(Path.join(workspace, "work.txt")) == "in progress\n"
   end
 
-  defp wait_for_startup(pid) do
-    Enum.reduce_while(1..200, nil, fn _attempt, _acc ->
-      if is_nil(:sys.get_state(pid).startup_workspace_lifecycle_task_ref) do
-        {:halt, :ok}
-      else
+  # Startup is done once its workspace lifecycle result is applied and no poll or dispatch
+  # readiness task it set off is still out. A readiness task started before that result runs the
+  # age GC over a kept set read before the test's state was in place; once the result is applied,
+  # the GC is not due again for the configured interval.
+  defp wait_until_quiet(pid, attempts \\ 500) do
+    cond do
+      quiet?(:sys.get_state(pid)) ->
+        :ok
+
+      attempts > 0 ->
         Process.sleep(10)
-        {:cont, nil}
+        wait_until_quiet(pid, attempts - 1)
+
+      true ->
+        flunk("the Orchestrator did not finish its startup work")
+    end
+  end
+
+  defp quiet?(state) do
+    is_nil(state.startup_workspace_lifecycle_task_ref) and
+      is_integer(state.workspace_lifecycle_last_check_at_ms) and
+      is_nil(state.repo_poll_task_ref) and
+      state.dispatch_readiness_tasks == %{} and
+      state.poll_check_in_progress != true
+  end
+
+  # The Orchestrator's own poll and watchdog ticks are held off for the test: a tick already sent
+  # carries a token that no longer matches and is dropped, so only the test's own messages change
+  # the state it sets with `:sys.replace_state`.
+  defp hold_ticks(pid) do
+    :sys.replace_state(pid, fn state ->
+      for timer_ref <- [state.tick_timer_ref, state.watchdog_timer_ref], is_reference(timer_ref) do
+        Process.cancel_timer(timer_ref)
       end
+
+      %{
+        state
+        | tick_timer_ref: nil,
+          tick_token: nil,
+          next_poll_due_at_ms: nil,
+          watchdog_timer_ref: nil,
+          watchdog_token: nil
+      }
     end)
   end
 end
