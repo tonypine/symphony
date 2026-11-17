@@ -133,7 +133,8 @@ final class TimelineTests: XCTestCase {
         XCTAssertEqual(byID["v2"]?.kind, .finding)
         XCTAssertEqual(byID["v2"]?.actor, "QA run")
         // What QA found is drawn as its card: the line and QA's description.
-        XCTAssertEqual(byID["v2"]?.finding, TimelineFinding(title: "Finding: the timeline missed a stopped run", text: "The timeline missed a stopped run"))
+        XCTAssertEqual(byID["v2"]?.finding, TimelineFinding(title: "The timeline missed a stopped run"))
+        XCTAssertEqual(byID["v2"]?.title, "QA found content missing")
         XCTAssertNil(byID["a1"]?.finding)
         XCTAssertEqual(byID["n1"]?.kind, .note)
         // The run's own events fold into its group; the situations that restate an entry leave no row.
@@ -326,15 +327,36 @@ final class TimelineTests: XCTestCase {
             .replacingOccurrences(of: #""summary""#, with: #""artifacts": [\#(shot), \#(log)], "summary""#)
         let entry = try XCTUnwrap(entries(TimelineModel.build(try page([found]), reference: reference, calendar: utc)).first)
         let finding = try XCTUnwrap(entry.finding)
-        XCTAssertEqual(finding.title, "QA found content clipped: Step 2")
-        XCTAssertEqual(finding.text, "The row is cut at its right edge")
+        XCTAssertEqual(finding.title, "The row is cut at its right edge")
+        XCTAssertNil(finding.text)
         XCTAssertEqual(finding.screenshots, [TicketScreenshot(id: "shot-1", label: "Run header at 1440×900", path: "api/v1/artifacts/shot-1", available: true)])
-        XCTAssertEqual(finding.accessibilityLabel, "Finding, QA found content clipped: Step 2, The row is cut at its right edge, 1 screenshot")
+        XCTAssertEqual(finding.accessibilityLabel, "Finding, The row is cut at its right edge, 1 screenshot")
         XCTAssertFalse(entry.isHighlighted)
+
+        // A finding without a description names itself by its entry's words.
+        let bare = event("g", "09:00:00", "finding.recorded", title: "QA found a defect", payload: #"{"class": "unclassified"}"#)
+        let unsaid = try XCTUnwrap(entries(TimelineModel.build(try page([bare]), reference: reference, calendar: utc)).first)
+        XCTAssertEqual(unsaid.finding, TimelineFinding(title: "QA found a defect"))
 
         let two = TimelineFinding(title: "QA found it", screenshots: finding.screenshots + finding.screenshots)
         XCTAssertEqual(two.accessibilityLabel, "Finding, QA found it, 2 screenshots")
         XCTAssertEqual(TimelineFinding(title: "QA found it").accessibilityLabel, "Finding, QA found it")
+    }
+
+    func testTheFindingCardHeadsWithQAsFirstSentenceAndNotTheEntrysWords() {
+        let said = "Walkthrough 1-2 on fixtures at 1440x900: the Details panel shows the raw model id. Expected: the display name."
+        XCTAssertEqual(
+            TimelineFinding.card(description: said),
+            TimelineFinding(title: "The Details panel shows the raw model id", text: "Expected: the display name.")
+        )
+        XCTAssertEqual(
+            TimelineFinding.card(description: "Design check: ticket page at 1440x900: The heading doubles. Actual: twice."),
+            TimelineFinding(title: "The heading doubles", text: "Actual: twice.")
+        )
+        XCTAssertEqual(TimelineFinding.card(description: "The row is cut."), TimelineFinding(title: "The row is cut"))
+        XCTAssertEqual(TimelineFinding.card(description: "Ends on a colon: "), TimelineFinding(title: "Ends on a colon:"))
+        XCTAssertNil(TimelineFinding.card(description: "  "))
+        XCTAssertNil(TimelineFinding.card(description: nil))
     }
 
     func testTheLeadIsTheWordsUpToTheColon() {

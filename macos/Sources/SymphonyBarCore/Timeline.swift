@@ -173,6 +173,27 @@ public struct TimelineFinding: Equatable {
     /// The card's badge word.
     public static let word = "Finding"
 
+    /// The card from QA's description: its first sentence is the card's heading, as the prototype's finding title, and
+    /// the rest its body. QA writes "Walkthrough 2 at 1440x900: The row is cut. Expected: …": the step and viewport
+    /// before the sentence's last colon are the entry's own words, so the heading leaves them out. Nil without a
+    /// description.
+    public static func card(description: String?, screenshots: [TicketScreenshot] = []) -> TimelineFinding? {
+        guard let said = description?.trimmedNonEmpty else { return nil }
+        let stop = said.range(of: ". ")
+        let first: String = stop.map { String(said[..<$0.lowerBound]) } ?? said
+        let rest: String? = stop.flatMap { String(said[$0.upperBound...]).trimmedNonEmpty }
+        return TimelineFinding(title: headline(first), text: rest, screenshots: screenshots)
+    }
+
+    /// A sentence as a heading: its first letter up, no closing full stop.
+    static func headline(_ sentence: String) -> String {
+        var bare: String = sentence.hasSuffix(".") ? String(sentence.dropLast()) : sentence
+        if let colon = bare.range(of: ": ", options: .backwards), let after = String(bare[colon.upperBound...]).trimmedNonEmpty {
+            bare = after
+        }
+        return bare.prefix(1).uppercased() + bare.dropFirst()
+    }
+
     /// The card for VoiceOver: "Finding, QA found content clipped, The row is cut at its right edge, 1 screenshot".
     public var accessibilityLabel: String {
         let shots = screenshots.isEmpty ? nil : (screenshots.count == 1 ? "1 screenshot" : "\(screenshots.count) screenshots")
@@ -592,7 +613,8 @@ public struct TimelineModel: Equatable {
         init(_ event: TicketEventsPayload.Event, at: Date, order: Int, kind: TimelineEntry.Kind, actor: String) {
             let title = event.summary?.title?.trimmedNonEmpty ?? event.type
             let finding = event.type == "finding.recorded"
-                ? TimelineFinding(title: title, text: event.payload.description?.trimmedNonEmpty, screenshots: event.screenshots)
+                ? TimelineFinding.card(description: event.payload.description, screenshots: event.screenshots)
+                    ?? TimelineFinding(title: title, screenshots: event.screenshots)
                 : nil
             entry = TimelineEntry(
                 id: event.id, kind: kind, at: at, title: title, detail: event.summary?.detail?.trimmedNonEmpty, actor: actor,

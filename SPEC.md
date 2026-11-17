@@ -6483,7 +6483,9 @@ Minimum endpoints:
     `children` (at any depth), each other event whose `run_id` names a run of the ticket in that
     run's `events`, and the rest at the top level. A run is `{"kind": "run", run_id, run_kind,
     run_number, model, model_name, effort, status, verdict, started_at, ended_at, exit, head, summary,
-    events}` (`model_name` the model as a person reads it: `claude-opus-5-5` is "Claude Opus 5.5"),
+    outcome, events}` (`model_name` the model as a person reads it: `claude-opus-5-5` is "Claude Opus
+    5.5"; `outcome` how an ended run came out in a few words, null while it runs: the question its last
+    step asked, else its verdict, else its exit, "Asked you a question", "Approved", "Pushed and handed off"),
     placed where its first event on the page falls. Its header is read from the ticket's whole
     history: `model` and `effort` are the ones its run kind's entry resolved when it was dispatched (its
     `run.started`, else its `run.ended`; null when it resolved none), `status` is `ended` once its `run.ended` is written and `running` before that

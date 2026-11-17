@@ -200,15 +200,23 @@ final class RunStepsTests: XCTestCase {
 
         let passed = RunGroupModel.group(
             TicketEventsPayload.Run(runID: "p", runKind: nil, runNumber: nil, status: "ended", exit: "handoff", verdict: nil,
-                                    startedAt: "2026-10-07T10:00:00Z", endedAt: "2026-10-07T10:03:00Z", head: nil, model: "m", effort: nil),
+                                    startedAt: "2026-10-07T10:00:00Z", endedAt: "2026-10-07T10:03:00Z", head: nil, model: "m", effort: nil,
+                                    outcome: "Pushed and handed off"),
             events: [event("a", "step.completed", "2026-10-07T10:01:00Z", .init(outcome: "skipped", stepID: "qa"))],
             reference: reference
         )
+        // A running run has no outcome yet, whatever the header says.
+        let live = RunGroupModel.group(
+            TicketEventsPayload.Run(runID: "l", status: "running", startedAt: "2026-10-07T10:00:00Z", outcome: "Approved"),
+            events: [], reference: reference
+        )
+        XCTAssertNil(live.outcome)
+        XCTAssertEqual(passed.outcome, "Pushed and handed off")
         XCTAssertEqual(passed.title, "Agent run")
         XCTAssertEqual(passed.state, .passed)
         XCTAssertEqual(passed.durationSeconds, 180)
         XCTAssertEqual(passed.model, "M")
-        XCTAssertEqual(passed.meta, "M · 3 min")
+        XCTAssertEqual(passed.meta, "M · 3 min · Pushed and handed off")
         XCTAssertEqual(passed.whereText, "ended after qa")
         XCTAssertNil(passed.steps[0].reason)
 

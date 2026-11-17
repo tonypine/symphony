@@ -339,13 +339,15 @@ public struct RunGroupModel: Equatable, Identifiable {
     public var model: String?
     /// The effort the run profile resolved, "high"; kept apart from the model's name.
     public var effort: String?
+    /// How it came out, the meta line's last words: "Asked you a question"; nil while it runs.
+    public var outcome: String?
     public var steps: [RunStep]
     /// One of its events is newer than the person's last look (TP-1451): an ended run's header carries the new dot.
     public var isNew = false
 
     public init(
         id: String, title: String, state: State, word: String, durationSeconds: Int? = nil, tokens: Int? = nil,
-        model: String? = nil, effort: String? = nil, steps: [RunStep] = []
+        model: String? = nil, effort: String? = nil, outcome: String? = nil, steps: [RunStep] = []
     ) {
         self.id = id
         self.title = title
@@ -355,6 +357,7 @@ public struct RunGroupModel: Equatable, Identifiable {
         self.tokens = tokens
         self.model = model
         self.effort = effort
+        self.outcome = outcome
         self.steps = steps
     }
 
@@ -373,10 +376,10 @@ public struct RunGroupModel: Equatable, Identifiable {
 
     public var tokensText: String? { tokens.flatMap { $0 > 0 ? Overview.tokens($0) + " tokens" : nil } }
 
-    /// The line under the run's head (the prototype's `.run-meta`): "Claude Opus 5.5 · 12 min · 600K tokens", the
-    /// time so far while it runs. Nil when it has none of them.
+    /// The line under the run's head (the prototype's `.run-meta`): "Claude Opus 5.5 · 12 min · 600K tokens · Asked
+    /// you a question", the time so far while it runs. Nil when it has none of them.
     public var meta: String? {
-        let parts = [model, duration, tokensText].compactMap { $0 }
+        let parts: [String] = [model, duration, tokensText, outcome].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: Self.metaSeparator)
     }
 
@@ -464,6 +467,7 @@ public struct RunGroupModel: Equatable, Identifiable {
             tokens: ended?.payload.tokens ?? liveTokens,
             model: model,
             effort: effort,
+            outcome: state == .running ? nil : run.outcome?.trimmingWhitespace().nonEmpty,
             steps: steps(events, live: state == .running, runNow: runNow, reference: reference)
         )
     }

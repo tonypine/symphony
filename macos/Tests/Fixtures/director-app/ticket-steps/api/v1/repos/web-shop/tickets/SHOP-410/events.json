@@ -368,6 +368,7 @@
       "kind": "run",
       "model": null,
       "model_name": null,
+      "outcome": "Asked you a question",
       "run_id": "run-impl-1",
       "run_kind": "implementation",
       "run_number": 1,

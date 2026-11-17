@@ -273,11 +273,13 @@ public struct TicketEventsPayload: Equatable {
         /// The model as a person reads it ("Claude Opus 5.5"), as the feed names it; nil from a Symphony that doesn't.
         public var modelName: String? = nil
         public var effort: String? = nil
+        /// How the ended run came out, in Symphony's words ("Asked you a question", "Approved"); nil while it runs.
+        public var outcome: String? = nil
 
         public init(
             runID: String, runKind: String? = nil, runNumber: Int? = nil, status: String? = nil, exit: String? = nil,
             verdict: Verdict? = nil, startedAt: String? = nil, endedAt: String? = nil, head: String? = nil,
-            model: String? = nil, modelName: String? = nil, effort: String? = nil
+            model: String? = nil, modelName: String? = nil, effort: String? = nil, outcome: String? = nil
         ) {
             self.runID = runID
             self.runKind = runKind
@@ -293,6 +295,7 @@ public struct TicketEventsPayload: Equatable {
             self.model = model
             self.modelName = modelName
             self.effort = effort
+            self.outcome = outcome
         }
     }
 
@@ -565,7 +568,7 @@ public struct TicketEventsPayload: Equatable {
         case event(Node)
 
         enum CodingKeys: String, CodingKey {
-            case kind, runId, runKind, runNumber, status, exit, verdict, startedAt, endedAt, head, model, modelName, effort, events
+            case kind, runId, runKind, runNumber, status, exit, verdict, startedAt, endedAt, head, model, modelName, effort, outcome, events
         }
 
         init(from decoder: Decoder) throws {
@@ -586,7 +589,8 @@ public struct TicketEventsPayload: Equatable {
                 head: try? container.decodeIfPresent(String.self, forKey: .head),
                 model: try? container.decodeIfPresent(String.self, forKey: .model),
                 modelName: try? container.decodeIfPresent(String.self, forKey: .modelName),
-                effort: try? container.decodeIfPresent(String.self, forKey: .effort)
+                effort: try? container.decodeIfPresent(String.self, forKey: .effort),
+                outcome: try? container.decodeIfPresent(String.self, forKey: .outcome)
             )
             self = .run(run, try container.decodeIfPresent([Node].self, forKey: .events) ?? [])
         }

@@ -75,6 +75,50 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     end
   end
 
+  @doc """
+  How an ended run came out, in a few words for the end of its meta line ("Claude Opus 5.5 · 12 min ·
+  0.6M tokens · Asked you a question"), from its `run.started`, `run.ended` and step events in the
+  order they were written and its `verdict.recorded` (or nil): a question its last step paused on,
+  else its verdict, else how it ended. Nil while it runs, and for an end with nothing to add.
+  """
+  @spec run_outcome([Event.t()], Event.t() | nil) :: String.t() | nil
+  def run_outcome(events, verdict) when is_list(events) do
+    ended = events |> Enum.filter(&(&1.type == "run.ended")) |> List.last()
+    last_step = events |> Enum.filter(&(&1.type in @step_types)) |> List.last()
+
+    cond do
+      is_nil(ended) -> nil
+      paused?(last_step) -> "Asked you a question"
+      outcome = verdict_outcome(verdict) -> outcome
+      true -> ended.payload |> map_or_empty() |> text(:exit) |> exit_outcome()
+    end
+  end
+
+  defp paused?(%Event{type: "step.completed", payload: %{} = step}), do: text(step, :outcome) == "paused"
+  defp paused?(_step), do: false
+
+  @verdict_outcomes %{
+    {"code_review", "approve"} => "Approved",
+    {"code_review", "rework"} => "Sent back to Rework",
+    {"code_review", "block"} => "Raised a decision for you",
+    {"qa", "pass"} => "Every walkthrough step passed",
+    {"qa", "fail"} => "Sent back to Rework",
+    {"qa", "skip"} => "QA skipped"
+  }
+
+  defp verdict_outcome(%Event{payload: %{} = payload}), do: Map.get(@verdict_outcomes, {text(payload, :kind), text(payload, :outcome)})
+  defp verdict_outcome(_verdict), do: nil
+
+  # The run's exit, as `Orchestrator` writes it: "handoff", "ended normally", "stopped: …", "failed (…)".
+  defp exit_outcome("handoff"), do: "Pushed and handed off"
+  defp exit_outcome("usage limit"), do: "Stopped at the usage limit"
+  defp exit_outcome("model API unreachable"), do: "Couldn't reach the model"
+  defp exit_outcome("waiting for CI"), do: "Ended to wait for CI"
+  defp exit_outcome("stopped: " <> why), do: "Stopped: " <> why
+  defp exit_outcome("failed" <> _why), do: "Failed"
+  defp exit_outcome("token budget spent" <> _spent), do: "Stopped: its token budget was spent"
+  defp exit_outcome(_exit), do: nil
+
   defp running(started, %Event{payload: %{} = step} = last) do
     run = run_name(map_or_empty(started.payload))
 

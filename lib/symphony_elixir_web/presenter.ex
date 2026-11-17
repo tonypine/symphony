@@ -716,8 +716,9 @@ defmodule SymphonyElixirWeb.Presenter do
   An event whose `parent` names an earlier event on the page sits in that event's `children`, at any
   depth. Otherwise an event whose `run_id` names a run of `history` sits in that run's `events`, and
   any other event stays at the top level. A run is `{kind: "run", run_id, run_kind, run_number,
-  model, model_name, effort, status, verdict, started_at, ended_at, exit, head, summary, events}`
-  (`model_name` the model as a person reads it, `SymphonyElixir.ModelNames.display_name/1`), its
+  model, model_name, effort, status, verdict, started_at, ended_at, exit, head, summary, outcome, events}`
+  (`model_name` the model as a person reads it, `SymphonyElixir.ModelNames.display_name/1`; `outcome`
+  how an ended run came out, `SymphonyElixir.TicketEvents.Summary.run_outcome/2`), its
   header read from `history` (the ticket's `run.started`, `run.ended`, `verdict.recorded` and step events, oldest
   first), not from the page: `status` is `ended` once its `run.ended` is written, `running` before
   that only while the orchestrator holds a run with its id (`opts[:held]`, `{run_ids, taken_at}`: the
@@ -832,7 +833,8 @@ defmodule SymphonyElixirWeb.Presenter do
       ended_at: ended && DateTime.to_iso8601(ended.at),
       exit: payload_field(ended, :exit),
       head: payload_field(ended, :head) || payload_field(started, :head),
-      summary: Summary.run_group(if(ended, do: events ++ [ended], else: events))
+      summary: Summary.run_group(if(ended, do: events ++ [ended], else: events)),
+      outcome: Summary.run_outcome(if(ended, do: events ++ [ended], else: events), verdict)
     }
   end
 

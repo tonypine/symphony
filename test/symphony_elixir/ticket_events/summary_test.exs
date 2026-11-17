@@ -372,6 +372,43 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     end
   end
 
+  describe "run_outcome/2" do
+    defp ended(exit), do: %Event{seq: 9, type: "run.ended", payload: %{run_id: "run-1", exit: exit}, run_id: "run-1"}
+    defp verdict(kind, outcome), do: %Event{type: "verdict.recorded", payload: %{kind: kind, outcome: outcome}}
+
+    test "an ended run comes out as the question it asked, else its verdict, else how it ended" do
+      started = %Event{seq: 1, type: "run.started", payload: @started, run_id: "run-1"}
+      paused = %Event{seq: 2, type: "step.completed", payload: %{step_id: "code", outcome: "paused", question_id: "q-1"}, run_id: "run-1"}
+      passed = %Event{seq: 2, type: "step.completed", payload: %{step_id: "code", outcome: "passed"}, run_id: "run-1"}
+
+      assert Summary.run_outcome([started], nil) == nil
+      assert Summary.run_outcome([started, paused, ended("ended normally")], verdict("code_review", "approve")) == "Asked you a question"
+      assert Summary.run_outcome([started, passed, ended("handoff")], verdict("code_review", "approve")) == "Approved"
+      assert Summary.run_outcome([started, ended("handoff")], verdict("code_review", "rework")) == "Sent back to Rework"
+      assert Summary.run_outcome([started, ended("handoff")], verdict("code_review", "block")) == "Raised a decision for you"
+      assert Summary.run_outcome([started, ended("ended normally")], verdict("qa", "pass")) == "Every walkthrough step passed"
+      assert Summary.run_outcome([started, ended("ended normally")], verdict("qa", "fail")) == "Sent back to Rework"
+      assert Summary.run_outcome([started, ended("ended normally")], verdict("qa", "skip")) == "QA skipped"
+      # A verdict the table doesn't name says nothing; the run's end does.
+      assert Summary.run_outcome([started, ended("handoff")], verdict("epic_review", "pass")) == "Pushed and handed off"
+      assert Summary.run_outcome([ended("handoff")], %Event{type: "verdict.recorded", payload: nil}) == "Pushed and handed off"
+    end
+
+    test "how a run ended, in a person's words" do
+      outcome = &Summary.run_outcome([ended(&1)], nil)
+
+      assert outcome.("handoff") == "Pushed and handed off"
+      assert outcome.("usage limit") == "Stopped at the usage limit"
+      assert outcome.("model API unreachable") == "Couldn't reach the model"
+      assert outcome.("waiting for CI") == "Ended to wait for CI"
+      assert outcome.("stopped: its ticket moved to Done") == "Stopped: its ticket moved to Done"
+      assert outcome.("failed (exit status 1)") == "Failed"
+      assert outcome.("token budget spent (12M tokens of a 10M limit)") == "Stopped: its token budget was spent"
+      assert outcome.("ended normally") == nil
+      assert outcome.(nil) == nil
+    end
+  end
+
   describe "bounds" do
     test "agent-supplied strings appear only in the detail, one line, cut at 200 characters with an ellipsis" do
       for {type, payload} <- [
