@@ -196,6 +196,12 @@ private struct StepRow: View {
     let unfolded: Bool
     let toggle: () -> Void
 
+    /// A step's lines start under its name: past the chevron, the mark and the gaps between them.
+    static let linesLeading: CGFloat = {
+        let gaps: CGFloat = 2 * DesignTokens.Space.s2
+        return 12 + StepMark.size + gaps
+    }()
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             CollapsibleHead(
@@ -207,7 +213,7 @@ private struct StepRow: View {
             }
             if unfolded {
                 StepLines(step: step, transcripts: transcripts)
-                    .padding(.leading, 12 + DesignTokens.Space.s2 + StepMark.size + DesignTokens.Space.s2)
+                    .padding(.leading, Self.linesLeading)
                     .padding(.top, DesignTokens.Space.s1)
                     .padding(.bottom, DesignTokens.Space.s2)
                     .transition(.opacity)
@@ -249,7 +255,7 @@ private struct StepHeaderLabel: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             Text(step.state.word)
                 .font(DesignTokens.TypeStyle.secondary.font.weight(.medium))
-                .foregroundStyle(step.state == .done || step.state == .skipped ? AnyShapeStyle(.secondary) : AnyShapeStyle(step.state.status.text))
+                .foregroundStyle(stateStyle)
                 .lineLimit(1)
                 .fixedSize()
                 .frame(minWidth: Self.stateColumn, alignment: .trailing)
@@ -260,6 +266,14 @@ private struct StepHeaderLabel: View {
                 .lineLimit(1)
                 .fixedSize()
                 .frame(minWidth: Self.durationColumn, alignment: .trailing)
+        }
+    }
+
+    /// A finished or skipped step's state reads quietly; any other in its status's colour.
+    private var stateStyle: AnyShapeStyle {
+        switch step.state {
+        case .done, .skipped: AnyShapeStyle(.secondary)
+        default: AnyShapeStyle(step.state.status.text)
         }
     }
 

@@ -523,17 +523,17 @@ struct TimelineEntryRow: View {
         .background(alignment: .topLeading) {
             if connects {
                 TimelineRuleLine()
-                    .padding(.leading, TimelineSection.timeColumn + DesignTokens.Space.s2 + TimelineSection.markColumn / 2 - TimelineRuleLine.width / 2)
-                    .padding(.top, DesignTokens.Space.s1 + TimelineMark.size)
+                    .padding(.leading, Self.ruleLeading)
+                    .padding(.top, Self.ruleTop)
                     // Through the gap to the next entry's mark.
-                    .padding(.bottom, -(DesignTokens.Space.s1 * 2))
+                    .padding(.bottom, Self.ruleBottom)
             }
         }
         .background {
             if entry.isHighlighted {
                 RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
                     .fill(DesignTokens.Status.problem.badgeFill.opacity(Self.highlightOpacity))
-                    .padding(EdgeInsets(top: -DesignTokens.Space.s1, leading: -DesignTokens.Space.s2, bottom: -DesignTokens.Space.s1, trailing: -DesignTokens.Space.s2))
+                    .padding(Self.highlightInsets)
             }
         }
         .modifier(RowFace(state: DesignTokens.Interaction(hovered: hovered, selected: selected), reduceMotion: reduceMotion))
@@ -541,13 +541,33 @@ struct TimelineEntryRow: View {
         .onHover { hovered = $0 }
         .onTapGesture(perform: select)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel([ticket?.spoken, entry.accessibilityLabel(time: time), entry.finding?.accessibilityLabel].compactMap { $0 }.joined(separator: ", "))
+        .accessibilityLabel(spokenLabel)
         .accessibilityHint(ticket?.hint ?? "")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { select() }
     }
 
     static let durationHelp = "How long the pause lasted"
+
+    /// What VoiceOver reads: the ticket's chip, the entry, and its finding.
+    private var spokenLabel: String {
+        let parts: [String?] = [ticket?.spoken, entry.accessibilityLabel(time: time), entry.finding?.accessibilityLabel]
+        return parts.compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// The rule line's place: under the mark's middle, from the mark's bottom through the gap to the next entry.
+    static let ruleLeading: CGFloat = {
+        let markMiddle: CGFloat = TimelineSection.markColumn / 2
+        let lineMiddle: CGFloat = TimelineRuleLine.width / 2
+        let markStart: CGFloat = TimelineSection.timeColumn + DesignTokens.Space.s2
+        return markStart + markMiddle - lineMiddle
+    }()
+    static let ruleTop: CGFloat = DesignTokens.Space.s1 + TimelineMark.size
+    static let ruleBottom: CGFloat = -2 * DesignTokens.Space.s1
+    /// The send-back's tint reaches a little past the row.
+    static let highlightInsets = EdgeInsets(
+        top: -DesignTokens.Space.s1, leading: -DesignTokens.Space.s2, bottom: -DesignTokens.Space.s1, trailing: -DesignTokens.Space.s2
+    )
     /// How far the time and the words sit below the mark's top, so their first line meets the mark's middle.
     static let textTop: CGFloat = 4
     /// The send-back's tint behind the row (the problem tint, a little lighter than a badge's).
@@ -915,8 +935,8 @@ private struct TimelineEntering: ViewModifier {
 /// row doesn't open the gate (TP-1480).
 extension TimelineEntryRow: Equatable {
     nonisolated static func == (lhs: TimelineEntryRow, rhs: TimelineEntryRow) -> Bool {
-        lhs.entry == rhs.entry && lhs.time == rhs.time && lhs.selected == rhs.selected && lhs.ticket == rhs.ticket
-            && lhs.connects == rhs.connects
+        guard lhs.entry == rhs.entry, lhs.time == rhs.time, lhs.selected == rhs.selected else { return false }
+        return lhs.ticket == rhs.ticket && lhs.connects == rhs.connects
     }
 }
 
