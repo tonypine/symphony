@@ -544,7 +544,8 @@ public enum ModelName {
     static let upper: [String: String] = ["gpt": "GPT", "glm": "GLM", "ai": "AI"]
 
     public static func display(_ id: String) -> String {
-        var parts = (id.split(separator: "/").last.map(String.init) ?? id).split(separator: "-").map(String.init)
+        let name: String = id.split(separator: "/").last.map(String.init) ?? id
+        var parts: [String] = name.split(separator: "-").map { String($0) }
         if let last = parts.last, last.count == 8, last.allSatisfy(\.isNumber) { parts.removeLast() }
         var words: [String] = []
         var version: [String] = []

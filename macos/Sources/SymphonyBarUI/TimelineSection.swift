@@ -692,7 +692,7 @@ struct FindingShot: View {
                 if let images {
                     FindingThumbnail(shot: shot, images: images)
                 } else {
-                    placeholder(nil)
+                    Self.placeholder(nil)
                 }
             }
             .frame(width: Self.size.width, height: Self.size.height)
