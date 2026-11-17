@@ -445,7 +445,7 @@ public struct TicketsPayload: Equatable {
         guard let identifier = entry["identifier"] as? String else { return nil }
         var values: [String: TicketValue] = [:]
         for (name, raw) in entry where name != "issue_id" {
-            if let value = value(raw, type: types[name] ?? TicketColumn.catalog.first { $0.name == name }?.type) {
+            if let value = value(raw, type: types[name] ?? catalogTypes[name]) {
                 values[name] = value
             }
         }
@@ -467,11 +467,22 @@ public struct TicketsPayload: Equatable {
         }
     }
 
+    /// A time with or without its fractional seconds. The formatters are made once: making one per value cost most of
+    /// a 1,000-row read's decode (TP-1541).
     static func time(_ text: String) -> Date? {
-        let fractional = ISO8601DateFormatter()
-        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return fractional.date(from: text) ?? ISO8601DateFormatter().date(from: text)
+        text.contains(".") ? fractionalFormatter.date(from: text) : wholeSecondsFormatter.date(from: text)
     }
+
+    private static let fractionalFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let wholeSecondsFormatter = ISO8601DateFormatter()
+
+    /// Each catalog column's type by its name, for a column the read didn't describe.
+    private static let catalogTypes = Dictionary(TicketColumn.catalog.map { ($0.name, $0.type) }, uniquingKeysWith: { first, _ in first })
 }
 
 /// The values each filter's menu offers: the situation kinds, the priorities and the time windows always, and the
