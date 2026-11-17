@@ -481,6 +481,9 @@ struct TicketsView: View {
 
 /// The filter bar: a chip per filter set, + Filter, the row count and Columns, in one bar that wraps on a laptop.
 struct TicketsFilterBar: View {
+    /// Why the Ticket column can't be hidden.
+    static let identifierStays = "Every table shows the ticket."
+
     @Binding var query: TicketsQuery
     let catalog: [TicketColumn]
     let values: TicketFilterValues
@@ -500,21 +503,16 @@ struct TicketsFilterBar: View {
                     TicketFilterChipView(chip: chip, values: values.values(chip.filter, query: query),
                                          toggle: { query.toggle(chip.filter, $0) }, remove: { query.remove(chip.filter) })
                 }
-                TicketsBarMenu(title: "Filter", symbol: "plus", help: "Add a filter") {
-                    ForEach(TicketFilter.allCases) { filter in
-                        Menu(filter.title) {
-                            ForEach(values.values(filter, query: query), id: \.self) { value in
-                                Toggle(filter.word(value), isOn: Binding(
-                                    get: { query.holds(filter, value) },
-                                    set: { _ in query.toggle(filter, value) }
-                                ))
-                            }
-                        }
+                MenuButton("Filter", glyph: "plus", size: .small, quiet: true, help: "Add a filter") {
+                    var items = TicketFilter.allCases.map { filter in
+                        MenuItem.submenu(filter.title, items: values.values(filter, query: query).map { value in
+                            MenuItem(filter.word(value), checked: query.holds(filter, value)) { query.toggle(filter, value) }
+                        })
                     }
                     if !query.chips.isEmpty {
-                        Divider()
-                        Button("Clear Filters") { query.chips = [] }
+                        items += [.separator, MenuItem("Clear Filters") { query.chips = [] }]
                     }
+                    return items
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -523,13 +521,14 @@ struct TicketsFilterBar: View {
                 .foregroundStyle(.secondary)
                 .frame(height: DesignTokens.Control.small.height)
                 .fixedSize()
-            TicketsBarMenu(title: "Columns", symbol: "tablecells", help: "Show or hide columns") {
-                ForEach(catalog) { column in
-                    Toggle(column.title, isOn: Binding(
-                        get: { query.columns.contains(column.name) },
-                        set: { query.setColumn(column.name, shown: $0, catalog: catalog) }
-                    ))
-                    .disabled(column.name == "identifier")
+            MenuButton("Columns", glyph: "tablecells", size: .small, alignment: .trailing, help: "Show or hide columns") {
+                catalog.map { column in
+                    let shown = query.columns.contains(column.name)
+                    return MenuItem(
+                        column.title, checked: shown, disabledReason: column.name == "identifier" ? TicketsFilterBar.identifierStays : nil
+                    ) {
+                        query.setColumn(column.name, shown: !shown, catalog: catalog)
+                    }
                 }
             }
             Button { drawerShown.toggle() } label: {
@@ -555,6 +554,8 @@ struct TicketViewActions {
     var working = false
     /// What went wrong with Update View or Delete…, shown under the bar.
     var error: String?
+    /// Why the menu's moves wait while a view call is on its way.
+    static let workingReason = "Wait for the last change to the view to finish."
     var dismissError: () -> Void = {}
 
     /// Runs the move `move` of the menu.
@@ -568,97 +569,32 @@ struct TicketViewActions {
     }
 }
 
-/// The views menu: the view in force on its face, with a dot when the bar differs from it; "All open" and the saved
-/// views to pick, then Save View…, Update View, Rename… and Delete…. Offscreen, where a menu draws nothing, its face.
+/// The views menu (C54 on the pop-up's face): "View" and the view in force, with the accent dot when the bar differs
+/// from it; "All open" and the saved views to pick, the one in force ticked, then Save View…, Update View, Rename… and
+/// Delete…, each off with why while it can't act. `drawnOpen` draws it open, still, for a snapshot.
 struct TicketViewsMenuButton: View {
     let menu: TicketViewsMenu
     var actions = TicketViewActions()
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+    var drawnOpen = false
 
     var body: some View {
-        if offscreenSnapshot {
-            ButtonFace(label: TicketViewsMenuLabel(menu: menu), kind: .secondary, size: .small, state: .rest, reduceMotion: true)
-        } else {
-            Menu {
-                ForEach(menu.items) { item in
-                    switch item {
-                    case let .pick(view, title, current):
-                        Toggle(title, isOn: Binding(get: { current }, set: { _ in actions.pick(view) }))
-                    case .divider:
-                        Divider()
-                    case let .move(move, enabled):
-                        Button(move.title) { actions.perform(move) }
-                            .disabled(!enabled || actions.working)
-                            .help(enabled ? "" : menu.disabledReason(move))
-                    }
-                }
-            } label: {
-                TicketViewsMenuLabel(menu: menu)
-            }
-            .menuStyle(.button)
-            .directorButton(.secondary, size: .small)
-            .fixedSize()
-            .help(menu.help)
-            .accessibilityLabel(menu.accessibilityLabel)
-        }
-    }
-}
-
-/// The menu button's face: a stack symbol, the view's name and, when the bar differs from it, a dot.
-struct TicketViewsMenuLabel: View {
-    let menu: TicketViewsMenu
-
-    var body: some View {
-        HStack(spacing: DesignTokens.Space.s1) {
-            Image(systemName: "rectangle.stack")
-            Text(menu.title).lineLimit(1)
-            if menu.changed {
-                Circle()
-                    .fill(Color.accentColor)
-                    .frame(width: 6, height: 6)
-                    .accessibilityHidden(true)
-            }
-        }
-    }
-}
-
-/// The views menu drawn open, as the menu lists it: for the snapshots, where a menu draws nothing offscreen.
-struct TicketViewsMenuPanel: View {
-    let menu: TicketViewsMenu
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            TicketViewsMenuButton(menu: menu)
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(menu.items) { item in
-                    switch item {
-                    case let .pick(_, title, current):
-                        row(title, checked: current, enabled: true)
-                    case .divider:
-                        Divider().padding(.vertical, DesignTokens.Space.s1)
-                    case let .move(move, enabled):
-                        row(move.title, checked: false, enabled: enabled)
+        MenuButton(
+            popUp: "View", value: menu.title, marked: menu.changed, size: .small, help: menu.help,
+            accessibilityLabel: menu.accessibilityLabel, drawnOpen: drawnOpen
+        ) {
+            menu.items.map { item in
+                switch item {
+                case let .pick(view, title, current):
+                    MenuItem(title, checked: current) { actions.pick(view) }
+                case .divider:
+                    .separator
+                case let .move(move, enabled):
+                    MenuItem(move.title, disabledReason: enabled ? (actions.working ? TicketViewActions.workingReason : nil) : menu.disabledReason(move)) {
+                        actions.perform(move)
                     }
                 }
             }
-            .padding(DesignTokens.Space.s1)
-            .frame(width: 240, alignment: .leading)
-            .background(DesignTokens.Surface.raised.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row))
-            .overlay(RoundedRectangle(cornerRadius: DesignTokens.Radius.row).strokeBorder(.separator))
-            .shadow(color: .black.opacity(0.18), radius: 10, y: 4)
         }
-    }
-
-    private func row(_ title: String, checked: Bool, enabled: Bool) -> some View {
-        HStack(spacing: DesignTokens.Space.s1) {
-            Image(systemName: "checkmark").opacity(checked ? 1 : 0).frame(width: 14)
-            Text(title)
-            Spacer(minLength: 0)
-        }
-        .font(DesignTokens.TypeStyle.body.font)
-        .foregroundStyle(enabled ? AnyShapeStyle(.primary) : AnyShapeStyle(.tertiary))
-        .padding(.horizontal, DesignTokens.Space.s2)
-        .padding(.vertical, 3)
     }
 }
 
@@ -794,9 +730,9 @@ struct TicketFilterChipView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            TicketsBarMenu(title: chip.text, help: "Change the \(chip.filter.title) filter", kind: .secondary) {
-                ForEach(values, id: \.self) { value in
-                    Toggle(chip.filter.word(value), isOn: Binding(get: { chip.values.contains(value) }, set: { _ in toggle(value) }))
+            MenuButton(chip.text, size: .small, help: "Change the \(chip.filter.title) filter") {
+                values.map { value in
+                    MenuItem(chip.filter.word(value), checked: chip.values.contains(value)) { toggle(value) }
                 }
             }
             Button(action: remove) { Label(chip.removeLabel, systemImage: "xmark") }
@@ -806,33 +742,6 @@ struct TicketFilterChipView: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(chip.text)
-    }
-}
-
-/// A small menu button of the bar; offscreen, where a menu draws nothing, its face.
-struct TicketsBarMenu<Items: View>: View {
-    let title: String
-    var symbol: String?
-    let help: String
-    var kind: ButtonKind = .quiet
-    @ViewBuilder var items: Items
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
-
-    var body: some View {
-        if offscreenSnapshot {
-            ButtonFace(label: label, kind: kind, size: .small, state: .rest, reduceMotion: true)
-        } else {
-            Menu { items } label: { label }
-                .menuStyle(.button)
-                .directorButton(kind, size: .small)
-                .fixedSize()
-                .help(help)
-                .accessibilityLabel(title)
-        }
-    }
-
-    @ViewBuilder private var label: some View {
-        if let symbol { Label(title, systemImage: symbol) } else { Text(title) }
     }
 }
 
