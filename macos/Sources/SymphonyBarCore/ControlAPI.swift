@@ -8,6 +8,9 @@ public enum ControlAction: Equatable {
     /// An update's pause: a `build` reason waiting on the version the update installs.
     case pauseForUpdate(version: String)
     case resume
+    /// Lifts only the update's `build` pause for `version`, the one `pauseForUpdate` set: any other reason (a pause
+    /// someone set while the update waited) stays, and dispatch stays paused while one remains.
+    case resumeUpdate(version: String)
     /// Try Now: the Director says a usage limit is back, so Symphony checks the hold waiting on `condition`
     /// (`usage_limit:anthropic:all`) at once, with one held run as the canary, instead of at its recorded reset.
     case tryNow(condition: String)
@@ -127,7 +130,7 @@ public enum ControlAction: Equatable {
         switch self {
         case .pause, .pauseWithReason, .pauseForUpdate:
             return "api/v1/control/pause"
-        case .resume, .tryNow:
+        case .resume, .resumeUpdate, .tryNow:
             return "api/v1/control/resume"
         case .force, .stopForcing:
             return "api/v1/control/force"
@@ -196,7 +199,7 @@ public enum ControlAction: Equatable {
              let .move(identifier, _, _),
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
-        case .pause, .pauseWithReason, .pauseForUpdate, .resume, .tryNow, .force, .stopForcing, .stop, .start, .note, .blocker,
+        case .pause, .pauseWithReason, .pauseForUpdate, .resume, .resumeUpdate, .tryNow, .force, .stopForcing, .stop, .start, .note, .blocker,
              .priority, .label, .decision, .pauseRepository, .resumeRepository, .looked, .saveView, .deleteView:
             return nil
         }
@@ -213,6 +216,8 @@ public enum ControlAction: Equatable {
             return ["kind": "build", "version": version, "reason": "updating to v\(version)"]
         case .resume, .resumeRepository, .deleteView:
             return [:]
+        case let .resumeUpdate(version):
+            return ["kind": "build", "version": version]
         case let .saveView(draft):
             return draft.body
         case let .tryNow(condition):
@@ -268,7 +273,7 @@ public enum ControlAction: Equatable {
         switch self {
         case .pause, .pauseWithReason, .pauseForUpdate:
             return "Couldn't pause Symphony"
-        case .resume:
+        case .resume, .resumeUpdate:
             return "Couldn't resume Symphony"
         case .tryNow:
             return "Couldn't check the usage limit"
