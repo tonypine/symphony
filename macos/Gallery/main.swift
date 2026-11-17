@@ -10,7 +10,7 @@ import SymphonyBarCore
 import SymphonyBarUI
 import UniformTypeIdentifiers
 
-let here = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+let here = galleryFolder
 // The fixture's clock, in UTC: its earlier call, at 05:48 that day, reads as today's.
 NSTimeZone.default = TimeZone(identifier: "UTC")!
 let now = ISO8601DateFormatter().date(from: "2026-10-07T14:20:00Z")!
