@@ -101,4 +101,49 @@ final class TextInputsTests: XCTestCase {
         watcher.stop()
         XCTAssertEqual(EscapeWatcher.escapeKeyCode, 53)
     }
+
+    /// The monitor sees every key of the app: an Escape not in this field's window, or with the keyboard in another
+    /// field, is left to whoever owns it (a sheet's own search field, its Cancel).
+    func testEscapeIsTakenOnlyInTheFieldThatHasTheKeyboard() {
+        let window = NSObject(), sheet = NSObject()
+        let field = CGRect(x: 20, y: 400, width: 240, height: 28)
+        let editorInField = CGRect(x: 44, y: 404, width: 180, height: 20)
+        let editorElsewhere = CGRect(x: 20, y: 100, width: 240, height: 20)
+        XCTAssertTrue(EscapeWatcher.belongs(eventWindow: window, fieldWindow: window, editorFrame: editorInField, fieldFrame: field))
+        XCTAssertFalse(EscapeWatcher.belongs(eventWindow: sheet, fieldWindow: window, editorFrame: editorInField, fieldFrame: field),
+                       "an Escape in a sheet over the window")
+        XCTAssertFalse(EscapeWatcher.belongs(eventWindow: nil, fieldWindow: window, editorFrame: editorInField, fieldFrame: field))
+        XCTAssertFalse(EscapeWatcher.belongs(eventWindow: window, fieldWindow: nil, editorFrame: editorInField, fieldFrame: field),
+                       "a field not in a window yet")
+        XCTAssertFalse(EscapeWatcher.belongs(eventWindow: window, fieldWindow: window, editorFrame: editorElsewhere, fieldFrame: field),
+                       "the keyboard is in another field of the window")
+        XCTAssertFalse(EscapeWatcher.belongs(eventWindow: window, fieldWindow: window, editorFrame: nil, fieldFrame: field),
+                       "nothing is typing")
+        XCTAssertFalse(EscapeWatcher.belongs(eventWindow: window, fieldWindow: window, editorFrame: editorInField, fieldFrame: .null))
+
+        XCTAssertTrue(EscapeWatcher.isPlainEscape(keyCode: 53, modifiers: []))
+        XCTAssertTrue(EscapeWatcher.isPlainEscape(keyCode: 53, modifiers: .capsLock))
+        XCTAssertFalse(EscapeWatcher.isPlainEscape(keyCode: 53, modifiers: .command))
+        XCTAssertFalse(EscapeWatcher.isPlainEscape(keyCode: 36, modifiers: []))
+    }
+
+    /// An Escape from a window that is not the field's (here none) reaches `take` and is not taken.
+    func testAnEscapeFromAnotherWindowIsNotTaken() throws {
+        let watcher = EscapeWatcher()
+        var performed = 0
+        watcher.perform = { performed += 1; return true }
+        let anchor = NSView(frame: CGRect(x: 0, y: 0, width: 240, height: 28))
+        watcher.anchor = anchor
+        let escape = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            characters: "\u{1b}", charactersIgnoringModifiers: "\u{1b}", isARepeat: false, keyCode: EscapeWatcher.escapeKeyCode
+        ))
+        XCTAssertFalse(watcher.take(escape))
+        let other = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            characters: "a", charactersIgnoringModifiers: "a", isARepeat: false, keyCode: 0
+        ))
+        XCTAssertFalse(watcher.take(other))
+        XCTAssertEqual(performed, 0)
+    }
 }

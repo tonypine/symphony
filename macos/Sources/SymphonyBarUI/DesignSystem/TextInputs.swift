@@ -113,11 +113,16 @@ struct FieldFootnote: View {
 }
 
 /// Watches Escape while a field has the keyboard, before the window's key equivalents see it, so a sheet's Cancel
-/// does not take the key that clears the field. A key that composes text in an input method is left to it.
+/// does not take the key that clears the field. The monitor sees every key of the app, so it takes Escape only when the
+/// key belongs to this field: pressed in the field's own window, whose keyboard is the text editor inside the field.
+/// An Escape in a sheet over the window, or in another field, is left alone, and so is a key that composes text in an
+/// input method.
 @MainActor
 final class EscapeWatcher {
     /// What Escape does; true when it took the key.
     var perform: () -> Bool = { false }
+    /// The view drawn under the field (`EscapeAnchor`): its window and its frame say where the field is.
+    weak var anchor: NSView?
     private var monitor: Any?
 
     nonisolated static let escapeKeyCode: UInt16 = 53
@@ -132,18 +137,52 @@ final class EscapeWatcher {
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: handler)
     }
 
-    /// Escape alone, not one an input method is composing with: what `perform` says.
-    private func take(_ event: NSEvent) -> Bool {
-        guard event.keyCode == Self.escapeKeyCode,
-              event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock).isEmpty
-        else { return false }
-        if let editor = event.window?.firstResponder as? NSTextView, editor.hasMarkedText() { return false }
+    /// Escape alone, in this field, not one an input method is composing with: what `perform` says.
+    func take(_ event: NSEvent) -> Bool {
+        guard Self.isPlainEscape(keyCode: event.keyCode, modifiers: event.modifierFlags) else { return false }
+        let fieldWindow = anchor?.window
+        let editor = fieldWindow?.firstResponder as? NSTextView
+        guard Self.belongs(
+            eventWindow: event.window, fieldWindow: fieldWindow,
+            editorFrame: editor.map { $0.convert($0.bounds, to: nil) },
+            fieldFrame: anchor.map { $0.convert($0.bounds, to: nil) } ?? .null
+        ) else { return false }
+        if let editor, editor.hasMarkedText() { return false }
         return perform()
+    }
+
+    /// Escape with no modifier but Caps Lock.
+    nonisolated static func isPlainEscape(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> Bool {
+        keyCode == escapeKeyCode && modifiers.intersection(.deviceIndependentFlagsMask).subtracting(.capsLock).isEmpty
+    }
+
+    /// The key is this field's: pressed in the field's window (not a sheet or another window over it), where the
+    /// keyboard is a text editor that sits inside the field's frame (not another field of the same window).
+    nonisolated static func belongs(
+        eventWindow: AnyObject?, fieldWindow: AnyObject?, editorFrame: CGRect?, fieldFrame: CGRect
+    ) -> Bool {
+        guard let fieldWindow, eventWindow === fieldWindow, let editorFrame, !fieldFrame.isNull else { return false }
+        return fieldFrame.intersects(editorFrame)
     }
 
     func stop() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+    }
+}
+
+/// An empty view under a search field that hands the watcher the field's place in its window.
+struct EscapeAnchor: NSViewRepresentable {
+    let watcher: EscapeWatcher
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        watcher.anchor = view
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        watcher.anchor = view
     }
 }
 
@@ -358,6 +397,7 @@ public struct SearchField: View {
         .padding(.trailing, size.padding * DesignTokens.Field.searchTrailingScale)
         .frame(height: size.height)
         .modifier(FieldSurface(shape: Capsule(), kind: .search, state: state, reduceMotion: reduceMotion))
+        .background { if !still { EscapeAnchor(watcher: escape) } }
         .contentShape(Capsule())
         .onTapGesture { if !still { focusBinding.wrappedValue = true } }
         .onHover { hovering = $0 }
