@@ -12,7 +12,9 @@ defmodule SymphonyElixir.InstructionsHold do
   build that includes the base branch's head: a `:build` reason on its pause
   (`waits_on: %{commit: sha}`), set by the rule "Instructions update hold", that reads "Holding for
   the v0.0.1.839 build: the instructions on main need it". The `skip-update-hold` label does not
-  opt out.
+  opt out. The release gate's fix ticket does (`SymphonyElixir.ReleaseGate.fix_ticket?/3`): the build
+  it would wait for cannot publish until its own fix lands, so it is never held, and a reason it
+  already holds is cleared.
 
   `resolve/4`, in the poll task, compares the running build's commit with the base branch on GitHub
   (`SymphonyElixir.GitHub.PullRequest.compare_to_branch/4`) and brings each polled ticket's pause in
@@ -27,7 +29,7 @@ defmodule SymphonyElixir.InstructionsHold do
 
   require Logger
 
-  alias SymphonyElixir.{BuildInfo, Config, Pauses, ReleaseBuild}
+  alias SymphonyElixir.{BuildInfo, Config, Pauses, ReleaseBuild, ReleaseGate}
   alias SymphonyElixir.GitHub.{PullRequest, Repo}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Repo.Status, as: RepoStatus
@@ -106,13 +108,17 @@ defmodule SymphonyElixir.InstructionsHold do
   the build is behind, each ticket holds one reason waiting on the base branch's head (one it holds
   already stays while the build still lacks its commit); once the build is not behind, every such
   reason is cleared. A failed compare changes nothing. Returns what `check/2` said. `opts`: those of
-  `check/2`.
+  `check/2`, and `:fix_ticket?` (`repo_key, identifier -> boolean`, default
+  `SymphonyElixir.ReleaseGate.fix_ticket?/2`): the release gate's fix ticket is never held.
   """
   @spec resolve([Issue.t()], String.t() | nil, keyword()) :: {:ok, behind() | nil} | {:error, term()}
   def resolve(issues, repo_key, opts \\ []) do
+    fix_ticket? = Keyword.get(opts, :fix_ticket?, &ReleaseGate.fix_ticket?/2)
+
     tickets =
       for %Issue{id: issue_id} = issue when is_binary(issue_id) <- issues,
-          do: {issue.repo_key || repo_key, issue}
+          ticket_repo_key = issue.repo_key || repo_key,
+          do: {ticket_repo_key, issue, fix_ticket?.(ticket_repo_key, issue.identifier)}
 
     if tickets == [] do
       {:ok, nil}
@@ -121,8 +127,9 @@ defmodule SymphonyElixir.InstructionsHold do
     end
   end
 
+  # The release gate's fix ticket is synced as on a current build: never held.
   defp sync_tickets({:ok, behind} = result, tickets, _repo_key) do
-    Enum.each(tickets, fn {ticket_repo_key, issue} -> sync(ticket_repo_key, issue, behind) end)
+    Enum.each(tickets, fn {ticket_repo_key, issue, fix_ticket?} -> sync(ticket_repo_key, issue, if(fix_ticket?, do: nil, else: behind)) end)
     result
   end
 
@@ -198,19 +205,22 @@ defmodule SymphonyElixir.InstructionsHold do
 
   @doc """
   A reason's line as a person reads it, naming the build it waits on once its release run is known
-  (`SymphonyElixir.ReleaseBuild.get/2`): "Holding for the v0.0.1.839 build: the instructions on
-  main need it", else "Holding for the build of 1a2b3c4: the instructions on main need it".
-  `opts`: those of `ReleaseBuild.get/2`.
+  (`SymphonyElixir.ReleaseBuild.awaited/2`): "Holding for the v0.0.1.839 build: the instructions on
+  main need it", else "Holding for the build of 1a2b3c4: the instructions on main need it". A
+  commit whose own build failed its release gate, or was replaced, is waited for in the later build
+  that carries it, which is named once known ("Holding for a later build: ..." until then): never
+  a build that will not publish. `opts`: those of `ReleaseBuild.awaited/2`.
   """
   @spec line(String.t(), keyword()) :: String.t()
   def line(commit, opts \\ []) when is_binary(commit) do
     build =
-      case ReleaseBuild.get(commit, opts) do
-        %{number: number} when is_integer(number) -> "v#{BuildInfo.release_version(number)} build"
-        _unknown -> "build of #{BuildInfo.short_sha(commit)}"
+      case ReleaseBuild.awaited(commit, opts) do
+        {:build, %{number: number}} when is_integer(number) -> "the v#{BuildInfo.release_version(number)} build"
+        {:next, _failed_or_replaced} -> "a later build"
+        _unknown -> "the build of #{BuildInfo.short_sha(commit)}"
       end
 
-    "Holding for the #{build}: the instructions on #{@default_branch} need it"
+    "Holding for #{build}: the instructions on #{@default_branch} need it"
   end
 
   @doc "The lines of `reasons` (`reasons/2`), each as `line/2` reads it now."
