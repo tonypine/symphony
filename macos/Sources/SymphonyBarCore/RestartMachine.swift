@@ -162,7 +162,7 @@ public struct RestartMachine: Equatable {
                 return []
             }
             enter(.resuming, now: now)
-            return [.send(.resume)]
+            return [.send(resumeAction)]
 
         case (.stopping, .exited):
             if purpose.isUpdate {
@@ -186,7 +186,7 @@ public struct RestartMachine: Equatable {
                     return []
                 }
                 enter(.resuming, now: now)
-                return [.send(.resume)]
+                return [.send(resumeAction)]
             }
             guard now.timeIntervalSince(phaseStart) >= Self.answerTimeout else { return [] }
             let seconds = Int(Self.answerTimeout)
@@ -199,7 +199,7 @@ public struct RestartMachine: Equatable {
         case let (.starting, .exited(exit)), let (.waitingForAnswer, .exited(exit)):
             return fail(Self.failedTitle, "Symphony \(exit.summary) before it answered. See \(logPath).\(pauseNote)", now: now)
 
-        case let (.resuming, .controlFinished(.resume, result)):
+        case let (.resuming, .controlFinished(action, result)) where action == resumeAction:
             enter(.idle, now: now)
             if case let .failed(message) = result { error = message }
             return []
@@ -298,7 +298,7 @@ public struct RestartMachine: Equatable {
             return []
         }
         enter(.resuming, now: now)
-        return [.send(.resume)]
+        return [.send(resumeAction)]
     }
 
     private mutating func fail(_ title: String, _ message: String, now: Date) -> [Effect] {
@@ -316,6 +316,12 @@ public struct RestartMachine: Equatable {
     /// The pause the restart sends: an update's is a `build` reason carrying the version it installs.
     public var pauseAction: ControlAction {
         updateVersion.map { .pauseForUpdate(version: $0) } ?? .pause
+    }
+
+    /// The resume that lifts the restart's own pause: an update's lifts only its `build` reason, so a pause someone else
+    /// set while it waited stays.
+    public var resumeAction: ControlAction {
+        updateVersion.map { .resumeUpdate(version: $0) } ?? .resume
     }
 
     /// Before Symphony is stopped, a failed restart or update leaves it running.

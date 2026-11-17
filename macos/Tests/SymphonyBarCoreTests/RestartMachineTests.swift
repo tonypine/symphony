@@ -681,6 +681,23 @@ final class RestartMachineTests: XCTestCase {
         }
     }
 
+    /// The update lifts only its own pause when it gives up: a pause someone set while it waited stays (TP-1529).
+    func testAnUpdatesResumeLiftsOnlyItsOwnPause() {
+        var machine = RestartMachine()
+        _ = machine.begin(alreadyPaused: false, purpose: .automaticUpdate, updatingTo: "0.0.1.42", runsTimeout: runsTimeout, logPath: log, now: began)
+        let resume = ControlAction.resumeUpdate(version: "0.0.1.42")
+        XCTAssertEqual(machine.resumeAction, resume)
+        _ = machine.handle(.controlFinished(machine.pauseAction, .done), now: began)
+        _ = machine.handle(.polled(pausedPoll(running: 1)), now: began)
+
+        XCTAssertEqual(machine.handle(.polled(pausedPoll(running: 1)), now: began.addingTimeInterval(runsTimeout)), [.send(resume)])
+        XCTAssertEqual(machine.handle(.controlFinished(.resume, .done), now: began), [], "only the resume it sent answers it")
+        XCTAssertTrue(machine.isRestarting)
+        XCTAssertEqual(machine.handle(.controlFinished(resume, .done), now: began), [])
+        XCTAssertFalse(machine.isRestarting)
+        XCTAssertEqual(RestartMachine().resumeAction, .resume, "a restart's pause is the menu's")
+    }
+
     func testAnUpdatesFailedPauseStillSaysSymphonyKeepsRunning() {
         var machine = RestartMachine()
         _ = machine.begin(alreadyPaused: false, purpose: .update, updatingTo: "0.0.1.42", runsTimeout: runsTimeout, logPath: log, now: began)
