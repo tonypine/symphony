@@ -412,18 +412,12 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
   describe "the run kind a session records as" do
     test "is the runner's, else the run profile's, else the scope's, else an implementation run's", ctx do
       base = Keyword.delete(session(ctx), :run_kind)
+      # The run profile is the struct the runner passes, which has no Access.
+      profile = %SymphonyElixir.Config.Runs.Run{kind: :breakdown, harness: "claude", command: "claude", provider: "anthropic", model: "m"}
 
       for {opts, kind} <- [
             {[run_kind: :ci_fix], "ci_fix"},
-            {[
-               run_profile: %SymphonyElixir.Config.Runs.Run{
-                 kind: :breakdown,
-                 harness: "claude",
-                 command: "claude",
-                 provider: "anthropic",
-                 model: "m"
-               }
-             ], "breakdown"},
+            {[run_profile: profile], "breakdown"},
             {[tool_scope: :read_only], "code_review"},
             {[tool_scope: :qa], "qa"},
             {[], "implementation"}
