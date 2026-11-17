@@ -417,7 +417,8 @@ public struct SearchField: View {
                 .focused(focusBinding)
                 .onSubmit { onSubmit?() }
                 .accessibilityLabel(placeholder)
-                .accessibilityValue(hasQuery ? [text, matches.map(DesignTokens.Field.matches)].compactMap { $0 }.joined(separator: ", ") : "")
+                // The match count rides on the hint: the field's value stays the typed text, as any Mac text field reports it.
+                .accessibilityHint(hasQuery ? (matches.map(DesignTokens.Field.matches) ?? "") : "")
                 .accessibilityAddTraits(.isSearchField)
         }
     }
