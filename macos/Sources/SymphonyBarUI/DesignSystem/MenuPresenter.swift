@@ -27,19 +27,21 @@ public final class MenuPresenter {
     static let shadowRoom: CGFloat = 40
 
     /// Opens `items` from `view`'s control, lined up with its `alignment` edge, at least `minWidth` wide, with
-    /// `highlighted` lit (a pop-up's current choice), for `owner`, the control that opens it. `onClose` runs once when it
-    /// closes, before a pick's move. Nil when the view is in no window.
+    /// `highlighted` lit (a pop-up's current choice), for `owner`, the control that opens it. With `search` it is a
+    /// searchable list, whose typed letters go to its field. `onClose` runs once when it closes, before a pick's move.
+    /// Nil when the view is in no window.
     @discardableResult
     public static func open(
         _ items: [MenuItem], from view: NSView, alignment: MenuNavigation.Alignment = .leading,
-        minWidth: Double = DesignTokens.Menu.minWidth, highlighted: Int? = nil, label: String, owner: AnyObject? = nil,
-        onClose: @escaping () -> Void
+        minWidth: Double = DesignTokens.Menu.minWidth, highlighted: Int? = nil, search: MenuSearch? = nil, label: String,
+        owner: AnyObject? = nil, onClose: @escaping () -> Void
     ) -> MenuPresenter? {
         current?.session.close()
         guard let window = view.window, let screen = window.screen ?? NSScreen.main else { return nil }
         let anchor = window.convertToScreen(view.convert(view.bounds, to: nil))
         let presenter = MenuPresenter(
-            session: MenuSession(items: items, highlighted: highlighted), window: window, screen: screen.visibleFrame, minWidth: minWidth
+            session: MenuSession(items: items, highlighted: highlighted, search: search), window: window, screen: screen.visibleFrame,
+            minWidth: minWidth
         )
         presenter.owner = owner
         presenter.show(anchor: anchor, alignment: alignment, label: label, onClose: onClose)
@@ -169,7 +171,7 @@ public final class MenuPresenter {
                 session.close()
                 return true
             }
-            guard let key = Self.key(event) else { return true }
+            guard let key = Self.key(event, searching: session.search != nil) else { return true }
             return !session.handle(key)
         case .scrollWheel:
             if !inside(NSEvent.mouseLocation) { session.close() }
@@ -185,12 +187,23 @@ public final class MenuPresenter {
         panels.values.contains { $0.listFrame.contains(point) }
     }
 
-    /// The menu key a key press is, if any.
-    static func key(_ event: NSEvent) -> MenuKey? {
+    /// The menu key a key press is, if any. In a searchable list (`searching`) the letters are typed as they are, with
+    /// Shift, Space types a space and Delete takes a letter back.
+    static func key(_ event: NSEvent, searching: Bool = false) -> MenuKey? {
+        if searching, let key = searchKey(code: event.keyCode) { return key }
         if let key = key(code: event.keyCode) { return key }
-        guard let text = event.charactersIgnoringModifiers, let scalar = text.unicodeScalars.first,
+        guard let text = searching ? event.characters : event.charactersIgnoringModifiers, let scalar = text.unicodeScalars.first,
               !CharacterSet.controlCharacters.contains(scalar), scalar.value < 0xF700 else { return nil }
         return .text(text)
+    }
+
+    /// A searchable list's own keys: Space and Delete, which edit its query rather than pick.
+    static func searchKey(code: UInt16) -> MenuKey? {
+        switch code {
+        case 49: .text(" ")
+        case 51: .deleteBackward
+        default: nil
+        }
     }
 
     /// The arrows, Home, End, Page Up and Down, Return, Enter, Space and Escape.
@@ -222,9 +235,13 @@ final class MenuPanel: NSPanel {
         let room = MenuPresenter.shadowRoom
         let relay = MenuScrollRelay()
         let list = MenuSessionList(session: session, minWidth: minWidth, maxHeight: maxHeight) { relay.host?.scroll(to: $0) }
-        host = MenuHostingView(rootView: AnyView(list.padding(room)), session: session, label: label)
+        // A searchable list narrows under its field as the Director types: the panel keeps the full list's size, the
+        // list stays at its top, and nothing resizes the panel under it.
+        let root = session.search == nil ? AnyView(list.padding(room)) : AnyView(list.padding(room).frame(maxHeight: .infinity, alignment: .top))
+        host = MenuHostingView(rootView: root, session: session, label: label)
         relay.host = host
         let fitting = host.fittingSize
+        if session.search != nil { host.sizingOptions = [] }
         listSize = CGSize(width: fitting.width - 2 * room, height: fitting.height - 2 * room)
         super.init(contentRect: CGRect(origin: .zero, size: fitting), styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
         isOpaque = false
@@ -268,6 +285,13 @@ final class MenuHostingView: NSHostingView<AnyView> {
         self.session = session
         self.label = label
         super.init(rootView: rootView)
+        session.onItems = { [weak self] in self?.itemsChanged() }
+    }
+
+    /// A searchable list's items changed: VoiceOver finds the ones shown now.
+    private func itemsChanged() {
+        elements = makeElements()
+        NSAccessibility.post(element: self, notification: .layoutChanged)
     }
 
     @available(*, unavailable)
@@ -324,11 +348,15 @@ final class MenuHostingView: NSHostingView<AnyView> {
         let menu = DesignTokens.Menu.self
         let room = MenuPresenter.shadowRoom
         let tops = MenuNavigation.tops(of: session.lines)
+        // A searchable list's choices start under its field, inside its own padding.
+        let searching = session.search != nil
+        let lead = searching ? DesignTokens.SearchableList.choicesTop - menu.padding : 0
+        let inset = searching ? DesignTokens.SearchableList.padding : menu.padding
         for element in elements {
-            let fromTop = room + tops[element.index] - scrollOffset
+            let fromTop = room + lead + tops[element.index] - scrollOffset
             let y = isFlipped ? fromTop : bounds.height - fromTop - menu.itemHeight
             element.rect = CGRect(
-                x: room + menu.padding, y: y, width: max(bounds.width - 2 * (room + menu.padding), 0), height: menu.itemHeight
+                x: room + inset, y: y, width: max(bounds.width - 2 * (room + inset), 0), height: menu.itemHeight
             )
         }
     }
