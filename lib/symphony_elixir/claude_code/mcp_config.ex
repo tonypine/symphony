@@ -7,7 +7,7 @@ defmodule SymphonyElixir.ClaudeCode.McpConfig do
   @spec inherited_servers(Schema.t(), Path.t()) :: {:ok, %{String.t() => map()}} | {:error, term()}
   def inherited_servers(%Schema{} = settings, host_claude_json_path) when is_binary(host_claude_json_path) do
     case agent_mcp(settings) do
-      %Schema.Agent.Mcp{inherit: "allowlist"} = mcp ->
+      %Schema.Execution.Mcp{inherit: "allowlist"} = mcp ->
         do_inherited_servers(mcp, host_claude_json_path)
 
       _mcp ->
@@ -75,6 +75,6 @@ defmodule SymphonyElixir.ClaudeCode.McpConfig do
     end)
   end
 
-  defp agent_mcp(%Schema{agent: %{mcp: %Schema.Agent.Mcp{} = mcp}}), do: mcp
-  defp agent_mcp(_settings), do: %Schema.Agent.Mcp{}
+  defp agent_mcp(%Schema{execution: %{mcp: %Schema.Execution.Mcp{} = mcp}}), do: mcp
+  defp agent_mcp(_settings), do: %Schema.Execution.Mcp{}
 end

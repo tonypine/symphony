@@ -360,7 +360,7 @@ defmodule SymphonyElixir.PrDecisionTest do
 
     test "G5: a PR merged outside Symphony closes the ticket out in any phase (R2)" do
       for phase <- Facts.phases() do
-        assert %Action{rule: "R2", kind: :close_out, reason: "PR #42 was merged"} = decide(phase: phase, pr: :merged, run: :active)
+        assert %Action{rule: "R2", kind: :close_ticket, reason: "PR #42 was merged"} = decide(phase: phase, pr: :merged, run: :active)
       end
     end
 

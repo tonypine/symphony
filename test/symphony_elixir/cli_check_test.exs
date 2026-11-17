@@ -71,7 +71,7 @@ defmodule SymphonyElixir.CLICheckTest do
     path = write_symphony!(root, String.replace(valid_symphony(root), "command: codex app-server", forced))
 
     assert check(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n"}
-    assert %{force_label: "Rush", forced_max: 2, forced_stale_after_hours: 24} = Config.settings!().agent
+    assert %{force_label: "Rush", forced_max: 2, forced_stale_after_hours: 24} = Config.settings!().execution
 
     path = write_symphony!(root, String.replace(valid_symphony(root), "command: codex app-server", "command: codex app-server\n  concurrency:\n    forced_max: 0"))
 
@@ -188,24 +188,39 @@ defmodule SymphonyElixir.CLICheckTest do
     refute message =~ @secret
   end
 
-  test "reports run profile errors naming the key", %{root: root} do
+  test "reports runs errors naming the key", %{root: root} do
+    codex = "    codex:\n      command: codex app-server\n"
+    default = "  default: {harness: codex, provider: openai, model: gpt-test}\n"
+
     cases = [
-      {"command: codex app-server\n  run_profiles:\n    bogus:\n      effort: low", "agent.run_profiles has unknown run kind `bogus`"},
-      {"command: codex app-server\n  effort: extreme", "agent.effort must be one of: low, medium, high, xhigh, max"},
-      {"command: claude --effort high\n  effort: low", "agent.command must not pass --effort when agent.model, agent.effort or agent.run_profiles is set"},
-      {"command: codex app-server\n  provider: bedrock", "agent.provider must be one of: anthropic, openrouter"},
-      {"command: codex app-server\n  run_profiles:\n    landing:\n      provider: openrouter", "agent.run_profiles.landing.provider openrouter needs an OpenRouter model id"},
-      {"command: codex app-server\n  provider: openrouter\n  model: openai/gpt-5", "agent.provider openrouter is only supported with agent.runtime: claude"}
+      {default, default <> "  bogus: {effort: low}\n",
+       "runs.bogus is not a run kind; expected default or one of: implementation, breakdown, rework, landing, code_review, epic_review, ci_fix, review_feedback, qa"},
+      {default, default <> "  pre_push_review: {effort: low}\n", "runs.pre_push_review is not a run kind"},
+      {default, "  default: {harness: codex, provider: openai, model: gpt-test, effort: extreme}\n", "runs.default.effort must be one of: low, medium, high, xhigh, max"},
+      {codex, "    codex:\n      command: codex app-server --effort high\n", "execution.harnesses.codex.command must not pass --effort; the run's entry sets the model and effort"},
+      {default, "  default: {harness: codex, provider: bedrock, model: gpt-test}\n", "runs.default.provider must be one of: anthropic, openrouter, opencode-go, openai"},
+      {default, "  default: {harness: codex, provider: openai, model: gpt-test, command: codex app-server}\n",
+       "runs.default.command is a run kind's own; a harness's command for every run is execution.harnesses.<harness>.command"},
+      {default, default <> "  landing: {provider: openrouter, model: openai/gpt-5}\n", "runs.landing runs the codex harness on openrouter, which it cannot reach; codex runs on: openai, opencode-go"},
+      {default, "  default: {harness: codex, provider: openai}\n", "runs.implementation resolves no model; set `model` there or in runs.default"},
+      {default, "", "resolves no harness"}
     ]
 
-    for {agent_lines, expected} <- cases do
+    for {old, new, expected} <- cases do
       Cache.clear()
-      path = write_symphony!(root, String.replace(valid_symphony(root), "command: codex app-server", agent_lines))
+      path = write_symphony!(root, String.replace(valid_symphony(root), old, new))
 
       assert {{:error, message}, ""} = check(["--config", path])
       assert message =~ "Config error in #{path}: "
       assert message =~ expected
     end
+  end
+
+  test "refuses the old agent section", %{root: root} do
+    path = write_symphony!(root, valid_symphony(root) <> "agent:\n  runtime: codex\n")
+
+    assert {{:error, message}, ""} = check(["--config", path])
+    assert message =~ "unknown symphony.yml key `agent`"
   end
 
   describe "OpenRouter key" do
@@ -233,6 +248,21 @@ defmodule SymphonyElixir.CLICheckTest do
                "Config OK: #{path}\nWarning: OPENROUTER_API_KEY is not set; runs that use provider openrouter will fail to start (landing, ci_fix)\n"
     end
 
+    test "warns when a run uses opencode-go and OPENCODE_API_KEY is unset, and not once it is set", %{root: root} do
+      previous = System.get_env("OPENCODE_API_KEY")
+      System.delete_env("OPENCODE_API_KEY")
+      on_exit(fn -> if previous, do: System.put_env("OPENCODE_API_KEY", previous), else: System.delete_env("OPENCODE_API_KEY") end)
+
+      runs = "  default: {harness: claude, provider: anthropic, model: claude-test}\n  qa: {provider: opencode-go, model: kimi-test, small_model: kimi-small}\n"
+      path = write_symphony!(root, claude_symphony(root, runs))
+
+      assert check(["--config", path]) ==
+               {{:halt, 0}, "Config OK: #{path}\nWarning: OPENCODE_API_KEY is not set; runs that use provider opencode-go will fail to start (qa)\n"}
+
+      System.put_env("OPENCODE_API_KEY", "oc-check-key")
+      assert check(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n"}
+    end
+
     test "does not warn, or print the key, when OPENROUTER_API_KEY is set and the model supports tools", %{root: root} do
       System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
       stub_models_api()
@@ -249,7 +279,7 @@ defmodule SymphonyElixir.CLICheckTest do
       path = write_symphony!(root, openrouter_symphony(root) <> "workers:\n  ssh_hosts: [worker-01]\n")
 
       assert {{:error, message}, ""} = check(["--config", path])
-      assert message =~ "agent.run_profiles.landing.provider openrouter is not supported with workers.ssh_hosts"
+      assert message =~ "runs.landing.provider openrouter is not supported with workers.ssh_hosts; OpenRouter runs start on the local host only"
     end
 
     test "check_findings is empty when the config does not load", %{root: root} do
@@ -275,7 +305,7 @@ defmodule SymphonyElixir.CLICheckTest do
       assert {{:error, message}, ""} = check(["--config", path])
 
       assert message ==
-               "Config error in #{path}: agent.run_profiles.landing.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"
+               "Config error in #{path}: runs.landing.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"
     end
 
     test "rejects a model id OpenRouter does not list", %{root: root} do
@@ -284,28 +314,48 @@ defmodule SymphonyElixir.CLICheckTest do
       path = write_symphony!(root, openrouter_symphony(root, "acme/typo"))
 
       assert {{:error, message}, ""} = check(["--config", path])
-      assert message == "Config error in #{path}: agent.run_profiles.landing.model: OpenRouter has no model `acme/typo`"
+      assert message == "Config error in #{path}: runs.landing.model: OpenRouter has no model `acme/typo`"
     end
 
-    test "checks agent.small_model against OpenRouter's models, without asking for tools", %{root: root} do
+    test "checks the harness's OpenRouter small model against OpenRouter's models, without asking for tools", %{root: root} do
       System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
       stub_models_api()
-      small_model = &String.replace(openrouter_symphony(root), "  runtime: claude\n", "  runtime: claude\n  small_model: #{&1}\n")
 
-      path = write_symphony!(root, small_model.("acme/chat-only"))
+      path = write_symphony!(root, openrouter_symphony(root, "anthropic/claude-haiku-4.5", "acme/chat-only"))
       assert check(["--config", path]) == {{:halt, 0}, "Config OK: #{path}\n"}
 
       Cache.clear()
-      path = write_symphony!(root, small_model.("acme/typo"))
+      path = write_symphony!(root, openrouter_symphony(root, "anthropic/claude-haiku-4.5", "acme/typo"))
       assert {{:error, message}, ""} = check(["--config", path])
-      assert message == "Config error in #{path}: agent.small_model: OpenRouter has no model `acme/typo`"
+      assert message == "Config error in #{path}: execution.harnesses.claude.small_model.openrouter: OpenRouter has no model `acme/typo`"
     end
 
-    test "rejects a blank agent.small_model", %{root: root} do
-      path = write_symphony!(root, String.replace(openrouter_symphony(root), "  runtime: claude\n", "  runtime: claude\n  small_model: \"  \"\n"))
+    test "names a run entry's own small model", %{root: root} do
+      System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
+      stub_models_api()
+
+      content = String.replace(openrouter_symphony(root), "landing: {provider: openrouter,", "landing: {small_model: acme/typo, provider: openrouter,")
+      path = write_symphony!(root, content)
 
       assert {{:error, message}, ""} = check(["--config", path])
-      assert message =~ "agent.small_model must not be blank"
+      assert message == "Config error in #{path}: runs.landing.small_model: OpenRouter has no model `acme/typo`"
+    end
+
+    test "rejects a blank small model", %{root: root} do
+      path = write_symphony!(root, openrouter_symphony(root, "anthropic/claude-haiku-4.5", "\"  \""))
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message =~ "execution.harnesses.claude.small_model.openrouter must not be blank"
+    end
+
+    test "rejects an OpenRouter run on a harness with no small model for it", %{root: root} do
+      content = String.replace(openrouter_symphony(root), ", openrouter: anthropic/claude-haiku-4.5}", "}")
+      path = write_symphony!(root, content)
+
+      assert {{:error, message}, ""} = check(["--config", path])
+
+      assert message =~
+               "runs.landing runs the claude harness on openrouter with no small model for its background calls; set execution.harnesses.claude.small_model.openrouter"
     end
 
     test "warns when effort is set for a model without reasoning", %{root: root} do
@@ -313,14 +363,9 @@ defmodule SymphonyElixir.CLICheckTest do
       stub_models_api()
 
       content =
-        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
-          runtime: claude
-          command: claude
-          provider: openrouter
-          model: acme/tools-only
-          effort: high
-          run_profiles:
-            landing: { effort: low }
+        claude_symphony(root, """
+          default: {harness: claude, provider: openrouter, model: acme/tools-only, effort: high}
+          landing: {effort: low}
         """)
 
       path = write_symphony!(root, content)
@@ -329,8 +374,8 @@ defmodule SymphonyElixir.CLICheckTest do
                {{:halt, 0},
                 """
                 Config OK: #{path}
-                Warning: agent.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort high
-                Warning: agent.run_profiles.landing.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort low
+                Warning: runs.default.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort high
+                Warning: runs.landing.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort low
                 """}
     end
 
@@ -339,23 +384,17 @@ defmodule SymphonyElixir.CLICheckTest do
       stub_models_api()
 
       content =
-        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
-          runtime: claude
-          command: claude
-          provider: openrouter
-          model: anthropic/claude-haiku-4.5
-        code_review:
-          model: acme/chat-only
-        auto_review:
-          model: acme/tools-only
-          effort: low
+        claude_symphony(root, """
+          default: {harness: claude, provider: openrouter, model: anthropic/claude-haiku-4.5}
+          code_review: {model: acme/chat-only}
+          qa: {model: acme/tools-only, effort: low}
         """)
 
       path = write_symphony!(root, content)
 
       assert check(["--config", path]) ==
-               {{:error, "Config error in #{path}: code_review.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"},
-                "Warning: auto_review.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort low\n"}
+               {{:error, "Config error in #{path}: runs.code_review.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"},
+                "Warning: runs.qa.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort low\n"}
     end
 
     test "names the repository key that set the model", %{root: root} do
@@ -363,72 +402,59 @@ defmodule SymphonyElixir.CLICheckTest do
       stub_models_api()
 
       content =
-        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
-          runtime: claude
-          command: claude
-          model: claude-opus-5-5
-          run_profiles:
-            ci_fix: { model: anthropic/claude-haiku-4.5 }
+        claude_symphony(root, """
+          default: {harness: claude, provider: anthropic, model: claude-opus-5-5}
+          ci_fix: {model: anthropic/claude-haiku-4.5}
         """) <>
           """
-              agent:
-                provider: openrouter
-                model: acme/chat-only
+              runs:
+                default: {provider: openrouter, model: acme/chat-only}
           """
 
       path = write_symphony!(root, content)
 
       assert check(["--config", path]) ==
-               {{:error, "Config error in #{path}: repositories[app].agent.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"}, ""}
+               {{:error, "Config error in #{path}: repositories[app].runs.default.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"}, ""}
     end
 
-    test "names the repository run profile key that set the model or effort", %{root: root} do
+    test "names the repository run entry key that set the model or effort", %{root: root} do
       System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
       stub_models_api()
 
       content =
-        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
-          runtime: claude
-          command: claude
-          provider: openrouter
-          model: anthropic/claude-haiku-4.5
-          run_profiles:
-            landing: { model: acme/tools-only }
+        claude_symphony(root, """
+          default: {harness: claude, provider: openrouter, model: anthropic/claude-haiku-4.5}
+          landing: {model: acme/tools-only}
         """) <>
           """
-              agent:
-                effort: high
-                run_profiles:
-                  landing: { model: acme/chat-only }
-                  ci_fix: { model: acme/tools-only }
+              runs:
+                default: {effort: high}
+                landing: {model: acme/chat-only}
+                ci_fix: {model: acme/tools-only}
           """
 
       path = write_symphony!(root, content)
 
       assert check(["--config", path]) ==
-               {{:error, "Config error in #{path}: repositories[app].agent.run_profiles.landing.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"},
-                "Warning: repositories[app].agent.run_profiles.ci_fix.model: OpenRouter model `acme/tools-only` does not support reasoning; " <>
-                  "its runs start without --effort high, inherited from repositories[app].agent.effort\n"}
+               {{:error, "Config error in #{path}: repositories[app].runs.landing.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"},
+                "Warning: repositories[app].runs.default.effort: OpenRouter model `acme/tools-only` does not support reasoning; " <>
+                  "its runs start without --effort high\n"}
     end
 
-    test "names the repository run profile that picked the model when its effort is inherited", %{root: root} do
+    test "names the key that set the effort when a repository run entry picked the model or the provider", %{root: root} do
       System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
       stub_models_api()
 
       content =
-        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
-          runtime: claude
-          command: claude
-          model: acme/tools-only
-          run_profiles:
-            breakdown: { model: claude-opus-5-5, effort: xhigh }
-            landing: { effort: high }
+        claude_symphony(root, """
+          default: {harness: claude, provider: anthropic, model: acme/tools-only}
+          breakdown: {model: claude-opus-5-5, effort: xhigh}
+          landing: {effort: high}
         """) <>
           """
-              agent:
-                run_profiles:
-                  breakdown: { provider: openrouter, model: acme/tools-only }
-                  landing: { provider: openrouter }
+              runs:
+                breakdown: {provider: openrouter, model: acme/tools-only}
+                landing: {provider: openrouter}
           """
 
       path = write_symphony!(root, content)
@@ -437,54 +463,44 @@ defmodule SymphonyElixir.CLICheckTest do
                {{:halt, 0},
                 """
                 Config OK: #{path}
-                Warning: repositories[app].agent.run_profiles.breakdown.model: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort xhigh, inherited from agent.run_profiles.breakdown.effort
-                Warning: repositories[app].agent.run_profiles.landing.provider: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort high, inherited from agent.run_profiles.landing.effort
+                Warning: runs.breakdown.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort xhigh
+                Warning: runs.landing.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort high
                 """}
     end
 
-    test "names the repository run profile that picked openrouter when its model is inherited", %{root: root} do
+    test "names the key that set the model when a repository run entry picked openrouter", %{root: root} do
       System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
       stub_models_api()
 
       content =
-        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
-          runtime: claude
-          command: claude
-          model: claude-sonnet-5-5
+        claude_symphony(root, """
+          default: {harness: claude, provider: anthropic, model: claude-sonnet-5-5}
         """) <>
           """
-              agent:
-                run_profiles:
-                  landing: { provider: openrouter }
+              runs:
+                landing: {provider: openrouter}
           """
 
       path = write_symphony!(root, content)
 
       assert check(["--config", path]) ==
-               {{:error,
-                 "Config error in #{path}: repositories[app].agent.run_profiles.landing.provider: OpenRouter has no model `claude-sonnet-5-5`, " <>
-                   "inherited from agent.model; set repositories[app].agent.run_profiles.landing.model to an OpenRouter model id"}, ""}
+               {{:error, "Config error in #{path}: runs.default.model: OpenRouter has no model `claude-sonnet-5-5`"}, ""}
     end
 
-    test "names the run profile that picked openrouter when its inherited model lacks tools", %{root: root} do
+    test "names the key that set the model when the run entry that picked openrouter has none and it lacks tools", %{root: root} do
       System.put_env("OPENROUTER_API_KEY", "sk-or-v1-check-secret")
       stub_models_api()
 
       content =
-        String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
-          runtime: claude
-          command: claude
-          model: acme/chat-only
-          run_profiles:
-            ci_fix: { provider: openrouter }
+        claude_symphony(root, """
+          default: {harness: claude, provider: anthropic, model: acme/chat-only}
+          ci_fix: {provider: openrouter}
         """)
 
       path = write_symphony!(root, content)
 
       assert check(["--config", path]) ==
-               {{:error,
-                 "Config error in #{path}: agent.run_profiles.ci_fix.provider: OpenRouter model `acme/chat-only`, inherited from agent.model, " <>
-                   "does not support tools; set agent.run_profiles.ci_fix.model to an OpenRouter model that lists tools"}, ""}
+               {{:error, "Config error in #{path}: runs.default.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use"}, ""}
     end
 
     test "checks models against the QA stub in QA mode", %{root: root} do
@@ -508,14 +524,14 @@ defmodule SymphonyElixir.CLICheckTest do
       content =
         openrouter_symphony(root, "symphony-qa/no-tools")
         |> String.replace("anthropic/claude-haiku-4.5", "symphony-qa/tools-only")
-        |> String.replace("  run_profiles:\n", "  effort: high\n  run_profiles:\n")
+        |> String.replace("model: claude-test}", "model: claude-test, effort: high}")
 
       path = write_symphony!(root, content)
 
       assert check(["--config", path]) ==
-               {{:error, "Config error in #{path}: agent.run_profiles.landing.model: OpenRouter model `symphony-qa/no-tools` does not support tools; Symphony runs need tool use"},
-                "Warning: agent.run_profiles.ci_fix.model: OpenRouter model `symphony-qa/tools-only` does not support reasoning; " <>
-                  "its runs start without --effort high, inherited from agent.effort\n"}
+               {{:error, "Config error in #{path}: runs.landing.model: OpenRouter model `symphony-qa/no-tools` does not support tools; Symphony runs need tool use"},
+                "Warning: runs.default.effort: OpenRouter model `symphony-qa/tools-only` does not support reasoning; " <>
+                  "its runs start without --effort high\n"}
     end
 
     test "only warns when the models API cannot be reached", %{root: root} do
@@ -541,27 +557,39 @@ defmodule SymphonyElixir.CLICheckTest do
     end)
   end
 
-  defp openrouter_symphony(root, landing_model \\ "anthropic/claude-haiku-4.5") do
-    String.replace(valid_symphony(root), "  runtime: codex\n  command: codex app-server\n", """
-      runtime: claude
-      command: claude
-      run_profiles:
-        landing: { provider: openrouter, model: #{landing_model} }
-        ci_fix: { provider: openrouter, model: anthropic/claude-haiku-4.5 }
-    """)
+  defp openrouter_symphony(root, landing_model \\ "anthropic/claude-haiku-4.5", small_model \\ "anthropic/claude-haiku-4.5") do
+    claude_symphony(
+      root,
+      """
+        default: {harness: claude, provider: anthropic, model: claude-test}
+        landing: {provider: openrouter, model: #{landing_model}}
+        ci_fix: {provider: openrouter, model: anthropic/claude-haiku-4.5}
+      """,
+      small_model
+    )
   end
 
-  test "reports Code Review's reviewer and QA agent profile errors naming the key", %{root: root} do
+  # `valid_symphony/1` on the claude harness, with `runs` as the lines of its `runs:` section.
+  defp claude_symphony(root, runs, openrouter_small_model \\ "anthropic/claude-haiku-4.5") do
+    valid_symphony(root)
+    |> String.replace(
+      "    codex:\n      command: codex app-server\n",
+      "    claude:\n      command: claude\n      small_model: {anthropic: claude-haiku-test, openrouter: #{openrouter_small_model}}\n"
+    )
+    |> String.replace("  default: {harness: codex, provider: openai, model: gpt-test}\n", runs)
+  end
+
+  test "reports Code Review's reviewer and QA agent run errors naming the key", %{root: root} do
     cases = [
-      {"code_review:\n  effort: extreme\n", "code_review.effort must be one of: low, medium, high, xhigh, max"},
-      {"auto_review:\n  effort: extreme\n", "auto_review.effort must be one of: low, medium, high, xhigh, max"},
-      {"code_review:\n  command: claude --model x\n  effort: low\n", "code_review.command must not pass --model"},
-      {"auto_review:\n  command: claude --effort high\n  model: y\n", "auto_review.command must not pass --effort"}
+      {"  code_review: {effort: extreme}\n", "runs.code_review.effort must be one of: low, medium, high, xhigh, max"},
+      {"  qa: {effort: extreme}\n", "runs.qa.effort must be one of: low, medium, high, xhigh, max"},
+      {"  code_review: {command: codex app-server --model x, effort: low}\n", "runs.code_review.command must not pass --model"},
+      {"  qa: {command: codex app-server --effort high, model: y}\n", "runs.qa.command must not pass --effort"}
     ]
 
-    for {section, expected} <- cases do
+    for {entry, expected} <- cases do
       Cache.clear()
-      path = write_symphony!(root, valid_symphony(root) <> section)
+      path = write_symphony!(root, String.replace(valid_symphony(root), "repositories:\n", entry <> "repositories:\n"))
 
       assert {{:error, message}, ""} = check(["--config", path])
       assert message =~ "Config error in #{path}: "
@@ -569,12 +597,29 @@ defmodule SymphonyElixir.CLICheckTest do
     end
   end
 
-  test "refuses a pre_push_review section: Code Review owns the review of the code now", %{root: root} do
+  test "refuses a reviewer's or QA agent's run settings in its own section", %{root: root} do
+    cases = [
+      {"code_review:\n  effort: low\n", "unknown symphony.yml key `code_review.effort`"},
+      {"code_review:\n  runtime: codex\n", "unknown symphony.yml key `code_review.runtime`"},
+      {"auto_review:\n  model: y\n", "unknown symphony.yml key `auto_review.model`"},
+      {"auto_review:\n  command: codex app-server\n", "unknown symphony.yml key `auto_review.command`"}
+    ]
+
+    for {section, expected} <- cases do
+      Cache.clear()
+      path = write_symphony!(root, valid_symphony(root) <> section)
+
+      assert {{:error, message}, ""} = check(["--config", path])
+      assert message =~ expected
+    end
+  end
+
+  test "refuses a pre_push_review section as an unknown key", %{root: root} do
     path = write_symphony!(root, valid_symphony(root) <> "pre_push_review:\n  enabled: true\n  run_on: first_push\n")
 
     assert {{:error, message}, ""} = check(["--config", path])
     assert message =~ "Config error in #{path}: "
-    assert message =~ "`pre_push_review` is not valid; the pre-push reviewer is removed and Code Review owns the review of the code now"
+    assert message =~ "unknown symphony.yml key `pre_push_review`"
   end
 
   test "reports a broken repo WORKFLOW.md", %{root: root} do
@@ -624,7 +669,7 @@ defmodule SymphonyElixir.CLICheckTest do
   end
 
   # A reviewer block as the file carried it before the rename: one the new build can run.
-  @pre_push_review "pre_push_review:\n  enabled: true\n  runtime: codex\n  command: codex app-server\n"
+  @pre_push_review "pre_push_review:\n  enabled: true\n"
 
   describe "check --migrate" do
     test "checks a migrated copy, says what moved and leaves the file alone", %{root: root} do
@@ -641,22 +686,28 @@ defmodule SymphonyElixir.CLICheckTest do
       assert File.ls!(resolved(root)) |> Enum.sort() == ["app", "symphony.yml"]
     end
 
-    test "migrates a repository's run profile and the agent's", %{root: root} do
-      content =
-        valid_symphony(root)
-        |> String.replace("  command: codex app-server\n", """
-          command: codex app-server
-          run_profiles:
-            pre_push_review:
-              model: gpt-5
-        """)
-        |> String.replace("    default: true\n", """
-            default: true
-            agent:
-              run_profiles:
-                pre_push_review:
-                  model: gpt-5
-        """)
+    test "migrates a file from before the agent section moved, old run profiles and all", %{root: root} do
+      content = """
+      issues:
+        provider: memory
+      agent:
+        runtime: codex
+        command: codex app-server
+        model: gpt-5
+        run_profiles:
+          pre_push_review:
+            effort: high
+      repositories:
+        - key: app
+          workflow: #{Path.join([root, "app", "WORKFLOW.md"])}
+          default: true
+          agent:
+            run_profiles:
+              pre_push_review:
+                model: gpt-5-mini
+          route:
+            team: Test
+      """
 
       path = write_symphony!(root, content)
 
@@ -665,6 +716,9 @@ defmodule SymphonyElixir.CLICheckTest do
       assert result == {:halt, 0}
       assert output =~ "`agent.run_profiles.pre_push_review` to `code_review`"
       assert output =~ "`repositories[].agent.run_profiles.pre_push_review` to `code_review`"
+      assert output =~ "moved `agent` to `execution` and `runs` in your settings\n"
+      assert output =~ "Config OK: #{path}\n"
+      assert File.read!(path) == content
     end
 
     test "passes a file with nothing to migrate as the plain check does", %{root: root} do
@@ -867,9 +921,12 @@ defmodule SymphonyElixir.CLICheckTest do
     """
     issues:
       provider: memory
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
       - key: app
         workflow: #{Path.join([root, "app", "WORKFLOW.md"])}

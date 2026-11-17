@@ -267,9 +267,12 @@ defmodule SymphonyElixirWeb.ObservabilityReposTest do
     workspaces:
       root: #{Path.join(root, "workspaces")}
       clones_root: #{Path.join(root, "clones")}
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     """)
 
     Workflow.set_symphony_file_path(path)

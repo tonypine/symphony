@@ -238,7 +238,7 @@ defmodule SymphonyElixir.QaDriver do
   the port's lease first (`SymphonyElixir.QaDriver.DevServerLease`), waiting
   while another pass's driver holds it, and gives it back once its own server
   stopped. Every `qa_launch_app` also gives the app the playbook's `launch_env`
-  after Symphony's own variables (`SymphonyElixir.QaAgent.PlaybookSettings`),
+  after Symphony's own variables (`SymphonyElixir.PlaybookSettings`),
   and refuses a name Symphony sets itself, then the running server's own
   `launch_env` (a `live` server's control URL and token).
   """
@@ -248,7 +248,7 @@ defmodule SymphonyElixir.QaDriver do
   require Logger
 
   alias SymphonyElixir.{AgentEnv, OpenRouter, PathSafety, QaBuild, QaPolicy, Workspace}
-  alias SymphonyElixir.QaAgent.PlaybookSettings
+  alias SymphonyElixir.PlaybookSettings
   alias SymphonyElixir.QaDriver.{Checks, DevServer, DevServerLease, Gallery, Machine, ReleasePair, Remote, SafeHost}
 
   @evidence_dir "qa-evidence"

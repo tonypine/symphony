@@ -146,7 +146,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_path_unlocks(Keyword.get(opts, :path_unlocks, []))
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
-    |> append_codex_transport_output_guard(agent_context, opts)
+    |> append_codex_transport_output_guard(agent_context)
   end
 
   @doc """
@@ -228,7 +228,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_path_unlocks(Keyword.get(opts, :path_unlocks, []))
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
-    |> append_codex_transport_output_guard(agent_context, opts)
+    |> append_codex_transport_output_guard(agent_context)
   end
 
   defp prompt_template!({:ok, workflow}, prompt_mode) do
@@ -464,7 +464,7 @@ defmodule SymphonyElixir.PromptBuilder do
     end
   end
 
-  defp agent_kind_from_settings(%{agent: %{kind: kind}}), do: present_string(kind)
+  defp agent_kind_from_settings(%{execution: %{harness: harness}}), do: present_string(harness)
   defp agent_kind_from_settings(_settings), do: nil
 
   defp append_extra_prompt(prompt, extra_prompt) when is_binary(extra_prompt) do
@@ -607,19 +607,13 @@ defmodule SymphonyElixir.PromptBuilder do
 
   defp managed_repo_line(_repo_key), do: nil
 
-  defp append_codex_transport_output_guard(prompt, %{kind: "codex"}, opts) do
-    if codex_transport_output_guard_enabled?(opts) do
-      prompt <> "\n\n" <> String.trim(@codex_transport_output_guard)
-    else
-      prompt
-    end
+  # The harness is the run's (`opts[:settings]`, or a named `:agent_kind`), so a codex prompt
+  # always gets the guard.
+  defp append_codex_transport_output_guard(prompt, %{kind: "codex"}) do
+    prompt <> "\n\n" <> String.trim(@codex_transport_output_guard)
   end
 
-  defp append_codex_transport_output_guard(prompt, _agent_context, _opts), do: prompt
-
-  defp codex_transport_output_guard_enabled?(opts) do
-    Keyword.has_key?(opts, :settings) or Keyword.has_key?(opts, :agent_kind)
-  end
+  defp append_codex_transport_output_guard(prompt, _agent_context), do: prompt
 
   defp repo_context_for_prompt(issue, opts) do
     explicit_repo_key = present_string(Keyword.get(opts, :repo_key))

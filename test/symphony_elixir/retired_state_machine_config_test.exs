@@ -7,7 +7,8 @@ defmodule SymphonyElixir.RetiredStateMachineConfigTest do
   defp symphony(issues, repo_fields) do
     %{
       "issues" => Map.merge(%{"provider" => "memory"}, issues),
-      "agent" => %{"runtime" => "claude", "command" => "claude --dangerously-skip-permissions"},
+      "execution" => %{"harnesses" => %{"claude" => %{"command" => "claude --dangerously-skip-permissions", "small_model" => %{"anthropic" => "small-test"}}}},
+      "runs" => %{"default" => %{"harness" => "claude", "provider" => "anthropic", "model" => "claude-test"}},
       "repositories" => [Map.merge(%{"key" => "app", "workflow" => "WORKFLOW.md", "route" => %{"team" => "Test"}}, repo_fields)]
     }
   end

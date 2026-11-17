@@ -7,11 +7,14 @@ repositories:
     workflow_source: local
 workspaces:
   root: /tmp/symphony-elixir-runtime-test-workspaces
-agent:
-  runtime: codex
-  command: codex app-server
+execution:
+  harnesses:
+    codex:
+      command: codex app-server
   concurrency:
     max_total: 1
+runs:
+  default: { harness: codex, provider: openai, model: gpt-test }
 pull_requests:
   enabled: false
   checks:

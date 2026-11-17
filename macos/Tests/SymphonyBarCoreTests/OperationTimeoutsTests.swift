@@ -4,8 +4,8 @@ import XCTest
 final class OperationTimeoutsTests: XCTestCase {
     private let config = """
         # Symphony operator config.
-        agent:
-          runtime: claude
+        execution:
+          prompts: {}
           timeouts:
             turn_ms: 3600000
             mcp_tool_ms: 900000  # 15 minutes
@@ -31,10 +31,10 @@ final class OperationTimeoutsTests: XCTestCase {
         let defaults = OperationTimeouts(gitNetworkMs: 300_000, mcpToolMs: 600_000, pendingToolReportMs: 60_000)
         XCTAssertEqual(OperationTimeouts(), defaults)
         XCTAssertEqual(try OperationTimeouts.values(in: ""), defaults)
-        XCTAssertEqual(try OperationTimeouts.values(in: "agent:\n  timeouts:\n    turn_ms: 5\nworkspaces:\n  root: ~/w\n"), defaults)
+        XCTAssertEqual(try OperationTimeouts.values(in: "execution:\n  timeouts:\n    turn_ms: 5\nworkspaces:\n  root: ~/w\n"), defaults)
         XCTAssertEqual(
             try OperationTimeouts.values(
-                in: "agent:\n  timeouts:\n    mcp_tool_ms: null\nworkspaces:\n  git_network_timeout_ms: ~\n"
+                in: "execution:\n  timeouts:\n    mcp_tool_ms: null\nworkspaces:\n  git_network_timeout_ms: ~\n"
                     + "watchdog:\n  pending_tool_report_after_ms: null\n"
             ),
             defaults
@@ -52,7 +52,7 @@ final class OperationTimeoutsTests: XCTestCase {
         XCTAssertThrowsError(try OperationTimeouts.values(in: "workspaces:\n  git_network_timeout_ms: soon\n")) { error in
             XCTAssertEqual(error as? OperationTimeoutsError, .unreadable(key: "workspaces.git_network_timeout_ms", value: "soon"))
         }
-        XCTAssertThrowsError(try OperationTimeouts.values(in: "agent:\n  timeouts: {mcp_tool_ms: 5}\n")) { error in
+        XCTAssertThrowsError(try OperationTimeouts.values(in: "execution:\n  timeouts: {mcp_tool_ms: 5}\n")) { error in
             XCTAssertEqual(error as? OperationTimeoutsError, .notABlock("timeouts"))
         }
         XCTAssertEqual(
@@ -86,19 +86,19 @@ final class OperationTimeoutsTests: XCTestCase {
         let new = OperationTimeouts(gitNetworkMs: 60_000, mcpToolMs: 120_000)
         XCTAssertEqual(
             try OperationTimeouts.updating("issues:\n  provider: linear\n", from: OperationTimeouts(), to: new),
-            "issues:\n  provider: linear\nworkspaces:\n  git_network_timeout_ms: 60000\nagent:\n  timeouts:\n    mcp_tool_ms: 120000\n"
+            "issues:\n  provider: linear\nworkspaces:\n  git_network_timeout_ms: 60000\nexecution:\n  timeouts:\n    mcp_tool_ms: 120000\n"
         )
         XCTAssertEqual(
             try OperationTimeouts.updating("issues:\n  provider: linear\n", from: OperationTimeouts(), to: OperationTimeouts(pendingToolReportMs: 180_000)),
             "issues:\n  provider: linear\nwatchdog:\n  pending_tool_report_after_ms: 180000\n"
         )
         XCTAssertEqual(
-            try OperationTimeouts.updating("agent:\n    runtime: codex\nworkspaces:\n    root: ~/w\n", from: OperationTimeouts(), to: new),
-            "agent:\n    timeouts:\n        mcp_tool_ms: 120000\n    runtime: codex\nworkspaces:\n    git_network_timeout_ms: 60000\n    root: ~/w\n"
+            try OperationTimeouts.updating("execution:\n    prompts: {}\nworkspaces:\n    root: ~/w\n", from: OperationTimeouts(), to: new),
+            "execution:\n    timeouts:\n        mcp_tool_ms: 120000\n    prompts: {}\nworkspaces:\n    git_network_timeout_ms: 60000\n    root: ~/w\n"
         )
         XCTAssertEqual(
-            try OperationTimeouts.updating("workspaces:\nagent:\n  timeouts:\n", from: OperationTimeouts(), to: new),
-            "workspaces:\n  git_network_timeout_ms: 60000\nagent:\n  timeouts:\n    mcp_tool_ms: 120000\n"
+            try OperationTimeouts.updating("workspaces:\nexecution:\n  timeouts:\n", from: OperationTimeouts(), to: new),
+            "workspaces:\n  git_network_timeout_ms: 60000\nexecution:\n  timeouts:\n    mcp_tool_ms: 120000\n"
         )
     }
 

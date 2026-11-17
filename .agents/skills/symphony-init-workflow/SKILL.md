@@ -61,7 +61,7 @@ The front matter should include only repo-local settings, especially:
 - repo-specific verification dev-server settings when applicable
 
 Keep operator-wide settings in `symphony.yml`; do not move `tracker`, `repos`,
-`workspace.root`, `agent.command`, polling, CI, notification, or quality-gate
+`workspace.root`, `execution`, `runs`, polling, CI, notification, or quality-gate
 operator settings into `WORKFLOW.md`.
 
 The prompt body should tell the agent how to work in this repository:

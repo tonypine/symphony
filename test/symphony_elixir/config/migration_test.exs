@@ -33,8 +33,8 @@ defmodule SymphonyElixir.Config.MigrationTest do
         model: claude-opus-5-5
         max_iterations: 2
 
-      agent:
-        runtime: codex
+      ledger:
+        artifact_max_bytes: 10
       """
 
       assert {:ok, migrated, [note]} = Migration.plan(text, @backup)
@@ -53,14 +53,17 @@ defmodule SymphonyElixir.Config.MigrationTest do
                # a note
                model: claude-opus-5-5
 
-             agent:
-               runtime: codex
+             ledger:
+               artifact_max_bytes: 10
              """
     end
 
-    test "a run profile keeps its indent, in the agent and in every repository" do
+    test "an old reviewer run profile is renamed, then moves to runs with the agent section" do
       text = """
       agent:
+        runtime: claude
+        command: claude
+        model: m
         run_profiles:
           pre_push_review:
             model: a
@@ -86,37 +89,40 @@ defmodule SymphonyElixir.Config.MigrationTest do
       assert {:ok, migrated, notes} = Migration.plan(text, @backup)
       assert {:ok, document} = YamlElixir.read_from_string(migrated)
 
-      assert document["agent"]["run_profiles"] == %{"code_review" => %{"model" => "a"}, "qa" => %{"model" => "b"}}
+      assert document["runs"]["code_review"] == %{"model" => "a"}
+      assert document["runs"]["qa"] == %{"model" => "b"}
       assert [one, two, three] = document["repositories"]
-      assert one["agent"]["run_profiles"] == %{"code_review" => %{"model" => "c"}}
+      assert one["runs"] == %{"code_review" => %{"model" => "c"}}
       assert two == %{"key" => "two", "workflow" => "WORKFLOW.md"}
-      assert three["agent"]["run_profiles"] == %{"code_review" => %{"model" => "d"}}, "your new name stays"
+      assert three["runs"] == %{"code_review" => %{"model" => "d"}}, "your new name stays"
+      refute Map.has_key?(document, "agent")
 
       assert "v0.0.1.691 renamed `agent.run_profiles.pre_push_review` to `code_review` in your settings" in notes
       assert "v0.0.1.691 renamed `repositories[].agent.run_profiles.pre_push_review` to `code_review` in your settings" in notes
 
       assert "v0.0.1.691 renamed `repositories[].agent.run_profiles.pre_push_review` to `code_review`; your `code_review` stays and the old block is gone" in notes
-
-      assert migrated =~ "    # Symphony: v0.0.1.691 renamed `agent.run_profiles.pre_push_review`"
+      assert List.last(notes) == "v#{BuildInfo.current().version} moved `agent` to `execution` and `runs` in your settings"
     end
 
     test "reads a list at its parent's column" do
-      text = "repositories:\n- key: one\n  agent:\n    run_profiles:\n      pre_push_review:\n        model: a\n- key: two\n"
+      text =
+        "agent:\n  runtime: claude\n  command: claude\n  model: m\n" <>
+          "repositories:\n- key: one\n  agent:\n    run_profiles:\n      pre_push_review:\n        model: a\n- key: two\n"
 
-      assert {:ok, migrated, [_note]} = Migration.plan(text, @backup)
+      assert {:ok, migrated, [_renamed, _moved]} = Migration.plan(text, @backup)
       assert {:ok, %{"repositories" => [one, two]}} = YamlElixir.read_from_string(migrated)
-      assert one["agent"]["run_profiles"] == %{"code_review" => %{"model" => "a"}}
+      assert one["runs"] == %{"code_review" => %{"model" => "a"}}
       assert two == %{"key" => "two"}
     end
 
     test "when both names are set, the new one stays and the old block goes" do
-      text = "code_review:\n  enabled: false\npre_push_review:\n  enabled: true\n  model: a\nagent:\n  runtime: codex\n"
+      text = "code_review:\n  enabled: false\npre_push_review:\n  enabled: true\n  model: a\nledger:\n  artifact_max_bytes: 10\n"
 
       assert {:ok, migrated, [note]} = Migration.plan(text, @backup)
 
       assert note =~ "your `code_review` stays"
       assert {:ok, document} = YamlElixir.read_from_string(migrated)
-      assert document == %{"code_review" => %{"enabled" => false}, "agent" => %{"runtime" => "codex"}}
+      assert document == %{"code_review" => %{"enabled" => false}, "ledger" => %{"artifact_max_bytes" => 10}}
     end
 
     test "removes a key that is gone and says why, keeping what follows it" do
@@ -160,7 +166,7 @@ defmodule SymphonyElixir.Config.MigrationTest do
     end
 
     test "leaves a file with nothing to migrate as it is" do
-      text = "issues:\n  provider: memory\n# pre_push_review:\nagent:\n  pre_push_review: looks like it but isn't\n"
+      text = "issues:\n  provider: memory\n# pre_push_review:\nledger:\n  pre_push_review: looks like it but isn't\n"
 
       assert Migration.plan(text, @backup) == {:ok, text, []}
     end

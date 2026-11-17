@@ -16,6 +16,12 @@ defmodule SymphonyElixir.ManagedCloneTest do
     {"GIT_CONFIG_SYSTEM", "/dev/null"}
   ]
 
+  # Nothing is built in: a symphony.yml loads only when every run kind resolves what it starts with.
+  @runs_config %{
+    "execution" => %{"harnesses" => %{"codex" => %{"command" => "codex app-server"}}},
+    "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}}
+  }
+
   setup do
     original_env =
       Map.new(
@@ -160,10 +166,12 @@ defmodule SymphonyElixir.ManagedCloneTest do
       assert message =~ "`workers.ssh_hosts` cannot be used with repositories that set `workspace.source` (web)"
 
       assert {:ok, _config} =
-               SystemSchema.parse(%{
-                 "repositories" => [%{"key" => "web", "workspace" => %{"source" => "acme/web"}}],
-                 "workers" => %{"ssh_hosts" => []}
-               })
+               SystemSchema.parse(
+                 Map.merge(@runs_config, %{
+                   "repositories" => [%{"key" => "web", "workspace" => %{"source" => "acme/web"}}],
+                   "workers" => %{"ssh_hosts" => []}
+                 })
+               )
     end
   end
 
@@ -426,10 +434,7 @@ defmodule SymphonyElixir.ManagedCloneTest do
   end
 
   defp parse(repo, workspaces \\ %{}) do
-    SystemSchema.parse(%{
-      "repositories" => [Map.merge(%{"key" => "web"}, repo)],
-      "workspaces" => workspaces
-    })
+    SystemSchema.parse(Map.merge(@runs_config, %{"repositories" => [Map.merge(%{"key" => "web"}, repo)], "workspaces" => workspaces}))
   end
 
   defp remote!(root, github, prompt) do
@@ -490,9 +495,12 @@ defmodule SymphonyElixir.ManagedCloneTest do
       root: #{Path.join(root, "workspaces")}
       clones_root: #{Path.join(root, "clones")}
     #{Keyword.get(opts, :workspaces, "")}
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     """)
 
     Workflow.set_symphony_file_path(path)

@@ -321,6 +321,24 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
     end)
   end
 
+  test "falls back to the repositories' own paths when a repository's settings do not load" do
+    # The file loads, so the repositories are known, but its settings do not suit the harness.
+    symphony_file = Workflow.symphony_file_path()
+    permissions = "      command: codex app-server\n  permissions:\n    approval_policy: never\n"
+    File.write!(symphony_file, String.replace(File.read!(symphony_file), "      command: codex app-server\n", permissions))
+    assert {:error, _reason} = SymphonyElixir.Config.settings()
+
+    with_fake_gh(fn log_path ->
+      {_output, error_output} =
+        capture_task_output(fn ->
+          BeforeRemove.run(["--repo", "bobthebuilder/things", "--branch", "feature/auto-detect"])
+        end)
+
+      assert error_output =~ "Refusing to close PRs for unconfigured repo bobthebuilder/things"
+      assert File.read!(log_path) == ""
+    end)
+  end
+
   test "refuses when configured repos cannot be resolved from config" do
     previous_symphony_file = Application.get_env(:symphony_elixir, :symphony_file_path)
 
@@ -494,6 +512,12 @@ defmodule Mix.Tasks.Workspace.BeforeRemoveTest do
     File.write!(symphony_file, """
     issues:
       provider: memory
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     workspaces:
       strategy: "worktree"
       repo: #{inspect(primary_repo)}

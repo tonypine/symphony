@@ -11,7 +11,8 @@ defmodule SymphonyElixir.ConfigPhasesTest do
     Map.merge(
       %{
         "issues" => %{"provider" => "memory"},
-        "agent" => %{"runtime" => "claude", "command" => "claude --dangerously-skip-permissions"},
+        "execution" => %{"harnesses" => %{"claude" => %{"command" => "claude --dangerously-skip-permissions", "small_model" => %{"anthropic" => "small-test"}}}},
+        "runs" => %{"default" => %{"harness" => "claude", "provider" => "anthropic", "model" => "claude-test"}},
         "repositories" => [%{"key" => "app", "workflow" => "WORKFLOW.md", "route" => %{"team" => "Test"}}]
       },
       sections
@@ -79,12 +80,12 @@ defmodule SymphonyElixir.ConfigPhasesTest do
       assert Phases.default_steps(:code_review) == []
     end
 
-    test "names the kinds phases takes, without the retired close_out" do
+    test "names the kinds phases takes: every run kind" do
       assert "implementation" in Phases.kinds()
-      refute "close_out" in Phases.kinds()
+      assert Phases.kinds() == SymphonyElixir.RunKind.names()
       assert Phases.kind("rework") == :rework
       assert Phases.kind(:qa) == :qa
-      assert Phases.kind("close_out") == nil
+      assert Phases.kind("not_a_kind") == nil
       assert Phases.kind(42) == nil
     end
   end
@@ -228,7 +229,6 @@ defmodule SymphonyElixir.ConfigPhasesTest do
 
     assert "phases.implementation.steps" in paths
     assert "phases.rework.steps" in paths
-    refute "phases.close_out.steps" in paths
   end
 
   test "the step model's modes and conditions" do

@@ -76,7 +76,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
         codex_output_tokens = codex_totals_token(codex_totals, :output_tokens)
         codex_seconds_running = Map.get(codex_totals, :seconds_running, 0)
         agent_count = length(running)
-        max_agents = Config.settings!().agent.max_concurrent_agents
+        max_agents = Config.settings!().execution.max_concurrent_agents
         forced = Map.get(snapshot, :forced, [])
         forced_rows = format_forced_section(forced)
         running_event_width = running_event_width(terminal_columns_override)
@@ -115,7 +115,7 @@ defmodule SymphonyElixir.StatusDashboard.Renderer do
                colorize(" · forced ", @ansi_gray) <>
                colorize("#{length(forced)}", @ansi_yellow) <>
                colorize("/", @ansi_gray) <>
-               colorize("#{Config.settings!().agent.forced_max}", @ansi_gray),
+               colorize("#{Config.settings!().execution.forced_max}", @ansi_gray),
              colorize("│ Throughput: ", @ansi_bold) <> colorize("#{format_tps(tps)} tps", @ansi_cyan),
              colorize("│ Runtime: ", @ansi_bold) <>
                colorize(format_runtime_seconds(codex_seconds_running), @ansi_magenta),

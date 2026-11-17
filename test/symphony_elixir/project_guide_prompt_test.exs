@@ -32,7 +32,7 @@ defmodule SymphonyElixir.ProjectGuidePromptTest do
 
   test "delegates to the default project guides injector" do
     settings = Config.settings!()
-    settings = %{settings | agent: %{settings.agent | include_project_guides: false}}
+    settings = %{settings | execution: %{settings.execution | include_project_guides: false}}
 
     assert {:ok, "Prompt"} =
              ProjectGuidePrompt.append_to_prompt("Prompt", "/tmp/workspace", settings, :claude)

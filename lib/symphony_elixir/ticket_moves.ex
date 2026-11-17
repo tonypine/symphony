@@ -281,7 +281,7 @@ defmodule SymphonyElixir.TicketMoves do
   end
 
   defp forced_label?(facts) do
-    force_label = normalize(Config.settings!().agent.force_label)
+    force_label = normalize(Config.settings!().execution.force_label)
     Enum.any?(facts.labels, &(normalize(&1) == force_label))
   end
 

@@ -60,7 +60,7 @@ defmodule SymphonyElixir.Setup.Checks.Labels do
     escalate =
       for repo <- system.repos, repo.name in repo_names, label <- escalate_labels(system, repo), uniq: true, do: label
 
-    StateProvisioning.machine_labels(system.agent.force_label, escalate)
+    StateProvisioning.machine_labels(system.execution.force_label, escalate)
   end
 
   # A repo's `acceptance_gate` override is its effective block, the global one merged in.

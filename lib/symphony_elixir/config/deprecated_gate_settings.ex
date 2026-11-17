@@ -15,7 +15,6 @@ defmodule SymphonyElixir.Config.DeprecatedGateSettings do
   import Ecto.Changeset
 
   alias SymphonyElixir.Config.Escalate
-  alias SymphonyElixir.Config.Schema.Agent
 
   # Recompile when the escalate rules' defaults change (see the note in `SystemSchema`).
   require Escalate
@@ -45,11 +44,9 @@ defmodule SymphonyElixir.Config.DeprecatedGateSettings do
     |> cast(attrs, @fields, empty_values: [])
     |> cast_embed(:escalate, with: &Escalate.changeset/2)
     |> validate_inclusion(:mode, @modes, message: "must be one of: #{Enum.join(@modes, ", ")}")
-    |> validate_inclusion(:kind, ["codex", "claude"])
     |> validate_number(:max_turns, greater_than: 0)
     |> validate_number(:timeout_ms, greater_than: 0)
     |> validate_number(:max_concurrent, greater_than: 0)
-    |> Agent.validate_profile_fields()
   end
 
   @doc """

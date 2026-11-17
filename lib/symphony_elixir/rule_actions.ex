@@ -35,7 +35,7 @@ defmodule SymphonyElixir.RuleActions do
     to_code_review: "moved",
     to_in_progress: "moved",
     to_rework: "moved",
-    close_out: "moved",
+    close_ticket: "moved",
     update_branch: "updated_branch",
     merge_now: "auto_merge",
     arm: "auto_merge",

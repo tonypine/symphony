@@ -8,6 +8,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   require Logger
 
   alias SymphonyElixir.Config.DeprecatedGateSettings
+  alias SymphonyElixir.Config.Runs
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.ManagedClone
   alias SymphonyElixir.Workflow
@@ -17,7 +18,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   # compile time, but Ecto only records a runtime reference to the embed. The
   # requires make Mix recompile this module when an embed's defaults change,
   # instead of keeping the old default after an incremental build.
-  require Schema.Agent
+  require Schema.Execution
   require Schema.AutoReview
   require Schema.Ci
   require Schema.Dependencies
@@ -51,9 +52,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @retired_human_review_state "the Human Review state (`tracker.human_review_state`) is retired; a decision request pauses " <>
                                 "the ticket on a Needs Decision hold, and a plan waits in `issues.states.plan_review`"
   @allowed_keys ~w(
-    agent auto_review code_review dashboard dependency_audit dispatch github human_actions issue_gate issues ledger linear notifications
-    phases poller pull_requests reports
-    repositories tickets verification watchdog workers workspaces
+    auto_review code_review dashboard dependency_audit dispatch execution github human_actions issue_gate issues ledger linear
+    notifications phases poller pull_requests reports
+    repositories runs tickets verification watchdog workers workspaces
   )
 
   # `repositories[].acceptance_gate` sets the kill switch, the numbers and extra escalation
@@ -91,30 +92,30 @@ defmodule SymphonyElixir.Config.SystemSchema do
     # (`drop_retired_key/4`).
     "issues.states" => ~w(active terminal waiting_on_sub_issues human_review code_review qa plan_review epic_review ci_fix),
     "tickets" => ~w(priorities),
-    "repositories[]" => ~w(key workflow workflow_source base_branch route workspace default agent acceptance_gate manual_review),
+    "repositories[]" => ~w(key workflow workflow_source base_branch route workspace default runs acceptance_gate manual_review),
     "repositories[].route" => ~w(team projects labels assignee),
     "repositories[].workspace" => ~w(strategy repo fetch_before_dispatch source),
-    "repositories[].agent" => ~w(provider model effort run_profiles),
     "repositories[].acceptance_gate" => @repo_acceptance_gate_keys,
     "repositories[].acceptance_gate.escalate" => @repo_acceptance_gate_escalate_keys,
     "repositories[].acceptance_gate.escalate.busy_files" => @acceptance_gate_busy_files_keys,
     "workspaces" => ~w(root clones_root strategy repo fetch_before_dispatch git_network_timeout_ms cleanup attachments),
     "workspaces.cleanup" => ~w(enabled max_age_days interval_ms min_free_bytes orphan_action trash_dir),
     "workspaces.attachments" => ~w(allowed_hosts public_upload_extensions),
-    "agent" => ~w(runtime command model effort provider small_model run_profiles concurrency limits timeouts prompts permissions mcp usage_limit),
-    "agent.concurrency" => ~w(max_total max_by_issue_state epic_lanes finishing_max force_label forced_max forced_stale_after_hours),
-    "agent.limits" => ~w(max_turns retry_backoff_max_ms tokens_per_issue tokens_per_day max_consecutive_identical_tool_failures),
-    "agent.timeouts" => ~w(turn_ms read_ms stall_ms command_ms mcp_tool_ms),
-    "agent.prompts" => ~w(include_project_guides project_guide_files codex_stdio_soft_limit_bytes),
-    "agent.permissions" => ~w(approval_policy filesystem network outer_sandbox),
-    "agent.permissions.filesystem" => ~w(sandbox turn_policy allow_read_paths allow_write_paths),
-    "agent.permissions.network" => ~w(mode allowed_domains denied_domains),
-    "agent.permissions.outer_sandbox" => ~w(runtime command enable_weaker_network_isolation),
-    "agent.mcp" => ~w(inherit allowed_servers servers),
-    "agent.usage_limit" => ~w(auto_pause resume_margin_seconds unknown_reset_retry_seconds headroom_utilization),
+    # `harnesses` is a map of harness to its `command` and `small_model`, one setting.
+    "execution" => ~w(harnesses concurrency limits timeouts prompts permissions mcp usage_limit),
+    "execution.concurrency" => ~w(max_total max_by_issue_state epic_lanes finishing_max force_label forced_max forced_stale_after_hours),
+    "execution.limits" => ~w(max_turns retry_backoff_max_ms tokens_per_issue tokens_per_day max_consecutive_identical_tool_failures),
+    "execution.timeouts" => ~w(turn_ms read_ms stall_ms command_ms mcp_tool_ms),
+    "execution.prompts" => ~w(include_project_guides project_guide_files codex_stdio_soft_limit_bytes),
+    "execution.permissions" => ~w(approval_policy filesystem network outer_sandbox),
+    "execution.permissions.filesystem" => ~w(sandbox turn_policy allow_read_paths allow_write_paths),
+    "execution.permissions.network" => ~w(mode allowed_domains denied_domains),
+    "execution.permissions.outer_sandbox" => ~w(kind command enable_weaker_network_isolation),
+    "execution.mcp" => ~w(inherit allowed_servers servers),
+    "execution.usage_limit" => ~w(auto_pause resume_margin_seconds unknown_reset_retry_seconds headroom_utilization),
     "workers" => ~w(ssh_hosts max_concurrent_agents_per_host),
-    "code_review" => ~w(enabled runtime command model effort),
-    "auto_review" => ~w(enabled state runtime command model effort max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks worker_host android acceptance_gate),
+    "code_review" => ~w(enabled),
+    "auto_review" => ~w(enabled state max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks worker_host android acceptance_gate),
     "auto_review.android" => ~w(avd sdk_root boot_timeout_ms idle_timeout_ms),
     "auto_review.acceptance_gate" => @acceptance_gate_keys,
     "auto_review.acceptance_gate.escalate" => @acceptance_gate_escalate_keys,
@@ -139,7 +140,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @operator_sections Map.merge(@operator_sections, @phase_sections)
 
   # `auto_review.playbooks` is a free-form map of playbook kinds, one setting; these keys under it
-  # have a control in the app too (`SymphonyElixir.QaAgent.PlaybookSettings` checks them).
+  # have a control in the app too (`SymphonyElixir.PlaybookSettings` checks them).
   @playbook_key_paths ~w(
     auto_review.playbooks.macos_app.dev_server
     auto_review.playbooks.macos_app.dev_server_port
@@ -155,29 +156,22 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "watchdog" => Schema.Watchdog
   }
 
-  # The pre-push reviewer is removed: Code Review reviews the code on the pull request, with the
-  # reviewer its `code_review` section configures.
-  @removed_pre_push_review "the pre-push reviewer is removed and Code Review owns the review of the code now; " <>
-                             "set Code Review's reviewer in `code_review` (enabled, runtime, command, model, effort) " <>
-                             "and its run profile in `agent.run_profiles.code_review`"
-
   # A removed key and what to do instead: a top-level key, or a dotted path to one in a section.
   @removed_keys %{
     "ci" => "use `pull_requests.checks`",
     "dependencies" => "use `dependency_audit`",
-    "dispatch.max_concurrent" => "remove it; use `agent.concurrency.max_total`",
+    "dispatch.max_concurrent" => "remove it; use `execution.concurrency.max_total`",
     "learnings" => "use `pull_requests.learnings`",
     "ledger.artifact_retention_days" => "remove it: Symphony now keeps every screenshot and run transcript",
     "observability" => "use `dashboard`",
     "polling" => "use `issues.poll_interval_ms`",
     "pr_review" => "use `pull_requests.review_comments`",
-    "pre_push_review" => @removed_pre_push_review,
     "quality_gate" => "use `issue_gate`",
     "repos" => "use `repositories`",
     "review_agent" => "use `code_review`",
     "self_review" => "use `code_review`",
     "server" => "use `dashboard`",
-    "token_budget" => "remove it; use `agent.limits.tokens_per_issue` and `agent.limits.tokens_per_day`",
+    "token_budget" => "remove it; use `execution.limits.tokens_per_issue` and `execution.limits.tokens_per_day`",
     "tracker" => "use `issues`",
     "worker" => "use `workers`",
     "workspace" => "use `workspaces`"
@@ -196,32 +190,31 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "tracker" => "issues",
     "worker" => "workers",
     "workspace" => "workspaces",
-    "agent.kind" => "agent.runtime",
-    "agent.max_concurrent_agents" => "agent.concurrency.max_total",
-    "agent.max_concurrent_agents_by_state" => "agent.concurrency.max_by_issue_state",
-    "agent.max_consecutive_identical_tool_failures" => "agent.limits.max_consecutive_identical_tool_failures",
-    "agent.max_retry_backoff_ms" => "agent.limits.retry_backoff_max_ms",
-    "agent.max_tokens_per_day" => "agent.limits.tokens_per_day",
-    "agent.max_tokens_per_issue" => "agent.limits.tokens_per_issue",
-    "agent.max_turns" => "agent.limits.max_turns",
-    "agent.network_access" => "agent.permissions.network",
-    "agent.network_access.allowed_domains" => "agent.permissions.network.allowed_domains",
-    "agent.network_access.denied_domains" => "agent.permissions.network.denied_domains",
-    "agent.network_access.mode" => "agent.permissions.network.mode",
-    "agent.approval_policy" => "agent.permissions.approval_policy",
-    "agent.project_guide_files" => "agent.prompts.project_guide_files",
-    "agent.include_project_guides" => "agent.prompts.include_project_guides",
-    "agent.read_timeout_ms" => "agent.timeouts.read_ms",
-    "agent.sandbox_runtime" => "agent.permissions.outer_sandbox",
-    "agent.sandbox_runtime.command" => "agent.permissions.outer_sandbox.command",
-    "agent.sandbox_runtime.enable_weaker_network_isolation" => "agent.permissions.outer_sandbox.enable_weaker_network_isolation",
-    "agent.sandbox_runtime.kind" => "agent.permissions.outer_sandbox.runtime",
-    "agent.stall_timeout_ms" => "agent.timeouts.stall_ms",
-    "agent.thread_sandbox" => "agent.permissions.filesystem.sandbox",
-    "agent.turn_sandbox_policy" => "agent.permissions.filesystem.turn_policy",
-    "agent.turn_timeout_ms" => "agent.timeouts.turn_ms",
-    "agent.command_timeout_ms" => "agent.timeouts.command_ms",
-    "agent.mcp_tool_timeout_ms" => "agent.timeouts.mcp_tool_ms",
+    "execution.max_concurrent_agents" => "execution.concurrency.max_total",
+    "execution.max_concurrent_agents_by_state" => "execution.concurrency.max_by_issue_state",
+    "execution.max_consecutive_identical_tool_failures" => "execution.limits.max_consecutive_identical_tool_failures",
+    "execution.max_retry_backoff_ms" => "execution.limits.retry_backoff_max_ms",
+    "execution.max_tokens_per_day" => "execution.limits.tokens_per_day",
+    "execution.max_tokens_per_issue" => "execution.limits.tokens_per_issue",
+    "execution.max_turns" => "execution.limits.max_turns",
+    "execution.network_access" => "execution.permissions.network",
+    "execution.network_access.allowed_domains" => "execution.permissions.network.allowed_domains",
+    "execution.network_access.denied_domains" => "execution.permissions.network.denied_domains",
+    "execution.network_access.mode" => "execution.permissions.network.mode",
+    "execution.approval_policy" => "execution.permissions.approval_policy",
+    "execution.project_guide_files" => "execution.prompts.project_guide_files",
+    "execution.include_project_guides" => "execution.prompts.include_project_guides",
+    "execution.read_timeout_ms" => "execution.timeouts.read_ms",
+    "execution.sandbox_runtime" => "execution.permissions.outer_sandbox",
+    "execution.sandbox_runtime.command" => "execution.permissions.outer_sandbox.command",
+    "execution.sandbox_runtime.enable_weaker_network_isolation" => "execution.permissions.outer_sandbox.enable_weaker_network_isolation",
+    "execution.sandbox_runtime.kind" => "execution.permissions.outer_sandbox.kind",
+    "execution.stall_timeout_ms" => "execution.timeouts.stall_ms",
+    "execution.thread_sandbox" => "execution.permissions.filesystem.sandbox",
+    "execution.turn_sandbox_policy" => "execution.permissions.filesystem.turn_policy",
+    "execution.turn_timeout_ms" => "execution.timeouts.turn_ms",
+    "execution.command_timeout_ms" => "execution.timeouts.command_ms",
+    "execution.mcp_tool_timeout_ms" => "execution.timeouts.mcp_tool_ms",
     "auto_review.kind" => "auto_review.runtime",
     "auto_review.acceptance_gate.kind" => "auto_review.acceptance_gate.runtime",
     "ci.enabled" => "pull_requests.checks.enabled",
@@ -274,11 +267,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "repos.workspace.fetch_before_dispatch" => "repositories.workspace.fetch_before_dispatch",
     "repos.workspace.repo" => "repositories.workspace.repo",
     "repos.workspace.strategy" => "repositories.workspace.strategy",
-    "review_agent.command" => "code_review.command",
     "review_agent.enabled" => "code_review.enabled",
-    "review_agent.effort" => "code_review.effort",
-    "review_agent.kind" => "code_review.runtime",
-    "review_agent.model" => "code_review.model",
     "server.host" => "dashboard.host",
     "server.port" => "dashboard.port",
     "tracker.active_states" => "issues.states.active",
@@ -308,9 +297,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "workspace.lifecycle.trash_dir" => "workspaces.cleanup.trash_dir",
     "workspace.repo" => "workspaces.repo",
     "workspace.root" => "workspaces.root",
-    "workspace.sandbox" => "agent.permissions.filesystem",
-    "workspace.sandbox.allow_read_paths" => "agent.permissions.filesystem.allow_read_paths",
-    "workspace.sandbox.allow_write_paths" => "agent.permissions.filesystem.allow_write_paths",
+    "workspace.sandbox" => "execution.permissions.filesystem",
+    "workspace.sandbox.allow_read_paths" => "execution.permissions.filesystem.allow_read_paths",
+    "workspace.sandbox.allow_write_paths" => "execution.permissions.filesystem.allow_write_paths",
     "workspace.strategy" => "workspaces.strategy"
   }
 
@@ -347,7 +336,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
       :projects,
       :assignee,
       :default,
-      :agent,
+      :runs,
       :acceptance_gate,
       :manual_review
     ]
@@ -390,8 +379,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
       field(:projects, {:array, :string}, default: [])
       field(:assignee, :string)
       field(:default, :boolean, default: false)
-      # The raw `agent` block until `SystemSchema.parse/1` replaces it with a `Schema.RepoAgent`.
-      field(:agent, :map)
+      # The repository's `runs:` block (`SymphonyElixir.Config.Runs`).
+      field(:runs, :map)
       # The raw `acceptance_gate` override until `SystemSchema.parse/1` replaces it with the
       # repository's effective `auto_review.acceptance_gate` block, as a string-keyed map.
       field(:acceptance_gate, :map)
@@ -469,7 +458,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
     embeds_one(:worker, Schema.Worker, on_replace: :update, defaults_to_struct: true)
     embeds_one(:github, Schema.GitHub, on_replace: :update, defaults_to_struct: true)
     embeds_one(:linear, Schema.Linear, on_replace: :update, defaults_to_struct: true)
-    embeds_one(:agent, Schema.Agent, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:execution, Schema.Execution, on_replace: :update, defaults_to_struct: true)
+    field(:runs, :map, default: %{})
     embeds_one(:observability, Schema.Observability, on_replace: :update, defaults_to_struct: true)
     embeds_one(:pr_review, Schema.PrReview, on_replace: :update, defaults_to_struct: true)
     embeds_one(:ci, Schema.Ci, on_replace: :update, defaults_to_struct: true)
@@ -588,7 +578,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   end
 
   defp finalize(system_config) do
-    with {:ok, system_config} <- system_config |> finalize_repos() |> parse_repo_agents() do
+    with {:ok, system_config} <- system_config |> finalize_repos() |> validate_runs() do
       merge_repo_acceptance_gates(system_config)
     end
   end
@@ -596,7 +586,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @doc """
   Every setting `symphony.yml` accepts, as a sorted dotted key path such as
   `auto_review.acceptance_gate.mode`. An item of a list adds `[]`: `repositories[].route.team`.
-  A key that holds a free-form map (`agent.run_profiles`) is one setting; `auto_review.playbooks` also
+  A key that holds a free-form map (`runs`, `execution.harnesses`) is one setting; `auto_review.playbooks` also
   lists the `macos_app` keys the app's Settings edits.
   """
   @spec operator_key_paths() :: [String.t()]
@@ -654,7 +644,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
       "worker" => struct_to_map(system_config.worker),
       "github" => struct_to_map(system_config.github),
       "linear" => struct_to_map(system_config.linear),
-      "agent" => agent_to_map(system_config.agent),
+      "execution" => execution_to_map(system_config.execution),
+      "runs" => system_config.runs,
       "observability" => struct_to_map(system_config.observability),
       "pr_review" => struct_to_map(system_config.pr_review),
       "ci" => struct_to_map(system_config.ci),
@@ -709,7 +700,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp changeset(attrs) do
     %__MODULE__{}
-    |> cast(attrs, [])
+    |> cast(attrs, [:runs])
     |> cast_embed(:tracker, with: &Schema.Tracker.changeset/2)
     |> cast_embed(:tickets, with: &Schema.Tickets.changeset/2)
     |> cast_embed(:polling, with: &Schema.Polling.changeset/2)
@@ -719,7 +710,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     |> cast_embed(:worker, with: &Schema.Worker.changeset/2)
     |> cast_embed(:github, with: &Schema.GitHub.changeset/2)
     |> cast_embed(:linear, with: &Schema.Linear.changeset/2)
-    |> cast_embed(:agent, with: &Schema.Agent.changeset/2)
+    |> cast_embed(:execution, with: &Schema.Execution.changeset/2)
     |> cast_embed(:observability, with: &Schema.Observability.changeset/2)
     |> cast_embed(:pr_review, with: &Schema.PrReview.changeset/2)
     |> cast_embed(:ci, with: &Schema.Ci.changeset/2)
@@ -736,7 +727,6 @@ defmodule SymphonyElixir.Config.SystemSchema do
     |> cast_embed(:reports, with: &Schema.Reports.changeset/2)
     |> cast_embed(:dispatch, with: &Schema.Dispatch.changeset/2)
     |> cast_embed(:phases, with: &Schema.Phases.changeset/2)
-    |> Schema.validate_profile_command_flags()
     |> cast_embed(:repos, with: &Repo.changeset/2, required: true)
     |> validate_length(:repos, min: 1)
     |> validate_unique_repo_names()
@@ -782,7 +772,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, tickets} <- normalize_tickets(Map.get(config, "tickets", %{})),
          {:ok, repos} <- normalize_repositories(Map.get(config, "repositories")),
          {:ok, workspace} <- normalize_workspaces(Map.get(config, "workspaces", %{})),
-         {:ok, agent_config} <- normalize_agent(Map.get(config, "agent", %{})),
+         {:ok, execution_config} <- normalize_execution(Map.get(config, "execution", %{})),
+         {:ok, runs} <- parse_runs(Map.get(config, "runs"), "runs"),
          {:ok, worker} <- normalize_workers(Map.get(config, "workers", %{})),
          :ok <- reject_managed_sources_on_ssh_workers(repos, worker),
          {:ok, code_review} <- normalize_code_review(Map.get(config, "code_review", %{})),
@@ -797,7 +788,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, reports} <- normalize_reports(Map.get(config, "reports", %{})),
          {:ok, dispatch} <- normalize_dispatch(Map.get(config, "dispatch", %{})),
          {:ok, phases} <- normalize_phases(Map.get(config, "phases", %{})) do
-      workspace = merge_section(workspace, "sandbox", Map.get(agent_config, "workspace_sandbox"))
+      workspace = merge_section(workspace, "sandbox", Map.get(execution_config, "workspace_sandbox"))
 
       {:ok,
        %{}
@@ -808,7 +799,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("worker", worker)
        |> maybe_put("github", Map.get(config, "github"))
        |> maybe_put("linear", Map.get(config, "linear"))
-       |> maybe_put("agent", Map.get(agent_config, "agent"))
+       |> maybe_put("execution", Map.get(execution_config, "execution"))
+       |> maybe_put("runs", runs)
        |> maybe_put("verification", Map.get(config, "verification"))
        |> maybe_put("review_agent", code_review)
        |> maybe_put("auto_review", auto_review)
@@ -910,10 +902,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, workspace} <- optional_section_map(Map.get(repo, "workspace"), path <> ".workspace"),
          :ok <- reject_unknown_section_keys(workspace || %{}, section_keys("repositories[].workspace"), path <> ".workspace"),
          {:ok, workspace} <- normalize_repo_source(repo, workspace, repo_path(Map.get(repo, "key"), index)),
-         {:ok, agent} <- section_map(Map.get(repo, "agent"), repo_agent_path(Map.get(repo, "key"), index)),
-         :ok <- reject_unknown_section_keys(agent, section_keys("repositories[].agent"), repo_agent_path(Map.get(repo, "key"), index)),
-         :ok <- reject_removed_run_profiles(Map.get(agent, "run_profiles"), repo_agent_path(Map.get(repo, "key"), index) <> ".run_profiles"),
-         agent = drop_repo_retired_run_profiles(agent, repo_agent_path(Map.get(repo, "key"), index)),
+         {:ok, runs} <- parse_runs(Map.get(repo, "runs"), repo_runs_path(Map.get(repo, "key"), index)),
          {:ok, acceptance_gate} <-
            normalize_acceptance_gate(Map.get(repo, "acceptance_gate"), repo_path(Map.get(repo, "key"), index) <> ".acceptance_gate", "repositories[].acceptance_gate") do
       normalized =
@@ -928,7 +917,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("labels", Map.get(route, "labels"))
         |> maybe_put("assignee", Map.get(route, "assignee"))
         |> maybe_put("workspace", workspace)
-        |> maybe_put("agent", agent)
+        |> maybe_put("runs", runs)
         |> maybe_put("acceptance_gate", acceptance_gate)
         |> maybe_put("manual_review", Map.get(repo, "manual_review"))
 
@@ -936,7 +925,14 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
-  defp repo_agent_path(key, index), do: repo_path(key, index) <> ".agent"
+  defp repo_runs_path(key, index), do: repo_path(key, index) <> ".runs"
+
+  defp parse_runs(raw, path) do
+    case Runs.parse(raw, path) do
+      {:ok, runs} -> {:ok, runs}
+      {:error, errors} -> {:error, {:invalid_symphony_config, Enum.join(errors, ", ")}}
+    end
+  end
 
   defp repo_path(key, _index) when is_binary(key) and key != "", do: "repositories[#{key}]"
   defp repo_path(_key, index), do: "repositories[#{index}]"
@@ -1034,48 +1030,42 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
-  defp normalize_agent(config) do
-    with {:ok, config} <- section_map(config, "agent"),
-         :ok <- reject_unknown_section_keys(config, section_keys("agent"), "agent"),
-         :ok <- reject_removed_run_profiles(Map.get(config, "run_profiles"), "agent.run_profiles"),
-         {:ok, concurrency} <- section_map(Map.get(config, "concurrency", %{}), "agent.concurrency"),
-         :ok <- reject_unknown_section_keys(concurrency, section_keys("agent.concurrency"), "agent.concurrency"),
-         {:ok, limits} <- section_map(Map.get(config, "limits", %{}), "agent.limits"),
+  defp normalize_execution(config) do
+    with {:ok, config} <- section_map(config, "execution"),
+         :ok <- reject_unknown_section_keys(config, section_keys("execution"), "execution"),
+         {:ok, harnesses} <- parse_harnesses(Map.get(config, "harnesses")),
+         {:ok, concurrency} <- section_map(Map.get(config, "concurrency", %{}), "execution.concurrency"),
+         :ok <- reject_unknown_section_keys(concurrency, section_keys("execution.concurrency"), "execution.concurrency"),
+         {:ok, limits} <- section_map(Map.get(config, "limits", %{}), "execution.limits"),
          :ok <-
-           reject_unknown_section_keys(limits, section_keys("agent.limits"), "agent.limits"),
-         {:ok, timeouts} <- section_map(Map.get(config, "timeouts", %{}), "agent.timeouts"),
-         :ok <- reject_unknown_section_keys(timeouts, section_keys("agent.timeouts"), "agent.timeouts"),
-         {:ok, prompts} <- section_map(Map.get(config, "prompts", %{}), "agent.prompts"),
+           reject_unknown_section_keys(limits, section_keys("execution.limits"), "execution.limits"),
+         {:ok, timeouts} <- section_map(Map.get(config, "timeouts", %{}), "execution.timeouts"),
+         :ok <- reject_unknown_section_keys(timeouts, section_keys("execution.timeouts"), "execution.timeouts"),
+         {:ok, prompts} <- section_map(Map.get(config, "prompts", %{}), "execution.prompts"),
          :ok <-
-           reject_unknown_section_keys(prompts, section_keys("agent.prompts"), "agent.prompts"),
-         {:ok, permissions} <- section_map(Map.get(config, "permissions", %{}), "agent.permissions"),
-         :ok <- reject_unknown_section_keys(permissions, section_keys("agent.permissions"), "agent.permissions"),
-         {:ok, filesystem} <- section_map(Map.get(permissions, "filesystem", %{}), "agent.permissions.filesystem"),
-         :ok <- reject_unknown_section_keys(filesystem, section_keys("agent.permissions.filesystem"), "agent.permissions.filesystem"),
-         {:ok, network} <- section_map(Map.get(permissions, "network", %{}), "agent.permissions.network"),
-         :ok <- reject_unknown_section_keys(network, section_keys("agent.permissions.network"), "agent.permissions.network"),
-         {:ok, outer_sandbox} <- section_map(Map.get(permissions, "outer_sandbox", %{}), "agent.permissions.outer_sandbox"),
-         :ok <- reject_unknown_section_keys(outer_sandbox, section_keys("agent.permissions.outer_sandbox"), "agent.permissions.outer_sandbox"),
-         {:ok, mcp} <- section_map(Map.get(config, "mcp", %{}), "agent.mcp"),
-         :ok <- reject_unknown_section_keys(mcp, section_keys("agent.mcp"), "agent.mcp"),
-         {:ok, usage_limit} <- section_map(Map.get(config, "usage_limit", %{}), "agent.usage_limit"),
+           reject_unknown_section_keys(prompts, section_keys("execution.prompts"), "execution.prompts"),
+         {:ok, permissions} <- section_map(Map.get(config, "permissions", %{}), "execution.permissions"),
+         :ok <- reject_unknown_section_keys(permissions, section_keys("execution.permissions"), "execution.permissions"),
+         {:ok, filesystem} <- section_map(Map.get(permissions, "filesystem", %{}), "execution.permissions.filesystem"),
+         :ok <- reject_unknown_section_keys(filesystem, section_keys("execution.permissions.filesystem"), "execution.permissions.filesystem"),
+         {:ok, network} <- section_map(Map.get(permissions, "network", %{}), "execution.permissions.network"),
+         :ok <- reject_unknown_section_keys(network, section_keys("execution.permissions.network"), "execution.permissions.network"),
+         {:ok, outer_sandbox} <- section_map(Map.get(permissions, "outer_sandbox", %{}), "execution.permissions.outer_sandbox"),
+         :ok <- reject_unknown_section_keys(outer_sandbox, section_keys("execution.permissions.outer_sandbox"), "execution.permissions.outer_sandbox"),
+         {:ok, mcp} <- section_map(Map.get(config, "mcp", %{}), "execution.mcp"),
+         :ok <- reject_unknown_section_keys(mcp, section_keys("execution.mcp"), "execution.mcp"),
+         {:ok, usage_limit} <- section_map(Map.get(config, "usage_limit", %{}), "execution.usage_limit"),
          :ok <-
-           reject_unknown_section_keys(usage_limit, section_keys("agent.usage_limit"), "agent.usage_limit") do
+           reject_unknown_section_keys(usage_limit, section_keys("execution.usage_limit"), "execution.usage_limit") do
       sandbox_runtime =
         %{}
-        |> maybe_put("kind", Map.get(outer_sandbox, "runtime"))
+        |> maybe_put("kind", Map.get(outer_sandbox, "kind"))
         |> maybe_put("command", Map.get(outer_sandbox, "command"))
         |> maybe_put("enable_weaker_network_isolation", Map.get(outer_sandbox, "enable_weaker_network_isolation"))
 
-      agent =
+      execution =
         %{}
-        |> maybe_put("kind", Map.get(config, "runtime"))
-        |> maybe_put("command", Map.get(config, "command"))
-        |> maybe_put("model", Map.get(config, "model"))
-        |> maybe_put("effort", Map.get(config, "effort"))
-        |> maybe_put("provider", Map.get(config, "provider"))
-        |> maybe_put("small_model", Map.get(config, "small_model"))
-        |> maybe_put("run_profiles", drop_retired_run_profiles(Map.get(config, "run_profiles"), "agent.run_profiles"))
+        |> maybe_put("harnesses", harnesses)
         |> maybe_put("max_concurrent_agents", Map.get(concurrency, "max_total"))
         |> maybe_put("max_concurrent_agents_by_state", Map.get(concurrency, "max_by_issue_state"))
         |> maybe_put("epic_lanes", Map.get(concurrency, "epic_lanes"))
@@ -1109,7 +1099,18 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("allow_read_paths", Map.get(filesystem, "allow_read_paths"))
         |> maybe_put("allow_write_paths", Map.get(filesystem, "allow_write_paths"))
 
-      {:ok, %{"agent" => agent, "workspace_sandbox" => workspace_sandbox}}
+      {:ok, %{"execution" => execution, "workspace_sandbox" => workspace_sandbox}}
+    end
+  end
+
+  # A harness's entry is kept with string keys, as the settings map casts it.
+  defp parse_harnesses(raw) do
+    case Runs.parse_harnesses(raw) do
+      {:ok, harnesses} ->
+        {:ok, Map.new(harnesses, fn {id, harness} -> {id, %{"command" => harness.command, "small_model" => harness.small_model}} end)}
+
+      {:error, errors} ->
+        {:error, {:invalid_symphony_config, Enum.join(errors, ", ")}}
     end
   end
 
@@ -1123,13 +1124,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp normalize_code_review(config) do
     with {:ok, config} <- section_map(config, "code_review"),
          :ok <- reject_unknown_section_keys(config, section_keys("code_review"), "code_review") do
-      {:ok,
-       %{}
-       |> maybe_put("enabled", Map.get(config, "enabled"))
-       |> maybe_put("kind", Map.get(config, "runtime"))
-       |> maybe_put("command", Map.get(config, "command"))
-       |> maybe_put("model", Map.get(config, "model"))
-       |> maybe_put("effort", Map.get(config, "effort"))}
+      {:ok, maybe_put(%{}, "enabled", Map.get(config, "enabled"))}
     end
   end
 
@@ -1144,8 +1139,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
       {:ok,
        config
-       |> Map.drop(["runtime", "acceptance_gate", "state"])
-       |> maybe_put("kind", Map.get(config, "runtime"))
+       |> Map.drop(["acceptance_gate", "state"])
        |> maybe_put("acceptance_gate", acceptance_gate)}
     end
   end
@@ -1197,15 +1191,15 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   # Auto Review is retired (`docs/design/state-machine.md` §Retired): its own flow settings load
   # unchanged during the deprecation window and say once per config that they do nothing now, and
-  # what replaced them. The QA settings that moved with the QA state (`runtime`, `command`, `model`,
-  # `effort`, `max_turns`, `timeout_ms`, `skip_globs`, `playbooks`, `worker_host`, `android`) still
+  # what replaced them. The QA settings that moved with the QA state (`max_turns`, `timeout_ms`,
+  # `skip_globs`, `playbooks`, `worker_host`, `android`) still
   # act and do not warn.
   @retired_auto_review_keys [
     {"enabled", "QA runs in the QA state"},
     {"state", "`issues.states.qa` names the QA state"},
     {"max_fix_attempts", "a QA fail returns the ticket to Rework on the same pull request"},
     {"run_on", "QA runs on every head that reaches the QA state"},
-    {"max_concurrent", "QA runs take agent slots (`agent.concurrency`)"}
+    {"max_concurrent", "QA runs take agent slots (`execution.concurrency`)"}
   ]
 
   defp warn_retired_auto_review_keys(config) do
@@ -1245,44 +1239,6 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
     :ok
   end
-
-  # A retired run kind's profile goes with it: the key still loads, says so, and is dropped before
-  # the run kinds are checked. The acceptance gate is retired, and so are `Final verification:`
-  # tickets: an epic closes in its epic review.
-  @retired_run_profiles [
-    {"acceptance_gate", "the acceptance gate is retired"},
-    {"final_verification", "`Final verification:` tickets are retired, and an epic closes in its epic review"}
-  ]
-
-  defp drop_retired_run_profiles(profiles, path) when is_map(profiles) do
-    Enum.reduce(@retired_run_profiles, profiles, fn {kind, reason}, acc ->
-      if Map.has_key?(acc, kind) do
-        no_effect_warning("#{path}.#{kind}", reason)
-        Map.delete(acc, kind)
-      else
-        acc
-      end
-    end)
-  end
-
-  defp drop_retired_run_profiles(profiles, _path), do: profiles
-
-  # A removed run kind's profile is refused, like a removed top-level key: its run no longer exists.
-  @removed_run_profiles %{"pre_push_review" => @removed_pre_push_review}
-
-  defp reject_removed_run_profiles(profiles, path) when is_map(profiles) do
-    case Enum.find(Map.keys(profiles), &Map.has_key?(@removed_run_profiles, &1)) do
-      nil -> :ok
-      kind -> {:error, {:invalid_symphony_config, "`#{path}.#{kind}` is not valid; #{@removed_run_profiles[kind]}"}}
-    end
-  end
-
-  defp reject_removed_run_profiles(_profiles, _path), do: :ok
-
-  defp drop_repo_retired_run_profiles(%{"run_profiles" => profiles} = agent, path) when is_map(profiles),
-    do: Map.put(agent, "run_profiles", drop_retired_run_profiles(profiles, path <> ".run_profiles"))
-
-  defp drop_repo_retired_run_profiles(agent, _path), do: agent
 
   # CI the fix runs could not make green no longer moves to a configured state: it pauses the ticket
   # on a Needs Decision hold.
@@ -1568,23 +1524,14 @@ defmodule SymphonyElixir.Config.SystemSchema do
     %{system_config | repos: repos}
   end
 
-  defp parse_repo_agents(%__MODULE__{} = system_config) do
-    sections = Map.take(system_config, [:agent, :review_agent, :auto_review, :worker])
+  # Every run kind must resolve what it starts with, for the operator's `runs:` and with each
+  # repository's block on top, and the `execution` section must suit the harness it resolves.
+  defp validate_runs(%__MODULE__{} = system_config) do
+    harnesses = Schema.Execution.harnesses(system_config.execution)
+    repos = for %Repo{runs: %{} = runs, name: name} <- system_config.repos, do: {repo_runs_path(name, nil), runs}
 
-    {repos, errors} =
-      Enum.map_reduce(system_config.repos, [], fn
-        %Repo{agent: nil} = repo, errors ->
-          {repo, errors}
-
-        %Repo{agent: agent, name: name} = repo, errors ->
-          case Schema.RepoAgent.parse(agent, sections, repo_agent_path(name, nil)) do
-            {:ok, repo_agent} -> {%{repo | agent: repo_agent}, errors}
-            {:error, repo_errors} -> {repo, errors ++ repo_errors}
-          end
-      end)
-
-    case errors do
-      [] -> {:ok, %{system_config | repos: repos}}
+    case Runs.errors(system_config.runs, repos, harnesses) do
+      [] -> {:ok, system_config}
       errors -> {:error, {:invalid_symphony_config, Enum.join(errors, ", ")}}
     end
   end
@@ -1644,8 +1591,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp non_empty_string?(value), do: is_binary(value) and String.trim(value) != ""
 
-  defp agent_to_map(%Schema.Agent{} = agent) do
-    agent
+  defp execution_to_map(%Schema.Execution{} = execution) do
+    execution
     |> struct_to_map()
     |> Map.update("network_access", nil, &struct_to_map/1)
     |> Map.update("sandbox_runtime", nil, &struct_to_map/1)
@@ -1718,7 +1665,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     if preserve_explicit_nil_path?(path), do: Map.put(acc, key, nil), else: acc
   end
 
-  defp preserve_explicit_nil_path?(["agent", key]) when key in ["max_tokens_per_issue", "max_tokens_per_day"],
+  defp preserve_explicit_nil_path?(["execution", key]) when key in ["max_tokens_per_issue", "max_tokens_per_day"],
     do: true
 
   defp preserve_explicit_nil_path?(["tracker", "waiting_on_sub_issues_state"]), do: true

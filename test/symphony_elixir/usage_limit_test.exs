@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.UsageLimitTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Config.Schema.Agent.UsageLimit, as: UsageLimitConfig
+  alias SymphonyElixir.Config.Schema.Execution.UsageLimit, as: UsageLimitConfig
   alias SymphonyElixir.{Pauses, UsageLimit}
 
   @now ~U[2026-10-03 03:46:00Z]
@@ -241,15 +241,6 @@ defmodule SymphonyElixir.UsageLimitTest do
     assert UsageLimit.key(entry) == {"openai", :all}
   end
 
-  test "for_agent_kind makes Codex runs openai and leaves other runs alone" do
-    profile = %{kind: :implementation, model: nil, effort: nil, provider: "anthropic"}
-
-    assert UsageLimit.for_agent_kind(profile, "codex").provider == "openai"
-    assert UsageLimit.for_agent_kind(profile, "claude") == profile
-    refute UsageLimit.covers?({"anthropic", :all}, UsageLimit.for_agent_kind(profile, "codex"))
-    assert UsageLimit.covers?({"openai", :all}, UsageLimit.for_agent_kind(profile, "codex"))
-  end
-
   test "an unknown reset uses the remembered window, else the retry interval" do
     windows =
       UsageLimit.remember_windows(%{}, %{
@@ -396,12 +387,12 @@ defmodule SymphonyElixir.UsageLimitTest do
     end
   end
 
-  describe "agent.usage_limit config" do
+  describe "execution.usage_limit config" do
     test "defaults to auto pause with a 120s margin and a 900s unknown-reset retry" do
       write_workflow_file!(Workflow.workflow_file_path())
 
       assert %UsageLimitConfig{auto_pause: true, resume_margin_seconds: 120, unknown_reset_retry_seconds: 900} =
-               Config.settings!().agent.usage_limit
+               Config.settings!().execution.usage_limit
     end
 
     test "reads the three keys" do
@@ -410,32 +401,32 @@ defmodule SymphonyElixir.UsageLimitTest do
       )
 
       assert %UsageLimitConfig{auto_pause: false, resume_margin_seconds: 0, unknown_reset_retry_seconds: 60} =
-               Config.settings!().agent.usage_limit
+               Config.settings!().execution.usage_limit
     end
 
     test "headroom_utilization is off by default and takes a share in (0, 1]" do
       write_workflow_file!(Workflow.workflow_file_path())
-      assert %UsageLimitConfig{headroom_utilization: nil} = Config.settings!().agent.usage_limit
+      assert %UsageLimitConfig{headroom_utilization: nil} = Config.settings!().execution.usage_limit
 
       for value <- [0.9, 1] do
         write_workflow_file!(Workflow.workflow_file_path(),
           agent_usage_limit: %{headroom_utilization: value}
         )
 
-        assert Config.settings!().agent.usage_limit.headroom_utilization == value / 1
+        assert Config.settings!().execution.usage_limit.headroom_utilization == value / 1
       end
     end
 
     test "rejects invalid values and unknown keys" do
       for {usage_limit, key} <- [
-            {%{headroom_utilization: 0}, "agent.usage_limit.headroom_utilization"},
-            {%{headroom_utilization: 1.5}, "agent.usage_limit.headroom_utilization"},
-            {%{headroom_utilization: "high"}, "agent.usage_limit.headroom_utilization"},
-            {%{auto_pause: "sometimes"}, "agent.usage_limit.auto_pause"},
-            {%{resume_margin_seconds: -1}, "agent.usage_limit.resume_margin_seconds"},
-            {%{unknown_reset_retry_seconds: 59}, "agent.usage_limit.unknown_reset_retry_seconds"},
-            {%{unknown_reset_retry_seconds: "soon"}, "agent.usage_limit.unknown_reset_retry_seconds"},
-            {%{resume_after: 5}, "agent.usage_limit"}
+            {%{headroom_utilization: 0}, "execution.usage_limit.headroom_utilization"},
+            {%{headroom_utilization: 1.5}, "execution.usage_limit.headroom_utilization"},
+            {%{headroom_utilization: "high"}, "execution.usage_limit.headroom_utilization"},
+            {%{auto_pause: "sometimes"}, "execution.usage_limit.auto_pause"},
+            {%{resume_margin_seconds: -1}, "execution.usage_limit.resume_margin_seconds"},
+            {%{unknown_reset_retry_seconds: 59}, "execution.usage_limit.unknown_reset_retry_seconds"},
+            {%{unknown_reset_retry_seconds: "soon"}, "execution.usage_limit.unknown_reset_retry_seconds"},
+            {%{resume_after: 5}, "execution.usage_limit"}
           ] do
         write_workflow_file!(Workflow.workflow_file_path(), agent_usage_limit: usage_limit)
         assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()

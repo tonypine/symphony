@@ -1,10 +1,10 @@
 defmodule SymphonyElixir.UsageLimit do
   @moduledoc """
-  Per-provider holds on dispatch after a provider usage limit (`agent.usage_limit`).
+  Per-provider holds on dispatch after a provider usage limit (`execution.usage_limit`).
 
   A run that ends on a usage limit (for Claude, a used-up five-hour or weekly window; for
   Codex, a used-up primary or secondary window) holds new runs of the same provider until the
-  window resets. Codex runs are provider `"openai"` (see `for_agent_kind/2`), so a Claude hold
+  window resets. A run's provider is its `runs:` entry's (codex on its own models is `"openai"`), so a Claude hold
   never holds them and a Codex hold never holds Claude runs. Each hold is keyed by
   `{provider, scope}`: scope `:all` holds every run of the provider, a model scope
   (`"opus"`, `"sonnet"`) only runs whose model is in that family. A run that sees a limit for a
@@ -289,11 +289,6 @@ defmodule SymphonyElixir.UsageLimit do
         acc
     end)
   end
-
-  @doc "`profile` with the provider a run of agent `kind` is limited by: Codex runs are `\"openai\"`."
-  @spec for_agent_kind(map(), String.t() | nil) :: map()
-  def for_agent_kind(profile, "codex") when is_map(profile), do: Map.put(profile, :provider, "openai")
-  def for_agent_kind(profile, _kind) when is_map(profile), do: profile
 
   @doc "Whether `entry` (or a key) holds a run with `profile` (its `provider` and `model`)."
   @spec covers?(entry() | key(), map()) :: boolean()

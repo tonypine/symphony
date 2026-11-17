@@ -4,26 +4,26 @@ defmodule SymphonyElixir.AgentMcp do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.McpShimCommand
 
-  @runtimes ["claude", "codex"]
+  @harnesses SymphonyElixir.Harnesses.ids()
 
-  @spec declared_servers(Schema.t(), String.t()) :: [{String.t(), Schema.Agent.Mcp.Server.t()}]
-  def declared_servers(%Schema{agent: %{mcp: %{servers: servers}}}, runtime) when runtime in @runtimes and is_map(servers) do
+  @spec declared_servers(Schema.t(), String.t()) :: [{String.t(), Schema.Execution.Mcp.Server.t()}]
+  def declared_servers(%Schema{execution: %{mcp: %{servers: servers}}}, harness) when harness in @harnesses and is_map(servers) do
     servers
-    |> Enum.filter(fn {_name, server} -> targets_runtime?(server, runtime) end)
+    |> Enum.filter(fn {_name, server} -> targets_harness?(server, harness) end)
     |> Enum.sort_by(fn {name, _server} -> name end)
   end
 
-  def declared_servers(_settings, _runtime), do: []
+  def declared_servers(_settings, _harness), do: []
 
-  @spec targets_runtime?(Schema.Agent.Mcp.Server.t(), String.t()) :: boolean()
-  def targets_runtime?(%Schema.Agent.Mcp.Server{runtimes: runtimes}, runtime) when runtime in @runtimes and is_list(runtimes) do
-    runtime in runtimes
+  @spec targets_harness?(Schema.Execution.Mcp.Server.t(), String.t()) :: boolean()
+  def targets_harness?(%Schema.Execution.Mcp.Server{harnesses: harnesses}, harness) when harness in @harnesses and is_list(harnesses) do
+    harness in harnesses
   end
 
-  def targets_runtime?(_server, _runtime), do: false
+  def targets_harness?(_server, _harness), do: false
 
-  @spec claude_server_config(Schema.Agent.Mcp.Server.t()) :: map()
-  def claude_server_config(%Schema.Agent.Mcp.Server{transport: "stdio"} = server) do
+  @spec claude_server_config(Schema.Execution.Mcp.Server.t()) :: map()
+  def claude_server_config(%Schema.Execution.Mcp.Server{transport: "stdio"} = server) do
     %{
       "command" => server.command,
       "args" => server.args || [],
@@ -32,7 +32,7 @@ defmodule SymphonyElixir.AgentMcp do
     |> normalize_claude_server_config()
   end
 
-  def claude_server_config(%Schema.Agent.Mcp.Server{transport: transport} = server) when transport in ["http", "sse"] do
+  def claude_server_config(%Schema.Execution.Mcp.Server{transport: transport} = server) when transport in ["http", "sse"] do
     %{
       "type" => transport,
       "url" => server.url,
@@ -74,8 +74,8 @@ defmodule SymphonyElixir.AgentMcp do
     end
   end
 
-  @spec codex_server_toml_block(String.t(), Schema.Agent.Mcp.Server.t()) :: String.t()
-  def codex_server_toml_block(name, %Schema.Agent.Mcp.Server{transport: "stdio"} = server) when is_binary(name) do
+  @spec codex_server_toml_block(String.t(), Schema.Execution.Mcp.Server.t()) :: String.t()
+  def codex_server_toml_block(name, %Schema.Execution.Mcp.Server{transport: "stdio"} = server) when is_binary(name) do
     entries =
       [
         {"command", server.command},

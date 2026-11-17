@@ -1,13 +1,14 @@
-defmodule SymphonyElixir.QaAgent.PlaybookSettingsTest do
+defmodule SymphonyElixir.PlaybookSettingsTest do
   use ExUnit.Case, async: true
 
   alias SymphonyElixir.Config.{RepoWorkflowSchema, SystemSchema}
-  alias SymphonyElixir.QaAgent.{PlaybookSettings, Selection}
+  alias SymphonyElixir.{PlaybookSettings, QaAgent.Selection}
 
   @base %{
     "issues" => %{"provider" => "memory"},
     "repositories" => [%{"key" => "web"}],
-    "agent" => %{"runtime" => "codex", "command" => "codex app-server"}
+    "execution" => %{"harnesses" => %{"codex" => %{"command" => "codex app-server"}}},
+    "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}}
   }
 
   defp macos_app(settings), do: %{"macos_app" => Map.merge(%{"build" => "make app", "app" => "build/App.app"}, settings)}

@@ -132,16 +132,14 @@ final class RepositoriesConfigTests: XCTestCase {
 
     // MARK: Round trip
 
-    func testRoundTripOfTheReposOwnConfigsKeepsEveryByte() throws {
+    func testRoundTripOfTheReposOwnConfigKeepsEveryByte() throws {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
-        for name in ["symphony.yml", "symphony.claude.yml"] {
-            let text = try String(contentsOf: root.appendingPathComponent(name), encoding: .utf8)
-            let entries = try RepositoriesConfig.entries(in: text)
-            XCTAssertFalse(entries.isEmpty, name)
-            for entry in entries {
-                XCTAssertEqual(try RepositoriesConfig.updating(entry.key, to: entry, in: text), text, name)
-            }
+        let text = try String(contentsOf: root.appendingPathComponent("symphony.yml"), encoding: .utf8)
+        let entries = try RepositoriesConfig.entries(in: text)
+        XCTAssertFalse(entries.isEmpty)
+        for entry in entries {
+            XCTAssertEqual(try RepositoriesConfig.updating(entry.key, to: entry, in: text), text)
         }
     }
 
@@ -233,11 +231,11 @@ final class RepositoriesConfigTests: XCTestCase {
     }
 
     func testAddFollowsTheFilesIndentation() throws {
-        let yaml = "repositories:\n- key: a\n  route:\n      team: A\nagent:\n  runtime: codex\n"
+        let yaml = "repositories:\n- key: a\n  route:\n      team: A\nexecution:\n  mcp: {}\n"
         let entry = RepositoryEntry(key: "b", route: RepositoryRoute(team: "B"))
         XCTAssertEqual(
             try RepositoriesConfig.adding(entry, to: yaml),
-            "repositories:\n- key: a\n  route:\n      team: A\n- key: b\n  route:\n      team: B\nagent:\n  runtime: codex\n"
+            "repositories:\n- key: a\n  route:\n      team: A\n- key: b\n  route:\n      team: B\nexecution:\n  mcp: {}\n"
         )
     }
 
@@ -255,13 +253,13 @@ final class RepositoriesConfigTests: XCTestCase {
 
     func testReadsAnEmptyFlowListAsNoRepos() throws {
         XCTAssertEqual(try RepositoriesConfig.entries(in: "repositories: []\n"), [])
-        XCTAssertEqual(try RepositoriesConfig.entries(in: "repositories: [ ]  # none yet\nagent: {}\n"), [])
+        XCTAssertEqual(try RepositoriesConfig.entries(in: "repositories: [ ]  # none yet\nexecution: {}\n"), [])
     }
 
     func testAddToAnEmptyFlowListTurnsItIntoABlockList() throws {
         XCTAssertEqual(
-            try RepositoriesConfig.adding(RepositoryEntry(key: "a"), to: "repositories: []\nagent: {}\n"),
-            "repositories:\n  - key: a\nagent: {}\n"
+            try RepositoriesConfig.adding(RepositoryEntry(key: "a"), to: "repositories: []\nexecution: {}\n"),
+            "repositories:\n  - key: a\nexecution: {}\n"
         )
         XCTAssertEqual(
             try RepositoriesConfig.adding(RepositoryEntry(key: "a"), to: "repositories: []   # none yet\n"),
@@ -271,8 +269,8 @@ final class RepositoriesConfigTests: XCTestCase {
 
     func testAddToAnEmptySectionGoesRightUnderIt() throws {
         XCTAssertEqual(
-            try RepositoriesConfig.adding(RepositoryEntry(key: "a"), to: "repositories:\n  # none yet\nagent: {}\n"),
-            "repositories:\n  - key: a\n  # none yet\nagent: {}\n"
+            try RepositoriesConfig.adding(RepositoryEntry(key: "a"), to: "repositories:\n  # none yet\nexecution: {}\n"),
+            "repositories:\n  - key: a\n  # none yet\nexecution: {}\n"
         )
     }
 
@@ -842,7 +840,7 @@ final class RepositoriesConfigTests: XCTestCase {
     }
 
     func testIgnoresUnsupportedYAMLOutsideTheSection() throws {
-        let yaml = "defaults: &d\n  x: 1\nrepositories:\n  - key: a\nagent:\n  <<: *d\n"
+        let yaml = "defaults: &d\n  x: 1\nrepositories:\n  - key: a\nexecution:\n  <<: *d\n"
         XCTAssertEqual(try RepositoriesConfig.entries(in: yaml), [RepositoryEntry(key: "a")])
     }
 

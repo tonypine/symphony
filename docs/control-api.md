@@ -141,7 +141,7 @@ run working on the ticket now.
 | `stages[].agent_time_ms` | How long the runs of the stage ran: the ended ones, and the one working now up to now. |
 | `stages[].tokens` | The tokens of the runs of the stage: the ended ones, and the one working now so far. |
 | `tokens.total` | The tokens of the ticket's runs, the one working now included: the stages' `tokens` add up to it. |
-| `tokens.cap` | The ticket's cap, `agent.limits.tokens_per_issue`; null when there is none. |
+| `tokens.cap` | The ticket's cap, `execution.limits.tokens_per_issue`; null when there is none. |
 
 Rework and CI Fix have no stage of their own; they count as visits of the stage they serve:
 

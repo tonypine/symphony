@@ -1,6 +1,6 @@
 import Foundation
 
-/// Why the model and effort keys of a `symphony.yml` can't be read or changed.
+/// Why the `runs` and `execution.harnesses` keys of a `symphony.yml` can't be read or changed.
 public enum RunProfilesConfigError: LocalizedError, Equatable {
     /// The keys use YAML the line editor doesn't handle. `line` counts from 1.
     case unsupported(line: Int, reason: String)
@@ -17,16 +17,16 @@ public enum RunProfilesConfigError: LocalizedError, Equatable {
     }
 }
 
-/// A kind of run Symphony can give its own model and effort, keyed by its `agent.run_profiles` name.
+/// A kind of run Symphony starts with its own harness, provider, model and effort, keyed by its `runs` name.
 public enum RunKind: String, CaseIterable, Identifiable {
     case breakdown
-    case closeOut = "close_out"
     case implementation
     case rework
     case ciFix = "ci_fix"
     case reviewFeedback = "review_feedback"
     case landing
     case codeReview = "code_review"
+    case epicReview = "epic_review"
     case qa
 
     public var id: String { rawValue }
@@ -34,65 +34,132 @@ public enum RunKind: String, CaseIterable, Identifiable {
     public var title: String {
         switch self {
         case .breakdown: return "Breakdown"
-        case .closeOut: return "Close-out"
         case .implementation: return "Implementation"
         case .rework: return "Rework"
         case .ciFix: return "CI fix"
         case .reviewFeedback: return "Review feedback"
         case .landing: return "Landing"
         case .codeReview: return "Code review"
+        case .epicReview: return "Epic review"
         case .qa: return "QA"
         }
     }
 }
 
-/// A field of a run profile, named as its YAML key, in the order new ones are written.
-public enum RunProfileField: String, CaseIterable {
-    case provider, model, effort
+/// The agent program that runs a session, keyed by its `execution.harnesses` name. The facts match
+/// `SymphonyElixir.Harnesses`.
+public enum Harness: String, CaseIterable, Identifiable {
+    case claude, codex, opencode
 
-    /// The fields `agent.command` can pass as `--model` / `--effort`.
-    static let commandFlags: [RunProfileField] = [.model, .effort]
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .claude: return "Claude"
+        case .codex: return "Codex"
+        case .opencode: return "OpenCode"
+        }
+    }
+
+    /// The providers the harness reaches.
+    public var providers: [String] {
+        switch self {
+        case .claude: return [RunProfilesConfig.anthropic, RunProfilesConfig.openRouter, RunProfilesConfig.openCodeGo]
+        case .codex: return [RunProfilesConfig.openAI, RunProfilesConfig.openCodeGo]
+        case .opencode: return [RunProfilesConfig.openCodeGo]
+        }
+    }
+
+    /// Whether the harness calls a small model in the background, which it then needs for the run's provider.
+    public var callsSmallModel: Bool { self != .codex }
 }
 
-/// The provider, model and effort for one kind of run, or the defaults. A nil field is missing from the file.
+/// `execution.harnesses.<harness>`: the harness's command, and the small model it calls in the background, by
+/// provider.
+public struct HarnessSettings: Equatable {
+    public var command: String?
+    public var smallModels: [String: String]
+
+    public init(command: String? = nil, smallModels: [String: String] = [:]) {
+        self.command = command
+        self.smallModels = smallModels
+    }
+}
+
+/// A field of a run profile, named as its YAML key, in the order new ones are written.
+public enum RunProfileField: String, CaseIterable {
+    case harness, provider, model, effort
+    case smallModel = "small_model"
+    case command
+}
+
+/// What one kind of run starts with, or the `default` entry. A nil field is missing from the file. `command`
+/// is a run kind's own: Symphony rejects it in `default`.
 public struct RunProfile: Equatable {
     public var model: String?
     public var effort: String?
     public var provider: String?
+    public var harness: String?
+    public var smallModel: String?
+    public var command: String?
 
-    public init(model: String? = nil, effort: String? = nil, provider: String? = nil) {
+    public init(
+        model: String? = nil,
+        effort: String? = nil,
+        provider: String? = nil,
+        harness: String? = nil,
+        smallModel: String? = nil,
+        command: String? = nil
+    ) {
         self.model = model
         self.effort = effort
         self.provider = provider
+        self.harness = harness
+        self.smallModel = smallModel
+        self.command = command
     }
 
     public subscript(field: RunProfileField) -> String? {
         get {
             switch field {
+            case .harness: return harness
             case .provider: return provider
             case .model: return model
             case .effort: return effort
+            case .smallModel: return smallModel
+            case .command: return command
             }
         }
         set {
             switch field {
+            case .harness: harness = newValue
             case .provider: provider = newValue
             case .model: model = newValue
             case .effort: effort = newValue
+            case .smallModel: smallModel = newValue
+            case .command: command = newValue
             }
         }
     }
 
     /// Each field of this profile, or of `fallback` where this one is unset.
     public func merged(over fallback: RunProfile) -> RunProfile {
-        RunProfile(model: model ?? fallback.model, effort: effort ?? fallback.effort, provider: provider ?? fallback.provider)
+        var merged = self
+        for field in RunProfileField.allCases where merged[field] == nil {
+            merged[field] = fallback[field]
+        }
+        return merged
     }
 
-    /// Whether a model or effort is set, which Symphony passes as `--model` / `--effort`. A provider alone isn't.
-    var setsModelOrEffort: Bool { model != nil || effort != nil }
+    /// The fields a run kind inherits from this `default` entry: every one but `command`.
+    var inheritable: RunProfile {
+        var profile = self
+        profile.command = nil
+        return profile
+    }
 }
 
-/// `agent.model` / `agent.effort` and `agent.run_profiles`.
+/// A `runs` block: its `default` entry and the run kinds it sets.
 public struct RunProfiles: Equatable {
     public var defaults: RunProfile
     public var kinds: [RunKind: RunProfile]
@@ -113,41 +180,30 @@ public struct RunProfiles: Equatable {
             }
         }
     }
-
-    /// Whether Symphony passes a model or effort to every run from these profiles, so it rejects
-    /// `--model` / `--effort` in `agent.command`.
-    var setsCommandFlags: Bool { defaults.setsModelOrEffort || !kinds.isEmpty }
-
-    /// Whether these profiles give `kind` a model or effort, or a profile of its own.
-    func setsCommandFlags(for kind: RunKind) -> Bool { defaults.setsModelOrEffort || kinds[kind] != nil }
 }
 
-/// Which `agent` block of a `symphony.yml` the profiles are in: the top-level one, or a `repositories[]`
+/// Which `runs` block of a `symphony.yml` the profiles are in: the top-level one, or a `repositories[]`
 /// entry's.
 public enum RunProfilesScope: Hashable {
     case global
     case repository(String)
 }
 
-/// The profiles of the top-level `agent` block and of each repository's `agent` block, keyed by
-/// repository key. A repository without a block holds empty profiles. `smallModel` is `agent.small_model`, the
-/// OpenRouter model for Claude Code's background calls on OpenRouter runs; nil leaves them on the run's model.
+/// The profiles of the top-level `runs` block and of each repository's `runs` block, keyed by repository key,
+/// and `execution.harnesses`. A repository without a block holds empty profiles.
 public struct ScopedRunProfiles: Equatable {
     public var global: RunProfiles
     public var repositories: [String: RunProfiles]
-    public var smallModel: String?
+    public var harnesses: [Harness: HarnessSettings]
 
-    public init(global: RunProfiles = RunProfiles(), repositories: [String: RunProfiles] = [:], smallModel: String? = nil) {
+    public init(
+        global: RunProfiles = RunProfiles(),
+        repositories: [String: RunProfiles] = [:],
+        harnesses: [Harness: HarnessSettings] = [:]
+    ) {
         self.global = global
         self.repositories = repositories
-        self.smallModel = smallModel
-    }
-
-    /// Whether any row in any scope picks OpenRouter, so `smallModel` has runs to serve.
-    public var usesOpenRouter: Bool {
-        ([global] + repositories.values).contains { profiles in
-            ([profiles.defaults] + profiles.kinds.values).contains { $0.provider == RunProfilesConfig.openRouter }
-        }
+        self.harnesses = harnesses
     }
 
     public subscript(scope: RunProfilesScope) -> RunProfiles {
@@ -165,22 +221,41 @@ public struct ScopedRunProfiles: Equatable {
         }
     }
 
+    /// The settings of `harness`. Empty settings read the same as missing ones.
+    public subscript(harness: Harness) -> HarnessSettings {
+        get { harnesses[harness] ?? HarnessSettings() }
+        set { harnesses[harness] = newValue == HarnessSettings() ? nil : newValue }
+    }
+
     /// What the row for `kind` (nil for the Default row) in `scope` resolves to where it sets nothing, the way
-    /// Symphony resolves each field: the repository's kind, the repository's defaults, `agent.run_profiles`'s
-    /// kind, `agent`'s defaults, then the flags in `agent.command` (`command`) and the `anthropic` provider.
-    public func inherited(_ kind: RunKind?, in scope: RunProfilesScope, command: RunProfile) -> RunProfile {
-        let base = RunProfile(model: command.model, effort: command.effort, provider: RunProfilesConfig.anthropic)
-        let global = global.defaults.merged(over: base)
+    /// Symphony resolves each field: the repository's kind, the repository's `default`, `runs.<kind>`, then
+    /// `runs.default`. Nothing is built in, so the top-level Default row inherits nothing.
+    public func inherited(_ kind: RunKind?, in scope: RunProfilesScope) -> RunProfile {
+        let global = global.defaults.inheritable
         switch (scope, kind) {
         case (.global, nil):
-            return base
+            return RunProfile()
         case (.global, _?):
             return global
         case (.repository, nil):
             return global
         case (.repository, let kind?):
-            return self[scope].defaults.merged(over: self.global[kind].merged(over: global))
+            return self[scope].defaults.inheritable.merged(over: self.global[kind].merged(over: global))
         }
+    }
+
+    /// The providers each harness runs on in some scope's run kind, as the rows resolve: the small models
+    /// those harnesses need.
+    public var providersInUse: [Harness: Set<String>] {
+        var inUse: [Harness: Set<String>] = [:]
+        for scope in [RunProfilesScope.global] + repositories.keys.map(RunProfilesScope.repository) {
+            for kind in RunKind.allCases {
+                let run = self[scope][kind].merged(over: inherited(kind, in: scope))
+                guard let harness = run.harness.flatMap(Harness.init) else { continue }
+                inUse[harness, default: []].formUnion(run.provider.map { [$0] } ?? [])
+            }
+        }
+        return inUse
     }
 }
 
@@ -195,8 +270,8 @@ public struct RunProfileChoice: Equatable, Identifiable {
     }
 }
 
-/// Reads and changes the model and effort keys in the text of a `symphony.yml`, one line at a time, so
-/// comments, ordering and unrelated keys stay as they are.
+/// Reads and changes the `runs` and `execution.harnesses` keys in the text of a `symphony.yml`, one line at a
+/// time, so comments, ordering and unrelated keys stay as they are.
 public enum RunProfilesConfig {
     /// The Default row first, then every run kind.
     public static let scopes: [RunKind?] = [nil] + RunKind.allCases
@@ -209,13 +284,25 @@ public enum RunProfilesConfig {
 
     public static let efforts = ["low", "medium", "high", "xhigh", "max"].map { RunProfileChoice(id: $0, title: $0) }
 
+    public static let harnesses = Harness.allCases.map { RunProfileChoice(id: $0.rawValue, title: $0.title) }
+
     public static let anthropic = "anthropic"
     public static let openRouter = "openrouter"
+    public static let openCodeGo = "opencode-go"
+    public static let openAI = "openai"
 
     public static let providers = [
         RunProfileChoice(id: anthropic, title: "Anthropic"),
         RunProfileChoice(id: openRouter, title: "OpenRouter"),
+        RunProfileChoice(id: openCodeGo, title: "OpenCode Go"),
+        RunProfileChoice(id: openAI, title: "OpenAI"),
     ]
+
+    /// The providers `harness` reaches, or every provider for no harness or one Symphony doesn't know.
+    public static func providers(for harness: String?) -> [RunProfileChoice] {
+        guard let harness = harness.flatMap(Harness.init) else { return providers }
+        return providers.filter { harness.providers.contains($0.id) }
+    }
 
     /// `choices`, plus `current` when the file holds a value they don't list.
     public static func choices(_ choices: [RunProfileChoice], including current: String?) -> [RunProfileChoice] {
@@ -223,54 +310,53 @@ public enum RunProfilesConfig {
         return choices + [RunProfileChoice(id: current, title: current)]
     }
 
-    /// The title of a picker's default entry: "default", or the value it falls back to and where from, as in
-    /// "Opus 5.5, from command".
-    public static func defaultTitle(_ choices: [RunProfileChoice], inherited: String?, source: String = "from command") -> String {
-        guard let inherited else { return "default" }
-        return (choices.first { $0.id == inherited }?.title ?? inherited) + ", " + source
+    /// The title of a picker's unset entry: the value it falls back to, or "none".
+    public static func inheritedTitle(_ choices: [RunProfileChoice], inherited: String?) -> String {
+        guard let inherited else { return "none" }
+        return choices.first { $0.id == inherited }?.title ?? inherited
     }
 
-    /// Keys of `agent:` in the order new ones are written.
-    static let agentOrder = ["runtime", "command", "provider", "model", "effort", smallModelKey, "run_profiles"]
-    public static let smallModelKey = "small_model"
+    static let runsSection = "runs"
+    static let defaultEntry = "default"
+    static let harnessesPath = ["execution", "harnesses"]
+    static let commandKey = "command"
+    static let smallModelKey = "small_model"
     static let fieldOrder = RunProfileField.allCases.map(\.rawValue)
     static let defaultIndentStep = 2
 
+    /// The name of the `runs` entry for `kind`, or of the defaults for nil.
+    static func entryName(_ kind: RunKind?) -> String { kind?.rawValue ?? defaultEntry }
+
     // MARK: Reading
 
-    /// The profiles of the top-level `agent` block, or of a repository's `agent` block for `scope`.
+    /// The profiles of the top-level `runs` block, or of a repository's `runs` block for `scope`.
     public static func profiles(in yaml: String, scope: RunProfilesScope = .global) throws -> RunProfiles {
         let document = Document(yaml)
-        guard let agent = try agentKey(in: document, scope: scope) else { return RunProfiles() }
-        let agentRange = document.children(of: agent)
         var profiles = RunProfiles()
-        for field in RunProfileField.allCases {
-            profiles.defaults[field] = try scalar(field.rawValue, in: agentRange, of: document)
-        }
-        guard let runProfiles = document.child("run_profiles", in: agentRange) else { return profiles }
-        let inline = try InlineText(runProfiles)
+        guard let runs = try runsKey(in: document, scope: scope) else { return profiles }
+        let inline = try InlineText(runs)
 
         if inline.isFlowMap {
-            for entry in try inline.flowMap(runProfiles) {
-                guard let kind = RunKind(rawValue: entry.key) else { continue }
-                guard case .map(let fields) = entry.value else { throw runProfiles.unsupported("`\(kind.rawValue)` should hold model and/or effort") }
-                profiles[kind] = try profile(from: fields, on: runProfiles)
+            for entry in try inline.flowMap(runs) {
+                guard let kind = kind(named: entry.key) else { continue }
+                guard case .map(let fields) = entry.value else { throw runs.unsupported(notAnEntry(entry.key)) }
+                profiles[kind] = try profile(from: fields, on: runs)
             }
             return profiles
         }
-        try requireBlock(runProfiles, inline)
-        let range = document.children(of: runProfiles)
-        for kind in RunKind.allCases {
-            guard let key = document.child(kind.rawValue, in: range) else { continue }
-            let kindInline = try InlineText(key)
-            if kindInline.isFlowMap {
-                profiles[kind] = try profile(from: kindInline.flowMap(key), on: key)
+        try requireBlock(runs, inline)
+        let range = document.children(of: runs)
+        for kind in scopes {
+            guard let key = document.child(entryName(kind), in: range) else { continue }
+            let entryInline = try InlineText(key)
+            if entryInline.isFlowMap {
+                profiles[kind] = try profile(from: entryInline.flowMap(key), on: key)
             } else {
-                try requireBlock(key, kindInline)
-                let kindRange = document.children(of: key)
+                try requireBlock(key, entryInline)
+                let entryRange = document.children(of: key)
                 var profile = RunProfile()
                 for field in RunProfileField.allCases {
-                    profile[field] = try scalar(field.rawValue, in: kindRange, of: document)
+                    profile[field] = try scalar(field.rawValue, in: entryRange, of: document)
                 }
                 profiles[kind] = profile
             }
@@ -278,25 +364,49 @@ public enum RunProfilesConfig {
         return profiles
     }
 
-    /// The profiles of the top-level `agent` block and of every repository, and `agent.small_model`.
+    /// The profiles of the top-level `runs` block and of every repository, and `execution.harnesses`.
     public static func scopedProfiles(in yaml: String) throws -> ScopedRunProfiles {
-        var profiles = ScopedRunProfiles(global: try self.profiles(in: yaml), smallModel: try smallModel(in: yaml))
+        var profiles = ScopedRunProfiles(global: try self.profiles(in: yaml), harnesses: try harnesses(in: yaml))
         for key in try repositoryKeys(in: yaml) {
             profiles.repositories[key] = try self.profiles(in: yaml, scope: .repository(key))
         }
         return profiles
     }
 
-    /// `agent.small_model`, or nil when it's missing.
-    public static func smallModel(in yaml: String) throws -> String? {
+    /// `execution.harnesses`: each harness that sets a command or a small model.
+    public static func harnesses(in yaml: String) throws -> [Harness: HarnessSettings] {
         let document = Document(yaml)
-        guard let agent = try agentKey(in: document) else { return nil }
-        return try scalar(smallModelKey, in: document.children(of: agent), of: document)
+        var harnesses: [Harness: HarnessSettings] = [:]
+        for harness in Harness.allCases {
+            var settings = HarnessSettings(command: try scalar(at: commandPath(harness), in: document))
+            for provider in harness.providers {
+                settings.smallModels[provider] = try scalar(at: smallModelPath(harness, provider), in: document)
+            }
+            if settings != HarnessSettings() { harnesses[harness] = settings }
+        }
+        return harnesses
     }
 
     /// The keys of the `repositories[]` entries, in file order.
     public static func repositoryKeys(in yaml: String) throws -> [String] {
         try repositoryItems(in: Document(yaml)).map(\.key)
+    }
+
+    public static func commandPath(_ harness: Harness) -> [String] {
+        harnessesPath + [harness.rawValue, commandKey]
+    }
+
+    public static func smallModelPath(_ harness: Harness, _ provider: String) -> [String] {
+        harnessesPath + [harness.rawValue, smallModelKey, provider]
+    }
+
+    /// The run kind an entry name stands for: `.some(nil)` for `default`, nil for a name that is no entry.
+    private static func kind(named name: String) -> RunKind?? {
+        name == defaultEntry ? .some(nil) : RunKind(rawValue: name).map(Optional.some)
+    }
+
+    private static func notAnEntry(_ name: String) -> String {
+        "`\(name)` should hold any of: \(fieldOrder.joined(separator: ", "))"
     }
 
     private static func profile(from entries: [FlowEntry], on key: Document.Key) throws -> RunProfile {
@@ -309,50 +419,6 @@ public enum RunProfilesConfig {
         return profile
     }
 
-    /// The `--model` and `--effort` that `agent.command` passes, which runs use while `agent.model` and
-    /// `agent.effort` are unset. `section` reads another section's command, such as `code_review`.
-    public static func commandProfile(in yaml: String, section: String = "agent") throws -> RunProfile {
-        let document = Document(yaml)
-        guard let key = try commandKey(in: document, section: section),
-              let command = try decodeScalar(InlineText(key).value, on: key) else { return RunProfile() }
-        return splitCommandFlags(command).flags
-    }
-
-    /// The command without its `--model` / `--effort` flags (`--model x` or `--model=x`), and their values.
-    /// Matches the flags Symphony rejects in `agent.command` once any model or effort is set.
-    static func splitCommandFlags(_ command: String) -> (command: String, flags: RunProfile) {
-        var rest = command
-        var flags = RunProfile()
-        for field in RunProfileField.commandFlags {
-            let pattern = #"(^|\s+)--"# + field.rawValue + #"(?:=(\S*)|\s+(?!-)(\S+))?(?=\s|$)"#
-            let regex = try! NSRegularExpression(pattern: pattern)
-            let matches = regex.matches(in: rest, range: NSRange(rest.startIndex..., in: rest))
-            // The CLI takes the last one.
-            for match in matches {
-                for group in [2, 3] {
-                    if let value = Range(match.range(at: group), in: rest), let unquoted = unquoted(rest[value]) {
-                        flags[field] = unquoted
-                    }
-                }
-            }
-            for match in matches.reversed() {
-                rest.removeSubrange(Range(match.range, in: rest)!)
-            }
-        }
-        if command.first?.isWhitespace != true {
-            rest = String(rest.drop { $0.isWhitespace })
-        }
-        return (rest, flags)
-    }
-
-    private static func unquoted(_ value: Substring) -> String? {
-        var value = value
-        if value.count >= 2, let quote = value.first, quote == "'" || quote == "\"", value.last == quote {
-            value = value.dropFirst().dropLast()
-        }
-        return value.isEmpty ? nil : String(value)
-    }
-
     /// The value of a direct child `name:` of the range.
     private static func scalar(_ name: String, in range: Range<Int>, of document: Document) throws -> String? {
         guard let key = document.child(name, in: range) else { return nil }
@@ -360,56 +426,53 @@ public enum RunProfilesConfig {
         return try decodeScalar(InlineText(key).value, on: key)
     }
 
+    /// The value at a key path from the top level, through indented blocks and `{ ... }` values, or nil when a
+    /// key on the way is missing.
+    private static func scalar(at path: [String], in document: Document) throws -> String? {
+        var range = document.all
+        for (depth, name) in path.enumerated() {
+            guard let key = document.child(name, in: range) else { return nil }
+            let inline = try InlineText(key)
+            let rest = path[(depth + 1)...]
+            guard !rest.isEmpty else {
+                try requireScalar(key, in: document)
+                return try decodeScalar(inline.value, on: key)
+            }
+            if inline.isFlowMap {
+                return try scalar(at: rest, in: inline.flowMap(key), on: key)
+            }
+            try requireBlock(key, inline)
+            range = document.children(of: key)
+        }
+        return nil
+    }
+
+    private static func scalar(at path: ArraySlice<String>, in entries: [FlowEntry], on key: Document.Key) throws -> String? {
+        guard let name = path.first, let entry = entries.first(where: { $0.key == name }) else { return nil }
+        switch (entry.value, path.count) {
+        case (.text(let raw), 1):
+            return try decodeScalar(Substring(raw), on: key)
+        case (.map(let nested), 2...):
+            return try scalar(at: path.dropFirst(), in: nested, on: key)
+        case (.text(let raw), _):
+            guard try decodeScalar(Substring(raw), on: key) == nil else { throw key.unsupported("`\(name)` should hold keys") }
+            return nil
+        case (.map, _):
+            throw key.unsupported("`\(name)` should be a single value")
+        }
+    }
+
     // MARK: Writing
 
     /// The same text with every field that differs between `old` and `new` written, and nothing else.
-    ///
-    /// Symphony rejects `--model` / `--effort` in `agent.command` once any model or effort is set, so when
-    /// the result sets one, those flags move out of the command into `agent.model` / `agent.effort`, unless
-    /// `new` sets those itself. It rejects them in `code_review.command` once a model or effort resolves
-    /// for Code Review's reviewer. `code_review.model` / `.effort` outrank the `code_review` kind and name no
-    /// provider, so a model there would also be checked against the provider the kind picks, such as
-    /// OpenRouter. When the result sets a default or the `code_review` kind, the section's keys, else
-    /// its flags, move into `agent.run_profiles.code_review`, the row Settings shows, for each field
-    /// that row keeps from `old`; a moved model keeps the provider the kind had in `old`. A row whose model
-    /// or provider changes drops the section's model, which names a model of the old provider.
-    /// `auto_review` and the `qa` kind work the same way. Runs then use the same model, effort and provider
-    /// as before, except where the rows change them or a repository's rows set them.
     public static func updating(_ yaml: String, from old: RunProfiles, to new: RunProfiles) throws -> String {
         try updating(yaml, from: ScopedRunProfiles(global: old), to: ScopedRunProfiles(global: new))
     }
 
-    /// `updating(_:from:to:)` for the top-level `agent` block and every repository's. A repository's model,
-    /// effort or `run_profiles` count like the top-level ones for moving the command flags, as Symphony
-    /// rejects those flags in the commands either way.
+    /// `updating(_:from:to:)` for the top-level `runs` block, every repository's, and `execution.harnesses`.
     public static func updating(_ yaml: String, from old: ScopedRunProfiles, to new: ScopedRunProfiles) throws -> String {
         guard old != new else { return yaml }
         var text = yaml
-        var new = new
-        let flags = try commandProfile(in: yaml)
-        if flags != RunProfile() && ([new.global] + new.repositories.values).contains(where: \.setsCommandFlags) {
-            for field in RunProfileField.commandFlags where new.global.defaults[field] == nil {
-                new.global.defaults[field] = flags[field]
-            }
-            text = try removingCommandFlags(in: text)
-        }
-        // After the move, as `agent.model` / `.effort` set from the flags count too.
-        let all = [new.global] + new.repositories.values
-        for (section, kind) in [(codeReview, RunKind.codeReview), (autoReview, .qa)] {
-            let moving = try sectionProfile(in: yaml, section: section)
-            guard moving != RunProfile() && all.contains(where: { $0.setsCommandFlags(for: kind) }) else { continue }
-            let kept = old.global[kind]
-            var row = new.global[kind]
-            if let model = moving.model, row.model == kept.model, row.provider == kept.provider {
-                row.model = model
-                let previous = provider(of: kind, in: old.global)
-                if row.provider == nil && provider(of: kind, in: new.global) != previous { row.provider = previous }
-            }
-            if let effort = moving.effort, row.effort == kept.effort { row.effort = effort }
-            new.global[kind] = row
-            text = try removingCommandFlags(in: text, section: section)
-            text = try removingSectionKeys(section, in: text)
-        }
         let scopes = [RunProfilesScope.global] + Set(old.repositories.keys).union(new.repositories.keys).sorted().map(RunProfilesScope.repository)
         for scope in scopes {
             for kind in self.scopes {
@@ -418,31 +481,88 @@ public enum RunProfilesConfig {
                 }
             }
         }
-        if old.smallModel != new.smallModel {
-            text = try settingSmallModel(new.smallModel, in: text)
+        for harness in Harness.allCases {
+            if old[harness].command != new[harness].command {
+                text = try settingCommand(new[harness].command, of: harness, in: text)
+            }
+            for provider in harness.providers where old[harness].smallModels[provider] != new[harness].smallModels[provider] {
+                text = try settingSmallModel(new[harness].smallModels[provider], of: harness, on: provider, in: text)
+            }
         }
         return text
     }
 
-    /// The same text with `agent.small_model` set, inserting it and any missing `agent:`, or removed for nil.
-    public static func settingSmallModel(_ value: String?, in yaml: String) throws -> String {
+    /// The same text with `execution.harnesses.<harness>.command` set, inserting it and any missing parent, or
+    /// removed for nil along with a parent it left empty.
+    public static func settingCommand(_ value: String?, of harness: Harness, in yaml: String) throws -> String {
+        try setting(at: commandPath(harness), to: value, in: yaml)
+    }
+
+    /// The same text with `execution.harnesses.<harness>.small_model.<provider>` set, inserting it and any
+    /// missing parent, or removed for nil along with a parent it left empty.
+    public static func settingSmallModel(_ value: String?, of harness: Harness, on provider: String, in yaml: String) throws -> String {
+        try setting(at: smallModelPath(harness, provider), to: value, in: yaml)
+    }
+
+    /// Sets the scalar at a key path from the top level, through indented blocks and `{ ... }` values. Missing
+    /// keys are inserted as indented blocks at the end of their parent's; a nil value removes the key, then
+    /// each parent it left empty.
+    private static func setting(at path: [String], to value: String?, in yaml: String) throws -> String {
         var document = Document(yaml)
         let rendered = value.map(RepositoriesConfig.scalar)
-        guard let agent = try agentKey(in: document) else {
-            guard let rendered else { return yaml }
-            document.append(["agent:", String(repeating: " ", count: defaultIndentStep) + smallModelKey + ": " + rendered])
+        var range = document.all
+        var parents: [Document.Key] = []
+        var step = defaultIndentStep
+
+        for (depth, name) in path.enumerated() {
+            guard let key = document.child(name, in: range) else {
+                guard let rendered else { return yaml }
+                let column = document.childIndent(in: range) ?? parents.last.map { $0.indent + step } ?? 0
+                let missing = Array(path[depth...])
+                let lines = missing.enumerated().map { offset, name in
+                    let line = String(repeating: " ", count: column + offset * step) + name + ":"
+                    return offset == missing.count - 1 ? line + " " + rendered : line
+                }
+                guard let parent = parents.last else {
+                    document.append(lines)
+                    return document.text
+                }
+                let last = document.lastStructural(in: range) ?? parent.index
+                document.lines.insert(contentsOf: lines, at: document.blockEnd(last, deeperThan: column) + 1)
+                return document.text
+            }
+            let inline = try InlineText(key)
+            let rest = path[(depth + 1)...]
+
+            if rest.isEmpty {
+                try set(name, to: rendered, under: parents.last, column: key.indent, order: [], in: &document)
+            } else if inline.isFlowMap {
+                var entries = try inline.flowMap(key)
+                guard try set(rest, to: rendered, in: &entries, on: key) else { return yaml }
+                if entries.isEmpty {
+                    document.lines.remove(at: key.index)
+                } else {
+                    document.lines[key.index] = inline.replacingValue(in: key, with: renderFlow(entries, padded: inline.isPadded))
+                }
+            } else {
+                try requireBlock(key, inline)
+                range = document.children(of: key)
+                if let childIndent = document.childIndent(in: range) { step = childIndent - key.indent }
+                parents.append(key)
+                continue
+            }
+            for parent in parents.reversed() where document.childIndent(in: document.children(of: parent)) == nil {
+                document.lines.remove(at: parent.index)
+            }
             return document.text
         }
-        let column = document.childIndent(in: document.children(of: agent)) ?? agent.indent + defaultIndentStep
-        try set(smallModelKey, to: rendered, under: agent, column: column, order: agentOrder, in: &document)
         return document.text
     }
 
-    /// The same text with one field set: `agent.<field>` for a nil kind, else
-    /// `agent.run_profiles.<kind>.<field>`, or the same keys under `repositories[<key>].agent` for a
-    /// repository `scope`. Rewrites only that value, keeping a trailing comment, or inserts the key and any
-    /// missing parent. A nil value removes the key, then a kind, `run_profiles:` or repository `agent:` it
-    /// left empty (Symphony rejects an empty one).
+    /// The same text with one field set: `runs.<kind>.<field>`, with `default` for a nil kind, or the same
+    /// keys under `repositories[<key>].runs` for a repository `scope`. Rewrites only that value, keeping a
+    /// trailing comment, or inserts the key and any missing parent. A nil value removes the key, then an entry
+    /// or `runs:` it left empty.
     public static func setting(
         _ field: RunProfileField,
         of kind: RunKind?,
@@ -450,232 +570,110 @@ public enum RunProfilesConfig {
         in yaml: String,
         scope: RunProfilesScope = .global
     ) throws -> String {
-        let text = try settingField(field, of: kind, to: value, in: yaml, scope: scope)
-        guard value == nil, case .repository = scope else { return text }
-        var document = Document(text)
-        guard let agent = try agentKey(in: document, scope: scope),
-              document.childIndent(in: document.children(of: agent)) == nil else { return text }
-        document.lines.remove(at: agent.index)
-        return document.text
-    }
-
-    private static func settingField(
-        _ field: RunProfileField,
-        of kind: RunKind?,
-        to value: String?,
-        in yaml: String,
-        scope: RunProfilesScope
-    ) throws -> String {
         var document = Document(yaml)
         let rendered = value.map(RepositoriesConfig.scalar)
+        let name = entryName(kind)
         var step = defaultIndentStep
-        // New kinds of a repository are written as indented blocks, which `RepositoriesConfig` can read.
+        let blocks: Bool
+        if case .repository = scope { blocks = true } else { blocks = false }
+        // New entries of a repository are written as indented blocks: `RepositoriesConfig` reads no `{ ... }`.
         var item: RepositoryItem?
         if case .repository(let key) = scope {
             item = try repositoryItem(key, in: document)
             step = item?.step ?? step
         }
 
-        guard let agent = try agentKey(in: document, scope: scope) else {
+        guard let runs = try runsKey(in: document, scope: scope) else {
             guard let rendered else { return yaml }
             guard let item else {
-                let pad = String(repeating: " ", count: step)
-                if let kind {
-                    document.append(["agent:", pad + "run_profiles:", pad + pad + flowLine(kind, field, rendered)])
-                } else {
-                    document.append(["agent:", pad + field.rawValue + ": " + rendered])
-                }
+                document.append([runsSection + ":"] + entryLines(name, field, rendered, column: step, step: step, blocks: blocks))
                 return document.text
             }
             let pad = String(repeating: " ", count: item.column)
-            var lines = [pad + "agent:"]
-            if let kind {
-                lines.append(pad + String(repeating: " ", count: step) + "run_profiles:")
-                lines += kindLines(kind, field, rendered, column: item.column + 2 * step, step: step, blocks: true)
-            } else {
-                lines.append(pad + String(repeating: " ", count: step) + field.rawValue + ": " + rendered)
-            }
-            document.lines.insert(contentsOf: lines, at: item.insertionIndex(in: document))
-            return document.text
-        }
-        let agentRange = document.children(of: agent)
-        let column = document.childIndent(in: agentRange) ?? agent.indent + step
-        let agentStep = column - agent.indent
-        let preferBlocks = item != nil
-
-        guard let kind else {
-            try set(field.rawValue, to: rendered, under: agent, column: column, order: agentOrder, in: &document)
-            return document.text
-        }
-
-        guard let runProfiles = document.child("run_profiles", in: agentRange) else {
-            guard let rendered else { return yaml }
-            let index = insertionIndex(for: "run_profiles", in: agentRange, order: agentOrder, after: agent, of: document)
-            let pad = String(repeating: " ", count: column)
             document.lines.insert(
-                contentsOf: [pad + "run_profiles:"]
-                    + kindLines(kind, field, rendered, column: column + agentStep, step: agentStep, blocks: preferBlocks),
-                at: index
+                contentsOf: [pad + runsSection + ":"] + entryLines(name, field, rendered, column: item.column + step, step: step, blocks: blocks),
+                at: item.insertionIndex(in: document)
             )
             return document.text
         }
-        let inline = try InlineText(runProfiles)
+        let inline = try InlineText(runs)
 
         if inline.isFlowMap {
-            var entries = try inline.flowMap(runProfiles)
+            var entries = try inline.flowMap(runs)
             if entries.isEmpty {
-                // `run_profiles: {}` turns into a block holding the new kind.
+                // `runs: {}` turns into a block holding the new entry.
                 guard let rendered else { return yaml }
-                document.lines[runProfiles.index] = inline.replacingValue(in: runProfiles, with: "")
+                document.lines[runs.index] = inline.replacingValue(in: runs, with: "")
                 document.lines.insert(
-                    contentsOf: kindLines(kind, field, rendered, column: runProfiles.indent + agentStep, step: agentStep, blocks: preferBlocks),
-                    at: runProfiles.index + 1
+                    contentsOf: entryLines(name, field, rendered, column: runs.indent + step, step: step, blocks: blocks),
+                    at: runs.index + 1
                 )
                 return document.text
             }
-            let entryIndex = entries.firstIndex { $0.key == kind.rawValue }
-            var fields: [FlowEntry] = []
-            if let entryIndex {
-                guard case .map(let existing) = entries[entryIndex].value else {
-                    throw runProfiles.unsupported("`\(kind.rawValue)` should hold model and/or effort")
-                }
-                fields = existing
-            }
-            guard set(field, to: rendered, in: &fields) else { return yaml }
-            if let entryIndex {
-                if fields.isEmpty { entries.remove(at: entryIndex) } else { entries[entryIndex].value = .map(fields) }
-            } else {
-                entries.append(FlowEntry(key: kind.rawValue, value: .map(fields)))
-            }
+            guard try set([name, field.rawValue], to: rendered, in: &entries, on: runs) else { return yaml }
             if entries.isEmpty {
-                document.lines.remove(at: runProfiles.index)
+                document.lines.remove(at: runs.index)
             } else {
-                document.lines[runProfiles.index] = inline.replacingValue(in: runProfiles, with: renderFlow(entries, padded: inline.isPadded))
+                document.lines[runs.index] = inline.replacingValue(in: runs, with: renderFlow(entries, padded: inline.isPadded))
             }
             return document.text
         }
 
-        try requireBlock(runProfiles, inline)
-        let profilesRange = document.children(of: runProfiles)
-        let kindColumn = document.childIndent(in: profilesRange) ?? runProfiles.indent + agentStep
+        try requireBlock(runs, inline)
+        let runsRange = document.children(of: runs)
+        let entryColumn = document.childIndent(in: runsRange) ?? runs.indent + step
+        let runsStep = entryColumn - runs.indent
 
-        guard let kindKey = document.child(kind.rawValue, in: profilesRange) else {
+        guard let entry = document.child(name, in: runsRange) else {
             guard let rendered else { return yaml }
-            let last = document.lastStructural(in: profilesRange) ?? runProfiles.index
-            let index = document.blockEnd(last, deeperThan: kindColumn) + 1
-            let blocks = try document.childIndent(in: profilesRange) == nil ? preferBlocks : siblingsUseBlocks(in: profilesRange, of: document)
+            // `default` leads the block; a run kind goes after the last entry.
+            var index = runs.index + 1
+            if kind != nil, let last = document.lastStructural(in: runsRange) {
+                index = document.blockEnd(last, deeperThan: entryColumn) + 1
+            }
             document.lines.insert(
-                contentsOf: kindLines(kind, field, rendered, column: kindColumn, step: agentStep, blocks: blocks),
+                contentsOf: entryLines(name, field, rendered, column: entryColumn, step: runsStep, blocks: blocks),
                 at: index
             )
             return document.text
         }
-        let kindInline = try InlineText(kindKey)
+        let entryInline = try InlineText(entry)
 
-        if kindInline.isFlowMap {
-            var fields = try kindInline.flowMap(kindKey)
-            guard set(field, to: rendered, in: &fields) else { return yaml }
+        if entryInline.isFlowMap {
+            var fields = try entryInline.flowMap(entry)
+            guard try set([field.rawValue], to: rendered, in: &fields, on: entry) else { return yaml }
             if fields.isEmpty {
-                document.lines.remove(at: kindKey.index)
+                document.lines.remove(at: entry.index)
             } else {
-                document.lines[kindKey.index] = kindInline.replacingValue(in: kindKey, with: renderFlow(fields, padded: kindInline.isPadded))
+                document.lines[entry.index] = entryInline.replacingValue(in: entry, with: renderFlow(fields, padded: entryInline.isPadded))
             }
         } else {
-            try requireBlock(kindKey, kindInline)
-            let fieldColumn = document.childIndent(in: document.children(of: kindKey)) ?? kindKey.indent + agentStep
-            try set(field.rawValue, to: rendered, under: kindKey, column: fieldColumn, order: fieldOrder, in: &document)
-            if let emptied = document.child(kind.rawValue, in: document.children(of: runProfiles)),
-               document.childIndent(in: document.children(of: emptied)) == nil {
-                document.lines.remove(at: emptied.index)
+            try requireBlock(entry, entryInline)
+            let fieldColumn = document.childIndent(in: document.children(of: entry)) ?? entry.indent + runsStep
+            try set(field.rawValue, to: rendered, under: entry, column: fieldColumn, order: fieldOrder, in: &document)
+            if document.childIndent(in: document.children(of: entry)) == nil {
+                document.lines.remove(at: entry.index)
             }
         }
-        if let profiles = document.child("run_profiles", in: document.children(of: agent)),
-           document.childIndent(in: document.children(of: profiles)) == nil {
-            document.lines.remove(at: profiles.index)
+        if document.childIndent(in: document.children(of: runs)) == nil {
+            document.lines.remove(at: runs.index)
         }
         return document.text
     }
 
-    static let codeReview = "code_review"
-    static let autoReview = "auto_review"
-
-    /// The model and effort `<section>` gives its runs: its `model` / `effort` keys, else the `--model` /
-    /// `--effort` in its command. A `<section>: { ... }` line only matters, and so only fails, when its command
-    /// passes one of them; its keys stay where they are.
-    private static func sectionProfile(in yaml: String, section name: String) throws -> RunProfile {
-        let flags = try commandFlags(in: yaml, section: name)
-        let document = Document(yaml)
-        guard let section = document.child(name, in: document.all), try InlineText(section).isNull else { return flags }
-        let range = document.children(of: section)
-        let keys = RunProfile(
-            model: try scalar("model", in: range, of: document),
-            effort: try scalar("effort", in: range, of: document)
-        )
-        return keys.merged(over: flags)
-    }
-
-    /// The `--model` / `--effort` in `<section>.command`. A `<section>: { ... }` line only matters, and so
-    /// only fails, when its command passes one of them.
-    private static func commandFlags(in yaml: String, section name: String) throws -> RunProfile {
-        let document = Document(yaml)
-        if let section = document.child(name, in: document.all), try InlineText(section).isFlowMap {
-            let command = try InlineText(section).flowMap(section).first { $0.key == "command" }
-            guard case .text(let raw)? = command?.value,
-                  let value = try decodeScalar(Substring(raw), on: section),
-                  splitCommandFlags(value).flags != RunProfile() else { return RunProfile() }
-            throw section.unsupported("`\(name):` should be an indented block")
-        }
-        return try commandProfile(in: yaml, section: name)
-    }
-
-    /// The text with `--model` / `--effort` taken out of `<section>.command`, keeping the rest of the line,
-    /// its quoting and any trailing comment.
-    private static func removingCommandFlags(in yaml: String, section: String = "agent") throws -> String {
-        var document = Document(yaml)
-        guard let key = try commandKey(in: document, section: section) else { return yaml }
-        let inline = try InlineText(key)
-        let rendered: String
-        switch inline.value.first {
-        case "'"?:
-            guard let command = try decodeScalar(inline.value, on: key) else { return yaml }
-            rendered = "'" + splitCommandFlags(command).command.replacingOccurrences(of: "'", with: "''") + "'"
-        case "\""?:
-            guard let command = try decodeScalar(inline.value, on: key) else { return yaml }
-            rendered = RepositoriesConfig.scalar(splitCommandFlags(command).command)
-        default:
-            rendered = splitCommandFlags(String(inline.value)).command
-        }
-        document.lines[key.index] = inline.replacingValue(in: key, with: rendered)
-        return document.text
-    }
-
-    /// The text without `<name>.model` / `.effort`.
-    private static func removingSectionKeys(_ name: String, in yaml: String) throws -> String {
-        var document = Document(yaml)
-        guard let section = try sectionKey(name, in: document) else { return yaml }
-        for field in RunProfileField.commandFlags {
-            try set(field.rawValue, to: nil, under: section, column: 0, order: [], in: &document)
-        }
-        return document.text
-    }
-
-    /// The provider runs of `kind` get from the top-level `agent` block.
-    private static func provider(of kind: RunKind, in profiles: RunProfiles) -> String {
-        profiles[kind].provider ?? profiles.defaults.provider ?? anthropic
-    }
-
-    /// Sets the scalar child `name:` of `parent`: rewrites its value, inserts it in `order`, or removes it for nil.
+    /// Sets the scalar child `name:` of `parent` (the top level for nil): rewrites its value, inserts it in
+    /// `order`, or removes it for nil.
     private static func set(
         _ name: String,
         to rendered: String?,
-        under parent: Document.Key,
+        under parent: Document.Key?,
         column: Int,
         order: [String],
         in document: inout Document
     ) throws {
-        let range = document.children(of: parent)
+        let range = parent.map { document.children(of: $0) } ?? document.all
         guard let key = document.child(name, in: range) else {
-            guard let rendered else { return }
+            guard let rendered, let parent else { return }
             let index = insertionIndex(for: name, in: range, order: order, after: parent, of: document)
             document.lines.insert(String(repeating: " ", count: column) + name + ": " + rendered, at: index)
             return
@@ -690,9 +688,35 @@ public enum RunProfilesConfig {
         document.lines[key.index] = inline.replacingValue(in: key, with: rendered)
     }
 
-    /// Sets a field in flow-map entries. Returns false when nothing changed.
-    private static func set(_ field: RunProfileField, to rendered: String?, in entries: inout [FlowEntry]) -> Bool {
-        let index = entries.firstIndex { $0.key == field.rawValue }
+    /// Sets the value at a key path in flow-map entries, adding the maps on the way and dropping the ones it
+    /// leaves empty. A new run profile field goes in `fieldOrder`; any other new key goes last. Returns false
+    /// when nothing changed.
+    private static func set(
+        _ path: ArraySlice<String>,
+        to rendered: String?,
+        in entries: inout [FlowEntry],
+        on key: Document.Key
+    ) throws -> Bool {
+        guard let name = path.first else { return false }
+        let index = entries.firstIndex { $0.key == name }
+        guard path.count == 1 else {
+            var nested: [FlowEntry] = []
+            if let index {
+                switch entries[index].value {
+                case .map(let existing): nested = existing
+                case .text(let raw):
+                    guard try decodeScalar(Substring(raw), on: key) == nil else { throw key.unsupported("`\(name)` should hold keys") }
+                }
+            }
+            guard try set(path.dropFirst(), to: rendered, in: &nested, on: key) else { return false }
+            switch (index, nested.isEmpty) {
+            case (let index?, true): entries.remove(at: index)
+            case (let index?, false): entries[index].value = .map(nested)
+            case (nil, true): return false
+            case (nil, false): entries.append(FlowEntry(key: name, value: .map(nested)))
+            }
+            return true
+        }
         switch (index, rendered) {
         case (nil, nil):
             return false
@@ -702,10 +726,9 @@ public enum RunProfilesConfig {
             guard entries[index].value != .text(rendered) else { return false }
             entries[index].value = .text(rendered)
         case (nil, let rendered?):
-            // Provider, then model, then effort.
-            let later = RunProfileField.allCases.drop { $0 != field }.dropFirst().map(\.rawValue)
+            let later = fieldOrder.drop { $0 != name }.dropFirst()
             let position = entries.firstIndex { later.contains($0.key) } ?? entries.count
-            entries.insert(FlowEntry(key: field.rawValue, value: .text(rendered)), at: position)
+            entries.insert(FlowEntry(key: name, value: .text(rendered)), at: position)
         }
         return true
     }
@@ -726,24 +749,10 @@ public enum RunProfilesConfig {
         return document.blockEnd(last, deeperThan: previous.indent) + 1
     }
 
-    /// Whether the existing kinds are written as indented blocks rather than `{ ... }`.
-    private static func siblingsUseBlocks(in range: Range<Int>, of document: Document) throws -> Bool {
-        guard let column = document.childIndent(in: range) else { return false }
-        guard let first = range.first(where: { document.indent(at: $0) == column }) else { return false }
-        let content = document.lines[first].dropFirst(column)
-        guard let colon = content.firstIndex(of: ":") else { return false }
-        let key = Document.Key(name: String(content[..<colon]), index: first, indent: column, rest: String(content[content.index(after: colon)...]))
-        return try InlineText(key).value.isEmpty
-    }
-
-    private static func flowLine(_ kind: RunKind, _ field: RunProfileField, _ rendered: String) -> String {
-        kind.rawValue + ": { " + field.rawValue + ": " + rendered + " }"
-    }
-
-    /// A new kind holding one field, at `column`: `kind: { field: value }`, or `kind:` with the field
+    /// A new entry holding one field, at `column`: `name: { field: value }`, or `name:` with the field
     /// indented under it.
-    private static func kindLines(
-        _ kind: RunKind,
+    private static func entryLines(
+        _ name: String,
         _ field: RunProfileField,
         _ rendered: String,
         column: Int,
@@ -751,24 +760,22 @@ public enum RunProfilesConfig {
         blocks: Bool
     ) -> [String] {
         let pad = String(repeating: " ", count: column)
-        guard blocks else { return [pad + flowLine(kind, field, rendered)] }
-        return [pad + kind.rawValue + ":", pad + String(repeating: " ", count: step) + field.rawValue + ": " + rendered]
+        guard blocks else { return [pad + name + ": { " + field.rawValue + ": " + rendered + " }"] }
+        return [pad + name + ":", pad + String(repeating: " ", count: step) + field.rawValue + ": " + rendered]
     }
 
     // MARK: Checks
 
-    /// The top-level `agent:` key, or a repository's `agent:` key, or nil when it's missing.
-    private static func agentKey(in document: Document, scope: RunProfilesScope = .global) throws -> Document.Key? {
-        guard case .repository(let key) = scope else { return try sectionKey("agent", in: document) }
+    /// The top-level `runs:` key, or a repository's `runs:` key, or nil when it's missing.
+    private static func runsKey(in document: Document, scope: RunProfilesScope) throws -> Document.Key? {
+        guard case .repository(let key) = scope else { return document.child(runsSection, in: document.all) }
         let item = try repositoryItem(key, in: document)
-        if item.firstKey == "agent" {
-            throw Document.Key(name: "agent", index: item.dash, indent: item.column, rest: "").unsupported(
-                "put `key:` first, not `agent:`, on the repository's `-` line"
+        if item.firstKey == runsSection {
+            throw Document.Key(name: runsSection, index: item.dash, indent: item.column, rest: "").unsupported(
+                "put `key:` first, not `runs:`, on the repository's `-` line"
             )
         }
-        guard let agent = document.child("agent", in: item.body, indent: item.column) else { return nil }
-        try requireBlock(agent, InlineText(agent))
-        return agent
+        return document.child(runsSection, in: item.body, indent: item.column)
     }
 
     /// One `- key: ...` entry of `repositories:`.
@@ -845,21 +852,6 @@ public enum RunProfilesConfig {
         }
     }
 
-    /// The top-level `name:` key, or nil when it's missing.
-    private static func sectionKey(_ name: String, in document: Document) throws -> Document.Key? {
-        guard let section = document.child(name, in: document.all) else { return nil }
-        try requireBlock(section, InlineText(section))
-        return section
-    }
-
-    /// `<section>.command`, or nil when it's missing.
-    private static func commandKey(in document: Document, section: String) throws -> Document.Key? {
-        guard let parent = try sectionKey(section, in: document),
-              let key = document.child("command", in: document.children(of: parent)) else { return nil }
-        try requireScalar(key, in: document)
-        return key
-    }
-
     private static func requireBlock(_ key: Document.Key, _ inline: InlineText) throws {
         guard inline.isNull else { throw key.unsupported("`\(key.name):` should be an indented block") }
     }
@@ -879,17 +871,12 @@ extension SymphonyConfigFile {
         try RunProfilesConfig.profiles(in: read())
     }
 
-    /// The `--model` / `--effort` that `agent.command` passes.
-    public func readCommandProfile() throws -> RunProfile {
-        try RunProfilesConfig.commandProfile(in: read())
-    }
-
     /// Writes the fields that differ between `old` and `new`. Leaves the file untouched when none do.
     public func writeRunProfiles(_ new: RunProfiles, from old: RunProfiles) throws {
         try rewrite { try RunProfilesConfig.updating($0, from: old, to: new) }
     }
 
-    /// The profiles of the top-level `agent` block and of every repository.
+    /// The profiles of the top-level `runs` block and of every repository, and `execution.harnesses`.
     public func readScopedRunProfiles() throws -> ScopedRunProfiles {
         try RunProfilesConfig.scopedProfiles(in: read())
     }

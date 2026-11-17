@@ -32,10 +32,10 @@ final class ConfigCheckTests: XCTestCase {
         )
         XCTAssertEqual(
             ConfigCheck.unreadable(
-                "Config error in /ops/a.yml: Lines it can't rewrite: 4 (`agent.run_profiles.pre_push_review`). Write each of those keys "
+                "Config error in /ops/a.yml: Lines it can't rewrite: 4 (`runs.pre_push_review`). Write each of those keys "
                     + "as an indented block, on a line of its own"
             ),
-            "line 4 (`agent.run_profiles.pre_push_review`)"
+            "line 4 (`runs.pre_push_review`)"
         )
         XCTAssertEqual(ConfigCheck.unreadable("Lines it can't read: 3 (`a`)"), "line 3 (`a`)", "a list with no closing period")
         XCTAssertEqual(ConfigCheck.unreadable("Config error: `a` is not valid"), "`a`")
@@ -126,8 +126,8 @@ final class ConfigCheckTests: XCTestCase {
 
     func testAConfigErrorReadsWithTheReasonAndKeyBeforeThePath() {
         XCTAssertEqual(
-            ConfigCheck.reasonFirst("Config error in /Users/me/ops/symphony.yml: invalid agent.run_profiles.qa.effort: \"huge\""),
-            "invalid agent.run_profiles.qa.effort: \"huge\" (in /Users/me/ops/symphony.yml)"
+            ConfigCheck.reasonFirst("Config error in /Users/me/ops/symphony.yml: invalid runs.qa.effort: \"huge\""),
+            "invalid runs.qa.effort: \"huge\" (in /Users/me/ops/symphony.yml)"
         )
     }
 
@@ -135,8 +135,8 @@ final class ConfigCheckTests: XCTestCase {
         let file = URL(fileURLWithPath: "/ops/symphony.yml")
         let copy = URL(fileURLWithPath: "/ops/.symphony.yml.74B448CD-E3DA-4192-AF79-696B76A39D77")
         XCTAssertEqual(
-            ConfigCheckResult.failed("Config error in \(copy.path): agent.model: bad").naming(file, for: copy),
-            .failed("Config error in /ops/symphony.yml: agent.model: bad")
+            ConfigCheckResult.failed("Config error in \(copy.path): runs.default.model: bad").naming(file, for: copy),
+            .failed("Config error in /ops/symphony.yml: runs.default.model: bad")
         )
         XCTAssertEqual(ConfigCheckResult.passed.naming(file, for: copy), .passed)
     }
