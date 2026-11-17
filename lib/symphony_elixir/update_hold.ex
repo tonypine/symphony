@@ -282,8 +282,8 @@ defmodule SymphonyElixir.UpdateHold do
   # release gate's fix ticket is never one: the build it would wait for publishes only once its own
   # fix lands.
   defp candidate?(%Issue{state: state, blocked_by: [_ | _]} = issue, terminal_states) when is_binary(state) do
-    normalize(state) == @todo_state and Issue.open_blockers(issue, terminal_states) == [] and not skip_labelled?(issue) and
-      not ReleaseGate.fix_ticket?(issue.repo_key, issue.identifier)
+    normalize(state) == @todo_state and Issue.open_blockers(issue, terminal_states) == [] and
+      not skip_labelled?(issue) and not ReleaseGate.fix_ticket?(issue.repo_key, issue.identifier)
   end
 
   defp candidate?(_issue, _terminal_states), do: false

@@ -172,7 +172,8 @@ defmodule SymphonyElixir.InstructionsHoldTest do
 
       # An injected answer decides it too.
       only_other = fn @repo_key, identifier -> identifier == "TP-other" end
-      capture_log(fn -> InstructionsHold.resolve([fix, other], @repo_key, opts(compare: ahead_on_renderer(), fix_ticket?: only_other)) end)
+      only_other_opts = opts(compare: ahead_on_renderer(), fix_ticket?: only_other)
+      capture_log(fn -> InstructionsHold.resolve([fix, other], @repo_key, only_other_opts) end)
       assert [_reason] = InstructionsHold.reasons(@repo_key, "fix")
       assert [_reason] = InstructionsHold.reasons(@repo_key, "other")
     end

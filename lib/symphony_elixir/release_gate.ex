@@ -123,13 +123,9 @@ defmodule SymphonyElixir.ReleaseGate do
   it. Reads only the run store. `opts`: `:run_store`.
   """
   @spec fix_ticket?(String.t() | nil, String.t() | nil, keyword()) :: boolean()
-  def fix_ticket?(repo_key, identifier, opts \\ [])
-
-  def fix_ticket?(repo_key, identifier, opts) when is_binary(repo_key) and is_binary(identifier) do
-    match?(%{identifier: ^identifier}, fix(repo_key, opts))
+  def fix_ticket?(repo_key, identifier, opts \\ []) do
+    is_binary(repo_key) and is_binary(identifier) and match?(%{identifier: ^identifier}, fix(repo_key, opts))
   end
-
-  def fix_ticket?(_repo_key, _identifier, _opts), do: false
 
   @doc """
   Why `repo_key`'s ticket `identifier` is not dispatched while the release gate is red: every
@@ -138,17 +134,13 @@ defmodule SymphonyElixir.ReleaseGate do
   run store. `opts`: `:run_store`.
   """
   @spec hold_reason(String.t() | nil, String.t() | nil, keyword()) :: String.t() | nil
-  def hold_reason(repo_key, identifier, opts \\ [])
-
-  def hold_reason(repo_key, identifier, opts) when is_binary(repo_key) do
-    case fix(repo_key, opts) do
+  def hold_reason(repo_key, identifier, opts \\ []) do
+    case is_binary(repo_key) && fix(repo_key, opts) do
       %{identifier: ^identifier} -> nil
       %{identifier: fix, red: true} -> "Holding while the release gate on main is red: #{fix} is fixing it"
-      _green_or_none -> nil
+      _green_none_or_no_repo -> nil
     end
   end
-
-  def hold_reason(_repo_key, _identifier, _opts), do: nil
 
   @doc """
   A release build of the repository `build.repo` passed the gate (it was published): a red gate
@@ -197,9 +189,12 @@ defmodule SymphonyElixir.ReleaseGate do
   nothing. `opts`: those of `failed/2`.
   """
   @spec reconcile([map()], String.t() | nil, keyword()) :: :ok
-  def reconcile(issues, repo_key, opts \\ [])
+  def reconcile(issues, repo_key, opts \\ []) do
+    if is_list(issues) and is_binary(repo_key), do: reconcile_red(issues, repo_key, opts)
+    :ok
+  end
 
-  def reconcile(issues, repo_key, opts) when is_list(issues) and is_binary(repo_key) do
+  defp reconcile_red(issues, repo_key, opts) do
     with %{identifier: identifier, red: true} = fix <- fix(repo_key, opts),
          false <- Enum.any?(issues, &match?(%{identifier: ^identifier}, &1)),
          {:ok, %{state: state} = issue} <- tracker(opts).fetch_issue_by_identifier(identifier) do
@@ -210,11 +205,7 @@ defmodule SymphonyElixir.ReleaseGate do
         to_todo(issue, opts)
       end
     end
-
-    :ok
   end
-
-  def reconcile(_issues, _repo_key, _opts), do: :ok
 
   defp fix(repo_key, opts) do
     case store(opts).get_github_updates(key(repo_key)) do
