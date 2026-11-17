@@ -8,9 +8,9 @@ defmodule SymphonyElixir.TicketList do
   (`removed_at` and `not_found_at` unset). The filters match as the Journal's and the aggregation
   read's do: `epic` keeps the epic and the tickets whose record names it as parent, `repo` a
   repository's tickets; `repo`, `phase` and `label` match in any case; `since` keeps the tickets whose
-  record was written after it. The situations are computed (`SymphonyElixir.Situation.read/3`) only
-  when the view shows, filters or sorts by one. A sort puts the tickets without a value last, either
-  way, and breaks ties by identifier. It reads Symphony's store only and writes nothing.
+  record was written after it. The situations' kind and since are computed
+  (`SymphonyElixir.Situation.headline/3`) only when the view shows, filters or sorts by one. A sort
+  puts the tickets without a value last, either way, and breaks ties by identifier. It reads Symphony's store only and writes nothing.
   """
 
   alias SymphonyElixir.{RunStore, Situation, TicketColumns, TicketState, Views}
@@ -47,7 +47,7 @@ defmodule SymphonyElixir.TicketList do
   defp with_situation(values, _record, false, _live, _records), do: values
 
   defp with_situation(values, record, true, live, records),
-    do: Map.merge(values, record |> Situation.read(live, records) |> TicketColumns.situation_values())
+    do: Map.merge(values, record |> Situation.headline(live, records) |> TicketColumns.situation_values())
 
   # -- Filters ---------------------------------------------------------------------------------
 

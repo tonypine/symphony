@@ -10,14 +10,16 @@ struct ForceSheetRequest: Identifiable, Equatable {
 // MARK: - The window model's Tickets and dispatch controls
 
 extension SymphonyWindowModel {
-    /// Every tracked ticket under the window's scope, nil until the first state payload.
-    var ticketList: TicketList? {
-        overviewState.map { TicketList(state: $0, scope: scope, now: Date()) }
+    /// Builds `ticketList` and `allTickets` again for a new state or scope, so a render reads them as they are.
+    func ticketListsChanged() {
+        let now = Date()
+        ticketList = overviewState.map { TicketList(state: $0, scope: scope, now: now) }
+        allTickets = overviewState.map { TicketList(state: $0, now: now) }
     }
 
-    /// Every tracked ticket in every repo, for the Force sheet's lookup.
-    var allTickets: TicketList? {
-        overviewState.map { TicketList(state: $0, now: Date()) }
+    /// Works out `ticketRows` again for new rows or a new search, so a render reads them as they are.
+    func ticketRowsChanged() {
+        ticketRows = ticketsPayload?.rows(matching: ticketSearch) ?? []
     }
 
     /// C2: the toolbar's dispatch control.
@@ -293,7 +295,8 @@ extension SymphonyWindowModel {
             let current = query == ticketsQuery && scope == self.scope
             if current {
                 if case let .loaded(data) = result, let payload = TicketsPayload.decode(data) {
-                    ticketsPayload = payload
+                    // The same rows again leave the table as it is: nothing re-renders.
+                    if payload != ticketsPayload { ticketsPayload = payload }
                     ticketsResult = nil
                     ticketFilterValues.learn(payload.rows, repos: overviewState?.repos ?? [])
                 } else {
@@ -338,6 +341,7 @@ struct TicketsContent: View {
             if let payload = model.ticketsPayload {
                 TicketsView(
                     payload: payload,
+                    rows: model.ticketRows,
                     list: model.ticketList,
                     catalog: model.ticketCatalog,
                     scope: model.scope,
@@ -371,7 +375,7 @@ struct TicketsContent: View {
             ToolbarItem(placement: .automatic) {
                 PageSearchField(
                     prompt: TicketsView.searchPrompt, text: $model.ticketSearch,
-                    matches: model.ticketsPayload?.rows(matching: model.ticketSearch).count, requested: $model.searchRequested
+                    matches: model.ticketsPayload.map { _ in model.ticketRows.count }, requested: $model.searchRequested
                 )
             }
         }
@@ -427,6 +431,8 @@ struct TicketsView: View {
     static let searchPrompt = "Ticket or title"
 
     let payload: TicketsPayload
+    /// The payload's rows the search finds, worked out by the model once per change of either, never in `body`.
+    let rows: [TicketsRow]
     /// The state's tickets: the forced and needs-attention marks, the situations' causes and the inspector's facts.
     var list: TicketList?
     var catalog = TicketColumn.catalog
@@ -446,7 +452,6 @@ struct TicketsView: View {
     @State private var tableSelection: String?
 
     var body: some View {
-        let rows = payload.rows(matching: search)
         let columns = query.shownColumns(catalog: catalog, scope: scope)
         VStack(spacing: 0) {
             TicketsFilterBar(query: $query, catalog: catalog, values: values, count: rows.count, drawerShown: $drawerShown,
@@ -473,7 +478,7 @@ struct TicketsView: View {
                 .clipped()
                 if drawerShown {
                     Divider()
-                    TicketsDrawer(row: drawerRow(rows), reference: reference, actions: actions, close: { drawerShown = false })
+                    TicketsDrawer(row: drawerRow, reference: reference, actions: actions, close: { drawerShown = false })
                         .frame(width: TicketsDrawer.width)
                         .frame(maxHeight: .infinity, alignment: .top)
                 }
@@ -490,7 +495,7 @@ struct TicketsView: View {
     }
 
     /// The selected ticket as the state has it, or as the server's columns read when the state doesn't list it.
-    private func drawerRow(_ rows: [TicketsRow]) -> TicketList.Row? {
+    private var drawerRow: TicketList.Row? {
         guard let selection else { return nil }
         if let tracked = list?.row(selection) { return tracked }
         return rows.first { $0.identifier == selection }.map { TicketList.Row($0, columns: payload.columns, reference: reference) }

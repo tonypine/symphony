@@ -100,7 +100,7 @@ defmodule SymphonyElixir.TicketColumns do
   end
 
   @doc "The situation's columns of a ticket (`SymphonyElixir.Situation.t/0`)."
-  @spec situation_values(Situation.t()) :: %{String.t() => term()}
+  @spec situation_values(Situation.t() | Situation.headline()) :: %{String.t() => term()}
   def situation_values(situation), do: %{"situation" => situation.kind, "situation_since" => situation.since}
 
   defp epic(%{identifier: identifier}) when is_binary(identifier), do: identifier
