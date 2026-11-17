@@ -66,6 +66,9 @@ let galleryEntries: [GalleryEntry] = [
         id: "text-area", title: "Text area", kind: .component, prefixes: ["text-area-"],
         files: ["SymphonyBarUI/DesignSystem/TextInputs.swift"]),
     GalleryEntry(
+        id: "table", title: "Table", kind: .component, prefixes: ["table-header-and-row-"],
+        files: ["SymphonyBarUI/DesignSystem/DataTable.swift"]),
+    GalleryEntry(
         id: "mention-chips", title: "Mention chips and their popovers", kind: .component,
         prefixes: ["ticket-popover", "pr-popover", "missing-popover", "plan-chips", "pr-chips", "clarify-chips", "blocked-chips", "decision-chips-"],
         files: ["SymphonyBarUI/Chip", "SymphonyBarUI/ReferencePopoverView.swift", "SymphonyBarCore/Mention"]),

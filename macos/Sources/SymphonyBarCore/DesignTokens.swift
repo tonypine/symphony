@@ -1379,6 +1379,170 @@ public enum DesignTokens {
         public static func escape(query: String) -> EscapeStep { query.isEmpty ? .release : .clear }
     }
 
+    /// The catalog's Table (`.table`, the Table header and row stories; TP-1510): a 32 pt header of short labels whose
+    /// sortable ones are small buttons showing their direction, 36 pt rows with the row radius at their ends, every
+    /// second one faintly banded; columns that fit their content and columns that share the spare width.
+    public enum Table {
+        /// The header's height and a row's.
+        public static let headerHeight: Double = 32
+        public static let rowHeight: Double = 36
+        /// The room on each side of a cell's content (`--space-3`).
+        public static let cellPadding = Space.s3
+        /// A sortable header's button: the small control's height and radius, reaching 8 pt past its cell's padding.
+        public static let headerButton = Control.small
+        public static let headerButtonOutset = Space.s2
+        /// Between a header's label and its sort glyph, and the glyph's size (the catalog's 9 px arrow).
+        public static let sortGap = Space.s1
+        public static let sortGlyph: Double = 9
+        public static let ascendingSymbol = "arrowtriangle.up.fill"
+        public static let descendingSymbol = "arrowtriangle.down.fill"
+        /// The header's rule under it.
+        public static let ruleWidth: Double = 1
+        /// The band behind every second row at rest: the catalog's 2.2 % of a dark ink, or of white in dark.
+        public static let band = ColorPair(RGBA(24, 24, 48, 0.022), RGBA(255, 255, 255, 0.022))
+        /// The fewest points a column that shares the spare width shrinks to before the table scrolls sideways.
+        public static let minShareWidth: Double = 80
+        /// The empty table's line: its height and its room above the link.
+        public static let emptyHeight: Double = 140
+
+        /// How a column's content sits: text at the leading edge, numbers at the trailing edge in tabular figures.
+        public enum Alignment: String, CaseIterable, Equatable {
+            case text, number
+        }
+
+        /// How wide a column is: as wide as its widest content (never squeezed), or a share of the width the fitted
+        /// columns leave, down to `minimum`.
+        public enum Width: Equatable {
+            case fit
+            case share(Double, minimum: Double = Table.minShareWidth)
+
+            /// The share's weight; none for a fitted column.
+            public var weight: Double? {
+                if case let .share(weight, _) = self { return max(weight, 0) }
+                return nil
+            }
+        }
+
+        /// The columns' widths in `available` points: a fitted column gets its `measured` width; the columns that
+        /// share split what is left in their weights' proportions, none under its minimum (a share that would be
+        /// smaller takes its minimum, and the rest is split again among the others). When even the minimums don't
+        /// fit, every sharing column is at its minimum and the total is wider than `available`: the table scrolls.
+        public static func widths(available: Double, columns: [Width], measured: [Double]) -> [Double] {
+            var widths = columns.indices.map { index -> Double in
+                columns[index].weight == nil ? (measured.indices.contains(index) ? max(measured[index], 0) : 0) : 0
+            }
+            var open = columns.indices.filter { columns[$0].weight != nil }
+            var spare = available - widths.reduce(0, +)
+            while !open.isEmpty {
+                let weights = open.map { columns[$0].weight ?? 0 }
+                let total = weights.reduce(0, +)
+                let shares = zip(open, weights).map { index, weight in
+                    (index, total > 0 ? max(spare, 0) * weight / total : max(spare, 0) / Double(open.count))
+                }
+                let short = shares.filter { index, share in share < minimum(columns[index]) }
+                if short.isEmpty {
+                    for (index, share) in shares { widths[index] = share }
+                    break
+                }
+                for (index, _) in short {
+                    widths[index] = minimum(columns[index])
+                    spare -= widths[index]
+                }
+                open.removeAll { index in short.contains { $0.0 == index } }
+            }
+            return widths
+        }
+
+        private static func minimum(_ width: Width) -> Double {
+            if case let .share(_, minimum) = width { return max(minimum, 0) }
+            return 0
+        }
+
+        /// The x offset that keeps the first column in place while the table scrolls sideways by `offset`.
+        public static func pinnedOffset(scrolled offset: Double) -> Double { max(offset, 0) }
+
+        /// Which column a table is sorted by and which way.
+        public struct Sort: Equatable, Hashable {
+            public var column: String
+            public var ascending: Bool
+
+            public init(_ column: String, ascending: Bool) {
+                self.column = column
+                self.ascending = ascending
+            }
+
+            /// A click on `column`'s header: the same column again reverses; another sorts by it, `firstAscending`
+            /// or not (the catalog sorts a new column most first).
+            public static func toggled(_ current: Sort?, column: String, firstAscending: Bool = false) -> Sort {
+                if let current, current.column == column { return Sort(column, ascending: !current.ascending) }
+                return Sort(column, ascending: firstAscending)
+            }
+
+            /// The order of two cells' words: numbers by their value (a leading number, its commas, a sign, a
+            /// trailing unit or percent left aside), anything else as Finder orders names; `ascending` or reversed.
+            public static func ordered(_ lhs: String, _ rhs: String, ascending: Bool) -> Bool {
+                let result: ComparisonResult
+                if let left = number(lhs), let right = number(rhs) {
+                    result = left == right ? .orderedSame : left < right ? .orderedAscending : .orderedDescending
+                } else {
+                    result = lhs.localizedStandardCompare(rhs)
+                }
+                return ascending ? result == .orderedAscending : result == .orderedDescending
+            }
+
+            /// A cell's number: "1,204", "62%", "3.4M" (a K, M or B scales it), "−12"; nil for words.
+            public static func number(_ text: String) -> Double? {
+                var body = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "")
+                    .replacingOccurrences(of: "\u{2212}", with: "-")
+                var scale = 1.0
+                if body.hasSuffix("%") { body.removeLast() }
+                if let last = body.last, let factor = ["K": 1e3, "M": 1e6, "B": 1e9][String(last)] {
+                    scale = factor
+                    body.removeLast()
+                }
+                return Double(body.trimmingCharacters(in: .whitespaces)).map { $0 * scale }
+            }
+        }
+
+        /// What VoiceOver reads for a header: its title, then whether it is sorted and which way ("Age, sorted, oldest
+        /// first"); `ascending` and `descending` are the column's own words for its directions.
+        public static func spokenHeader(_ title: String, sort: Sort?, column: String, ascending: String, descending: String) -> String {
+            guard let sort, sort.column == column else { return title }
+            return "\(title), sorted, \(sort.ascending ? ascending : descending)"
+        }
+
+        /// What VoiceOver reads for a row: each cell after its column's title ("Ticket, TP-1382. Age, 3 h"); an empty
+        /// cell is left out.
+        public static func spokenRow(titles: [String], cells: [String]) -> String {
+            zip(titles, cells).filter { !$0.1.isEmpty }.map { "\($0), \($1)" }.joined(separator: ". ")
+        }
+
+        /// The row Up or Down picks from `selected` among `count` rows: the next or the previous, held at the ends;
+        /// with nothing picked, Down picks the first and Up the last. Nil when there are no rows.
+        public static func moved(_ selected: Int?, by step: Int, count: Int) -> Int? {
+            guard count > 0 else { return nil }
+            guard let selected, (0 ..< count).contains(selected) else { return step >= 0 ? 0 : count - 1 }
+            return min(max(selected + step, 0), count - 1)
+        }
+
+        /// Whether row `index` (from 0) is banded: every second one, at rest only (the catalog's even rows).
+        public static func banded(_ index: Int, selected: Bool, hovered: Bool) -> Bool {
+            index % 2 == 1 && !selected && !hovered
+        }
+
+        /// A row's fill: the accent when selected (the pressed grey when the window is not in front), else the hover
+        /// overlay, else the band on every second row; none otherwise.
+        public enum Fill: Equatable {
+            case accent, inactiveSelection, hover, band
+        }
+
+        public static func fill(_ index: Int, selected: Bool, hovered: Bool, windowActive: Bool = true) -> Fill? {
+            if selected { return windowActive ? .accent : .inactiveSelection }
+            if hovered { return .hover }
+            return banded(index, selected: selected, hovered: hovered) ? .band : nil
+        }
+    }
+
     /// The main window's layout (§3.5).
     public enum Layout {
         public static let windowWidth: Double = 1200

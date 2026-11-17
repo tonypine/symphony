@@ -146,9 +146,7 @@ struct AuditView: View {
     var exportError: String?
     var openTicket: (String) -> Void = { _ in }
     var perform: (Audit.Empty.Action) -> Void = { _ in }
-    @State private var sortOrder = [KeyPathComparator(\Audit.Row.timeSort, order: .reverse)]
-    /// The table's own selection, handed to the model after the table's delegate call returns, as on Tickets.
-    @State private var tableSelection: String?
+    @State private var sort: DesignTokens.Table.Sort? = DesignTokens.Table.Sort(AuditTable.timeColumn, ascending: false)
 
     var body: some View {
         VStack(spacing: 0) {
@@ -162,23 +160,13 @@ struct AuditView: View {
                     actions: empty.action.map { action in [(action.title, { perform(action) })] } ?? []
                 )
             } else {
-                AuditTable(rows: audit.rows.sorted(using: sortOrder), selection: $tableSelection, sortOrder: $sortOrder, openTicket: openTicket)
-                    .onKeyPress(.space) {
-                        inspectorShown.toggle()
-                        return .handled
-                    }
+                AuditTable(rows: audit.rows, selection: $selection, sort: $sort, openTicket: openTicket) {
+                    inspectorShown.toggle()
+                }
             }
         }
         // Fill the detail from the top, as the other views do; otherwise the split view centres it.
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .onAppear { tableSelection = selection }
-        .onChange(of: tableSelection) { _, chosen in
-            guard chosen != selection else { return }
-            Task { @MainActor in selection = chosen }
-        }
-        .onChange(of: selection) { _, chosen in
-            if chosen != tableSelection { tableSelection = chosen }
-        }
         .inspector(isPresented: $inspectorShown) {
             AuditInspector(row: audit.rows.first { $0.id == selection }, openTicket: openTicket)
                 .inspectorColumnWidth(min: 260, ideal: 320, max: 480)
@@ -271,55 +259,59 @@ struct AuditChainLineView: View {
     }
 }
 
-/// C19: time, kind, ticket, repo, actor and summary; a row's record shows in the inspector, and Return or a
-/// double-click opens its ticket.
+/// C19 on the shared table (C59): time, kind, ticket, repo, actor and summary, the summary taking the spare width; a
+/// row's record shows in the inspector, Return or a double-click opens its ticket, and Space shows or hides the
+/// inspector.
 struct AuditTable: View {
     let rows: [Audit.Row]
     @Binding var selection: String?
-    @Binding var sortOrder: [KeyPathComparator<Audit.Row>]
+    @Binding var sort: DesignTokens.Table.Sort?
     var openTicket: (String) -> Void
+    var toggleInspector: () -> Void = {}
+
+    static let timeColumn = "time"
+
+    static let columns: [DataTableColumn<Audit.Row>] = [
+        DataTableColumn(
+            "Time", id: timeColumn, ascending: "oldest first", descending: "newest first", firstAscending: false,
+            sortKey: { String($0.timeSort.timeIntervalSince1970) }, text: \.timeText
+        ) { row in
+            DataTableText(row.timeText, secondary: true, number: true)
+        },
+        DataTableColumn(
+            "Kind", id: "kind", fitExtra: DesignTokens.Space.s1 + DesignTokens.Control.small.glyphSize, text: \.kindTitle
+        ) { row in
+            HStack(spacing: DesignTokens.Space.s1) {
+                if row.breaksChain {
+                    Image(systemName: Audit.brokenSymbol)
+                        .foregroundStyle(DesignTokens.Status.problem.tint)
+                        .help("The chain breaks at this record")
+                }
+                DataTableText(row.kindTitle)
+            }
+        },
+        DataTableColumn("Ticket", id: "ticket", text: \.ticketText) { row in
+            Text(row.ticketText).textStyle(.mono).lineLimit(1)
+        },
+        DataTableColumn("Repo", id: "repo", text: \.repoText),
+        DataTableColumn("Actor", id: "actor", text: \.actor),
+        DataTableColumn("Summary", id: "summary", width: .share(1, minimum: 160), text: \.summary),
+    ]
 
     var body: some View {
-        Table(rows, selection: $selection, sortOrder: $sortOrder) {
-            TableColumn("Time", value: \.timeSort) { row in
-                Text(row.timeText).monospacedDigit().foregroundStyle(.secondary)
-            }
-            .width(min: 70, ideal: 120)
-            TableColumn("Kind", value: \.kindTitle) { row in
-                HStack(spacing: DesignTokens.Space.s1) {
-                    if row.breaksChain {
-                        Image(systemName: Audit.brokenSymbol)
-                            .foregroundStyle(DesignTokens.Status.problem.tint)
-                            .help("The chain breaks at this record")
-                    }
-                    Text(row.kindTitle)
-                }
-            }
-            .width(min: 90, ideal: 120)
-            TableColumn("Ticket", value: \.ticketText) { row in
-                Text(row.ticketText).font(DesignTokens.TypeStyle.mono.font)
-            }
-            .width(min: 70, ideal: 90)
-            TableColumn("Repo", value: \.repoText)
-                .width(min: 60, ideal: 90)
-            TableColumn("Actor", value: \.actor)
-                .width(min: 50, ideal: 70)
-            TableColumn("Summary", value: \.summary) { row in
-                Text(row.summary).lineLimit(1)
-            }
-            .width(min: 160, ideal: 360)
+        DataTable(
+            "Audit records", columns: Self.columns, rows: rows, selection: $selection, sort: $sort,
+            open: { row in row.record.issueIdentifier.map(openTicket) },
+            secondary: { _ in toggleInspector() },
+            rowMenu: { row in AnyView(menu(row)) }
+        )
+    }
+
+    @ViewBuilder private func menu(_ row: Audit.Row) -> some View {
+        if let identifier = row.record.issueIdentifier {
+            Button("Open \(identifier)") { openTicket(identifier) }
         }
-        .contextMenu(forSelectionType: String.self) { ids in
-            if let id = ids.first, let row = rows.first(where: { $0.id == id }) {
-                if let identifier = row.record.issueIdentifier {
-                    Button("Open \(identifier)") { openTicket(identifier) }
-                }
-                Button("Copy Record") { copy(row.record.line) }
-            }
-        } primaryAction: { ids in
-            ids.first.flatMap { id in rows.first { $0.id == id }?.record.issueIdentifier }.map(openTicket)
-        }
-        .accessibilityLabel("Audit records")
+        Button("Copy Record") { copy(row.record.line) }
     }
 
     private func copy(_ text: String) {

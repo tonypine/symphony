@@ -322,6 +322,40 @@ final class DesignGuardTests: XCTestCase {
         XCTAssertTrue(failures[0].hasPrefix("View.swift draws with 1 raw field value(s) and is not in the baseline"), failures[0])
     }
 
+    // MARK: - Stock tables (TP-1510)
+
+    func testAStockTableCounts() {
+        let found = scan("""
+        Table(rows, selection: $selection, sortOrder: $sortOrder) {
+        Table(of: TicketsRow.self, selection: $selection) {
+        SwiftUI.Table(runs) {
+        """).filter { $0.kind == .table }
+        XCTAssertEqual(found.map(\.line), [1, 2, 3])
+        XCTAssertEqual(found.map(\.value), ["Table", "Table", "SwiftUI.Table"])
+        XCTAssertEqual(found[0].message, "View.swift:1: table bypass Table: use \(DesignGuard.tableReplacement)")
+    }
+
+    func testTheSharedTableAndLongerNamesDoNotCount() {
+        XCTAssertEqual(scan("""
+        DataTable(columns: columns, rows: rows)
+        AuditTable(rows: rows, selection: $selection)
+        TableColumn("Ticket") { Text($0.id) }
+        .tableStyle(.inset)
+        // Table(rows) in a comment
+        Text("Table(")
+        """).filter { $0.kind == .table }, [])
+    }
+
+    func testTheTableKindIsABaselineKind() throws {
+        let counts: DesignGuard.Counts = ["SymphonyBar/A.swift": [.field: 1, .table: 1]]
+        XCTAssertEqual(try DesignGuard.parseBaseline(DesignGuard.formatBaseline(counts)), counts)
+        XCTAssertTrue(DesignGuard.Kind.guarded.contains(.table))
+        XCTAssertTrue(DesignGuard.formatBaseline(counts).hasSuffix("SymphonyBar/A.swift field 1\nSymphonyBar/A.swift table 1\n"))
+        let failures = DesignGuard.failures(bypasses: scan("Table(rows) {"), baseline: [:])
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertTrue(failures[0].hasPrefix("View.swift draws with 1 raw table value(s) and is not in the baseline"), failures[0])
+    }
+
     // MARK: - What does not count
 
     func testTokensAndComponentsDoNotCount() {

@@ -9,7 +9,7 @@ import SymphonyBarUI
 struct ComponentStory {
     /// `button`, `icon-button`, `inline-refusal` (TP-1505), `badge`, `count-badge`, `status-dot` or `keyboard-hint`
     /// (TP-1506), `row` (TP-1507), `segmented-control`, `pop-up` or `menu-button` (TP-1508), or `text-field`,
-    /// `search-field` or `text-area` (TP-1509).
+    /// `search-field` or `text-area` (TP-1509), or `table-header-and-row` (TP-1510).
     let component: String
     let id: String
     /// The catalog's component title, for the sheet.
