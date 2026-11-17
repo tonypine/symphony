@@ -95,24 +95,27 @@ defmodule SymphonyElixir.LifecycleTest do
       assert result.lifecycle.current == nil
 
       assert result.lifecycle.stages == [
+               # In Progress and the two Reworks: 39 + 20 + 62 min, and their four runs.
                %{
                  id: "coding",
                  name: "Coding",
                  state: "passed",
-                 visits: 1,
-                 time_ms: 39 * @minute,
-                 agent_time_ms: 38 * @minute,
-                 tokens: 2_400_000
+                 visits: 3,
+                 time_ms: 121 * @minute,
+                 agent_time_ms: 81 * @minute,
+                 tokens: 4_800_000,
+                 runs: 4
                },
-               # Each Code Review, the CI Fix and the two Reworks: 9 + 10 + 17 + 20 + 14 + 62 + 13 min.
+               # Each Code Review and the CI Fix: 9 + 10 + 17 + 14 + 13 min.
                %{
                  id: "code_review",
                  name: "Code Review",
                  state: "passed",
                  visits: 4,
-                 time_ms: 145 * @minute,
-                 agent_time_ms: 71 * @minute,
-                 tokens: 4_300_000
+                 time_ms: 63 * @minute,
+                 agent_time_ms: 28 * @minute,
+                 tokens: 1_900_000,
+                 runs: 4
                },
                %{
                  id: "qa",
@@ -121,10 +124,11 @@ defmodule SymphonyElixir.LifecycleTest do
                  visits: 2,
                  time_ms: 38 * @minute,
                  agent_time_ms: 36 * @minute,
-                 tokens: 1_900_000
+                 tokens: 1_900_000,
+                 runs: 2
                },
-               %{id: "merging", name: "Merging", state: "passed", visits: 1, time_ms: 120 * @minute, agent_time_ms: 0, tokens: 0},
-               %{id: "done", name: "Done", state: "passed", visits: 1, time_ms: 0, agent_time_ms: 0, tokens: 0}
+               %{id: "merging", name: "Merging", state: "passed", visits: 1, time_ms: 120 * @minute, agent_time_ms: 0, tokens: 0, runs: 0},
+               %{id: "done", name: "Done", state: "passed", visits: 1, time_ms: 0, agent_time_ms: 0, tokens: 0, runs: 0}
              ]
     end
 
@@ -169,32 +173,56 @@ defmodule SymphonyElixir.LifecycleTest do
   end
 
   describe "a stage's state and visits" do
-    test "a ticket in Rework reads Code Review as current with visits 2, time running up to now" do
+    test "a ticket in Rework reads Coding as current with visits 2, time running up to now, and Code Review sent back" do
       events = moved([{"10:00", "In Progress"}, {"11:00", "Code Review"}, {"11:30", "Rework"}])
 
       result = Lifecycle.compute(events, %{@facts | now: at("2026-10-30T12:00")})
 
-      assert result.lifecycle.current == "code_review"
-      assert stages(result)["code_review"] |> Map.take([:state, :visits, :time_ms]) == %{state: "current", visits: 2, time_ms: 60 * @minute}
-      assert states(result) == ["passed", "current", "not_yet", "not_yet", "not_yet"]
+      assert result.lifecycle.current == "coding"
+      assert stages(result)["coding"] |> Map.take([:state, :visits, :time_ms]) == %{state: "current", visits: 2, time_ms: 90 * @minute}
+      assert states(result) == ["current", "sent_back", "not_yet", "not_yet", "not_yet"]
       assert result.phase_path.current == "Rework"
     end
 
-    test "the move back from Rework into Code Review is the same visit" do
+    test "the move back from Rework into Code Review is a new visit of Code Review, which passes it again" do
       events = moved([{"10:00", "In Progress"}, {"11:00", "Code Review"}, {"11:30", "Rework"}, {"11:45", "Code Review"}])
 
-      assert stages(Lifecycle.compute(events, @facts))["code_review"].visits == 2
+      result = Lifecycle.compute(events, @facts)
+
+      assert visits(result) == [2, 2, 0, 0, 0]
+      assert states(result) == ["passed", "current", "not_yet", "not_yet", "not_yet"]
     end
 
-    test "QA reads not yet, with its earlier visit, while Rework sent the ticket back from it" do
+    test "QA reads sent back, and Code Review, which passed it on, passed, while Rework holds the ticket QA sent back" do
       events = moved([{"10:00", "In Progress"}, {"11:00", "Code Review"}, {"11:30", "QA"}, {"11:45", "Rework"}])
 
       result = Lifecycle.compute(events, %{@facts | now: at("2026-10-30T12:00")})
 
-      assert result.lifecycle.current == "code_review"
-      assert states(result) == ["passed", "current", "not_yet", "not_yet", "not_yet"]
-      assert visits(result) == [1, 2, 1, 0, 0]
+      assert result.lifecycle.current == "coding"
+      assert states(result) == ["current", "passed", "sent_back", "not_yet", "not_yet"]
+      assert visits(result) == [2, 1, 1, 0, 0]
       assert stages(result)["qa"].time_ms == 15 * @minute
+
+      back_in_review = Lifecycle.compute(events ++ moved([{"12:10", "Code Review"}]), @facts)
+      assert states(back_in_review) == ["passed", "current", "sent_back", "not_yet", "not_yet"]
+
+      back_in_qa = Lifecycle.compute(events ++ moved([{"12:10", "Code Review"}, {"12:20", "QA"}]), @facts)
+      assert states(back_in_qa) == ["passed", "passed", "current", "not_yet", "not_yet"]
+    end
+
+    test "a stage left backwards by a person's move, not into Rework, is not sent back" do
+      events = moved([{"10:00", "In Progress"}, {"11:00", "Code Review"}, {"11:30", "In Progress"}])
+
+      assert states(Lifecycle.compute(events, @facts)) == ["current", "not_yet", "not_yet", "not_yet", "not_yet"]
+    end
+
+    test "the stage a held ticket is in reads paused, and a finished one has none" do
+      events = moved([{"10:00", "In Progress"}, {"11:00", "Code Review"}])
+      held = Map.put(@facts, :held?, true)
+
+      assert states(Lifecycle.compute(events, held)) == ["passed", "paused", "not_yet", "not_yet", "not_yet"]
+      assert Lifecycle.compute(events, held).lifecycle.current == "code_review"
+      assert states(Lifecycle.compute(events ++ moved([{"11:30", "Done"}]), held)) == ["passed", "passed", "skipped", "skipped", "passed"]
     end
 
     test "a stage the ticket went past without entering reads skipped" do
@@ -219,7 +247,7 @@ defmodule SymphonyElixir.LifecycleTest do
     test "a CI Fix inside a Rework adds one visit, not two" do
       events = moved([{"10:00", "In Progress"}, {"11:00", "Code Review"}, {"11:10", "Rework"}, {"11:20", "CI Fix"}, {"11:30", "Rework"}])
 
-      assert stages(Lifecycle.compute(events, @facts))["code_review"].visits == 3
+      assert visits(Lifecycle.compute(events, @facts)) == [3, 1, 0, 0, 0]
     end
 
     test "a CI Fix with no stage before it serves Coding" do
@@ -355,11 +383,11 @@ defmodule SymphonyElixir.LifecycleTest do
       assert visits(result) == [0, 0, 0, 0, 0]
     end
 
-    test "a phase turned off with an empty name holds no phase, and Rework still serves Code Review" do
+    test "a phase turned off with an empty name holds no phase, and Rework still serves Coding" do
       facts = %{@facts | phase_names: %{code_review: nil, qa: nil, ci_fix: "CI Fix"}}
 
       assert Lifecycle.compute(moved([{"10:00", "QA"}]), facts).lifecycle.current == nil
-      assert Lifecycle.compute(moved([{"10:00", "Rework"}]), facts).lifecycle.current == "code_review"
+      assert Lifecycle.compute(moved([{"10:00", "Rework"}]), facts).lifecycle.current == "coding"
     end
   end
 
@@ -444,6 +472,8 @@ defmodule SymphonyElixir.LifecycleTest do
       assert stages(result)["code_review"].tokens == 65_000_000
       assert stages(result)["code_review"].agent_time_ms == 25 * @minute
       assert result.lifecycle.tokens.total == 66_000_000
+      # The run working now counts among the stage's runs.
+      assert {stages(result)["coding"].runs, stages(result)["code_review"].runs} == {1, 1}
     end
 
     test "uses the orchestrator's start when the ledger has none, and counts once the ledger ended it" do
@@ -473,6 +503,7 @@ defmodule SymphonyElixir.LifecycleTest do
 
       assert result.lifecycle.tokens.total == 59_000_000
       assert stages(result)["coding"].agent_time_ms == 20 * @minute
+      assert stages(Lifecycle.read(@id, at("2026-10-30T10:25"), running, true))["coding"].state == "paused"
     end
   end
 end

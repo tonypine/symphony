@@ -6,7 +6,7 @@ import XCTest
 /// in a narrower main column (a desktop's just past the breakpoint, beside the rail and the decisions).
 final class StageStripTests: XCTestCase {
     /// The waiting ticket's stages, with the longest name the fixture has.
-    private let titles = ["Coding", "Code Review ×3", "QA", "Merging", "Done"]
+    private let titles = ["Coding", "Code Review", "QA", "Merging", "Done"]
 
     /// The room the stages get inside the Lifecycle card, in a main column `main` wide.
     private func strip(main: Double, widest: CGFloat) -> CGFloat {
@@ -30,10 +30,10 @@ final class StageStripTests: XCTestCase {
 
     func testTheWidestNameSetsEveryCell() {
         let short = LifecycleSection.stripWidth(titles: ["QA", "QA"])
-        let long = LifecycleSection.stripWidth(titles: ["QA", "Code Review ×3"])
+        let long = LifecycleSection.stripWidth(titles: ["QA", "Code Review"])
 
         XCTAssertGreaterThan(long, short)
-        XCTAssertEqual(LifecycleSection.stripWidth(titles: ["Code Review ×3", "QA"]), long)
+        XCTAssertEqual(LifecycleSection.stripWidth(titles: ["Code Review", "QA"]), long)
         XCTAssertEqual(LifecycleSection.stripWidth(titles: []), 0)
     }
 }

@@ -1,13 +1,13 @@
 {
   "identifier": "TP-901",
   "lifecycle": {
-    "current": "code_review",
+    "current": "coding",
     "stages": [
-      { "id": "coding", "name": "Coding", "state": "passed", "visits": 1, "time_ms": 2400000, "agent_time_ms": 2280000, "tokens": 2400000 },
-      { "id": "code_review", "name": "Code Review", "state": "current", "visits": 3, "time_ms": 6060000, "agent_time_ms": 1500000, "tokens": 1200000 },
-      { "id": "qa", "name": "QA", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0 },
-      { "id": "merging", "name": "Merging", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0 },
-      { "id": "done", "name": "Done", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0 }
+      { "id": "coding", "name": "Coding", "state": "current", "visits": 3, "time_ms": 5160000, "agent_time_ms": 3180000, "tokens": 3100000, "runs": 3 },
+      { "id": "code_review", "name": "Code Review", "state": "sent_back", "visits": 2, "time_ms": 3300000, "agent_time_ms": 600000, "tokens": 500000, "runs": 2 },
+      { "id": "qa", "name": "QA", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0, "runs": 0 },
+      { "id": "merging", "name": "Merging", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0, "runs": 0 },
+      { "id": "done", "name": "Done", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0, "runs": 0 }
     ],
     "tokens": { "total": 3600000, "cap": 8000000 }
   },
