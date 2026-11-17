@@ -296,6 +296,12 @@ defmodule SymphonyElixir.SituationTest do
 
       assert compute(record(), [], skip("the repository is paused by you", :repository_pause)).next == "Starts when you resume the repository."
 
+      # A red release gate holds every ticket but its fix ticket, and says so in its own words (TP-1528).
+      assert %{kind: "paused_by_rule", cause: "Holding while the release gate on main is red: TP-1526 is fixing it.", next: next} =
+               compute(record(), [], skip("Holding while the release gate on main is red: TP-1526 is fixing it", :release_gate))
+
+      assert next == "Starts when the release gate on main passes, or its fix ticket lands."
+
       budgets = [:usage_limit, :token_budget, :workspace_quota, :daily_budget]
       settings = [:priority, :reviewer_off, :no_repo_key, :not_assigned]
 

@@ -131,3 +131,20 @@ step included. Every merge to `main` runs it again in the release gate.
 The script gives each run a fresh `HOME` and creates an empty git repo there at every
 `repo: ~/...` path the config names, since `symphony check` rejects a `strategy: worktree`
 repo that doesn't exist.
+
+## When the release gate fails
+
+A merge to `main` whose release gate fails publishes nothing. Symphony files one Urgent fix ticket
+in Todo with the failure (a later failure is added to it while it is open), and moves it back to
+Todo itself if it ever sits in Backlog. While the gate is red:
+
+- the fix ticket is the only ticket of the repository Symphony dispatches; every other one reads
+  "Holding while the release gate on main is red: TP-… is fixing it";
+- no app-update hold waits on the fix ticket, since the build it would wait for publishes only once
+  its fix lands;
+- a ticket held for a build whose gate failed waits for the later build that carries its commit,
+  and its line names that build, never the failed one.
+
+The hold lifts when a later build passes the gate or the fix ticket is closed. A later build that
+passes with the fix ticket still open (the check passed with no fix merged) adds a comment to the
+ticket: a check that fails at random is a defect in the check, and the ticket still asks for it.
