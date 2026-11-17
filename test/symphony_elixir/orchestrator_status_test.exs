@@ -2976,6 +2976,33 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       assert {:ok, %{paused: false}} = Orchestrator.resume_dispatch(name)
     end
 
+    test "the update's resume lifts only its own build pause: a person's pause stays and dispatch stays paused" do
+      name = Module.concat(__MODULE__, :UpdateResumeOrchestrator)
+      start_paused_orchestrator(name)
+
+      assert {:ok, %{paused: true}} = Orchestrator.pause_dispatch(name, "updating to v0.0.1.1")
+      assert {:ok, %{paused: true}} = Orchestrator.pause_dispatch(name, "Agent tools crash in this build")
+
+      # Another version's update and a pause it doesn't hold change nothing.
+      assert {:ok, %{paused: true, reasons: [%{kind: :build}, %{kind: :person}]}} =
+               Orchestrator.resume_dispatch(name, {:build, "0.0.1.2"})
+
+      assert {:ok, %{paused: true, reason: "Agent tools crash in this build", reasons: [%{kind: :person, text: "Agent tools crash in this build"}]}} =
+               Orchestrator.resume_dispatch(name, {:build, "0.0.1.1"})
+
+      assert %{paused: true, reasons: [%{kind: :person}]} = Orchestrator.pause_status(name)
+      assert %{pause: %{paused: true}} = GenServer.call(name, :snapshot)
+
+      # The person lifts their own; then nothing holds dispatch, and lifting again changes nothing.
+      assert {:ok, %{paused: false, reasons: []}} = Orchestrator.resume_dispatch(name, :person)
+      assert {:ok, %{paused: false}} = Orchestrator.resume_dispatch(name, {:build, "0.0.1.1"})
+      assert Pauses.get(:symphony) == {:ok, nil}
+    end
+
+    test "a targeted resume answers unavailable when the orchestrator isn't running" do
+      assert Orchestrator.resume_dispatch(Module.concat(__MODULE__, :NoOrchestrator), :person) == :unavailable
+    end
+
     test "a pause the release before left on its old row is in force from the first tick, and an installed update's lifts" do
       write_legacy_pause = fn row ->
         {:atomic, :ok} = :mnesia.transaction(fn -> :mnesia.write({:symphony_run_store_pause, :dispatch_pause, row}) end)

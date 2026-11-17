@@ -71,8 +71,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private lazy var setupItem = menuItem("", action: #selector(openSetup(_:)))
     /// Set when the app started Symphony after an update: resume dispatch once it answers.
     private var resumeWhenAnswering = false
-    /// True until the dispatch an update paused is resumed: kept across the health check's restarts of Symphony.
-    private var resumeAfterUpdate = false
+    /// The version whose update paused dispatch, until the app lifts that pause: kept across the health check's restarts
+    /// of Symphony. The app lifts only that `build` reason; a pause someone else set stays.
+    private var resumeUpdateVersion: String?
     /// Checks Symphony on the build an update relaunched, and asks for a rollback when it isn't healthy.
     private var health = UpdateHealthCheck()
     /// The update the health check is about.
@@ -298,7 +299,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         } else if settings.startOnLaunch || startAfterUpdate {
             // Wait for the first poll, so a Symphony already running from the CLI is attached to, not started twice.
             startWhenStopped = true
-            resumeWhenAnswering = resumeAfterUpdate
+            resumeWhenAnswering = resumeUpdateVersion != nil
         }
         poller.start()
 
@@ -327,19 +328,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             updater.removeDownloads()
             let message = UpdateMenu.rolledBackMessage(pending, logPath: updater.logPath)
             DispatchQueue.main.async { SymphonyRunner.showAlert(title: UpdateMenu.failedTitle, body: message) }
-            resumeAfterUpdate = pending.resumeDispatch
+            resumeUpdateVersion = pending.resumeDispatch ? pending.version : nil
             return pending.startSymphony
         case let .checkHealth(pending):
             updater.log.append("started after the update from build \(pending.fromBuild); checking its health")
             updater.removeDownloads()
             checkedUpdate = pending
-            resumeAfterUpdate = pending.resumeDispatch
+            resumeUpdateVersion = pending.resumeDispatch ? pending.version : nil
             return pending.startSymphony
         case let .rolledBack(record):
             updater.log.append("put back after v\(record.version) was rolled back: \(record.reason)")
             updater.rolledBack = record
             notifyAfterLaunch(.rolledBack(record, restoredVersion: updates.current.version))
-            resumeAfterUpdate = record.resumeDispatch
+            resumeUpdateVersion = record.resumeDispatch ? record.version : nil
             return record.startSymphony
         case let .launchFailed(record):
             // The failed build never ran, so it couldn't pin itself: this build does, as a rollback would have.
@@ -348,7 +349,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             updater.pin(record)
             updater.rolledBack = record
             notifyAfterLaunch(.rolledBack(record, restoredVersion: updates.current.version))
-            resumeAfterUpdate = record.resumeDispatch
+            resumeUpdateVersion = record.resumeDispatch ? record.version : nil
             return record.startSymphony
         case let .rollbackFailed(record):
             // Still the build that failed its check: say how to roll back by hand, and don't start Symphony for the
@@ -391,7 +392,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 // On the next poll, so a Symphony already running from the CLI is attached to, not started twice.
                 // While one still answers, the regular poll checks again whether it has exited.
                 startWhenStopped = true
-                resumeWhenAnswering = resumeAfterUpdate
+                resumeWhenAnswering = resumeUpdateVersion != nil
                 if machine.canStart { poller.pollNow() }
             case .restart:
                 runner.stop { [weak self] in self?.performHealth([.start]) }
@@ -419,7 +420,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             version: update.version,
             reason: failure.reason(logPath: runner.logPath),
             startSymphony: update.startSymphony,
-            resumeDispatch: resumeAfterUpdate,
+            resumeDispatch: resumeUpdateVersion != nil,
             details: update.details,
             bundle: updater.bundleFileNumber
         )
@@ -927,6 +928,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             updater.fail(error.localizedDescription)
             guard symphonyStopped else { return }
             // Cleared again when the start fails; resumes only once the started Symphony answers.
+            resumeUpdateVersion = resumeDispatch ? update.release.version : nil
             resumeWhenAnswering = resumeDispatch
             startSymphony(nil)
         }
@@ -945,6 +947,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         updater.helperGaveUp(exit, version: update.release.version)
         guard symphonyStopped, !runner.isRunning else { return }
         // Cleared again when the start fails; resumes only once the started Symphony answers.
+        resumeUpdateVersion = resumeDispatch ? update.release.version : nil
         resumeWhenAnswering = resumeDispatch
         startSymphony(nil)
     }
@@ -1067,8 +1070,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private func resumeIfAnswering(_ poll: StatusPoll) {
         guard resumeWhenAnswering, runner.isRunning, case .state = poll else { return }
         resumeWhenAnswering = false
-        resumeAfterUpdate = false
-        if StatusMenu.canResume(machine.status) { send(.resume) }
+        guard let version = resumeUpdateVersion else { return }
+        resumeUpdateVersion = nil
+        if StatusMenu.canResume(machine.status) { send(.resumeUpdate(version: version)) }
     }
 
     private func handle(_ event: StatusMachine.Event) {

@@ -36,6 +36,19 @@ final class ControlAPITests: XCTestCase {
         XCTAssertEqual(try json(request), [:])
     }
 
+    /// After an update the app lifts only the `build` reason its update set, by kind and version (TP-1529): a pause
+    /// someone else set while the update waited stays.
+    func testAnUpdatesResumeLiftsOnlyItsBuildReason() throws {
+        let action = ControlAction.resumeUpdate(version: "0.0.1.956")
+        let request = ControlAPI.request(action, base: base, token: "secret")
+
+        XCTAssertEqual(request.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/resume")
+        XCTAssertEqual(try json(request), ["kind": "build", "version": "0.0.1.956"])
+        XCTAssertEqual(action.failurePrefix, "Couldn't resume Symphony")
+        XCTAssertNil(action.moveIdentifier)
+        XCTAssertFalse(StatusMenu.isPause(action))
+    }
+
     /// Try Now is Resume with the usage limit's condition (TP-1471).
     func testTryNowRequestNamesTheLimitsCondition() throws {
         let request = ControlAPI.request(.tryNow(condition: "usage_limit:anthropic:all"), base: base, token: "secret")
