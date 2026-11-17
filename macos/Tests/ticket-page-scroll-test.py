@@ -125,13 +125,16 @@ def driver(binary, *args, timeout=90):
         return {"error": {"code": "unreadable", "message": result.stdout[-500:] + result.stderr[-500:]}}
 
 
-def page_scroll_area(binary, pid, title=TITLE):
+def page_scroll_area(binary, pid, title=TITLE, min_width=300):
     """The ticket page's scroll area once its title shows (any page's, with no title): the widest scroll area of the
     window (the sidebar's is narrow), or None."""
     if title and not driver(binary, "ax-tree", pid, 40, 5, "", title).get("matches"):
         return None
     areas = driver(binary, "ax-tree", pid, 40, 20, "AXScrollArea", "").get("matches", [])
-    areas = [a for a in areas if (a.get("frame") or {}).get("w", 0) >= 300 and (a.get("frame") or {}).get("h", 0) >= 200]
+    if min_width < 300:
+        # A table's own area is the one labelled with its title, whatever its width.
+        areas = [a for a in areas if a.get("description") == title] or areas
+    areas = [a for a in areas if (a.get("frame") or {}).get("w", 0) >= min_width and (a.get("frame") or {}).get("h", 0) >= 200]
     return max(areas, key=lambda a: a["frame"]["w"] * a["frame"]["h"], default=None)
 
 
@@ -434,7 +437,7 @@ def measure_table(binary, executable, root, failures):
             if process.poll() is not None:
                 break
             # The table's own label shows once the records are read and drawn (an empty Audit draws none).
-            area = page_scroll_area(binary, pid, "Audit records")
+            area = page_scroll_area(binary, pid, "Audit records", min_width=100)
             if area:
                 break
             time.sleep(1)
