@@ -743,6 +743,34 @@ public struct TitledPanel<Content: View>: View {
     }
 }
 
+/// Caps a chip's text at `width`: it takes its own width up to it, and is cut with an ellipsis past it, whatever the
+/// chip's container proposes. No width: the text as it is.
+private struct ChipTextCap: ViewModifier {
+    let width: Double?
+
+    func body(content: Content) -> some View {
+        if let width {
+            ChipTextCapLayout(width: CGFloat(width)) { content }
+        } else {
+            content
+        }
+    }
+}
+
+private struct ChipTextCapLayout: Layout {
+    let width: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let text = subviews.first else { return .zero }
+        let ideal = text.sizeThatFits(.unspecified).width
+        return text.sizeThatFits(ProposedViewSize(width: min(ideal, width), height: nil))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+    }
+}
+
 /// `.chip`: a compact tag for what a ticket is or where it belongs. One height, 24 pt (`--control-sm`), in the label
 /// style, on a capsule: plain and repo on the content surface with a hairline ring, epic transparent with a strong
 /// ring, status on its tint with its glyph in its colour. A label chip (`.chip-label`) is 20 pt on the raised
@@ -787,10 +815,18 @@ public struct Chip: View {
 
     let text: String
     let kind: Kind
+    /// The widest the text is drawn before it is cut with an ellipsis; nil draws it whole.
+    let maxTextWidth: Double?
+    /// The whole of what a cut chip stands for: its tooltip and VoiceOver's words; nil says the text.
+    let fullText: String?
 
-    public init(_ text: String, kind: Kind = .plain) {
+    /// A chip saying `text`. With `maxTextWidth` the text stops at that width with an ellipsis, and `fullText` (the
+    /// epic's whole title) is the tooltip and what VoiceOver says.
+    public init(_ text: String, kind: Kind = .plain, maxTextWidth: Double? = nil, fullText: String? = nil) {
         self.text = text
         self.kind = kind
+        self.maxTextWidth = maxTextWidth
+        self.fullText = fullText
     }
 
     public var body: some View {
@@ -801,13 +837,16 @@ public struct Chip: View {
                 .tracking(CGFloat(Self.tracking * DesignTokens.TypeStyle.label.scaledSize(by: DesignTokens.TypeStyle.textScale)))
                 .foregroundStyle(textColor.color)
                 .lineLimit(1)
+                .truncationMode(.tail)
+                .modifier(ChipTextCap(width: maxTextWidth))
         }
         .fixedSize()
         .padding(.horizontal, isLabel ? Self.labelInset : Self.inset)
         .frame(height: kind.height)
         .background { face }
+        .help(fullText ?? "")
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(text)
+        .accessibilityLabel(fullText ?? text)
     }
 
     private var isLabel: Bool {
