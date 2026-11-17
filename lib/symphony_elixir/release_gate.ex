@@ -24,7 +24,23 @@ defmodule SymphonyElixir.ReleaseGate do
   One fix ticket is open at a time. While it is, the next merge's failed gate adds its evidence to
   that ticket as a comment instead of filing another: the gate stays red until the fix lands, and
   every merge in between fails it again. The open ticket is kept in the run store under
-  `{:release_gate, :fix}` and is forgotten once Linear says it is terminal.
+  `{:release_gate_fix, repo_key}` and is forgotten once Linear says it is terminal.
+
+  The fix ticket is the one thing a red gate lets run (TP-1528):
+
+    * it is filed in Todo, Urgent, and Symphony moves it back to Todo itself whenever it finds it
+      in Backlog or Triage (`failed/2` right after filing, and `reconcile/3` on every poll), so it is
+      dispatched without a person;
+    * no update hold waits on it (`fix_ticket?/3`): `SymphonyElixir.UpdateHold` and
+      `SymphonyElixir.InstructionsHold` leave it out, since the build they would wait for is the one
+      its own fix publishes;
+    * while the gate is red and the fix ticket is open, every other ticket of the repo is held at
+      dispatch (`hold_reason/3`, the rule `:release_gate`): a merge into a `main` whose builds cannot
+      publish would only add to what the next build has to carry. The hold lifts when a later build
+      passes the gate (`passed/2`) or the fix ticket goes terminal (`reconcile/3`);
+    * a later build that passes the gate while the fix ticket is still open (the check passed with no
+      fix merged) adds a comment to it saying so and what it still asks for: a check that fails at
+      random is a defect in the check.
 
   A pull request cannot prove a fix for a check its own workflow skips, so while the gate is red on
   `main` the `macos` check runs the whole gate on every pull request (`.github/workflows/macos.yml`,
@@ -49,6 +65,21 @@ defmodule SymphonyElixir.ReleaseGate do
 
   @typedoc "A release build's record (`SymphonyElixir.ReleaseBuild.t/0`) whose run failed."
   @type build :: map()
+
+  @backlog_states ["backlog", "triage"]
+  @todo_state "Todo"
+
+  @typedoc """
+  The fix ticket kept per repo: its identifier, the commit and step that failed, the build's run
+  number, and whether the gate is red (no later build passed it since).
+  """
+  @type fix :: %{
+          required(:identifier) => String.t(),
+          optional(:sha) => String.t(),
+          optional(:step) => String.t() | nil,
+          optional(:number) => pos_integer() | nil,
+          optional(:red) => boolean()
+        }
 
   @doc "The name of the gate's job in the `release` workflow."
   @spec job() :: String.t()
@@ -79,13 +110,109 @@ defmodule SymphonyElixir.ReleaseGate do
         evidence = evidence(build, opts)
 
         case open_ticket(repo_key, opts) do
-          identifier when is_binary(identifier) -> attach(identifier, build, evidence, opts)
+          identifier when is_binary(identifier) -> attach(repo_key, identifier, build, evidence, opts)
           nil -> file(repo_key, build, evidence, opts)
         end
     end
   end
 
   def failed(_build, _opts), do: {:error, :invalid_build}
+
+  @doc """
+  Whether `identifier` is `repo_key`'s release-gate fix ticket, open or not: no update hold waits on
+  it. Reads only the run store. `opts`: `:run_store`.
+  """
+  @spec fix_ticket?(String.t() | nil, String.t() | nil, keyword()) :: boolean()
+  def fix_ticket?(repo_key, identifier, opts \\ []) do
+    is_binary(repo_key) and is_binary(identifier) and match?(%{identifier: ^identifier}, fix(repo_key, opts))
+  end
+
+  @doc """
+  Why `repo_key`'s ticket `identifier` is not dispatched while the release gate is red: every
+  ticket but the fix ticket waits for it ("Holding while the release gate on main is red: TP-1526
+  is fixing it"). Nil when the gate is not red, or `identifier` is the fix ticket. Reads only the
+  run store. `opts`: `:run_store`.
+  """
+  @spec hold_reason(String.t() | nil, String.t() | nil, keyword()) :: String.t() | nil
+  def hold_reason(repo_key, identifier, opts \\ []) do
+    case is_binary(repo_key) && fix(repo_key, opts) do
+      %{identifier: ^identifier} -> nil
+      %{identifier: fix, red: true} -> "Holding while the release gate on main is red: #{fix} is fixing it"
+      _green_none_or_no_repo -> nil
+    end
+  end
+
+  @doc """
+  A release build of the repository `build.repo` passed the gate (it was published): a red gate
+  turns green when the build is later than the one that failed, which lifts `hold_reason/3`. When
+  the fix ticket is still open, its fix did not merge before this build: a comment on it says the
+  gate passed again and what the ticket still asks for. `:green` when the gate turned green,
+  `:ok` otherwise. `opts`: those of `failed/2`.
+  """
+  @spec passed(build(), keyword()) :: :green | :ok
+  def passed(%{sha: sha} = build, opts) when is_binary(sha) do
+    with repo_key when is_binary(repo_key) <- repo_key(Map.get(build, :repo), opts),
+         %{identifier: identifier, red: true} = fix <- fix(repo_key, opts),
+         true <- later?(build, fix) do
+      remember(repo_key, %{fix | red: false}, opts)
+      Logger.warning("The release gate passed again on #{sha}; it no longer holds the tickets of #{repo_key}")
+      tell_passed(identifier, build, fix, opts)
+      :green
+    else
+      _not_red_or_older -> :ok
+    end
+  end
+
+  def passed(_build, _opts), do: :ok
+
+  # A build of the commit that failed, or of an older one, says nothing about the gate now. A build
+  # whose run number is unknown is taken as later: it was found after the failure.
+  defp later?(%{sha: sha}, %{sha: sha}), do: false
+  defp later?(%{number: number}, %{number: failed}) when is_integer(number) and is_integer(failed), do: number > failed
+  defp later?(_build, _fix), do: true
+
+  defp tell_passed(identifier, build, fix, opts) do
+    with {:ok, %{state: state}} <- tracker(opts).fetch_issue_by_identifier(identifier),
+         false <- terminal?(state, opts),
+         {:error, reason} <- fixer(opts).attach(identifier, passed_comment(build, fix), opts) do
+      Logger.warning("Could not tell #{identifier} that the release gate passed again: #{inspect(reason)}")
+    end
+
+    :ok
+  end
+
+  @doc """
+  Brings `repo_key`'s red gate in line with its fix ticket on a poll of the repo's `issues` (its
+  active tickets): a fix ticket among them is open and dispatchable. Otherwise it is read by
+  identifier: one in Backlog or Triage is moved to Todo, and a terminal one lifts the hold (its fix
+  merged, or a person closed it; a later failure files a new one). A read that fails changes
+  nothing. `opts`: those of `failed/2`.
+  """
+  @spec reconcile([map()], String.t() | nil, keyword()) :: :ok
+  def reconcile(issues, repo_key, opts \\ []) do
+    if is_list(issues) and is_binary(repo_key), do: reconcile_red(issues, repo_key, opts)
+    :ok
+  end
+
+  defp reconcile_red(issues, repo_key, opts) do
+    with %{identifier: identifier, red: true} = fix <- fix(repo_key, opts),
+         false <- Enum.any?(issues, &match?(%{identifier: ^identifier}, &1)),
+         {:ok, %{state: state} = issue} <- tracker(opts).fetch_issue_by_identifier(identifier) do
+      if terminal?(state, opts) do
+        remember(repo_key, %{fix | red: false}, opts)
+        Logger.warning("The release gate's fix ticket #{identifier} is #{state}; the gate no longer holds the tickets of #{repo_key}")
+      else
+        to_todo(issue, opts)
+      end
+    end
+  end
+
+  defp fix(repo_key, opts) do
+    case store(opts).get_github_updates(key(repo_key)) do
+      %{identifier: identifier} = fix when is_binary(identifier) -> fix
+      _none -> nil
+    end
+  end
 
   # The configured repo whose GitHub repository is `repo` (`owner/name`, from the delivery's
   # `repository.full_name`), or nil.
@@ -106,8 +233,9 @@ defmodule SymphonyElixir.ReleaseGate do
 
     case fixer(opts).create(attrs, Keyword.put(opts, :priority, @urgent)) do
       {:ok, %{identifier: identifier}} when is_binary(identifier) ->
-        remember(scope, %{identifier: identifier, sha: build.sha, step: step(build)}, opts)
+        remember(scope, red(identifier, build), opts)
         Logger.warning("The release gate failed on #{build.sha} (#{place(build)}); filed #{identifier} to fix it")
+        ensure_todo(identifier, opts)
         {:filed, identifier}
 
       {:error, reason} ->
@@ -120,9 +248,10 @@ defmodule SymphonyElixir.ReleaseGate do
     end
   end
 
-  defp attach(identifier, build, evidence, opts) do
+  defp attach(scope, identifier, build, evidence, opts) do
     case fixer(opts).attach(identifier, comment(build, evidence), opts) do
       :ok ->
+        remember(scope, red(identifier, build), opts)
         Logger.warning("The release gate failed again on #{build.sha} (#{place(build)}); added it to #{identifier}")
         {:attached, identifier}
 
@@ -137,13 +266,41 @@ defmodule SymphonyElixir.ReleaseGate do
   # rather than writing on a closed one.
   defp open_ticket(repo_key, opts) do
     with %{identifier: identifier} when is_binary(identifier) <- store(opts).get_github_updates(key(repo_key)),
-         {:ok, %{state: state}} <- tracker(opts).fetch_issue_by_identifier(identifier),
+         {:ok, %{state: state} = issue} <- tracker(opts).fetch_issue_by_identifier(identifier),
          false <- terminal?(state, opts) do
+      to_todo(issue, opts)
       identifier
     else
       _none_terminal_or_unreadable -> nil
     end
   end
+
+  defp red(identifier, build), do: %{identifier: identifier, sha: build.sha, step: step(build), number: number(build), red: true}
+
+  defp number(%{number: number}) when is_integer(number), do: number
+  defp number(_build), do: nil
+
+  # The fix ticket is dispatched only from Todo: one Linear (or anyone) left in Backlog or Triage is
+  # moved there. A read or a move that fails is tried again by the next poll (`reconcile/3`).
+  defp ensure_todo(identifier, opts) do
+    case tracker(opts).fetch_issue_by_identifier(identifier) do
+      {:ok, issue} -> to_todo(issue, opts)
+      {:error, _reason} -> :ok
+    end
+  end
+
+  defp to_todo(%{id: id, state: state, identifier: identifier}, opts) when is_binary(id) and is_binary(state) do
+    if normalize(state) in @backlog_states do
+      case tracker(opts).update_issue_state(id, @todo_state) do
+        :ok -> Logger.warning("The release gate's fix ticket #{identifier} was in #{state}; moved it to #{@todo_state} so it is dispatched")
+        {:error, reason} -> Logger.warning("Could not move the release gate's fix ticket #{identifier} to #{@todo_state}: #{inspect(reason)}")
+      end
+    end
+
+    :ok
+  end
+
+  defp to_todo(_issue, _opts), do: :ok
 
   defp remember(repo_key, ticket, opts) do
     case store(opts).put_github_updates(key(repo_key), ticket) do
@@ -227,6 +384,23 @@ defmodule SymphonyElixir.ReleaseGate do
     Enum.join(
       ["The release gate failed again on `main`, on a later merge. The #{build_name(build)} was not published either.", what_failed(build, evidence), log_section(evidence.log)]
       |> Enum.reject(&is_nil/1),
+      "\n\n"
+    )
+  end
+
+  defp passed_comment(build, fix) do
+    failed_on = if is_binary(Map.get(fix, :sha)), do: " on `#{String.slice(fix.sha, 0, 8)}`", else: ""
+    step = if is_binary(Map.get(fix, :step)), do: "The step “#{fix.step}”", else: "The job “#{@job}”"
+
+    Enum.join(
+      [
+        "The release gate passed again on `main` with the #{build_name(build)} (commit `#{String.slice(build.sha, 0, 8)}`), " <>
+          "and this ticket's fix is not merged. #{step} failed#{failed_on} and passed here with no change made for it.",
+        "This ticket still asks for the fix. A check that fails at random is a defect in the check: find why it fails only " <>
+          "some of the time and fix it at that cause, so the gate passes on every merge. If it really was fixed by another " <>
+          "merge, say which in the pull request, with the evidence.",
+        "Other tickets are no longer held while this one is open: the gate holds them only while it is red."
+      ],
       "\n\n"
     )
   end

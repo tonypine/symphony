@@ -101,6 +101,15 @@ defmodule SymphonyElixir.UpdateHoldTest do
       assert UpdateHold.hold(issue, @build, cache, @terminal) == nil
     end
 
+    test "the release gate's fix ticket is never held for an app update (TP-1528)" do
+      issue = %Issue{todo_blocked_by(blocker("TP-419", "Done")) | repo_key: @repo_key}
+      cache = %{blockers: %{"id-TP-419" => {:merged, @fix_pr, @merge_sha}}, included: %{{@merge_sha, @build_sha} => false}}
+      assert %{blockers: [_blocker]} = UpdateHold.hold(issue, @build, cache, @terminal)
+
+      :ok = RunStore.put_github_updates({:release_gate_fix, @repo_key}, %{identifier: "TP-332", red: true})
+      assert UpdateHold.hold(issue, @build, cache, @terminal) == nil
+    end
+
     test "only Todo tickets whose blockers are all terminal are looked up or held" do
       open_blocker = todo_blocked_by(blocker("TP-5", "In Review"))
       running = %Issue{todo_blocked_by(blocker("TP-6", "Done")) | state: "In Progress"}
