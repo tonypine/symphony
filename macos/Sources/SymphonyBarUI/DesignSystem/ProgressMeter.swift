@@ -180,14 +180,21 @@ private struct LineTrack: View {
     var body: some View {
         let meter = DesignTokens.ProgressMeter.self
         let radius = meter.lineTrackHeight / 2
+        // The track and fill keep the track's height on their own, and the tick is an overlay: inside one ZStack the
+        // 14 pt tick would set the stack's height and the flexible track and fill would grow to it.
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
-                RoundedRectangle(cornerRadius: radius).fill(DesignTokens.ColorToken.surfacePressed.color)
+                RoundedRectangle(cornerRadius: radius)
+                    .fill(DesignTokens.ColorToken.surfacePressed.color)
+                    .frame(width: proxy.size.width, height: meter.lineTrackHeight)
                 if fraction > 0 {
                     RoundedRectangle(cornerRadius: radius)
                         .fill(level.fill)
-                        .frame(width: proxy.size.width * fraction)
+                        .frame(width: proxy.size.width * fraction, height: meter.lineTrackHeight)
                 }
+            }
+            .frame(width: proxy.size.width, height: meter.lineTrackHeight, alignment: .leading)
+            .overlay(alignment: .leading) {
                 if let stop {
                     RoundedRectangle(cornerRadius: meter.stopWidth / 2)
                         .fill(DesignTokens.TextColor.secondary.color)
@@ -196,7 +203,6 @@ private struct LineTrack: View {
                         .help("New runs stop at \(stop) %")
                 }
             }
-            .frame(height: proxy.size.height)
         }
         .frame(height: meter.lineTrackHeight)
         .accessibilityHidden(true)

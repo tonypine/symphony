@@ -281,6 +281,42 @@ final class FactoryComponentsTests: XCTestCase {
         XCTAssertEqual(ProgressMeter(line: "Week", percent: 130).percent, 100)
     }
 
+    /// The pixels of a view drawn offscreen at 1x, as RGBA rows.
+    private func pixels(_ view: some View, size: CGSize) -> (width: Int, height: Int, bytes: [UInt8]) {
+        let renderer = ImageRenderer(content: view.frame(width: size.width, height: size.height))
+        renderer.scale = 1
+        guard let image = renderer.cgImage else { return (0, 0, []) }
+        let width = image.width, height = image.height
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        let context = CGContext(
+            data: &bytes, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )
+        context?.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return (width, height, bytes)
+    }
+
+    func testTheStopMarkChangesOnlyItsOwnColumnsAndTheTrackKeepsItsHeight() {
+        // The catalog's track is 6 pt with or without a stop mark: the tick alone reaches past it. Drawn with and
+        // without a mark, the two meters differ only in the tick's few columns, never along the track or its fill.
+        let size = CGSize(width: 640, height: 40)
+        let plain = pixels(ProgressMeter(line: "Week", percent: 62), size: size)
+        let marked = pixels(ProgressMeter(line: "Week", percent: 62, stop: 90), size: size)
+        XCTAssertGreaterThan(plain.width, 0)
+        XCTAssertEqual(plain.width, marked.width)
+        XCTAssertEqual(plain.height, marked.height)
+        var columns = Set<Int>()
+        for y in 0 ..< plain.height {
+            for x in 0 ..< plain.width {
+                let index = (y * plain.width + x) * 4
+                if plain.bytes[index ..< index + 4] != marked.bytes[index ..< index + 4] { columns.insert(x) }
+            }
+        }
+        XCTAssertFalse(columns.isEmpty, "the stop mark is drawn")
+        let span = (columns.max() ?? 0) - (columns.min() ?? 0) + 1
+        XCTAssertLessThanOrEqual(CGFloat(span), DesignTokens.ProgressMeter.stopWidth + 2, "only the tick's columns change")
+    }
+
     func testTheFullFormIsTheCatalogsWidthAndReadsItsShare() {
         let reading = ProgressMeterReading(label: "Tokens today", used: 4_100_000, cap: 5_000_000, resets: "at midnight")
         let meter = ProgressMeter(reading)
