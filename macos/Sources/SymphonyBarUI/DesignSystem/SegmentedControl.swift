@@ -153,12 +153,12 @@ public struct SegmentedControl<Value: Hashable>: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// `label` names the choice for VoiceOver ("Period"); the bar shows it beside the control when it needs a word.
+    /// It is for two to five segments (past five, a pop-up), but it draws whatever it is given and never stops the
+    /// app: a page's tabs are read again for one frame as the window leaves for a page with a single one (Home).
     public init(
         _ label: String, selection: Binding<Value>, segments: [Segment<Value>], size: DesignTokens.Control = .medium,
         disabledReason: String? = nil
     ) {
-        precondition(segments.count >= DesignTokens.Segmented.fewest && segments.count <= DesignTokens.Segmented.most,
-                     "A segmented control has two to five segments: past five, use a pop-up")
         self.label = label
         _selection = selection
         self.segments = segments

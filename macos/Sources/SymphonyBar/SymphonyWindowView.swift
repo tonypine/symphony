@@ -1330,11 +1330,14 @@ struct DestinationTabs: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SegmentedControl(
-                "\(model.destination.title) tabs", selection: Binding(get: { model.selection }, set: { model.show($0) }),
-                segments: model.destination.pages.map { Segment($0, $0.title) }, size: .small
-            )
-            .padding(.vertical, DesignTokens.Space.s2)
+            // Read once more as the window leaves for a destination with one page (⌘1 to Home): no tabs then.
+            if model.destination.pages.count >= DesignTokens.Segmented.fewest {
+                SegmentedControl(
+                    "\(model.destination.title) tabs", selection: Binding(get: { model.selection }, set: { model.show($0) }),
+                    segments: model.destination.pages.map { Segment($0, $0.title) }, size: .small
+                )
+                .padding(.vertical, DesignTokens.Space.s2)
+            }
             Divider()
         }
         .frame(maxWidth: .infinity)

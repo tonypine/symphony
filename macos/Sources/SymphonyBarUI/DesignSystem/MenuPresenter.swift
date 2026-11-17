@@ -10,8 +10,8 @@ import SymphonyBarCore
 /// taller than the screen is cut to it and scrolls, so its first items stay reachable.
 @MainActor
 public final class MenuPresenter {
-    /// The menu open now: one at a time.
-    public private(set) static weak var current: MenuPresenter?
+    /// The menu open now: one at a time. It holds the open menu, and its close lets it go.
+    public private(set) static var current: MenuPresenter?
 
     let session: MenuSession
     /// The control that opened it: the one whose next press closes it rather than opens another.
@@ -22,7 +22,6 @@ public final class MenuPresenter {
     private weak var window: NSWindow?
     private let screen: CGRect
     private let minWidth: Double
-    private var retained: MenuPresenter?
 
     /// Room around the list for its shadow, inside the panel.
     static let shadowRoom: CGFloat = 40
@@ -47,10 +46,16 @@ public final class MenuPresenter {
         return presenter
     }
 
-    /// The menu `owner` has open now, if any: a closed one is no longer open, whatever still holds it.
+    /// The menu `owner` has open now, if any: one that is closed, or whose list is not on screen, is not open, so the
+    /// control's next press opens it again (and `open` closes what is left of the other).
     static func showing(for owner: AnyObject) -> MenuPresenter? {
-        guard let current, current.owner === owner, !current.session.isClosed else { return nil }
+        guard let current, current.owner === owner, current.isShowing else { return nil }
         return current
+    }
+
+    /// Whether its list is on screen and not closed.
+    var isShowing: Bool {
+        !session.isClosed && panels[ObjectIdentifier(session)]?.isVisible == true
     }
 
     private init(session: MenuSession, window: NSWindow, screen: CGRect, minWidth: Double) {
@@ -61,7 +66,6 @@ public final class MenuPresenter {
     }
 
     private func show(anchor: CGRect, alignment: MenuNavigation.Alignment, label: String, onClose: @escaping () -> Void) {
-        retained = self
         Self.current = self
         wire(session)
         session.onClose = { [weak self] in
@@ -150,14 +154,15 @@ public final class MenuPresenter {
         }
         panels = [:]
         if Self.current === self { Self.current = nil }
-        retained = nil
     }
 
     // MARK: - Events
 
     /// A key goes to the menu; a click inside it goes on to its item, one outside closes it and goes nowhere.
-    /// True when the event goes on to the app.
+    /// True when the event goes on to the app, as every event does once the menu closed.
     private func passes(_ event: NSEvent) -> Bool {
+        // A monitor outliving its menu lets every event through: a closed menu never takes a click or a key.
+        guard !session.isClosed, Self.current === self else { return true }
         switch event.type {
         case .keyDown:
             if event.modifierFlags.contains(.command) {
@@ -227,7 +232,9 @@ final class MenuPanel: NSPanel {
         hasShadow = false
         level = .popUpMenu
         isReleasedWhenClosed = false
-        hidesOnDeactivate = true
+        // The presenter closes the menu when the app goes to the back; hiding it here instead would leave a menu
+        // open that no one sees.
+        hidesOnDeactivate = false
         animationBehavior = .none
         contentView = host
     }

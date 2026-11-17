@@ -229,6 +229,14 @@ final class MenuControlsTests: XCTestCase {
         XCTAssertNil(MenuPresenter.showing(for: MenuAnchorBox()), "a control whose menu closed opens it again")
     }
 
+    func testASegmentedControlOutsideTwoToFiveSegmentsStillDraws() {
+        // The Work tabs are read once more as ⌘1 leaves for Home, which has one page: that read stopped the app.
+        let one = fittingSize(SegmentedControl("Home tabs", selection: .constant(0), segments: [Segment(0, "Overview")], size: .small))
+        XCTAssertEqual(one.height, DesignTokens.Control.small.height, accuracy: 0.5)
+        let none = fittingSize(SegmentedControl("No tabs", selection: .constant(0), segments: [Segment<Int>](), size: .small))
+        XCTAssertEqual(none.height, DesignTokens.Control.small.height, accuracy: 0.5)
+    }
+
     func testTheSegmentsShareTheWidthEqually() {
         let three = fittingSize(SegmentedFace(titles: ["Day", "Week", "Month"], selected: 0, reduceMotion: true)).width
         let longWord = fittingSize(SegmentedFace(titles: ["Day", "Day", "Month"], selected: 0, reduceMotion: true)).width

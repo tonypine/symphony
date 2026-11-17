@@ -126,18 +126,20 @@ public struct MenuControlFace: View {
     }
 }
 
-/// A raised face's depth: the first elevation at rest and the second under the pointer, with the edge highlight.
+/// A raised face's depth: the first elevation at rest and the second under the pointer, with the edge highlight; none
+/// while open or off. The face keeps one view tree in every state (only the shadows and the highlight change), so
+/// opening and closing its menu never rebuilds the control under the pointer.
 private struct MenuControlDepth<S: Shape>: ViewModifier {
     let raised: Bool
     let hovered: Bool
     let shape: S
 
     func body(content: Content) -> some View {
-        if raised {
-            content.edgeHighlight(shape).elevation(hovered ? .level2 : .level1, in: shape)
-        } else {
-            content
-        }
+        content
+            .overlay {
+                if raised { Color.clear.edgeHighlight(shape) }
+            }
+            .elevation(raised ? (hovered ? .level2 : .level1) : .level0, in: shape)
     }
 }
 
@@ -230,12 +232,16 @@ private struct MenuTrigger: View {
                 return .handled
             }
             .fixedSize()
-            .onDisappear { MenuPresenter.showing(for: anchor)?.session.close() }
+            .onDisappear {
+                // Whatever is left of its menu goes with it, on screen or not.
+                if let current = MenuPresenter.current, current.owner === anchor { current.session.close() }
+            }
     }
 
-    /// Closes this control's menu when it is the one open, and opens it otherwise. Whether it is open is the
-    /// presenter's to say, not `open`'s: `open` only draws the face, so a close it missed (Escape, a click outside)
-    /// can never leave the control unable to open again.
+    /// Closes this control's menu when it is the one on screen, and opens it otherwise. Whether it is open is the
+    /// presenter's to say, not `open`'s: `open` only draws the face, so a close it missed (Escape, a click outside),
+    /// or a menu that left the screen without closing, can never leave the control unable to open again. Opening
+    /// closes what is left of any other menu first.
     private func toggle() {
         if let shown = MenuPresenter.showing(for: anchor) {
             shown.session.close()
