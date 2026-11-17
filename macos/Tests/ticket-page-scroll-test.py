@@ -157,7 +157,14 @@ def open_from_find(binary, pid, ticket=TICKET):
         time.sleep(0.5)
     if not field:
         return "Find a Ticket's field never showed"
-    reply = driver(binary, "ax-set-value", pid, field["path"], ticket)
+    # The window can lose focus between ⌘F and the typing (the Mac CI VM's desktop is shared): the sheet's field then
+    # holds nothing. Ask for the field again, a few times, before calling it a failure.
+    for attempt in range(3):
+        reply = driver(binary, "ax-set-value", pid, field["path"], ticket)
+        if (reply.get("error") or {}).get("code") != "text_not_entered":
+            break
+        time.sleep(2)
+        driver(binary, "click", pid, field["path"], 1)
     if "error" in reply:
         return f"typing {ticket}: {reply['error']}"
     reply = driver(binary, "key", pid, "return", "")
