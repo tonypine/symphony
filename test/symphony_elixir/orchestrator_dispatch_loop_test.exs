@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Artifacts, CiWait, ClaudeCode, Codex, DispatchLoop, Handoff, Paths}
+  alias SymphonyElixir.{Artifacts, CiWait, ClaudeCode, Codex, DispatchLoop, Handoff, InstructionsHold, Paths}
   alias SymphonyElixir.Inbox.Item
   alias SymphonyElixir.{Pauses, Questions, TicketEvents, TicketState}
 
@@ -298,6 +298,73 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     end
   end
 
+  describe "a run its ticket's hold stopped" do
+    @build_commit "d1dffa9c0d3a4e5f60718293a4b5c6d7e8f90123"
+
+    setup do
+      :ok = RunStore.clear()
+      :ok = put_dispatch(@repo_key, @issue_id, %{kind: :implementation, run_id: "run-1", state: "In Progress"})
+      :ok
+    end
+
+    test "schedules no continuation, releases its claim and counts towards no loop" do
+      :ok = InstructionsHold.hold(@repo_key, %{id: @issue_id, identifier: @identifier}, %{commit: @build_commit})
+      pid = start_orchestrator(:HeldNoContinuation)
+
+      log = send_down(pid, "run-1", "In Progress", :normal)
+      state = :sys.get_state(pid)
+
+      assert log =~ "its ticket is held, so no continuation is scheduled"
+      refute Map.has_key?(state.retry_attempts, @issue_id)
+      refute MapSet.member?(state.claimed, @issue_id)
+      assert RunStore.list_retries(@repo_key) == []
+
+      assert [{"run.ended", %{run_id: "run-1", exit: "stopped: its ticket waits on a hold", counted: false}}] =
+               ticket_events(@repo_key, @issue_id, "run.ended")
+
+      assert ticket_dispatches(@issue_id) == []
+    end
+
+    test "a hold set while a run works stops it, no run starts until the hold lifts, then exactly one starts" do
+      put_observed_head!("sha-held")
+      ticket = {:ticket, @repo_key, @issue_id}
+      pid = start_orchestrator(:HeldThenLifted)
+
+      # The merge that changes the instructions holds the ticket while its run works; the runner
+      # stops the run, which ends normally.
+      :ok = InstructionsHold.hold(@repo_key, %{id: @issue_id, identifier: @identifier}, %{commit: @build_commit})
+      send_down(pid, "run-1", "In Progress", :normal)
+      refute Map.has_key?(:sys.get_state(pid).retry_attempts, @issue_id)
+
+      # A continuation already on its way when the hold was set starts nothing either.
+      log =
+        capture_log(fn ->
+          send_retry(pid)
+          state = wait_for_state(pid, &(not MapSet.member?(&1.claimed, @issue_id)))
+          refute Map.has_key?(state.running, @issue_id)
+          refute Map.has_key?(state.retry_attempts, @issue_id)
+        end)
+
+      refute log =~ "dispatch_loop"
+      refute log =~ "without the handoff signal"
+      assert Questions.open(ticket) == []
+      assert [_first_run] = RunStore.list_ticket_events(@issue_id, types: ["run.started"])
+
+      # The build installs: the hold lifts, and the ticket's next run starts once.
+      {:ok, _pause} = Pauses.clear(ticket)
+
+      capture_log(fn ->
+        send_retry(pid)
+        state = wait_for_state(pid, &Map.has_key?(&1.running, @issue_id))
+        run_id = state.running[@issue_id].run_id
+
+        assert [_first_run, %{run_id: ^run_id}] = RunStore.list_ticket_events(@issue_id, types: ["run.started"])
+        assert map_size(state.running) == 1
+        refute Map.has_key?(state.retry_attempts, @issue_id)
+      end)
+    end
+  end
+
   describe "a run's transcript" do
     @session "5f0c6a52-0e4b-4c4f-9d8e-2a1b3c4d5e6f"
     @workspace "/Users/tonypine/symphony-workspaces/symphony/TP-1082"
@@ -589,6 +656,24 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
     :sys.replace_state(pid, fn state -> %{state | claimed: MapSet.new([@issue_id]), retry_attempts: %{@issue_id => retry}} end)
     send(pid, {:retry_issue, @issue_id, retry_token})
     pid
+  end
+
+  # A continuation retry of the ticket, delivered to a running orchestrator as its timer would.
+  defp send_retry(pid) do
+    retry_token = make_ref()
+
+    retry = %{
+      attempt: 1,
+      timer_ref: nil,
+      retry_token: retry_token,
+      due_at_ms: System.monotonic_time(:millisecond),
+      identifier: @identifier,
+      repo_key: @repo_key,
+      delay_type: :continuation
+    }
+
+    :sys.replace_state(pid, fn state -> %{state | claimed: MapSet.put(state.claimed, @issue_id), retry_attempts: %{@issue_id => retry}} end)
+    send(pid, {:retry_issue, @issue_id, retry_token})
   end
 
   defp down(name, reason), do: name |> start_orchestrator() |> send_down("run-1", "In Progress", reason)

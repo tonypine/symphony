@@ -16,7 +16,8 @@ defmodule SymphonyElixir.DispatchLoop do
   Progress ends the count. A run that started on another state or another PR head is older than the
   last state move or push, so it is not counted; a verdict recorded and a pause reason lifted (a
   person unblocked the ticket, answered its question, or what it waited on landed) end the list of
-  runs (`SymphonyElixir.TicketState.dispatches_in/1`). A run stopped by a usage limit or an unreachable model API is
+  runs (`SymphonyElixir.TicketState.dispatches_in/1`). A run stopped by a usage limit, an
+  unreachable model API or its ticket's hold (a pause, a decision request, a wait for a build) is
   dropped when it ends, since the orchestrator counts no attempt for it, and so is an epic review
   that found CI still running on its commit: CI takes longer than the window, and that wait has its
   own bound (`SymphonyElixir.CiWait`). Lifting the loop's pause itself, with `Unblock` or
