@@ -455,10 +455,10 @@ public struct SearchField: View {
             }
             if focused, !still { escape.start() } else { escape.stop() }
         }
-        .onChange(of: focusRequest?.wrappedValue ?? false, initial: true) { _, requested in
-            guard requested, let focusRequest else { return }
+        .onChange(of: focusRequest?.wrappedValue ?? false, initial: true) { (_: Bool, requested: Bool) in
+            guard requested, let focusRequest = self.focusRequest else { return }
             focusRequest.wrappedValue = false
-            if !still { focus() }
+            if !still { takeKeyboard() }
         }
         .onDisappear { escape.stop() }
     }
@@ -491,12 +491,12 @@ public struct SearchField: View {
         .modifier(FieldSurface(shape: Capsule(), kind: .search, state: state, reduceMotion: reduceMotion))
         .background { if !still { EscapeAnchor(watcher: escape) { editing = $0 } } }
         .contentShape(Capsule())
-        .onTapGesture { if !still { focus() } }
+        .onTapGesture { if !still { takeKeyboard() } }
         .onHover { hovering = $0 }
     }
 
     /// Puts the keyboard in the field, by its focus state and through the window (`EscapeAnchor`).
-    private func focus() {
+    private func takeKeyboard() {
         focusBinding.wrappedValue = true
         (escape.anchor as? FieldAnchorView)?.focusField()
     }
@@ -524,7 +524,7 @@ public struct SearchField: View {
     private var clearButton: some View {
         Button {
             text = ""
-            if !still { focus() }
+            if !still { takeKeyboard() }
         } label: {
             ZStack {
                 Circle().fill((clearHovered ? DesignTokens.TextColor.secondary : DesignTokens.TextColor.tertiary).color)
