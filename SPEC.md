@@ -530,7 +530,9 @@ The event:
   `payload`, `artifacts` and `summary`.
 - `summary` (`title`, `detail`) is rendered by Symphony from the type and payload, never written by
   an agent: the title says what happened in at most 120 characters, and an agent's free text only
-  ever lands in the one-line detail.
+  ever lands in the one-line detail. Both are sentences a person would say: no rule numbers, no
+  reason codes, no snake_case and no 40-character hashes (a commit is named by its 7-character short
+  hash), and the model by its name ("Claude Opus 5.5").
 - A second append with the idempotency key of an event the ticket already holds writes nothing and
   returns that event.
 
@@ -6466,7 +6468,12 @@ Minimum endpoints:
 - `GET /api/v1/repos/<repo_key>/tickets/<issue_identifier>/events?since=&types=&run_id=&limit=&group=`
   - The ticket's event ledger (Section 4.1.11), the debug API through which it is visible:
     `{"events": [...], "next_since": "<iso8601>"}`, the events oldest first by `at` then `seq`, each
-    with its `summary`. Read-only and served like `/api/v1/state`.
+    with its `summary` rendered on read (an event stored with older words reads as a new one does),
+    `bookkeeping` (true for an event that only records Symphony's bookkeeping: a review waiting on
+    the PR watcher, a stale check, a workspace already on the PR head, which the Director's timeline
+    leaves out of its default view) and `rule` (the rule that did it named by what it does,
+    "blockers first", "Merging lands with auto-merge", never by a PR watcher row's number; null when
+    no rule did). Read-only and served like `/api/v1/state`.
   - Each event's `artifacts` are `{id, kind, mime, label, available, url}`: `url` is
     `/api/v1/artifacts/<id>`, relative to the server, and `available` is false for an artifact the
     store marks expired and for an id it doesn't know (whose other fields are null). The page's
@@ -6475,7 +6482,10 @@ Minimum endpoints:
     first, with each event that names an earlier event of the page as `parent` in that event's
     `children` (at any depth), each other event whose `run_id` names a run of the ticket in that
     run's `events`, and the rest at the top level. A run is `{"kind": "run", run_id, run_kind,
-    run_number, model, effort, status, verdict, started_at, ended_at, exit, head, summary, events}`,
+    run_number, model, model_name, effort, status, verdict, started_at, ended_at, exit, head, summary,
+    outcome, events}` (`model_name` the model as a person reads it: `claude-opus-5-5` is "Claude Opus
+    5.5"; `outcome` how an ended run came out in a few words, null while it runs: the question its last
+    step asked, else its verdict, else its exit, "Asked you a question", "Approved", "Pushed and handed off"),
     placed where its first event on the page falls. Its header is read from the ticket's whole
     history: `model` and `effort` are the ones its run kind's entry resolved when it was dispatched (its
     `run.started`, else its `run.ended`; null when it resolved none), `status` is `ended` once its `run.ended` is written and `running` before that

@@ -1262,8 +1262,14 @@ defmodule SymphonyElixir.CoreTest do
       end)
 
       send(pid, :tick)
-      Process.sleep(100)
-      state = :sys.get_state(pid)
+
+      # The poll cycle runs in a task and reconciles when its result comes back, so wait on the
+      # state it leaves rather than a fixed sleep.
+      state =
+        eventually(fn ->
+          state = :sys.get_state(pid)
+          not Map.has_key?(state.running, issue_id) and state
+        end)
 
       refute Map.has_key?(state.running, issue_id)
       refute MapSet.member?(state.claimed, issue_id)

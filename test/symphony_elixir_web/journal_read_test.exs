@@ -43,7 +43,7 @@ defmodule SymphonyElixirWeb.JournalReadTest do
 
     assert [
              %{"type" => "ticket.moved", "by" => %{"kind" => "person", "name" => "Director"}},
-             %{"type" => "rule.action", "by" => %{"kind" => "rule", "name" => "CI wait"}, "summary" => %{"title" => "CI wait paused the ticket"}},
+             %{"type" => "rule.action", "by" => %{"kind" => "rule", "name" => "CI wait"}, "summary" => %{"title" => "Paused the ticket"}},
              %{"type" => "verdict.recorded", "by" => %{"kind" => "run", "run_id" => "run-2"}}
            ] = events
 

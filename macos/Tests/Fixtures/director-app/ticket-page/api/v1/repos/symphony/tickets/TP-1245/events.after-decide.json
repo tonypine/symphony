@@ -35,7 +35,7 @@
       },
       "summary": {
         "title": "Entered Todo from Backlog",
-        "detail": "via move"
+        "detail": null
       },
       "artifacts": [],
       "children": []
@@ -66,7 +66,7 @@
       "model": "claude-opus-5-5",
       "effort": "high",
       "status": "ended",
-      "exit": "failed",
+      "exit": "failed", "outcome": "Failed",
       "verdict": null,
       "started_at": "2026-10-07T09:02:00Z",
       "ended_at": "2026-10-07T09:24:00Z",
@@ -160,7 +160,8 @@
           "artifacts": [],
           "children": []
         }
-      ]
+      ],
+      "model_name": "Claude Opus 5.5"
     },
     {
       "id": "p1",
@@ -300,11 +301,12 @@
         "text": "Waiting for TP-1443 to finish"
       },
       "summary": {
-        "title": "Blocked-by links paused the ticket",
+        "title": "Paused the ticket",
         "detail": "Waiting for TP-1443 to finish"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "rule": "blockers first"
     },
     {
       "id": "b2",
@@ -398,10 +400,11 @@
         "text": "Waiting for TP-1443 to finish"
       },
       "summary": {
-        "title": "Blocked-by links paused the ticket"
+        "title": "Paused the ticket"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "rule": "blockers first"
     },
     {
       "id": "b7",
@@ -439,10 +442,11 @@
         "action": "lifted_pause"
       },
       "summary": {
-        "title": "Blocked-by links lifted a pause"
+        "title": "Lifted a pause"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "rule": "blockers first"
     },
     {
       "id": "q1",
@@ -519,11 +523,12 @@
         "text": "Branch updated with the newest main"
       },
       "summary": {
-        "title": "PR watcher R22 updated the branch",
+        "title": "Updated the branch",
         "detail": "with the newest main"
       },
       "artifacts": [],
-      "children": []
+      "children": [],
+      "rule": "keep the branch current"
     },
     {
       "id": "v1",
@@ -554,14 +559,23 @@
         "run_kind": "qa"
       },
       "payload": {
-        "class": "visual",
+        "class": "content missing",
         "severity": "major",
         "description": "The timeline missed a stopped run"
       },
       "summary": {
-        "title": "Finding: the timeline missed a stopped run"
+        "title": "QA found content missing"
       },
-      "artifacts": [],
+      "artifacts": [
+        {
+          "id": "1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0",
+          "kind": "screenshot",
+          "label": "The timeline at 1440×900",
+          "mime": "image/png",
+          "url": "/api/v1/artifacts/1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0",
+          "available": true
+        }
+      ],
       "children": []
     },
     {
@@ -596,7 +610,7 @@
         "to": "Rework"
       },
       "summary": {
-        "title": "Entered Rework from QA",
+        "title": "Sent back to Rework by QA",
         "detail": "QA failed"
       },
       "artifacts": [],
@@ -615,7 +629,7 @@
         "to": "Rework"
       },
       "summary": {
-        "title": "Entered Rework from QA",
+        "title": "Sent back to Rework by QA",
         "detail": "QA failed"
       },
       "artifacts": [],
@@ -629,7 +643,7 @@
       "model": "claude-opus-5-5",
       "effort": "high",
       "status": "ended",
-      "exit": "paused",
+      "exit": "paused", "outcome": "Asked you a question",
       "verdict": null,
       "started_at": "2026-10-08T09:45:00Z",
       "ended_at": "2026-10-08T10:05:00Z",
@@ -694,7 +708,8 @@
           "artifacts": [],
           "children": []
         }
-      ]
+      ],
+      "model_name": "Claude Opus 5.5"
     },
     {
       "id": "q3",
@@ -748,11 +763,12 @@
       },
       "payload": {
         "question_id": "q-3",
+        "title": "How should the times on the paused line read in dark mode?",
         "answer": "Use the secondary text colour"
       },
       "summary": {
-        "title": "Answered: How should the times on the paused line read in dark mode?",
-        "detail": "Use the secondary text colour"
+        "title": "You answered: Use the secondary text colour",
+        "detail": "How should the times on the paused line read in dark mode?"
       },
       "artifacts": [],
       "children": []
@@ -778,7 +794,7 @@
         }
       },
       "summary": {
-        "title": "Pause cleared",
+        "title": "Moving again",
         "detail": "Waiting for your answer"
       },
       "artifacts": [],

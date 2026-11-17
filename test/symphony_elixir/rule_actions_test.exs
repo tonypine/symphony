@@ -26,7 +26,7 @@ defmodule SymphonyElixir.RuleActionsTest do
     assert [first, second, third] = rule_actions()
     assert first.at == @at
     assert first.payload == %{rule: "Self-heal", action: "filed_ticket", text: String.duplicate("x", 500), filed: "TP-9", head: "abc1234"}
-    assert first.summary.title == "Self-heal filed TP-9"
+    assert first.summary.title == "Filed TP-9"
     assert second.payload == %{rule: "Idle park", action: "parked"}
     assert third.payload == %{rule: "Loop guard", action: "paused"}
   end

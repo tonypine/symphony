@@ -316,7 +316,7 @@ public struct DetailsPanelModel: Equatable {
         public var id: String
         /// "Implementation run 2".
         public var run: String
-        /// "claude-opus-5-5 · high effort".
+        /// "Claude Opus 5.5 · high effort": the model's name as the timeline reads it.
         public var model: String
     }
 
@@ -342,7 +342,7 @@ public struct DetailsPanelModel: Equatable {
     /// The machine the workspace is on, when Symphony names one.
     public var workspaceHost: String?
     public var models: [RunModel]
-    /// The models' fold folded: "3 runs · claude-opus-5-5".
+    /// The models' fold folded: "3 runs · Claude Opus 5.5".
     public var modelsSummary: String?
     public var links: [Link]
     public var brief: Brief?
@@ -395,7 +395,10 @@ public struct DetailsPanelModel: Equatable {
         runs.values
             .sorted { ($0.startedAt ?? "", $0.runID) < ($1.startedAt ?? "", $1.runID) }
             .compactMap { run in
-                guard let model = run.model?.trimmingWhitespace().nonEmpty else { return nil }
+                let modelID = run.model?.trimmingWhitespace().nonEmpty
+                guard let model = run.modelName?.trimmingWhitespace().nonEmpty ?? modelID.map(ModelName.display) else {
+                    return nil
+                }
                 let effort = run.effort?.trimmingWhitespace().nonEmpty.map { "\($0) effort" }
                 return RunModel(
                     id: run.runID, run: TicketEventsPayload.runTitle(kind: run.runKind, number: run.runNumber),
@@ -404,7 +407,7 @@ public struct DetailsPanelModel: Equatable {
             }
     }
 
-    /// "1 run · claude-opus-5-5", "3 runs · claude-opus-5-5, deepseek-v4": how many runs, and their models once each.
+    /// "1 run · Claude Opus 5.5", "3 runs · Claude Opus 5.5, Deepseek V4": how many runs, and their models once each.
     static func modelsSummary(_ models: [RunModel]) -> String? {
         guard !models.isEmpty else { return nil }
         var names: [String] = []

@@ -158,7 +158,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
 
       assert [started] = RunStore.list_ticket_events(@issue_id, types: ["run.started"])
       assert %{run_id: ^run_id, run_kind: "implementation", model: "claude-opus-5-5", effort: "high"} = started.payload
-      assert started.summary.detail == "claude-opus-5-5 · in In Progress · at sha-now"
+      assert started.summary.detail == "Claude Opus 5.5 · in In Progress · at sha-now"
     end)
   end
 

@@ -561,6 +561,7 @@ struct TicketPageContent: View, Equatable {
                 undo: { model.undoTicketBanner($0) },
                 closeBanner: { model.dismissBanner() }
             )
+            .environment(\.artifactImages, model.artifactImages)
         } else {
             EmptyState(title: "Reading the ticket…", symbol: "doc.text.magnifyingglass", showsSpinner: true)
         }

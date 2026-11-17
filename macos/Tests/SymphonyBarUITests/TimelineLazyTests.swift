@@ -153,6 +153,19 @@ final class TimelineLazyTests: XCTestCase {
         XCTAssertEqual(TimelineSection.lines(model, idle: nil, clock: { _ in "" }).count, 5)
     }
 
+    func testTheRuleLineJoinsAnEntryToTheEntryUnderItInItsDay() {
+        let at = Self.start
+        func entry(_ id: String) -> TimelineItem { .entry(TimelineEntry(id: id, kind: .phase, at: at, title: id, actor: "Symphony")) }
+        let run = TimelineItem.run(RunGroupModel(id: "r", title: "Run", state: .passed, word: "Passed"), at: at)
+        let model = TimelineModel(days: [
+            TimelineDay(id: "today", relative: "Today", date: "13 Nov", span: nil, items: [entry("a"), entry("b"), run, entry("c")]),
+            TimelineDay(id: "yesterday", relative: "Yesterday", date: "12 Nov", span: nil, items: [entry("d"), entry("e")]),
+        ])
+        let lines = TimelineSection.lines(model, idle: nil, clock: { _ in "" })
+        // a joins b; b stops at the run; c is the day's last; d joins e; the day's separator breaks the line.
+        XCTAssertEqual(TimelineSection.connected(lines), [entry("a").id, entry("d").id])
+    }
+
     // MARK: - The page keeps its place when the timeline grows above it
 
     func testAGrowthAboveWhatThePageShowsIsScrolledAwayOnce() {

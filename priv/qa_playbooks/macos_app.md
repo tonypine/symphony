@@ -441,7 +441,8 @@ GitHub or Linear in QA:
   "Sending your answer…" while it waits. After 10 s `qa_api_requests` lists one
   `POST /api/v1/control/decide` for TP-1245 with the pick "Use the secondary text colour"; the page reads again:
   the decisions line fades to "Nothing needs you", the situation reads "Starting a run", the
-  timeline shows "Answered" and "Pause cleared" at its top, and the banner says "Sent your
+  timeline shows "You answered: Use the secondary text colour" and "Moving again" at its top, in the same
+  sentences as before the answer (no rule numbers), and the banner says "Sent your
   decision" (VoiceOver announces it). Open the Inbox: TP-1245's question is gone. Relaunch with
   a fresh root and pick "Answer in my own words" instead: Send stays off with "Write your answer
   first." until there is text, and the consequence sheet quotes it. With the window past 1600 pt
