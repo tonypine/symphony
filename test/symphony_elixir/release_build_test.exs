@@ -329,6 +329,10 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: String.duplicate("c", 40), number: 956})
       assert {:next, %{sha: ^failed}} = ReleaseBuild.awaited(failed)
 
+      # The update line's newest build says its gate failed and which ticket fixes it.
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: failed, number: 954})
+      assert ReleaseBuild.latest_build().line == "The v#{BuildInfo.release_version(954)} build: failed its release gate; TP-1526 was opened to fix it"
+
       # A build that failed for another reason may still be rerun: it is the one waited for.
       put_build(failed, %{state: :failed, number: 954})
       assert {:build, %{sha: ^failed}} = ReleaseBuild.awaited(failed)
