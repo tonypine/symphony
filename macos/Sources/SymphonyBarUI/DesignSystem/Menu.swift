@@ -65,14 +65,24 @@ public struct MenuItem {
 /// The keys an open menu answers.
 public enum MenuKey: Equatable {
     case up, down, home, end, left, right, pick, escape
+    /// Delete: a searchable list's query loses its last letter.
+    case deleteBackward
     case text(String)
 }
 
 /// An open menu: its items, the one highlighted, the submenu open beside it, and what the keys, the pointer and a pick
-/// do. A pick closes the whole menu first, then runs the item's move.
+/// do. A pick closes the whole menu first, then runs the item's move. A searchable one (`search`, the Searchable
+/// pop-up's list) keeps what is typed as its query instead of jumping: its items are the choices the query keeps, the
+/// first of them lit, and Delete takes the last letter back.
 @MainActor
 public final class MenuSession: ObservableObject {
-    public let items: [MenuItem]
+    /// The items shown: every item, or a searchable list's choices its query keeps.
+    @Published public private(set) var items: [MenuItem]
+    /// What a searchable list searches for; nil for a menu.
+    public let search: MenuSearch?
+    /// What is typed in a searchable list's field.
+    @Published public private(set) var query = ""
+    private let allItems: [MenuItem]
     @Published public private(set) var highlighted: Int?
     @Published public private(set) var child: MenuSession?
     public private(set) var childIndex: Int?
@@ -86,11 +96,28 @@ public final class MenuSession: ObservableObject {
     var onSubmenu: ((MenuSession?, Int) -> Void)?
     /// Tells the presenter the highlight moved, so VoiceOver follows it.
     var onHighlight: ((Int?) -> Void)?
+    /// Tells the presenter a searchable list's items changed, so VoiceOver finds the ones shown.
+    var onItems: (() -> Void)?
 
-    public init(items: [MenuItem], highlighted: Int? = nil) {
+    public init(items: [MenuItem], highlighted: Int? = nil, search: MenuSearch? = nil) {
         self.items = items
+        allItems = items
+        self.search = search
         let lines = items.map(\.line)
         self.highlighted = highlighted.flatMap { lines.indices.contains($0) && lines[$0].selectable ? $0 : nil }
+    }
+
+    /// Sets a searchable list's query: its items become the choices it keeps (no separator), the first that can be
+    /// picked lit; an empty query brings every item back with the ticked one lit. Nothing for a menu.
+    public func find(_ query: String) {
+        guard search != nil, !isClosed else { return }
+        self.query = query
+        items = query.isEmpty ? allItems : allItems.filter { !$0.isSeparator && MenuSearch.matches($0.title, query: query) }
+        let lines = items.map(\.line)
+        let ticked = query.isEmpty ? items.firstIndex { $0.checked == true && $0.enabled } : nil
+        highlighted = ticked ?? MenuNavigation.end(false, in: lines)
+        onItems?()
+        onHighlight?(highlighted)
     }
 
     var lines: [MenuNavigation.Line] { items.map(\.line) }
@@ -123,6 +150,19 @@ public final class MenuSession: ObservableObject {
             closeChild()
             return true
         }
+        if search != nil {
+            switch key {
+            case let .text(text):
+                find(query + text)
+                return true
+            case .deleteBackward:
+                find(String(query.dropLast()))
+                return true
+            case .left, .right:
+                return true
+            default: break
+            }
+        }
         switch key {
         case .up: setHighlight(MenuNavigation.move(from: highlighted, step: -1, in: lines))
         case .down: setHighlight(MenuNavigation.move(from: highlighted, step: 1, in: lines))
@@ -137,6 +177,7 @@ public final class MenuSession: ObservableObject {
             if key == .escape { close() }
         case .pick:
             if let highlighted { pick(highlighted) }
+        case .deleteBackward: break
         case let .text(text):
             if let found = typeAhead.type(text, at: time, current: highlighted, in: lines) { setHighlight(found) }
         }
@@ -200,10 +241,14 @@ public final class MenuSession: ObservableObject {
 /// tick column when any item is a choice, a keyboard hint or a submenu's chevron at the trailing edge, hairline
 /// separators, the highlighted item on the accent fill with white words, a destructive item in the problem colour and
 /// an item that is off in the tertiary colour with its reason as help. Without `hover` and `pick`, a still picture.
+/// With `search` it is the Searchable pop-up's list: 280 pt, the search field on top holding `query`, the choices
+/// under it cut to 220 pt and scrolling, and a line saying nothing matches in their place when none is left.
 public struct MenuList: View {
     let items: [MenuItem]
     let highlighted: Int?
     var minWidth: Double
+    var search: MenuSearch?
+    var query: String
     /// The tallest the list may be: a taller one shows this much and scrolls, keeping the highlighted item in view.
     var maxHeight: Double?
     var hover: ((Int?) -> Void)?
@@ -215,19 +260,27 @@ public struct MenuList: View {
 
     public init(
         items: [MenuItem], highlighted: Int? = nil, minWidth: Double = DesignTokens.Menu.minWidth, maxHeight: Double? = nil,
+        search: MenuSearch? = nil, query: String = "",
         hover: ((Int?) -> Void)? = nil, pick: ((Int) -> Void)? = nil, scrolled: ((Double) -> Void)? = nil
     ) {
         self.items = items
         self.highlighted = highlighted
         self.minWidth = minWidth
         self.maxHeight = maxHeight
+        self.search = search
+        self.query = query
         self.hover = hover
         self.pick = pick
         self.scrolled = scrolled
     }
 
-    /// The height the list is cut to, when its items are taller than `maxHeight`.
+    /// The height the list is cut to, when its items are taller than `maxHeight` (a searchable list's choices, than
+    /// its 220 pt).
     var scrollHeight: Double? {
+        if search != nil {
+            let choices = MenuNavigation.height(of: items.map(\.line)) - 2 * DesignTokens.Menu.padding
+            return choices > DesignTokens.SearchableList.listHeight ? DesignTokens.SearchableList.listHeight : nil
+        }
         guard let maxHeight, MenuNavigation.height(of: items.map(\.line)) > maxHeight else { return nil }
         return maxHeight
     }
@@ -238,7 +291,9 @@ public struct MenuList: View {
         let menu = DesignTokens.Menu.self
         let shape = RoundedRectangle(cornerRadius: menu.radius, style: .continuous)
         Group {
-            if let scrollHeight {
+            if let search {
+                searching(search)
+            } else if let scrollHeight {
                 scrolling(height: scrollHeight)
             } else {
                 stack.fixedSize()
@@ -255,6 +310,12 @@ public struct MenuList: View {
     }
 
     private var stack: some View {
+        rows
+            .padding(DesignTokens.Menu.padding)
+            .frame(minWidth: minWidth, alignment: .leading)
+    }
+
+    private var rows: some View {
         let menu = DesignTokens.Menu.self
         return VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
@@ -267,19 +328,44 @@ public struct MenuList: View {
                 }
             }
         }
-        .padding(menu.padding)
-        .frame(minWidth: minWidth, alignment: .leading)
+    }
+
+    /// The Searchable pop-up's list: the field holding the query, then the choices (cut and scrolling past 220 pt),
+    /// or the line saying nothing matches.
+    private func searching(_ search: MenuSearch) -> some View {
+        let list = DesignTokens.SearchableList.self
+        return VStack(alignment: .leading, spacing: list.fieldGap) {
+            SearchQueryFace(placeholder: search.placeholder, query: query)
+            if items.isEmpty {
+                Text(search.noMatch(query))
+                    .textStyle(.secondary)
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    .lineLimit(1)
+                    .padding(.vertical, list.noMatchVertical)
+                    .padding(.horizontal, list.noMatchHorizontal)
+            } else if let scrollHeight {
+                cut(rows.frame(maxWidth: .infinity, alignment: .leading), height: scrollHeight)
+            } else {
+                rows
+            }
+        }
+        .padding(list.padding)
+        .frame(width: list.width, alignment: .leading)
     }
 
     /// A list taller than `maxHeight`: cut to `height`, scrolling, with the highlighted item kept in view.
     private func scrolling(height: Double) -> some View {
+        cut(stack.fixedSize(), height: height).fixedSize(horizontal: true, vertical: false)
+    }
+
+    /// `content` cut to `height`, scrolling, with the highlighted item kept in view.
+    private func cut(_ content: some View, height: Double) -> some View {
         ScrollViewReader { proxy in
             ScrollView(.vertical) {
-                stack.fixedSize()
+                content
             }
             .scrollIndicators(.automatic)
             .frame(height: height)
-            .fixedSize(horizontal: true, vertical: false)
             .onScrollGeometryChange(for: Double.self) { Double($0.contentOffset.y) } action: { _, offset in
                 scrolled?(offset)
             }
@@ -307,7 +393,7 @@ public struct MenuList: View {
             if let glyph = item.glyph {
                 Image(systemName: glyph).font(DesignTokens.Control.small.glyphFont()).accessibilityHidden(true)
             }
-            Text(item.title).textStyle(.body).lineLimit(1).fixedSize()
+            title(item)
             Spacer(minLength: menu.hintGap)
             if let shortcut = item.shortcut {
                 KeyboardHint(shortcut, plain: true, highlighted: lit)
@@ -338,6 +424,18 @@ public struct MenuList: View {
         }
     }
 
+    /// An item's title: a searchable list's choices are identifiers, in the mono face.
+    @ViewBuilder private func title(_ item: MenuItem) -> some View {
+        if search != nil {
+            Text(item.title)
+                .textStyle(.mono)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        } else {
+            Text(item.title).textStyle(.body).lineLimit(1).fixedSize()
+        }
+    }
+
     private func foreground(_ item: MenuItem, lit: Bool) -> Color {
         if !item.enabled { return DesignTokens.TextColor.tertiary.color }
         if lit { return DesignTokens.TextColor.onAccent.color }
@@ -357,6 +455,7 @@ struct MenuSessionList: View {
     var body: some View {
         MenuList(
             items: session.items, highlighted: session.highlighted, minWidth: minWidth, maxHeight: maxHeight,
+            search: session.search, query: session.query,
             hover: { session.hover($0) }, pick: { session.pick($0) }, scrolled: scrolled
         )
         .opacity(shown || reduceMotion ? 1 : 0)

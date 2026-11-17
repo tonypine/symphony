@@ -149,3 +149,26 @@ public enum MenuNavigation {
         max(low, min(value, high))
     }
 }
+
+/// What a searchable list (the catalog's Searchable pop-up, TP-1530) searches for: the noun its field and its
+/// nothing-matches line name ("Find a model", "No model matches “gpt”."), and which choices a query keeps.
+public struct MenuSearch: Equatable {
+    public var noun: String
+
+    public init(noun: String) {
+        self.noun = noun
+    }
+
+    /// The field's placeholder.
+    public var placeholder: String { "Find a \(noun)" }
+
+    /// The line in the list's place when nothing matches `query`.
+    public func noMatch(_ query: String) -> String { "No \(noun) matches “\(query)”." }
+
+    /// Whether a choice titled `title` stays for `query`: every choice for an empty query, otherwise one whose title
+    /// holds the query anywhere, ignoring case and accents.
+    public static func matches(_ title: String, query: String) -> Bool {
+        guard !query.isEmpty else { return true }
+        return MenuNavigation.TypeAhead.fold(title).contains(MenuNavigation.TypeAhead.fold(query))
+    }
+}

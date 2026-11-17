@@ -16,24 +16,30 @@ public enum MenuControlContent: Equatable {
 /// primary colour after its label in the secondary), then the chevron: up-down for a pop-up, down for a menu button,
 /// turned over while its menu is open. Hover lightens it and deepens its shadow, a press settles it to 97 %, open puts
 /// the accent edge and its tint ring round it, keyboard focus the focus ring, and disabled is tertiary on the raised
-/// surface. The quiet form ("Filter") has no surface and no chevron, its words and glyph in the accent.
+/// surface. The quiet form ("Filter") has no surface and no chevron, its words and glyph in the accent. A pop-up's
+/// value may be an identifier, in the mono face (`monoValue`), or come from a default, in the tertiary colour at the
+/// regular weight (`inheritedValue`), as the Searchable pop-up draws them.
 public struct MenuControlFace: View {
     let content: MenuControlContent
     var size: DesignTokens.Control
     var quiet: Bool
     let state: DesignTokens.Interaction
     var open: Bool
+    var monoValue: Bool
+    var inheritedValue: Bool
     let reduceMotion: Bool
 
     public init(
         _ content: MenuControlContent, size: DesignTokens.Control = .medium, quiet: Bool = false, state: DesignTokens.Interaction = .rest,
-        open: Bool = false, reduceMotion: Bool
+        open: Bool = false, monoValue: Bool = false, inheritedValue: Bool = false, reduceMotion: Bool
     ) {
         self.content = content
         self.size = size
         self.quiet = quiet
         self.state = state
         self.open = open
+        self.monoValue = monoValue
+        self.inheritedValue = inheritedValue
         self.reduceMotion = reduceMotion
     }
 
@@ -57,7 +63,7 @@ public struct MenuControlFace: View {
                     Text(label).foregroundStyle(state.disabled ? DesignTokens.TextColor.tertiary.color : DesignTokens.TextColor.secondary.color)
                 }
                 HStack(spacing: DesignTokens.MenuControl.markGap) {
-                    Text(value)
+                    valueText(value)
                     if marked {
                         Circle()
                             .fill(DesignTokens.ColorToken.accent.color)
@@ -96,6 +102,19 @@ public struct MenuControlFace: View {
         .scaleEffect(DesignTokens.Motion.scale(DesignTokens.Motion.pressScale, pressed: state.pressed && !state.disabled, reduceMotion: reduceMotion))
         .animation(.motion(.instant, reduceMotion: reduceMotion), value: state)
         .animation(.motion(.fold, reduceMotion: reduceMotion), value: isOpen)
+    }
+
+    /// A pop-up's value: in the label's font, or the mono face for an identifier, and tertiary at the regular weight
+    /// when it comes from a default.
+    @ViewBuilder private func valueText(_ value: String) -> some View {
+        let text = Text(value)
+        let weight = inheritedValue ? DesignTokens.SearchableList.inheritedWeight : DesignTokens.TypeStyle.label.weight
+        let styled = text.font(monoValue ? DesignTokens.TypeStyle.monoFont(weight: weight) : inheritedValue ? DesignTokens.TypeStyle.font(size: size.fontSize, weight: weight) : size.labelFont)
+        if inheritedValue, !state.disabled {
+            styled.foregroundStyle(DesignTokens.TextColor.tertiary.color)
+        } else {
+            styled
+        }
     }
 
     private var foreground: Color {
@@ -149,9 +168,11 @@ private struct MenuControlStyle: ButtonStyle {
     let size: DesignTokens.Control
     let quiet: Bool
     let open: Bool
+    var monoValue = false
+    var inheritedValue = false
 
     func makeBody(configuration: Configuration) -> some View {
-        Face(configuration: configuration, content: content, size: size, quiet: quiet, open: open)
+        Face(configuration: configuration, content: content, size: size, quiet: quiet, open: open, monoValue: monoValue, inheritedValue: inheritedValue)
     }
 
     private struct Face: View {
@@ -160,6 +181,8 @@ private struct MenuControlStyle: ButtonStyle {
         let size: DesignTokens.Control
         let quiet: Bool
         let open: Bool
+        let monoValue: Bool
+        let inheritedValue: Bool
         @State private var hovered = false
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.buttonKeyboardFocus) private var keyboardFocus
@@ -169,7 +192,7 @@ private struct MenuControlStyle: ButtonStyle {
             MenuControlFace(
                 content, size: size, quiet: quiet,
                 state: DesignTokens.Interaction(hovered: hovered, pressed: configuration.isPressed, focused: keyboardFocus, disabled: !isEnabled),
-                open: open, reduceMotion: reduceMotion
+                open: open, monoValue: monoValue, inheritedValue: inheritedValue, reduceMotion: reduceMotion
             )
             .contentShape(RoundedRectangle(cornerRadius: size.radius, style: .continuous))
             .onHover { hovered = $0 }
@@ -189,28 +212,56 @@ private struct MenuControlFocus: ViewModifier {
 /// The control's button: it opens the menu on a click, Space, Return or Down, from the anchor's place on screen. To
 /// VoiceOver the anchor is the control: a pop-up button with its value, or a menu button, that a press opens (an
 /// AppKit element, so no stock control is built for it).
-private struct MenuTrigger: View {
+struct MenuTrigger: View {
     let content: MenuControlContent
     let size: DesignTokens.Control
     let quiet: Bool
+    let monoValue: Bool
+    let inheritedValue: Bool
+    /// A searchable list's search: its typed letters go to the field.
+    let search: MenuSearch?
     let alignment: MenuNavigation.Alignment
     let label: String
     let drawnOpen: Bool
-    var role: NSAccessibility.Role = .menuButton
-    var spokenLabel: String?
-    var spokenValue: String?
-    var reason: String?
+    let role: NSAccessibility.Role
+    let spokenLabel: String?
+    let spokenValue: String?
+    let reason: String?
     let items: () -> (items: [MenuItem], highlighted: Int?)
     @State private var open = false
     @State private var anchor = MenuAnchorBox()
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+
+    init(
+        content: MenuControlContent, size: DesignTokens.Control, quiet: Bool, monoValue: Bool = false, inheritedValue: Bool = false,
+        search: MenuSearch? = nil, alignment: MenuNavigation.Alignment, label: String, drawnOpen: Bool, role: NSAccessibility.Role = .menuButton,
+        spokenLabel: String? = nil, spokenValue: String? = nil, reason: String? = nil,
+        items: @escaping () -> (items: [MenuItem], highlighted: Int?)
+    ) {
+        self.content = content
+        self.size = size
+        self.quiet = quiet
+        self.monoValue = monoValue
+        self.inheritedValue = inheritedValue
+        self.search = search
+        self.alignment = alignment
+        self.label = label
+        self.drawnOpen = drawnOpen
+        self.role = role
+        self.spokenLabel = spokenLabel
+        self.spokenValue = spokenValue
+        self.reason = reason
+        self.items = items
+    }
 
     /// Drawn open while its menu is: `open` redraws the face when it closes, and the presenter has the last word.
     private var shown: Bool { open && MenuPresenter.showing(for: anchor) != nil }
 
     var body: some View {
         Button(action: toggle) { Text(label) }
-            .buttonStyle(MenuControlStyle(content: content, size: size, quiet: quiet, open: shown || drawnOpen))
+            .buttonStyle(MenuControlStyle(
+                content: content, size: size, quiet: quiet, open: shown || drawnOpen, monoValue: monoValue, inheritedValue: inheritedValue
+            ))
             .focusEffectDisabled()
             .modifier(MenuControlFocus())
             .accessibilityHidden(true)
@@ -251,7 +302,7 @@ private struct MenuTrigger: View {
         let menu = items()
         let opened = MenuPresenter.open(
             menu.items, from: view, alignment: alignment, minWidth: max(DesignTokens.Menu.minWidth, view.bounds.width),
-            highlighted: menu.highlighted, label: label, owner: anchor
+            highlighted: menu.highlighted, search: search, label: label, owner: anchor
         ) { open = false }
         open = opened != nil
     }
