@@ -1027,13 +1027,14 @@ public enum DesignTokens {
         public static func height(twoLines: Bool) -> Double { twoLines ? twoLineHeight : oneLineHeight }
 
         /// The row's fill: the accent when selected in the front window (the pressed grey behind it), else pressed,
-        /// else hover; none at rest or disabled.
-        public static func fill(_ state: Interaction, windowActive: Bool) -> ColorToken? {
+        /// else hover, else the accent tint on the row that is the page's own item (`current`, the catalog's
+        /// `.is-self`); none at rest or disabled.
+        public static func fill(_ state: Interaction, windowActive: Bool, current: Bool = false) -> ColorToken? {
             if state.disabled { return nil }
             if state.selected { return windowActive ? .accent : .surfacePressed }
             if state.pressed { return .surfacePressed }
             if state.hovered { return .surfaceHover }
-            return nil
+            return current ? .accentTint : nil
         }
 
         /// Whether the row's words are white on the accent: selected, enabled, in the front window.

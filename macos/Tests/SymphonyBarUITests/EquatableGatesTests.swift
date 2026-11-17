@@ -11,7 +11,7 @@ final class EquatableGatesTests: XCTestCase {
     private let reference = Date(timeIntervalSince1970: 1_791_000_000)
 
     func testTheFactsRailCardsCompareTheirModelsAndNotTheirActions() {
-        let connected = ConnectedPanelModel.build(nil, reference: reference)
+        let connected = ConnectedPanelModel.build(nil)
         XCTAssertEqual(
             ConnectedPanel(model: connected, openTicket: { _ in }, openInitiatives: {}),
             ConnectedPanel(model: connected, openTicket: { _ in XCTFail() }, openInitiatives: { XCTFail() })

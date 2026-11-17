@@ -4,7 +4,7 @@ import XCTest
 
 /// The ticket read's `pull_request` and `connected` as the facts rail's Pull request and Connected panels say them,
 /// from the fixtures in `Tests/Fixtures/facts-rail`: a green PR, a red PR with three workflows, and a ticket in a
-/// chain with one blocker resolved yesterday and one still open.
+/// chain with one blocker resolved yesterday and one still open, which is the only one the panel lists.
 final class FactsRailTests: XCTestCase {
     private static let fixtures = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
@@ -28,7 +28,7 @@ final class FactsRailTests: XCTestCase {
     }
 
     private func connected(_ name: String) throws -> ConnectedPanelModel {
-        ConnectedPanelModel.build(try read(name).connected, reference: reference, calendar: utc)
+        ConnectedPanelModel.build(try read(name).connected)
     }
 
     // MARK: - Decoding
@@ -174,64 +174,124 @@ final class FactsRailTests: XCTestCase {
 
     // MARK: - The Connected panel
 
-    func testTheEpicRowCarriesItsProgressStripAndCount() throws {
+    func testTheEpicSaysItsProgressWhereThisTicketSitsAndTheTicketsAroundIt() throws {
         let epic = try XCTUnwrap(try connected("blockers").epic)
         XCTAssertEqual(epic.identifier, "TP-1381")
         XCTAssertEqual(epic.title, "Phase 3b: the Director redesigned around a ticket's situation")
         XCTAssertEqual(epic.progress, "3 of 6 done")
+        XCTAssertEqual(epic.place, "this is the 5th")
+        XCTAssertEqual(epic.progressLine, "3 of 6 done · this is the 5th")
         XCTAssertEqual(epic.strip?.segments, [.done, .done, .done, .working, .notStarted, .notStarted])
-        XCTAssertEqual(epic.accessibilityLabel, "Epic TP-1381, Phase 3b: the Director redesigned around a ticket's situation, 3 of 6 sub-tickets done")
+        XCTAssertEqual(
+            epic.accessibilityLabel,
+            "Epic TP-1381, Phase 3b: the Director redesigned around a ticket's situation, 3 of 6 sub-tickets done, this is the 5th"
+        )
+        // The one before it, this one, and the next ones the chain has.
+        XCTAssertEqual(epic.tickets.map(\.identifier), ["TP-1446", "TP-1447", "TP-1448"])
+        XCTAssertEqual(epic.tickets.map(\.current), [false, true, false])
+        XCTAssertEqual(epic.tickets.map(\.badge), ["Waiting for CI", "Blocked", "Blocked"])
+        XCTAssertEqual(epic.tickets.map(\.status), [.working, .idle, .idle])
+        XCTAssertEqual(
+            epic.tickets[1].accessibilityLabel, "This ticket, TP-1447, The facts rail's Note, Decisions and Details panels, Blocked"
+        )
+        XCTAssertEqual(epic.tickets[0].accessibilityLabel, "TP-1446, The facts rail's Pull request and Connected panels, Waiting for CI")
     }
 
-    func testAResolvedBlockerIsStruckThroughWithYesterdaysDateAndTheOpenOneSaysWhereItStands() throws {
+    func testALargeEpicListsOnlyTheTicketBeforeThisOneAndTheNextTwo() {
+        let tickets = (1 ... 40).map { TicketConnected.Ticket(identifier: "TP-\($0)", state: "Todo", current: $0 == 21) }
+        let epic = ConnectedPanelModel.build(TicketConnected(epic: .init(identifier: "TP-0", done: 20, total: 40, tickets: tickets))).epic
+        XCTAssertEqual(epic?.tickets.map(\.identifier), ["TP-20", "TP-21", "TP-22", "TP-23"])
+        XCTAssertEqual(epic?.tickets.map(\.badge), ["Todo", "Todo", "Todo", "Todo"])
+        XCTAssertEqual(epic?.progressLine, "20 of 40 done · this is the 21st")
+
+        let first = ConnectedPanelModel.build(TicketConnected(epic: .init(identifier: "TP-0", tickets: Array(tickets[20...])))).epic
+        XCTAssertEqual(first?.tickets.map(\.identifier), ["TP-21", "TP-22", "TP-23"])
+        XCTAssertEqual(first?.place, "this is the 1st")
+
+        let last = ConnectedPanelModel.build(TicketConnected(epic: .init(identifier: "TP-0", tickets: Array(tickets[..<21])))).epic
+        XCTAssertEqual(last?.tickets.map(\.identifier), ["TP-20", "TP-21"])
+    }
+
+    func testAnEpicWhoseListDoesNotHoldThisTicketSaysOnlyItsProgress() {
+        let epic = ConnectedPanelModel.build(TicketConnected(epic: .init(identifier: "TP-9", done: 1, total: 1))).epic
+        XCTAssertNil(epic?.strip)
+        XCTAssertNil(epic?.place)
+        XCTAssertEqual(epic?.tickets, [])
+        XCTAssertEqual(epic?.title, "TP-9")
+        XCTAssertEqual(epic?.progressLine, "1 of 1 done")
+        XCTAssertEqual(epic?.accessibilityLabel, "Epic TP-9, TP-9, 1 of 1 sub-ticket done")
+    }
+
+    func testWaitingOnListsOnlyWhatBlocksItNowAndHoldingUpWhatItBlocks() throws {
         let model = try connected("blockers")
-        XCTAssertEqual(model.waitingOn.map(\.identifier), ["TP-1445", "TP-1446"])
-        let resolved = model.waitingOn[0]
+        // TP-1445 resolved yesterday: what it waited on before is the timeline's, not the panel's.
+        XCTAssertEqual(model.waitingOn.map(\.identifier), ["TP-1446"])
+        let open = model.waitingOn[0]
+        XCTAssertEqual(open.badge, "Waiting for CI")
+        XCTAssertEqual(open.status, .working)
+        XCTAssertFalse(open.current)
+        XCTAssertEqual(open.accessibilityLabel, "TP-1446, The facts rail's Pull request and Connected panels, holds this one up, Waiting for CI")
+        XCTAssertEqual(model.holdingUp.map(\.identifier), ["TP-1448"])
+        XCTAssertEqual(model.holdingUp[0].badge, "Blocked")
+        XCTAssertEqual(model.holdingUp[0].accessibilityLabel, "TP-1448, The ticket page's layout on a laptop, waits on this one, Blocked")
+        XCTAssertFalse(model.isEmpty)
+    }
+
+    func testATicketConnectedToNothingHasNoPanelAndOneWithOnlyResolvedBlockersNeither() {
+        XCTAssertTrue(ConnectedPanelModel.build(nil).isEmpty)
+        let resolved = ConnectedPanelModel.build(TicketConnected(blockedBy: [TicketConnected.Blocker(identifier: "TP-8", resolved: true)]))
+        XCTAssertTrue(resolved.waitingOn.isEmpty)
+        XCTAssertTrue(resolved.isEmpty)
+        XCTAssertFalse(ConnectedPanelModel.build(TicketConnected(blocks: [TicketConnected.Ticket(identifier: "TP-4")])).isEmpty)
+        XCTAssertFalse(ConnectedPanelModel.build(TicketConnected(epic: .init(identifier: "TP-9"))).isEmpty)
+    }
+
+    func testTicketsWithoutTheirFactsStillReadInWords() {
+        let connected = TicketConnected(
+            blockedBy: [TicketConnected.Blocker(identifier: "TP-8"), TicketConnected.Blocker(identifier: "TP-7", state: "In Progress")],
+            blocks: [TicketConnected.Ticket(identifier: "TP-4")]
+        )
+        let model = ConnectedPanelModel.build(connected)
+        XCTAssertEqual(model.waitingOn.map(\.title), ["TP-8", "TP-7"])
+        XCTAssertEqual(model.waitingOn.map(\.badge), [nil, "In Progress"])
+        XCTAssertEqual(model.waitingOn[0].status, .idle)
+        XCTAssertEqual(model.waitingOn[0].accessibilityLabel, "TP-8, TP-8, holds this one up")
+        XCTAssertNil(model.holdingUp[0].badge)
+        XCTAssertEqual(model.holdingUp[0].accessibilityLabel, "TP-4, TP-4, waits on this one")
+    }
+
+    func testOrdinalsReadInEnglish() {
+        let numbers = [1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101, 111, 112]
+        XCTAssertEqual(
+            numbers.map(ConnectedPanelModel.ordinal),
+            ["1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "22nd", "23rd", "101st", "111th", "112th"]
+        )
+    }
+
+    // MARK: - A blocker as the Initiatives page lists it
+
+    func testAResolvedBlockerIsStruckThroughWithItsDayAndAnOpenOneSaysWhereItStands() throws {
+        let blockers = try read("blockers").connected?.blockedBy ?? []
+        let resolved = ConnectedPanelModel.row(blockers[0], situation: nil, reference: reference, calendar: utc)
         XCTAssertTrue(resolved.struck)
         XCTAssertEqual(resolved.detail, "Resolved yesterday, Mon 9 Nov")
         XCTAssertEqual(resolved.status, .done)
         XCTAssertEqual(resolved.accessibilityLabel, "TP-1445, The Lifecycle section and the Phase path, no longer holds this one up, resolved yesterday, Mon 9 Nov")
-        let open = model.waitingOn[1]
+        let open = ConnectedPanelModel.row(blockers[1], situation: .ci, reference: reference, calendar: utc)
         XCTAssertFalse(open.struck)
         XCTAssertEqual(open.detail, "Waiting for CI · Code Review")
         XCTAssertEqual(open.status, .working)
         XCTAssertEqual(open.accessibilityLabel, "TP-1446, The facts rail's Pull request and Connected panels, holds this one up, Waiting for CI, Code Review")
-        XCTAssertEqual(model.holdingUp.map(\.identifier), ["TP-1448"])
-        XCTAssertEqual(model.holdingUp[0].detail, "Blocked · Todo")
-        XCTAssertEqual(model.holdingUp[0].accessibilityLabel, "TP-1448, The ticket page's layout on a laptop, waits on this one, Blocked, Todo")
-    }
 
-    func testATicketConnectedToNothingReadsEachPartsPlainLine() {
-        let model = ConnectedPanelModel.build(nil, reference: reference, calendar: utc)
-        XCTAssertNil(model.epic)
-        XCTAssertTrue(model.waitingOn.isEmpty)
-        XCTAssertTrue(model.holdingUp.isEmpty)
-        XCTAssertEqual(ConnectedPanelModel.noEpicLine, "Not part of an epic.")
-        XCTAssertEqual(ConnectedPanelModel.noBlockerLine, "Nothing: no ticket holds this one up.")
-        XCTAssertEqual(ConnectedPanelModel.holdsNothingLine, "Nothing waits on this one.")
-    }
-
-    func testBlockersAndHeldTicketsWithoutTheirFactsStillReadInWords() {
-        let connected = TicketConnected(
-            epic: TicketConnected.Epic(identifier: "TP-9", done: 1, total: 1),
-            blockedBy: [
-                TicketConnected.Blocker(identifier: "TP-8"),
-                TicketConnected.Blocker(identifier: "TP-7", resolved: true),
-                TicketConnected.Blocker(identifier: "TP-6", resolved: true, resolvedAt: ISO8601DateFormatter().date(from: "2026-11-10T09:05:00Z")),
-                TicketConnected.Blocker(identifier: "TP-5", resolved: true, resolvedAt: ISO8601DateFormatter().date(from: "2026-11-06T09:05:00Z")),
-            ],
-            blocks: [TicketConnected.Ticket(identifier: "TP-4")]
-        )
-        let model = ConnectedPanelModel.build(connected, reference: reference, calendar: utc)
-        XCTAssertNil(model.epic?.strip)
-        XCTAssertEqual(model.epic?.title, "TP-9")
-        XCTAssertEqual(model.epic?.accessibilityLabel, "Epic TP-9, TP-9, 1 of 1 sub-ticket done")
-        XCTAssertEqual(model.waitingOn.map(\.detail), ["Open", "Resolved", "Resolved today 09:05", "Resolved Fri 6 Nov"])
-        XCTAssertEqual(model.waitingOn[0].title, "TP-8")
-        XCTAssertEqual(model.waitingOn[0].status, .idle)
-        XCTAssertEqual(model.waitingOn[0].accessibilityLabel, "TP-8, TP-8, holds this one up")
-        XCTAssertEqual(model.holdingUp[0].detail, "")
-        XCTAssertEqual(model.holdingUp[0].accessibilityLabel, "TP-4, TP-4, waits on this one")
+        func row(_ blocker: TicketConnected.Blocker) -> ConnectedPanelModel.Row {
+            ConnectedPanelModel.row(blocker, situation: nil, reference: reference, calendar: utc)
+        }
+        let date = ISO8601DateFormatter()
+        XCTAssertEqual(row(.init(identifier: "TP-8")).detail, "Open")
+        XCTAssertEqual(row(.init(identifier: "TP-8")).accessibilityLabel, "TP-8, TP-8, holds this one up")
+        XCTAssertEqual(row(.init(identifier: "TP-7", resolved: true)).detail, "Resolved")
+        XCTAssertEqual(row(.init(identifier: "TP-6", resolved: true, resolvedAt: date.date(from: "2026-11-10T09:05:00Z"))).detail, "Resolved today 09:05")
+        XCTAssertEqual(row(.init(identifier: "TP-5", resolved: true, resolvedAt: date.date(from: "2026-11-06T09:05:00Z"))).detail, "Resolved Fri 6 Nov")
     }
 
     func testAnEpicTicketsSegmentFollowsItsStateAndSituation() {

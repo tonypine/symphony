@@ -140,8 +140,8 @@ SymphonyBarUI/FactsRailDetailPanels.swift color 15
 SymphonyBarUI/FactsRailDetailPanels.swift number 3
 SymphonyBarUI/FactsRailDetailPanels.swift disabled 2
 SymphonyBarUI/FactsRailPanels.swift font 7
-SymphonyBarUI/FactsRailPanels.swift color 18
-SymphonyBarUI/FactsRailPanels.swift number 4
+SymphonyBarUI/FactsRailPanels.swift color 13
+SymphonyBarUI/FactsRailPanels.swift number 3
 SymphonyBarUI/FactsRailPanels.swift button 1
 SymphonyBarUI/JournalSection.swift disabled 1
 SymphonyBarUI/LifecycleSection.swift font 6

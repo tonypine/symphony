@@ -890,15 +890,20 @@ struct TicketPageBody: View {
 
     private func rail(width: CGFloat?) -> some View {
         let runs = page.history?.runs ?? [:]
+        let connected = ConnectedPanelModel.build(page.factsRead?.connected)
+        // Pull request, Connected, Decisions (`docs/design/director-window-and-home.md`), then the Note and Details
+        // panels until later tickets replace them.
         return VStack(alignment: .leading, spacing: gap) {
             // Each card draws again only when its model changed; their actions don't open the gate (TP-1480).
             PullRequestPanel(model: PullRequestPanelModel.build(page.factsRead?.pullRequest), open: actions.openURL)
                 .equatable()
-            ConnectedPanel(
-                model: ConnectedPanelModel.build(page.factsRead?.connected, reference: page.reference, calendar: calendar),
-                openTicket: actions.openTicket, openInitiatives: actions.openInitiatives
-            )
-            .equatable()
+            // A ticket connected to nothing has no Connected panel.
+            if !connected.isEmpty {
+                ConnectedPanel(model: connected, openTicket: actions.openTicket, openInitiatives: actions.openInitiatives)
+                    .equatable()
+            }
+            DecisionsPanel(model: DecisionsPanelModel.build(decisions))
+                .equatable()
             NotePanel(
                 model: NotePanelModel.build(
                     note: page.detailsRead?.note, move: page.detailsRead?.noteMove, runs: runs, reference: page.reference, calendar: calendar
@@ -907,8 +912,6 @@ struct TicketPageBody: View {
             )
             .equatable()
             .id(TicketPageView.noteAnchor)
-            DecisionsPanel(model: DecisionsPanelModel.build(decisions))
-                .equatable()
             DetailsPanel(
                 model: DetailsPanelModel.build(
                     page.detailsRead, runs: runs, linearURL: page.url, pullRequest: page.factsRead?.pullRequest, description: nil,

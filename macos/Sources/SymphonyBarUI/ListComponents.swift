@@ -22,6 +22,8 @@ public enum RowLead: Equatable {
 extension EnvironmentValues {
     /// True inside a row selected in the front window: what it holds draws white on the accent.
     @Entry public var rowOnAccent = false
+    /// True while the pointer is over the row the view sits in: its arrow slides right.
+    @Entry public var rowHovered = false
 }
 
 /// A value in a row's trail, such as an age or a count: secondary, with tabular figures, white on a selected row.
@@ -47,9 +49,9 @@ public struct RowValue: View {
 /// identifier, the title cut with an ellipsis, then a trail laid out right to left whose last item, `value`, sits in a
 /// column at least `valueWidth` wide so a list's values align. It shows hover, pressed (settling to 99.5 %), selected
 /// (the accent fill with white words; the pressed grey with the words in their colours when the window is not in
-/// front) and the keyboard focus ring. A click calls `select`, a double click or Return `open`; with either, the row
-/// takes keyboard focus unless its list owns it (`focused`). VoiceOver reads it as one element. `state` draws one
-/// state still, for a snapshot.
+/// front) and the keyboard focus ring; `current` marks the page's own item with the accent tint. A click calls
+/// `select`, a double click or Return `open`; with either, the row takes keyboard focus unless its list owns it
+/// (`focused`). VoiceOver reads it as one element. `state` draws one state still, for a snapshot.
 public struct Row<Trail: View>: View {
     let title: String
     let identifier: String?
@@ -58,6 +60,7 @@ public struct Row<Trail: View>: View {
     let value: String?
     let valueWidth: Double
     let selected: Bool
+    let current: Bool
     let listFocused: Bool?
     let state: DesignTokens.Interaction?
     let windowActive: Bool?
@@ -74,7 +77,7 @@ public struct Row<Trail: View>: View {
 
     public init(
         _ title: String, identifier: String? = nil, lead: RowLead = .none, line2: String? = nil, value: String? = nil,
-        valueWidth: Double = DesignTokens.Row.valueWidth, selected: Bool = false, focused: Bool? = nil,
+        valueWidth: Double = DesignTokens.Row.valueWidth, selected: Bool = false, current: Bool = false, focused: Bool? = nil,
         state: DesignTokens.Interaction? = nil, windowActive: Bool? = nil,
         select: (() -> Void)? = nil, open: (() -> Void)? = nil, @ViewBuilder trail: () -> Trail
     ) {
@@ -85,6 +88,7 @@ public struct Row<Trail: View>: View {
         self.value = value
         self.valueWidth = valueWidth
         self.selected = selected
+        self.current = current
         listFocused = focused
         self.state = state
         self.windowActive = windowActive
@@ -117,10 +121,11 @@ public struct Row<Trail: View>: View {
             .padding(.vertical, DesignTokens.Row.inset)
             .frame(maxWidth: .infinity, minHeight: DesignTokens.Row.height(twoLines: twoLines), alignment: .leading)
             .background {
-                if let fill = DesignTokens.Row.fill(state, windowActive: active) { shape.fill(fill.color) }
+                if let fill = DesignTokens.Row.fill(state, windowActive: active, current: current) { shape.fill(fill.color) }
             }
             .focusRing(state.showsFocusRing, shape, offset: 0)
             .environment(\.rowOnAccent, onAccent)
+            .environment(\.rowHovered, state.hovered)
             .environment(\.backgroundProminence, onAccent ? .increased : .standard)
             .scaleEffect(DesignTokens.Motion.scale(DesignTokens.Motion.rowPressScale, pressed: state.pressed, reduceMotion: reduceMotion))
             .animation(.motion(.fast, reduceMotion: reduceMotion), value: state)
@@ -225,13 +230,13 @@ extension Row where Trail == EmptyView {
     /// A row with nothing in its trail but its value.
     public init(
         _ title: String, identifier: String? = nil, lead: RowLead = .none, line2: String? = nil, value: String? = nil,
-        valueWidth: Double = DesignTokens.Row.valueWidth, selected: Bool = false, focused: Bool? = nil,
+        valueWidth: Double = DesignTokens.Row.valueWidth, selected: Bool = false, current: Bool = false, focused: Bool? = nil,
         state: DesignTokens.Interaction? = nil, windowActive: Bool? = nil,
         select: (() -> Void)? = nil, open: (() -> Void)? = nil
     ) {
         self.init(
             title, identifier: identifier, lead: lead, line2: line2, value: value, valueWidth: valueWidth, selected: selected,
-            focused: focused, state: state, windowActive: windowActive, select: select, open: open
+            current: current, focused: focused, state: state, windowActive: windowActive, select: select, open: open
         ) { EmptyView() }
     }
 }
