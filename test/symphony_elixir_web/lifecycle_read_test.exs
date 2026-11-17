@@ -4,6 +4,7 @@ defmodule SymphonyElixirWeb.LifecycleReadTest do
 
   import Phoenix.ConnTest, only: [build_conn: 0, get: 2, json_response: 2]
 
+  alias SymphonyElixir.Pauses
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.TicketEvents
 
@@ -82,11 +83,11 @@ defmodule SymphonyElixirWeb.LifecycleReadTest do
     assert %{"lifecycle" => lifecycle, "phase_path" => phase_path} = read("MT-1")
 
     assert [
-             %{"id" => "coding", "state" => "passed", "visits" => 1, "time_ms" => 1_800_000, "tokens" => 2_000},
-             %{"id" => "code_review", "state" => "passed", "visits" => 2, "time_ms" => 1_800_000, "tokens" => 1_200},
-             %{"id" => "qa", "state" => "passed", "visits" => 1, "time_ms" => 1_200_000, "tokens" => 300},
-             %{"id" => "merging", "state" => "passed", "visits" => 1, "time_ms" => 3_600_000, "tokens" => 0},
-             %{"id" => "done", "state" => "passed", "visits" => 1, "time_ms" => 0, "tokens" => 0}
+             %{"id" => "coding", "state" => "passed", "visits" => 2, "time_ms" => 2_400_000, "tokens" => 2_700, "runs" => 2},
+             %{"id" => "code_review", "state" => "passed", "visits" => 2, "time_ms" => 1_200_000, "tokens" => 500, "runs" => 1},
+             %{"id" => "qa", "state" => "passed", "visits" => 1, "time_ms" => 1_200_000, "tokens" => 300, "runs" => 1},
+             %{"id" => "merging", "state" => "passed", "visits" => 1, "time_ms" => 3_600_000, "tokens" => 0, "runs" => 0},
+             %{"id" => "done", "state" => "passed", "visits" => 1, "time_ms" => 0, "tokens" => 0, "runs" => 0}
            ] = lifecycle["stages"]
 
     on_timeline = "merged" |> TicketEvents.query(types: ["run.ended"], limit: :all) |> Enum.map(& &1.payload.tokens) |> Enum.sum()
@@ -164,12 +165,24 @@ defmodule SymphonyElixirWeb.LifecycleReadTest do
     :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "watched", issue_identifier: "MT-2", phase: "Rework"})
     facts = %Facts{phase: :rework, ci: :pending, pr: :open, pr_number: 741}
     :ok = RunStore.put_ticket_pr_watch(@repo, "watched", "MT-2", %{facts: facts, head_sha: "abc1234"})
+    moved("watched", ~U[2026-10-30 09:00:00Z], "Todo", "In Progress")
     moved("watched", ~U[2026-10-30 10:00:00Z], "In Progress", "Code Review")
     moved("watched", ~U[2026-10-30 10:30:00Z], "Code Review", "Rework")
 
     assert %{"issues" => [issue]} = build_conn() |> get("/api/v1/state") |> json_response(200)
 
-    assert %{"identifier" => "MT-2", "lifecycle" => %{"current" => "code_review"} = lifecycle, "phase_path" => %{"current" => "Rework"}} = issue
-    assert %{"state" => "current", "visits" => 2} = Enum.find(lifecycle["stages"], &(&1["id"] == "code_review"))
+    assert %{"identifier" => "MT-2", "lifecycle" => %{"current" => "coding"} = lifecycle, "phase_path" => %{"current" => "Rework"}} = issue
+    assert %{"state" => "current", "visits" => 2} = Enum.find(lifecycle["stages"], &(&1["id"] == "coding"))
+    assert %{"state" => "sent_back", "visits" => 1} = Enum.find(lifecycle["stages"], &(&1["id"] == "code_review"))
+  end
+
+  test "a ticket held in Rework reads Coding paused and QA, which sent it back, sent back" do
+    :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "held", issue_identifier: "MT-5", phase: "Rework"})
+    {:ok, _pause} = Pauses.set({:ticket, @repo, "held"}, Pauses.ticket_reason(:dependency, "MT-2"))
+    moved("held", ~U[2026-10-30 10:00:00Z], "In Progress", "QA")
+    moved("held", ~U[2026-10-30 10:30:00Z], "QA", "Rework")
+
+    assert %{"lifecycle" => %{"current" => "coding", "stages" => stages}} = read("MT-5")
+    assert ["paused", "not_yet", "sent_back", "not_yet", "not_yet"] = Enum.map(stages, & &1["state"])
   end
 end

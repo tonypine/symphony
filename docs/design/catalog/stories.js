@@ -318,21 +318,22 @@ window.CATALOG = (function () {
 
   /* With a cap, the bar is the whole allowance: the stages fill it from the left and the rest stays
      empty, so one bar says both where the tokens went and how much is left. A stage passed as
-     undefined is left out of the legend (agents spend no tokens waiting on you). */
+     undefined is left out of the legend (agents spend no tokens waiting on you). A ticket that ended
+     (`ended`: Done or Cancelled) spends nothing more: its bar and totals stay, without the note. */
   function stageBar(p) {
     const parts = [["Coding", p.code, "s1"], ["Code Review", p.review, "s2"], ["QA", p.qa, "s3"], ["Merging", p.merge, "s4"], ["Waiting on you", p.waiting, "s5"]].filter((x) => x[1] !== undefined && x[1] !== "");
     const round = (n) => Math.round(n * 10) / 10;
     const total = round(parts.reduce((a, x) => a + (Number(x[1]) || 0), 0));
     const cap = Number(p.cap) || 0;
     const pct = cap ? Math.min(100, Math.round((total / cap) * 100)) : 0;
-    const role = pct >= 95 ? "problem" : pct >= 75 ? "you" : "accent";
+    const role = p.ended ? "accent" : pct >= 95 ? "problem" : pct >= 75 ? "you" : "accent";
     const k = p.key ? p.key + "-" : "";
     const segs = parts.filter((x) => Number(x[1]) > 0).map((x) => '<span class="stage-seg ' + x[2] + '" data-anim="seg-' + k + x[2] + '" style="flex:' + Number(x[1]) + '" title="' + esc(x[0]) + ": " + esc(x[1]) + " " + esc(p.unit) + '"></span>').join("");
     const rest = cap && cap > total ? '<span class="stage-seg rest" data-anim="seg-' + k + 'rest" style="flex:' + round(cap - total) + '" title="Left: ' + round(cap - total) + " " + esc(p.unit) + '"></span>' : "";
     const label = esc(p.label) + (cap ? ", " + pct + " percent of the cap" : "");
     const track = total || cap ? '<div class="stage-track' + (total ? "" : " empty") + '" role="img" aria-label="' + label + '">' + segs + (total ? rest : "") + "</div>" : '<div class="stage-track empty"></div>';
     const value = cap ? esc(total) + " of " + esc(cap) + " " + esc(p.unit) + " · " + pct + " %" : total ? esc(total) + " " + esc(p.unit) + " in all" : "Nothing yet";
-    const note = cap ? '<div class="meter-note role-' + role + (role === "accent" ? " calm" : "") + '">' + esc(pct >= 100 ? "At the cap: no new run starts." : pct >= 95 ? "Almost at the cap: the run finishes, the next one waits." : pct >= 75 ? "Getting close: " + (100 - pct) + " % left of the ticket's cap." : (100 - pct) + " % of the ticket's cap left.") + "</div>" : "";
+    const note = cap && !p.ended ? '<div class="meter-note role-' + role + (role === "accent" ? " calm" : "") + '">' + esc(pct >= 100 ? "At the cap: no new run starts." : pct >= 95 ? "Almost at the cap: the run finishes, the next one waits." : pct >= 75 ? "Getting close: " + (100 - pct) + " % left of the ticket's cap." : (100 - pct) + " % of the ticket's cap left.") + "</div>" : "";
     return '<div class="stage-bar' + (cap ? " has-cap" : "") + '"><div class="meter-head"><span>' + esc(p.label) + '</span><span class="value">' + value + "</span></div>" + track +
       '<ul class="stage-legend">' + parts.map((x) => '<li><span class="key stage-seg ' + x[2] + '"></span>' + esc(x[0]) + ' <span class="v">' + esc(x[1] || 0) + "</span></li>").join("") + "</ul>" + note + "</div>";
   }
@@ -952,17 +953,18 @@ window.CATALOG = (function () {
         { name: "waiting", label: "Waiting on you", type: "number", min: 0, when: (p) => p.waiting !== undefined },
         { name: "unit", label: "Unit", type: "select", options: ["min", "M tokens"] },
         { name: "cap", label: "Cap (0 for none)", type: "number", min: 0, step: 0.5 },
+        { name: "ended", label: "Ticket ended", type: "toggle", when: (p) => Number(p.cap) > 0 },
       ],
       render: (p) => stageBar(p),
       docs: {
         what: "Where a ticket's time or tokens went, stage by stage, as one bar split into segments with a legend that carries the numbers.",
-        when: ["Segments keep their landing order left to right. The legend is always there, so colour is never the only way to read it.", "With a cap, the bar is the whole allowance: the stages fill it from the left, the rest stays empty, and a note says how much is left. Use it for a ticket's tokens, so one bar replaces a meter and a stage split."],
+        when: ["Segments keep their landing order left to right. The legend is always there, so colour is never the only way to read it.", "With a cap, the bar is the whole allowance: the stages fill it from the left, the rest stays empty, and a note says how much is left. Use it for a ticket's tokens, so one bar replaces a meter and a stage split.", "Once the ticket ended (Done or Cancelled) it spends nothing more: the bar and its totals stay, the note goes."],
         avoid: "Status colours in the segments (they are stages, not states) other than the gray for waiting.",
         states: [["Typical", "every stage present"], ["One stage dominant", "a stuck review"], ["Empty", "a track with “Nothing yet”"]],
         motion: "Segments resize on a spring when the numbers change; the order never moves.",
         tokens: ["chart series 1 to 4", "--status-idle", "--radius-mark"],
       },
-      stories: [{ name: "Typical ticket" }, { name: "Stuck in review", args: { review: 180, qa: 0, merge: 0, waiting: 5 } }, { name: "Tokens by stage", args: { label: "Tokens by stage", code: 4.2, review: 0.8, qa: 1.1, merge: 0.1, waiting: 0, unit: "M tokens" } }, { name: "Tokens against the ticket's cap", args: { label: "Tokens", code: 5.8, review: 0.4, qa: 0, merge: 0, waiting: undefined, unit: "M tokens", cap: 8 } }, { name: "Near the cap", args: { label: "Tokens", code: 5.8, review: 0.8, qa: 0.4, merge: 0, waiting: undefined, unit: "M tokens", cap: 8 } }, { name: "Empty", args: { code: 0, review: 0, qa: 0, merge: 0, waiting: 0 } }],
+      stories: [{ name: "Typical ticket" }, { name: "Stuck in review", args: { review: 180, qa: 0, merge: 0, waiting: 5 } }, { name: "Tokens by stage", args: { label: "Tokens by stage", code: 4.2, review: 0.8, qa: 1.1, merge: 0.1, waiting: 0, unit: "M tokens" } }, { name: "Tokens against the ticket's cap", args: { label: "Tokens", code: 5.8, review: 0.4, qa: 0, merge: 0, waiting: undefined, unit: "M tokens", cap: 8 } }, { name: "Near the cap", args: { label: "Tokens", code: 5.8, review: 0.8, qa: 0.4, merge: 0, waiting: undefined, unit: "M tokens", cap: 8 } }, { name: "Shipped near the cap: no note", args: { label: "Tokens", code: 5.8, review: 0.8, qa: 0.4, merge: 0, waiting: undefined, unit: "M tokens", cap: 8, ended: true } }, { name: "Empty", args: { code: 0, review: 0, qa: 0, merge: 0, waiting: 0 } }],
     },
     {
       title: "Text field",

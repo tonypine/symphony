@@ -9,10 +9,16 @@ defmodule SymphonyElixir.Lifecycle do
   Linear's state history, and a read writes nothing.
 
   Rework and CI Fix have no stage of their own: they count as visits of the stage they serve. Rework
-  serves Code Review, the stage it hands back to, whichever stage sent it back. CI Fix serves the
-  stage it interrupted. Each time the ticket goes into one of them is one more visit, and the move
+  serves Coding: the ticket is written again, whichever stage sent it back. CI Fix serves the stage
+  it interrupted. Each time the ticket goes into one of them is one more visit, and the move
   back out of CI Fix or Rework into the stage they serve is the same visit going on. A phase outside
   the five (Backlog, Todo, Plan Review) belongs to no stage.
+
+  A stage behind the one the ticket is in reads `passed` (or `skipped`, never entered); the one it is
+  in reads `current`, or `paused` while the ticket is held (its record holds a pause). A stage ahead
+  reads by the ticket's last move out of it: `sent_back` when it went into Rework (a review's or
+  QA's verdict), `passed` when it went on to a later stage, and `not_yet` otherwise or when the ticket
+  never entered it.
 
   A run belongs to the stage the ticket was in when the run started, and its tokens and time join the
   stage when it ends. The run working now counts too, with its tokens and time so far, from what the
@@ -30,7 +36,7 @@ defmodule SymphonyElixir.Lifecycle do
 
   @stages [{"coding", "Coding"}, {"code_review", "Code Review"}, {"qa", "QA"}, {"merging", "Merging"}, {"done", "Done"}]
   @rework "rework"
-  @fixed_stage_of %{"in progress" => "coding", @rework => "code_review", "merging" => "merging", "done" => "done"}
+  @fixed_stage_of %{"in progress" => "coding", @rework => "coding", "merging" => "merging", "done" => "done"}
   @outside_any_stage "coding"
 
   @type stage :: %{
@@ -40,7 +46,8 @@ defmodule SymphonyElixir.Lifecycle do
           visits: non_neg_integer(),
           time_ms: non_neg_integer(),
           agent_time_ms: non_neg_integer(),
-          tokens: non_neg_integer()
+          tokens: non_neg_integer(),
+          runs: non_neg_integer()
         }
 
   @type t :: %{
@@ -70,26 +77,31 @@ defmodule SymphonyElixir.Lifecycle do
           }
           | nil
 
-  @typedoc "What `compute/2` needs beside the ledger; `running` is optional."
+  @typedoc """
+  What `compute/2` needs beside the ledger; `running` and `held?` (whether the ticket is held now, its
+  record holding a pause) are optional.
+  """
   @type facts :: %{
           required(:now) => DateTime.t(),
           required(:terminal_states) => [String.t()],
           required(:token_cap) => non_neg_integer() | nil,
           required(:phase_names) => %{code_review: String.t() | nil, qa: String.t() | nil, ci_fix: String.t()},
-          optional(:running) => running()
+          optional(:running) => running(),
+          optional(:held?) => boolean()
         }
 
   @doc """
   The lifecycle and the phase path of ticket `issue_id`, from its ledger and the configured token cap
   (`agent.max_tokens_per_issue`), terminal states and phase names, and the run working on it now
-  (`t:running/0`), whose tokens and time so far count. A ledger that cannot be read reads as empty.
+  (`t:running/0`), whose tokens and time so far count, and whether the ticket is `held?` now, which
+  pauses the stage it is in. A ledger that cannot be read reads as empty.
   """
-  @spec read(String.t() | nil, DateTime.t(), running()) :: t()
-  def read(issue_id, now \\ DateTime.utc_now(), running \\ nil) do
+  @spec read(String.t() | nil, DateTime.t(), running(), boolean()) :: t()
+  def read(issue_id, now \\ DateTime.utc_now(), running \\ nil, held? \\ false) do
     issue_id
     |> TicketEvents.query(limit: :all)
     |> List.wrap()
-    |> compute(Map.put(facts(now), :running, running))
+    |> compute(now |> facts() |> Map.merge(%{running: running, held?: held?}))
   end
 
   @doc "What `compute/2` and `stage_spans/2` need beside the ledger, from the settings, at `now`."
@@ -129,7 +141,7 @@ defmodule SymphonyElixir.Lifecycle do
     started = runs_started(events)
     runs = runs(events, started, moves) ++ running_run(events, started, moves, Map.get(facts, :running), now)
 
-    %{lifecycle: lifecycle(moves, runs, token_cap), phase_path: phase_path(moves)}
+    %{lifecycle: lifecycle(moves, runs, token_cap, Map.get(facts, :held?, false)), phase_path: phase_path(moves)}
   end
 
   # A repository may turn Code Review or QA off with an empty name: then no phase goes by it.
@@ -232,14 +244,14 @@ defmodule SymphonyElixir.Lifecycle do
   defp tokens(%{} = tokens), do: tokens(Map.get(tokens, :total_tokens, Map.get(tokens, "total_tokens")))
   defp tokens(_tokens), do: 0
 
-  defp lifecycle(moves, runs, token_cap) do
+  defp lifecycle(moves, runs, token_cap, held?) do
     current = current_stage(moves)
-    position = position(moves, current)
+    where = %{current: current, position: position(moves, current), held?: held?, exits: exits(moves)}
 
     stages =
       @stages
       |> Enum.with_index()
-      |> Enum.map(fn {stage, index} -> stage_row(stage, index, {current, position}, moves, runs) end)
+      |> Enum.map(fn {stage, index} -> stage_row(stage, index, where, moves, runs) end)
 
     %{current: current, stages: stages, tokens: %{total: runs |> Enum.map(& &1.tokens) |> Enum.sum(), cap: token_cap}}
   end
@@ -264,6 +276,20 @@ defmodule SymphonyElixir.Lifecycle do
 
   defp stage_index(stage), do: Enum.find_index(@stages, fn {id, _name} -> id == stage end)
 
+  # How the ticket last left each stage it left, as a stage ahead of it reads: into Rework, a review's
+  # or QA's verdict, sent it back; on to a later stage, it passed it; anywhere else, not yet.
+  defp exits(moves) do
+    moves
+    |> Enum.chunk_every(2, 1, :discard)
+    |> Enum.reduce(%{}, fn [%{stage: left}, %{stage: entered, to: to}], exits ->
+      if is_binary(left) and left != entered, do: Map.put(exits, left, exit_state(left, entered, normalized(to))), else: exits
+    end)
+  end
+
+  defp exit_state(_left, _entered, @rework), do: "sent_back"
+  defp exit_state(left, entered, _to) when is_binary(entered), do: if(stage_index(entered) > stage_index(left), do: "passed", else: "not_yet")
+  defp exit_state(_left, _entered, _to), do: "not_yet"
+
   defp stage_row({id, name}, index, where, moves, runs) do
     in_stage = Enum.filter(moves, &(&1.stage == id))
     runs_in_stage = Enum.filter(runs, &(&1.stage == id))
@@ -276,13 +302,16 @@ defmodule SymphonyElixir.Lifecycle do
       visits: visits,
       time_ms: in_stage |> Enum.map(& &1.time_ms) |> Enum.sum(),
       agent_time_ms: runs_in_stage |> Enum.map(& &1.agent_time_ms) |> Enum.sum(),
-      tokens: runs_in_stage |> Enum.map(& &1.tokens) |> Enum.sum()
+      tokens: runs_in_stage |> Enum.map(& &1.tokens) |> Enum.sum(),
+      runs: length(runs_in_stage)
     }
   end
 
-  defp stage_state(id, _index, _visits, {id, _position}), do: "current"
-  defp stage_state(_id, index, 0, {_current, position}) when index < position, do: "skipped"
-  defp stage_state(_id, index, _visits, {_current, position}) when index < position, do: "passed"
+  defp stage_state(id, _index, _visits, %{current: id, held?: true}), do: "paused"
+  defp stage_state(id, _index, _visits, %{current: id}), do: "current"
+  defp stage_state(_id, index, 0, %{position: position}) when index < position, do: "skipped"
+  defp stage_state(_id, index, _visits, %{position: position}) when index < position, do: "passed"
+  defp stage_state(id, _index, visits, %{exits: exits}) when visits > 0, do: Map.get(exits, id, "not_yet")
   defp stage_state(_id, _index, _visits, _where), do: "not_yet"
 
   defp phase_path(moves) do

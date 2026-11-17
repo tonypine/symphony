@@ -263,19 +263,21 @@
         "id": "coding",
         "name": "Coding",
         "state": "passed",
-        "visits": 1,
-        "time_ms": 3000000,
+        "visits": 2,
+        "time_ms": 4800000,
         "agent_time_ms": 2900000,
-        "tokens": 3100000
+        "tokens": 3100000,
+        "runs": 2
       },
       {
         "id": "code_review",
         "name": "Code Review",
         "state": "passed",
         "visits": 2,
-        "time_ms": 4200000,
+        "time_ms": 2400000,
         "agent_time_ms": 1260000,
-        "tokens": 900000
+        "tokens": 900000,
+        "runs": 2
       },
       {
         "id": "qa",
@@ -284,7 +286,8 @@
         "visits": 1,
         "time_ms": 2160000,
         "agent_time_ms": 1800000,
-        "tokens": 600000
+        "tokens": 600000,
+        "runs": 1
       },
       {
         "id": "merging",
@@ -293,7 +296,8 @@
         "visits": 1,
         "time_ms": 720000,
         "agent_time_ms": 0,
-        "tokens": 100000
+        "tokens": 100000,
+        "runs": 1
       },
       {
         "id": "done",
@@ -302,7 +306,8 @@
         "visits": 1,
         "time_ms": 0,
         "agent_time_ms": 0,
-        "tokens": 0
+        "tokens": 0,
+        "runs": 0
       }
     ],
     "tokens": {
