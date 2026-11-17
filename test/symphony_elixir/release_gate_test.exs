@@ -126,7 +126,7 @@ defmodule SymphonyElixir.ReleaseGateTest do
       assert attrs.description =~ part
     end
 
-    assert RunStore.get_github_updates({:release_gate, :fix}) == %{identifier: "TP-1520", sha: @sha, step: "Test the update"}
+    assert RunStore.get_github_updates({:release_gate_fix, "symphony"}) == %{identifier: "TP-1520", sha: @sha, step: "Test the update"}
   end
 
   test "while that ticket is open, the next failure is added to it; once it is closed, a new one is filed", %{opts: opts} do
@@ -195,7 +195,7 @@ defmodule SymphonyElixir.ReleaseGateTest do
 
     Process.put({:release_gate_reply, :create}, {:ok, %{}})
     assert capture_log(fn -> assert ReleaseGate.failed(build(), opts) == {:error, :fix_ticket_not_filed} end) =~ "Could not file"
-    assert RunStore.get_github_updates({:release_gate, :fix}) == nil
+    assert RunStore.get_github_updates({:release_gate_fix, "symphony"}) == nil
 
     Process.delete({:release_gate_reply, :create})
 
@@ -214,10 +214,24 @@ defmodule SymphonyElixir.ReleaseGateTest do
     capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(%{repo_key: "cycle"}), opts) end)
     assert_received {:create, %{scope: "symphony", repo_key: "symphony"}, _opts}
 
-    :ok = RunStore.clear()
+    Process.put({:release_gate_issue, "TP-1520"}, "In Progress")
+
+    # Symphony's ticket is open, and a failure from Cycle's repository files Cycle's own ticket.
+    Process.put({:release_gate_reply, :create}, {:ok, %{identifier: "MOT-104"}})
     cycle = build(%{repo: "acme/cycle"})
-    capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(cycle, opts) end)
-    assert_received {:create, %{scope: "cycle"}, _opts}
+    capture_log(fn -> assert {:filed, "MOT-104"} = ReleaseGate.failed(cycle, opts) end)
+    assert_received {:create, %{scope: "cycle", repo_key: "cycle"}, _opts}
+    refute_received {:attach, _identifier, _body}
+    assert RunStore.get_github_updates({:release_gate_fix, "cycle"}).identifier == "MOT-104"
+    assert RunStore.get_github_updates({:release_gate_fix, "symphony"}).identifier == "TP-1520"
+
+    # Each repo's next failure is added to its own open ticket.
+    Process.put({:release_gate_issue, "MOT-104"}, "Todo")
+    capture_log(fn -> assert {:attached, "TP-1520"} = ReleaseGate.failed(build(%{attempt: 2}), opts) end)
+    assert_received {:attach, "TP-1520", _body}
+    capture_log(fn -> assert {:attached, "MOT-104"} = ReleaseGate.failed(%{cycle | attempt: 2}, opts) end)
+    assert_received {:attach, "MOT-104", _body}
+    refute_received {:create, _attrs, _opts}
   end
 
   test "a delivery from a repository no configured repo has files nothing and names it", %{opts: opts} do

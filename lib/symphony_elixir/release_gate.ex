@@ -41,7 +41,8 @@ defmodule SymphonyElixir.ReleaseGate do
   alias SymphonyElixir.GitHub.{FailedLog, PullRequest, Repo}
   alias SymphonyElixir.Repo.Status, as: RepoStatus
 
-  @key {:release_gate, :fix}
+  # The open fix ticket is kept per repo: a failure is added only to its own repo's ticket.
+  @key :release_gate_fix
   @component "release_gate"
   # Linear's priority scale: 1 is Urgent.
   @urgent 1
@@ -77,7 +78,7 @@ defmodule SymphonyElixir.ReleaseGate do
       repo_key ->
         evidence = evidence(build, opts)
 
-        case open_ticket(opts) do
+        case open_ticket(repo_key, opts) do
           identifier when is_binary(identifier) -> attach(identifier, build, evidence, opts)
           nil -> file(repo_key, build, evidence, opts)
         end
@@ -105,7 +106,7 @@ defmodule SymphonyElixir.ReleaseGate do
 
     case fixer(opts).create(attrs, Keyword.put(opts, :priority, @urgent)) do
       {:ok, %{identifier: identifier}} when is_binary(identifier) ->
-        remember(%{identifier: identifier, sha: build.sha, step: step(build)}, opts)
+        remember(scope, %{identifier: identifier, sha: build.sha, step: step(build)}, opts)
         Logger.warning("The release gate failed on #{build.sha} (#{place(build)}); filed #{identifier} to fix it")
         {:filed, identifier}
 
@@ -134,8 +135,8 @@ defmodule SymphonyElixir.ReleaseGate do
   # The fix ticket still open in Linear, or nil: a terminal one, one Linear no longer has, and one
   # that cannot be read now are all forgotten or left out, so a new failure files a new ticket
   # rather than writing on a closed one.
-  defp open_ticket(opts) do
-    with %{identifier: identifier} when is_binary(identifier) <- store(opts).get_github_updates(@key),
+  defp open_ticket(repo_key, opts) do
+    with %{identifier: identifier} when is_binary(identifier) <- store(opts).get_github_updates(key(repo_key)),
          {:ok, %{state: state}} <- tracker(opts).fetch_issue_by_identifier(identifier),
          false <- terminal?(state, opts) do
       identifier
@@ -144,14 +145,16 @@ defmodule SymphonyElixir.ReleaseGate do
     end
   end
 
-  defp remember(ticket, opts) do
-    case store(opts).put_github_updates(@key, ticket) do
+  defp remember(repo_key, ticket, opts) do
+    case store(opts).put_github_updates(key(repo_key), ticket) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("Could not record the release gate's fix ticket #{ticket.identifier}: #{inspect(reason)}")
     end
 
     :ok
   end
+
+  defp key(repo_key), do: {@key, repo_key}
 
   defp terminal?(state, opts) when is_binary(state) do
     normalized = normalize(state)
