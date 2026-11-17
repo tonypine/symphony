@@ -75,6 +75,7 @@ window.CATALOG = (function () {
     link: '<path d="M7 9a3 3 0 0 0 4.2 0l2-2A3 3 0 0 0 9 2.8l-.8.8M9 7a3 3 0 0 0-4.2 0l-2 2A3 3 0 0 0 7 13.2l.8-.8"/>',
     inspector: '<rect x="2" y="3" width="12" height="10" rx="1.5"/><path d="M10 3v10"/>',
     plus: '<path d="M8 3v10M3 8h10"/>',
+    grip: '<g fill="currentColor" stroke="none"><circle cx="6" cy="4" r="1.1"/><circle cx="10" cy="4" r="1.1"/><circle cx="6" cy="8" r="1.1"/><circle cx="10" cy="8" r="1.1"/><circle cx="6" cy="12" r="1.1"/><circle cx="10" cy="12" r="1.1"/></g>',
     calendar: '<rect x="2" y="3" width="12" height="11" rx="1.5"/><path d="M2 6.5h12M5 1.8v2.6M11 1.8v2.6"/>',
     stop: '<rect x="3.5" y="3.5" width="9" height="9" rx="1.5"/>',
     undo: '<path d="M5.5 3 2.5 6l3 3"/><path d="M2.5 6H10a3.5 3.5 0 0 1 0 7H7"/>',
@@ -2338,44 +2339,51 @@ window.CATALOG = (function () {
   const runThen = (k) => (k.ownThen && k.then ? k.then : RUN_DEFAULT.then);
   const runProviderRole = (id, p) => (id === "anthropic" && p.provState !== "available" ? (p.provState === "held" ? "problem" : "you") : "done");
 
-  function runStep(step, own, p, n) {
-    const part = (i, text, cls) => (text ? '<span class="' + (cls || "") + (own.indexOf(i) < 0 ? " inherited" : "") + '">' + esc(text) + "</span>" : "");
-    const role = runProviderRole(step[1], p);
-    return '<span class="run-step' + (role === "done" ? "" : " is-off") + '"' + (role === "done" ? "" : ' title="' + esc(NAMES[step[1]]) + ' can’t take a run now"') + '><span class="n">' + n + '</span><span class="dot role-' + role + '"></span>' +
-      part(0, NAMES[step[0]]) + part(1, NAMES[step[1]]) + part(2, step[2], "mono") + part(3, step[3]) + "</span>";
+  const MODELS = { anthropic: ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"], "opencode-go": ["kimi-k3", "hy4-flash", "hy4-flash-free", "deepseek-v4-pro", "beam-free"], openrouter: ["deepseek/deepseek-flash", "deepseek/deepseek-v4-pro", "anthropic/claude-haiku-4.5", "openai/gpt-5"] };
+
+  /* A pop-up; `list` opens it as a searchable list of choices */
+  function pop(label, value, o) {
+    const b = '<button type="button" class="popup sz-sm' + (o && o.inherited ? " inherited" : "") + (o && o.mono ? " mono" : "") + '" aria-haspopup="listbox"' + (o && o.list ? ' aria-expanded="true"' : "") + (o && o.toggle ? ' data-set="' + o.toggle + '" data-key="pop-' + o.toggle + '"' : "") +
+      '><span class="popup-label">' + (label ? "<span>" + esc(label) + "</span>" : "") + "<span>" + esc(value || "None") + "</span></span>" + icon("updown", "chev") + "</button>";
+    if (!o || !o.list) return b;
+    return '<span class="menu-wrap">' + b + '<div class="menu pick-list" role="listbox"><div class="field sz-sm"><div class="input search">' + icon("search") + '<input type="search" aria-label="Find a model" placeholder="Find a model" value="' + esc(o.query || "") + '"></div></div><ul>' +
+      o.list.filter((m) => !o.query || m.indexOf(o.query) >= 0).map((m) => '<li class="menu-item' + (m === o.hover ? " is-hover" : "") + '" role="option" aria-checked="' + (m === value) + '">' + icon("check", "check") + '<span class="mono">' + esc(m) + "</span></li>").join("") + "</ul></div></span>";
   }
 
-  const pop = (label, value, inherited) => '<button type="button" class="popup sz-sm' + (inherited ? " inherited" : "") + '" aria-haspopup="listbox"><span class="popup-label"><span>' + esc(label) + "</span><span>" + esc(value || "None") + "</span></span>" + icon("updown", "chev") + "</button>";
-
-  function runEditor(k, p) {
-    const line = (step, own, n, removable) => '<div class="run-edit-line"><span class="n">' + n + "</span>" + pop("Harness", NAMES[step[0]], own.indexOf(0) < 0) + pop("Provider", NAMES[step[1]], own.indexOf(1) < 0) +
-      '<div class="field sz-sm run-model' + (own.indexOf(2) < 0 ? " inherited" : "") + '"><div class="input"><input type="text" aria-label="Model" value="' + esc(step[2]) + '"></div></div>' + pop("Effort", step[3], own.indexOf(3) < 0) +
-      (removable ? iconBtn("close", "Remove this fallback", { size: "sm" }) : "") + "</div>";
-    const then = runThen(k);
-    const all = [0, 1, 2, 3];
-    return '<div class="run-edit">' + line(runFirst(k), k.own || [], 1, false) + then.map((t, i) => line(t, k.ownThen ? all : [], i + 2, true)).join("") +
-      '<div class="run-edit-foot">' + button({ label: "Add a Fallback", variant: "quiet", size: "small", glyph: "plus" }) +
-      (k.id !== "default" && (k.own || k.ownThen) ? button({ label: "Use Default’s", variant: "quiet", size: "small" }) : "") + "</div></div>";
+  function runLine(k, step, own, n, total, p) {
+    const role = runProviderRole(step[1], p);
+    const key = k.id + "-" + n;
+    const picking = p.modelOpen === key;
+    return '<div class="run-edit-line' + (p.dragging === key ? " dragging" : "") + (role === "done" ? "" : " is-off") + '">' +
+      '<span class="grip" role="button" tabindex="0" aria-label="Drag to change the order" title="Drag to change the order">' + icon("grip") + '</span><span class="n">' + n + "</span>" +
+      pop("Harness", NAMES[step[0]], { inherited: own.indexOf(0) < 0 }) + pop("Provider", NAMES[step[1]], { inherited: own.indexOf(1) < 0 }) +
+      pop("Model", step[2], { inherited: own.indexOf(2) < 0, mono: true, toggle: "modelOpen=" + (picking ? "" : key), list: picking ? MODELS[step[1]] : null, query: picking ? p.modelQuery : "", hover: (MODELS[step[1]] || [])[1] }) +
+      pop("Effort", step[3], { inherited: own.indexOf(3) < 0 }) +
+      (role === "done" ? "" : '<span class="off-note"><span class="dot role-' + role + '"></span>' + esc(NAMES[step[1]]) + (role === "problem" ? " is at its limit" : " is paused") + "</span>") +
+      '<span class="grow"></span>' + (total > 1 && (k.id === "default" || k.ownThen) ? iconBtn("close", n === 1 ? "Remove; the next one becomes the first choice" : "Remove this fallback", { size: "sm" }) : "") + "</div>";
   }
 
   function runRow(k, p) {
-    const open = p.runOpen === k.id;
     const then = runThen(k);
     const all = [0, 1, 2, 3];
-    const chain = runStep(runFirst(k), k.own || [], p, 1) + then.map((t, i) => icon("arrow", "then") + runStep(t, k.ownThen ? all : [], p, i + 2)).join("") +
-      icon("arrow", "then") + '<span class="run-waits' + (then.length ? "" : " only") + '">waits</span>';
-    return '<div class="run-row' + (open ? " open" : "") + (k.id === "default" ? " is-default" : "") + '"><button type="button" class="run-line" aria-expanded="' + open + '" data-set="runOpen=' + (open ? "" : k.id) + '" data-key="run-' + k.id + '">' +
-      icon(open ? "chevron-down" : "chevron-right", "fold-mark") + '<span class="kind">' + esc(k.name) + '</span><span class="run-chain">' + chain + "</span></button>" + (open ? runEditor(k, p) : "") + "</div>";
+    const total = 1 + then.length;
+    const inherits = k.id !== "default" && !(k.own || []).length && !k.ownThen;
+    return '<div class="run-row' + (k.id === "default" ? " is-default" : "") + '"><div class="run-kind"><span class="kind">' + esc(k.name) + "</span>" +
+      (k.id === "default" || inherits ? "" : button({ label: "Use Default’s", variant: "quiet", size: "small" })) + '</div><div class="run-edit">' +
+      runLine(k, runFirst(k), k.own || [], 1, total, p) + then.map((t, i) => runLine(k, t, k.ownThen ? all : [], i + 2, total, p)).join("") +
+      '<div class="run-edit-foot">' + button({ label: "Add a Fallback", variant: "quiet", size: "small", glyph: "plus" }) + (then.length ? "" : '<span class="run-waits only">No fallback: a run waits when ' + esc(NAMES[runFirst(k)[1]]) + " can’t take it</span>") + "</div></div></div>";
   }
 
-  const HARNESS_ROWS = [["Claude", "claude --dangerously-skip-permissions", [["Anthropic", "claude-haiku-5-5"], ["OpenRouter", "deepseek/deepseek-flash"]]], ["OpenCode", "opencode", [["OpenCode Go", "hy4-flash"]]]];
+  const HARNESS_ROWS = [["Claude", "claude --dangerously-skip-permissions", [["anthropic", "claude-haiku-5-5"], ["openrouter", "deepseek/deepseek-flash"]]], ["OpenCode", "opencode", [["opencode-go", "hy4-flash"]]]];
 
   function runsPage(p) {
     const scope = '<div class="tk-bar"><button type="button" class="popup sz-sm" aria-haspopup="listbox"><span class="popup-label"><span>For</span><span>' + (p.runsRepo ? "web-shop" : "All repositories") + "</span></span>" + icon("updown", "chev") + "</button>" +
-      '<span class="grow"></span>' + (p.runsDirty ? '<span class="tk-count">2 changes</span>' + button({ label: "Revert", variant: "quiet", size: "small" }) + button({ label: "Save", variant: "primary", size: "small" }) : "") + "</div>";
+      '<span class="grow"></span>' + (p.runsDirty ? '<span class="tk-count">2 changes not saved</span>' + button({ label: "Revert", variant: "quiet", size: "small" }) : "") +
+      button({ label: "Save", variant: "primary", size: "small", disabled: !p.runsDirty, reason: "Nothing has changed.", showReason: false }) + "</div>";
     const kinds = p.runsRepo ? RUN_KINDS.map((k) => (k.id === "qa" ? k : { id: k.id, name: k.name })) : RUN_KINDS;
-    const field = (label, value, w) => '<label class="h-field"><span>' + esc(label) + '</span><div class="field sz-sm" style="width:' + w + 'px"><div class="input"><input type="text" value="' + esc(value) + '"></div></div></label>';
-    const harnesses = '<h3 class="zone-title">Harnesses</h3><section class="panel run-harnesses">' + HARNESS_ROWS.map((h) => '<div class="h-row"><b>' + h[0] + "</b>" + field("Command", h[1], 300) + '<span class="h-models">' + h[2].map((m) => field("Small model on " + m[0], m[1], 190)).join("") + "</span></div>").join("") + "</section>";
+    const command = (value) => '<label class="h-field"><span>Command</span><div class="field sz-sm" style="width:300px"><div class="input"><input type="text" value="' + esc(value) + '"></div></div></label>';
+    const harnesses = '<h3 class="zone-title">Harnesses</h3><section class="panel run-harnesses">' + HARNESS_ROWS.map((h) => '<div class="h-row"><b>' + h[0] + "</b>" + command(h[1]) + '<span class="h-models">' +
+      h[2].map((m) => pop("Small model on " + NAMES[m[0]], m[1], { mono: true })).join("") + "</span></div>").join("") + "</section>";
     return '<div class="runs-page">' + scope + '<section class="panel run-list">' + kinds.map((k) => runRow(k, p)).join("") + "</section>" + (p.runsRepo ? "" : harnesses) + "</div>";
   }
 
@@ -2445,11 +2453,13 @@ window.CATALOG = (function () {
   sections.push({
     title: "Window",
     wide: true,
-    args: Object.assign({}, sections[0].args, { dest: "work", workTab: 0, ticketOpen: false, epic: "TP-1381", allRows: false, filtered: false, inspector: false, ticketRow: -1, role: "working", collapsed: false, focused: true, paused: false, inboxOpen: false, navHover: "", provider: "anthropic", provState: "available", otherPaused: "", reserve: 90, menuBar: false, runOpen: "", runsRepo: false, runsDirty: false }),
+    args: Object.assign({}, sections[0].args, { dest: "work", workTab: 0, ticketOpen: false, epic: "TP-1381", allRows: false, filtered: false, inspector: false, ticketRow: -1, role: "working", collapsed: false, focused: true, paused: false, inboxOpen: false, navHover: "", provider: "anthropic", provState: "available", otherPaused: "", reserve: 90, menuBar: false, runsRepo: false, runsDirty: false, modelOpen: "", modelQuery: "", dragging: "" }),
     controls: [
       { name: "dest", label: "Destination", type: "select", options: [{ value: "home", label: "Home (the board)" }, { value: "work", label: "Work (a ticket page)" }, { value: "journal", label: "Journal" }, { value: "insights", label: "Insights" }, { value: "factory", label: "Factory" }, { value: "runs", label: "Factory › Runs" }, { value: "providers", label: "Factory › Providers" }, { value: "settings", label: "Factory › Settings" }] },
       { name: "provider", label: "Provider", type: "select", options: PROVIDERS.map((v) => ({ value: v.id, label: v.name })), when: (p) => p.dest === "providers" || p.menuBar },
-      { name: "runOpen", label: "A kind of run is open", type: "select", options: [{ value: "", label: "None" }].concat(RUN_KINDS.map((k) => ({ value: k.id, label: k.name }))), when: (p) => p.dest === "runs" },
+      { name: "modelOpen", label: "A model list is open", type: "select", options: [{ value: "", label: "None" }, { value: "default-1", label: "Default’s first choice" }, { value: "qa-2", label: "QA’s first fallback" }], when: (p) => p.dest === "runs" },
+      { name: "modelQuery", label: "Typed in the list", type: "text", when: (p) => p.dest === "runs" && !!p.modelOpen },
+      { name: "dragging", label: "A line is being dragged", type: "select", options: [{ value: "", label: "None" }, { value: "qa-3", label: "QA’s second fallback" }], when: (p) => p.dest === "runs" },
       { name: "runsRepo", label: "For one repository", type: "toggle", when: (p) => p.dest === "runs" },
       { name: "runsDirty", label: "Changes not saved", type: "toggle", when: (p) => p.dest === "runs" },
       { name: "provState", label: "The provider is", type: "select", options: [{ value: "available", label: "Available" }, { value: "paused", label: "Paused by you" }, { value: "held", label: "At its limit" }, { value: "reserve", label: "At your reserve" }], when: (p) => p.dest === "providers" || p.dest === "runs" || p.menuBar },
@@ -2496,11 +2506,13 @@ window.CATALOG = (function () {
       { name: "Window not focused", viewport: "laptop", args: { focused: false, ticketOpen: true } },
       { name: "Dispatch paused", viewport: "laptop", args: { paused: true, dest: "home" } },
       { name: "Runs, laptop", viewport: "laptop", args: { dest: "runs" } },
-      { name: "Runs, Default open", viewport: "laptop", args: { dest: "runs", runOpen: "default" } },
-      { name: "Runs, QA open with changes", viewport: "laptop", args: { dest: "runs", runOpen: "qa", runsDirty: true } },
+      { name: "Runs, changes not saved", viewport: "laptop", args: { dest: "runs", runsDirty: true } },
+      { name: "Runs, a model list open", viewport: "laptop", args: { dest: "runs", modelOpen: "default-1", runsDirty: true } },
+      { name: "Runs, finding a model", viewport: "laptop", args: { dest: "runs", modelOpen: "qa-2", modelQuery: "deep" } },
+      { name: "Runs, a fallback being dragged", viewport: "laptop", args: { dest: "runs", dragging: "qa-3", runsDirty: true } },
       { name: "Runs, a provider paused", viewport: "laptop", args: { dest: "runs", provState: "paused" } },
-      { name: "Runs, for one repository", viewport: "laptop", args: { dest: "runs", runsRepo: true, runOpen: "qa" } },
-      { name: "Runs, desktop", viewport: "desktop", args: { dest: "runs", runOpen: "landing" } },
+      { name: "Runs, for one repository", viewport: "laptop", args: { dest: "runs", runsRepo: true } },
+      { name: "Runs, desktop", viewport: "desktop", args: { dest: "runs" } },
       { name: "Providers, laptop", viewport: "laptop", args: { dest: "providers" } },
       { name: "Providers, one paused", viewport: "laptop", args: { dest: "providers", provState: "paused" } },
       { name: "Providers, at its limit", viewport: "laptop", args: { dest: "providers", provState: "held" } },
