@@ -8,8 +8,8 @@ final class QAHostToolsTests: XCTestCase {
           playbooks:
             macos_app:
               requires: [go, pg_ctl]   # on the QA VM
-        agent:
-          runtime: codex
+        execution:
+          mcp: {}
 
         """
 
@@ -73,8 +73,8 @@ final class QAHostToolsTests: XCTestCase {
 
     func testInsertsTheSectionsWhenMissing() throws {
         XCTAssertEqual(
-            try QAHostTools.updating("agent:\n  runtime: codex\n", from: QAHostTools(), to: QAHostTools(tools: ["go"])),
-            "agent:\n  runtime: codex\nauto_review:\n  playbooks:\n    macos_app:\n      requires: [go]\n"
+            try QAHostTools.updating("execution:\n  mcp: {}\n", from: QAHostTools(), to: QAHostTools(tools: ["go"])),
+            "execution:\n  mcp: {}\nauto_review:\n  playbooks:\n    macos_app:\n      requires: [go]\n"
         )
         XCTAssertEqual(
             try QAHostTools.updating("auto_review:\n  playbooks:\n    macos_app:\n      build: make app\n", from: QAHostTools(), to: QAHostTools(tools: ["go"])),

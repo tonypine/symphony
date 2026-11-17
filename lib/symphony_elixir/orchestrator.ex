@@ -212,6 +212,9 @@ defmodule SymphonyElixir.Orchestrator do
       tracker_tasks: %{},
       dispatch_refresh: nil,
       usage_limits: %{},
+      # The issue a continuation is being dispatched for, while its dispatch runs: a continuation
+      # keeps its run kind's own choice under a headroom hold instead of a fallback.
+      continuation_dispatch: nil,
       usage_limit_timers: %{},
       usage_windows: %{},
       api_outages: %{},
@@ -255,7 +258,7 @@ defmodule SymphonyElixir.Orchestrator do
     state = %State{
       repo_key: repo_key,
       poll_interval_ms: config.polling.interval_ms,
-      max_concurrent_agents: config.agent.max_concurrent_agents,
+      max_concurrent_agents: config.execution.max_concurrent_agents,
       next_poll_due_at_ms: now_ms,
       poll_check_in_progress: false,
       tick_timer_ref: nil,
@@ -1027,7 +1030,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_abnormal_agent_exit(%State{} = state, issue_id, running_entry, session_id, {:usage_limited, %{} = info} = reason) do
     cond do
-      not Config.settings!().agent.usage_limit.auto_pause ->
+      not Config.settings!().execution.usage_limit.auto_pause ->
         handle_failed_agent_exit(state, issue_id, running_entry, session_id, reason)
 
       usage_limit_holds_run?(state, running_entry, info) ->
@@ -1308,12 +1311,21 @@ defmodule SymphonyElixir.Orchestrator do
   # Whether a usage limit for `info`'s provider holds a run for `running_entry`: only when the run's
   # own provider matches. An OpenRouter run (Claude runtime) never matches a Claude subscription
   # limit. An entry without an issue follows the old behavior and is held.
-  defp usage_limit_holds_run?(%State{} = state, %{issue: %Issue{} = issue}, info) do
+  defp usage_limit_holds_run?(%State{} = state, %{issue: %Issue{} = issue} = running_entry, info) do
     {provider, _scope} = UsageLimit.key(info)
-    run_profile_for_issue(state, issue).provider == provider
+    running_provider(state, issue, running_entry) == provider
   end
 
   defp usage_limit_holds_run?(_state, _running_entry, _info), do: true
+
+  # The provider the run started on, which a fallback may have picked. An entry that kept no
+  # profile is on its run kind's own choice.
+  defp running_provider(_state, _issue, %{run_profile: %{provider: provider}}) when is_binary(provider), do: provider
+
+  defp running_provider(%State{} = state, %Issue{} = issue, _running_entry) do
+    repo_key = dispatch_repo_key(state, issue)
+    AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key).provider
+  end
 
   defp agent_exit_reason_summary({%RuntimeError{message: message}, _stacktrace}) when is_binary(message) do
     strip_ansi(message)
@@ -1912,7 +1924,6 @@ defmodule SymphonyElixir.Orchestrator do
   defp tracker_failure_reason(:missing_tracker_kind), do: :missing_tracker_kind
   defp tracker_failure_reason(:workflow_front_matter_not_a_map), do: :workflow_front_matter_not_a_map
   defp tracker_failure_reason({:unsupported_tracker_kind, _kind} = reason), do: reason
-  defp tracker_failure_reason({:unsupported_agent_kind, _kind} = reason), do: reason
   defp tracker_failure_reason({:missing_workflow_file, _path, _reason} = reason), do: reason
   defp tracker_failure_reason({:workflow_parse_error, _reason} = reason), do: reason
 
@@ -2477,6 +2488,10 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   @doc false
+  @spec run_profile_for_test(State.t(), Issue.t(), boolean()) :: Config.Runs.Run.t()
+  def run_profile_for_test(%State{} = state, %Issue{} = issue, continuation?), do: run_profile_for_issue(state, issue, continuation?)
+
+  @doc false
   @spec run_watchdogs_for_test(State.t()) :: State.t()
   def run_watchdogs_for_test(%State{} = state), do: state |> reconcile_stalled_running_issues() |> maybe_run_watchdog()
 
@@ -2929,7 +2944,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp reconcile_stalled_running_issues(%State{} = state) do
-    timeout_ms = Config.settings!().agent.stall_timeout_ms
+    timeout_ms = Config.settings!().execution.stall_timeout_ms
 
     cond do
       timeout_ms <= 0 ->
@@ -4442,7 +4457,7 @@ defmodule SymphonyElixir.Orchestrator do
         Map.has_key?(next_state.running, issue_id),
         not Map.has_key?(state.running, issue_id) do
       Logger.warning(
-        "Daily token budget exhausted daily_used=#{state.budget_daily_used} daily_limit=#{Config.settings!().agent.max_tokens_per_day}; dispatched forced ticket anyway: #{issue_context(issue)} forced=true"
+        "Daily token budget exhausted daily_used=#{state.budget_daily_used} daily_limit=#{Config.settings!().execution.max_tokens_per_day}; dispatched forced ticket anyway: #{issue_context(issue)} forced=true"
       )
     end
 
@@ -4562,7 +4577,7 @@ defmodule SymphonyElixir.Orchestrator do
       reason = forced_wait_reason(issue, state)
 
       Logger.warning(
-        "Forced ticket waiting: #{issue_context(issue)} forced=true forced_max=#{Config.settings!().agent.forced_max} held_by=#{Enum.join(forced_running_identifiers(state), ",")}; #{reason}"
+        "Forced ticket waiting: #{issue_context(issue)} forced=true forced_max=#{Config.settings!().execution.forced_max} held_by=#{Enum.join(forced_running_identifiers(state), ",")}; #{reason}"
       )
 
       Notifications.emit_issue_event(:forced_waiting, issue, %{reason: reason})
@@ -4885,9 +4900,9 @@ defmodule SymphonyElixir.Orchestrator do
   # Each active epic reserves a lane out of max_total, recomputed from the candidates every poll.
   defp put_epic_lanes(%State{} = state, issues) do
     settings = Config.settings!()
-    max_total = state.max_concurrent_agents || settings.agent.max_concurrent_agents
+    max_total = state.max_concurrent_agents || settings.execution.max_concurrent_agents
     priority_gate = %{names: settings.tickets.priorities, allowed?: &lane_priority_allowed?(&1, state)}
-    %{state | epic_lanes: EpicLanes.plan(issues, max_total, settings.agent.epic_lanes, terminal_state_set(), priority_gate)}
+    %{state | epic_lanes: EpicLanes.plan(issues, max_total, settings.execution.epic_lanes, terminal_state_set(), priority_gate)}
   end
 
   # A lane is for an epic Symphony can work on: the dispatch filter decides, and a ticket with a run
@@ -5024,7 +5039,7 @@ defmodule SymphonyElixir.Orchestrator do
   # When each was sent is kept in the queue entry, so a restart does not send it again.
   defp note_forced_milestones(%State{forced: forced} = state) do
     now = state.clock.()
-    stale_after_hours = Config.settings!().agent.forced_stale_after_hours
+    stale_after_hours = Config.settings!().execution.forced_stale_after_hours
 
     noted =
       Map.new(forced, fn {issue_id, entry} ->
@@ -5118,7 +5133,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp entity_not_found?(_error), do: false
 
   defp put_force_label(%Issue{labels: labels} = issue, false = _clear?, settings) do
-    label = settings.agent.force_label
+    label = settings.execution.force_label
 
     cond do
       terminal_issue_state?(issue.state, terminal_state_set()) -> {:error, {:issue_terminal, issue.state}}
@@ -5128,7 +5143,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp put_force_label(%Issue{labels: labels} = issue, true = _clear?, settings) do
-    label = settings.agent.force_label
+    label = settings.execution.force_label
     {removed, kept} = Enum.split_with(labels, &(normalize_issue_state(&1) == normalize_issue_state(label)))
 
     if removed == [] do
@@ -5206,7 +5221,7 @@ defmodule SymphonyElixir.Orchestrator do
   # until it joins), and the tickets holding the `forced_max` slots.
   defp force_result(%Issue{} = issue, forced, settings) do
     queue = ForcedQueue.snapshot(forced)
-    forced_max = settings.agent.forced_max
+    forced_max = settings.execution.forced_max
 
     %{
       issue_id: issue.id,
@@ -5233,7 +5248,7 @@ defmodule SymphonyElixir.Orchestrator do
   # A ticket forced through to a terminal state is done with: its force label comes off, so it
   # doesn't read as forced on the board. The Linear call runs outside the orchestrator.
   defp remove_force_label(issue_id, entry) do
-    label = Config.settings!().agent.force_label
+    label = Config.settings!().execution.force_label
 
     remove = fn ->
       case Tracker.remove_issue_label(issue_id, label) do
@@ -5294,7 +5309,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp finishing_entry?(%{run_profile: %{kind: :landing}}), do: true
   defp finishing_entry?(_running_entry), do: false
 
-  # Forced tickets (`agent.concurrency.force_label`) dispatch on their own `forced_max` allowance,
+  # Forced tickets (`execution.concurrency.force_label`) dispatch on their own `forced_max` allowance,
   # past `max_total`, the epic lanes, `finishing_max` and the per-state caps. A run on it carries
   # `forced: true` and takes none of those slots. A forced ticket past `forced_max` competes for a
   # normal slot and runs as a normal run.
@@ -5309,7 +5324,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp forced_slot_free?(%State{running: running}) do
     forced_runs = Enum.count(running, fn {_issue_id, entry} -> forced_entry?(entry) end)
-    forced_runs < Config.settings!().agent.forced_max
+    forced_runs < Config.settings!().execution.forced_max
   end
 
   # With the normal slots full, a poll still runs the dispatch pass for a forced candidate the
@@ -5406,7 +5421,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp forced_snapshot(%State{} = state, auto_merge) do
     now = state.clock.()
-    stale_after_hours = Config.settings!().agent.forced_stale_after_hours
+    stale_after_hours = Config.settings!().execution.forced_stale_after_hours
     context = %{auto_merge_ids: MapSet.new(auto_merge, & &1.issue_id)}
 
     for entry <- ForcedQueue.snapshot(state.forced) do
@@ -5436,10 +5451,13 @@ defmodule SymphonyElixir.Orchestrator do
     Map.get(issues, issue_id) || %Issue{id: issue_id, identifier: identifier, title: entry.title, state: issue_state}
   end
 
+  defp running_kind(%{run_profile: %{kind: kind}}) when not is_nil(kind), do: kind
+  defp running_kind(_running_entry), do: :implementation
+
   defp forced_signals(%Issue{id: issue_id} = issue, %State{} = state, context) do
     case Map.get(state.running, issue_id) do
       %{} = running_entry ->
-        %{running_kind: get_in(running_entry, [:run_profile, :kind]) || :implementation}
+        %{running_kind: running_kind(running_entry)}
 
       nil ->
         settings = Config.settings!()
@@ -5480,7 +5498,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp available_finishing_slots(%State{running: running}) do
-    max(Config.settings!().agent.finishing_max - Enum.count(running, fn {_issue_id, entry} -> finishing_entry?(entry) and not slot_free_entry?(entry) end), 0)
+    max(Config.settings!().execution.finishing_max - Enum.count(running, fn {_issue_id, entry} -> finishing_entry?(entry) and not slot_free_entry?(entry) end), 0)
   end
 
   # A run on a machine step, or waiting for the slot of its next agent turn, holds no slot: its
@@ -6141,8 +6159,9 @@ defmodule SymphonyElixir.Orchestrator do
     running_attrs = Map.get(dispatch, :running_attrs, %{})
     # Read from the current workflow on every dispatch, so a config edit applies to the next run.
     settings = Config.settings_for_repo!(repo_key)
-    run_profile = AgentRunner.run_profile(issue, settings, repo_key: repo_key)
-    reviewer_run_profile = if run_profile.kind == :code_review and review_agent_enabled?(settings), do: Config.code_review_profile(settings)
+    # The run kind's own choice, or the first fallback whose provider can take the run now.
+    run_profile = run_profile_for_issue(state, issue, state.continuation_dispatch == issue.id)
+    reviewer_run_profile = if run_profile.kind == :code_review and review_agent_enabled?(settings), do: Config.run(settings, :code_review)
     forced? = forced_slot_available?(issue, state)
 
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
@@ -6432,7 +6451,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp record_dispatch_outcome(_running_entry, _reason), do: :ok
 
   defp run_profile_log_fields(%{kind: kind, model: model, effort: effort}) do
-    "run_kind=#{kind} model=#{model || "default"} effort=#{effort || "default"}"
+    "run_kind=#{kind} model=#{model} effort=#{effort || "default"}"
   end
 
   # Names the PR comment a review_feedback run answers, so a run started by a stray
@@ -7387,7 +7406,7 @@ defmodule SymphonyElixir.Orchestrator do
         state_after_tokens.budget_daily_paused_logged == true
 
     if daily_budget_just_logged? do
-      limit = Config.settings!().agent.max_tokens_per_day
+      limit = Config.settings!().execution.max_tokens_per_day
 
       emit_running_event(:budget_exceeded, running_entry, %{
         reason: "daily token budget exhausted: daily_used=#{state_after_tokens.budget_daily_used} limit=#{limit}",
@@ -7423,6 +7442,15 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp done_state?(state_name) when is_binary(state_name), do: normalize_issue_state(state_name) == "done"
   defp done_state?(_state_name), do: false
+
+  # A continuation is marked for the length of its dispatch, so it starts on its run kind's
+  # own choice where a new run would take a fallback.
+  defp dispatch_retry(state, issue, attempt, %{continuation: true} = metadata) do
+    state = dispatch_issue(%{state | continuation_dispatch: issue.id}, issue, attempt, metadata[:worker_host])
+    %{state | continuation_dispatch: nil}
+  end
+
+  defp dispatch_retry(state, issue, attempt, metadata), do: dispatch_issue(state, issue, attempt, metadata[:worker_host])
 
   defp handle_active_retry_after_readiness(state, issue, attempt, metadata) do
     cond do
@@ -7461,7 +7489,7 @@ defmodule SymphonyElixir.Orchestrator do
       active_retry_issue?(issue, terminal_state_set()) and
         dispatch_slots_available?(issue, state) and
           worker_slots_available?(state, metadata[:worker_host]) ->
-        dispatch_issue(state, issue, attempt, metadata[:worker_host])
+        dispatch_retry(state, issue, attempt, metadata)
 
       true ->
         Logger.debug("No available slots for retrying #{issue_context(issue)}; waiting for a slot")
@@ -7568,7 +7596,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp held_retry_delay_ms(%{phase: :canary}, _now), do: unknown_reset_retry_ms()
   defp held_retry_delay_ms(entry, now), do: UsageLimit.remaining_ms(entry, now)
 
-  defp unknown_reset_retry_ms, do: Config.settings!().agent.usage_limit.unknown_reset_retry_seconds * 1000
+  defp unknown_reset_retry_ms, do: Config.settings!().execution.usage_limit.unknown_reset_retry_seconds * 1000
 
   # Waiting for a slot is not a failure: the retry leaves the backoff queue with its attempt
   # unchanged, and the poll dispatches it in stage order as soon as a slot is free.
@@ -7617,7 +7645,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp failure_retry_delay(attempt) do
     max_delay_power = min(attempt - 1, 10)
-    min(@failure_retry_base_ms * (1 <<< max_delay_power), Config.settings!().agent.max_retry_backoff_ms)
+    min(@failure_retry_base_ms * (1 <<< max_delay_power), Config.settings!().execution.max_retry_backoff_ms)
   end
 
   defp normalize_retry_attempt(attempt) when is_integer(attempt) and attempt > 0, do: attempt
@@ -8014,7 +8042,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp available_slots(%State{} = state) do
     max(
-      (state.max_concurrent_agents || Config.settings!().agent.max_concurrent_agents) -
+      (state.max_concurrent_agents || Config.settings!().execution.max_concurrent_agents) -
         length(work_running_ids(state.running)),
       0
     )
@@ -8312,7 +8340,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp hydrate_budget_exhausted do
-    case Config.settings!().agent.max_tokens_per_issue do
+    case Config.settings!().execution.max_tokens_per_issue do
       limit when is_integer(limit) and limit > 0 ->
         hydrate_budget_exhausted(limit)
 
@@ -9024,7 +9052,7 @@ defmodule SymphonyElixir.Orchestrator do
   def dispatch_pr(_server, _target, _opts), do: {:error, :invalid_pr_target}
 
   @doc """
-  Adds `agent.concurrency.force_label` to the ticket, or removes it with `clear?`, and puts the change
+  Adds `execution.concurrency.force_label` to the ticket, or removes it with `clear?`, and puts the change
   into the forced queue at once, so a ticket forced before the next poll queues behind the one
   forced first. The Linear calls run in the caller, not in the orchestrator.
   """
@@ -9740,7 +9768,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp concurrency_snapshot(%State{} = state) do
-    agent = Config.settings!().agent
+    agent = Config.settings!().execution
 
     %{
       max_total: state.max_concurrent_agents || agent.max_concurrent_agents,
@@ -9756,7 +9784,7 @@ defmodule SymphonyElixir.Orchestrator do
       end
 
     %{
-      slots: Config.settings!().agent.finishing_max,
+      slots: Config.settings!().execution.finishing_max,
       used: length(landing_runs),
       running: Enum.sort_by(landing_runs, & &1.identifier)
     }
@@ -10329,7 +10357,7 @@ defmodule SymphonyElixir.Orchestrator do
         %{
           state
           | poll_interval_ms: config.polling.interval_ms,
-            max_concurrent_agents: config.agent.max_concurrent_agents
+            max_concurrent_agents: config.execution.max_concurrent_agents
         }
 
       {:error, reason} ->
@@ -10356,7 +10384,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp daily_budget_paused?(%State{} = state) do
-    case Config.settings!().agent.max_tokens_per_day do
+    case Config.settings!().execution.max_tokens_per_day do
       limit when is_integer(limit) and limit > 0 -> state.budget_daily_used >= limit
       _ -> false
     end
@@ -10364,7 +10392,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp operator_paused?(%State{}), do: Pauses.dispatch_reasons(symphony_pause()) != []
 
-  # Usage-limit holds (`agent.usage_limit`) are kept apart from the Director's pause: each is its
+  # Usage-limit holds (`execution.usage_limit`) are kept apart from the Director's pause: each is its
   # own reason of Symphony's pause, and resuming one never sets or clears the other.
   defp put_usage_limit(%State{} = state, info, identifier) do
     key = UsageLimit.key(info)
@@ -10374,7 +10402,7 @@ defmodule SymphonyElixir.Orchestrator do
     entry =
       UsageLimit.put(existing, info,
         now: state.clock.(),
-        config: Config.settings!().agent.usage_limit,
+        config: Config.settings!().execution.usage_limit,
         windows: state.usage_windows,
         issue_identifier: identifier,
         last_outage: last_outage
@@ -10446,10 +10474,10 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # `agent.usage_limit.headroom_utilization`: an allowed_warning at or above it holds new runs of
+  # `execution.usage_limit.headroom_utilization`: an allowed_warning at or above it holds new runs of
   # the provider until the window resets. A pause or canary already in place is left as it is.
   defp hold_for_usage_headroom(%State{} = state, running_entry, %{usage_windows: %{} = windows}) do
-    case Config.settings!().agent.usage_limit.headroom_utilization do
+    case Config.settings!().execution.usage_limit.headroom_utilization do
       threshold when is_number(threshold) ->
         windows
         |> UsageLimit.headroom_crossings(threshold, state.clock.())
@@ -10473,7 +10501,7 @@ defmodule SymphonyElixir.Orchestrator do
         entry =
           UsageLimit.put_headroom(existing, info,
             now: state.clock.(),
-            config: Config.settings!().agent.usage_limit,
+            config: Config.settings!().execution.usage_limit,
             issue_identifier: identifier
           )
 
@@ -10740,7 +10768,7 @@ defmodule SymphonyElixir.Orchestrator do
   # the outage again continues it. The outage ends, with its resumed event, when no run has found
   # it again for `UsageLimit.outage_memory_seconds/1`.
   defp release_api_outage(%State{} = state, key, entry) do
-    memory_seconds = UsageLimit.outage_memory_seconds(Config.settings!().agent.usage_limit)
+    memory_seconds = UsageLimit.outage_memory_seconds(Config.settings!().execution.usage_limit)
     Logger.info("Model API hold released provider=#{entry.provider}; the next run probes the API")
     Process.send_after(self(), {:api_outage_over, key, entry.since}, memory_seconds * 1000)
 
@@ -10833,15 +10861,25 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp usage_limit_hold(%State{usage_limits: usage_limits}, _issue, _continuation?) when map_size(usage_limits) == 0, do: nil
 
-  defp usage_limit_hold(%State{usage_limits: usage_limits} = state, %Issue{} = issue, continuation?) do
-    profile = run_profile_for_issue(state, issue)
+  defp usage_limit_hold(%State{} = state, %Issue{} = issue, continuation?) do
+    usage_limit_holding(state, issue, run_profile_for_issue(state, issue, continuation?), continuation?)
+  end
+
+  defp usage_limit_holding(%State{usage_limits: usage_limits} = state, %Issue{} = issue, profile, continuation?) do
     UsageLimit.holding(usage_limits, Map.merge(profile, %{continuation: continuation?, forced: forced_issue?(issue, state)}), issue.id)
   end
 
-  # The run's provider and model, resolved as at dispatch.
-  defp run_profile_for_issue(%State{} = state, %Issue{} = issue) do
+  # The run's provider and model, resolved as at dispatch: the run kind's own choice, or the
+  # first of its fallbacks whose provider no usage limit holds for this run.
+  defp run_profile_for_issue(%State{} = state, %Issue{} = issue, continuation? \\ false) do
     repo_key = dispatch_repo_key(state, issue)
-    AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key)
+    # A continuation stays on its run kind's own choice: it never takes a fallback.
+    available? = fn profile ->
+      own_choice? = is_nil(profile.fallback)
+      (own_choice? or not continuation?) and is_nil(usage_limit_holding(state, issue, profile, continuation?))
+    end
+
+    AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key, available?: available?)
   end
 
   defp remember_usage_windows(%State{} = state, %{usage_windows: %{} = windows}) do
@@ -10983,7 +11021,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp log_daily_budget_pause(%State{budget_daily_paused_logged: true} = state), do: state
 
   defp log_daily_budget_pause(%State{} = state) do
-    case Config.settings!().agent.max_tokens_per_day do
+    case Config.settings!().execution.max_tokens_per_day do
       limit when is_integer(limit) and limit > 0 and state.budget_daily_used >= limit ->
         Logger.warning("Daily token budget exhausted daily_used=#{state.budget_daily_used} daily_limit=#{limit} day_started_on=#{Date.to_iso8601(state.budget_day_started_on)}; pausing new dispatch")
         %{state | budget_daily_paused_logged: true}
@@ -10994,7 +11032,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp budget_snapshot(%State{} = state) do
-    agent = Config.settings!().agent
+    agent = Config.settings!().execution
     daily_limit = agent.max_tokens_per_day
     daily_used = max(state.budget_daily_used || 0, 0)
 
@@ -11009,7 +11047,7 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp dispatch_state_snapshot(%State{} = state) do
     settings = Config.settings!()
-    agent = settings.agent
+    agent = settings.execution
 
     SymphonyElixir.DispatchState.compute(
       %{
@@ -11040,7 +11078,7 @@ defmodule SymphonyElixir.Orchestrator do
       for {:ok, repos} <- [Config.repos()], repo <- repos, {:ok, repo_settings} <- [Config.settings_for_repo(repo.name)], do: repo_settings
 
     for settings <- [settings | repo_settings], kind <- RunKind.names(), uniq: true do
-      settings |> Config.run_profile(kind) |> Map.take([:provider, :model]) |> Map.put(:kind, kind)
+      settings |> Config.run(kind) |> Map.take([:provider, :model]) |> Map.put(:kind, kind)
     end
   end
 
@@ -11341,7 +11379,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp put_running_entry(state, _issue_id, _running_entry), do: state
 
   defp enforce_issue_budget(%State{} = state, issue_id) when is_binary(issue_id) do
-    limit = Config.settings!().agent.max_tokens_per_issue
+    limit = Config.settings!().execution.max_tokens_per_issue
     running_entry = Map.get(state.running, issue_id)
     total_tokens = running_entry_total_tokens(running_entry)
 
@@ -11412,7 +11450,7 @@ defmodule SymphonyElixir.Orchestrator do
   # facts of their newest run, which is the one that spent it (`hydrate_budget_exhausted/1`).
   # Without a limit there is nothing to name, and the next start-up frees them.
   defp ask_spent_budgets(%State{budget_exhausted: spent} = state, issues) do
-    case Config.settings!().agent.max_tokens_per_issue do
+    case Config.settings!().execution.max_tokens_per_issue do
       limit when is_integer(limit) and limit > 0 ->
         for %Issue{id: issue_id} = issue <- issues, MapSet.member?(spent, issue_id), reduce: state do
           acc -> ask_spent_budget_of(acc, issue, limit)

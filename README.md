@@ -10,13 +10,15 @@ professional work.
 [Automattic/symphony](https://github.com/Automattic/symphony) →
 [tonypine/symphony](https://github.com/tonypine/symphony).
 
-**Direction:** run agents from more than one model provider (Claude already runs alongside Codex),
+**Direction:** run agents on more than one harness and model provider (claude first, with codex and
+opencode supported),
 bring in improvements from community forks, and shape the workflow to fit how I work.
 
 **Changes so far:** once an issue reaches `Merging`, Symphony lands its PR with GitHub auto-merge, without an agent. When auto-merge can't be used, an agent merges it through the scoped
 `github_merge_pull_request` tool.
 
-Symphony runs coding agents (Codex or Claude) on your Linear issues and GitHub pull requests, so
+Symphony runs coding-agent harnesses (claude first; codex and opencode are supported) on your
+Linear issues and GitHub pull requests, so
 your team manages the work instead of babysitting the agents.
 
 It watches Linear for issues to pick up, creates an isolated workspace for each one, runs the agent
@@ -177,11 +179,12 @@ Symphony, so you need no checkout, `mise` or Elixir.
    [Install](macos/README.md#install).
 2. **Scaffold operator config.** From your operator repo, run
    `~/Applications/Symphony.app/Contents/Resources/symphony init` to create `symphony.yml`, then edit the
-   issue scope, agent command, workspace root, and `repositories:`.
+   issue scope, harness command (`execution.harnesses`), what each run starts with (`runs`),
+   workspace root, and `repositories:`.
 3. **Write a workflow per repo.** Connect each repo with **Add Repo…** in the app's Repos window: for a
    repo without a `WORKFLOW.md`, it drafts one from the repo's files for you to edit, then opens a pull
    request that adds it (or writes it into a local checkout). For a more tailored file, invoke the
-   `symphony-init-workflow` skill from Codex or Claude in the target repo; the agent inspects the repo and
+   `symphony-init-workflow` skill from Claude or Codex in the target repo; the agent inspects the repo and
    writes one.
 4. **Start Symphony.** In the app's Settings window, choose your `symphony.yml` and paste a Linear
    personal API key (Settings → Security & access → Personal API keys); the app keeps it in a file
@@ -209,8 +212,8 @@ Run Symphony from a checkout to work on Symphony itself, or on a platform withou
    ```
 
 3. **Scaffold operator config.** Run `mise exec -- ./bin/symphony init` from your operator repo to
-   create `symphony.yml`, then edit the issue scope, agent command, workspace root, and
-   `repositories:`.
+   create `symphony.yml`, then edit the issue scope, harness command (`execution.harnesses`), what
+   each run starts with (`runs`), workspace root, and `repositories:`.
 4. **Write a workflow per repo**, as above.
 5. **Start Symphony:**
 
@@ -251,9 +254,17 @@ issues:
       project_slug: "..."
 workspaces:
   root: ~/code/workspaces
-agent:
-  runtime: codex
-  command: codex app-server
+execution:
+  harnesses:
+    claude:
+      command: claude --dangerously-skip-permissions --verbose
+      small_model:
+        anthropic: claude-haiku-4-5
+runs:
+  default:
+    harness: claude
+    provider: anthropic
+    model: claude-opus-5-5
 repositories:
   - key: my-repo
     workflow: ./WORKFLOW.md
@@ -286,8 +297,14 @@ prepends a managed runtime context (workspace isolation, untrusted-input handlin
 secret handling, response shape) before either, so keep `WORKFLOW.md` focused on repo-specific
 commands, conventions, and validation gates.
 
+`runs` says what each kind of run starts with: its harness (`claude`, `codex` or `opencode`), the
+provider that serves its model, and the model. `runs.default` covers every kind, and `runs.<kind>`
+overrides it field by field. Nothing is built in: a run kind that resolves no harness, provider or
+model stops `symphony.yml` from loading. See [docs/configuration.md](docs/configuration.md#runs).
+
 To run a kind of run's model through OpenRouter, set `provider: openrouter` and an OpenRouter
-model id under `agent` or `agent.run_profiles.<kind>` (Claude runtime, local host only), and export
+model id in `runs.default` or `runs.<kind>` (claude harness, local host only), name the small model
+for it in `execution.harnesses.claude.small_model.openrouter`, and export
 `OPENROUTER_API_KEY` in Symphony's environment (the macOS app sets it from the OpenRouter section of
 its Settings). The key reaches `claude` only through its process env. The model must support tool
 use: `symphony check` asks OpenRouter's models API and rejects an unknown model id or one without
@@ -344,7 +361,7 @@ Work an existing PR:
 ./bin/symphony pr 123 --intent "address review comments"
 ```
 
-Force a ticket, or stop forcing it. `symphony force` adds the `agent.concurrency.force_label` label
+Force a ticket, or stop forcing it. `symphony force` adds the `execution.concurrency.force_label` label
 (default `expedite`) to the ticket in Linear through the running Symphony's control API
 (`POST /api/v1/control/force`, with the token in `<state-root>/control_token` or
 `SYMPHONY_CONTROL_TOKEN`), and prints the ticket's place in the forced queue:
@@ -380,7 +397,7 @@ A ticket's Linear priority means how important it is. Symphony uses it only to o
 for the same kind of normal slot: after the stage (`Merging`, `Rework`, a resume,
 `Todo`) and before age. Raising a ticket to Urgent does not get it a slot any sooner when the slots
 are full, and a board full of Urgents stops saying which work matters. To have a ticket worked now,
-force it: add the `expedite` label (`agent.concurrency.force_label`) or run `symphony force TP-123`.
+force it: add the `expedite` label (`execution.concurrency.force_label`) or run `symphony force TP-123`.
 Remove the label (`symphony force --clear TP-123`) to stop; it also ends when the ticket is done.
 A run already going then finishes as a normal run and gives the forced slot to the next forced ticket.
 
@@ -393,7 +410,7 @@ A run already going then finishes as a normal run and gives the forced slot to t
 | the daily token budget (with a warning) and a usage-limit headroom hold | the per-issue token cap and the per-host worker cap |
 | | a failed setup, retry backoff, and the CI waits before merging |
 
-`agent.concurrency.forced_max` (default `1`) forced runs go at once, on top of the normal slots. A
+`execution.concurrency.forced_max` (default `1`) forced runs go at once, on top of the normal slots. A
 second forced ticket queues behind the first, shows `queued #2` on the dashboard, and sends one
 `forced_waiting` notification. Forcing never stops a running agent. Forcing a plan ticket
 forces its sub-tickets one at a time, in blocked-by order. See `concurrency.force_label` in
@@ -512,12 +529,12 @@ and **Assignee** is `Me`, order it by **Updated**, and save it as `Waiting on me
 too. It does not show the brief headline; open the ticket and read its `## Review brief` comment.
 
 When a run hits the Claude or Codex usage limit, Symphony holds new runs of that agent on its own
-and resumes them when the limit resets (plus `agent.usage_limit.resume_margin_seconds`), keeping each held issue's
+and resumes them when the limit resets (plus `execution.usage_limit.resume_margin_seconds`), keeping each held issue's
 attempt. One held run goes first; the rest follow only once it is accepted, and the hold starts
 again if the limit is still in force. Runs on other providers keep going, and an operator pause is never cleared by it.
 A QA run that hits the limit is held the same way: it records no verdict, the issue stays where it
 is, and the run goes again after the hold. Set
-`agent.usage_limit.auto_pause: false` to fail and retry such runs as before.
+`execution.usage_limit.auto_pause: false` to fail and retry such runs as before.
 
 While Claude runs are held, the web and terminal dashboards show a banner such as
 `Paused: Claude 5-hour limit, resumes ~14:05` (local time, with the date when it isn't today), and
@@ -539,7 +556,7 @@ the API after a minute, then after twice as long each time it still fails (up to
 under `usage_limits` with `reason: model_api_unreachable`.
 
 To leave part of the Claude limit for your own sessions, set
-`agent.usage_limit.headroom_utilization` (for example `0.9`; off by default). Once Claude reports
+`execution.usage_limit.headroom_utilization` (for example `0.9`; off by default). Once Claude reports
 that share of a window used, Symphony holds new Claude runs until the window resets, while runs in
 flight finish and landing runs still start. The dashboards show
 `Holding new runs: Claude at 91%, resets ~14:05`. Claude only reports utilization from about 75%,

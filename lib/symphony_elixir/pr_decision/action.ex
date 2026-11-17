@@ -22,7 +22,7 @@ defmodule SymphonyElixir.PrDecision.Action do
     :arm,
     :disarm,
     :land_agent,
-    :close_out,
+    :close_ticket,
     :decision,
     :file_fix_ticket,
     :wait_for_competitors
@@ -42,7 +42,7 @@ defmodule SymphonyElixir.PrDecision.Action do
     arm: "auto-merge is on for the PR",
     disarm: "auto-merge is off for the PR",
     land_agent: "a landing run starts",
-    close_out: "the ticket moves to Done"
+    close_ticket: "the ticket moves to Done"
   }
 
   @type kind ::
@@ -59,7 +59,7 @@ defmodule SymphonyElixir.PrDecision.Action do
           | :arm
           | :disarm
           | :land_agent
-          | :close_out
+          | :close_ticket
           | :decision
           | :file_fix_ticket
           | :wait_for_competitors

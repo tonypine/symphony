@@ -57,6 +57,8 @@ defmodule SymphonyElixir.SubIssueWaitTest do
         assert {:ok, system_config} =
                  SystemSchema.parse(%{
                    "issues" => %{"provider" => "memory", "states" => %{"waiting_on_sub_issues" => value}},
+                   "execution" => %{"harnesses" => %{"codex" => %{"command" => "codex app-server"}}},
+                   "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}},
                    "repositories" => repositories
                  })
 

@@ -299,7 +299,7 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   defp sandboxed_command(start_cmd, workspace, tmp_dir, executable, opts) do
     build? = Keyword.get(opts, :build?, false)
     write_paths = [workspace, tmp_dir] ++ AgentCaches.write_paths() ++ item_replacement_paths(opts)
-    profile_opts = [socket_dir: tmp_dir, loopback_listeners: build?]
+    profile_opts = [socket_dir: tmp_dir, socket_dirs: Keyword.get(opts, :socket_dirs, []), loopback_listeners: build?]
     profile = profile(workspace, write_paths, protected_paths(workspace), profile_opts)
 
     # The build profile allows loopback listeners by design, so there is no refusal to probe.
@@ -375,7 +375,8 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   (relative to it), unreadable in the agent's denied read paths under `home`, with no TCP
   listener, unix sockets only in `socket_dir`, outgoing connections to loopback only, an
   allowlist of mach services, no way to have launchd start a process outside it, and no process
-  info on or signals to a process outside it. Options: `:socket_dir` (required), `:home`
+  info on or signals to a process outside it. Options: `:socket_dir` (required), `:socket_dirs`
+  (more folders whose unix sockets it may use, such as the one of Symphony's tools), `:home`
   (default `System.user_home!()`) and `:loopback_listeners` (default `false`; the build profile
   of `build_command/4` sets it to allow TCP listeners on loopback, as the agent's profile does).
   """
@@ -383,6 +384,7 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
   def profile(workspace, write_paths, protected_paths, opts) do
     home = real_path(Keyword.get_lazy(opts, :home, &System.user_home!/0))
     socket_dir = real_path(Keyword.fetch!(opts, :socket_dir))
+    socket_dirs = opts |> Keyword.get(:socket_dirs, []) |> Enum.map(&real_path/1)
     workspace = real_path(workspace)
 
     deny_read =
@@ -406,7 +408,7 @@ defmodule SymphonyElixir.Verification.DevServerSandbox do
       rule("deny file-write*", Enum.map(protected, &subpath/1)),
       # A path filter matches only a unix socket, so no TCP or UDP socket may bind or accept.
       "(deny network*)",
-      rule("allow network*", [subpath(socket_dir)]),
+      rule("allow network*", Enum.map([socket_dir | socket_dirs], &subpath/1)),
       ~s{(allow network-outbound (remote ip "localhost:*"))},
       listener_rules,
       rule("allow network-outbound", [literal(@dns_socket)]),

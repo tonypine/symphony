@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.RunProfileReviewQaTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Config.{Schema, SystemSchema}
+  alias SymphonyElixir.Config.SystemSchema
   alias SymphonyElixir.{QaAgent, ReviewAgent, RunKind}
 
   @sha "0123456789abcdef0123456789abcdef01234567"
@@ -10,17 +10,14 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
     Map.merge(
       %{
         "issues" => %{"provider" => "memory"},
-        "agent" => %{"runtime" => "claude", "command" => "claude --dangerously-skip-permissions"},
+        "execution" => %{
+          "harnesses" => %{"claude" => %{"command" => "claude --dangerously-skip-permissions", "small_model" => %{"anthropic" => "claude-haiku-4-5"}}}
+        },
+        "runs" => %{"default" => %{"harness" => "claude", "provider" => "anthropic", "model" => "claude-opus-5-5"}},
         "repositories" => [%{"key" => "app", "workflow" => "WORKFLOW.md", "route" => %{"team" => "Test"}}]
       },
       sections
     )
-  end
-
-  defp settings!(sections) do
-    {:ok, system} = SystemSchema.parse(symphony(sections))
-    {:ok, settings} = Schema.parse(SystemSchema.to_config_map(system))
-    settings
   end
 
   defp error!(sections) do
@@ -28,124 +25,25 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
     message
   end
 
-  defp agent(fields), do: Map.merge(%{"runtime" => "claude", "command" => "claude --dangerously-skip-permissions"}, fields)
-
-  describe "profile precedence" do
-    test "nothing set resolves to nil model and effort" do
-      settings = settings!(%{})
-
-      unset = %{model: nil, effort: nil, provider: "anthropic"}
-      assert Config.code_review_profile(settings) == Map.put(unset, :kind, :code_review)
-      assert Config.qa_profile(settings) == Map.put(unset, :kind, :qa)
-    end
-
-    test "own field, then agent.run_profiles.<kind>, then agent.model / agent.effort" do
-      base = %{
-        "agent" =>
-          agent(%{
-            "model" => "claude-sonnet-5-5",
-            "effort" => "medium",
-            "run_profiles" => %{"code_review" => %{"effort" => "high"}, "qa" => %{"model" => "claude-haiku-4-5"}}
-          })
-      }
-
-      settings = settings!(base)
-      assert Config.code_review_profile(settings) == %{kind: :code_review, model: "claude-sonnet-5-5", effort: "high", provider: "anthropic"}
-      assert Config.qa_profile(settings) == %{kind: :qa, model: "claude-haiku-4-5", effort: "medium", provider: "anthropic"}
-
-      settings =
-        settings!(
-          Map.merge(base, %{
-            "code_review" => %{"model" => " claude-opus-5-5 ", "effort" => "max"},
-            "auto_review" => %{"effort" => "low"}
-          })
-        )
-
-      assert Config.code_review_profile(settings) == %{kind: :code_review, model: "claude-opus-5-5", effort: "max", provider: "anthropic"}
-      assert Config.qa_profile(settings) == %{kind: :qa, model: "claude-haiku-4-5", effort: "low", provider: "anthropic"}
-    end
-  end
-
   describe "validation errors name the key" do
-    test "unknown or blank reviewer and QA fields" do
-      assert error!(%{"code_review" => %{"effort" => "extreme"}}) =~ "code_review.effort must be one of: low, medium, high, xhigh, max"
-      assert error!(%{"auto_review" => %{"effort" => "extreme"}}) =~ "auto_review.effort must be one of: low, medium, high, xhigh, max"
-      assert error!(%{"code_review" => %{"model" => " "}}) =~ "code_review.model must not be blank"
-      assert error!(%{"auto_review" => %{"model" => 5}}) =~ "auto_review.model is invalid"
-    end
+    test "the auto_review android block names every wrong setting" do
+      assert {:ok, _settings} =
+               SystemSchema.parse(symphony(%{"auto_review" => %{"android" => %{"avd" => "Pixel_3a_API_34", "sdk_root" => "/sdk"}}}))
 
-    test "--model / --effort in the reviewer command when a profile reaches it" do
-      message = error!(%{"code_review" => %{"command" => "claude --model x --effort=high", "effort" => "low"}})
+      assert error!(%{"auto_review" => %{"android" => %{"avd" => "bad name!", "sdk_root" => "/sdk"}}}) =~
+               "auto_review.android.avd must be an AVD name such as Pixel_3a_API_34"
 
-      assert message =~ "code_review.command must not pass --model when a model or effort is set for Code Review's reviewer"
-      assert message =~ "code_review.command must not pass --effort when"
+      assert error!(%{"auto_review" => %{"android" => %{"avd" => "Pixel", "sdk_root" => " "}}}) =~
+               "auto_review.android.sdk_root must not be blank"
 
-      assert error!(%{
-               "agent" => agent(%{"run_profiles" => %{"code_review" => %{"model" => "y"}}}),
-               "code_review" => %{"command" => "claude --effort high"}
-             }) =~ "code_review.command must not pass --effort"
+      assert error!(%{"auto_review" => %{"android" => %{"avd" => "Pixel", "boot_timeout_ms" => 0}}}) =~
+               "auto_review.android.boot_timeout_ms must be a positive integer"
 
-      assert error!(%{"agent" => agent(%{"effort" => "low"}), "code_review" => %{"command" => "claude --model x"}}) =~
-               "code_review.command must not pass --model"
-    end
+      assert error!(%{"auto_review" => %{"android" => %{"avd" => "Pixel", "boot_timeout_ms" => "soon"}}}) =~
+               "auto_review.android.boot_timeout_ms must be a positive integer"
 
-    test "--model / --effort in the QA command when a profile reaches it" do
-      assert error!(%{"auto_review" => %{"command" => "claude --model x", "model" => "y"}}) =~
-               "auto_review.command must not pass --model when a model or effort is set for the QA agent"
-
-      assert error!(%{
-               "agent" => agent(%{"run_profiles" => %{"qa" => %{"effort" => "low"}}}),
-               "auto_review" => %{"command" => "claude --effort high"}
-             }) =~ "auto_review.command must not pass --effort"
-    end
-
-    test "the QA fallback to agent.command conflicts only through the QA agent's own fields" do
-      message = error!(%{"agent" => agent(%{"command" => "claude --model x"}), "auto_review" => %{"effort" => "low"}})
-
-      assert message =~ "auto_review.command is not set, and agent.command passes --model while auto_review.model or auto_review.effort is set"
-
-      message = error!(%{"agent" => agent(%{"command" => "claude --model x", "effort" => "low"}), "auto_review" => %{"effort" => "low"}})
-
-      assert message =~ "agent.command must not pass --model"
-      refute message =~ "auto_review.command"
-    end
-
-    test "flags without a profile, and a profile without flags, load" do
-      settings =
-        settings!(%{
-          "agent" => agent(%{"command" => "claude --model x"}),
-          "code_review" => %{"command" => "claude --model x --effort high"},
-          "auto_review" => %{"command" => "claude --effort high"}
-        })
-
-      assert settings.review_agent.command == "claude --model x --effort high"
-
-      settings =
-        settings!(%{
-          "agent" => agent(%{"effort" => "low"}),
-          "code_review" => %{"command" => "claude --model-hint x"},
-          "auto_review" => %{"command" => "claude"}
-        })
-
-      assert settings.auto_review.command == "claude"
-    end
-
-    test "a flag conflict is reported with other errors in the same section" do
-      message = error!(%{"code_review" => %{"command" => "claude --model x", "model" => "y", "runtime" => "other"}})
-
-      assert message =~ "code_review.command must not pass --model"
-      assert message =~ "code_review.runtime is invalid"
-    end
-
-    test "the merged workflow schema checks the reviewer command too" do
-      assert {:error, {:invalid_workflow_config, message}} =
-               Schema.parse(%{
-                 "tracker" => %{"kind" => "memory"},
-                 "agent" => %{"kind" => "claude", "command" => "claude"},
-                 "review_agent" => %{"command" => "claude --effort low", "effort" => "high"}
-               })
-
-      assert message =~ "review_agent.command must not pass --effort"
+      assert error!(%{"auto_review" => %{"android" => %{"avd" => 5}}}) =~
+               "auto_review.android.avd must be a string"
     end
   end
 
@@ -171,13 +69,16 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
     # A Claude stand-in that records its argv and answers with `answer` as the turn result.
     defp write_fake_claude!(ctx, answer) do
       assistant = Jason.encode!(%{type: "assistant", message: %{content: [%{type: "text", text: answer}]}})
-      result = Jason.encode!(%{type: "result", subtype: "success", is_error: false, num_turns: 1, session_id: "sess-profile"})
+
+      result =
+        Jason.encode!(%{type: "result", subtype: "success", is_error: false, num_turns: 1, session_id: "sess-profile"})
 
       File.write!(ctx.fake_claude, """
       #!/bin/sh
       cat > /dev/null
       printf '%s\\n' "$*" >> "#{ctx.argv_trace}"
-      printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-profile","cwd":"/tmp","tools":[],"mcp_servers":[]}'
+      printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-profile","cwd":"/tmp","tools":[]},' \\
+      '"mcp_servers":[]}'
       printf '%s\\n' '#{assistant}'
       printf '%s\\n' '#{result}'
       exit 0
@@ -223,7 +124,13 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
         {_output, 0} = System.cmd("git", ["-C", repo | args], stderr_to_stdout: true)
       end
 
-      issue = %Issue{id: "issue-review", identifier: "MT-REVIEW", title: "Review", description: "Review it", state: "Code Review"}
+      issue = %Issue{
+        id: "issue-review",
+        identifier: "MT-REVIEW",
+        title: "Review",
+        description: "Review it",
+        state: "Code Review"
+      }
 
       assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(issue, repo, Config.settings!(), base_branch: "main")
       argv!(ctx)
@@ -240,7 +147,14 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
       end
 
       job = %{
-        issue: %Issue{id: "issue-qa", identifier: "MT-QA", title: "QA", description: "Test it", state: "Auto Review", labels: []},
+        issue: %Issue{
+          id: "issue-qa",
+          identifier: "MT-QA",
+          title: "QA",
+          description: "Test it",
+          state: "Auto Review",
+          labels: []
+        },
         sha: @sha,
         workspace_path: ctx.workspace_root,
         worker_host: nil,
@@ -271,19 +185,17 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
       assert qa!(ctx) =~ ~r/--print --model claude-haiku-4-5 --effort low$/
     end
 
-    test "with nothing set the reviewer and QA argv are unchanged", ctx do
+    test "with no entry of their own the reviewer and QA argv carry default's model and no effort", ctx do
       write_fake_claude!(ctx, ~s({"verdict":"approve","findings":[]}))
       write_workflow!(ctx, [])
 
       argv = review!(ctx)
-      assert argv =~ ~r/--print$/
-      refute argv =~ "--model"
+      assert argv =~ ~r/--print --model claude-test$/
       refute argv =~ "--effort"
 
       write_fake_claude!(ctx, ~s({"verdict":"pass","summary":"ok","steps":[]}))
       argv = qa!(ctx)
-      assert argv =~ ~r/--print$/
-      refute argv =~ "--model"
+      assert argv =~ ~r/--print --model claude-test$/
       refute argv =~ "--effort"
     end
 
@@ -302,7 +214,14 @@ defmodule SymphonyElixir.RunProfileReviewQaTest do
         {_output, 0} = System.cmd("git", ["-C", repo | args], stderr_to_stdout: true)
       end
 
-      issue = %Issue{id: "issue-dispatch", identifier: "MT-DISPATCH", title: "Review", description: "Review it", state: "In Progress"}
+      issue = %Issue{
+        id: "issue-dispatch",
+        identifier: "MT-DISPATCH",
+        title: "Review",
+        description: "Review it",
+        state: "In Progress"
+      }
+
       profile = %{kind: :code_review, model: "claude-opus-5-5", effort: nil}
 
       assert {:ok, %{verdict: :approve}} =

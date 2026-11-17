@@ -10,6 +10,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   alias SymphonyElixir.AgentEnv
   alias SymphonyElixir.AgentPriority
   alias SymphonyElixir.AgentProcesses
+  alias SymphonyElixir.AgentProviders
   alias SymphonyElixir.AgentSandboxConfig
   alias SymphonyElixir.AgentTools.Linear.CommentRegistry
   alias SymphonyElixir.AuditLog
@@ -108,8 +109,8 @@ defmodule SymphonyElixir.Codex.AppServer do
   @spec start_session(Path.t(), keyword()) :: {:ok, session()} | {:error, term()}
   def start_session(workspace, opts \\ []) do
     worker_host = Keyword.get(opts, :worker_host)
-    settings = settings_from_opts(opts)
-    warn_ignored_run_profile(Keyword.get(opts, :run_profile), Keyword.get(opts, :issue))
+    settings = opts |> settings_from_opts() |> Config.launch_settings(Keyword.get(opts, :run_profile), "codex")
+    opts = run_profile_config_overrides(opts)
 
     with :ok <- validate_remote_launch_preconditions(worker_host, settings),
          {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host, settings),
@@ -127,14 +128,30 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  # Codex keeps the model and reasoning effort from its own config: Symphony's effort levels
-  # do not map one-to-one onto `model_reasoning_effort`, so a run profile is not applied.
-  defp warn_ignored_run_profile(%{kind: kind, model: model, effort: effort}, %{id: _id, identifier: _identifier} = issue)
-       when not is_nil(model) or not is_nil(effort) do
-    Logger.warning("Ignoring agent.model and agent.effort for the codex runtime #{issue_context(issue)} run_kind=#{kind} model=#{model || "default"} effort=#{effort || "default"}")
+  # The run profile's provider and model become `--config` overrides, spliced in before codex's
+  # `app-server` subcommand with the sandbox ones (`command_with_sandbox_config`), so one
+  # the harness's command serves every provider and each run kind's choice applies: the per-run
+  # CODEX_HOME's generated config holds no providers of its own. Effort has no mapping onto
+  # `model_reasoning_effort`, so it stays a decision for the harness's command; a set effort is warned
+  # about, once per run.
+  defp run_profile_config_overrides(opts) do
+    case Keyword.get(opts, :run_profile) do
+      nil ->
+        opts
+
+      profile ->
+        warn_unapplied_effort(profile, Keyword.get(opts, :issue))
+
+        overrides = AgentProviders.codex_config_overrides(Map.get(profile, :provider), Map.get(profile, :model))
+        Keyword.put(opts, :config_overrides, overrides)
+    end
   end
 
-  defp warn_ignored_run_profile(_profile, _issue), do: :ok
+  defp warn_unapplied_effort(%{effort: effort}, %{id: _id, identifier: _identifier} = issue) when not is_nil(effort) do
+    Logger.warning("A run's effort is not applied on the codex harness; set model_reasoning_effort in execution.harnesses.codex.command #{issue_context(issue)}")
+  end
+
+  defp warn_unapplied_effort(_profile, _issue), do: :ok
 
   defp start_session_with_mcp(
          workspace,
@@ -500,7 +517,7 @@ defmodule SymphonyElixir.Codex.AppServer do
 
   defp validate_remote_launch_preconditions(worker_host, settings) when is_binary(worker_host) do
     case sandbox_runtime(settings) do
-      %Schema.Agent.SandboxRuntime{kind: "srt"} ->
+      %Schema.Execution.SandboxRuntime{kind: "srt"} ->
         {:error, {:unsupported_agent_sandbox_runtime, "srt", :remote_worker}}
 
       _runtime ->
@@ -517,7 +534,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     with {:ok, executable} <- bash_executable(),
          {:ok, codex_home} <- McpConfig.write_home(settings, mcp_session),
          {:ok, command, launch_cleanup_paths} <-
-           local_command_with_codex_home(settings, workspace, codex_home, mcp_session, Keyword.get(opts, :unlocked_paths, [])) do
+           local_command_with_codex_home(settings, workspace, codex_home, mcp_session, Keyword.get(opts, :unlocked_paths, []), Keyword.get(opts, :config_overrides, [])) do
       stderr_log_path = Path.join(codex_home.home_path, "codex.stderr.log")
       :ok = File.touch!(stderr_log_path)
       wrapped_command = wrap_command_with_stderr_redirect(command, stderr_log_path)
@@ -539,7 +556,7 @@ defmodule SymphonyElixir.Codex.AppServer do
         )
 
       :ok = AgentProcesses.track(port, workspace: workspace)
-      :ok = AgentPriority.log_started(port, settings.agent.command, run_id, priority)
+      :ok = AgentPriority.log_started(port, settings.execution.command, run_id, priority)
 
       case start_stdout_pump(port) do
         {:ok, stdout_pump} ->
@@ -566,7 +583,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     remote_paths = {remote_socket_path, remote_shim_path}
 
     with {:ok, remote_command, remote_codex_home, remote_stderr_path} <-
-           remote_launch_command(workspace, settings, mcp_session, remote_paths, Keyword.get(opts, :unlocked_paths, [])),
+           remote_launch_command(workspace, settings, mcp_session, remote_paths, Keyword.get(opts, :unlocked_paths, []), Keyword.get(opts, :config_overrides, [])),
          {:ok, port} <-
            SSH.start_port(
              worker_host,
@@ -607,7 +624,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     command = String.to_charlist(command)
 
     case sandbox_runtime(settings) do
-      %Schema.Agent.SandboxRuntime{kind: "srt"} ->
+      %Schema.Execution.SandboxRuntime{kind: "srt"} ->
         # Keep SRT deny-listed operator profiles out of the local wrapper path.
         [~c"--noprofile", ~c"--norc", ~c"-c", command]
 
@@ -616,14 +633,15 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp local_command_with_codex_home(settings, workspace, codex_home, mcp_session, unlocked_paths) do
+  defp local_command_with_codex_home(settings, workspace, codex_home, mcp_session, unlocked_paths, config_overrides) do
     opts = [
       extra_deny_read_paths: codex_home_deny_read_paths(codex_home.home_path),
       srt_allow_unix_socket_paths: srt_mcp_unix_socket_paths(mcp_session),
-      unlocked_paths: unlocked_paths
+      unlocked_paths: unlocked_paths,
+      config_overrides: config_overrides
     ]
 
-    case command_with_sandbox_config(settings.agent.command, settings, workspace, opts) do
+    case command_with_sandbox_config(settings.execution.command, settings, workspace, opts) do
       {:ok, command, launch_cleanup_paths} ->
         {:ok, command, launch_cleanup_paths}
 
@@ -632,15 +650,17 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp remote_launch_command(workspace, settings, mcp_session, {remote_socket_path, remote_shim_path}, unlocked_paths) when is_binary(workspace) do
+  defp remote_launch_command(workspace, settings, mcp_session, {remote_socket_path, remote_shim_path}, unlocked_paths, config_overrides)
+       when is_binary(workspace) do
     codex_home = Path.join("/tmp", "symphony-codex-home-#{mcp_session.id}")
     stderr_log_path = Path.join(codex_home, "codex.stderr.log")
 
     with {:ok, command, []} <-
-           command_with_sandbox_config(settings.agent.command, settings, workspace,
+           command_with_sandbox_config(settings.execution.command, settings, workspace,
              remote: true,
              extra_deny_read_paths: codex_home_deny_read_paths(codex_home),
-             unlocked_paths: unlocked_paths
+             unlocked_paths: unlocked_paths,
+             config_overrides: config_overrides
            ),
          {:ok, setup_command} <-
            remote_codex_home_setup_command(settings, mcp_session, remote_socket_path, remote_shim_path, codex_home) do
@@ -855,22 +875,23 @@ defmodule SymphonyElixir.Codex.AppServer do
   defp mcp_reverse_forwards(_mcp_session, _remote_socket), do: []
 
   defp command_with_sandbox_config(command, settings, workspace, opts) when is_binary(command) do
-    network_access = settings.agent.network_access || %Schema.Agent.NetworkAccess{}
+    network_access = settings.execution.network_access || %Schema.Execution.NetworkAccess{}
     extra_deny_read_paths = Keyword.get(opts, :extra_deny_read_paths, [])
 
     deny_write_paths =
       workspace_link_targets(workspace, opts) ++ codex_git_metadata_deny_write_paths(settings, workspace, opts)
 
     overrides =
-      network_access.mode
-      |> AgentSandboxConfig.codex_config_overrides(
-        Schema.codex_effective_network_allowed_domains(settings),
-        workspace_sandbox_allow_read_paths(settings),
-        extra_deny_read_paths,
-        workspace: workspace,
-        deny_write_paths: deny_write_paths,
-        unlocked_paths: Keyword.get(opts, :unlocked_paths, [])
-      )
+      Keyword.get(opts, :config_overrides, []) ++
+        (network_access.mode
+         |> AgentSandboxConfig.codex_config_overrides(
+           Schema.codex_effective_network_allowed_domains(settings),
+           workspace_sandbox_allow_read_paths(settings),
+           extra_deny_read_paths,
+           workspace: workspace,
+           deny_write_paths: deny_write_paths,
+           unlocked_paths: Keyword.get(opts, :unlocked_paths, [])
+         ))
 
     with {:ok, command} <- inject_config_overrides(command, overrides) do
       maybe_wrap_sandbox_runtime(command, settings, workspace, opts)
@@ -893,9 +914,9 @@ defmodule SymphonyElixir.Codex.AppServer do
     end
   end
 
-  defp sandbox_runtime(%Schema{agent: %{sandbox_runtime: %Schema.Agent.SandboxRuntime{} = runtime}}), do: runtime
+  defp sandbox_runtime(%Schema{execution: %{sandbox_runtime: %Schema.Execution.SandboxRuntime{} = runtime}}), do: runtime
 
-  defp sandbox_runtime(_settings), do: %Schema.Agent.SandboxRuntime{}
+  defp sandbox_runtime(_settings), do: %Schema.Execution.SandboxRuntime{}
 
   defp wrap_srt_command(command, settings, workspace, runtime, opts) do
     with {:ok, srt_words} <- srt_command_words(runtime.command),
@@ -958,7 +979,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   defp write_srt_settings(settings, workspace, runtime, opts) do
     settings_dir = Path.join(System.tmp_dir!(), "symphony-srt-#{System.unique_integer([:positive])}")
     settings_path = Path.join(settings_dir, "settings.json")
-    network_access = settings.agent.network_access || %Schema.Agent.NetworkAccess{}
+    network_access = settings.execution.network_access || %Schema.Execution.NetworkAccess{}
 
     with {:ok, srt_settings} <-
            AgentSandboxConfig.srt_settings(
@@ -1295,7 +1316,7 @@ defmodule SymphonyElixir.Codex.AppServer do
          sandbox_startup,
          stderr_tail
        ) do
-    config = settings.agent
+    config = settings.execution
 
     receive_loop(
       port,
@@ -2390,7 +2411,7 @@ defmodule SymphonyElixir.Codex.AppServer do
     approval_context
     |> Map.get(:settings)
     |> case do
-      %Schema{} = settings -> settings.agent.network_access.denied_domains
+      %Schema{} = settings -> settings.execution.network_access.denied_domains
       _ -> []
     end
     |> Enum.map(&normalize_domain/1)
@@ -3913,7 +3934,7 @@ defmodule SymphonyElixir.Codex.AppServer do
   defp normalize_command(_command), do: nil
 
   defp await_response(port, request_id, settings, stderr_tail) do
-    with_timeout_response(port, request_id, settings.agent.read_timeout_ms, "", stderr_tail)
+    with_timeout_response(port, request_id, settings.execution.read_timeout_ms, "", stderr_tail)
   end
 
   defp port_exit_reason(status, stderr_tail) when is_integer(status) do

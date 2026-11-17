@@ -4,8 +4,8 @@ import XCTest
 final class TokenLimitsTests: XCTestCase {
     private let config = """
         # Symphony operator config.
-        agent:
-          runtime: claude
+        execution:
+          prompts: {}
           concurrency:
             max_total: 2  # two agents
           limits:
@@ -29,7 +29,7 @@ final class TokenLimitsTests: XCTestCase {
 
     func testNullValuesReadAsOff() throws {
         for value in ["null", "~", "", "Null", "NULL", "null  # no cap"] {
-            let yaml = "agent:\n  limits:\n    tokens_per_day: \(value)\n    tokens_per_issue: \(value)\n"
+            let yaml = "execution:\n  limits:\n    tokens_per_day: \(value)\n    tokens_per_issue: \(value)\n"
             XCTAssertEqual(try TokenLimits.values(in: yaml), TokenLimits(perDay: .off, perIssue: .off), value)
         }
     }
@@ -37,11 +37,11 @@ final class TokenLimitsTests: XCTestCase {
     func testMissingKeysReadAsSymphonysDefaults() throws {
         let defaults = TokenLimits(perDay: .tokens(5_000_000), perIssue: .tokens(500_000))
         XCTAssertEqual(try TokenLimits.values(in: ""), defaults)
-        XCTAssertEqual(try TokenLimits.values(in: "agent:\n  runtime: codex\n"), defaults)
-        XCTAssertEqual(try TokenLimits.values(in: "agent:\n  limits:\n    max_turns: 8\n"), defaults)
+        XCTAssertEqual(try TokenLimits.values(in: "execution:\n  prompts: {}\n"), defaults)
+        XCTAssertEqual(try TokenLimits.values(in: "execution:\n  limits:\n    max_turns: 8\n"), defaults)
         XCTAssertEqual(TokenLimits(), defaults)
         XCTAssertEqual(
-            try TokenLimits.values(in: "agent:\n  limits:\n    tokens_per_day: null\n"),
+            try TokenLimits.values(in: "execution:\n  limits:\n    tokens_per_day: null\n"),
             TokenLimits(perDay: .off, perIssue: .tokens(500_000))
         )
     }
@@ -50,7 +50,7 @@ final class TokenLimitsTests: XCTestCase {
         let yaml = """
             limits:
               tokens_per_day: 7
-            agent:
+            execution:
               limits:
                 # tokens_per_day: 9
                 tokens_per_day_extra: 4
@@ -59,10 +59,10 @@ final class TokenLimitsTests: XCTestCase {
     }
 
     func testRefusesValuesItCannotRead() {
-        XCTAssertThrowsError(try TokenLimits.values(in: "agent:\n  limits:\n    tokens_per_day: lots\n")) { error in
+        XCTAssertThrowsError(try TokenLimits.values(in: "execution:\n  limits:\n    tokens_per_day: lots\n")) { error in
             XCTAssertEqual(error as? TokenLimitsError, .unreadable(key: "tokens_per_day", value: "lots"))
         }
-        XCTAssertThrowsError(try TokenLimits.values(in: "agent:\n  limits: {tokens_per_day: 5}\n")) { error in
+        XCTAssertThrowsError(try TokenLimits.values(in: "execution:\n  limits: {tokens_per_day: 5}\n")) { error in
             XCTAssertEqual(error as? TokenLimitsError, .notABlock("limits"))
         }
         XCTAssertEqual(
@@ -110,7 +110,7 @@ final class TokenLimitsTests: XCTestCase {
     func testUnchangedLimitsLeaveTheTextAlone() throws {
         XCTAssertEqual(try TokenLimits.updating(config, from: configLimits, to: configLimits), config)
         // An empty value reads as off; it's left as it is rather than rewritten to null.
-        let empty = "agent:\n  limits:\n    tokens_per_day:\n"
+        let empty = "execution:\n  limits:\n    tokens_per_day:\n"
         let off = TokenLimits(perDay: .off)
         XCTAssertEqual(try TokenLimits.updating(empty, from: off, to: off), empty)
     }
@@ -118,11 +118,11 @@ final class TokenLimitsTests: XCTestCase {
     func testFillsAnEmptyValue() throws {
         XCTAssertEqual(
             try TokenLimits.updating(
-                "agent:\n  limits:\n    tokens_per_day:   # none\n",
+                "execution:\n  limits:\n    tokens_per_day:   # none\n",
                 from: TokenLimits(perDay: .off),
                 to: TokenLimits(perDay: .tokens(3))
             ),
-            "agent:\n  limits:\n    tokens_per_day: 3 # none\n"
+            "execution:\n  limits:\n    tokens_per_day: 3 # none\n"
         )
     }
 
@@ -130,22 +130,22 @@ final class TokenLimitsTests: XCTestCase {
         let off = TokenLimits(perDay: .off, perIssue: .off)
 
         XCTAssertEqual(
-            try TokenLimits.updating("agent:\n  limits:\n    max_turns: 8\n", from: TokenLimits(), to: off),
-            "agent:\n  limits:\n    tokens_per_issue: null\n    tokens_per_day: null\n    max_turns: 8\n"
+            try TokenLimits.updating("execution:\n  limits:\n    max_turns: 8\n", from: TokenLimits(), to: off),
+            "execution:\n  limits:\n    tokens_per_issue: null\n    tokens_per_day: null\n    max_turns: 8\n"
         )
         XCTAssertEqual(
-            try TokenLimits.updating("agent:\n  runtime: codex\n", from: TokenLimits(), to: TokenLimits(perDay: .off)),
-            "agent:\n  limits:\n    tokens_per_day: null\n  runtime: codex\n"
+            try TokenLimits.updating("execution:\n  prompts: {}\n", from: TokenLimits(), to: TokenLimits(perDay: .off)),
+            "execution:\n  limits:\n    tokens_per_day: null\n  prompts: {}\n"
         )
         XCTAssertEqual(
             try TokenLimits.updating("issues:\n  provider: linear\n", from: TokenLimits(), to: TokenLimits(perDay: .tokens(9))),
-            "issues:\n  provider: linear\nagent:\n  limits:\n    tokens_per_day: 9\n"
+            "issues:\n  provider: linear\nexecution:\n  limits:\n    tokens_per_day: 9\n"
         )
     }
 
     func testRefusesToWriteIntoAnInlineSection() {
         XCTAssertThrowsError(
-            try TokenLimits.updating("agent:\n  limits: {max_turns: 8}\n", from: TokenLimits(), to: TokenLimits(perDay: .off))
+            try TokenLimits.updating("execution:\n  limits: {max_turns: 8}\n", from: TokenLimits(), to: TokenLimits(perDay: .off))
         ) { error in
             XCTAssertEqual(error as? TokenLimitsError, .notABlock("limits"))
         }
@@ -180,9 +180,9 @@ final class TokenLimitsTests: XCTestCase {
         let result = try await SymphonyConfigFile(path: url.path).writeTokenLimits(
             TokenLimits(perDay: .tokens(-5), perIssue: configLimits.perIssue),
             from: configLimits
-        ) { _ in .failed("agent.max_tokens_per_day must be greater than 0") }
+        ) { _ in .failed("execution.limits.tokens_per_day must be greater than 0") }
 
-        XCTAssertEqual(result, .failed("agent.max_tokens_per_day must be greater than 0"))
+        XCTAssertEqual(result, .failed("execution.limits.tokens_per_day must be greater than 0"))
         XCTAssertEqual(try String(contentsOf: url, encoding: .utf8), config)
         XCTAssertEqual(try siblings(of: url), ["symphony.yml"])
     }

@@ -63,7 +63,7 @@ defmodule SymphonyElixir.QaModeContractTest do
 
     assert build.(settings: settings) =~ @heading
     refute build.(settings: settings, prompt_mode: :pr, pr_context: @pr) =~ @heading
-    refute build.(settings: %{agent: %{kind: "claude"}}) =~ @heading
+    refute build.(settings: %{execution: %{harness: "claude"}}) =~ @heading
     refute build.(agent_kind: "claude", repo_key: "missing-repo") =~ @heading
   end
 

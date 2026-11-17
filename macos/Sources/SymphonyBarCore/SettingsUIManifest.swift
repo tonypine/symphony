@@ -1,8 +1,8 @@
 import Foundation
 
 /// The `symphony.yml` settings the app's Settings, Models and Repos sections read and write, as dotted key
-/// paths: `agent.concurrency.max_total`, or `repositories[].route.team` for a key of every `repositories`
-/// item. A key holding a free-form map, such as `agent.run_profiles`, covers everything under it.
+/// paths: `execution.concurrency.max_total`, or `repositories[].route.team` for a key of every `repositories`
+/// item. A key holding a free-form map, such as `runs`, covers everything under it.
 ///
 /// `mix settings.ui_coverage` reads this list from this file and fails CI for a setting that is neither here
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
@@ -12,16 +12,6 @@ import Foundation
 /// here, and that the rest are `writtenBySymphony`. Keep one string literal per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
-        "agent.command",
-        "agent.concurrency.max_total",
-        "agent.effort",
-        "agent.limits.tokens_per_day",
-        "agent.limits.tokens_per_issue",
-        "agent.model",
-        "agent.provider",
-        "agent.run_profiles",
-        "agent.small_model",
-        "agent.timeouts.mcp_tool_ms",
         "auto_review.acceptance_gate.escalate.on_match.busy_files",
         "auto_review.acceptance_gate.escalate.on_match.dependencies",
         "auto_review.acceptance_gate.escalate.on_match.diff_patterns",
@@ -30,18 +20,17 @@ public enum SettingsUIManifest {
         "auto_review.acceptance_gate.escalate.size_counts",
         "auto_review.acceptance_gate.escalate.ticket_patterns_builtin",
         "auto_review.acceptance_gate.mode",
-        "auto_review.command",
-        "auto_review.effort",
-        "auto_review.model",
         "auto_review.playbooks.macos_app.dev_server",
         "auto_review.playbooks.macos_app.dev_server_port",
         "auto_review.playbooks.macos_app.launch_env",
         "auto_review.playbooks.macos_app.requires",
-        "code_review.command",
-        "code_review.effort",
-        "code_review.model",
         "dispatch.shadow_window",
         "dispatch.source",
+        "execution.concurrency.max_total",
+        "execution.harnesses",
+        "execution.limits.tokens_per_day",
+        "execution.limits.tokens_per_issue",
+        "execution.timeouts.mcp_tool_ms",
         "github.webhooks.enabled",
         "github.webhooks.events",
         "github.webhooks.fallback_poll_interval_ms",
@@ -78,10 +67,6 @@ public enum SettingsUIManifest {
         "reports.triggers.ticket_shipped",
         "repositories[].acceptance_gate.escalate.ticket_patterns_builtin",
         "repositories[].acceptance_gate.mode",
-        "repositories[].agent.effort",
-        "repositories[].agent.model",
-        "repositories[].agent.provider",
-        "repositories[].agent.run_profiles",
         "repositories[].base_branch",
         "repositories[].default",
         "repositories[].key",
@@ -90,11 +75,13 @@ public enum SettingsUIManifest {
         "repositories[].route.labels",
         "repositories[].route.projects",
         "repositories[].route.team",
+        "repositories[].runs",
         "repositories[].workflow",
         "repositories[].workspace.fetch_before_dispatch",
         "repositories[].workspace.repo",
         "repositories[].workspace.source",
         "repositories[].workspace.strategy",
+        "runs",
         "tickets.priorities",
         "watchdog.dispatch_loop_long_runs",
         "watchdog.dispatch_loop_long_window_ms",

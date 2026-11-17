@@ -23,8 +23,8 @@ final class SetupConfigEditTests: XCTestCase {
         route:
           team: TQ
           projects: [a1abb875ac02]
-    agent:
-      runtime: claude
+    execution:
+      mcp: {}
 
     """
 
@@ -40,9 +40,9 @@ final class SetupConfigEditTests: XCTestCase {
     }
 
     func testRemoveTakesASectionItEmptiesToo() throws {
-        let yaml = "issues:\n  provider: linear\nauto_review:\n  enabled: true\n  # a note under it\nagent:\n  runtime: claude\n"
-        XCTAssertEqual(try edit("auto_review.enabled", .remove, in: yaml), "issues:\n  provider: linear\nagent:\n  runtime: claude\n")
-        XCTAssertEqual(try edit("agent", .remove, in: yaml), "issues:\n  provider: linear\nauto_review:\n  enabled: true\n  # a note under it\n")
+        let yaml = "issues:\n  provider: linear\nauto_review:\n  enabled: true\n  # a note under it\nexecution:\n  mcp: {}\n"
+        XCTAssertEqual(try edit("auto_review.enabled", .remove, in: yaml), "issues:\n  provider: linear\nexecution:\n  mcp: {}\n")
+        XCTAssertEqual(try edit("execution", .remove, in: yaml), "issues:\n  provider: linear\nauto_review:\n  enabled: true\n  # a note under it\n")
     }
 
     func testRemoveKeepsTheSectionWhileItHasOtherKeys() throws {
@@ -103,7 +103,7 @@ final class SetupConfigEditTests: XCTestCase {
         XCTAssertEqual(try edit("labels", .add, .string("a"), in: "labels: a\n"), "labels: a\n")
         XCTAssertEqual(try edit("labels", .add, .string("a"), in: "labels:\nnext: 1\n"), "labels: [a]\nnext: 1\n")
         // A missing key goes in as the settings writer inserts one: first in its section.
-        XCTAssertEqual(try edit("agent.labels", .add, .string("a"), in: "agent:\n  runtime: claude\n"), "agent:\n  labels: [a]\n  runtime: claude\n")
+        XCTAssertEqual(try edit("execution.labels", .add, .string("a"), in: "execution:\n  mcp: {}\n"), "execution:\n  labels: [a]\n  mcp: {}\n")
         XCTAssertThrowsError(try edit("labels", .add, .list([.string("a")]), in: "labels: a\n"))
     }
 
@@ -112,7 +112,7 @@ final class SetupConfigEditTests: XCTestCase {
     func testSetAScalarOrAList() throws {
         XCTAssertEqual(try edit("issues.provider", .set, .string("memory")), config.replacingOccurrences(of: "provider: linear", with: "provider: memory"))
         XCTAssertEqual(try edit("auto_review.enabled", .set, .bool(false)), config.replacingOccurrences(of: "enabled: true # retired", with: "enabled: false # retired"))
-        XCTAssertEqual(try edit("agent.max", .set, .number(3)), config.replacingOccurrences(of: "agent:\n", with: "agent:\n  max: 3\n"))
+        XCTAssertEqual(try edit("execution.max", .set, .number(3)), config.replacingOccurrences(of: "execution:\n", with: "execution:\n  max: 3\n"))
         XCTAssertEqual(
             try edit("pull_requests.checks.required", .set, .list([.string("test"), .string("a b")])),
             config.replacingOccurrences(of: "    required:\n      - test\n      - lint # style\n", with: "    required: [test, \"a b\"]\n")

@@ -28,7 +28,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   its passes too, and needs it configured the same way. The `macos_app` playbook's
   dev server runs on the QA host instead, never on this host, on its
   `dev_server_port`, and its `launch_env` reaches the app (see
-  `SymphonyElixir.QaAgent.PlaybookSettings`); it needs only `verification.dev_server`
+  `SymphonyElixir.PlaybookSettings`); it needs only `verification.dev_server`
   (`dev_server_command?: true`), since `verification.enabled` turns on this host's
   dev server, for agent runs too. Its `live` server, when set, is carried as
   `:live_server`; when `live/3` says it should run, the playbook is selected even for a
@@ -45,7 +45,7 @@ defmodule SymphonyElixir.QaAgent.Selection do
   """
 
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.QaAgent.PlaybookSettings
+  alias SymphonyElixir.PlaybookSettings
   alias SymphonyElixir.Walkthrough
 
   @skip_label "qa:skip"

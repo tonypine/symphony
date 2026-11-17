@@ -131,7 +131,7 @@ defmodule SymphonyElixir.Codex.McpConfigTest do
             transport: "stdio",
             command: "declared-node",
             args: ["/declared/context.js"],
-            runtimes: ["codex"]
+            harnesses: ["codex"]
           }
         }
       })
@@ -378,7 +378,7 @@ defmodule SymphonyElixir.Codex.McpConfigTest do
     assert {:ok, []} =
              McpConfig.inherited_server_blocks(
                invalid_mcp_home,
-               %Schema.Agent.Mcp{inherit: "invalid"},
+               %Schema.Execution.Mcp{inherit: "invalid"},
                MapSet.new()
              )
   end
@@ -412,9 +412,7 @@ defmodule SymphonyElixir.Codex.McpConfigTest do
   defp settings!(mcp) do
     {:ok, settings} =
       Schema.parse(%{
-        agent: %{
-          kind: "codex",
-          command: "codex app-server",
+        execution: %{
           mcp: mcp
         }
       })
@@ -423,7 +421,7 @@ defmodule SymphonyElixir.Codex.McpConfigTest do
   end
 
   defp mcp!(mcp) do
-    settings!(mcp).agent.mcp
+    settings!(mcp).execution.mcp
   end
 
   defp build_config(settings, host_codex_home) do

@@ -11,7 +11,7 @@ public struct StateSnapshot: Equatable {
     public var pause: Pause?
     /// Provider usage-limit holds, soonest resume first; empty when nothing is held.
     public var usageLimits: [UsageLimit]
-    /// Today's tokens against `agent.limits`, nil when Symphony didn't report them.
+    /// Today's tokens against `execution.limits`, nil when Symphony didn't report them.
     public var budget: Budget?
     /// Tickets held only until the running Symphony includes a fix that merged: updating releases them.
     public var updateUnblocks: Int
@@ -334,7 +334,7 @@ public struct StateSnapshot: Equatable {
         /// Its Linear state, for example "Todo".
         public var state: String?
         public var forcedForSeconds: Int?
-        /// Forced for longer than `agent.concurrency.forced_stale_after_hours`.
+        /// Forced for longer than `execution.concurrency.forced_stale_after_hours`.
         public var stale: Bool
         /// For a forced parent, the sub-ticket it is working through now.
         public var part: String?

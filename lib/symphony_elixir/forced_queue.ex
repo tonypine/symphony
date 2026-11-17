@@ -1,6 +1,6 @@
 defmodule SymphonyElixir.ForcedQueue do
   @moduledoc """
-  The tickets a human has forced with `agent.concurrency.force_label` (default `expedite`), and
+  The tickets a human has forced with `execution.concurrency.force_label` (default `expedite`), and
   when Symphony first saw each one.
 
   A ticket joins the queue the first time a poll sees it carry the label outside a terminal state.

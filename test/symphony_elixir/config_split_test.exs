@@ -323,9 +323,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
     write_symphony_text!(root, """
     issues:
       provider: memory
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     auto_review:
       enabled: true
       playbooks:
@@ -391,9 +394,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
       write_symphony_text!(root, """
       issues:
         provider: memory
-      agent:
-        runtime: codex
-        command: codex app-server
+      execution:
+        harnesses:
+          codex:
+            command: codex app-server
+      runs:
+        default: {harness: codex, provider: openai, model: gpt-test}
       auto_review:
         enabled: true
       #{android}
@@ -482,9 +488,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
         api_key: token
         scope:
           project_slug: project
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
       - key: app
         workflow: #{Path.join(repo.path, "WORKFLOW.md")}
@@ -500,9 +509,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
     write_symphony_text!(root, """
     issues:
       provider: memory
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
       - key: web
         workflow: #{Path.join(root, "web/WORKFLOW.md")}
@@ -529,9 +541,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
     write_symphony_text!(root, """
     issues:
       provider: memory
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
       - key: fallback
         workflow: #{Path.join(root, "fallback/WORKFLOW.md")}
@@ -644,9 +659,8 @@ defmodule SymphonyElixir.ConfigSplitTest do
                    "provider" => "memory",
                    "poll_interval_ms" => 0
                  },
-                 "agent" => %{
-                   "runtime" => "future-runtime",
-                   "command" => "codex app-server",
+                 "execution" => %{
+                   "harnesses" => %{"codex" => %{"command" => "codex app-server"}},
                    "concurrency" => %{"max_total" => 0}
                  },
                  "pull_requests" => %{
@@ -663,8 +677,7 @@ defmodule SymphonyElixir.ConfigSplitTest do
              )
 
     assert message =~ "issues.poll_interval_ms"
-    assert message =~ "agent.runtime"
-    assert message =~ "agent.concurrency.max_total"
+    assert message =~ "execution.concurrency.max_total"
     assert message =~ "pull_requests.checks.max_fix_attempts"
     assert message =~ "repositories.key"
     assert message =~ "repositories.workflow"
@@ -675,15 +688,18 @@ defmodule SymphonyElixir.ConfigSplitTest do
     refute message =~ "pr_review"
     refute message =~ "ci."
     refute message =~ "max_concurrent_agents"
+
+    future = %{"default" => %{"harness" => "future-harness", "provider" => "openai", "model" => "gpt-test"}}
+    assert {:error, {:invalid_symphony_config, message}} = SystemSchema.parse(system_config(%{"runs" => future}))
+    assert message == "runs.default.harness must be one of: claude, codex, opencode"
   end
 
   test "system schema maps nested operator config and resolves repo workflow paths" do
     assert {:ok, system_config} =
              SystemSchema.parse(
                system_config(%{
-                 "agent" => %{
-                   "runtime" => "codex",
-                   "command" => "codex app-server",
+                 "execution" => %{
+                   "harnesses" => %{"codex" => %{"command" => "codex app-server"}},
                    "concurrency" => %{"max_total" => 3},
                    "limits" => %{"tokens_per_issue" => 100, "tokens_per_day" => 200}
                  },
@@ -696,9 +712,9 @@ defmodule SymphonyElixir.ConfigSplitTest do
     assert SystemSchema.repo_workflow_path(repo) == Path.expand("relative/app/config/Workflow.md", SymphonyElixir.Workflow.symphony_file_path() |> Path.dirname())
 
     config_map = SystemSchema.to_config_map(system_config)
-    assert get_in(config_map, ["agent", "max_concurrent_agents"]) == 3
-    assert get_in(config_map, ["agent", "max_tokens_per_issue"]) == 100
-    assert get_in(config_map, ["agent", "max_tokens_per_day"]) == 200
+    assert get_in(config_map, ["execution", "max_concurrent_agents"]) == 3
+    assert get_in(config_map, ["execution", "max_tokens_per_issue"]) == 100
+    assert get_in(config_map, ["execution", "max_tokens_per_day"]) == 200
   end
 
   test "repo workflow path can be declared without a repo checkout path", %{root: root} do
@@ -732,9 +748,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
       provider: memory
     workspaces:
       root: #{workspace_root}
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
       - key: app
         workflow: #{SystemSchema.repo_workflow_path(repo)}
@@ -765,9 +784,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
     workspaces:
       strategy: worktree
       repo: #{Path.join(root, "primary")}
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
       - key: web
         workflow: #{Path.join(web_repo.path, "WORKFLOW.md")}
@@ -817,9 +839,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
     write_symphony_text!(root, """
     issues:
       provider: memory
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
       - key: valid
         workflow: #{Path.join(valid_repo.path, "WORKFLOW.md")}
@@ -885,9 +910,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
     write_symphony_text!(root, """
     issues:
       provider: memory
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
       - key: web
         workflow: #{Path.join(web_repo.path, "WORKFLOW.md")}
@@ -942,9 +970,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
     write_symphony_text!(root, """
     issues:
       provider: memory
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
       - key: api
         workflow: #{Path.join(api_repo.path, "WORKFLOW.md")}
@@ -997,9 +1028,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
       enabled: true
       port_allocation:
         range: [4400, 4402]
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
       - key: web
         workflow: #{Path.join(web_repo.path, "WORKFLOW.md")}
@@ -1041,9 +1075,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
     write_symphony_text!(root, """
     issues:
       provider: memory
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
       - key: web
         workflow: #{Path.join(web_repo.path, "WORKFLOW.md")}
@@ -1151,9 +1188,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
       """
       issues:
         provider: memory
-      agent:
-        runtime: codex
-        command: codex app-server
+      execution:
+        harnesses:
+          codex:
+            command: codex app-server
+      runs:
+        default: {harness: codex, provider: openai, model: gpt-test}
       repositories:
       """ <> repos_yaml(repos)
     )
@@ -1170,9 +1210,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
     issues:
       provider: memory
       poll_interval_ms: #{poll_interval_ms}
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
     """ <> repos_yaml(repos)
   end
@@ -1204,7 +1247,8 @@ defmodule SymphonyElixir.ConfigSplitTest do
     Map.merge(
       %{
         "issues" => %{"provider" => "memory"},
-        "agent" => %{"runtime" => "codex", "command" => "codex app-server"},
+        "execution" => %{"harnesses" => %{"codex" => %{"command" => "codex app-server"}}},
+        "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}},
         "repositories" => [repo_config("app")]
       },
       overrides

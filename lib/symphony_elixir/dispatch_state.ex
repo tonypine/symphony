@@ -250,9 +250,6 @@ defmodule SymphonyElixir.DispatchState do
   defp config_invalid_message({:unsupported_tracker_kind, kind}),
     do: "Unsupported tracker kind in WORKFLOW.md: #{inspect(kind)}"
 
-  defp config_invalid_message({:unsupported_agent_kind, kind}),
-    do: "Unsupported agent runtime in WORKFLOW.md: #{inspect(kind)}"
-
   defp config_invalid_message({:missing_workflow_file, path, reason}),
     do: "Missing WORKFLOW.md at #{path}: #{inspect(reason)}"
 

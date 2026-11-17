@@ -37,7 +37,7 @@ final class PhaseSettingsTests: XCTestCase {
     }
 
     func testTheDefaultListPreviewsAsSymphonyDoes() throws {
-        let settings = try PhaseSettings.values(in: "agent:\n  max_turns: 3\n")
+        let settings = try PhaseSettings.values(in: "execution:\n  max_turns: 3\n")
         XCTAssertEqual(settings[.implementation], .defaults(for: .implementation))
         XCTAssertEqual(PhasePreview.text(kind: .implementation, list: settings[.implementation]), try fixture("default.preview.txt"))
     }
@@ -334,7 +334,7 @@ final class PhaseSettingsTests: XCTestCase {
 
     func testSavingRewritesOnlyTheStepsBlockAndKeepsTheRest() throws {
         let yaml = """
-            agent:
+            execution:
               max_turns: 3
             phases:
               implementation:
@@ -353,7 +353,7 @@ final class PhaseSettingsTests: XCTestCase {
         XCTAssertEqual(
             try PhaseSettings.updating(yaml, from: old, to: new),
             """
-            agent:
+            execution:
               max_turns: 3
             phases:
               implementation:
@@ -378,8 +378,8 @@ final class PhaseSettingsTests: XCTestCase {
     func testSavingAnEmptyListWritesNoSteps() throws {
         var new = PhaseSettings()
         new[.rework] = PhaseSteps(steps: [], isDefault: false)
-        let yaml = try PhaseSettings.updating("agent:\n  max_turns: 3\n", from: PhaseSettings(), to: new)
-        XCTAssertEqual(yaml, "agent:\n  max_turns: 3\nphases:\n  rework:\n    steps: []\n")
+        let yaml = try PhaseSettings.updating("execution:\n  max_turns: 3\n", from: PhaseSettings(), to: new)
+        XCTAssertEqual(yaml, "execution:\n  max_turns: 3\nphases:\n  rework:\n    steps: []\n")
         XCTAssertEqual(try PhaseSettings.values(in: yaml)[.rework], PhaseSteps(steps: [], isDefault: false))
     }
 
@@ -430,15 +430,15 @@ final class PhaseSettingsTests: XCTestCase {
     }
 
     func testResettingRemovesTheKindAndAnEmptiedPhasesKey() throws {
-        let yaml = "agent:\n  max_turns: 3\nphases:\n  implementation:\n    steps: []\n    # under it\n  qa:\n    steps: []\nnext: 1\n"
+        let yaml = "execution:\n  max_turns: 3\nphases:\n  implementation:\n    steps: []\n    # under it\n  qa:\n    steps: []\nnext: 1\n"
         let old = try PhaseSettings.values(in: yaml)
         var new = old
         new[.implementation] = .defaults(for: .implementation)
         let once = try PhaseSettings.updating(yaml, from: old, to: new)
-        XCTAssertEqual(once, "agent:\n  max_turns: 3\nphases:\n  qa:\n    steps: []\nnext: 1\n")
+        XCTAssertEqual(once, "execution:\n  max_turns: 3\nphases:\n  qa:\n    steps: []\nnext: 1\n")
         new[.qa] = .defaults(for: .qa)
-        XCTAssertEqual(try PhaseSettings.updating(yaml, from: old, to: new), "agent:\n  max_turns: 3\nnext: 1\n")
-        XCTAssertEqual(try PhaseSettings.resetting("agent: {}\n", kind: .qa), "agent: {}\n")
+        XCTAssertEqual(try PhaseSettings.updating(yaml, from: old, to: new), "execution:\n  max_turns: 3\nnext: 1\n")
+        XCTAssertEqual(try PhaseSettings.resetting("execution: {}\n", kind: .qa), "execution: {}\n")
     }
 
     func testAnInlinePhasesKeyIsReportedWhenSaving() {
@@ -462,7 +462,7 @@ final class PhaseSettingsTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let path = directory.appendingPathComponent("symphony.yml").path
-        try "agent:\n  max_turns: 3\n".write(toFile: path, atomically: true, encoding: .utf8)
+        try "execution:\n  max_turns: 3\n".write(toFile: path, atomically: true, encoding: .utf8)
         let file = SymphonyConfigFile(path: path)
         var new = PhaseSettings()
         new[.implementation] = reordered()

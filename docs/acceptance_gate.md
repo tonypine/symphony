@@ -32,8 +32,8 @@ deprecation window, each key with one warning per loaded config:
 - `escalate` is still read, by Code Review, until the block is removed and the rules move with it;
 - `mode` only derives a repo's `manual_review` when that is unset (`shadow` → `on`; `off`,
   `enforce` and `decide` → `off`);
-- `runtime`, `command`, `model`, `effort`, `max_turns`, `timeout_ms`, `max_concurrent`,
-  `escalate.inconclusive_limit` and `agent.run_profiles.acceptance_gate` do nothing.
+- `runtime`, `command`, `model`, `effort`, `max_turns`, `timeout_ms`, `max_concurrent` and
+  `escalate.inconclusive_limit` do nothing.
 
 ```yaml
 auto_review:

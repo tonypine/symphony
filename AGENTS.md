@@ -1,6 +1,6 @@
 # Symphony
 
-This repository contains the Elixir agent orchestration service that polls Linear, creates per-issue workspaces, and runs Codex in app-server mode.
+This repository contains the Elixir agent orchestration service that polls Linear, creates per-issue workspaces, and runs coding-agent harnesses in them: claude first, with codex and opencode supported.
 
 ## Environment
 
@@ -21,7 +21,7 @@ This repository contains the Elixir agent orchestration service that polls Linea
     change where practical so the spec stays current.
 - Prefer adding config access through `SymphonyElixir.Config` instead of ad-hoc env reads.
 - Workspace safety is critical:
-  - Never run Codex turn cwd in source repo.
+  - Never run an agent turn's cwd in source repo.
   - Workspaces must stay under configured workspace root.
 - Orchestrator behavior is stateful and concurrency-sensitive; preserve retry, reconciliation, and cleanup semantics.
 - Follow `docs/logging.md` for logging conventions and required issue/session context fields.

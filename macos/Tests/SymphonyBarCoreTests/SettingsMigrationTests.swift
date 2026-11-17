@@ -3,7 +3,7 @@ import XCTest
 
 final class SettingsMigrationTests: XCTestCase {
     private let rename = ReleaseSettingsMigration(key: "pre_push_review", to: "code_review")
-    private let nested = ReleaseSettingsMigration(key: "repositories[].agent.run_profiles.pre_push_review", to: "code_review")
+    private let nested = ReleaseSettingsMigration(key: "repositories[].runs.pre_push_review", to: "code_review")
     private let removal = ReleaseSettingsMigration(key: "ledger.artifact_retention_days", to: nil)
 
     private let release = Release(
@@ -19,7 +19,7 @@ final class SettingsMigrationTests: XCTestCase {
         XCTAssertEqual(SettingsMigrationPreview.affecting([rename], text: "code_review:\n  enabled: true\n"), [])
         XCTAssertEqual(SettingsMigrationPreview.affecting([rename], text: "# pre_push_review:\n"), [], "a comment isn't a key")
         XCTAssertEqual(
-            SettingsMigrationPreview.affecting([rename], text: "agent:\n  pre_push_review: 1\n"),
+            SettingsMigrationPreview.affecting([rename], text: "execution:\n  pre_push_review: 1\n"),
             [],
             "the same name in another section isn't the key"
         )
@@ -32,18 +32,16 @@ final class SettingsMigrationTests: XCTestCase {
               - key: one
                 workflow: WORKFLOW.md
               - key: two
-                agent:
-                  run_profiles:
-                    pre_push_review:
-                      model: gpt-5
+                runs:
+                  pre_push_review:
+                    model: gpt-5
             """
         let sameColumn = """
             repositories:
             - key: one
-              agent:
-                run_profiles:
-                  pre_push_review:
-                    model: gpt-5
+              runs:
+                pre_push_review:
+                  model: gpt-5
             ledger:
               artifact_retention_days: 3
             """

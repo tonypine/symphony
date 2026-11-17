@@ -133,7 +133,7 @@ defmodule SymphonyElixir.OrchestratorDispatchLoopTest do
       assert [_old, _review, started] = RunStore.list_ticket_events(@issue_id, types: ["run.started"])
 
       assert %{run_id: ^run_id, phase: "In Progress", actor: %{kind: :machine}, idempotency: "run.started:" <> ^run_id} = started
-      assert started.payload == %{run_id: run_id, run_kind: "implementation", run_number: 2, state: "In Progress", head: "sha-now"}
+      assert started.payload == %{run_id: run_id, run_kind: "implementation", run_number: 2, state: "In Progress", head: "sha-now", model: "gpt-test"}
 
       refute Pauses.paused?({:ticket, @repo_key, @issue_id})
     end)

@@ -9,7 +9,8 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
     Map.merge(
       %{
         "issues" => %{"provider" => "memory"},
-        "agent" => %{"runtime" => "claude", "command" => "claude --dangerously-skip-permissions"},
+        "execution" => %{"harnesses" => %{"claude" => %{"command" => "claude --dangerously-skip-permissions", "small_model" => %{"anthropic" => "small-test"}}}},
+        "runs" => %{"default" => %{"harness" => "claude", "provider" => "anthropic", "model" => "claude-test"}},
         "repositories" => [Map.merge(%{"key" => "app", "workflow" => "WORKFLOW.md", "route" => %{"team" => "Test"}}, repo_fields)]
       },
       sections
@@ -132,8 +133,13 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
     test "invalid values name the key" do
       assert error!(gate("off")) =~ "`auto_review.acceptance_gate` must be an object"
       assert error!(gate(%{"escalate" => []})) =~ "`auto_review.acceptance_gate.escalate` must be an object"
-      assert error!(gate(%{"runtime" => "gpt"})) =~ "auto_review.acceptance_gate.runtime is invalid"
-      assert error!(gate(%{"effort" => "extreme"})) =~ "auto_review.acceptance_gate.effort must be one of: low, medium, high, xhigh, max"
+
+      # The retired gate's own run settings do nothing and are no longer checked: they only warn.
+      capture_log(fn ->
+        assert {:ok, _system} = SystemSchema.parse(symphony(gate(%{"runtime" => "gpt"})))
+        assert {:ok, _system} = SystemSchema.parse(symphony(gate(%{"effort" => "extreme"})))
+      end)
+
       assert error!(gate(%{"max_turns" => 0})) =~ "auto_review.acceptance_gate.max_turns must be greater than 0"
       assert error!(gate(%{"escalate" => %{"dependencies" => "minor"}})) =~ "auto_review.acceptance_gate.escalate.dependencies must be one of: off, major, any"
       assert error!(gate(%{"escalate" => %{"max_changed_lines" => 0}})) =~ "auto_review.acceptance_gate.escalate.max_changed_lines must be a positive integer"
@@ -358,41 +364,15 @@ defmodule SymphonyElixir.DeprecatedGateSettingsTest do
                Escalate.built_in().labels ++ ["also-risky"]
     end
 
-    test "agent.run_profiles.acceptance_gate and a repository's still load, warn and are dropped" do
-      agent = %{
-        "runtime" => "claude",
-        "command" => "claude --dangerously-skip-permissions",
-        "run_profiles" => %{"acceptance_gate" => %{"model" => "claude-opus-5-5"}, "qa" => %{"effort" => "high"}}
-      }
+    test "acceptance_gate and final_verification are not run kinds: runs refuses them, in a repository too" do
+      for retired <- ["acceptance_gate", "final_verification"] do
+        runs = %{"default" => %{"harness" => "claude", "provider" => "anthropic", "model" => "claude-test"}, retired => %{"model" => "claude-opus-5-5"}}
 
-      log =
-        capture_log(fn ->
-          assert {:ok, system} =
-                   SystemSchema.parse(symphony(%{"agent" => agent}, %{"agent" => %{"run_profiles" => %{"acceptance_gate" => %{"effort" => "low"}}}}))
+        assert error!(%{"runs" => runs}) =~ "runs.#{retired} is not a run kind; expected default or one of: implementation, "
 
-          assert {:ok, settings} = Schema.parse(SystemSchema.to_config_map(system))
-          assert settings.agent.run_profiles == %{"qa" => %{"effort" => "high"}}
-        end)
-
-      assert log =~ "`agent.run_profiles.acceptance_gate` is deprecated and has no effect"
-      assert log =~ "`repositories[app].agent.run_profiles.acceptance_gate` is deprecated and has no effect"
-    end
-
-    test "agent.run_profiles.final_verification still loads, warns and is dropped" do
-      agent = %{
-        "runtime" => "claude",
-        "command" => "claude --dangerously-skip-permissions",
-        "run_profiles" => %{"final_verification" => %{"model" => "claude-opus-5-5"}, "qa" => %{"effort" => "high"}}
-      }
-
-      log =
-        capture_log(fn ->
-          assert {:ok, system} = SystemSchema.parse(symphony(%{"agent" => agent}, %{}))
-          assert {:ok, settings} = Schema.parse(SystemSchema.to_config_map(system))
-          assert settings.agent.run_profiles == %{"qa" => %{"effort" => "high"}}
-        end)
-
-      assert log =~ "`agent.run_profiles.final_verification` is deprecated and has no effect: `Final verification:` tickets are retired"
+        assert error!(%{}, %{"runs" => %{retired => %{"effort" => "low"}}}) =~
+                 "repositories[app].runs.#{retired} is not a run kind; expected default or one of: implementation, "
+      end
     end
 
     test "pull_requests.checks.escalate_to_state still loads and warns that it does nothing" do

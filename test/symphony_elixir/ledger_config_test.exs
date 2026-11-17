@@ -6,7 +6,8 @@ defmodule SymphonyElixir.LedgerConfigTest do
   @base %{
     "issues" => %{"provider" => "memory"},
     "repositories" => [%{"key" => "web"}],
-    "agent" => %{"runtime" => "codex", "command" => "codex app-server"}
+    "execution" => %{"harnesses" => %{"codex" => %{"command" => "codex app-server"}}},
+    "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}}
   }
 
   defp append_symphony_yml!(yaml) do
