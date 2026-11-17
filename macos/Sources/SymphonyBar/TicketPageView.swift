@@ -863,7 +863,7 @@ struct TicketPageBody: View {
                 DecisionsLineView(line: line, open: sheetOpen, focus: answerFocus, answer: answer, review: actions.review)
             }
             if let lifecycle = page.lifecycleRead?.lifecycle {
-                LifecycleSection(model: LifecycleModel.build(lifecycle, phase: page.lifecycleRead?.phasePath?.current))
+                LifecycleSection(model: LifecycleModel.build(lifecycle, path: page.lifecycleRead?.phasePath, situation: page.situation))
                     .equatable()
             }
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {

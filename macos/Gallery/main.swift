@@ -1290,7 +1290,7 @@ func timeline(width: CGFloat, selection: String? = nil, unfoldedRuns: Set<String
 
 // MARK: - The Lifecycle section and the Phase path (TP-1445)
 
-/// Three tickets (`Tests/Fixtures/lifecycle`): one mid-way, back in Rework with Code Review entered three times; one
+/// Three tickets (`Tests/Fixtures/lifecycle`): one mid-way, in Coding the third time after Code Review sent it back; one
 /// Done; one in QA at 95 % of its cap.
 let lifecycleFixtures = here.appendingPathComponent("../Tests/Fixtures/lifecycle").standardizedFileURL
 let lifecycleReference = ISO8601DateFormatter().date(from: "2026-10-08T11:21:00Z")!
@@ -1307,7 +1307,7 @@ func lifecycleRead(_ name: String) -> TicketLifecycleRead {
 @MainActor
 func lifecycle(_ name: String, width: CGFloat) -> some View {
     let read = lifecycleRead(name)
-    return LifecycleSection(model: LifecycleModel.build(read.lifecycle!, phase: read.phasePath?.current))
+    return LifecycleSection(model: LifecycleModel.build(read.lifecycle!, path: read.phasePath))
         .padding(DesignTokens.Space.s5)
         .frame(width: width + 2 * DesignTokens.Space.s5, alignment: .leading)
         .background(DesignTokens.Surface.window.color)
