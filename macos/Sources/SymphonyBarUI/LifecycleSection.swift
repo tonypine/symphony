@@ -14,7 +14,9 @@ import SymphonyBarCore
 public struct LifecycleSection: View {
     let model: LifecycleModel
 
-    /// The section's widest on a laptop's main column and on a desktop's (the catalog's Lifecycle).
+    /// The section's widest on a laptop's main column and on a desktop's (the catalog's Lifecycle). The page's main
+    /// column already stops there when nothing waits on the person; beside the decisions it is fluid, and the card fills
+    /// it like the timeline under it (`.ticket-page .zone-run`), so their right edges line up (TP-1485).
     public static let laptopWidth: CGFloat = 780
     public static let desktopWidth: CGFloat = 1040
     public static let title = "Lifecycle"
@@ -29,7 +31,7 @@ public struct LifecycleSection: View {
             StageStrip(stages: model.stages)
             TokenBarView(bar: model.tokens)
         }
-        .frame(maxWidth: Self.desktopWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 

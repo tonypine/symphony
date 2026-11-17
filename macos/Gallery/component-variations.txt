@@ -43,6 +43,9 @@ count-badge-problems
 count-badge-quiet
 count-badge-waiting-on-you
 count-badge-zero
+hairline-divider-horizontal
+hairline-divider-vertical-14
+hairline-divider-vertical-20
 icon-button-default
 icon-button-disabled-with-reason
 icon-button-focused
@@ -75,6 +78,9 @@ pop-up-focused
 pop-up-hover
 pop-up-open
 pop-up-pressed
+priority-mark-low
+priority-mark-on-the-identifier-line
+priority-mark-urgent
 row-default
 row-fix-disabled-with-reason
 row-focused

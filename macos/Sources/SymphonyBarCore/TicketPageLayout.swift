@@ -228,11 +228,36 @@ extension TicketPage {
     }
 
     /// The header's epic chip: the epic the ticket read connects it to, else the plan the state's lanes name.
-    public var epicChip: String? {
+    public var epicChip: EpicChip? {
         if let epic = factsRead?.connected?.epic {
-            return [epic.identifier, epic.title].compactMap { $0 }.joined(separator: " ")
+            return EpicChip(identifier: epic.identifier, title: epic.title)
         }
-        return initiative
+        // The lane's "SHOP-300 Gift cards": its identifier, then its title.
+        guard let initiative = initiative?.trimmingWhitespace(), !initiative.isEmpty else { return nil }
+        let parts = initiative.split(separator: " ", maxSplits: 1).map(String.init)
+        return EpicChip(identifier: parts[0], title: parts.count > 1 ? parts[1] : nil)
+    }
+
+    /// The header's priority on the identifier's line: "Urgent"; nil without one, or with Linear's No priority.
+    public var headerPriority: String? {
+        guard let priority = detailsRead?.ticket?.priority, let named = TicketPriority.named(String(priority)), named != .none else {
+            return nil
+        }
+        return named.title
+    }
+
+    /// The header's labels on the identifier's line, after the priority, as Linear names them.
+    public var headerLabels: [String] {
+        (detailsRead?.ticket?.labels ?? []).map { $0.trimmingWhitespace() }.filter { !$0.isEmpty }
+    }
+
+    /// What the Action rail links to: the pull request, the ticket in Linear and the run's workspace while it exists.
+    public var railLinks: TicketActionRail.Links {
+        TicketActionRail.Links(
+            pullRequest: factsRead?.pullRequest?.url,
+            linear: url,
+            workspacePath: detailsRead?.workspace?.path ?? workspacePath
+        )
     }
 
     /// The decision sheet's subtitle: "TP-1245 · The paused line's times".
@@ -245,5 +270,50 @@ extension TicketPage {
     public func moveSheet(to state: String) -> MoveSheet? {
         guard let entry = moveMenu?.entries.first(where: { $0.name.caseInsensitiveCompare(state) == .orderedSame }) else { return nil }
         return moveMenu?.sheet(for: entry)
+    }
+}
+
+/// The header's epic chip (TP-1485): the epic's short name on the chip, cut at a set width, and its whole title in the
+/// tooltip and for VoiceOver.
+public struct EpicChip: Equatable {
+    /// The widest the chip's text is drawn before it is cut with an ellipsis.
+    public static let maxTextWidth: Double = 160
+
+    public var identifier: String
+    public var title: String?
+
+    public init(identifier: String, title: String?) {
+        self.identifier = identifier
+        let title = title?.trimmingWhitespace()
+        self.title = title?.isEmpty == false ? title : nil
+    }
+
+    /// The short name: the title up to its first colon ("Phase 3b" of "Phase 3b: the Director redesigned…"), the
+    /// whole title when it has none, the identifier without a title.
+    public var shortName: String {
+        guard let title else { return identifier }
+        let head = title.split(separator: ":", maxSplits: 1).first.map { String($0).trimmingWhitespace() } ?? ""
+        return head.isEmpty ? title : head
+    }
+
+    /// The tooltip and VoiceOver's words: "Epic TP-1381: Phase 3b: the Director redesigned around a ticket's situation".
+    public var fullTitle: String {
+        guard let title else { return "Epic \(identifier)" }
+        return "Epic \(identifier): \(title)"
+    }
+}
+
+/// The page header's title (the catalog's `.page-header h1`, TP-1485): in the title style, at most 30 em wide on a
+/// laptop and 56 em on a desktop, and at most three lines, so a long title never pushes the moves off screen.
+public enum TicketPageHeaderLayout {
+    /// The most lines the title takes before it is cut with an ellipsis (its whole text is the tooltip).
+    public static let titleLines = 3
+    /// `max-width: 30em` on a laptop, `56em` on a desktop.
+    public static let laptopTitleEms: Double = 30
+    public static let desktopTitleEms: Double = 56
+
+    /// The title's widest, in points: its ems at the title style's size.
+    public static func titleWidth(desktop: Bool) -> Double {
+        (desktop ? desktopTitleEms : laptopTitleEms) * DesignTokens.TypeStyle.title.size
     }
 }
