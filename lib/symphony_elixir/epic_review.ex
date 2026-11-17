@@ -376,7 +376,7 @@ defmodule SymphonyElixir.EpicReview do
       repo_key: repo_key(issue, opts),
       run_id: epic_run_id(issue, opts, sha),
       playbooks: playbooks,
-      token_limit: settings.agent.max_tokens_per_issue,
+      token_limit: settings.execution.max_tokens_per_issue,
       run_profile: Keyword.get(opts, :run_profile),
       journey: QaVerification.journey(issue, settings.proof_check, "the epic")
     }

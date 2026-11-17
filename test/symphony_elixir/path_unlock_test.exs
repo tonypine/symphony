@@ -3,7 +3,7 @@ defmodule SymphonyElixir.PathUnlockTest do
 
   alias SymphonyElixir.{AgentSandboxConfig, Decisions, PathUnlock, Questions}
   alias SymphonyElixir.ClaudeCode.AppServer, as: ClaudeAppServer
-  alias SymphonyElixir.Config.Schema.Agent.NetworkAccess
+  alias SymphonyElixir.Config.Schema.Execution.NetworkAccess
   alias SymphonyElixir.HumanActions.PlainWords
 
   @path "config/settings_ui_exempt.yml"

@@ -87,6 +87,9 @@ defmodule SymphonyElixir.MixProject do
           SymphonyElixir.Verification.PortPool,
           SymphonyElixir.CLI,
           SymphonyElixir.ClaudeCode.AppServer,
+          # Moved out of ClaudeCode.AppServer unchanged, with its untested branches.
+          SymphonyElixir.Harnesses.EventStream,
+          SymphonyElixir.Harnesses.ToolSession,
           SymphonyElixir.Codex.AppServer,
           SymphonyElixir.Codex.DynamicTool,
           SymphonyElixir.Codex.MessageHumanizer,

@@ -170,7 +170,7 @@ defmodule SymphonyElixir.DirectorLabels do
   defp escalate_labels(%{auto_review: %{acceptance_gate: %{escalate: %{labels: labels}}}}) when is_list(labels), do: labels
   defp escalate_labels(_settings), do: Escalate.built_in().labels
 
-  defp force_label(%{agent: %{force_label: label}}) when is_binary(label), do: label
+  defp force_label(%{execution: %{force_label: label}}) when is_binary(label), do: label
   defp force_label(_settings), do: "expedite"
 
   defp toggle(toggles, ticket, label, force_label) do

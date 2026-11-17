@@ -98,7 +98,7 @@ defmodule SymphonyElixir.TicketMovesTest do
   end
 
   test "force needs an open ticket that isn't forced; unforce one that is" do
-    force_label = Config.settings!().agent.force_label
+    force_label = Config.settings!().execution.force_label
 
     allowed(:force, %{})
     refused(:force, %{labels: [String.upcase(force_label)]}, "It is already forced.")

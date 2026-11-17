@@ -5,13 +5,13 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   require Logger
   alias SymphonyElixir.AgentCaches
-  alias SymphonyElixir.{AgentEnv, AgentMcp, AgentSandboxConfig, Config, DependencyGate, McpServer, PathSafety, SSH}
+  alias SymphonyElixir.{AgentEnv, AgentMcp, AgentSandboxConfig, Config, McpServer, PathSafety, SSH}
   alias SymphonyElixir.{AgentPriority, AgentProcesses}
+  alias SymphonyElixir.AgentProviders
   alias SymphonyElixir.ClaudeCode.{AppLaunchHook, McpConfig}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Config.Schema.Agent
-  alias SymphonyElixir.GitHub.Hosts
-  alias SymphonyElixir.OpenRouter
+  alias SymphonyElixir.Config.Schema.Execution
+  alias SymphonyElixir.Harnesses.{EventStream, ToolSession}
   alias SymphonyElixir.OpenRouter.Models, as: OpenRouterModels
   alias SymphonyElixir.ProjectGuidePrompt
   alias SymphonyElixir.Secret
@@ -24,15 +24,12 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   @port_line_bytes 1_048_576
   @symphony_mcp_server "symphony"
   @mcp_log_files_scanned 5
-  @diagnostic_output_line_count 5
-  @diagnostic_output_line_max_bytes 4_096
   # Grace window after a terminal `result`/`turn_completed`/`turn_failed` event
   # during which the loop keeps reading late bookkeeping output while the
   # Claude CLI shuts down. If the OS process never exits (e.g. a lingering tool
   # subprocess keeps it alive) we finalize the turn from the captured result
   # once the grace expires so the caller is not stuck waiting for the port
   # `exit_status`.
-  @post_completion_grace_default_ms 1_500
   @denied_commands ["Bash(gh:*)", "Bash(ghe:*)", "Bash(git push:*)", "Bash(git remote add:*)", "Bash(git remote set-url:*)"]
   @file_edit_tools ["Edit", "Write", "NotebookEdit"]
 
@@ -46,7 +43,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
           mcp_session: McpServer.session() | nil,
           mcp_remote_socket_path: Path.t() | nil,
           mcp_remote_shim_path: Path.t() | nil,
-          run_profile: SymphonyElixir.RunKind.profile() | nil,
+          run_profile: SymphonyElixir.Config.Runs.Run.t() | nil,
           extra_env: %{optional(String.t()) => String.t()}
         }
 
@@ -55,12 +52,11 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   @spec start_session(Path.t(), keyword()) :: {:ok, session()} | {:error, term()}
   def start_session(workspace, opts \\ []) do
     worker_host = Keyword.get(opts, :worker_host)
-    settings = settings_from_opts(opts)
     run_profile = Keyword.get(opts, :run_profile)
+    settings = opts |> settings_from_opts() |> Config.launch_settings(run_profile, "claude")
 
     with :ok <- check_provider(run_profile, worker_host),
          {:ok, run_profile} <- check_model_capabilities(run_profile, settings),
-         run_profile = put_small_model(run_profile, settings),
          {:ok, expanded_workspace} <- validate_workspace_cwd(workspace, worker_host, settings),
          {:ok, mcp_session, remote_socket_path, remote_shim_path} <-
            start_mcp_session(expanded_workspace, worker_host, opts),
@@ -82,10 +78,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   @spec run_turn(session(), String.t(), map(), keyword()) :: {:ok, map()} | {:error, term()}
   def run_turn(%{workspace: workspace, worker_host: worker_host} = session, prompt, issue, opts) do
     on_message = Keyword.get(opts, :on_message, fn _msg -> :ok end)
-    settings = settings_from_opts(opts)
-    command = settings.agent.command
-    turn_timeout_ms = settings.agent.turn_timeout_ms
-    command_timeout_ms = settings.agent.command_timeout_ms
+    settings = opts |> settings_from_opts() |> Config.launch_settings(Map.get(session, :run_profile), "claude")
+    command = settings.execution.command
+    turn_timeout_ms = settings.execution.turn_timeout_ms
+    command_timeout_ms = settings.execution.command_timeout_ms
 
     # Claude writes MCP server logs on the host it runs on.
     mcp_log_workspace = if is_nil(worker_host), do: workspace
@@ -93,7 +89,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     read_opts = [
       issue: issue,
       mcp_log_workspace: mcp_log_workspace,
-      provider: session |> Map.get(:run_profile) |> run_profile_provider()
+      provider: session |> Map.get(:run_profile) |> run_profile_provider(),
+      parse: &parse_event/1,
+      after_line: &check_symphony_mcp_server/2,
+      label: "Claude"
     ]
 
     # `claude -p` starts a new conversation each turn unless told which one to resume.
@@ -105,9 +104,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     with {:ok, prompt} <- ProjectGuidePrompt.append_to_prompt(prompt, workspace, settings, :claude),
          {:ok, port, prompt_cleanup_paths} <- start_port(workspace, command, prompt, worker_host, session) do
       try do
-        read_port_output(port, on_message, turn_timeout_ms, command_timeout_ms, read_opts)
+        EventStream.read(port, on_message, turn_timeout_ms, command_timeout_ms, read_opts)
       after
-        safe_close_port(port)
+        EventStream.close(port)
         remove_local_prompt_files(prompt_cleanup_paths)
       end
     end
@@ -135,9 +134,10 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   # --- Sandbox settings ---
 
   @doc false
-  @spec build_sandbox_settings(Agent.NetworkAccess.t(), [String.t()], [String.t()], [String.t()], [String.t()]) :: map()
+  @spec build_sandbox_settings(Execution.NetworkAccess.t(), [String.t()], [String.t()], [String.t()], [String.t()]) ::
+          map()
   def build_sandbox_settings(
-        %Agent.NetworkAccess{mode: mode} = network_access,
+        %Execution.NetworkAccess{mode: mode} = network_access,
         allow_read \\ [],
         allow_write \\ [],
         deny_write \\ [],
@@ -189,7 +189,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   # working directory from the shell. `unlocked_paths` are the protected paths a person's decision
   # unlocked for this run (`SymphonyElixir.PathUnlock`): neither the sandbox nor the file tools deny them.
   @doc false
-  @spec build_claude_settings(Agent.NetworkAccess.t(), [String.t()], [String.t()], [String.t()], keyword()) :: map()
+  @spec build_claude_settings(Execution.NetworkAccess.t(), [String.t()], [String.t()], [String.t()], keyword()) :: map()
   def build_claude_settings(network_access, allow_read_paths, allow_write_paths, deny_write_paths \\ [], opts \\ []) do
     unlocked_paths = Keyword.get(opts, :unlocked_paths, [])
 
@@ -470,7 +470,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       event: :usage_limited,
       timestamp: DateTime.utc_now(),
       usage_limit: info,
-      message: usage_limit_message(info)
+      message: EventStream.usage_limit_message(info)
     }
   end
 
@@ -612,30 +612,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   end
 
   defp start_mcp_session(workspace, worker_host, opts) do
-    issue = Keyword.get(opts, :issue)
-
-    context = %{
-      issue: issue,
-      issue_id: Keyword.get(opts, :issue_id),
-      workspace: workspace,
-      command_security: command_security_context(workspace, worker_host),
-      comment_registry: Keyword.get(opts, :linear_comment_registry),
-      tool_scope: Keyword.get(opts, :tool_scope),
-      tool_opts: tool_opts(opts),
-      dependency_gate: DependencyGate.build(workspace, issue, Keyword.get(opts, :settings), opts),
-      on_tool_call: Keyword.get(opts, :on_tool_call)
-    }
-
-    mcp_opts =
-      [
-        run_id: Keyword.get(opts, :run_id),
-        server: Keyword.get(opts, :mcp_server, McpServer),
-        shim_path: Keyword.get(opts, :mcp_shim_path),
-        worker_host: worker_host
-      ]
-      |> Enum.reject(fn {_key, value} -> is_nil(value) end)
-
-    case McpServer.start_session(context, mcp_opts) do
+    case ToolSession.start(workspace, worker_host, opts) do
       {:ok, mcp_session} ->
         case install_remote_shim(mcp_session, worker_host) do
           {:ok, remote_shim_path} ->
@@ -649,28 +626,6 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       {:error, reason} ->
         {:error, reason}
     end
-  end
-
-  defp tool_opts(opts) do
-    opts
-    |> Keyword.take([
-      :linear_client,
-      :upload_client,
-      :gh_runner,
-      :git_runner,
-      :settings,
-      :tool_scope,
-      :qa_driver,
-      :qa_android_driver,
-      :unlocked_paths,
-      :review_verdict_sink,
-      :qa_verdict_sink,
-      :repo_key,
-      :run_id,
-      :run_kind,
-      :run_profile,
-      :agent_tmp_dir
-    ])
   end
 
   defp install_remote_shim(_mcp_session, nil), do: {:ok, nil}
@@ -723,7 +678,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
   end
 
   defp write_claude_runtime_files(workspace, worker_host, settings, mcp_session, {socket_path, remote_shim_path}, session_opts) do
-    network_access = settings.agent.network_access
+    network_access = settings.execution.network_access
     allow_read_paths = workspace_sandbox_allow_read_paths(settings)
     allow_write_paths = workspace_sandbox_allow_write_paths(settings) ++ host_allow_write_paths(worker_host)
     effective_shim_path = effective_shim_path(mcp_session, remote_shim_path)
@@ -1080,11 +1035,15 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     verbose_args ++ ["--output-format", "stream-json", "--print"]
   end
 
-  # OpenRouter runs only start locally: the key is passed through the subprocess env, which an
-  # SSH worker does not get. Config rejects `openrouter` with `workers.ssh_hosts`; this guards
-  # direct callers.
-  defp check_provider(%{provider: "openrouter"}, worker_host) when is_binary(worker_host) do
-    {:error, {:openrouter_remote_worker_unsupported, worker_host}}
+  # A provider whose key reaches `claude` through the subprocess env only starts locally: an SSH
+  # worker does not get that env. Config rejects such a provider with `workers.ssh_hosts`; this
+  # guards direct callers.
+  defp check_provider(nil, _worker_host), do: :ok
+
+  defp check_provider(%{provider: provider} = profile, worker_host) when is_binary(worker_host) do
+    if AgentProviders.api_key_env(provider),
+      do: {:error, {:provider_remote_worker_unsupported, provider, worker_host}},
+      else: check_provider(profile, nil)
   end
 
   defp check_provider(profile, _worker_host) do
@@ -1102,7 +1061,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       {:ok, %{tools: false}} ->
         Logger.error(
           "OpenRouter run cannot start: model #{model} does not support tools run_kind=#{kind}; " <>
-            "set #{Config.openrouter_model_key(settings, kind)} to a model that lists tools"
+            "set #{Config.run_key(settings, kind, :model)} to a model that lists tools"
         )
 
         {:error, {:openrouter_model_unsupported, model, kind, :tools}}
@@ -1138,45 +1097,48 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp drop_unsupported_effort(profile), do: profile
 
-  # A set `agent.small_model` rides on an OpenRouter session's profile, so every turn of the
-  # session sends Claude Code's background calls to the model the session started with.
-  defp put_small_model(%{provider: "openrouter"} = profile, %Schema{agent: %{small_model: small_model}}) when is_binary(small_model),
-    do: Map.put(profile, :small_model, small_model)
+  # The env that points `claude` at the run's provider and models, read at each launch so the
+  # key never sits in the session. The small model serves claude's background calls (titles,
+  # summaries) on every provider. A provider other than Anthropic's own also gets its endpoint
+  # and key, and every model id `claude` can pick by itself (subagents, the alias defaults)
+  # points at the run's model, since that provider does not know Anthropic's ids.
+  defp provider_env(nil), do: {:ok, %{}}
 
-  defp put_small_model(profile, _settings), do: profile
+  defp provider_env(profile) do
+    provider = Map.get(profile, :provider)
+    small_model = small_model_env(Map.get(profile, :small_model))
 
-  # The env that points `claude` at the run's provider, read at each launch so the key never
-  # sits in the session. Anthropic runs add nothing. Every model id `claude` can pick on its own
-  # (subagents, the small fast model for background calls, the alias defaults) points at the
-  # profile's model, since OpenRouter does not know Anthropic's own ids; the Haiku and small fast
-  # ids point at `agent.small_model` instead when it is set. The base URL is openrouter.ai's
-  # outside QA mode (`OpenRouter.base_url/1`).
-  defp provider_env(%{provider: "openrouter"} = profile) do
-    case Config.openrouter_api_key() do
-      nil ->
-        kind = Map.get(profile, :kind)
-        Logger.error("OpenRouter run cannot start: #{Config.openrouter_api_key_env()} is not set run_kind=#{kind}")
-        {:error, {:missing_provider_env, Config.openrouter_api_key_env(), kind}}
-
-      api_key ->
-        model = Map.get(profile, :model)
-        small_model = Map.get(profile, :small_model) || model
-
-        {:ok,
-         %{
-           "ANTHROPIC_BASE_URL" => OpenRouter.base_url(),
-           "ANTHROPIC_AUTH_TOKEN" => Secret.unwrap(api_key),
-           "ANTHROPIC_API_KEY" => "",
-           "CLAUDE_CODE_SUBAGENT_MODEL" => model,
-           "ANTHROPIC_DEFAULT_HAIKU_MODEL" => small_model,
-           "ANTHROPIC_DEFAULT_SONNET_MODEL" => model,
-           "ANTHROPIC_DEFAULT_OPUS_MODEL" => model,
-           "ANTHROPIC_SMALL_FAST_MODEL" => small_model
-         }}
+    case AgentProviders.claude_base_url(provider) do
+      nil -> {:ok, small_model}
+      base_url -> provider_env(profile, provider, base_url, small_model)
     end
   end
 
-  defp provider_env(_profile), do: {:ok, %{}}
+  defp provider_env(profile, provider, base_url, small_model) do
+    case Config.provider_api_key(provider) do
+      nil ->
+        kind = Map.get(profile, :kind)
+        env = AgentProviders.api_key_env(provider)
+        Logger.error("#{AgentProviders.display_name(provider)} run cannot start: #{env} is not set run_kind=#{kind}")
+        {:error, {:missing_provider_env, env, kind}}
+
+      api_key ->
+        model = Map.get(profile, :model)
+
+        {:ok,
+         Map.merge(small_model, %{
+           "ANTHROPIC_BASE_URL" => base_url,
+           "ANTHROPIC_AUTH_TOKEN" => Secret.unwrap(api_key),
+           "ANTHROPIC_API_KEY" => "",
+           "CLAUDE_CODE_SUBAGENT_MODEL" => model,
+           "ANTHROPIC_DEFAULT_SONNET_MODEL" => model,
+           "ANTHROPIC_DEFAULT_OPUS_MODEL" => model
+         })}
+    end
+  end
+
+  defp small_model_env(nil), do: %{}
+  defp small_model_env(model), do: %{"ANTHROPIC_DEFAULT_HAIKU_MODEL" => model, "ANTHROPIC_SMALL_FAST_MODEL" => model}
 
   defp run_profile_args(%{run_profile: %{} = profile}) do
     flag_args("--model", Map.get(profile, :model)) ++ flag_args("--effort", Map.get(profile, :effort))
@@ -1339,243 +1301,8 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp mcp_reverse_forwards(_session), do: []
 
-  defp command_security_context(workspace, worker_host) do
-    origin_url = discover_origin_url(workspace, worker_host)
-
-    %{
-      origin_url: origin_url,
-      origin_repo: github_repo_from_url(origin_url),
-      origin_gh_repo: github_gh_repo_from_url(origin_url),
-      workspace: workspace,
-      worker_host: worker_host
-    }
-  end
-
-  defp discover_origin_url(workspace, nil) when is_binary(workspace) do
-    with git when is_binary(git) <- System.find_executable("git"),
-         {output, 0} <-
-           SymphonyElixir.Workspace.safe_git(git, ["-C", workspace, "remote", "get-url", "origin"]) do
-      output |> String.trim() |> blank_to_nil()
-    else
-      _result -> nil
-    end
-  end
-
-  defp discover_origin_url(_workspace, worker_host) when is_binary(worker_host), do: nil
-
-  defp github_repo_from_url(url) when is_binary(url) do
-    case github_repo_parts_from_url(url) do
-      {_host, owner, repo} -> "#{owner}/#{repo}"
-      nil -> nil
-    end
-  end
-
-  defp github_repo_from_url(_url), do: nil
-
-  defp github_gh_repo_from_url(url) when is_binary(url) do
-    case github_repo_parts_from_url(url) do
-      {"github.com", owner, repo} -> "#{owner}/#{repo}"
-      {host, owner, repo} when is_binary(host) -> "#{host}/#{owner}/#{repo}"
-      nil -> nil
-    end
-  end
-
-  defp github_gh_repo_from_url(_url), do: nil
-
-  defp github_repo_parts_from_url(url) when is_binary(url) do
-    Enum.find_value(
-      [
-        ~r{^https?://([^/]+)/([^/\s]+)/([^/\s]+?)(?:\.git)?/?$},
-        ~r{^ssh://[^@]+@([^/]+)/([^/\s]+)/([^/\s]+?)(?:\.git)?/?$},
-        ~r{^(?:[^@]+@)?([^/:]+):([^/\s]+)/([^/\s]+?)(?:\.git)?/?$},
-        ~r{^([^/\s:]*github[^/\s:]*)/([^/\s]+)/([^/\s]+?)(?:\.git)?/?$}
-      ],
-      fn regex ->
-        case Regex.run(regex, url) do
-          [_full, host, owner, repo] -> canonical_github_repo_parts(host, owner, repo)
-          _ -> nil
-        end
-      end
-    )
-  end
-
-  defp canonical_github_repo_parts(host, owner, repo) do
-    case Hosts.canonical_github_host(host) do
-      {:ok, canonical_host} -> {canonical_host, owner, repo}
-      :error -> nil
-    end
-  end
-
-  defp blank_to_nil(value) when is_binary(value) do
-    case String.trim(value) do
-      "" -> nil
-      present -> present
-    end
-  end
-
   defp ssh_module do
     Application.get_env(:symphony_elixir, :claude_code_ssh_module, SSH)
-  end
-
-  defp read_port_output(port, on_message, turn_timeout_ms, command_timeout_ms, opts) do
-    now = System.monotonic_time(:millisecond)
-
-    acc = %{
-      session_id: nil,
-      input_tokens: 0,
-      output_tokens: 0,
-      turn_failed: nil,
-      turn_completed: false,
-      diagnostic_output_lines: [],
-      mcp_servers_checked: false,
-      mcp_log_workspace: Keyword.get(opts, :mcp_log_workspace),
-      issue: Keyword.get(opts, :issue),
-      usage_limited: nil,
-      api_unreachable: nil,
-      provider: Keyword.get(opts, :provider, "anthropic"),
-      usage_windows: %{}
-    }
-
-    loop_state = %{
-      turn_deadline: now + turn_timeout_ms,
-      command_deadline: nil,
-      command_timeout_ms: command_timeout_ms,
-      active_tool_uses: 0,
-      pending_line: "",
-      post_completion_deadline: nil
-    }
-
-    read_loop(port, on_message, acc, loop_state)
-  end
-
-  defp read_loop(port, on_message, acc, loop_state) do
-    timeout = compute_read_timeout(loop_state)
-
-    receive do
-      {^port, {:data, {:eol, line}}} ->
-        handle_eol_line(port, on_message, acc, loop_state, line)
-
-      {^port, {:data, {:noeol, partial}}} ->
-        read_loop(port, on_message, acc, %{loop_state | pending_line: loop_state.pending_line <> partial})
-
-      {^port, {:exit_status, 0}} ->
-        finalize_read_result(acc)
-
-      {^port, {:exit_status, status}} ->
-        handle_nonzero_exit(acc, loop_state, status)
-    after
-      timeout ->
-        handle_read_loop_timeout(acc, loop_state)
-    end
-  end
-
-  defp compute_read_timeout(%{turn_deadline: turn_deadline, command_deadline: command_deadline, post_completion_deadline: post_completion_deadline}) do
-    now = System.monotonic_time(:millisecond)
-
-    [
-      max(1, turn_deadline - now),
-      command_deadline && max(1, command_deadline - now),
-      post_completion_deadline && max(1, post_completion_deadline - now)
-    ]
-    |> Enum.reject(&is_nil/1)
-    |> Enum.min()
-  end
-
-  defp handle_eol_line(port, on_message, acc, loop_state, line) do
-    full_line = loop_state.pending_line <> line
-    event = parse_event(full_line)
-
-    tracked_loop_state = update_command_tracking(loop_state, event)
-
-    new_acc =
-      event
-      |> apply_event(on_message, acc)
-      |> then(&check_symphony_mcp_server(full_line, &1))
-
-    new_loop_state = %{
-      tracked_loop_state
-      | pending_line: "",
-        post_completion_deadline: maybe_start_post_completion_grace(new_acc, loop_state.post_completion_deadline)
-    }
-
-    read_loop(port, on_message, new_acc, new_loop_state)
-  end
-
-  defp handle_nonzero_exit(acc, loop_state, status) do
-    if terminal_event_observed?(acc) do
-      Logger.info("Claude terminal result before non-zero exit status=#{status} session_id=#{inspect(Map.get(acc, :session_id))}")
-
-      finalize_read_result(acc)
-    else
-      case diagnostic_output_text(acc, loop_state) do
-        nil -> {:error, {:exit_status, status}}
-        output -> {:error, {:exit_status, status, %{stderr: output}}}
-      end
-    end
-  end
-
-  defp handle_read_loop_timeout(acc, %{turn_deadline: turn_deadline, post_completion_deadline: post_completion_deadline}) do
-    now = System.monotonic_time(:millisecond)
-
-    cond do
-      post_completion_deadline != nil and now >= post_completion_deadline ->
-        Logger.warning("Claude turn_completed_without_process_exit: finalizing turn after grace period session_id=#{inspect(Map.get(acc, :session_id))}")
-
-        finalize_read_result(acc)
-
-      now >= turn_deadline ->
-        {:error, :turn_timeout}
-
-      true ->
-        {:error, :command_timeout}
-    end
-  end
-
-  defp maybe_start_post_completion_grace(acc, nil) do
-    if terminal_event_observed?(acc) do
-      System.monotonic_time(:millisecond) + post_completion_grace_ms()
-    else
-      nil
-    end
-  end
-
-  defp maybe_start_post_completion_grace(_acc, deadline), do: deadline
-
-  defp terminal_event_observed?(acc) do
-    Map.get(acc, :turn_completed, false) or is_binary(Map.get(acc, :turn_failed))
-  end
-
-  defp post_completion_grace_ms do
-    case Application.get_env(:symphony_elixir, :claude_post_completion_grace_ms) do
-      ms when is_integer(ms) and ms >= 0 -> ms
-      _ -> @post_completion_grace_default_ms
-    end
-  end
-
-  defp finalize_read_result(%{usage_limited: %{} = info}), do: {:error, {:usage_limited, info}}
-  defp finalize_read_result(%{api_unreachable: %{} = info}), do: {:error, {:model_api_unreachable, info}}
-
-  defp finalize_read_result(%{turn_failed: reason}) when is_binary(reason) do
-    {:error, {:turn_failed, reason}}
-  end
-
-  defp finalize_read_result(%{turn_completed: false}) do
-    {:error, :no_result_event}
-  end
-
-  defp finalize_read_result(acc) do
-    {:ok,
-     acc
-     |> Map.delete(:turn_failed)
-     |> Map.delete(:turn_completed)
-     |> Map.delete(:diagnostic_output_lines)
-     |> Map.delete(:mcp_servers_checked)
-     |> Map.delete(:mcp_log_workspace)
-     |> Map.delete(:issue)
-     |> Map.delete(:usage_limited)
-     |> Map.delete(:api_unreachable)
-     |> Map.delete(:provider)
-     |> Map.delete(:usage_windows)}
   end
 
   defp check_symphony_mcp_server(line, %{mcp_servers_checked: false} = acc) do
@@ -1751,331 +1478,7 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp format_mcp_server_entry(server), do: inspect(server)
 
-  defp update_command_tracking(%{command_timeout_ms: timeout_ms} = loop_state, _event)
-       when timeout_ms <= 0 do
-    %{loop_state | active_tool_uses: 0, command_deadline: nil}
-  end
-
-  defp update_command_tracking(loop_state, event) do
-    now = System.monotonic_time(:millisecond)
-
-    {active_tool_uses, command_deadline} =
-      apply_command_tracking_event(
-        event,
-        loop_state.active_tool_uses,
-        loop_state.command_deadline,
-        loop_state.command_timeout_ms,
-        now
-      )
-
-    %{loop_state | active_tool_uses: active_tool_uses, command_deadline: command_deadline}
-  end
-
-  defp apply_command_tracking_event({:multi, events}, active_tool_uses, command_deadline, timeout_ms, now)
-       when is_list(events) do
-    Enum.reduce(events, {active_tool_uses, command_deadline}, fn event, {active, deadline} ->
-      apply_command_tracking_event(event, active, deadline, timeout_ms, now)
-    end)
-  end
-
-  defp apply_command_tracking_event({:tool_use, _}, active_tool_uses, _command_deadline, timeout_ms, now) do
-    {active_tool_uses + 1, now + timeout_ms}
-  end
-
-  defp apply_command_tracking_event({:tool_result, _}, active_tool_uses, command_deadline, _timeout_ms, _now) do
-    active_tool_uses = max(active_tool_uses - 1, 0)
-    command_deadline = if active_tool_uses == 0, do: nil, else: command_deadline
-
-    {active_tool_uses, command_deadline}
-  end
-
-  defp apply_command_tracking_event({:turn_completed, _}, _active_tool_uses, _command_deadline, _timeout_ms, _now),
-    do: {0, nil}
-
-  defp apply_command_tracking_event({:turn_failed, _}, _active_tool_uses, _command_deadline, _timeout_ms, _now),
-    do: {0, nil}
-
-  defp apply_command_tracking_event({:usage_limited, _info}, _active_tool_uses, _command_deadline, _timeout_ms, _now),
-    do: {0, nil}
-
-  defp apply_command_tracking_event({:api_unreachable, _info}, _active_tool_uses, _command_deadline, _timeout_ms, _now),
-    do: {0, nil}
-
-  defp apply_command_tracking_event(
-         {:rate_limited, _info, _reason},
-         _active_tool_uses,
-         _command_deadline,
-         _timeout_ms,
-         _now
-       ),
-       do: {0, nil}
-
-  defp apply_command_tracking_event(_event, active_tool_uses, command_deadline, _timeout_ms, _now),
-    do: {active_tool_uses, command_deadline}
-
-  defp apply_event({:multi, events}, on_message, acc) when is_list(events) do
-    Enum.reduce(events, acc, fn child, acc -> apply_event(child, on_message, acc) end)
-  end
-
-  defp apply_event({:session_started, session_id}, on_message, acc) do
-    on_message.({:session_started, session_id})
-    %{acc | session_id: session_id}
-  end
-
-  defp apply_event({:turn_completed, result}, on_message, acc) do
-    on_message.({:turn_completed, result})
-    acc |> Map.merge(result) |> Map.put(:turn_completed, true)
-  end
-
-  defp apply_event({:token_usage_delta, delta}, on_message, acc) do
-    uncached_input =
-      Map.get(acc, :uncached_input_tokens, Map.get(acc, :input_tokens, 0)) +
-        Map.get(delta, :uncached_input_tokens, Map.get(delta, :input_tokens, 0))
-
-    output = Map.get(acc, :output_tokens, 0) + Map.get(delta, :output_tokens, 0)
-    cached = Map.get(acc, :cached_input_tokens, 0) + Map.get(delta, :cached_input_tokens, 0)
-
-    cache_creation =
-      Map.get(acc, :cache_creation_input_tokens, 0) + Map.get(delta, :cache_creation_input_tokens, 0)
-
-    cumulative = %{
-      input_tokens: uncached_input + cached + cache_creation,
-      uncached_input_tokens: uncached_input,
-      cached_input_tokens: cached,
-      cache_creation_input_tokens: cache_creation,
-      output_tokens: output,
-      total_tokens: uncached_input + cached + cache_creation + output
-    }
-
-    on_message.({:token_usage, cumulative})
-
-    acc
-    |> Map.put(:input_tokens, uncached_input + cached + cache_creation)
-    |> Map.put(:uncached_input_tokens, uncached_input)
-    |> Map.put(:output_tokens, output)
-    |> Map.put(:cached_input_tokens, cached)
-    |> Map.put(:cache_creation_input_tokens, cache_creation)
-  end
-
-  defp apply_event({:turn_failed, reason}, on_message, acc) do
-    on_message.({:turn_failed, reason})
-    %{acc | turn_failed: reason}
-  end
-
-  defp apply_event({:rate_limited, info, reason}, on_message, acc) do
-    on_message.({:rate_limited, info})
-    on_message.({:turn_failed, reason})
-    %{acc | turn_failed: reason}
-  end
-
-  # A rejection from the `rate_limit_event` wins over the result text that follows it:
-  # only the event carries the window and the epoch reset time.
-  defp apply_event({:usage_limited, info}, on_message, acc) do
-    info =
-      case acc.usage_limited do
-        %{source: :rate_limit_event} = earlier -> earlier
-        _none_or_fallback -> info
-      end
-
-    reason = usage_limit_message(info)
-    on_message.({:usage_limited, info})
-    on_message.({:turn_failed, reason})
-    %{acc | usage_limited: info, turn_failed: reason}
-  end
-
-  defp apply_event({:api_unreachable, info}, on_message, acc) do
-    info = %{info | provider: acc.provider}
-    reason = "model API unreachable (#{info.error})"
-    on_message.({:turn_failed, reason})
-    %{acc | api_unreachable: info, turn_failed: reason}
-  end
-
-  defp apply_event({:usage_window, message, %{window: window} = usage_window}, on_message, acc) do
-    windows = Map.put(acc.usage_windows, window, Map.take(usage_window, [:status, :resets_at, :utilization]))
-    on_message.({:usage_window, message, windows})
-    %{acc | usage_windows: windows}
-  end
-
-  defp apply_event({:rate_limit_info, info}, _on_message, acc) do
-    Logger.warning("Claude rate_limit_event not allowed #{issue_log_context(acc.issue)} session_id=#{inspect(acc.session_id)} rate_limit_info=#{inspect(info)}")
-
-    acc
-  end
-
-  # Claude Code sends one every few seconds while a tool runs. It is forwarded so a long tool
-  # call (a full test suite) counts as activity for the orchestrator's no-progress watchdog.
-  defp apply_event({:tool_progress, _tool_name} = event, on_message, acc) do
-    on_message.(event)
-    acc
-  end
-
-  defp apply_event({:malformed, raw}, _on_message, acc) do
-    Logger.debug("ClaudeCode unparseable line: #{inspect(raw)}")
-    record_diagnostic_output(acc, raw)
-  end
-
-  defp apply_event({kind, _payload} = event, on_message, acc)
-       when kind in [:tool_use, :tool_result, :notification, :agent_text] do
-    on_message.(event)
-    acc
-  end
-
-  defp record_diagnostic_output(acc, raw) when is_binary(raw) do
-    line = normalize_diagnostic_output_line(raw)
-
-    if line == "" do
-      acc
-    else
-      lines =
-        acc
-        |> Map.get(:diagnostic_output_lines, [])
-        |> Kernel.++([line])
-        |> Enum.take(-@diagnostic_output_line_count)
-
-      Map.put(acc, :diagnostic_output_lines, lines)
-    end
-  end
-
-  defp diagnostic_output_text(acc, loop_state) do
-    pending_line = normalize_diagnostic_output_line(Map.get(loop_state, :pending_line, ""))
-
-    lines =
-      acc
-      |> Map.get(:diagnostic_output_lines, [])
-      |> maybe_append_pending_diagnostic_line(pending_line)
-      |> Enum.take(-@diagnostic_output_line_count)
-
-    case Enum.join(lines, "\n") do
-      "" -> nil
-      text -> text
-    end
-  end
-
-  defp maybe_append_pending_diagnostic_line(lines, ""), do: lines
-  defp maybe_append_pending_diagnostic_line(lines, pending_line), do: lines ++ [pending_line]
-
-  defp normalize_diagnostic_output_line(raw) when is_binary(raw) do
-    raw
-    |> strip_ansi()
-    |> String.trim()
-    |> truncate_diagnostic_output_line()
-  end
-
-  defp truncate_diagnostic_output_line(line) when byte_size(line) <= @diagnostic_output_line_max_bytes, do: line
-
-  defp truncate_diagnostic_output_line(line) do
-    truncated = binary_part(line, 0, @diagnostic_output_line_max_bytes)
-
-    if String.valid?(truncated) do
-      truncated
-    else
-      truncate_valid_utf8_prefix(line, @diagnostic_output_line_max_bytes - 1)
-    end
-  end
-
-  defp truncate_valid_utf8_prefix(_line, byte_count) when byte_count <= 0, do: ""
-
-  defp truncate_valid_utf8_prefix(line, byte_count) do
-    truncated = binary_part(line, 0, byte_count)
-
-    if String.valid?(truncated) do
-      truncated
-    else
-      truncate_valid_utf8_prefix(line, byte_count - 1)
-    end
-  end
-
-  defp strip_ansi(text) when is_binary(text), do: String.replace(text, ~r/\x1b\[[0-9;]*m/, "")
-
-  @doc false
-  @spec safe_close_port(port()) :: :ok
-  def safe_close_port(port) do
-    terminate_port_descendants(port)
-    Port.close(port)
-    :ok
-  rescue
-    # Killing descendants can make the CLI exit, and the port can close at
-    # any moment after a turn timeout. A closed port is a finished turn.
-    ArgumentError -> :ok
-  end
-
-  # Send SIGKILL to descendants of the port's OS process before closing the
-  # port. Port.close only signals the immediate child, so tool subprocesses
-  # spawned by Claude (e.g. a long-running bash loop) would otherwise be
-  # reparented to init and keep running.
-  defp terminate_port_descendants(port) do
-    with {:os_pid, os_pid} when is_integer(os_pid) and os_pid > 0 <-
-           safe_port_info(port, :os_pid) do
-      os_pid
-      |> collect_descendant_pids([])
-      |> Enum.uniq()
-      |> Enum.each(&kill_pid/1)
-    end
-
-    :ok
-  rescue
-    exception ->
-      Logger.debug("Claude port descendant cleanup raised: #{Exception.message(exception)}")
-      :ok
-  end
-
-  defp safe_port_info(port, key) do
-    Port.info(port, key)
-  rescue
-    _ -> nil
-  end
-
-  defp collect_descendant_pids(pid, acc) when is_integer(pid) and pid > 0 do
-    case pgrep_children(pid) do
-      [] ->
-        acc
-
-      children ->
-        Enum.reduce(children, acc, fn child_pid, acc ->
-          collect_descendant_pids(child_pid, [child_pid | acc])
-        end)
-    end
-  end
-
-  defp collect_descendant_pids(_pid, acc), do: acc
-
-  defp pgrep_children(pid) when is_integer(pid) do
-    case System.find_executable("pgrep") do
-      nil -> []
-      pgrep -> run_pgrep_children(pgrep, pid)
-    end
-  rescue
-    _ -> []
-  end
-
-  defp run_pgrep_children(pgrep, pid) do
-    case System.cmd(pgrep, ["-P", to_string(pid)], stderr_to_stdout: true) do
-      {output, status} when status in [0, 1] -> parse_pgrep_output(output)
-      _ -> []
-    end
-  end
-
-  defp parse_pgrep_output(output) do
-    output
-    |> String.split(["\n", " ", "\t"], trim: true)
-    |> Enum.flat_map(&parse_pgrep_pid_token/1)
-  end
-
-  defp parse_pgrep_pid_token(token) do
-    case Integer.parse(token) do
-      {child_pid, ""} when child_pid > 0 -> [child_pid]
-      _ -> []
-    end
-  end
-
-  defp kill_pid(pid) when is_integer(pid) and pid > 0 do
-    _ = System.cmd("kill", ["-KILL", to_string(pid)], stderr_to_stdout: true)
-    :ok
-  rescue
-    _ -> :ok
-  end
-
-  defp effective_allowed_domains(%Agent.NetworkAccess{
+  defp effective_allowed_domains(%Execution.NetworkAccess{
          allowed_domains: extra,
          denied_domains: denied
        }) do
@@ -2385,11 +1788,6 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
     date
     |> DateTime.new!(time)
     |> DateTime.add(-offset_seconds)
-  end
-
-  defp usage_limit_message(%{window: window, resets_at: resets_at}) do
-    reset = if resets_at, do: " resets_at=#{DateTime.to_iso8601(resets_at)}", else: ""
-    "usage_limited #{window || "unknown"}#{reset}"
   end
 
   defp issue_log_context(issue) when is_map(issue),

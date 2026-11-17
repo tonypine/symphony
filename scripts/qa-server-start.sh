@@ -60,9 +60,12 @@ repositories:
       team: QA
 workspaces:
   root: $root/workspaces
-agent:
-  runtime: codex
-  command: "false"
+execution:
+  harnesses:
+    codex:
+      command: "false"
+runs:
+  default: { harness: codex, provider: openai, model: none }
 YAML
 
 cd "$repo"

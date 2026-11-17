@@ -112,7 +112,7 @@ defmodule SymphonyElixir.Lifecycle do
     %{
       now: now,
       terminal_states: settings.tracker.terminal_states,
-      token_cap: settings.agent.max_tokens_per_issue,
+      token_cap: settings.execution.max_tokens_per_issue,
       phase_names: %{code_review: settings.tracker.code_review_state, qa: settings.tracker.qa_state, ci_fix: CiFix.state(settings)}
     }
   end

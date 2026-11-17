@@ -103,11 +103,11 @@ defmodule SymphonyElixir.Codex.McpConfig do
     end
   end
 
-  @spec inherited_server_blocks(Path.t(), Schema.Agent.Mcp.t(), MapSet.t(String.t())) ::
+  @spec inherited_server_blocks(Path.t(), Schema.Execution.Mcp.t(), MapSet.t(String.t())) ::
           {:ok, [String.t()]} | {:error, term()}
-  def inherited_server_blocks(_host_codex_home, %Schema.Agent.Mcp{inherit: "none"}, _declared_names), do: {:ok, []}
+  def inherited_server_blocks(_host_codex_home, %Schema.Execution.Mcp{inherit: "none"}, _declared_names), do: {:ok, []}
 
-  def inherited_server_blocks(host_codex_home, %Schema.Agent.Mcp{} = mcp, declared_names) when is_binary(host_codex_home) do
+  def inherited_server_blocks(host_codex_home, %Schema.Execution.Mcp{} = mcp, declared_names) when is_binary(host_codex_home) do
     config_path = Path.join(host_codex_home, "config.toml")
 
     case File.read(config_path) do
@@ -147,8 +147,8 @@ defmodule SymphonyElixir.Codex.McpConfig do
     |> Map.to_list()
   end
 
-  defp agent_mcp(%Schema{agent: %{mcp: %Schema.Agent.Mcp{} = mcp}}), do: mcp
-  defp agent_mcp(_settings), do: %Schema.Agent.Mcp{}
+  defp agent_mcp(%Schema{execution: %{mcp: %Schema.Execution.Mcp{} = mcp}}), do: mcp
+  defp agent_mcp(_settings), do: %Schema.Execution.Mcp{}
 
   defp host_codex_home do
     home = System.get_env("HOME") || System.user_home!()
@@ -228,12 +228,12 @@ defmodule SymphonyElixir.Codex.McpConfig do
     end
   end
 
-  @spec inherited_allowed_names(Schema.Agent.Mcp.t()) :: MapSet.t(String.t()) | nil
-  defp inherited_allowed_names(%Schema.Agent.Mcp{inherit: "allowlist", allowed_servers: allowed_servers}) do
+  @spec inherited_allowed_names(Schema.Execution.Mcp.t()) :: MapSet.t(String.t()) | nil
+  defp inherited_allowed_names(%Schema.Execution.Mcp{inherit: "allowlist", allowed_servers: allowed_servers}) do
     MapSet.new(allowed_servers || [])
   end
 
-  defp inherited_allowed_names(%Schema.Agent.Mcp{inherit: "all"}), do: nil
+  defp inherited_allowed_names(%Schema.Execution.Mcp{inherit: "all"}), do: nil
   defp inherited_allowed_names(_mcp), do: MapSet.new()
 
   @spec inherited_server_allowed?(MapSet.t(String.t()) | nil, String.t()) :: boolean()

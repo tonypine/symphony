@@ -19,8 +19,9 @@ defmodule SymphonyElixir.Config.Migration do
 
   alias SymphonyElixir.BuildInfo
   alias SymphonyElixir.Config.{LineEditor, SystemSchema}
+  alias SymphonyElixir.Config.Migration.{Lines, RunsMove, RunsRewrite}
 
-  @type error :: {:not_migrated, [{String.t(), pos_integer() | nil}]} | File.posix()
+  @type error :: {:not_migrated, [{String.t(), pos_integer() | nil}]} | {:runs_not_moved, String.t()} | File.posix()
 
   @rename_defaults %{drop_children: [], why: nil}
   @migrations [
@@ -52,8 +53,6 @@ defmodule SymphonyElixir.Config.Migration do
     })
   ]
 
-  @key_line ~r/\A( *)((?:- +)?)([A-Za-z0-9_][A-Za-z0-9_\-]*):(?:\s.*)?\z/
-
   @doc "The table as `symphony config migrations` prints it, for the release's `version.json`."
   @spec migrations_json() :: String.t()
   def migrations_json do
@@ -71,7 +70,23 @@ defmodule SymphonyElixir.Config.Migration do
   def plan(text, backup) when is_binary(text) and is_binary(backup) do
     case read_map(text) do
       nil -> {:ok, text, []}
-      document -> plan_document(text, document, backup)
+      document -> text |> plan_document(document, backup) |> move_runs(backup)
+    end
+  end
+
+  # After the table's renames, a file that still has the `agent` section has it moved to
+  # `execution` and `runs` (`RunsRewrite`).
+  defp move_runs({:ok, text, notes}, backup) do
+    # The table's stage only returns a text that still reads as a map.
+    %{} = document = read_map(text)
+    if RunsMove.needed?(document), do: move_runs(text, document, notes, backup), else: {:ok, text, notes}
+  end
+
+  defp move_runs({:error, _reason} = error, _backup), do: error
+
+  defp move_runs(text, document, notes, backup) do
+    with {:ok, moved, moved_notes} <- RunsRewrite.plan(text, document, backup, BuildInfo.current().version) do
+      {:ok, moved, notes ++ moved_notes}
     end
   end
 
@@ -111,7 +126,7 @@ defmodule SymphonyElixir.Config.Migration do
          %{} = document <- read_map(text),
          {:ok, original_text} <- File.read(original),
          [_ | _] = keys <- SystemSchema.refused_keys(document) do
-      lines = original_text |> String.split("\n") |> key_entries() |> Map.new(&{&1.path, &1.index + 1})
+      lines = original_text |> String.split("\n") |> Lines.key_entries() |> Map.new(&{&1.path, &1.index + 1})
       " Lines it can't read: " <> Enum.map_join(keys, ", ", &spot(&1, Map.get(lines, &1))) <> "."
     else
       _nothing_to_name -> ""
@@ -124,6 +139,8 @@ defmodule SymphonyElixir.Config.Migration do
     "Lines it can't rewrite: #{Enum.map_join(keys, ", ", fn {key, line} -> spot(key, line) end)}. " <>
       "Write each of those keys as an indented block, on a line of its own"
   end
+
+  def format_error({:runs_not_moved, message}), do: "The `agent` section moved to `execution` and `runs`, and this file can't be moved as it is: #{message}"
 
   def format_error(reason), do: "couldn't write the migrated file: #{:file.format_error(reason)}"
 
@@ -164,12 +181,12 @@ defmodule SymphonyElixir.Config.Migration do
 
   defp plan_document(text, document, backup) do
     lines = String.split(text, "\n")
-    entries = key_entries(lines)
+    entries = Lines.key_entries(lines)
     matches = for migration <- @migrations, entry <- entries, entry.path == migration.key, do: {migration, entry}
 
     edits = Enum.flat_map(matches, fn {migration, entry} -> edits(migration, entry, entries, lines, backup) end)
     edits = edits ++ emptied_parents(matches, entries, lines)
-    migrated = lines |> apply_edits(edits) |> Enum.join("\n")
+    migrated = lines |> Lines.apply_edits(edits) |> Enum.join("\n")
     notes = matches |> Enum.map(fn {migration, entry} -> note(migration, target_set?(migration, entry, entries)) end) |> Enum.uniq()
 
     verify(document, migrated, notes, entries)
@@ -213,14 +230,14 @@ defmodule SymphonyElixir.Config.Migration do
     comment = comment(migration, entry, entries, backup)
 
     if migration.to == nil or target_set?(migration, entry, entries) do
-      [{entry.index, block_length(lines, entry), [comment]}]
+      [{entry.index, Lines.block_length(lines, entry), [comment]}]
     else
       renamed = String.replace(Enum.at(lines, entry.index), entry.name <> ":", migration.to <> ":", global: false)
       children = Enum.filter(entries, &(&1.parent == entry.index))
       {dropped, kept} = Enum.split_with(children, &(&1.name in migration.drop_children))
       renamed = if dropped != [] and kept == [], do: empty_map_line(renamed, migration.to), else: renamed
 
-      [{entry.index, 1, [comment, renamed]} | Enum.map(dropped, &{&1.index, block_length(lines, &1), []})]
+      [{entry.index, 1, [comment, renamed]} | Enum.map(dropped, &{&1.index, Lines.block_length(lines, &1), []})]
     end
   end
 
@@ -248,15 +265,6 @@ defmodule SymphonyElixir.Config.Migration do
     end
   end
 
-  # From the last line up, so each edit's index still holds.
-  defp apply_edits(lines, edits) do
-    edits
-    |> Enum.sort_by(fn {index, _remove, _insert} -> index end, :desc)
-    |> Enum.reduce(lines, fn {index, remove, insert}, lines ->
-      Enum.take(lines, index) ++ insert ++ Enum.drop(lines, index + remove)
-    end)
-  end
-
   defp comment(migration, entry, entries, backup) do
     note = note(migration, target_set?(migration, entry, entries))
     String.duplicate(" ", entry.column) <> "# Symphony: #{note} (#{migration.ticket}). The file as it was: #{backup}."
@@ -276,62 +284,6 @@ defmodule SymphonyElixir.Config.Migration do
 
   defp target_set?(migration, entry, entries) do
     Enum.any?(entries, &(&1.parent == entry.parent and &1.name == migration.to))
-  end
-
-  # A block runs to its last line of content, so a comment or a blank line after it stays.
-  defp block_length(lines, entry) do
-    lines
-    |> Enum.drop(entry.index + 1)
-    |> Enum.take_while(&(not content?(&1) or inside_block?(&1, entry.column)))
-    |> Enum.reverse()
-    |> Enum.drop_while(&(not content?(&1)))
-    |> length()
-    |> Kernel.+(1)
-  end
-
-  defp content?(line) do
-    trimmed = String.trim(line)
-    trimmed != "" and not String.starts_with?(trimmed, "#")
-  end
-
-  defp inside_block?(line, column) do
-    indent = String.length(line) - String.length(String.trim_leading(line, " "))
-    indent > column or (indent == column and String.starts_with?(String.trim_leading(line, " "), "- "))
-  end
-
-  # Every key line, with its dotted path (`repositories[].agent.model`) and the line that opens the
-  # block it sits in: a key's, or a list item's, so two items' keys of one name stay apart.
-  defp key_entries(lines) do
-    root = %{column: -1, path: "", index: -1, item?: false}
-
-    {_stack, entries} =
-      lines
-      |> Enum.with_index()
-      |> Enum.reduce({[root], []}, fn {line, index}, {stack, entries} ->
-        case Regex.run(@key_line, line) do
-          [_line, spaces, dash, name] -> key_entry({String.length(spaces), dash, name}, index, stack, entries)
-          nil -> {stack, entries}
-        end
-      end)
-
-    Enum.reverse(entries)
-  end
-
-  defp key_entry({spaces, dash, name}, index, stack, entries) do
-    stack = if dash == "", do: stack, else: open_item(stack, spaces, index)
-    column = spaces + String.length(dash)
-    stack = Enum.drop_while(stack, &(&1.column >= column))
-    [parent | _rest] = stack
-    path = if parent.path == "", do: name, else: parent.path <> "." <> name
-    frame = %{column: column, path: path, index: index, item?: false}
-
-    {[frame | stack], [%{index: index, column: column, name: name, path: path, parent: parent.index} | entries]}
-  end
-
-  # A list item sits under the key at the dash's column or left of it.
-  defp open_item(stack, spaces, index) do
-    [parent | _rest] = stack = Enum.drop_while(stack, &(&1.column > spaces or (&1.item? and &1.column == spaces)))
-    [%{column: spaces, path: parent.path <> "[]", index: index, item?: true} | stack]
   end
 
   defp read_map(text) do

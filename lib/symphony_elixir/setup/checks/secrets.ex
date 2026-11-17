@@ -6,8 +6,9 @@ defmodule SymphonyElixir.Setup.Checks.Secrets do
 
     * The Linear API key (`issues.linear.api_key`, else `LINEAR_API_KEY`). Without it Setup also
       lists the Linear-side checks under `not_checked` (`linear_api_key?/0`).
-    * `OPENROUTER_API_KEY`, when a run kind's profile resolves to `openrouter`. The model checks
-      stay in `symphony check`.
+    * A provider's API key (`OPENROUTER_API_KEY`, `OPENCODE_API_KEY`), when a run kind resolves
+      to that provider (`SymphonyElixir.AgentProviders.api_key_env/1`). The model checks stay in
+      `symphony check`.
     * Each whole-value `$NAME` reference in `symphony.yml` whose variable is unset or empty: an MCP server's
       `env` and `headers`, a notification channel's `url`, `webhook_url` and `headers`, and
       `github.webhooks.secret` (only while no handed-off secret file stands in for it). An MCP
@@ -18,7 +19,7 @@ defmodule SymphonyElixir.Setup.Checks.Secrets do
 
   @behaviour SymphonyElixir.Setup.Check
 
-  alias SymphonyElixir.{Config, Paths, Secret}
+  alias SymphonyElixir.{AgentProviders, Config, Harnesses, Paths, Secret}
   alias SymphonyElixir.Config.Cache
   alias SymphonyElixir.GitHub.PullRequest
   alias SymphonyElixir.Setup.Problem
@@ -47,7 +48,8 @@ defmodule SymphonyElixir.Setup.Checks.Secrets do
 
   def run(context) do
     raw = raw_symphony(context.symphony_path)
-    linear_problems(raw) ++ openrouter_problems(context.system) ++ reference_problems(raw) ++ github_problems(context.system)
+
+    linear_problems(raw) ++ provider_key_problems(context.system) ++ reference_problems(raw) ++ github_problems(context.system)
   end
 
   defp linear_key do
@@ -78,14 +80,22 @@ defmodule SymphonyElixir.Setup.Checks.Secrets do
     end
   end
 
-  defp openrouter_problems(system) do
-    uses =
-      for repo <- system.repos, {:ok, settings} <- [Config.settings_for_repo(repo.name)], kind <- Config.openrouter_run_kinds(settings), do: {repo.name, kind}
+  # One problem per provider whose key is unset while a run kind resolves to it.
+  defp provider_key_problems(system) do
+    for provider <- Harnesses.all_providers(),
+        env = AgentProviders.api_key_env(provider),
+        problem <- provider_key_problem(system, provider, env) do
+      problem
+    end
+  end
 
-    if uses == [] or not is_nil(Config.openrouter_api_key()) do
+  defp provider_key_problem(system, provider, env) do
+    uses =
+      for repo <- system.repos, {:ok, settings} <- [Config.settings_for_repo(repo.name)], kind <- Config.run_kinds_on(settings, provider), do: {repo.name, kind}
+
+    if uses == [] or not is_nil(Config.provider_api_key(provider)) do
       []
     else
-      env = Config.openrouter_api_key_env()
       kinds = uses |> Enum.map(&elem(&1, 1)) |> Enum.uniq() |> Enum.join(", ")
 
       [
@@ -94,7 +104,7 @@ defmodule SymphonyElixir.Setup.Checks.Secrets do
           severity: :error,
           category: :secrets,
           title: "#{env} is not set",
-          consequence: "Runs that use OpenRouter fail to start: #{kinds}.",
+          consequence: "Runs that use #{AgentProviders.display_name(provider)} fail to start: #{kinds}.",
           repos: uses |> Enum.map(&elem(&1, 0)) |> Enum.uniq(),
           details: [Variable: env, "Run kinds": kinds],
           fix: Problem.open(:settings)
@@ -120,12 +130,12 @@ defmodule SymphonyElixir.Setup.Checks.Secrets do
   end
 
   defp mcp_references(raw) do
-    for {server, declaration} <- sorted_map(get_in(raw, ["agent", "mcp", "servers"])),
+    for {server, declaration} <- sorted_map(get_in(raw, ["execution", "mcp", "servers"])),
         {field, what} <- [{"env", "#{server} MCP server starts"}, {"headers", "#{server} MCP server is called"}],
         {key, value} <- sorted_map(declaration[field]),
         name = env_reference(value),
         name != nil do
-      {"agent.mcp.servers.#{server}.#{field}.#{key}", name, "The #{what} without a value for #{key}, so its calls may fail."}
+      {"execution.mcp.servers.#{server}.#{field}.#{key}", name, "The #{what} without a value for #{key}, so its calls may fail."}
     end
   end
 

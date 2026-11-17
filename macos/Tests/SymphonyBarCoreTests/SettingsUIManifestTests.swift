@@ -4,19 +4,10 @@ import XCTest
 /// `SettingsUIManifest` lists exactly the `symphony.yml` keys the line editors write, so
 /// `mix settings.ui_coverage` neither misses a key the app edits nor counts one it doesn't.
 final class SettingsUIManifestTests: XCTestCase {
-    /// Commands with `--model` / `--effort` and section keys, so saving models moves them as the app does.
     private let config = """
         # Symphony operator config.
-        agent:
-          command: claude --model claude-opus-5-5 --effort high  # flags
         code_review:
-          command: claude --model claude-haiku-4-5-20251001 --effort low
-          model: claude-haiku-4-5-20251001
-          effort: low
-        auto_review:
-          command: claude --model claude-sonnet-5-5 --effort medium
-          model: claude-sonnet-5-5
-          effort: medium
+          enabled: true
         repositories:
           - key: web
             workflow: WORKFLOW.md
@@ -64,10 +55,18 @@ final class SettingsUIManifestTests: XCTestCase {
         changed.ticketPatternsBuiltIn = false
         yaml = try record("updating a repository", { try RepositoriesConfig.updating("api", to: changed, in: $0) }, from: yaml)
 
-        let every = RunProfile(model: "claude-opus-5-5", effort: "max", provider: "anthropic")
-        let profiles = RunProfiles(defaults: every, kinds: Dictionary(uniqueKeysWithValues: RunKind.allCases.map { ($0, every) }))
+        let every = RunProfile(model: "claude-opus-5-5", effort: "max", provider: "anthropic", harness: "claude", smallModel: "x/y")
+        var kind = every
+        kind.command = "claude --verbose"
+        let profiles = RunProfiles(defaults: every, kinds: Dictionary(uniqueKeysWithValues: RunKind.allCases.map { ($0, kind) }))
+        let harnesses = Dictionary(uniqueKeysWithValues: Harness.allCases.map { harness in
+            (harness, HarnessSettings(
+                command: harness.rawValue,
+                smallModels: Dictionary(uniqueKeysWithValues: harness.providers.map { ($0, "x/y") })
+            ))
+        })
         let old = try RunProfilesConfig.scopedProfiles(in: yaml)
-        let new = ScopedRunProfiles(global: profiles, repositories: ["web": profiles, "api": profiles], smallModel: "x/y")
+        let new = ScopedRunProfiles(global: profiles, repositories: ["web": profiles, "api": profiles], harnesses: harnesses)
         yaml = try record("saving models", { try RunProfilesConfig.updating($0, from: old, to: new) }, from: yaml)
         yaml = try record("clearing models", { try RunProfilesConfig.updating($0, from: new, to: ScopedRunProfiles()) }, from: yaml)
 
@@ -157,9 +156,10 @@ final class SettingsUIManifestTests: XCTestCase {
 
     func testReadsKeyPathsOfBlockMappingsListsAndFlowValues() {
         let yaml = """
-            agent:  # comment
-              run_profiles:
-                qa: { model: x }
+            runs:  # comment
+              qa: { model: x }
+              landing:
+                effort: low
             repositories:
             - key: web
               route:
@@ -167,7 +167,7 @@ final class SettingsUIManifestTests: XCTestCase {
                   - backend
             """
         XCTAssertEqual(keyLines(yaml).map(\.path), [
-            "agent", "agent.run_profiles", "agent.run_profiles.qa",
+            "runs", "runs.qa", "runs.landing", "runs.landing.effort",
             "repositories", "repositories[].key", "repositories[].route", "repositories[].route.labels",
             "repositories[].route.labels",
         ])
@@ -175,8 +175,8 @@ final class SettingsUIManifestTests: XCTestCase {
 
     // MARK: Helpers
 
-    /// Whether `path` is a listed key, a key under a listed free-form map (`agent.run_profiles.qa`) or in an item of
-    /// a listed list (`phases.qa.steps[].id`), or a section holding a listed key (`agent.limits`).
+    /// Whether `path` is a listed key, a key under a listed free-form map (`runs.qa`) or in an item of
+    /// a listed list (`phases.qa.steps[].id`), or a section holding a listed key (`execution.limits`).
     private func covers(_ path: String) -> Bool {
         SettingsUIManifest.keyPaths.contains {
             $0 == path || path.hasPrefix($0 + ".") || path.hasPrefix($0 + "[]") || $0.hasPrefix(path + ".")

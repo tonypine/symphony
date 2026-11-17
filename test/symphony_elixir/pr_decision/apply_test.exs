@@ -582,22 +582,22 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
       assert log =~ "PR watch could not comment on TP-7"
     end
 
-    test "close_out moves a merged Merging ticket to Done and marks its PR finished" do
-      assert %{outcome: :applied} = Apply.apply(action("R2", :close_out), ctx(:merging))
+    test "close_ticket moves a merged Merging ticket to Done and marks its PR finished" do
+      assert %{outcome: :applied} = Apply.apply(action("R2", :close_ticket), ctx(:merging))
       assert_received {:move, @issue_id, "Done"}
       assert %{state: "merged"} = TicketPullRequest.get(@repo_key, @issue_id)
 
       :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/TP-7")
       Process.put(:move_result, {:error, :linear_down})
-      capture_log(fn -> assert %{outcome: {:error, {:move_failed, :landing_done, :linear_down}}} = Apply.apply(action("R2", :close_out), ctx(:merging)) end)
+      capture_log(fn -> assert %{outcome: {:error, {:move_failed, :landing_done, :linear_down}}} = Apply.apply(action("R2", :close_ticket), ctx(:merging)) end)
       assert %{state: "open"} = TicketPullRequest.get(@repo_key, @issue_id)
     end
 
-    test "close_out moves a merged ticket with started sub-tickets to the waiting state" do
+    test "close_ticket moves a merged ticket with started sub-tickets to the waiting state" do
       ctx = ctx(:merging)
       ctx = %{ctx | issue: %{ctx.issue | sub_issues: [%{id: "sub-1", identifier: "TP-8", state: "In Progress"}]}}
 
-      assert %{outcome: :applied} = Apply.apply(action("R2", :close_out), ctx)
+      assert %{outcome: :applied} = Apply.apply(action("R2", :close_ticket), ctx)
       assert_received {:move, @issue_id, "Waiting on sub-tickets"}
     end
   end
@@ -980,17 +980,17 @@ defmodule SymphonyElixir.PrDecision.ApplyTest do
   end
 
   describe "the PR's lifecycle (TP-944)" do
-    test "close_out closes a PR merged outside Merging, whoever merged it (R2)" do
+    test "close_ticket closes a PR merged outside Merging, whoever merged it (R2)" do
       for phase <- [:in_progress, :code_review, :qa, :rework, :ci_fix] do
         :ok = TicketPullRequest.record_created(@repo_key, @issue_id, @pr_url, "auto/TP-7")
-        assert %{outcome: :applied} = Apply.apply(action("R2", :close_out, reason: "PR #7 was merged"), ctx(phase))
+        assert %{outcome: :applied} = Apply.apply(action("R2", :close_ticket, reason: "PR #7 was merged"), ctx(phase))
         assert_received {:move, @issue_id, "Done"}
         assert %{state: "merged"} = TicketPullRequest.get(@repo_key, @issue_id)
       end
 
       ctx = ctx(:qa)
       ctx = %{ctx | issue: %{ctx.issue | sub_issues: [%{id: "sub-1", identifier: "TP-8", state: "In Progress"}]}}
-      assert %{outcome: :applied} = Apply.apply(action("R2", :close_out), ctx)
+      assert %{outcome: :applied} = Apply.apply(action("R2", :close_ticket), ctx)
       assert_received {:move, @issue_id, "Waiting on sub-tickets"}
     end
 

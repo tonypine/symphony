@@ -82,7 +82,7 @@ defmodule SymphonyElixir.PhaseStepsTest do
       assert PhaseSteps.steps(:implementation, {:error, {:missing_symphony_file, "symphony.yml", :enoent}}) == implementation
       assert PhaseSteps.steps(:implementation, {:error, :unreadable}) == []
       assert PhaseSteps.steps(:code_review) == []
-      assert PhaseSteps.steps(:close_out) == []
+      assert PhaseSteps.steps(:not_a_run_kind) == []
       refute PhaseSteps.walk?(steps([%{"id" => "code", "mode" => "delegated"}]))
       refute PhaseSteps.machine?(:not_a_step)
     end

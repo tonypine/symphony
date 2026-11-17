@@ -14,7 +14,8 @@ Required sections:
 
 - `issues`
 - `repositories`
-- `agent`
+- `execution`
+- `runs`
 
 Common optional sections:
 
@@ -50,15 +51,26 @@ repositories:
 workspaces:
   root: ~/code/workspaces
 
-agent:
-  runtime: codex
-  command: codex app-server
+execution:
+  harnesses:
+    claude:
+      command: claude --dangerously-skip-permissions --verbose
+      small_model:
+        anthropic: claude-haiku-4-5
+
+runs:
+  default:
+    harness: claude
+    provider: anthropic
+    model: claude-opus-5-5
 ```
+
+`symphony init` writes this file. The repo-root `symphony.yml` is the full sample.
 
 ## File Split
 
-`symphony.yml` owns operator concerns: issue source, repository routing, workspaces, agent runtime,
-pollers, gates, dashboard, notifications, and worker hosts.
+`symphony.yml` owns operator concerns: issue source, repository routing, workspaces, the harnesses
+and what each kind of run starts with, pollers, gates, dashboard, notifications, and worker hosts.
 
 Each repository listed in `repositories` has a `WORKFLOW.md`. That file owns repo-local prompt text
 and optional front-matter keys for `hooks`, `prompts`, `verification`, `validation`, and
@@ -81,7 +93,7 @@ tickets, and a route that has matched nothing for 24 hours. It flags each reposi
 team (an error), and one whose team is found only through its projects or tickets (a warning,
 with a fix that sets `route.team`). In each routed Linear team it checks the labels Symphony
 applies or reads (`Blocked`, `Needs Decision`, the CI labels, `plan`, `qa:skip`, the
-`agent.concurrency.force_label`, each `escalate.labels` entry and the others), with a fix that
+`execution.concurrency.force_label`, each `escalate.labels` entry and the others), with a fix that
 creates a missing one; a label one typo away from one of them; the deprecated `human-action`
 label in `escalate.labels` (a fix removes it) or on open tickets; and tickets whose `Blocked` or
 `Needs Decision` label disagrees with the hold Symphony keeps, with a fix that re-syncs the label.
@@ -106,7 +118,7 @@ in neither of these:
 - **The app's manifest**, `SettingsUIManifest.keyPaths` in
   `macos/Sources/SymphonyBarCore/SettingsUIManifest.swift`: the keys the Settings, Models and
   Repos sections read and write, one string literal per line. A key holding a free-form map, such
-  as `agent.run_profiles`, covers everything under it. A Swift test runs every line-editor write
+  as `runs`, covers everything under it. A Swift test runs every line-editor write
   and fails when one writes a key the manifest doesn't list, or the manifest lists a key no editor
   writes. The task also fails when the manifest lists a key that is not a setting. It may list a
   path inside a setting that holds a map, such as `auto_review.playbooks.macos_app.requires`, when
@@ -146,6 +158,46 @@ holds the table: each old key, the sibling it became or nothing, the ticket and 
   a key in the table written inline (`ledger: {artifact_retention_days: 3}`), which can't be rewritten
   one line at a time: the refusal names only the keys left in place, each with its line
   (``Lines it can't rewrite: 1 (`ledger.artifact_retention_days`)``).
+
+The `agent` section is moved the same way, by a rewrite of its own
+(`SymphonyElixir.Config.Migration.RunsRewrite`), since it changed shape as well as name:
+
+- `agent:` is renamed to `execution:` where it stands, so the settings that stay under it
+  (`concurrency`, `limits`, `timeouts`, `prompts`, `permissions`, `mcp`, `usage_limit`) keep their
+  place and their comments.
+- The run keys are removed from their lines and written as two generated blocks:
+  `execution.harnesses`, under `execution:`, and `runs:`, after the `execution` block. The run keys
+  are `agent.runtime`, `agent.command`, `agent.model`, `agent.effort`, `agent.provider`,
+  `agent.small_model` and `agent.run_profiles`, and `runtime`, `command`, `model` and `effort` in
+  `code_review` and `auto_review`. A comment on a removed line goes with it.
+- `runs.default.harness` comes from `agent.runtime`, and `execution.harnesses.<harness>.command`
+  from `agent.command`.
+- `runs.default.provider` comes from `agent.provider`, else `anthropic` for `claude` and `openai`
+  for `codex`.
+- `runs.default.model` comes from `agent.model`, else from the model the command passed
+  (`--model`, or codex's `model=` override), which is then removed from the command. Claude's
+  `--effort` moves to `runs.default.effort` the same way. Codex's `model_reasoning_effort` stays in
+  its command.
+- Each `agent.run_profiles.<kind>` becomes `runs.<kind>`. A profile for a kind that no longer runs
+  is dropped.
+- The reviewer's settings in `code_review` become `runs.code_review`, and the QA agent's in
+  `auto_review` become `runs.qa`.
+- Each `repositories[].agent` block becomes that repository's `runs` block.
+- `agent.permissions.outer_sandbox.runtime` becomes `kind`, and an MCP server's `runtimes` list
+  becomes `harnesses`.
+- The small model: a claude run on `anthropic` gets
+  `execution.harnesses.claude.small_model.anthropic`. A claude run on another provider gets
+  `small_model` in its entry: `agent.small_model`, else the run's own model, which is where those
+  runs sent their background calls.
+- A file with no model anywhere is not moved. The start stops with a message that names the key to
+  set (``no model is set for the runs; set `agent.model`, which becomes `runs.default.model` ``)
+  and writes nothing. So does a file with no `agent.command`, or with an `agent.runtime` other
+  than `claude` or `codex`.
+- An `agent` section written inline (`agent: {runtime: claude}`) can't be moved one line at a time.
+  The refusal names its line.
+
+A build with this change refuses a file that still has `agent`, once loaded:
+`` unknown symphony.yml key `agent` ``. Only the rewrite at start reads it.
 
 A ticket that renames or removes a key adds its row in the same pull request. CI's `build` job loads
 the previous release's `symphony.yml` on the new build (`scripts/ci/previous-release-config-check.sh`).
@@ -293,7 +345,7 @@ tickets:
   `no priority` are accepted too, and an issue Linear reports with no priority reads as `none`.
   An issue whose priority is not listed is not dispatched: Symphony waits with free lanes even
   when it sits in an active state such as `Todo`. Use it to focus a limited API budget, for
-  example on `[urgent, high]` only. It never stops a forced ticket (`agent.concurrency.force_label`)
+  example on `[urgent, high]` only. It never stops a forced ticket (`execution.concurrency.force_label`)
   or a run already under way (a retry waiting for a slot), so it only gates fresh picks. Empty or
   `null` turns the filter off. `/api/v1/state` lists each ticket it holds back under
   `dispatch_skipped` (`priority medium is not in tickets.priorities (urgent, high)`).
@@ -317,11 +369,9 @@ repositories:
       strategy: worktree
       repo: ~/code/web
       fetch_before_dispatch: true
-    agent:
-      provider: openrouter
-      model: anthropic/claude-sonnet-4.5
-      run_profiles:
-        breakdown: { provider: anthropic, model: claude-opus-5-5, effort: xhigh }
+    runs:
+      default: { provider: openrouter, model: anthropic/claude-sonnet-4.5 }
+      breakdown: { provider: anthropic, model: claude-opus-5-5, effort: xhigh }
 ```
 
 - `key`: unique repo key used in dashboards, run records, and prompt context. Keys must also remain
@@ -354,9 +404,9 @@ repositories:
 - `route`: Linear team, project, label, or assignee selectors.
 - `workspace`: per-repo override for workspace population (`strategy`, `repo`,
   `fetch_before_dispatch`), or `source` for a repo Symphony clones itself (see below).
-- `agent`: per-repo `provider`, `model`, `effort` and `run_profiles` for issues routed to this
-  repo. They take the same values as the `agent` keys and win over them field by field; see
-  **Run profiles** under `agent`. Errors name the key, e.g. `repositories[web].agent.effort`.
+- `runs`: what each kind of run starts with for issues routed to this repo: a `default` entry and
+  the run kinds, with the same keys as the top-level [`runs`](#runs). Each field it sets wins over
+  the top-level one. Errors name the key, such as `repositories[web].runs.landing.effort`.
 - `acceptance_gate`: deprecated with the retired acceptance gate (see
   [`auto_review`](#the-retired-acceptance-gates-escalation-rules)). Its `escalate` rules add to the
   global ones and feed this repo's Code Review; its `mode` sets `manual_review` when that is unset;
@@ -511,7 +561,7 @@ run's reviewer gets it too. So the agent's `$TMPDIR` is the run's own, and concu
 longer share the `/tmp/claude-<uid>` every Claude session uses or Symphony's own temp folder. The
 folder is removed when the run succeeds and kept, with a log line naming it, when the run fails, so
 you can look at what the agent left there; the issue's next run starts with an empty one. A run that
-can't create it logs a warning and keeps the runtime's default temp folder. Runs on a remote worker
+can't create it logs a warning and keeps the harness's default temp folder. Runs on a remote worker
 keep that host's temp folder.
 
 On macOS a local Claude session also gets the env that lets `swift build` and `swift test` run in
@@ -548,18 +598,18 @@ When `--temp-root` is omitted, Symphony scans the system temp directory and `/tm
 per-session Symphony temp patterns. The task does not delete files; `--apply` is rejected until
 explicit deletion controls exist.
 
-### `agent`
+### `execution`
 
-Agent runtime, limits, timeouts, prompts, permissions, and MCP settings.
+How every run is executed: each harness's command, and the limits, timeouts, prompts, permissions
+and MCP settings every run shares. What each kind of run starts with is [`runs`](#runs).
 
 ```yaml
-agent:
-  runtime: codex
-  command: codex app-server
-  model:
-  effort:
-  provider: anthropic
-  run_profiles: {}
+execution:
+  harnesses:
+    claude:
+      command: claude --dangerously-skip-permissions --verbose
+      small_model:
+        anthropic: claude-haiku-4-5
   concurrency:
     max_total: 10
     epic_lanes:
@@ -585,10 +635,6 @@ agent:
     codex_stdio_soft_limit_bytes: 65536
   permissions:
     approval_policy:
-      reject:
-        sandbox_approval: true
-        rules: true
-        mcp_elicitations: true
     filesystem:
       sandbox: workspace-write
       turn_policy:
@@ -600,7 +646,7 @@ agent:
       allowed_domains: []
       denied_domains: []
     outer_sandbox:
-      runtime: srt
+      kind: none
       command: srt
       enable_weaker_network_isolation: false
   mcp:
@@ -615,21 +661,24 @@ agent:
     mcp_tool_ms: 600000
 ```
 
-- `runtime`: `codex` or `claude`.
-- `command`: command used to start the runtime adapter. For the Claude runtime,
-  prefer pinning a Sonnet model (e.g. `claude --model sonnet`) over Opus when
-  available — Opus burns Agent-SDK credit much faster and Sonnet is usually
-  sufficient for orchestration turns. Treat this as guidance; revisit when
-  Anthropic's model lineup or credit policy changes.
-- `model`, `effort`, `provider`, `run_profiles`: the model, effort and provider per kind of run;
-  see **Run profiles** below. Model and effort are unset by default, which leaves `command` as it
-  is; the provider defaults to `anthropic`.
+- `harnesses`: a map of harness id to its settings. A harness is the agent program that runs a
+  session: `claude`, `codex` or `opencode`. Any other id is a load error.
+  - `command`: the command that starts the harness, for every run on it. It must not pass
+    `--model` or `--effort`: the run's entry in [`runs`](#runs) sets both. A run kind may bring a
+    command of its own (`runs.<kind>.command`).
+  - `small_model`: a map of provider to the model the harness calls in the background (titles,
+    summaries), for runs on that provider. `claude` and `opencode` make such calls and `codex`
+    does not. A provider the harness does not reach is a load error. See
+    [Small models](#small-models).
 - `concurrency.max_total`: maximum concurrent issue workers.
+- `permissions.approval_policy`: unset by default, which gives each run its harness's default:
+  `never` on `claude` and `opencode`, and the `reject` map on `codex` (see
+  [Codex-specific: sandbox](#codex-specific-sandbox)).
 - `limits.tokens_per_issue` and `limits.tokens_per_day`: explicit `null` disables that cap.
 - `permissions.filesystem.allow_read_paths`: extra read-only host paths rendered into Codex
   filesystem permissions.
 - `permissions.filesystem.allow_write_paths`: extra writable host paths emitted to the Claude
-  runtime as `sandbox.filesystem.allowWrite`. Use it to broaden Claude Code's default writable
+  harness as `sandbox.filesystem.allowWrite`. Use it to broaden Claude Code's default writable
   set (workspace + `/tmp`) — e.g. to grant test runs access to a configured MCP socket root.
   For Gradle builds, add `~/.gradle` so builds share its caches. Daemons don't come with it:
   each local agent run in a Gradle project (`gradlew`, `settings.gradle` or
@@ -656,132 +705,6 @@ agent:
   itself is not a plain directory the run gets neither the env nor the write access. Hooks and SSH
   workers keep their own env.
 - `permissions.outer_sandbox`: optional outer sandbox wrapper, currently used for Codex SRT.
-
-**Run profiles:**
-
-Symphony classifies each run by kind so a cheap run (landing, a CI fix) need not use the same
-model and effort as an implementation run. With the Claude runtime, each run starts Claude with
-`--model <model>` / `--effort <effort>` for its kind, appended after Symphony's own flags; a field
-that resolves to nothing adds no flag, so with nothing set the command is unchanged.
-
-```yaml
-agent:
-  model: claude-sonnet-5-5
-  effort: medium
-  run_profiles:
-    breakdown: { model: claude-opus-5-5, effort: xhigh }
-    landing: { effort: low }
-    ci_fix: { provider: openrouter, model: anthropic/claude-haiku-4.5 }
-```
-
-- `model`: default model for every run kind (string).
-- `effort`: default effort: `low`, `medium`, `high`, `xhigh`, or `max`.
-- `provider`: default provider that serves the model: `anthropic` (default) or `openrouter`.
-  `openrouter` needs a model for every run it serves (an OpenRouter model id such as
-  `anthropic/claude-haiku-4.5`) and works only with `runtime: claude`. An `openrouter` run
-  starts `claude` with `--model <id>` and this env:
-  - `ANTHROPIC_BASE_URL=https://openrouter.ai/api`;
-  - `ANTHROPIC_AUTH_TOKEN=<OPENROUTER_API_KEY>`;
-  - `ANTHROPIC_API_KEY=` (empty);
-  - `CLAUDE_CODE_SUBAGENT_MODEL=<id>`, so subagents use the same model;
-  - `ANTHROPIC_DEFAULT_SONNET_MODEL=<id>` and `ANTHROPIC_DEFAULT_OPUS_MODEL=<id>`, so Claude
-    Code's model aliases use the same model instead of Anthropic's own ids, which OpenRouter does
-    not know;
-  - `ANTHROPIC_DEFAULT_HAIKU_MODEL` and `ANTHROPIC_SMALL_FAST_MODEL`, the model for Claude Code's
-    background calls (titles, summaries): `small_model` when it is set, else `<id>`.
-
-  `anthropic` runs start as before: Symphony sets none of these. In QA mode the base URL is the QA
-  stub's instead (see [OpenRouter in QA](#qa-passes)).
-- `small_model`: optional OpenRouter model id for Claude Code's background calls on runs whose
-  provider is `openrouter`, for example `anthropic/claude-haiku-4.5`. Titles and summaries are
-  frequent, simple calls, so a cheap model keeps them from billing at the run's model's rate.
-  Unset, they use the run's model. One value for every OpenRouter run; `anthropic` runs ignore it.
-  When `OPENROUTER_API_KEY` is set and a run uses `openrouter`, `symphony check` reports an id
-  OpenRouter does not list, for example
-  `` agent.small_model: OpenRouter has no model `acme/typo` ``. The model needs no `tools`.
-  Settings in the macOS app edits it as the Background calls row of Models.
-- `OPENROUTER_API_KEY` (environment variable, read from Symphony's own environment): the
-  OpenRouter API key. It is never written to `symphony.yml` and reaches the agent only through
-  the subprocess env, as `ANTHROPIC_AUTH_TOKEN`. When it is unset, an `openrouter` run fails
-  before `claude` starts and logs `OpenRouter run cannot start: OPENROUTER_API_KEY is not set
-  run_kind=<kind>`; retries work as for any other failed start. `symphony check` prints a
-  warning naming the run kinds that use `openrouter` while the variable is unset.
-- Model capabilities: Symphony agents need tool use, so an OpenRouter model must list `tools` in
-  `supported_parameters` on OpenRouter's models API (`GET https://openrouter.ai/api/v1/models`, the
-  QA stub's in QA mode, read without the key and cached in process for an hour). When `OPENROUTER_API_KEY` is set,
-  `symphony check` asks that API and reports, naming the key that set the model or effort
-  (`code_review.model`, `auto_review.model`, `repositories[<key>].agent.run_profiles.<kind>.model`,
-  `repositories[<key>].agent.model`, `agent.run_profiles.<kind>.model`, `agent.model`, and the
-  matching `effort` keys; the first one set, in the order a run resolves them):
-  - an error for a model id OpenRouter does not list, for example
-    `` agent.run_profiles.landing.model: OpenRouter has no model `acme/typo` ``;
-  - an error for a model without `tools`, for example
-    `` agent.run_profiles.landing.model: OpenRouter model `acme/chat-only` does not support tools ``;
-  - a warning when `effort` is set for a model that does not list `reasoning`. When the effort
-    comes from a key above the one that picked the model (for example
-    `repositories[api].agent.run_profiles.breakdown: { provider: openrouter, model: acme/tools-only }`
-    under `agent.run_profiles.breakdown.effort: xhigh`), the warning names the model key and the
-    key the effort is inherited from:
-    `` repositories[api].agent.run_profiles.breakdown.model: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort xhigh, inherited from agent.run_profiles.breakdown.effort ``.
-
-  When a run's model is inherited from a key above the one that picked `openrouter` (for example
-  `repositories[api].agent.run_profiles.landing: { provider: openrouter }` with only `agent.model`
-  set), the error names that provider key, the key the model is inherited from, and the `model` key
-  to set next to it:
-  `` repositories[api].agent.run_profiles.landing.provider: OpenRouter has no model `claude-sonnet-5-5`, inherited from agent.model; set repositories[api].agent.run_profiles.landing.model to an OpenRouter model id ``.
-
-  When the API cannot be reached, `check` prints a warning and does not fail. Before an
-  OpenRouter run starts, Symphony looks the model up the same way: a model without `tools` fails
-  the run before `claude` starts and logs `OpenRouter run cannot start: model <id> does not
-  support tools run_kind=<kind>; set <key> to a model that lists tools`, where `<key>` is the
-  model key `check` names; a model without `reasoning` starts without `--effort` and logs
-  a warning once per model. If the lookup fails, or OpenRouter does not list the model, the run
-  starts anyway and logs a warning, so an OpenRouter outage does not block work.
-- `run_profiles.<kind>`: `model`, `effort` and/or `provider` for one kind of run. Kinds, first match wins:
-  `breakdown` (plan ticket in `Rework`), `epic_review` (a plan ticket whose sub-issues are all
-  terminal: the epic review), `breakdown` (other plan ticket: a new, resumed or revised plan),
-  `landing` (`Merging`), `code_review` (`Code Review`), `qa` (`QA`), `rework` (`Rework`), `ci_fix`
-  (continuation after red CI), `review_feedback` (continuation after PR review comments), and
-  `implementation` (everything else). `close_out` named the retired legacy machine's close-out
-  run: it still loads and matches no run. `code_review` names the Code Review run and its
-  reviewer, and `qa` the QA agent's runs. `pre_push_review` named the removed pre-push reviewer:
-  it is migrated to `code_review` at start (see [`code_review`](#code_review)). `acceptance_gate` is deprecated with
-  the retired gate, and `final_verification` with the retired `Final verification:` tickets: each
-  loads with a warning and does nothing.
-- Resolution per field, for the repository the issue is routed to:
-  `repositories[].agent.run_profiles.<kind>`, then `repositories[].agent.<field>`, then
-  `agent.run_profiles.<kind>`, then `agent.<field>`, else nothing is added (provider:
-  `anthropic`). A repository without an `agent` block resolves from the `agent` section alone. Code
-  Review's reviewer and the QA agent check their own section first: `code_review.model` /
-  `.effort` and `auto_review.model` / `.effort`.
-- `WORKFLOW.md` front matter cannot set any of these: `symphony.yml` owns the agent runtime, so a
-  per-repository profile goes under that repository's `repositories[].agent`.
-- Config errors: an unknown kind under `run_profiles`, an unknown effort or provider, an unknown
-  profile key, `--model` / `--effort` already in `command` while any of `model`, `effort`, or
-  `run_profiles` is set, `openrouter` for a run that resolves no model, `openrouter` with a
-  runtime other than `claude`, or `openrouter` with `workers.ssh_hosts` (OpenRouter runs start
-  on the local host only). `symphony check` reports them and names the key that picked
-  `openrouter` (`agent.run_profiles.<kind>.provider`, else `agent.provider`). A
-  `repositories[].agent` block is checked the same way against the `agent` section, including the
-  `--model` / `--effort` flags in `agent.command`, `code_review.command` and
-  `auto_review.command`, and its errors name `repositories[<key>].agent...`.
-- The kind and profile are chosen once, when the run is dispatched, from the current workflow
-  config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
-  keeps its profile. A CI fix or review feedback re-activation is a new run with its own kind.
-- The run history record keeps `run_kind`, `model` and `effort`, so do the run's `run.started` and
-  `run.ended` events on the ticket's history (and the run's header in the ticket's timeline, whose
-  summary names the model), and the dispatch log line shows
-  `run_kind=… model=… effort=…` (`default` when nothing is added). A `review_feedback` dispatch
-  also names the latest pending PR comment it answers: `trigger_comment_id=…
-  trigger_comment_author=… trigger_comment="<first line>" pending_comments=<n>`. Code
-  Review's reviewer runs inside the Code Review run, so that run's record also keeps
-  `reviewer_profile` next to `reviewer_tokens`; other runs record no reviewer profile. A QA run's
-  record keeps its own `run_kind: qa`, `model` and `effort`.
-- The Mac app and the terminal status dashboard show the kind, model and effort of each
-  running run (and its reviewer's, for a Code Review run) and of the recent runs.
-- Codex runtime: `model` and `effort` are ignored; Codex keeps the model and reasoning effort
-  from its own config (set them in `command`, for example `codex -c model_reasoning_effort=high
-  app-server`). Symphony logs one warning when a run starts with a profile that resolves to a model or effort.
 
 **Concurrency and turns:**
 
@@ -919,13 +842,15 @@ agent:
 - `usage_limit.auto_pause` (default `true`): when a run ends on the Claude or Codex usage limit, Symphony
   holds new runs of that provider until the limit resets instead of failing the run. The retry
   keeps its attempt, gets no backoff and no `run_failed` notification, and the run is recorded as
-  `usage_limited`. Runs on another provider (for example an `openrouter` run profile) keep
+  `usage_limited`. Runs on another provider (for example a `runs` entry on `openrouter`) keep
   dispatching, and a weekly Opus limit holds only Opus runs. A limit for another provider that a
-  run itself sees also leaves that run alone: an OpenRouter run through the Claude runtime can see
+  run itself sees also leaves that run alone: an OpenRouter run through the claude harness can see
   the Claude subscription's window, which records the Claude hold but lets the OpenRouter run retry
-  with the normal backoff instead of waiting for the Claude reset. Codex runs (`agent.kind: codex`) are
-  their own provider (`openai`): a Codex limit holds only Codex runs, and a Claude limit never
-  holds them. `false` keeps the old behaviour: the
+  with the normal backoff instead of waiting for the Claude reset. Codex runs on `openai` are
+  their own provider: a Codex limit holds only Codex runs, and a Claude limit never
+  holds them. A new run whose provider is held starts on the first of its
+  [fallbacks](#fallbacks) whose provider is free, and waits only when all are held. `false` keeps
+  the old behaviour: the
   run fails and retries with the normal backoff.
 - `usage_limit.resume_margin_seconds` (default `120`, `>= 0`): added to the reset time the provider
   reports before runs resume.
@@ -998,26 +923,28 @@ These keys are Codex-only and use safer defaults when omitted:
 
 | Key | Default | Notes |
 | --- | --- | --- |
-| `agent.permissions.approval_policy` | `{"reject":{"sandbox_approval":true,"rules":true,"mcp_elicitations":true}}` | String values supported by the local Codex schema: `untrusted`, `on-failure`, `on-request`, `auto_approve_all`. Object-form `reject` is the Codex default in Symphony. The wire value `never` is **not** supported here; use `auto_approve_all` for unattended mode. |
-| `agent.permissions.filesystem.sandbox` | `workspace-write` | Supported values: `read-only`, `workspace-write`, `danger-full-access`. |
-| `agent.permissions.filesystem.turn_policy` | `workspaceWrite` rooted at the issue workspace | When set explicitly, Symphony still ensures the issue workspace stays in `writableRoots`, and adds the `.git` directory plus Git's `--git-dir` and `--git-common-dir` (so branch/commit/fetch/push work for clones and linked worktrees). Other policy fields depend on the targeted Codex app-server version. |
-| `agent.permissions.network.mode` | `allowlist` | See table above. |
-| `agent.permissions.outer_sandbox.runtime` | `none` | Optional outer SRT wrapper. |
+| `execution.permissions.approval_policy` | `{"reject":{"sandbox_approval":true,"rules":true,"mcp_elicitations":true}}` | String values supported by the local Codex schema: `untrusted`, `on-failure`, `on-request`, `auto_approve_all`. Object-form `reject` is the Codex default in Symphony. The wire value `never` is **not** supported here; use `auto_approve_all` for unattended mode. |
+| `execution.permissions.filesystem.sandbox` | `workspace-write` | Supported values: `read-only`, `workspace-write`, `danger-full-access`. |
+| `execution.permissions.filesystem.turn_policy` | `workspaceWrite` rooted at the issue workspace | When set explicitly, Symphony still ensures the issue workspace stays in `writableRoots`, and adds the `.git` directory plus Git's `--git-dir` and `--git-common-dir` (so branch/commit/fetch/push work for clones and linked worktrees). Other policy fields depend on the targeted Codex app-server version. |
+| `execution.permissions.network.mode` | `allowlist` | See table above. |
+| `execution.permissions.outer_sandbox.kind` | `none` | Optional outer SRT wrapper. |
 
 Codex native `workspace-write` sandboxing is the default compatibility path. Symphony injects a
 managed permission profile containing the sensitive read-deny list, but current Codex versions can
 either fail shell execution when only that profile is used or drop it when legacy thread/turn
 sandbox fields are sent. **Treat native Codex deny-list enforcement as best-effort** unless your
-Codex runtime has been verified with a shell-execution probe. Use
-`agent.permissions.outer_sandbox.runtime: srt` when deny rules must be enforced while shell
+Codex version has been verified with a shell-execution probe. Use
+`execution.permissions.outer_sandbox.kind: srt` when deny rules must be enforced while shell
 commands remain available.
 
 #### Codex-specific: `outer_sandbox: srt`
 
 An optional outer-sandbox wrapper using `@anthropic-ai/sandbox-runtime`.
 
-- `runtime: srt` wraps the launch as
-  `srt --settings <temp-settings.json> sh -c <prelude-and-agent.command-with-codex-config>`.
+- `kind: srt` wraps the launch as
+  `srt --settings <temp-settings.json> sh -c <prelude-and-codex-command-with-codex-config>`.
+  It is supported on the `codex` harness only: with `kind: srt`, a run kind on another harness is a
+  load error.
   The prelude rewrites localhost HTTP(S) proxy environment values to `127.0.0.1` and sets
   `SSL_CERT_FILE=/etc/ssl/cert.pem` only when it is unset.
 - `command` defaults to `srt`; can be a shell-like string when a wrapper such as `mise exec -- srt`
@@ -1037,8 +964,8 @@ An optional outer-sandbox wrapper using `@anthropic-ai/sandbox-runtime`.
 - Symphony emits `enableWeakerNestedSandbox: true` for Linux/Docker compatibility.
   `enable_weaker_network_isolation` maps directly to the same SRT setting; keep it `false`
   unless required.
-- Symphony generates the temporary settings file from `agent.permissions.network`,
-  `agent.permissions.filesystem.allow_read_paths`, the issue workspace, linked-worktree Git
+- Symphony generates the temporary settings file from `execution.permissions.network`,
+  `execution.permissions.filesystem.allow_read_paths`, the issue workspace, linked-worktree Git
   metadata roots, and the shared sensitive-path deny lists. The file is removed when the session
   stops.
 - Shell startup files such as `~/.zshrc`, `~/.zshenv`, and `~/.bash_profile` are in both the
@@ -1046,9 +973,9 @@ An optional outer-sandbox wrapper using `@anthropic-ai/sandbox-runtime`.
   startup files so the wrapper does not need profile access under SRT. Codex may still log a
   non-fatal PATH update warning when writes are blocked; Symphony does not grant access to silence
   that warning.
-- `agent.permissions.network.mode: open` is **rejected** with SRT (no unrestricted domain
+- `execution.permissions.network.mode: open` is **rejected** with SRT (no unrestricted domain
   wildcard). Use `allowlist` or `block`.
-- **Local only:** remote SSH workers reject `runtime: srt` because the temp settings file is
+- **Local only:** remote SSH workers reject `kind: srt` because the temp settings file is
   generated on the orchestrator host.
 - SRT wraps the entire Codex process tree, so it cannot distinguish Codex's own credential reads
   from commands launched beneath Codex. Treat this as an additional OS guardrail, not a complete
@@ -1064,14 +991,14 @@ SRT for Codex until Codex/SRT stdio behavior is hardened. Debug logs include `Co
 entries with raw byte counts, method, item type/status, and noisy-field byte counts to correlate
 the last successfully received frames before a stdio write failure.
 
-#### `agent.mcp`
+#### `execution.mcp`
 
 Controls which MCP servers the agent can reach. Symphony always exposes its built-in `symphony`
 MCP server; every other server is gated by this section.
 
 | Key | Description |
 | --- | --- |
-| `inherit` (default `none`) | `none` ignores the host runtime config. `allowlist` inherits servers named in `allowed_servers` (requires non-empty list). `all` inherits every host server except `symphony` - **Codex only**, rejected for Claude. |
+| `inherit` (default `none`) | `none` ignores the host's own harness config. `allowlist` inherits servers named in `allowed_servers` (requires non-empty list). `all` inherits every host server except `symphony` - **Codex only**, rejected for Claude. |
 | `allowed_servers` | Only meaningful with `inherit: allowlist`. Setting it with `none` or `all` is rejected. |
 | `servers` | Map of `name` to declaration. Reserved name: `symphony`. |
 
@@ -1079,10 +1006,10 @@ Per-server declaration:
 
 | Key | Type | Notes |
 | --- | --- | --- |
-| `transport` | string, default `stdio` | `stdio` \| `http` \| `sse`. **`http`/`sse` with `codex` in `runtimes` is rejected.** |
+| `transport` | string, default `stdio` | `stdio` \| `http` \| `sse`. **`http`/`sse` with `codex` in `harnesses` is rejected.** |
 | `command`, `args`, `env` | strings / list / map | Required for `stdio`. `env` is a map of string keys/values. |
 | `url`, `headers` | string / map | Required for `http` and `sse`. |
-| `runtimes` | list, default `["claude", "codex"]` | Restricts which runtimes the server is published to. `runtimes: ["claude"]` is the typical way to expose HTTP/SSE MCP to Claude without violating Codex's stdio invariant. |
+| `harnesses` | list, default `["claude", "codex", "opencode"]` | Restricts which harnesses the server is published to. `harnesses: ["claude"]` is the typical way to expose HTTP/SSE MCP to Claude without violating Codex's stdio invariant. |
 
 **Env-var expansion** in `env` and `headers`: a value that is exactly `$NAME` (where `NAME` matches
 `[A-Za-z_][A-Za-z0-9_]*`) is resolved from the orchestrator's environment at config-load time.
@@ -1092,7 +1019,7 @@ A set var substitutes the value; an empty var drops the entry; a missing var kee
 references (`"Bearer $TOKEN"`) are **not** expanded - use a whole-value reference or pre-compose
 the literal.
 
-**Runtime-specific wiring:**
+**Harness-specific wiring:**
 
 - **Codex:** Symphony writes a fresh `CODEX_HOME` per session containing a generated `config.toml`
   (symphony + inherited + declared servers) and a symlink to the operator's `~/.codex/auth.json`
@@ -1104,7 +1031,7 @@ the literal.
   `auth.json`/`config.toml`/`AGENTS.md`/cloud requirements cache. Remote workers also receive a
   per-session `/tmp/symphony-codex-home-<id>` directory; Symphony tears both down at session stop.
 - **Codex prompt transport:** when the fully rendered first-turn prompt is larger than Symphony's
-  app-server stdio soft limit (`agent.prompts.codex_stdio_soft_limit_bytes`, default 65536),
+  app-server stdio soft limit (`execution.prompts.codex_stdio_soft_limit_bytes`, default 65536),
   Symphony sends a compact bootstrap prompt instead. The compact
   prompt keeps the hard security rules and directs Codex to load issue details through scoped
   `linear_*` tools, preventing large echoed `userMessage` events from wedging the app-server
@@ -1129,6 +1056,265 @@ the literal.
   `~/.claude.json`. Plugin MCP (`~/.claude/plugins/*/.mcp.json`), project `.mcp.json`, and
   `.claude/settings.json` enable/disable semantics are excluded. Declare those servers explicitly
   when needed.
+- **OpenCode:** each session's own config holds Symphony's server and the declared servers whose
+  `harnesses` list has `opencode`. The operator's OpenCode config is never read.
+
+### `runs`
+
+What each kind of run starts with: its harness, the provider that serves its model, the model, and
+optionally an effort, a small model and a command of its own. A cheap run (landing, a CI fix) need
+not use the same model and effort as an implementation run.
+
+```yaml
+execution:
+  harnesses:
+    claude:
+      command: claude --dangerously-skip-permissions --verbose
+      small_model:
+        anthropic: claude-haiku-4-5
+        openrouter: anthropic/claude-haiku-4.5
+    codex:
+      command: codex --config model_reasoning_effort=high app-server
+
+runs:
+  default:
+    harness: claude
+    provider: anthropic
+    model: claude-opus-5-5
+    effort: medium
+  implementation:
+    fallbacks:
+      - { model: claude-sonnet-5-5 }
+      - { harness: codex, provider: openai, model: gpt-5.5 }
+  breakdown: { effort: xhigh }
+  landing: { model: claude-sonnet-5-5, effort: low }
+  ci_fix: { provider: openrouter, model: deepseek/deepseek-flash }
+  qa: { harness: codex, provider: openai, model: gpt-5.5 }
+
+repositories:
+  - key: web
+    workflow: ./workflows/web.md
+    runs:
+      default: { effort: low }
+      landing: { model: claude-haiku-4-5 }
+```
+
+**Entries:**
+
+An entry is `default` or a run kind. Any other name is a load error, as is an unknown key in an
+entry.
+
+| Key | Values | Notes |
+| --- | --- | --- |
+| `harness` | `claude`, `codex`, `opencode` | The agent program that runs the session. |
+| `provider` | `anthropic`, `openai`, `openrouter`, `opencode-go` | Who serves the model. It must be one the harness reaches. |
+| `model` | string | The model id, as the provider names it. |
+| `effort` | `low`, `medium`, `high`, `xhigh`, `max` | Optional. |
+| `small_model` | string | Optional. The model for the harness's background calls on this entry's runs. |
+| `command` | string | Optional, in a run kind's entry only. That kind's own command, in place of its harness's. It must not pass `--model` or `--effort`. |
+| `fallbacks` | list | Optional. Alternatives for when the provider is held; see [Fallbacks](#fallbacks). |
+
+**Run kinds:**
+
+Symphony classifies each run when it dispatches it. The first match wins:
+
+| Kind | The run |
+| --- | --- |
+| `breakdown` | A plan ticket in `Rework`: its rejected plan is made again. |
+| `epic_review` | A plan ticket whose sub-issues are all terminal: the epic review. |
+| `breakdown` | Any other plan ticket: a new, resumed or revised plan. |
+| `landing` | A ticket in `Merging`. |
+| `rework` | A ticket in `Rework`. |
+| `code_review` | A ticket in `Code Review`: the Code Review run and its reviewer. |
+| `qa` | A ticket in `QA`: the QA agent's run. |
+| `epic_review` | A ticket in the epic review state. |
+| `ci_fix` | A ticket in the CI fix state, or a continuation after red CI. |
+| `review_feedback` | A continuation after PR review comments. |
+| `implementation` | Everything else. |
+
+**Resolution:**
+
+Each field resolves on its own, for the repository the issue is routed to. The first entry that
+sets it wins:
+
+1. `repositories[].runs.<kind>`
+2. `repositories[].runs.default`
+3. `runs.<kind>`
+4. `runs.default`
+
+Nothing is built in. Every run kind must resolve a `harness`, a `provider` and a `model`, or
+`symphony.yml` does not load. `effort` is optional: with none set, the harness starts without one.
+`command` is the exception: a run kind's own command is read from that kind's entries only, never
+from `default`, and a run without one uses `execution.harnesses.<harness>.command`.
+
+`WORKFLOW.md` front matter cannot set any of these. A per-repository choice goes under that
+repository's `repositories[].runs`.
+
+The kind and what it starts with are chosen once, when the run is dispatched, from the current
+config: an edit applies to the next dispatch without a restart. Every continuation turn of a run
+keeps its choice. A CI fix or review feedback re-activation is a new run with its own kind.
+
+**Harnesses and providers:**
+
+| Harness | Providers it reaches | Small model |
+| --- | --- | --- |
+| `claude` | `anthropic`, `openrouter`, `opencode-go` | Required |
+| `codex` | `openai`, `opencode-go` | None |
+| `opencode` | `opencode-go` | Required |
+
+`claude` is the primary harness. `anthropic` is claude's own provider and `openai` is codex's own:
+the harness signs in to it by itself, and Symphony passes no key. `openrouter` needs
+`OPENROUTER_API_KEY` and `opencode-go` needs `OPENCODE_API_KEY`, both read from Symphony's own
+environment. A provider that needs a key starts runs on the local host only, so it is a config
+error with `workers.ssh_hosts`.
+
+- `claude` starts with `--model <model>` and, when an effort resolves, `--effort <effort>`,
+  appended after Symphony's own flags. On `anthropic` Symphony sets no provider env. On
+  `openrouter` it sets:
+  - `ANTHROPIC_BASE_URL=https://openrouter.ai/api`;
+  - `ANTHROPIC_AUTH_TOKEN=<OPENROUTER_API_KEY>`;
+  - `ANTHROPIC_API_KEY=` (empty);
+  - `CLAUDE_CODE_SUBAGENT_MODEL=<model>`, so subagents use the same model;
+  - `ANTHROPIC_DEFAULT_SONNET_MODEL=<model>` and `ANTHROPIC_DEFAULT_OPUS_MODEL=<model>`, so Claude
+    Code's model aliases use the same model instead of Anthropic's own ids, which OpenRouter does
+    not know.
+
+  In QA mode the base URL is the QA stub's instead (see [OpenRouter in QA](#qa-passes)). On
+  `opencode-go` the env has the same shape, on
+  `ANTHROPIC_BASE_URL=https://opencode.ai/inference/go/anthropic` with
+  `ANTHROPIC_AUTH_TOKEN=<OPENCODE_API_KEY>`.
+- `codex` gets the run's model and provider as `--config` overrides, spliced into its command
+  before the `app-server` subcommand: `model="<model>"`, and on `opencode-go` also
+  `model_provider=opencode-go` with the table entry
+  `model_providers.opencode-go.base_url="https://opencode.ai/inference/go/openai/v1"`,
+  `env_key="OPENCODE_API_KEY"`, `wire_api="responses"`. A run's `effort` is not applied on
+  `codex`: set `model_reasoning_effort` in `execution.harnesses.codex.command`. Symphony logs a
+  warning when a codex run starts with an effort set.
+- `opencode` starts one `opencode run --format json` per turn with `--model <provider>/<model>`,
+  and continues the session of the turn before with `--session`. OpenCode has no sandbox of its
+  own, so each turn runs inside Symphony's: the same Seatbelt or bwrap confinement the
+  verification dev server's build uses. It can write the workspace and the session's own folder
+  only, and it reaches the network only through Symphony's allowlisting egress proxy: the
+  provider's hosts and the ones `execution.permissions.network` allows. Each session has a home of
+  its own, so the operator's OpenCode config, sign-ins and MCP servers never reach a run. Its
+  config holds Symphony's tools and the `execution.mcp.servers` declared for `opencode`. Runs
+  start on the local host only.
+
+`opencode-go` serves the OpenCode Go subscription's models. Console serves the same model ids (the
+[Go table](https://opencode.ai/docs/console/go), such as `kimi-k3` or `glm-5.3-flash`) over an
+Anthropic-compatible and an OpenAI-compatible endpoint, so the model id is the same on every
+harness.
+
+- `OPENROUTER_API_KEY` (environment variable): the OpenRouter API key. It is never written to
+  `symphony.yml` and reaches the agent only through the subprocess env, as
+  `ANTHROPIC_AUTH_TOKEN`. When it is unset, an `openrouter` run fails before `claude` starts and
+  logs `OpenRouter run cannot start: OPENROUTER_API_KEY is not set run_kind=<kind>`; retries work
+  as for any other failed start. `symphony check` prints a warning naming the run kinds that use
+  `openrouter` while the variable is unset.
+- `OPENCODE_API_KEY` (environment variable): the OpenCode API key, from a Console workspace with a
+  Go subscription. Like `OPENROUTER_API_KEY`, it is never written to `symphony.yml` and reaches the
+  agent only through the subprocess env. When it is unset, an `opencode-go` run fails before the
+  harness starts; `symphony check` warns naming the run kinds that use `opencode-go` while the
+  variable is unset.
+
+#### Small models
+
+`claude` and `opencode` call a second, small model in the background (titles, summaries). A session
+talks to one provider only, so that model must be named for the run's provider. The first one set
+wins:
+
+1. the run's `small_model`, resolved like any other field;
+2. `execution.harnesses.<harness>.small_model.<provider>`.
+
+A run on such a harness with neither is a load error. `codex` makes no such calls and needs none.
+
+Titles and summaries are frequent, short calls, so a cheap model keeps them from billing at the
+run's model's rate. With `claude`, Symphony passes the small model as
+`ANTHROPIC_DEFAULT_HAIKU_MODEL` and `ANTHROPIC_SMALL_FAST_MODEL`, on every provider.
+
+#### Fallbacks
+
+`fallbacks` on an entry is an ordered list of alternatives for when its provider cannot take a new
+run. Each one is a map that sets what differs from the entry's own choice: `harness`, `provider`,
+`model`, `effort`, `small_model`.
+
+- One that keeps the harness and the provider keeps the entry's model, small model and command
+  unless it sets its own.
+- One that changes the harness or the provider must name its `model`. Its small model is the one
+  for its own harness and provider, and one that changes the harness takes that harness's command.
+- A fallback cannot set `command` or `fallbacks`.
+- Every fallback must resolve like any run: its harness must reach its provider, and have a
+  command and, where it needs one, a small model.
+
+A new run whose provider is held by a usage limit (**Usage limits** under
+[`execution`](#execution)) starts on the first fallback
+whose provider is free. It waits only when its own choice and every fallback are held, and then it
+waits on its own choice. A continuation of a run in progress stays on its own choice.
+
+The list is taken whole from the first entry that sets one, in the resolution order above: a
+`fallbacks` list on `runs.landing` replaces the one on `runs.default` for landing runs.
+
+#### Load errors
+
+`symphony.yml` does not load, and `symphony check` reports the message, when an entry is wrong.
+Each message names the key to edit. A repository's block is checked the same way and named
+by its key (`repositories[web].runs.landing`).
+
+| Cause | Message |
+| --- | --- |
+| A run kind resolves no harness, provider or model | ``runs.implementation resolves no harness; set `harness` there or in runs.default`` |
+| An entry that is not `default` or a run kind | `runs.deploy is not a run kind; expected default or one of: implementation, breakdown, ...` |
+| An unknown key in an entry | ``runs.default has unknown key `runtime`; expected any of: harness, provider, model, effort, small_model, command, fallbacks`` |
+| An unknown harness, provider or effort | `repositories[web].runs.landing.effort must be one of: low, medium, high, xhigh, max` |
+| A provider the harness does not reach | `runs.qa runs the codex harness on anthropic, which it cannot reach; codex runs on: openai, opencode-go` |
+| A harness with no command | `runs.qa runs the claude harness, which has no command; set execution.harnesses.claude.command` |
+| No small model for the run's provider | `runs.qa runs the claude harness on opencode-go with no small model for its background calls; set execution.harnesses.claude.small_model.opencode-go` |
+| `command` in `default` | `runs.default.command is a run kind's own; a harness's command for every run is execution.harnesses.<harness>.command` |
+| A command that passes a model or an effort | `execution.harnesses.claude.command must not pass --model; the run's entry sets the model and effort` |
+| A fallback that changes the harness or provider with no model | ``runs.default.fallbacks[0] changes the harness or the provider, so it must set `model` `` |
+| A provider that needs a key, with `workers.ssh_hosts` | `runs.landing.provider openrouter is not supported with workers.ssh_hosts; OpenRouter runs start on the local host only` |
+| An `execution` setting the run's harness cannot do | `execution.mcp.inherit="all" is not supported on the claude harness; declare MCP servers explicitly (runs.implementation runs the claude harness)` |
+| The old section | `` unknown symphony.yml key `agent` `` |
+
+#### OpenRouter model checks
+
+Symphony agents need tool use, so an OpenRouter model must list `tools` in `supported_parameters`
+on OpenRouter's models API (`GET https://openrouter.ai/api/v1/models`, the QA stub's in QA mode,
+read without the key and cached in process for an hour). When `OPENROUTER_API_KEY` is set,
+`symphony check` asks that API for every run kind on `openrouter` and reports, naming the key that
+set the model or effort (such as `runs.landing.model` or `repositories[api].runs.default.effort`):
+
+- an error for a model id OpenRouter does not list, for example
+  `` runs.landing.model: OpenRouter has no model `acme/typo` ``;
+- an error for a model without `tools`, for example
+  `` runs.landing.model: OpenRouter model `acme/chat-only` does not support tools; Symphony runs need tool use ``;
+- an error for a small model OpenRouter does not list, for example
+  `` execution.harnesses.claude.small_model.openrouter: OpenRouter has no model `acme/typo` ``. The
+  small model needs no `tools`;
+- a warning when `effort` is set for a model that does not list `reasoning`:
+  `` runs.breakdown.effort: OpenRouter model `acme/tools-only` does not support reasoning; its runs start without --effort xhigh ``.
+
+When the API cannot be reached, `check` prints a warning and does not fail. Before an OpenRouter
+run starts, Symphony looks the model up the same way: a model without `tools` fails the run before
+`claude` starts and logs `OpenRouter run cannot start: model <id> does not support tools
+run_kind=<kind>; set <key> to a model that lists tools`, where `<key>` is the model key `check`
+names; a model without `reasoning` starts without `--effort` and logs a warning once per model. If
+the lookup fails, or OpenRouter does not list the model, the run starts anyway and logs a warning,
+so an OpenRouter outage does not block work.
+
+#### Where a run's choice shows
+
+- The run history record keeps `run_kind`, `model`, `effort` and `provider`, so do the run's
+  `run.started` and `run.ended` events on the ticket's history (and the run's header in the
+  ticket's timeline, whose summary names the model), and the dispatch log line shows
+  `run_kind=… model=… effort=…` (`default` when no effort is set). A `review_feedback` dispatch
+  also names the latest pending PR comment it answers: `trigger_comment_id=…
+  trigger_comment_author=… trigger_comment="<first line>" pending_comments=<n>`. Code
+  Review's reviewer runs inside the Code Review run, so that run's record also keeps
+  `reviewer_profile` next to `reviewer_tokens`; other runs record no reviewer profile. A QA run's
+  record keeps its own `run_kind: qa`, `model` and `effort`.
+- The Mac app and the terminal status dashboard show the kind, model and effort of each
+  running run (and its reviewer's, for a Code Review run) and of the recent runs.
 
 ### `pull_requests`
 
@@ -1257,18 +1443,11 @@ diff (see [`design/state-machine.md`](design/state-machine.md)).
 ```yaml
 code_review:
   enabled: true
-  runtime: codex
-  command: codex app-server
-  model: claude-opus-5-5
-  effort: high
 ```
 
-`model` and `effort` (optional) set the reviewer's `--model` / `--effort` with the Claude runtime.
-Each one falls back to the `code_review` run profile (the routed repository's
-`repositories[].agent.run_profiles.code_review`, then `repositories[].agent`, then
-`agent.run_profiles.code_review`, then `agent.model` / `agent.effort`); with none set the reviewer
-command is unchanged. They take the same values as `agent.model` / `agent.effort`, and `command`
-must not pass `--model` / `--effort` while any of them resolves. With `enabled: false` no reviewer
+`enabled` is the section's only key. The reviewer's harness, provider, model, effort and command
+are the `code_review` entry of [`runs`](#runs): `runs.code_review`, or the routed repository's
+`repositories[].runs.code_review`. With `enabled: false` no reviewer
 exists, so Symphony parks the repo's `Code Review` tickets with the reason recorded
 (`code_review_reviewer_disabled`) and dispatches no run.
 
@@ -1294,11 +1473,7 @@ unverifiable. `/api/v1/state` counts inconclusive Code Review runs per cause
 
 The pre-push reviewer that used to review an implementation run's commits before its first push
 is removed. A `symphony.yml` that still has `pre_push_review:` is [migrated](#renamed-keys-are-migrated)
-to `code_review` at start, and so are `agent.run_profiles.pre_push_review` and
-`repositories[].agent.run_profiles.pre_push_review`. A running Symphony's reload refuses the old
-name: "`pre_push_review` is not valid; the pre-push reviewer is removed and Code Review owns the
-review of the code now; set Code Review's reviewer in `code_review` (enabled, runtime, command,
-model, effort) and its run profile in `agent.run_profiles.code_review`".
+to `code_review` at start.
 
 ### `auto_review`
 
@@ -1309,10 +1484,6 @@ and the acceptance gate; that state and the gate are gone.
 
 ```yaml
 auto_review:
-  runtime: claude
-  command: claude --dangerously-skip-permissions
-  model: claude-sonnet-5-5
-  effort: medium
   max_turns: 20
   timeout_ms: 1800000
   skip_globs: []
@@ -1322,11 +1493,8 @@ auto_review:
   #   avd: Pixel_3a_API_34
 ```
 
-`model` and `effort` (optional) set the QA agent's `--model` / `--effort` with the Claude runtime,
-falling back to the `qa` run profile (the routed repository's `repositories[].agent`, then
-`agent.run_profiles.qa`, then `agent.model` / `agent.effort`). Validation is the same
-as for `code_review`; when `command` is not set the QA agent uses `agent.command`, which must
-then not pass the flag that `auto_review.model` / `auto_review.effort` sets.
+The QA agent's harness, provider, model, effort and command are the `qa` entry of
+[`runs`](#runs): `runs.qa`, or the routed repository's `repositories[].runs.qa`.
 
 The old Auto Review keys still load, each with one deprecation warning per config naming what
 replaced it, and do nothing: `enabled`, `state` (the `QA` state's name is `issues.states.qa`),
@@ -1359,7 +1527,7 @@ gets a pass that drives it. The `cli` playbook builds the CLI, runs the walkthro
 throwaway config and state under `$TMPDIR`, and attaches a command transcript. A CLI pass
 typically costs 1–4 minutes and 50–150k tokens.
 
-The QA agent (`runtime` and `command`, defaulting to `agent.runtime` and `agent.command`) runs in
+The QA agent (`runs.qa`) runs in
 a fresh worktree at the PR head under `<workspaces.root>/.qa/`, removed afterwards. Each pass
 also gets a private temp folder, `/tmp/symphony-qa-<hash>` (Symphony's own temp folder when it
 can't write to `/tmp`), passed to a Claude agent as `CLAUDE_CODE_TMPDIR` and to a Codex agent as
@@ -1370,7 +1538,7 @@ including ones detached with `nohup` or `setsid`, such as a server the agent sta
 of the PR under `$TMPDIR`, and logs each one. It can read
 the issue, its parent and the PR, and attach evidence files with `linear_attach_file`; it cannot
 move the issue, comment, push or write to GitHub. The session stops at `timeout_ms`, `max_turns`,
-or `agent.limits.tokens_per_issue`.
+or `execution.limits.tokens_per_issue`.
 
 The QA agent records its verdict with the `qa_verdict` tool, offered to QA passes (and epic
 reviews) only, as its last act. Its input schema is the verdict contract: `pass`, `fail` or
@@ -1424,7 +1592,7 @@ commit is bounded: once it has lasted an hour, Symphony starts the review no mor
 puts the epic on a `Blocked` hold whose reason names the commit and the workflows still running; the
 Inbox lists it, and `Unblock` starts the wait again from zero. The public API is
 `api.github.com`, which is not in the built-in network allowlist; add it to
-`agent.permissions.network.allowed_domains` for the fallback to work.
+`execution.permissions.network.allowed_domains` for the fallback to work.
 
 A commit whose runs finished with a failed one is not judged at once: Symphony reruns the failed
 jobs of each failed run once per commit (`gh run rerun <id> --failed`, as the PR watcher reruns a
@@ -1721,8 +1889,7 @@ changed, otherwise the setting it is missing or `enabled: false`.
 
 The acceptance gate is retired, and `auto_review.acceptance_gate` is deprecated: every key in it
 loads with a warning. Its agent settings (`runtime`, `command`, `model`, `effort`, `max_turns`,
-`timeout_ms`, `max_concurrent`), `escalate.inconclusive_limit` and
-`agent.run_profiles.acceptance_gate` do nothing. `mode` only sets a repo's `manual_review` when the
+`timeout_ms`, `max_concurrent`) and `escalate.inconclusive_limit` do nothing. `mode` only sets a repo's `manual_review` when the
 repo sets none. Its `escalate` rules (and a `repositories[].acceptance_gate.escalate` override) are
 still read, by Code Review, until the block is removed. Each rule's new home:
 
@@ -1792,7 +1959,7 @@ For a `web` pass Symphony:
    gets. By default that is [Playwright MCP](https://github.com/microsoft/playwright-mcp) with
    headless Chromium and an in-memory profile, limited with `--allowed-origins` to the dev server
    on `localhost` / `127.0.0.1`, and saving files into `qa-evidence/`. With
-   `agent.network_access.mode: allowlist` the QA session's sandbox also allows `localhost` and
+   `execution.permissions.network.mode: allowlist` the QA session's sandbox also allows `localhost` and
    `127.0.0.1`;
 3. stops the dev server, releases the port and removes its worktree when the pass ends.
 
@@ -1817,14 +1984,14 @@ there, check the flags above against that release, and update the install comman
 origin allowlist keeps the browser
 on the dev server; Playwright documents it as a guard rather than a security boundary. To use
 another browser server, such as Glance, set `browser_mcp` to its MCP server definition (the shape
-of an [`agent.mcp.servers`](#agentmcp) entry); Symphony then starts it as given:
+of an [`execution.mcp.servers`](#executionmcp) entry); Symphony then starts it as given:
 
 ```yaml
 auto_review:
   playbooks:
     web:
       browser_mcp:
-        command: glance-mcp      # stdio server; or transport: http with url: (Claude runtime only)
+        command: glance-mcp      # stdio server; or transport: http with url: (claude harness only)
         args: ["--headless"]
 ```
 
@@ -2417,7 +2584,7 @@ skipped. The QA prompt gives the agent the build command, every APK path and the
 needs in the command itself: `ANDROID_HOME` (or `ANDROID_SDK_ROOT`) and, when the JDK is not the
 one `/usr/libexec/java_home` finds, `JAVA_HOME`. Add `~/.gradle` to
 `permissions.filesystem.allow_write_paths` so the build can use Gradle's caches (see
-[`agent`](#agent)); Maven Central, Google's Maven and the Gradle plugin portal are
+[`execution`](#execution)); Maven Central, Google's Maven and the Gradle plugin portal are
 in the built-in network allowlist. A fresh QA worktree has no `local.properties`.
 
 The agent follows the ticket's `## User walkthrough` and acceptance criteria. It lets each screen
@@ -2667,7 +2834,7 @@ to the phase before.
 ### `watchdog`
 
 Progress watchdog for stalled runs. A run waiting out a Linear rate limit or outage is not stalled:
-its no-progress clock (and the first-turn `agent.timeouts.stall_ms` clock) starts again when the
+its no-progress clock (and the first-turn `execution.timeouts.stall_ms` clock) starts again when the
 wait ends.
 
 ```yaml
@@ -2686,16 +2853,16 @@ watchdog:
 A run is restarted only on proven silence: the orchestrator has heard from its agent (a session id,
 a transcript event or a Claude Code `tool_progress` heartbeat) and then nothing for the whole bound,
 `no_progress_threshold_ms` (default `600000`, 10 minutes) or, before the first transcript event,
-`agent.timeouts.stall_ms`, while the run's process lives. Every run kind reports the same way:
+`execution.timeouts.stall_ms`, while the run's process lives. Every run kind reports the same way:
 implementation, Code Review and QA runs all forward their streamed events to the orchestrator, so
 each running entry, `/api/v1/state` and the ticket page show the run's session and its latest
 activity. A run the orchestrator never heard from is unobserved, not silent: the watchdog logs
 `watchdog.unobserved_run` once per run at warning level, with `issue_id=`, `issue_identifier=`,
 `run_kind=` and `age_ms=`, and keeps it. Such a run ends through the exit path: the agent's own
-`agent.timeouts` (`turn_ms`, `read_ms`), a hook's timeout, or its process exiting.
+`execution.timeouts` (`turn_ms`, `read_ms`), a hook's timeout, or its process exiting.
 
 Before Code Review runs reported their events, every review longer than the bound was restarted
-while it worked, and operators raised `agent.timeouts.stall_ms` (to 20 minutes) and
+while it worked, and operators raised `execution.timeouts.stall_ms` (to 20 minutes) and
 `watchdog.no_progress_threshold_ms` to cope. Those raised values are no longer needed: remove them
 from your `symphony.yml` to go back to the defaults.
 
@@ -2841,7 +3008,7 @@ read-deny list, writes limited to the
 checkout, a temp folder of its own and the agent cache folder, the agent's environment, no
 listener the network reaches (on macOS no TCP listener at all, only its unix socket), and
 connections limited to loopback and, through a proxy Symphony sets as `HTTPS_PROXY`, the dependency
-hosts on `agent.permissions.network`'s allowlist, an allowlist of mach services like the agent's
+hosts on `execution.permissions.network`'s allowlist, an allowlist of mach services like the agent's
 (no window server, no pasteboard), and no way to have launchd start a process outside the
 sandbox (Apple Events, `open`, `launchctl submit`) (see
 [security](security.md#verification-dev-server-runs-in-a-sandbox)). On Linux the network is a
@@ -3699,7 +3866,7 @@ hooks:
   an empty `.<issue>.after_create_pending` file beside the workspace.
 - A timed-out `after_create` on an SSH worker is not retried, and the next run doesn't run it again
   either, since the first try may still be running there. The timeout fails the run.
-- While `after_create` or `before_run` runs, the agent stall timeout (`agent.timeouts.stall_ms`, 5
+- While `after_create` or `before_run` runs, the agent stall timeout (`execution.timeouts.stall_ms`, 5
   minutes) and the watchdog (`watchdog.no_progress_threshold_ms`) wait for the hook's own timeout,
   so a long install isn't ended as a stalled run. Their clocks start again when the hook ends.
 - A run that is stopped while a hook runs on this machine stops the hook too.

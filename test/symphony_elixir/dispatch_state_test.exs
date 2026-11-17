@@ -306,11 +306,10 @@ defmodule SymphonyElixir.DispatchStateTest do
 
     test "tracker health config failures become config invalid blockers" do
       for {reason, expected_message} <- [
-            {{:invalid_workflow_config, "WORKFLOW.md: agent.runtime is required"}, "Invalid WORKFLOW.md config: agent.runtime is required"},
+            {{:invalid_workflow_config, "WORKFLOW.md: hooks.timeout_ms is invalid"}, "Invalid WORKFLOW.md config: hooks.timeout_ms is invalid"},
             {{:invalid_workflow_config, "symphony.yml: repositories is invalid"}, "Invalid symphony.yml config: repositories is invalid"},
             {:missing_tracker_kind, "Tracker kind missing in WORKFLOW.md"},
             {{:unsupported_tracker_kind, "jira"}, ~s(Unsupported tracker kind in WORKFLOW.md: "jira")},
-            {{:unsupported_agent_kind, "shell"}, ~s(Unsupported agent runtime in WORKFLOW.md: "shell")},
             {{:missing_workflow_file, "/tmp/missing/WORKFLOW.md", :enoent}, "Missing WORKFLOW.md at /tmp/missing/WORKFLOW.md: :enoent"},
             {:workflow_front_matter_not_a_map, "Failed to parse WORKFLOW.md: workflow front matter must decode to a map"},
             {{:workflow_parse_error, {:unexpected_token, "["}}, ~s(Failed to parse WORKFLOW.md: {:unexpected_token, "["})},

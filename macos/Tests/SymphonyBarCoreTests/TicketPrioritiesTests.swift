@@ -6,8 +6,8 @@ final class TicketPrioritiesTests: XCTestCase {
         # Symphony operator config.
         tickets:
           priorities: [urgent, high]   # only these may start
-        agent:
-          runtime: codex
+        execution:
+          mcp: {}
 
         """
 
@@ -34,14 +34,14 @@ final class TicketPrioritiesTests: XCTestCase {
     func testMissingEmptyAndNullReadAsEveryPriority() throws {
         let none = TicketPriorities()
         XCTAssertEqual(try TicketPriorities.values(in: ""), none)
-        XCTAssertEqual(try TicketPriorities.values(in: "agent:\n  runtime: codex\n"), none)
+        XCTAssertEqual(try TicketPriorities.values(in: "execution:\n  mcp: {}\n"), none)
         XCTAssertEqual(try TicketPriorities.values(in: "tickets:\n  priorities: []\n"), none)
         XCTAssertEqual(try TicketPriorities.values(in: "tickets:\n  priorities: null\n"), none)
         XCTAssertEqual(TicketPriorities(), none)
     }
 
     func testIgnoresPrioritiesOutsideTickets() throws {
-        let yaml = "priorities: [urgent]\nagent:\n  priorities: [high]\n"
+        let yaml = "priorities: [urgent]\nexecution:\n  priorities: [high]\n"
         XCTAssertEqual(try TicketPriorities.values(in: yaml), TicketPriorities())
     }
 
@@ -102,8 +102,8 @@ final class TicketPrioritiesTests: XCTestCase {
 
     func testInsertsTheSectionWhenMissing() throws {
         XCTAssertEqual(
-            try TicketPriorities.updating("agent:\n  runtime: codex\n", from: TicketPriorities(), to: TicketPriorities(priorities: [.urgent])),
-            "agent:\n  runtime: codex\ntickets:\n  priorities: [urgent]\n"
+            try TicketPriorities.updating("execution:\n  mcp: {}\n", from: TicketPriorities(), to: TicketPriorities(priorities: [.urgent])),
+            "execution:\n  mcp: {}\ntickets:\n  priorities: [urgent]\n"
         )
     }
 

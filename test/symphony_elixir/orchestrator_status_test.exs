@@ -7305,9 +7305,12 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
     File.write!(Workflow.symphony_file_path(), """
     issues:
       provider: memory
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
       - key: default
         workflow: #{Workflow.workflow_file_path()}

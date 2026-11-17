@@ -217,7 +217,7 @@ defmodule SymphonyElixir.Quality do
   defp error_kind(_status, _error), do: nil
 
   defp agent_kind(opts) do
-    case Keyword.get(opts, :agent_kind) || Config.settings!().agent.kind do
+    case Keyword.get(opts, :agent_kind) || Config.settings!().execution.harness do
       kind when is_binary(kind) and kind != "" -> kind
       _ -> "unknown"
     end

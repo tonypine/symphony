@@ -45,7 +45,7 @@ defmodule SymphonyElixir.Dispatch.Settings do
     case Config.settings_for_repo(repo_key) do
       {:ok, %Schema{} = settings} ->
         %{
-          agent: Map.take(settings.agent, @agent_fields),
+          agent: Map.take(settings.execution, @agent_fields),
           tracker: Map.take(settings.tracker, @tracker_fields),
           priorities: settings.tickets.priorities
         }

@@ -14,9 +14,17 @@ defmodule SymphonyElixir.Init do
     provider: linear
   workspaces:
     root: .symphony/workspaces
-  agent:
-    runtime: codex
-    command: codex app-server
+  execution:
+    harnesses:
+      claude:
+        command: claude --dangerously-skip-permissions --verbose
+        small_model:
+          anthropic: claude-haiku-4-5
+  runs:
+    default:
+      harness: claude
+      provider: anthropic
+      model: claude-opus-5-5
   repositories:
     - key: default
       workflow: WORKFLOW.md

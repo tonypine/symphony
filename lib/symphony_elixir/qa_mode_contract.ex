@@ -9,7 +9,7 @@ defmodule SymphonyElixir.QaModeContract do
   the playbook's own `dev_server_port` and `launch_env`, so the text cannot drift from the code.
   """
 
-  alias SymphonyElixir.QaAgent.PlaybookSettings
+  alias SymphonyElixir.PlaybookSettings
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.{QaDriver, Verification}
 

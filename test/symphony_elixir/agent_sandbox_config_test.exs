@@ -924,9 +924,9 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
     assert {:ok, system_config} =
              SystemSchema.parse(%{
                "repositories" => [%{"key" => "default"}],
-               "agent" => %{
-                 "runtime" => "codex",
-                 "command" => "codex app-server",
+               "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}},
+               "execution" => %{
+                 "harnesses" => %{"codex" => %{"command" => "codex app-server"}},
                  "permissions" => %{
                    "filesystem" => %{
                      "allow_read_paths" => ["~/.npmrc", "~/.claude/projects"]
@@ -940,7 +940,7 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
 
     overrides =
       AgentSandboxConfig.codex_config_overrides(
-        settings.agent.network_access.mode,
+        settings.execution.network_access.mode,
         Schema.codex_effective_network_allowed_domains(settings),
         settings.workspace.sandbox.allow_read_paths
       )
@@ -973,9 +973,9 @@ defmodule SymphonyElixir.AgentSandboxConfigTest do
     assert {:ok, system_config} =
              SystemSchema.parse(%{
                "repositories" => [%{"key" => "default"}],
-               "agent" => %{
-                 "runtime" => "claude",
-                 "command" => "claude --dangerously-skip-permissions",
+               "runs" => %{"default" => %{"harness" => "claude", "provider" => "anthropic", "model" => "claude-test"}},
+               "execution" => %{
+                 "harnesses" => %{"claude" => %{"command" => "claude --dangerously-skip-permissions", "small_model" => %{"anthropic" => "small-test"}}},
                  "permissions" => %{
                    "filesystem" => %{
                      "allow_write_paths" => ["/private/tmp/symphony-mcp", " /opt/cache "]

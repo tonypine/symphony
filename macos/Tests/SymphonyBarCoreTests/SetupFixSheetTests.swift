@@ -153,7 +153,7 @@ final class SetupFixSheetTests: XCTestCase {
     // MARK: - Config (SU7)
 
     func testAConfigSheetShowsTheExactDiff() throws {
-        let text = "auto_review:\n  enabled: true\nagent:\n  runtime: claude\n"
+        let text = "auto_review:\n  enabled: true\nexecution:\n  mcp: {}\n"
         let edited = try SetupConfigEdit.apply(path: "auto_review.enabled", action: .remove, value: .null, to: text)
         let sheet = try XCTUnwrap(SetupFixSheet(problem: key, text: text, edited: .success(edited)))
         XCTAssertEqual(sheet.title, "Remove auto_review.enabled from symphony.yml?")

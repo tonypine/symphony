@@ -7,7 +7,7 @@ defmodule SymphonyElixir.Config.RepoWorkflowSchema do
 
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Playbook.Assembly
-  alias SymphonyElixir.QaAgent.PlaybookSettings
+  alias SymphonyElixir.PlaybookSettings
 
   # Recompile this schema when an embed's defaults change; see SystemSchema.
   require Schema.Hooks

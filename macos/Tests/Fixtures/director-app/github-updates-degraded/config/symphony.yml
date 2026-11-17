@@ -14,9 +14,14 @@ repositories:
       team: TP
     workspace:
       source: https://github.com/acme/web-shop.git
-agent:
-  runtime: claude
-  command: claude
+execution:
+  harnesses:
+    claude:
+      command: claude
+      small_model:
+        anthropic: claude-haiku-4-5
+runs:
+  default: { harness: claude, provider: anthropic, model: claude-sonnet-5-5 }
 dashboard:
   port: 4040
 github:

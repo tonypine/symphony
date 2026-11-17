@@ -3,7 +3,7 @@ import Foundation
 /// One settings key a release's build rewrites by itself, from the release's `version.json`: the table
 /// `symphony config migrations` prints.
 public struct ReleaseSettingsMigration: Equatable, Decodable {
-    /// A dotted path, with `[]` for a list's items: `repositories[].agent.model`.
+    /// A dotted path, with `[]` for a list's items: `repositories[].runs.default.model`.
     public var key: String
     /// The sibling key it becomes; nil when the key is simply gone.
     public var to: String?

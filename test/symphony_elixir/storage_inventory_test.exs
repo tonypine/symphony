@@ -168,9 +168,12 @@ defmodule SymphonyElixir.StorageInventoryTest do
         workflow: WORKFLOW.md
     workspaces:
       root: #{workspace_root}
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     """)
 
     Workflow.set_symphony_file_path(symphony_path)

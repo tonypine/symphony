@@ -10,6 +10,7 @@ defmodule SymphonyElixir.ReviewAgent do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Decisions
   alias SymphonyElixir.EscalationRules
+  alias SymphonyElixir.Harnesses.Launcher
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.ReviewAgent.{Context, Verdict}
 
@@ -370,10 +371,9 @@ defmodule SymphonyElixir.ReviewAgent do
   end
 
   defp run_reviewer_agent(issue, workspace, settings, source, reasons, opts) do
-    config = settings.review_agent
+    reviewer_settings = reviewer_settings(settings)
 
-    with {:ok, agent_module} <- resolve_agent_module(opts, config) do
-      reviewer_settings = reviewer_settings(settings, config)
+    with {:ok, agent_module} <- resolve_agent_module(opts, reviewer_settings) do
       decision_opts = [repo_key: Keyword.get(opts, :repo_key)]
       prompt = reviewer_prompt(issue, source, decision_opts, reasons)
       message_collector = Keyword.get(opts, :review_agent_message_collector, self())
@@ -386,13 +386,13 @@ defmodule SymphonyElixir.ReviewAgent do
                issue: issue,
                repo_key: Keyword.get(opts, :repo_key),
                run_id: Keyword.get(opts, :run_id),
-               run_profile: Keyword.get(opts, :reviewer_run_profile) || Config.code_review_profile(settings),
+               run_profile: Keyword.get(opts, :reviewer_run_profile) || reviewer_settings.execution.run,
                tool_scope: :read_only,
                review_verdict_sink: self(),
                linear_comment_registry: Keyword.get(opts, :linear_comment_registry),
                agent_tmp_dir: Keyword.get(opts, :agent_tmp_dir),
                # The run's temp folder, which its settings already make writable.
-               extra_env: AgentTmpDir.env(reviewer_settings.agent.kind, Keyword.get(opts, :agent_tmp_dir))
+               extra_env: AgentTmpDir.env(reviewer_settings.execution.harness, Keyword.get(opts, :agent_tmp_dir))
              ) do
         try do
           turn_opts =
@@ -654,20 +654,14 @@ defmodule SymphonyElixir.ReviewAgent do
     |> then(&(String.contains?(&1, "max_iterations") or String.contains?(&1, "maximum iterations")))
   end
 
-  defp reviewer_settings(%Schema{} = settings, %Schema.ReviewAgent{} = config) do
-    %{settings | agent: %{settings.agent | kind: config.kind, command: config.command}}
-  end
+  defp reviewer_settings(%Schema{} = settings), do: Config.for_run(settings, Config.run(settings, :code_review))
 
-  defp resolve_agent_module(opts, %Schema.ReviewAgent{} = config) do
+  defp resolve_agent_module(opts, %Schema{} = reviewer_settings) do
     case Keyword.get(opts, :review_agent_module) do
-      nil -> agent_module(config.kind)
+      nil -> {:ok, Launcher.module!(reviewer_settings.execution.harness)}
       module when is_atom(module) -> {:ok, module}
     end
   end
-
-  defp agent_module("codex"), do: {:ok, SymphonyElixir.Codex.AppServer}
-  defp agent_module("claude"), do: {:ok, SymphonyElixir.ClaudeCode.AppServer}
-  defp agent_module(other), do: {:error, {:unsupported_review_agent_kind, other}}
 
   # Code Review judges the pull request's diff for bugs and code quality, and against the ticket's
   # acceptance criteria, scope and intent.

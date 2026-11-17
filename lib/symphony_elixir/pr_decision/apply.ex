@@ -53,12 +53,12 @@ defmodule SymphonyElixir.PrDecision.Apply do
     * `update_branch` – the upkeep's U1 merges the base into the PR's branch, in any phase and
       whatever `pull_requests.auto_merge` says; a conflict GitHub reports shows on the next read.
     * `merge_now`, `arm`, `disarm` – the GitHub calls of a landing. A `merge_now` that merged closes
-      the ticket out in the same step, as `close_out` does: Symphony made the merge, so the record
+      the ticket out in the same step, as `close_ticket` does: Symphony made the merge, so the record
       holds Done before Linear's GitHub automation moves the ticket there, and the observation reads
       that move as unchanged instead of moving it back as drift.
     * `land_agent` – says on the ticket that a landing agent takes the PR over; the orchestrator
       dispatches it.
-    * `close_out` – a merged PR moves its ticket to Done, or to the waiting state when its started
+    * `close_ticket` – a merged PR moves its ticket to Done, or to the waiting state when its started
       sub-issues are open, in every watched phase and whoever merged it.
     * `file_fix_ticket` – the red backstop (10 fix runs, or 3 in a row on the same failure): auto-merge
       off, then the self-heal lane files or reuses the fix ticket for the failing check and holds the
@@ -411,7 +411,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
     with :ok <- AutoMerge.merge(ctx.read, github_opts(ctx)) do
       Logger.info("PR watch squash-merged #{label(ctx)} pr_url=#{pr_url(ctx)} head_sha=#{head(ctx)}")
 
-      with {:error, reason} <- perform(Action.new!("R2", :close_out, reason: "#{pr_name(ctx)} was merged"), ctx) do
+      with {:error, reason} <- perform(Action.new!("R2", :close_ticket, reason: "#{pr_name(ctx)} was merged"), ctx) do
         Logger.warning("PR watch merged #{label(ctx)} but could not close it out; R2 follows reason=#{inspect(reason)}")
       end
 
@@ -451,8 +451,8 @@ defmodule SymphonyElixir.PrDecision.Apply do
     {:ok, %{}}
   end
 
-  defp perform(%Action{kind: :close_out}, ctx) do
-    with :ok <- close_out(ctx) do
+  defp perform(%Action{kind: :close_ticket}, ctx) do
+    with :ok <- close_ticket(ctx) do
       TicketPullRequest.mark_finished(ctx.repo_key, pr_url(ctx), "merged")
       {:ok, %{}}
     end
@@ -732,7 +732,7 @@ defmodule SymphonyElixir.PrDecision.Apply do
     end
   end
 
-  defp close_out(ctx) do
+  defp close_ticket(ctx) do
     if SubIssueWait.wait_on_merge?(ctx.issue, ctx.settings.tracker.terminal_states, ctx.settings) do
       SubIssueWait.wait_on_merge(ctx.issue, ctx.settings, tracker(ctx))
     else

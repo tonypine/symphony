@@ -152,7 +152,7 @@ defmodule SymphonyElixir.PrDecision do
         guard: &rate_limited?/1,
         build: &wait_for_rate_limit/1
       },
-      %{id: "R2", phases: @all, when: "The PR is merged, by Symphony or anyone else", then: "`close_out`", guard: &merged?/1, build: &close_out/1},
+      %{id: "R2", phases: @all, when: "The PR is merged, by Symphony or anyone else", then: "`close_ticket`", guard: &merged?/1, build: &close_ticket/1},
       %{
         id: "R3",
         phases: @all -- [:merging],
@@ -510,7 +510,7 @@ defmodule SymphonyElixir.PrDecision do
     wait("R1", "GitHub's rate limit is spent: the PR can't be read until it resets", :github, "GitHub's rate limit resets")
   end
 
-  defp close_out(facts), do: Action.new!("R2", :close_out, reason: "#{subject(pr(facts))} was merged")
+  defp close_ticket(facts), do: Action.new!("R2", :close_ticket, reason: "#{subject(pr(facts))} was merged")
   defp disarm(facts), do: Action.new!("R3", :disarm, reason: "Auto-merge is armed on #{pr(facts)} but the ticket is in #{phase_name(facts.phase)}")
 
   defp wait_for_hold(%{hold: :question}), do: wait("R4", "A Needs Decision hold pauses the ticket", :person, "a person answers and the hold clears")

@@ -295,9 +295,9 @@ defmodule SymphonyElixir.OrchestratorFinishingTest do
     assert message =~ "finishing_max"
 
     write_finishing_workflow!(ctx)
-    assert Config.settings!().agent.finishing_max == 2
+    assert Config.settings!().execution.finishing_max == 2
 
-    changeset = Schema.Agent.changeset(%Schema.Agent{}, %{"kind" => "codex", "command" => "codex", "finishing_max" => 0})
+    changeset = Schema.Execution.changeset(%Schema.Execution{}, %{"kind" => "codex", "command" => "codex", "finishing_max" => 0})
     assert {"must be greater than %{number}", _} = changeset.errors[:finishing_max]
   end
 

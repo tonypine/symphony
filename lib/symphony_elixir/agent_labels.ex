@@ -18,6 +18,7 @@ defmodule SymphonyElixir.AgentLabels do
     case normalize_kind(kind) do
       "codex" -> "Codex"
       "claude" -> "Claude"
+      "opencode" -> "OpenCode"
       _ -> "Agent"
     end
   end

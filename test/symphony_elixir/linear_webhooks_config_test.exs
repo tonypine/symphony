@@ -9,7 +9,8 @@ defmodule SymphonyElixir.LinearWebhooksConfigTest do
   @base %{
     "issues" => %{"provider" => "memory"},
     "repositories" => [%{"key" => "web"}],
-    "agent" => %{"runtime" => "codex", "command" => "codex app-server"}
+    "execution" => %{"harnesses" => %{"codex" => %{"command" => "codex app-server"}}},
+    "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}}
   }
 
   setup do

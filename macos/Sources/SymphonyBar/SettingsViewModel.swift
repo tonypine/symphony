@@ -42,24 +42,22 @@ final class SettingsViewModel: ObservableObject {
     /// True until the secrets have been read, which can wait on a Keychain prompt while they move out of the
     /// Keychain. Save stays off until then, so an empty form can't overwrite them.
     @Published private(set) var isLoadingSecrets = true
-    /// `agent.concurrency.max_total` in the configured symphony.yml. Saved to that file, not UserDefaults.
+    /// `execution.concurrency.max_total` in the configured symphony.yml. Saved to that file, not UserDefaults.
     @Published var maxConcurrentAgents = MaxConcurrentAgents.symphonyDefault
-    /// `agent.provider`, `.model`, `.effort` and `.run_profiles` in the configured symphony.yml, and the same
-    /// keys under each `repositories[].agent`, plus `agent.small_model`.
+    /// `runs` in the configured symphony.yml, each `repositories[].runs`, and `execution.harnesses`.
     @Published var runProfiles = ScopedRunProfiles()
-    /// The `agent` block the Models rows edit: the top-level one or a repository's.
+    /// The `runs` block the Models rows edit: the top-level one or a repository's.
     @Published var runProfilesScope = RunProfilesScope.global
     /// The `repositories[]` keys, in file order, for the scope picker.
     @Published private(set) var repositoryKeys: [String] = []
-    /// The `--model` / `--effort` in `agent.command`, which runs use while the Default row is set to default.
-    @Published private(set) var commandProfile = RunProfile()
     @Published private(set) var configFileError: String?
     /// Why `symphony check` rejected the changed models, shown in the Models section.
     @Published private(set) var configCheckError: String?
-    /// The row whose OpenRouter model list is open (its run kind, or "default"), and the list's search text.
+    /// The row whose OpenRouter model list is open (its run kind, "default", or a harness's small model), and the
+    /// list's search text.
     @Published var openRouterPickerRow: String?
     @Published var openRouterQuery = ""
-    /// `agent.limits.tokens_per_day` and `.tokens_per_issue` in the configured symphony.yml. A change is checked
+    /// `execution.limits.tokens_per_day` and `.tokens_per_issue` in the configured symphony.yml. A change is checked
     /// with `symphony check` shortly after the last edit.
     @Published var dailyTokenLimit = TokenLimitField(.tokens(TokenLimits.defaultPerDay), default: TokenLimits.defaultPerDay) {
         didSet { if dailyTokenLimit != oldValue { checkTokenLimits() } }
@@ -111,7 +109,7 @@ final class SettingsViewModel: ObservableObject {
     /// Shown once in place of the last-check line after a typed check interval was moved into range (S1d).
     @Published var releaseCheckNote: String?
 
-    /// `workspaces.git_network_timeout_ms`, `agent.timeouts.mcp_tool_ms` and `watchdog.pending_tool_report_after_ms`
+    /// `workspaces.git_network_timeout_ms`, `execution.timeouts.mcp_tool_ms` and `watchdog.pending_tool_report_after_ms`
     /// in the configured symphony.yml, in minutes.
     @Published var gitNetworkTimeoutMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultGitNetworkMs)
     @Published var mcpToolTimeoutMinutes = OperationTimeouts.minutes(OperationTimeouts.defaultMcpToolMs)
@@ -625,12 +623,12 @@ final class SettingsViewModel: ObservableObject {
         macAppQA.launchEnv.removeAll { $0.id == id }
     }
 
-    /// The model and effort pickers are off until a symphony.yml has been read, and while Save checks it.
+    /// The Models and Harnesses rows are off until a symphony.yml has been read, and while Save checks it.
     var canEditRunProfiles: Bool { loadedRunProfiles != nil && !isSaving }
 
     /// What each field of the row for `kind` falls back to in the current scope.
     func inheritedProfile(_ kind: RunKind?) -> RunProfile {
-        runProfiles.inherited(kind, in: runProfilesScope, command: commandProfile)
+        runProfiles.inherited(kind, in: runProfilesScope)
     }
 
     private func loadRunProfiles() {
@@ -639,7 +637,6 @@ final class SettingsViewModel: ObservableObject {
         do {
             let file = SymphonyConfigFile(path: path)
             let profiles = try file.readScopedRunProfiles()
-            commandProfile = try file.readCommandProfile()
             runProfiles = profiles
             loadedRunProfiles = profiles
             repositoryKeys = try RunProfilesConfig.repositoryKeys(in: String(contentsOfFile: path, encoding: .utf8))
@@ -917,9 +914,8 @@ final class SettingsViewModel: ObservableObject {
         return true
     }
 
-    /// Writes the provider, model and effort fields the rows changed to symphony.yml once `symphony check`
-    /// passes on the result, then reads them back, since saving can move `--model` / `--effort` out of
-    /// `agent.command` into the Default row.
+    /// Writes the run profile fields and harness settings the rows changed to symphony.yml once `symphony check`
+    /// passes on the result, then reads them back.
     private func saveRunProfiles(
         _ profiles: ScopedRunProfiles,
         from loaded: ScopedRunProfiles,

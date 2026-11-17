@@ -142,7 +142,7 @@ defmodule SymphonyElixir.LifecycleTest do
     end
 
     test "the token cap is the configured per-ticket limit", %{result: result} do
-      assert result.lifecycle.tokens.cap == Config.settings!().agent.max_tokens_per_issue
+      assert result.lifecycle.tokens.cap == Config.settings!().execution.max_tokens_per_issue
     end
 
     test "the phase path lists the phases in the order entered, with counts and times", %{result: result} do
