@@ -6,8 +6,11 @@ import Foundation
 
 /// Where the ticket is on its way to landing: the five stages in order and its tokens against its cap.
 public struct TicketLifecycle: Equatable, Decodable {
+    /// `paused`: the stage the ticket is in while a pause holds it; `sent_back`: a stage ahead whose verdict sent the
+    /// ticket back to Rework, until it enters it again.
     public enum StageState: String, Equatable, Decodable {
-        case current, passed, skipped
+        case current, paused, passed, skipped
+        case sentBack = "sent_back"
         case notYet = "not_yet"
     }
 
@@ -19,8 +22,13 @@ public struct TicketLifecycle: Equatable, Decodable {
         public var timeMs: Int
         public var agentTimeMs: Int
         public var tokens: Int
+        /// How many runs worked in the stage, the one working now included.
+        public var runs: Int
 
-        public init(id: String, name: String, state: StageState, visits: Int = 0, timeMs: Int = 0, agentTimeMs: Int = 0, tokens: Int = 0) {
+        public init(
+            id: String, name: String, state: StageState, visits: Int = 0, timeMs: Int = 0, agentTimeMs: Int = 0, tokens: Int = 0,
+            runs: Int = 0
+        ) {
             self.id = id
             self.name = name
             self.state = state
@@ -28,10 +36,11 @@ public struct TicketLifecycle: Equatable, Decodable {
             self.timeMs = timeMs
             self.agentTimeMs = agentTimeMs
             self.tokens = tokens
+            self.runs = runs
         }
 
         private enum CodingKeys: String, CodingKey {
-            case id, name, state, visits, tokens
+            case id, name, state, visits, tokens, runs
             case timeMs = "time_ms", agentTimeMs = "agent_time_ms"
         }
 
@@ -44,6 +53,7 @@ public struct TicketLifecycle: Equatable, Decodable {
             timeMs = try container.decodeIfPresent(Int.self, forKey: .timeMs) ?? 0
             agentTimeMs = try container.decodeIfPresent(Int.self, forKey: .agentTimeMs) ?? 0
             tokens = try container.decodeIfPresent(Int.self, forKey: .tokens) ?? 0
+            runs = try container.decodeIfPresent(Int.self, forKey: .runs) ?? 0
         }
     }
 
@@ -186,13 +196,12 @@ public struct TicketLifecycleRead: Equatable, Decodable {
 public struct LifecycleModel: Equatable {
     public struct Stage: Equatable, Identifiable {
         public var id: String
-        /// "Code Review ×3": the stage's name, with its visits when it was entered more than once.
+        /// The stage's name.
         public var title: String
         public var state: TicketLifecycle.StageState
-        /// "Passed", "Now", "Skipped", "Not yet".
+        /// "Passed", "Now", "Paused", "Sent back", "Skipped", "Not yet".
         public var word: String
-        /// "Now · in Rework · 16 min so far": the word, the phase it is in when that isn't the stage's own name, and
-        /// its time.
+        /// "Paused · 4 times · 1 h 30 min", "Sent back · 19 min": the word, the visits when more than one, and its time.
         public var line: String
         public var status: DesignTokens.Status
         public var accessibilityLabel: String
@@ -218,7 +227,7 @@ public struct LifecycleModel: Equatable {
         public var level: Overview.Meter.Level
         /// "3.6M of 8M tokens · 45 %", "3.6M tokens in all", "Nothing yet".
         public var value: String
-        /// What the cap means now, in words; nil without a cap.
+        /// What the cap means now, in words; nil without a cap, and once the ticket ended: it spends nothing more.
         public var note: String?
         public var accessibilityLabel: String
 
@@ -226,71 +235,137 @@ public struct LifecycleModel: Equatable {
         public var scale: Int { max(total, cap ?? 0) }
     }
 
-    /// "In Code Review, visit 3", "Done", "Not started yet".
+    /// One sentence: "In Coding, the 3rd time: QA sent it back, and it waits on your answer", "Done: merged as PR #741
+    /// at 21:05", "Not started yet".
     public var whereLine: String
-    /// "1 h 4 min of agent work", "No run yet".
+    /// "1 h 50 min of work in 7 runs", "No run yet".
     public var summary: String
     /// True while a stage is current: its dot works.
     public var live: Bool
     public var stages: [Stage]
     public var tokens: TokenBar
 
-    /// The phases In Progress serves under its own stage name: no "in In Progress" on Coding.
-    static let ownPhases: [String: String] = ["coding": "In Progress"]
-
-    /// The section from `lifecycle`, with `phase` (`phase_path.current`) naming the phase a current stage is in when
-    /// it is another than the stage's own: a ticket in Rework reads Code Review as current, "in Rework".
-    public static func build(_ lifecycle: TicketLifecycle, phase: String? = nil) -> LifecycleModel {
-        let stages = lifecycle.stages.map { stage(of: $0, phase: phase) }
+    /// The section from `lifecycle`, said in one sentence with the phase path (`path`: the phase it is in and the
+    /// move that sent it back) and the ticket's `situation` (what it waits on, and how a finished ticket ended).
+    public static func build(_ lifecycle: TicketLifecycle, path: TicketPhasePath? = nil, situation: Situation? = nil) -> LifecycleModel {
+        let stages = lifecycle.stages.map(stage(of:))
         let current = lifecycle.stages.first { $0.id == lifecycle.current }
-        let whereLine: String
-        if let current {
-            whereLine = "In \(current.name)" + (current.visits > 1 ? ", visit \(current.visits)" : "")
-        } else if lifecycle.stages.last.map({ $0.id == "done" && $0.state == .passed }) == true {
-            whereLine = "Done"
-        } else if lifecycle.stages.contains(where: { $0.visits > 0 }) {
-            whereLine = phase.map { "In \($0), outside the stages" } ?? "Outside the stages"
-        } else {
-            whereLine = "Not started yet"
-        }
+        let ended = ended(lifecycle, path: path, situation: situation)
         let agentSeconds = lifecycle.stages.reduce(0) { $0 + $1.agentTimeMs } / 1_000
-        let summary = agentSeconds > 0 ? "\(Overview.duration(agentSeconds)) of agent work" : "No run yet"
+        let runs = lifecycle.stages.reduce(0) { $0 + $1.runs }
+        let summary: String
+        if runs > 0 {
+            summary = "\(Overview.duration(agentSeconds)) of work in " + (runs == 1 ? "1 run" : "\(runs) runs")
+        } else if agentSeconds > 0 {
+            summary = "\(Overview.duration(agentSeconds)) of work"
+        } else {
+            summary = "No run yet"
+        }
         return LifecycleModel(
-            whereLine: whereLine, summary: summary, live: current != nil, stages: stages,
-            tokens: tokenBar(lifecycle)
+            whereLine: whereLine(lifecycle, current: current, ended: ended, path: path, situation: situation), summary: summary,
+            live: current?.state == .current && !ended, stages: stages, tokens: tokenBar(lifecycle, ended: ended)
         )
     }
 
-    static func stage(of stage: TicketLifecycle.Stage, phase: String?) -> Stage {
-        let title = stage.name + (stage.visits > 1 ? " ×\(stage.visits)" : "")
+    /// Whether the ticket ended (Done or Cancelled): it spends nothing more.
+    static func ended(_ lifecycle: TicketLifecycle, path: TicketPhasePath?, situation: Situation?) -> Bool {
+        if let kind = situation?.kind { return kind == .done || kind == .cancelled }
+        if let phase = path?.current, PhasePathModel.terminal.contains(phase) { return true }
+        return lifecycle.stages.last.map { $0.id == "done" && $0.state == .passed } ?? false
+    }
+
+    /// "In Coding, the 3rd time: QA sent it back, and it waits on your answer": where it is, which visit, why it came back
+    /// and what it waits on; for a finished ticket, how it ended.
+    static func whereLine(
+        _ lifecycle: TicketLifecycle, current: TicketLifecycle.Stage?, ended: Bool, path: TicketPhasePath?, situation: Situation?
+    ) -> String {
+        if ended { return endLine(situation, path: path) }
+        guard let current else {
+            if lifecycle.stages.contains(where: { $0.visits > 0 }) {
+                return path?.current.map { "In \($0), outside the stages" } ?? "Outside the stages"
+            }
+            return "Not started yet"
+        }
+        var line = "In \(current.name)" + (current.visits > 1 ? ", the \(ordinal(current.visits)) time" : "")
+        let back = current.id == "coding" ? sentBackBy(lifecycle, path: path) : nil
+        let waits = situation.flatMap { waitsOn[$0.kind] }
+        switch (back, waits) {
+        case let (back?, waits?): line += ": \(back) sent it back, and \(waits)"
+        case let (back?, nil): line += ": \(back) sent it back"
+        case let (nil, waits?): line += ": \(waits)"
+        case (nil, nil): break
+        }
+        return line
+    }
+
+    /// What a held ticket waits on, by its situation's kind.
+    static let waitsOn: [DesignTokens.SituationKind: String] = [
+        .you: "it waits on your answer", .blocked: "it waits on another ticket", .paused: "it waits for the pause to lift",
+        .ci: "it waits on CI", .build: "it waits on the build", .slot: "it waits for a free slot", .retrying: "it waits to retry",
+    ]
+
+    /// The phase whose verdict sent the ticket back: the last move into Rework names it, else the stage that reads sent
+    /// back; nil when no stage does.
+    static func sentBackBy(_ lifecycle: TicketLifecycle, path: TicketPhasePath?) -> String? {
+        guard let stage = lifecycle.stages.last(where: { $0.state == .sentBack }) else { return nil }
+        return path?.moves.last(where: { $0.to == "Rework" })?.from ?? stage.name
+    }
+
+    /// "Done: merged as PR #741 at 21:05", "Cancelled: you cancelled it; PR #741 was closed", from the situation's cause.
+    static func endLine(_ situation: Situation?, path: TicketPhasePath?) -> String {
+        let cancelled = situation.map { $0.kind == .cancelled } ?? ["Canceled", "Cancelled"].contains(path?.current ?? "")
+        let word = cancelled ? "Cancelled" : "Done"
+        guard let cause = situation?.cause.trimmingCharacters(in: .whitespaces), !cause.isEmpty,
+              !["It is done.", "It was cancelled."].contains(cause)
+        else { return word }
+        let sentence = cause.hasSuffix(".") ? String(cause.dropLast()) : cause
+        return "\(word): " + sentence.prefix(1).lowercased() + sentence.dropFirst()
+    }
+
+    /// "2nd", "3rd", "11th".
+    static func ordinal(_ n: Int) -> String {
+        let suffix = switch (n % 10, n % 100) {
+        case (1, let t) where t != 11: "st"
+        case (2, let t) where t != 12: "nd"
+        case (3, let t) where t != 13: "rd"
+        default: "th"
+        }
+        return "\(n)\(suffix)"
+    }
+
+    static func stage(of stage: TicketLifecycle.Stage) -> Stage {
         let (word, status): (String, DesignTokens.Status) = switch stage.state {
         case .current: ("Now", .working)
+        case .paused: ("Paused", .idle)
+        case .sentBack: ("Sent back", .you)
         case .passed: ("Passed", .done)
         case .skipped: ("Skipped", .idle)
         case .notYet: ("Not yet", .idle)
         }
+        let soFar = stage.state == .current ? " so far" : ""
         var parts = [word]
-        if stage.state == .current, let phase, phase != stage.name, phase != ownPhases[stage.id] {
-            parts.append("in \(phase)")
-        }
+        if stage.visits > 1 { parts.append("\(stage.visits) times") }
         let seconds = stage.timeMs / 1_000
-        if stage.timeMs > 0 {
-            parts.append(Overview.duration(seconds) + (stage.state == .current ? " so far" : ""))
-        }
+        if stage.timeMs > 0 { parts.append(Overview.duration(seconds) + soFar) }
         var spoken = [stage.name]
         if stage.visits > 1 { spoken.append("entered \(stage.visits) times") }
         spoken.append(word.lowercased())
-        if parts.count > 1, parts[1].hasPrefix("in ") { spoken.append(parts[1]) }
-        if stage.timeMs > 0 { spoken.append(Overview.spokenDuration(seconds) + (stage.state == .current ? " so far" : "")) }
+        if stage.timeMs > 0 { spoken.append(Overview.spokenDuration(seconds) + soFar) }
         return Stage(
-            id: stage.id, title: title, state: stage.state, word: word, line: parts.joined(separator: " · "), status: status,
+            id: stage.id, title: stage.name, state: stage.state, word: word, line: parts.map(unbroken).joined(separator: " · "), status: status,
             accessibilityLabel: spoken.joined(separator: ", ")
         )
     }
 
+    /// One part of a stage's line kept whole: its spaces don't break, so a narrow tile wraps only at a " · ".
+    static func unbroken(_ part: String) -> String {
+        part.replacingOccurrences(of: " ", with: "\u{00A0}")
+    }
+
     static let series: [String: DesignTokens.ChartSeries] = ["coding": .series1, "code_review": .series2, "qa": .series3, "merging": .series4]
 
-    static func tokenBar(_ lifecycle: TicketLifecycle) -> TokenBar {
+    /// The bar; a ticket that `ended` keeps its bar and totals, without a warning: it spends nothing more.
+    static func tokenBar(_ lifecycle: TicketLifecycle, ended: Bool = false) -> TokenBar {
         // Done takes no tokens: the four working stages fill the bar, in their landing order.
         let segments = lifecycle.stages.compactMap { stage -> Segment? in
             guard let series = series[stage.id] else { return nil }
@@ -308,8 +383,8 @@ public struct LifecycleModel: Equatable {
         } else {
             value = "Nothing yet"
         }
-        let level = Overview.level(fraction)
-        let note: String? = percent.map { percent in
+        let level: Overview.Meter.Level = ended ? .normal : Overview.level(fraction)
+        let note: String? = ended ? nil : percent.map { percent in
             if percent >= 100 { return "At the cap: no new run starts." }
             switch level {
             case .atLimit: return "Almost at the cap: the run finishes, the next one waits."

@@ -2973,6 +2973,10 @@ Important nuance:
 - Once the worker exits normally, the orchestrator still schedules a short continuation retry
   (about 1 second) so it can re-check whether the issue remains active and needs another worker
   session.
+- A worker that exits normally while its ticket is held (a pause, a decision request, a wait for a
+  build) was stopped by that hold: the orchestrator schedules no continuation retry, releases the
+  claim, and records the run's end as not counted towards the dispatch-loop guard. The ticket is
+  dispatched again only once the hold lifts, as any held ticket is.
 
 ### 7.2 Run Attempt Lifecycle
 
@@ -3075,7 +3079,7 @@ question tool asks it as a request (`request: true`), and a machine step's is as
   - Remove running entry.
   - Update aggregate runtime totals.
   - Schedule continuation retry (attempt `1`) after the worker exhausts or finishes its in-process
-    turn loop.
+    turn loop, unless the ticket is held: then release the claim instead.
 
 - `Worker Exit (abnormal)`
   - Remove running entry.

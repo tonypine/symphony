@@ -207,7 +207,7 @@
     const live = !!v.live;
     const sum = v.runs.length ? dur(v.totalMinutes) + " of work in " + v.runs.length + " runs" : "No run yet";
     return '<section class="panel lifecycle-panel" aria-label="Lifecycle"><div class="life-head"><span class="dot role-' + esc(v.situation.role) + (live ? " live" : "") + '"></span><span class="life-where">' + esc(v.life.where) + "</span>" +
-      '<span class="life-sum">' + esc(sum) + "</span></div>" + K.steps(Object.assign({ kind: "ticket" }, v.life.state)) + K.stageBar(Object.assign({ key: "life" }, v.tokens)) + "</section>";
+      '<span class="life-sum">' + esc(sum) + "</span></div>" + K.steps(Object.assign({ kind: "ticket" }, v.life.state)) + K.stageBar(Object.assign({ key: "life", ended: v.life.current === "done" }, v.tokens)) + "</section>";
   }
 
   /* ----- Timeline ----- */

@@ -39,6 +39,7 @@ defmodule SymphonyElixir.Orchestrator do
     QualityGate,
     Questions,
     ReleaseBuild,
+    ReleaseGate,
     RetiredStates,
     RuleActions,
     RunKind,
@@ -839,6 +840,7 @@ defmodule SymphonyElixir.Orchestrator do
       issue_id ->
         {running_entry, state} = pop_running_entry(state, issue_id)
         Verification.release(Map.get(running_entry, :verification), "agent process exit")
+        reason = held_exit(reason, running_entry)
         record_dispatch_outcome(running_entry, reason)
         state = record_session_completion_totals(state, running_entry)
         session_id = running_entry_session_id(running_entry)
@@ -849,6 +851,9 @@ defmodule SymphonyElixir.Orchestrator do
           case reason do
             :normal ->
               handle_normal_agent_exit(state, issue_id, running_entry, session_id)
+
+            :held ->
+              handle_held_agent_exit(state, issue_id, running_entry, session_id)
 
             _ ->
               handle_abnormal_agent_exit(state, issue_id, running_entry, session_id, reason)
@@ -986,6 +991,29 @@ defmodule SymphonyElixir.Orchestrator do
         complete_pr_review_comment_cursor(issue_id, running_entry_repo_key(running_entry))
         complete_active_agent_run(state, issue_id, running_entry, session_id)
     end
+  end
+
+  # A run that ended normally while its ticket is held (`hold?/1`: a pause, a decision request, a
+  # wait for a build) ended because of that hold: the runner stops a run whose ticket waits on one
+  # (`SymphonyElixir.AgentRunner`). Its end is `:held`: no continuation follows it, and it counts
+  # towards neither the dispatch-loop guard nor the quiet-handoff count. A PR run has no ticket to
+  # hold.
+  defp held_exit(:normal, %{issue: %Issue{} = issue} = running_entry) do
+    if not pr_run_entry?(running_entry) and hold?(issue), do: :held, else: :normal
+  end
+
+  defp held_exit(reason, _running_entry), do: reason
+
+  # The ticket is dispatched again as any held ticket is: by the poll that finds its hold lifted, or
+  # by the lift itself. Its claim is released, so nothing else waits on it.
+  defp handle_held_agent_exit(%State{} = state, issue_id, running_entry, session_id) do
+    persist_run_completion(running_entry, "success", nil)
+    complete_pr_review_comment_cursor(issue_id, running_entry_repo_key(running_entry))
+    Logger.info("Agent task completed for issue_id=#{issue_id} session_id=#{session_id}; its ticket is held, so no continuation is scheduled")
+
+    state
+    |> complete_issue(issue_id, running_entry)
+    |> release_issue_claim(issue_id)
   end
 
   # A landing run that ended on pending checks is held instead of continued (see
@@ -1717,6 +1745,9 @@ defmodule SymphonyElixir.Orchestrator do
     # Every ticket of the build's repository waits while the build is behind its base branch on the
     # files the prompt rendering must agree with, `skip-update-hold` or not.
     _behind = InstructionsHold.resolve(issues, repo_name, build: build)
+    # A red release gate's fix ticket: moved to Todo when it sits in Backlog, and the gate's hold on
+    # every other ticket lifted once the fix ticket is terminal.
+    :ok = ReleaseGate.reconcile(issues, repo_name)
     # The release build of each fix a held ticket waits on: rerun when GitHub had no machine for it.
     :ok = ReleaseBuild.watch(issues, build, cache, repo_name, [])
     cache
@@ -4730,7 +4761,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp pause_gate(%Issue{} = issue, %State{} = state, terminal_states) do
     closed_gate(repository_pause_reason(issue), :repository_pause) ||
       closed_gate(no_repo_key_reason(issue), :no_repo_key) ||
-      closed_gate(hold_reason(issue, state, terminal_states), nil)
+      closed_gate(hold_reason(issue, state, terminal_states), nil) ||
+      closed_gate(ReleaseGate.hold_reason(hold_repo_key(issue), issue.identifier), :release_gate)
   end
 
   defp flow_gate(%Issue{} = issue, %State{} = state) do
@@ -5663,11 +5695,19 @@ defmodule SymphonyElixir.Orchestrator do
   # again from where it stopped. The store is the truth; the board label is only its projection.
   # The store is keyed by repo, so an issue whose repo can't be told (`hold_repo_key/1`) is held
   # rather than read as unheld.
+  #
+  # A wait for a build (`SymphonyElixir.InstructionsHold`, `SymphonyElixir.UpdateHold`) holds it
+  # too, as it holds a fresh dispatch (`hold_reason/3`): a continuation or a retry of a run such a
+  # hold stopped would otherwise start the ticket again a second later, and stop again (TP-1527).
   defp hold?(%Issue{} = issue) do
     case hold_repo_key(issue) do
       nil -> true
-      repo_key -> paused?(repo_key, issue)
+      repo_key -> paused?(repo_key, issue) or build_held?(repo_key, issue)
     end
+  end
+
+  defp build_held?(repo_key, %Issue{id: issue_id}) do
+    InstructionsHold.reasons(repo_key, issue_id) != [] or UpdateHold.reasons(repo_key, issue_id) != []
   end
 
   # The repo a ticket's holds are read under: its own, else the only configured repo. With several
@@ -6319,8 +6359,8 @@ defmodule SymphonyElixir.Orchestrator do
   # The run's `run.ended` event, keyed by its run id, with how it ended, how long it ran, the tokens
   # it spent, its transcript and the head its workspace held that no remote has (`unpushed_head`),
   # which the next run's `SymphonyElixir.WorkspaceSync` compares. A run a usage limit, an
-  # unreachable model API or a CI wait stopped records `counted: false`, as its dispatch outcome is
-  # dropped.
+  # unreachable model API, a CI wait or its ticket's hold stopped records `counted: false`, as its
+  # dispatch outcome is dropped.
   defp record_run_ended(repo_key, issue_id, run_id, running_entry, reason) do
     head = pr_head(issue_id, repo_key)
     started = run_events(issue_id, "run.started", &(&1[:run_id] == run_id)) |> List.first() || %{}
@@ -6403,6 +6443,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp run_exit({:stopped, state_name}, _repo_key, _issue_id, _head), do: "stopped: its ticket moved to #{state_name}"
+  defp run_exit(:held, _repo_key, _issue_id, _head), do: "stopped: its ticket waits on a hold"
   defp run_exit({:usage_limited, _info}, _repo_key, _issue_id, _head), do: "usage limit"
   defp run_exit({:model_api_unreachable, _info}, _repo_key, _issue_id, _head), do: "model API unreachable"
   defp run_exit({:ci_pending, _info}, _repo_key, _issue_id, _head), do: "waiting for CI"
@@ -6417,6 +6458,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp uncounted_exit?({uncounted, _info}) when uncounted in [:usage_limited, :model_api_unreachable, :ci_pending], do: true
+  defp uncounted_exit?(:held), do: true
   defp uncounted_exit?(_reason), do: false
 
   defp run_duration_ms(%DateTime{} = started_at), do: max(DateTime.diff(DateTime.utc_now(), started_at, :millisecond), 0)
