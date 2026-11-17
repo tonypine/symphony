@@ -166,6 +166,51 @@ defmodule SymphonyElixir.SituationTest do
     end
   end
 
+  describe "headline/3" do
+    # The events whose time is a kind's since: a run's end, the step a run works on, a push, a cancel.
+    defp ledger! do
+      events = [
+        {"run.started", %{run_id: "run-3", run_kind: "implementation", run_number: 1}, [run_id: "run-3"]},
+        {"step.started", %{step_id: "code", title: "Write the code", mode: "delegated"}, [run_id: "run-3"]},
+        {"attempt.pushed", %{head: "abc1234", pr_url: "https://github.com/o/r/pull/741"}, [run_id: "run-3"]},
+        {"run.ended", %{run_id: "run-3", exit: "normal"}, [run_id: "run-3"]},
+        {"ticket.cancelled", %{from: "QA", to: "Canceled"}, [actor: %{kind: :person, name: "Director"}]}
+      ]
+
+      for {type, payload, opts} <- events do
+        {:ok, _event} = TicketEvents.record(@repo, @id, type, payload, opts)
+      end
+    end
+
+    defp headline_of_read(record, live), do: record |> Situation.read(live) |> Map.take([:kind, :since])
+
+    test "gives every kind and its since as read/3 does, with a ledger" do
+      for kind <- Situation.kinds() do
+        :ok = RunStore.clear()
+        :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: @id, issue_identifier: "TP-1", phase: "In Progress"})
+        ledger!()
+        facts = arrange(kind)
+
+        assert Situation.headline(stored_record(), live(facts)) == headline_of_read(stored_record(), live(facts)), kind
+        assert Situation.headline(stored_record(), live(facts)).kind == kind
+      end
+    end
+
+    test "a ticket nothing holds reads its ledger only when its watcher waits on a run that ended" do
+      ledger!()
+      decision = %{kind: :wait, rule: "R9", owner: :agent, reason: "A run is working on the ticket", clears_when: "the run ends", since: @at}
+      agent = record(%{phase: "QA", pr_watch: watch(%{phase: :qa, ci: :green}, %{decision: decision})})
+      todo = record(%{phase: "Todo"})
+
+      assert %{kind: "waiting_for_ci", since: since} = Situation.headline(agent, live())
+      assert since == Situation.read(agent, live()).since
+      refute since == @at
+
+      assert Situation.headline(todo, live()) == headline_of_read(todo, live())
+      assert Situation.headline(nil, live()) == headline_of_read(nil, live())
+    end
+  end
+
   describe "waiting_on_you" do
     test "says who asked what, by the run's name in the ledger" do
       assert %{

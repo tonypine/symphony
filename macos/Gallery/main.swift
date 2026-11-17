@@ -1620,7 +1620,7 @@ func ticketsTable(window: CGFloat, query: TicketsQuery = TicketsQuery(), drawer:
     var values = TicketFilterValues()
     values.learn(ticketsPayload.rows)
     return TicketsView(
-        payload: payload, list: list, query: .constant(query), values: values, search: "", selection: .constant("SHOP-301"),
+        payload: payload, rows: payload.rows, list: list, query: .constant(query), values: values, search: "", selection: .constant("SHOP-301"),
         drawerShown: .constant(drawer), reference: situationsNow, actions: TicketsActions(),
         viewsMenu: TicketViewsMenu(views: savedTicketViews, currentID: nil, query: query)
     )

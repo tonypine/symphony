@@ -109,7 +109,12 @@ public struct TicketList: Equatable {
     public static let openTitle = "Open Ticket"
 
     /// Every tracked ticket in the repo scope, by situation kind then oldest first.
-    public var rows: [Row]
+    public var rows: [Row] {
+        didSet { positions = Self.positions(rows) }
+    }
+
+    /// Each row's place in `rows` by its identifier in lower case, so a cell finds its ticket in constant time.
+    private var positions: [String: Int] = [:]
     /// Symphony's clock when it took the state, which the situations' ages are measured against.
     public var reference: Date
 
@@ -246,11 +251,22 @@ public struct TicketList: Equatable {
             }
             .filter { scope.includes($0.repoKey) }
             .sorted(by: Self.defaultOrder)
+        positions = Self.positions(rows)
     }
 
-    /// The row of `identifier`, case-insensitively.
+    /// The row of `identifier`, case-insensitively, by a lookup built once per list.
     public func row(_ identifier: String) -> Row? {
-        rows.first { $0.identifier.caseInsensitiveCompare(identifier) == .orderedSame }
+        positions[identifier.lowercased()].map { rows[$0] }
+    }
+
+    /// The first row's place for each identifier.
+    private static func positions(_ rows: [Row]) -> [String: Int] {
+        var positions: [String: Int] = [:]
+        positions.reserveCapacity(rows.count)
+        for (index, row) in rows.enumerated() where positions[row.identifier.lowercased()] == nil {
+            positions[row.identifier.lowercased()] = index
+        }
+        return positions
     }
 
     // MARK: - Helpers

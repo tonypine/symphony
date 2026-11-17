@@ -203,6 +203,32 @@ defmodule SymphonyElixir.Situation do
     compute(record, ledger(record), live, phase_of(records))
   end
 
+  @typedoc "A situation's kind and since when it holds: what a list of tickets shows and sorts by."
+  @type headline :: %{kind: kind(), since: DateTime.t() | nil}
+
+  # The kinds whose since a ledger event says (a run's end, its step, a push, the cancel): every other
+  # kind's since is its record's or the live facts', but for a ticket nothing holds whose watcher
+  # waits on a run that ended.
+  @ledger_kinds ["retrying", "waiting_for_ci", "working", "cancelled"]
+
+  @doc """
+  The kind and the since of `record`'s situation, as `read/3` gives them, read without its ledger
+  unless the kind's since comes from it: a list of every ticket (`SymphonyElixir.TicketList`) then
+  reads only the ledgers of the few tickets working, retrying, waiting for CI or cancelled.
+  """
+  @spec headline(map() | nil, live_facts(), [map()] | nil) :: headline()
+  def headline(record, live, records \\ nil) do
+    record = TicketState.normalize(record)
+    ctx = context(record, [], live, phase_of(records))
+    kind = Enum.find(@kinds, &holds?(&1, ctx)) || :nothing
+    ctx = if ledger_since?(kind, ctx), do: %{ctx | events: ledger(record)}, else: ctx
+    situation = situation(kind, ctx)
+    %{kind: situation.kind, since: situation.since}
+  end
+
+  defp ledger_since?(:nothing, ctx), do: match?({:wait, %{owner: :agent}}, next_of(ctx))
+  defp ledger_since?(kind, _ctx), do: kind in @ledger_kinds
+
   defp ledger(%{issue_id: issue_id}) do
     case TicketEvents.query(issue_id, limit: :all) do
       events when is_list(events) -> events
