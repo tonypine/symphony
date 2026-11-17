@@ -1241,6 +1241,383 @@ public enum DesignTokens {
         public static var separatorSpan: Double { separatorHeight + 2 * separatorMargin }
     }
 
+    /// The catalog's Text field, Search field and multi-line input (`.field`, `.input`, `.input.search`, `.help`,
+    /// `.own-words`, `.tl-compose`; TP-1509): a surface of a control height, its edge and, while focused, a soft halo
+    /// outside it; the label above and help, the error or the reason under it, never two of them.
+    public enum Field {
+        /// What the surface shows: at rest, under the pointer, or with the keyboard.
+        public enum State: String, CaseIterable, Equatable {
+            case rest, hover, focused
+        }
+
+        /// Which input: the text field and the text area (`.input`), or the search field's sunken capsule (`.search`).
+        public enum Kind: String, CaseIterable, Equatable {
+            case text, search
+        }
+
+        /// A colour at an opacity: the hovered edge is the primary text at 28 %.
+        public struct Tone: Equatable {
+            public var token: ColorToken
+            public var opacity: Double
+
+            public init(_ token: ColorToken, opacity: Double = 1) {
+                self.token = token
+                self.opacity = opacity
+            }
+        }
+
+        /// What sits under a field: the reason it is off, the error, or its help.
+        public enum Footnote: Equatable {
+            case reason(String)
+            case error(String)
+            case help(String)
+        }
+
+        /// Between the label, the field and the line under it.
+        public static let gap: Double = 6
+        /// The room on each side of the text: 70 % of the control's padding (the search field's 75 % before the glyph
+        /// and 60 % after the last item).
+        public static let paddingScale: Double = 0.7
+        public static let searchLeadingScale: Double = 0.75
+        public static let searchTrailingScale: Double = 0.6
+        /// Between the glyph, the text, the count and the clear button.
+        public static let itemGap = Space.s2
+        /// The edge, and the halo outside it while focused (the catalog's `0 0 0 4px`, past the 1 pt edge).
+        public static let edgeWidth = Control.edgeWidth
+        public static let haloWidth: Double = 3
+        /// The accented form's edge while focused (the own-words field's `1.5px`), and its halo past it.
+        public static let accentedFocusEdge: Double = 1.5
+        public static let accentedFocusHalo: Double = 3.5
+        /// The hovered text field's edge: the primary text at 28 %.
+        public static let hoverEdgeOpacity: Double = 0.28
+        /// The hovered search field's surface: the primary text at 3 % over the sunken surface.
+        public static let searchHoverOpacity: Double = 0.03
+        /// The surface's inner shadow at its top (`inset 0 1px 2px var(--shadow-near)`).
+        public static let innerShadowY: Double = 1
+        public static let innerShadowBlur: Double = 2
+        /// The text's weight: the catalog's 400 at the control's size.
+        public static let textWeight = 400
+        /// The search glyph and the clear button.
+        public static let searchSymbol = "magnifyingglass"
+        public static let searchGlyph: Double = 13
+        public static let clearSymbol = "xmark"
+        public static let clearSize: Double = 16
+        public static let clearGlyph: Double = 8
+        /// The search field's shortcut, shown while it is empty.
+        public static let searchShortcut = "⌘ F"
+        /// A search field's width in the window's toolbar.
+        public static let toolbarSearchWidth: Double = 220
+        /// The error's shake: the field's offsets, in points, at each fraction of `Motion.slowDuration` (the catalog's
+        /// `ds-shake`); none under Reduce Motion.
+        public static let shakeOffsets: [Double] = [-4, 3, -2, 0]
+        public static let shakeTimes: [Double] = [0.2, 0.45, 0.7, 1]
+        /// The text area: its radius, its room above and below the text, and its fewest and most lines before it
+        /// scrolls (the own-words field starts at three and grows to eight).
+        public static let areaRadius = Radius.row
+        public static let areaVerticalPadding = Space.s2
+        public static let areaMinLines = 3
+        public static let areaMaxLines = 8
+        /// The keys that send a text area's text.
+        public static let sendShortcut = "⌘ ↩"
+
+        /// The surface's colour.
+        public static func fill(_ kind: Kind, _ state: State, disabled: Bool) -> ColorToken {
+            if disabled { return .surfaceRaised }
+            if kind == .search, state != .focused { return .surfaceSunken }
+            return .surfaceContent
+        }
+
+        /// The edge's colour: the problem colour while invalid, the accent while focused (or `accented`).
+        public static func edge(_ kind: Kind, _ state: State, invalid: Bool = false, disabled: Bool = false, accented: Bool = false) -> Tone {
+            if disabled { return Tone(.strokeSeparator) }
+            if invalid { return Tone(.statusProblem) }
+            if state == .focused || accented { return Tone(.accent) }
+            switch (kind, state) {
+            case (.text, .hover): return Tone(.textPrimary, opacity: hoverEdgeOpacity)
+            case (.search, .hover): return Tone(.strokeStrong)
+            case (.search, _): return Tone(.strokeSeparator)
+            default: return Tone(.strokeStrong)
+            }
+        }
+
+        /// The halo outside the edge: the accent tint while focused (the problem tint while invalid too), the lighter
+        /// accent tint at rest on an `accented` area; none otherwise.
+        public static func halo(_ state: State, invalid: Bool = false, disabled: Bool = false, accented: Bool = false) -> ColorToken? {
+            if disabled { return nil }
+            if state == .focused { return invalid ? .tintProblem : .accentTintStrong }
+            if invalid { return nil }
+            return accented ? .accentTint : nil
+        }
+
+        /// What shows under the field: the reason while it is off, else the error, else the help; one at most.
+        public static func footnote(help: String?, error: String?, disabledReason: String?) -> Footnote? {
+            if let reason = nonBlank(disabledReason) { return .reason(reason) }
+            if let error = nonBlank(error) { return .error(error) }
+            if let help = nonBlank(help) { return .help(help) }
+            return nil
+        }
+
+        private static func nonBlank(_ text: String?) -> String? {
+            guard let text, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return text
+        }
+
+        /// The count inside a search field with a query: "3 found", or "None".
+        public static func matches(_ count: Int) -> String { count > 0 ? "\(count) found" : "None" }
+
+        /// The line under a search field that found nothing: what it searched.
+        public static func noMatch(_ query: String, searched: String) -> String {
+            "Nothing matches “\(query.trimmingCharacters(in: .whitespacesAndNewlines))”. \(searched)"
+        }
+
+        /// Whether a search field shows its count, clear button and no-match line: a query that is not only spaces.
+        public static func hasQuery(_ query: String) -> Bool { !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+
+        /// What Escape does in a search field: clear its query, then give up the keyboard.
+        public enum EscapeStep: Equatable { case clear, release }
+
+        public static func escape(query: String) -> EscapeStep { query.isEmpty ? .release : .clear }
+    }
+
+    /// The catalog's Table (`.table`, the Table header and row stories; TP-1510): a 32 pt header of short labels whose
+    /// sortable ones are small buttons showing their direction, 36 pt rows with the row radius at their ends, every
+    /// second one faintly banded; columns that fit their content and columns that share the spare width.
+    public enum Table {
+        /// The header's height and a row's.
+        public static let headerHeight: Double = 32
+        public static let rowHeight: Double = 36
+        /// The room on each side of a cell's content (`--space-3`).
+        public static let cellPadding = Space.s3
+        /// A sortable header's button: the small control's height and radius, reaching 8 pt past its cell's padding.
+        public static let headerButton = Control.small
+        public static let headerButtonOutset = Space.s2
+        /// Between a header's label and its sort glyph, and the glyph's size (the catalog's 9 px arrow).
+        public static let sortGap = Space.s1
+        public static let sortGlyph: Double = 9
+        public static let ascendingSymbol = "arrowtriangle.up.fill"
+        public static let descendingSymbol = "arrowtriangle.down.fill"
+        /// The header's rule under it.
+        public static let ruleWidth: Double = 1
+        /// The band behind every second row at rest: the catalog's 2.2 % of a dark ink, or of white in dark.
+        public static let band = ColorPair(RGBA(24, 24, 48, 0.022), RGBA(255, 255, 255, 0.022))
+        /// The fewest points a column that shares the spare width shrinks to before the table scrolls sideways.
+        public static let minShareWidth: Double = 80
+        /// The empty table's line: its height and its room above the link.
+        public static let emptyHeight: Double = 140
+
+        /// How a column's content sits: text at the leading edge, numbers at the trailing edge in tabular figures.
+        public enum Alignment: String, CaseIterable, Equatable {
+            case text, number
+        }
+
+        /// How wide a column is: as wide as its widest content (never squeezed), or a share of the width the fitted
+        /// columns leave, down to `minimum`.
+        public enum Width: Equatable {
+            case fit
+            case share(Double, minimum: Double = Table.minShareWidth)
+
+            /// The share's weight; none for a fitted column.
+            public var weight: Double? {
+                if case let .share(weight, _) = self { return max(weight, 0) }
+                return nil
+            }
+        }
+
+        /// The columns' widths in `available` points: a fitted column gets its `measured` width; the columns that
+        /// share split what is left in their weights' proportions, none under its minimum (a share that would be
+        /// smaller takes its minimum, and the rest is split again among the others). When even the minimums don't
+        /// fit, every sharing column is at its minimum and the total is wider than `available`: the table scrolls.
+        public static func widths(available: Double, columns: [Width], measured: [Double]) -> [Double] {
+            var widths = columns.indices.map { index -> Double in
+                columns[index].weight == nil ? (measured.indices.contains(index) ? max(measured[index], 0) : 0) : 0
+            }
+            var open = columns.indices.filter { columns[$0].weight != nil }
+            var spare = available - widths.reduce(0, +)
+            while !open.isEmpty {
+                let weights = open.map { columns[$0].weight ?? 0 }
+                let total = weights.reduce(0, +)
+                let shares = zip(open, weights).map { index, weight in
+                    (index, total > 0 ? max(spare, 0) * weight / total : max(spare, 0) / Double(open.count))
+                }
+                let short = shares.filter { index, share in share < minimum(columns[index]) }
+                if short.isEmpty {
+                    for (index, share) in shares { widths[index] = share }
+                    break
+                }
+                for (index, _) in short {
+                    widths[index] = minimum(columns[index])
+                    spare -= widths[index]
+                }
+                open.removeAll { index in short.contains { $0.0 == index } }
+            }
+            return widths
+        }
+
+        private static func minimum(_ width: Width) -> Double {
+            if case let .share(_, minimum) = width { return max(minimum, 0) }
+            return 0
+        }
+
+        /// The x offset that keeps the first column in place while the table scrolls sideways by `offset`.
+        public static func pinnedOffset(scrolled offset: Double) -> Double { max(offset, 0) }
+
+        /// Which column a table is sorted by and which way.
+        public struct Sort: Equatable, Hashable {
+            public var column: String
+            public var ascending: Bool
+
+            public init(_ column: String, ascending: Bool) {
+                self.column = column
+                self.ascending = ascending
+            }
+
+            /// A click on `column`'s header: the same column again reverses; another sorts by it, `firstAscending`
+            /// or not (the catalog sorts a new column most first).
+            public static func toggled(_ current: Sort?, column: String, firstAscending: Bool = false) -> Sort {
+                if let current, current.column == column { return Sort(column, ascending: !current.ascending) }
+                return Sort(column, ascending: firstAscending)
+            }
+
+            /// The order of two cells' words: numbers by their value (a leading number, its commas, a sign, a
+            /// trailing unit or percent left aside), anything else as Finder orders names; `ascending` or reversed.
+            public static func ordered(_ lhs: String, _ rhs: String, ascending: Bool) -> Bool {
+                let result: ComparisonResult
+                if let left = number(lhs), let right = number(rhs) {
+                    result = left == right ? .orderedSame : left < right ? .orderedAscending : .orderedDescending
+                } else {
+                    result = lhs.localizedStandardCompare(rhs)
+                }
+                return ascending ? result == .orderedAscending : result == .orderedDescending
+            }
+
+            /// A cell's number: "1,204", "62%", "3.4M" (a K, M or B scales it), "−12"; nil for words.
+            public static func number(_ text: String) -> Double? {
+                var body = text.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "")
+                    .replacingOccurrences(of: "\u{2212}", with: "-")
+                var scale = 1.0
+                if body.hasSuffix("%") { body.removeLast() }
+                if let last = body.last, let factor = ["K": 1e3, "M": 1e6, "B": 1e9][String(last)] {
+                    scale = factor
+                    body.removeLast()
+                }
+                return Double(body.trimmingCharacters(in: .whitespaces)).map { $0 * scale }
+            }
+        }
+
+        /// What VoiceOver reads for a header: its title, then whether it is sorted and which way ("Age, sorted, oldest
+        /// first"); `ascending` and `descending` are the column's own words for its directions.
+        public static func spokenHeader(_ title: String, sort: Sort?, column: String, ascending: String, descending: String) -> String {
+            guard let sort, sort.column == column else { return title }
+            return "\(title), sorted, \(sort.ascending ? ascending : descending)"
+        }
+
+        /// What VoiceOver reads for a row: each cell after its column's title ("Ticket, TP-1382. Age, 3 h"); an empty
+        /// cell is left out.
+        public static func spokenRow(titles: [String], cells: [String]) -> String {
+            zip(titles, cells).filter { !$0.1.isEmpty }.map { "\($0), \($1)" }.joined(separator: ". ")
+        }
+
+        /// The row Up or Down picks from `selected` among `count` rows: the next or the previous, held at the ends;
+        /// with nothing picked, Down picks the first and Up the last. Nil when there are no rows.
+        public static func moved(_ selected: Int?, by step: Int, count: Int) -> Int? {
+            guard count > 0 else { return nil }
+            guard let selected, (0 ..< count).contains(selected) else { return step >= 0 ? 0 : count - 1 }
+            return min(max(selected + step, 0), count - 1)
+        }
+
+        /// Whether row `index` (from 0) is banded: every second one, at rest only (the catalog's even rows).
+        public static func banded(_ index: Int, selected: Bool, hovered: Bool) -> Bool {
+            index % 2 == 1 && !selected && !hovered
+        }
+
+        /// A row's fill: the accent when selected (the pressed grey when the window is not in front), else the hover
+        /// overlay, else the band on every second row; none otherwise.
+        public enum Fill: Equatable {
+            case accent, inactiveSelection, hover, band
+        }
+
+        public static func fill(_ index: Int, selected: Bool, hovered: Bool, windowActive: Bool = true) -> Fill? {
+            if selected { return windowActive ? .accent : .inactiveSelection }
+            if hovered { return .hover }
+            return banded(index, selected: selected, hovered: hovered) ? .band : nil
+        }
+    }
+
+    /// The catalog's Key-value list (`.kv` in `components.css`, TP-1511): labels in a column as wide as the longest,
+    /// values beside them; stacked, labels above their values. The Tickets details' list (`.facts`) is the same list
+    /// in the secondary style with tighter rows.
+    public enum KeyValue {
+        /// Between the label column and the values (`gap: … var(--space-4)`).
+        public static let columnGap: Double = Space.s4
+        /// Between two facts (`gap: 8px …`).
+        public static let rowGap: Double = 8
+        /// Between two facts of the Tickets details (`.facts`, `gap: 6px …`).
+        public static let compactRowGap: Double = 6
+        /// Stacked: between a label and its value (`.kv.stacked { gap: 2px }`).
+        public static let stackedLabelGap: Double = 2
+        /// Stacked: under each value (`.kv.stacked dd { margin-bottom: var(--space-2) }`).
+        public static let stackedValueGap: Double = Space.s2
+        /// Between the parts of a value that are several things, chips or a path and its button (`dd { gap: … }`).
+        public static let valueGap: Double = Space.s2
+        /// Between two groups (`.kv-group + .kv-group { margin-top: var(--space-4) }`).
+        public static let groupGap: Double = Space.s4
+        /// Under a group's heading (`.kv-group h4 { margin: 0 0 var(--space-2) }`).
+        public static let groupHeadingGap: Double = Space.s2
+        /// A group's heading's letter spacing, as a fraction of its size (`letter-spacing: 0.08em`).
+        public static let groupHeadingTracking: Double = 0.08
+        /// Narrower than this, a list is stacked ("labels above values, under 300 pt").
+        public static let stackedBelow: Double = 300
+
+        /// How a list lays its facts out.
+        public enum Layout: String, CaseIterable, Equatable {
+            /// Two columns: labels on the left in a column as wide as the longest.
+            case columns
+            /// Each label above its value, for a narrow place.
+            case stacked
+
+            /// Two columns at `width` and wider, stacked under `stackedBelow`.
+            public static func fitting(_ width: Double) -> Layout { width < stackedBelow ? .stacked : .columns }
+        }
+    }
+
+    /// The catalog's Collapsible card (`.collapsible` and `.fold` in `components.css`, TP-1511): a head with the
+    /// disclosure chevron, the title and a summary at the trailing end, over a body that folds away.
+    public enum Collapsible {
+        /// The head's least height (`min-height: 48px`).
+        public static let headMinHeight: Double = 48
+        /// The head's padding above and below (`padding: var(--space-3) …`).
+        public static let headVerticalPadding: Double = Space.s3
+        /// The head's padding at the sides (`padding: … var(--space-5)`).
+        public static let headHorizontalPadding: Double = Space.s5
+        /// Between the chevron, the title and the summary (`gap: var(--space-2)`).
+        public static let headGap: Double = Space.s2
+        /// The disclosure chevron's size (`.disclose { width: 10px }`).
+        public static let chevronSize: Double = 10
+        /// The body's padding at the leading side: under the title, past the chevron (`calc(var(--space-3) + 6px)`).
+        public static let bodyLeadingPadding: Double = Space.s3 + 6
+        /// The body's padding at the trailing side and under it (`padding: 0 var(--space-3) var(--space-3) …`).
+        public static let bodyPadding: Double = Space.s3
+        /// How far a row of an opening body comes down from (`--enter-offset`).
+        public static let rowEnterOffset: Double = 6
+        /// What the summary says when the card cannot open: there is nothing in it.
+        public static let emptySummary = "None yet"
+
+        /// The summary's opacity: there while folded, faded away while open.
+        public static func summaryOpacity(expanded: Bool) -> Double { expanded ? 0 : 1 }
+
+        /// The chevron's turn in degrees: right while folded, down while open.
+        public static func chevronDegrees(expanded: Bool) -> Double { expanded ? 90 : 0 }
+
+        /// What VoiceOver reads after the head's title: its state, then the summary ("collapsed, 3 runs"); an empty
+        /// card reads "None yet".
+        public static func spokenValue(expanded: Bool, summary: String?, empty: Bool) -> String {
+            if empty { return emptySummary }
+            let state = expanded ? "expanded" : "collapsed"
+            guard let summary, !summary.isEmpty, !expanded else { return state }
+            return "\(state), \(summary)"
+        }
+    }
+
     /// The main window's layout (§3.5).
     public enum Layout {
         public static let windowWidth: Double = 1200

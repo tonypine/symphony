@@ -1,6 +1,5 @@
 // The catalog's Segmented control, Pop-up and Menu button stories (TP-1508), each drawn by the shared components under
-// the id the catalog gives the story (`docs/design/catalog/stories.js`). The gallery shows each component's
-// stories as one cell, each under its name.
+// the id the catalog gives the story (`docs/design/catalog/stories.js`), each a variation of its own.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI

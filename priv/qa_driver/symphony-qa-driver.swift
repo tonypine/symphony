@@ -437,6 +437,12 @@ func characterCount(_ element: AXUIElement) -> Int? {
     return (attribute(element, kAXValueAttribute as String) as? String)?.utf16.count
 }
 
+/// Text in an error message: in quotes, with line breaks and tabs written out, cut at 80 characters.
+func quoted(_ text: String) -> String {
+    let escaped = text.replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: "\t", with: "\\t")
+    return "\"" + (escaped.count > 80 ? String(escaped.prefix(80)) + "…" : escaped) + "\""
+}
+
 func setFlag(_ element: AXUIElement, _ name: String) -> AXError {
     AXUIElementSetAttributeValue(element, name as CFString, kCFBooleanTrue)
 }
@@ -491,8 +497,14 @@ func enterText(_ app: AXUIElement, _ pid: pid_t, _ element: AXUIElement, role: S
     }
 
     guard landed else {
-        let shown = characterCount(element).map(String.init) ?? "unknown"
-        fail("text_not_entered", "After typing, the field holds \(shown) characters, not the \(expected) typed. The app may have lost focus or changed the text.")
+        // A secure field's text is never shown: only how many characters it holds.
+        if secure {
+            let shown = characterCount(element).map(String.init) ?? "an unknown number of"
+            fail("text_not_entered", "After typing, the secure field holds \(shown) characters, not the \(expected) typed. The app may have lost focus or changed the text.")
+        }
+        let held = attribute(element, kAXValueAttribute as String) as? String ?? ""
+        let holds = held.isEmpty ? "nothing" : quoted(held)
+        fail("text_not_entered", "After typing \(quoted(value)), the field holds \(holds). The app may have lost focus or changed the text.")
     }
 
     if singleLineRoles.contains(role) {

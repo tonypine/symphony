@@ -22,7 +22,10 @@ while IFS= read -r path; do
     macos/Sources/* | macos/Gallery/* | macos/Package.swift | macos/Makefile | macos/Info.plist | macos/Resources/* | priv/qa_driver/* | .xcode-version) build=true ;;
   esac
   case "$path" in
-    macos/Sources/* | macos/Tests/* | macos/Package.swift | test/fixtures/api/* | .xcode-version) unit=true ;;
+    # The catalog, its counterpart table and the gallery's list of component variations are read by the unit tests
+    # (DesignTokensCatalogTests, CatalogCounterpartsTests): a story added to the catalog alone must meet them.
+    macos/Sources/* | macos/Tests/* | macos/Package.swift | test/fixtures/api/* | .xcode-version | docs/design/catalog/* | \
+      docs/design/catalog-counterparts.md | macos/Gallery/component-variations.txt) unit=true ;;
   esac
   case "$path" in
     macos/Sources/* | macos/Tests/ticket-page-scroll-test.py | macos/Tests/Fixtures/* | priv/qa_driver/* | .xcode-version) speed=true build=true ;;

@@ -513,27 +513,12 @@ private struct ContextCardView: View {
 
     var body: some View {
         Card(title: ContextCard.title) {
-            if narrow {
-                VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-                    ForEach(rows, id: \.label) { row in
-                        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-                            ContextLabel(text: row.label)
-                            row.value
-                        }
-                    }
-                }
-            } else {
-                Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: DesignTokens.Space.s4, verticalSpacing: DesignTokens.Space.s3) {
-                    ForEach(rows, id: \.label) { row in
-                        GridRow {
-                            ContextLabel(text: row.label)
-                            row.value
-                        }
-                    }
+            KeyValueList(layout: narrow ? .stacked : .columns) {
+                ForEach(rows, id: \.label) { row in
+                    KeyValueRow(row.label) { row.value }
                 }
             }
         }
-        .font(DesignTokens.TypeStyle.body.font)
         .environment(\.mentionReferences, card.references)
     }
 
@@ -585,18 +570,6 @@ private struct ContextCardView: View {
             })))
         }
         return rows
-    }
-}
-
-/// A row's label in the context card (N9).
-private struct ContextLabel: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .foregroundStyle(.secondary)
-            .gridColumnAlignment(.leading)
-            .fixedSize()
     }
 }
 

@@ -1,7 +1,7 @@
 // The catalog's Row stories (TP-1507), each drawn by the shared `Row` under the id the catalog gives the story
 // (`docs/design/catalog/stories.js`), and the tree and the progress strip drawn from the catalog's Home and Initiatives
-// data (`PROGRESS`, `QUEUE` and `EPICS` there). The gallery shows the Row stories as one cell of its Row
-// entry, each under its name, beside the tree and the progress strips.
+// data (`PROGRESS`, `QUEUE` and `EPICS` there). Each Row story is a variation of its own Row entry, beside the tree
+// and the progress strips.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI
@@ -33,10 +33,11 @@ let catalogTickets = [
 
 /// A row story as the catalog's `row()` draws it: the status glyph (or the live dot), the identifier and title, the
 /// second line when asked, then the small badge, a fix button (or its reason and the disabled button) and the age.
+/// `width` is the catalog's 640 px row; `nil` lets the row take the width its container gives it (a fold's body).
 @MainActor
 func rowStory(
     _ ticket: CatalogTicket, state: DesignTokens.Interaction = .rest, twoLines: Bool = false, live: Bool = false,
-    windowActive: Bool = true, fix: String? = nil, fixReason: String? = nil
+    windowActive: Bool = true, fix: String? = nil, fixReason: String? = nil, width: CGFloat? = 640
 ) -> AnyView {
     AnyView(
         Row(
@@ -53,7 +54,8 @@ func rowStory(
                 }
             }
         }
-        .frame(width: 640)
+        .frame(width: width)
+        .frame(maxWidth: width == nil ? .infinity : nil, alignment: .leading)
     )
 }
 

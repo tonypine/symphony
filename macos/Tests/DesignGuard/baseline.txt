@@ -1,8 +1,10 @@
 # The design guard's baseline (TP-1493, docs/design/design-system.md §3.11): how many raw style values each view
 # file still has, per kind, and (TP-1505) how many buttons without the shared style (`button`) and controls turned
 # off without a reason (`disabled`), and (TP-1506) how many status dots drawn by hand (`dot`), and (TP-1508) how
-# many stock pickers (`picker`) and stock menus (`menu`). It must equal what the guard counts: lower a number in the
-# same change that removes a bypass, and delete the line when it reaches zero. A file not listed here may have none.
+# many stock pickers (`picker`) and stock menus (`menu`), and (TP-1509) how many stock text fields, secure fields and
+# text editors (`field`), and (TP-1510) how many stock tables (`table`). It must equal what the guard counts: lower a
+# number in the same change that removes a bypass, and delete the line when it reaches zero. A file not listed here
+# may have none.
 SymphonyBar/ActionRail.swift button 2
 SymphonyBar/AddRepoView.swift font 9
 SymphonyBar/AddRepoView.swift color 30
@@ -10,8 +12,9 @@ SymphonyBar/AddRepoView.swift number 15
 SymphonyBar/AddRepoView.swift button 12
 SymphonyBar/AddRepoView.swift disabled 9
 SymphonyBar/AddRepoView.swift picker 1
+SymphonyBar/AddRepoView.swift field 3
 SymphonyBar/AppDelegate.swift rawColor 3
-SymphonyBar/AuditView.swift color 6
+SymphonyBar/AuditView.swift color 5
 SymphonyBar/AuditView.swift button 2
 SymphonyBar/BuiltInTicketPatternsPicker.swift font 1
 SymphonyBar/BuiltInTicketPatternsPicker.swift color 1
@@ -28,26 +31,29 @@ SymphonyBar/EditRepoSheet.swift number 6
 SymphonyBar/EditRepoSheet.swift button 5
 SymphonyBar/EditRepoSheet.swift disabled 5
 SymphonyBar/EditRepoSheet.swift picker 1
+SymphonyBar/EditRepoSheet.swift field 2
 SymphonyBar/GitHubUpdatesCardView.swift color 6
 SymphonyBar/GitHubUpdatesCardView.swift number 1
 SymphonyBar/GitHubUpdatesCardView.swift button 2
 SymphonyBar/GitHubUpdatesCardView.swift disabled 2
 SymphonyBar/GitHubUpdatesCardView.swift picker 1
+SymphonyBar/GitHubUpdatesCardView.swift field 1
 SymphonyBar/GitHubUpdatesSetupView.swift color 11
 SymphonyBar/GitHubUpdatesSetupView.swift number 4
 SymphonyBar/GitHubUpdatesSetupView.swift button 1
 SymphonyBar/GitHubUpdatesSetupView.swift disabled 2
+SymphonyBar/GitHubUpdatesSetupView.swift field 1
 SymphonyBar/HomeInboxView.swift color 6
 SymphonyBar/HomeInboxView.swift button 1
 SymphonyBar/HomeInboxView.swift disabled 2
-SymphonyBar/HomeView.swift font 2
-SymphonyBar/HomeView.swift color 11
+SymphonyBar/HomeView.swift font 1
+SymphonyBar/HomeView.swift color 10
 SymphonyBar/HomeView.swift number 1
-SymphonyBar/HomeView.swift button 1
 SymphonyBar/HomeView.swift disabled 2
 SymphonyBar/InboxMoveViews.swift color 5
 SymphonyBar/InboxMoveViews.swift button 2
-SymphonyBar/InboxView.swift color 14
+SymphonyBar/InboxMoveViews.swift field 1
+SymphonyBar/InboxView.swift color 13
 SymphonyBar/InboxView.swift number 2
 SymphonyBar/InboxView.swift button 1
 SymphonyBar/InitiativesView.swift color 21
@@ -55,7 +61,7 @@ SymphonyBar/InitiativesView.swift number 3
 SymphonyBar/InitiativesView.swift button 7
 SymphonyBar/InsightsView.swift color 5
 SymphonyBar/InsightsView.swift number 7
-SymphonyBar/InsightsView.swift button 3
+SymphonyBar/InsightsView.swift button 2
 SymphonyBar/JournalView.swift font 1
 SymphonyBar/JournalView.swift color 5
 SymphonyBar/JournalView.swift number 2
@@ -63,31 +69,34 @@ SymphonyBar/JournalView.swift button 2
 SymphonyBar/PRWatchCardView.swift color 7
 SymphonyBar/PRWatchCardView.swift button 1
 SymphonyBar/PRWatchCardView.swift disabled 1
-SymphonyBar/PeekView.swift color 6
+SymphonyBar/PeekView.swift color 5
 SymphonyBar/PhasesSection.swift font 14
 SymphonyBar/PhasesSection.swift color 13
 SymphonyBar/PhasesSection.swift button 10
 SymphonyBar/PhasesSection.swift disabled 4
 SymphonyBar/PhasesSection.swift picker 4
 SymphonyBar/PhasesSection.swift menu 1
+SymphonyBar/PhasesSection.swift field 8
 SymphonyBar/PlainTextEditor.swift font 1
-SymphonyBar/PullRequestPageView.swift color 10
+SymphonyBar/PullRequestPageView.swift color 9
 SymphonyBar/PullRequestPageView.swift button 4
 SymphonyBar/QualityView.swift color 11
 SymphonyBar/QualityView.swift number 1
 SymphonyBar/QualityView.swift button 5
-SymphonyBar/ReposView.swift font 17
-SymphonyBar/ReposView.swift color 28
+SymphonyBar/ReposView.swift font 16
+SymphonyBar/ReposView.swift color 25
 SymphonyBar/ReposView.swift rawColor 1
 SymphonyBar/ReposView.swift number 42
 SymphonyBar/ReposView.swift button 18
 SymphonyBar/ReposView.swift disabled 11
+SymphonyBar/ReposView.swift field 1
 SymphonyBar/SettingsView.swift font 2
 SymphonyBar/SettingsView.swift color 66
 SymphonyBar/SettingsView.swift number 7
 SymphonyBar/SettingsView.swift button 11
 SymphonyBar/SettingsView.swift disabled 27
 SymphonyBar/SettingsView.swift picker 8
+SymphonyBar/SettingsView.swift field 22
 SymphonyBar/SetupView.swift color 29
 SymphonyBar/SetupView.swift number 6
 SymphonyBar/SetupView.swift button 7
@@ -96,7 +105,7 @@ SymphonyBar/ShippedView.swift color 2
 SymphonyBar/SituationLine.swift color 2
 SymphonyBar/SituationLine.swift number 8
 SymphonyBar/SymphonyWindowView.swift font 3
-SymphonyBar/SymphonyWindowView.swift color 2
+SymphonyBar/SymphonyWindowView.swift color 1
 SymphonyBar/SymphonyWindowView.swift button 13
 SymphonyBar/SymphonyWindowView.swift disabled 7
 SymphonyBar/TicketPageView.swift font 2
@@ -104,12 +113,14 @@ SymphonyBar/TicketPageView.swift color 14
 SymphonyBar/TicketPageView.swift number 4
 SymphonyBar/TicketPageView.swift button 4
 SymphonyBar/TicketPageView.swift disabled 2
+SymphonyBar/TicketPageView.swift field 2
 SymphonyBar/TicketsView.swift font 2
-SymphonyBar/TicketsView.swift color 23
-SymphonyBar/TicketsView.swift number 6
+SymphonyBar/TicketsView.swift color 18
+SymphonyBar/TicketsView.swift number 3
 SymphonyBar/TicketsView.swift button 8
 SymphonyBar/TicketsView.swift disabled 2
 SymphonyBar/TicketsView.swift menu 1
+SymphonyBar/TicketsView.swift table 1
 SymphonyBar/UpdatePoller.swift font 1
 SymphonyBar/UsageView.swift color 1
 SymphonyBar/WorkflowSetupPage.swift font 1
@@ -124,9 +135,9 @@ SymphonyBar/WorkflowSetupSheet.swift disabled 2
 SymphonyBarUI/ChipText.swift rawColor 1
 SymphonyBarUI/ChipTextView.swift rawColor 7
 SymphonyBarUI/ChipTextView.swift number 1
-SymphonyBarUI/FactsRailDetailPanels.swift font 3
-SymphonyBarUI/FactsRailDetailPanels.swift color 22
-SymphonyBarUI/FactsRailDetailPanels.swift number 9
+SymphonyBarUI/FactsRailDetailPanels.swift font 2
+SymphonyBarUI/FactsRailDetailPanels.swift color 15
+SymphonyBarUI/FactsRailDetailPanels.swift number 3
 SymphonyBarUI/FactsRailDetailPanels.swift disabled 2
 SymphonyBarUI/FactsRailPanels.swift font 7
 SymphonyBarUI/FactsRailPanels.swift color 18
@@ -136,10 +147,10 @@ SymphonyBarUI/JournalSection.swift disabled 1
 SymphonyBarUI/LifecycleSection.swift font 6
 SymphonyBarUI/LifecycleSection.swift color 15
 SymphonyBarUI/LifecycleSection.swift number 14
-SymphonyBarUI/QuestionBlock.swift font 6
-SymphonyBarUI/QuestionBlock.swift color 11
+SymphonyBarUI/QuestionBlock.swift font 5
+SymphonyBarUI/QuestionBlock.swift color 9
 SymphonyBarUI/QuestionBlock.swift rawColor 2
-SymphonyBarUI/QuestionBlock.swift number 10
+SymphonyBarUI/QuestionBlock.swift number 9
 SymphonyBarUI/QuestionBlock.swift button 1
 SymphonyBarUI/QuestionBlock.swift disabled 2
 SymphonyBarUI/QuestionBlock.swift picker 1
@@ -150,8 +161,8 @@ SymphonyBarUI/RunGroup.swift number 2
 SymphonyBarUI/SessionReaderView.swift font 6
 SymphonyBarUI/SessionReaderView.swift color 12
 SymphonyBarUI/SessionReaderView.swift number 2
-SymphonyBarUI/StepList.swift font 9
-SymphonyBarUI/StepList.swift color 10
+SymphonyBarUI/StepList.swift font 8
+SymphonyBarUI/StepList.swift color 8
 SymphonyBarUI/StepList.swift number 4
 SymphonyBarUI/TimelineSection.swift font 3
 SymphonyBarUI/TimelineSection.swift color 10

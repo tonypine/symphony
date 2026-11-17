@@ -210,8 +210,9 @@ build-gallery:
 	sh Tests/gallery-portable-test.sh "$(GALLERY)"
 
 # What a built gallery reads, copied in the checkout's layout to $(GALLERY_RESOURCES) (Gallery/Files.swift): the
-# committed fixtures, Symphony's API fixtures and the shared views' files `--check` lists. `make qa-app` puts it in the
-# QA build at Contents/Resources/GalleryResources, so the gallery runs on a QA host that has no checkout.
+# committed fixtures, Symphony's API fixtures, the shared views' files and the list of component variations `--check`
+# reads. `make qa-app` puts it in the QA build at Contents/Resources/GalleryResources, so the gallery runs on a QA host
+# that has no checkout.
 # It takes no default: a copy at build/GalleryResources would sit beside build/SymphonyGallery and stand in for the
 # checkout there.
 gallery-resources:
@@ -221,6 +222,7 @@ gallery-resources:
 		"$(GALLERY_RESOURCES)/test/fixtures"
 	cp -R Tests/Fixtures "$(GALLERY_RESOURCES)/macos/Tests/Fixtures"
 	cp Sources/SymphonyBarUI/*.swift "$(GALLERY_RESOURCES)/macos/Sources/SymphonyBarUI/"
+	cp Gallery/component-variations.txt "$(GALLERY_RESOURCES)/macos/Gallery/"
 	cp -R ../test/fixtures/api "$(GALLERY_RESOURCES)/test/fixtures/api"
 
 gallery: build-gallery

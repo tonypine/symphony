@@ -749,9 +749,8 @@ private struct ModelField: View {
         case RunProfilesConfig.anthropic:
             ChoicePicker(title: "Model", selection: $selection, choices: RunProfilesConfig.models, inherited: inherited)
         default:
-            TextField("Model", text: $selection.text, prompt: Text(inherited ?? "none"))
-                .labelsHidden()
-                .textFieldStyle(.roundedBorder)
+            DirectorTextField(nil, text: $selection.text, placeholder: inherited ?? "none", size: .small)
+                .accessibilityLabel("Model")
         }
     }
 }
@@ -775,11 +774,9 @@ private struct HarnessesSection: View {
             Section {
                 ForEach(harnesses) { harness in
                     Row("\(harness.title) command") {
-                        TextField("Command", text: $model.runProfiles[harness].command.text)
-                            .labelsHidden()
-                            .textFieldStyle(.roundedBorder)
+                        DirectorTextField(nil, text: $model.runProfiles[harness].command.text, placeholder: "Command", size: .small)
+                            .accessibilityLabel("\(harness.title) command")
                             .frame(width: 320)
-                            .controlSize(.small)
                     }
                     .help(RunProfilesConfig.commandPath(harness).joined(separator: "."))
                     ForEach(smallModelProviders(harness, inUse: inUse[harness] ?? []), id: \.self) { provider in

@@ -150,12 +150,17 @@ def live_snapshot(work):
     snapshot = {}
 
     rows = [(pid, cmd) for pid, cmd in processes() if str(work) not in cmd]
-    # The installed app (~/Applications or /Applications) and the Symphony it runs from the release in its bundle.
-    snapshot["apps"] = sorted(pid for pid, cmd in rows if "/Applications/Symphony.app/Contents/MacOS/" in cmd)
+    # The installed app (~/Applications or /Applications) and the Symphony it runs from the release in its bundle,
+    # matched by where their executables start: on a CI VM another runner's job may run a copy installed under its
+    # own folder (…/_temp/Applications/Symphony.app), which is not the live app.
+    installed = ("/Applications/Symphony.app", str(home / "Applications" / "Symphony.app"))
+    snapshot["apps"] = sorted(
+        pid for pid, cmd in rows if any(cmd.startswith(f"{app}/Contents/MacOS/") for app in installed)
+    )
     snapshot["beams"] = sorted(
         pid for pid, cmd in rows
         if "beam.smp" in cmd
-        and "/Applications/Symphony.app/Contents/Resources/symphony-release/" in cmd
+        and any(cmd.startswith(f"{app}/Contents/Resources/symphony-release/") for app in installed)
     )
 
     listeners = run(["lsof", "-nP", "-iTCP:4000", "-sTCP:LISTEN", "-t"], check=False).stdout.split()

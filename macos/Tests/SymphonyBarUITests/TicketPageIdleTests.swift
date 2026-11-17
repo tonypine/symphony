@@ -22,10 +22,10 @@ final class TicketPageIdleTests: XCTestCase {
     // MARK: - A click on a fold
 
     func testAPressReleasedWhereItBeganIsAClick() {
-        XCTAssertTrue(FoldHeader<EmptyView>.isClick(.zero))
-        XCTAssertTrue(FoldHeader<EmptyView>.isClick(CGSize(width: FoldHeader<EmptyView>.clickSlop, height: -FoldHeader<EmptyView>.clickSlop)))
-        XCTAssertFalse(FoldHeader<EmptyView>.isClick(CGSize(width: 0, height: 30)))
-        XCTAssertFalse(FoldHeader<EmptyView>.isClick(CGSize(width: -12, height: 0)))
+        XCTAssertTrue(CollapsibleHead<EmptyView>.isClick(.zero))
+        XCTAssertTrue(CollapsibleHead<EmptyView>.isClick(CGSize(width: CollapsibleHead<EmptyView>.clickSlop, height: -CollapsibleHead<EmptyView>.clickSlop)))
+        XCTAssertFalse(CollapsibleHead<EmptyView>.isClick(CGSize(width: 0, height: 30)))
+        XCTAssertFalse(CollapsibleHead<EmptyView>.isClick(CGSize(width: -12, height: 0)))
     }
 
     // MARK: - The working pulses run on Core Animation

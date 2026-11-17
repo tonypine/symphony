@@ -193,8 +193,6 @@ private struct BoardGroup<Row: View>: View {
     let reference: Date
     let toggle: () -> Void
     @ViewBuilder let row: (HomeBoard.Row) -> Row
-    @FocusState private var headingFocused: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous) }
 
@@ -203,23 +201,17 @@ private struct BoardGroup<Row: View>: View {
             if group.isEmpty {
                 heading.padding(.horizontal, DesignTokens.Space.s4).frame(minHeight: 38)
             } else {
-                Button(action: toggle) {
+                // The shared fold head (C61's): the chevron, hover, pressed, Return and Space, across the card's width.
+                CollapsibleHead(
+                    expanded: !folded, style: .card, accessibilityLabel: group.accessibilityLabel,
+                    accessibilityValue: folded ? "Folded" : "Open", toggle: toggle
+                ) {
                     heading
-                        .padding(.horizontal, DesignTokens.Space.s4)
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(GroupHeadingStyle())
-                .focusEffectDisabled()
-                .focused($headingFocused)
-                .accessibilityLabel(group.accessibilityLabel)
-                .accessibilityValue(folded ? "Folded" : "Open")
-                .accessibilityHint(folded ? "Shows its tickets" : "Hides its tickets")
-                if !folded {
+                FoldBody(expanded: !folded) {
                     VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                         ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, item in
-                            row(item)
-                                .transition(.opacity.animation(reduceMotion ? nil : .standard.delay(Double(index) * 0.035)))
+                            row(item).foldRow(index)
                         }
                     }
                     .padding(.horizontal, DesignTokens.Space.s2)
@@ -228,7 +220,6 @@ private struct BoardGroup<Row: View>: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .clipShape(shape)
         // A group with rows is a panel; an empty one keeps its hairline on the window.
         .background {
             if !group.isEmpty { Color.clear.panelSurface(in: shape) }
@@ -236,22 +227,12 @@ private struct BoardGroup<Row: View>: View {
         .overlay {
             if group.isEmpty { shape.strokeBorder(DesignTokens.Surface.separator.color) }
         }
-        // The heading spans the card's top edge, so its keyboard focus rings the card, outside its rounded corners.
-        .focusRing(headingFocused && keyboardFocus, shape)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(group.accessibilityLabel)
     }
 
     private var heading: some View {
         HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
-            if !group.isEmpty {
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .rotationEffect(.degrees(folded ? 0 : 90))
-                    .animation(reduceMotion ? nil : .spring(duration: 0.5, bounce: 0.1), value: folded)
-                    .accessibilityHidden(true)
-            }
             Image(systemName: group.kind.symbol)
                 .foregroundStyle(group.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(group.kind.tint))
                 .accessibilityHidden(true)
@@ -267,25 +248,6 @@ private struct BoardGroup<Row: View>: View {
                     .monospacedDigit()
                     .lineLimit(1)
             }
-        }
-    }
-}
-
-/// The heading's hover and pressed surfaces, across the card's full width.
-private struct GroupHeadingStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        Face(configuration: configuration)
-    }
-
-    private struct Face: View {
-        let configuration: ButtonStyleConfiguration
-        @State private var hovered = false
-
-        var body: some View {
-            let state = DesignTokens.Interaction(hovered: hovered, pressed: configuration.isPressed)
-            configuration.label
-                .background { state.surface.map { Rectangle().fill($0.fill) } }
-                .onHover { hovered = $0 }
         }
     }
 }
