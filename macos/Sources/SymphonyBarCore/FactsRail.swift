@@ -411,8 +411,10 @@ public struct PullRequestPanelModel: Equatable {
 
 // MARK: - The Connected panel
 
-/// What the Connected panel says: the epic with its progress, each blocker (an open one with where it stands, a
-/// resolved one struck through with when) and the tickets this one holds up.
+/// What the Connected panel says (`docs/design/director-window-and-home.md` § The ticket page): the epic with its
+/// progress, where this ticket sits in it and the tickets around it; the tickets that block this one now; the tickets
+/// it holds up. Every ticket is one line: its dot, identifier, title and where it stands. A part with nothing to list
+/// is left out, and a ticket connected to nothing has no panel (`isEmpty`).
 public struct ConnectedPanelModel: Equatable {
     public struct Epic: Equatable {
         public var identifier: String
@@ -420,9 +422,31 @@ public struct ConnectedPanelModel: Equatable {
         public var strip: SubTicketStrip?
         /// "4 of 7 done".
         public var progress: String
+        /// "this is the 5th": this ticket's place in the chain; nil when the epic's list doesn't hold it.
+        public var place: String?
+        /// The tickets around this one: the one before it, this one, and the next ones, bounded for a large epic.
+        public var tickets: [Line]
+        public var accessibilityLabel: String
+
+        /// "4 of 7 done · this is the 5th".
+        public var progressLine: String { [progress, place].compactMap { $0 }.joined(separator: " · ") }
+    }
+
+    /// One ticket of the panel, on one line: its status dot, identifier, title and its situation's badge.
+    public struct Line: Equatable, Identifiable {
+        public var id: String { identifier }
+        public var identifier: String
+        public var title: String
+        /// Its situation's word ("Waiting for CI"), else its phase ("Todo"); nil when the read names neither.
+        public var badge: String?
+        public var status: DesignTokens.Status
+        /// This ticket, in its epic's list: highlighted, and it opens nothing.
+        public var current: Bool
         public var accessibilityLabel: String
     }
 
+    /// A blocker as the Initiatives page lists it under a sub-ticket: open with where it stands, resolved struck
+    /// through with when.
     public struct Row: Equatable, Identifiable {
         public var id: String { identifier }
         public var identifier: String
@@ -436,28 +460,35 @@ public struct ConnectedPanelModel: Equatable {
     }
 
     public var epic: Epic?
-    public var waitingOn: [Row]
-    public var holdingUp: [Row]
+    public var waitingOn: [Line]
+    public var holdingUp: [Line]
 
-    public static let noEpicLine = "Not part of an epic."
-    public static let noBlockerLine = "Nothing: no ticket holds this one up."
-    public static let holdsNothingLine = "Nothing waits on this one."
+    /// How many tickets before this one, and after it, the epic's list shows.
+    public static let ticketsBefore = 1
+    public static let ticketsAfter = 2
 
-    /// The panel from `connected`; a ticket without the field reads as connected to nothing. A blocker's situation is
-    /// read from the epic's list when the blocker is one of its tickets. Dates read in `calendar`, against
-    /// `reference`'s day.
-    public static func build(_ connected: TicketConnected?, reference: Date, calendar: Calendar = .current) -> ConnectedPanelModel {
+    /// Nothing to say: no epic, nothing blocks it and it holds nothing up. The panel is not drawn.
+    public var isEmpty: Bool { epic == nil && waitingOn.isEmpty && holdingUp.isEmpty }
+
+    /// The panel from `connected`; a ticket without the field reads as connected to nothing. Only a blocker still
+    /// open is listed: what it waited on before is the timeline's. A blocker's situation is read from the epic's list
+    /// or the held tickets when it is one of them.
+    public static func build(_ connected: TicketConnected?) -> ConnectedPanelModel {
         let connected = connected ?? TicketConnected()
         let known = Dictionary(
             (connected.epic?.tickets ?? []).map { ($0.identifier, $0) } + connected.blocks.map { ($0.identifier, $0) },
             uniquingKeysWith: { first, _ in first }
         )
-        let waitingOn = connected.blockedBy.map { blocker in
-            row(blocker, situation: known[blocker.identifier]?.situation, reference: reference, calendar: calendar)
+        let waitingOn = connected.blockedBy.filter { !$0.resolved }.map { blocker in
+            line(
+                identifier: blocker.identifier, title: blocker.title, situation: known[blocker.identifier]?.situation,
+                state: blocker.state, relation: "holds this one up"
+            )
         }
-        return ConnectedPanelModel(
-            epic: connected.epic.map(epic), waitingOn: waitingOn, holdingUp: connected.blocks.map(row)
-        )
+        let holdingUp = connected.blocks.map { held in
+            line(identifier: held.identifier, title: held.title, situation: held.situation, state: held.state, relation: "waits on this one")
+        }
+        return ConnectedPanelModel(epic: connected.epic.map(epic), waitingOn: waitingOn, holdingUp: holdingUp)
     }
 
     static func epic(_ epic: TicketConnected.Epic) -> Epic {
@@ -466,12 +497,48 @@ public struct ConnectedPanelModel: Equatable {
         let strip = segments.isEmpty ? nil : SubTicketStrip(segments: segments, done: epic.done, total: total)
         let progress = "\(epic.done) of \(total) done"
         let title = epic.title ?? epic.identifier
+        let index = epic.tickets.firstIndex { $0.current }
+        let place = index.map { "this is the \(ordinal($0 + 1))" }
+        let around = index.map { index in
+            epic.tickets[max(index - ticketsBefore, 0) ..< min(index + ticketsAfter + 1, epic.tickets.count)]
+        } ?? []
+        let tickets = around.map { ticket in
+            line(identifier: ticket.identifier, title: ticket.title, situation: ticket.situation, state: ticket.state, current: ticket.current)
+        }
+        let spoken = ["Epic \(epic.identifier)", title, "\(epic.done) of \(total) \(total == 1 ? "sub-ticket" : "sub-tickets") done", place]
         return Epic(
-            identifier: epic.identifier, title: title, strip: strip, progress: progress,
-            accessibilityLabel: "Epic \(epic.identifier), \(title), \(epic.done) of \(total) \(total == 1 ? "sub-ticket" : "sub-tickets") done"
+            identifier: epic.identifier, title: title, strip: strip, progress: progress, place: place, tickets: tickets,
+            accessibilityLabel: spoken.compactMap { $0 }.joined(separator: ", ")
         )
     }
 
+    static func line(
+        identifier: String, title: String?, situation: DesignTokens.SituationKind?, state: String?, current: Bool = false,
+        relation: String? = nil
+    ) -> Line {
+        let title = title ?? identifier
+        let badge = situation?.word ?? state
+        let spoken = [current ? "This ticket" : nil, identifier, title, relation, badge]
+        return Line(
+            identifier: identifier, title: title, badge: badge, status: situation?.status ?? .idle, current: current,
+            accessibilityLabel: spoken.compactMap { $0 }.joined(separator: ", ")
+        )
+    }
+
+    /// "1st", "2nd", "3rd", "4th", "11th", "12th", "13th", "21st", "112th".
+    static func ordinal(_ number: Int) -> String {
+        let suffix = switch (number % 10, number % 100) {
+        case (_, 11 ... 13): "th"
+        case (1, _): "st"
+        case (2, _): "nd"
+        case (3, _): "rd"
+        default: "th"
+        }
+        return "\(number)\(suffix)"
+    }
+
+    /// A blocker as the Initiatives page lists it: open with its situation and phase, resolved struck through with
+    /// the day it resolved, read in `calendar` against `reference`'s day.
     static func row(_ blocker: TicketConnected.Blocker, situation: DesignTokens.SituationKind?, reference: Date, calendar: Calendar) -> Row {
         let title = blocker.title ?? blocker.identifier
         if blocker.resolved {
@@ -487,16 +554,6 @@ public struct ConnectedPanelModel: Equatable {
         let spoken = [blocker.identifier, title, "holds this one up", detail.isEmpty ? nil : detail.replacingOccurrences(of: " · ", with: ", ")]
         return Row(
             identifier: blocker.identifier, title: title, detail: detail.isEmpty ? "Open" : detail, status: status, struck: false,
-            accessibilityLabel: spoken.compactMap { $0 }.joined(separator: ", ")
-        )
-    }
-
-    static func row(_ held: TicketConnected.Ticket) -> Row {
-        let title = held.title ?? held.identifier
-        let detail = [held.situation?.word, held.state].compactMap { $0 }.joined(separator: " · ")
-        let spoken = [held.identifier, title, "waits on this one", detail.isEmpty ? nil : detail.replacingOccurrences(of: " · ", with: ", ")]
-        return Row(
-            identifier: held.identifier, title: title, detail: detail, status: held.situation?.status ?? .idle, struck: false,
             accessibilityLabel: spoken.compactMap { $0 }.joined(separator: ", ")
         )
     }

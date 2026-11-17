@@ -1348,10 +1348,7 @@ func factsRail(_ name: String, width: CGFloat) -> some View {
     else { fatalError("The facts rail fixture \(name) is missing from \(factsFixtures.path)") }
     return VStack(alignment: .leading, spacing: DesignTokens.Space.s5) {
         PullRequestPanel(model: PullRequestPanelModel.build(read.pullRequest), open: { _ in })
-        ConnectedPanel(
-            model: ConnectedPanelModel.build(read.connected, reference: factsReference, calendar: timelineCalendar),
-            openTicket: { _ in }, openInitiatives: {}
-        )
+        ConnectedPanel(model: ConnectedPanelModel.build(read.connected), openTicket: { _ in }, openInitiatives: {})
     }
     .frame(width: width, alignment: .leading)
     .padding(DesignTokens.Space.s5)

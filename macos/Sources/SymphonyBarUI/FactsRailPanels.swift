@@ -2,11 +2,12 @@ import SwiftUI
 import SymphonyBarCore
 
 // The catalog's Facts rail, its first two panels (`docs/design/director-ticket-page.md` §1 facts 9, 10, 15, 16 and
-// 21): the Pull request panel (the PR with its size and the state of its checks, then every check by workflow with
-// its state and how long it took, each row opening its log) and the Connected panel (the epic with its progress, the
-// tickets this one waits on, open or struck through once resolved, and the tickets it holds up). Each panel's title
-// sits outside its card; the panels never fold. Rows are the catalog's Row: hover and pressed overlays, the focus
-// ring, and the arrow nudging 2 pt right under the pointer.
+// 21, as `docs/design/director-window-and-home.md` § The ticket page changed them): the Pull request panel (the PR with
+// its size and the state of its checks, then every check under its workflow's name, with its state and how long it
+// took, each row opening its log) and the Connected panel (the epic with its progress and the tickets around this one,
+// the tickets that block it now and the tickets it holds up, each on one line). A part with nothing to list is left
+// out, and a ticket connected to nothing has no Connected panel. Each panel's title sits outside its card; the panels
+// never fold. Rows hover, press, take the focus ring and nudge their arrow 2 pt right under the pointer.
 
 /// The rail's widths: a laptop's column and a desktop's.
 public enum FactsRail {
@@ -94,11 +95,10 @@ private struct ChecksBlock: View {
             }
             ForEach(model.groups) { group in
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-                    Text(group.name)
-                        .font(DesignTokens.TypeStyle.caption.font.weight(.semibold))
-                        .foregroundStyle(.secondary)
+                    // The workflow's own name, upper case in the zone style: the app keeps no table of names.
+                    ZoneTitle(group.name)
+                        .padding(.leading, -DesignTokens.Space.s1)
                         .padding(.top, DesignTokens.Space.s1)
-                        .accessibilityAddTraits(.isHeader)
                     ForEach(group.checks) { check in
                         CheckRow(check: check, open: open)
                     }
@@ -170,7 +170,7 @@ public struct ConnectedPanel: View {
     let openTicket: (String) -> Void
     let openInitiatives: () -> Void
 
-    /// `openTicket` opens a blocker's or a held ticket's page; `openInitiatives` the epic's place in Initiatives.
+    /// `openTicket` opens another ticket's page; `openInitiatives` the epic's place in Initiatives.
     public init(model: ConnectedPanelModel, openTicket: @escaping (String) -> Void, openInitiatives: @escaping () -> Void) {
         self.model = model
         self.openTicket = openTicket
@@ -178,109 +178,106 @@ public struct ConnectedPanel: View {
     }
 
     public var body: some View {
-        FactsPanel(title: "Connected") {
-            SubPanel(title: "Epic") {
+        if !model.isEmpty {
+            FactsPanel(title: "Connected") {
                 if let epic = model.epic {
-                    EpicRow(epic: epic, open: openInitiatives)
-                } else {
-                    EmptyLine(text: ConnectedPanelModel.noEpicLine)
+                    SubPanel(title: "Epic") {
+                        EpicBlock(epic: epic, openInitiatives: openInitiatives, openTicket: openTicket)
+                    }
                 }
-            }
-            SubPanel(title: "Waiting on") {
-                if model.waitingOn.isEmpty {
-                    EmptyLine(text: ConnectedPanelModel.noBlockerLine)
-                } else {
-                    ForEach(model.waitingOn) { TicketRow(row: $0, open: openTicket) }
+                if !model.waitingOn.isEmpty {
+                    SubPanel(title: "Waiting on") { TicketLines(lines: model.waitingOn, open: openTicket) }
                 }
-            }
-            SubPanel(title: "Holding up") {
-                if model.holdingUp.isEmpty {
-                    EmptyLine(text: ConnectedPanelModel.holdsNothingLine)
-                } else {
-                    ForEach(model.holdingUp) { TicketRow(row: $0, open: openTicket) }
+                if !model.holdingUp.isEmpty {
+                    SubPanel(title: "Holding up") { TicketLines(lines: model.holdingUp, open: openTicket) }
                 }
             }
         }
     }
 }
 
-/// The epic: its identifier and title, opening Initiatives; its progress strip (N10, C51) and count under it.
-private struct EpicRow: View {
+/// The epic: its identifier and title (two lines at most, the whole title in its tooltip), opening Initiatives; its
+/// progress strip (C51) across the panel, "4 of 7 done · this is the 5th" under it, then the tickets around this one.
+private struct EpicBlock: View {
     let epic: ConnectedPanelModel.Epic
-    let open: () -> Void
+    let openInitiatives: () -> Void
+    let openTicket: (String) -> Void
 
     var body: some View {
-        FactRow(action: open) {
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+            FactRow(action: openInitiatives) {
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                     Text(epic.identifier)
                         .font(DesignTokens.TypeStyle.secondary.font.weight(.semibold))
+                        .foregroundStyle(.secondary)
                         .monospacedDigit()
                         .fixedSize()
                     Text(epic.title)
-                        .font(DesignTokens.TypeStyle.secondary.font)
+                        .font(DesignTokens.TypeStyle.rowTitle.font)
+                        .lineLimit(2)
+                        .truncationMode(.tail)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: DesignTokens.Space.s2)
                     RowArrow()
                 }
-                HStack(spacing: DesignTokens.Space.s2) {
-                    if let strip = epic.strip {
-                        ProgressStrip(strip.items, label: strip.accessibilityLabel)
-                            .frame(width: DesignTokens.ProgressStrip.compactWidth)
-                    }
-                    Text(epic.progress)
-                        .font(DesignTokens.TypeStyle.secondary.font)
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                        .fixedSize()
+            }
+            .help(epic.title)
+            .accessibilityLabel(epic.accessibilityLabel)
+            .accessibilityHint("Opens Initiatives")
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                if let strip = epic.strip {
+                    ProgressStrip(strip.items, label: strip.accessibilityLabel)
                 }
+                Text(epic.progressLine)
+                    .font(DesignTokens.TypeStyle.secondary.font)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            .accessibilityElement(children: .combine)
+            if !epic.tickets.isEmpty {
+                TicketLines(lines: epic.tickets, open: openTicket)
             }
         }
-        .accessibilityLabel(epic.accessibilityLabel)
-        .accessibilityHint("Opens Initiatives")
     }
 }
 
-/// A ticket it waits on or holds up: its status dot, identifier and title, where it stands; struck through once a
-/// blocker resolved.
-private struct TicketRow: View {
-    let row: ConnectedPanelModel.Row
+/// Tickets one under the other, each a one-line Row.
+private struct TicketLines: View {
+    let lines: [ConnectedPanelModel.Line]
     let open: (String) -> Void
 
     var body: some View {
-        FactRow(action: { open(row.identifier) }) {
-            HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                StatusDot(row.status)
-                    .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                        Text(row.identifier)
-                            .font(DesignTokens.TypeStyle.secondary.font.weight(.semibold))
-                            .monospacedDigit()
-                            .strikethrough(row.struck)
-                            .foregroundStyle(row.struck ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                            .fixedSize()
-                        Text(row.title)
-                            .font(DesignTokens.TypeStyle.secondary.font)
-                            .strikethrough(row.struck)
-                            .foregroundStyle(row.struck ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    if !row.detail.isEmpty {
-                        Text(row.detail)
-                            .font(DesignTokens.TypeStyle.caption.font)
-                            .fontWeight(row.struck ? .regular : .medium)
-                            .foregroundStyle(row.struck || row.status == .idle ? AnyShapeStyle(.secondary) : AnyShapeStyle(row.status.tint))
-                            .monospacedDigit()
-                    }
-                }
-                Spacer(minLength: DesignTokens.Space.s2)
+        VStack(alignment: .leading, spacing: DesignTokens.Tree.lineGap) {
+            ForEach(lines) { TicketLine(line: $0, open: open) }
+        }
+    }
+}
+
+/// A ticket on one line (C49): its status dot, identifier, title cut with an ellipsis (the whole title in its tooltip)
+/// and its situation's badge. Another ticket opens its page; this ticket is highlighted and opens nothing.
+private struct TicketLine: View {
+    let line: ConnectedPanelModel.Line
+    let open: (String) -> Void
+
+    var body: some View {
+        let action: (() -> Void)? = line.current ? nil : { open(line.identifier) }
+        Row(
+            line.title, identifier: line.identifier, lead: .dot(line.status, live: false), current: line.current,
+            select: action, open: action
+        ) {
+            if let badge = line.badge {
+                Badge(status: line.status, word: badge, size: .small)
+            }
+            if !line.current {
                 RowArrow()
             }
         }
-        .accessibilityLabel(row.accessibilityLabel)
-        .accessibilityHint("Opens its ticket")
+        // The row's inset bleeds past the panel's edge, so its dot lines up with the epic's title.
+        .padding(.horizontal, -DesignTokens.Row.sideInset)
+        .help(line.title)
+        .accessibilityLabel(line.accessibilityLabel)
+        .accessibilityHint(line.current ? "" : "Opens its ticket")
     }
 }
 
@@ -327,7 +324,7 @@ struct EmptyLine: View {
 
 /// The row's arrow: it slides 2 pt right while the pointer is over the row.
 struct RowArrow: View {
-    @Environment(\.factRowHovered) private var hovered
+    @Environment(\.rowHovered) private var hovered
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -338,11 +335,6 @@ struct RowArrow: View {
             .animation(.motion(.fast, reduceMotion: reduceMotion), value: hovered)
             .accessibilityHidden(true)
     }
-}
-
-extension EnvironmentValues {
-    /// True while the pointer is over the fact row the view sits in.
-    @Entry var factRowHovered = false
 }
 
 /// A fact row as a button: it opens `url` with `open`, or runs `action`; a row with neither is plain text.
@@ -404,7 +396,7 @@ struct FactRowStyle: ButtonStyle {
 
         var body: some View {
             configuration.label
-                .environment(\.factRowHovered, hovered)
+                .environment(\.rowHovered, hovered)
                 .modifier(RowFace(
                     state: DesignTokens.Interaction(hovered: hovered, pressed: configuration.isPressed, focused: isFocused),
                     reduceMotion: reduceMotion,

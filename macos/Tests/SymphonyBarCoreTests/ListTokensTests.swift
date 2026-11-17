@@ -30,6 +30,15 @@ final class ListTokensTests: XCTestCase {
         XCTAssertFalse(row.onAccent(DesignTokens.Interaction(selected: true, disabled: true), windowActive: true))
     }
 
+    func testThePagesOwnRowRestsOnTheAccentTint() {
+        let row = DesignTokens.Row.self
+        XCTAssertEqual(row.fill(.rest, windowActive: true, current: true), .accentTint)
+        XCTAssertEqual(row.fill(.rest, windowActive: false, current: true), .accentTint)
+        XCTAssertEqual(row.fill(.hover, windowActive: true, current: true), .surfaceHover)
+        XCTAssertEqual(row.fill(.selection, windowActive: true, current: true), .accent)
+        XCTAssertNil(row.fill(DesignTokens.Interaction(disabled: true), windowActive: true, current: true))
+    }
+
     // MARK: - Tree
 
     /// The catalog's queue: a chain of nine, a fork (SHOP-311 under which SHOP-312 and SHOP-313 wait, SHOP-314 under
