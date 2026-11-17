@@ -87,6 +87,28 @@ final class TicketsSpeedTests: XCTestCase {
         XCTAssertEqual(payload.rows(matching: "TP-12").map(\.identifier), payload.rows.filter { $0.matches("TP-12") }.map(\.identifier))
     }
 
+    func testATimeReadByHandIsTheFormattersTime() throws {
+        let whole = ISO8601DateFormatter()
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        for text in ["1970-01-01T00:00:00Z", "2026-10-07T14:00:00Z", "2024-02-29T23:59:59Z", "1999-12-31T12:30:15Z", "2100-03-01T00:00:00Z"] {
+            XCTAssertEqual(TicketsPayload.utcTime(text), whole.date(from: text), text)
+            XCTAssertEqual(TicketsPayload.time(text), whole.date(from: text), text)
+        }
+        let micro = try XCTUnwrap(TicketsPayload.utcTime("2026-10-07T14:00:00.123456Z"))
+        XCTAssertEqual(micro.timeIntervalSince1970, try XCTUnwrap(fractional.date(from: "2026-10-07T14:00:00.123Z")).timeIntervalSince1970, accuracy: 0.001)
+        XCTAssertEqual(TicketsPayload.utcTime("2026-10-07T14:00:00.5Z")?.timeIntervalSince1970, 1_791_381_600.5)
+
+        // Any other shape is the formatters' to read: an offset, a bad digit, a date out of range, no fraction after the dot.
+        for text in ["2026-10-07T14:00:00+02:00", "2026-10-07T14:00:00", "2026-1x-07T14:00:00Z", "2026-13-07T14:00:00Z",
+                     "2026-10-07T24:00:00Z", "2026-10-07 14:00:00Z", "2026-10-07T14:00:00.Z", "2026-10-07T14:00:00,5Z",
+                     "2026-10-07T14:00:00.1234567890Z", "2026-10-07T14:00:00ZZ", "yesterday"] {
+            XCTAssertNil(TicketsPayload.utcTime(text), text)
+        }
+        XCTAssertEqual(TicketsPayload.time("2026-10-07T16:00:00+02:00"), whole.date(from: "2026-10-07T14:00:00Z"))
+        XCTAssertNil(TicketsPayload.time("yesterday"))
+    }
+
     func testOneThousandRowsAndTheirCellsBuildWithinTheBudget() throws {
         let data = Self.payload()
         let list = Self.list()

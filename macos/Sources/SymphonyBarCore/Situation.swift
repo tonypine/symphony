@@ -149,9 +149,12 @@ extension DesignTokens.SituationKind {
     }
 
     public init?(apiKind: String) {
-        guard let kind = Self.allCases.first(where: { $0.apiKind == apiKind }) else { return nil }
+        guard let kind = Self.byAPIKind[apiKind] else { return nil }
         self = kind
     }
+
+    /// Every kind by its name in the API, so a table of a thousand rows reads each one's kind by a lookup.
+    private static let byAPIKind = Dictionary(allCases.map { ($0.apiKind, $0) }, uniquingKeysWith: { first, _ in first })
 }
 
 /// The Situation line's words (`director-ticket-page.md` §3): the word, the cause (with "and n more" when a pause has

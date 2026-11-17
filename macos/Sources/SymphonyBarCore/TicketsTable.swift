@@ -436,7 +436,8 @@ public struct TicketsPayload: Equatable {
         // A refusal is an error object; a snapshot the server couldn't read is a code beside the rows.
         if root["error"] is [String: Any] { return nil }
         let columns = (root["columns"] as? [[String: Any]])?.compactMap(TicketColumn.column) ?? []
-        let types = Dictionary(columns.map { ($0.name, $0.type) }, uniquingKeysWith: { first, _ in first })
+        let read = Dictionary(columns.map { ($0.name, $0.type) }, uniquingKeysWith: { first, _ in first })
+        let types = catalogTypes.merging(read, uniquingKeysWith: { _, read in read })
         let rows = tickets.compactMap { row(from: $0, types: types) }
         return TicketsPayload(columns: columns, rows: rows, count: root["count"] as? Int, error: root["error"] as? String)
     }
@@ -445,7 +446,7 @@ public struct TicketsPayload: Equatable {
         guard let identifier = entry["identifier"] as? String else { return nil }
         var values: [String: TicketValue] = [:]
         for (name, raw) in entry where name != "issue_id" {
-            if let value = value(raw, type: types[name] ?? catalogTypes[name]) {
+            if let value = value(raw, type: types[name]) {
                 values[name] = value
             }
         }
@@ -470,7 +471,47 @@ public struct TicketsPayload: Equatable {
     /// A time with or without its fractional seconds. The formatters are made once: making one per value cost most of
     /// a 1,000-row read's decode (TP-1541).
     static func time(_ text: String) -> Date? {
-        text.contains(".") ? fractionalFormatter.date(from: text) : wholeSecondsFormatter.date(from: text)
+        if let date = utcTime(text) { return date }
+        return text.contains(".") ? fractionalFormatter.date(from: text) : wholeSecondsFormatter.date(from: text)
+    }
+
+    /// The shape the server writes every time in, `2026-10-01T08:30:00Z` or `2026-10-01T08:30:00.123456Z`, read by
+    /// hand: a formatter's parse is most of what a 1,000-row read still costs. Any other text is nil, for the
+    /// formatters.
+    static func utcTime(_ text: String) -> Date? {
+        let bytes = Array(text.utf8)
+        guard bytes.count >= 20, bytes.last == UInt8(ascii: "Z"), bytes[4] == UInt8(ascii: "-"), bytes[7] == UInt8(ascii: "-"),
+              bytes[10] == UInt8(ascii: "T"), bytes[13] == UInt8(ascii: ":"), bytes[16] == UInt8(ascii: ":")
+        else { return nil }
+        func number(_ range: Range<Int>) -> Int? {
+            var value = 0
+            for index in range {
+                let digit = Int(bytes[index]) - 48
+                guard (0 ... 9).contains(digit) else { return nil }
+                value = value * 10 + digit
+            }
+            return value
+        }
+        guard let year = number(0 ..< 4), let month = number(5 ..< 7), let day = number(8 ..< 10),
+              let hour = number(11 ..< 13), let minute = number(14 ..< 16), let second = number(17 ..< 19),
+              (1 ... 12).contains(month), (1 ... 31).contains(day), hour < 24, minute < 60, second < 60
+        else { return nil }
+        var fraction = 0.0
+        if bytes.count > 20 {
+            guard bytes[19] == UInt8(ascii: "."), (22 ... 30).contains(bytes.count), let digits = number(20 ..< bytes.count - 1) else { return nil }
+            fraction = Double(digits) / pow(10, Double(bytes.count - 21))
+        } else if bytes[19] != UInt8(ascii: "Z") {
+            return nil
+        }
+        // Days since 1970-01-01 of the proleptic Gregorian date (Howard Hinnant's days_from_civil).
+        let shifted = month <= 2 ? year - 1 : year
+        let era = (shifted >= 0 ? shifted : shifted - 399) / 400
+        let yearOfEra = shifted - era * 400
+        let dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1
+        let dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear
+        let days = era * 146_097 + dayOfEra - 719_468
+        let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second
+        return Date(timeIntervalSince1970: Double(seconds) + fraction)
     }
 
     private static let fractionalFormatter: ISO8601DateFormatter = {
