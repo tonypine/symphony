@@ -71,6 +71,37 @@ final class DataTableTests: XCTestCase {
         XCTAssertEqual(cache.measures, 3)
     }
 
+    func testARowWhoseContentChangesUnderTheSameIdIsDrawnAsItIsNow() {
+        let cache = DataTableCache<Item>()
+        let byCount = DesignTokens.Table.Sort("count", ascending: false)
+        let first = cache.layout(rows: items, columns: columns, sort: byCount)
+        XCTAssertEqual(first.rows.map(\.id), ["b", "a", "c"])
+        let changed = [
+            Item(id: "a", name: "Workspace lifecycle docs", count: 9),
+            Item(id: "b", name: "Checkout", count: 1),
+            Item(id: "c", name: "Answer", count: 12_345),
+        ]
+        let next = cache.layout(rows: changed, columns: columns, sort: byCount)
+        XCTAssertEqual(cache.measures, 2, "new words under the same ids are measured again")
+        XCTAssertEqual(next.rows.map(\.id), ["c", "a", "b"], "the sort follows the new numbers")
+        XCTAssertEqual(next.rows.map(\.count), [12_345, 9, 1], "the rows handed back are the ones just given")
+        XCTAssertGreaterThan(next.measured[1], first.measured[1], "the wider number widens its fitted column")
+    }
+
+    func testARowWithTheSameWordsIsHandedBackAsGivenWithoutMeasuring() {
+        struct Run: Identifiable {
+            let id: Int
+            let name: String
+            let hidden: Int
+        }
+        let cache = DataTableCache<Run>()
+        let columns = [DataTableColumn<Run>("Name", id: "name", width: .share(1), text: \.name)]
+        _ = cache.layout(rows: [Run(id: 1, name: "One", hidden: 0)], columns: columns, sort: nil)
+        let next = cache.layout(rows: [Run(id: 1, name: "One", hidden: 7)], columns: columns, sort: nil)
+        XCTAssertEqual(cache.measures, 1)
+        XCTAssertEqual(next.rows.map(\.hidden), [7], "a cell drawn from more than its words still shows the new row")
+    }
+
     func testABadgeTakesItsPaddingAndGlyphBeyondItsWord() {
         let size = DesignTokens.Badge.Size.small
         XCTAssertEqual(size.tableRoom, size.leading + size.trailing + size.glyph + DesignTokens.Badge.gap)

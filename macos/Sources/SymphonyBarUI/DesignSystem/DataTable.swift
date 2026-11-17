@@ -299,13 +299,17 @@ public struct DataTable<Item: Identifiable>: View {
 
 // MARK: - Sorting and measuring, once per change
 
-/// The rows in their order and each column's measured width, worked out again only when the rows, the columns or the
-/// sort change: the table's body runs on every pick and resize, and a thousand rows' words are not measured each time.
+/// The rows' order and each column's measured width, worked out again only when the rows' ids or words, the columns
+/// or the sort change: the table's body runs on every pick and resize, and a thousand rows' words are not measured each
+/// time. The rows it hands back are always the ones just given, in the kept order, so a row whose content changes under
+/// the same id is drawn as it is now.
 @MainActor
 final class DataTableCache<Item: Identifiable> {
     struct Key: Equatable {
         let ids: [Item.ID]
         let columns: [String]
+        /// Each row's words, column by column: its text and, when the column has one, its sort words.
+        let words: [String]
         let sort: DesignTokens.Table.Sort?
     }
 
@@ -315,29 +319,51 @@ final class DataTableCache<Item: Identifiable> {
     }
 
     private var key: Key?
-    private var laid = Laid(rows: [], measured: [])
+    /// The given rows' positions in the table's order.
+    private var order: [Int] = []
+    private var measured: [Double] = []
     /// How many times it measured: a test's count.
     private(set) var measures = 0
 
     func layout(rows: [Item], columns: [DataTableColumn<Item>], sort: DesignTokens.Table.Sort?) -> Laid {
-        let next = Key(ids: rows.map(\.id), columns: columns.map(\.id), sort: sort)
-        if next == key { return laid }
-        key = next
-        measures += 1
-        laid = Laid(rows: Self.sorted(rows, columns: columns, sort: sort), measured: columns.map { Self.measure($0, rows: rows) })
-        return laid
+        let next = Key(ids: rows.map(\.id), columns: columns.map(\.id), words: Self.words(rows, columns: columns), sort: sort)
+        if next != key {
+            key = next
+            measures += 1
+            order = Self.order(rows, columns: columns, sort: sort)
+            measured = columns.map { Self.measure($0, rows: rows) }
+        }
+        return Laid(rows: order.map { rows[$0] }, measured: measured)
     }
 
-    /// `rows` in `sort`'s order by its column's sort words, ties kept in the order given; as given with no sort.
+    static func words(_ rows: [Item], columns: [DataTableColumn<Item>]) -> [String] {
+        var words: [String] = []
+        words.reserveCapacity(rows.count * columns.count)
+        for row in rows {
+            for column in columns {
+                words.append(column.text(row))
+                if let sortKey = column.sortKey { words.append(sortKey(row)) }
+            }
+        }
+        return words
+    }
+
+    /// `rows` in `sort`'s order.
     static func sorted(_ rows: [Item], columns: [DataTableColumn<Item>], sort: DesignTokens.Table.Sort?) -> [Item] {
-        guard let sort, let column = columns.first(where: { $0.id == sort.column && $0.sortable }) else { return rows }
+        order(rows, columns: columns, sort: sort).map { rows[$0] }
+    }
+
+    /// The positions of `rows` in `sort`'s order by its column's sort words, ties kept in the order given; as given
+    /// with no sort.
+    static func order(_ rows: [Item], columns: [DataTableColumn<Item>], sort: DesignTokens.Table.Sort?) -> [Int] {
+        guard let sort, let column = columns.first(where: { $0.id == sort.column && $0.sortable }) else { return Array(rows.indices) }
         let keys = rows.map(column.sortKey ?? column.text)
         let order = rows.indices.sorted { lhs, rhs in
             if DesignTokens.Table.Sort.ordered(keys[lhs], keys[rhs], ascending: sort.ascending) { return true }
             if DesignTokens.Table.Sort.ordered(keys[rhs], keys[lhs], ascending: sort.ascending) { return false }
             return lhs < rhs
         }
-        return order.map { rows[$0] }
+        return order
     }
 
     /// A fitted column's width: its widest words (or its title with the sort glyph's room) and its padding; nothing
