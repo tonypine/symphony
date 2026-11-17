@@ -75,7 +75,8 @@ jobs:
     runs-on: [self-hosted, macOS, tahoe]
     env:
       SYMPHONY_CI_REF: main
-    timeout-minutes: 60
+    # Room for the signing step to wait for the desktop.
+    timeout-minutes: 75
 
     steps:
       - name: Checkout
@@ -137,59 +138,66 @@ jobs:
           make release
           test -x _build/prod/rel/symphony/bin/symphony-app
 
-      - name: Import the signing certificate
+      # The executable the gate built from nothing for this commit, from the build store; built
+      # here, from nothing, when the store has none. A release never takes an incremental build.
+      - name: Get the app's executable
+        working-directory: macos
+        run: bash ../scripts/ci/build-store.sh app "$RUNNER_TEMP/release/SymphonyBar" --clean
+
+      # The certificate goes into a temporary keychain put first on the user's search list, which
+      # every runner of the VM shares: the update test and the QA signing identity test change that
+      # list too, and restore it as they found it. So the import, the signing and the keychain's
+      # removal run in one step, under the desktop lock (scripts/ci/desktop-lock.sh).
+      - name: Sign and build Symphony.app
         id: signing
+        working-directory: macos
+        shell: bash ../scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
+        timeout-minutes: 25
         env:
           MACOS_SIGNING_P12_BASE64: ${{ secrets.MACOS_SIGNING_P12_BASE64 }}
           MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-        run: |
-          if [ -z "$MACOS_SIGNING_P12_BASE64" ] || [ -z "$MACOS_SIGNING_P12_PASSWORD" ] || [ -z "$MACOS_SIGNING_IDENTITY" ]; then
-            echo "No signing certificate configured; signing ad hoc."
-            echo "signed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          keychain="$RUNNER_TEMP/symphony-signing.keychain-db"
-          keychain_password="$(openssl rand -hex 24)"
-          echo "::add-mask::$keychain_password"
-          p12="$RUNNER_TEMP/symphony-signing.p12"
-          (umask 077 && printf '%s' "$MACOS_SIGNING_P12_BASE64" | base64 --decode > "$p12")
-          security create-keychain -p "$keychain_password" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security unlock-keychain -p "$keychain_password" "$keychain"
-          security import "$p12" -k "$keychain" -f pkcs12 -P "$MACOS_SIGNING_P12_PASSWORD" -T /usr/bin/codesign > /dev/null
-          rm -f "$p12"
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
-          # Put the temporary keychain first in the search list so codesign finds the identity.
-          existing="$(security list-keychains -d user | tr -d '"' | xargs)"
-          security list-keychains -d user -s "$keychain" $existing
-          echo "Imported the signing certificate into a temporary keychain."
-          echo "signed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Build Symphony.app
-        working-directory: macos
-        env:
           # Passed directly: step outputs that contain a secret are dropped.
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          SIGNED: ${{ steps.signing.outputs.signed }}
           SHORT_VERSION: ${{ steps.version.outputs.version }}
           BUILD_NUMBER: ${{ steps.version.outputs.build }}
           MINISIGN_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
         run: |
-          if [ "$SIGNED" = true ]; then
-            identity="$MACOS_SIGNING_IDENTITY"
-          else
+          keychain="$RUNNER_TEMP/symphony-signing.keychain-db"
+          p12="$RUNNER_TEMP/symphony-signing.p12"
+          trap 'rm -f "$p12"; if [ -f "$keychain" ]; then security delete-keychain "$keychain"; fi' EXIT
+          if [ -z "$MACOS_SIGNING_P12_BASE64" ] || [ -z "$MACOS_SIGNING_P12_PASSWORD" ] || [ -z "$MACOS_SIGNING_IDENTITY" ]; then
+            echo "No signing certificate configured; signing ad hoc."
+            echo "signed=false" >> "$GITHUB_OUTPUT"
             identity=-
+          else
+            keychain_password="$(openssl rand -hex 24)"
+            echo "::add-mask::$keychain_password"
+            (umask 077 && printf '%s' "$MACOS_SIGNING_P12_BASE64" | base64 --decode > "$p12")
+            security create-keychain -p "$keychain_password" "$keychain"
+            security set-keychain-settings -lut 21600 "$keychain"
+            security unlock-keychain -p "$keychain_password" "$keychain"
+            security import "$p12" -k "$keychain" -f pkcs12 -P "$MACOS_SIGNING_P12_PASSWORD" -T /usr/bin/codesign > /dev/null
+            rm -f "$p12"
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain" > /dev/null
+            # Put the temporary keychain first in the search list so codesign finds the identity.
+            existing="$(security list-keychains -d user | tr -d '"' | xargs)"
+            security list-keychains -d user -s "$keychain" $existing
+            echo "Imported the signing certificate into a temporary keychain."
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+            identity="$MACOS_SIGNING_IDENTITY"
           fi
-          # The executable the gate built from nothing for this commit, from the build store; built
-          # here, from nothing, when the store has none. A release never takes an incremental build.
-          bash ../scripts/ci/build-store.sh app "$RUNNER_TEMP/release/SymphonyBar" --clean
           make bundle PREBUILT_EXECUTABLE="$RUNNER_TEMP/release/SymphonyBar" SYMPHONY_RELEASE="$GITHUB_WORKSPACE/_build/prod/rel/symphony" SIGNING_IDENTITY="$identity"
           codesign -dvv build/Symphony.app 2>&1 | grep -E '^(Identifier|Authority|Signature)=' || true
-          ../scripts/release/smoke_test.sh build/Symphony.app/Contents/Resources/symphony "$GITHUB_WORKSPACE/symphony.yml"
 
+      - name: Smoke-test Symphony.app
+        working-directory: macos
+        run: ../scripts/release/smoke_test.sh build/Symphony.app/Contents/Resources/symphony "$GITHUB_WORKSPACE/symphony.yml"
+
+      # Only when the signing step was stopped before its own cleanup ran.
       - name: Delete the temporary keychain
         if: always()
+        shell: bash scripts/ci/desktop-lock.sh --wait 15 --limit 1 -- bash -e {0}
+        timeout-minutes: 16
         run: |
           keychain="$RUNNER_TEMP/symphony-signing.keychain-db"
           rm -f "$RUNNER_TEMP/symphony-signing.p12"

@@ -10,7 +10,8 @@ name: appkit-dialog
 # summary records what each run showed, and the screenshots are uploaded.
 #
 # The runner is a disposable Mac with a desktop session, so a window or dialog lands on nobody's
-# screen. `test/test_helper.exs` excludes the test everywhere else, and it never runs on the host.
+# screen. The VM's other runner shares that screen, so the steps that change crash dialogs and put
+# windows on it hold the desktop lock (scripts/ci/desktop-lock.sh). `test/test_helper.exs` excludes the test everywhere else, and it never runs on the host.
 #
 # Not a required check: it runs weekly, to catch an SRT or macOS release, and on pull requests that
 # change the probe, the test, the hook or the agent's SRT settings.
@@ -39,7 +40,7 @@ jobs:
   appkit-dialog:
     name: appkit dialog
     runs-on: [self-hosted, macOS, tahoe]
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout
@@ -47,11 +48,13 @@ jobs:
         with:
           persist-credentials: false
 
+      # No cache: the runner's VM keeps its disk, so the tools are already installed, and restoring
+      # a cache over them could swap files under the other runner's running jobs.
       - name: Set up mise tools
         uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
           install: true
-          cache: true
+          cache: false
 
       - name: Cache deps and build
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
@@ -82,6 +85,8 @@ jobs:
       # The image unloads the notification agent; load it back, best effort, in case the dialog
       # needs it.
       - name: Turn on crash dialogs
+        shell: bash scripts/ci/desktop-lock.sh --wait 15 --limit 1 -- bash -e {0}
+        timeout-minutes: 16
         run: |
           defaults write com.apple.CrashReporter DialogType basic
           launchctl load -w /System/Library/LaunchAgents/com.apple.notificationcenterui.plist || true
@@ -97,7 +102,15 @@ jobs:
           echo "SRT_PACKAGE_DIR=$RUNNER_TEMP/srt/node_modules/@anthropic-ai/sandbox-runtime" >> "$GITHUB_ENV"
           echo "APPKIT_PROBE_ARTIFACTS=$RUNNER_TEMP/appkit-probe" >> "$GITHUB_ENV"
 
+      # Compiled first, outside the lock, so the probe holds the desktop only while it runs.
+      - name: Compile
+        env:
+          MIX_ENV: test
+        run: time mix compile
+
       - name: Run the AppKit probe
+        shell: bash scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
+        timeout-minutes: 25
         run: mix test test/symphony_elixir/agent_sandbox_appkit_test.exs --only appkit_dialog
 
       - name: Upload the screenshots and report
