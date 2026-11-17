@@ -191,7 +191,7 @@ private struct AgreementChart: View {
             }
         }
         .sheet(isPresented: $showsData) {
-            DataTable(title: Quality.agreementTitle, rows: quality.agreementTable) { showsData = false }
+            ShowDataSheet(title: Quality.agreementTitle, rows: quality.agreementTable) { showsData = false }
         }
     }
 }
@@ -218,6 +218,25 @@ private struct AllRunsSheet: View {
     let quality: Quality
     var done: () -> Void
     @State private var filter = Quality.RunFilter()
+    @State private var selection: String?
+    @State private var sort: DesignTokens.Table.Sort? = DesignTokens.Table.Sort("day", ascending: false)
+
+    /// The ticket, the agent, the outcome as its badge, the day and the tokens; the agent takes the spare width.
+    static let columns: [DataTableColumn<QualityRun>] = [
+        DataTableColumn("Ticket", id: "ticket") { $0.identifier ?? "—" },
+        DataTableColumn("Agent", id: "agent", width: .share(1)) { $0.agent },
+        DataTableColumn(
+            "Outcome", id: "outcome", fitExtra: DesignTokens.Badge.Size.small.tableRoom,
+            sortKey: { String(QualityRun.Outcome.allCases.firstIndex(of: $0.outcome) ?? 0) }, text: { $0.outcome.title }
+        ) { run in
+            Badge(status: run.outcome.status, word: run.outcome.title, size: .small)
+        },
+        DataTableColumn("Day", id: "day", ascending: "oldest first", descending: "newest first", firstAscending: false) { $0.date },
+        DataTableColumn(
+            "Tokens", id: "tokens", alignment: .number, ascending: "least first", descending: "most first",
+            sortKey: { String($0.tokens) }
+        ) { Overview.tokens($0.tokens) },
+    ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
@@ -232,13 +251,12 @@ private struct AllRunsSheet: View {
                 )
                 PopUp("Day", selection: $filter.date, choices: popUpChoices(all: "All days", quality.runDates), size: .small)
             }
-            Table(quality.runs(matching: filter)) {
-                TableColumn("Ticket") { Text($0.identifier ?? "—") }
-                TableColumn("Agent", value: \.agent)
-                TableColumn("Outcome") { Text($0.outcome.title) }
-                TableColumn("Day", value: \.date)
-                TableColumn("Tokens") { Text(Overview.tokens($0.tokens)).monospacedDigit() }
-            }
+            DataTable(
+                "All Runs", columns: Self.columns, rows: quality.runs(matching: filter), selection: $selection, sort: $sort,
+                empty: filter == Quality.RunFilter()
+                    ? DataTableEmpty("No runs in this period.")
+                    : DataTableEmpty("No runs match these filters.") { filter = Quality.RunFilter() }
+            )
             HStack {
                 Spacer()
                 Button("Done", action: done).keyboardShortcut(.defaultAction)

@@ -342,7 +342,7 @@ struct InsightsBarChart: View {
             .accessibilityChartDescriptor(InsightsChartDescriptor(chart: chart))
         }
         .sheet(isPresented: $showsData) {
-            DataTable(title: chart.title, rows: chart.dataTable) { showsData = false }
+            ShowDataSheet(title: chart.title, rows: chart.dataTable) { showsData = false }
         }
     }
 
@@ -387,37 +387,50 @@ extension InsightsChart.Tint {
     }
 }
 
-/// Show Data: a chart's series as a table.
-struct DataTable: View {
+/// Show Data: a chart's series as the shared table (C59): its first row the column titles, the first column the words
+/// that share the width, a column whose every cell is a number at the trailing edge in tabular figures.
+struct ShowDataSheet: View {
     let title: String
     let rows: [[String]]
     var done: () -> Void
+    @State private var selection: Int?
+    @State private var sort: DesignTokens.Table.Sort?
+
+    /// One row of the series: its place in the chart's order and its cells.
+    struct Line: Identifiable {
+        let id: Int
+        let cells: [String]
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-            Text(title).font(DesignTokens.TypeStyle.heading.font)
-            ScrollView {
-                Grid(alignment: .trailing, horizontalSpacing: DesignTokens.Space.s4, verticalSpacing: DesignTokens.Space.s1) {
-                    ForEach(Array(rows.enumerated()), id: \.offset) { index, row in
-                        GridRow {
-                            ForEach(Array(row.enumerated()), id: \.offset) { column, cell in
-                                Text(cell)
-                                    .font(index == 0 ? DesignTokens.TypeStyle.label.font : DesignTokens.TypeStyle.body.font)
-                                    .monospacedDigit()
-                                    .gridColumnAlignment(column == 0 ? .leading : .trailing)
-                            }
-                        }
-                        if index == 0 { Divider() }
-                    }
-                }
-            }
+            Text(title).textStyle(.heading)
+            DataTable(title, columns: Self.columns(rows), rows: Self.lines(rows), selection: $selection, sort: $sort)
             HStack {
                 Spacer()
-                Button("Done", action: done).keyboardShortcut(.defaultAction)
+                Button("Done", action: done).directorButton(.primary).keyboardShortcut(.defaultAction)
             }
         }
         .padding(DesignTokens.Space.s5)
         .frame(minWidth: 420, minHeight: 360)
+    }
+
+    static func lines(_ rows: [[String]]) -> [Line] {
+        rows.dropFirst().enumerated().map { Line(id: $0.offset, cells: $0.element) }
+    }
+
+    static func columns(_ rows: [[String]]) -> [DataTableColumn<Line>] {
+        let titles = rows.first ?? []
+        let body = rows.dropFirst()
+        return titles.indices.map { index in
+            let numbers = !body.isEmpty && body.allSatisfy { row in
+                index < row.count && DesignTokens.Table.Sort.number(row[index]) != nil
+            }
+            return DataTableColumn<Line>(
+                titles[index], id: "\(index)", alignment: numbers && index > 0 ? .number : .text,
+                width: index == 0 ? .share(1) : .fit
+            ) { line in index < line.cells.count ? line.cells[index] : "" }
+        }
     }
 }
 

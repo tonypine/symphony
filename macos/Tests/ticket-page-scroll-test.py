@@ -53,6 +53,12 @@ TP-1480"). TP-1480 stops a poll that changes nothing from redrawing the page, an
   fails here. The ratio stays above Apple's 10 ms/s: the seconds counted include the driver's synthetic scroll
   rounds on a virtual display, and each newly built row still lays out its text as it scrolls in.
 
+Last, the shared Table (TP-1510): the app is launched again on Audit (`SYMPHONY_BAR_QA_OPEN_VIEW`) over the `audit`
+fixtures with 1,000 records, the most Audit reads, made from its 15 (a table of a thousand rows, the ticket's), and
+the same scroll to the bottom and back is counted. It fails when the table never shows, the scroll does not reach an
+end, or the hitch ratio goes over the same HITCH_BUDGET_MS_PER_S: a table that builds every row, not only those on
+screen, hitches far past it.
+
 It launches a window and needs the Accessibility grant (the QA driver's scroll), so it runs in the Mac CI build only,
 never in an agent's sandbox.
 
@@ -73,6 +79,9 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 PRIV = os.path.normpath(os.path.join(HERE, "..", "..", "priv", "qa_driver"))
 FIXTURES = os.path.join(HERE, "Fixtures", "director-app", "ticket-page-speed")
+AUDIT_FIXTURES = os.path.join(HERE, "Fixtures", "director-app", "audit")
+# Audit reads the newest 1,000 records (`Audit.maxRecords`): the table's thousand rows.
+TABLE_ROWS = 1000
 TICKET = "TP-1244"
 TITLE = "The paused line on the ticket page"
 # A short ticket of the same fixtures, for the fold check: the driver's click judges whether it changed anything from a
@@ -116,13 +125,16 @@ def driver(binary, *args, timeout=90):
         return {"error": {"code": "unreadable", "message": result.stdout[-500:] + result.stderr[-500:]}}
 
 
-def page_scroll_area(binary, pid, title=TITLE):
+def page_scroll_area(binary, pid, title=TITLE, min_width=300):
     """The ticket page's scroll area once its title shows (any page's, with no title): the widest scroll area of the
     window (the sidebar's is narrow), or None."""
     if title and not driver(binary, "ax-tree", pid, 40, 5, "", title).get("matches"):
         return None
     areas = driver(binary, "ax-tree", pid, 40, 20, "AXScrollArea", "").get("matches", [])
-    areas = [a for a in areas if (a.get("frame") or {}).get("w", 0) >= 300 and (a.get("frame") or {}).get("h", 0) >= 200]
+    if min_width < 300:
+        # A table's own area is the one labelled with its title, whatever its width.
+        areas = [a for a in areas if a.get("description") == title] or areas
+    areas = [a for a in areas if (a.get("frame") or {}).get("w", 0) >= min_width and (a.get("frame") or {}).get("h", 0) >= 200]
     return max(areas, key=lambda a: a["frame"]["w"] * a["frame"]["h"], default=None)
 
 
@@ -370,8 +382,113 @@ def signal_app(pid, number):
     os.kill(pid, number)
 
 
+# -- the shared Table -----------------------------------------------------------------------------------------------
+
+def thousand_records(source, count=TABLE_ROWS):
+    """`count` audit records made from the fixture's own, each on its record's day a few seconds later, chained by
+    unique hashes: NDJSON lines as `GET /api/v1/audit` serves them."""
+    with open(source) as handle:
+        base = [json.loads(line) for line in handle if line.strip()]
+    lines = []
+    for index in range(count):
+        record = dict(base[index % len(base)])
+        stamp = time.strptime(record["timestamp"], "%Y-%m-%dT%H:%M:%SZ")
+        seconds = stamp.tm_hour * 3600 + stamp.tm_min * 60 + stamp.tm_sec + index // len(base)
+        record["timestamp"] = f"{record['date']}T{seconds // 3600:02d}:{seconds // 60 % 60:02d}:{seconds % 60:02d}Z"
+        record["record_hash"] = f"{index + 1:016x}"
+        if index:
+            record["previous_hash"] = f"{index:016x}"
+        else:
+            record.pop("previous_hash", None)
+        lines.append(json.dumps(record, sort_keys=True))
+    return "\n".join(lines) + "\n"
+
+
+def audit_fixtures(root):
+    """A copy of the `audit` fixtures whose records are a thousand."""
+    target = os.path.join(root, "audit-fixtures")
+    shutil.copytree(AUDIT_FIXTURES, target)
+    records = os.path.join(target, "api", "v1", "audit.json")
+    content = thousand_records(records)
+    with open(records, "w") as handle:
+        handle.write(content)
+    return target
+
+
+def measure_table(binary, executable, root, failures):
+    """Launches the app on Audit over a thousand records, scrolls its table to the bottom and back while it counts
+    frames, and appends what failed to `failures`."""
+    qa_root = os.path.join(root, "table-qa-root")
+    os.makedirs(qa_root)
+    shutil.copy(os.path.join(root, "qa-root", "settings.plist"), os.path.join(qa_root, "settings.plist"))
+    environment = dict(os.environ)
+    environment.update({
+        "SYMPHONY_BAR_QA_ROOT": qa_root,
+        "SYMPHONY_BAR_QA_API_FIXTURES": audit_fixtures(root),
+        "SYMPHONY_BAR_QA_OPEN_VIEW": "audit",
+    })
+    log_path = os.path.join(root, "table-app.log")
+    with open(log_path, "w") as log:
+        process = subprocess.Popen([executable], env=environment, stdout=log, stderr=subprocess.STDOUT)
+    try:
+        pid = process.pid
+        area = None
+        for _ in range(90):
+            if process.poll() is not None:
+                break
+            # The table's own label shows once the records are read and drawn (an empty Audit draws none).
+            area = page_scroll_area(binary, pid, "Audit records", min_width=100)
+            if area:
+                break
+            time.sleep(1)
+        if not area:
+            with open(log_path, errors="replace") as handle:
+                tail = handle.read()[-3000:]
+            for needle in ("Audit", "SHOP-", "records"):
+                seen = driver(binary, "ax-tree", pid, 40, 8, "", needle, timeout=60)
+                print(f"table: nodes naming {needle!r}: {json.dumps(seen.get('matches', seen))[:1500]}")
+            failures.append("table")
+            print(f"FAIL [table]: Audit's table of {TABLE_ROWS} records never showed (exit {process.poll()}); the app's log:\n{tail}")
+            return
+        print(f"ok [table]: Audit's table of {TABLE_ROWS} records shows, its scroll area at {area.get('frame')}")
+        time.sleep(SETTLE_SECONDS)
+        frames, replies = scroll_and_count(binary, pid, area, os.path.join(qa_root, "frames.json"))
+        for edge, reply in zip(("bottom", "top"), replies):
+            if "error" in reply or reply.get("at_edge") is not True:
+                failures.append(f"table scroll to the {edge}")
+                print(f"FAIL [table scroll to the {edge}]: {reply.get('error') or reply.get('note') or reply}")
+            else:
+                print(f"ok [table scroll to the {edge}]: {reply.get('rounds')} rounds via {reply.get('via')}")
+        if not frames or frames.get("frames", 0) < 2:
+            failures.append("table frames")
+            print(f"FAIL [table frames]: the app counted no frames while the table scrolled: {frames}")
+            return
+        ratio = frames["hitch_ratio"]
+        print(
+            f"table scroll: hitch ratio {ratio:.1f} ms/s, budget {HITCH_BUDGET_MS_PER_S:.0f} ms/s; "
+            f"{frames['dropped']} dropped frames, {frames['hitch_ms']:.0f} ms of hitch over {frames['seconds']:.1f} s "
+            f"({frames['frames']} frames of {frames['frame_ms']:.1f} ms, the longest {frames['longest_ms']:.0f} ms)"
+        )
+        if ratio > HITCH_BUDGET_MS_PER_S:
+            failures.append("table hitch ratio")
+            print(f"FAIL [table hitch ratio]: scrolling {TABLE_ROWS} rows hitched {ratio:.1f} ms/s, over the {HITCH_BUDGET_MS_PER_S:.0f} ms/s budget")
+        if process.poll() is not None:
+            failures.append("table app")
+            print(f"FAIL [table app]: the app exited ({process.returncode}) during the table's scroll")
+    finally:
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired:
+                process.kill()
+
+
 def main():
     assert main_thread_busy(SELF_TEST_REPORT) == (10.0, 1000), main_thread_busy(SELF_TEST_REPORT)
+    records = [json.loads(line) for line in thousand_records(os.path.join(AUDIT_FIXTURES, "api", "v1", "audit.json")).splitlines()]
+    assert len(records) == TABLE_ROWS and len({r["record_hash"] for r in records}) == TABLE_ROWS, "a thousand distinct records"
+    assert all(r["timestamp"].startswith(r["date"]) for r in records), "each on its record's day"
 
     app = os.path.abspath(sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "..", "build", "Symphony.app"))
     executable = os.path.join(app, "Contents", "MacOS", "SymphonyBar")
@@ -534,6 +651,13 @@ def main():
         if process.poll() is not None:
             failures.append("app")
             print(f"FAIL [app]: the app exited ({process.returncode}) during the test")
+        # 5. The shared Table's thousand rows, in a launch of its own: one app holds one set of fixtures.
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        measure_table(binary, executable, root, failures)
     finally:
         if process and process.poll() is None:
             process.terminate()

@@ -84,6 +84,13 @@ final class QAModeTests: XCTestCase {
         XCTAssertEqual(qaStores([QAMode.openTicketKey: " TP-9001\n"]).qaMode?.openTicket, "TP-9001")
     }
 
+    func testThePageToOpenAtLaunchIsReadOnlyInQAModeAndOnlyByItsName() {
+        XCTAssertNil(AppStores(environment: [QAMode.openViewKey: "audit"], home: home).qaMode)
+        XCTAssertNil(qaStores().qaMode?.openView)
+        XCTAssertNil(qaStores([QAMode.openViewKey: "nowhere"]).qaMode?.openView)
+        XCTAssertEqual(qaStores([QAMode.openViewKey: " audit\n"]).qaMode?.openView, .audit)
+    }
+
     func testTheFrameCountIsWrittenUnderTheQARoot() {
         XCTAssertEqual(QAMode(root: root).framesFile, root.standardizedFileURL.appendingPathComponent("frames.json"))
     }

@@ -1797,6 +1797,10 @@ MainActor.assumeIsolated {
         for story in fieldStories {
             render(componentStorySnapshot(story), scheme, to: "\(story.component)-\(story.id)-\(suffix).png")
         }
+        // The catalog's Table header and row stories (TP-1510), each a variation of its own, and a thousand rows.
+        for story in tableStories {
+            render(componentStorySnapshot(story), scheme, to: "\(story.component)-\(story.id)-\(suffix).png")
+        }
         render(homeTree(selected: .more("TP-1483")), scheme, to: "tree-home-\(suffix).png")
         render(homeTree(opened: ["TP-1481"], selected: .row("TP-1484")), scheme, to: "tree-home-chain-open-\(suffix).png")
         render(progressStrips(), scheme, to: "progress-strip-initiatives-\(suffix).png")
