@@ -61,7 +61,6 @@ jobs:
       sandbox: true
       helpers: true
       driver: true
-      speed: true
       update: true
       smoke: true
       installer: true

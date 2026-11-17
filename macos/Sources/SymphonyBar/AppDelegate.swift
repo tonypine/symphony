@@ -307,7 +307,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         updates.start()
         QAScriptDriver.startIfScripted(menu: menu) { [weak self] in self?.runner.pid }
         QAStatusMenuOpener.startIfQAMode(item: item)
-        QAFrameMeter.startIfQAMode()
         if let ticket = AppStores.current.qaMode?.openTicket { symphonyWindow.showTicket(ticket) }
         if let view = AppStores.current.qaMode?.openView { symphonyWindow.show(view: view) }
     }
