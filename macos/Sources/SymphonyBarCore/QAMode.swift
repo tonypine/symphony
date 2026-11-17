@@ -10,8 +10,7 @@ import Foundation
 /// the app draws in light or dark whatever the Mac's own appearance, which QA never changes. With
 /// `SYMPHONY_BAR_CONTROL_URL` and `SYMPHONY_BAR_CONTROL_TOKEN` it talks to a live Symphony, the QA pass's own server,
 /// instead of the fixtures (see `LiveControl`). With `SYMPHONY_BAR_QA_OPEN_TICKET` the app opens its window on that
-/// ticket's page at launch, with `SYMPHONY_BAR_QA_OPEN_VIEW` on that page (`audit`), and in QA mode SIGUSR1 and
-/// SIGUSR2 start and stop counting frames (`FrameMeter`), for the ticket page and table scroll test.
+/// ticket's page at launch, with `SYMPHONY_BAR_QA_OPEN_VIEW` on that page (`audit`).
 public struct QAMode: Equatable {
     /// The directory QA mode keeps everything under. QA mode is on while it is set and not blank.
     public static let environmentKey = "SYMPHONY_BAR_QA_ROOT"
@@ -186,8 +185,6 @@ public struct QAMode: Equatable {
     public var symphonyLogsRoot: URL { root.appendingPathComponent(Self.symphonyLogsFolder, isDirectory: true) }
     public var updateCacheDirectory: URL { root.appendingPathComponent(Self.updatesFolder, isDirectory: true) }
     public var stateRoot: URL { root.appendingPathComponent(Self.stateFolder, isDirectory: true) }
-    /// Where the frame count a SIGUSR2 ends is written (`FrameMeter.Summary`).
-    public var framesFile: URL { root.appendingPathComponent(FrameMeter.fileName) }
 
     /// The fixtures the app reads Symphony's API from, logging control requests under the QA root; nil without
     /// `SYMPHONY_BAR_QA_API_FIXTURES`, and nil with a live Symphony, which answers in their place.

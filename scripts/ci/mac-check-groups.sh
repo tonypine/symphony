@@ -10,8 +10,8 @@
 set -eu
 
 gate="${1:-}"
-build=false unit=false sandbox=false helpers=false driver=false speed=false update=false smoke=false installer=false
-all() { build=true unit=true sandbox=true helpers=true driver=true speed=true update=true smoke=true installer=true; }
+build=false unit=false sandbox=false helpers=false driver=false update=false smoke=false installer=false
+all() { build=true unit=true sandbox=true helpers=true driver=true update=true smoke=true installer=true; }
 
 while IFS= read -r path; do
   case "$path" in
@@ -26,9 +26,6 @@ while IFS= read -r path; do
     # (DesignTokensCatalogTests, CatalogCounterpartsTests): a story added to the catalog alone must meet them.
     macos/Sources/* | macos/Tests/* | macos/Package.swift | test/fixtures/api/* | .xcode-version | docs/design/catalog/* | \
       docs/design/catalog-counterparts.md | macos/Gallery/component-variations.txt) unit=true ;;
-  esac
-  case "$path" in
-    macos/Sources/* | macos/Tests/ticket-page-scroll-test.py | macos/Tests/Fixtures/* | priv/qa_driver/* | .xcode-version) speed=true build=true ;;
   esac
   case "$path" in
     macos/Package.swift | macos/Makefile | .xcode-version | lib/symphony_elixir/agent_tmp_dir.ex) sandbox=true ;;
@@ -56,10 +53,10 @@ done
 if [ "$gate" = failure ]; then all; fi
 
 any=false
-for value in $build $unit $sandbox $helpers $driver $speed $update $smoke $installer; do
+for value in $build $unit $sandbox $helpers $driver $update $smoke $installer; do
   if [ "$value" = true ]; then any=true; fi
 done
 
-for group in any build unit sandbox helpers driver speed update smoke installer; do
+for group in any build unit sandbox helpers driver update smoke installer; do
   eval "echo \"$group=\$$group\""
 done

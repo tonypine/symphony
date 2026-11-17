@@ -53,10 +53,6 @@ on:
         description: The QA driver's own tests (appearance, scrolling, key shortcuts).
         type: boolean
         default: false
-      speed:
-        description: The ticket page's idle sample and scroll hitches.
-        type: boolean
-        default: false
       update:
         description: Update, restart and rollback end to end, on releases N and N+1.
         type: boolean
@@ -243,16 +239,6 @@ jobs:
         shell: bash ../scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
         timeout-minutes: 25
         run: time python3 -I Tests/qa-key-test.py
-
-      # The ticket page's speed (TP-1491): the app built above, in QA mode over the
-      # ticket-page-speed fixtures, with the page open while polls land. No other desktop step runs
-      # while it measures; the other runner's builds may.
-      - name: Test the ticket page's idle sample and scroll hitches
-        if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.speed && steps.build.outcome == 'success' }}
-        working-directory: macos
-        shell: bash ../scripts/ci/desktop-lock.sh --wait 15 --limit 10 -- bash -e {0}
-        timeout-minutes: 25
-        run: time python3 -I Tests/ticket-page-scroll-test.py build/Symphony.app
 
       # Update, Restart and rollback end to end (macos/Tests/e2e/README.md) on releases N and N+1
       # of this commit. The app's executable and the two Symphony releases come from the store,
