@@ -297,13 +297,16 @@ def more_reopens(binary, pid, area):
 THREAD = re.compile(r"^ {4}(\d+) Thread_")
 NODE = re.compile(r"^(\s+[+!:| ]*?)(\d+) (.+)$")
 WAIT = "__CFRunLoopServiceMachPort"
+# How `sample` names the main thread: by its queue, or as "Thread_n: Main Thread   DispatchQueue_<multiple>" when the
+# thread ran work of more than one queue while it was sampled.
+MAIN_THREAD = re.compile(r"com\.apple\.main-thread|^ {4}\d+ Thread_\w+: Main Thread\b")
 
 
 def main_thread_busy(report):
     """(busy share in percent, samples) of the main thread in a `sample` report: the samples not under the run loop's
     wait for a message. None when the report has no main thread."""
     lines = report.splitlines()
-    start = next((i for i, line in enumerate(lines) if THREAD.match(line) and "com.apple.main-thread" in line), None)
+    start = next((i for i, line in enumerate(lines) if THREAD.match(line) and MAIN_THREAD.search(line)), None)
     if start is None:
         return None
     total = int(THREAD.match(lines[start]).group(1))
@@ -479,6 +482,9 @@ def measure_table(binary, executable, root, failures):
 
 def main():
     assert main_thread_busy(SELF_TEST_REPORT) == (10.0, 1000), main_thread_busy(SELF_TEST_REPORT)
+    by_name = SELF_TEST_REPORT.replace("Thread_1   DispatchQueue_1: com.apple.main-thread  (serial)", "Thread_1071921: Main Thread   DispatchQueue_<multiple>")
+    assert main_thread_busy(by_name) == (10.0, 1000), main_thread_busy(by_name)
+    assert main_thread_busy(SELF_TEST_REPORT.replace("com.apple.main-thread", "a.worker")) is None, "a report with no main thread"
     records = [json.loads(line) for line in thousand_records(os.path.join(AUDIT_FIXTURES, "api", "v1", "audit.json")).splitlines()]
     assert len(records) == TABLE_ROWS and len({r["record_hash"] for r in records}) == TABLE_ROWS, "a thousand distinct records"
     assert all(r["timestamp"].startswith(r["date"]) for r in records), "each on its record's day"
