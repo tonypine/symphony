@@ -33,7 +33,7 @@ public struct RunGroup: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .center, spacing: DesignTokens.Space.s1) {
-                FoldHeader(unfolded: unfolded, accessibilityLabel: run.foldAccessibilityLabel(folded: !unfolded) + ", " + run.accessibilityLabel, toggle: toggle) {
+                CollapsibleHead(expanded: unfolded, style: .line, accessibilityLabel: run.foldAccessibilityLabel(folded: !unfolded) + ", " + run.accessibilityLabel, toggle: toggle) {
                     RunHeaderLabel(run: run, folded: !unfolded)
                 }
                 if let readSession {

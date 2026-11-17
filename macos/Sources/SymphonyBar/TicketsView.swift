@@ -1024,16 +1024,13 @@ struct TicketInspectorBody: View {
                 Text(row.titleText).font(DesignTokens.TypeStyle.rowTitle.font).fixedSize(horizontal: false, vertical: true)
             }
             SituationLine(row.line, reference: reference, size: .compact, forced: row.forced)
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: DesignTokens.Space.s3, verticalSpacing: DesignTokens.Space.s2) {
+            // The catalog's details list (`.facts`): the shared Key-value list in the secondary style, its labels in one
+            // column as wide as the longest.
+            KeyValueList(style: .secondary, rowGap: DesignTokens.KeyValue.compactRowGap) {
                 ForEach(Array(row.facts.enumerated()), id: \.offset) { _, fact in
-                    GridRow {
-                        Text(fact.label).foregroundStyle(.secondary).gridColumnAlignment(.leading)
-                        Text(fact.value).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
-                    }
-                    .accessibilityElement(children: .combine)
+                    KeyValueRow(fact.label, text: fact.value)
                 }
             }
-            .font(DesignTokens.TypeStyle.secondary.font)
             HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                 Button(TicketList.openTitle) { actions.open(row.identifier) }
                     .directorButton(.primary)

@@ -223,7 +223,7 @@ struct PullRequestPageBody: View {
                     }
                     Card(title: PullRequestScreen.ticketTitle) {
                         if let page {
-                            TicketFacts(ticket: page.ticket)
+                            ticketFacts(page.ticket)
                         } else {
                             Placeholder(lines: 2)
                         }
@@ -460,21 +460,14 @@ private struct SizeFigures: View {
     }
 }
 
-/// The ticket as a chip, its stage and what it waits on.
-private struct TicketFacts: View {
-    let ticket: PullRequestScreen.TicketCard
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            ChipText(text: ticket.text)
-            HStack(spacing: DesignTokens.Space.s2) {
-                if let stage = ticket.stage { Badge(status: stage.status, word: stage.word).fixedSize() }
-                if let waitingOn = ticket.waitingOn {
-                    Text(waitingOn)
-                        .font(DesignTokens.TypeStyle.secondary.font)
-                        .foregroundStyle(.secondary)
-                }
-            }
+/// The ticket as a chip, its stage and what it waits on: the shared Key-value list, a fact left out when unknown.
+@MainActor
+private func ticketFacts(_ ticket: PullRequestScreen.TicketCard) -> some View {
+    KeyValueList {
+        KeyValueRow("Ticket") { ChipText(text: ticket.text) }
+        if let stage = ticket.stage {
+            KeyValueRow("Stage") { Badge(status: stage.status, word: stage.word).fixedSize() }
         }
+        KeyValueRow("Waiting on", text: ticket.waitingOn)
     }
 }

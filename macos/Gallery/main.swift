@@ -1774,31 +1774,13 @@ MainActor.assumeIsolated {
         // The catalog's panel, zone title and chip (TP-1484).
         render(panelStories(), scheme, to: "component-panel-\(suffix).png")
         render(chipVariants(), scheme, to: "component-chip-\(suffix).png")
-        // The catalog's Button, Icon button and Inline refusal stories (TP-1505), one snapshot each.
-        // The catalog's Badge, Count badge, Status dot and Keyboard hint stories (TP-1506), one snapshot each.
-        // The catalog's Segmented control, Pop-up and Menu button stories (TP-1508) join them below.
-        // The catalog's Row stories (TP-1507), one snapshot each; the tree and the progress strip from the catalog's Home
-        // and Initiatives: the queue folded, its first chain opened, and the epics' strips.
-        // A component's cases are one cell: each case on a line under its name. The Button's are composed by hand
-        // (ButtonStories.swift), so each of its three is a cell of its own.
-        let stories = componentStories + badgeStories + rowStories + menuStories
-        var listed: [String] = []
-        for story in stories where !listed.contains(story.component) {
-            listed.append(story.component)
-            let cases = stories.filter { $0.component == story.component }
-            if story.component == "button" {
-                for one in cases { render(componentStorySnapshot(one), scheme, to: "\(one.component)-\(one.id)-\(suffix).png") }
-            } else {
-                render(casesTable(cases.map { ($0.id, $0.draw()) }), scheme, to: "\(story.component)-cases-\(suffix).png")
-            }
-        }
-        // The catalog's Text field and Search field stories and the Text area's (TP-1509): each story a variation of its
-        // own, under the catalog's name for it.
-        for story in fieldStories {
-            render(componentStorySnapshot(story), scheme, to: "\(story.component)-\(story.id)-\(suffix).png")
-        }
-        // The catalog's Table header and row stories (TP-1510), each a variation of its own, and a thousand rows.
-        for story in tableStories {
+        // The catalog's component stories, each a variation of its own under the catalog's name for it (TP-1511): the
+        // Button's, Icon button's and Inline refusal's (TP-1505), the Badge's, Count badge's, Status dot's and Keyboard
+        // hint's (TP-1506), the Row's (TP-1507), the Segmented control's, Pop-up's and Menu button's (TP-1508), the Text
+        // field's, Search field's and Text area's (TP-1509), the Table's with a thousand rows (TP-1510), and the
+        // Key-value list's and Collapsible card's (TP-1511). The counterpart check (`CatalogCounterpartsTests`) holds
+        // every story of a mapped catalog component to a variation of the same name.
+        for story in allComponentStories {
             render(componentStorySnapshot(story), scheme, to: "\(story.component)-\(story.id)-\(suffix).png")
         }
         render(homeTree(selected: .more("TP-1483")), scheme, to: "tree-home-\(suffix).png")

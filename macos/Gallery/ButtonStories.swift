@@ -1,6 +1,6 @@
 // The catalog's Button, Icon button and Inline refusal stories (TP-1505), each drawn by the shared components under
-// the id the catalog gives the story (`docs/design/catalog/stories.js`: its name, lower-cased, with dashes). The
-// gallery shows the Button's as three composed cells, and each other component's as one cell, each story under its name.
+// the id the catalog gives the story (`docs/design/catalog/stories.js`: its name, lower-cased, with dashes). Each story
+// is a variation of its own (`button-primary-hover`); the Button adds three composed cells after its stories.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI
@@ -9,7 +9,8 @@ import SymphonyBarUI
 struct ComponentStory {
     /// `button`, `icon-button`, `inline-refusal` (TP-1505), `badge`, `count-badge`, `status-dot` or `keyboard-hint`
     /// (TP-1506), `row` (TP-1507), `segmented-control`, `pop-up` or `menu-button` (TP-1508), or `text-field`,
-    /// `search-field` or `text-area` (TP-1509), or `table-header-and-row` (TP-1510).
+    /// `search-field` or `text-area` (TP-1509), `table-header-and-row` (TP-1510), or `key-value-list` or
+    /// `collapsible-card` (TP-1511).
     let component: String
     let id: String
     /// The catalog's component title, for the sheet.
@@ -22,6 +23,16 @@ struct ComponentStory {
     /// under `components/` and the element to measure.
     var reference: (address: String, selector: String)? = nil
 }
+
+/// Every component story the gallery draws, in its order: each is the variation `<component>-<id>`.
+@MainActor
+var allComponentStories: [ComponentStory] {
+    componentStories + badgeStories + rowStories + menuStories + fieldStories + tableStories + foldStories
+}
+
+/// The component stories' variation names, as `Gallery/component-variations.txt` lists them.
+@MainActor
+var componentVariationNames: [String] { allComponentStories.map { "\($0.component)-\($0.id)" } }
 
 /// The catalog's glyph names as SF Symbols.
 let catalogGlyphs = [
@@ -156,8 +167,28 @@ let componentStories: [ComponentStory] = {
     func refusal(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(component: "inline-refusal", id: id, title: "Inline refusal", width: 360, height: 64, draw: draw)
     }
+    let restart = "A run is still finishing. Wait for it, or stop it first."
     return [
-        // One board, three cells: every kind in every state, the sizes side by side, and the cases apart from those.
+        // Each of the catalog's stories, in its order (TP-1511), then three composed cells: every kind in every state,
+        // the sizes side by side (the catalog's last story), and the cases apart from those.
+        button("primary") { buttonStory("Approve Plan") },
+        button("primary-hover") { buttonStory("Approve Plan", state: .hover) },
+        button("primary-pressed") { buttonStory("Approve Plan", state: .press) },
+        button("primary-focused") { buttonStory("Approve Plan", state: .focus) },
+        button("primary-disabled-with-reason", height: 64) { buttonStory("Approve and Merge…", reason: buttonReason) },
+        button("secondary") { buttonStory("Open Checks", kind: .secondary) },
+        button("secondary-hover") { buttonStory("Open Checks", kind: .secondary, state: .hover) },
+        button("secondary-pressed") { buttonStory("Open Checks", kind: .secondary, state: .press) },
+        button("secondary-disabled-with-reason", height: 64) { buttonStory("Restart…", kind: .secondary, reason: restart) },
+        button("destructive") { buttonStory("Stop Run…", kind: .destructive) },
+        button("destructive-hover") { buttonStory("Stop Run…", kind: .destructive, state: .hover) },
+        button("destructive-in-a-sheet") { buttonStory("Stop Run", kind: .destructiveFilled) },
+        button("quiet") { buttonStory("Show All", kind: .quiet) },
+        button("quiet-hover") { buttonStory("Show All", kind: .quiet, state: .hover) },
+        button("with-a-glyph") { buttonStory("Run Again", kind: .secondary, glyph: catalogGlyphs["refresh"]) },
+        button("small") { buttonStory("Open", kind: .secondary, size: .small) },
+        button("medium") { buttonStory("Open Checks", kind: .secondary, size: .medium) },
+        button("large") { buttonStory("Send Decision…", size: .large) },
         button("kinds-and-states") { buttonKindsAndStates() },
         button("sizes-side-by-side") { buttonSizesSideBySide() },
         button("glyph-reason-and-long-label") { buttonOtherCases() },

@@ -202,11 +202,11 @@ private struct TicketPeekBody: View {
             }
         }
         if !peek.head.facts.isEmpty {
-            PeekFacts(facts: peek.head.facts.map { ($0.label, $0.value) })
+            peekFacts(peek.head.facts.map { ($0.label, $0.value) })
         }
         if let now = peek.now {
             PeekSection(title: TicketPeek.nowTitle) {
-                PeekFacts(facts: [("Stage", now.stage), ("Waiting", now.waitingOn), ("Work", now.pullRequest)].compactMap { label, value in
+                peekFacts([("Stage", now.stage), ("Waiting", now.waitingOn), ("Work", now.pullRequest)].compactMap { label, value in
                     value.map { (label, $0) }
                 })
             }
@@ -331,21 +331,12 @@ private struct PeekSection<Content: View>: View {
     }
 }
 
-/// Labelled lines whose values are chip text.
-private struct PeekFacts: View {
-    let facts: [(label: String, value: String)]
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            ForEach(facts, id: \.label) { fact in
-                HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
-                    Text(fact.label)
-                        .font(DesignTokens.TypeStyle.secondary.font)
-                        .foregroundStyle(.secondary)
-                        .frame(width: 72, alignment: .leading)
-                    ChipText(text: fact.value, font: DesignTokens.TypeStyle.secondary.nsFont)
-                }
-            }
+/// Labelled lines whose values are chip text: the shared Key-value list, in the secondary style.
+@MainActor
+private func peekFacts(_ facts: [(label: String, value: String)]) -> some View {
+    KeyValueList(style: .secondary, rowGap: DesignTokens.KeyValue.compactRowGap) {
+        ForEach(facts, id: \.label) { fact in
+            KeyValueRow(fact.label) { ChipText(text: fact.value, font: DesignTokens.TypeStyle.secondary.nsFont) }
         }
     }
 }
