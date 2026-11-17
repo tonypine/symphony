@@ -123,12 +123,23 @@ defmodule SymphonyElixirWeb.ControlApiController do
   @spec resume(Conn.t(), map()) :: Conn.t()
   def resume(conn, params) do
     case {string_param(params["condition"]), string_param(params["kind"]), string_param(params["version"])} do
-      {nil, nil, _version} -> respond_resume(conn, Orchestrator.resume_dispatch(orchestrator(conn)))
-      {nil, "build", nil} -> error_response(conn, 422, "invalid_resume", "Lifting an update's pause needs the version it waits on")
-      {nil, "build", version} -> respond(conn, Orchestrator.resume_dispatch(orchestrator(conn), {:build, version}))
-      {nil, "person", _version} -> respond(conn, Orchestrator.resume_dispatch(orchestrator(conn), :person))
-      {nil, kind, _version} -> error_response(conn, 422, "invalid_resume", "Resume lifts a pause of kind build or person, not #{kind}")
-      {condition, _kind, _version} -> respond_resume(conn, Orchestrator.try_usage_limit_now(orchestrator(conn), condition))
+      {nil, nil, _version} ->
+        respond_resume(conn, Orchestrator.resume_dispatch(orchestrator(conn)))
+
+      {nil, "build", nil} ->
+        error_response(conn, 422, "invalid_resume", "Lifting an update's pause needs the version it waits on")
+
+      {nil, "build", version} ->
+        respond(conn, Orchestrator.resume_dispatch(orchestrator(conn), {:build, version}))
+
+      {nil, "person", _version} ->
+        respond(conn, Orchestrator.resume_dispatch(orchestrator(conn), :person))
+
+      {nil, kind, _version} ->
+        error_response(conn, 422, "invalid_resume", "Resume lifts a pause of kind build or person, not #{kind}")
+
+      {condition, _kind, _version} ->
+        respond_resume(conn, Orchestrator.try_usage_limit_now(orchestrator(conn), condition))
     end
   end
 

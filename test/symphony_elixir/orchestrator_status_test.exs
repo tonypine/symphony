@@ -2984,7 +2984,8 @@ defmodule SymphonyElixir.OrchestratorStatusTest do
       assert {:ok, %{paused: true}} = Orchestrator.pause_dispatch(name, "Agent tools crash in this build")
 
       # Another version's update and a pause it doesn't hold change nothing.
-      assert {:ok, %{paused: true, reasons: [%{kind: :build}, %{kind: :person}]}} = Orchestrator.resume_dispatch(name, {:build, "0.0.1.2"})
+      assert {:ok, %{paused: true, reasons: [%{kind: :build}, %{kind: :person}]}} =
+               Orchestrator.resume_dispatch(name, {:build, "0.0.1.2"})
 
       assert {:ok, %{paused: true, reason: "Agent tools crash in this build", reasons: [%{kind: :person, text: "Agent tools crash in this build"}]}} =
                Orchestrator.resume_dispatch(name, {:build, "0.0.1.1"})
