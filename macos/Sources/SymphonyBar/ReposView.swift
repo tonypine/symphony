@@ -315,7 +315,7 @@ struct RepoDetailView: View {
                 live
                 if let manualReview = repo.manualReview {
                     Section {
-                        FieldRow(field: manualReview)
+                        KeyValueList { FieldRow(field: manualReview) }
                     } header: {
                         sectionHeader(.review)
                     }
@@ -423,7 +423,9 @@ struct RepoDetailView: View {
                 }
             }
             .fixedSize(horizontal: false, vertical: true)
-            ForEach(repo.routing.fields, id: \.label) { FieldRow(field: $0) }
+            KeyValueList {
+                ForEach(repo.routing.fields, id: \.label) { FieldRow(field: $0) }
+            }
         } header: {
             sectionHeader(.routing)
         }
@@ -446,10 +448,10 @@ struct RepoDetailView: View {
             }
         case let .status(workflow, lastFetch, agents, agentsProblem):
             Section("WORKFLOW.md") {
-                FieldRow(field: workflow)
+                KeyValueList { FieldRow(field: workflow) }
             }
             Section("Activity") {
-                FieldRow(field: lastFetch)
+                KeyValueList { FieldRow(field: lastFetch) }
                 if let agentsProblem {
                     Text(agentsProblem)
                         .foregroundStyle(.secondary)
@@ -619,30 +621,29 @@ struct NeedsAttentionBox: View {
     }
 }
 
-/// A label and its value, with the detail under the value in small selectable text.
+/// A label and its value, with the detail under the value in small selectable text: one row of the
+/// `KeyValueList` around it, so the fields of a section share one label column.
 struct FieldRow: View {
     let field: RepoField
 
     var body: some View {
-        KeyValueList {
-            KeyValueRow(field.label) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(field.value)
-                        .foregroundStyle(
-                            field.tone == .problem ? DesignTokens.Status.problem.textColor.color : DesignTokens.TextColor.primary.color
-                        )
-                    if let detail = field.detail {
-                        Text(detail)
-                            .textStyle(.caption)
-                            .foregroundStyle(DesignTokens.TextColor.secondary.color)
-                            .lineLimit(3)
-                            .truncationMode(.middle)
-                            .textSelection(.enabled)
-                    }
+        KeyValueRow(field.label) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(field.value)
+                    .foregroundStyle(
+                        field.tone == .problem ? DesignTokens.Status.problem.textColor.color : DesignTokens.TextColor.primary.color
+                    )
+                if let detail = field.detail {
+                    Text(detail)
+                        .textStyle(.caption)
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                        .lineLimit(3)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
                 }
             }
+            .help(field.detail ?? field.value)
         }
-        .help(field.detail ?? field.value)
     }
 }
 
