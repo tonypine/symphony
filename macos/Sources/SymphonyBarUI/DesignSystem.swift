@@ -743,8 +743,6 @@ public struct TitledPanel<Content: View>: View {
     }
 }
 
-/// Caps a chip's text at `width`: it takes its own width up to it, and is cut with an ellipsis past it, whatever the
-/// chip's container proposes. No width: the text as it is.
 /// The chip's tooltip, which is also its accessibility help: only a chip that stands for more than it says has one.
 private struct ChipHelp: ViewModifier {
     let text: String?
@@ -754,6 +752,8 @@ private struct ChipHelp: ViewModifier {
     }
 }
 
+/// Caps a chip's text at `width`: it takes its own width up to it, and is cut with an ellipsis past it, whatever the
+/// chip's container proposes. No width: the text as it is.
 private struct ChipTextCap: ViewModifier {
     let width: Double?
 
