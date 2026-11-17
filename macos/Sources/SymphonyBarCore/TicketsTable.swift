@@ -383,9 +383,16 @@ public struct TicketsRow: Equatable, Identifiable {
 
     /// Whether the search field's `text` finds it: in its identifier or its title, in any case.
     public func matches(_ search: String) -> Bool {
-        let needle = search.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !needle.isEmpty else { return true }
-        return identifier.localizedCaseInsensitiveContains(needle) || title.localizedCaseInsensitiveContains(needle)
+        matches(needle: Self.needle(search))
+    }
+
+    /// The search field's text as `matches` looks for it: without the spaces around it.
+    static func needle(_ search: String) -> String {
+        search.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func matches(needle: String) -> Bool {
+        needle.isEmpty || identifier.localizedCaseInsensitiveContains(needle) || title.localizedCaseInsensitiveContains(needle)
     }
 
     /// The inspector's facts for a ticket the state doesn't list: each column read, by its header.
@@ -415,9 +422,10 @@ public struct TicketsPayload: Equatable {
         self.error = error
     }
 
-    /// The rows the search field finds.
+    /// The rows the search field finds: every row while it is empty.
     public func rows(matching search: String) -> [TicketsRow] {
-        rows.filter { $0.matches(search) }
+        let needle = TicketsRow.needle(search)
+        return needle.isEmpty ? rows : rows.filter { $0.matches(needle: needle) }
     }
 
     /// The answer in `data`, nil when it isn't one (an error, or not JSON).

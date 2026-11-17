@@ -50,7 +50,13 @@ final class SymphonyWindowModel: ObservableObject {
     /// The app's update under way, which the dispatch control and the Overview show (S3a, S3b).
     @Published var updateHold: UpdateHold?
     /// The Overview's reading of the last state payload, decoded off the main actor and taken only when it changed.
-    @Published private(set) var overviewState: OverviewState?
+    @Published private(set) var overviewState: OverviewState? {
+        didSet { ticketListsChanged() }
+    }
+    /// Every tracked ticket under the window's scope, and in every repo for the Force sheet's lookup: built once per
+    /// state or scope, nil until the first state payload.
+    private(set) var ticketList: TicketList?
+    private(set) var allTickets: TicketList?
     /// The PR and CI watcher's reading of it: each watched ticket's block, for the Inbox's evidence (S16).
     @Published private(set) var watchState = WatchState()
     /// The last answer to `/api/v1/repos`, for the Overview's repos line.
@@ -60,6 +66,7 @@ final class SymphonyWindowModel: ObservableObject {
         didSet {
             guard scope != oldValue else { return }
             onScopeChange(scope)
+            ticketListsChanged()
             // Audit and Tickets ask Symphony for the scope's records.
             auditReadAt = nil
             readAuditIfDue()
@@ -251,7 +258,11 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
     /// The rows `GET /api/v1/tickets` served for the query, read while Tickets shows.
-    @Published var ticketsPayload: TicketsPayload?
+    @Published var ticketsPayload: TicketsPayload? {
+        didSet { ticketRowsChanged() }
+    }
+    /// The rows Tickets shows: the payload's rows the search finds, worked out once per change of either.
+    private(set) var ticketRows: [TicketsRow] = []
     /// What the last tickets read got when it got no rows, nil after one that did.
     @Published var ticketsResult: EndpointResult?
     /// The ticket entity's columns, as `GET /api/v1/views` names them; the documented catalog until it answers.
@@ -273,7 +284,12 @@ final class SymphonyWindowModel: ObservableObject {
     var ticketsReadAt: Date?
     static let ticketsInterval: TimeInterval = 5
     /// Tickets' search, which narrows the rows by identifier and title, and its selected row (D6).
-    @Published var ticketSearch = ""
+    @Published var ticketSearch = "" {
+        didSet {
+            guard ticketSearch != oldValue else { return }
+            ticketRowsChanged()
+        }
+    }
     @Published var ticketSelection: String?
     /// Tickets' inspector (⌥⌘I, Space).
     @Published var inspectorShown = true
