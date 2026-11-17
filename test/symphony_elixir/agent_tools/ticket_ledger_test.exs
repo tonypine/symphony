@@ -415,7 +415,7 @@ defmodule SymphonyElixir.AgentTools.TicketLedgerTest do
 
       for {opts, kind} <- [
             {[run_kind: :ci_fix], "ci_fix"},
-            {[run_profile: %{kind: :breakdown}], "breakdown"},
+            {[run_profile: %SymphonyElixir.Config.Runs.Run{kind: :breakdown, harness: "claude", command: "claude", provider: "anthropic", model: "m"}], "breakdown"},
             {[tool_scope: :read_only], "code_review"},
             {[tool_scope: :qa], "qa"},
             {[], "implementation"}
