@@ -220,14 +220,14 @@ defmodule SymphonyElixir.ReleaseGateTest do
     assert_received {:create, %{scope: "cycle"}, _opts}
   end
 
-  test "a delivery from a repository no configured repo is files nothing and names it", %{opts: opts} do
+  test "a delivery from a repository no configured repo has files nothing and names it", %{opts: opts} do
     for {build, repos} <- [
           {build(%{repo: "acme/other"}), {:ok, repos()}},
           {build(%{repo: nil}), {:ok, repos()}},
           {build(), {:error, :missing_symphony_config}}
         ] do
-      log = capture_log(fn -> assert {:error, {:unknown_repo, repo}} = ReleaseGate.failed(build, Keyword.put(opts, :repos, repos)) end)
-      assert repo == build.repo
+      {result, log} = with_log(fn -> ReleaseGate.failed(build, Keyword.put(opts, :repos, repos)) end)
+      assert result == {:error, {:unknown_repo, build.repo}}
       assert log =~ "no configured repo is its repository #{inspect(build.repo)}; filed no fix ticket"
     end
 
