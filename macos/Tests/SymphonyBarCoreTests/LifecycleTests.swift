@@ -86,7 +86,7 @@ final class LifecycleTests: XCTestCase {
         XCTAssertEqual(model.summary, "1 h 3 min of work in 5 runs")
         XCTAssertTrue(model.live)
         XCTAssertEqual(model.stages.map(\.title), ["Coding", "Code Review", "QA", "Merging", "Done"])
-        XCTAssertEqual(model.stages.map(\.line), ["Now · 3 times · 1 h 26 min so far", "Sent back · 2 times · 55 min", "Not yet", "Not yet", "Not yet"])
+        XCTAssertEqual(model.stages.map(\.line).map(plain), ["Now · 3 times · 1 h 26 min so far", "Sent back · 2 times · 55 min", "Not yet", "Not yet", "Not yet"])
         XCTAssertEqual(model.stages.map(\.status), [.working, .you, .idle, .idle, .idle])
         XCTAssertEqual(model.stages[0].accessibilityLabel, "Coding, entered 3 times, now, 1 hour 26 minutes so far")
         XCTAssertEqual(model.stages[1].accessibilityLabel, "Code Review, entered 2 times, sent back, 55 minutes")
@@ -110,7 +110,7 @@ final class LifecycleTests: XCTestCase {
         XCTAssertEqual(model.whereLine, "In Coding, the 3rd time: QA sent it back, and it waits on your answer")
         XCTAssertEqual(model.summary, "1 h 16 min of work in 6 runs")
         XCTAssertFalse(model.live)
-        XCTAssertEqual(model.stages.map(\.line), ["Paused · 3 times · 1 h 30 min", "Passed · 2 times · 20 min", "Sent back · 19 min", "Not yet", "Not yet"])
+        XCTAssertEqual(model.stages.map(\.line).map(plain), ["Paused · 3 times · 1 h 30 min", "Passed · 2 times · 20 min", "Sent back · 19 min", "Not yet", "Not yet"])
         XCTAssertEqual(model.stages.map(\.status), [.idle, .done, .you, .idle, .idle])
         XCTAssertEqual(model.stages[0].accessibilityLabel, "Coding, entered 3 times, paused, 1 hour 30 minutes")
         // A ticket that can still spend keeps the cap's warning.
@@ -197,7 +197,7 @@ final class LifecycleTests: XCTestCase {
     func testATicketAt95PercentOfItsCapTurnsTheBarToTheProblemColour() throws {
         let model = try lifecycle("near-cap")
         XCTAssertEqual(model.whereLine, "In QA")
-        XCTAssertEqual(model.stages.map(\.line), ["Passed · 1 h 30 min", "Passed · 2 times · 35 min", "Now · 22 min so far", "Not yet", "Not yet"])
+        XCTAssertEqual(model.stages.map(\.line).map(plain), ["Passed · 1 h 30 min", "Passed · 2 times · 35 min", "Now · 22 min so far", "Not yet", "Not yet"])
         XCTAssertEqual(model.stages[1].title, "Code Review")
         XCTAssertEqual(model.summary, "2 h 7 min of work in 5 runs")
         XCTAssertEqual(model.tokens.value, "7.6M of 8M tokens · 95 %")
@@ -210,7 +210,7 @@ final class LifecycleTests: XCTestCase {
         XCTAssertEqual(model.whereLine, "Done")
         XCTAssertEqual(model.summary, "1 h 39 min of work in 6 runs")
         XCTAssertFalse(model.live)
-        XCTAssertEqual(model.stages.map(\.line), ["Passed · 2 times · 1 h 20 min", "Passed · 2 times · 40 min", "Passed · 36 min", "Passed · 12 min", "Passed"])
+        XCTAssertEqual(model.stages.map(\.line).map(plain), ["Passed · 2 times · 1 h 20 min", "Passed · 2 times · 40 min", "Passed · 36 min", "Passed · 12 min", "Passed"])
         XCTAssertEqual(model.tokens.value, "4.7M of 8M tokens · 58 %")
         XCTAssertNil(model.tokens.note)
     }
@@ -247,16 +247,23 @@ final class LifecycleTests: XCTestCase {
 
     func testAStageLineSaysItsWordItsVisitsWhenMoreThanOneAndItsTime() {
         let coding = TicketLifecycle.Stage(id: "coding", name: "Coding", state: .current, visits: 1, timeMs: 120_000)
-        XCTAssertEqual(LifecycleModel.stage(of: coding).line, "Now · 2 min so far")
+        XCTAssertEqual(plain(LifecycleModel.stage(of: coding).line), "Now · 2 min so far")
         let review = TicketLifecycle.Stage(id: "code_review", name: "Code Review", state: .current, visits: 1)
-        XCTAssertEqual(LifecycleModel.stage(of: review).line, "Now")
+        XCTAssertEqual(plain(LifecycleModel.stage(of: review).line), "Now")
         let back = TicketLifecycle.Stage(id: "qa", name: "QA", state: .sentBack, visits: 1, timeMs: 1_140_000)
-        XCTAssertEqual(LifecycleModel.stage(of: back).line, "Sent back · 19 min")
+        XCTAssertEqual(plain(LifecycleModel.stage(of: back).line), "Sent back · 19 min")
         let paused = TicketLifecycle.Stage(id: "coding", name: "Coding", state: .paused, visits: 4, timeMs: 5_400_000)
-        XCTAssertEqual(LifecycleModel.stage(of: paused).line, "Paused · 4 times · 1 h 30 min")
+        XCTAssertEqual(plain(LifecycleModel.stage(of: paused).line), "Paused · 4 times · 1 h 30 min")
         let skipped = TicketLifecycle.Stage(id: "qa", name: "QA", state: .skipped)
-        XCTAssertEqual(LifecycleModel.stage(of: skipped).line, "Skipped")
+        XCTAssertEqual(plain(LifecycleModel.stage(of: skipped).line), "Skipped")
         XCTAssertEqual(LifecycleModel.stage(of: skipped).status, .idle)
+    }
+
+    func testAStageLineWrapsOnlyBetweenItsParts() {
+        let paused = TicketLifecycle.Stage(id: "coding", name: "Coding", state: .paused, visits: 2, timeMs: 5_100_000)
+        XCTAssertEqual(LifecycleModel.stage(of: paused).line, "Paused · 2\u{00A0}times · 1\u{00A0}h\u{00A0}25\u{00A0}min")
+        let coding = TicketLifecycle.Stage(id: "coding", name: "Coding", state: .current, visits: 3, timeMs: 5_160_000)
+        XCTAssertEqual(LifecycleModel.stage(of: coding).line, "Now · 3\u{00A0}times · 1\u{00A0}h\u{00A0}26\u{00A0}min\u{00A0}so\u{00A0}far")
     }
 
     func testTheNewStageStatesDecode() throws {
@@ -318,5 +325,10 @@ final class LifecycleTests: XCTestCase {
         XCTAssertEqual(model.phases.first?.entered, ["08:00"])
         XCTAssertNil(model.phases.first?.time)
         XCTAssertEqual(model.phases.first?.accessibilityLabel, "Todo, entered at 08:00")
+    }
+
+    /// A stage line with its non-breaking spaces read as plain ones.
+    private func plain(_ line: String) -> String {
+        line.replacingOccurrences(of: "\u{00A0}", with: " ")
     }
 }

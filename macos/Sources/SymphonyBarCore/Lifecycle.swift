@@ -352,9 +352,14 @@ public struct LifecycleModel: Equatable {
         spoken.append(word.lowercased())
         if stage.timeMs > 0 { spoken.append(Overview.spokenDuration(seconds) + soFar) }
         return Stage(
-            id: stage.id, title: stage.name, state: stage.state, word: word, line: parts.joined(separator: " · "), status: status,
+            id: stage.id, title: stage.name, state: stage.state, word: word, line: parts.map(unbroken).joined(separator: " · "), status: status,
             accessibilityLabel: spoken.joined(separator: ", ")
         )
+    }
+
+    /// One part of a stage's line kept whole: its spaces don't break, so a narrow tile wraps only at a " · ".
+    static func unbroken(_ part: String) -> String {
+        part.replacingOccurrences(of: " ", with: "\u{00A0}")
     }
 
     static let series: [String: DesignTokens.ChartSeries] = ["coding": .series1, "code_review": .series2, "qa": .series3, "merging": .series4]
