@@ -191,7 +191,7 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
       epic_lanes: 1
     )
 
-    assert Config.settings!().agent.epic_lanes == 1
+    assert Config.settings!().execution.epic_lanes == 1
 
     epics = for n <- 1..2, do: epic("e#{n}", "MT-#{n}0", [%{id: "p#{n}", identifier: "MT-#{n}1", state: "Todo"}])
     state = Orchestrator.put_epic_lanes_for_test(%{orchestrator_state(3) | max_concurrent_agents: nil}, epics)
@@ -207,7 +207,7 @@ defmodule SymphonyElixir.OrchestratorEpicLanesTest do
       assert message =~ "epic_lanes"
     end
 
-    changeset = Schema.Agent.changeset(%Schema.Agent{}, %{"kind" => "codex", "command" => "codex", "max_concurrent_agents" => 0, "epic_lanes" => -1})
+    changeset = Schema.Execution.changeset(%Schema.Execution{}, %{"kind" => "codex", "command" => "codex", "max_concurrent_agents" => 0, "epic_lanes" => -1})
     assert {"must be greater than or equal to %{number}", _} = changeset.errors[:epic_lanes]
   end
 

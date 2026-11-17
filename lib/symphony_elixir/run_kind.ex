@@ -1,12 +1,7 @@
 defmodule SymphonyElixir.RunKind do
-  # The legacy machine's kinds, which `classify/2` never returns; see the moduledoc. The moduledoc
-  # interpolates these names, so the documented set cannot drift from the code.
-  @retired_kinds [:close_out]
-  @retired_kind_names Enum.map_join(@retired_kinds, " and ", fn kind -> "`" <> Atom.to_string(kind) <> "`" end)
-
   @moduledoc """
   Classifies what kind of agent run Symphony is about to start, so each kind can
-  get its own model, effort and provider (`agent.run_profiles.<kind>`).
+  start with its own harness, provider, model and effort (`runs.<kind>`, `SymphonyElixir.Config.Runs`).
 
   Classification is deterministic and uses the signals the orchestrator already
   routes on. The first match wins:
@@ -36,10 +31,6 @@ defmodule SymphonyElixir.RunKind do
 
   Parent tickets come before states because they never open a PR: the workflow sends them to the
   parent-ticket steps whatever their state.
-
-  #{@retired_kind_names} is never returned by `classify/2`: the legacy machine's close-out
-  run is retired with it (the epic path reviews the epic in `Epic Review`), and the name stays only
-  so an `agent.run_profiles` that still sets it loads.
   """
 
   alias SymphonyElixir.Linear.Issue
@@ -48,7 +39,6 @@ defmodule SymphonyElixir.RunKind do
   @type t ::
           :implementation
           | :breakdown
-          | :close_out
           | :rework
           | :landing
           | :code_review
@@ -57,16 +47,9 @@ defmodule SymphonyElixir.RunKind do
           | :review_feedback
           | :qa
 
-  @typedoc "The provider that serves a run's model."
-  @type provider :: String.t()
-
-  @typedoc "A run kind with the model, effort and provider it resolves to; a nil model or effort adds nothing to the agent command."
-  @type profile :: %{kind: t(), model: String.t() | nil, effort: String.t() | nil, provider: provider()}
-
   @kinds [
     :implementation,
     :breakdown,
-    :close_out,
     :rework,
     :landing,
     :code_review,
@@ -88,7 +71,7 @@ defmodule SymphonyElixir.RunKind do
   @spec kinds() :: [t()]
   def kinds, do: @kinds
 
-  @doc "Every run kind as the string used for `agent.run_profiles` keys."
+  @doc "Every run kind as the string used for `runs:` entries."
   @spec names() :: [String.t()]
   def names, do: Enum.map(@kinds, &Atom.to_string/1)
 

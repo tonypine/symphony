@@ -17,7 +17,7 @@ defmodule SymphonyElixir.QaPolicy do
   the QA agent is told up front that building and launching the app are the whole check, and the
   merge stays gated on the app starting (`SymphonyElixir.QaVerification`).
 
-  A `macos_app` playbook with a `live` server (`SymphonyElixir.QaAgent.PlaybookSettings`) is marked
+  A `macos_app` playbook with a `live` server (`SymphonyElixir.PlaybookSettings`) is marked
   `live: true` when the pass should run that server on the QA host beside the app
   (`SymphonyElixir.QaAgent.Selection.live/3`): the diff touches one of the server's `paths` and the
   ticket's `## User walkthrough` mentions one of its `walkthrough_mentions` (any walkthrough when it

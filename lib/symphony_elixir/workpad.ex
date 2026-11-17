@@ -416,7 +416,7 @@ defmodule SymphonyElixir.Workpad do
 
   def workpad_body?(_body), do: false
 
-  defp agent_workpad_heading(%{agent: %{kind: kind}}), do: AgentLabels.workpad_heading(kind)
+  defp agent_workpad_heading(%{execution: %{harness: harness}}), do: AgentLabels.workpad_heading(harness)
   defp agent_workpad_heading(_settings), do: AgentLabels.workpad_heading(nil)
 
   defp linear_tracker?(%{tracker: %{kind: kind}}), do: to_string(kind) == "linear"

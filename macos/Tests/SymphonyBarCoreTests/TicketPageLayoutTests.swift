@@ -41,14 +41,22 @@ final class TicketPageLayoutTests: XCTestCase {
 
         XCTAssertEqual(page.headerTitle, "The paused line on the ticket page")
         XCTAssertEqual(page.repoKey, "symphony")
-        XCTAssertEqual(page.epicChip, "TP-1381 Phase 3b: the Director redesigned around a ticket's situation")
+        // The epic chip says the epic's short name; its whole title is the tooltip and VoiceOver's words (TP-1485).
+        XCTAssertEqual(page.epicChip?.shortName, "Phase 3b")
+        XCTAssertEqual(page.epicChip?.fullTitle, "Epic TP-1381: Phase 3b: the Director redesigned around a ticket's situation")
+        // The identifier's line: the priority, then the labels.
+        XCTAssertEqual(page.headerPriority, "Urgent")
+        XCTAssertEqual(page.headerLabels, ["skip-update-hold"])
+        // The rail's links: the pull request and the run's workspace.
+        XCTAssertEqual(page.railLinks.pullRequest, URL(string: "https://github.com/acme/symphony/pull/741"))
+        XCTAssertEqual(page.railLinks.workspacePath, "/Users/director/symphony-workspaces/symphony/TP-1244")
         XCTAssertEqual(page.situation?.kind, .working)
         XCTAssertEqual(page.situation?.word, "Working on the tests step")
         XCTAssertEqual(page.reference, ISO8601DateFormatter().date(from: "2026-10-08T10:27:00Z"))
         // The rail: Stop Run… allowed in More, Start Now refused because a run works on it.
         let rail = TicketActionRail(identifier: page.identifier, moves: try XCTUnwrap(page.moves))
         XCTAssertEqual(rail.items.first { $0.move == .start }?.reason, "A run is already working on it.")
-        XCTAssertTrue(rail.more.contains { $0.move == .stop && $0.allowed })
+        XCTAssertEqual(rail.stop?.allowed, true)
         XCTAssertEqual(page.lifecycleRead?.lifecycle?.current, "coding")
         XCTAssertEqual(page.lifecycleRead?.phasePath?.current, "Rework")
         XCTAssertEqual(page.factsRead?.pullRequest?.number, 741)
@@ -124,6 +132,48 @@ final class TicketPageLayoutTests: XCTestCase {
     }
 
     // MARK: - The decisions line
+
+    // MARK: - The header's identifier line and title (TP-1485)
+
+    private func header(_ ticket: String, connected: String = "null") -> TicketPage {
+        let json = #"{"issue_identifier":"TP-1","ticket":\#(ticket),"connected":\#(connected)}"#
+        return TicketPage(identifier: "TP-1", sources: TicketPage.Sources(issue: Data(json.utf8)), timeZone: utc)
+    }
+
+    func testNoPriorityShowsNeitherTheHairlineNorASlot_AndNoLabelsShowsThePriorityAlone() {
+        let alone = header(#"{"title":"T","priority":2,"labels":[]}"#)
+        XCTAssertEqual(alone.headerPriority, "High")
+        XCTAssertEqual(alone.headerLabels, [])
+        // Linear's 0 is No priority: nothing is drawn for it, as for a ticket without one.
+        XCTAssertNil(header(#"{"title":"T","priority":0,"labels":["mac"," "]}"#).headerPriority)
+        XCTAssertEqual(header(#"{"title":"T","priority":0,"labels":["mac"," "]}"#).headerLabels, ["mac"])
+        XCTAssertNil(header(#"{"title":"T"}"#).headerPriority)
+    }
+
+    func testTheEpicChipSaysTheShortNameAndKeepsTheWholeTitleForItsTooltip() {
+        let page = header(#"{"title":"T"}"#, connected: #"{"epic":{"identifier":"TP-9","title":"Pauses","done":1,"total":3,"tickets":[]},"blocked_by":[],"blocks":[]}"#)
+        XCTAssertEqual(page.epicChip?.shortName, "Pauses")
+        XCTAssertEqual(page.epicChip?.fullTitle, "Epic TP-9: Pauses")
+        XCTAssertEqual(EpicChip(identifier: "TP-9", title: " ").shortName, "TP-9")
+        XCTAssertEqual(EpicChip(identifier: "TP-9", title: nil).fullTitle, "Epic TP-9")
+        XCTAssertEqual(EpicChip(identifier: "TP-9", title: ": Pauses").shortName, "Pauses")
+        XCTAssertEqual(EpicChip.maxTextWidth, 160)
+        // Without the read's epic, the plan the state's lanes name.
+        var lane = header(#"{"title":"T"}"#)
+        lane.initiative = "SHOP-300 Gift cards: the new flow"
+        XCTAssertEqual(lane.epicChip, EpicChip(identifier: "SHOP-300", title: "Gift cards: the new flow"))
+        XCTAssertEqual(lane.epicChip?.shortName, "Gift cards")
+        lane.initiative = "SHOP-300"
+        XCTAssertEqual(lane.epicChip?.shortName, "SHOP-300")
+        lane.initiative = "  "
+        XCTAssertNil(lane.epicChip)
+    }
+
+    func testTheTitleTakesTheTitleStyleUpTo30EmOnALaptopAnd56OnADesktop_AndThreeLines() {
+        XCTAssertEqual(TicketPageHeaderLayout.titleWidth(desktop: false), 780)
+        XCTAssertEqual(TicketPageHeaderLayout.titleWidth(desktop: true), 1456)
+        XCTAssertEqual(TicketPageHeaderLayout.titleLines, 3)
+    }
 
     func testTheQuietLineSaysNothingNeedsYouAndOffersNoAnswer() {
         let line = DecisionsLine(openQuestions: [], questions: [])

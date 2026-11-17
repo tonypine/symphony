@@ -2,6 +2,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Codex.AppServer, as: CodexAppServer
+  alias SymphonyElixir.Config.Runs.Run
 
   @run_profiles %{"breakdown" => %{"effort" => "high"}}
 
@@ -140,21 +141,53 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       write_profile_workflow!(ctx)
       settings = Config.settings!()
 
-      assert AgentRunner.run_profile(issue("i-1", "MT-1", %{labels: ["breakdown"]}), settings) ==
-               %{kind: :breakdown, model: "claude-opus-5-5", effort: "high", provider: "anthropic"}
+      run = %Run{
+        kind: :breakdown,
+        harness: "claude",
+        command: ctx.fake_claude,
+        provider: "anthropic",
+        model: "claude-opus-5-5",
+        effort: "high",
+        small_model: "small-test"
+      }
 
-      assert AgentRunner.run_profile(issue("i-2", "MT-2"), settings) ==
-               %{kind: :implementation, model: "claude-opus-5-5", effort: "medium", provider: "anthropic"}
-
-      assert AgentRunner.run_profile(issue("i-3", "MT-3", %{state: "Merging"}), settings) ==
-               %{kind: :landing, model: "claude-opus-5-5", effort: "medium", provider: "anthropic"}
+      assert AgentRunner.run_profile(issue("i-1", "MT-1", %{labels: ["breakdown"]}), settings) == run
+      assert AgentRunner.run_profile(issue("i-2", "MT-2"), settings) == %{run | kind: :implementation, effort: "medium"}
+      assert AgentRunner.run_profile(issue("i-3", "MT-3", %{state: "Merging"}), settings) == %{run | kind: :landing, effort: "medium"}
     end
 
-    test "resolves nil model and effort when nothing is configured", ctx do
+    test "takes the first candidate whose provider can take the run, and the entry's own choice when none can", ctx do
+      fallbacks = [%{"provider" => "openrouter", "model" => "acme/chat"}, %{"model" => "claude-sonnet-5-5"}]
+      write_profile_workflow!(ctx, agent_run_profiles: %{"implementation" => %{"fallbacks" => fallbacks}})
+      settings = Config.settings!()
+      issue = issue("i-1", "MT-1")
+
+      assert [%Run{fallback: nil}, %Run{fallback: 0}, %Run{fallback: 1}] = Config.runs(settings, :implementation)
+      assert %Run{fallback: nil, provider: "anthropic"} = AgentRunner.run_profile(issue, settings)
+
+      assert %Run{fallback: 0, provider: "openrouter", model: "acme/chat"} =
+               AgentRunner.run_profile(issue, settings, available?: &(&1.provider != "anthropic"))
+
+      assert %Run{fallback: 1, model: "claude-sonnet-5-5"} =
+               AgentRunner.run_profile(issue, settings, available?: &(&1.model == "claude-sonnet-5-5"))
+
+      assert %Run{fallback: nil} = AgentRunner.run_profile(issue, settings, available?: fn _run -> false end)
+      assert_raise ArgumentError, ~r/runs.qa resolves no harness/, fn -> Config.runs(%{settings | runs: %{}}, :qa) end
+    end
+
+    test "resolves runs.default's model and no effort when no entry sets an effort", ctx do
       write_profile_workflow!(ctx, agent_model: nil, agent_effort: nil, agent_run_profiles: nil)
 
       assert AgentRunner.run_profile(issue("i-1", "MT-1"), Config.settings!()) ==
-               %{kind: :implementation, model: nil, effort: nil, provider: "anthropic"}
+               %Run{
+                 kind: :implementation,
+                 harness: "claude",
+                 command: ctx.fake_claude,
+                 provider: "anthropic",
+                 model: "claude-test",
+                 effort: nil,
+                 small_model: "small-test"
+               }
     end
   end
 
@@ -199,14 +232,13 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
         with_log(fn ->
           send(pid, :run_poll_cycle)
           assert [_first, second | _rest] = wait_for_argv_lines(ctx.argv_trace, 2)
-          assert String.ends_with?(second, "--print --effort low")
-          refute second =~ "--model"
+          assert String.ends_with?(second, "--print --model claude-test --effort low")
           wait_for_run("issue-profile-sub")
         end)
 
-      assert log =~ ~r/Dispatching issue to agent: issue_id=issue-profile-sub .* run_kind=implementation model=default effort=low\n/
+      assert log =~ ~r/Dispatching issue to agent: issue_id=issue-profile-sub .* run_kind=implementation model=claude-test effort=low\n/
 
-      assert %{run_kind: "implementation", model: nil, effort: "low"} = sub_run
+      assert %{run_kind: "implementation", model: "claude-test", effort: "low"} = sub_run
 
       # Code Review's reviewer runs only in a Code Review run: an implementation run has none.
       refute Map.has_key?(sub_run, :reviewer_profile)
@@ -452,7 +484,7 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       assert argv_lines(ctx.argv_trace) == []
     end
 
-    test "with no model, effort or run profiles, Claude's argv is unchanged", ctx do
+    test "with no effort or run kind entries, Claude's argv gets runs.default's model and no effort", ctx do
       write_profile_workflow!(ctx, agent_model: nil, agent_effort: nil, agent_run_profiles: nil)
       workspace = Path.join([ctx.test_root, "workspaces", "MT-PLAIN"])
       File.mkdir_p!(workspace)
@@ -466,36 +498,65 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
                )
 
       assert [argv] = argv_lines(ctx.argv_trace)
-      assert String.ends_with?(argv, "--plugin-dir #{plugin_dir_from(argv)} --verbose --output-format stream-json --print")
-      refute argv =~ "--model"
+      assert String.ends_with?(argv, "--plugin-dir #{plugin_dir_from(argv)} --verbose --output-format stream-json --print --model claude-test")
       refute argv =~ "--effort"
     end
   end
 
-  describe "Codex runtime" do
-    test "ignores the run profile with one warning", ctx do
-      write_profile_workflow!(ctx, agent_kind: "codex", agent_command: "codex app-server")
-      outside_root = Path.join(ctx.test_root, "outside")
-      File.mkdir_p!(outside_root)
-      run_issue = issue("issue-codex", "MT-CODEX")
-      profile = %{kind: :implementation, model: "gpt-5", effort: nil}
+  describe "Codex harness" do
+    test "applies the run profile as codex config overrides and warns only about effort", ctx do
+      fake_codex = Path.join(ctx.test_root, "fake-codex")
 
-      log =
-        capture_log(fn ->
-          assert {:error, _reason} = CodexAppServer.start_session(outside_root, issue: run_issue, run_profile: profile)
+      File.write!(fake_codex, """
+      #!/bin/sh
+      printf '%s\\n' "$*" >> "#{ctx.argv_trace}"
+      exit 3
+      """)
+
+      File.chmod!(fake_codex, 0o755)
+      write_profile_workflow!(ctx, agent_kind: "codex", agent_command: fake_codex <> " app-server")
+      workspace = Path.join([ctx.test_root, "workspaces", "app", "MT-CODEX"])
+      File.mkdir_p!(workspace)
+      run_issue = issue("issue-codex", "MT-CODEX")
+
+      {result, log} =
+        with_log(fn ->
+          CodexAppServer.start_session(workspace,
+            issue: run_issue,
+            run_profile: %{kind: :implementation, model: "kimi-k3", effort: nil, provider: "opencode-go"}
+          )
         end)
 
-      assert log =~ "Ignoring agent.model and agent.effort for the codex runtime issue_id=issue-codex issue_identifier=MT-CODEX run_kind=implementation model=gpt-5 effort=default"
+      assert {:error, reason} = result
+
+      argv =
+        Enum.find_value(1..50, fn _ ->
+          Process.sleep(100)
+
+          case argv_lines(ctx.argv_trace) do
+            [line | _] -> line
+            [] -> nil
+          end
+        end)
+
+      assert argv != nil, "the fake codex never started; start reason: #{inspect(reason, pretty: true, limit: 25)}"
+      assert argv =~ ~s(model="kimi-k3")
+      assert argv =~ "model_provider=opencode-go"
+      assert argv =~ ~s(model_providers.opencode-go.base_url="https://opencode.ai/inference/go/openai/v1")
+      assert argv =~ ~s(model_providers.opencode-go.env_key="OPENCODE_API_KEY")
+      assert argv =~ ~s(model_providers.opencode-go.wire_api="responses")
+      refute log =~ "effort is not applied"
 
       log =
         capture_log(fn ->
           assert {:error, _reason} =
-                   CodexAppServer.start_session(outside_root,
+                   CodexAppServer.start_session(workspace,
                      issue: run_issue,
-                     run_profile: %{profile | model: nil}
+                     run_profile: %{kind: :implementation, model: "gpt-test", effort: "high", provider: "openai"}
                    )
         end)
 
+      assert log =~ "A run's effort is not applied on the codex harness; set model_reasoning_effort in execution.harnesses.codex.command"
       refute log =~ "Ignoring agent.model"
     end
   end

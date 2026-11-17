@@ -73,7 +73,7 @@ defmodule SymphonyElixir.StateProvisioning do
   @doc """
   Every label Symphony applies or reads, the one list the Setup labels check reads: the
   machine-owned labels (errors, exact spelling), then the labels people add for Symphony to read
-  (warnings, any case), the `force_label` (`agent.concurrency.force_label`) and each
+  (warnings, any case), the `force_label` (`execution.concurrency.force_label`) and each
   `escalate_labels` entry. The deprecated `human-action` is left out: it is reported on its own.
   """
   @spec machine_labels(String.t() | nil, [String.t()]) :: [machine_label()]

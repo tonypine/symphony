@@ -80,7 +80,7 @@ defmodule SymphonyElixir.CoreTest do
     assert config.tracker.team == nil
     assert config.tracker.labels == []
     assert config.tracker.assignee == nil
-    assert config.agent.max_turns == 20
+    assert config.execution.max_turns == 20
     assert config.pr_review.mode == "tracker"
     assert config.pr_review.cooldown_minutes == nil
     assert config.pr_review.stale_days == nil
@@ -157,19 +157,16 @@ defmodule SymphonyElixir.CoreTest do
       %ReviewAgentConfig{}
       |> ReviewAgentConfig.changeset(%{enabled: true})
 
-    refute review_agent_config.valid?
-
-    assert {"is required when review_agent.enabled is true", [validation: :required]} in Keyword.get_values(
-             review_agent_config.errors,
-             :kind
-           )
+    # `code_review` only turns the reviewer on: what it starts with is `runs.code_review`.
+    assert review_agent_config.valid?
+    assert Ecto.Changeset.apply_changes(review_agent_config) == %ReviewAgentConfig{enabled: true}
 
     write_workflow_file!(Workflow.workflow_file_path(), max_turns: 0)
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
-    assert message =~ "agent.limits.max_turns"
+    assert message =~ "execution.limits.max_turns"
 
     write_workflow_file!(Workflow.workflow_file_path(), max_turns: 5)
-    assert Config.settings!().agent.max_turns == 5
+    assert Config.settings!().execution.max_turns == 5
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_active_states: "Todo,  Review,")
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
@@ -259,12 +256,11 @@ defmodule SymphonyElixir.CoreTest do
     )
 
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
-    assert message =~ "agent.command"
-    assert message =~ "can't be blank"
+    assert message =~ "execution.harnesses.codex.command must not be blank"
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_command: "   ")
-    assert :ok = Config.validate!()
-    assert Config.settings!().agent.command == "   "
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "execution.harnesses.codex.command must not be blank"
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_command: "/bin/sh app-server")
     assert :ok = Config.validate!()
@@ -283,11 +279,11 @@ defmodule SymphonyElixir.CoreTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_approval_policy: 123)
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
-    assert message =~ "agent.permissions.approval_policy"
+    assert message =~ "execution.permissions.approval_policy"
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_thread_sandbox: 123)
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
-    assert message =~ "agent.permissions.filesystem.sandbox"
+    assert message =~ "execution.permissions.filesystem.sandbox"
 
     write_workflow_file!(Workflow.workflow_file_path(), tracker_kind: "123")
     assert {:error, {:unsupported_tracker_kind, "123"}} = Config.validate!()
@@ -3035,7 +3031,9 @@ defmodule SymphonyElixir.CoreTest do
       labels: []
     }
 
-    prompt = PromptBuilder.build_prompt(issue)
+    # A run's settings name its harness; the shared settings name none.
+    settings = Config.settings!()
+    prompt = PromptBuilder.build_prompt(issue, settings: Config.for_run(settings, Config.run(settings, :implementation)))
 
     assert prompt =~ "Symphony runtime context:"
     assert prompt =~ "kind=claude name=Claude update=Claude update workpad=## Symphony Workpad"
@@ -4090,22 +4088,9 @@ defmodule SymphonyElixir.CoreTest do
   end
 
   test "agent runner does not compact oversized Claude first-turn prompts" do
-    {:ok, claude_settings} =
-      Schema.parse(%{
-        agent: %{
-          kind: "claude",
-          command: "claude"
-        }
-      })
-
-    {:ok, codex_settings} =
-      Schema.parse(%{
-        agent: %{
-          kind: "codex",
-          command: "codex app-server",
-          codex_stdio_prompt_soft_limit: 12_000
-        }
-      })
+    {:ok, settings} = Schema.parse(%{execution: %{codex_stdio_prompt_soft_limit: 12_000}})
+    claude_settings = %{settings | execution: %{settings.execution | harness: "claude", command: "claude"}}
+    codex_settings = %{settings | execution: %{settings.execution | harness: "codex", command: "codex app-server"}}
 
     write_workflow_file!(Workflow.workflow_file_path(),
       prompt: String.duplicate("workflow detail\n", 1_000)

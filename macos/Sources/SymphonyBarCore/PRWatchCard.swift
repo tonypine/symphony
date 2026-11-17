@@ -367,7 +367,7 @@ public struct PRWatchCard: Equatable {
         case "arm": "Turned auto-merge on"
         case "disarm": "Turned auto-merge off"
         case "land_agent": "Started the landing agent"
-        case "close_out": "Closed out the merged PR"
+        case "close_ticket": "Closed the ticket of the merged PR"
         case let other?: Overview.phaseName(other)
         case nil: "Acted"
         }

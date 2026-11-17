@@ -1102,9 +1102,16 @@ let actionRailSample: [String: TicketMoves] = {
 }()
 
 /// A rail with every move the read can allow, allowed.
-let everyMoveAllowed = TicketMoves(Dictionary(uniqueKeysWithValues: TicketActionRail.Move.allCases.map {
+let everyMoveAllowed = TicketMoves(Dictionary(uniqueKeysWithValues: TicketActionRail.Move.judged.map {
     ($0.rawValue, TicketMoveRead(allowed: true, states: $0 == .moveTo ? ["Todo", "Code Review", "Done"] : []))
 }))
+
+/// What the sample rails link to: a pull request, the ticket in Linear and its workspace.
+let actionRailLinks = TicketActionRail.Links(
+    pullRequest: URL(string: "https://github.com/acme/symphony/pull/741"),
+    linear: URL(string: "https://linear.app/acme/issue/TP-1"),
+    workspacePath: "/Users/director/symphony-workspaces/symphony/TP-1"
+)
 
 /// Each rail under a caption naming the ticket it is drawn for, at the laptop's header width (1180 pt) or the
 /// desktop's (2200 pt).
@@ -1117,8 +1124,12 @@ func actionRails(_ rails: [(String, TicketMoves)], width: CGFloat, moreOpen: Boo
                     Text(rail.0)
                         .font(DesignTokens.TypeStyle.secondary.font)
                         .foregroundStyle(.secondary)
-                    ActionRail(rail: TicketActionRail(identifier: "TP-1", moves: rail.1), perform: { _ in },
-                               moreOpen: moreOpen)
+                    ActionRail(
+                        rail: TicketActionRail(
+                            identifier: "TP-1", moves: rail.1, links: actionRailLinks, stopOnRail: TicketPageLayout.isDesktop(page: Double(width))
+                        ),
+                        perform: { _ in }, moreOpen: moreOpen
+                    )
                 }
             }
         },

@@ -53,7 +53,8 @@ defmodule SymphonyElixir.HumanActionsConfigTest do
     base = %{
       "issues" => %{"provider" => "memory"},
       "repositories" => [%{"key" => "web"}],
-      "agent" => %{"runtime" => "codex", "command" => "codex app-server"}
+      "execution" => %{"harnesses" => %{"codex" => %{"command" => "codex app-server"}}},
+      "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}}
     }
 
     assert {:error, {:invalid_symphony_config, message}} = SystemSchema.parse(Map.put(base, "human_actions", %{"lable" => "x"}))

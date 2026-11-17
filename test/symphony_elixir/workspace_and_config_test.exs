@@ -2,7 +2,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   use SymphonyElixir.TestSupport
   alias Ecto.Changeset
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.Config.Schema.{Agent, StringOrMap}
+  alias SymphonyElixir.Config.Schema.{Execution, StringOrMap}
   alias SymphonyElixir.Config.Schema.Verification.DevServer, as: DevServerConfig
   alias SymphonyElixir.Config.Schema.Workspace.Attachments
   alias SymphonyElixir.Config.Schema.Workspace.Lifecycle, as: WorkspaceLifecycle
@@ -980,9 +980,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         provider: memory
       workspaces:
         root: #{workspace_root}
-      agent:
-        runtime: codex
-        command: codex app-server
+      execution:
+        harnesses:
+          codex:
+            command: codex app-server
+      runs:
+        default: {harness: codex, provider: openai, model: gpt-test}
       repositories:
         - key: api
           workflow: #{workflow_path}
@@ -3386,6 +3389,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert {:ok, system_config} =
              SystemSchema.parse(%{
                "watchdog" => %{"stray_process_cpu_minutes" => nil},
+               "execution" => %{"harnesses" => %{"codex" => %{"command" => "codex app-server"}}},
+               "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}},
                "repositories" => [%{"key" => "default", "workflow" => "WORKFLOW.md"}]
              })
 
@@ -3417,7 +3422,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert Config.git_network_timeout_ms() == 120_000
     assert Config.mcp_tool_timeout_ms() == 900_000
     assert Config.settings!().workspace.git_network_timeout_ms == 120_000
-    assert Config.settings!().agent.mcp_tool_timeout_ms == 900_000
+    assert Config.settings!().execution.mcp_tool_timeout_ms == 900_000
 
     # A symphony.yml that doesn't validate falls back to the app env.
     write_workflow_file!(Workflow.workflow_file_path(), workspace_git_network_timeout_ms: 0)
@@ -3432,7 +3437,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_mcp_tool_timeout_ms: "bad")
     assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
-    assert message =~ "agent.timeouts.mcp_tool_ms"
+    assert message =~ "execution.timeouts.mcp_tool_ms"
   end
 
   test "the pending tool report threshold comes from symphony.yml and must be a positive integer" do
@@ -3527,12 +3532,16 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
            ]
 
     assert config.worker.max_concurrent_agents_per_host == nil
-    assert config.agent.max_concurrent_agents == 10
-    assert config.agent.max_tokens_per_issue == nil
-    assert config.agent.max_tokens_per_day == nil
-    assert config.agent.command == "codex app-server"
+    assert config.execution.max_concurrent_agents == 10
+    assert config.execution.max_tokens_per_issue == nil
+    assert config.execution.max_tokens_per_day == nil
+    assert config.execution.command == nil
+    assert Config.run(config, :implementation).command == "codex app-server"
 
-    assert config.agent.approval_policy == %{
+    # Unset, the approval policy is the run's harness's default, on the run's settings only.
+    assert config.execution.approval_policy == nil
+
+    assert Config.for_run(config, Config.run(config, :implementation)).execution.approval_policy == %{
              "reject" => %{
                "sandbox_approval" => true,
                "rules" => true,
@@ -3540,13 +3549,13 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              }
            }
 
-    assert config.agent.thread_sandbox == "workspace-write"
-    assert config.agent.network_access.mode == "allowlist"
-    assert config.agent.network_access.allowed_domains == []
-    assert config.agent.network_access.denied_domains == []
-    assert config.agent.sandbox_runtime.kind == "none"
-    assert config.agent.sandbox_runtime.command == "srt"
-    assert config.agent.sandbox_runtime.enable_weaker_network_isolation == false
+    assert config.execution.thread_sandbox == "workspace-write"
+    assert config.execution.network_access.mode == "allowlist"
+    assert config.execution.network_access.allowed_domains == []
+    assert config.execution.network_access.denied_domains == []
+    assert config.execution.sandbox_runtime.kind == "none"
+    assert config.execution.sandbox_runtime.command == "srt"
+    assert config.execution.sandbox_runtime.enable_weaker_network_isolation == false
 
     assert {:ok, canonical_default_workspace_root} =
              SymphonyElixir.PathSafety.canonicalize(Path.join(System.tmp_dir!(), "symphony_workspaces"))
@@ -3560,10 +3569,10 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              "excludeSlashTmp" => false
            }
 
-    assert config.agent.turn_timeout_ms == 3_600_000
-    assert config.agent.read_timeout_ms == 30_000
-    assert config.agent.stall_timeout_ms == 300_000
-    assert config.agent.command_timeout_ms == 600_000
+    assert config.execution.turn_timeout_ms == 3_600_000
+    assert config.execution.read_timeout_ms == 30_000
+    assert config.execution.stall_timeout_ms == 300_000
+    assert config.execution.command_timeout_ms == 600_000
     assert config.watchdog.enabled
     assert config.watchdog.tick_interval_ms == 60_000
     assert config.watchdog.no_progress_threshold_ms == 600_000
@@ -3585,7 +3594,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       agent_command: "codex --config 'model=\"gpt-5.5\"' app-server"
     )
 
-    assert Config.settings!().agent.command ==
+    assert Config.run(Config.settings!(), :implementation).command ==
              "codex --config 'model=\"gpt-5.5\"' app-server"
 
     write_workflow_file!(Workflow.workflow_file_path(),
@@ -3688,9 +3697,9 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     )
 
     config = Config.settings!()
-    assert config.agent.max_tokens_per_issue == 500_000
-    assert config.agent.max_tokens_per_day == 5_000_000
-    assert config.agent.max_consecutive_identical_tool_failures == 5
+    assert config.execution.max_tokens_per_issue == 500_000
+    assert config.execution.max_tokens_per_day == 5_000_000
+    assert config.execution.max_consecutive_identical_tool_failures == 5
 
     write_workflow_file!(Workflow.workflow_file_path(), server_port: 4123)
     assert Config.server_port() == 4123
@@ -3757,8 +3766,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     )
 
     config = Config.settings!()
-    assert config.agent.approval_policy == "on-request"
-    assert config.agent.thread_sandbox == "workspace-write"
+    assert config.execution.approval_policy == "on-request"
+    assert config.execution.thread_sandbox == "workspace-write"
 
     assert {:ok, canonical_explicit_workspace} =
              SymphonyElixir.PathSafety.canonicalize(explicit_workspace)
@@ -3785,19 +3794,19 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), max_concurrent_agents: "bad")
     assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
-    assert message =~ "agent.concurrency.max_total"
+    assert message =~ "execution.concurrency.max_total"
 
     write_workflow_file!(Workflow.workflow_file_path(), max_tokens_per_issue: 0)
     assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
-    assert message =~ "agent.limits.tokens_per_issue"
+    assert message =~ "execution.limits.tokens_per_issue"
 
     write_workflow_file!(Workflow.workflow_file_path(), max_tokens_per_day: "bad")
     assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
-    assert message =~ "agent.limits.tokens_per_day"
+    assert message =~ "execution.limits.tokens_per_day"
 
     write_workflow_file!(Workflow.workflow_file_path(), max_consecutive_identical_tool_failures: -1)
     assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
-    assert message =~ "agent.limits.max_consecutive_identical_tool_failures"
+    assert message =~ "execution.limits.max_consecutive_identical_tool_failures"
 
     write_workflow_file!(Workflow.workflow_file_path(), worker_max_concurrent_agents_per_host: 0)
     assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
@@ -3805,19 +3814,19 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_turn_timeout_ms: "bad")
     assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
-    assert message =~ "agent.timeouts.turn_ms"
+    assert message =~ "execution.timeouts.turn_ms"
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_read_timeout_ms: "bad")
     assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
-    assert message =~ "agent.timeouts.read_ms"
+    assert message =~ "execution.timeouts.read_ms"
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_stall_timeout_ms: "bad")
     assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
-    assert message =~ "agent.timeouts.stall_ms"
+    assert message =~ "execution.timeouts.stall_ms"
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_command_timeout_ms: "bad")
     assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
-    assert message =~ "agent.timeouts.command_ms"
+    assert message =~ "execution.timeouts.command_ms"
 
     write_workflow_file!(Workflow.workflow_file_path(),
       watchdog: %{enabled: true, tick_interval_ms: 0, no_progress_threshold_ms: "bad", stray_process_cpu_minutes: 0}
@@ -3864,15 +3873,15 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_approval_policy: "")
     assert :ok = Config.validate!()
-    assert Config.settings!().agent.approval_policy == ""
+    assert Config.settings!().execution.approval_policy == ""
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_thread_sandbox: "")
     assert :ok = Config.validate!()
-    assert Config.settings!().agent.thread_sandbox == ""
+    assert Config.settings!().execution.thread_sandbox == ""
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_turn_sandbox_policy: "bad")
     assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
-    assert message =~ "agent.permissions.filesystem.turn_policy"
+    assert message =~ "execution.permissions.filesystem.turn_policy"
 
     write_workflow_file!(Workflow.workflow_file_path(),
       agent_approval_policy: "future-policy",
@@ -3884,8 +3893,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     )
 
     config = Config.settings!()
-    assert config.agent.approval_policy == "future-policy"
-    assert config.agent.thread_sandbox == "future-sandbox"
+    assert config.execution.approval_policy == "future-policy"
+    assert config.execution.thread_sandbox == "future-sandbox"
 
     assert :ok = Config.validate!()
 
@@ -3895,13 +3904,13 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
            }
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_command: "codex app-server")
-    assert Config.settings!().agent.command == "codex app-server"
+    assert Config.run(Config.settings!(), :implementation).command == "codex app-server"
   end
 
   test "codex runtime approval policy maps auto approve all to Codex wire value" do
     write_workflow_file!(Workflow.workflow_file_path(), agent_approval_policy: "auto_approve_all")
 
-    assert Config.settings!().agent.approval_policy == "auto_approve_all"
+    assert Config.settings!().execution.approval_policy == "auto_approve_all"
     assert {:ok, runtime_settings} = Config.codex_runtime_settings()
     assert runtime_settings.approval_policy == "never"
     assert runtime_settings.auto_approve_requests == true
@@ -3914,8 +3923,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     )
 
     config = Config.settings!()
-    assert config.agent.include_project_guides == false
-    assert config.agent.project_guide_files == ["CLAUDE.md", "docs/AGENTS.md"]
+    assert config.execution.include_project_guides == false
+    assert config.execution.project_guide_files == ["CLAUDE.md", "docs/AGENTS.md"]
 
     write_workflow_file!(Workflow.workflow_file_path(), agent_include_project_guides: "yes")
     assert {:error, {:invalid_workflow_config, message}} = Config.settings()
@@ -3952,7 +3961,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       agent_turn_sandbox_policy: %{type: "workspaceWrite", networkAccess: true}
     )
 
-    assert Config.settings!().agent.sandbox_runtime.kind == "srt"
+    assert Config.settings!().execution.sandbox_runtime.kind == "srt"
     assert {:ok, runtime_settings} = Config.codex_runtime_settings()
     assert runtime_settings.thread_sandbox == "workspace-write"
     assert runtime_settings.turn_sandbox_policy == %{"type" => "externalSandbox"}
@@ -3961,8 +3970,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   test "config rejects legacy Codex approval policy never" do
     write_workflow_file!(Workflow.workflow_file_path(), agent_approval_policy: "never")
 
-    assert {:error, {:invalid_workflow_config, message}} = Config.settings()
-    assert message =~ ~s(agent.permissions.approval_policy="never" is no longer supported for Codex)
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ ~s(execution.permissions.approval_policy="never" is not supported on the codex harness)
     assert message =~ "auto_approve_all"
   end
 
@@ -3974,8 +3983,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     )
 
     config = Config.settings!()
-    assert config.agent.kind == "claude"
-    assert config.agent.approval_policy == "never"
+    assert config.execution.harness == nil
+    assert config.execution.approval_policy == nil
+
+    run_config = Config.for_run(config, Config.run(config, :implementation))
+    assert run_config.execution.harness == "claude"
+    assert run_config.execution.approval_policy == "never"
   end
 
   test "config validates local worktree repository settings" do
@@ -4072,7 +4085,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     config = Config.settings!()
     assert Secret.unwrap(config.tracker.api_key) == api_key
     assert config.workspace.root == Path.expand(workspace_root)
-    assert config.agent.command == "#{codex_bin} app-server"
+    assert Config.run(config, :implementation).command == "#{codex_bin} app-server"
   end
 
   test "config parses workspace public upload extension overrides" do
@@ -4130,7 +4143,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       }
     )
 
-    assert Config.settings!().agent.max_concurrent_agents == 10
+    assert Config.settings!().execution.max_concurrent_agents == 10
     assert Config.max_concurrent_agents_for_state("Todo") == 1
     assert Config.max_concurrent_agents_for_state("In Progress") == 4
     assert Config.max_concurrent_agents_for_state("In Review") == 2
@@ -4202,21 +4215,20 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
              Schema.parse(%{
                tracker: %{api_key: "$#{empty_secret_env}"},
                workspace: %{root: "$#{missing_workspace_env}"},
-               agent: %{kind: "codex", command: "codex app-server", approval_policy: %{reject: %{sandbox_approval: true}}}
+               execution: %{approval_policy: %{reject: %{sandbox_approval: true}}}
              })
 
     assert settings.tracker.api_key == nil
     assert settings.workspace.root == Path.join(System.tmp_dir!(), "symphony_workspaces")
 
-    assert settings.agent.approval_policy == %{
+    assert settings.execution.approval_policy == %{
              "reject" => %{"sandbox_approval" => true}
            }
 
     assert {:ok, settings} =
              Schema.parse(%{
                tracker: %{api_key: "$#{missing_secret_env}"},
-               workspace: %{root: ""},
-               agent: %{kind: "codex", command: "codex app-server"}
+               workspace: %{root: ""}
              })
 
     assert Secret.unwrap(settings.tracker.api_key) == "fallback-linear-token"
@@ -4227,12 +4239,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     explicit_policy = %{"type" => "workspaceWrite", "writableRoots" => ["/tmp/explicit"]}
 
     assert Schema.resolve_turn_sandbox_policy(%Schema{
-             agent: %Agent{turn_sandbox_policy: explicit_policy},
+             execution: %Execution{turn_sandbox_policy: explicit_policy},
              workspace: %Schema.Workspace{root: "/tmp/ignored"}
            }) == Map.put(explicit_policy, "networkAccess", true)
 
     assert Schema.resolve_turn_sandbox_policy(%Schema{
-             agent: %Agent{turn_sandbox_policy: nil},
+             execution: %Execution{turn_sandbox_policy: nil},
              workspace: %Schema.Workspace{root: ""}
            }) == %{
              "type" => "workspaceWrite",
@@ -4245,7 +4257,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert Schema.resolve_turn_sandbox_policy(
              %Schema{
-               agent: %Agent{turn_sandbox_policy: nil},
+               execution: %Execution{turn_sandbox_policy: nil},
                workspace: %Schema.Workspace{root: "/tmp/ignored"}
              },
              "/tmp/workspace"
@@ -4262,8 +4274,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   test "schema keeps workspace roots raw while sandbox helpers expand only for local use" do
     assert {:ok, settings} =
              Schema.parse(%{
-               workspace: %{root: "~/.symphony-workspaces"},
-               agent: %{kind: "codex", command: "codex app-server"}
+               workspace: %{root: "~/.symphony-workspaces"}
              })
 
     assert settings.workspace.root == "~/.symphony-workspaces"
@@ -4293,9 +4304,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   test "schema resolves codex network allowlist config" do
     assert {:ok, settings} =
              Schema.parse(%{
-               agent: %{
-                 kind: "codex",
-                 command: "codex app-server",
+               execution: %{
                  network_access: %{
                    mode: "allowlist",
                    allowed_domains: ["API.MyCompany.com", " registry.npmjs.org "],
@@ -4313,9 +4322,9 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       assert domain in Schema.claude_built_in_network_allowed_domains()
     end
 
-    assert settings.agent.network_access.mode == "allowlist"
-    assert settings.agent.network_access.allowed_domains == ["api.mycompany.com", "registry.npmjs.org"]
-    assert settings.agent.network_access.denied_domains == ["registry.npmjs.org", "api.github.com"]
+    assert settings.execution.network_access.mode == "allowlist"
+    assert settings.execution.network_access.allowed_domains == ["api.mycompany.com", "registry.npmjs.org"]
+    assert settings.execution.network_access.denied_domains == ["registry.npmjs.org", "api.github.com"]
 
     effective_domains = Schema.codex_effective_network_allowed_domains(settings)
     assert "github.com" in effective_domains
@@ -4337,9 +4346,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
   test "schema maps codex network modes to sandbox policy and thread config" do
     assert {:ok, block_settings} =
              Schema.parse(%{
-               agent: %{
-                 kind: "codex",
-                 command: "codex app-server",
+               execution: %{
                  network_access: %{mode: "block"},
                  turn_sandbox_policy: %{type: "workspaceWrite", networkAccess: true}
                }
@@ -4350,9 +4357,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert {:ok, open_settings} =
              Schema.parse(%{
-               agent: %{
-                 kind: "codex",
-                 command: "codex app-server",
+               execution: %{
                  network_access: %{mode: "open"},
                  turn_sandbox_policy: %{type: "workspaceWrite", networkAccess: false}
                }
@@ -4371,7 +4376,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       }
     )
 
-    runtime = Config.settings!().agent.sandbox_runtime
+    runtime = Config.settings!().execution.sandbox_runtime
     assert runtime.kind == "srt"
     assert runtime.command == "/usr/local/bin/srt"
     assert runtime.enable_weaker_network_isolation == true
@@ -4381,10 +4386,10 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       agent_sandbox_runtime: %{kind: "srt"}
     )
 
-    assert {:error, {:invalid_workflow_config, message}} = Config.settings()
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
 
     assert message =~
-             "agent.permissions.outer_sandbox.runtime=\"srt\" does not support agent.permissions.network.mode=\"open\""
+             "execution.permissions.outer_sandbox.kind=\"srt\" does not support execution.permissions.network.mode=\"open\""
 
     write_workflow_file!(Workflow.workflow_file_path(),
       agent_kind: "claude",
@@ -4392,8 +4397,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       agent_sandbox_runtime: %{kind: "srt"}
     )
 
-    assert {:error, {:invalid_workflow_config, message}} = Config.settings()
-    assert message =~ "agent.permissions.outer_sandbox.runtime=\"srt\" is only supported for agent.runtime=codex"
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ "execution.permissions.outer_sandbox.kind=\"srt\" is only supported on the codex harness"
   end
 
   test "schema parses agent MCP defaults and declared servers" do
@@ -4405,19 +4410,19 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
             command: "node",
             args: ["/srv/example-server/server.js"],
             env: %{LOG_LEVEL: "info"},
-            runtimes: ["claude", "codex"]
+            harnesses: ["claude", "codex"]
           },
           "docs" => %{
             transport: "http",
             url: "https://docs.example/mcp",
             headers: %{Authorization: "Bearer token"},
-            runtimes: ["claude"]
+            harnesses: ["claude"]
           }
         }
       }
     )
 
-    mcp = Config.settings!().agent.mcp
+    mcp = Config.settings!().execution.mcp
     assert mcp.inherit == "none"
     assert mcp.allowed_servers == []
     assert mcp.servers["example-server"].transport == "stdio"
@@ -4425,7 +4430,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert mcp.servers["example-server"].args == ["/srv/example-server/server.js"]
     assert mcp.servers["example-server"].env == %{"LOG_LEVEL" => "info"}
     assert mcp.servers["docs"].transport == "http"
-    assert mcp.servers["docs"].runtimes == ["claude"]
+    assert mcp.servers["docs"].harnesses == ["claude"]
   end
 
   test "schema validates agent MCP inheritance and Codex transport restrictions" do
@@ -4434,7 +4439,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     )
 
     assert {:error, {:invalid_workflow_config, message}} = Config.settings()
-    assert message =~ "agent.mcp.allowed_servers"
+    assert message =~ "execution.mcp.allowed_servers"
     assert message =~ "must not be empty"
 
     write_workflow_file!(Workflow.workflow_file_path(),
@@ -4443,8 +4448,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
       agent_mcp: %{inherit: "all"}
     )
 
-    assert {:error, {:invalid_workflow_config, message}} = Config.settings()
-    assert message =~ ~s(agent.mcp.inherit="all" is not supported for agent.runtime=claude)
+    assert {:error, {:invalid_workflow_config, message}} = Config.validate!()
+    assert message =~ ~s(execution.mcp.inherit="all" is not supported on the claude harness)
 
     write_workflow_file!(Workflow.workflow_file_path(),
       agent_mcp: %{
@@ -4452,7 +4457,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
           "browser" => %{
             transport: "sse",
             url: "https://browser.example/sse",
-            runtimes: ["codex"]
+            harnesses: ["codex"]
           }
         }
       }
@@ -4460,12 +4465,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
     assert {:error, {:invalid_workflow_config, message}} = Config.settings()
     assert message =~ "browser is invalid"
-    assert message =~ "Codex MCP servers must use transport"
+    assert message =~ ~s(transport=\\"sse\\" is not supported on the codex harness; its MCP servers must use transport=\\"stdio\\")
 
     write_workflow_file!(Workflow.workflow_file_path(),
       agent_mcp: %{
         servers: %{
-          "browser-default-runtimes" => %{
+          "browser-default-harnesses" => %{
             transport: "sse",
             url: "https://browser.example/sse"
           }
@@ -4474,16 +4479,16 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     )
 
     assert {:error, {:invalid_workflow_config, message}} = Config.settings()
-    assert message =~ "browser-default-runtimes is invalid"
-    assert message =~ "Codex MCP servers must use transport"
+    assert message =~ "browser-default-harnesses is invalid"
+    assert message =~ ~s(transport=\\"sse\\" is not supported on the codex harness; its MCP servers must use transport=\\"stdio\\")
 
     write_workflow_file!(Workflow.workflow_file_path(),
       agent_mcp: %{inherit: "none", allowed_servers: ["example-server"]}
     )
 
     assert {:error, {:invalid_workflow_config, message}} = Config.settings()
-    assert message =~ "agent.mcp.allowed_servers"
-    assert message =~ "must be empty unless agent.mcp.inherit is allowlist"
+    assert message =~ "execution.mcp.allowed_servers"
+    assert message =~ "must be empty unless execution.mcp.inherit is allowlist"
 
     write_workflow_file!(Workflow.workflow_file_path(),
       agent_mcp: %{
@@ -4493,7 +4498,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
           "invalid-runtime" => %{
             command: "node",
             env: [],
-            runtimes: ["unknown"]
+            harnesses: ["unknown"]
           }
         }
       }
@@ -4523,12 +4528,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     )
 
     assert {:error, {:invalid_workflow_config, message}} = Config.settings()
-    assert message =~ "agent.mcp.servers"
+    assert message =~ "execution.mcp.servers"
   end
 
   test "schema network helpers tolerate missing embedded network config" do
     settings = %Schema{
-      agent: %Agent{network_access: nil},
+      execution: %Execution{network_access: nil},
       workspace: %Schema.Workspace{root: "/tmp/ignored"}
     }
 
@@ -4536,8 +4541,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     assert get_in(Schema.resolve_codex_thread_config(settings), ["experimental_network", "domains", "github.com"]) == "allow"
 
     nil_domains_settings = %Schema{
-      agent: %Agent{
-        network_access: %Agent.NetworkAccess{allowed_domains: nil, denied_domains: nil}
+      execution: %Execution{
+        network_access: %Execution.NetworkAccess{allowed_domains: nil, denied_domains: nil}
       },
       workspace: %Schema.Workspace{root: "/tmp/ignored"}
     }
@@ -4548,7 +4553,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
   test "schema network helpers fail on malformed embedded network config" do
     settings = %Schema{
-      agent: %Agent{network_access: %{mode: "open"}},
+      execution: %Execution{network_access: %{mode: "open"}},
       workspace: %Schema.Workspace{root: "/tmp/ignored"}
     }
 
@@ -4559,8 +4564,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
   test "runtime sandbox policy keeps workspaceWrite policy rootless when no workspace is available" do
     settings = %Schema{
-      agent: %Agent{
-        network_access: %Agent.NetworkAccess{mode: "block"},
+      execution: %Execution{
+        network_access: %Execution.NetworkAccess{mode: "block"},
         turn_sandbox_policy: %{"type" => "workspaceWrite", "writableRoots" => []}
       },
       workspace: %Schema.Workspace{root: "/tmp/ignored"}
@@ -4839,8 +4844,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       policy_settings = %{
         settings
-        | agent: %{
-            settings.agent
+        | execution: %{
+            settings.execution
             | turn_sandbox_policy: %{
                 "type" => "workspaceWrite",
                 "writableRoots" => ["relative/path", invalid_root, 8080, %{"nested" => true}]
@@ -4861,8 +4866,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       invalid_root_settings = %{
         settings
-        | agent: %{
-            settings.agent
+        | execution: %{
+            settings.execution
             | turn_sandbox_policy: %{
                 "type" => "workspaceWrite",
                 "writableRoots" => [invalid_root]
@@ -4877,8 +4882,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       invalid_roots_settings = %{
         settings
-        | agent: %{
-            settings.agent
+        | execution: %{
+            settings.execution
             | turn_sandbox_policy: %{
                 "type" => "workspaceWrite",
                 "writableRoots" => "not-a-list"
@@ -4911,8 +4916,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       policy_settings = %{
         settings
-        | agent: %{
-            settings.agent
+        | execution: %{
+            settings.execution
             | turn_sandbox_policy: %{
                 "type" => "workspaceWrite",
                 "writableRoots" => ["/remote/absolute/path", "relative/path"]
@@ -4978,7 +4983,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       read_only_settings = %{
         settings
-        | agent: %{settings.agent | turn_sandbox_policy: %{"type" => "readOnly", "networkAccess" => true}}
+        | execution: %{settings.execution | turn_sandbox_policy: %{"type" => "readOnly", "networkAccess" => true}}
       }
 
       assert {:ok, %{"type" => "readOnly", "networkAccess" => true}} =
@@ -4986,7 +4991,7 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
 
       future_settings = %{
         settings
-        | agent: %{settings.agent | turn_sandbox_policy: %{"type" => "futureSandbox", "nested" => %{"flag" => true}}}
+        | execution: %{settings.execution | turn_sandbox_policy: %{"type" => "futureSandbox", "nested" => %{"flag" => true}}}
       }
 
       assert {:ok, %{"type" => "futureSandbox", "nested" => %{"flag" => true}}} =
@@ -5003,8 +5008,8 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     write_workflow_without_token_budget_keys!()
 
     config = Config.settings!()
-    assert config.agent.max_tokens_per_issue == 500_000
-    assert config.agent.max_tokens_per_day == 5_000_000
+    assert config.execution.max_tokens_per_issue == 500_000
+    assert config.execution.max_tokens_per_day == 5_000_000
 
     write_workflow_file!(Workflow.workflow_file_path(),
       max_tokens_per_issue: nil,
@@ -5012,15 +5017,15 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     )
 
     config = Config.settings!()
-    assert config.agent.max_tokens_per_issue == nil
-    assert config.agent.max_tokens_per_day == nil
+    assert config.execution.max_tokens_per_issue == nil
+    assert config.execution.max_tokens_per_day == nil
 
     write_workflow_file!(Workflow.workflow_file_path(),
       max_consecutive_identical_tool_failures: 0
     )
 
     config = Config.settings!()
-    assert config.agent.max_consecutive_identical_tool_failures == 0
+    assert config.execution.max_consecutive_identical_tool_failures == 0
   end
 
   test "workflow prompt is used when building base prompt" do
@@ -6681,9 +6686,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         provider: memory
       workspaces:
         root: #{workspace_root}
-      agent:
-        runtime: codex
-        command: codex app-server
+      execution:
+        harnesses:
+          codex:
+            command: codex app-server
+      runs:
+        default: {harness: codex, provider: openai, model: gpt-test}
       repositories:
         - key: api
           base_branch: main
@@ -6732,9 +6740,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
         provider: memory
       workspaces:
         root: #{workspace_root}
-      agent:
-        runtime: codex
-        command: codex app-server
+      execution:
+        harnesses:
+          codex:
+            command: codex app-server
+      runs:
+        default: {harness: codex, provider: openai, model: gpt-test}
       repositories:
         - key: api
           base_branch: main
@@ -6924,9 +6935,12 @@ defmodule SymphonyElixir.WorkspaceAndConfigTest do
     File.write!(Workflow.symphony_file_path(), """
     issues:
       provider: memory
-    agent:
-      runtime: codex
-      command: codex app-server
+    execution:
+      harnesses:
+        codex:
+          command: codex app-server
+    runs:
+      default: {harness: codex, provider: openai, model: gpt-test}
     repositories:
       - key: default
         workflow: #{Workflow.workflow_file_path()}

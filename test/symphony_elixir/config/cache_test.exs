@@ -482,7 +482,8 @@ defmodule SymphonyElixir.Config.CacheTest do
   end
 
   # The smallest `symphony.yml` that validates, its one repo keyed `r<n>`.
-  defp config(n), do: "repositories:\n  - key: r#{n}\n    route:\n      team: T\n"
+  @runs "execution:\n  harnesses:\n    codex:\n      command: codex app-server\nruns:\n  default: {harness: codex, provider: openai, model: gpt-test}\n"
+  defp config(n), do: "repositories:\n  - key: r#{n}\n    route:\n      team: T\n" <> @runs
 
   defp restore_env(key, nil), do: Application.delete_env(:symphony_elixir, key)
   defp restore_env(key, value), do: Application.put_env(:symphony_elixir, key, value)

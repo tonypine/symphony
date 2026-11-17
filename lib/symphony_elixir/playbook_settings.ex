@@ -1,4 +1,4 @@
-defmodule SymphonyElixir.QaAgent.PlaybookSettings do
+defmodule SymphonyElixir.PlaybookSettings do
   @moduledoc """
   Checks the QA playbook settings that start the project's dev server on the QA host and hand the
   app under test its environment, wherever `auto_review.playbooks` is set (`symphony.yml` or a

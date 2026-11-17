@@ -21,7 +21,7 @@ defmodule SymphonyElixir.PerIssueSharedSettingsTest do
 
   # The `repositories[]` sections a repository may set, none of which holds a state, the
   # finished states or the force label. A new one fails the first test: check it doesn't, then add it.
-  @repo_sections ~w(acceptance_gate agent base_branch default key manual_review route workflow workflow_source workspace)
+  @repo_sections ~w(acceptance_gate base_branch default key manual_review route runs workflow workflow_source workspace)
 
   test "no repository key in symphony.yml names a state, the finished states or the force label" do
     sections =
@@ -98,8 +98,8 @@ defmodule SymphonyElixir.PerIssueSharedSettingsTest do
     # ...and the ones the per-issue decisions read stay the shared ones.
     assert shared.tracker.plan_review_state == "Plan Check"
     assert shared.tracker.terminal_states == ["Shipped", "Dropped"]
-    assert shared.agent.force_label == "rush"
+    assert shared.execution.force_label == "rush"
     assert api.tracker == shared.tracker
-    assert api.agent.force_label == shared.agent.force_label
+    assert api.execution.force_label == shared.execution.force_label
   end
 end

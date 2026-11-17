@@ -6,6 +6,7 @@ defmodule SymphonyElixir.AgentLabelsTest do
   test "returns configured display labels for known agent kinds" do
     assert AgentLabels.display_name("codex") == "Codex"
     assert AgentLabels.display_name(:claude) == "Claude"
+    assert AgentLabels.display_name("opencode") == "OpenCode"
 
     assert AgentLabels.update_label("codex") == "Codex update"
     assert AgentLabels.workpad_heading(:claude) == "## Symphony Workpad"

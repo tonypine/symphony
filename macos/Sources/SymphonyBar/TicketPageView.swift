@@ -431,7 +431,8 @@ extension SymphonyWindowModel {
 
 /// What the ticket page's controls do.
 struct TicketPageActions {
-    /// A move on the Action rail, after the page took the ones it shows itself (Answer, Restart…, Write a Note…).
+    /// A move on the Action rail, after the page took the ones it shows itself (Answer, Restart…, Write a Note…) and
+    /// its links (Open Pull Request, Open in Linear, Copy Link, Copy Workspace Path), which go to `openURL` and `copy`.
     var move: (TicketActionRail.Request) -> Void = { _ in }
     var openURL: (URL) -> Void = { _ in }
     /// A click on a ticket or pull request chip in the page's text.
@@ -463,6 +464,10 @@ extension SymphonyWindowModel {
             if let sheet = page.moveSheet(to: state) { openMove(sheet) }
         case .sheet(.force):
             openForceSheet(page.identifier)
+        case let .open(url):
+            onOpenURL(url)
+        case let .copy(text):
+            copy(text)
         case .sheet(.answer), .sheet(.restart), .sheet(.note), .confirm:
             break
         }
@@ -689,6 +694,8 @@ struct TicketPageView: View {
             sheetOpen = true
         case .sheet(.restart): confirmingRestart = true
         case .sheet(.note): withAnimation { proxy.scrollTo(Self.noteAnchor, anchor: .top) }
+        case let .open(url): actions.openURL(url)
+        case let .copy(text): actions.copy(text)
         default: actions.move(request)
         }
     }
@@ -1049,9 +1056,11 @@ private struct LiveSituationLine: View {
     }
 }
 
-/// The header across the page: the identifier with its repo and epic chips, the title, where the ticket stands and
-/// why (the Situation line), and the moves on their own row under them. On a desktop (TP-1449) the moves sit on the
-/// identifier's line, at its right, so the title has the whole width under them.
+/// The header across the page (TP-1485, the catalog's Page header): the identifier with its repo and epic chips, its
+/// priority and labels after a hairline, the title in the title style, where the ticket stands and why (the Situation
+/// line), and the moves on their own row under them. On a desktop (TP-1449) the moves sit on the identifier's line, at
+/// its right, with Stop Run… on the rail, so the title has the whole width under them. VoiceOver reads it in that
+/// order: identity, title, situation, moves.
 struct TicketPageHeader: View {
     let page: TicketPage
     var desktop = false
@@ -1066,47 +1075,85 @@ struct TicketPageHeader: View {
                             .frame(minHeight: DesignTokens.Control.medium.height)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         // The decisions column is always open beside the page: no Answer (§5).
-                        ActionRail(rail: TicketActionRail(identifier: page.identifier, moves: moves, omitting: [.answer]), perform: move)
+                        ActionRail(rail: rail(moves, omitting: [.answer]), perform: move)
                             .layoutPriority(1)
+                            .accessibilitySortPriority(Self.order.moves)
                     }
                 } else {
                     identifierLine
                 }
                 Text(page.headerTitle ?? page.identifier)
-                    .font(DesignTokens.TypeStyle.sentence.font)
+                    .textStyle(.title)
+                    .lineLimit(TicketPageHeaderLayout.titleLines)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: TicketPageHeaderLayout.titleWidth(desktop: desktop), alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
+                    .help(page.headerTitle ?? "")
                     .accessibilityAddTraits(.isHeader)
+                    .accessibilitySortPriority(Self.order.title)
             }
-            if let situation = page.situation {
-                LiveSituationLine(situation: situation, reference: page.reference, forced: page.isForced)
-            } else {
-                Text(page.phaseSentence)
-                    .font(DesignTokens.TypeStyle.body.font)
-                    .foregroundStyle(.secondary)
+            Group {
+                if let situation = page.situation {
+                    LiveSituationLine(situation: situation, reference: page.reference, forced: page.isForced)
+                } else {
+                    Text(page.phaseSentence)
+                        .font(DesignTokens.TypeStyle.body.font)
+                        .foregroundStyle(.secondary)
+                }
             }
+            .accessibilitySortPriority(Self.order.situation)
             if let note = page.repositoryPausedNote {
                 Label(note, systemImage: "pause.circle")
                     .font(DesignTokens.TypeStyle.body.font)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilitySortPriority(Self.order.situation)
             }
             if !desktop, let moves = page.moves {
-                ActionRail(rail: TicketActionRail(identifier: page.identifier, moves: moves), perform: move)
+                ActionRail(rail: rail(moves), perform: move)
+                    .accessibilitySortPriority(Self.order.moves)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
     }
 
+    /// VoiceOver's order across the header, highest first: identity chips, title, situation, moves.
+    static let order = (identity: 4.0, title: 3.0, situation: 2.0, moves: 1.0)
+
+    private func rail(_ moves: TicketMoves, omitting: Set<TicketActionRail.Move> = []) -> TicketActionRail {
+        TicketActionRail(identifier: page.identifier, moves: moves, links: page.railLinks, omitting: omitting, stopOnRail: desktop)
+    }
+
+    /// The identifier, the repo and epic chips, then after a hairline the priority and the labels (the catalog's
+    /// `ident-line`): no priority, no hairline; no labels, the priority alone. It wraps before anything is cut.
     private var identifierLine: some View {
-        HStack(spacing: DesignTokens.Space.s2) {
+        WrappingStack(spacing: DesignTokens.Space.s2) {
             Text(page.identifier)
                 .font(DesignTokens.TypeStyle.label.font)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
+                .frame(height: Chip.height)
             if let repo = page.repoKey { Chip(repo, kind: .repo) }
-            if let epic = page.epicChip { Chip(epic, kind: .epic) }
+            if let epic = page.epicChip {
+                Chip(epic.shortName, kind: .epic, maxTextWidth: EpicChip.maxTextWidth, fullText: epic.fullTitle)
+            }
+            if let priority = page.headerPriority {
+                // `.ident-sep`: the shared hairline, 14 pt tall.
+                HairlineDivider(.vertical, length: 14)
+                    .padding(.horizontal, DesignTokens.Space.s1)
+                    .frame(height: Chip.height)
+                PriorityMark(priority)
+                    .frame(height: Chip.height)
+            }
+            ForEach(page.headerLabels, id: \.self) { label in
+                Chip(label, kind: .label(.idle))
+                    .frame(height: Chip.height)
+            }
         }
+        .accessibilityElement(children: .contain)
+        .accessibilitySortPriority(Self.order.identity)
     }
 }
 

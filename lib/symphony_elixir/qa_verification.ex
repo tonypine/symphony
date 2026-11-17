@@ -916,7 +916,7 @@ defmodule SymphonyElixir.QaVerification do
 
   # The model the QA agent ran on: the run's profile, else the QA profile `QaAgent` starts with.
   defp qa_model(opts, settings) do
-    profile = Keyword.get(opts, :run_profile) || Config.qa_profile(settings)
+    profile = Keyword.get(opts, :run_profile) || Config.run(settings, :qa)
     Map.get(profile, :model) || "default"
   end
 
@@ -960,7 +960,7 @@ defmodule SymphonyElixir.QaVerification do
       run_id: qa_run_id(issue, opts, head),
       pr_url: Keyword.get(opts, :pr_url),
       playbooks: playbooks,
-      token_limit: settings.agent.max_tokens_per_issue,
+      token_limit: settings.execution.max_tokens_per_issue,
       run_profile: Keyword.get(opts, :run_profile),
       journey: journey(issue, settings.proof_check),
       proofs: proofs,

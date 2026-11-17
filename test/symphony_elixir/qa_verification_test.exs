@@ -195,9 +195,12 @@ defmodule SymphonyElixir.QaVerificationTest do
     :ok
   end
 
+  @execution %{"harnesses" => %{"claude" => %{"command" => "claude", "small_model" => %{"anthropic" => "small-test"}}}}
+  @runs %{"default" => %{"harness" => "claude", "provider" => "anthropic", "model" => "claude-test"}}
+
   defp settings!(extra \\ %{}) do
     assert {:ok, settings} =
-             Schema.parse(Map.merge(%{"tracker" => %{"kind" => "memory"}}, extra))
+             Schema.parse(Map.merge(%{"tracker" => %{"kind" => "memory"}, "execution" => @execution, "runs" => @runs}, extra))
 
     settings
   end
@@ -893,11 +896,11 @@ defmodule SymphonyElixir.QaVerificationTest do
       log = capture_log(fn -> assert :ok = run(workspace, []) end)
 
       assert log =~
-               "QA blocked for TP-816 head=#{head} model=default needs_person=false playbooks=cli (attempt 1/2); " <>
+               "QA blocked for TP-816 head=#{head} model=claude-test needs_person=false playbooks=cli (attempt 1/2); " <>
                  "retrying: the model could not drive the QA tools"
 
       assert [%{outcome: "blocked", details: details}] = verdicts()
-      assert details == %{reason: "the model could not drive the QA tools", needs_person: false, model: "default", playbooks: ["cli"]}
+      assert details == %{reason: "the model could not drive the QA tools", needs_person: false, model: "claude-test", playbooks: ["cli"]}
 
       profile = %{kind: :qa, model: "~deepseek/deepseek-flash-latest", effort: nil, provider: "openrouter"}
       log = capture_log(fn -> assert :ok = run(workspace, run_profile: profile) end)
@@ -906,7 +909,7 @@ defmodule SymphonyElixir.QaVerificationTest do
                "QA blocked for TP-816 head=#{head} model=~deepseek/deepseek-flash-latest needs_person=false playbooks=cli (attempt 2/2); " <>
                  "asking a person: the model could not drive the QA tools"
 
-      assert [%{details: %{model: "~deepseek/deepseek-flash-latest"}}, %{details: %{model: "default"}}] = verdicts()
+      assert [%{details: %{model: "~deepseek/deepseek-flash-latest"}}, %{details: %{model: "claude-test"}}] = verdicts()
     end
 
     test "a block that needs a person logs it" do
@@ -1586,7 +1589,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       log = capture_log(fn -> assert :ok = run(workspace, []) end)
 
-      assert log =~ "QA inconclusive for TP-816 head=#{head} model=default playbooks=cli (attempt 1/2); rerunning: the wide pass did not run"
+      assert log =~ "QA inconclusive for TP-816 head=#{head} model=claude-test playbooks=cli (attempt 1/2); rerunning: the wide pass did not run"
       refute deciding()
       assert_received {:memory_tracker_comment, @issue_id, rerunning}
       assert rerunning =~ "**Verdict:** inconclusive → QA (inconclusive, rerunning)"
@@ -1721,7 +1724,7 @@ defmodule SymphonyElixir.QaVerificationTest do
 
       log = capture_log(fn -> assert :ok = run(workspace, []) end)
 
-      assert log =~ "QA blocked on CI for TP-816 head=#{head} model=default; handing the head to the PR watcher: CI is red on this head: coverage (2/4) failed"
+      assert log =~ "QA blocked on CI for TP-816 head=#{head} model=claude-test; handing the head to the PR watcher: CI is red on this head: coverage (2/4) failed"
       refute_received {:memory_tracker_state_update, _, _}
       refute_received {:fixer_create, _}
       refute blocked?(@issue_id)

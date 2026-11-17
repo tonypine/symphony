@@ -353,7 +353,8 @@ defmodule SymphonyElixir.ReportsTest do
     @base %{
       "issues" => %{"provider" => "memory"},
       "repositories" => [%{"key" => "web"}],
-      "agent" => %{"runtime" => "codex", "command" => "codex app-server"}
+      "execution" => %{"harnesses" => %{"codex" => %{"command" => "codex app-server"}}},
+      "runs" => %{"default" => %{"harness" => "codex", "provider" => "openai", "model" => "gpt-test"}}
     }
 
     test "is the cheapest capable model when missing, and the model symphony.yml names otherwise" do

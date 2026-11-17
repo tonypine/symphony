@@ -259,12 +259,9 @@ public struct MenuList: View {
         return VStack(alignment: .leading, spacing: 0) {
             ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 if item.isSeparator {
-                    Rectangle()
-                        .fill(DesignTokens.Surface.separator.color)
-                        .frame(height: menu.separatorHeight)
+                    HairlineDivider()
                         .padding(.vertical, menu.separatorMargin)
                         .padding(.horizontal, menu.itemInset)
-                        .accessibilityHidden(true)
                 } else {
                     row(index, item).id(index)
                 }

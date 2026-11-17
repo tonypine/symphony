@@ -18,7 +18,7 @@ public enum PhaseSettingsError: LocalizedError, Equatable {
 }
 
 /// A run kind that takes a step list under `phases`, as `symphony.yml` names it: every kind Symphony runs, in
-/// `SymphonyElixir.RunKind`'s order (the retired close-out never runs).
+/// `SymphonyElixir.RunKind`'s order.
 public enum PhaseKind: String, CaseIterable, Identifiable {
     case implementation
     case breakdown

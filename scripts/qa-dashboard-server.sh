@@ -27,9 +27,12 @@ repositories:
     workflow: $repo/WORKFLOW.md
 workspaces:
   root: $root/workspaces
-agent:
-  runtime: codex
-  command: "false"
+execution:
+  harnesses:
+    codex:
+      command: "false"
+runs:
+  default: { harness: codex, provider: openai, model: none }
 EOF
 
 cd "$repo"

@@ -31,22 +31,22 @@ orphan reporting, and free-disk-space dispatch pauses (`workspace.disk.*`).
 For Codex, Symphony applies safer defaults whenever the operator does not override them
 (see [docs/configuration.md](configuration.md)):
 
-- `agent.thread_sandbox` defaults to `workspace-write` — writes are scoped to the current issue
+- `execution.permissions.filesystem.sandbox` defaults to `workspace-write`: writes are scoped to the current issue
   workspace.
-- `agent.turn_sandbox_policy` defaults to a `workspaceWrite` policy rooted at that workspace.
-- `agent.approval_policy` defaults to `reject` for `sandbox_approval`, `rules`, and
+- `execution.permissions.filesystem.turn_policy` defaults to a `workspaceWrite` policy rooted at that workspace.
+- `execution.permissions.approval_policy` defaults to `reject` for `sandbox_approval`, `rules`, and
   `mcp_elicitations`, so the agent cannot cross those policy boundaries on its own.
-- `agent.network_access.mode` defaults to `allowlist` — the agent talks only to Symphony's
+- `execution.permissions.network.mode` defaults to `allowlist`: the agent talks only to Symphony's
   built-in dev domains plus the operator's `allowed_domains`, minus `denied_domains`.
 
 A managed permission profile carries a built-in **credential/config read-deny list** covering paths
-such as `~/.ssh`, `~/.aws`, `~/.config/gh`, `*.pem`, `*.key`, and the agent runtime credential
-stores under `~/.codex` and `~/.claude`. `workspace.sandbox.allow_read_paths` lets you carve narrow
+such as `~/.ssh`, `~/.aws`, `~/.config/gh`, `*.pem`, `*.key`, and the harness credential
+stores under `~/.codex` and `~/.claude`. `execution.permissions.filesystem.allow_read_paths` lets you carve narrow
 exceptions when a repo legitimately needs something like `~/.npmrc`.
-`workspace.sandbox.allow_write_paths` is the write-side counterpart: it adds entries to the Claude
-runtime's `sandbox.filesystem.allowWrite` so the agent can write under specific host paths beyond
+`execution.permissions.filesystem.allow_write_paths` is the write-side counterpart: it adds entries to the claude
+harness's `sandbox.filesystem.allowWrite` so the agent can write under specific host paths beyond
 the Claude Code default (workspace + `/tmp`). Codex/SRT already authors a broader writable set
-under `/tmp` and the workspace, so this knob only affects the Claude runtime today.
+under `/tmp` and the workspace, so this knob only affects the claude harness today.
 On macOS, a sandboxed process's Foundation stages every atomic file write in the per-user
 `TemporaryItems` dir (`$(getconf DARWIN_USER_TEMP_DIR)TemporaryItems`), so `swift build` and
 `swift test` fail in an agent's sandbox. That dir can't be granted: macOS refuses to read it, so
@@ -59,7 +59,7 @@ either, so `SWIFTPM_MODULECACHE_OVERRIDE` points SwiftPM's module cache at the r
 The per-user temp dir stays read-only: Symphony keeps each session's Claude settings and the MCP
 shim there.
 
-Both runtimes also deny writes to the workspace's workflow and guardrail files: `WORKFLOW.md`,
+Every harness also denies writes to the workspace's workflow and guardrail files: `WORKFLOW.md`,
 `symphony.yml`, the project `.claude/` settings, agents, commands and hooks, the skill directories
 `.agents/skills`, `.claude/skills` and `.codex/skills`, `mise.toml`, `.tool-versions`, `.github`
 (the CI workflows and actions, `CODEOWNERS`, dependabot) and `config/settings_ui_exempt.yml`. CI is
@@ -249,7 +249,7 @@ A local agent commits in its workspace, so it may write the workspace's git dir 
 worktree (`workspace.strategy: worktree`), the shared repo's `.git`. Some files there change what
 git runs, in the agent's own `git` commands and in Symphony's on the host: the config (filter
 drivers, `core.fsmonitor`, `core.hooksPath`), the hooks and `info/attributes`. In each of those git
-dirs, every local runtime denies writes to:
+dirs, every local harness denies writes to:
 
 - `config`, `config.worktree`, `hooks`, `info` and `packed-refs`,
 - every worktree's `worktrees/<id>/config` and `worktrees/<id>/config.worktree`,
@@ -323,7 +323,7 @@ windows, and its "quit unexpectedly" dialog when it crashes, on the operator's s
   sandbox gets no window server connection and can't draw. Offscreen `ImageRenderer` snapshots
   still work.
 - The profiles still allow LaunchServices (`com.apple.coreservices.launchservicesd`), which the
-  runtimes don't let Symphony turn off. The `appkit-dialog` workflow showed what that leaves open,
+  harnesses don't let Symphony turn off. The `appkit-dialog` workflow showed what that leaves open,
   on a disposable macOS runner (run 38452505961): a minimal `NSApplication` + `NSWindow` program
   started under the agent profile draws no window, but it checks in with LaunchServices, so
   ReportCrash treats it as an app, and when it crashes the "quit unexpectedly" dialog appears.
@@ -350,14 +350,14 @@ windows, and its "quit unexpectedly" dialog when it crashes, on the operator's s
 
 ### Optional outer sandbox (Codex + SRT)
 
-Set `agent.sandbox_runtime.kind: srt` to wrap Codex with
+Set `execution.permissions.outer_sandbox.kind: srt` to wrap Codex with
 `@anthropic-ai/sandbox-runtime`. Symphony generates a temporary SRT settings file with deny-reads
 on the credential paths, allow-writes scoped to the issue workspace, and an `externalSandbox` turn
 policy so SRT — not nested `sandbox-exec` — owns command enforcement. Use this when native Codex
 deny-list enforcement is not enough.
 
 **Git write model.** SRT denies writes to the git config files on every git dir the agent may
-write; see [Git metadata](#git-metadata) for the list and for the other runtimes.
+write; see [Git metadata](#git-metadata) for the list and for the other harnesses.
 
 **Known issue.** Codex app-server sessions wrapped by SRT can fail while writing stdout with
 `Resource temporarily unavailable (os error 35)`, surfaced by Symphony as
@@ -433,14 +433,14 @@ agent's `diff`, `log` and `show` get `--no-ext-diff --no-textconv`. They replace
 Limits:
 
 - The drivers are listed just before the command runs, so one written to the config in between
-  still runs. Every local runtime denies agent writes to the repo's config files (see the Git
+  still runs. Every local harness denies agent writes to the repo's config files (see the Git
   write model above), but native Codex may drop those entries.
 - A command that prints a diff through another git command, such as `stash show -p` or
   `add -p`, gets neither option. Symphony runs none of them on the host or a worker.
 
 ### Network access controls
 
-`agent.network_access` supports `allowlist`, `block`, and `open`. `denied_domains` always
+`execution.permissions.network` supports `allowlist`, `block`, and `open`. `denied_domains` always
 overrides built-in and user-supplied `allowed_domains`. Quality-gate and orchestrator HTTP traffic
 are *not* covered by these switches — see Best Practices below.
 
@@ -464,8 +464,8 @@ attachment handling go through the same scoped surface.
 
 ### Dispatch and budget caps
 
-- `agent.max_concurrent_agents`, `agent.max_turns`, `agent.max_tokens_per_issue`, and
-  `agent.max_tokens_per_day` cap blast radius and spend.
+- `execution.concurrency.max_total`, `execution.limits.max_turns`,
+  `execution.limits.tokens_per_issue`, and `execution.limits.tokens_per_day` cap blast radius and spend.
 - Watchdog detects no-progress sessions and recovers them; failed runs back off through the retry
   queue.
 - `Pause Dispatch` (dashboard or `mix symphony.pause`) survives restarts and is persisted with the
@@ -498,7 +498,7 @@ agent's sandbox:
   read-deny list in [Sandbox defaults](#sandbox-defaults-for-the-agent-process)), and so are
   the Codex files a Codex agent can't read (`~/.codex/auth.json`, `~/.codex/config.toml`) and
   every per-run `CODEX_HOME` Symphony writes for a Codex agent.
-  `workspace.sandbox.allow_read_paths` does not apply to it.
+  `execution.permissions.filesystem.allow_read_paths` does not apply to it.
 - **Writes.** Only the checkout, a temp folder of its own (`$TMPDIR`, removed when the server
   stops), the agent cache folder, the per-user `TemporaryItems` dir (macOS) and the `/dev` sinks
   are writable. Inside the checkout, the paths the agent may not write stay read-only: `.git`,
@@ -507,7 +507,7 @@ agent's sandbox:
   network reaches (see [below](#macos-the-dev-server-listens-on-a-unix-socket) for how macOS does
   it). It reaches the dependency hosts through a proxy on loopback that Symphony runs for
   it (`HTTPS_PROXY` and `HTTP_PROXY`): the proxy only tunnels HTTPS (`CONNECT`) to the agent's
-  built-in dependency hosts plus `agent.permissions.network.allowed_domains`, less
+  built-in dependency hosts plus `execution.permissions.network.allowed_domains`, less
   `denied_domains`, and to none with `mode: block`. The model provider hosts are left out. Any
   other host gets a 403.
 - **Processes outside the sandbox** (macOS). A process launchd starts is not in the sandbox, so the
@@ -668,18 +668,18 @@ read from environment variables. The quality gate explicitly ignores credentials
 
 ### Sandboxing
 
-- Prefer `agent.sandbox_runtime.kind: srt` when you need credential deny rules enforced at the OS
+- Prefer `execution.permissions.outer_sandbox.kind: srt` when you need credential deny rules enforced at the OS
   layer rather than as a best-effort Codex profile. Native Codex enforcement of the managed deny
   list is best-effort across versions.
-- Keep `agent.approval_policy` at its `reject` defaults unless an unattended use case truly
-  requires `auto_approve_all`, and never combine `auto_approve_all` with `thread_sandbox:
+- Keep `execution.permissions.approval_policy` at its `reject` defaults unless an unattended use case truly
+  requires `auto_approve_all`, and never combine `auto_approve_all` with `filesystem.sandbox:
   danger-full-access`.
-- Treat `workspace.sandbox.allow_read_paths` as an escape hatch. Add only the narrowest path you
+- Treat `execution.permissions.filesystem.allow_read_paths` as an escape hatch. Add only the narrowest path you
   need (e.g. `~/.npmrc`), never a directory containing other credentials.
-- Treat `workspace.sandbox.allow_write_paths` the same way for the Claude runtime. Grant only
+- Treat `execution.permissions.filesystem.allow_write_paths` the same way for the claude harness. Grant only
   paths the agent legitimately needs to write — e.g. a known MCP socket root — not broad parents
   like `/private/tmp`.
-- Keep `agent.network_access.mode: allowlist`. Use `denied_domains` to override anything in the
+- Keep `execution.permissions.network.mode: allowlist`. Use `denied_domains` to override anything in the
   built-in dev allow list you do not want the agent to reach.
 - `verification.enabled` runs the checkout's code as your user, inside a sandbox like the
   agent's (Seatbelt on macOS, `bwrap` on Linux; see

@@ -7,7 +7,7 @@ defmodule SymphonyElixir.ForcedStatus do
   `describe/1` turns them into a `phase` and a `waiting_on`:
 
     * a running agent gives the run's kind as the phase (`implementation`, `rework`,
-      `review_feedback`, `ci_fix`, `landing`, `breakdown`, `close_out`, `code_review`,
+      `review_feedback`, `ci_fix`, `landing`, `breakdown`, `code_review`,
       `qa`, `epic_review`) and waits on nothing;
     * a `Merging` ticket held while CI runs on its head is `waiting_on_ci` (`ci`);
     * a plan in `Plan Review` is `waiting_for_human` (`human`);
@@ -29,7 +29,6 @@ defmodule SymphonyElixir.ForcedStatus do
           | :waiting_for_human
           | :landing
           | :breakdown
-          | :close_out
           | :epic_review
 
   @type waiting_on :: :slot | :human | :ci | :blocker | :usage_limit | :paused | :backlog | nil
@@ -58,7 +57,6 @@ defmodule SymphonyElixir.ForcedStatus do
     :code_review,
     :qa,
     :breakdown,
-    :close_out,
     :epic_review
   ]
   @backlog_states ["backlog", "triage"]
@@ -74,7 +72,6 @@ defmodule SymphonyElixir.ForcedStatus do
     "waiting_for_human" => "waiting for a human",
     "landing" => "landing",
     "breakdown" => "plan",
-    "close_out" => "close-out",
     "epic_review" => "epic review"
   }
 

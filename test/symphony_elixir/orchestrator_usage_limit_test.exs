@@ -379,6 +379,35 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert Orchestrator.should_dispatch_issue_for_test(issue("i-claude", "MT-CLAUDE"), orchestrator_state())
   end
 
+  test "a run whose provider is held starts on its first free fallback, and waits when every one is held", ctx do
+    fallbacks = [%{"provider" => "openrouter", "model" => "openai/gpt-5"}]
+    write_usage_workflow!(ctx, agent_run_profiles: %{"implementation" => %{"fallbacks" => fallbacks}})
+    held = %{orchestrator_state() | usage_limits: %{@anthropic => hold(ctx)}}
+
+    assert Orchestrator.should_dispatch_issue_for_test(issue("i-fallback", "MT-FALLBACK"), held)
+    refute Orchestrator.should_dispatch_issue_for_test(issue("i-rework", "MT-REWORK", %{state: "Rework"}), held)
+
+    openrouter = hold(ctx, %{provider: "openrouter"})
+    all_held = %{held | usage_limits: Map.put(held.usage_limits, {"openrouter", :all}, openrouter)}
+
+    log =
+      capture_log([level: :debug], fn ->
+        refute Orchestrator.should_dispatch_issue_for_test(issue("i-fallback", "MT-FALLBACK"), all_held)
+      end)
+
+    assert log =~ "Skipping dispatch; usage limit holds provider=anthropic scope=all"
+  end
+
+  test "a continuation stays on its own choice while a new run takes the fallback", ctx do
+    fallbacks = [%{"provider" => "openrouter", "model" => "openai/gpt-5"}]
+    write_usage_workflow!(ctx, agent_run_profiles: %{"implementation" => %{"fallbacks" => fallbacks}})
+    held = %{orchestrator_state() | usage_limits: %{@anthropic => hold(ctx)}}
+    issue = issue("i-continue", "MT-CONTINUE")
+
+    assert %{provider: "openrouter", fallback: 0} = Orchestrator.run_profile_for_test(held, issue, false)
+    assert %{provider: "anthropic", fallback: nil} = Orchestrator.run_profile_for_test(held, issue, true)
+  end
+
   test "a Codex hold skips Codex candidates while Claude candidates still dispatch, and the reverse", ctx do
     openai_hold = hold(ctx, %{provider: "openai", reason: "codex_usage_limit", window: "primary"})
     codex_hold = %{orchestrator_state() | usage_limits: %{@openai => openai_hold}}
@@ -1084,7 +1113,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert {:ok, %{provider: "anthropic", scope: :all, phase: :paused, issue_identifier: "MT-QA"} = entry} =
              Orchestrator.hold_for_usage_limit(name, usage_info(ctx), "MT-QA")
 
-    assert entry.resume_at == DateTime.add(ctx.now, 3600 + Config.settings!().agent.usage_limit.resume_margin_seconds)
+    assert entry.resume_at == DateTime.add(ctx.now, 3600 + Config.settings!().execution.usage_limit.resume_margin_seconds)
     assert %{@anthropic => ^entry} = RunStore.get_usage_limits()
     assert UsageLimit.persisted_holding(%{provider: "anthropic", model: "claude-opus-5-5"})
 
@@ -1132,7 +1161,7 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
         assert :sys.get_state(pid).api_outages == %{@anthropic => second}
 
         # A run that finds the outage while a usage-limit hold is in force keeps it remembered.
-        limit = UsageLimit.put(nil, usage_info(ctx), now: second.resume_at, config: Config.settings!().agent.usage_limit)
+        limit = UsageLimit.put(nil, usage_info(ctx), now: second.resume_at, config: Config.settings!().execution.usage_limit)
         :sys.replace_state(pid, &%{&1 | usage_limits: %{@anthropic => limit}})
         assert {:ok, ^limit} = Orchestrator.hold_for_usage_limit(name, outage, "MT-QA")
         assert :sys.get_state(pid).api_outages == %{@anthropic => second}

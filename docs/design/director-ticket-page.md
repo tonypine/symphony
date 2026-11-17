@@ -164,7 +164,7 @@ Every control is one of the catalog's, and has all of its states; the prototype 
 
 | Control | Hover | Pressed | Selected | Focused | Disabled, with its reason |
 | --- | --- | --- | --- | --- | --- |
-| Button (moves, Send, Save Note) | raised surface; primary brightens | settles to 97 % | – | ring outside the shape, keyboard only | faint, the pointer says not allowed; pressing it shows the reason under it: "No run is working.", "A run is already working on it.", "It waits on your answer first.", "Pick an answer first.", "Write a note first." |
+| Button (moves, Send, Save Note) | raised surface; primary brightens | settles to 97 % | – | ring outside the shape, keyboard only | faint, the pointer says not allowed; the reason shows under it at once, without a press (as the prototype draws it): "No run is working.", "A run is already working on it.", "It waits on your answer first.", "Pick an answer first.", "Write a note first." |
 | More menu and its items | overlay | settles | the open menu's button stays pressed | ring | an item that can't act says why when chosen ("The ticket is done.") |
 | Option card (the Question) | lifts a point on a spring; its radio rings in accent | settles to 99 % | accent ring and tint, radio filled with a bounce | ring | – |
 | Answer in my own words | as an option card | | its field unfolds under it and takes focus | ring on the field | Send stays off with "Write your answer first." until there is text |
@@ -224,14 +224,17 @@ The timeline keeps its column of times and marks.
 
 | | Laptop (1180 pt) | Desktop (2200 pt) |
 | --- | --- | --- |
-| Header | the identifier, title and situation; the moves on their own row under them | one row across the page; the moves on the identifier's line, so the title has the whole width |
+| Header | the identifier with its repo chip, the epic's short name (cut at 160 pt, the whole title in its tooltip), and after a hairline the priority and labels; the title in the title style, at most 30 em and three lines; the situation; the moves on their own row under them | one row across the page; the moves on the identifier's line, so the title has the whole width (up to 56 em) |
 | Decisions | one line under the header; Answer opens the side sheet over a dimmed page | a column on the far right, always open, scrolling on its own; no line, no Answer |
 | Main column | the lifecycle on top of the timeline, fluid | the same, fluid next to the decisions, up to 1040 pt without them |
 | Facts rail | 340 pt: pull request and every check, connected tickets, the note for the next run, decisions, details | the same, 440 pt |
 
 **What collapses.** Ended runs fold into their line (a short bar per step and where it stopped); a
-run's steps fold into their name and state. The rarer moves sit in More; on a laptop Stop Run… is the
-last item there, in red.
+run's steps fold into their name and state. The moves read, in order: the expected one (primary), Open
+Pull Request when the ticket has one, Force, then on a desktop a separator and Stop Run…, then More. More
+holds Move to…, Restart… and the other moves not on the rail; a separator; Copy Link, Copy Workspace Path
+(only while the workspace exists) and Open in Linear; and on a laptop a separator and Stop Run…, last, in
+red. The timeline fills the main column, so its right edge lines up with the Lifecycle card's.
 
 **Scrolling.** The page scrolls as one inside the window; nothing scrolls sideways at either width.
 The decision sheet and the desktop's decisions column scroll on their own, with their header and Send

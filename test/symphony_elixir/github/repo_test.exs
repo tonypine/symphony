@@ -17,6 +17,14 @@ defmodule SymphonyElixir.GitHub.RepoTest do
     assert Repo.from_url("ssh://git@github.a8c.com/Automattic/symphony/", opts) == "Automattic/symphony"
   end
 
+  test "an enterprise host cannot be told from any other when the settings do not load" do
+    File.write!(Workflow.symphony_file_path(), "issues:\n  provider: memory\n")
+    assert {:error, _reason} = Config.settings()
+
+    assert Repo.from_url("git@github.a8c.com:Automattic/symphony.git") == nil
+    assert Repo.from_url("git@github.com:acme/symphony.git") == "acme/symphony"
+  end
+
   test "formats GitHub CLI repo targets for public and enterprise origins" do
     opts = [github_enterprise_hosts: ["github.a8c.com"]]
 

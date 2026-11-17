@@ -492,7 +492,7 @@ defmodule SymphonyElixir.WorkpadTest do
     }
 
     assert {:error, {:workpad_bootstrap_comment_failed, :comment_failed}} =
-             Workpad.bootstrap(issue, System.tmp_dir!(), settings: %{agent: %{kind: "claude"}, tracker: %{kind: "memory"}})
+             Workpad.bootstrap(issue, System.tmp_dir!(), settings: %{execution: %{harness: "claude"}, tracker: %{kind: "memory"}})
   end
 
   test "bootstrap body uses remote worker path without local expansion" do

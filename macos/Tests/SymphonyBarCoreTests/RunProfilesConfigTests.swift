@@ -7,20 +7,24 @@ final class RunProfilesConfigTests: XCTestCase {
         issues:
           provider: linear
 
-        agent:
-          runtime: claude
-          command: claude
-          # Defaults for every kind of run.
-          model: claude-sonnet-5-5  # cheap default
-          effort: medium
-          run_profiles:
-            # Plan carefully.
-            breakdown: { effort: xhigh }  # big tickets
-            landing:
-              effort: low
-              # model: claude-haiku-4-5-20251001
+        execution:
+          harnesses:
+            claude:
+              command: claude
           concurrency:
             max_total: 2
+
+        runs:
+          # Defaults for every kind of run.
+          default:
+            harness: claude
+            model: claude-sonnet-5-5  # cheap default
+            effort: medium
+          # Plan carefully.
+          breakdown: { effort: xhigh }  # big tickets
+          landing:
+            effort: low
+            # model: claude-haiku-4-5-20251001
 
         workspaces:
           root: ~/work
@@ -32,24 +36,41 @@ final class RunProfilesConfigTests: XCTestCase {
     func testReadsDefaultsAndBothStyles() throws {
         let profiles = try RunProfilesConfig.profiles(in: config)
 
-        XCTAssertEqual(profiles.defaults, RunProfile(model: "claude-sonnet-5-5", effort: "medium"))
+        XCTAssertEqual(profiles.defaults, RunProfile(model: "claude-sonnet-5-5", effort: "medium", harness: "claude"))
         XCTAssertEqual(profiles.kinds, [
             .breakdown: RunProfile(effort: "xhigh"),
             .landing: RunProfile(effort: "low"),
         ])
     }
 
-    func testMissingKeysReadAsDefault() throws {
-        XCTAssertEqual(try RunProfilesConfig.profiles(in: "issues:\n  provider: linear\n"), RunProfiles())
-        XCTAssertEqual(try RunProfilesConfig.profiles(in: "agent:\n  model:\n  effort: null\n  run_profiles: {}\n"), RunProfiles())
+    func testReadsEveryFieldOfAnEntry() throws {
+        let yaml = """
+            runs:
+              default: { harness: claude, provider: openrouter, model: x/y, effort: low, small_model: x/tiny }
+              code_review:
+                harness: codex
+                provider: openai
+                model: gpt-5
+                command: "codex app-server"
+            """
+        let profiles = try RunProfilesConfig.profiles(in: yaml)
+
+        XCTAssertEqual(profiles.defaults, RunProfile(model: "x/y", effort: "low", provider: "openrouter", harness: "claude", smallModel: "x/tiny"))
+        XCTAssertEqual(profiles.kinds, [
+            .codeReview: RunProfile(model: "gpt-5", provider: "openai", harness: "codex", command: "codex app-server"),
+        ])
     }
 
-    func testReadsQuotedValuesAndAFlowRunProfilesLine() throws {
+    func testMissingKeysReadAsUnset() throws {
+        XCTAssertEqual(try RunProfilesConfig.profiles(in: "issues:\n  provider: linear\n"), RunProfiles())
+        XCTAssertEqual(try RunProfilesConfig.profiles(in: "runs:\n  default:\n    model:\n    effort: null\n"), RunProfiles())
+        XCTAssertEqual(try RunProfilesConfig.profiles(in: "runs: {}\n"), RunProfiles())
+        XCTAssertEqual(try RunProfilesConfig.profiles(in: "runs:\n"), RunProfiles())
+    }
+
+    func testReadsQuotedValuesAndAFlowRunsLine() throws {
         let yaml = """
-            agent:
-              model: "claude-opus-5-5"
-              effort: 'high'
-              run_profiles: {qa: {model: "claude-haiku-4-5-20251001", effort: low}, ci_fix: {}, typo: {effort: low}}
+            runs: {default: {model: "claude-opus-5-5", effort: 'high'}, qa: {model: "claude-haiku-4-5-20251001", effort: low}, ci_fix: {}, typo: {effort: low}}
             """
         let profiles = try RunProfilesConfig.profiles(in: yaml)
 
@@ -59,19 +80,18 @@ final class RunProfilesConfigTests: XCTestCase {
 
     func testRejectsLayoutsItCannotEdit() {
         let cases = [
-            "agent: { model: x }\n",
-            "agent:\n  run_profiles: lots\n",
-            "agent:\n  run_profiles:\n    breakdown: high\n",
-            "agent:\n  run_profiles: { breakdown: high }\n",
-            "agent:\n  run_profiles:\n    breakdown: { effort: [high] }\n",
-            "agent:\n  model: [a, b]\n",
-            "agent:\n  model:\n    nested: x\n",
-            "agent:\n  model: \"open\n",
-            "agent:\n  model: \"a\" b\n",
-            "agent:\n  model: *alias\n",
-            "agent:\n  run_profiles: { breakdown: { effort high } }\n",
-            "agent:\n  run_profiles: { breakdown: { effort: high }\n",
-            "agent:\n  run_profiles: { qa: [low\n",
+            "runs: lots\n",
+            "runs:\n  breakdown: high\n",
+            "runs: { breakdown: high }\n",
+            "runs:\n  breakdown: { effort: [high] }\n",
+            "runs:\n  default:\n    model: [a, b]\n",
+            "runs:\n  default:\n    model:\n      nested: x\n",
+            "runs:\n  default:\n    model: \"open\n",
+            "runs:\n  default:\n    model: \"a\" b\n",
+            "runs:\n  default:\n    model: *alias\n",
+            "runs: { breakdown: { effort high } }\n",
+            "runs: { breakdown: { effort: high }\n",
+            "runs: { qa: [low\n",
         ]
         for yaml in cases {
             XCTAssertThrowsError(try RunProfilesConfig.profiles(in: yaml), yaml) { error in
@@ -84,25 +104,74 @@ final class RunProfilesConfigTests: XCTestCase {
     }
 
     func testErrorNamesTheLine() {
-        let error = RunProfilesConfigError.unsupported(line: 3, reason: "`agent:` should be an indented block")
-        XCTAssertEqual(error.errorDescription, "symphony.yml line 3: `agent:` should be an indented block. Edit models by hand.")
+        let error = RunProfilesConfigError.unsupported(line: 3, reason: "`runs:` should be an indented block")
+        XCTAssertEqual(error.errorDescription, "symphony.yml line 3: `runs:` should be an indented block. Edit models by hand.")
     }
 
     // MARK: Changing one value
 
+    // MARK: Fallbacks
+
+    private let fallbackConfig = """
+        runs:
+          default:
+            harness: claude
+            provider: anthropic
+            model: claude-opus-5-5
+            fallbacks:
+              - { harness: opencode, provider: opencode-go, model: kimi-k3 }
+              - provider: openrouter
+                model: acme/chat
+          landing: { model: claude-sonnet-5-5, fallbacks: [{ provider: openrouter, model: acme/flash }] }
+        repositories:
+          - key: web
+            runs:
+              qa:
+                model: claude-haiku-4-5
+                fallbacks:
+                  - { model: claude-sonnet-5-5 }
+
+        """
+
+    func testReadsEntriesThatHaveFallbacks() throws {
+        let scoped = try RunProfilesConfig.scopedProfiles(in: fallbackConfig)
+
+        XCTAssertEqual(scoped.global.defaults.model, "claude-opus-5-5")
+        XCTAssertEqual(scoped.global.kinds[.landing]?.model, "claude-sonnet-5-5")
+        XCTAssertEqual(scoped.repositories["web"]?.kinds[.qa]?.model, "claude-haiku-4-5")
+    }
+
+    func testChangingAFieldKeepsTheEntrysFallbacks() throws {
+        let old = try RunProfilesConfig.scopedProfiles(in: fallbackConfig)
+        var new = old
+        new.global.defaults.model = "claude-sonnet-5-5"
+        new.global.kinds[.landing]?.effort = "low"
+        new.repositories["web"]?.kinds[.qa]?.model = "claude-opus-5-5"
+
+        let updated = try RunProfilesConfig.updating(fallbackConfig, from: old, to: new)
+
+        XCTAssertTrue(updated.contains("- { harness: opencode, provider: opencode-go, model: kimi-k3 }"))
+        XCTAssertTrue(updated.contains("- provider: openrouter\n        model: acme/chat"))
+        XCTAssertTrue(updated.contains("fallbacks: [{ provider: openrouter, model: acme/flash }]"))
+        XCTAssertTrue(updated.contains("- { model: claude-sonnet-5-5 }"))
+        XCTAssertTrue(updated.contains("    model: claude-sonnet-5-5\n    fallbacks:"))
+        XCTAssertTrue(updated.contains("effort: low"))
+        XCTAssertTrue(updated.contains("        model: claude-opus-5-5\n        fallbacks:"))
+    }
+
     func testChangingBreakdownEffortChangesOnlyThatLine() throws {
         let updated = try RunProfilesConfig.setting(.effort, of: .breakdown, to: "high", in: config)
 
-        XCTAssertEqual(changedLines(config, updated), ["    breakdown: { effort: high }  # big tickets"])
+        XCTAssertEqual(changedLines(config, updated), ["  breakdown: { effort: high }  # big tickets"])
         XCTAssertEqual(try RunProfilesConfig.profiles(in: updated)[.breakdown], RunProfile(effort: "high"))
     }
 
     func testChangingABlockValueKeepsItsComment() throws {
         let updated = try RunProfilesConfig.setting(.model, of: nil, to: "claude-opus-5-5", in: config)
 
-        XCTAssertEqual(changedLines(config, updated), ["  model: claude-opus-5-5  # cheap default"])
+        XCTAssertEqual(changedLines(config, updated), ["    model: claude-opus-5-5  # cheap default"])
         let landing = try RunProfilesConfig.setting(.effort, of: .landing, to: "medium", in: config)
-        XCTAssertEqual(changedLines(config, landing), ["      effort: medium"])
+        XCTAssertEqual(changedLines(config, landing), ["    effort: medium"])
     }
 
     func testSettingTheSameValueLeavesTheTextAlone() throws {
@@ -113,166 +182,155 @@ final class RunProfilesConfigTests: XCTestCase {
         XCTAssertEqual(try RunProfilesConfig.setting(.model, of: nil, to: nil, in: "issues:\n"), "issues:\n")
     }
 
-    func testAddsAFieldToAnExistingKind() throws {
+    func testAddsAFieldToAnExistingEntryInFieldOrder() throws {
         let flow = try RunProfilesConfig.setting(.model, of: .breakdown, to: "claude-opus-5-5", in: config)
-        XCTAssertEqual(changedLines(config, flow), ["    breakdown: { model: claude-opus-5-5, effort: xhigh }  # big tickets"])
+        XCTAssertEqual(changedLines(config, flow), ["  breakdown: { model: claude-opus-5-5, effort: xhigh }  # big tickets"])
 
         let block = try RunProfilesConfig.setting(.model, of: .landing, to: "claude-haiku-4-5-20251001", in: config)
         XCTAssertEqual(block, config.replacingOccurrences(
-            of: "    landing:\n",
-            with: "    landing:\n      model: claude-haiku-4-5-20251001\n"
+            of: "  landing:\n",
+            with: "  landing:\n    model: claude-haiku-4-5-20251001\n"
+        ))
+
+        let provider = try RunProfilesConfig.setting(.provider, of: nil, to: "anthropic", in: config)
+        XCTAssertEqual(provider, config.replacingOccurrences(
+            of: "    harness: claude\n",
+            with: "    harness: claude\n    provider: anthropic\n"
+        ))
+    }
+
+    func testWritesEveryFieldOfAFlowEntryInOrder() throws {
+        var text = "runs:\n  ci_fix: { model: deepseek/x }\n"
+        text = try RunProfilesConfig.setting(.command, of: .ciFix, to: "claude --verbose", in: text)
+        text = try RunProfilesConfig.setting(.smallModel, of: .ciFix, to: "deepseek/x", in: text)
+        text = try RunProfilesConfig.setting(.effort, of: .ciFix, to: "low", in: text)
+        text = try RunProfilesConfig.setting(.provider, of: .ciFix, to: "openrouter", in: text)
+        text = try RunProfilesConfig.setting(.harness, of: .ciFix, to: "claude", in: text)
+
+        XCTAssertEqual(
+            text,
+            "runs:\n  ci_fix: { harness: claude, provider: openrouter, model: deepseek/x, effort: low, small_model: deepseek/x, "
+                + "command: \"claude --verbose\" }\n"
+        )
+        XCTAssertEqual(try RunProfilesConfig.profiles(in: text)[.ciFix], RunProfile(
+            model: "deepseek/x", effort: "low", provider: "openrouter", harness: "claude", smallModel: "deepseek/x", command: "claude --verbose"
         ))
     }
 
     func testKeepsTheBraceSpacingOfAFlowLine() throws {
-        let yaml = "agent:\n  run_profiles:\n    qa: {effort: low}\n"
+        let yaml = "runs:\n  qa: {effort: low}\n"
         let updated = try RunProfilesConfig.setting(.model, of: .qa, to: "claude-haiku-4-5-20251001", in: yaml)
 
-        XCTAssertEqual(updated, "agent:\n  run_profiles:\n    qa: {model: claude-haiku-4-5-20251001, effort: low}\n")
+        XCTAssertEqual(updated, "runs:\n  qa: {model: claude-haiku-4-5-20251001, effort: low}\n")
     }
 
     // MARK: Inserting
 
-    func testInsertsAMissingKindInTheSiblingsStyle() throws {
+    func testInsertsAMissingKindInFlowStyleAfterTheLastEntry() throws {
         let updated = try RunProfilesConfig.setting(.effort, of: .rework, to: "high", in: config)
         XCTAssertEqual(updated, config.replacingOccurrences(
-            of: "      # model: claude-haiku-4-5-20251001\n",
-            with: "      # model: claude-haiku-4-5-20251001\n    rework: { effort: high }\n"
+            of: "    # model: claude-haiku-4-5-20251001\n",
+            with: "    # model: claude-haiku-4-5-20251001\n  rework: { effort: high }\n"
         ))
-
-        let blocks = "agent:\n  run_profiles:\n    landing:\n      effort: low\n  concurrency:\n    max_total: 2\n"
-        XCTAssertEqual(
-            try RunProfilesConfig.setting(.model, of: .qa, to: "claude-haiku-4-5-20251001", in: blocks),
-            "agent:\n  run_profiles:\n    landing:\n      effort: low\n    qa:\n      model: claude-haiku-4-5-20251001\n  concurrency:\n    max_total: 2\n"
-        )
+        XCTAssertEqual(try RunProfilesConfig.setting(.effort, of: .rework, to: nil, in: updated), config)
     }
 
-    func testInsertsAMissingRunProfilesBlockAfterTheDefaults() throws {
-        let yaml = """
-            agent:
-              runtime: claude
-              command: claude  # flags come from run profiles
-              # Model and effort per kind of run.
-              # run_profiles:
-              #   breakdown: { effort: xhigh }
-              concurrency:
-                max_total: 2
-
-            """
-        let updated = try RunProfilesConfig.setting(.effort, of: .breakdown, to: "high", in: yaml)
-
-        XCTAssertEqual(updated, yaml.replacingOccurrences(
-            of: "  command: claude  # flags come from run profiles\n",
-            with: "  command: claude  # flags come from run profiles\n  run_profiles:\n    breakdown: { effort: high }\n"
-        ))
-        XCTAssertEqual(try RunProfilesConfig.setting(.effort, of: .breakdown, to: nil, in: updated), yaml)
-    }
-
-    func testInsertsDefaultsInKeyOrder() throws {
-        let yaml = "agent:\n    command: claude\n    effort: low\n    concurrency:\n        max_total: 2\n"
+    func testInsertsAMissingDefaultFirst() throws {
+        let yaml = "runs:\n    landing: { effort: low }\nworkspaces:\n    root: ~/work\n"
 
         XCTAssertEqual(
             try RunProfilesConfig.setting(.model, of: nil, to: "claude-opus-5-5", in: yaml),
-            "agent:\n    command: claude\n    model: claude-opus-5-5\n    effort: low\n    concurrency:\n        max_total: 2\n"
-        )
-        XCTAssertEqual(
-            try RunProfilesConfig.setting(.effort, of: nil, to: "max", in: "agent:\n  concurrency:\n    max_total: 2\n"),
-            "agent:\n  effort: max\n  concurrency:\n    max_total: 2\n"
+            "runs:\n    default: { model: claude-opus-5-5 }\n    landing: { effort: low }\nworkspaces:\n    root: ~/work\n"
         )
     }
 
-    func testFollowsTheFilesIndentWhenInsertingRunProfiles() throws {
-        let yaml = "agent:\n    command: claude\n"
-
-        XCTAssertEqual(
-            try RunProfilesConfig.setting(.effort, of: .qa, to: "low", in: yaml),
-            "agent:\n    command: claude\n    run_profiles:\n        qa: { effort: low }\n"
-        )
-    }
-
-    func testAddsAnAgentSectionWhenTheFileHasNone() throws {
+    func testAddsARunsSectionWhenTheFileHasNone() throws {
         let yaml = "# config\nissues:\n  provider: linear\n"
 
         XCTAssertEqual(
             try RunProfilesConfig.setting(.effort, of: .breakdown, to: "high", in: yaml),
-            "# config\nissues:\n  provider: linear\nagent:\n  run_profiles:\n    breakdown: { effort: high }\n"
+            "# config\nissues:\n  provider: linear\nruns:\n  breakdown: { effort: high }\n"
         )
         XCTAssertEqual(
             try RunProfilesConfig.setting(.model, of: nil, to: "claude-opus-5-5", in: yaml),
-            "# config\nissues:\n  provider: linear\nagent:\n  model: claude-opus-5-5\n"
+            "# config\nissues:\n  provider: linear\nruns:\n  default: { model: claude-opus-5-5 }\n"
         )
     }
 
-    func testFillsAnEmptyRunProfilesMapOrBlock() throws {
+    func testFillsAnEmptyRunsMapOrBlock() throws {
         XCTAssertEqual(
-            try RunProfilesConfig.setting(.effort, of: .qa, to: "low", in: "agent:\n  run_profiles: {}  # none yet\n"),
-            "agent:\n  run_profiles: # none yet\n    qa: { effort: low }\n"
+            try RunProfilesConfig.setting(.effort, of: .qa, to: "low", in: "runs: {}  # none yet\n"),
+            "runs: # none yet\n  qa: { effort: low }\n"
         )
         XCTAssertEqual(
-            try RunProfilesConfig.setting(.effort, of: .qa, to: "low", in: "agent:\n  run_profiles:\n  limits: {}\n"),
-            "agent:\n  run_profiles:\n    qa: { effort: low }\n  limits: {}\n"
+            try RunProfilesConfig.setting(.effort, of: .qa, to: "low", in: "runs:\nphases: {}\n"),
+            "runs:\n  qa: { effort: low }\nphases: {}\n"
         )
-        XCTAssertEqual(try RunProfilesConfig.setting(.effort, of: .qa, to: nil, in: "agent:\n  run_profiles: {}\n"), "agent:\n  run_profiles: {}\n")
+        XCTAssertEqual(try RunProfilesConfig.setting(.effort, of: .qa, to: nil, in: "runs: {}\n"), "runs: {}\n")
     }
 
-    func testFillsAnEmptyKindBlock() throws {
+    func testFillsAnEmptyEntryBlock() throws {
         XCTAssertEqual(
-            try RunProfilesConfig.setting(.effort, of: .qa, to: "low", in: "agent:\n  run_profiles:\n    qa:\n"),
-            "agent:\n  run_profiles:\n    qa:\n      effort: low\n"
+            try RunProfilesConfig.setting(.effort, of: .qa, to: "low", in: "runs:\n  qa:\n"),
+            "runs:\n  qa:\n    effort: low\n"
         )
     }
 
     func testQuotesValuesThatWouldReadAsSomethingElse() throws {
-        let updated = try RunProfilesConfig.setting(.model, of: nil, to: "yes", in: "agent:\n  model: x\n")
+        let updated = try RunProfilesConfig.setting(.model, of: nil, to: "yes", in: "runs:\n  default:\n    model: x\n")
 
-        XCTAssertEqual(updated, "agent:\n  model: \"yes\"\n")
+        XCTAssertEqual(updated, "runs:\n  default:\n    model: \"yes\"\n")
         XCTAssertEqual(try RunProfilesConfig.profiles(in: updated).defaults.model, "yes")
     }
 
-    // MARK: Default removes the key
+    // MARK: Unsetting removes the key
 
-    func testDefaultRemovesTheKeyAndLeavesTheRestAlone() throws {
+    func testUnsettingRemovesTheKeyAndLeavesTheRestAlone() throws {
         let updated = try RunProfilesConfig.setting(.model, of: nil, to: nil, in: config)
 
-        XCTAssertEqual(updated, config.replacingOccurrences(of: "  model: claude-sonnet-5-5  # cheap default\n", with: ""))
+        XCTAssertEqual(updated, config.replacingOccurrences(of: "    model: claude-sonnet-5-5  # cheap default\n", with: ""))
     }
 
-    func testDefaultRemovesAKindItEmptied() throws {
+    func testUnsettingRemovesAnEntryItEmptied() throws {
         let flow = try RunProfilesConfig.setting(.effort, of: .breakdown, to: nil, in: config)
-        XCTAssertEqual(flow, config.replacingOccurrences(of: "    breakdown: { effort: xhigh }  # big tickets\n", with: ""))
+        XCTAssertEqual(flow, config.replacingOccurrences(of: "  breakdown: { effort: xhigh }  # big tickets\n", with: ""))
 
         let block = try RunProfilesConfig.setting(.effort, of: .landing, to: nil, in: config)
-        XCTAssertEqual(block, config.replacingOccurrences(of: "    landing:\n      effort: low\n", with: ""))
+        XCTAssertEqual(block, config.replacingOccurrences(of: "  landing:\n    effort: low\n", with: ""))
     }
 
-    func testDefaultRemovesRunProfilesWhenItEmptied() throws {
-        let yaml = "agent:\n  command: claude\n  run_profiles:\n    qa:\n      effort: low\n  concurrency:\n    max_total: 2\n"
+    func testUnsettingRemovesRunsWhenItEmptied() throws {
+        let yaml = "issues:\n  provider: linear\nruns:\n  qa:\n    effort: low\nworkspaces:\n  root: ~/work\n"
         XCTAssertEqual(
             try RunProfilesConfig.setting(.effort, of: .qa, to: nil, in: yaml),
-            "agent:\n  command: claude\n  concurrency:\n    max_total: 2\n"
+            "issues:\n  provider: linear\nworkspaces:\n  root: ~/work\n"
         )
 
-        let flow = "agent:\n  run_profiles: { qa: { effort: low } }  # one\n  command: claude\n"
-        XCTAssertEqual(try RunProfilesConfig.setting(.effort, of: .qa, to: nil, in: flow), "agent:\n  command: claude\n")
+        let flow = "runs: { qa: { effort: low } }  # one\nissues:\n  provider: linear\n"
+        XCTAssertEqual(try RunProfilesConfig.setting(.effort, of: .qa, to: nil, in: flow), "issues:\n  provider: linear\n")
     }
 
-    func testEditsAFlowRunProfilesLine() throws {
-        let yaml = "agent:\n  run_profiles: { qa: { effort: low }, landing: { effort: low } }  # cheap\n"
+    func testEditsAFlowRunsLine() throws {
+        let yaml = "runs: { qa: { effort: low }, landing: { effort: low } }  # cheap\n"
 
         XCTAssertEqual(
             try RunProfilesConfig.setting(.effort, of: .qa, to: nil, in: yaml),
-            "agent:\n  run_profiles: { landing: { effort: low } }  # cheap\n"
+            "runs: { landing: { effort: low } }  # cheap\n"
         )
         XCTAssertEqual(
             try RunProfilesConfig.setting(.effort, of: .ciFix, to: "low", in: yaml),
-            "agent:\n  run_profiles: { qa: { effort: low }, landing: { effort: low }, ci_fix: { effort: low } }  # cheap\n"
+            "runs: { qa: { effort: low }, landing: { effort: low }, ci_fix: { effort: low } }  # cheap\n"
         )
         XCTAssertEqual(
             try RunProfilesConfig.setting(.effort, of: .qa, to: "high", in: yaml),
-            "agent:\n  run_profiles: { qa: { effort: high }, landing: { effort: low } }  # cheap\n"
+            "runs: { qa: { effort: high }, landing: { effort: low } }  # cheap\n"
+        )
+        XCTAssertEqual(
+            try RunProfilesConfig.setting(.harness, of: nil, to: "codex", in: yaml),
+            "runs: { qa: { effort: low }, landing: { effort: low }, default: { harness: codex } }  # cheap\n"
         )
         XCTAssertEqual(try RunProfilesConfig.setting(.effort, of: .rework, to: nil, in: yaml), yaml)
-        XCTAssertThrowsError(try RunProfilesConfig.setting(.effort, of: .qa, to: "low", in: "agent:\n  run_profiles: { qa: low }\n"))
+        XCTAssertThrowsError(try RunProfilesConfig.setting(.effort, of: .qa, to: "low", in: "runs: { qa: low }\n"))
     }
 
     func testInsertThenRemoveRoundTripsByteForByte() throws {
@@ -285,14 +343,13 @@ final class RunProfilesConfigTests: XCTestCase {
         XCTAssertEqual(profiles.kinds.count, RunKind.allCases.count)
         XCTAssertTrue(profiles.kinds.values.allSatisfy { $0 == RunProfile(model: "claude-haiku-4-5-20251001", effort: "max") })
         XCTAssertTrue(text.contains("  # Defaults for every kind of run.\n"))
-        XCTAssertTrue(text.contains("      # model: claude-haiku-4-5-20251001\n"))
+        XCTAssertTrue(text.contains("    # model: claude-haiku-4-5-20251001\n"))
 
         let stripped = try RunProfilesConfig.updating(text, from: profiles, to: RunProfiles(defaults: profiles.defaults))
         XCTAssertEqual(try RunProfilesConfig.profiles(in: stripped), RunProfiles(defaults: profiles.defaults))
         XCTAssertEqual(stripped, config
-            .replacingOccurrences(of: "  run_profiles:\n", with: "")
-            .replacingOccurrences(of: "    breakdown: { effort: xhigh }  # big tickets\n", with: "")
-            .replacingOccurrences(of: "    landing:\n      effort: low\n", with: ""))
+            .replacingOccurrences(of: "  breakdown: { effort: xhigh }  # big tickets\n", with: "")
+            .replacingOccurrences(of: "  landing:\n    effort: low\n", with: ""))
     }
 
     func testUpdatingWritesOnlyChangedFields() throws {
@@ -301,17 +358,39 @@ final class RunProfilesConfigTests: XCTestCase {
         new[.breakdown].effort = "high"
         new[.qa].model = "claude-haiku-4-5-20251001"
         new[nil].effort = nil
+        new[nil].provider = "anthropic"
 
         let updated = try RunProfilesConfig.updating(config, from: old, to: new)
 
         XCTAssertEqual(try RunProfilesConfig.profiles(in: updated), new)
         XCTAssertEqual(try RunProfilesConfig.updating(config, from: old, to: old), config)
+        XCTAssertEqual(
+            try RunProfilesConfig.updating(config, from: old, to: {
+                var one = old
+                one[.breakdown].effort = "high"
+                return one
+            }()),
+            try RunProfilesConfig.setting(.effort, of: .breakdown, to: "high", in: config)
+        )
     }
 
     func testKeepsCRLFLineEndings() throws {
-        let yaml = "agent:\r\n  effort: low\r\n"
+        let yaml = "runs:\r\n  default:\r\n    effort: low\r\n"
 
-        XCTAssertEqual(try RunProfilesConfig.setting(.effort, of: nil, to: "high", in: yaml), "agent:\r\n  effort: high\r\n")
+        XCTAssertEqual(try RunProfilesConfig.setting(.effort, of: nil, to: "high", in: yaml), "runs:\r\n  default:\r\n    effort: high\r\n")
+    }
+
+    func testKeepsAnEntryThatStillHasAField() throws {
+        let flow = "runs:\n  breakdown: { provider: openrouter, model: x/y }\n"
+        let block = "runs:\n  breakdown:\n    provider: openrouter\n    model: x/y\n"
+        let old = try RunProfilesConfig.profiles(in: flow)
+        XCTAssertEqual(old[.breakdown], RunProfile(model: "x/y", provider: "openrouter"))
+        XCTAssertEqual(try RunProfilesConfig.profiles(in: block), old)
+        var new = old
+        new[.breakdown].model = nil
+
+        XCTAssertEqual(try RunProfilesConfig.updating(flow, from: old, to: new), "runs:\n  breakdown: { provider: openrouter }\n")
+        XCTAssertEqual(try RunProfilesConfig.updating(block, from: old, to: new), "runs:\n  breakdown:\n    provider: openrouter\n")
     }
 
     // MARK: Model
@@ -326,6 +405,17 @@ final class RunProfilesConfigTests: XCTestCase {
         XCTAssertEqual(profiles.defaults, RunProfile(model: "m"))
     }
 
+    func testAFieldReadsAndWritesItsProperty() {
+        var profile = RunProfile()
+        for field in RunProfileField.allCases {
+            profile[field] = field.rawValue
+        }
+        XCTAssertEqual(profile, RunProfile(
+            model: "model", effort: "effort", provider: "provider", harness: "harness", smallModel: "small_model", command: "command"
+        ))
+        XCTAssertEqual(RunProfileField.allCases.map { profile[$0] }, ["harness", "provider", "model", "effort", "small_model", "command"])
+    }
+
     func testChoicesIncludeAValueFromTheFile() {
         XCTAssertEqual(RunProfilesConfig.choices(RunProfilesConfig.models, including: "claude-opus-5-5"), RunProfilesConfig.models)
         XCTAssertEqual(RunProfilesConfig.choices(RunProfilesConfig.models, including: nil), RunProfilesConfig.models)
@@ -338,336 +428,34 @@ final class RunProfilesConfigTests: XCTestCase {
     func testEveryKindHasATitleAndTheSettingsOrder() {
         XCTAssertEqual(RunProfilesConfig.scopes.count, 10)
         XCTAssertEqual(RunKind.allCases.map(\.title), [
-            "Breakdown", "Close-out", "Implementation", "Rework", "CI fix",
-            "Review feedback", "Landing", "Code review", "QA",
+            "Breakdown", "Implementation", "Rework", "CI fix",
+            "Review feedback", "Landing", "Code review", "Epic review", "QA",
         ])
         XCTAssertEqual(RunKind.ciFix.id, "ci_fix")
+        // The kinds `SymphonyElixir.RunKind` lists.
+        XCTAssertEqual(Set(RunKind.allCases.map(\.rawValue)), [
+            "implementation", "breakdown", "rework", "landing", "code_review", "epic_review", "ci_fix", "review_feedback", "qa",
+        ])
     }
 
-    // MARK: Flags in agent.command
-
-    func testReadsModelAndEffortFlagsFromTheCommand() throws {
-        XCTAssertEqual(
-            try RunProfilesConfig.commandProfile(in: "agent:\n  command: claude --model claude-opus-5-5 --effort=high --verbose\n"),
-            RunProfile(model: "claude-opus-5-5", effort: "high")
-        )
-        XCTAssertEqual(
-            try RunProfilesConfig.commandProfile(in: "agent:\n  command: \"claude --model='claude-haiku-4-5-20251001'\"  # quoted\n"),
-            RunProfile(model: "claude-haiku-4-5-20251001")
-        )
-        XCTAssertEqual(try RunProfilesConfig.commandProfile(in: config), RunProfile())
-        XCTAssertEqual(try RunProfilesConfig.commandProfile(in: "agent:\n  command: claude --models x --model-y z\n"), RunProfile())
-        XCTAssertEqual(try RunProfilesConfig.commandProfile(in: "issues:\n  provider: linear\n"), RunProfile())
+    func testInheritedTitleNamesTheValueAnUnsetFieldFallsBackTo() {
+        XCTAssertEqual(RunProfilesConfig.inheritedTitle(RunProfilesConfig.models, inherited: nil), "none")
+        XCTAssertEqual(RunProfilesConfig.inheritedTitle(RunProfilesConfig.models, inherited: "claude-opus-5-5"), "Opus 5.5")
+        XCTAssertEqual(RunProfilesConfig.inheritedTitle(RunProfilesConfig.providers, inherited: "opencode-go"), "OpenCode Go")
+        XCTAssertEqual(RunProfilesConfig.inheritedTitle(RunProfilesConfig.models, inherited: "x/y"), "x/y")
     }
 
-    func testSplitsFlagsOutOfACommand() {
-        let split = RunProfilesConfig.splitCommandFlags("--effort low claude --model a --verbose --model=b --effort")
-        XCTAssertEqual(split.command, "claude --verbose")
-        XCTAssertEqual(split.flags, RunProfile(model: "b", effort: "low"))
-    }
+    // MARK: Harnesses
 
-    func testSettingAKindMovesCommandFlagsToTheDefaults() throws {
-        let yaml = """
-            agent:
-              runtime: claude
-              command: claude --model claude-opus-5-5 --verbose
-              concurrency:
-                max_total: 2
-
-            """
-        let old = try RunProfilesConfig.profiles(in: yaml)
-        var new = old
-        new[.breakdown].effort = "high"
-
-        XCTAssertEqual(try RunProfilesConfig.updating(yaml, from: old, to: new), """
-            agent:
-              runtime: claude
-              command: claude --verbose
-              model: claude-opus-5-5
-              run_profiles:
-                breakdown: { effort: high }
-              concurrency:
-                max_total: 2
-
-            """)
-    }
-
-    func testMovesTheEqualsFormAndKeepsTheCommandComment() throws {
-        let yaml = "agent:\n  command: claude --model=claude-opus-5-5 --effort=xhigh --verbose  # main runs\n"
-        var new = RunProfiles()
-        new[.landing].model = "claude-haiku-4-5-20251001"
-
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
-            """
-            agent:
-              command: claude --verbose  # main runs
-              model: claude-opus-5-5
-              effort: xhigh
-              run_profiles:
-                landing: { model: claude-haiku-4-5-20251001 }
-
-            """.trimmingCharacters(in: .newlines) + "\n"
-        )
-    }
-
-    func testADefaultSetInTheSameSaveWinsOverTheCommandFlag() throws {
-        let yaml = "agent:\n  command: 'claude --model claude-opus-5-5 --effort high'\n"
-        var new = RunProfiles()
-        new.defaults.model = "claude-sonnet-5-5"
-
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
-            "agent:\n  command: 'claude'\n  model: claude-sonnet-5-5\n  effort: high\n"
-        )
-    }
-
-    func testKeepsDoubleQuotesOnTheCommand() throws {
-        let yaml = "agent:\n  command: \"claude --effort low --verbose\"\n"
-        var new = RunProfiles()
-        new[.qa].effort = "medium"
-
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
-            "agent:\n  command: \"claude --verbose\"\n  effort: low\n  run_profiles:\n    qa: { effort: medium }\n"
-        )
-    }
-
-    func testLeavesCommandFlagsWhenTheSaveSetsNothing() throws {
-        let yaml = "agent:\n  command: claude --model claude-opus-5-5\n  run_profiles:\n    qa: { effort: low }\n"
-        let old = try RunProfilesConfig.profiles(in: yaml)
-
-        XCTAssertEqual(try RunProfilesConfig.updating(yaml, from: old, to: RunProfiles()), "agent:\n  command: claude --model claude-opus-5-5\n")
-        XCTAssertEqual(try RunProfilesConfig.updating(yaml, from: old, to: old), yaml)
-    }
-
-    func testWithoutCommandFlagsTheOutputIsUnchanged() throws {
-        let old = try RunProfilesConfig.profiles(in: config)
-        var new = old
-        new[.breakdown].effort = "high"
-
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(config, from: old, to: new),
-            try RunProfilesConfig.setting(.effort, of: .breakdown, to: "high", in: config)
-        )
-    }
-
-    func testMovesFlagsOutOfBothCommands() throws {
-        let yaml = """
-            agent:
-              runtime: claude
-              command: claude --model claude-opus-5-5 --dangerously-skip-permissions --verbose
-
-            code_review:
-              enabled: true
-              runtime: claude
-              command: claude --model claude-opus-5-5 --effort=high --dangerously-skip-permissions  # reviewer
-
-            """
-        let old = try RunProfilesConfig.profiles(in: yaml)
-        var new = old
-        new[.breakdown].effort = "high"
-
-        XCTAssertEqual(try RunProfilesConfig.updating(yaml, from: old, to: new), """
-            agent:
-              runtime: claude
-              command: claude --dangerously-skip-permissions --verbose
-              model: claude-opus-5-5
-              run_profiles:
-                breakdown: { effort: high }
-                code_review: { model: claude-opus-5-5, effort: high }
-
-            code_review:
-              enabled: true
-              runtime: claude
-              command: claude --dangerously-skip-permissions  # reviewer
-
-            """)
-    }
-
-    func testLeavesTheCodeReviewCommandWhenNothingResolvesForIt() throws {
-        let yaml = "agent:\n  command: claude\ncode_review:\n  command: claude --model claude-opus-5-5\n"
-        var new = RunProfiles()
-        new[.breakdown].effort = "high"
-
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
-            "agent:\n  command: claude\n  run_profiles:\n    breakdown: { effort: high }\ncode_review:\n  command: claude --model claude-opus-5-5\n"
-        )
-    }
-
-    func testSettingTheCodeReviewKindMovesTheSectionIntoItsRowAndWinsOverTheSection() throws {
-        let yaml = "agent:\n  command: claude\ncode_review:\n  command: 'claude --model claude-opus-5-5 --effort low'\n  effort: max\n"
-        var new = RunProfiles()
-        new[.codeReview].effort = "high"
-
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
-            "agent:\n  command: claude\n  run_profiles:\n    code_review: { model: claude-opus-5-5, effort: high }\n"
-                + "code_review:\n  command: 'claude'\n"
-        )
-    }
-
-    func testTheSectionsKeysOutrankItsFlagsWhenTheyMove() throws {
-        let yaml = "agent:\n  command: claude\ncode_review:\n  command: claude --model claude-opus-5-5 --effort low\n  effort: max\n"
-        var new = RunProfiles()
-        new.defaults.model = "claude-sonnet-5-5"
-
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
-            "agent:\n  command: claude\n  model: claude-sonnet-5-5\n  run_profiles:\n"
-                + "    code_review: { model: claude-opus-5-5, effort: max }\ncode_review:\n  command: claude\n"
-        )
-    }
-
-    func testAnOpenRouterDefaultKeepsTheReviewersClaudeModelOnAnthropic() throws {
-        let yaml = """
-            agent:
-              runtime: claude
-              command: claude --model claude-opus-4-7 --dangerously-skip-permissions
-            code_review:
-              enabled: true
-              runtime: claude
-              command: claude --model claude-opus-4-7 --dangerously-skip-permissions
-
-            """
-        let old = try RunProfilesConfig.profiles(in: yaml)
-        var new = old
-        new.defaults = RunProfile(model: "openai/gpt-oss-120b", provider: "openrouter")
-
-        XCTAssertEqual(try RunProfilesConfig.updating(yaml, from: old, to: new), """
-            agent:
-              runtime: claude
-              command: claude --dangerously-skip-permissions
-              provider: openrouter
-              model: openai/gpt-oss-120b
-              run_profiles:
-                code_review: { provider: anthropic, model: claude-opus-4-7 }
-            code_review:
-              enabled: true
-              runtime: claude
-              command: claude --dangerously-skip-permissions
-
-            """)
-    }
-
-    func testAnOpenRouterQARowReplacesTheSectionsModel() throws {
-        let yaml = "agent:\n  command: claude\nauto_review:\n  enabled: true\n  model: claude-opus-4-7\n  effort: low\n"
-        var new = RunProfiles()
-        new[.qa] = RunProfile(model: "openai/gpt-oss-120b", provider: "openrouter")
-
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
-            "agent:\n  command: claude\n  run_profiles:\n"
-                + "    qa: { provider: openrouter, model: openai/gpt-oss-120b, effort: low }\nauto_review:\n  enabled: true\n"
-        )
-    }
-
-    func testChangingTheRowsProviderDropsTheSectionsModel() throws {
-        let yaml = "agent:\n  command: claude\n  model: x/y\ncode_review:\n  command: claude --model claude-opus-4-7\n"
-        let old = try RunProfilesConfig.profiles(in: yaml)
-        var new = old
-        new[.codeReview].provider = "openrouter"
-
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(yaml, from: old, to: new),
-            "agent:\n  command: claude\n  model: x/y\n  run_profiles:\n    code_review: { provider: openrouter }\n"
-                + "code_review:\n  command: claude\n"
-        )
-    }
-
-    func testAMovedModelOverwritesTheRowItOutranked() throws {
-        let yaml = "agent:\n  command: claude\n  run_profiles:\n    code_review: { model: claude-haiku-4-5-20251001 }\n"
-            + "code_review:\n  model: claude-opus-4-7\n"
-        let old = try RunProfilesConfig.profiles(in: yaml)
-        var new = old
-        new.defaults.effort = "high"
-
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(yaml, from: old, to: new),
-            "agent:\n  command: claude\n  effort: high\n  run_profiles:\n    code_review: { model: claude-opus-4-7 }\n"
-                + "code_review:\n"
-        )
-    }
-
-    func testAOneLineCodeReviewSectionFailsOnlyWithFlags() throws {
-        var new = RunProfiles()
-        new.defaults.effort = "high"
-        let plain = "agent:\n  command: claude\ncode_review: { enabled: true, command: claude, model: x }\n"
-
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(plain, from: RunProfiles(), to: new),
-            "agent:\n  command: claude\n  effort: high\ncode_review: { enabled: true, command: claude, model: x }\n"
-        )
-        let flagged = "agent:\n  command: claude\ncode_review: { command: claude --model x }\n"
-        XCTAssertThrowsError(try RunProfilesConfig.updating(flagged, from: RunProfiles(), to: new)) { error in
-            XCTAssertEqual(error as? RunProfilesConfigError, .unsupported(line: 3, reason: "`code_review:` should be an indented block"))
-        }
-    }
-
-    func testMovesFlagsOutOfTheQACommand() throws {
-        let yaml = """
-            agent:
-              command: claude
-            auto_review:
-              enabled: true
-              state: QA
-              command: "claude --effort=low --dangerously-skip-permissions"  # QA
-              max_turns: 20
-
-            """
-        var new = RunProfiles()
-        new[.qa].model = "claude-sonnet-5-5"
-
-        XCTAssertEqual(try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new), """
-            agent:
-              command: claude
-              run_profiles:
-                qa: { model: claude-sonnet-5-5, effort: low }
-            auto_review:
-              enabled: true
-              state: QA
-              command: "claude --dangerously-skip-permissions"  # QA
-              max_turns: 20
-
-            """)
-    }
-
-    func testLeavesTheQACommandWhenNothingResolvesForIt() throws {
-        let yaml = "agent:\n  command: claude\nauto_review:\n  command: claude --model claude-opus-5-5\n"
-        var new = RunProfiles()
-        new[.codeReview].effort = "high"
-
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(yaml, from: RunProfiles(), to: new),
-            "agent:\n  command: claude\n  run_profiles:\n    code_review: { effort: high }\nauto_review:\n  command: claude --model claude-opus-5-5\n"
-        )
-    }
-
-    func testKeepsAKindThatStillHasAProvider() throws {
-        let flow = "agent:\n  run_profiles:\n    breakdown: { provider: openrouter, model: x/y }\n"
-        let block = "agent:\n  run_profiles:\n    breakdown:\n      provider: openrouter\n      model: x/y\n"
-        let old = try RunProfilesConfig.profiles(in: flow)
-        XCTAssertEqual(old[.breakdown], RunProfile(model: "x/y", provider: "openrouter"))
-        XCTAssertEqual(try RunProfilesConfig.profiles(in: block), old)
-        var new = old
-        new[.breakdown].model = nil
-
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(flow, from: old, to: new),
-            "agent:\n  run_profiles:\n    breakdown: { provider: openrouter }\n"
-        )
-        XCTAssertEqual(
-            try RunProfilesConfig.updating(block, from: old, to: new),
-            "agent:\n  run_profiles:\n    breakdown:\n      provider: openrouter\n"
-        )
-    }
-
-    func testDefaultTitleNamesTheCommandValue() {
-        XCTAssertEqual(RunProfilesConfig.defaultTitle(RunProfilesConfig.models, inherited: nil), "default")
-        XCTAssertEqual(RunProfilesConfig.defaultTitle(RunProfilesConfig.models, inherited: "claude-opus-5-5"), "Opus 5.5, from command")
-        XCTAssertEqual(RunProfilesConfig.defaultTitle(RunProfilesConfig.efforts, inherited: "high"), "high, from command")
-        XCTAssertEqual(RunProfilesConfig.defaultTitle(RunProfilesConfig.models, inherited: "opus"), "opus, from command")
+    func testEachHarnessOffersTheProvidersItReaches() {
+        XCTAssertEqual(RunProfilesConfig.harnesses.map(\.id), ["claude", "codex", "opencode"])
+        XCTAssertEqual(RunProfilesConfig.harnesses.map(\.title), ["Claude", "Codex", "OpenCode"])
+        XCTAssertEqual(RunProfilesConfig.providers(for: "claude").map(\.title), ["Anthropic", "OpenRouter", "OpenCode Go"])
+        XCTAssertEqual(RunProfilesConfig.providers(for: "codex").map(\.title), ["OpenCode Go", "OpenAI"])
+        XCTAssertEqual(RunProfilesConfig.providers(for: "opencode").map(\.id), ["opencode-go"])
+        XCTAssertEqual(RunProfilesConfig.providers(for: nil), RunProfilesConfig.providers)
+        XCTAssertEqual(RunProfilesConfig.providers(for: "aider"), RunProfilesConfig.providers)
+        XCTAssertEqual(Harness.allCases.filter(\.callsSmallModel), [.claude, .opencode])
     }
 
     // MARK: File
@@ -686,9 +474,8 @@ final class RunProfilesConfigTests: XCTestCase {
         try file.writeRunProfiles(new, from: old)
 
         let written = try String(contentsOfFile: path, encoding: .utf8)
-        XCTAssertEqual(changedLines(config, written), ["    breakdown: { effort: high }  # big tickets"])
+        XCTAssertEqual(changedLines(config, written), ["  breakdown: { effort: high }  # big tickets"])
         XCTAssertEqual(try file.readRunProfiles(), new)
-        XCTAssertEqual(try file.readCommandProfile(), RunProfile())
     }
 
     private func changedLines(_ original: String, _ updated: String) -> [String] {

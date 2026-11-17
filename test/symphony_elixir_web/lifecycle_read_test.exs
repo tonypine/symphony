@@ -94,7 +94,7 @@ defmodule SymphonyElixirWeb.LifecycleReadTest do
 
     assert on_timeline == 3_500
     assert split == on_timeline
-    assert lifecycle["tokens"] == %{"total" => on_timeline, "cap" => Config.settings!().agent.max_tokens_per_issue}
+    assert lifecycle["tokens"] == %{"total" => on_timeline, "cap" => Config.settings!().execution.max_tokens_per_issue}
 
     assert phase_path["current"] == "Done"
     assert Enum.map(phase_path["phases"], &{&1["phase"], &1["count"]}) == [{"In Progress", 1}, {"Code Review", 2}, {"Rework", 1}, {"QA", 1}, {"Merging", 1}, {"Done", 1}]

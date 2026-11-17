@@ -325,12 +325,12 @@ If Symphony documents token reporting externally, the contract should be:
 
 ## Budget Enforcement
 
-`agent.max_tokens_per_issue` and `agent.max_tokens_per_day` use the same accepted cumulative token
+`execution.limits.tokens_per_issue` and `execution.limits.tokens_per_day` use the same accepted cumulative token
 totals described above. They default to `500000` tokens per issue and `5000000` tokens per UTC day.
 When a per-issue limit is active, Symphony stops only the issue whose running total reaches the limit
 and does not schedule a retry. When a daily limit is active, Symphony pauses new dispatch after the
 UTC-day total reaches the limit, while already-running agents continue to report tokens and finish
 normally. Daily usage resets at UTC day boundaries, but per-issue budget exhaustion is persisted in
 run history and rehydrated across restarts while the current per-issue limit is still exceeded.
-Operators can allow a stopped issue to dispatch again by raising `agent.max_tokens_per_issue` or
+Operators can allow a stopped issue to dispatch again by raising `execution.limits.tokens_per_issue` or
 setting it to `null` to disable the per-issue cap.

@@ -56,7 +56,9 @@ public struct TimelineSection: View {
     @Environment(\.timelineGrowth) private var growth
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
-    /// The column's widest (the catalog's Timeline: one column of at most 780 pt, at both widths).
+    /// The Journal's column at its widest (the catalog's Timeline: one column of at most 780 pt). On the ticket page the
+    /// timeline fills its column instead (`.ticket-page .timeline-layout`, TP-1485), so its right edge lines up with the
+    /// Lifecycle card's.
     public static let maxWidth: CGFloat = 780
     /// The column of times, and the column of marks after it.
     static let timeColumn: CGFloat = 40
@@ -168,7 +170,7 @@ public struct TimelineSection: View {
                     .padding(.vertical, DesignTokens.Space.s2)
             }
         }
-        .frame(maxWidth: Self.maxWidth, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
@@ -412,9 +414,7 @@ struct DaySeparator: View {
                     .foregroundStyle(.tertiary)
                     .fixedSize()
             }
-            Rectangle()
-                .fill(DesignTokens.Surface.separator.color)
-                .frame(height: 1)
+            HairlineDivider()
         }
         .padding(.top, DesignTokens.Space.s4)
         .padding(.bottom, DesignTokens.Space.s1)

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Why `agent.concurrency.max_total` can't be changed by editing one line.
+/// Why `execution.concurrency.max_total` can't be changed by editing one line.
 public enum MaxConcurrentAgentsError: LocalizedError, Equatable {
     /// The key holds an inline value (for example `concurrency: {max_total: 2}`) instead of an indented block.
     case notABlock(String)
@@ -13,7 +13,7 @@ public enum MaxConcurrentAgentsError: LocalizedError, Equatable {
     }
 }
 
-/// Reads and changes `agent.concurrency.max_total` in the text of a `symphony.yml`. Only that one line is
+/// Reads and changes `execution.concurrency.max_total` in the text of a `symphony.yml`. Only that one line is
 /// rewritten, or inserted when missing, so comments, ordering and indentation stay as they are.
 public enum MaxConcurrentAgents {
     /// Values offered in Settings.
@@ -24,32 +24,32 @@ public enum MaxConcurrentAgents {
 
     /// The `max_total` value, or nil when the key is missing or not a whole number.
     public static func value(in yaml: String) -> Int? {
-        (try? AgentSetting.value("max_total", in: "concurrency", of: yaml)).flatMap { Int($0) }
+        (try? ExecutionSetting.value("max_total", in: "concurrency", of: yaml)).flatMap { Int($0) }
     }
 
-    /// The same text with `max_total` set to `value`. Inserts the key, and `concurrency:` or `agent:` when
+    /// The same text with `max_total` set to `value`. Inserts the key, and `concurrency:` or `execution:` when
     /// they are missing too.
     public static func setting(_ value: Int, in yaml: String) throws -> String {
-        try AgentSetting.setting("max_total", in: "concurrency", to: String(value), in: yaml)
+        try ExecutionSetting.setting("max_total", in: "concurrency", to: String(value), in: yaml)
     }
 }
 
-/// One `agent.<section>.<key>` value in the text of a `symphony.yml`. Only that one line is rewritten, or
+/// One `execution.<section>.<key>` value in the text of a `symphony.yml`. Only that one line is rewritten, or
 /// inserted when missing, so comments, ordering and indentation stay as they are.
-enum AgentSetting {
+enum ExecutionSetting {
     /// Indent added for a new nested key when the file gives no example to follow.
     static let defaultIndentStep = ConfigSetting.defaultIndentStep
 
     /// The value after `key:` without its comment, "" when empty, or nil when the key or a section above it
     /// is missing. Throws `MaxConcurrentAgentsError.notABlock` when a section above it holds an inline value.
     static func value(_ key: String, in section: String, of yaml: String) throws -> String? {
-        try ConfigSetting.value(at: ["agent", section, key], of: yaml)
+        try ConfigSetting.value(at: ["execution", section, key], of: yaml)
     }
 
-    /// The same text with `key` set to `value`. Inserts the key, and the section or `agent:` when they are
+    /// The same text with `key` set to `value`. Inserts the key, and the section or `execution:` when they are
     /// missing too.
     static func setting(_ key: String, in section: String, to value: String, in yaml: String) throws -> String {
-        try ConfigSetting.setting(at: ["agent", section, key], to: value, in: yaml)
+        try ConfigSetting.setting(at: ["execution", section, key], to: value, in: yaml)
     }
 }
 
