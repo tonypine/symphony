@@ -287,21 +287,16 @@ private struct StepHeaderLabel: View {
 private struct StepMark: View {
     let step: RunStep
 
-    static let size: CGFloat = 20
+    static let size: CGFloat = TimelineMark.stepSize
 
     var body: some View {
-        Group {
-            if step.isLive {
-                StatusDot(.working, size: .regular, live: true)
-            } else {
-                Image(systemName: step.state.markSymbol)
-                    .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(step.state.status.tint)
-            }
-        }
-        .frame(width: Self.size, height: Self.size)
-        .background(Circle().fill(step.state.status.badgeFill))
-        .accessibilityHidden(true)
+        TimelineMark(
+            symbol: step.state.markSymbol,
+            tint: step.state.status.tint,
+            fill: step.state.status.badgeFill,
+            kind: .step,
+            live: step.isLive
+        )
     }
 }
 

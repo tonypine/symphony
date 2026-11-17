@@ -162,8 +162,8 @@ SymphonyBarUI/SessionReaderView.swift font 6
 SymphonyBarUI/SessionReaderView.swift color 12
 SymphonyBarUI/SessionReaderView.swift number 2
 SymphonyBarUI/StepList.swift font 8
-SymphonyBarUI/StepList.swift color 8
-SymphonyBarUI/StepList.swift number 4
-SymphonyBarUI/TimelineSection.swift font 3
+SymphonyBarUI/StepList.swift color 7
+SymphonyBarUI/StepList.swift number 2
+SymphonyBarUI/TimelineSection.swift font 2
 SymphonyBarUI/TimelineSection.swift color 10
 SymphonyBarUI/TimelineSection.swift number 2

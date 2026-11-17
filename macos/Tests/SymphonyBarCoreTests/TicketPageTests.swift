@@ -880,7 +880,7 @@ final class TicketPageFeedTests: XCTestCase {
         XCTAssertEqual(page.repoKey, "web-shop")
         XCTAssertEqual(page.timeline.map(\.title), [
             "Entered In Progress from Todo", "Implementation run 1", "Entered QA from Code Review", "QA run 1",
-            "Entered Rework from QA", "Note by you", "Entered QA from Code Review", "QA run 2",
+            "Sent back to Rework by QA", "Note by you", "Entered QA from Code Review", "QA run 2",
         ])
         let failed = try XCTUnwrap(page.timeline.first { $0.runID == "run-qa-1" })
         XCTAssertEqual(failed.resultWord, "failed")

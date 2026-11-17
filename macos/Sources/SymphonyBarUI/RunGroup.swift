@@ -232,19 +232,13 @@ struct RunMark: View {
     let run: RunGroupModel
 
     var body: some View {
-        Group {
-            if run.isLive {
-                StatusDot(.working, size: .large, live: true)
-            } else {
-                Image(systemName: run.state.markSymbol)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(run.state.status.tint)
-            }
-        }
-        .frame(width: TimelineMark.size, height: TimelineMark.size)
-        .background(Circle().fill(run.state.status.badgeFill))
-        .overlay(Circle().strokeBorder(run.state.status.tint.opacity(0.2), lineWidth: 1))
-        .accessibilityHidden(true)
+        TimelineMark(
+            symbol: run.state.markSymbol,
+            tint: run.state.status.tint,
+            fill: run.state.status.badgeFill,
+            kind: .run,
+            live: run.isLive
+        )
     }
 }
 

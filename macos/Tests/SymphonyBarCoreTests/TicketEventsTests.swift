@@ -55,7 +55,7 @@ final class TicketEventsTests: XCTestCase {
 
         XCTAssertEqual(timeline.map(\.title), [
             "Entered In Progress from Todo", "Implementation run 1", "Entered QA from Code Review", "QA run 1",
-            "Entered Rework from QA", TicketPage.noteByYou, "Entered QA from Code Review", "QA run 2",
+            "Sent back to Rework by QA", TicketPage.noteByYou, "Entered QA from Code Review", "QA run 2",
         ])
         XCTAssertEqual(timeline.map(\.timeText), ["10:01", "10:02", "10:30", "10:31", "10:47", "10:50", "11:10", "11:11"])
         XCTAssertEqual(timeline.filter(\.isGroup).map(\.runID), ["run-impl-1", "run-qa-1", "run-qa-2"])
@@ -362,7 +362,7 @@ final class TicketEventsTests: XCTestCase {
             "tests failed: back to writing the code", "Step started", "Paused on your answer",
         ])
         XCTAssertEqual(run.children.map(\.detail), [
-            "writing the code", "writing the code", "mix compile --warnings-as-errors", "output kept", "mix test", "output kept",
+            "writing the code", "writing the code", nil, "output kept", nil, "output kept",
             "writing the code", "writing the code",
         ])
         XCTAssertEqual(run.children.map(\.result), [.done, .done, .done, .done, .done, .failed, .done, .stopped])
