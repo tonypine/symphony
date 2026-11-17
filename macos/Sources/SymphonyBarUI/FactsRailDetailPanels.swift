@@ -115,13 +115,12 @@ private struct CurrentNote: View {
 
 public struct DecisionsPanel: View {
     let model: DecisionsPanelModel
-    @State private var unfolded: Set<String>
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let unfolded: Set<String>
 
     /// `unfolded` names the decisions open at first ("D2"); every one starts folded by default.
     public init(model: DecisionsPanelModel, unfolded: Set<String> = []) {
         self.model = model
-        _unfolded = State(initialValue: unfolded)
+        self.unfolded = unfolded
     }
 
     public var body: some View {
@@ -131,23 +130,32 @@ public struct DecisionsPanel: View {
             } else {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
                     ForEach(model.rows) { row in
-                        decision(row, unfolded: unfolded.contains(row.id)) {
-                            withAnimation(FoldMotion.opening(reduceMotion: reduceMotion)) {
-                                if unfolded.contains(row.id) { unfolded.remove(row.id) } else { unfolded.insert(row.id) }
-                            }
-                        }
+                        DecisionFold(row: row, unfolded: unfolded.contains(row.id))
                     }
                 }
             }
         }
     }
+}
 
-    /// One decision: its label and what was decided, unfolding into the question in its own words and the answer.
-    private func decision(_ row: DecisionsPanelModel.Row, unfolded: Bool, toggle: @escaping () -> Void) -> some View {
+/// One decision: its label and what was decided, unfolding into the question in its own words and the answer. Each
+/// row keeps its own fold: the ticket page draws the panel behind its Equatable gate, and a fold kept in the panel and
+/// read through its `ForEach` never opened there (TP-1511's QA).
+struct DecisionFold: View {
+    let row: DecisionsPanelModel.Row
+    @State private var unfolded: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    init(row: DecisionsPanelModel.Row, unfolded: Bool) {
+        self.row = row
+        _unfolded = State(initialValue: unfolded)
+    }
+
+    var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
             CollapsibleHead(
                 expanded: unfolded, style: .line, accessibilityLabel: row.accessibilityLabel + (unfolded ? ", expanded" : ", collapsed"),
-                toggle: toggle
+                toggle: { withAnimation(FoldMotion.opening(reduceMotion: reduceMotion)) { unfolded.toggle() } }
             ) {
                 HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
                     Text(row.id)
