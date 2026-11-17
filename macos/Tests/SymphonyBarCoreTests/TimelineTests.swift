@@ -386,7 +386,7 @@ final class TimelineTests: XCTestCase {
         XCTAssertEqual(model.items.filter(\.isNew).map(\.id), ["run-run-2", "entry-m1"])
         XCTAssertEqual(model.marker, TimelineMarker(lookedAt: lookedAt, before: "entry-n1"))
         let rework = try XCTUnwrap(entries(model).first { $0.id == "m1" })
-        XCTAssertEqual(rework.accessibilityLabel(time: "09:44"), "09:44, phase move, Entered Rework from QA, QA failed, by Symphony, new since you last looked")
+        XCTAssertEqual(rework.accessibilityLabel(time: "09:44"), "09:44, sent back, Sent back to Rework by QA, QA failed, by Symphony, new since you last looked")
         // The run now is live: it says so instead of carrying the dot.
         let run = try XCTUnwrap(model.items.first?.run)
         XCTAssertTrue(run.isNew)

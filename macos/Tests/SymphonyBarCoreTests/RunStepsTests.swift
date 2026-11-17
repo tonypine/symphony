@@ -329,10 +329,6 @@ final class RunStepsTests: XCTestCase {
         XCTAssertEqual(transcripts.transcripts["kept-1"], .loaded([]))
         XCTAssertNotNil(transcripts.transcripts["kept-\(StepTranscripts.capacity)"])
     }
-}
-
-private extension RunGroupModel.State {
-    static var allStatuses: [DesignTokens.Status] { [RunGroupModel.State.running, .passed, .failed, .stopped].map(\.status) }
 
     // MARK: - The model's name (TP-1487)
 
@@ -352,4 +348,8 @@ private extension RunGroupModel.State {
         XCTAssertEqual(named.effort, "medium")
         XCTAssertNil(RunGroupModel(id: "x", title: "Run", state: .passed, word: "Passed").meta)
     }
+}
+
+private extension RunGroupModel.State {
+    static var allStatuses: [DesignTokens.Status] { [RunGroupModel.State.running, .passed, .failed, .stopped].map(\.status) }
 }
