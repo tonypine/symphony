@@ -121,11 +121,11 @@ run working on the ticket now.
 {
   "current": "code_review",
   "stages": [
-    { "id": "coding", "name": "Coding", "state": "passed", "visits": 1, "time_ms": 2340000, "agent_time_ms": 2280000, "tokens": 2400000 },
-    { "id": "code_review", "name": "Code Review", "state": "current", "visits": 2, "time_ms": 3120000, "agent_time_ms": 1020000, "tokens": 1200000 },
-    { "id": "qa", "name": "QA", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0 },
-    { "id": "merging", "name": "Merging", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0 },
-    { "id": "done", "name": "Done", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0 }
+    { "id": "coding", "name": "Coding", "state": "passed", "visits": 2, "time_ms": 2340000, "agent_time_ms": 2280000, "tokens": 2400000, "runs": 2 },
+    { "id": "code_review", "name": "Code Review", "state": "current", "visits": 2, "time_ms": 3120000, "agent_time_ms": 1020000, "tokens": 1200000, "runs": 2 },
+    { "id": "qa", "name": "QA", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0, "runs": 0 },
+    { "id": "merging", "name": "Merging", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0, "runs": 0 },
+    { "id": "done", "name": "Done", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0, "runs": 0 }
   ],
   "tokens": { "total": 3600000, "cap": 8000000 }
 }
@@ -135,26 +135,30 @@ run working on the ticket now.
 | --- | --- |
 | `current` | The `id` of the stage the ticket is in; null in a phase outside the stages and once it is Done. |
 | `stages[].id`, `name` | `coding` (In Progress), `code_review`, `qa`, `merging`, `done`, always these five in this order. |
-| `stages[].state` | `current`; `passed`: a stage behind the current one that it entered; `skipped`: a stage behind the current one that it never entered; `not_yet`: the stages ahead. Done reads `passed` once reached. |
+| `stages[].state` | `current`; `paused`: the stage the ticket is in while a pause holds it (the ticket read's `pause`); `passed`: a stage behind the current one that it entered, or a stage ahead it left for a later one; `skipped`: a stage behind the current one that it never entered; `sent_back`: a stage ahead that sent the ticket back (its last move out of it went into Rework, a Code Review or QA verdict), until the ticket enters it again; `not_yet`: the other stages ahead. Done reads `passed` once reached. |
 | `stages[].visits` | How many times the ticket entered the stage. |
 | `stages[].time_ms` | Wall time in the stage, summed over its visits, up to now for the phase it is in. Pauses count. Done takes none. |
 | `stages[].agent_time_ms` | How long the runs of the stage ran: the ended ones, and the one working now up to now. |
 | `stages[].tokens` | The tokens of the runs of the stage: the ended ones, and the one working now so far. |
+| `stages[].runs` | How many runs the stage holds: the ended ones, and the one working now. |
 | `tokens.total` | The tokens of the ticket's runs, the one working now included: the stages' `tokens` add up to it. |
 | `tokens.cap` | The ticket's cap, `agent.limits.tokens_per_issue`; null when there is none. |
 
 Rework and CI Fix have no stage of their own; they count as visits of the stage they serve:
 
-- Rework serves Code Review, the stage it hands back to, whichever stage sent it back. A ticket in
-  Rework for the first time reads Code Review as `current` with `visits` 2.
+- Rework serves Coding: the ticket is written again, whichever stage sent it back. A ticket in
+  Rework for the first time reads Coding as `current` with `visits` 2, and the stage that sent it
+  back reads `sent_back`.
 - CI Fix serves the stage it interrupted: Code Review, QA or Merging.
 - Each move into Rework or CI Fix is one visit. The move back out of them into the stage they serve
   is the same visit going on.
-- A stage the ticket left going backwards reads by where it is now: QA reads `not_yet`, with its
-  earlier visits, while the ticket is back in Code Review.
+- A stage ahead of the ticket reads by its last move out of it: QA reads `sent_back`, with its
+  earlier visits, while QA's verdict holds the ticket in Rework or back in Code Review, and Code
+  Review, which passed it on to QA, reads `passed`. A stage left backwards by a person's move (not
+  into Rework) reads `not_yet`.
 
 A run belongs to the stage the ticket was in when it started, so the work a Rework run does counts in
-Code Review. A run that started outside any stage counts in Coding: a first run starts just before
+Coding. A run that started outside any stage counts in Coding: a first run starts just before
 its move out of Todo, and a plan run or an epic review never enters a stage. A run still working counts
 its tokens and time so far, so the numbers move while it works; once it ends, its `run.ended` counts
 instead.

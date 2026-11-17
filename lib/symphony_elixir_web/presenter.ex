@@ -407,7 +407,7 @@ defmodule SymphonyElixirWeb.Presenter do
     |> Map.put(:watch, WatchPayload.watch(record))
     |> Map.put(:plan_brief, plan_brief_payload(record))
     |> Map.put(:situation, situation_payload(record || %{issue_id: payload.issue_id, repo_key: payload.repo_key}, Situation.live_facts(snapshot), nil))
-    |> Map.merge(Lifecycle.read(payload.issue_id, DateTime.utc_now(), running_entry(snapshot, payload.issue_id)))
+    |> Map.merge(Lifecycle.read(payload.issue_id, DateTime.utc_now(), running_entry(snapshot, payload.issue_id), paused?(record)))
     |> Map.merge(Marks.read(record, events))
     |> Map.put(:brief, TicketBrief.read(events))
     |> Map.put(:pull_request, PullRequestPayload.read(record))
@@ -619,9 +619,12 @@ defmodule SymphonyElixirWeb.Presenter do
             running?: Map.has_key?(live.running, record.issue_id)
           })
       },
-      Lifecycle.read(record.issue_id, DateTime.utc_now(), running_entry(snapshot, record.issue_id))
+      Lifecycle.read(record.issue_id, DateTime.utc_now(), running_entry(snapshot, record.issue_id), paused?(record))
     )
   end
+
+  # Whether a pause holds the ticket now (`pause_payload/1` reads it), which pauses its lifecycle's stage.
+  defp paused?(record), do: match?(%{pause: %{reasons: _}}, record)
 
   # The orchestrator's entry for the run working on ticket `issue_id` now, or nil.
   defp running_entry(snapshot, issue_id), do: snapshot |> Map.get(:running, []) |> Enum.find(&(Map.get(&1, :issue_id) == issue_id))

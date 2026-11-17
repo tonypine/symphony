@@ -131,6 +131,8 @@ private struct StageCell: View {
     let stacked: Bool
 
     private var current: Bool { stage.state == .current }
+    /// Its line says it in its status colour, semibold: the stage it works in, or the one that sent it back.
+    private var emphasized: Bool { stage.state == .current || stage.state == .sentBack }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1 + 2) {
@@ -179,8 +181,8 @@ private struct StageCell: View {
     private var line: some View {
         Text(stage.line)
             .font(DesignTokens.TypeStyle.caption.font)
-            .fontWeight(current ? .semibold : .regular)
-            .foregroundStyle(current ? AnyShapeStyle(stage.status.tint) : AnyShapeStyle(.secondary))
+            .fontWeight(emphasized ? .semibold : .regular)
+            .foregroundStyle(emphasized ? AnyShapeStyle(stage.status.tint) : AnyShapeStyle(.secondary))
             .monospacedDigit()
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -188,6 +190,8 @@ private struct StageCell: View {
     private var symbol: String {
         switch stage.state {
         case .current: "circle.dotted.circle"
+        case .paused: "pause.circle"
+        case .sentBack: "arrow.uturn.backward.circle.fill"
         case .passed: "checkmark.circle.fill"
         case .skipped: "chevron.right"
         case .notYet: "clock"
@@ -195,7 +199,8 @@ private struct StageCell: View {
     }
 }
 
-/// A stage's bar: full in the done colour once passed, partly filled while current, dashed when skipped, empty ahead.
+/// A stage's bar: full in the done colour once passed, full in its colour when it sent the ticket back, partly filled
+/// while current, dashed in its colour while paused, a dashed outline when skipped, empty ahead.
 private struct StageBar: View {
     let state: TicketLifecycle.StageState
     let status: DesignTokens.Status
@@ -209,11 +214,18 @@ private struct StageBar: View {
                     Capsule().fill(DesignTokens.Surface.raised.color)
                 }
                 switch state {
-                case .passed: Capsule().fill(status.tint)
+                case .passed, .sentBack: Capsule().fill(status.tint)
                 case .current: Capsule().fill(status.tint).frame(width: proxy.size.width * 0.55)
+                case .paused:
+                    Path { path in
+                        path.move(to: CGPoint(x: 0, y: proxy.size.height / 2))
+                        path.addLine(to: CGPoint(x: proxy.size.width, y: proxy.size.height / 2))
+                    }
+                    .stroke(status.tint, style: StrokeStyle(lineWidth: proxy.size.height, dash: [6, 3]))
                 case .skipped, .notYet: EmptyView()
                 }
             }
+            .clipShape(Capsule())
         }
         .frame(height: 4)
         .accessibilityHidden(true)
