@@ -472,7 +472,11 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     test "every type's line is a sentence: no rule number, code, full hash or model id" do
       assert @coded |> Enum.map(&elem(&1, 0)) |> Enum.sort() == Types.catalog() |> Map.keys() |> Enum.sort()
 
-      for {type, payload} <- @coded, line <- [render(type, payload).title, render(type, payload).detail], is_binary(line), pattern <- @log_words do
+      for {type, payload} <- @coded,
+          summary = render(type, payload),
+          line <- [summary.title, summary.detail],
+          is_binary(line),
+          pattern <- @log_words do
         refute line =~ pattern, "#{type}: #{line}"
       end
     end
