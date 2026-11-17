@@ -188,9 +188,18 @@ public enum ButtonKind: String, CaseIterable {
 
 extension DesignTokens.Control {
     /// A control label's font: the size's label size at the catalog's 550 weight, under the system's text size.
-    public var labelFont: Font {
+    public var labelFont: Font { Font(labelNSFont as CTFont) }
+
+    private var labelNSFont: NSFont {
         let scale = DesignTokens.TypeStyle.textScale
-        return Font(NSFont.systemFont(ofSize: CGFloat(fontSize * scale), weight: NSFont.Weight(rawValue: CGFloat(DesignTokens.TypeStyle.label.systemWeight))) as CTFont)
+        return NSFont.systemFont(ofSize: CGFloat(fontSize * scale), weight: NSFont.Weight(rawValue: CGFloat(DesignTokens.TypeStyle.label.systemWeight)))
+    }
+
+    /// A control label's line: the label font's own, ascender to descender, so no letter is cut. A line of the font's
+    /// point size (`.multiple(factor: 1)`) is shorter than its letters, and a window cuts the descenders off.
+    public var labelLineHeight: CGFloat {
+        let font = labelNSFont
+        return (font.ascender - font.descender + font.leading).rounded(.up)
     }
 
     /// A glyph's font at the size's glyph size: `glyphSize` in a button, `iconGlyphSize` in an icon button.
@@ -232,7 +241,7 @@ public struct ButtonFace<Label: View>: View {
             label.font(size.labelFont).lineLimit(1)
         }
         // A label's line is its own, whatever text style the view around it set.
-        .lineHeight(.multiple(factor: 1))
+        .lineHeight(.exact(points: size.labelLineHeight))
         .padding(.horizontal, size.padding)
         .frame(height: size.height)
         .foregroundStyle(Self.foreground(kind, state: state, onAccent: onAccent))

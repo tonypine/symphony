@@ -221,18 +221,8 @@ private struct LearningsFilterBar: View {
 
     var body: some View {
         HStack(spacing: DesignTokens.Space.s3) {
-            Picker("Repo", selection: $filter.repo) {
-                Text("All repos").tag(String?.none)
-                ForEach(learnings.repos, id: \.self) { Text($0).tag(String?.some($0)) }
-            }
-            .pickerStyle(.menu)
-            .fixedSize()
-            Picker("Tag", selection: $filter.tag) {
-                Text("All tags").tag(String?.none)
-                ForEach(learnings.tags, id: \.self) { Text($0).tag(String?.some($0)) }
-            }
-            .pickerStyle(.menu)
-            .fixedSize()
+            PopUp("Repo", selection: $filter.repo, choices: popUpChoices(all: "All repos", learnings.repos), size: .small)
+            PopUp("Tag", selection: $filter.tag, choices: popUpChoices(all: "All tags", learnings.tags), size: .small)
             Spacer()
             Text("\(learnings.count) \(learnings.count == 1 ? "learning" : "learnings")")
                 .font(DesignTokens.TypeStyle.secondary.font)

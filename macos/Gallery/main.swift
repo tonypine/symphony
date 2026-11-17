@@ -1619,7 +1619,7 @@ let savedTicketViews: [TicketView] = {
 func ticketViewsMenuOpen() -> some View {
     var query = savedTicketViews[0].query
     query.toggle(.priority, "1")
-    return TicketViewsMenuPanel(menu: TicketViewsMenu(views: savedTicketViews, currentID: savedTicketViews[0].id, query: query))
+    return TicketViewsMenuButton(menu: TicketViewsMenu(views: savedTicketViews, currentID: savedTicketViews[0].id, query: query), drawnOpen: true)
         .padding(DesignTokens.Space.s4)
         .frame(width: 300, height: 330, alignment: .topLeading)
         .background(DesignTokens.Surface.content.color)
@@ -1776,11 +1776,12 @@ MainActor.assumeIsolated {
         render(chipVariants(), scheme, to: "component-chip-\(suffix).png")
         // The catalog's Button, Icon button and Inline refusal stories (TP-1505), one snapshot each.
         // The catalog's Badge, Count badge, Status dot and Keyboard hint stories (TP-1506), one snapshot each.
+        // The catalog's Segmented control, Pop-up and Menu button stories (TP-1508) join them below.
         // The catalog's Row stories (TP-1507), one snapshot each; the tree and the progress strip from the catalog's Home
         // and Initiatives: the queue folded, its first chain opened, and the epics' strips.
         // A component's cases are one cell: each case on a line under its name. The Button's are composed by hand
         // (ButtonStories.swift), so each of its three is a cell of its own.
-        let stories = componentStories + badgeStories + rowStories
+        let stories = componentStories + badgeStories + rowStories + menuStories
         var listed: [String] = []
         for story in stories where !listed.contains(story.component) {
             listed.append(story.component)

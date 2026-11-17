@@ -23,7 +23,8 @@ store="bash $repo/scripts/ci/build-store.sh"
 commit() { git -C "$repo" add -A; git -C "$repo" -c user.email=t@t -c user.name=t commit -q -m "$1"; }
 
 export SYMPHONY_CI_CACHE="$tmp/cache"
-unset RUNNER_NAME
+# The runner sets its own work area (SYMPHONY_CI_WORK); the test makes its own.
+unset RUNNER_NAME SYMPHONY_CI_WORK SYMPHONY_CI_IN_USE_MINUTES
 app1=$($store key app); server1=$($store key server 7)
 echo "more" >> "$repo/docs/x.md"; echo "// more" >> "$repo/macos/Tests/t.swift"; commit docs
 check "a change outside a piece's inputs keeps its key" "$app1 $server1" "$($store key app) $($store key server 7)"

@@ -92,7 +92,6 @@ struct HomeInboxRow: View {
     let actions: HomeInboxActions
     var now = Date()
     var narrow = false
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     private var item: InboxItem { row.item }
     private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous) }
@@ -170,20 +169,8 @@ struct HomeInboxRow: View {
                     .disabled(!button.enabled)
             }
             if !row.toolbar.overflow.isEmpty {
-                if offscreenSnapshot {
-                    Image(systemName: "ellipsis.circle").foregroundStyle(.secondary)
-                } else {
-                    Menu {
-                        ForEach(Array(row.toolbar.overflow.enumerated()), id: \.offset) { _, command in
-                            Button(command.title) { actions.perform(command, item) }
-                        }
-                    } label: {
-                        Label("More", systemImage: "ellipsis.circle")
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .help("More actions")
+                MenuButton("More", glyph: "ellipsis", quiet: true, help: "More actions") {
+                    row.toolbar.overflow.map { command in MenuItem(command.title) { actions.perform(command, item) } }
                 }
             }
             Spacer(minLength: DesignTokens.Space.s2)

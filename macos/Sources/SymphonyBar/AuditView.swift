@@ -221,20 +221,18 @@ private struct AuditFilterBar: View {
 
     var body: some View {
         HStack(spacing: DesignTokens.Space.s3) {
-            Picker("Kind", selection: $filter.kind) {
-                Text("All kinds").tag(String?.none)
-                Divider()
-                ForEach(audit.kinds) { Text($0.title).tag(String?.some($0.id)) }
-            }
-            .pickerStyle(.menu)
-            .fixedSize()
-            Picker("Date", selection: $filter.date) {
-                Text(Audit.title(.recent, today: today)).tag(Audit.DateFilter.recent)
-                Divider()
-                ForEach(audit.days, id: \.self) { Text(Audit.title(.day($0), today: today)).tag(Audit.DateFilter.day($0)) }
-            }
-            .pickerStyle(.menu)
-            .fixedSize()
+            PopUp(
+                "Kind", selection: $filter.kind,
+                choices: [PopUpChoice(String?.none, "All kinds")]
+                    + audit.kinds.enumerated().map { PopUpChoice(String?.some($1.id), $1.title, separatorBefore: $0 == 0) },
+                size: .small
+            )
+            PopUp(
+                "Date", selection: $filter.date,
+                choices: [PopUpChoice(Audit.DateFilter.recent, Audit.title(.recent, today: today))]
+                    + audit.days.enumerated().map { PopUpChoice(Audit.DateFilter.day($1), Audit.title(.day($1), today: today), separatorBefore: $0 == 0) },
+                size: .small
+            )
             if let ticket = filter.ticket {
                 Button("Ticket \(ticket)") {
                     filter.ticket = nil

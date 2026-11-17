@@ -23,11 +23,16 @@ enum DesignGuard {
         /// A `Circle()` filled or styled with a status colour: a status dot drawn by hand instead of `StatusDot`
         /// (TP-1506).
         case dot
+        /// A stock `Picker(`: a choice drawn by the system instead of `SegmentedControl` or `PopUp` (TP-1508).
+        case picker
+        /// A stock `Menu(` or `Menu {`: a menu drawn by the system instead of `MenuButton` (TP-1508). A context
+        /// menu stays the system's; a submenu inside one still counts.
+        case menu
         /// A numeric literal in `.frame(`: reported only.
         case frame
 
         /// The kinds that fail the guard.
-        static let guarded: [Kind] = [.font, .color, .rawColor, .number, .button, .disabled, .dot]
+        static let guarded: [Kind] = [.font, .color, .rawColor, .number, .button, .disabled, .dot, .picker, .menu]
 
         static func < (lhs: Kind, rhs: Kind) -> Bool {
             allCases.firstIndex(of: lhs)! < allCases.firstIndex(of: rhs)!
@@ -139,6 +144,12 @@ enum DesignGuard {
         for offset in statusDots(in: code, text: text) {
             record(offset, .dot, "Circle()", dotReplacement)
         }
+        for match in matches(pickerRegex, in: text, range: 0..<code.count) {
+            record(match.offset, .picker, "Picker", pickerReplacement)
+        }
+        for match in matches(menuRegex, in: text, range: 0..<code.count) {
+            record(match.offset, .menu, "Menu", menuReplacement)
+        }
         for range in arguments(of: [".frame("], in: code) {
             for match in matches(numberRegex, in: text, range: range) where !isZero(match.text) {
                 record(match.offset, .frame, match.text, "a `DesignTokens.Layout` or `DesignTokens.Control` measure")
@@ -189,6 +200,10 @@ enum DesignGuard {
     static let disabledPattern = #"\.disabled\("#
     /// A circle's initialiser, not a longer name (`StatusDot(`).
     static let circlePattern = #"(?<![\w.])Circle\(\s*\)"#
+    /// A stock picker's initialiser, not a longer name (`DatePicker(`, `ScopePicker(`).
+    static let pickerPattern = #"(?<![\w.])Picker\s*\("#
+    /// A stock menu's initialiser, not a longer name (`MenuButton(`, `.contextMenu {`).
+    static let menuPattern = #"(?<![\w.])Menu\s*[({]"#
     /// A status colour: anything on a status (`row.status.tint`, `DesignTokens.Status.idle`), a `.tint`, or a named
     /// status hue.
     static let statusColourPattern = #"\b[Ss]tatus\b|\.tint\b|\.(?:green|orange|red|blue|gray)\b"#
@@ -202,6 +217,8 @@ enum DesignGuard {
     static let buttonRegex = regex(buttonPattern)
     static let disabledRegex = regex(disabledPattern)
     static let circleRegex = regex(circlePattern)
+    static let pickerRegex = regex(pickerPattern)
+    static let menuRegex = regex(menuPattern)
     static let statusColourRegex = regex(statusColourPattern)
 
     static func regex(_ pattern: String) -> NSRegularExpression {
@@ -303,6 +320,11 @@ enum DesignGuard {
         }
         return calls
     }
+
+    // MARK: - Pickers and menus (TP-1508)
+
+    static let pickerReplacement = "`SegmentedControl` for two to five choices, or `PopUp` for a longer list"
+    static let menuReplacement = "`MenuButton`, whose menu the app draws; a context menu stays the system's"
 
     // MARK: - Status dots
 
@@ -420,9 +442,9 @@ enum DesignGuard {
     static let baselineHeader = """
     # The design guard's baseline (TP-1493, docs/design/design-system.md §3.11): how many raw style values each view
     # file still has, per kind, and (TP-1505) how many buttons without the shared style (`button`) and controls turned
-    # off without a reason (`disabled`), and (TP-1506) how many status dots drawn by hand (`dot`). It must equal what
-    # the guard counts: lower a number in the same change that removes a bypass, and delete the line when it reaches
-    # zero. A file not listed here may have none.
+    # off without a reason (`disabled`), and (TP-1506) how many status dots drawn by hand (`dot`), and (TP-1508) how
+    # many stock pickers (`picker`) and stock menus (`menu`). It must equal what the guard counts: lower a number in the
+    # same change that removes a bypass, and delete the line when it reaches zero. A file not listed here may have none.
     """
 
     static func formatBaseline(_ counts: Counts) -> String {
