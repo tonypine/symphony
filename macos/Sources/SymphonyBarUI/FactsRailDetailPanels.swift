@@ -15,7 +15,6 @@ public struct NotePanel: View {
     @ObservedObject var composer: TicketNoteComposer
     let save: () -> Void
 
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
     @FocusState private var focused: Bool
 
     /// `composer` holds the field's text, whether a note is on its way and why the last one wasn't saved; `save` posts
@@ -64,28 +63,14 @@ public struct NotePanel: View {
         }
     }
 
-    @ViewBuilder private var field: some View {
-        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
-        Group {
-            if offscreenSnapshot {
-                // `ImageRenderer` draws no text field: its text, or its placeholder, stands in.
-                Text(composer.text.isEmpty ? NotePanelModel.placeholder : composer.text)
-                    .foregroundStyle(composer.text.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
-                    .frame(maxWidth: .infinity, minHeight: 34, alignment: .topLeading)
-            } else {
-                TextField(NotePanelModel.placeholder, text: $composer.text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(2...6)
-                    .focused($focused)
-                    .disabled(composer.sending)
-                    .onSubmit { if saveReason == nil { save() } }
-                    .accessibilityLabel(composer.identifier.map(TicketNoteComposer.fieldLabel) ?? NotePanelModel.title)
-            }
-        }
-        .font(DesignTokens.TypeStyle.body.font)
-        .padding(DesignTokens.Space.s2)
-        .background(DesignTokens.Surface.window.color, in: shape)
-        .overlay(shape.strokeBorder(focused ? Color.accentColor : DesignTokens.Surface.separator.color, lineWidth: 1))
+    /// The shared text area: two lines tall, growing to six; Return adds a line and ⌘↩ saves, as Save Note does.
+    private var field: some View {
+        TextArea(
+            composer.identifier.map(TicketNoteComposer.fieldLabel) ?? NotePanelModel.title, text: $composer.text,
+            placeholder: NotePanelModel.placeholder, hint: NotePanelModel.fieldHint, minLines: 2, maxLines: 6, focused: $focused,
+            send: { if saveReason == nil, !composer.sending { save() } }
+        )
+        .disabled(composer.sending)
     }
 }
 

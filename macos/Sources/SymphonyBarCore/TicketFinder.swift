@@ -6,7 +6,8 @@ public enum TicketFinder {
     public static let menuTitle = "Find a Ticket…"
     public static let prompt = "Identifier or title"
     public static let openTitle = "Open"
-    public static let noMatch = "No ticket Symphony tracks matches."
+    /// What the field searched, under it when nothing matches and nothing would open.
+    public static let searched = "Find a Ticket looks at the identifiers and titles of the tickets Symphony tracks."
     public static let limit = 8
 
     /// The tracked tickets that match what was typed, best first: the identifier named exactly, then the identifiers

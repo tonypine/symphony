@@ -61,7 +61,6 @@ extension SymphonyWindowModel {
 /// D9: Shipped, or its Learnings tab, from `/api/v1/shipped` and `/api/v1/learnings`, under the window's scope.
 struct ShippedContent: View {
     @ObservedObject var model: SymphonyWindowModel
-    @FocusState private var searchFocused: Bool
 
     var body: some View {
         Group {
@@ -70,14 +69,16 @@ struct ShippedContent: View {
                 shippedTab
             case .learnings:
                 learningsTab
-                    .searchable(text: $model.learningsFilter.search, placement: .toolbar, prompt: Learnings.searchPrompt)
-                    .searchFocused($searchFocused)
+                    .toolbar {
+                        ToolbarItem(placement: .automatic) {
+                            PageSearchField(
+                                prompt: Learnings.searchPrompt, text: $model.learningsFilter.search,
+                                matches: model.learnings.map { Learnings(payload: $0, filter: model.learningsFilter, scope: model.scope).count },
+                                requested: $model.learningsSearchRequested
+                            )
+                        }
+                    }
             }
-        }
-        .onChange(of: model.learningsSearchRequested, initial: true) { _, requested in
-            guard requested else { return }
-            searchFocused = true
-            model.learningsSearchRequested = false
         }
     }
 

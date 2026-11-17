@@ -57,6 +57,15 @@ let galleryEntries: [GalleryEntry] = [
         id: "menu-button", title: "Menu button and its menu", kind: .component, prefixes: ["menu-button-"],
         files: ["SymphonyBarUI/DesignSystem/MenuControls.swift", "SymphonyBarUI/DesignSystem/Menu.swift", "SymphonyBarUI/DesignSystem/MenuPresenter.swift"]),
     GalleryEntry(
+        id: "text-field", title: "Text field", kind: .component, prefixes: ["text-field-"],
+        files: ["SymphonyBarUI/DesignSystem/TextInputs.swift"]),
+    GalleryEntry(
+        id: "search-field", title: "Search field", kind: .component, prefixes: ["search-field-"],
+        files: ["SymphonyBarUI/DesignSystem/TextInputs.swift"]),
+    GalleryEntry(
+        id: "text-area", title: "Text area", kind: .component, prefixes: ["text-area-"],
+        files: ["SymphonyBarUI/DesignSystem/TextInputs.swift"]),
+    GalleryEntry(
         id: "mention-chips", title: "Mention chips and their popovers", kind: .component,
         prefixes: ["ticket-popover", "pr-popover", "missing-popover", "plan-chips", "pr-chips", "clarify-chips", "blocked-chips", "decision-chips-"],
         files: ["SymphonyBarUI/Chip", "SymphonyBarUI/ReferencePopoverView.swift", "SymphonyBarCore/Mention"]),

@@ -8,7 +8,8 @@ import SymphonyBarUI
 /// One catalog story: its component's id in the catalog's address, its own id, and the view.
 struct ComponentStory {
     /// `button`, `icon-button`, `inline-refusal` (TP-1505), `badge`, `count-badge`, `status-dot` or `keyboard-hint`
-    /// (TP-1506), `row` (TP-1507), or `segmented-control`, `pop-up` or `menu-button` (TP-1508).
+    /// (TP-1506), `row` (TP-1507), `segmented-control`, `pop-up` or `menu-button` (TP-1508), or `text-field`,
+    /// `search-field` or `text-area` (TP-1509).
     let component: String
     let id: String
     /// The catalog's component title, for the sheet.

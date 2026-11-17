@@ -285,6 +285,43 @@ final class DesignGuardTests: XCTestCase {
         XCTAssertTrue(failures[0].hasPrefix("View.swift draws with 1 raw menu value(s) and is not in the baseline"), failures[0])
     }
 
+    // MARK: - Stock text inputs (TP-1509)
+
+    func testAStockTextFieldSecureFieldOrTextEditorCounts() {
+        let found = scan("""
+        TextField("Name", text: $name)
+        SecureField("Key", text: $key)
+        TextEditor(text: $prompt)
+        SwiftUI.TextField("Reason", text: $reason, axis: .vertical)
+        """).filter { $0.kind == .field }
+        XCTAssertEqual(found.map(\.line), [1, 2, 3, 4])
+        XCTAssertEqual(found.map(\.value), ["TextField", "SecureField", "TextEditor", "SwiftUI.TextField"])
+        XCTAssertEqual(found[0].message, "View.swift:1: field bypass TextField: use \(DesignGuard.fieldReplacement)")
+    }
+
+    func testTheSharedInputsAndLongerNamesDoNotCount() {
+        XCTAssertEqual(scan("""
+        DirectorTextField("Reason", text: $reason, placeholder: "Deploy freeze")
+        SearchField("Search tickets", text: $query, matches: 3)
+        TextArea("Answer", text: $answer)
+        PlainTextEditor(text: $draft)
+        LabelTokenField(tokens: $labels)
+        .textFieldStyle(.plain)
+        // TextField("in a comment", text: $x)
+        Text("TextField(")
+        """).filter { $0.kind == .field }, [])
+    }
+
+    func testTheFieldKindIsABaselineKind() throws {
+        let counts: DesignGuard.Counts = ["SymphonyBar/A.swift": [.menu: 1, .field: 3]]
+        XCTAssertEqual(try DesignGuard.parseBaseline(DesignGuard.formatBaseline(counts)), counts)
+        XCTAssertTrue(DesignGuard.Kind.guarded.contains(.field))
+        XCTAssertTrue(DesignGuard.formatBaseline(counts).hasSuffix("SymphonyBar/A.swift menu 1\nSymphonyBar/A.swift field 3\n"))
+        let failures = DesignGuard.failures(bypasses: scan("TextField(\"Name\", text: $name)"), baseline: [:])
+        XCTAssertEqual(failures.count, 1)
+        XCTAssertTrue(failures[0].hasPrefix("View.swift draws with 1 raw field value(s) and is not in the baseline"), failures[0])
+    }
+
     // MARK: - What does not count
 
     func testTokensAndComponentsDoNotCount() {

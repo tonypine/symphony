@@ -423,24 +423,20 @@ public struct OptionCardFace: View {
     }
 }
 
-/// N11's field, under the own-words card once it is picked: a `TextEditor` three lines tall that grows with the text
-/// to eight, then scrolls, over the hint that says how the agent reads it. The editor types into the field's own draft,
-/// handed to `commit` on each change: bound straight to the window model, a redraw between fast keystrokes put an
-/// older text back and lost what was typed. While a sheet covers the window (Send Decision, a peek) the text is a
-/// `Text`, which dims with the window as the editor's AppKit view doesn't, and the editor gets the keyboard back after.
+/// N11's field, under the own-words card once it is picked: the shared `TextArea`, accented as under a picked card,
+/// three lines tall and growing with the text to eight, then scrolling, over the hint that says how the agent reads it.
+/// The area types into the field's own draft, handed to `commit` on each change: bound straight to the window model, a
+/// redraw between fast keystrokes put an older text back and lost what was typed. While a sheet covers the window (Send
+/// Decision, a peek) the area draws its text still, which dims with the window as the system's text view doesn't, and
+/// the area gets the keyboard back after.
 public struct WriteInField: View {
     @State private var text: String
     var commit: (String) -> Void
     var focused: FocusState<Bool>.Binding
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
     @State private var covered = false
-    /// Whether the editor had the keyboard before the sheet came up: taking the editor out takes its focus.
+    /// Whether the area had the keyboard before the sheet came up: taking the text view out takes its focus.
     @State private var hadFocus = false
 
-    /// The height of one line of `type.body`.
-    private static let lineHeight = NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: NSFont.systemFontSize))
-    /// The text view's own inset on each side of a line.
-    private static let inset: CGFloat = 5
     /// The field's id in the review's scroll view, which scrolls to it once it is picked.
     public static let scrollID = "write-in"
 
@@ -457,30 +453,12 @@ public struct WriteInField: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            // A hidden copy of the text sizes the editor: at least three lines, at most eight.
-            Text(text.isEmpty || text.hasSuffix("\n") ? text + " " : text)
-                .font(DesignTokens.TypeStyle.body.font)
-                .lineLimit(8)
-                .padding(.horizontal, Self.inset)
-                .frame(maxWidth: .infinity, minHeight: Self.lineHeight * 3, alignment: .topLeading)
-                .hidden()
-                .overlay(alignment: .topLeading) {
-                    if offscreenSnapshot || covered {
-                        Text(text).font(DesignTokens.TypeStyle.body.font).padding(.horizontal, Self.inset)
-                    } else {
-                        editor
-                    }
-                }
-                .padding(DesignTokens.Space.s2)
-                .background(DesignTokens.Surface.content.color, in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
-                        .strokeBorder(Color.accentColor, lineWidth: 1)
-                )
+        VStack(alignment: .leading, spacing: DesignTokens.Field.gap) {
+            TextArea(OptionCard.writeInLabel, text: $text, hint: OptionCard.writeInHint, accented: true, still: covered, focused: focused)
+                .onChange(of: text) { _, text in commit(text) }
             Text(OptionCard.writeInHint)
                 .font(DesignTokens.TypeStyle.secondary.font)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityHidden(true)
         }
@@ -490,19 +468,9 @@ public struct WriteInField: View {
         }
         .onChange(of: covered) { _, covered in
             guard !covered, hadFocus else { return }
-            // Once the editor is back in the field.
+            // Once the text view is back in the field.
             DispatchQueue.main.async { focused.wrappedValue = true }
         }
-    }
-
-    private var editor: some View {
-        TextEditor(text: $text)
-            .font(DesignTokens.TypeStyle.body.font)
-            .scrollContentBackground(.hidden)
-            .onChange(of: text) { _, text in commit(text) }
-            .focused(focused)
-            .accessibilityLabel(OptionCard.writeInLabel)
-            .accessibilityHint(OptionCard.writeInHint)
     }
 }
 
