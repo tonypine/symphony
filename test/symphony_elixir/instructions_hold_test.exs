@@ -158,6 +158,25 @@ defmodule SymphonyElixir.InstructionsHoldTest do
       assert {:ok, nil} = resolve([%Issue{id: nil}], fn _repo, _sha, _branch -> flunk("nothing to compare") end)
     end
 
+    test "the release gate's fix ticket is never held, and a reason it holds is cleared (TP-1528)" do
+      fix = ticket("fix", identifier: "TP-1526")
+      other = ticket("other")
+      capture_log(fn -> assert {:ok, %{commit: @main_sha}} = resolve([fix, other], ahead_on_renderer()) end)
+      assert [_reason] = InstructionsHold.reasons(@repo_key, "fix")
+
+      # Filed as the gate's fix ticket: the next poll clears its hold and keeps the other's.
+      :ok = RunStore.put_github_updates({:release_gate_fix, @repo_key}, %{identifier: "TP-1526", red: true})
+      capture_log(fn -> assert {:ok, %{commit: @main_sha}} = resolve([fix, other], ahead_on_renderer()) end)
+      assert InstructionsHold.reasons(@repo_key, "fix") == []
+      assert [_reason] = InstructionsHold.reasons(@repo_key, "other")
+
+      # An injected answer decides it too.
+      only_other = fn @repo_key, identifier -> identifier == "TP-other" end
+      capture_log(fn -> InstructionsHold.resolve([fix, other], @repo_key, opts(compare: ahead_on_renderer(), fix_ticket?: only_other)) end)
+      assert [_reason] = InstructionsHold.reasons(@repo_key, "fix")
+      assert [_reason] = InstructionsHold.reasons(@repo_key, "other")
+    end
+
     test "a current build leaves a ticket without the hold untouched" do
       assert {:ok, nil} = resolve([ticket("a")], fn _repo, _sha, _branch -> identical() end)
       assert Pauses.get({:ticket, @repo_key, "a"}) == {:ok, nil}
@@ -229,6 +248,22 @@ defmodule SymphonyElixir.InstructionsHoldTest do
       state = Orchestrator.put_blocked_for_test(orchestrator_state(), [issue])
       assert state.blocked == []
       assert Orchestrator.should_dispatch_issue_for_test(issue, state)
+    end
+
+    test "a red release gate holds every ticket but its fix ticket, in the rule's words, until it turns green (TP-1528)" do
+      other = %Issue{ticket("other") | identifier: "TP-1486"}
+      fix = %Issue{ticket("fix") | identifier: "TP-1526"}
+      :ok = RunStore.put_github_updates({:release_gate_fix, @repo_key}, %{identifier: "TP-1526", red: true})
+      state = orchestrator_state()
+
+      refute Orchestrator.should_dispatch_issue_for_test(other, state)
+      assert Orchestrator.should_dispatch_issue_for_test(fix, state)
+
+      skipped = Orchestrator.dispatch_chosen_issues_for_test([other], state)
+      assert %{reason: "Holding while the release gate on main is red: TP-1526 is fixing it", rule: :release_gate} = skipped.dispatch_skipped["other"]
+
+      :ok = RunStore.put_github_updates({:release_gate_fix, @repo_key}, %{identifier: "TP-1526", red: false})
+      assert Orchestrator.should_dispatch_issue_for_test(other, state)
     end
   end
 

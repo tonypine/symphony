@@ -36,8 +36,13 @@ defmodule SymphonyElixir.ReleaseGateTest do
     def fetch_issue_by_identifier(identifier) do
       case Process.get({:release_gate_issue, identifier}) do
         nil -> {:error, :not_found}
-        state -> {:ok, %{identifier: identifier, state: state}}
+        state -> {:ok, %{id: "id-" <> identifier, identifier: identifier, state: state}}
       end
+    end
+
+    def update_issue_state(issue_id, state) do
+      send(Process.get(:release_gate_test), {:moved, issue_id, state})
+      Process.get(:release_gate_move_reply, :ok)
     end
   end
 
@@ -126,7 +131,8 @@ defmodule SymphonyElixir.ReleaseGateTest do
       assert attrs.description =~ part
     end
 
-    assert RunStore.get_github_updates({:release_gate_fix, "symphony"}) == %{identifier: "TP-1520", sha: @sha, step: "Test the update"}
+    assert RunStore.get_github_updates({:release_gate_fix, "symphony"}) ==
+             %{identifier: "TP-1520", sha: @sha, step: "Test the update", number: 950, red: true}
   end
 
   test "while that ticket is open, the next failure is added to it; once it is closed, a new one is filed", %{opts: opts} do
@@ -252,5 +258,115 @@ defmodule SymphonyElixir.ReleaseGateTest do
   test "without injected repos the configured ones are read, and the test config has no acme/symphony", %{opts: opts} do
     opts = Keyword.delete(opts, :repos)
     assert capture_log(fn -> assert {:error, {:unknown_repo, @repo}} = ReleaseGate.failed(build(), opts) end) =~ "filed no fix ticket"
+  end
+
+  describe "the fix ticket is the one thing a red gate lets run (TP-1528)" do
+    test "a fix ticket Linear left in Backlog is moved to Todo at once, and on the next failure", %{opts: opts} do
+      Process.put({:release_gate_issue, "TP-1520"}, "Backlog")
+      log = capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(), opts) end)
+      assert_received {:moved, "id-TP-1520", "Todo"}
+      assert log =~ "TP-1520 was in Backlog; moved it to Todo so it is dispatched"
+
+      # In Todo already, it is left where it is.
+      Process.put({:release_gate_issue, "TP-1520"}, "Todo")
+      capture_log(fn -> assert {:attached, "TP-1520"} = ReleaseGate.failed(build(%{attempt: 2}), opts) end)
+      refute_received {:moved, _id, _state}
+
+      # In Triage on a later failure, and a move Linear refuses is said in the log.
+      Process.put({:release_gate_issue, "TP-1520"}, "Triage")
+      Process.put(:release_gate_move_reply, {:error, :linear_down})
+      log = capture_log(fn -> assert {:attached, "TP-1520"} = ReleaseGate.failed(build(%{attempt: 3}), opts) end)
+      assert_received {:moved, "id-TP-1520", "Todo"}
+      assert log =~ "Could not move the release gate's fix ticket TP-1520 to Todo: :linear_down"
+    end
+
+    test "while the gate is red every ticket of the repo but the fix ticket is held, and no update hold waits on it", %{opts: opts} do
+      assert ReleaseGate.hold_reason("symphony", "TP-1") == nil
+      refute ReleaseGate.fix_ticket?("symphony", "TP-1520")
+
+      capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(), opts) end)
+
+      assert ReleaseGate.hold_reason("symphony", "TP-1") == "Holding while the release gate on main is red: TP-1520 is fixing it"
+      assert ReleaseGate.hold_reason("symphony", "TP-1520") == nil
+      assert ReleaseGate.hold_reason("cycle", "MOT-1") == nil
+      assert ReleaseGate.hold_reason(nil, "TP-1") == nil
+      assert ReleaseGate.fix_ticket?("symphony", "TP-1520")
+      refute ReleaseGate.fix_ticket?("symphony", "TP-1")
+      refute ReleaseGate.fix_ticket?(nil, "TP-1520")
+    end
+
+    test "a later build that passes the gate lifts the hold and tells the open fix ticket what it still asks for", %{opts: opts} do
+      capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(), opts) end)
+      Process.put({:release_gate_issue, "TP-1520"}, "In Progress")
+
+      # The failed commit's own build, an older one, and another repository's say nothing.
+      assert ReleaseGate.passed(build(%{number: 951}), opts) == :ok
+      assert ReleaseGate.passed(build(%{sha: "0000000011111111222222223333333344444444", number: 949}), opts) == :ok
+      assert ReleaseGate.passed(build(%{sha: "0000000011111111222222223333333344444444", repo: "acme/other"}), opts) == :ok
+      assert ReleaseGate.passed(%{}, opts) == :ok
+      refute_received {:attach, _identifier, _body}
+
+      passing = build(%{sha: "6f280e7e11111111222222223333333344444444", number: 955})
+      log = capture_log(fn -> assert ReleaseGate.passed(passing, opts) == :green end)
+      assert log =~ "The release gate passed again on 6f280e7e"
+      assert ReleaseGate.hold_reason("symphony", "TP-1") == nil
+      assert ReleaseGate.fix_ticket?("symphony", "TP-1520")
+
+      assert_received {:attach, "TP-1520", body}
+      assert body =~ "passed again on `main` with the v#{BuildInfo.release_version(955)} build (commit `6f280e7e`)"
+      assert body =~ "The step “Test the update” failed on `9f54098b` and passed here with no change made for it."
+      assert body =~ "A check that fails at random is a defect in the check"
+
+      # Green already: the next build says nothing.
+      assert ReleaseGate.passed(%{passing | number: 956}, opts) == :ok
+      refute_received {:attach, _identifier, _body}
+    end
+
+    test "a passing build tells nothing to a fix ticket that already landed, and a comment Linear refuses is logged", %{opts: opts} do
+      unknown_step = build(%{failure: %{job: "release gate", step: nil}, number: nil})
+      capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(unknown_step, opts) end)
+      Process.put({:release_gate_issue, "TP-1520"}, "Done")
+      later = build(%{sha: "6f280e7e11111111222222223333333344444444", number: nil})
+      capture_log(fn -> assert ReleaseGate.passed(later, opts) == :green end)
+      refute_received {:attach, _identifier, _body}
+
+      :ok = RunStore.put_github_updates({:release_gate_fix, "symphony"}, %{identifier: "TP-1520", red: true})
+      Process.put({:release_gate_issue, "TP-1520"}, "Todo")
+      Process.put({:release_gate_reply, :attach}, {:error, :linear_down})
+      log = capture_log(fn -> assert ReleaseGate.passed(later, opts) == :green end)
+      assert_received {:attach, "TP-1520", body}
+      assert body =~ "The job “release gate” failed and passed here"
+      assert body =~ "release build (commit `6f280e7e`)"
+      assert log =~ "Could not tell TP-1520 that the release gate passed again: :linear_down"
+    end
+
+    test "each poll moves a fix ticket out of Backlog, and a terminal one lifts the hold", %{opts: opts} do
+      # Nothing red: nothing is read.
+      assert ReleaseGate.reconcile([], "symphony", opts) == :ok
+      assert ReleaseGate.reconcile([], nil, opts) == :ok
+      refute_received {:moved, _id, _state}
+
+      capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(), opts) end)
+
+      # Polled among the active tickets: it is dispatchable as it is.
+      Process.put({:release_gate_issue, "TP-1520"}, "Backlog")
+      assert ReleaseGate.reconcile([%{identifier: "TP-1520"}], "symphony", opts) == :ok
+      refute_received {:moved, _id, _state}
+
+      # Not polled: read by identifier and moved to Todo from Backlog.
+      capture_log(fn -> assert ReleaseGate.reconcile([%{identifier: "TP-1"}], "symphony", opts) == :ok end)
+      assert_received {:moved, "id-TP-1520", "Todo"}
+
+      # A read that fails changes nothing.
+      Process.put({:release_gate_issue, "TP-1520"}, nil)
+      assert ReleaseGate.reconcile([], "symphony", opts) == :ok
+      assert ReleaseGate.hold_reason("symphony", "TP-1") =~ "TP-1520 is fixing it"
+
+      # Terminal: the hold lifts.
+      Process.put({:release_gate_issue, "TP-1520"}, "Canceled")
+      log = capture_log(fn -> assert ReleaseGate.reconcile([], "symphony", opts) == :ok end)
+      assert log =~ "fix ticket TP-1520 is Canceled; the gate no longer holds the tickets of symphony"
+      assert ReleaseGate.hold_reason("symphony", "TP-1") == nil
+    end
   end
 end

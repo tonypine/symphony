@@ -10,7 +10,9 @@ defmodule SymphonyElixir.UpdateHold do
   every blocker when the running build has no sha (a build from a checkout).
 
   The `skip-update-hold` label opts out, on the held ticket or on the blocker (a docs-only or
-  `WORKFLOW.md` change needs no app update).
+  `WORKFLOW.md` change needs no app update). The release gate's fix ticket is never held
+  (`SymphonyElixir.ReleaseGate.fix_ticket?/3`), and a reason it holds is cleared: no build can publish
+  until its fix lands.
 
   The self-heal lane's wait on a fix ticket, and a run's block report on its blockers, wait the same
   way for a ticket merged in that repository (`awaiting_update/4`, called by
@@ -33,7 +35,7 @@ defmodule SymphonyElixir.UpdateHold do
 
   require Logger
 
-  alias SymphonyElixir.{BuildInfo, Pauses, ReleaseBuild, TicketPullRequest, Tracker}
+  alias SymphonyElixir.{BuildInfo, Pauses, ReleaseBuild, ReleaseGate, TicketPullRequest, Tracker}
   alias SymphonyElixir.GitHub.{PullRequest, Repo}
   alias SymphonyElixir.Linear.Issue
 
@@ -276,9 +278,12 @@ defmodule SymphonyElixir.UpdateHold do
     end
   end
 
-  # A `Todo` ticket whose blockers are all terminal: the plain blocked-by gate would release it.
+  # A `Todo` ticket whose blockers are all terminal: the plain blocked-by gate would release it. The
+  # release gate's fix ticket is never one: the build it would wait for publishes only once its own
+  # fix lands.
   defp candidate?(%Issue{state: state, blocked_by: [_ | _]} = issue, terminal_states) when is_binary(state) do
-    normalize(state) == @todo_state and Issue.open_blockers(issue, terminal_states) == [] and not skip_labelled?(issue)
+    normalize(state) == @todo_state and Issue.open_blockers(issue, terminal_states) == [] and not skip_labelled?(issue) and
+      not ReleaseGate.fix_ticket?(issue.repo_key, issue.identifier)
   end
 
   defp candidate?(_issue, _terminal_states), do: false

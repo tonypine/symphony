@@ -36,6 +36,11 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       send(Process.get(:release_gate_test), {:gate_failed, build})
       Process.get(:release_gate_reply, {:filed, "TP-1520"})
     end
+
+    def passed(build, _opts) do
+      send(Process.get(:release_gate_test), {:gate_passed, build})
+      :green
+    end
   end
 
   setup do
@@ -119,6 +124,8 @@ defmodule SymphonyElixir.ReleaseBuildTest do
   defp check(opts, extra \\ []), do: ReleaseBuild.check(@sha, @repo, @repo_key, [@ticket], Keyword.merge(opts, extra))
 
   defp line(opts), do: ReleaseBuild.line(@sha, "TP-1238's fix", opts)
+
+  defp put_build(sha, fields), do: :ok = RunStore.put_github_updates({:release_build, sha}, Map.merge(%{sha: sha, reruns: 0, since: nil, fix: nil}, fields))
 
   defp version, do: BuildInfo.release_version(750)
 
@@ -263,7 +270,7 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       refute Map.has_key?(build, :opts)
       refute_received {:asked, _ticket, _request}
       assert symphony_conditions() == []
-      assert line(opts) == "Waiting for the v#{version()} build with TP-1238's fix: failed its release gate; TP-1520 was opened to fix it"
+      assert line(opts) == "Waiting for a build with TP-1238's fix that passes the release gate: TP-1520 is fixing it"
 
       assert {:ok, %{state: :failed, fix: %{attempt: 1}}} = check(opts)
       refute_received {:gate_failed, _build}
@@ -276,6 +283,56 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       Process.put(:release_gate_reply, {:attached, "TP-1520"})
       assert {:ok, %{state: :failed, fix: %{identifier: "TP-1520", attempt: 2}}} = check(opts)
       assert_received {:gate_failed, %{attempt: 2}}
+    end
+
+    test "a build that passes tells the release gate once (TP-1528)", %{github: github, opts: opts} do
+      Process.put(:release_gate_test, self())
+      opts = Keyword.put(opts, :release_gate, __MODULE__.Gate)
+      runs(github, [run(1, "completed", "success")])
+
+      assert {:ok, %{state: :built}} = check(opts)
+      assert_received {:gate_passed, %{sha: @sha, state: :built, number: 750} = build}
+      refute Map.has_key?(build, :opts)
+
+      assert {:ok, %{state: :built}} = check(opts)
+      refute_received {:gate_passed, _build}
+    end
+
+    test "a commit whose build failed its gate waits on the later build that carries it, never the failed one (TP-1528)" do
+      failed = String.duplicate("a", 40)
+      later = String.duplicate("b", 40)
+      put_build(failed, %{state: :failed, number: 954, fix: %{identifier: "TP-1526", attempt: 1}})
+
+      # No later build yet: the line names the build that passes the gate, and who is fixing it.
+      assert ReleaseBuild.awaited(failed) == {:next, ReleaseBuild.get(failed)}
+      assert ReleaseBuild.line(failed, nil) == "Waiting for a build that passes the release gate: TP-1526 is fixing it"
+      assert SymphonyElixir.InstructionsHold.line(failed) == "Holding for a later build: the instructions on main need it"
+
+      # A later build on main carries the commit: it is the one waited for.
+      put_build(later, %{state: :running, number: 955})
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: later, number: 955})
+      assert {:build, %{sha: ^later}} = ReleaseBuild.awaited(failed)
+      assert ReleaseBuild.line(failed, "TP-1238's fix") == "Waiting for the v#{BuildInfo.release_version(955)} build with TP-1238's fix: building on GitHub"
+      assert SymphonyElixir.InstructionsHold.line(failed) == "Holding for the v#{BuildInfo.release_version(955)} build: the instructions on main need it"
+
+      # Published: the update is what is left.
+      put_build(later, %{state: :built, number: 955})
+      assert ReleaseBuild.line(failed, nil) == nil
+
+      # The later build failed the gate too: still the build that passes it.
+      put_build(later, %{state: :failed, number: 955, fix: %{identifier: "TP-1530", attempt: 1}})
+      assert ReleaseBuild.line(failed, nil) == "Waiting for a build that passes the release gate: TP-1530 is fixing it"
+
+      # The newest watched build is not later, or not recorded: nothing later is known.
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: later, number: 953})
+      assert {:next, %{sha: ^failed}} = ReleaseBuild.awaited(failed)
+      :ok = RunStore.put_github_updates({:release_build, :latest}, %{sha: String.duplicate("c", 40), number: 956})
+      assert {:next, %{sha: ^failed}} = ReleaseBuild.awaited(failed)
+
+      # A build that failed for another reason may still be rerun: it is the one waited for.
+      put_build(failed, %{state: :failed, number: 954})
+      assert {:build, %{sha: ^failed}} = ReleaseBuild.awaited(failed)
+      assert ReleaseBuild.awaited(String.duplicate("d", 40)) == nil
     end
 
     test "rerun the build after a person already reran it on GitHub sends nothing", %{github: github, decisions: decisions, opts: opts} do
@@ -839,7 +896,8 @@ defmodule SymphonyElixir.ReleaseBuildTest do
       refute_received {:rerun, _id}
       refute_received {:asked, _ticket, _request}
       assert %{state: :superseded, reruns: 0, question: nil} = ReleaseBuild.get(@sha)
-      assert ReleaseBuild.line(@sha, nil, opts) == "Waiting for the v#{version()} build: replaced by a newer build"
+      assert ReleaseBuild.line(@sha, nil, opts) == "Waiting for a newer build: the build of this merge was replaced by a newer run"
+      assert ReleaseBuild.latest_build(opts).line == "The v#{version()} build: replaced by a newer build"
 
       # A held ticket waiting on the replaced commit doesn't rerun it either, and it is not read again.
       assert {:ok, %{state: :superseded}} = check(opts)

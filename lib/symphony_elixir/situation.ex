@@ -703,6 +703,7 @@ defmodule SymphonyElixir.Situation do
 
   defp rule_lifts(:repository_pause), do: "Starts when you resume the repository."
   defp rule_lifts(:symphony_pause), do: "Starts when you resume dispatch."
+  defp rule_lifts(:release_gate), do: "Starts when the release gate on main passes, or its fix ticket lands."
   defp rule_lifts(_rule), do: "Starts when that clears."
 
   defp first_check(%PrDecision.Facts{missing_checks: missing, running_checks: running}), do: List.first(missing ++ running)

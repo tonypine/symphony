@@ -39,6 +39,7 @@ defmodule SymphonyElixir.Orchestrator do
     QualityGate,
     Questions,
     ReleaseBuild,
+    ReleaseGate,
     RetiredStates,
     RuleActions,
     RunKind,
@@ -1717,6 +1718,9 @@ defmodule SymphonyElixir.Orchestrator do
     # Every ticket of the build's repository waits while the build is behind its base branch on the
     # files the prompt rendering must agree with, `skip-update-hold` or not.
     _behind = InstructionsHold.resolve(issues, repo_name, build: build)
+    # A red release gate's fix ticket: moved to Todo when it sits in Backlog, and the gate's hold on
+    # every other ticket lifted once the fix ticket is terminal.
+    :ok = ReleaseGate.reconcile(issues, repo_name)
     # The release build of each fix a held ticket waits on: rerun when GitHub had no machine for it.
     :ok = ReleaseBuild.watch(issues, build, cache, repo_name, [])
     cache
@@ -4730,7 +4734,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp pause_gate(%Issue{} = issue, %State{} = state, terminal_states) do
     closed_gate(repository_pause_reason(issue), :repository_pause) ||
       closed_gate(no_repo_key_reason(issue), :no_repo_key) ||
-      closed_gate(hold_reason(issue, state, terminal_states), nil)
+      closed_gate(hold_reason(issue, state, terminal_states), nil) ||
+      closed_gate(ReleaseGate.hold_reason(hold_repo_key(issue), issue.identifier), :release_gate)
   end
 
   defp flow_gate(%Issue{} = issue, %State{} = state) do

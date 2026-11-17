@@ -27,6 +27,12 @@ defmodule SymphonyElixir.ReleaseBuild do
       and pauses nothing: Symphony files one Urgent fix ticket with the failure, or adds the failure
       to the fix ticket still open, once per attempt of the run. A pause would hold the very ticket
       that repairs it.
+    * a run that publishes tells the release gate (`SymphonyElixir.ReleaseGate.passed/2`) once,
+      when the check first finds it built: a later build passing the gate turns a red gate green.
+
+  A held ticket's line names the build that will bring its commit (`awaited/2`): the commit's own
+  build, or, when that one failed its gate or was replaced, the later build on `main` that carries
+  it, never one that will not publish.
     * with no held ticket to ask, a build cancelled again or failed is logged with its commit and
       run and asked on Symphony itself (TP-1341, `SymphonyElixir.Questions` with subject
       `:symphony`, step `step_name/1`): rerun the build, or wait for a fix. The Inbox lists it with
@@ -335,10 +341,12 @@ defmodule SymphonyElixir.ReleaseBuild do
       {:ok, runs} ->
         run = List.first(runs)
         unfinished? = record.state in @unfinished_states
+        built? = record.state == :built
         record = record |> take_answer(run, opts) |> step(run) |> settle_question()
         stored = put(record, opts)
         sync_pause(stored, opts)
         if unfinished?, do: ci_finished(sha, run)
+        if stored.state == :built and not built?, do: Keyword.get(opts, :release_gate, ReleaseGate).passed(stored, opts)
         {:ok, stored}
 
       {:error, reason} ->
@@ -375,14 +383,58 @@ defmodule SymphonyElixir.ReleaseBuild do
   """
   @spec line(String.t() | nil, String.t() | nil, keyword()) :: String.t() | nil
   def line(sha, fix, opts) when is_binary(sha) do
-    with %{} = record <- get(sha, opts),
-         words when is_binary(words) <- words(record, now(opts)) do
-      with_fix = if fix, do: " with #{fix}", else: ""
-      "Waiting for the #{build_name(record)}#{with_fix}: #{words}"
+    with_fix = if fix, do: " with #{fix}", else: ""
+
+    case awaited(sha, opts) do
+      {:build, record} ->
+        with words when is_binary(words) <- words(record, now(opts)), do: "Waiting for the #{build_name(record)}#{with_fix}: #{words}"
+
+      {:next, record} ->
+        next_line(record, with_fix)
+
+      nil ->
+        nil
     end
   end
 
   def line(_sha, _fix, _opts), do: nil
+
+  @doc """
+  The build that brings commit `sha` to the app, as far as Symphony knows: `{:build, record}`, the
+  commit's own build, or a later one on `main` when the commit's own failed its release gate or was
+  replaced (every later build on `main` carries the commit); `{:next, record}` when none is known
+  yet, `record` being the commit's own build; nil when the commit's build is not known. A hold for
+  a build therefore never names one whose gate failed: once a later build is published, the update
+  is what is left. `opts`: `:run_store`.
+  """
+  @spec awaited(String.t(), keyword()) :: {:build, t()} | {:next, t()} | nil
+  def awaited(sha, opts \\ []) when is_binary(sha) do
+    case get(sha, opts) do
+      %{} = record -> if replaced?(record), do: later_build(record, opts), else: {:build, record}
+      nil -> nil
+    end
+  end
+
+  # A build that will never publish: its gate failed (a fix ticket was filed for it), or a newer
+  # run replaced it.
+  defp replaced?(%{state: :superseded}), do: true
+  defp replaced?(%{state: :failed} = record), do: fix_filed?(record)
+  defp replaced?(_record), do: false
+
+  defp later_build(record, opts) do
+    with %{sha: sha, number: number} when is_integer(number) <- latest_pointer(opts),
+         true <- is_integer(record.number) and number > record.number,
+         %{} = latest <- get(sha, opts) do
+      if replaced?(latest), do: {:next, latest}, else: {:build, latest}
+    else
+      _none_later -> {:next, record}
+    end
+  end
+
+  defp next_line(%{state: :failed, fix: %{identifier: identifier}}, with_fix),
+    do: "Waiting for a build#{with_fix} that passes the release gate: #{identifier} is fixing it"
+
+  defp next_line(_superseded, with_fix), do: "Waiting for a newer build#{with_fix}: the build of this merge was replaced by a newer run"
 
   defp words(%{state: :queued} = record, now), do: "queued on GitHub for #{duration(record.since, now)}" <> rerun_note(record)
   defp words(%{state: :running} = record, _now), do: "building on GitHub" <> rerun_note(record)
