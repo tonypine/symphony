@@ -118,6 +118,8 @@ func runGallery() {
             },
             "widths": Dictionary(uniqueKeysWithValues: GalleryWidth.named.map { ($0.name, Int($0.points)) }),
             "foundation": galleryFoundation,
+            // Where the fixtures were read from: the checkout, or the copy a build carries (Files.swift).
+            "root": galleryRoot.path,
         ]))
         return
     }
@@ -129,7 +131,7 @@ func runGallery() {
         return
     }
     if arguments.contains("--check") {
-        let shared = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../Sources/SymphonyBarUI")
+        let shared = galleryRoot.appendingPathComponent("macos/Sources/SymphonyBarUI")
         let files = ((try? FileManager.default.contentsOfDirectory(atPath: shared.path)) ?? []).filter { $0.hasSuffix(".swift") }.sorted()
         let problems = galleryProblems(variations: galleryVariations.map(\.id), sharedFiles: files)
         for problem in problems { print(problem) }

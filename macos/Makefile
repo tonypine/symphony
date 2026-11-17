@@ -35,7 +35,7 @@ MIX ?= mix
 ERL ?= erl
 QA_SYMPHONY := $(BUILD_DIR)/qa-symphony
 
-.PHONY: all build app bundle qa-app install run test e2e release-pair gallery build-gallery clean
+.PHONY: all build app bundle qa-app install run test e2e release-pair gallery build-gallery gallery-resources clean
 
 # The slow type-check guard. `make guarded-<target>` makes <target> with the Swift compiler
 # warning on every expression it takes longer than TYPE_CHECK_LIMIT_MS to type-check, and fails
@@ -151,6 +151,7 @@ qa-app:
 	$(MAKE) build-gallery
 	cp "$(GALLERY)" "$(APP)/Contents/Helpers/SymphonyGallery"
 	codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(APP)/Contents/Helpers/SymphonyGallery"
+	$(MAKE) gallery-resources GALLERY_RESOURCES="$(APP)/Contents/Resources/GalleryResources"
 	codesign --force --sign "$(SIGNING_IDENTITY)" $(CODESIGN_FLAGS) "$(APP)"
 	codesign --verify --strict "$(APP)"
 
@@ -189,7 +190,8 @@ release-pair:
 #   $(GALLERY) --entries                the entries, as JSON
 #   $(GALLERY) --shot button --out /tmp/shots   draws that entry's board to files, in light and dark
 # `make qa-app` puts it inside the QA build's bundle, where a launch on Tests/Fixtures/gallery starts it in the
-# app's place (Sources/SymphonyBar/GalleryLaunch.swift), so QA drives it with the tools it drives the app with.
+# app's place (Sources/SymphonyBar/GalleryLaunch.swift), so QA drives it with the tools it drives the app with, and
+# puts the fixtures it reads beside it (`gallery-resources`), since a QA host has no checkout.
 # `-disable-sandbox` lets the SwiftUI macros' plugin server run inside an agent sandbox.
 GALLERY := $(BUILD_DIR)/SymphonyGallery
 build-gallery:
@@ -204,6 +206,22 @@ build-gallery:
 		-I "$$modules" -o $(GALLERY) \
 		Gallery/*.swift $$(ls Sources/SymphonyBar/*.swift | grep -v '/main.swift$$') \
 		$$objects
+	@# The built gallery, copied out of the checkout with its fixtures, still reads every story (TP-1520).
+	sh Tests/gallery-portable-test.sh "$(GALLERY)"
+
+# What a built gallery reads, copied in the checkout's layout to $(GALLERY_RESOURCES) (Gallery/Files.swift): the
+# committed fixtures, Symphony's API fixtures and the shared views' files `--check` lists. `make qa-app` puts it in the
+# QA build at Contents/Resources/GalleryResources, so the gallery runs on a QA host that has no checkout.
+# It takes no default: a copy at build/GalleryResources would sit beside build/SymphonyGallery and stand in for the
+# checkout there.
+gallery-resources:
+	@test -n "$(GALLERY_RESOURCES)" || { echo "gallery-resources needs GALLERY_RESOURCES=<folder>" >&2; exit 2; }
+	rm -rf "$(GALLERY_RESOURCES)"
+	mkdir -p "$(GALLERY_RESOURCES)/macos/Gallery" "$(GALLERY_RESOURCES)/macos/Tests" "$(GALLERY_RESOURCES)/macos/Sources/SymphonyBarUI" \
+		"$(GALLERY_RESOURCES)/test/fixtures"
+	cp -R Tests/Fixtures "$(GALLERY_RESOURCES)/macos/Tests/Fixtures"
+	cp Sources/SymphonyBarUI/*.swift "$(GALLERY_RESOURCES)/macos/Sources/SymphonyBarUI/"
+	cp -R ../test/fixtures/api "$(GALLERY_RESOURCES)/test/fixtures/api"
 
 gallery: build-gallery
 	$(GALLERY) --window
