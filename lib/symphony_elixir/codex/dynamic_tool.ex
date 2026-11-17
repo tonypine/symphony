@@ -1361,11 +1361,15 @@ defmodule SymphonyElixir.Codex.DynamicTool do
   # The run kind the session's ticket tools record as: the one its runner names, else its run
   # profile's, else its scope's (the reviewer's and the QA pass's), else an implementation run.
   defp run_kind(opts) do
-    case Keyword.get(opts, :run_kind) || get_in(opts, [:run_profile, :kind]) do
+    case Keyword.get(opts, :run_kind) || profile_run_kind(Keyword.get(opts, :run_profile)) do
       nil -> scope_run_kind(Keyword.get(opts, :tool_scope))
       kind -> to_string(kind)
     end
   end
+
+  # The run profile is a `Config.Runs.Run` struct, which has no Access: `get_in/2` on it raises.
+  defp profile_run_kind(%{kind: kind}), do: kind
+  defp profile_run_kind(_profile), do: nil
 
   defp scope_run_kind(:read_only), do: "code_review"
   defp scope_run_kind(:qa), do: "qa"
