@@ -1241,6 +1241,100 @@ public enum DesignTokens {
         public static var separatorSpan: Double { separatorHeight + 2 * separatorMargin }
     }
 
+    /// The catalog's Searchable pop-up (`.pick-list`, `.pick-none`, TP-1530): the Pop-up's small face, its value in
+    /// the mono face (an identifier) or the tertiary colour when it comes from a default, opening a 280 pt list with
+    /// the search field on top and the choices under it, cut to 220 pt and scrolling.
+    public enum SearchableList {
+        public static let width: Double = 280
+        public static let padding: Double = 6
+        /// Between the search field and the first choice.
+        public static let fieldGap: Double = 4
+        /// The tallest the choices are before they scroll.
+        public static let listHeight: Double = 220
+        /// The line saying nothing matches: 8 pt above and below, 12 pt in.
+        public static let noMatchVertical = Space.s2
+        public static let noMatchHorizontal = Space.s3
+        /// A value from a default: tertiary, at the regular weight.
+        public static let inheritedWeight = 400
+        public static let control = Control.small
+
+        /// From the list's top to its first choice's: its padding, the field and the gap.
+        public static var choicesTop: Double { padding + control.height + fieldGap }
+    }
+
+    /// The catalog's Save bar (`.save-bar`, TP-1530): glass over a page edited whole, what is edited on the left and
+    /// how much is not saved, Revert and Save on the right.
+    public enum SaveBar {
+        public static let radius = Radius.card
+        public static let gap = Space.s2
+        public static let verticalPadding = Space.s2
+        public static let horizontalPadding = Space.s3
+        public static let glass = Glass.glass
+        public static let elevation = Elevation.level1
+        /// The room after the count before Revert.
+        public static let countTrailing = Space.s1
+        /// The check before "Saved" and the mark before a refusal, and their gap.
+        public static let glyph: Double = 13
+        public static let glyphGap: Double = 5
+        public static let savedSymbol = "checkmark.circle.fill"
+        public static let refusedSymbol = "exclamationmark.triangle.fill"
+        public static let shortcut = "⌘ S"
+        public static let saving = "Saving…"
+        public static let saved = "Saved"
+        /// How long "Saved" stays before the page takes it away.
+        public static let savedFor: Double = 2
+
+        /// The count: "1 change not saved", "3 changes not saved"; nil with nothing to save.
+        public static func unsaved(_ changes: Int) -> String? {
+            guard changes > 0 else { return nil }
+            return "\(changes) \(changes == 1 ? "change" : "changes") not saved"
+        }
+    }
+
+    /// The catalog's List card (`.list-card`, TP-1530): one thing of the list beside a page, its name and one fact on
+    /// top and where it stands under them, after a Status dot.
+    public enum ListCard {
+        public static let radius = Radius.card
+        public static let gap: Double = 6
+        public static let verticalPadding = Space.s3
+        public static let horizontalPadding = Space.s4
+        /// Between the name and the fact.
+        public static let topGap = Space.s3
+        public static let dot: Double = 7
+        public static let dotGap: Double = 5
+        /// The selection: a 1.5 pt accent edge and its tint 2.5 pt past it; grey while the window is not focused.
+        public static let ringWidth: Double = 1.5
+        public static let tintWidth: Double = 2.5
+    }
+
+    /// The catalog's Progress meter (`.meter`, `.meter-line`, TP-1530): how much of a cap is used. The full form is
+    /// 320 pt: its label and value, an 8 pt track and a note; the one-line form is its label, a 6 pt track, the
+    /// percent and when it resets, with a stop mark where new work stops.
+    public enum ProgressMeter {
+        public static let width: Double = 320
+        public static let gap: Double = 7
+        public static let trackHeight: Double = 8
+        /// The track: the fill's colour at 14 % over the sunken surface.
+        public static let trackTint: Double = 0.14
+        /// The fill's lighter end (70 % of its colour over white) and its glow (45 %, 10 pt).
+        public static let fillLight: Double = 0.3
+        public static let glowOpacity: Double = 0.45
+        public static let glowRadius: Double = 5
+        /// The one-line form's columns: label, the track (at least 120 pt), the percent and when it resets.
+        public static let lineLabel: Double = 72
+        public static let lineTrackMin: Double = 120
+        public static let lineValue: Double = 44
+        public static let lineResets: Double = 190
+        public static let lineGap = Space.s4
+        public static let lineTrackHeight: Double = 6
+        /// The stop mark: 2 pt wide, 4 pt past the track above and below.
+        public static let stopWidth: Double = 2
+        public static let stopReach: Double = 4
+        /// From this share the fill is orange, and from `atCap` red.
+        public static let near = 75
+        public static let atCap = 95
+    }
+
     /// The catalog's Text field, Search field and multi-line input (`.field`, `.input`, `.input.search`, `.help`,
     /// `.own-words`, `.tl-compose`; TP-1509): a surface of a control height, its edge and, while focused, a soft halo
     /// outside it; the label above and help, the error or the reason under it, never two of them.

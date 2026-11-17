@@ -79,6 +79,19 @@ let galleryEntries: [GalleryEntry] = [
         id: "priority-mark", title: "Priority mark", kind: .component, prefixes: ["priority-mark-"],
         files: ["SymphonyBarUI/DesignSystem/PriorityMark.swift"]),
     GalleryEntry(
+        id: "searchable-pop-up", title: "Searchable pop-up", kind: .component, prefixes: ["searchable-pop-up-"],
+        files: [
+            "SymphonyBarUI/DesignSystem/SearchablePopUp.swift", "SymphonyBarUI/DesignSystem/MenuControls.swift", "SymphonyBarUI/DesignSystem/Menu.swift",
+            "SymphonyBarUI/DesignSystem/MenuPresenter.swift",
+        ]),
+    GalleryEntry(
+        id: "save-bar", title: "Save bar", kind: .component, prefixes: ["save-bar-"], files: ["SymphonyBarUI/DesignSystem/SaveBar.swift"]),
+    GalleryEntry(
+        id: "list-card", title: "List card", kind: .component, prefixes: ["list-card-"], files: ["SymphonyBarUI/DesignSystem/ListCard.swift"]),
+    GalleryEntry(
+        id: "progress-meter", title: "Progress meter", kind: .component, prefixes: ["progress-meter-"],
+        files: ["SymphonyBarUI/DesignSystem/ProgressMeter.swift", "SymphonyBarCore/ProgressMeterReading.swift"]),
+    GalleryEntry(
         id: "collapsible-card", title: "Collapsible card", kind: .component, prefixes: ["collapsible-card-"],
         files: ["SymphonyBarUI/DesignSystem/Collapsible.swift"]),
     GalleryEntry(

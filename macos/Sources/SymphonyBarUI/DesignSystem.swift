@@ -280,6 +280,14 @@ extension DesignTokens.TypeStyle {
         )
         return Font(font as CTFont)
     }
+
+    /// The mono face at the mono style's size and a CSS weight: an identifier inside a control (a model on a pop-up).
+    public static func monoFont(weight: Int) -> Font {
+        let font = NSFont.monospacedSystemFont(
+            ofSize: CGFloat(mono.size * textScale), weight: NSFont.Weight(rawValue: CGFloat(systemWeight(css: weight)))
+        )
+        return Font(font as CTFont)
+    }
 }
 
 /// C7, the catalog's Badge (`.badge`, TP-1506): a status glyph and word on the status tint, the one way the Director
@@ -463,15 +471,20 @@ public struct CountBadge: View {
 /// (`LayerPulse`), off the main thread (TP-1480); a snapshot draws the dot still.
 public struct StatusDot: View {
     let status: DesignTokens.Status
-    let size: DesignTokens.StatusDot.Size
+    let diameter: Double
     let live: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.liveDurations) private var onLayer
     @State private var ringing = false
 
     public init(_ status: DesignTokens.Status, size: DesignTokens.StatusDot.Size = .regular, live: Bool = false) {
+        self.init(status, diameter: size.diameter, live: live)
+    }
+
+    /// A dot of a component's own `diameter` (the List card's 7 pt).
+    public init(_ status: DesignTokens.Status, diameter: Double, live: Bool = false) {
         self.status = status
-        self.size = size
+        self.diameter = diameter
         self.live = live
     }
 
@@ -486,7 +499,7 @@ public struct StatusDot: View {
     public var body: some View {
         Circle()
             .fill(status.tint)
-            .frame(width: size.diameter, height: size.diameter)
+            .frame(width: diameter, height: diameter)
             .background {
                 if Self.rings(live: live, reduceMotion: reduceMotion) { ringView }
             }

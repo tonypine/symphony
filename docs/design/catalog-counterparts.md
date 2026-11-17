@@ -33,7 +33,7 @@ story of a mapped entry has no variation of its name, naming the story.
 | `components/count-badge` | `CountBadge` |
 | `components/status-dot` | `StatusDot` |
 | `components/situation-line` | Drawn by the app's own `SituationLine`, not shared yet |
-| `components/progress-meter` | not built |
+| `components/progress-meter` | `ProgressMeter` |
 | `components/stacked-stage-bar` | not built |
 | `components/text-field` | `DirectorTextField` |
 | `components/search-field` | `SearchField` |
@@ -58,10 +58,10 @@ story of a mapped entry has no variation of its name, naming the story.
 | `components/sheet-header` | not built |
 | `components/inline-refusal` | `Refusal` |
 | `components/keyboard-hint` | `KeyboardHint` |
-| `components/searchable-pop-up` | not built |
+| `components/searchable-pop-up` | `SearchablePopUp` |
 | `components/reorderable-list` | not built |
-| `components/save-bar` | not built |
-| `components/list-card` | not built |
+| `components/save-bar` | `SaveBar` |
+| `components/list-card` | `ListCard` |
 
 ## Sections
 
