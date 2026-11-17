@@ -10,6 +10,7 @@ defmodule SymphonyElixir.ReleaseGateTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.{BuildInfo, ReleaseGate}
+  alias SymphonyElixir.Config.SystemSchema
 
   @repo "acme/symphony"
   @sha "9f54098b96666e6e233247d53fc995c3b293c4f2"
@@ -44,7 +45,15 @@ defmodule SymphonyElixir.ReleaseGateTest do
     :ok = RunStore.clear()
     on_exit(fn -> :ok = RunStore.clear() end)
     Process.put(:release_gate_test, self())
-    {:ok, opts: [fixer: Fixer, tracker: Tracker, gh_runner: gh(), symphony_repo_key: "symphony", terminal_states: ["Done", "Canceled"]]}
+    {:ok, opts: [fixer: Fixer, tracker: Tracker, gh_runner: gh(), repos: {:ok, repos()}, terminal_states: ["Done", "Canceled"]]}
+  end
+
+  # A config whose primary repo is Cycle, with Symphony's own repository configured beside it.
+  defp repos do
+    [
+      %SystemSchema.Repo{name: "cycle", default: true, team: "MOT", workspace: %SystemSchema.Repo.Workspace{github: "acme/cycle"}},
+      %SystemSchema.Repo{name: "symphony", team: "TP", workspace: %SystemSchema.Repo.Workspace{github: "Acme/Symphony"}}
+    ]
   end
 
   # `gh` as GitHub answers the failed log of the run and the commit.
@@ -117,7 +126,7 @@ defmodule SymphonyElixir.ReleaseGateTest do
       assert attrs.description =~ part
     end
 
-    assert RunStore.get_github_updates({:release_gate, :fix}) == %{identifier: "TP-1520", sha: @sha, step: "Test the update"}
+    assert RunStore.get_github_updates({:release_gate_fix, "symphony"}) == %{identifier: "TP-1520", sha: @sha, step: "Test the update"}
   end
 
   test "while that ticket is open, the next failure is added to it; once it is closed, a new one is filed", %{opts: opts} do
@@ -160,17 +169,13 @@ defmodule SymphonyElixir.ReleaseGateTest do
     refute attrs.description =~ "## The end of the failed step's log"
     refute attrs.description =~ "## What the commit changed"
 
-    # A build that names no repository still reads its run's log, from the checkout's own repository.
-    capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(%{repo: nil}), Keyword.put(opts, :gh_runner, gh())) end)
-    assert_received {:create, %{description: description}, _opts}
-    assert description =~ "## The end of the failed step's log"
-
-    no_run = build(%{run_id: nil, repo: nil})
+    no_run = build(%{run_id: nil})
     capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(no_run, Keyword.put(opts, :gh_runner, gh(%{commit: {"HTTP 404", 1}}))) end)
 
     silent = Keyword.put(opts, :gh_runner, gh(%{log: {"", 0}, commit: {Jason.encode!(%{message: "subject only", files: []}), 0}}))
     capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(), silent) end)
-    assert_received {:create, _no_run, _opts}
+    assert_received {:create, %{description: no_run_description}, _opts}
+    refute no_run_description =~ "## The end of the failed step's log"
     assert_received {:create, attrs, _opts}
     assert attrs.description =~ "* Commit: `9f54098b` subject only\n"
   end
@@ -190,7 +195,7 @@ defmodule SymphonyElixir.ReleaseGateTest do
 
     Process.put({:release_gate_reply, :create}, {:ok, %{}})
     assert capture_log(fn -> assert ReleaseGate.failed(build(), opts) == {:error, :fix_ticket_not_filed} end) =~ "Could not file"
-    assert RunStore.get_github_updates({:release_gate, :fix}) == nil
+    assert RunStore.get_github_updates({:release_gate_fix, "symphony"}) == nil
 
     Process.delete({:release_gate_reply, :create})
 
@@ -204,9 +209,48 @@ defmodule SymphonyElixir.ReleaseGateTest do
     assert log =~ "Could not record the release gate's fix ticket TP-1520"
   end
 
-  test "the scope defaults to the build's repository key, then the configured one", %{opts: opts} do
-    opts = Keyword.delete(opts, :symphony_repo_key)
-    capture_log(fn -> assert {:filed, _id} = ReleaseGate.failed(build(%{repo_key: "own"}), opts) end)
-    assert_received {:create, %{scope: "own"}, _opts}
+  test "the ticket is filed under the configured repo whose repository sent the delivery, never the primary one", %{opts: opts} do
+    # The build's own repo key (the primary's, from a held ticket) does not decide either.
+    capture_log(fn -> assert {:filed, "TP-1520"} = ReleaseGate.failed(build(%{repo_key: "cycle"}), opts) end)
+    assert_received {:create, %{scope: "symphony", repo_key: "symphony"}, _opts}
+
+    Process.put({:release_gate_issue, "TP-1520"}, "In Progress")
+
+    # Symphony's ticket is open, and a failure from Cycle's repository files Cycle's own ticket.
+    Process.put({:release_gate_reply, :create}, {:ok, %{identifier: "MOT-104"}})
+    cycle = build(%{repo: "acme/cycle"})
+    capture_log(fn -> assert {:filed, "MOT-104"} = ReleaseGate.failed(cycle, opts) end)
+    assert_received {:create, %{scope: "cycle", repo_key: "cycle"}, _opts}
+    refute_received {:attach, _identifier, _body}
+    assert RunStore.get_github_updates({:release_gate_fix, "cycle"}).identifier == "MOT-104"
+    assert RunStore.get_github_updates({:release_gate_fix, "symphony"}).identifier == "TP-1520"
+
+    # Each repo's next failure is added to its own open ticket.
+    Process.put({:release_gate_issue, "MOT-104"}, "Todo")
+    capture_log(fn -> assert {:attached, "TP-1520"} = ReleaseGate.failed(build(%{attempt: 2}), opts) end)
+    assert_received {:attach, "TP-1520", _body}
+    capture_log(fn -> assert {:attached, "MOT-104"} = ReleaseGate.failed(%{cycle | attempt: 2}, opts) end)
+    assert_received {:attach, "MOT-104", _body}
+    refute_received {:create, _attrs, _opts}
+  end
+
+  test "a delivery from a repository no configured repo has files nothing and names it", %{opts: opts} do
+    for {build, repos} <- [
+          {build(%{repo: "acme/other"}), {:ok, repos()}},
+          {build(%{repo: nil}), {:ok, repos()}},
+          {build(), {:error, :missing_symphony_config}}
+        ] do
+      {result, log} = with_log(fn -> ReleaseGate.failed(build, Keyword.put(opts, :repos, repos)) end)
+      assert result == {:error, {:unknown_repo, build.repo}}
+      assert log =~ "no configured repo is its repository #{inspect(build.repo)}; filed no fix ticket"
+    end
+
+    refute_received {:create, _attrs, _opts}
+    refute_received {:attach, _identifier, _body}
+  end
+
+  test "without injected repos the configured ones are read, and the test config has no acme/symphony", %{opts: opts} do
+    opts = Keyword.delete(opts, :repos)
+    assert capture_log(fn -> assert {:error, {:unknown_repo, @repo}} = ReleaseGate.failed(build(), opts) end) =~ "filed no fix ticket"
   end
 end
