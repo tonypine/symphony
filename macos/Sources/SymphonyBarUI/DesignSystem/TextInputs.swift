@@ -171,18 +171,97 @@ final class EscapeWatcher {
     }
 }
 
-/// An empty view under a search field that hands the watcher the field's place in its window.
+/// An empty view under a search field that hands the watcher the field's place in its window, and knows from the
+/// window itself whether the field has the keyboard. A field in the window's toolbar lives in the toolbar's own view
+/// tree, where a focus state from the page never reaches it: the anchor watches the window's first responder, puts
+/// the keyboard in the field and takes it back through AppKit, so the field focuses, draws focused and lets go wherever
+/// it sits.
 struct EscapeAnchor: NSViewRepresentable {
     let watcher: EscapeWatcher
+    var editing: (Bool) -> Void = { _ in }
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
+    func makeNSView(context: Context) -> FieldAnchorView {
+        let view = FieldAnchorView()
+        view.editing = editing
         watcher.anchor = view
         return view
     }
 
-    func updateNSView(_ view: NSView, context: Context) {
+    func updateNSView(_ view: FieldAnchorView, context: Context) {
+        view.editing = editing
         watcher.anchor = view
+    }
+}
+
+/// The anchor's view: see `EscapeAnchor`.
+@MainActor
+final class FieldAnchorView: NSView {
+    /// Called with whether the window's keyboard is in the field, each time the window's first responder changes.
+    var editing: (Bool) -> Void = { _ in }
+    private var observation: NSKeyValueObservation?
+    private var focusWhenShown = false
+    private var lastEditing: Bool?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        observation = window?.observe(\.firstResponder, options: [.initial, .new]) { [weak self] _, _ in
+            Task { @MainActor [weak self] in self?.report() }
+        }
+        if window != nil, focusWhenShown {
+            focusWhenShown = false
+            Task { @MainActor [weak self] in self?.focusField() }
+        }
+    }
+
+    private var fieldFrame: CGRect { window == nil ? .null : convert(bounds, to: nil) }
+
+    /// Whether the window's keyboard is a text editor inside the field.
+    var isEditing: Bool {
+        guard let editor = window?.firstResponder as? NSTextView else { return false }
+        let host = (editor.delegate as? NSView) ?? editor
+        return Self.inField(host.convert(host.bounds, to: nil), fieldFrame: fieldFrame)
+    }
+
+    private func report() {
+        let now = isEditing
+        guard now != lastEditing else { return }
+        lastEditing = now
+        editing(now)
+    }
+
+    /// Puts the keyboard in the field's text field; before the field is in a window, as soon as it is.
+    func focusField() {
+        guard let window else {
+            focusWhenShown = true
+            return
+        }
+        guard !isEditing, let root = window.contentView?.superview ?? window.contentView else { return }
+        let fields = Self.textFields(in: root)
+        let index = Self.pick(fields.map { $0.convert($0.bounds, to: nil) }, fieldFrame: fieldFrame)
+        if let index { window.makeFirstResponder(fields[index]) }
+    }
+
+    /// Takes the keyboard back from the field: the window keeps it, as when a Mac search field lets go.
+    func release() {
+        guard isEditing else { return }
+        window?.makeFirstResponder(nil)
+    }
+
+    private static func textFields(in view: NSView) -> [NSTextField] {
+        view.subviews.flatMap { sub -> [NSTextField] in
+            if let field = sub as? NSTextField, field.isEditable { return [field] }
+            return textFields(in: sub)
+        }
+    }
+
+    /// A frame lies inside the field: both in the window, and overlapping.
+    nonisolated static func inField(_ frame: CGRect, fieldFrame: CGRect) -> Bool {
+        !fieldFrame.isNull && !frame.isNull && fieldFrame.intersects(frame)
+    }
+
+    /// The first of the window's text fields that sits inside the field.
+    nonisolated static func pick(_ frames: [CGRect], fieldFrame: CGRect) -> Int? {
+        frames.firstIndex { inField($0, fieldFrame: fieldFrame) }
     }
 }
 
@@ -312,10 +391,12 @@ public struct SearchField: View {
     var shortcut: String?
     var size: DesignTokens.Control
     var focus: FocusState<Bool>.Binding?
+    var focusRequest: Binding<Bool>?
     var drawnAs: DesignTokens.Field.State?
     var onSubmit: (() -> Void)?
 
     @FocusState private var ownFocus: Bool
+    @State private var editing = false
     @State private var hovering = false
     @State private var clearHovered = false
     @State private var escape = EscapeWatcher()
@@ -328,7 +409,8 @@ public struct SearchField: View {
     public init(
         _ placeholder: String, text: Binding<String>, matches: Int? = nil, searched: String? = nil,
         shortcut: String? = DesignTokens.Field.searchShortcut, size: DesignTokens.Control = .medium,
-        focused: FocusState<Bool>.Binding? = nil, drawnAs: DesignTokens.Field.State? = nil, onSubmit: (() -> Void)? = nil
+        focused: FocusState<Bool>.Binding? = nil, focusRequest: Binding<Bool>? = nil, drawnAs: DesignTokens.Field.State? = nil,
+        onSubmit: (() -> Void)? = nil
     ) {
         self.placeholder = placeholder
         _text = text
@@ -337,14 +419,17 @@ public struct SearchField: View {
         self.shortcut = shortcut
         self.size = size
         focus = focused
+        self.focusRequest = focusRequest
         self.drawnAs = drawnAs
         self.onSubmit = onSubmit
     }
 
     private var focusBinding: FocusState<Bool>.Binding { focus ?? $ownFocus }
     private var hasQuery: Bool { DesignTokens.Field.hasQuery(text) }
+    /// The keyboard is in the field: by its focus state, or by the window's own first responder (`EscapeAnchor`).
+    private var focused: Bool { focusBinding.wrappedValue || editing }
     private var state: DesignTokens.Field.State {
-        drawnAs ?? (focusBinding.wrappedValue ? .focused : hovering ? .hover : .rest)
+        drawnAs ?? (focused ? .focused : hovering ? .hover : .rest)
     }
     private var still: Bool { drawnAs != nil || offscreenSnapshot }
     private var noMatchLine: String? {
@@ -358,15 +443,22 @@ public struct SearchField: View {
             if let noMatchLine { FieldFootnote(footnote: .help(noMatchLine)) }
         }
         .animation(.motion(.lift, reduceMotion: reduceMotion), value: hasQuery)
-        .onChange(of: focusBinding.wrappedValue, initial: true) { _, focused in
-            escape.perform = { [text = $text, focus = focusBinding] in
+        .onChange(of: focused, initial: true) { _, focused in
+            escape.perform = { [text = $text, focus = focusBinding, escape] in
                 switch DesignTokens.Field.escape(query: text.wrappedValue) {
                 case .clear: text.wrappedValue = ""
-                case .release: focus.wrappedValue = false
+                case .release:
+                    focus.wrappedValue = false
+                    (escape.anchor as? FieldAnchorView)?.release()
                 }
                 return true
             }
             if focused, !still { escape.start() } else { escape.stop() }
+        }
+        .onChange(of: focusRequest?.wrappedValue ?? false, initial: true) { _, requested in
+            guard requested, let focusRequest else { return }
+            focusRequest.wrappedValue = false
+            if !still { focus() }
         }
         .onDisappear { escape.stop() }
     }
@@ -397,10 +489,16 @@ public struct SearchField: View {
         .padding(.trailing, size.padding * DesignTokens.Field.searchTrailingScale)
         .frame(height: size.height)
         .modifier(FieldSurface(shape: Capsule(), kind: .search, state: state, reduceMotion: reduceMotion))
-        .background { if !still { EscapeAnchor(watcher: escape) } }
+        .background { if !still { EscapeAnchor(watcher: escape) { editing = $0 } } }
         .contentShape(Capsule())
-        .onTapGesture { if !still { focusBinding.wrappedValue = true } }
+        .onTapGesture { if !still { focus() } }
         .onHover { hovering = $0 }
+    }
+
+    /// Puts the keyboard in the field, by its focus state and through the window (`EscapeAnchor`).
+    private func focus() {
+        focusBinding.wrappedValue = true
+        (escape.anchor as? FieldAnchorView)?.focusField()
     }
 
     @ViewBuilder private var field: some View {
@@ -426,7 +524,7 @@ public struct SearchField: View {
     private var clearButton: some View {
         Button {
             text = ""
-            if !still { focusBinding.wrappedValue = true }
+            if !still { focus() }
         } label: {
             ZStack {
                 Circle().fill((clearHovered ? DesignTokens.TextColor.secondary : DesignTokens.TextColor.tertiary).color)
@@ -466,6 +564,8 @@ public struct TextArea: View {
 
     @FocusState private var ownFocus: Bool
     @State private var hovering = false
+    /// The text is taller than `maxLines`, so the area scrolls and may show its scroll bar.
+    @State private var overflows = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
@@ -510,6 +610,16 @@ public struct TextArea: View {
             .padding(.horizontal, Self.textInset)
             .frame(maxWidth: .infinity, minHeight: Self.lineHeight * CGFloat(minLines), alignment: .topLeading)
             .hidden()
+            .background(alignment: .topLeading) {
+                // The whole text at the area's width: taller than `maxLines`, and the area scrolls.
+                Text(text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, Self.textInset)
+                    .hidden()
+                    .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { height in
+                        overflows = Self.overflows(height: height, maxLines: maxLines)
+                    }
+            }
             .overlay(alignment: .topLeading) {
                 if text.isEmpty {
                     Text(placeholder)
@@ -542,13 +652,20 @@ public struct TextArea: View {
     private var editor: some View {
         TextEditor(text: $text)
             .scrollContentBackground(.hidden)
+            // No scroll bar while the text fits, even with a mouse's always-drawn scrollers: the catalog draws none.
+            .scrollIndicators(overflows ? .automatic : .never)
             .foregroundStyle(DesignTokens.TextColor.primary.color)
             .focused(focusBinding)
             .accessibilityLabel(label)
             .accessibilityHint(hint ?? "")
     }
 
-    /// ⌘↩ while the area has the keyboard: a key equivalent, which the window gives out before the text view sees
+    /// Text this tall needs more than `maxLines` lines (half a line of slack for the two text systems' rounding).
+    static func overflows(height: CGFloat, maxLines: Int) -> Bool {
+        height > lineHeight * (CGFloat(maxLines) + 0.5)
+    }
+
+        /// ⌘↩ while the area has the keyboard: a key equivalent, which the window gives out before the text view sees
     /// the key, so Return alone still adds a line.
     @ViewBuilder private var sendKey: some View {
         if let send, focusBinding.wrappedValue, !drawsStill {

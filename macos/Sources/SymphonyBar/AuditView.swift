@@ -106,7 +106,6 @@ extension SymphonyWindowModel {
 /// D10 for the window: the filters, each shown day's chain, the table and the inspector, or a placeholder.
 struct AuditContent: View {
     @ObservedObject var model: SymphonyWindowModel
-    @FocusState private var searchFocused: Bool
 
     var body: some View {
         Group {
@@ -131,14 +130,9 @@ struct AuditContent: View {
             ToolbarItem(placement: .automatic) {
                 PageSearchField(
                     prompt: Audit.searchPrompt, text: $model.auditFilter.search, matches: model.auditView?.rows.count,
-                    focused: $searchFocused
+                    requested: $model.auditSearchRequested
                 )
             }
-        }
-        .onChange(of: model.auditSearchRequested, initial: true) { _, requested in
-            guard requested else { return }
-            searchFocused = true
-            model.auditSearchRequested = false
         }
     }
 }

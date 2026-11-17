@@ -312,17 +312,18 @@ extension SymphonyWindowModel {
 
 /// A page's search field in the window's toolbar, Tickets', Audit's or Learnings' (TP-1509): the shared search field,
 /// small and as wide as the toolbar keeps it, with the count of what it found and ⌥⌘F, which puts the keyboard in it,
-/// while it is empty.
+/// while it is empty. ⌥⌘F sets `requested`; the field takes the keyboard through the window and clears it, since a
+/// page's focus state does not reach a field in the toolbar.
 struct PageSearchField: View {
     let prompt: String
     @Binding var text: String
     let matches: Int?
-    var focused: FocusState<Bool>.Binding
+    @Binding var requested: Bool
 
     static let shortcut = "⌥ ⌘ F"
 
     var body: some View {
-        SearchField(prompt, text: $text, matches: matches, shortcut: Self.shortcut, size: .small, focused: focused)
+        SearchField(prompt, text: $text, matches: matches, shortcut: Self.shortcut, size: .small, focusRequest: $requested)
             .frame(width: DesignTokens.Field.toolbarSearchWidth)
     }
 }
@@ -331,7 +332,6 @@ struct PageSearchField: View {
 struct TicketsContent: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
-    @FocusState private var searchFocused: Bool
 
     var body: some View {
         Group {
@@ -371,14 +371,9 @@ struct TicketsContent: View {
             ToolbarItem(placement: .automatic) {
                 PageSearchField(
                     prompt: TicketsView.searchPrompt, text: $model.ticketSearch,
-                    matches: model.ticketsPayload?.rows(matching: model.ticketSearch).count, focused: $searchFocused
+                    matches: model.ticketsPayload?.rows(matching: model.ticketSearch).count, requested: $model.searchRequested
                 )
             }
-        }
-        .onChange(of: model.searchRequested, initial: true) { _, requested in
-            guard requested else { return }
-            searchFocused = true
-            model.searchRequested = false
         }
     }
 

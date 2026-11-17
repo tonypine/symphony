@@ -146,4 +146,37 @@ final class TextInputsTests: XCTestCase {
         XCTAssertFalse(watcher.take(other))
         XCTAssertEqual(performed, 0)
     }
+
+    /// A field in the window's toolbar is out of reach of a page's focus state: its anchor finds the window's text
+    /// field that sits inside the field, and says the field has the keyboard when the window's editor is inside it.
+    func testTheAnchorFindsTheTextFieldInsideTheSearchField() {
+        let field = CGRect(x: 900, y: 860, width: 220, height: 24)
+        let finder = CGRect(x: 300, y: 400, width: 400, height: 22)
+        let inside = CGRect(x: 924, y: 862, width: 150, height: 20)
+        XCTAssertEqual(FieldAnchorView.pick([finder, inside], fieldFrame: field), 1)
+        XCTAssertNil(FieldAnchorView.pick([finder], fieldFrame: field), "no text field inside the search field")
+        XCTAssertNil(FieldAnchorView.pick([inside], fieldFrame: .null), "the field is not in a window yet")
+        XCTAssertTrue(FieldAnchorView.inField(inside, fieldFrame: field))
+        XCTAssertFalse(FieldAnchorView.inField(.null, fieldFrame: field))
+    }
+
+    /// Before the field is in a window, a request for the keyboard waits; nothing is editing and nothing lets go.
+    func testAnAnchorOutsideAWindowHoldsTheRequest() {
+        let anchor = FieldAnchorView()
+        var reports: [Bool] = []
+        anchor.editing = { reports.append($0) }
+        XCTAssertFalse(anchor.isEditing)
+        anchor.focusField()
+        anchor.release()
+        anchor.viewDidMoveToWindow()
+        XCTAssertEqual(reports, [], "no window, no first responder to report")
+    }
+
+    /// The area shows no scroll bar while its text fits its most lines; past them, it scrolls.
+    func testTheTextAreaScrollsOnlyPastItsMostLines() {
+        let line = TextArea.lineHeight
+        XCTAssertFalse(TextArea.overflows(height: line * 3, maxLines: 6))
+        XCTAssertFalse(TextArea.overflows(height: line * 6, maxLines: 6), "at its maximum it still fits")
+        XCTAssertTrue(TextArea.overflows(height: line * 7, maxLines: 6))
+    }
 }
