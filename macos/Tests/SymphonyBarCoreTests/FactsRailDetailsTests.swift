@@ -268,7 +268,7 @@ final class FactsRailDetailsTests: XCTestCase {
     func testOneRunsModelIsSummedUpAsOneRun() {
         let runs = ["a": TicketEventsPayload.Run(runID: "a", runKind: "implementation", runNumber: 1, model: "gpt-6", effort: " ")]
         let models = DetailsPanelModel.runModels(runs)
-        XCTAssertEqual(models.map(\.model), ["gpt-6"])
-        XCTAssertEqual(DetailsPanelModel.modelsSummary(models), "1 run · gpt-6")
+        XCTAssertEqual(models.map(\.model), ["GPT 6"])
+        XCTAssertEqual(DetailsPanelModel.modelsSummary(models), "1 run · GPT 6")
     }
 }
