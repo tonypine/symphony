@@ -153,7 +153,7 @@ private struct SessionStepHeader: View {
         }
         .padding(.vertical, DesignTokens.Space.s1)
         .overlay(alignment: .bottom) {
-            Rectangle().fill(DesignTokens.Surface.separator.color).frame(height: 1)
+            HairlineDivider()
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(step.accessibilityLabel)
