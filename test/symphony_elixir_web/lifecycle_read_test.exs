@@ -165,6 +165,7 @@ defmodule SymphonyElixirWeb.LifecycleReadTest do
     :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "watched", issue_identifier: "MT-2", phase: "Rework"})
     facts = %Facts{phase: :rework, ci: :pending, pr: :open, pr_number: 741}
     :ok = RunStore.put_ticket_pr_watch(@repo, "watched", "MT-2", %{facts: facts, head_sha: "abc1234"})
+    moved("watched", ~U[2026-10-30 09:00:00Z], "Todo", "In Progress")
     moved("watched", ~U[2026-10-30 10:00:00Z], "In Progress", "Code Review")
     moved("watched", ~U[2026-10-30 10:30:00Z], "Code Review", "Rework")
 
@@ -177,7 +178,7 @@ defmodule SymphonyElixirWeb.LifecycleReadTest do
 
   test "a ticket held in Rework reads Coding paused and QA, which sent it back, sent back" do
     :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: "held", issue_identifier: "MT-5", phase: "Rework"})
-    {:ok, _pause} = Pauses.add_reason({:ticket, @repo, "held"}, Pauses.ticket_reason(:dependency, "MT-2"))
+    {:ok, _pause} = Pauses.set({:ticket, @repo, "held"}, Pauses.ticket_reason(:dependency, "MT-2"))
     moved("held", ~U[2026-10-30 10:00:00Z], "In Progress", "QA")
     moved("held", ~U[2026-10-30 10:30:00Z], "QA", "Rework")
 
