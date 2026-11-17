@@ -573,8 +573,6 @@ private struct ContextCardView: View {
     }
 }
 
-}
-
 /// N10: the progress strip (C51) of the parent's sub-tickets in landing order, and "4 of 7 done" beside it; one element
 /// for VoiceOver, "4 of 7 sub-tickets done", then its counts. `header` draws the taller strip of an epic's header on
 /// Initiatives, up to its wider width.
