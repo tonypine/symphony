@@ -911,18 +911,20 @@ window.CATALOG = (function () {
     },
     {
       title: "Progress meter",
-      args: { label: "Tokens today", used: 2100000, cap: 5000000, unit: "tokens", resets: "at midnight" },
+      args: { label: "Tokens today", used: 2100000, cap: 5000000, unit: "tokens", resets: "at midnight", line: false, stop: 0 },
       controls: [
         { name: "label", label: "Label", type: "text" },
         { name: "used", label: "Used", type: "number", min: 0, step: 100000 },
         { name: "cap", label: "Cap", type: "number", min: 1, step: 100000 },
         { name: "unit", label: "Unit", type: "select", options: ["tokens", "runs"] },
         { name: "resets", label: "Resets", type: "text" },
+        { name: "line", label: "On one line", type: "toggle" },
+        { name: "stop", label: "New work stops at (%, 0: no mark)", type: "number", min: 0, max: 100, step: 5, when: (p) => p.line },
       ],
-      render: (p) => meter(p),
+      render: (p) => (p.line ? '<div style="width:640px">' + meterLine({ label: p.label, pct: Math.round((Number(p.used) / Math.max(1, Number(p.cap))) * 100), stop: p.stop, resets: p.resets }) + "</div>" : meter(p)),
       docs: {
         what: "How much of a cap is used: tokens against the daily budget, a ticket against its token cap, runs against a limit.",
-        when: ["The fill carries severity: accent below 75 %, orange from 75 %, red from 95 %. The note under it says what happens at the cap, in words."],
+        when: ["The fill carries severity: accent below 75 %, orange from 75 %, red from 95 %. The note under it says what happens at the cap, in words.", "On one line, for several meters read together (a provider’s windows): label, bar, percent, when it resets, and no note.", "A stop mark is a tick on the bar where the Director stops new work before the cap. With one, the fill is orange from the mark and red only at 100 %."],
         states: [["Calm", "below 75 %"], ["Near the cap", "75 to 95 %"], ["At the cap", "95 % and over"], ["Empty", "nothing used yet"]],
         motion: "The fill grows to a new value on a spring (0.45 s) and glows faintly in its colour. Change Used in the controls to see it.",
         tokens: ["--accent", "--status-you", "--status-problem", "--radius-mark", "--motion-standard"],
@@ -932,6 +934,10 @@ window.CATALOG = (function () {
         { name: "Calm" }, { name: "Near the cap", args: { used: 4100000 } }, { name: "At the cap", args: { used: 4900000 } },
         { name: "Ticket cap", args: { label: "TP-1382 against its cap", used: 7600000, cap: 8000000, resets: "never: the cap is per ticket" } },
         { name: "Empty", args: { used: 0 } },
+        { name: "One line", args: { line: true, label: "Week", used: 62, cap: 100, resets: "Thu 19 Nov, 14:00" } },
+        { name: "One line with a stop mark", args: { line: true, label: "Week", used: 62, cap: 100, stop: 90, resets: "Thu 19 Nov, 14:00" } },
+        { name: "One line at the stop mark", args: { line: true, label: "Week", used: 90, cap: 100, stop: 90, resets: "Thu 19 Nov, 14:00" } },
+        { name: "One line at the cap", args: { line: true, label: "Week", used: 100, cap: 100, stop: 90, resets: "Thu 19 Nov, 14:00" } },
       ],
     },
     {
@@ -2266,19 +2272,28 @@ window.CATALOG = (function () {
   const providerStateOf = (v, p) => providerState(v, v.id === p.provider ? p.provState : v.id === "openrouter" && p.otherPaused ? "paused" : "available");
   const weekOf = (v, state) => (v.windows || []).map((w) => (w.label === "Week" && state === "held" ? Object.assign({}, w, { pct: 100 }) : w.label === "Week" && state === "reserve" ? Object.assign({}, w, { pct: 90 }) : w));
 
+  /* A card of a list beside a page: a name, one fact, and where the thing stands in a line */
+  function listCard(o) {
+    return '<button type="button" class="ini-item list-card' + (o.unfocused ? " unfocused" : "") + stateClass(o.state) + '"' + (o.selected ? ' aria-selected="true"' : "") + (o.set ? ' data-set="' + esc(o.set) + '"' : "") + attr("data-key", o.key) + ">" +
+      '<span class="top"><span class="ident">' + esc(o.title) + "</span>" + (o.fact ? '<span class="n">' + esc(o.fact) + "</span>" : "") + "</span>" +
+      '<span class="legend"><span><span class="dot role-' + esc(o.role) + (o.live ? " live" : "") + '"></span>' + esc(o.status) + "</span></span></button>";
+  }
+
   function providerItem(v, p) {
     const st = providerStateOf(v, p);
     const week = weekOf(v, v.id === p.provider ? p.provState : "").find((w) => w.label === "Week");
-    return '<button type="button" class="ini-item prov-item' + (p.focused ? "" : " unfocused") + '"' + (p.provider === v.id ? ' aria-selected="true"' : "") + ' data-set="provider=' + esc(v.id) + '" data-key="prov-' + esc(v.id) + '">' +
-      '<span class="top"><span class="ident">' + esc(v.name) + "</span>" + (week ? '<span class="n">' + week.pct + " % of the week</span>" : v.tokens ? '<span class="n">' + esc(v.tokens) + " today</span>" : "") + "</span>" +
-      '<span class="legend"><span><span class="dot role-' + st.role + (st.role === "done" && v.working ? " live" : "") + '"></span>' + esc(st.short) + "</span></span></button>";
+    return listCard({ title: v.name, fact: week ? week.pct + " % of the week" : v.tokens ? v.tokens + " today" : "", role: st.role, status: st.short, live: st.role === "done" && !!v.working,
+      selected: p.provider === v.id, unfocused: !p.focused, set: "provider=" + v.id, key: "prov-" + v.id });
   }
 
-  function usageRow(w, reserve) {
-    const role = w.pct >= 100 ? "problem" : w.pct >= reserve ? "you" : "accent";
-    return '<div class="use-row role-' + role + '" role="meter" aria-valuenow="' + w.pct + '" aria-valuemin="0" aria-valuemax="100" aria-label="' + esc(w.label) + '"><span class="use-label">' + esc(w.label) + "</span>" +
-      '<span class="use-track"><span class="use-fill" style="width:' + w.pct + '%"></span><span class="use-stop" style="left:' + reserve + '%" title="You stop new runs at ' + reserve + ' %"></span></span>' +
-      '<span class="use-value">' + w.pct + ' %</span><span class="use-resets">resets ' + esc(w.resets) + "</span></div>";
+  /* The Progress meter on one line: label, bar, percent and when it resets; `stop` draws a mark where new work stops */
+  function meterLine(o) {
+    const pct = Math.max(0, Math.min(100, Number(o.pct) || 0));
+    const stop = Number(o.stop) || 0;
+    const role = pct >= 100 ? "problem" : stop && pct >= stop ? "you" : !stop && pct >= 95 ? "problem" : !stop && pct >= 75 ? "you" : "accent";
+    return '<div class="meter-line role-' + role + '" role="meter" aria-valuenow="' + pct + '" aria-valuemin="0" aria-valuemax="100" aria-label="' + esc(o.label) + ", " + pct + ' percent"><span class="ml-label">' + esc(o.label) + "</span>" +
+      '<span class="ml-track"><span class="ml-fill" data-anim="meter-fill" style="width:' + pct + '%"></span>' + (stop && stop < 100 ? '<span class="ml-stop" style="left:' + stop + '%" title="New runs stop at ' + stop + ' %"></span>' : "") + "</span>" +
+      '<span class="ml-value">' + pct + " %</span>" + (o.resets ? '<span class="ml-resets">resets ' + esc(o.resets) + "</span>" : "") + "</div>";
   }
 
   function providersPage(p) {
@@ -2293,7 +2308,7 @@ window.CATALOG = (function () {
       situation({ role: st.role, word: st.word, cause: st.cause, waits: st.waits, compact: false }) + "</div>";
     const windows = weekOf(v, p.provState);
     const reserve = Number(p.reserve);
-    const usage = !windows.length ? "" : '<h3 class="zone-title">Usage</h3><section class="panel prov-usage">' + windows.map((w) => usageRow(w, reserve)).join("") +
+    const usage = !windows.length ? "" : '<h3 class="zone-title">Usage</h3><section class="panel prov-usage">' + windows.map((w) => meterLine({ label: w.label, pct: w.pct, stop: reserve, resets: w.resets })).join("") +
       '<div class="use-set"><span>Stop new runs at</span><button type="button" class="popup sz-sm" aria-haspopup="listbox"><span class="popup-label"><span>' + reserve + " %</span></span>" + icon("updown", "chev") + "</button></div></section>";
     const facts = '<h3 class="zone-title">Access</h3><section class="panel">' + kv([["Key", v.key + (v.key.indexOf("_") > 0 ? " · set" : "")], ["Harnesses", v.harnesses], ["Runs set to it", v.runs.length ? v.runs.filter((r) => !r.fallbackOf).map((r) => r.kind).join(", ") : ""], ["Fallback for", v.runs.filter((r) => r.fallbackOf).map((r) => r.kind).join(", ")], ["Working now", v.working ? v.working + (v.working === 1 ? " run" : " runs") : ""], ["Tokens today", v.tokens || ""]]) + "</section>";
     return '<div class="ini prov"><aside class="ini-side">' + list + '</aside><div class="ini-main">' + head + usage + facts + "</div></div>";
@@ -2350,17 +2365,32 @@ window.CATALOG = (function () {
       o.list.filter((m) => !o.query || m.indexOf(o.query) >= 0).map((m) => '<li class="menu-item' + (m === o.hover ? " is-hover" : "") + '" role="option" aria-checked="' + (m === value) + '">' + icon("check", "check") + '<span class="mono">' + esc(m) + "</span></li>").join("") + "</ul></div></span>";
   }
 
+  /* One line of a list whose order the Director sets by dragging: handle, position, the line's own controls, remove */
+  function reorderLine(o) {
+    return '<div class="reorder-line' + (o.dragging ? " dragging" : "") + (o.gap ? " drop-gap" : "") + (o.off ? " is-off" : "") + (o.hover ? " handle-hover" : "") + (o.focused ? " handle-focus" : "") + '" role="listitem">' +
+      '<span class="grip" role="button" tabindex="0" aria-label="Move line ' + o.n + '" title="Drag to change the order">' + icon("grip") + '</span><span class="n">' + o.n + "</span>" + o.inner +
+      '<span class="grow"></span>' + (o.remove ? iconBtn("close", o.remove, { size: "sm" }) : "") + "</div>";
+  }
+
+  /* The bar over a page that is edited whole: what is being edited on the left; what is not saved yet, Revert and Save on the right */
+  function saveBar(o) {
+    const n = Number(o.changes) || 0;
+    return '<div class="tk-bar save-bar">' + (o.left || "") + '<span class="grow"></span>' +
+      (o.saving ? '<span class="tk-count">Saving…</span>' : o.error ? '<span class="save-error">' + icon("problem") + esc(o.error) + "</span>" : n ? '<span class="tk-count">' + n + (n === 1 ? " change" : " changes") + " not saved</span>" : o.saved ? '<span class="tk-count saved">' + icon("done") + "Saved</span>" : "") +
+      (n && !o.saving ? button({ label: "Revert", variant: "quiet", size: "small" }) : "") +
+      button({ label: "Save", variant: "primary", size: "small", disabled: !n || !!o.saving, reason: o.saving ? "Saving." : "Nothing has changed.", showReason: false }) + kbd("⌘ S", true) + "</div>";
+  }
+
   function runLine(k, step, own, n, total, p) {
     const role = runProviderRole(step[1], p);
     const key = k.id + "-" + n;
     const picking = p.modelOpen === key;
-    return '<div class="run-edit-line' + (p.dragging === key ? " dragging" : "") + (role === "done" ? "" : " is-off") + '">' +
-      '<span class="grip" role="button" tabindex="0" aria-label="Drag to change the order" title="Drag to change the order">' + icon("grip") + '</span><span class="n">' + n + "</span>" +
-      pop("Harness", NAMES[step[0]], { inherited: own.indexOf(0) < 0 }) + pop("Provider", NAMES[step[1]], { inherited: own.indexOf(1) < 0 }) +
+    const inner = pop("Harness", NAMES[step[0]], { inherited: own.indexOf(0) < 0 }) + pop("Provider", NAMES[step[1]], { inherited: own.indexOf(1) < 0 }) +
       pop("Model", step[2], { inherited: own.indexOf(2) < 0, mono: true, toggle: "modelOpen=" + (picking ? "" : key), list: picking ? MODELS[step[1]] : null, query: picking ? p.modelQuery : "", hover: (MODELS[step[1]] || [])[1] }) +
       pop("Effort", step[3], { inherited: own.indexOf(3) < 0 }) +
-      (role === "done" ? "" : '<span class="off-note"><span class="dot role-' + role + '"></span>' + esc(NAMES[step[1]]) + (role === "problem" ? " is at its limit" : " is paused") + "</span>") +
-      '<span class="grow"></span>' + (total > 1 && (k.id === "default" || k.ownThen) ? iconBtn("close", n === 1 ? "Remove; the next one becomes the first choice" : "Remove this fallback", { size: "sm" }) : "") + "</div>";
+      (role === "done" ? "" : '<span class="off-note"><span class="dot role-' + role + '"></span>' + esc(NAMES[step[1]]) + (role === "problem" ? " is at its limit" : " is paused") + "</span>");
+    return reorderLine({ n: n, inner: inner, dragging: p.dragging === key, gap: n > 1 && p.dragging === k.id + "-" + (n + 1), off: role !== "done",
+      remove: total > 1 && (k.id === "default" || k.ownThen) ? (n === 1 ? "Remove; the next one becomes the first choice" : "Remove this fallback") : "" });
   }
 
   function runRow(k, p) {
@@ -2369,7 +2399,7 @@ window.CATALOG = (function () {
     const total = 1 + then.length;
     const inherits = k.id !== "default" && !(k.own || []).length && !k.ownThen;
     return '<div class="run-row' + (k.id === "default" ? " is-default" : "") + '"><div class="run-kind"><span class="kind">' + esc(k.name) + "</span>" +
-      (k.id === "default" || inherits ? "" : button({ label: "Use Default’s", variant: "quiet", size: "small" })) + '</div><div class="run-edit">' +
+      (k.id === "default" || inherits ? "" : button({ label: "Use Default’s", variant: "quiet", size: "small" })) + '</div><div class="run-edit" role="list">' +
       runLine(k, runFirst(k), k.own || [], 1, total, p) + then.map((t, i) => runLine(k, t, k.ownThen ? all : [], i + 2, total, p)).join("") +
       '<div class="run-edit-foot">' + button({ label: "Add a Fallback", variant: "quiet", size: "small", glyph: "plus" }) + (then.length ? "" : '<span class="run-waits only">No fallback: a run waits when ' + esc(NAMES[runFirst(k)[1]]) + " can’t take it</span>") + "</div></div></div>";
   }
@@ -2377,15 +2407,100 @@ window.CATALOG = (function () {
   const HARNESS_ROWS = [["Claude", "claude --dangerously-skip-permissions", [["anthropic", "claude-haiku-5-5"], ["openrouter", "deepseek/deepseek-flash"]]], ["OpenCode", "opencode", [["opencode-go", "hy4-flash"]]]];
 
   function runsPage(p) {
-    const scope = '<div class="tk-bar"><button type="button" class="popup sz-sm" aria-haspopup="listbox"><span class="popup-label"><span>For</span><span>' + (p.runsRepo ? "web-shop" : "All repositories") + "</span></span>" + icon("updown", "chev") + "</button>" +
-      '<span class="grow"></span>' + (p.runsDirty ? '<span class="tk-count">2 changes not saved</span>' + button({ label: "Revert", variant: "quiet", size: "small" }) : "") +
-      button({ label: "Save", variant: "primary", size: "small", disabled: !p.runsDirty, reason: "Nothing has changed.", showReason: false }) + "</div>";
+    const scope = saveBar({ changes: p.runsDirty ? 2 : 0, left: '<button type="button" class="popup sz-sm" aria-haspopup="listbox"><span class="popup-label"><span>For</span><span>' + (p.runsRepo ? "web-shop" : "All repositories") + "</span></span>" + icon("updown", "chev") + "</button>" });
     const kinds = p.runsRepo ? RUN_KINDS.map((k) => (k.id === "qa" ? k : { id: k.id, name: k.name })) : RUN_KINDS;
     const command = (value) => '<label class="h-field"><span>Command</span><div class="field sz-sm" style="width:300px"><div class="input"><input type="text" value="' + esc(value) + '"></div></div></label>';
     const harnesses = '<h3 class="zone-title">Harnesses</h3><section class="panel run-harnesses">' + HARNESS_ROWS.map((h) => '<div class="h-row"><b>' + h[0] + "</b>" + command(h[1]) + '<span class="h-models">' +
       h[2].map((m) => pop("Small model on " + NAMES[m[0]], m[1], { mono: true })).join("") + "</span></div>").join("") + "</section>";
     return '<div class="runs-page">' + scope + '<section class="panel run-list">' + kinds.map((k) => runRow(k, p)).join("") + "</section>" + (p.runsRepo ? "" : harnesses) + "</div>";
   }
+
+  /* ---------- Components the Runs and Providers pages are built from ---------- */
+
+  components.push(
+    {
+      title: "Searchable pop-up",
+      args: { label: "Model", value: "claude-opus-5-5", provider: "anthropic", open: false, query: "", inherited: false },
+      controls: [{ name: "label", label: "Label", type: "text" }, { name: "provider", label: "Choices", type: "select", options: [{ value: "anthropic", label: "3 (Anthropic)" }, { value: "opencode-go", label: "5 (OpenCode Go)" }, { value: "openrouter", label: "4 (OpenRouter)" }] },
+        { name: "open", label: "Open", type: "toggle" }, { name: "query", label: "Typed in the list", type: "text", when: (p) => p.open }, { name: "inherited", label: "Value comes from a default", type: "toggle" }],
+      render: (p) => {
+        const list = MODELS[p.provider] || [];
+        const value = list.indexOf(p.value) >= 0 ? p.value : list[0];
+        const shown = list.filter((m) => !p.query || m.indexOf(p.query) >= 0);
+        return '<div style="min-height:' + (p.open ? 250 : 40) + 'px">' + (p.open && !shown.length ?
+          pop(p.label, value, { mono: true, inherited: p.inherited, toggle: "open=", list: [], query: p.query }).replace("<ul></ul>", '<p class="pick-none">No model matches “' + esc(p.query) + "”.</p>") :
+          pop(p.label, value, { mono: true, inherited: p.inherited, toggle: "open=" + (p.open ? "" : "1"), list: p.open ? list : null, query: p.query, hover: shown[1] })) + "</div>";
+      },
+      docs: {
+        what: "A Pop-up whose list has a search field on top: for a choice among more values than fit a glance, such as a provider’s models.",
+        when: ["Use it when the list can pass about seven values or is read from a service. A short fixed list stays a Pop-up.", "The value is always one of the list’s: nothing is typed in as a value.", "A value that comes from a default is drawn in the tertiary colour; choosing one makes it the entry’s own."],
+        states: [["Closed", "like a Pop-up"], ["Open", "the search field has the focus, the current value is checked"], ["Finding", "the list narrows as the Director types"], ["Nothing matches", "one line saying so, in the list’s place"], ["Value from a default", "tertiary colour"]],
+        motion: "Opens as a menu does. The list narrows without moving the field.",
+        tokens: ["Pop-up and Search field tokens", "--material-glass-thick", "--elevation-3", "--font-mono for identifiers"],
+        access: "Space or Return opens it with the focus in the search field. Typing narrows, the arrows move through the list, Return picks, Escape closes and keeps the value.",
+      },
+      stories: [{ name: "Closed" }, { name: "Open", args: { open: true } }, { name: "Finding", args: { open: true, provider: "openrouter", value: "deepseek/deepseek-flash", query: "deep" } },
+        { name: "Nothing matches", args: { open: true, query: "gpt" } }, { name: "Value from a default", args: { inherited: true } }],
+    },
+    {
+      title: "Reorderable list",
+      args: { count: 3, dragging: 0, hover: 0, focused: 0, off: 0, removable: true },
+      controls: [{ name: "count", label: "Lines", type: "number", min: 1, max: 4 }, { name: "dragging", label: "Line being dragged (0: none)", type: "number", min: 0, max: 4 }, { name: "hover", label: "Handle under the pointer (0: none)", type: "number", min: 0, max: 4 },
+        { name: "focused", label: "Handle with the focus (0: none)", type: "number", min: 0, max: 4 }, { name: "off", label: "Line that can’t be used now (0: none)", type: "number", min: 0, max: 4 }, { name: "removable", label: "Lines can be removed", type: "toggle" }],
+      render: (p) => {
+        const steps = [["claude", "anthropic", "claude-opus-5-5", "medium"], ["opencode", "opencode-go", "kimi-k3", ""], ["claude", "openrouter", "deepseek/deepseek-flash", "low"], ["claude", "anthropic", "claude-haiku-5-5", "low"]].slice(0, Math.max(1, Number(p.count)));
+        const line = (st, i) => reorderLine({ n: i + 1, dragging: Number(p.dragging) === i + 1, gap: Number(p.dragging) > 1 && Number(p.dragging) === i + 2, hover: Number(p.hover) === i + 1, focused: Number(p.focused) === i + 1, off: Number(p.off) === i + 1,
+          remove: p.removable && steps.length > 1 ? "Remove this line" : "",
+          inner: pop("Harness", NAMES[st[0]]) + pop("Provider", NAMES[st[1]]) + pop("Model", st[2], { mono: true }) + pop("Effort", st[3]) + (Number(p.off) === i + 1 ? '<span class="off-note"><span class="dot role-you"></span>' + NAMES[st[1]] + " is paused</span>" : "") });
+        return '<div style="width:760px;padding:24px 0"><div class="run-edit" role="list">' + steps.map(line).join("") + '<div class="run-edit-foot">' + button({ label: "Add a Fallback", variant: "quiet", size: "small", glyph: "plus" }) + "</div></div></div>";
+      },
+      docs: {
+        what: "A short list whose order means something and is the Director’s to set: each line has a handle to drag, its place as a number, its own controls, and a way to remove it.",
+        when: ["Use it where the order is what is being edited, such as the fallbacks of a kind of run, tried from the top.", "The number is the line’s place, and it changes as the line moves. A list whose order means nothing has no handles.", "Adding a line is a quiet button under the list. Removing is an Icon button at the line’s end, never on the only line.", "A list this component draws is saved with its page (see the Save bar): a drop changes nothing outside the page."],
+        states: [["Resting", "handles in the tertiary colour"], ["Handle hover", "the handle darkens on a pressed surface, the pointer is a hand"], ["Dragging", "the line lifts with the accent edge and follows the pointer; the others part to show where it lands"], ["Handle focused", "focus ring on the handle"], ["A line that can’t be used now", "orange edge on its controls and a line saying why"], ["One line", "no remove button"]],
+        motion: "The lifted line follows the pointer. The others slide to open the place on the fold spring; on a drop the line settles and the numbers change at once.",
+        tokens: ["--surface-pressed", "--elevation-3", "--accent", "--radius-control-md", "--ease-spring", "Pop-up and Icon button tokens"],
+        access: "The handle is a button named “Move line 2”. Space picks the line up, the arrows move it, Space drops it, Escape puts it back. VoiceOver says the new place: “Line 2 of 3”.",
+      },
+      stories: [{ name: "Resting" }, { name: "Handle hover", args: { hover: 2 } }, { name: "Dragging", args: { dragging: 3 } }, { name: "Handle focused", args: { focused: 2 } },
+        { name: "A line that can’t be used now", args: { off: 1 } }, { name: "One line", args: { count: 1 } }],
+    },
+    {
+      title: "Save bar",
+      args: { changes: 2, saving: false, saved: false, error: "", scope: true },
+      controls: [{ name: "changes", label: "Changes not saved", type: "number", min: 0 }, { name: "saving", label: "Saving", type: "toggle" }, { name: "saved", label: "Just saved", type: "toggle", when: (p) => !Number(p.changes) },
+        { name: "error", label: "Why the save was refused", type: "text" }, { name: "scope", label: "What is edited, on the left", type: "toggle" }],
+      render: (p) => '<div style="width:900px">' + saveBar({ changes: p.changes, saving: p.saving, saved: p.saved, error: p.error,
+        left: p.scope ? '<button type="button" class="popup sz-sm" aria-haspopup="listbox"><span class="popup-label"><span>For</span><span>All repositories</span></span>' + icon("updown", "chev") + "</button>" : "" }) + "</div>",
+      docs: {
+        what: "The bar over a page that is edited whole and saved at once: what is being edited on the left; how much is not saved, Revert and Save on the right.",
+        when: ["Use it on a page where a change means nothing alone or is checked as a whole, such as Runs and Settings. A control that acts at once (Pause, a toggle that applies) has no Save bar.", "Nothing the page shows is applied until Save. Save is disabled while nothing has changed.", "It stays at the top of the page while the page scrolls under it.", "A save that is refused keeps every change and says why in the bar, in the problem colour."],
+        states: [["Nothing changed", "Save disabled, no count"], ["Changes not saved", "the count, Revert and Save"], ["Saving", "“Saving…”, Save disabled"], ["Saved", "“Saved” with a check, for a moment"], ["Refused", "the reason in red; the changes stay"]],
+        motion: "The count and Revert fade in with the first change. “Saved” fades after two seconds.",
+        tokens: ["--material-glass", "--stroke-separator", "--status-problem-text", "--status-done", "Button and Pop-up tokens"],
+        access: "⌘S saves. Leaving the page with changes asks to save, revert or stay. The count is announced when it changes.",
+      },
+      stories: [{ name: "Nothing changed", args: { changes: 0 } }, { name: "Changes not saved" }, { name: "Saving", args: { saving: true } }, { name: "Saved", args: { changes: 0, saved: true } },
+        { name: "Refused", args: { error: "runs.qa resolves no model; set one there or in Default" } }, { name: "No scope", args: { scope: false } }],
+    },
+    {
+      title: "List card",
+      args: { title: "Anthropic", fact: "62 % of the week", role: "done", status: "3 working", live: true, selected: false, unfocused: false, state: "default" },
+      controls: [{ name: "title", label: "Name", type: "text" }, { name: "fact", label: "One fact", type: "text" }, { name: "role", label: "Status", type: "select", options: ROLE_OPTIONS }, { name: "status", label: "Status line", type: "text" },
+        { name: "live", label: "Something is working", type: "toggle" }, { name: "selected", label: "Selected", type: "toggle" }, { name: "unfocused", label: "Window not focused", type: "toggle" }, STATE],
+      render: (p) => '<div style="width:340px">' + listCard(p) + "</div>",
+      docs: {
+        what: "One thing in the list beside its page: its name, one fact on the right, and where it stands in a line with a Status dot. The provider list is built from it.",
+        when: ["Use it for the left list of a page that shows one of a few things at a time. For many rows, use the Row or a table.", "One fact only, the one the Director compares across the list.", "The status line is the short form of the page’s Situation line, never a second message."],
+        states: [["Resting", "card surface"], ["Hover", "lifts 1 pt"], ["Selected", "accent ring"], ["Selected, window not focused", "grey ring"], ["Focused", "focus ring"]],
+        motion: "Lifts on hover on the spring. The selection ring moves to the picked card.",
+        tokens: ["--surface-content", "--elevation-1", "--accent", "--accent-tint", "--radius-card", "--type-row-title", "Status dot tokens"],
+        access: "The list is a listbox; the arrows move the selection, and the page follows it.",
+      },
+      stories: [{ name: "Resting" }, { name: "Hover", args: { state: "hover" } }, { name: "Selected", args: { selected: true } }, { name: "Selected, window not focused", args: { selected: true, unfocused: true } },
+        { name: "Focused", args: { state: "focused" } }, { name: "Waiting on you", args: { role: "you", status: "Paused by you · 12 min", live: false, selected: true } }, { name: "No fact", args: { title: "OpenAI", fact: "", role: "idle", status: "Not in use", live: false } }],
+    }
+  );
 
   /* ---------- The window: sidebar, toolbar, status bar and background around a page ---------- */
 
