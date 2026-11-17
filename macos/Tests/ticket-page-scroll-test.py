@@ -433,13 +433,16 @@ def measure_table(binary, executable, root, failures):
         for _ in range(90):
             if process.poll() is not None:
                 break
-            area = page_scroll_area(binary, pid, "Summary")
+            # A row's own words ("SHOP-298", the fixtures' ticket) show once the records are read and drawn.
+            area = page_scroll_area(binary, pid, "SHOP-")
             if area:
                 break
             time.sleep(1)
         if not area:
             with open(log_path, errors="replace") as handle:
                 tail = handle.read()[-3000:]
+            seen = driver(binary, "ax-tree", pid, 40, 40, "", "", timeout=60)
+            print(f"table: the app exposes {json.dumps(seen)[:3000]}")
             failures.append("table")
             print(f"FAIL [table]: Audit's table of {TABLE_ROWS} records never showed (exit {process.poll()}); the app's log:\n{tail}")
             return
