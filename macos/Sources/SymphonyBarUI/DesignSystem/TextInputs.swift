@@ -444,12 +444,12 @@ public struct SearchField: View {
         }
         .animation(.motion(.lift, reduceMotion: reduceMotion), value: hasQuery)
         .onChange(of: focused, initial: true) { _, focused in
-            escape.perform = { [text = $text, focus = focusBinding, escape] in
+            escape.perform = { [text = $text, focus = focusBinding, weak escape] in
                 switch DesignTokens.Field.escape(query: text.wrappedValue) {
                 case .clear: text.wrappedValue = ""
                 case .release:
                     focus.wrappedValue = false
-                    (escape.anchor as? FieldAnchorView)?.release()
+                    (escape?.anchor as? FieldAnchorView)?.release()
                 }
                 return true
             }
