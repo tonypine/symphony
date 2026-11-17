@@ -38,7 +38,9 @@ func tableAge(_ minutes: Int) -> String {
 /// Tokens; Title and Stage do not sort.
 @MainActor
 let tableColumns: [DataTableColumn<TableTicket>] = [
-    DataTableColumn("Ticket", id: "ident", ascending: "A to Z", descending: "Z to A", text: \.id) { ticket in
+    DataTableColumn(
+        "Ticket", id: "ident", ascending: "A to Z", descending: "Z to A", measuredAs: .rowTitle, tabular: true, text: \.id
+    ) { ticket in
         Text(ticket.id).textStyle(.rowTitle).monospacedDigit().lineLimit(1)
     },
     DataTableColumn("Title", id: "title", width: .share(1), sortable: false, text: \.title),

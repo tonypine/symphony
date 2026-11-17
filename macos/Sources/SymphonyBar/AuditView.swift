@@ -290,7 +290,7 @@ struct AuditTable: View {
                 DataTableText(row.kindTitle)
             }
         },
-        DataTableColumn("Ticket", id: "ticket", text: \.ticketText) { row in
+        DataTableColumn("Ticket", id: "ticket", measuredAs: .mono, text: \.ticketText) { row in
             Text(row.ticketText).textStyle(.mono).lineLimit(1)
         },
         DataTableColumn("Repo", id: "repo", text: \.repoText),

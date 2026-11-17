@@ -1448,6 +1448,8 @@ Ten more variables, read only in QA mode:
   set to Aqua or Dark Aqua at launch) whatever the Mac's own setting, so QA judges both on one Mac without
   switching the Mac's appearance. Any other value, or none, follows the Mac.
 - `SYMPHONY_BAR_QA_OPEN_TICKET=TP-123` opens the Symphony window on that ticket's page at launch.
+- `SYMPHONY_BAR_QA_OPEN_VIEW=audit` opens the Symphony window on that page at launch (a page's name: `audit`,
+  `usage`, `tickets`…); the scroll test opens Audit over a thousand records this way.
 - In QA mode SIGUSR1 starts counting frames (a display link on the main run loop) and SIGUSR2 stops it and writes
   the count to `frames.json` in the QA root: the frames, the seconds, the hitch time (each frame later than one
   frame and a half, past one frame), the dropped frames and the hitch ratio in ms per second. Outside QA mode the

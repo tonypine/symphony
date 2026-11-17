@@ -102,6 +102,30 @@ final class DataTableTests: XCTestCase {
         XCTAssertEqual(next.rows.map(\.hidden), [7], "a cell drawn from more than its words still shows the new row")
     }
 
+    func testAFittedColumnIsMeasuredInTheStyleItsCellDraws() {
+        let long = [Item(id: "SYMPHONY-10482", name: "", count: 0)]
+        func measured(_ style: DesignTokens.TypeStyle, tabular: Bool = false) -> Double {
+            let column = DataTableColumn<Item>("Id", id: "id", sortable: false, measuredAs: style, tabular: tabular, text: \.id) {
+                Text($0.id).textStyle(style)
+            }
+            return DataTableCache<Item>.measure(column, rows: long)
+        }
+        let padding = 2 * DesignTokens.Table.cellPadding
+        let body = measured(.body)
+        let rowTitle = measured(.rowTitle, tabular: true)
+        let bodyWords = DataTableCache<Item>.width("SYMPHONY-10482", font: DesignTokens.TypeStyle.body.nsFont)
+        XCTAssertEqual(body, (bodyWords + padding).rounded(.up), accuracy: 1)
+        XCTAssertGreaterThan(rowTitle, body, "the row title's 600 weight draws wider than body's 400")
+        let drawn = DataTableCache<Item>.width("SYMPHONY-10482", font: DataTableCache<Item>.font(.rowTitle, tabular: true))
+        XCTAssertGreaterThanOrEqual(rowTitle, drawn + padding, "the words fit as the cell draws them")
+        let mono = measured(.mono)
+        let monoDrawn = DataTableCache<Item>.width("SYMPHONY-10482", font: DesignTokens.TypeStyle.mono.nsFont)
+        XCTAssertGreaterThanOrEqual(mono, monoDrawn + padding, "an id in mono fits as it draws")
+        XCTAssertEqual(DataTableCache<Item>.font(.mono, tabular: true), DesignTokens.TypeStyle.mono.nsFont, "mono's figures are already even")
+        XCTAssertEqual(DataTableColumn<Item>("Id", text: \.id).measuredAs, .body)
+        XCTAssertTrue(DataTableColumn<Item>("N", alignment: .number, text: \.id).tabular, "numbers are in tabular figures")
+    }
+
     func testABadgeTakesItsPaddingAndGlyphBeyondItsWord() {
         let size = DesignTokens.Badge.Size.small
         XCTAssertEqual(size.tableRoom, size.leading + size.trailing + size.glyph + DesignTokens.Badge.gap)

@@ -27,6 +27,11 @@ public struct DataTableColumn<Item: Identifiable> {
     public let firstAscending: Bool
     /// Room a fitted column's custom cell takes beyond its words (a badge's padding and glyph).
     public let fitExtra: Double
+    /// The text style its words are drawn in, which a fitted column is measured in: body unless a custom cell draws
+    /// them otherwise (a ticket's id in the row title's weight, an id in mono).
+    public let measuredAs: DesignTokens.TypeStyle
+    /// Whether its words are drawn in tabular figures: always for numbers, and for a custom cell that asks for them.
+    public let tabular: Bool
     let text: (Item) -> String
     let sortKey: ((Item) -> String)?
     let cell: ((Item) -> AnyView)?
@@ -47,16 +52,20 @@ public struct DataTableColumn<Item: Identifiable> {
         descendingWords = descending
         self.firstAscending = firstAscending ?? (alignment == .text)
         fitExtra = 0
+        measuredAs = .body
+        tabular = alignment == .number
         self.text = text
         self.sortKey = sortKey
         cell = nil
     }
 
-    /// A column whose cell is any view; `text` still names its words.
+    /// A column whose cell is any view; `text` still names its words, drawn in `measuredAs` (in tabular figures with
+    /// `tabular`, or when it holds numbers), which a fitted column is measured in.
     public init<Cell: View>(
         _ title: String, id: String? = nil, alignment: DesignTokens.Table.Alignment = .text,
         width: DesignTokens.Table.Width = .fit, sortable: Bool = true, ascending: String = "ascending",
         descending: String = "descending", firstAscending: Bool? = nil, fitExtra: Double = 0,
+        measuredAs: DesignTokens.TypeStyle = .body, tabular: Bool = false,
         sortKey: ((Item) -> String)? = nil, text: @escaping (Item) -> String, @ViewBuilder cell: @escaping (Item) -> Cell
     ) {
         self.id = id ?? title
@@ -68,6 +77,8 @@ public struct DataTableColumn<Item: Identifiable> {
         descendingWords = descending
         self.firstAscending = firstAscending ?? (alignment == .text)
         self.fitExtra = fitExtra
+        self.measuredAs = measuredAs
+        self.tabular = tabular || alignment == .number
         self.text = text
         self.sortKey = sortKey
         self.cell = { AnyView(cell($0)) }
@@ -373,7 +384,7 @@ final class DataTableCache<Item: Identifiable> {
         let label = DesignTokens.TypeStyle.label
         let title = width(column.title, font: label.nsFont, tracking: label.tracking * label.scaledSize(by: DesignTokens.TypeStyle.textScale))
             + (column.sortable ? DesignTokens.Table.sortGap + DesignTokens.Table.sortGlyph + DesignTokens.Table.headerButtonOutset : 0)
-        let font = column.alignment == .number ? numberFont : DesignTokens.TypeStyle.body.nsFont
+        let font = font(column.measuredAs, tabular: column.tabular)
         let widest = rows.reduce(0.0) { max($0, width(column.text($1), font: font)) } + column.fitExtra
         return (max(title, widest) + 2 * DesignTokens.Table.cellPadding).rounded(.up)
     }
@@ -384,9 +395,13 @@ final class DataTableCache<Item: Identifiable> {
     }
 
     /// The body style in tabular figures.
-    static var numberFont: NSFont {
-        let body = DesignTokens.TypeStyle.body.nsFont
-        return NSFont.monospacedDigitSystemFont(ofSize: body.pointSize, weight: NSFont.Weight(rawValue: CGFloat(DesignTokens.TypeStyle.body.systemWeight)))
+    static var numberFont: NSFont { font(.body, tabular: true) }
+
+    /// A style's font as its cell draws it, in tabular figures when asked (mono's figures already are).
+    static func font(_ style: DesignTokens.TypeStyle, tabular: Bool) -> NSFont {
+        let font = style.nsFont
+        guard tabular, style.family != .mono else { return font }
+        return NSFont.monospacedDigitSystemFont(ofSize: font.pointSize, weight: NSFont.Weight(rawValue: CGFloat(style.systemWeight)))
     }
 }
 
