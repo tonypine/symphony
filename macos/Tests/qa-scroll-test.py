@@ -145,9 +145,16 @@ def scroll_to_end(binary, pid, name, first, last, lazy=True):
     if lazy and find(binary, pid, last):
         return fail(name, f"{last!r} is already in the AX tree before scrolling; the fixture shows too much")
 
-    reply = driver(binary, "scroll", pid, start["path"], "bottom", "pixel")
-    if "error" in reply:
-        return fail(name, f"scroll failed: {reply['error']}")
+    # A shared runner's desktop can take the pointer or focus off the window for the
+    # first scroll events, so the driver reports the edge without having moved: scroll
+    # again, up to three times, until the last row shows.
+    for _ in range(3):
+        reply = driver(binary, "scroll", pid, start["path"], "bottom", "pixel")
+        if "error" in reply:
+            return fail(name, f"scroll failed: {reply['error']}")
+        if find(binary, pid, last):
+            break
+        time.sleep(1)
     if reply.get("at_edge") is not True:
         fail(name, f"at_edge is {reply.get('at_edge')!r} after {reply.get('rounds')} rounds: {reply.get('note')}")
 
