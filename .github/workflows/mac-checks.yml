@@ -34,7 +34,7 @@ on:
         type: boolean
         default: false
       build:
-        description: Build the app (the type-check guard) and file its executable.
+        description: Build the app and file its executable.
         type: boolean
         default: false
       unit:
@@ -130,10 +130,8 @@ jobs:
         timeout-minutes: 5
         run: bash scripts/ci/desktop-lock-test.sh
 
-      # Fails on any expression the type-checker takes over 100ms on (macos/Makefile's `guarded-%`,
-      # which a run's Build step also calls). It builds in the branch's saved state, so a push
-      # compiles what it changed; main builds from nothing. The executable is filed in the store
-      # for the steps and jobs that need the app.
+      # Builds in the branch's saved state, so a push compiles what it changed; main builds from
+      # nothing. The executable is filed in the store for the steps and jobs that need the app.
       - name: Build app
         id: build
         if: ${{ (inputs.fail_fast && success() || !inputs.fail_fast && !cancelled()) && inputs.build }}
@@ -143,7 +141,7 @@ jobs:
           fresh=""; mode=incremental
           if [ "$CLEAN" = true ]; then fresh="--fresh"; mode=clean; fi
           scratch="$($store work "$SYMPHONY_CI_REF" release $fresh)"
-          time make guarded-app ${scratch:+TYPE_CHECK_GUARD_SCRATCH="$scratch"}
+          time make app ${scratch:+SWIFT_FLAGS="--scratch-path $scratch"}
           if [ -n "$scratch" ]; then
             $store save "$SYMPHONY_CI_REF" release
             if key="$($store key app)"; then
