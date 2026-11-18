@@ -4,6 +4,7 @@ defmodule SymphonyElixirWeb.Presenter do
   """
 
   alias SymphonyElixir.{
+    AgentProviders,
     Artifacts,
     BuildInfo,
     Config,
@@ -546,6 +547,16 @@ defmodule SymphonyElixirWeb.Presenter do
   @spec repository_payload(%{repo_key: String.t(), pause: map() | nil}) :: map()
   def repository_payload(%{repo_key: repo_key} = repository),
     do: %{repo_key: repo_key, paused: not is_nil(repository.pause), pause: pause_payload(repository)}
+
+  @doc """
+  A provider and its pause (`SymphonyElixir.Pauses`, subject `{:provider, provider}`) as the control
+  API gives it: its id, its name for a person, `paused`, and the pause as a repository's reads (nil
+  when not paused).
+  """
+  @spec provider_payload(%{provider: String.t(), pause: map() | nil}) :: map()
+  def provider_payload(%{provider: provider} = status) do
+    %{provider: provider, name: AgentProviders.display_name(provider), paused: not is_nil(status.pause), pause: pause_payload(status)}
+  end
 
   @doc """
   Why a ticket or a repository does not move (`SymphonyElixir.Pauses`), from its record: since when,
