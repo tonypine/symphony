@@ -234,7 +234,8 @@ final class SituationTests: XCTestCase {
     }
 
     func testAnythingElseIsNoSituation() {
-        XCTAssertNil(Situation.decode(Data(#"{"kind":"needs_attention","word":"Needs attention"}"#.utf8)))
+        XCTAssertEqual(Situation.decode(Data(#"{"kind":"needs_attention","word":"Needs attention"}"#.utf8))?.kind, .unknown)
+        XCTAssertNil(Situation.decode(Data(#"{"word":"Needs attention"}"#.utf8)), "no kind is no situation")
         XCTAssertNil(Situation.decode(Data("null".utf8)))
         XCTAssertNil(Situation.decode(object: nil))
         XCTAssertNil(Situation.decode(object: NSNull()))
@@ -278,7 +279,8 @@ final class SituationTests: XCTestCase {
                    {"situation":{"kind":"done"}}]}
         """.utf8)
         let situations = Situation.byTicket(state: data)
-        XCTAssertEqual(situations.keys.sorted(), ["A-1", "A-2", "A-3", "A-4"])
+        XCTAssertEqual(situations.keys.sorted(), ["A-1", "A-2", "A-3", "A-4", "A-5"])
+        XCTAssertEqual(situations["A-5"]?.kind, .unknown, "a kind the app does not know reads as not known")
         XCTAssertEqual(situations["A-1"]?.cause, "From the groups.")
         XCTAssertEqual(situations["A-3"]?.kind, .ci)
         XCTAssertEqual(situations["A-4"]?.kind, .done)
