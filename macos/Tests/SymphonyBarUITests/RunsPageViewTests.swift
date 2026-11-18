@@ -35,9 +35,9 @@ final class RunsPageViewTests: XCTestCase {
         return host.fittingSize
     }
 
-    /// The laptop viewport (1440 pt) less the widest sidebar and the page's sides.
+    /// The laptop viewport (1440 pt) less the sidebar and the page's sides.
     private var laptopPage: Double {
-        1440 - DesignTokens.Layout.maxSidebarWidth - 2 * DesignTokens.RunsPage.sides
+        1440 - DesignTokens.Layout.sidebarWidth - 2 * DesignTokens.RunsPage.sides
     }
 
     func testTheWidestRowFitsTheLaptopPage() throws {
