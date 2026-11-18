@@ -120,6 +120,12 @@ public struct ConditionalReads: Equatable {
             return .changed(nil)
         }
     }
+
+    /// Forgets the tag of `path`, so the next read is in full: for an answer that came but the page couldn't use (a
+    /// body that doesn't decode), which a `304` would otherwise keep for good.
+    public mutating func forget(_ path: String) {
+        tags[path] = nil
+    }
 }
 
 /// The one client every view of the Symphony window reads Symphony's local API through (DD5, P7). It polls

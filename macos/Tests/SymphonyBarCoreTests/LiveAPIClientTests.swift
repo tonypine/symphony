@@ -402,6 +402,37 @@ final class LiveAPIClientTests: XCTestCase {
         XCTAssertEqual(sent, [nil, "v1", "v1"])
     }
 
+    /// A body that came but doesn't decode (TP-1499's Home read): its tag is forgotten, so the next read is whole and
+    /// the page gets the fixed answer, rather than a `304` that keeps it on nothing for good.
+    func testABodyThatDoesntDecodeIsForgottenSoTheNextReadIsWhole() async {
+        let broken = Data("not json".utf8)
+        let fixed = Data("{}".utf8)
+        var sent: [String?] = []
+        var body = broken
+        let client = LiveAPIClient(
+            fetch: { _ in .unreachable },
+            conditional: { _, tag in
+                sent.append(tag)
+                if tag == "v1" { return TaggedAnswer(.answered(Data(), statusCode: 304), etag: "v1") }
+                return TaggedAnswer(.answered(body, statusCode: 200), etag: body == broken ? "v1" : "v2")
+            },
+            scheduler: scheduler
+        )
+        var reads = ConditionalReads()
+        let first = await client.read(HomeRead.path, through: &reads)
+        XCTAssertEqual(first, .changed(broken))
+        XCTAssertNil(HomeRead.decode(broken))
+        XCTAssertEqual(reads.tag(for: HomeRead.path), "v1")
+        reads.forget(HomeRead.path)
+        XCTAssertNil(reads.tag(for: HomeRead.path))
+
+        body = fixed
+        let second = await client.read(HomeRead.path, through: &reads)
+        XCTAssertEqual(second, .changed(fixed))
+        XCTAssertEqual(reads.tag(for: HomeRead.path), "v2")
+        XCTAssertEqual(sent, [nil, nil])
+    }
+
     func testWithoutAConditionalFetchEveryReadIsInFull() async {
         let body = Data("{}".utf8)
         let client = LiveAPIClient(fetch: { _ in .answered(body, statusCode: 200) }, scheduler: scheduler)

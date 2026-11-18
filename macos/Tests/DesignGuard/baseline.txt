@@ -44,13 +44,7 @@ SymphonyBar/GitHubUpdatesSetupView.swift number 4
 SymphonyBar/GitHubUpdatesSetupView.swift button 1
 SymphonyBar/GitHubUpdatesSetupView.swift disabled 2
 SymphonyBar/GitHubUpdatesSetupView.swift field 1
-SymphonyBar/HomeInboxView.swift color 5
-SymphonyBar/HomeInboxView.swift button 1
-SymphonyBar/HomeInboxView.swift disabled 2
-SymphonyBar/HomeView.swift font 1
-SymphonyBar/HomeView.swift color 10
-SymphonyBar/HomeView.swift number 1
-SymphonyBar/HomeView.swift disabled 2
+SymphonyBar/HomeView.swift color 2
 SymphonyBar/InboxMoveViews.swift color 5
 SymphonyBar/InboxMoveViews.swift button 2
 SymphonyBar/InboxMoveViews.swift field 1

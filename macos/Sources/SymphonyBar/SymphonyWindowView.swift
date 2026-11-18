@@ -116,6 +116,13 @@ final class SymphonyWindowModel: ObservableObject {
     @Published private(set) var inboxMoveError: String?
     /// The banner after a move, with Undo for 10 s (C18).
     @Published private(set) var inboxBanner: InboxBanner?
+    /// Home's read (`GET /api/v1/home`, TP-1499), read again after each state poll while Home shows.
+    @Published private(set) var home: HomeRead?
+    /// What the last Home read got when it got none (an older Symphony answers 404), nil after one that did.
+    @Published private(set) var homeResult: EndpointResult?
+    /// The tag of the Home read the page shows: an unchanged read comes back `304` with no body.
+    var homeReads = ConditionalReads()
+    var readingHome = false
     /// The last Initiatives Symphony served, read again after each state poll.
     @Published private(set) var initiatives: InitiativesPayload?
     /// What the last Initiatives read got when it got none, nil after one that did.
@@ -464,6 +471,7 @@ final class SymphonyWindowModel: ObservableObject {
                 settleGitHubUpdatesAnswer()
                 readReposIfDue()
                 readInbox()
+                readHome()
                 readInitiatives()
                 readInitiativeStoryIfDue()
                 readTicketsIfDue()
@@ -539,12 +547,6 @@ final class SymphonyWindowModel: ObservableObject {
     func toggleInboxDrawer() {
         if !inboxDrawerShown { readInbox() }
         inboxDrawerShown.toggle()
-    }
-
-    /// Home's top (TP-1454): every Inbox item in every repo, as Home's badge counts them (Home has no scope, TP-1497),
-    /// newest first, less the ones answered from the app, which leave at once.
-    var homeInbox: HomeInbox? {
-        inbox.map { HomeInbox(items: $0.items, scope: .all, answered: answeredItems, picks: picks(for:)) }
     }
 
     /// Opens Initiatives on the initiative with issue id `id`.
@@ -1233,28 +1235,23 @@ struct SymphonyDetail: View {
     }
 }
 
-/// D1: Home, what waits on the Director on top (TP-1454), then the board of every open ticket Symphony works, from
-/// `/api/v1/state`'s dispatch order, in every repo: Home has no controls of its own, so no scope (TP-1497). The Inbox's review is its drawer, its moves ask with
-/// the Inbox's consequence sheets, and the banner after one sits under the page.
+/// D1: Home (TP-1499), from `GET /api/v1/home`: what is in progress, under its epics, and the queue as a tree, in every
+/// repo (Home has no controls of its own, so no scope, TP-1497). A row's Answer opens its question in the Inbox's drawer,
+/// whose moves ask with the Inbox's consequence sheets; the banner after one sits under the page. A Symphony that
+/// predates the read gets the Empty state that asks for an update, never the old board.
 struct OverviewContent: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
 
     var body: some View {
-        if let state = model.overviewWithSetup {
+        content
+            .onAppear { model.readHome() }
+    }
+
+    @ViewBuilder private var content: some View {
+        if let lists = model.homeLists {
             VStack(spacing: 0) {
-                HomeView(
-                    board: HomeBoard(state: state, scope: .all, updating: model.updateHold != nil, now: Date()),
-                    actions: HomeActions(
-                        resume: { model.send(.resume) },
-                        tryNow: { model.send(.tryNow(condition: $0.condition)) },
-                        controlInFlight: model.controlInFlight,
-                        openTicket: model.openTicket
-                    ),
-                    inbox: model.homeInbox,
-                    inboxActions: model.homeInboxActions,
-                    now: model.overviewState?.generatedAt ?? Date()
-                )
+                HomeView(lists: lists, actions: model.homeActions)
                 if let banner = model.inboxBanner {
                     InboxBannerView(banner: banner, undo: { model.undo(banner) }, close: model.dismissBanner)
                         .padding(DesignTokens.Space.s3)
@@ -1264,10 +1261,67 @@ struct OverviewContent: View {
             .animation(.default, value: model.inboxBanner)
             .modifier(InboxDrawerPresenter(model: model))
             .modifier(InboxSheetPresenter(model: model))
-        } else if client.stateResult == .unsupported {
+        } else if model.homeResult == .unsupported || client.stateResult == .unsupported {
             EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
+        } else if case let .failed(message)? = model.homeResult {
+            EmptyState(title: message, symbol: HomeLists.failureSymbol)
         } else {
-            EmptyState(title: HomeBoard.readingOrder, symbol: SymphonyView.overview.symbol, showsSpinner: true)
+            EmptyState(title: HomeLists.reading, symbol: SymphonyView.overview.symbol, showsSpinner: true)
+        }
+    }
+}
+
+extension SymphonyWindowModel {
+    /// Home's two lists, their ages on Symphony's clock.
+    var homeLists: HomeLists? {
+        home.map { HomeLists(read: $0, reference: overviewState?.generatedAt ?? Date()) }
+    }
+
+    /// What Home's rows do: open the ticket's page or the epic in Initiatives, and the row's move as the ticket page
+    /// makes it. Answer opens the ticket's question in the Inbox's drawer, as the ticket page's decisions line does;
+    /// Unblock sends the control call the Action rail sends.
+    var homeActions: HomeActions {
+        HomeActions(
+            openTicket: { [weak self] in self?.openTicket($0) },
+            openEpic: { [weak self] in self?.showInitiative($0) },
+            perform: { [weak self] row in self?.performHomeMove(row) }
+        )
+    }
+
+    func performHomeMove(_ row: HomeLists.Row) {
+        guard let name = row.move?.name else { return }
+        switch TicketActionRail.Move(rawValue: name) {
+        case .answer?:
+            if let issueID = row.issueID { reviewInDrawer(issueID) } else { openTicket(row.identifier) }
+        case .unblock?:
+            send(.unblock(row.identifier))
+        default:
+            openTicket(row.identifier)
+        }
+    }
+
+    /// Reads Home while it shows, after each state poll: the read sends the tag of the one the page shows, so while
+    /// nothing changed Symphony answers `304` and the page stays as it is.
+    func readHome() {
+        guard selection == .overview, !showsPage, !readingHome, state.countsKnown else { return }
+        readingHome = true
+        Task {
+            let result = await client.get(HomeRead.path, ifNoneMatch: homeReads.tag(for: HomeRead.path))
+            readingHome = false
+            guard case let .changed(data) = homeReads.take(result, for: HomeRead.path) else { return }
+            let decoded = await Task.detached(priority: .userInitiated) { data.flatMap(HomeRead.decode) }.value
+            if let decoded {
+                if home != decoded { home = decoded }
+                if homeResult != nil { homeResult = nil }
+                return
+            }
+            // No read to show: an older Symphony's 404 drops the lists for the Empty state that asks for an update; a
+            // failure keeps the lists the page shows, or says what went wrong when it shows none. A body that came but
+            // doesn't decode keeps its tag, so it is forgotten here: the next read is whole, never a 304 for good.
+            homeReads.forget(HomeRead.path)
+            let failure = HomeLists.failure(after: result)
+            if failure == .unsupported { home = nil }
+            if homeResult != failure { homeResult = failure }
         }
     }
 }
