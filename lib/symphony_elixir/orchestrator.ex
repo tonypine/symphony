@@ -32,10 +32,10 @@ defmodule SymphonyElixir.Orchestrator do
     Pauses,
     PlanComments,
     PlanReview,
+    Providers,
     PrReviewPoller,
     PrRun,
     PrWatch,
-    Providers,
     QaBuildHold,
     Quality,
     QualityGate,
@@ -10609,13 +10609,23 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       nil ->
-        %{state | budget_day_started_on: today, budget_daily_used: 0, provider_tokens_today: %{}, budget_daily_paused_logged: false}
+        reset_daily_tokens(state, today)
 
       previous_day ->
         Logger.info("Resetting daily token budget previous_day=#{Date.to_iso8601(previous_day)} previous_daily_used=#{state.budget_daily_used}")
 
-        %{state | budget_day_started_on: today, budget_daily_used: 0, provider_tokens_today: %{}, budget_daily_paused_logged: false}
+        reset_daily_tokens(state, today)
     end
+  end
+
+  defp reset_daily_tokens(state, today) do
+    %{
+      state
+      | budget_day_started_on: today,
+        budget_daily_used: 0,
+        provider_tokens_today: %{},
+        budget_daily_paused_logged: false
+    }
   end
 
   defp daily_budget_paused?(%State{} = state) do

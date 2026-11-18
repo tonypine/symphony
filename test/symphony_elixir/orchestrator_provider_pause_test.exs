@@ -251,8 +251,11 @@ defmodule SymphonyElixir.OrchestratorProviderPauseTest do
       windows = %{{"anthropic", "five_hour"} => %{resets_at: resets_at, utilization: 1.0}}
       state = %{orchestrator_state() | usage_limits: %{{"anthropic", :all} => hold}, usage_windows: windows}
 
-      assert %{held: true, held_until: ^resume_at, usage_windows: [%{name: "five_hour", utilization: 1.0, resets_at: ^resets_at}]} =
-               provider(snapshot_of(state), "anthropic")
+      assert %{
+               held: true,
+               held_until: ^resume_at,
+               usage_windows: [%{name: "five_hour", utilization: 1.0, resets_at: ^resets_at}]
+             } = provider(snapshot_of(state), "anthropic")
 
       assert %{held: false, usage_windows: []} = provider(snapshot_of(state), "openai")
     end
@@ -261,14 +264,30 @@ defmodule SymphonyElixir.OrchestratorProviderPauseTest do
       provider = "provider-#{System.unique_integer([:positive])}"
 
       :ok =
-        RunStore.put_run(%{repo_key: "default", run_id: "run-#{provider}", issue_id: "tokens", started_at: DateTime.utc_now(), provider: provider, tokens: %{total_tokens: 700}})
+        RunStore.put_run(%{
+          repo_key: "default",
+          run_id: "run-#{provider}",
+          issue_id: "tokens",
+          started_at: DateTime.utc_now(),
+          provider: provider,
+          tokens: %{total_tokens: 700}
+        })
 
       pid = start_orchestrator(:ProviderTokensOrchestrator)
       assert :sys.get_state(pid).provider_tokens_today[provider] == 700
 
       running_entry = running_entry(issue("tokens", "MT-TOKENS", "In Progress"), provider)
       :sys.replace_state(pid, &%{&1 | running: %{"tokens" => running_entry}})
-      usage = %{input_tokens: 18, uncached_input_tokens: 12, cached_input_tokens: 4, cache_creation_input_tokens: 2, output_tokens: 5, total_tokens: 23}
+
+      usage = %{
+        input_tokens: 18,
+        uncached_input_tokens: 12,
+        cached_input_tokens: 4,
+        cache_creation_input_tokens: 2,
+        output_tokens: 5,
+        total_tokens: 23
+      }
+
       send(pid, {:codex_worker_update, "tokens", AppServer.event_to_update({:turn_completed, usage})})
 
       assert :sys.get_state(pid).provider_tokens_today[provider] == 723
