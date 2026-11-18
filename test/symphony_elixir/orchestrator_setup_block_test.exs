@@ -64,6 +64,10 @@ defmodule SymphonyElixir.OrchestratorSetupBlockTest do
              Enum.filter(RunStore.list_runs(), &(&1.issue_id == issue.id))
 
     # A poll lists the ticket under `blocked` with its fix ticket, and skips it with its pause's line.
+    # The hold's pause asked for a dispatch cycle at once, and that cycle's poll (which does not list
+    # this ticket) writes the blocked list, so it must have finished before the list is seeded here.
+    wait_for_orchestrator_state(pid, &cycle_settled?/1)
+
     :sys.replace_state(pid, fn state ->
       state = Orchestrator.put_blocked_for_test(state, [issue])
       Orchestrator.dispatch_chosen_issues_for_test([issue], state)
@@ -163,6 +167,13 @@ defmodule SymphonyElixir.OrchestratorSetupBlockTest do
   end
 
   defp poll_idle?(state), do: is_nil(state.repo_poll_task_ref) and not state.poll_check_in_progress and state.dispatch_readiness_tasks == %{}
+
+  # No cycle is in flight or due: the last one ended and put the next tick a poll interval away. The
+  # task that set a pause announced it before its own result, so once the orchestrator handled that
+  # result, the cycle the pause asked for is the one in flight or due.
+  defp cycle_settled?(state) do
+    poll_idle?(state) and is_integer(state.next_poll_due_at_ms) and state.next_poll_due_at_ms > System.monotonic_time(:millisecond)
+  end
 
   # Starts a run for `issue` in the orchestrator, then ends it with `reason`, as the runner's exit would.
   defp down(pid, %Issue{} = issue, reason) do
