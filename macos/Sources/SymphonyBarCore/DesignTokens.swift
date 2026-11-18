@@ -1308,6 +1308,53 @@ public enum DesignTokens {
         public static let tintWidth: Double = 2.5
     }
 
+    /// The catalog's Reorderable list (`.reorder-line`, `.run-edit`, TP-1531): lines 6 pt apart, each at least 28 pt,
+    /// a 16 × 24 pt handle of six dots, the place in a 20 pt disc, the line's own controls and, at its end, the
+    /// remove button. The lifted line is the content surface at the third elevation with a 1.5 pt accent edge, 4 pt
+    /// above and below and 6 pt to the sides past the line, turned 0.4°.
+    public enum ReorderableList {
+        public static let gap: Double = 6
+        public static let lineHeight: Double = 28
+        public static let lineGap = Space.s2
+        public static let radius = Control.medium.radius
+        public static let handleWidth: Double = 16
+        public static let handleHeight: Double = 24
+        public static let handleRadius = Radius.mark
+        public static let handleGlyph: Double = 14
+        /// The six dots, on the catalog's 16 pt grid: columns at 6 and 10, rows at 4, 8 and 12, 1.1 pt across each.
+        public static let dotColumns: [Double] = [6, 10]
+        public static let dotRows: [Double] = [4, 8, 12]
+        public static let dotRadius: Double = 1.1
+        public static let dotGrid: Double = 16
+        public static let number: Double = 20
+        public static let numberSize: Double = 11
+        public static let numberWeight = 600
+        public static let elevation = Elevation.level3
+        public static let liftEdge: Double = 1.5
+        public static let liftVertical: Double = 4
+        public static let liftHorizontal: Double = 6
+        public static let liftRotation: Double = -0.4
+        /// Where the catalog's Dragging story draws the lifted line: 14 pt right of and 70 pt above its place, with a
+        /// line's room (`dropGap`) opened over the line it is above.
+        public static let drawnLiftX: Double = 14
+        public static let drawnLiftY: Double = -70
+        public static let dropGap: Double = 34
+        /// The quiet add button under the lines, in line with their controls.
+        public static let footIndent: Double = 38
+        public static let footGap = Space.s4
+        public static let addSymbol = "plus"
+        public static let removeSymbol = "xmark"
+        public static let control = Control.small
+        /// A line that can't be used now: a 1 pt orange edge inside its controls, and the reason after a 6 pt dot.
+        public static let offEdge: Double = 1
+        public static let offDot: Double = 6
+        public static let offGap: Double = 6
+        public static let offIndent = Space.s2
+
+        /// From one line's top to the next's: its height and the gap.
+        public static func pitch(_ height: Double) -> Double { max(height, lineHeight) + gap }
+    }
+
     /// The catalog's Progress meter (`.meter`, `.meter-line`, TP-1530): how much of a cap is used. The full form is
     /// 320 pt: its label and value, an 8 pt track and a note; the one-line form is its label, a 6 pt track, the
     /// percent and when it resets, with a stop mark where new work stops.
