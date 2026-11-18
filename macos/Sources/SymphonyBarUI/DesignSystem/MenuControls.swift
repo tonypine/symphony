@@ -413,13 +413,15 @@ public struct PopUp<Value: Hashable>: View {
     var accessibilityText: String?
     var disabledReason: String?
     var drawnOpen: Bool
+    var inherited: Bool
 
     /// `value` stands in for the chosen choice's word on the face (a scope the window chose). `drawnOpen` draws the
-    /// list open under it, still, for a snapshot.
+    /// list open under it, still, for a snapshot. `inherited` draws the value in the tertiary colour, as one that comes
+    /// from a default (`.popup.inherited`).
     public init(
         _ label: String?, selection: Binding<Value>, choices: [PopUpChoice<Value>], value: String? = nil,
         size: DesignTokens.Control = .medium, help: String? = nil, accessibilityLabel: String? = nil, disabledReason: String? = nil,
-        drawnOpen: Bool = false
+        drawnOpen: Bool = false, inherited: Bool = false
     ) {
         self.label = label
         _selection = selection
@@ -430,6 +432,7 @@ public struct PopUp<Value: Hashable>: View {
         accessibilityText = accessibilityLabel
         self.disabledReason = disabledReason
         self.drawnOpen = drawnOpen
+        self.inherited = inherited
     }
 
     /// The choices as the open list's items, ticked on the current one, and the current one's line.
@@ -452,7 +455,7 @@ public struct PopUp<Value: Hashable>: View {
 
     public var body: some View {
         let trigger = MenuTrigger(
-            content: .popUp(label: label, value: shown), size: size, quiet: false, alignment: .leading,
+            content: .popUp(label: label, value: shown), size: size, quiet: false, inheritedValue: inherited, alignment: .leading,
             label: spoken.isEmpty ? shown : spoken, drawnOpen: drawnOpen && disabledReason == nil, role: .popUpButton,
             spokenValue: shown, reason: disabledReason, items: menu
         )

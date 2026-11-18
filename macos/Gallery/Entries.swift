@@ -179,6 +179,9 @@ let galleryEntries: [GalleryEntry] = [
     GalleryEntry(
         id: "repos", title: "Repos: pausing one, and the sidebar", kind: .screen, prefixes: ["repo-pause-", "sidebar-destinations"],
         files: ["SymphonyBar/ReposView.swift", "SymphonyBar/SymphonyWindowView.swift", "SymphonyBarCore/RepoPause"]),
+    GalleryEntry(
+        id: "runs", title: "Factory › Runs", kind: .screen, prefixes: ["runs-page"],
+        files: ["SymphonyBarUI/RunsPageView.swift", "SymphonyBar/RunsPageContent.swift", "SymphonyBarCore/RunsPage.swift"]),
 ]
 
 /// The files every entry is drawn with: a change to one is a reason to look at all of them.
