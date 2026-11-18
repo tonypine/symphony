@@ -6,6 +6,11 @@ public struct DiagnosticsPayload: Decodable, Equatable {
     public struct Build: Decodable, Equatable {
         public var version: String?
         public var sha: String?
+
+        public init(version: String?, sha: String?) {
+            self.version = version
+            self.sha = sha
+        }
     }
 
     public struct Counts: Decodable, Equatable {

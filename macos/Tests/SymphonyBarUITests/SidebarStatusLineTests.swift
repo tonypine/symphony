@@ -55,7 +55,7 @@ final class SidebarStatusLineTests: XCTestCase {
     }
 
     func testTheStatusLineIs30PointsTall() throws {
-        let build = try JSONDecoder().decode(DiagnosticsPayload.Build.self, from: Data(#"{"version":"0.0.1.926","sha":"a0be0aa"}"#.utf8))
+        let build = DiagnosticsPayload.Build(version: "0.0.1.926", sha: "a0be0aa")
         let control = DispatchControl(window: .connected, paused: true, state: nil, now: Date())
         let line = HealthLine(
             window: .connected, dispatch: control, build: build, appVersion: "",
