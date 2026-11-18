@@ -215,9 +215,9 @@ struct LearningsBarControls {
     var searchRequested: Binding<Bool> = .constant(false)
 }
 
-/// The Learnings tab's control bar: the Shipped and Learnings switch, the scope, the search and the repo and tag
-/// pop-ups at the left; how many learnings show at the right. While the learnings read, only the switch, the scope and
-/// the search.
+/// The Learnings tab's control bar: the Shipped and Learnings switch, the scope (the bar's one repo chooser), the search
+/// and the tag pop-up at the left; how many learnings show at the right. While the learnings read, only the switch, the
+/// scope and the search.
 struct LearningsControlBar: View {
     let learnings: Learnings?
     @Binding var filter: Learnings.Filter
@@ -230,7 +230,6 @@ struct LearningsControlBar: View {
             controls.page.scopePopUp
             PageSearchField(prompt: Learnings.searchPrompt, text: controls.search, matches: learnings?.count, requested: controls.searchRequested)
             if let learnings {
-                PopUp("Repo", selection: $filter.repo, choices: popUpChoices(all: "All repos", learnings.repos), size: .small)
                 PopUp("Tag", selection: $filter.tag, choices: popUpChoices(all: "All tags", learnings.tags), size: .small)
             }
         } act: {

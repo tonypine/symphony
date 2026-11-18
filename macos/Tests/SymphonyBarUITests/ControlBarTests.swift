@@ -45,6 +45,21 @@ final class ControlBarTests: XCTestCase {
         XCTAssertEqual(narrow.midY, act.midY, accuracy: 0.5, "both sides on one line")
     }
 
+    func testWhatActsKeepsItsWholeWidthWhenWhatNarrowsWantsMore() {
+        let (narrow, act, size) = frames(width: 600) { left, right in
+            ControlBar("Page controls") {
+                left.frame(minWidth: 100, idealWidth: 900, maxWidth: .infinity).frame(height: 24)
+            } act: {
+                right.frame(width: 120, height: 24)
+            }
+        }
+        let bar = DesignTokens.ControlBar.self
+        XCTAssertEqual(act.width, 120, accuracy: 0.5, "the action is never cut")
+        XCTAssertEqual(act.maxX, size.width - bar.pageInset - bar.horizontalPadding, accuracy: 0.5)
+        XCTAssertLessThanOrEqual(narrow.maxX, act.minX - bar.sidesGap + 0.5, "what narrows gives way")
+        XCTAssertEqual(narrow.maxX, act.minX - bar.gap - bar.sidesGap - bar.gap, accuracy: 0.5, "and takes the rest of the line")
+    }
+
     func testOnALaptopTheSummaryHasItsOwnLineUnderTheControls() {
         XCTAssertFalse(ControlBarLayout.beside(width: 1100, controls: CGSize(width: 300, height: 24), summary: CGSize(width: 200, height: 16)))
     }

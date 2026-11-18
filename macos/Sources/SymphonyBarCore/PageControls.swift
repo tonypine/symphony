@@ -49,7 +49,8 @@ public struct PageControls: Equatable {
     /// - Journal and Initiatives: the scope.
     /// - Tickets and Audit: the scope and their search, then Force a Ticket… or Export… at the right.
     /// - Quality, Usage and Shipped: Insights' one bar, whose Repo pop-up reads the scope (TP-1463); on Shipped it
-    ///   holds the Shipped and Learnings switch. Learnings: the switch, the scope and its search.
+    ///   holds the Shipped and Learnings switch. Learnings: the switch, the scope as its one repo chooser, and its
+    ///   search.
     /// - Setup: Check Again at the right; Setup is Symphony's own, so no scope.
     /// - Diagnostics, and Repos and Settings (their own windows): none.
     public static func of(_ view: SymphonyView, shippedTab: Shipped.Tab = .shipped) -> PageControls {
@@ -79,9 +80,13 @@ public enum FindCommand: Equatable {
     case pageSearch(PageSearch)
     case findTicket
 
-    /// ⌘F on `view`; a ticket's or a pull request's page shown over it (`showsPage`) has no search of its own.
-    public static func commandF(_ view: SymphonyView, showsPage: Bool, shippedTab: Shipped.Tab = .shipped) -> FindCommand {
-        guard !showsPage, let search = PageControls.of(view, shippedTab: shippedTab).search else { return .findTicket }
+    /// ⌘F on `view`; a ticket's or a pull request's page shown over it (`showsPage`) has no search of its own, and
+    /// neither has a page that draws no bar yet (`searchShown` false: Tickets or Audit reading, or asking for an update
+    /// of Symphony), so ⌘F there is Find a ticket.
+    public static func commandF(
+        _ view: SymphonyView, showsPage: Bool, shippedTab: Shipped.Tab = .shipped, searchShown: Bool = true
+    ) -> FindCommand {
+        guard !showsPage, searchShown, let search = PageControls.of(view, shippedTab: shippedTab).search else { return .findTicket }
         return .pageSearch(search)
     }
 

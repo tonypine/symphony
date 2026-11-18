@@ -137,8 +137,20 @@ extension SymphonyWindowModel {
     /// The shown page's own controls (TP-1497).
     var pageControls: PageControls { showsPage ? .none : PageControls.of(selection, shippedTab: shippedTab) }
 
-    /// Where ⌘F puts the keyboard on the page shown.
-    var commandF: FindCommand { FindCommand.commandF(selection, showsPage: showsPage, shippedTab: shippedTab) }
+    /// Where ⌘F puts the keyboard on the page shown: Find a ticket while Tickets or Audit draw no bar, so no search.
+    var commandF: FindCommand {
+        FindCommand.commandF(selection, showsPage: showsPage, shippedTab: shippedTab, searchShown: pageSearchShown)
+    }
+
+    /// Whether the page shown draws its search: Tickets once its tickets read, Audit once its records read. Shipped's
+    /// Learnings bar stays at the top while the learnings read, with its search.
+    var pageSearchShown: Bool {
+        switch selection {
+        case .tickets: ticketsPayload != nil
+        case .audit: auditRecords != nil
+        default: true
+        }
+    }
 
     /// The window's part of the shown page's control bar: the scope when the page reads it.
     var pageBar: PageBar {

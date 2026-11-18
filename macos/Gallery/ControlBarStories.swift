@@ -82,11 +82,11 @@ let controlBarStories: [ComponentStory] = {
     return [
         story("laptop", height: 96) { insightsBar() },
         story("desktop", width: controlBarDesktopWidth) { insightsBar() },
-        story("filtered", height: 96) { insightsBar(filtered) },
-        story("shipped", height: 96) { insightsBar(shipped: true) },
+        story("filtered", height: 128) { insightsBar(filtered) },
+        story("shipped", height: 128) { insightsBar(shipped: true) },
         story("learnings") { learningsBar() },
-        story("tickets") { ticketsBar() },
-        story("tickets-filtered") { ticketsBar(ticketsFiltered) },
+        story("tickets", height: 96) { ticketsBar() },
+        story("tickets-filtered", height: 96) { ticketsBar(ticketsFiltered) },
         story("audit") { auditBar() },
         story("journal") {
             AnyView(JournalFilterBar(query: .constant(JournalQuery()), values: JournalFilterValues(repos: controlBarRepos), page: controlBarPage))

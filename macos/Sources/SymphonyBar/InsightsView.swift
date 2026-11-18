@@ -65,9 +65,9 @@ struct InsightsEmptyState: View {
 
 /// The Insights control bar (the catalog's Control bar section, drawn by the shared `ControlBar`): on Shipped its
 /// Shipped and Learnings switch first, then the period as a small (24 pt) segmented control and Range… for other days,
-/// the unit, the repo and the epic as small pop-ups, Clear when a repo or an epic is picked, and the one-line summary of
-/// what the page shows: on its own line under the controls on a laptop, right aligned beside them from 1600 pt (a
-/// desktop).
+/// the unit, the repo and the epic as small pop-ups, Clear when a repo or an epic is picked, wrapping onto a second line
+/// when the bar can't hold them on one, and the one-line summary of what the page shows: on its own line under the
+/// controls on a laptop, right aligned beside them from 1600 pt (a desktop).
 struct InsightsControlBar: View {
     @Binding var slice: InsightsSlice
     let values: InsightsControlValues
@@ -91,8 +91,10 @@ struct InsightsControlBar: View {
         }
     }
 
+    /// The groups on one line when the bar holds them, else wrapped onto the next (a laptop's window as it opens holds
+    /// Shipped's switch and the four groups on two lines); a group never splits.
     private var controls: some View {
-        HStack(spacing: DesignTokens.ControlBar.groupGap) {
+        WrappingStack(spacing: DesignTokens.ControlBar.groupGap, lineSpacing: DesignTokens.ControlBar.gap) {
             if let shippedTab {
                 ShippedTabSwitch(tab: shippedTab)
             }
@@ -132,7 +134,7 @@ struct InsightsControlBar: View {
                     .help("Show every repo and every epic")
             }
         }
-        .fixedSize()
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Whether the period is a range of days rather than one of the segments.

@@ -1246,6 +1246,8 @@ struct DecisionsLineView: View {
 /// Lays its views out in lines, left to right, starting a new line when the next one doesn't fit.
 struct WrappingStack: Layout {
     var spacing: CGFloat
+    /// Between one line and the next; `spacing` when nil.
+    var lineSpacing: CGFloat?
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         arrange(width: proposal.width, subviews: subviews).size
@@ -1266,7 +1268,7 @@ struct WrappingStack: Layout {
             let size = subview.sizeThatFits(.unspecified)
             if x > 0, x + size.width > maxWidth {
                 x = 0
-                y += lineHeight + spacing
+                y += lineHeight + (lineSpacing ?? spacing)
                 lineHeight = 0
             }
             places.append(CGPoint(x: x, y: y))

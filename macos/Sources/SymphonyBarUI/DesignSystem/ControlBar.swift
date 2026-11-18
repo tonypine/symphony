@@ -56,11 +56,16 @@ public struct ControlBar<Narrow: View, Act: View>: View {
         .accessibilityLabel(label)
     }
 
+    /// What acts keeps its whole width (a title is never cut to "Force a Ti…"); what narrows takes the rest before the
+    /// gap between the sides does, and a side that wraps (Tickets' filters, Insights' groups) wraps within it.
     private var controls: some View {
         HStack(spacing: DesignTokens.ControlBar.gap) {
-            narrow
+            HStack(spacing: DesignTokens.ControlBar.gap) { narrow }
+                .layoutPriority(1)
             Spacer(minLength: DesignTokens.ControlBar.sidesGap)
             act
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
         }
     }
 
@@ -88,35 +93,41 @@ extension ControlBar where Act == EmptyView {
 struct ControlBarLayout: Layout {
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard subviews.count == 2 else { return .zero }
-        let controls = subviews[0].sizeThatFits(.unspecified)
-        let width = proposal.width ?? controls.width
-        let summary = subviews[1].sizeThatFits(ProposedViewSize(width: width, height: nil))
-        if Self.beside(width: width, controls: controls, summary: summary) {
-            return CGSize(width: width, height: max(controls.height, summary.height))
-        }
-        return CGSize(width: width, height: controls.height + DesignTokens.ControlBar.summaryGap + summary.height)
+        let width = proposal.width ?? subviews[0].sizeThatFits(.unspecified).width
+        let place = Self.arrange(width: width, subviews: subviews)
+        return CGSize(width: width, height: place.height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard subviews.count == 2 else { return }
-        let controls = subviews[0].sizeThatFits(.unspecified)
-        let summary = subviews[1].sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
-        if Self.beside(width: bounds.width, controls: controls, summary: summary) {
-            let height = max(controls.height, summary.height)
+        let place = Self.arrange(width: bounds.width, subviews: subviews)
+        if place.beside {
             subviews[0].place(
-                at: CGPoint(x: bounds.minX, y: bounds.minY + (height - controls.height) / 2),
-                proposal: ProposedViewSize(width: bounds.width - summary.width - DesignTokens.ControlBar.groupGap, height: controls.height)
+                at: CGPoint(x: bounds.minX, y: bounds.minY + (place.height - place.controls.height) / 2),
+                proposal: ProposedViewSize(width: bounds.width - place.summary.width - DesignTokens.ControlBar.groupGap, height: place.controls.height)
             )
             subviews[1].place(
-                at: CGPoint(x: bounds.maxX, y: bounds.minY + height / 2), anchor: .trailing, proposal: ProposedViewSize(summary)
+                at: CGPoint(x: bounds.maxX, y: bounds.minY + place.height / 2), anchor: .trailing, proposal: ProposedViewSize(place.summary)
             )
         } else {
-            subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.minY), proposal: ProposedViewSize(width: bounds.width, height: controls.height))
+            subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.minY), proposal: ProposedViewSize(width: bounds.width, height: place.controls.height))
             subviews[1].place(
-                at: CGPoint(x: bounds.minX, y: bounds.minY + controls.height + DesignTokens.ControlBar.summaryGap),
-                proposal: ProposedViewSize(width: bounds.width, height: summary.height)
+                at: CGPoint(x: bounds.minX, y: bounds.minY + place.controls.height + DesignTokens.ControlBar.summaryGap),
+                proposal: ProposedViewSize(width: bounds.width, height: place.summary.height)
             )
         }
+    }
+
+    /// The controls on one line beside the summary when the bar holds both, else the controls in the bar's width
+    /// (wrapped when they don't fit on one line) over the summary.
+    private static func arrange(width: CGFloat, subviews: Subviews) -> (beside: Bool, controls: CGSize, summary: CGSize, height: CGFloat) {
+        let line = subviews[0].sizeThatFits(.unspecified)
+        let summary = subviews[1].sizeThatFits(ProposedViewSize(width: width, height: nil))
+        if beside(width: width, controls: line, summary: summary) {
+            return (true, line, summary, max(line.height, summary.height))
+        }
+        let controls = subviews[0].sizeThatFits(ProposedViewSize(width: width, height: nil))
+        return (false, controls, summary, controls.height + DesignTokens.ControlBar.summaryGap + summary.height)
     }
 
     /// Whether the summary sits beside controls `controls` big in a bar `width` wide.

@@ -58,6 +58,13 @@ final class PageControlsTests: XCTestCase {
         XCTAssertEqual(FindCommand.commandF(.shipped, showsPage: false, shippedTab: .learnings), .pageSearch(.learnings))
     }
 
+    func testCommandFOnAPageThatDrawsNoSearchYetFocusesFindATicket() {
+        // Tickets or Audit reading, or asking for an update of Symphony, draw no bar and so no search.
+        XCTAssertEqual(FindCommand.commandF(.tickets, showsPage: false, searchShown: false), .findTicket)
+        XCTAssertEqual(FindCommand.commandF(.audit, showsPage: false, searchShown: false), .findTicket)
+        XCTAssertEqual(FindCommand.commandF(.audit, showsPage: false, searchShown: false).findTicketShortcut, FindCommand.commandFShortcut)
+    }
+
     func testCommandFElsewhereFocusesFindATicket() {
         for view in SymphonyView.allCases where ![.tickets, .shipped, .audit].contains(view) {
             XCTAssertEqual(FindCommand.commandF(view, showsPage: false), .findTicket, view.rawValue)

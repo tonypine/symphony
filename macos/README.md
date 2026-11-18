@@ -1065,8 +1065,9 @@ a ticket's page) and **Refresh** (⌘R). A page's own controls sit in its contro
 page: what narrows the page (the scope pop-up, the page's search, its filters) at the left, what acts on it (Audit's
 **Export…**, Tickets' **Force a Ticket…**, Setup's **Check Again**) at the right. The scope pop-up shows only on the
 pages that read it (Journal, Initiatives, Tickets, Learnings, Audit; Insights' own Repo pop-up reads it), always with
-its value. Home and Diagnostics have no bar: Home shows every repo. Insights keeps its one bar under its tabs, and on
-Shipped the **Shipped** and **Learnings** switch is in it.
+its value; on Learnings it is the bar's one repo chooser. Home and Diagnostics have no bar: Home shows every repo.
+Insights keeps its one bar under its tabs, and on Shipped the **Shipped** and **Learnings** switch is in it. A bar whose
+controls don't fit on one line wraps them onto the next; its actions at the right always keep their whole titles.
 The sidebar has five destinations, on ⌘1 to ⌘5:
 **Home** (its badge counts what waits on you, in orange), **Journal** (its name and a line saying what it will hold,
 for now), **Work** (**Initiatives** and **Tickets** as two tabs), **Insights** (**Quality**, **Usage**, **Shipped** and
@@ -1075,7 +1076,8 @@ for now), **Work** (**Initiatives** and **Tickets** as two tabs), **Insights** (
 Work and Insights open on their first tab and come back to the tab shown last while the app runs. **Find a ticket**
 (⌘F, from any page) finds a ticket by its identifier or title as you type, listing the matches under it; Return opens
 the best match's page, and **Back** returns to where you were. On Tickets, Shipped and Audit, ⌘F puts the focus in the
-page's own search instead (Shipped's is on its Learnings tab, which it shows), and ⌥⌘F reaches Find a ticket. The window opens on
+page's own search instead (Shipped's is on its Learnings tab, which it shows), and ⌥⌘F reaches Find a ticket; while
+Tickets or Audit is still reading, or asks for an update of Symphony, ⌘F is Find a ticket there too. The window opens on
 Home the first time, and on the page it showed last after that.
 
 - **Inbox** lists everything that waits on you (`/api/v1/inbox`), grouped as Plans, Pull requests, Final
