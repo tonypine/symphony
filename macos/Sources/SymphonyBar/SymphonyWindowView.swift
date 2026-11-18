@@ -337,6 +337,8 @@ final class SymphonyWindowModel: ObservableObject {
     var setupBannerTask: Task<Void, Never>?
     /// The app's own build, for the build warning (J11).
     var appBuild = AppBuild(build: 0, isDevelopment: true)
+    /// Factory › Runs (TP-1538): the run profiles read from `symphony.yml`, with the changes not saved yet.
+    @Published var runsPage = RunsPage()
     /// The `symphony.yml` path in Settings.
     var configPath: () -> String = { "" }
     /// Check Again with no fix, a Linear fix with one: `POST /api/v1/setup/refresh` or `/fixes`.
@@ -1234,6 +1236,8 @@ struct SymphonyDetail: View {
             AuditContent(model: model)
         case .setup:
             SetupContent(model: model)
+        case .runs:
+            RunsContent(model: model)
         case .journal:
             JournalContent(model: model)
         default:

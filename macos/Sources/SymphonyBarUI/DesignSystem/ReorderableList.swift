@@ -129,14 +129,18 @@ struct ReorderLine<Handle: View, Content: View>: View {
 /// Space drops it and Escape puts it back where it was; VoiceOver announces the pick-up, each move and the drop
 /// ("Line 2 of 3"). The numbers change at once on the drop, and `onReorder` hears the new order then, once, when it
 /// changed. `onRemove` asks the page to remove a line; the only line has no remove button and is never removed.
-/// Adding a line is the quiet `addTitle` button under the lines. `drawn` draws a still state for a story.
+/// Adding a line is the quiet `addTitle` button under the lines, and `footNote` a line beside it (a kind of run with
+/// no fallback says a run waits). `removable` keeps the remove button off the lines the page can't remove. `drawn`
+/// draws a still state for a story.
 public struct ReorderableList<Item: Identifiable, Line: View>: View {
     let items: [Item]
     let onReorder: ([Item.ID]) -> Void
     let onRemove: ((Item.ID) -> Void)?
+    let removable: ((Item.ID) -> Bool)?
     let removeHelp: (Int) -> String
     let addTitle: String?
     let onAdd: (() -> Void)?
+    let footNote: ReorderFootNote?
     let drawn: ReorderableListDrawn?
     let line: (Item) -> Line
 
@@ -154,15 +158,18 @@ public struct ReorderableList<Item: Identifiable, Line: View>: View {
 
     public init(
         _ items: [Item], onReorder: @escaping ([Item.ID]) -> Void, onRemove: ((Item.ID) -> Void)? = nil,
-        removeHelp: @escaping (Int) -> String = { _ in ReorderSpeech.remove }, addTitle: String? = nil, onAdd: (() -> Void)? = nil,
+        removable: ((Item.ID) -> Bool)? = nil, removeHelp: @escaping (Int) -> String = { _ in ReorderSpeech.remove },
+        addTitle: String? = nil, onAdd: (() -> Void)? = nil, footNote: ReorderFootNote? = nil,
         drawn: ReorderableListDrawn? = nil, @ViewBuilder line: @escaping (Item) -> Line
     ) {
         self.items = items
         self.onReorder = onReorder
         self.onRemove = onRemove
+        self.removable = removable
         self.removeHelp = removeHelp
         self.addTitle = addTitle
         self.onAdd = onAdd
+        self.footNote = footNote
         self.drawn = drawn
         self.line = line
         _model = State(initialValue: ReorderModel(items.map(\.id)))
@@ -188,6 +195,12 @@ public struct ReorderableList<Item: Identifiable, Line: View>: View {
                 HStack(spacing: list.footGap) {
                     Button(addTitle, action: onAdd)
                         .buttonStyle(DirectorButtonStyle(kind: .quiet, size: list.control, glyph: list.addSymbol))
+                    if let footNote {
+                        Text(footNote.text)
+                            .textStyle(.secondary)
+                            .foregroundStyle((footNote.status?.textColor ?? DesignTokens.TextColor.tertiary).color)
+                            .lineLimit(1)
+                    }
                 }
                 .padding(.leading, list.footIndent)
             }
@@ -216,7 +229,7 @@ public struct ReorderableList<Item: Identifiable, Line: View>: View {
     }
 
     private func remove(_ id: Item.ID, number: Int) -> ReorderLine<AnyView, Line>.Remove? {
-        guard let onRemove, model.showsRemove else { return nil }
+        guard let onRemove, model.showsRemove, removable?(id) ?? true else { return nil }
         return .init(help: removeHelp(number)) {
             if model.canRemove(id) { onRemove(id) }
         }
@@ -368,6 +381,18 @@ public struct ReorderableList<Item: Identifiable, Line: View>: View {
     private func announce(_ words: (Int, Int) -> String, id: Item.ID? = nil) {
         guard let id = id ?? model.lifted, let position = model.position(of: id) else { return }
         AccessibilityNotification.Announcement(words(position, model.order.count)).post()
+    }
+}
+
+/// The line beside the add button under the lines (`.run-waits`): in the tertiary colour, or in a status's text colour
+/// (`.run-waits.only`, "waiting on you" orange, when it warns).
+public struct ReorderFootNote: Equatable {
+    public var text: String
+    public var status: DesignTokens.Status?
+
+    public init(_ text: String, status: DesignTokens.Status? = nil) {
+        self.text = text
+        self.status = status
     }
 }
 

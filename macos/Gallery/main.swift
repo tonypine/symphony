@@ -2020,6 +2020,11 @@ MainActor.assumeIsolated {
         render(repoPauseSection(width: 500), scheme, to: "repo-pause-repos-narrow-\(suffix).png")
         render(repoPauseSection(width: 1220), scheme, to: "repo-pause-repos-laptop-\(suffix).png")
         render(repoPausedSidebar(), scheme, to: "repo-pause-sidebar-\(suffix).png")
+        // Factory › Runs (TP-1538): what opens, a model list open, a change not saved, a fallback added and dragged,
+        // saving, saved, refused, and one repository's own values.
+        for (name, page, drawn) in runsStates {
+            renderScreen(scheme, to: name) { runsScreen(page, drawn: drawn, window: $0) }
+        }
         // The five destinations (TP-1455): Home's and Factory's badges, and none.
         render(destinationsSidebar(), scheme, to: "sidebar-destinations-\(suffix).png")
         // Move to… (TP-1328): the move's sheet, also with a refusal.
