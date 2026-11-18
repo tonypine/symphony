@@ -236,6 +236,87 @@ final class StateSnapshotTests: XCTestCase {
         XCTAssertNil(snapshot.repository("web-shop"))
     }
 
+    /// `providers` as `SymphonyElixirWeb.Presenter` serves it: a provider held by a usage limit with its windows, a paused
+    /// one with no readable usage, an available one and an unused one, in use first.
+    func testDecodesTheProviders() throws {
+        let fixture = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/providers-block.json")
+        let block = try JSONSerialization.jsonObject(with: Data(contentsOf: fixture))
+        guard case let .state(snapshot) = SymphonyState.poll(data: try recordedState(replacing: "providers", with: block), statusCode: 200)
+        else { return XCTFail("not a state") }
+
+        XCTAssertEqual(snapshot.providers?.map(\.id), ["anthropic", "openrouter", "openai", "opencode-go"])
+        XCTAssertEqual(snapshot.provider("anthropic"), .init(
+            id: "anthropic",
+            name: "Anthropic",
+            inUse: true,
+            held: true,
+            heldUntil: SymphonyState.parseDate("2026-10-07T18:05:00Z"),
+            usageWindows: [
+                .init(name: "five_hour", utilization: 0.97, resetsAt: SymphonyState.parseDate("2026-10-07T18:00:00Z")),
+                .init(name: "seven_day", utilization: 0.64, resetsAt: SymphonyState.parseDate("2026-10-10T09:00:00Z")),
+            ],
+            harnesses: ["claude"],
+            kinds: ["implementation", "breakdown", "rework", "landing", "code_review", "epic_review", "ci_fix", "review_feedback"],
+            working: 2,
+            tokensToday: 1_840_000
+        ))
+        XCTAssertEqual(snapshot.provider("openrouter"), .init(
+            id: "openrouter",
+            name: "OpenRouter",
+            inUse: true,
+            paused: true,
+            pausedSince: SymphonyState.parseDate("2026-10-07T13:30:00Z"),
+            harnesses: ["claude"],
+            fallbackFor: ["implementation", "rework"],
+            tokensToday: 52_000
+        ))
+        XCTAssertEqual(snapshot.provider("openai"), .init(
+            id: "openai", name: "OpenAI", inUse: true, harnesses: ["codex"], kinds: ["qa"], fallbackFor: ["code_review"], working: 1,
+            tokensToday: 310_000
+        ))
+        XCTAssertEqual(snapshot.provider("opencode-go"), .init(id: "opencode-go", name: "OpenCode Go", harnesses: ["claude", "codex", "opencode"]))
+        XCTAssertNil(snapshot.provider("acme"))
+    }
+
+    /// An entry without an id is dropped, and one missing the rest reads as a provider nothing uses, named by its id.
+    func testAProviderMissingItsFieldsReadsAsUnused() throws {
+        let data = try recordedState(replacing: "providers", with: [
+            ["provider": "anthropic", "name": "  ", "usage_windows": [["utilization": 0.5], ["name": "five_hour"]]],
+            ["provider": ""],
+            ["name": "Nobody"],
+        ])
+        guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else { return XCTFail("not a state") }
+
+        XCTAssertEqual(snapshot.providers, [.init(id: "anthropic", usageWindows: [.init(name: "five_hour")])])
+    }
+
+    /// Every QA state fixture lists the four providers, so a page that draws them has them in any fixture.
+    func testEveryQAStateFixtureListsTheProviders() throws {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app", isDirectory: true)
+        let fixtures = try FileManager.default.contentsOfDirectory(atPath: root.path).sorted()
+        XCTAssertFalse(fixtures.isEmpty)
+        for name in fixtures {
+            let file = root.appendingPathComponent("\(name)/api/v1/state.json")
+            guard FileManager.default.fileExists(atPath: file.path) else { continue }
+            guard case let .state(snapshot) = SymphonyState.poll(data: try Data(contentsOf: file), statusCode: 200)
+            else { XCTFail("\(name): not a state"); continue }
+            XCTAssertEqual(snapshot.providers?.map(\.id), ["anthropic", "openrouter", "openai", "opencode-go"], name)
+            XCTAssertEqual(snapshot.provider("openrouter")?.paused, true, name)
+        }
+    }
+
+    func testAnOlderSymphonyListsNoProviders() throws {
+        guard case let .state(snapshot) = SymphonyState.poll(data: try recordedState(), statusCode: 200) else { return XCTFail("not a state") }
+
+        XCTAssertNil(snapshot.providers)
+        XCTAssertNil(snapshot.provider("anthropic"))
+    }
+
     func testDecodesUsageLimits() throws {
         let data = try recordedState(replacing: "usage_limits", with: [
             [
