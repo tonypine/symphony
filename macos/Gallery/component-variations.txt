@@ -48,6 +48,7 @@ control-bar-desktop
 control-bar-filtered
 control-bar-initiatives
 control-bar-journal
+control-bar-journal-toggled
 control-bar-laptop
 control-bar-learnings
 control-bar-setup

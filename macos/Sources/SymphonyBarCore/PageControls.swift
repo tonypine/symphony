@@ -46,7 +46,7 @@ public struct PageControls: Equatable {
     /// The controls of `view`, with Shipped on `shippedTab`.
     ///
     /// - Home has none: it shows every repo, whatever the scope, as two lists and nothing else.
-    /// - Journal and Initiatives: the scope.
+    /// - Journal and Initiatives: the scope; on Journal it is the bar's one repo chooser, before its Epic and Class chips.
     /// - Tickets and Audit: the scope and their search, then Force a Ticket… or Export… at the right.
     /// - Quality, Usage and Shipped: Insights' one bar, whose Repo pop-up reads the scope (TP-1463); on Shipped it
     ///   holds the Shipped and Learnings switch. Learnings: the switch, the scope as its one repo chooser, and its

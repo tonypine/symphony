@@ -1,8 +1,8 @@
 // The catalog's Control bar (TP-1497, `sections/control-bar` in `docs/design/catalog/stories.js`): the one bar a page
 // holds its own controls in, as each page fills it. The catalog's own stories (Laptop, Desktop, Filtered) are Insights'
 // bar; then Shipped's with its Shipped and Learnings switch, Learnings', Tickets' (and filtered), Audit's, the
-// Journal's, Initiatives' and Setup's (and checking). Home and Diagnostics have none. The gallery draws each in light
-// and dark.
+// Journal's (and with its toggles on), Initiatives' and Setup's (and checking). Home and Diagnostics have none. The
+// gallery draws each in light and dark.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI
@@ -90,6 +90,12 @@ let controlBarStories: [ComponentStory] = {
         story("audit") { auditBar() },
         story("journal") {
             AnyView(JournalFilterBar(query: .constant(JournalQuery()), values: JournalFilterValues(repos: controlBarRepos), page: controlBarPage))
+        },
+        story("journal-toggled") {
+            AnyView(JournalFilterBar(
+                query: .constant(JournalQuery(everything: true, reportsOnly: true)), values: JournalFilterValues(repos: controlBarRepos),
+                page: controlBarPage
+            ))
         },
         story("initiatives") { AnyView(InitiativesControlBar(bar: controlBarPage)) },
         story("setup") { AnyView(SetupControlBar(checking: false, check: {})) },

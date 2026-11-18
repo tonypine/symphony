@@ -64,8 +64,8 @@ SymphonyBar/InsightsView.swift color 3
 SymphonyBar/InsightsView.swift number 3
 SymphonyBar/InsightsView.swift button 2
 SymphonyBar/JournalView.swift font 1
-SymphonyBar/JournalView.swift color 5
-SymphonyBar/JournalView.swift number 2
+SymphonyBar/JournalView.swift color 4
+SymphonyBar/JournalView.swift number 1
 SymphonyBar/JournalView.swift button 2
 SymphonyBar/PRWatchCardView.swift color 7
 SymphonyBar/PRWatchCardView.swift button 1

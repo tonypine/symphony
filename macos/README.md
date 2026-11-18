@@ -1035,7 +1035,7 @@ a ticket's page) and **Refresh** (⌘R). A page's own controls sit in its contro
 page: what narrows the page (the scope pop-up, the page's search, its filters) at the left, what acts on it (Audit's
 **Export…**, Tickets' **Force a Ticket…**, Setup's **Check Again**) at the right. The scope pop-up shows only on the
 pages that read it (Journal, Initiatives, Tickets, Learnings, Audit; Insights' own Repo pop-up reads it), always with
-its value; on Learnings it is the bar's one repo chooser. Home and Diagnostics have no bar: Home shows every repo.
+its value; on Journal and Learnings it is the bar's one repo chooser. Home and Diagnostics have no bar: Home shows every repo.
 Insights keeps its one bar under its tabs, and on Shipped the **Shipped** and **Learnings** switch is in it. A bar whose
 controls don't fit on one line wraps them onto the next; its actions at the right always keep their whole titles.
 The sidebar has five destinations, on ⌘1 to ⌘5:

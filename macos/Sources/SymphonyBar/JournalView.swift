@@ -273,22 +273,18 @@ struct JournalView: View {
     }
 }
 
-/// The Journal's control bar (TP-1497): the scope, then the Repo, Epic and Class chips, each a menu, and the Reports
-/// only and Everything switches, wrapping on a laptop. Everything in it narrows the Journal.
+/// The Journal's control bar (TP-1497): the scope, the Journal's one repo chooser as on Learnings, then the Epic and
+/// Class chips, each a menu, and the Reports only and Everything toggles, wrapping on a laptop. Everything in it
+/// narrows the Journal.
 struct JournalFilterBar: View {
     @Binding var query: JournalQuery
     let values: JournalFilterValues
     var page = PageBar()
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     var body: some View {
         ControlBar("Journal controls") {
             page.scopePopUp
             WrappingStack(spacing: DesignTokens.ControlBar.gap) {
-                chip(.repo) {
-                    [MenuItem(OverviewScope.allTitle, checked: query.repo == nil) { query.repo = nil }, .separator]
-                        + values.repos.map { repo in MenuItem(repo, checked: query.repo == repo) { query.repo = repo } }
-                }
                 chip(.epic) {
                     [MenuItem(JournalQuery.allEpics, checked: query.epic == nil) { query.epic = nil }, .separator]
                         + values.epics.map { epic in MenuItem(epic, checked: query.epic == epic) { query.epic = epic } }
@@ -299,17 +295,9 @@ struct JournalFilterBar: View {
                             MenuItem(value.title, checked: query.classes.contains(value)) { query.toggle(value) }
                         }
                 }
-                // The switches narrow the Journal too: they follow the chips, at the left.
-                filterSwitch(JournalQuery.reportsOnlyTitle, isOn: $query.reportsOnly)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .fixedSize()
-                    .frame(height: DesignTokens.Control.small.height)
-                    .help(JournalQuery.reportsOnlyHelp)
-                filterSwitch(JournalFilter.everything.title, isOn: $query.everything)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .fixedSize()
-                    .frame(height: DesignTokens.Control.small.height)
-                    .help(Self.everythingHelp)
+                // The toggles narrow the Journal too: they follow the chips, at the left.
+                filterToggle(JournalQuery.reportsOnlyTitle, isOn: $query.reportsOnly, help: JournalQuery.reportsOnlyHelp)
+                filterToggle(JournalFilter.everything.title, isOn: $query.everything, help: Self.everythingHelp)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -317,23 +305,15 @@ struct JournalFilterBar: View {
 
     static let everythingHelp = "Show every event, not only the notable ones"
 
-    /// A switch of the bar (Reports only, Everything); offscreen, where the AppKit switch can't draw, its face.
-    @ViewBuilder private func filterSwitch(_ title: String, isOn: Binding<Bool>) -> some View {
-        if offscreenSnapshot {
-            HStack(spacing: DesignTokens.Space.s2) {
-                Text(title)
-                Capsule()
-                    .fill(isOn.wrappedValue ? DesignTokens.ColorToken.accent.color : DesignTokens.Surface.separator.color)
-                    .frame(width: 26, height: 15)
-                    .overlay(alignment: isOn.wrappedValue ? .trailing : .leading) {
-                        Circle().fill(.white).frame(width: 13, height: 13).padding(1)
-                    }
-            }
-        } else {
-            Toggle(title, isOn: isOn)
-                .toggleStyle(.switch)
-                .controlSize(.small)
-        }
+    /// A toggle of the bar (Reports only, Everything): the catalog's quiet button, held pressed while it is on, as the
+    /// Tickets bar's details toggle.
+    private func filterToggle(_ title: String, isOn: Binding<Bool>, help: String) -> some View {
+        Button(title) { isOn.wrappedValue.toggle() }
+            .directorButton(.quiet, size: .small, selected: isOn.wrappedValue)
+            .fixedSize()
+            .help(help)
+            .accessibilityAddTraits(.isToggle)
+            .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
     }
 
     /// A filter's chip (C54): its value on the secondary face once set, the quiet form while it isn't.
