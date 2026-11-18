@@ -269,7 +269,8 @@ In Development mode it runs this in the checkout folder:
 
 The login shell loads your zsh profile, so a Finder-launched app still finds `mise`. In both modes the app
 appends to PATH, after your own PATH: mise's shims folder (`$MISE_DATA_DIR/shims`, else
-`~/.local/share/mise/shims`) when it exists, then `/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin`.
+`~/.local/share/mise/shims`) when it exists, then `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and
+`~/.opencode/bin`.
 Build `bin/symphony` first with `mise exec -- mix build`. An empty `LINEAR_API_KEY` counts as not set, and
 Start asks you to add one.
 
