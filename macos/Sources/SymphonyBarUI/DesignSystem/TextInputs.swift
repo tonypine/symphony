@@ -274,7 +274,8 @@ final class FieldAnchorView: NSView {
 /// surface and the reason shows under it in place of the help.
 ///
 /// `drawnAs` draws the field still in a state, for the Component Gallery; the field is live otherwise, and draws its
-/// text still in an offscreen snapshot, which draws no text view.
+/// text still in an offscreen snapshot, which draws no text view. `mono` sets the text in the mono face, for an
+/// identifier such as a harness's command (`.h-field input`).
 public struct DirectorTextField: View {
     let label: String?
     @Binding var text: String
@@ -286,6 +287,7 @@ public struct DirectorTextField: View {
     var focus: FocusState<Bool>.Binding?
     var drawnAs: DesignTokens.Field.State?
     var onSubmit: (() -> Void)?
+    var mono: Bool
 
     @FocusState private var ownFocus: Bool
     @State private var hovering = false
@@ -296,7 +298,7 @@ public struct DirectorTextField: View {
     public init(
         _ label: String?, text: Binding<String>, placeholder: String = "", help: String? = nil, error: String? = nil,
         size: DesignTokens.Control = .medium, disabledReason: String? = nil, focused: FocusState<Bool>.Binding? = nil,
-        drawnAs: DesignTokens.Field.State? = nil, onSubmit: (() -> Void)? = nil
+        drawnAs: DesignTokens.Field.State? = nil, mono: Bool = false, onSubmit: (() -> Void)? = nil
     ) {
         self.label = label
         _text = text
@@ -307,6 +309,7 @@ public struct DirectorTextField: View {
         self.disabledReason = disabledReason
         focus = focused
         self.drawnAs = drawnAs
+        self.mono = mono
         self.onSubmit = onSubmit
     }
 
@@ -363,7 +366,7 @@ public struct DirectorTextField: View {
                 .accessibilityHint(help ?? "")
             }
         }
-        .font(size.inputFont)
+        .font(mono ? DesignTokens.TypeStyle.monoFont(weight: DesignTokens.Field.textWeight) : size.inputFont)
         .padding(.horizontal, size.padding * DesignTokens.Field.paddingScale)
         .frame(height: size.height)
         .modifier(FieldSurface(shape: shape, kind: .text, state: state, invalid: invalid, disabled: disabled, reduceMotion: reduceMotion))

@@ -1408,6 +1408,17 @@ public enum DesignTokens {
         public static let defaultFill = ColorToken.accentTint
         public static let defaultRadius = Control.medium.radius
         public static let control = Control.small
+        /// The Harnesses block (`.run-harnesses`, `.h-row`, TP-1539): rows 12 pt apart with a hairline between them,
+        /// the harness's name in a 90 pt column 5 pt down to sit on the controls' line, then the 300 pt Command field
+        /// and the small models wrapping 8 pt apart down, 12 pt across, 20 pt from each other column.
+        public static let harnessRowGap = Space.s3
+        public static let harnessNameWidth: Double = 90
+        public static let harnessNameTop: Double = 5
+        public static let harnessColumnGap = Space.s5
+        public static let commandWidth: Double = 300
+        public static let commandLabelGap = Space.s2
+        public static let smallModelGap = Space.s3
+        public static let smallModelLineGap = Space.s2
     }
 
     /// The catalog's List card (`.list-card`, TP-1530): one thing of the list beside a page, its name and one fact on

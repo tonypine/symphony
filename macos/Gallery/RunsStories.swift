@@ -3,7 +3,8 @@ import SymphonyBarCore
 import SymphonyBarUI
 
 // Factory › Runs (TP-1538): the page as the catalog draws it, from a `symphony.yml` with Default, QA's own model and
-// two fallbacks, and web-shop's own values. Each story is one state the walkthrough reaches.
+// two fallbacks, web-shop's own values, and each harness's command and small models (TP-1539). Each story is one
+// state the walkthrough reaches.
 
 private let runsYAML = """
     runs:
@@ -25,6 +26,17 @@ private let runsYAML = """
           qa:
             effort: low
       - key: docs
+    execution:
+      harnesses:
+        claude:
+          command: claude --dangerously-skip-permissions
+          small_model:
+            anthropic: claude-haiku-5-5
+            openrouter: deepseek/deepseek-flash
+        opencode:
+          command: opencode
+          small_model:
+            opencode-go: hy4-flash
 
     """
 
@@ -72,4 +84,7 @@ let runsStates: [(name: String, page: RunsPage, drawn: RunsPageDrawn?)] = [
         $0.finishSave(.refused("runs.qa.fallbacks[1]: opencode reaches no provider opencode-go"))
     }, nil),
     ("runs-page-repository", runsPageState { $0.show(.repository("web-shop")) }, nil),
+    ("runs-page-small-model-changed", runsPageState {
+        $0.pickSmallModel("claude-sonnet-5-5", of: .claude, on: RunProfilesConfig.anthropic)
+    }, nil),
 ]
