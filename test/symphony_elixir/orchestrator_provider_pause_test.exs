@@ -213,6 +213,113 @@ defmodule SymphonyElixir.OrchestratorProviderPauseTest do
     end
   end
 
+  describe "the state's providers" do
+    test "a pause shows with its time in the next snapshot, and a resume clears it" do
+      running = running_entry(issue("running", "MT-RUN", "In Progress"), "anthropic")
+      state = %{orchestrator_state() | running: %{"running" => running}}
+
+      assert %{paused: false, paused_since: nil, in_use: true, working: 1} = provider(snapshot_of(state), "anthropic")
+
+      {:reply, {:ok, _status}, paused} = call({:pause_provider, "anthropic"}, state)
+      assert %{paused: true, paused_since: %DateTime{}, kinds: kinds} = provider(snapshot_of(paused), "anthropic")
+      assert "implementation" in kinds
+      assert %{paused: false} = provider(snapshot_of(paused), "openrouter")
+
+      {:reply, {:ok, _status}, resumed} = call({:resume_provider, "anthropic"}, paused)
+      assert %{paused: false, paused_since: nil} = provider(snapshot_of(resumed), "anthropic")
+    end
+
+    test "a usage limit's hold and the windows Symphony read show on its provider" do
+      resume_at = DateTime.add(DateTime.utc_now(), 3600, :second) |> DateTime.truncate(:second)
+      resets_at = DateTime.add(resume_at, -60, :second)
+
+      hold = %{
+        provider: "anthropic",
+        scope: :all,
+        reason: "claude_usage_limit",
+        window: "five_hour",
+        phase: :paused,
+        since: DateTime.utc_now(),
+        resets_at: resets_at,
+        resume_at: resume_at,
+        source: nil,
+        canary_issue_id: nil,
+        issue_identifier: nil,
+        utilization: 1.0
+      }
+
+      windows = %{{"anthropic", "five_hour"} => %{resets_at: resets_at, utilization: 1.0}}
+      state = %{orchestrator_state() | usage_limits: %{{"anthropic", :all} => hold}, usage_windows: windows}
+
+      assert %{
+               held: true,
+               held_until: ^resume_at,
+               usage_windows: [%{name: "five_hour", utilization: 1.0, resets_at: ^resets_at}]
+             } = provider(snapshot_of(state), "anthropic")
+
+      assert %{held: false, usage_windows: []} = provider(snapshot_of(state), "openai")
+    end
+
+    test "a run's tokens count today for the provider it started on, from the store at start and from its updates" do
+      provider = "provider-#{System.unique_integer([:positive])}"
+
+      :ok =
+        RunStore.put_run(%{
+          repo_key: "default",
+          run_id: "run-#{provider}",
+          issue_id: "tokens",
+          started_at: DateTime.utc_now(),
+          provider: provider,
+          tokens: %{total_tokens: 700}
+        })
+
+      pid = start_orchestrator(:ProviderTokensOrchestrator)
+      assert :sys.get_state(pid).provider_tokens_today[provider] == 700
+
+      running_entry = running_entry(issue("tokens", "MT-TOKENS", "In Progress"), provider)
+      :sys.replace_state(pid, &%{&1 | running: %{"tokens" => running_entry}})
+
+      usage = %{
+        input_tokens: 18,
+        uncached_input_tokens: 12,
+        cached_input_tokens: 4,
+        cache_creation_input_tokens: 2,
+        output_tokens: 5,
+        total_tokens: 23
+      }
+
+      update = %{event: :turn_completed, payload: %{method: "turn/completed", usage: usage}, timestamp: DateTime.utc_now()}
+      send(pid, {:codex_worker_update, "tokens", update})
+
+      assert :sys.get_state(pid).provider_tokens_today[provider] == 723
+    end
+  end
+
+  defp provider(snapshot, provider), do: Enum.find(snapshot.providers, &(&1.provider == provider))
+
+  defp running_entry(issue, provider) do
+    %{
+      pid: self(),
+      ref: make_ref(),
+      identifier: issue.identifier,
+      issue: issue,
+      session_id: nil,
+      last_codex_message: nil,
+      last_codex_timestamp: nil,
+      last_codex_event: nil,
+      codex_input_tokens: 0,
+      codex_cached_input_tokens: 0,
+      codex_output_tokens: 0,
+      codex_total_tokens: 0,
+      codex_last_reported_input_tokens: 0,
+      codex_last_reported_cached_input_tokens: 0,
+      codex_last_reported_output_tokens: 0,
+      codex_last_reported_total_tokens: 0,
+      started_at: DateTime.utc_now(),
+      run_profile: %{kind: :implementation, provider: provider, model: "m", effort: nil}
+    }
+  end
+
   defp situation(state, issue_id, phase) do
     record = TicketState.normalize(%{repo_key: "default", issue_id: issue_id, issue_identifier: issue_id, phase: phase})
     Situation.compute(record, [], Situation.live_facts(snapshot_of(state)))

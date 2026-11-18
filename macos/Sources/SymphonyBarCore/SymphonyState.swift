@@ -48,6 +48,9 @@ public struct StateSnapshot: Equatable {
     /// Every configured repository and its pause (`repositories`), in Symphony's order; nil when Symphony predates
     /// the pause of one repository, so the app offers no Pause for it.
     public var repositories: [Repository]?
+    /// Every provider some harness reaches (`providers`), in use first, then not in use, in Symphony's order; nil when
+    /// Symphony predates the list.
+    public var providers: [Provider]?
     /// Every reason Symphony's own pause holds (`pause.reasons`), in the order they were set, the usage-limit holds'
     /// included; nil when Symphony predates them, so the header reads `pause` as before.
     public var pauseReasons: [PauseReason]?
@@ -134,6 +137,84 @@ public struct StateSnapshot: Equatable {
     /// The listed repository `key`, nil when Symphony doesn't list it or predates `repositories`.
     public func repository(_ key: String) -> Repository? {
         repositories?.first { $0.key == key }
+    }
+
+    /// A provider as `/api/v1/state`'s `providers` lists it (`SymphonyElixir.Providers`): whether a kind of run uses it,
+    /// the Director's pause, a usage limit's hold, its usage windows, the harnesses that reach it, the kinds of run on it,
+    /// the runs working on it and its tokens today. Its `reserve` isn't read until Symphony fills it.
+    public struct Provider: Equatable {
+        /// A usage window Symphony read for the provider from its runs, for example `five_hour`.
+        public struct UsageWindow: Equatable {
+            public var name: String
+            /// How much of the window is used, from 0 to 1, when known.
+            public var utilization: Double?
+            public var resetsAt: Date?
+
+            public init(name: String, utilization: Double? = nil, resetsAt: Date? = nil) {
+                self.name = name
+                self.utilization = utilization
+                self.resetsAt = resetsAt
+            }
+        }
+
+        /// The provider's id, for example `anthropic`, which Pause and Resume name.
+        public var id: String
+        /// Its name for a person, for example `Anthropic`.
+        public var name: String
+        /// A kind of run, or one of its fallbacks, is set to it.
+        public var inUse: Bool
+        /// The Director paused it: no new run starts on it.
+        public var paused: Bool
+        public var pausedSince: Date?
+        /// A usage limit holds new runs on it, until `heldUntil` when known.
+        public var held: Bool
+        public var heldUntil: Date?
+        /// Its usage windows, by name; empty when Symphony can read none for it.
+        public var usageWindows: [UsageWindow]
+        /// The harnesses that reach it, for example `claude`.
+        public var harnesses: [String]
+        /// The kinds of run whose own choice is on it, for example `implementation`.
+        public var kinds: [String]
+        /// The kinds of run one of whose fallbacks is on it.
+        public var fallbackFor: [String]
+        /// How many runs work on it now.
+        public var working: Int
+        public var tokensToday: Int
+
+        public init(
+            id: String,
+            name: String? = nil,
+            inUse: Bool = false,
+            paused: Bool = false,
+            pausedSince: Date? = nil,
+            held: Bool = false,
+            heldUntil: Date? = nil,
+            usageWindows: [UsageWindow] = [],
+            harnesses: [String] = [],
+            kinds: [String] = [],
+            fallbackFor: [String] = [],
+            working: Int = 0,
+            tokensToday: Int = 0
+        ) {
+            self.id = id
+            self.name = name ?? id
+            self.inUse = inUse
+            self.paused = paused
+            self.pausedSince = pausedSince
+            self.held = held
+            self.heldUntil = heldUntil
+            self.usageWindows = usageWindows
+            self.harnesses = harnesses
+            self.kinds = kinds
+            self.fallbackFor = fallbackFor
+            self.working = working
+            self.tokensToday = tokensToday
+        }
+    }
+
+    /// The listed provider `id`, nil when Symphony doesn't list it or predates `providers`.
+    public func provider(_ id: String) -> Provider? {
+        providers?.first { $0.id == id }
     }
 
     /// A ticket waiting on the operator, as `/api/v1/state`'s `waiting_on_you` lists it.
@@ -411,6 +492,7 @@ public struct StateSnapshot: Equatable {
         dispatchShadow: DispatchShadowReport? = nil,
         reconcile: ReconcileReport? = nil,
         repositories: [Repository]? = nil,
+        providers: [Provider]? = nil,
         pauseReasons: [PauseReason]? = nil
     ) {
         self.running = running
@@ -433,6 +515,7 @@ public struct StateSnapshot: Equatable {
         self.dispatchShadow = dispatchShadow
         self.reconcile = reconcile
         self.repositories = repositories
+        self.providers = providers
         self.pauseReasons = pauseReasons
     }
 }
@@ -945,6 +1028,28 @@ public enum SymphonyState {
             }
             return StateSnapshot.Repository(key: key, pause: pause)
         }
+        snapshot.providers = payload.providers?.compactMap { provider in
+            guard let id = provider.provider, !id.isEmpty else { return nil }
+            let name = provider.name?.trimmingWhitespace()
+            return StateSnapshot.Provider(
+                id: id,
+                name: name?.isEmpty == false ? name : nil,
+                inUse: provider.inUse ?? false,
+                paused: provider.paused ?? false,
+                pausedSince: provider.pausedSince.flatMap(parseDate),
+                held: provider.held ?? false,
+                heldUntil: provider.heldUntil.flatMap(parseDate),
+                usageWindows: (provider.usageWindows ?? []).compactMap { window in
+                    guard let name = window.name, !name.isEmpty else { return nil }
+                    return .init(name: name, utilization: window.utilization, resetsAt: window.resetsAt.flatMap(parseDate))
+                },
+                harnesses: provider.harnesses ?? [],
+                kinds: provider.kinds ?? [],
+                fallbackFor: provider.fallbackFor ?? [],
+                working: provider.working ?? 0,
+                tokensToday: provider.tokensToday ?? 0
+            )
+        }
         return .state(snapshot)
     }
 
@@ -1085,6 +1190,28 @@ public enum SymphonyState {
             let pause: Pause?
         }
 
+        struct Provider: Decodable {
+            struct Window: Decodable {
+                let name: String?
+                let utilization: Double?
+                let resetsAt: String?
+            }
+
+            let provider: String?
+            let name: String?
+            let inUse: Bool?
+            let paused: Bool?
+            let pausedSince: String?
+            let held: Bool?
+            let heldUntil: String?
+            let usageWindows: [Window]?
+            let harnesses: [String]?
+            let kinds: [String]?
+            let fallbackFor: [String]?
+            let working: Int?
+            let tokensToday: Int?
+        }
+
         struct Waiting: Decodable {
             let issueId: String?
             let issueIdentifier: String?
@@ -1116,6 +1243,8 @@ public enum SymphonyState {
         let build: Build?
         /// Missing before Symphony paused one repository at a time.
         let repositories: [Repository]?
+        /// Missing before Symphony listed its providers.
+        let providers: [Provider]?
         let error: Failure?
     }
 }

@@ -32,6 +32,7 @@ defmodule SymphonyElixir.Orchestrator do
     Pauses,
     PlanComments,
     PlanReview,
+    Providers,
     PrReviewPoller,
     PrRun,
     PrWatch,
@@ -179,6 +180,9 @@ defmodule SymphonyElixir.Orchestrator do
       tracker_health: %{tracker: :unknown, reason: nil, since: nil, consecutive_failures: 0},
       budget_day_started_on: nil,
       budget_daily_used: 0,
+      # The tokens each provider's runs used on `budget_day_started_on`, by provider, for the state's
+      # `providers` (`SymphonyElixir.Providers`).
+      provider_tokens_today: %{},
       budget_daily_paused_logged: false,
       budget_exhausted: MapSet.new(),
       parked_parents: MapSet.new(),
@@ -251,7 +255,7 @@ defmodule SymphonyElixir.Orchestrator do
     quality_gate_cache = hydrate_quality_gate_cache()
     quality_gate_comment_keys = hydrate_quality_gate_comment_keys()
     budget_day_started_on = Date.utc_today()
-    budget_daily_used = hydrate_budget_daily_used(budget_day_started_on)
+    {budget_daily_used, provider_tokens_today} = hydrate_daily_tokens(budget_day_started_on)
     budget_exhausted = hydrate_budget_exhausted()
     :ok = ensure_snapshot_table()
     _ = ObservabilityPubSub.subscribe_ticket_records()
@@ -280,6 +284,7 @@ defmodule SymphonyElixir.Orchestrator do
       tracker_health: empty_tracker_health(config.tracker.kind),
       budget_day_started_on: budget_day_started_on,
       budget_daily_used: budget_daily_used,
+      provider_tokens_today: provider_tokens_today,
       budget_daily_paused_logged: false,
       budget_exhausted: budget_exhausted,
       quality_gate_cache: quality_gate_cache,
@@ -745,6 +750,7 @@ defmodule SymphonyElixir.Orchestrator do
         state_after_tokens =
           state
           |> apply_codex_token_delta(token_delta)
+          |> apply_provider_token_delta(updated_running_entry, token_delta)
 
         state =
           state_after_tokens
@@ -8478,18 +8484,26 @@ defmodule SymphonyElixir.Orchestrator do
   defp present_value?(""), do: false
   defp present_value?(_value), do: true
 
-  defp hydrate_budget_daily_used(%Date{} = day) do
+  # The tokens the day's runs used, in all and by provider: a run that kept no provider counts in
+  # the total only.
+  defp hydrate_daily_tokens(%Date{} = day) do
     case RunStore.list_runs_started_on(day) do
       runs when is_list(runs) ->
-        Enum.reduce(runs, 0, fn run, total ->
-          total + run_total_tokens(run)
+        Enum.reduce(runs, {0, %{}}, fn run, {total, by_provider} ->
+          tokens = run_total_tokens(run)
+          {total + tokens, add_provider_tokens(by_provider, Map.get(run, :provider), tokens)}
         end)
 
       {:error, reason} ->
         Logger.warning("Failed to hydrate daily token budget usage from run store: #{inspect(reason)}")
-        0
+        {0, %{}}
     end
   end
+
+  defp add_provider_tokens(by_provider, provider, tokens) when is_binary(provider) and tokens > 0,
+    do: Map.update(by_provider, provider, tokens, &(&1 + tokens))
+
+  defp add_provider_tokens(by_provider, _provider, _tokens), do: by_provider
 
   defp hydrate_budget_exhausted do
     case Config.settings!().execution.max_tokens_per_issue do
@@ -9960,6 +9974,7 @@ defmodule SymphonyElixir.Orchestrator do
       usage_limits: UsageLimit.snapshot(state.usage_limits, state.usage_windows),
       pause: symphony_pause_status(),
       repositories: repositories_snapshot(),
+      providers: providers_snapshot(state),
       workspace_lifecycle: workspace_lifecycle_snapshot(state),
       budget: budget_snapshot(state),
       dispatch_state: dispatch_state_snapshot(state),
@@ -10594,13 +10609,23 @@ defmodule SymphonyElixir.Orchestrator do
         state
 
       nil ->
-        %{state | budget_day_started_on: today, budget_daily_used: 0, budget_daily_paused_logged: false}
+        reset_daily_tokens(state, today)
 
       previous_day ->
         Logger.info("Resetting daily token budget previous_day=#{Date.to_iso8601(previous_day)} previous_daily_used=#{state.budget_daily_used}")
 
-        %{state | budget_day_started_on: today, budget_daily_used: 0, budget_daily_paused_logged: false}
+        reset_daily_tokens(state, today)
     end
+  end
+
+  defp reset_daily_tokens(state, today) do
+    %{
+      state
+      | budget_day_started_on: today,
+        budget_daily_used: 0,
+        provider_tokens_today: %{},
+        budget_daily_paused_logged: false
+    }
   end
 
   defp daily_budget_paused?(%State{} = state) do
@@ -11323,11 +11348,37 @@ defmodule SymphonyElixir.Orchestrator do
   defp run_profiles_in_use(%State{usage_limits: usage_limits}, _settings) when map_size(usage_limits) == 0, do: []
 
   defp run_profiles_in_use(%State{}, settings) do
+    for settings <- with_repo_settings(settings), kind <- RunKind.names(), uniq: true do
+      settings |> Config.run(kind) |> Map.take([:provider, :model]) |> Map.put(:kind, kind)
+    end
+  end
+
+  # Symphony's settings, then each configured repository's.
+  defp with_repo_settings(settings) do
     repo_settings =
       for {:ok, repos} <- [Config.repos()], repo <- repos, {:ok, repo_settings} <- [Config.settings_for_repo(repo.name)], do: repo_settings
 
-    for settings <- [settings | repo_settings], kind <- RunKind.names(), uniq: true do
-      settings |> Config.run(kind) |> Map.take([:provider, :model]) |> Map.put(:kind, kind)
+    [settings | repo_settings]
+  end
+
+  # Every provider and its state (`SymphonyElixir.Providers`): the pause read for each provider the
+  # Director paused, so a Pause or a Resume shows in the next state, which each pushes at once.
+  defp providers_snapshot(%State{} = state) do
+    Providers.list(%{
+      runs: Providers.configured_runs(with_repo_settings(Config.settings!())),
+      pauses: Map.new(state.paused_providers, &{&1, provider_pause(&1)}),
+      usage_limits: Map.values(state.usage_limits),
+      usage_windows: state.usage_windows,
+      working: for({_issue_id, %{run_profile: %{provider: provider}}} <- state.running, do: provider),
+      tokens_today: state.provider_tokens_today
+    })
+  end
+
+  # A provider's pause, nil when its record can't be read.
+  defp provider_pause(provider) do
+    case Pauses.get({:provider, provider}) do
+      {:ok, pause} -> pause
+      {:error, _unreadable} -> nil
     end
   end
 
@@ -11768,6 +11819,13 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp apply_codex_token_delta(state, _token_delta), do: state
+
+  # The run's tokens count for the provider it started on, after `apply_codex_token_delta/2` began
+  # the day.
+  defp apply_provider_token_delta(%State{} = state, %{run_profile: %{provider: provider}}, %{total_tokens: total}) when is_integer(total),
+    do: %{state | provider_tokens_today: add_provider_tokens(state.provider_tokens_today, provider, total)}
+
+  defp apply_provider_token_delta(state, _running_entry, _token_delta), do: state
 
   defp apply_rate_limits(%State{} = state, update) when is_map(update) do
     case AgentTelemetry.extract_rate_limits(update) do
