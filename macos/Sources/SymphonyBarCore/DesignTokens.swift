@@ -1385,6 +1385,31 @@ public enum DesignTokens {
         }
     }
 
+    /// Factory › Runs (`.runs-page`, `.run-list`, `.run-row`, TP-1538): the Save bar over one panel of rows, each a
+    /// kind of run's name (170 pt) beside its lines, Default's row on the accent tint, a hairline between the others.
+    /// The page is 24 pt from the top, 32 pt from the sides and 40 pt from the bottom, at most 1320 pt wide.
+    public enum RunsPage {
+        public static let maxWidth: Double = 1320
+        public static let top = Space.s6
+        public static let sides = Space.s8
+        public static let bottom = Space.s10
+        /// Between the Save bar and the panel.
+        public static let gap = Space.s4
+        public static let listPadding = Space.s2
+        public static let rowPadding = Space.s3
+        public static let rowGap = Space.s4
+        public static let kindWidth: Double = 170
+        /// Between the kind's name and its "Use Default's".
+        public static let kindGap: Double = 2
+        /// The name's line, as tall as a line of the list.
+        public static let kindLineHeight: Double = 28
+        /// "Use Default's" sits 8 pt left of the name, so its word lines up with it.
+        public static let useDefaultsInset: Double = -8
+        public static let defaultFill = ColorToken.accentTint
+        public static let defaultRadius = Control.medium.radius
+        public static let control = Control.small
+    }
+
     /// The catalog's List card (`.list-card`, TP-1530): one thing of the list beside a page, its name and one fact on
     /// top and where it stands under them, after a Status dot.
     public enum ListCard {
