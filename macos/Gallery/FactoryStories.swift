@@ -109,10 +109,12 @@ private struct LiveReorderableList: View {
     }
 }
 
-/// The catalog's Reorderable list story: `count` of its steps, 760 pt, 24 pt above and below, the Add a Fallback
-/// button under them; live, or in a still state (`drawn`) with the line at `off` unusable now.
+/// The catalog's Reorderable list story: `count` of its steps, `width` (760 pt), 24 pt above and below, the Add a
+/// Fallback button under them; live, or in a still state (`drawn`) with the line at `off` unusable now.
 @MainActor
-func reorderableListStory(count: Int = 3, drawn: ReorderableListDrawn? = nil, off: Int? = nil, removable: Bool = true) -> AnyView {
+func reorderableListStory(
+    count: Int = 3, drawn: ReorderableListDrawn? = nil, off: Int? = nil, removable: Bool = true, width: CGFloat = reorderableListStoryWidth
+) -> AnyView {
     let steps = Array(galleryRunSteps.prefix(max(1, count)))
     let list: AnyView
     if drawn == nil, off == nil {
@@ -126,10 +128,14 @@ func reorderableListStory(count: Int = 3, drawn: ReorderableListDrawn? = nil, of
             }
         )
     }
-    return AnyView(list.padding(.vertical, reorderableListStoryPadding).frame(width: reorderableListStoryWidth, alignment: .leading))
+    return AnyView(list.padding(.vertical, reorderableListStoryPadding).frame(width: width, alignment: .leading))
 }
 
 let reorderableListStoryWidth: CGFloat = 760
+/// The story of a line that can't be used now: its four pop-ups and the note saying why come to about 846 pt with
+/// the handle, the number and the remove button, more than the catalog's 760 pt box (which the catalog's line runs
+/// past). The story is as wide as that line, so its whole note and its remove button show inside the list.
+let reorderableListOffStoryWidth: CGFloat = 880
 let reorderableListStoryPadding: CGFloat = 24
 
 /// The story's height: its padding, the lines and their gaps, and the add button under them.
@@ -210,9 +216,11 @@ let factoryStories: [ComponentStory] = {
     func picker(_ id: String, height: CGFloat = 40, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(component: "searchable-pop-up", id: id, title: "Searchable pop-up", width: 320, height: height, draw: draw)
     }
-    func reorder(_ id: String, count: Int = 3, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+    func reorder(
+        _ id: String, count: Int = 3, width: CGFloat = reorderableListStoryWidth, _ draw: @escaping @MainActor () -> AnyView
+    ) -> ComponentStory {
         ComponentStory(
-            component: "reorderable-list", id: id, title: "Reorderable list", width: reorderableListStoryWidth,
+            component: "reorderable-list", id: id, title: "Reorderable list", width: width,
             height: reorderableListStoryHeight(count), draw: draw)
     }
     func saveBar(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
@@ -238,7 +246,9 @@ let factoryStories: [ComponentStory] = {
         reorder("handle-hover") { reorderableListStory(drawn: .init(hover: 2)) },
         reorder("dragging") { reorderableListStory(drawn: .init(dragging: 3)) },
         reorder("handle-focused") { reorderableListStory(drawn: .init(focused: 2)) },
-        reorder("a-line-that-can-t-be-used-now") { reorderableListStory(off: 1) },
+        reorder("a-line-that-can-t-be-used-now", width: reorderableListOffStoryWidth) {
+            reorderableListStory(off: 1, width: reorderableListOffStoryWidth)
+        },
         reorder("one-line", count: 1) { reorderableListStory(count: 1) },
         saveBar("nothing-changed") { saveBarStory(changes: 0) },
         saveBar("changes-not-saved") { saveBarStory(live: true) },
