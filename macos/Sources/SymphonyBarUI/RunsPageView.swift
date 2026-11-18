@@ -122,7 +122,6 @@ public struct RunsPageView: View {
                 }
                 RunsRowView(row: row, actions: actions, drawn: drawn, reordered: { reorders += 1 })
                     .id("\(row.id)-\(reorders)")
-                    .disabled(!page.isEditable)
             }
         }
         .padding(tokens.listPadding)
