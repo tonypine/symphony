@@ -1858,12 +1858,15 @@ defmodule SymphonyElixir.AgentRunner do
     Issue.waiting_on_sub_issues?(issue, terminal_states) or SubIssueWait.held?(issue, terminal_states, settings)
   end
 
+  # CI Fix has its own pending-CI wait and green-fix handoff below. Letting it stop here as a quiet
+  # success would retry it on the same head and count that wait as a dispatch loop.
   defp post_pr_quiet_continuation?(%Issue{} = previous_issue, %Issue{} = refreshed_issue, run_context) do
     case ticket_pr_url(refreshed_issue, run_context.opts) || ticket_pr_url(previous_issue, run_context.opts) do
       pr_url when is_binary(pr_url) ->
         active_issue_state?(refreshed_issue.state) and
           !rework_state?(refreshed_issue.state) and
           !merging_state?(refreshed_issue.state) and
+          !ci_fix_state?(refreshed_issue, run_context) and
           no_pending_rework_signal?(refreshed_issue, run_context.opts) and
           work_on_pr?(refreshed_issue, pr_url, run_context)
 
@@ -2238,12 +2241,13 @@ defmodule SymphonyElixir.AgentRunner do
   # A Rework run that pushed a new head to its PR, with CI on it running or green, waits on that CI,
   # so it is not idle: it moves to the post-PR state, where the PR and CI watcher takes the head over. That
   # covers what `rework_finished?/2` skips, such as a Rework started by a CI failure, which stays
-  # pending until the run ends. Outside Rework, `pushed_head_handoff_ci_action/2` already handed off
-  # such a head. A run whose HEAD is the PR head with checks pending but that is not handed off (one
-  # that started on that head) keeps turning, up to
-  # `agent.max_turns`, until CI settles. A CI-fix run that found the red check a flake, or a
-  # merge-conflict run that found the PR no longer conflicts, rightly pushes nothing: once CI on
-  # its PR head is green, that is its outcome, so it hands the PR back instead of being parked
+  # pending until the run ends. A CI-caused Rework that rightly pushes nothing takes the same handoff
+  # when its head is green or still running: another run would have nothing to repair. Outside Rework,
+  # `pushed_head_handoff_ci_action/2` already handed off such a head. A run whose HEAD is the PR head
+  # with checks pending but that is not handed off (a reviewer-driven Rework that started on that head)
+  # keeps turning, up to `agent.max_turns`, until CI settles. A CI-fix run that found the red check a
+  # flake, or a merge-conflict run that found the PR no longer conflicts, rightly pushes nothing: once
+  # CI on its PR head is green, that is its outcome, so it hands the PR back instead of being parked
   # (`hand_off_green_fix/3`). Any other idle run is parked.
   defp end_idle_run(%Issue{} = issue, %{progress: %{head: head}} = run_context) do
     case await_pr_head(issue, run_context) do
@@ -2287,8 +2291,10 @@ defmodule SymphonyElixir.AgentRunner do
     green_fix = if ci_action == :success, do: green_fix(issue, ci_status, run_context)
 
     cond do
-      ci_action in [:pending, :success] and rework_state?(issue.state) and pushed_new_head?(run_context) ->
-        hand_off_idle_pushed_head(issue, ci_action, run_context)
+      ci_action in [:pending, :success] and rework_state?(issue.state) and
+          (pushed_new_head?(run_context) or
+             (is_map(run_context.opts[:ci_failure]) and pending_reviewer_comments(issue, run_context.opts) == [])) ->
+        hand_off_idle_rework(issue, ci_action, run_context)
 
       ci_action == :pending ->
         Logger.info("Not parking #{issue_context(issue)}; waiting for CI on its pushed head #{head}")
@@ -2306,7 +2312,13 @@ defmodule SymphonyElixir.AgentRunner do
   # rework an earlier run pushed counts too.
   defp pushed_new_head?(%{progress: progress}), do: progress.head != progress.start_head or progress.head != progress.rework_base
 
-  defp hand_off_idle_pushed_head(%Issue{} = issue, ci_action, run_context) do
+  defp hand_off_idle_rework(%Issue{} = issue, ci_action, run_context) do
+    # A CI-caused Rework can be done without a new commit, so no push hook fired for its head. Record
+    # the same handoff a finished Rework records when its push happened outside the tool hooks.
+    if not handoff_emitted?(issue, run_context) do
+      Handoff.emit(run_repo_key(issue, run_context.opts), issue.id, %{head: run_context.progress.head, pr_url: ticket_pr_url(issue, run_context.opts), source: "pushed_pr_head"})
+    end
+
     with :ok <- hand_off_pushed_head(issue, ci_action, run_context) do
       forget_rework_base(issue, run_context.opts)
     end
