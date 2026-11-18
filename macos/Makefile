@@ -46,7 +46,8 @@ QA_SYMPHONY := $(BUILD_DIR)/qa-symphony
 # before it pushes. The guarded build keeps its own scratch path, so it never switches the flags
 # of the plain `.build` that `swift test` reuses (a switch rebuilds every module). A file that
 # warned is touched, so the next guarded build compiles it again and fails again until it is
-# fixed.
+# fixed. On GitHub each warning is also an error annotation, so the run's summary names the file
+# and line without its whole log.
 TYPE_CHECK_LIMIT_MS := 100
 TYPE_CHECK_GUARD_FLAGS := -Xswiftc -Xfrontend -Xswiftc -warn-long-expression-type-checking=$(TYPE_CHECK_LIMIT_MS)
 TYPE_CHECK_GUARD_SCRATCH := .build/type-check-guard
@@ -61,12 +62,16 @@ guarded-%:
 	set -o pipefail; \
 	$(MAKE) --no-print-directory $* SWIFT_FLAGS='$(SWIFT_FLAGS) $(TYPE_CHECK_GUARD_FLAGS) --scratch-path $(TYPE_CHECK_GUARD_SCRATCH)' 2>&1 | tee "$$log"; \
 	status=$$?; \
-	slow="$$(grep 'expression took' "$$log" | cut -d: -f1 | sort -u)"; \
+	warnings="$$(grep 'expression took' "$$log" | sort -u)"; \
+	slow="$$(printf '%s\n' "$$warnings" | cut -d: -f1 | sort -u)"; \
 	rm -f "$$log"; \
-	if [ -n "$$slow" ]; then \
+	if [ -n "$$warnings" ]; then \
 		printf '%s\n' "$$slow" | while IFS= read -r file; do if [ -f "$$file" ]; then touch "$$file"; fi; done; \
 		message="An expression took longer than $(TYPE_CHECK_LIMIT_MS) ms to type-check (the warning above names its file and line). Break it up: CI's macos build fails on it, and an older Xcode cannot compile it."; \
-		if [ -n "$$GITHUB_ACTIONS" ]; then echo "::error::$$message"; else echo "error: $$message"; fi; \
+		if [ -n "$$GITHUB_ACTIONS" ]; then \
+			printf '%s\n' "$$warnings" | while IFS= read -r warning; do echo "::error::$${warning#$(CURDIR)/}"; done; \
+			echo "::error::$$message"; \
+		else echo "error: $$message"; fi; \
 		exit 1; \
 	fi; \
 	exit $$status
