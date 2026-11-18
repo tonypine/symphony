@@ -288,7 +288,8 @@ defmodule SymphonyElixir.OrchestratorProviderPauseTest do
         total_tokens: 23
       }
 
-      send(pid, {:codex_worker_update, "tokens", AppServer.event_to_update({:turn_completed, usage})})
+      update = %{event: :turn_completed, payload: %{method: "turn/completed", usage: usage}, timestamp: DateTime.utc_now()}
+      send(pid, {:codex_worker_update, "tokens", update})
 
       assert :sys.get_state(pid).provider_tokens_today[provider] == 723
     end
