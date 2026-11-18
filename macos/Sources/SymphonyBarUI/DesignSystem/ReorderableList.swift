@@ -228,8 +228,10 @@ public struct ReorderableList<Item: Identifiable, Line: View>: View {
         if let drawn {
             return drawn.dragging == index + 1 ? CGSize(width: list.drawnLiftX, height: list.drawnLiftY) : .zero
         }
-        guard let from = dragFrom else { return .zero }
+        // The lifted line reads its offset first: at the drop `dragFrom` is already nil, and the line settles from
+        // the pointer into its new place as `dragOffset` animates to zero.
         if lifted { return dragOffset }
+        guard let from = dragFrom else { return .zero }
         let step = ReorderModel<Item.ID>.shift(index, from: from, to: dragTarget ?? from)
         return CGSize(width: 0, height: Double(step) * pitch)
     }
