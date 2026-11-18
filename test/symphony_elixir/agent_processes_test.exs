@@ -128,7 +128,9 @@ defmodule SymphonyElixir.AgentProcessesTest do
 
     Port.close(port)
     assert eventually_gone?(os_pid, 3_000)
-    Process.sleep(200)
+    # The group can end on SIGTERM before the grace timer fires; the entry leaves the ledger with
+    # the SIGKILL that timer sends, so wait for the server to have sent it.
+    assert stopped?(server, os_pid, 5_000)
     assert read_ledger(path) == []
   end
 
@@ -376,6 +378,26 @@ defmodule SymphonyElixir.AgentProcessesTest do
   end
 
   defp kill_group(os_pid), do: System.cmd("kill", ["-KILL", "--", "-#{os_pid}"], stderr_to_stdout: true)
+
+  # Whether the server sent the group its SIGKILL (and wrote the ledger without it) by the deadline.
+  defp stopped?(server, os_pid, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+    wait_stopped(server, os_pid, deadline)
+  end
+
+  defp wait_stopped(server, os_pid, deadline) do
+    cond do
+      not Map.has_key?(:sys.get_state(server).entries, os_pid) ->
+        true
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        false
+
+      true ->
+        Process.sleep(10)
+        wait_stopped(server, os_pid, deadline)
+    end
+  end
 
   defp eventually_gone?(os_pid, timeout_ms) do
     deadline = System.monotonic_time(:millisecond) + timeout_ms
