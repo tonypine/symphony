@@ -76,8 +76,18 @@ key_of() { # "<inputs>" extra...
 app_key() { key_of "$APP_INPUTS" release; }
 server_key() { key_of "$SERVER_INPUTS" "build=$1" "sha=${SYMPHONY_BUILD_SHA:-}" "repo=${SYMPHONY_BUILD_REPO:-}"; }
 
-toolchain() { # the Xcode a working folder belongs to: another Xcode starts clean
-  xcodebuild -version 2>/dev/null | tr -s ' \n' '-' | sed 's/-$//' || echo unknown
+# The Xcode a working folder belongs to (another Xcode starts clean), named as `xcodebuild -version`
+# prints it: Xcode-26.6-Build-version-17F42. Read from the selected Xcode's version.plist, not from
+# a run of xcodebuild, so every call of a job, and of the other runner's beside it, gets the same name.
+toolchain() {
+  local plist short build
+  plist="$(xcode-select -p 2>/dev/null)/../version.plist"
+  if short=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist" 2>/dev/null) &&
+    build=$(/usr/libexec/PlistBuddy -c 'Print :ProductBuildVersion' "$plist" 2>/dev/null); then
+    echo "Xcode-$short-Build-version-$build"
+  else
+    xcodebuild -version 2>/dev/null | tr -s ' \n' '-' | sed 's/-$//' || echo unknown
+  fi
 }
 
 safe_ref() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
