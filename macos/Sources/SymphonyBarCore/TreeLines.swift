@@ -66,6 +66,18 @@ public enum TreeLines {
         return lines[min(max(index + offset, 0), lines.count - 1)].key
     }
 
+    /// Whether an arrow going `offset` (−1 up, 1 down) from `key` would leave `lines`: `key` is the first line going up
+    /// or the last going down.
+    public static func isEdge<ID: Hashable>(_ key: TreeKey<ID>, going offset: Int, in lines: [TreeLine<ID>]) -> Bool {
+        guard let index = lines.firstIndex(where: { $0.key == key }) else { return false }
+        return offset < 0 ? index == 0 : index == lines.count - 1
+    }
+
+    /// The first line of `lines` (`last` false) or its last; nil when it has none.
+    public static func end<ID: Hashable>(_ lines: [TreeLine<ID>], last: Bool) -> TreeKey<ID>? {
+        (last ? lines.last : lines.first)?.key
+    }
+
     /// The Right arrow on `key`: the pill, or the row the pill hangs under, opens its chain. Nil when nothing opens.
     public static func open<ID: Hashable>(_ key: TreeKey<ID>?, in lines: [TreeLine<ID>], opened: Set<ID>) -> Set<ID>? {
         guard let key, let index = lines.firstIndex(where: { $0.key == key }) else { return nil }

@@ -970,18 +970,25 @@ func menuWaitingSituations() -> some View {
     )
 }
 
-/// Home's board (TP-1453) from `fixture`'s dispatch order, in a window `window` wide less its sidebar: every group
-/// populated (`home`, SHOP-320 picked) or most empty with dispatch paused (`home-quiet`).
+/// Home (TP-1499) from the `home` fixture's Home read, which holds the catalog's `PROGRESS` and `QUEUE`
+/// (`docs/design/catalog/stories.js`), on the fixture's clock, in a window `window` wide less its sidebar: the queue's
+/// long chain folded into its pill, or `opened` (`home-a-long-chain-shown-whole`), with `selection` picked.
 @MainActor
-func homeBoard(_ fixture: String, window: CGFloat, selection: String? = nil) -> some View {
+func homeLists(window: CGFloat, opened: Set<String> = [], selection: TreeKey<String>? = nil) -> some View {
     let width = window - DesignTokens.Layout.sidebarWidth
-    return HomeBody(
-        board: HomeBoard(state: situationsState(fixture), now: situationsNow, timeZone: TimeZone(identifier: "UTC")!),
-        actions: HomeActions(),
-        selection: selection
-    )
-    .frame(width: width, alignment: .topLeading)
-    .background(DesignTokens.Surface.window.color)
+    let url = situationsAPI.appendingPathComponent("home/api/v1/home.json")
+    guard let read = HomeRead.decode(try! Data(contentsOf: url)) else { fatalError("The home fixture's Home read doesn't read") }
+    return HomeBody(lists: HomeLists(read: read, reference: situationsNow), opened: opened, selection: selection)
+        .frame(width: width, alignment: .topLeading)
+        .background(DesignTokens.Surface.window.color)
+}
+
+/// Home on a Symphony that predates its read: the Empty state that asks for an update, never the old board.
+@MainActor
+func homeUnavailable(window: CGFloat) -> some View {
+    EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
+        .frame(width: window - DesignTokens.Layout.sidebarWidth, height: 600)
+        .background(DesignTokens.Surface.window.color)
 }
 
 /// Home's top (TP-1454): the `home-questions` fixture's Inbox, two questions and a pause, read as the window reads it.
@@ -992,20 +999,6 @@ let homeQuestionsInbox: InboxPayload = {
     }
     return inbox.withPauses(fromState: try? Data(contentsOf: homeQuestionsAPI.appendingPathComponent("state.json")))
 }()
-
-/// Home with the questions and the pause above the board, in a window `window` wide less its sidebar.
-@MainActor
-func homeWithQuestions(window: CGFloat) -> some View {
-    let width = window - DesignTokens.Layout.sidebarWidth
-    return HomeBody(
-        board: HomeBoard(state: situationsState("home-questions"), now: situationsNow, timeZone: TimeZone(identifier: "UTC")!),
-        actions: HomeActions(),
-        inbox: HomeInbox(items: homeQuestionsInbox.items),
-        now: situationsNow
-    )
-    .frame(width: width, alignment: .topLeading)
-    .background(DesignTokens.Surface.window.color)
-}
 
 /// The Inbox's drawer beside Home: TP-892's review, at the drawer's ideal width.
 @MainActor
@@ -1760,16 +1753,14 @@ MainActor.assumeIsolated {
         }
         render(inboxContextSituations(), scheme, to: "situations-inbox-context-\(suffix).png")
         render(menuWaitingSituations(), scheme, to: "situations-menu-waiting-\(suffix).png")
-        // Home's board (TP-1453): every group populated and most empty with dispatch paused, at the laptop's and the
-        // desktop's widths.
+        // Home (TP-1499): the two lists from the catalog's data, the long chain folded and shown whole, and Home on a
+        // Symphony without its read, at the laptop's and the desktop's widths.
         do {
-            renderScreen(scheme, to: "home-board") { window in homeBoard("home", window: window, selection: "SHOP-320") }
-            renderScreen(scheme, to: "home-board-quiet") { window in homeBoard("home-quiet", window: window) }
-        }
-        // Home's top (TP-1454): two questions and a pause above the board, and the drawer, at the laptop's and the
-        // desktop's widths.
-        do {
-            renderScreen(scheme, to: "home-questions") { window in homeWithQuestions(window: window) }
+            renderScreen(scheme, to: "home-lists") { window in homeLists(window: window, selection: .row("BIL-306")) }
+            renderScreen(scheme, to: "home-lists-chain-open") { window in
+                homeLists(window: window, opened: ["TP-1481"], selection: .row("TP-1484"))
+            }
+            renderScreen(scheme, to: "home-unavailable") { window in homeUnavailable(window: window) }
         }
         render(inboxDrawer(), scheme, to: "inbox-drawer-\(suffix).png")
         // The Action rail (TP-1440): every move allowed, and each refusal with its reason and More open, at the

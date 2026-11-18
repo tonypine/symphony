@@ -1,351 +1,185 @@
 import SwiftUI
 import SymphonyBarCore
+import SymphonyBarUI
 
-/// What Home's rows and its pause notice do.
+/// What Home's rows do.
 struct HomeActions {
-    var resume: () -> Void = {}
-    /// Try Now on the paused usage limit the notice names.
-    var tryNow: (StateSnapshot.UsageLimit) -> Void = { _ in }
-    /// The control request under way; Resume Dispatch is off until it is answered.
-    var controlInFlight: ControlAction?
-    /// A click on a row, or Return on the picked one, opens the ticket's page (D3).
+    /// A click on a ticket's row, or Return on it, opens the ticket's page, by identifier.
     var openTicket: (String) -> Void = { _ in }
+    /// A click on an epic's row, or Return on it, opens Initiatives on the epic, by issue id.
+    var openEpic: (String) -> Void = { _ in }
+    /// A row's button, or Space on its row: the move the read names (Answer, Unblock), through the ticket page's path.
+    var perform: (HomeLists.Row) -> Void = { _ in }
 }
 
-/// Home in a scroll view, laid out for the width it gets.
+/// Home in a scroll view, laid out for the width it gets (TP-1499).
 struct HomeView: View {
-    let board: HomeBoard
+    let lists: HomeLists
     let actions: HomeActions
-    /// What waits on the Director, above the board (TP-1454); nil until the Inbox is read.
-    var inbox: HomeInbox?
-    var inboxActions = HomeInboxActions()
-    var now = Date()
 
     var body: some View {
         ScrollView {
-            HomeBody(board: board, actions: actions, inbox: inbox, inboxActions: inboxActions, now: now)
+            HomeBody(lists: lists, actions: actions)
         }
     }
 }
 
-/// Home's board (the catalog's Board group): what waits on the Director first, each item answerable in place
-/// (TP-1454), the pause notice while dispatch is paused, then one group per situation
-/// kind stacked top to bottom in the order the Director acts on them, each a card with its heading (glyph, title, the
-/// count of its rows, a hint) and its rows in dispatch order. A group with nothing in it is one quiet heading. Outside
-/// the scroll view, so it also renders offscreen.
+/// Home (TP-1499, `docs/design/director-window-and-home.md` § Home): two tree lists and nothing else, "In progress"
+/// (an epic's tickets one step in under its row) and "Queue" (a ticket one step in under the ticket it waits on, past
+/// two steps folded into a pill), each with its title in the sentence style and left out when it has no entry. The
+/// arrow keys walk the rows of both lists in order, Return opens the row, Space presses its button, Right and Left
+/// open and fold a branch. Outside the scroll view, so it also renders offscreen.
 struct HomeBody: View {
-    let board: HomeBoard
+    let lists: HomeLists
     let actions: HomeActions
-    /// The Inbox's items above the board; nil or empty draws none.
-    var inbox: HomeInbox?
-    var inboxActions = HomeInboxActions()
-    /// Symphony's clock, for the items' ages.
-    var now = Date()
-    /// The row picked: it follows the keyboard's focus, and the arrow keys move it across groups.
-    @State private var selection: String?
-    /// The groups folded by a click on their heading.
-    @State private var folded: Set<DesignTokens.SituationKind> = []
-    @FocusState private var focus: String?
-    /// Set by the first key pressed on the board: a group heading draws its focus ring only for keyboard focus, never
-    /// for the focus the window hands it at launch.
-    @State private var keyboardFocus = false
+    /// The queue's chains opened by their pill, kept while the page is open.
+    @State private var opened: Set<String>
+    @State private var progressSelection: TreeKey<String>?
+    @State private var queueSelection: TreeKey<String>?
+    @State private var progressFocused = false
+    @State private var queueFocused = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    /// `selection` is the row drawn picked at first, for a snapshot.
-    init(
-        board: HomeBoard, actions: HomeActions, inbox: HomeInbox? = nil, inboxActions: HomeInboxActions = HomeInboxActions(),
-        now: Date = Date(), selection: String? = nil
-    ) {
-        self.board = board
+    /// `opened` and `selection` draw a chain open and a row picked at first, for a snapshot.
+    init(lists: HomeLists, actions: HomeActions = HomeActions(), opened: Set<String> = [], selection: TreeKey<String>? = nil) {
+        self.lists = lists
         self.actions = actions
-        self.inbox = inbox
-        self.inboxActions = inboxActions
-        self.now = now
-        _selection = State(initialValue: selection)
+        _opened = State(initialValue: opened)
+        let inProgress = selection.map { key in TreeLines.lines(lists.progress).contains { $0.key == key } } ?? false
+        _progressSelection = State(initialValue: inProgress ? selection : nil)
+        _queueSelection = State(initialValue: inProgress ? nil : selection)
     }
-
-    @State private var narrow = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-            if let inbox, !inbox.isEmpty {
-                HomeInboxSection(inbox: inbox, actions: inboxActions, now: now, narrow: narrow)
-                    .padding(.bottom, DesignTokens.Space.s3)
-            }
-            if let sentence = board.pauseSentence {
-                PauseNotice(
-                    sentence: sentence, lines: board.pauseLines, showsResume: board.showsResume,
-                    tryNow: board.showsTryNow ? board.tryNow : nil, actions: actions
-                )
-                    .padding(.bottom, DesignTokens.Space.s2)
-            }
-            if !board.hasOrder {
-                Text(HomeBoard.olderSymphony)
-                    .font(DesignTokens.TypeStyle.body.font)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            ForEach(board.groups) { group in
-                BoardGroup(
-                    group: group,
-                    folded: folded.contains(group.kind),
-                    keyboardFocus: keyboardFocus,
-                    reference: board.reference,
-                    toggle: { toggle(group.kind) }
-                ) { row in
-                    BoardRow(row: row, reference: board.reference, selected: selection == row.identifier, focused: focus == row.identifier)
-                        .focusable()
-                        .focusEffectDisabled()
-                        .focused($focus, equals: row.identifier)
-                        .onTapGesture {
-                            selection = row.identifier
-                            actions.openTicket(row.identifier)
-                        }
-                        .onKeyPress(.return) {
-                            actions.openTicket(row.identifier)
-                            return .handled
-                        }
-                        .onKeyPress(.downArrow) { move(from: row.identifier, by: 1) }
-                        .onKeyPress(.upArrow) { move(from: row.identifier, by: -1) }
-                        .accessibilityAction { actions.openTicket(row.identifier) }
-                        .accessibilityAction(named: "Open") { actions.openTicket(row.identifier) }
-                }
-            }
-        }
-        .padding(DesignTokens.Space.s5)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .onGeometryChange(for: Bool.self) { $0.size.width < DesignTokens.Layout.narrowReviewWidth } action: { narrow = $0 }
-        .onKeyPress(phases: .down) { _ in
-            keyboardFocus = true
-            return .ignored
-        }
-        .onChange(of: focus) { _, id in
-            if let id { selection = id }
-        }
-    }
-
-    private func toggle(_ kind: DesignTokens.SituationKind) {
-        withAnimation(reduceMotion ? nil : .standard) {
-            if folded.contains(kind) { folded.remove(kind) } else { folded.insert(kind) }
-        }
-    }
-
-    /// The arrow keys walk the rows of every unfolded group, top to bottom.
-    private func move(from id: String, by offset: Int) -> KeyPress.Result {
-        var shown = board
-        shown.groups = shown.groups.filter { !folded.contains($0.kind) }
-        guard let next = shown.row(from: id, offset: offset), next != id else { return .ignored }
-        selection = next
-        focus = next
-        return .handled
-    }
-}
-
-/// While dispatch is paused or a usage limit holds runs: the sentence, one line per reason, Try Now while a usage
-/// limit is paused, and Resume Dispatch unless an update holds it.
-private struct PauseNotice: View {
-    let sentence: String
-    let lines: [String]
-    let showsResume: Bool
-    let tryNow: StateSnapshot.UsageLimit?
-    let actions: HomeActions
-
-    var body: some View {
-        HStack(alignment: .center, spacing: DesignTokens.Space.s3) {
-            Image(systemName: DesignTokens.Status.idle.symbol)
-                .font(.title2)
-                .foregroundStyle(DesignTokens.Status.idle.tint)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-                Text(sentence)
-                    .font(DesignTokens.TypeStyle.sentence.font)
-                    .accessibilityAddTraits(.isHeader)
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    Text(line)
-                        .font(DesignTokens.TypeStyle.body.font)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Spacer(minLength: DesignTokens.Space.s4)
-            if let tryNow {
-                Button(StatusMenu.tryNowTitle) { actions.tryNow(tryNow) }
-                    .directorButton(showsResume ? .secondary : .primary)
-                    .help(StatusMenu.tryNowHelp)
-                    .accessibilityHint(StatusMenu.tryNowHelp)
-                    .disabled(actions.controlInFlight != nil)
-            }
-            if showsResume {
-                Button(Overview.resumeTitle, action: actions.resume)
-                    .directorButton(.primary)
-                    .disabled(actions.controlInFlight != nil)
-            }
-        }
-    }
-}
-
-/// A situation group: its heading, then its rows on the content surface. Empty, it is one quiet heading on the window
-/// with a hairline and no rows.
-private struct BoardGroup<Row: View>: View {
-    let group: HomeBoard.Group
-    let folded: Bool
-    let keyboardFocus: Bool
-    let reference: Date
-    let toggle: () -> Void
-    @ViewBuilder let row: (HomeBoard.Row) -> Row
-
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            if group.isEmpty {
-                heading.padding(.horizontal, DesignTokens.Space.s4).frame(minHeight: 38)
-            } else {
-                // The shared fold head (C61's): the chevron, hover, pressed, Return and Space, across the card's width.
-                CollapsibleHead(
-                    expanded: !folded, style: .card, accessibilityLabel: group.accessibilityLabel,
-                    accessibilityValue: folded ? "Folded" : "Open", toggle: toggle
-                ) {
-                    heading
+            if !lists.progress.isEmpty {
+                title(HomeLists.progressTitle)
+                TreeList(
+                    lists.progress, foldDepth: nil, opened: .constant([]), selection: $progressSelection, open: open,
+                    leave: { offset in if offset > 0 { enterQueue(last: false) } }, focus: $progressFocused
+                ) { id, state in
+                    rowView(id, state: state)
                 }
-                FoldBody(expanded: !folded) {
-                    VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-                        ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, item in
-                            row(item).foldRow(index)
-                        }
-                    }
-                    .padding(.horizontal, DesignTokens.Space.s2)
-                    .padding(.bottom, DesignTokens.Space.s2)
+                .onKeyPress(.space) { press(progressSelection) }
+            }
+            if !lists.queue.isEmpty {
+                title(HomeLists.queueTitle)
+                    .padding(.top, lists.progress.isEmpty ? 0 : DesignTokens.Space.s8)
+                TreeList(
+                    lists.queue, opened: $opened, selection: $queueSelection, open: open,
+                    leave: { offset in if offset < 0 { enterProgress() } }, focus: $queueFocused
+                ) { id, state in
+                    rowView(id, state: state)
                 }
+                .onKeyPress(.space) { press(queueSelection) }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // A group with rows is a panel; an empty one keeps its hairline on the window.
-        .background {
-            if !group.isEmpty { Color.clear.panelSurface(in: shape) }
-        }
-        .overlay {
-            if group.isEmpty { shape.strokeBorder(DesignTokens.Surface.separator.color) }
-        }
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(group.accessibilityLabel)
+        .padding(DesignTokens.Space.s6)
+        .frame(maxWidth: DesignTokens.Layout.homeMaxWidth, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .top)
+        // A row the read moves goes to its new place with the catalog's enter motion; the rows around it stay put.
+        .animation(DesignTokens.Motion.entering(reduceMotion: reduceMotion).map(Self.animation), value: lists)
     }
 
-    private var heading: some View {
-        HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
-            Image(systemName: group.kind.symbol)
-                .foregroundStyle(group.isEmpty ? AnyShapeStyle(.tertiary) : AnyShapeStyle(group.kind.tint))
-                .accessibilityHidden(true)
-            Text(group.title)
-                .font(DesignTokens.TypeStyle.rowTitle.font)
-                .foregroundStyle(group.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-            CountBadge(group.count, role: group.kind.status).accessibilityHidden(true)
-            Spacer(minLength: DesignTokens.Space.s3)
-            if let hint = group.isEmpty ? HomeBoard.emptyHint : group.hint {
-                Text(hint)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                    .lineLimit(1)
-            }
+    private static func animation(_ timing: DesignTokens.Motion.Timing) -> Animation {
+        switch timing {
+        case let .spring(duration, bounce): .spring(duration: duration, bounce: bounce)
+        case let .eased(duration): .easeInOut(duration: duration)
         }
     }
-}
 
-/// A ticket's row, in two lines (the catalog's laptop row): the ticket, then where it stands with its age trailing;
-/// for a candidate, why it is or is not next under it. It draws the shared row's hover, pressed, selected and focus
-/// states.
-private struct BoardRow: View {
-    let row: HomeBoard.Row
-    let reference: Date
-    let selected: Bool
-    let focused: Bool
-    @State private var hovered = false
-    @State private var pressed = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
-            TicketTitle(identifier: row.identifier, title: row.title, repoKey: row.repoKey)
-            SituationLine(row.situation, reference: reference, size: .compact, forced: row.forced)
-            if let reason = row.reason {
-                Label {
-                    Text(reason)
-                } icon: {
-                    Image(systemName: "arrow.turn.down.right")
-                }
-                .labelStyle(.titleAndIcon)
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-            }
-        }
-        .padding(.vertical, DesignTokens.Space.s2)
-        .padding(.horizontal, DesignTokens.Space.s2)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .modifier(RowFace(
-            state: DesignTokens.Interaction(hovered: hovered, pressed: pressed, selected: selected, focused: focused),
-            reduceMotion: reduceMotion,
-            bleed: EdgeInsets()
-        ))
-        .contentShape(Rectangle())
-        .onHover { hovered = $0 }
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in pressed = true }
-                .onEnded { _ in pressed = false }
-        )
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(row.accessibilityLabel(reference: reference))
-        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-        .help("Open \(row.identifier)")
+    private func title(_ text: String) -> some View {
+        Text(text)
+            .textStyle(.sentence)
+            .foregroundStyle(DesignTokens.TextColor.primary.color)
+            .padding(.leading, DesignTokens.Space.s3)
+            .padding(.bottom, DesignTokens.Space.s3)
+            .accessibilityAddTraits(.isHeader)
     }
-}
 
-/// A ticket is always its identifier and its title together, with its repo after them.
-private struct TicketTitle: View {
-    let identifier: String
-    let title: String?
-    let repoKey: String?
-
-    var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-            Text(identifier).font(DesignTokens.TypeStyle.rowTitle.font)
-            if let title {
-                Text(title).font(DesignTokens.TypeStyle.body.font).lineLimit(1)
-            }
-            if let repoKey {
-                Text(repoKey)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-            }
+    @ViewBuilder private func rowView(_ id: String, state: TreeRowState) -> some View {
+        if let row = lists.row(id) {
+            HomeRow(row: row, state: state, open: { open(id) }, perform: { actions.perform(row) })
         }
     }
-}
 
-// MARK: - Shared rows
-
-extension View {
-    /// A ticket row: a double-click, or Return once it has focus, opens the ticket's page (D3, P10). It carries the
-    /// shared row's states (hover, pressed, the focus ring). VoiceOver reads the row as one element, its label and its
-    /// own actions combined, with Open as its default and a named action. Nothing changes for a row that is not about
-    /// a ticket.
-    @ViewBuilder func opensTicket(_ identifier: String?, open: @escaping (String) -> Void) -> some View {
-        if let identifier {
-            contentShape(Rectangle())
-                .onTapGesture(count: 2) { open(identifier) }
-                .rowStyle()
-                .onKeyPress(.return) {
-                    open(identifier)
-                    return .handled
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityAddTraits(.isButton)
-                .accessibilityAction { open(identifier) }
-                .accessibilityAction(named: "Open") { open(identifier) }
+    /// A row opens its ticket's page, or an epic's row Initiatives on the epic.
+    private func open(_ id: String) {
+        guard let row = lists.row(id) else { return }
+        if row.isEpic {
+            if let issueID = row.issueID { actions.openEpic(issueID) }
         } else {
-            self
+            actions.openTicket(row.identifier)
+        }
+    }
+
+    /// Space on a row with a button presses it.
+    private func press(_ key: TreeKey<String>?) -> KeyPress.Result {
+        guard case let .row(id)? = key, let row = lists.row(id), let move = row.move, move.reason == nil else { return .ignored }
+        actions.perform(row)
+        return .handled
+    }
+
+    /// Down past In progress's last row: the queue's first line, with the keyboard.
+    private func enterQueue(last: Bool) {
+        guard !lists.queue.isEmpty else { return }
+        queueSelection = TreeLines.end(TreeLines.lines(lists.queue, foldDepth: DesignTokens.Tree.foldDepth, opened: opened), last: last)
+        progressSelection = nil
+        queueFocused = true
+    }
+
+    /// Up past the queue's first line: In progress's last row, with the keyboard.
+    private func enterProgress() {
+        guard !lists.progress.isEmpty else { return }
+        progressSelection = TreeLines.end(TreeLines.lines(lists.progress), last: true)
+        queueSelection = nil
+        progressFocused = true
+    }
+}
+
+/// One row of Home (the catalog's `homeRow`, `epicRow`): one line, 34 pt. The state glyph (the live dot while a run
+/// works), the identifier, the title cut with an ellipsis; at the right the ticket a queue root comes after, its epic as
+/// a chip, the situation as a small badge, the move when the ticket needs the Director, and how long, in one column.
+/// An epic's row carries its progress strip and "4 of 9" instead.
+struct HomeRow: View {
+    let row: HomeLists.Row
+    var state = TreeRowState(selected: false, focused: false)
+    var open: () -> Void = {}
+    var perform: () -> Void = {}
+
+    var body: some View {
+        Row(
+            row.title, identifier: row.identifier, lead: lead, value: row.value, valueWidth: DesignTokens.Row.homeValueWidth,
+            selected: state.selected, focused: state.focused, open: open, opensOnClick: true
+        ) {
+            if let after = row.after {
+                HStack(spacing: DesignTokens.Space.s1) {
+                    Image(systemName: "arrow.right")
+                        .font(DesignTokens.TypeStyle.caption.font)
+                        .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                    RowValue(after)
+                }
+                .help(HomeLists.Row.afterHelp(after))
+            }
+            if let epic = row.epic { Chip(epic, kind: .epic) }
+            if let strip = row.strip {
+                ProgressStrip(strip, label: row.value).frame(width: DesignTokens.ProgressStrip.compactWidth)
+            }
+            if let badge = row.badge { Badge(status: badge.status, word: badge.word, size: .small) }
+            if let move = row.move {
+                Button(move.title, action: perform)
+                    .directorButton(.primary, size: .small, disabledReason: move.reason)
+            }
+        }
+        .help(row.isEpic ? "Open \(row.identifier) in Initiatives" : "Open \(row.identifier)")
+    }
+
+    private var lead: RowLead {
+        switch row.lead {
+        case .live: .dot(.working, live: true)
+        case let .status(status): .status(status)
+        case .waiting: .glyph("clock", DesignTokens.TextColor.secondary)
+        case .epic: .glyph(SymphonyView.initiatives.symbol, DesignTokens.TextColor.secondary)
         }
     }
 }

@@ -50,7 +50,8 @@ public struct RowValue: View {
 /// column at least `valueWidth` wide so a list's values align. It shows hover, pressed (settling to 99.5 %), selected
 /// (the accent fill with white words; the pressed grey with the words in their colours when the window is not in
 /// front) and the keyboard focus ring; `current` marks the page's own item with the accent tint. A click calls
-/// `select`, a double click or Return `open`; with either, the row takes keyboard focus unless its list owns it
+/// `select`, a double click or Return `open`; with `opensOnClick` a click calls `open` (a button in its trail keeps its
+/// own click). With either, the row takes keyboard focus unless its list owns it
 /// (`focused`). VoiceOver reads it as one element. `state` draws one state still, for a snapshot.
 public struct Row<Trail: View>: View {
     let title: String
@@ -66,6 +67,7 @@ public struct Row<Trail: View>: View {
     let windowActive: Bool?
     let select: (() -> Void)?
     let open: (() -> Void)?
+    let opensOnClick: Bool
     let trail: Trail
 
     @State private var hovered = false
@@ -79,7 +81,7 @@ public struct Row<Trail: View>: View {
         _ title: String, identifier: String? = nil, lead: RowLead = .none, line2: String? = nil, value: String? = nil,
         valueWidth: Double = DesignTokens.Row.valueWidth, selected: Bool = false, current: Bool = false, focused: Bool? = nil,
         state: DesignTokens.Interaction? = nil, windowActive: Bool? = nil,
-        select: (() -> Void)? = nil, open: (() -> Void)? = nil, @ViewBuilder trail: () -> Trail
+        select: (() -> Void)? = nil, open: (() -> Void)? = nil, opensOnClick: Bool = false, @ViewBuilder trail: () -> Trail
     ) {
         self.title = title
         self.identifier = identifier
@@ -94,6 +96,7 @@ public struct Row<Trail: View>: View {
         self.windowActive = windowActive
         self.select = select
         self.open = open
+        self.opensOnClick = opensOnClick
         self.trail = trail()
     }
 
@@ -131,16 +134,18 @@ public struct Row<Trail: View>: View {
             .animation(.motion(.fast, reduceMotion: reduceMotion), value: state)
             .contentShape(shape)
             .onHover { hovered = $0 }
+            .focusable(acts && listFocused == nil)
+            .focusEffectDisabled()
+            .focused($focused)
+            // After focus, so Return reaches it from the focused row: key presses go up from the focused view.
+            .modifier(RowActions(select: select, open: open, opensOnClick: opensOnClick))
+            // Outside the clicks and beside them: inside, a drag that starts at once would win every click before the
+            // row's own tap saw it, so a click or a double click would only press the row.
             .simultaneousGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { _ in pressed = true }
                     .onEnded { _ in pressed = false }
             )
-            .focusable(acts && listFocused == nil)
-            .focusEffectDisabled()
-            .focused($focused)
-            // After focus, so Return reaches it from the focused row: key presses go up from the focused view.
-            .modifier(RowActions(select: select, open: open))
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(state.selected ? .isSelected : [])
     }
@@ -241,18 +246,19 @@ extension Row where Trail == EmptyView {
     }
 }
 
-/// A row's click, double click and Return, and the same as VoiceOver actions; nothing when it has neither.
+/// A row's click, double click and Return, and the same as VoiceOver actions; nothing when it has neither. A row that
+/// opens on a click takes the click as its own gesture, not beside its children's, so a button in its trail presses
+/// the button and nothing else.
 private struct RowActions: ViewModifier {
     let select: (() -> Void)?
     let open: (() -> Void)?
+    var opensOnClick = false
 
     func body(content: Content) -> some View {
         if select == nil, open == nil {
             content
         } else {
-            content
-                .onTapGesture(count: 2) { open?() }
-                .simultaneousGesture(TapGesture().onEnded { select?() })
+            clicks(content)
                 .onKeyPress(.return) {
                     guard let open else { return .ignored }
                     open()
@@ -260,6 +266,16 @@ private struct RowActions: ViewModifier {
                 }
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { (open ?? select)?() }
+        }
+    }
+
+    @ViewBuilder private func clicks(_ content: Content) -> some View {
+        if opensOnClick {
+            content.onTapGesture { (open ?? select)?() }
+        } else {
+            content
+                .onTapGesture(count: 2) { open?() }
+                .simultaneousGesture(TapGesture().onEnded { select?() })
         }
     }
 }
@@ -270,26 +286,35 @@ private struct RowActions: ViewModifier {
 public struct TreeRowState: Equatable {
     public var selected: Bool
     public var focused: Bool
+
+    public init(selected: Bool, focused: Bool) {
+        self.selected = selected
+        self.focused = focused
+    }
 }
 
 /// C50, the catalog's tree (`.t-root`, `.t-kids`): `nodes` as rows, each child one step in under its parent on a rail
 /// with a tick to its row. Past `foldDepth` (nil: never) the rest of a chain folds into a pill counting it ("+6"), which
 /// a click or the Right arrow opens (`opened` holds the roots whose chains are open) and the Left arrow closes. The up
-/// and down arrows walk the lines in order; Return opens the selected row's item (`open`). In a window it makes only
-/// the rows on screen (a lazy stack); offscreen, where a snapshot has no scroll view, all of them.
+/// and down arrows walk the lines in order; Return opens the selected row's item (`open`). Two lists one above the
+/// other walk as one: `leave` is called with 1 or −1 when an arrow goes past the last or the first line, and `focus`
+/// gives the list the keyboard when it turns true and turns true while the list has it. In a window it makes only the
+/// rows on screen (a lazy stack); offscreen, where a snapshot has no scroll view, all of them.
 public struct TreeList<ID: Hashable, RowContent: View>: View {
     let nodes: [TreeNode<ID>]
     let foldDepth: Int?
     @Binding var opened: Set<ID>
     @Binding var selection: TreeKey<ID>?
     let open: ((ID) -> Void)?
+    let leave: ((Int) -> Void)?
+    let focus: Binding<Bool>?
     let row: (ID, TreeRowState) -> RowContent
     @FocusState private var focused: Bool
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     public init(
         _ nodes: [TreeNode<ID>], foldDepth: Int? = DesignTokens.Tree.foldDepth, opened: Binding<Set<ID>>,
-        selection: Binding<TreeKey<ID>?>, open: ((ID) -> Void)? = nil,
+        selection: Binding<TreeKey<ID>?>, open: ((ID) -> Void)? = nil, leave: ((Int) -> Void)? = nil, focus: Binding<Bool>? = nil,
         @ViewBuilder row: @escaping (ID, TreeRowState) -> RowContent
     ) {
         self.nodes = nodes
@@ -297,7 +322,19 @@ public struct TreeList<ID: Hashable, RowContent: View>: View {
         _opened = opened
         _selection = selection
         self.open = open
+        self.leave = leave
+        self.focus = focus
         self.row = row
+    }
+
+    /// An arrow `by` lines from the selection: the next line, or past the first or the last, the list above or below.
+    private func step(_ offset: Int, in lines: [TreeLine<ID>]) -> KeyPress.Result {
+        if let leave, let selection, TreeLines.isEdge(selection, going: offset, in: lines) {
+            leave(offset)
+            return .handled
+        }
+        selection = TreeLines.move(from: selection, by: offset, in: lines)
+        return .handled
     }
 
     public var body: some View {
@@ -313,14 +350,14 @@ public struct TreeList<ID: Hashable, RowContent: View>: View {
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
-        .onKeyPress(.downArrow) {
-            selection = TreeLines.move(from: selection, by: 1, in: lines)
-            return .handled
+        .onChange(of: focus?.wrappedValue ?? false) { _, wanted in
+            if wanted, !focused { focused = true }
         }
-        .onKeyPress(.upArrow) {
-            selection = TreeLines.move(from: selection, by: -1, in: lines)
-            return .handled
+        .onChange(of: focused) { _, has in
+            if let focus, focus.wrappedValue != has { focus.wrappedValue = has }
         }
+        .onKeyPress(.downArrow) { step(1, in: lines) }
+        .onKeyPress(.upArrow) { step(-1, in: lines) }
         .onKeyPress(.rightArrow) {
             guard let next = TreeLines.open(selection, in: lines, opened: opened) else { return .ignored }
             opened = next

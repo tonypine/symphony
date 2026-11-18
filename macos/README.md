@@ -1102,20 +1102,18 @@ Home the first time, and on the page it showed last after that.
   Overview's side column shows the active initiatives in an **Initiatives** card; a click opens one here. The
   scope pop-up applies.
 
-- **Home** is one board of every open ticket Symphony works, read from Symphony's dispatch order (`order` on
-  `/api/v1/state`). The tickets are grouped by situation in the order the Director acts on them: Waiting on you,
-  Retrying, Blocked by a ticket, Paused by a rule, Waiting for CI, Waiting for a build, Waiting for a slot and
-  Working (Shipped and Cancelled join only with a ticket in them). Each group is a card whose heading has its
-  glyph, the count of its rows and a hint ("oldest 30 min", "longest 22 min"); a click on the heading folds it. A
-  group with nothing in it is one quiet heading that says "None right now". Each row is the ticket, its compact
-  situation line with its age, the Forced chip when forced and, for a ticket in line or held out of it, why it is
-  or is not next ("Next: a slot is free", "2nd: behind SHOP-325", "Not next: Waiting for BIL-206 to finish").
-  Within a group the tickets are in the order the dispatcher would start them. Every count is a count of the rows
-  the board shows. A click on a row, or Return on the picked one, opens its ticket page; the arrow keys move
-  between rows across groups. While dispatch is paused, "Dispatch is paused since 14:03: Deploy freeze." heads
-  it, with one line per reason and **Resume Dispatch**. The sidebar's Home item counts what needs attention (a
-  run with no agent activity for 10 minutes, 3 failed attempts or more, a ticket routed to more than one repo, a
-  usage-limit hold, a stale forced ticket, stray processes), which also notifies.
+- **Home** is two lists read from `/api/v1/home` (TP-1499), and nothing else: **In progress**, every ticket that
+  has started and has not landed, a ticket of an epic one step in under its epic's row (the epic glyph, its progress
+  strip and "4 of 9"); and **Queue**, every ticket Symphony would dispatch that has not started, as the tree of what
+  waits on what: a ticket sits one step in under the ticket it waits on, on a rail. Past two steps under a root the
+  rest folds into a "+6" pill; a click, or the Right arrow, shows the whole branch for as long as the page is open,
+  and the Left arrow folds it again. A list with nothing in it is not drawn, title included. Each row is one line:
+  the state glyph (the live dot while a run works), the identifier and the title, then the ticket in progress a
+  queue root starts after ("→ TP-1480"), its epic as a chip (queue only), the situation as a small badge, the move
+  when the ticket needs you (**Answer** opens its question in the Inbox's drawer, **Unblock** sends the ticket
+  page's Unblock) and how long the situation has held. A click on a row, or Return, opens its ticket page; an epic's
+  row opens Initiatives on the epic. The arrow keys walk the rows of both lists in order and Space presses the
+  row's button. A Symphony that serves no Home read gets "Update Symphony to see this view."
 - A **ticket page** tells one ticket's story: its badges, repo and initiative, what it is doing ("Waiting on a
   retry at 14:32", "In review · QA pass running"), **Now** (the run and its model and effort, running time,
   turn, last activity, the tool call it waits on, its workspace with **Reveal**, and its tokens against the
@@ -1274,7 +1272,7 @@ reached with Tab.
   git diff --name-only origin/main | build/SymphonyGallery --affected   # the entries a change is a reason to look at
   build/SymphonyGallery --shot button --out /tmp/shots # a component's board, light and dark
   build/SymphonyGallery --shot ticket-page --variation ticket-page-waiting --width desktop --out /tmp/shots
-  build/SymphonyGallery --open home --variation home-board --width laptop --dark
+  build/SymphonyGallery --open home --variation home-lists --width laptop --dark
   ```
 
 - **It is always built from the checkout it is used on.** A person or an implementation run builds
@@ -1388,8 +1386,8 @@ Ten more variables, read only in QA mode:
   Overview's four states next to it: `flowing`, `attention` (a stuck forced ticket and a Codex usage-limit
   hold; the stuck ticket, SHOP-305, has a failed run 1, its own endpoint and its transcript, SHOP-288 is a done
   ticket, the Inbox holds two pull requests, and Stop Run's requests are answered from `api/v1/control/`),
-  `paused` (paused for "Deploy freeze") and `idle`, of Home's board: `home` (every situation group populated,
-  sixteen tickets with their dispatch order and reasons) and `home-quiet` (one ticket working, every other group
+  `paused` (paused for "Deploy freeze") and `idle`, of Home: `home` (its Home read holds the catalog's two lists,
+  two epics in progress and four queued chains, and its state every situation group populated) and `home-quiet` (one ticket working, every other group
   empty, dispatch paused for "Deploy freeze"), of the Inbox: `inbox` (one item of each kind, plus the Initiatives: two active, BIL-200 with BIL-206 waiting on you, one in review and one done),
   `inbox-empty`, `inbox-unasked-choices` (`inbox` with four choices SHOP-330's plan run could not ask, so its page and its Approve sheet carry the warning), `inbox-lane-yielded` (`inbox` with DOCS-20 holding no lane because its open sub-tickets are below the priority filter, so Initiatives says why) and `inbox-decision` (TP-892's decision, with three options, with every ticket and pull request it mentions resolved
   and where TP-892 sits: 4 of its parent's 7 sub-tickets done, its pull request, two connected tickets and one

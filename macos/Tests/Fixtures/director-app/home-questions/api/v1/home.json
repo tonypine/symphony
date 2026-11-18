@@ -1,0 +1,76 @@
+{
+  "in_progress": [
+    {
+      "kind": "ticket",
+      "issue_id": "i-892",
+      "identifier": "TP-892",
+      "title": "Retire two old review steps",
+      "repo_key": "symphony",
+      "phase": "Rework",
+      "situation": {
+        "kind": "waiting_on_you",
+        "word": "Question",
+        "cause": "Retire two old review steps",
+        "since": "2026-10-07T13:20:00Z"
+      },
+      "since": "2026-10-07T13:20:00Z",
+      "working": false,
+      "move": {
+        "name": "answer",
+        "allowed": true,
+        "reason": null
+      }
+    },
+    {
+      "kind": "ticket",
+      "issue_id": "i-344",
+      "identifier": "SHOP-344",
+      "title": "Gift card balance on the receipt",
+      "repo_key": "web-shop",
+      "phase": "In Progress",
+      "situation": {
+        "kind": "waiting_on_you",
+        "word": "Question",
+        "cause": "Gift card balance on the receipt",
+        "since": "2026-10-07T14:10:00Z"
+      },
+      "since": "2026-10-07T14:10:00Z",
+      "working": false,
+      "move": {
+        "name": "answer",
+        "allowed": true,
+        "reason": null
+      }
+    },
+    {
+      "kind": "ticket",
+      "issue_id": "i-899",
+      "identifier": "TP-899",
+      "title": "Retry the release upload",
+      "repo_key": "symphony",
+      "phase": "In Progress",
+      "situation": {
+        "kind": "waiting_on_you",
+        "word": "Stopped by you",
+        "cause": "Retry the release upload",
+        "since": "2026-10-07T14:15:00Z"
+      },
+      "since": "2026-10-07T14:15:00Z",
+      "working": false,
+      "move": {
+        "name": "unblock",
+        "allowed": true,
+        "reason": null
+      }
+    }
+  ],
+  "queue": {
+    "roots": []
+  },
+  "outside": {
+    "backlog": 0,
+    "below_priority": 0,
+    "epic": 0,
+    "behind": 0
+  }
+}
