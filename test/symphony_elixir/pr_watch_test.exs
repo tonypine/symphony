@@ -103,7 +103,13 @@ defmodule SymphonyElixir.PrWatchTest do
       # No decision on it: the run starts, as with the watcher off.
       assert PrWatch.dispatch_reason(ci_fix, settings) == nil
 
-      PrWatchSupport.put_watch!(@repo_key, "3", decision: %{rule: "R24", kind: :wait, owner: :ci, reason: "Checks are running on PR #3's head"})
+      PrWatchSupport.put_watch!(@repo_key, "3",
+        phase: :ci_fix,
+        head_sha: "sha-pending",
+        facts: %{ci: :pending},
+        decision: %{rule: "R24", kind: :wait, owner: :ci, reason: "Checks are running on PR #3's head"}
+      )
+
       assert PrWatch.dispatch_reason(ci_fix, settings) == "the PR watcher (R24): Checks are running on PR #3's head"
 
       PrWatchSupport.put_watch!(@repo_key, "3", decision: %{rule: "R22", kind: :rerun_failed, reason: "specs failed: rerunning it once"})
