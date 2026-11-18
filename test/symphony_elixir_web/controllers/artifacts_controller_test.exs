@@ -136,14 +136,44 @@ defmodule SymphonyElixirWeb.ArtifactsControllerTest do
       end
     end
 
-    test "any other method is 405 on both routes" do
+    test "any other method is 405 on every route" do
       id = String.duplicate("ab", 32)
 
-      for path <- ["/api/v1/artifacts/#{id}", "/api/v1/artifacts/#{id}/meta"] do
+      for path <- ["/api/v1/artifacts/#{id}", "/api/v1/artifacts/#{id}/meta", "/api/v1/artifacts/#{id}/lines"] do
         assert %{"error" => %{"code" => "method_not_allowed"}} = json_response(post(build_conn(), path, %{}), 405)
         assert %{"error" => %{"code" => "method_not_allowed"}} = json_response(delete(build_conn(), path), 405)
         assert %{"error" => %{"code" => "method_not_allowed"}} = json_response(put(build_conn(), path, %{}), 405)
       end
+    end
+  end
+
+  describe "GET /api/v1/artifacts/:id/lines" do
+    # A QA or Code Review run walks no steps: the session reader reads its run's own transcript.
+    test "a session transcript is its lines, one JSON object a line", %{workspace: workspace} do
+      session =
+        ~s({"type":"user","message":{"content":"Do it"}}\n) <>
+          ~s({"type":"assistant","timestamp":"2026-11-18T10:00:00Z","message":{"content":[{"type":"text","text":"Checking."},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"mix test"}}]}}\n)
+
+      artifact = ingest!(workspace, "session.jsonl", session, %{@meta | kind: "transcript", label: "session.jsonl"})
+
+      conn = get(build_conn(), "/api/v1/artifacts/#{artifact.id}/lines")
+
+      assert conn |> response(200) |> String.split("\n", trim: true) |> Enum.map(&Jason.decode!/1) == [
+               %{"at" => "2026-11-18T10:00:00Z", "kind" => "say", "text" => "Checking."},
+               %{"at" => "2026-11-18T10:00:00Z", "kind" => "tool", "text" => "Bash: mix test"}
+             ]
+
+      assert get_resp_header(conn, "content-type") == ["application/x-ndjson; charset=utf-8"]
+      assert get_resp_header(conn, "cache-control") == [@immutable]
+    end
+
+    test "an artifact of another kind is 404, a gone one 410", %{workspace: workspace} do
+      shot = ingest!(workspace, "home.png", @png, @meta)
+      assert %{"error" => %{"code" => "artifact_not_found"}} = json_response(get(build_conn(), "/api/v1/artifacts/#{shot.id}/lines"), 404)
+
+      transcript = ingest!(workspace, "t.jsonl", @transcript, %{@meta | kind: "transcript", label: "t.jsonl"})
+      File.rm!(Store.path(transcript.id))
+      assert %{"error" => %{"code" => "artifact_expired"}} = json_response(get(build_conn(), "/api/v1/artifacts/#{transcript.id}/lines"), 410)
     end
   end
 

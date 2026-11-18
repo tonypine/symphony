@@ -166,35 +166,40 @@ defmodule SymphonyElixir.PhaseSteps.Transcript do
 
   @doc """
   What the ticket read's `running` says of the live run `run_id` of `issue_id`: the step it started
-  and did not complete (`current_step`, nil between steps) and that step's newest lines in `stream`,
-  the run's buffered session updates (`recent_lines`, at most `recent_lines_bound/0`).
+  and did not complete (`current_step`, nil when none is open) and the run's newest lines in `stream`,
+  the run's buffered session updates (`recent_lines`, at most `recent_lines_bound/0`). With a step
+  open they are that step's lines; with none open, the lines since the run's last step completed,
+  or the whole stream's for a run that walks no steps (a QA or Code Review run).
   """
   @spec run_now(String.t() | nil, String.t() | nil, [map()]) ::
           %{current_step: current_step() | nil, recent_lines: [line()]}
   def run_now(issue_id, run_id, stream) when is_list(stream) do
-    case open_step(issue_id, run_id) do
-      %Event{at: at, payload: payload} ->
+    case last_step_event(issue_id, run_id) do
+      %Event{type: "step.started", at: at, payload: payload} ->
         step = %{id: payload.step_id, title: Map.get(payload, :title), mode: Map.get(payload, :mode), started_at: DateTime.to_iso8601(at)}
-        %{current_step: step, recent_lines: stream |> Enum.flat_map(&stream_line(&1, at)) |> Enum.take(-@recent_lines)}
+        %{current_step: step, recent_lines: recent_lines(stream, at)}
+
+      %Event{at: at} ->
+        %{current_step: nil, recent_lines: recent_lines(stream, at)}
 
       nil ->
-        %{current_step: nil, recent_lines: []}
+        %{current_step: nil, recent_lines: recent_lines(stream, nil)}
     end
   end
 
-  defp open_step(issue_id, run_id) when is_binary(issue_id) and is_binary(run_id) do
-    with [_ | _] = events <- RunStore.list_ticket_events(issue_id, types: ["step.started", "step.completed"], run_id: run_id),
-         %Event{type: "step.started"} = step <- List.last(events) do
-      step
-    else
-      _no_open_step -> nil
+  defp last_step_event(issue_id, run_id) when is_binary(issue_id) and is_binary(run_id) do
+    case RunStore.list_ticket_events(issue_id, types: ["step.started", "step.completed"], run_id: run_id) do
+      [_ | _] = events -> List.last(events)
+      _no_step -> nil
     end
   end
 
-  defp open_step(_issue_id, _run_id), do: nil
+  defp last_step_event(_issue_id, _run_id), do: nil
+
+  defp recent_lines(stream, since), do: stream |> Enum.flat_map(&stream_line(&1, since)) |> Enum.take(-@recent_lines)
 
   defp stream_line(%{timestamp: %DateTime{} = at} = update, since) do
-    case {DateTime.compare(at, since), stream_text(update)} do
+    case {since && DateTime.compare(at, since), stream_text(update)} do
       {:lt, _text} -> []
       {_at_or_after, nil} -> []
       {_at_or_after, {kind, text}} -> [line(kind, summary(text, @recent_chars), DateTime.to_iso8601(at))]

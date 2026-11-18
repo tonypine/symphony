@@ -113,6 +113,14 @@ public struct TicketEventsPayload: Equatable {
             let fallback = kind == "step_output" ? "Step output" : "Output"
             return TicketOutput(id: id, label: label?.trimmingWhitespace().trimmedNonEmpty ?? fallback, path: path, available: available ?? true)
         }
+
+        /// A session transcript (a `run.ended`'s) read as a step's lines: Symphony renders them at `<path>/lines`.
+        var sessionLines: TicketOutput {
+            TicketOutput(
+                id: id + "/lines", label: label?.trimmingWhitespace().trimmedNonEmpty ?? "Session", path: path + "/lines",
+                available: available ?? true
+            )
+        }
     }
 
     /// The fields of an event's payload the timeline reads; any other field, or a field of another type, is ignored.

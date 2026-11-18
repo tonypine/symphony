@@ -57,6 +57,23 @@ defmodule SymphonyElixir.Artifacts.TranscriptTest do
     end
   end
 
+  describe "a session found by its id alone" do
+    test "is its file in whichever working directory's folder holds it", %{root: root} do
+      qa = write!(root, "-Users-tonypine-symphony-workspaces--qa-symphony-TP-1496-57deb95b1b27/#{@session}.jsonl")
+
+      assert Transcript.find_session(:claude, @session) == {:ok, qa}
+    end
+
+    test "is none when no folder holds it, the id names a path, or the runtime keeps none", %{root: root} do
+      write!(root, "-w/#{@session}.jsonl")
+
+      assert Transcript.find_session(:claude, "another-session") == :none
+      assert Transcript.find_session(:claude, "../-w/#{@session}") == :none
+      assert Transcript.find_session(:claude, nil) == :none
+      assert Transcript.find_session(:codex, @session) == :none
+    end
+  end
+
   describe "a path the run reported" do
     test "is the transcript when it is a .jsonl file in Claude Code's projects folder", %{root: root} do
       reported = write!(root, "-elsewhere/reported.jsonl")

@@ -576,7 +576,9 @@ transcript as a `transcript` artifact (`.ndjson`, one line per entry: what the a
 call with its arguments summarised, each result summarised with its duration), cut at whole entries
 so a session's slices concatenated are its whole transcript; an end the agent recorded mid-turn gets
 it once the turn is over. While a run is live, the ticket read's `running` says the step it is on
-(`current_step`) and that step's newest lines from the session stream (`recent_lines`, at most 20). There is no `step.skipped`: a skip is `step.completed` with `outcome:
+(`current_step`) and the run's newest lines from the session stream (`recent_lines`, at most 20):
+that step's while one is open, else the lines since the run's last step completed, or the whole
+stream's for a run that walks no steps (a QA or Code Review run). There is no `step.skipped`: a skip is `step.completed` with `outcome:
 skipped`. A `question.answered` naming the question a paused step waits on resumes that step. Each
 outcome renders one line ("Build failed after 4 min: back to writing the code", "Tests passed in 2
 min", "Paused on your answer", "Checks skipped: no Elixir changed"), and while a run is under way
@@ -731,7 +733,10 @@ A `run.ended` names the run's transcript: a copy kept in the artifact store (Sec
 kind `transcript`, its id both in the event's `artifacts` and in `payload.transcript`. The
 transcript is the path the run reported, when it reported one; otherwise, for a Claude Code run on
 the local host, `~/.claude/projects/<the run's working directory, every character other than a
-letter or a digit as "-">/<session id>.jsonl`, when that file exists. That folder is a sensitive
+letter or a digit as "-">/<session id>.jsonl`, when that file exists, else the one
+`<session id>.jsonl` any folder there holds: a QA pass runs its session in a worktree of its own.
+A Code Review or QA run, which starts its agent itself, has one when its run profile's harness is
+`claude`. That folder is a sensitive
 path, so only a `.jsonl` file under it is ingested; a reported path anywhere else is ignored and
 logged. A Codex run, a run on a remote worker and a run with no session id have none. The copy is
 made in a task the orchestrator does not wait for, and the event keeps the time the run ended. A
@@ -6561,16 +6566,19 @@ Minimum endpoints:
   - When the client goes away a write fails, and the response ends and unsubscribes. Other methods
     are `405`. An older Symphony without the channel answers `404`, and the app keeps polling.
 
-- `GET /api/v1/artifacts/<id>` and `GET /api/v1/artifacts/<id>/meta`
+- `GET /api/v1/artifacts/<id>`, `GET /api/v1/artifacts/<id>/meta` and `GET /api/v1/artifacts/<id>/lines`
   - An artifact (Section 4.1.12) by id, read-only and served like the events feed. The first answers
     its bytes, sent from the file, with the artifact's `mime` as `Content-Type` (`; charset=utf-8`
     for text and JSON lines), `Cache-Control: public, max-age=31536000, immutable`,
     `X-Content-Type-Options: nosniff` and `Content-Disposition: inline` with the label as file name
     (`attachment` for `application/octet-stream`). The second answers its metadata: `id`, `mime`,
     `bytes`, `label`, `kind`, `repo_key`, `issue_id`, `run_id`, `captured_at`, `projections`,
-    `expired`, `expired_at` and `references`.
+    `expired`, `expired_at` and `references`. The third answers a session transcript (a `transcript`
+    artifact holding a Claude Code session, as a `run.ended` keeps it) as the lines a step's
+    transcript holds, JSON lines cached as the bytes are, so the Director reads the whole session of a
+    run that walks no steps; it is `404` for an artifact of another kind.
   - An expired artifact, or one whose file is gone (the store then marks it expired), is `410` on
-    both, with the metadata and an `error` (`artifact_expired`) in the body. An id that is not 64
+    each, with the metadata and an `error` (`artifact_expired`) in the body. An id that is not 64
     lowercase hex characters is `404` `artifact_not_found` before any store or filesystem lookup, so
     no path can be traversed; so is an unknown id. Other methods are `405`.
 
