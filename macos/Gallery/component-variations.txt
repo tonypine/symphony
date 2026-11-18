@@ -12,6 +12,11 @@ badge-recommended
 badge-small
 badge-waiting-on-you
 badge-working
+breadcrumb-destination
+breadcrumb-pull-request
+breadcrumb-ticket-page
+breadcrumb-ticket-page-link-hover
+breadcrumb-ticket-page-no-epic
 button-destructive
 button-destructive-hover
 button-destructive-in-a-sheet
@@ -161,3 +166,12 @@ text-field-error
 text-field-filled
 text-field-focused
 text-field-hover
+window-bar-home
+window-bar-home-find-focused
+window-bar-ticket-page
+window-bar-ticket-page-find-focused
+window-bar-ticket-page-inbox-open
+window-bar-ticket-page-sidebar-hidden
+window-bar-work-initiatives
+window-bar-work-tickets
+window-bar-work-tickets-find-focused

@@ -1055,17 +1055,22 @@ one, quit the app and run the install script with `SYMPHONY_RELEASE_TAG` set to 
 
 ## The Symphony window
 
-**Open Symphony** (⌘O) opens one window, **Symphony**, next to the menu bar item. It has a sidebar of views
-and, in the toolbar, **Back** and **Forward** (⌘[ and ⌘], between the views and the ticket pages shown), the
-view's title, Symphony's connection state (quiet while Symphony answers; the time of the last update is in its
-help), the scope pop-up, **Find a Ticket** and **Refresh** (⌘R). The sidebar has five destinations, on ⌘1 to ⌘5:
+**Open Symphony** (⌘O) opens one window, **Symphony**, next to the menu bar item. It has a sidebar of views and,
+over the page, the window's own bar (the system toolbar is not used; the window drags by the bar, and a double-click
+on it zooms as on a title bar): show or hide the sidebar, **Back** and **Forward** (⌘[ and ⌘], between the views and
+the ticket pages shown), a breadcrumb of where you are (the destination's name; on a ticket's page the destination it
+was opened from, its epic and its identifier, each part but the last a link), on Work the **Initiatives** and
+**Tickets** switch, then **Find a ticket** (⌘F), the **Inbox** with the count of what needs you (its drawer on Home and
+a ticket's page) and **Refresh** (⌘R). A page's own controls (the scope pop-up, Shipped's Learnings switch, a page's
+search, Audit's **Export…**, Tickets' **Force a Ticket**) sit in a row at the top of the page, with Insights' tabs.
+The sidebar has five destinations, on ⌘1 to ⌘5:
 **Home** (its badge counts what waits on you, in orange), **Journal** (its name and a line saying what it will hold,
 for now), **Work** (**Initiatives** and **Tickets** as two tabs), **Insights** (**Quality**, **Usage**, **Shipped** and
 **Audit** as tabs) and **Factory** (its badge counts the setup problems, in red), with its pages listed under it:
 **Setup**, **Repos** (which opens the Repos window), **Diagnostics** and **Settings** (which opens the Settings window).
-Work and Insights open on their first tab and come back to the tab shown last while the app runs. **Find a Ticket**
-(⌘F, from any page) finds a ticket by its identifier or title as you type; Return opens its page, and **Back** returns
-to where you were. ⌥⌘F puts the focus in the search field of Tickets, Shipped's Learnings or Audit. The window opens on
+Work and Insights open on their first tab and come back to the tab shown last while the app runs. **Find a ticket**
+(⌘F, from any page) finds a ticket by its identifier or title as you type, listing the matches under it; Return opens
+the best match's page, and **Back** returns to where you were. ⌥⌘F puts the focus in the search field of Tickets, Shipped's Learnings or Audit. The window opens on
 Home the first time, and on the page it showed last after that.
 
 - **Inbox** lists everything that waits on you (`/api/v1/inbox`), grouped as Plans, Pull requests, Final

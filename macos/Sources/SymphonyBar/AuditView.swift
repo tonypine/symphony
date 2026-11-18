@@ -126,14 +126,6 @@ struct AuditContent: View {
                 EmptyState(title: "Reading the audit records…", symbol: SymphonyView.audit.symbol, showsSpinner: true)
             }
         }
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                PageSearchField(
-                    prompt: Audit.searchPrompt, text: $model.auditFilter.search, matches: model.auditView?.rows.count,
-                    requested: $model.auditSearchRequested
-                )
-            }
-        }
     }
 }
 
