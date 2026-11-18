@@ -11,11 +11,6 @@ on:
         description: Suite runs per partition
         type: number
         default: 20
-  # TEMPORARY (TP-1546): lists the sweep's failures on this ticket's branch before the workflow is
-  # on main, where workflow_dispatch can start it. Removed before the handoff.
-  push:
-    branches:
-      - auto/TP-1546
 
 permissions:
   contents: read
