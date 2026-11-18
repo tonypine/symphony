@@ -219,7 +219,7 @@ public struct RunsPage: Equatable {
     /// first one, and a provider whose models are known and don't hold the line's model takes its first model, so the
     /// line stays one Symphony can run.
     public mutating func pick(_ field: RunProfileField, of line: Int, kind: RunKind?, to value: String?) {
-        guard var editor else { return }
+        guard var editor = editable else { return }
         guard editor.set(field, of: line, kind: kind, in: scope, to: value) else { return }
         if field == .harness, let reached = value.flatMap(Harness.init)?.providers,
            let provider = editor.lines(kind, in: scope)[line].provider.value, !reached.contains(provider) {
@@ -237,27 +237,28 @@ public struct RunsPage: Equatable {
 
     /// "Use Default's": the kind takes everything from Default again.
     public mutating func useDefaults(_ kind: RunKind?) {
-        guard var editor, editor.useDefaults(kind, in: scope) else { return }
+        guard var editor = editable, editor.useDefaults(kind, in: scope) else { return }
         edited(editor)
     }
 
     /// Adds a fallback after the last line of `kind`.
     public mutating func addFallback(_ kind: RunKind?) {
-        guard var editor else { return }
+        guard var editor = editable else { return }
         editor.addFallback(kind, in: scope)
         edited(editor)
     }
 
     /// Removes line `line` of `kind`, when it can be.
     public mutating func remove(_ line: Int, of kind: RunKind?) {
-        guard var editor, editor.remove(line, of: kind, in: scope) else { return }
+        guard var editor = editable, editor.remove(line, of: kind, in: scope) else { return }
         edited(editor)
     }
 
     /// Takes the order the list was left in (the lines' places before the move, in their new order) and moves the line
     /// that moved. A move the editor refuses leaves the order as it was.
     public mutating func reorder(_ kind: RunKind?, to order: [Int]) {
-        guard var editor, let moved = Self.move(in: order), editor.move(moved.from, to: moved.to, of: kind, in: scope) else { return }
+        guard var editor = editable, let moved = Self.move(in: order),
+              editor.move(moved.from, to: moved.to, of: kind, in: scope) else { return }
         edited(editor)
     }
 
@@ -276,10 +277,17 @@ public struct RunsPage: Equatable {
 
     /// Puts every value back as it was read.
     public mutating func revert() {
-        guard var editor else { return }
+        guard var editor = editable else { return }
         editor.revert()
         edited(editor)
     }
+
+    /// Whether the values can be edited: the file is read and no save is under way. An edit made while `symphony check`
+    /// runs would be lost when the saved values come back, so the page takes none until the save ends.
+    public var isEditable: Bool { editor != nil && save != .saving }
+
+    /// The editor to edit, nil while a save is under way.
+    private var editable: RunsEditor? { save == .saving ? nil : editor }
 
     private mutating func edited(_ editor: RunsEditor) {
         self.editor = editor

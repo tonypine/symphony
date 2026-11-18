@@ -320,6 +320,36 @@ final class RunsPageTests: XCTestCase {
         XCTAssertEqual(page.save, .editing)
     }
 
+    func testEditsWhileASaveIsUnderWayAreRefusedSoNoneIsLost() async throws {
+        let (file, directory) = try file(yaml)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var page = RunsPage()
+        page.read(file)
+        XCTAssertTrue(page.isEditable)
+        page.pick(.model, of: 0, kind: .qa, to: "claude-opus-5-5")
+        let editor = try XCTUnwrap(page.beginSave())
+        XCTAssertFalse(page.isEditable, "the rows are off while the save runs")
+
+        let before = page.rows
+        page.pick(.effort, of: 0, kind: .qa, to: "max")
+        page.useDefaults(.qa)
+        page.addFallback(.qa)
+        page.remove(1, of: .qa)
+        page.reorder(.qa, to: [1, 0])
+        page.revert()
+        XCTAssertEqual(page.rows, before, "no edit is taken while the save runs")
+        XCTAssertEqual(page.save, .saving, "an edit doesn't end the save")
+        XCTAssertFalse(page.canSave, "a second Save can't start beside the first")
+        XCTAssertNil(page.beginSave())
+
+        page.finishSave(await editor.save(to: file) { _ in .passed })
+        XCTAssertEqual(page.save, .saved)
+        XCTAssertEqual(page.changeCount, 0)
+        XCTAssertTrue(page.isEditable)
+        page.pick(.effort, of: 0, kind: .qa, to: "max")
+        XCTAssertEqual(page.changeCount, 1, "edits are taken again once the save ends")
+    }
+
     func testARefusedSaveKeepsEveryChangeAndShowsWhyUntilTheNextEdit() async throws {
         let (file, directory) = try file(yaml)
         defer { try? FileManager.default.removeItem(at: directory) }
