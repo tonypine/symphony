@@ -344,10 +344,22 @@ public enum RunProfilesConfig {
     /// The Default row first, then every run kind.
     public static let scopes: [RunKind?] = [nil] + RunKind.allCases
 
+    /// Anthropic's models, in the order Claude Code's own model picker lists them: the current ones, then the
+    /// older ones it keeps under More models. The ids are the ones the `claude` CLI takes with `--model`.
     public static let models = [
         RunProfileChoice(id: "claude-opus-5-5", title: "Opus 5.5"),
+        RunProfileChoice(id: "claude-fable-5-2", title: "Fable 5.2"),
         RunProfileChoice(id: "claude-sonnet-5-5", title: "Sonnet 5.5"),
+        RunProfileChoice(id: "claude-haiku-5-5", title: "Haiku 5.5"),
+        RunProfileChoice(id: "claude-fable-5-1", title: "Fable 5.1"),
         RunProfileChoice(id: "claude-haiku-4-5-20251001", title: "Haiku 4.5"),
+        RunProfileChoice(id: "claude-sonnet-5", title: "Sonnet 5"),
+        RunProfileChoice(id: "claude-opus-5", title: "Opus 5"),
+        RunProfileChoice(id: "claude-fable-5", title: "Fable 5"),
+        RunProfileChoice(id: "claude-opus-4-8", title: "Opus 4.8"),
+        RunProfileChoice(id: "claude-opus-4-7", title: "Opus 4.7"),
+        RunProfileChoice(id: "claude-opus-4-6", title: "Opus 4.6"),
+        RunProfileChoice(id: "claude-sonnet-4-6", title: "Sonnet 4.6"),
     ]
 
     /// OpenAI's models for Codex runs.

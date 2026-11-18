@@ -95,4 +95,14 @@ final class RunModelListsTests: XCTestCase {
         guard case .failure(let failure) = await OpenCodeModels.load(missing) else { return XCTFail("ran a missing program") }
         XCTAssertTrue(failure.message.hasPrefix("Couldn't run opencode models"))
     }
+
+    /// Every model Claude Code's own picker lists, current ones first, by the id `claude --model` takes.
+    func testAnthropicOffersEveryModelClaudeCodeLists() {
+        XCTAssertEqual(RunProfilesConfig.models.map(\.id), [
+            "claude-opus-5-5", "claude-fable-5-2", "claude-sonnet-5-5", "claude-haiku-5-5",
+            "claude-fable-5-1", "claude-haiku-4-5-20251001", "claude-sonnet-5", "claude-opus-5", "claude-fable-5",
+            "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
+        ])
+        XCTAssertEqual(Set(RunProfilesConfig.models.map(\.title)).count, RunProfilesConfig.models.count)
+    }
 }
