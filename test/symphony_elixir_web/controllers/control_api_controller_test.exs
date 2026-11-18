@@ -500,6 +500,92 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
     end
   end
 
+  describe "POST /control/providers/:provider/pause and resume (TP-1532)" do
+    @describetag :tmp_dir
+
+    defp provider_action(action, replies, provider, audit_dir) do
+      pid = start_stub(replies)
+      params = %{"provider" => provider}
+
+      conn =
+        build_conn(:post, "/api/v1/control/providers/#{provider}/#{action}", params)
+        |> Plug.Conn.assign(:audit_log, dir: audit_dir)
+        |> send_to(:"#{action}_provider", pid, params)
+
+      {conn, calls(pid)}
+    end
+
+    test "pause needs no reason, answers the provider's pause and records it", %{tmp_dir: tmp_dir} do
+      reason = %{kind: :person, waits_on: %{action: "unblock"}, text: "You paused Anthropic", set_by: %{kind: :person, name: "Director"}, set_at: ~U[2026-11-18 10:00:00Z]}
+      pause = SymphonyElixir.Pauses.normalize(%{subject: {:provider, "anthropic"}, reasons: [reason]})
+
+      {conn, calls} = provider_action("pause", [{:ok, %{provider: "anthropic", pause: pause}}], "anthropic", tmp_dir)
+
+      assert conn.status == 200
+      assert calls == [{:pause_provider, "anthropic"}]
+
+      assert %{
+               "provider" => %{
+                 "provider" => "anthropic",
+                 "name" => "Anthropic",
+                 "paused" => true,
+                 "pause" => %{"since" => "2026-11-18T10:00:00Z", "reasons" => [%{"kind" => "person", "text" => "You paused Anthropic", "releasable" => true}]}
+               }
+             } = json_body(conn)
+
+      {:ok, stream} = AuditLog.query(dir: tmp_dir, event_type: "provider_paused")
+      assert [%{"provider" => "anthropic"}] = Enum.to_list(stream)
+    end
+
+    test "resume clears it, answers the provider unpaused and records it", %{tmp_dir: tmp_dir} do
+      {conn, calls} = provider_action("resume", [{:ok, %{provider: "opencode-go", pause: nil}}], "opencode-go", tmp_dir)
+
+      assert conn.status == 200
+      assert calls == [{:resume_provider, "opencode-go"}]
+      assert json_body(conn) == %{"provider" => %{"provider" => "opencode-go", "name" => "OpenCode Go", "paused" => false, "pause" => nil}}
+      {:ok, stream} = AuditLog.query(dir: tmp_dir, event_type: "provider_resumed")
+      assert [%{"provider" => "opencode-go"}] = Enum.to_list(stream)
+    end
+
+    test "an unknown provider is 404 naming it, and records nothing", %{tmp_dir: tmp_dir} do
+      {conn, _calls} = provider_action("pause", [{:error, {:provider_not_found, "acme"}}], "acme", tmp_dir)
+
+      assert conn.status == 404
+      assert json_body(conn)["error"] == %{"code" => "provider_not_found", "message" => "Symphony knows no provider acme"}
+      {:ok, stream} = AuditLog.query(dir: tmp_dir)
+      assert Enum.to_list(stream) == []
+    end
+
+    test "an unavailable orchestrator is 503", %{tmp_dir: tmp_dir} do
+      {conn, _calls} = provider_action("resume", [:unavailable], "anthropic", tmp_dir)
+      assert conn.status == 503
+    end
+
+    test "still answers when the audit record can't be written", %{tmp_dir: tmp_dir} do
+      blocker = Path.join(tmp_dir, "blocker")
+      File.write!(blocker, "")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          {conn, _calls} = provider_action("resume", [{:ok, %{provider: "anthropic", pause: nil}}], "anthropic", Path.join(blocker, "audit"))
+          assert conn.status == 200
+        end)
+
+      assert log =~ "Failed to record provider_resumed audit event: provider=anthropic"
+    end
+
+    test "is refused without the control token, like the other control routes" do
+      for action <- ["pause", "resume"] do
+        conn =
+          conn(:post, "/api/v1/control/providers/anthropic/#{action}", "{}")
+          |> put_req_header("content-type", "application/json")
+          |> Router.call(Router.init([]))
+
+        assert conn.status == 401
+      end
+    end
+  end
+
   test "POST /control/dispatch_pr forwards target and intent" do
     pid = start_stub([{:ok, %{pull_request_url: "https://example/pr/1"}}])
 

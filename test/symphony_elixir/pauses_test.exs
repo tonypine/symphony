@@ -223,7 +223,7 @@ defmodule SymphonyElixir.PausesTest do
     end
 
     test "a subject that is not a ticket gets the same pause and records no event, as set/3 records none (TP-1341)" do
-      for subject <- [{:repository, "repo-a"}, :symphony] do
+      for subject <- [{:repository, "repo-a"}, {:provider, "anthropic"}, :symphony] do
         assert {:ok, %{subject: ^subject, reasons: [%{kind: :question}]} = paused, []} =
                  Pauses.set_change(subject, nil, @question, at: @at)
 
@@ -234,7 +234,7 @@ defmodule SymphonyElixir.PausesTest do
     end
 
     test "refuses a subject it doesn't know, and a reason, setter or time it doesn't know" do
-      for subject <- [{:repository, " "}, :everything, {:ticket, @repo_key, " "}] do
+      for subject <- [{:repository, " "}, {:provider, " "}, :everything, {:ticket, @repo_key, " "}] do
         assert Pauses.set_change(subject, nil, @question, []) == {:error, {:invalid_subject, subject}}
         assert Pauses.clear_reason_change(subject, nil, @question, []) == {:error, {:invalid_subject, subject}}
       end
@@ -391,6 +391,24 @@ defmodule SymphonyElixir.PausesTest do
       refute Pauses.paused?(:symphony)
 
       assert RunStore.list_ticket_events(@issue_id, []) == []
+    end
+  end
+
+  describe "the Director's pause of a provider (TP-1532)" do
+    test "waits on them, its line naming the provider, and is kept by the store" do
+      assert Pauses.provider_reason("opencode-go") ==
+               %{kind: :person, waits_on: %{action: "unblock"}, text: "You paused OpenCode Go", releasable: true}
+
+      assert Pauses.provider_skip_reason("anthropic") == "you paused Anthropic, and no fallback of its run can take it"
+
+      provider = {:provider, "anthropic"}
+      {:ok, _pause} = Pauses.set(provider, Pauses.provider_reason("anthropic"), set_by: @person, at: @at)
+      assert Pauses.paused?(provider)
+      assert Pauses.why(provider) == ["You paused Anthropic"]
+      refute Pauses.paused?({:provider, "openrouter"})
+
+      assert {:ok, nil} = Pauses.clear_reasons(provider, &(&1.kind == :person), by: @person)
+      refute Pauses.paused?(provider)
     end
   end
 

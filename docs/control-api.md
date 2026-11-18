@@ -84,6 +84,7 @@ When more than one holds, the first in this order is the situation:
 | `retrying` | Retrying | null |
 | `blocked_by_ticket` | Blocked by TP-n | `ticket` |
 | `waiting_on_sub_tickets` | Waiting on its sub-tickets | `sub_tickets`: the open ones' identifiers |
+| `waiting_for_provider` | Waiting: you paused *provider* | `provider` |
 | `paused_by_rule` | Paused | the pause reason's own |
 | `waiting_for_ci` | Waiting for CI | `pr`, `check`; for a wait on a commit, the pause reason's own |
 | `waiting_for_build` | Waiting for a build | the pause reason's own |
@@ -114,6 +115,10 @@ closest one:
   one whose run ended on CI still running and starts again after it, read `waiting_for_ci` naming the
   commit and the workflows still running.
 - A ticket in `Backlog` reads `paused_by_rule`.
+- A ticket the dispatch pass held because the Director paused its run's provider
+  (`POST /api/v1/control/providers/<provider>/pause`) and no fallback of its run can take it reads
+  `waiting_for_provider`: "Waiting: you paused Anthropic", "Starts when you resume Anthropic.". It
+  never reads a slot's or a rule's words.
 - A ticket waiting for a slot while Symphony is paused reads `paused_by_rule`.
 - A `Merging` ticket held until CI settles reads `waiting_for_ci`.
 - A ticket Symphony can tell nothing of reads `unknown` ("Not known", "Symphony can't tell what it
@@ -801,7 +806,7 @@ ticket entity, and nothing more. Its columns and filters come from one catalog
 | `repo` | `repo` | Any of its values, in any case. |
 | `epic` | `epic` | The epic itself and the tickets whose record names it as parent, as the Journal's and the aggregation read's `epic`. |
 | `phase` | `phase` | Any of its values, in any case. |
-| `situation` | `situation` | Any of its kinds (`waiting_on_you`, `retrying`, `blocked_by_ticket`, `waiting_on_sub_tickets`, `paused_by_rule`, `waiting_for_ci`, `waiting_for_build`, `waiting_for_slot`, `working`, `done`, `cancelled`, `unknown`). |
+| `situation` | `situation` | Any of its kinds (`waiting_on_you`, `retrying`, `blocked_by_ticket`, `waiting_on_sub_tickets`, `waiting_for_provider`, `paused_by_rule`, `waiting_for_ci`, `waiting_for_build`, `waiting_for_slot`, `working`, `done`, `cancelled`, `unknown`). |
 | `label` | `labels` | A ticket holding any of its labels, in any case. |
 | `priority` | `priority` | Any of its values, integers from 0 to 4. |
 | `since` | `updated_at` | The tickets whose record was written after its one ISO 8601 time. |

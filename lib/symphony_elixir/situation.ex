@@ -32,6 +32,10 @@ defmodule SymphonyElixir.Situation do
   `waiting_on_sub_tickets` ("2 of 5 done", `waits_on` the open ones), and a ticket in `Backlog`
   `paused_by_rule`.
 
+  A ticket the dispatch pass held because the Director paused its run's provider and no fallback of
+  its run can take it (its skip's `rule` is `:provider_pause`, naming the `provider`) reads
+  `waiting_for_provider`, "Waiting: you paused Anthropic", never a slot's or a rule's words.
+
   `waiting_for_slot` is said only of a ticket that passed every dispatch condition but a free slot.
   A dispatch skip reads `paused_by_rule` only when the orchestrator names the rule behind it (its
   entry's `rule`); any other skip is told by the gate that closed (its entry's `gate`), never by the
@@ -48,12 +52,12 @@ defmodule SymphonyElixir.Situation do
 
   require Logger
 
-  alias SymphonyElixir.{CiWait, Config, PrDecision, RunStore, TicketEvents, TicketPullRequest, TicketState}
+  alias SymphonyElixir.{AgentProviders, CiWait, Config, PrDecision, RunStore, TicketEvents, TicketPullRequest, TicketState}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.PrWatch.{SilentWait, StalledRun}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
 
-  @kinds ~w(waiting_on_you retrying blocked_by_ticket waiting_on_sub_tickets paused_by_rule waiting_for_ci waiting_for_build waiting_for_slot working done cancelled unknown)
+  @kinds ~w(waiting_on_you retrying blocked_by_ticket waiting_on_sub_tickets waiting_for_provider paused_by_rule waiting_for_ci waiting_for_build waiting_for_slot working done cancelled unknown)
 
   # A retry that follows a run's normal end, or a wait on something that is not broken, is no retry
   # to a person: only a failure, or a usage limit, reads as `retrying`.
@@ -160,7 +164,7 @@ defmodule SymphonyElixir.Situation do
       running: by_issue(snapshot, :running, &Map.take(&1, [:run_kind, :started_at, :step])),
       retrying: by_issue(snapshot, :retrying, &retry_facts(&1, now)),
       slot_waiting: by_issue(snapshot, :slot_waiting, &Map.take(&1, [:since, :reason, :ci_wait])),
-      skipped: by_issue(snapshot, :dispatch_skipped, &Map.take(&1, [:since, :reason, :rule, :gate])),
+      skipped: by_issue(snapshot, :dispatch_skipped, &Map.take(&1, [:since, :reason, :rule, :gate, :provider])),
       limit: snapshot |> Map.get(:concurrency) |> max_total(),
       symphony_pause: snapshot |> Map.get(:pause) |> symphony_pause(),
       max_tries: settings.watchdog.dispatch_loop_runs,
@@ -360,6 +364,7 @@ defmodule SymphonyElixir.Situation do
       ci_retry: live.retrying |> Map.get(issue_id) |> ci_retry(),
       slot: Map.get(live.slot_waiting, issue_id),
       skipped: live.skipped |> Map.get(issue_id) |> rule_skip(running),
+      provider_skip: live.skipped |> Map.get(issue_id) |> provider_skip(),
       gate_skip: live.skipped |> Map.get(issue_id) |> gate_skip(running),
       facts: facts(record)
     }
@@ -370,6 +375,10 @@ defmodule SymphonyElixir.Situation do
 
   defp facts(%{pr_watch: %{facts: %PrDecision.Facts{} = facts}}), do: facts
   defp facts(_record), do: nil
+
+  # A skip for a paused provider names it; nil for any other.
+  defp provider_skip(%{rule: :provider_pause, provider: provider} = skip) when is_binary(provider), do: skip
+  defp provider_skip(_skip), do: nil
 
   defp rule_skip(%{rule: rule} = skip, nil) when not is_nil(rule), do: skip
   defp rule_skip(_skip, _running), do: nil
@@ -394,6 +403,7 @@ defmodule SymphonyElixir.Situation do
   defp holds?("retrying", ctx), do: ctx.retry != nil
   defp holds?("blocked_by_ticket", ctx), do: reason(ctx, :ticket) != nil
   defp holds?("waiting_on_sub_tickets", ctx), do: waits_on_sub_tickets?(ctx)
+  defp holds?("waiting_for_provider", ctx), do: ctx.provider_skip != nil
   defp holds?("paused_by_rule", ctx), do: rule_reason(ctx) != nil or ctx.phase == "backlog" or ctx.skipped != nil or pause_holds_slot?(ctx)
   defp holds?("waiting_for_ci", ctx), do: ci_wait_reason(ctx) != nil or ctx.ci_retry != nil or waiting_for_ci?(ctx)
   defp holds?("waiting_for_build", ctx), do: reason(ctx, :build) != nil
@@ -483,6 +493,20 @@ defmodule SymphonyElixir.Situation do
     base("waiting_on_sub_tickets", "Waiting on its sub-tickets", cause, "It moves on when every sub-ticket has ended.", since, %{
       sub_tickets: open |> Enum.map(& &1.identifier) |> Enum.filter(&is_binary/1)
     })
+  end
+
+  defp situation("waiting_for_provider", ctx) do
+    %{provider: provider} = skip = ctx.provider_skip
+    name = AgentProviders.display_name(provider)
+
+    base(
+      "waiting_for_provider",
+      "Waiting: you paused #{name}",
+      "#{next_run_label(ctx)} runs on #{name}, and none of its fallbacks can take it.",
+      "Starts when you resume #{name}.",
+      skip[:since],
+      %{provider: provider}
+    )
   end
 
   defp situation("paused_by_rule", ctx) do

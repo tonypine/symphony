@@ -619,7 +619,8 @@ changed and written in one store transaction that holds its lock, and a ticket's
 in that same transaction: concurrent writers never lose each other's reasons, the pause never
 changes without its event, and the events follow the order the changes were written in. The live
 channel's notice of the event goes out once the transaction commits.
-A repository's or Symphony's own pause is kept in the store by subject and records no event.
+A repository's, a provider's or Symphony's own pause is kept in the store by subject; a
+repository's and a provider's record no event.
 
 A repository's pause stops dispatch for that repository alone. The Director's Pause of a repository
 (`POST /api/v1/control/repos/<repo_key>/pause`) sets a `person` reason that waits on `unblock`, its
@@ -632,6 +633,22 @@ watcher keeps watching its pull requests (landing an approved one is not a dispa
 payload lists each configured repository under `repositories` with its pause, and a ticket's
 payload carries `repository_paused`; every repository paused is not Symphony's pause, and the
 payload's `all_repositories_paused` says it apart.
+
+A provider's pause (subject `{:provider, <provider>}`, any provider some harness reaches) stops new
+runs on that provider alone. The Director's Pause of a provider
+(`POST /api/v1/control/providers/<provider>/pause`, no reason) sets a `person` reason that waits on
+`unblock`, its line `You paused <name>` (`You paused Anthropic`); its Resume
+(`POST /api/v1/control/providers/<provider>/resume`) clears it. An unknown provider is refused with
+404 `provider_not_found`, naming it. While it holds, a paused provider is one more reason a run's
+candidate cannot take a run, as a usage limit that holds the provider is: a new run starts on the
+first fallback of its run kind whose provider can take it, and a continuation stays on its own
+choice. A run with no such candidate waits, as under a reached usage limit (landing runs and forced
+tickets' runs included): a candidate is skipped with rule `provider_pause`, naming the `provider`
+(`you paused Anthropic, and no fallback of its run can take it`), and a retry or continuation keeps
+its claim and attempt with no timer. Its situation is `waiting_for_provider` ("Waiting: you paused
+Anthropic"). A run that works on the provider goes on. Resume sends each retry the pause held on at
+once and asks for a tick, so the waiting tickets start without waiting for a poll. The pause is kept
+in the run store, so it survives a restart.
 
 Symphony's own pause is the operator pause: the one answer to why Symphony is not dispatching. It
 shows only at the app level (the state payload's `pause`), never on a ticket page; a candidate the

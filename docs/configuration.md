@@ -2777,6 +2777,19 @@ every configured repository under `repositories` with its `pause` (null when not
 `all_repositories_paused`, which is not Symphony's own `pause`; a ticket's payload carries
 `repository_paused`.
 
+**Pause one provider** (`POST /api/v1/control/providers/<provider>/pause`, no reason) stops new runs
+on that provider (`anthropic`, `openai`, `openrouter`, `opencode-go`), and
+`POST /api/v1/control/providers/<provider>/resume` starts them again at once. A run that works on the
+provider is not stopped. A new run whose first choice is on the paused provider starts on its first
+fallback (`runs.<kind>.fallbacks`) whose provider can take it, exactly as when a usage limit holds
+the provider; a continuation stays on its own choice and waits. A ticket with no free fallback is
+listed under `dispatch_skipped` with rule `provider_pause` and its `provider`, and reads "Waiting:
+you paused Anthropic". Landing runs and forced tickets wait too, as under a reached usage limit.
+Resume sends the waiting runs on without waiting for a poll. The pause is kept in the run store, so
+it survives a restart; each call writes a `provider_paused` or `provider_resumed` audit record and
+answers the provider, its name and its `pause` (null once resumed); a provider no harness reaches
+answers 404 `provider_not_found`.
+
 **Stop** (`POST /api/v1/control/stop`, `mix symphony.stop`, the Director's Stop Run) ends one
 ticket's run and leaves its Linear state as it is, but the ticket is not dispatched again: Symphony's
 copy of it still reads the old state until a poll, so the stop pauses it on a reason that waits on

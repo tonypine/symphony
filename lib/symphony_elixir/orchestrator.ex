@@ -24,6 +24,7 @@ defmodule SymphonyElixir.Orchestrator do
     ForcedQueue,
     ForcedStatus,
     Handoff,
+    Harnesses,
     IdlePark,
     Initiatives,
     InstructionsHold,
@@ -213,6 +214,9 @@ defmodule SymphonyElixir.Orchestrator do
       tracker_tasks: %{},
       dispatch_refresh: nil,
       usage_limits: %{},
+      # The providers the Director paused (`SymphonyElixir.Pauses`, subject `{:provider, provider}`):
+      # no new run starts on one, read from the run store at start and changed by Pause and Resume.
+      paused_providers: MapSet.new(),
       # The issue a continuation is being dispatched for, while its dispatch runs: a continuation
       # keeps its run kind's own choice under a headroom hold instead of a fallback.
       continuation_dispatch: nil,
@@ -281,6 +285,7 @@ defmodule SymphonyElixir.Orchestrator do
       quality_gate_cache: quality_gate_cache,
       quality_gate_comment_keys: quality_gate_comment_keys,
       usage_limits: usage_limits,
+      paused_providers: persisted_paused_providers(),
       forced: forced,
       self_heal_opts: Keyword.get(opts, :self_heal_opts, []),
       clock: Keyword.get(opts, :clock, &DateTime.utc_now/0),
@@ -4418,6 +4423,9 @@ defmodule SymphonyElixir.Orchestrator do
         {reason, rule, _gate} = gate
         {%{outcome: :held, reason: reason, rule: rule}, pass, hold}
 
+      provider = provider_pause_hold(pass, issue) ->
+        {%{outcome: :held, reason: Pauses.provider_skip_reason(provider), rule: :provider_pause}, pass, hold}
+
       limit = usage_limit_hold(pass, issue) ->
         {%{outcome: :held, reason: UsageLimit.hold_label(limit), rule: :usage_limit}, pass, hold}
 
@@ -4508,6 +4516,9 @@ defmodule SymphonyElixir.Orchestrator do
       waiting_retry_held?(waiting, issue, state) ->
         {hold_waiting_retry_for_usage_limit(state, issue, waiting), hold}
 
+      provider = provider_pause_hold(state, issue) ->
+        {put_dispatch_skipped(state, issue, Pauses.provider_skip_reason(provider), :provider_pause), hold}
+
       usage_limit_held?(issue, state) ->
         {put_dispatch_skipped(state, issue, UsageLimit.hold_label(usage_limit_hold(state, issue)), :usage_limit), hold}
 
@@ -4555,6 +4566,8 @@ defmodule SymphonyElixir.Orchestrator do
   # skip no rule is behind: a run already on it, CI, its own pause. `gate` names which of those
   # others closed (`:sub_tickets`, `:claimed`, `:watch`…), so a ticket read words it from what
   # Symphony knows and never from the reason's text (`SymphonyElixir.Situation`); nil for a rule's.
+  # A skip for a paused provider names the provider (`provider`), so the ticket's situation says which
+  # one the Director paused.
   defp put_dispatch_skipped(%State{} = state, %Issue{} = issue, reason, rule, gate \\ nil) do
     entry = %{
       identifier: issue.identifier,
@@ -4567,6 +4580,7 @@ defmodule SymphonyElixir.Orchestrator do
       connected: Connected.build(issue, nil)
     }
 
+    entry = if rule == :provider_pause, do: Map.put(entry, :provider, paused_provider_of(state, issue)), else: entry
     %{state | dispatch_skipped: Map.put(state.dispatch_skipped, issue.id, entry)}
   end
 
@@ -4737,7 +4751,8 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp dispatch_eligible?(%Issue{} = issue, %State{} = state, active_states, terminal_states) do
-    dispatch_gates_open?(issue, state, active_states, terminal_states) and !usage_limit_held?(issue, state)
+    dispatch_gates_open?(issue, state, active_states, terminal_states) and is_nil(provider_pause_hold(state, issue)) and
+      !usage_limit_held?(issue, state)
   end
 
   # Every dispatch gate but the usage limit.
@@ -4875,6 +4890,7 @@ defmodule SymphonyElixir.Orchestrator do
   defp taken_reason(%Issue{id: issue_id}, %State{} = state) do
     cond do
       Map.has_key?(state.running, issue_id) -> open_gate(running_reason(issue_id), :running)
+      provider = held_provider(state, issue_id) -> closed_gate(Pauses.provider_skip_reason(provider), :provider_pause)
       MapSet.member?(state.claimed, issue_id) -> open_gate("claimed by a retry or a Linear update in flight", :claimed)
       true -> nil
     end
@@ -5512,7 +5528,7 @@ defmodule SymphonyElixir.Orchestrator do
           merging_ci_wait?: Map.has_key?(state.merging_ci_waits, issue_id),
           auto_merge?: merging_state?(issue.state) and MapSet.member?(context.auto_merge_ids, issue_id),
           blockers: forced_blockers(issue, state, terminal_states),
-          paused?: operator_paused?(state),
+          paused?: operator_paused?(state) or not is_nil(provider_pause_hold(state, issue)),
           usage_limit?: not is_nil(usage_limit_hold(state, issue)),
           slot_waiting?: Map.has_key?(state.slot_waiting, issue_id)
         }
@@ -7508,6 +7524,9 @@ defmodule SymphonyElixir.Orchestrator do
       held = pause_held_retry(state, issue, attempt, metadata) ->
         held
 
+      provider = provider_pause_hold(state, issue, metadata[:continuation] == true) ->
+        hold_retry_for_provider_pause(state, issue, attempt, metadata, provider)
+
       hold = usage_limit_hold(state, issue, metadata[:continuation] == true) ->
         hold_retry_for_usage_limit(state, issue, attempt, metadata, hold)
 
@@ -7623,6 +7642,43 @@ defmodule SymphonyElixir.Orchestrator do
   defp release_for_repository_pause(%State{} = state, %Issue{} = issue, reason) do
     Logger.info("Not dispatching #{issue_context(issue)} again: #{reason}; releasing its claim")
     release_issue_claim(state, issue.id)
+  end
+
+  # A retry whose run waits on a paused provider keeps its claim and its attempt, with no timer, and
+  # a continuation keeps its run kind's own choice: Resume sends it on at once
+  # (`release_provider_held_retries/2`). Its ticket is listed under `dispatch_skipped` naming the
+  # provider, never as a retry.
+  defp hold_retry_for_provider_pause(%State{} = state, %Issue{} = issue, attempt, metadata, provider) do
+    Logger.info("Not dispatching retry of #{issue_context(issue)}: #{Pauses.provider_skip_reason(provider)}; it waits for the provider to resume")
+    delay_type = if metadata[:continuation] == true, do: :continuation
+    metadata = Map.merge(metadata, %{identifier: issue.identifier, title: issue.title, delay_type: delay_type})
+    state = schedule_issue_retry(state, issue.id, retry_attempt(attempt), metadata)
+    retry = Map.fetch!(state.retry_attempts, issue.id)
+    Process.cancel_timer(retry.timer_ref)
+    retry = retry |> Map.put(:timer_ref, nil) |> Map.put(:held_by_provider, provider)
+
+    %{state | claimed: MapSet.put(state.claimed, issue.id), retry_attempts: Map.put(state.retry_attempts, issue.id, retry)}
+    |> put_dispatch_skipped(issue, Pauses.provider_skip_reason(provider), :provider_pause)
+  end
+
+  # Each retry the provider's pause held is sent on at once, with the attempt it had, and dispatched
+  # or left waiting for a slot as any retry is.
+  defp release_provider_held_retries(%State{} = state, provider) do
+    Enum.reduce(state.retry_attempts, state, fn
+      {issue_id, %{held_by_provider: ^provider, retry_token: retry_token} = retry}, acc ->
+        send(self(), {:retry_issue, issue_id, retry_token})
+        %{acc | retry_attempts: Map.put(acc.retry_attempts, issue_id, Map.delete(retry, :held_by_provider))}
+
+      _retry, acc ->
+        acc
+    end)
+  end
+
+  defp held_provider(%State{} = state, issue_id) do
+    case Map.get(state.retry_attempts, issue_id) do
+      %{held_by_provider: provider} -> provider
+      _none -> nil
+    end
   end
 
   defp hold_retry_for_usage_limit(%State{} = state, %Issue{} = issue, attempt, metadata, entry) do
@@ -8191,6 +8247,17 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp repository_status(repo_key, pause), do: %{repo_key: repo_key, pause: pause}
+
+  defp known_provider(provider) do
+    if provider in Harnesses.all_providers(), do: :ok, else: {:error, {:provider_not_found, provider}}
+  end
+
+  defp provider_status(provider, pause), do: %{provider: provider, pause: pause}
+
+  # The providers the Director paused, read from the run store so a restart keeps them.
+  defp persisted_paused_providers do
+    for provider <- Harnesses.all_providers(), Pauses.paused?({:provider, provider}), into: MapSet.new(), do: provider
+  end
 
   # The app's update pause waits on the build it installs: once Symphony runs that build (or a
   # later one), the install finished and its reason is cleared.
@@ -9071,6 +9138,29 @@ defmodule SymphonyElixir.Orchestrator do
     if server_available?(server), do: GenServer.call(server, {:resume_repository, repo_key}), else: :unavailable
   end
 
+  @doc """
+  Pauses new runs on one provider (`SymphonyElixir.Harnesses.all_providers/0`) on the Director's
+  reason (`SymphonyElixir.Pauses.provider_reason/1`): a new run takes its first fallback on another
+  provider, one that has none waits, and a run that works goes on. Returns the provider and its
+  pause; `{:error, :provider_not_found}` for a provider no harness reaches.
+  """
+  @spec pause_provider(String.t()) :: {:ok, map()} | :unavailable | {:error, term()}
+  def pause_provider(provider), do: pause_provider(__MODULE__, provider)
+
+  @spec pause_provider(GenServer.server(), String.t()) :: {:ok, map()} | :unavailable | {:error, term()}
+  def pause_provider(server, provider) do
+    if server_available?(server), do: GenServer.call(server, {:pause_provider, provider}), else: :unavailable
+  end
+
+  @doc "Clears the Director's pause of a provider, and sends the runs that waited on it on at once."
+  @spec resume_provider(String.t()) :: {:ok, map()} | :unavailable | {:error, term()}
+  def resume_provider(provider), do: resume_provider(__MODULE__, provider)
+
+  @spec resume_provider(GenServer.server(), String.t()) :: {:ok, map()} | :unavailable | {:error, term()}
+  def resume_provider(server, provider) do
+    if server_available?(server), do: GenServer.call(server, {:resume_provider, provider}), else: :unavailable
+  end
+
   @spec pause_status() :: map() | :unavailable
   def pause_status do
     pause_status(__MODULE__)
@@ -9436,6 +9526,29 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  defp handle_call_message({:pause_provider, provider}, _from, state) do
+    with :ok <- known_provider(provider),
+         {:ok, pause} <- Pauses.set({:provider, provider}, Pauses.provider_reason(provider), set_by: @director_setter) do
+      Logger.warning("Operator paused new runs on provider=#{provider}")
+      notify_dashboard()
+      {:reply, {:ok, provider_status(provider, pause)}, %{state | paused_providers: MapSet.put(state.paused_providers, provider)}}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  defp handle_call_message({:resume_provider, provider}, _from, state) do
+    with :ok <- known_provider(provider),
+         {:ok, pause} <- Pauses.clear_reasons({:provider, provider}, &(&1.kind == :person), by: @director_setter) do
+      Logger.warning("Operator resumed new runs on provider=#{provider}")
+      notify_dashboard()
+      state = %{state | paused_providers: if(pause, do: state.paused_providers, else: MapSet.delete(state.paused_providers, provider))}
+      {:reply, {:ok, provider_status(provider, pause)}, schedule_tick(release_provider_held_retries(state, provider), 0)}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
   defp handle_call_message(:pause_status, _from, state) do
     {:reply, symphony_pause_status(), state}
   end
@@ -9707,10 +9820,11 @@ defmodule SymphonyElixir.Orchestrator do
         }
       end)
 
-    # A retry the pause holds is listed under `dispatch_skipped` with the pause's reason instead.
+    # A retry the pause, or a provider's, holds is listed under `dispatch_skipped` with the pause's
+    # reason instead.
     retrying =
       state.retry_attempts
-      |> Enum.reject(fn {_issue_id, retry} -> Map.get(retry, :held_by_pause) == true end)
+      |> Enum.reject(fn {_issue_id, retry} -> Map.get(retry, :held_by_pause) == true or Map.has_key?(retry, :held_by_provider) end)
       |> Enum.map(fn {issue_id, %{attempt: attempt, due_at_ms: due_at_ms} = retry} ->
         %{
           issue_id: issue_id,
@@ -10948,18 +11062,37 @@ defmodule SymphonyElixir.Orchestrator do
     usage_limit_holding(state, issue, run_profile_for_issue(state, issue, continuation?), continuation?)
   end
 
+  # The paused provider the issue's next run waits on: its run profile, resolved as at dispatch, is
+  # on a provider the Director paused, so none of its run kind's candidates can take it. A pause holds
+  # every new run on the provider, as a reached usage limit does: a landing run, a continuation and a
+  # forced ticket's run too. Nil when none.
+  defp provider_pause_hold(state, issue, continuation? \\ false)
+
+  defp provider_pause_hold(%State{paused_providers: paused} = state, %Issue{} = issue, continuation?) do
+    if MapSet.size(paused) > 0 do
+      %{provider: provider} = run_profile_for_issue(state, issue, continuation?)
+      if MapSet.member?(paused, provider), do: provider
+    end
+  end
+
+  # The provider a skip for a paused provider names: the one a held retry waits on, else the one the
+  # issue's next run would start on.
+  defp paused_provider_of(%State{} = state, %Issue{} = issue), do: held_provider(state, issue.id) || provider_pause_hold(state, issue)
+
   defp usage_limit_holding(%State{usage_limits: usage_limits} = state, %Issue{} = issue, profile, continuation?) do
     UsageLimit.holding(usage_limits, Map.merge(profile, %{continuation: continuation?, forced: forced_issue?(issue, state)}), issue.id)
   end
 
   # The run's provider and model, resolved as at dispatch: the run kind's own choice, or the
-  # first of its fallbacks whose provider no usage limit holds for this run.
+  # first of its fallbacks whose provider is not paused and no usage limit holds for this run.
   defp run_profile_for_issue(%State{} = state, %Issue{} = issue, continuation? \\ false) do
     repo_key = dispatch_repo_key(state, issue)
     # A continuation stays on its run kind's own choice: it never takes a fallback.
     available? = fn profile ->
       own_choice? = is_nil(profile.fallback)
-      (own_choice? or not continuation?) and is_nil(usage_limit_holding(state, issue, profile, continuation?))
+
+      (own_choice? or not continuation?) and not MapSet.member?(state.paused_providers, profile.provider) and
+        is_nil(usage_limit_holding(state, issue, profile, continuation?))
     end
 
     AgentRunner.run_profile(issue, Config.settings_for_repo!(repo_key), repo_key: repo_key, available?: available?)

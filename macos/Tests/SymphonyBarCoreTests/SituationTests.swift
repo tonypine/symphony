@@ -42,7 +42,8 @@ final class SituationTests: XCTestCase {
     func testEachAPIKindNamesOneOfTheKinds() {
         XCTAssertEqual(
             DesignTokens.SituationKind.allCases.map(\.apiKind),
-            ["waiting_on_you", "retrying", "blocked_by_ticket", "waiting_on_sub_tickets", "paused_by_rule", "waiting_for_ci",
+            ["waiting_on_you", "retrying", "blocked_by_ticket", "waiting_on_sub_tickets", "waiting_for_provider", "paused_by_rule",
+             "waiting_for_ci",
              "waiting_for_build", "waiting_for_slot", "working", "done", "cancelled", "unknown"]
         )
         for kind in DesignTokens.SituationKind.allCases {
@@ -150,6 +151,21 @@ final class SituationTests: XCTestCase {
         XCTAssertEqual(text.sentence, "Blocked by TP-1251 · It is in Code Review. · Starts when TP-1251 lands. · for 17 h")
         XCTAssertEqual(text.kind.status, .idle)
         XCTAssertEqual(text.kind.symbol, "lock.fill")
+    }
+
+    /// TP-1532: a ticket whose provider the Director paused names the provider, never a slot's or a rule's words.
+    func testWaitingOnAPausedProvider() throws {
+        let (situation, text) = try line("waiting_for_provider")
+        XCTAssertEqual(situation.kind, .provider)
+        XCTAssertEqual(
+            text.sentence,
+            "Waiting: you paused Anthropic · The implementation run runs on Anthropic, and none of its fallbacks can take it. · "
+                + "Starts when you resume Anthropic. · for 12 min"
+        )
+        XCTAssertEqual(text.kind.status, .idle)
+        XCTAssertEqual(text.kind.symbol, "pause.rectangle")
+        XCTAssertEqual(DesignTokens.SituationKind.provider.word, "Waiting on a paused provider")
+        XCTAssertEqual(DesignTokens.SituationKind.shown([.slot, .provider, .paused]), .provider)
     }
 
     func testPausedByARule() throws {

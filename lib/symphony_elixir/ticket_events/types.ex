@@ -178,7 +178,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @drift [record_phase: :string, linear_phase: :string]
   @pause_reasons ~w(question ticket build person environment)
   # `SymphonyElixir.Situation.kinds/0`, which reads the record and so may not be read here.
-  @situation_kinds ~w(waiting_on_you retrying blocked_by_ticket waiting_on_sub_tickets paused_by_rule waiting_for_ci waiting_for_build waiting_for_slot working done cancelled unknown)
+  @situation_kinds ~w(waiting_on_you retrying blocked_by_ticket waiting_on_sub_tickets waiting_for_provider paused_by_rule waiting_for_ci waiting_for_build waiting_for_slot working done cancelled unknown)
   # Where a pause's or a question's event came from when no live write recorded it: the backfill
   # from the holds and decisions (`SymphonyElixir.Pauses.Backfill`).
   @source {:enum, ~w(backfill)}

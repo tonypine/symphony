@@ -430,6 +430,19 @@ defmodule SymphonyElixir.RunStoreTest do
     end
   end
 
+  test "keeps a provider's pause by subject, across restart (TP-1532)" do
+    provider = {:provider, "anthropic"}
+    pause = %{subject: provider, reasons: [%{kind: :person, waits_on: %{action: "unblock"}, text: "You paused Anthropic"}]}
+
+    assert :ok = RunStore.put_subject_pause(provider, pause)
+    restart_run_store()
+
+    assert RunStore.get_subject_pause(provider) == pause
+    assert RunStore.get_subject_pause({:provider, "openrouter"}) == nil
+    assert RunStore.get_subject_pause({:provider, ""}) == {:error, :invalid_subject}
+    assert :ok = RunStore.delete_subject_pause(provider)
+  end
+
   test "keeps a repository's and Symphony's pause by subject, across restart" do
     repository = {:repository, @repo_key}
     pause = %{subject: repository, reasons: [%{kind: :environment, waits_on: %{condition: "github_down"}}]}

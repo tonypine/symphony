@@ -33,6 +33,13 @@ defmodule SymphonyElixirWeb.ControlApiController do
   or `repository_resumed` audit record, and answers 404 for a repository Symphony isn't configured
   with.
 
+  `providers/:provider/pause` and `providers/:provider/resume` pause and resume new runs on one
+  provider (`SymphonyElixir.Orchestrator.pause_provider/2`), with no reason: a new run takes its
+  first fallback on another provider, one with none waits, and a run working goes on. Each answers
+  200 with the provider and its pause (null once resumed), writes a `provider_paused` or
+  `provider_resumed` audit record, and answers 404 `provider_not_found`, naming it, for a provider
+  no harness reaches.
+
   The Director's moves from the Mac app's Inbox (`approve_plan`, `rework`, `restart`, `decisions`,
   `changes`, `backlog`, `cancel`, `move`, `unblock`, `decide` and `undo`) are made by
   `SymphonyElixir.DirectorMoves`:
@@ -183,6 +190,20 @@ defmodule SymphonyElixirWeb.ControlApiController do
     result = Orchestrator.resume_repository(orchestrator(conn), repo_key)
     record_repository_action(conn, "repository_resumed", result, %{})
     respond_repository(conn, repo_key, result)
+  end
+
+  @spec pause_provider(Conn.t(), map()) :: Conn.t()
+  def pause_provider(conn, %{"provider" => provider}) do
+    result = Orchestrator.pause_provider(orchestrator(conn), provider)
+    record_provider_action(conn, "provider_paused", result)
+    respond_provider(conn, result)
+  end
+
+  @spec resume_provider(Conn.t(), map()) :: Conn.t()
+  def resume_provider(conn, %{"provider" => provider}) do
+    result = Orchestrator.resume_provider(orchestrator(conn), provider)
+    record_provider_action(conn, "provider_resumed", result)
+    respond_provider(conn, result)
   end
 
   @spec stop(Conn.t(), map()) :: Conn.t()
@@ -463,6 +484,22 @@ defmodule SymphonyElixirWeb.ControlApiController do
     do: error_response(conn, 404, "repository_not_found", "Symphony has no repository #{repo_key}")
 
   defp respond_repository(conn, _repo_key, result), do: respond(conn, result)
+
+  defp record_provider_action(conn, event_type, {:ok, %{provider: provider}}) do
+    case AuditLog.record(%{event_type: event_type, provider: provider}, Map.get(conn.assigns, :audit_log, [])) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Failed to record #{event_type} audit event: provider=#{provider} reason=#{inspect(reason)}")
+    end
+  end
+
+  defp record_provider_action(_conn, _event_type, _result), do: :ok
+
+  defp respond_provider(conn, {:ok, status}), do: json(conn, %{provider: Presenter.provider_payload(status)})
+
+  defp respond_provider(conn, {:error, {:provider_not_found, provider}}),
+    do: error_response(conn, 404, "provider_not_found", "Symphony knows no provider #{provider}")
+
+  defp respond_provider(conn, result), do: respond(conn, result)
 
   defp note_ticket(params) do
     case {string_param(params["repo_key"]), string_param(params["issue_identifier"])} do
