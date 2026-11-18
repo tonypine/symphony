@@ -1061,8 +1061,12 @@ on it zooms as on a title bar): show or hide the sidebar, **Back** and **Forward
 the ticket pages shown), a breadcrumb of where you are (the destination's name; on a ticket's page the destination it
 was opened from, its epic and its identifier, each part but the last a link), on Work the **Initiatives** and
 **Tickets** switch, then **Find a ticket** (⌘F), the **Inbox** with the count of what needs you (its drawer on Home and
-a ticket's page) and **Refresh** (⌘R). A page's own controls (the scope pop-up, Shipped's Learnings switch, a page's
-search, Audit's **Export…**, Tickets' **Force a Ticket**) sit in a row at the top of the page, with Insights' tabs.
+a ticket's page) and **Refresh** (⌘R). A page's own controls sit in its control bar, one glass bar at the top of the
+page: what narrows the page (the scope pop-up, the page's search, its filters) at the left, what acts on it (Audit's
+**Export…**, Tickets' **Force a Ticket…**, Setup's **Check Again**) at the right. The scope pop-up shows only on the
+pages that read it (Journal, Initiatives, Tickets, Learnings, Audit; Insights' own Repo pop-up reads it), always with
+its value. Home and Diagnostics have no bar: Home shows every repo. Insights keeps its one bar under its tabs, and on
+Shipped the **Shipped** and **Learnings** switch is in it.
 The sidebar has five destinations, on ⌘1 to ⌘5:
 **Home** (its badge counts what waits on you, in orange), **Journal** (its name and a line saying what it will hold,
 for now), **Work** (**Initiatives** and **Tickets** as two tabs), **Insights** (**Quality**, **Usage**, **Shipped** and
@@ -1070,7 +1074,8 @@ for now), **Work** (**Initiatives** and **Tickets** as two tabs), **Insights** (
 **Setup**, **Repos** (which opens the Repos window), **Diagnostics** and **Settings** (which opens the Settings window).
 Work and Insights open on their first tab and come back to the tab shown last while the app runs. **Find a ticket**
 (⌘F, from any page) finds a ticket by its identifier or title as you type, listing the matches under it; Return opens
-the best match's page, and **Back** returns to where you were. ⌥⌘F puts the focus in the search field of Tickets, Shipped's Learnings or Audit. The window opens on
+the best match's page, and **Back** returns to where you were. On Tickets, Shipped and Audit, ⌘F puts the focus in the
+page's own search instead (Shipped's is on its Learnings tab, which it shows), and ⌥⌘F reaches Find a ticket. The window opens on
 Home the first time, and on the page it showed last after that.
 
 - **Inbox** lists everything that waits on you (`/api/v1/inbox`), grouped as Plans, Pull requests, Final
@@ -1151,15 +1156,15 @@ Home the first time, and on the page it showed last after that.
   poll. **Also move to Backlog** (off from the ticket page) then moves the ticket to
   Backlog with your note as a comment (`POST /api/v1/control/stop`, then `backlog`). A failing ticket between
   attempts has no run to stop, so only the Backlog move is left.
-- The **scope** pop-up shows all repos or one of the repos Symphony has tickets in. It filters every count
-  and row of Home (the sidebar badge still counts every repo), and the app remembers it across
-  relaunches.
+- The **scope** pop-up shows all repos or one of the repos Symphony has tickets in, in the control bar of the pages
+  that read it (Journal, Initiatives, Tickets, Learnings and Audit; Insights' Repo pop-up starts from it). It filters
+  their rows; Home shows every repo, as its sidebar badge counts them. The app remembers it across relaunches.
 
 - **Audit** (a tab of Insights) lists the local audit records newest first (`/api/v1/audit`, the newest 1,000
   under the filters): time, kind, ticket, repo, who acted (you, the agent or Symphony) and what happened. Your
   moves from the app (approve, merge, rework, decisions, Backlog, Stop Run) are recorded like any
   other; older records may still show a sign-off, a move retired with `Final verification:` tickets.
-  The kind and date pop-ups (the last 7 days, or one of them), the search (⌥⌘F) and the scope pop-up filter
+  The kind and date pop-ups (the last 7 days, or one of them), the search (⌘F) and the scope pop-up filter
   it; a ticket page's **Show Audit Records** filters it to that ticket. Above the table each shown day says
   whether its hash chain verified (`/api/v1/audit/verify`): "Chain verified" with a seal, or the line and record
   that broke it with a crossed seal, which is also marked in its row. The inspector (⌥⌘I, Space) shows the

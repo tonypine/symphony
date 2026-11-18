@@ -148,7 +148,7 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var shippedTab: Shipped.Tab = .shipped
     /// The Learnings tab's repo and tag filters and search.
     @Published var learningsFilter = Learnings.Filter()
-    /// Set by ⌥⌘F on Shipped to put the focus in the Learnings search field.
+    /// Set by ⌘F on Shipped to put the focus in the Learnings search field (TP-1497).
     @Published var learningsSearchRequested = false
     /// Audit's records under the filters Symphony applies, read while Audit shows (D10), newest last as served.
     @Published var auditRecords: [AuditRecord]?
@@ -166,7 +166,7 @@ final class SymphonyWindowModel: ObservableObject {
     }
     /// The audit record in the inspector, by id.
     @Published var auditSelection: String?
-    /// Set by ⌥⌘F on Audit to put the focus in its search field.
+    /// Set by ⌘F on Audit to put the focus in its search field (TP-1497).
     @Published var auditSearchRequested = false
     /// True while Export… reads the records; what went wrong with it, shown under the filters.
     @Published var auditExporting = false
@@ -295,7 +295,7 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var ticketSelection: String?
     /// Tickets' inspector (⌥⌘I, Space).
     @Published var inspectorShown = true
-    /// Set by ⌥⌘F on Tickets to put the focus in its search field.
+    /// Set by ⌘F on Tickets to put the focus in its search field (TP-1497).
     @Published var searchRequested = false
     /// ⌘F: puts the keyboard in the window bar's Find a ticket, from any page (TP-1455, TP-1496); the field clears it.
     @Published var findRequested = false
@@ -528,10 +528,10 @@ final class SymphonyWindowModel: ObservableObject {
         inboxDrawerShown.toggle()
     }
 
-    /// Home's top (TP-1454): every Inbox item under the window's scope, newest first, less the ones answered from the
-    /// app, which leave at once.
+    /// Home's top (TP-1454): every Inbox item in every repo, as Home's badge counts them (Home has no scope, TP-1497),
+    /// newest first, less the ones answered from the app, which leave at once.
     var homeInbox: HomeInbox? {
-        inbox.map { HomeInbox(items: $0.items, scope: scope, answered: answeredItems, picks: picks(for:)) }
+        inbox.map { HomeInbox(items: $0.items, scope: .all, answered: answeredItems, picks: picks(for:)) }
     }
 
     /// Opens Initiatives on the initiative with issue id `id`.
@@ -1111,20 +1111,6 @@ struct SymphonyWindowView: View {
     }
 }
 
-/// C3: the scope pop-up (C53), all repos or one of the repos Symphony has tickets in.
-struct ScopePicker: View {
-    @ObservedObject var model: SymphonyWindowModel
-
-    var body: some View {
-        let choices = OverviewScope.choices(repos: model.overviewState?.repos ?? [], current: model.scope)
-        PopUp(
-            nil, selection: $model.scope,
-            choices: choices.enumerated().map { PopUpChoice($1, $1.title, separatorBefore: $0 == 1) },
-            size: .small, help: "Show all repos or one", accessibilityLabel: model.scope.accessibilityLabel
-        )
-    }
-}
-
 /// The sidebar: the five destinations, Factory with its pages under it (TP-1455). Symphony's version and state are in
 /// the status bar (TP-1454).
 struct SymphonySidebar: View {
@@ -1207,9 +1193,18 @@ struct SymphonyDetail: View {
             PullRequestPageContent(model: model)
         } else {
             VStack(spacing: 0) {
-                // Insights' tabs and the page's own controls; Work's tabs are the window bar's switch (TP-1496).
-                PageControlsRow(model: model)
-                // The page takes the rest of the height, so the row stays at the top over a page that isn't full
+                // Insights' tabs; Work's tabs are the window bar's switch (TP-1496). Each page draws its own control
+                // bar at its top, the shared one (TP-1497); Setup's and Initiatives' hold only the window's controls.
+                InsightsTabs(model: model)
+                switch model.selection {
+                case .setup where model.showsSetupCheck:
+                    SetupControlBar(checking: model.setupChecking, check: model.refresh)
+                case .initiatives:
+                    InitiativesControlBar(bar: model.pageBar)
+                default:
+                    EmptyView()
+                }
+                // The page takes the rest of the height, so the bar stays at the top over a page that isn't full
                 // (an empty state centres in the space under it).
                 page
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1248,7 +1243,7 @@ struct SymphonyDetail: View {
 }
 
 /// D1: Home, what waits on the Director on top (TP-1454), then the board of every open ticket Symphony works, from
-/// `/api/v1/state`'s dispatch order under the window's scope. The Inbox's review is its drawer, its moves ask with
+/// `/api/v1/state`'s dispatch order, in every repo: Home has no controls of its own, so no scope (TP-1497). The Inbox's review is its drawer, its moves ask with
 /// the Inbox's consequence sheets, and the banner after one sits under the page.
 struct OverviewContent: View {
     @ObservedObject var model: SymphonyWindowModel
@@ -1258,7 +1253,7 @@ struct OverviewContent: View {
         if let state = model.overviewWithSetup {
             VStack(spacing: 0) {
                 HomeView(
-                    board: HomeBoard(state: state, scope: model.scope, updating: model.updateHold != nil, now: Date()),
+                    board: HomeBoard(state: state, scope: .all, updating: model.updateHold != nil, now: Date()),
                     actions: HomeActions(
                         resume: { model.send(.resume) },
                         tryNow: { model.send(.tryNow(condition: $0.condition)) },

@@ -15,14 +15,12 @@ public struct WindowBarControls: Equatable {
     public var inboxCount: Int
     /// The Inbox's drawer is open where the window is: its button shows on.
     public var inboxShown: Bool
-    /// On Setup, Refresh is Check Again.
-    public var checksSetup: Bool
-    /// Check Again is under way: Refresh is off.
-    public var refreshing: Bool
+    /// The hint Find a ticket shows while it is empty: ⌘F, or ⌥⌘F on a page whose own search ⌘F reaches (TP-1497).
+    public var findShortcut: String
 
     public init(
         sidebarShown: Bool = true, canGoBack: Bool = false, canGoForward: Bool = false, breadcrumb: WindowBreadcrumb,
-        inboxCount: Int = 0, inboxShown: Bool = false, checksSetup: Bool = false, refreshing: Bool = false
+        inboxCount: Int = 0, inboxShown: Bool = false, findShortcut: String = WindowBarText.findShortcut
     ) {
         self.sidebarShown = sidebarShown
         self.canGoBack = canGoBack
@@ -30,8 +28,7 @@ public struct WindowBarControls: Equatable {
         self.breadcrumb = breadcrumb
         self.inboxCount = inboxCount
         self.inboxShown = inboxShown
-        self.checksSetup = checksSetup
-        self.refreshing = refreshing
+        self.findShortcut = findShortcut
     }
 }
 
@@ -119,8 +116,7 @@ public struct WindowBar<Switch: View, Results: View>: View {
             Spacer(minLength: 0)
             find
             inbox
-            IconButton(bar.refreshSymbol, help: WindowBarText.refresh(checksSetup: controls.checksSetup), size: bar.control, action: actions.refresh)
-                .disabled(controls.refreshing)
+            IconButton(bar.refreshSymbol, help: WindowBarText.refresh, size: bar.control, action: actions.refresh)
         }
         .padding(.leading, bar.leading(sidebarShown: controls.sidebarShown))
         .padding(.trailing, bar.trailingPadding)
@@ -136,7 +132,7 @@ public struct WindowBar<Switch: View, Results: View>: View {
     private var find: some View {
         let bar = DesignTokens.WindowBar.self
         return SearchField(
-            WindowBarText.findPlaceholder, text: $findText, shortcut: WindowBarText.findShortcut, size: .small,
+            WindowBarText.findPlaceholder, text: $findText, shortcut: controls.findShortcut, size: .small,
             focused: findFocus, focusRequest: findRequest, drawnAs: findDrawnAs, onSubmit: actions.find
         )
         .frame(width: bar.searchWidth)

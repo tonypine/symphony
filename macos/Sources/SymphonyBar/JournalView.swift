@@ -174,7 +174,8 @@ struct JournalContent: View {
                     model: model.journalModel, query: $model.journalQuery, values: model.journalFilterValues,
                     readingEarlier: model.journalReadingEarlier, questions: model.journalReportQuestions,
                     sending: model.holdsAnswer || model.inboxMoveInFlight, open: model.openJournalRow,
-                    showEarlier: model.showEarlierJournal, openCitation: model.openCitation, openMention: model.openMentionDirectly
+                    showEarlier: model.showEarlierJournal, openCitation: model.openCitation, openMention: model.openMentionDirectly,
+                    page: model.pageBar
                 )
                 // The banner of an answer sent from a report's card, with its Undo.
                 if let banner = model.inboxBanner {
@@ -210,6 +211,8 @@ struct JournalView: View {
     var showEarlier: () -> Void = {}
     var openCitation: (TimelineFocus) -> Void = { _ in }
     var openMention: (Mention) -> Void = { _ in }
+    /// The window's part of the bar: the scope (TP-1497).
+    var page = PageBar()
     /// Snapshots draw the list unscrolled, its whole height.
     var scrolls = true
     var calendar: Calendar = .current
@@ -224,8 +227,7 @@ struct JournalView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            JournalFilterBar(query: $query, values: values)
-            Divider()
+            JournalFilterBar(query: $query, values: values, page: page)
             if model.isEmpty {
                 EmptyState(title: JournalModel.emptyTitle(query), symbol: Destination.journal.symbol)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -271,16 +273,18 @@ struct JournalView: View {
     }
 }
 
-/// The filter bar: the Repo, Epic and Class chips, each a menu, and the Reports only and Everything switches, in one bar
-/// that wraps.
+/// The Journal's control bar (TP-1497): the scope, then the Repo, Epic and Class chips, each a menu, and the Reports
+/// only and Everything switches, wrapping on a laptop. Everything in it narrows the Journal.
 struct JournalFilterBar: View {
     @Binding var query: JournalQuery
     let values: JournalFilterValues
+    var page = PageBar()
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     var body: some View {
-        HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
-            WrappingStack(spacing: DesignTokens.Space.s2) {
+        ControlBar("Journal controls") {
+            page.scopePopUp
+            WrappingStack(spacing: DesignTokens.ControlBar.gap) {
                 chip(.repo) {
                     [MenuItem(OverviewScope.allTitle, checked: query.repo == nil) { query.repo = nil }, .separator]
                         + values.repos.map { repo in MenuItem(repo, checked: query.repo == repo) { query.repo = repo } }
@@ -295,21 +299,20 @@ struct JournalFilterBar: View {
                             MenuItem(value.title, checked: query.classes.contains(value)) { query.toggle(value) }
                         }
                 }
+                // The switches narrow the Journal too: they follow the chips, at the left.
+                filterSwitch(JournalQuery.reportsOnlyTitle, isOn: $query.reportsOnly)
+                    .font(DesignTokens.TypeStyle.secondary.font)
+                    .fixedSize()
+                    .frame(height: DesignTokens.Control.small.height)
+                    .help(JournalQuery.reportsOnlyHelp)
+                filterSwitch(JournalFilter.everything.title, isOn: $query.everything)
+                    .font(DesignTokens.TypeStyle.secondary.font)
+                    .fixedSize()
+                    .frame(height: DesignTokens.Control.small.height)
+                    .help(Self.everythingHelp)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            filterSwitch(JournalQuery.reportsOnlyTitle, isOn: $query.reportsOnly)
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .fixedSize()
-                .frame(height: DesignTokens.Control.small.height)
-                .help(JournalQuery.reportsOnlyHelp)
-            filterSwitch(JournalFilter.everything.title, isOn: $query.everything)
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .fixedSize()
-                .frame(height: DesignTokens.Control.small.height)
-                .help(Self.everythingHelp)
         }
-        .padding(.horizontal, DesignTokens.Space.s4)
-        .padding(.vertical, DesignTokens.Space.s2)
     }
 
     static let everythingHelp = "Show every event, not only the notable ones"

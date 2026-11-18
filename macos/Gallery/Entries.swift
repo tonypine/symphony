@@ -104,6 +104,13 @@ let galleryEntries: [GalleryEntry] = [
             "SymphonyBarCore/WindowBar.swift",
         ]),
     GalleryEntry(
+        id: "control-bar", title: "Control bar", kind: .component, prefixes: ["control-bar-"],
+        files: [
+            "SymphonyBarUI/DesignSystem/ControlBar.swift", "SymphonyBarCore/PageControls.swift", "SymphonyBar/WindowBarView.swift",
+            "SymphonyBar/InsightsView.swift", "SymphonyBar/ShippedView.swift", "SymphonyBar/TicketsView.swift", "SymphonyBar/AuditView.swift",
+            "SymphonyBar/JournalView.swift",
+        ]),
+    GalleryEntry(
         id: "breadcrumb", title: "Breadcrumb", kind: .component, prefixes: ["breadcrumb-"],
         files: ["SymphonyBarUI/DesignSystem/Breadcrumb.swift", "SymphonyBarCore/WindowBar.swift"]),
     GalleryEntry(

@@ -18,8 +18,7 @@ extension SymphonyWindowModel {
     func windowBarControls(sidebarShown: Bool) -> WindowBarControls {
         WindowBarControls(
             sidebarShown: sidebarShown, canGoBack: canGoBack, canGoForward: history.canGoForward, breadcrumb: breadcrumb,
-            inboxCount: inboxBadge, inboxShown: presentsInboxDrawer && inboxDrawerShown, checksSetup: showsSetupCheck,
-            refreshing: showsSetupCheck && setupChecking
+            inboxCount: inboxBadge, inboxShown: presentsInboxDrawer && inboxDrawerShown, findShortcut: commandF.findTicketShortcut
         )
     }
 
@@ -134,76 +133,96 @@ struct FindTicketResults: View {
 
 // MARK: - A page's own controls
 
-/// The row at the top of a sidebar page: Insights' tabs, then at the right what the system toolbar held for the page
-/// alone: Shipped's Shipped and Learnings switch, the page's search (Tickets', Learnings', Audit's), Audit's Export…,
-/// Tickets' Force a Ticket, and the scope on the pages that read it. Nothing on a page that has none of them (Setup,
-/// Diagnostics). The page's own ticket, TP-1497, moves each into the page.
-struct PageControlsRow: View {
+extension SymphonyWindowModel {
+    /// The shown page's own controls (TP-1497).
+    var pageControls: PageControls { showsPage ? .none : PageControls.of(selection, shippedTab: shippedTab) }
+
+    /// Where ⌘F puts the keyboard on the page shown.
+    var commandF: FindCommand { FindCommand.commandF(selection, showsPage: showsPage, shippedTab: shippedTab) }
+
+    /// The window's part of the shown page's control bar: the scope when the page reads it.
+    var pageBar: PageBar {
+        PageBar(
+            scope: pageControls.readsScope ? Binding(get: { self.scope }, set: { self.scope = $0 }) : nil,
+            repos: overviewState?.repos ?? []
+        )
+    }
+}
+
+/// The window's controls a page's control bar holds: the scope pop-up (nil on a page that doesn't read the scope).
+/// The page puts it first, at the left, with what narrows it.
+struct PageBar {
+    var scope: Binding<OverviewScope>?
+    var repos: [String] = []
+
+    /// The scope pop-up, or nothing on a page that doesn't read the scope.
+    @ViewBuilder var scopePopUp: some View {
+        if let scope {
+            ScopePopUp(scope: scope, repos: repos)
+        }
+    }
+}
+
+/// C3: the scope pop-up (C53), all repos or one of the repos Symphony has tickets in, its value always shown: "All
+/// repos", or the repo picked even when Symphony no longer lists it.
+struct ScopePopUp: View {
+    @Binding var scope: OverviewScope
+    let repos: [String]
+
+    var body: some View {
+        let choices = OverviewScope.choices(repos: repos, current: scope)
+        PopUp(
+            nil, selection: $scope,
+            choices: choices.enumerated().map { PopUpChoice($1, $1.title, separatorBefore: $0 == 1) },
+            value: scope.title, size: DesignTokens.ControlBar.control, help: "Show all repos or one",
+            accessibilityLabel: scope.accessibilityLabel
+        )
+    }
+}
+
+/// Insights' tabs over its page (Quality, Usage, Shipped), whose one control bar is the page's (TP-1463). Work's tabs
+/// are the window bar's switch (TP-1496); no other destination has tabs.
+struct InsightsTabs: View {
     @ObservedObject var model: SymphonyWindowModel
 
     var body: some View {
-        if hasControls {
-            VStack(spacing: 0) {
-                HStack(spacing: DesignTokens.Space.s2) {
-                    if model.destination == .insights {
-                        SegmentedControl(
-                            "\(model.destination.title) tabs", selection: Binding(get: { model.selection }, set: { model.show($0) }),
-                            segments: model.destination.pages.map { Segment($0, $0.title) }, size: .small
-                        )
-                    }
-                    Spacer(minLength: 0)
-                    pageControls
-                    if Self.readsScope(model.selection) {
-                        ScopePicker(model: model)
-                    }
-                }
-                .padding(.horizontal, DesignTokens.Space.s4)
-                .padding(.vertical, DesignTokens.Space.s2)
-                HairlineDivider()
-            }
+        if model.destination == .insights, model.destination.pages.count >= DesignTokens.Segmented.fewest {
+            SegmentedControl(
+                "\(model.destination.title) tabs", selection: Binding(get: { model.selection }, set: { model.show($0) }),
+                segments: model.destination.pages.map { Segment($0, $0.title) }, size: .small
+            )
+            .padding(.top, DesignTokens.ControlBar.pageGap)
             .frame(maxWidth: .infinity)
         }
     }
+}
 
-    private var hasControls: Bool { model.destination == .insights || Self.readsScope(model.selection) }
+/// Setup's control bar: Check Again at the right (SU3), "Checking…" while Symphony runs its checks, when a press
+/// starts nothing more. ⌘R runs it too.
+struct SetupControlBar: View {
+    let checking: Bool
+    let check: () -> Void
 
-    /// The pages whose rows the window's scope narrows; Setup and Diagnostics are Symphony's own.
-    static func readsScope(_ view: SymphonyView) -> Bool { ![.setup, .diagnostics, .repos, .settings].contains(view) }
+    static let checkingTitle = "Checking…"
 
-    @ViewBuilder private var pageControls: some View {
-        switch model.selection {
-        case .tickets:
-            PageSearchField(
-                prompt: TicketsView.searchPrompt, text: $model.ticketSearch,
-                matches: model.ticketsPayload.map { _ in model.ticketRows.count }, requested: $model.searchRequested
-            )
-            Button(DispatchControl.forceTitle) { model.openForceSheet() }
-                .buttonStyle(DirectorButtonStyle(kind: .secondary, size: .small, glyph: DesignTokens.Status.forced.symbol))
-                .help("Force a ticket (⇧⌘F)")
-                .disabled(!model.dispatchControl.canForce)
-        case .shipped:
-            SegmentedControl(
-                "Shipped or Learnings", selection: $model.shippedTab,
-                segments: Shipped.Tab.allCases.map { Segment($0, $0.title) }, size: .small
-            )
-            if model.shippedTab == .learnings {
-                PageSearchField(
-                    prompt: Learnings.searchPrompt, text: $model.learningsFilter.search,
-                    matches: model.learnings.map { Learnings(payload: $0, filter: model.learningsFilter, scope: model.scope).count },
-                    requested: $model.learningsSearchRequested
-                )
-            }
-        case .audit:
-            PageSearchField(
-                prompt: Audit.searchPrompt, text: $model.auditFilter.search, matches: model.auditView?.rows.count,
-                requested: $model.auditSearchRequested
-            )
-            Button(Audit.exportTitle) { model.exportAudit() }
-                .buttonStyle(DirectorButtonStyle(kind: .secondary, size: .small, glyph: "square.and.arrow.up"))
-                .help("Export the filtered records as NDJSON")
-                .disabled(model.auditExporting || model.auditRecords == nil)
-        default:
+    var body: some View {
+        ControlBar("Setup controls") {
             EmptyView()
+        } act: {
+            Button(checking ? Self.checkingTitle : SetupPage.checkAgainTitle, action: check)
+                .directorButton(.secondary, size: DesignTokens.ControlBar.control, glyph: "arrow.clockwise", selected: checking)
+                .help(WindowBarText.checkAgain)
+        }
+    }
+}
+
+/// Initiatives' control bar: the scope.
+struct InitiativesControlBar: View {
+    let bar: PageBar
+
+    var body: some View {
+        ControlBar("Initiatives controls") {
+            bar.scopePopUp
         }
     }
 }

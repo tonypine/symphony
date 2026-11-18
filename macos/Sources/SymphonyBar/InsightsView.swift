@@ -11,13 +11,16 @@ import SymphonyBarCore
 struct InsightsPage<Content: View>: View {
     @ObservedObject var model: SymphonyWindowModel
     let symbol: String
+    /// Shipped's Shipped and Learnings switch, in the bar on Shipped (TP-1497).
+    var shippedTab: Binding<Shipped.Tab>?
     @ViewBuilder let content: (AggregatePayload) -> Content
 
     var body: some View {
         PinnedBarPage {
             InsightsControlBar(
                 slice: $model.insightsSlice, values: model.insightsValues, today: model.insightsToday,
-                summary: current.map { Insights.summary($0, slice: model.insightsSlice, scope: model.scope) }, scope: model.scope
+                summary: current.map { Insights.summary($0, slice: model.insightsSlice, scope: model.scope) }, scope: model.scope,
+                shippedTab: shippedTab
             )
         } content: {
             switch model.aggregateShown {
@@ -60,10 +63,11 @@ struct InsightsEmptyState: View {
 
 // MARK: - The control bar
 
-/// The Insights control bar (the catalog's Control bar section): a glass bar over the page with the period as a small
-/// (24 pt) segmented control and Range… for other days, the unit, the repo and the epic as small pop-ups, Clear when a
-/// repo or an epic is picked, and the one-line summary of what the page shows: on its own line under the controls on a
-/// laptop, right aligned beside them from 1600 pt (a desktop).
+/// The Insights control bar (the catalog's Control bar section, drawn by the shared `ControlBar`): on Shipped its
+/// Shipped and Learnings switch first, then the period as a small (24 pt) segmented control and Range… for other days,
+/// the unit, the repo and the epic as small pop-ups, Clear when a repo or an epic is picked, and the one-line summary of
+/// what the page shows: on its own line under the controls on a laptop, right aligned beside them from 1600 pt (a
+/// desktop).
 struct InsightsControlBar: View {
     @Binding var slice: InsightsSlice
     let values: InsightsControlValues
@@ -71,25 +75,14 @@ struct InsightsControlBar: View {
     /// Nil while the slice's read is on its way.
     let summary: String?
     var scope: OverviewScope = .all
+    /// Shipped's switch to its Learnings tab; nil on Quality and Usage.
+    var shippedTab: Binding<Shipped.Tab>?
     @State private var showsRange = false
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
-        InsightsControlBarLayout {
+        ControlBar("What the page shows", summary: summary ?? slice.title(scope: scope)) {
             controls
-            summaryLine
         }
-        .padding(.horizontal, DesignTokens.Space.s3)
-        .padding(.vertical, DesignTokens.Space.s2)
-        .background(glass, in: shape)
-        .overlay { shape.strokeBorder(DesignTokens.Surface.separator.color, lineWidth: 1) }
-        .shadow(color: .black.opacity(0.06), radius: 2, y: 1)
-        .padding(.horizontal, DesignTokens.Space.s6)
-        .padding(.vertical, DesignTokens.Space.s3)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel("What the page shows")
         .popover(isPresented: $showsRange, arrowEdge: .bottom) {
             InsightsRangeEditor(period: slice.period, today: today) { period in
                 slice.choose(period, today: today)
@@ -98,15 +91,11 @@ struct InsightsControlBar: View {
         }
     }
 
-    /// The glass of the bar; an offscreen snapshot has no window behind it to blur, and Reduce Transparency wants none,
-    /// so either draws the glass's solid surface.
-    private var glass: AnyShapeStyle {
-        offscreenSnapshot || reduceTransparency
-            ? AnyShapeStyle(DesignTokens.Glass.glass.solid.color) : AnyShapeStyle(.regularMaterial)
-    }
-
     private var controls: some View {
-        HStack(spacing: DesignTokens.Space.s5) {
+        HStack(spacing: DesignTokens.ControlBar.groupGap) {
+            if let shippedTab {
+                ShippedTabSwitch(tab: shippedTab)
+            }
             group("Period") {
                 SegmentedControl(
                     "Period",
@@ -153,64 +142,25 @@ struct InsightsControlBar: View {
 
     /// A control under its label, side by side: "Period [Last 7 days ⌃⌄]".
     private func group(_ label: String, @ViewBuilder control: () -> some View) -> some View {
-        HStack(spacing: DesignTokens.Space.s2) {
+        HStack(spacing: DesignTokens.ControlBar.gap) {
             Text(label)
-                .font(DesignTokens.TypeStyle.label.font)
-                .foregroundStyle(.secondary)
+                .textStyle(.label)
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
                 .accessibilityHidden(true)
             control()
         }
-    }
-
-    @ViewBuilder private var summaryLine: some View {
-        Text(summary ?? slice.title(scope: scope))
-            .font(DesignTokens.TypeStyle.secondary.font)
-            .foregroundStyle(.secondary)
-            .monospacedDigit()
-            .lineLimit(1)
-            .truncationMode(.tail)
-            .padding(.horizontal, DesignTokens.Space.s1)
-            .accessibilityLabel("Showing \(summary ?? slice.title(scope: scope))")
     }
 
     static let rangeTitle = "Range…"
     static let clearTitle = "Clear"
 }
 
-/// The bar's two parts: the controls, then the summary on its own line under them, or right aligned on their line
-/// once the bar is `Insights.summaryBesideWidth` wide and the line holds both.
-private struct InsightsControlBarLayout: Layout {
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard subviews.count == 2 else { return .zero }
-        let controls = subviews[0].sizeThatFits(.unspecified)
-        let width = proposal.width ?? controls.width
-        let summary = subviews[1].sizeThatFits(ProposedViewSize(width: width, height: nil))
-        if beside(width: width, controls: controls, summary: summary) {
-            return CGSize(width: width, height: max(controls.height, summary.height))
-        }
-        return CGSize(width: width, height: controls.height + DesignTokens.Space.s2 + summary.height)
-    }
+/// Shipped's Shipped and Learnings switch (a small segmented control), first in the page's control bar on either tab.
+struct ShippedTabSwitch: View {
+    @Binding var tab: Shipped.Tab
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        guard subviews.count == 2 else { return }
-        let controls = subviews[0].sizeThatFits(.unspecified)
-        let summary = subviews[1].sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
-        subviews[0].place(at: CGPoint(x: bounds.minX, y: bounds.minY), proposal: ProposedViewSize(controls))
-        if beside(width: bounds.width, controls: controls, summary: summary) {
-            let height = max(controls.height, summary.height)
-            subviews[1].place(
-                at: CGPoint(x: bounds.maxX, y: bounds.minY + height / 2), anchor: .trailing, proposal: ProposedViewSize(summary)
-            )
-        } else {
-            subviews[1].place(
-                at: CGPoint(x: bounds.minX, y: bounds.minY + controls.height + DesignTokens.Space.s2),
-                proposal: ProposedViewSize(width: bounds.width, height: summary.height)
-            )
-        }
-    }
-
-    private func beside(width: CGFloat, controls: CGSize, summary: CGSize) -> Bool {
-        Insights.summaryBeside(width: width) && controls.width + DesignTokens.Space.s5 + summary.width <= width
+    var body: some View {
+        SegmentedControl("Shipped or Learnings", selection: $tab, segments: Shipped.Tab.allCases.map { Segment($0, $0.title) }, size: .small)
     }
 }
 
