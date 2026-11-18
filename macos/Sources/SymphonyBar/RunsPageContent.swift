@@ -74,7 +74,8 @@ struct RunsContent: View {
     var body: some View {
         Group {
             if model.runsPage.editor != nil {
-                RunsPageView(page: model.runsPage, actions: model.runsActions)
+                // Each line whose provider is paused or held says so, from the state Symphony served last (TP-1534).
+                RunsPageView(page: model.runsPage.showing(model.overviewState?.snapshot.providers), actions: model.runsActions)
             } else if let error = model.runsPage.loadError {
                 EmptyState(title: error, symbol: SymphonyView.runs.symbol, actions: [(RunsPage.readAgain, { model.openRuns() })])
             } else {
