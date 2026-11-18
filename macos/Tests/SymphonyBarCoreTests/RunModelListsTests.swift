@@ -66,15 +66,27 @@ final class RunModelListsTests: XCTestCase {
     }
 
     func testRunsTheOpenCodeHarnessesProgram() {
-        XCTAssertEqual(OpenCodeModels.script(command: nil), "opencode models opencode-go")
-        XCTAssertEqual(OpenCodeModels.script(command: "/opt/tools/opencode --print-logs"), "/opt/tools/opencode models opencode-go")
-        XCTAssertEqual(OpenCodeModels.script(command: "'/Applications/Open Code/opencode'"), "'/Applications/Open Code/opencode' models opencode-go")
-        XCTAssertEqual(OpenCodeModels.script(command: "'unclosed"), "opencode models opencode-go")
+        XCTAssertEqual(OpenCodeModels.script(command: nil), "opencode models")
+        XCTAssertEqual(OpenCodeModels.script(command: "/opt/tools/opencode --print-logs"), "/opt/tools/opencode models")
+        XCTAssertEqual(OpenCodeModels.script(command: "'/Applications/Open Code/opencode'"), "'/Applications/Open Code/opencode' models")
+        XCTAssertEqual(OpenCodeModels.script(command: "'unclosed"), "opencode models")
 
-        let launch = OpenCodeModels.launch(command: nil, environment: ["PATH": "/usr/bin"], workingDirectory: "/tmp")
+        let shims = "/Users/me/.local/share/mise/shims"
+        let launch = OpenCodeModels.launch(
+            command: nil,
+            environment: ["HOME": "/Users/me", "PATH": "/usr/bin"],
+            workingDirectory: "/tmp",
+            files: StubFileChecker(directories: [shims])
+        )
         XCTAssertEqual(launch.executable, ChildLaunch.shell)
-        XCTAssertEqual(launch.arguments, ["-lc", "opencode models opencode-go"])
-        XCTAssertEqual(launch.environment, ["PATH": "/usr/bin"])
+        XCTAssertEqual(launch.arguments, ["-lc", "opencode models"])
+        XCTAssertEqual(
+            launch.environment,
+            [
+                "HOME": "/Users/me",
+                "PATH": "/usr/bin:\(shims):/opt/homebrew/bin:/usr/local/bin:/Users/me/.local/bin:/Users/me/.opencode/bin",
+            ]
+        )
         XCTAssertEqual(launch.workingDirectory, "/tmp")
     }
 
@@ -94,5 +106,15 @@ final class RunModelListsTests: XCTestCase {
         let missing = ChildLaunch(executable: "/nonexistent/opencode", arguments: [], workingDirectory: directory, environment: [:])
         guard case .failure(let failure) = await OpenCodeModels.load(missing) else { return XCTFail("ran a missing program") }
         XCTAssertTrue(failure.message.hasPrefix("Couldn't run opencode models"))
+    }
+
+    /// Every model Claude Code's own picker lists, current ones first, by the id `claude --model` takes.
+    func testAnthropicOffersEveryModelClaudeCodeLists() {
+        XCTAssertEqual(RunProfilesConfig.models.map(\.id), [
+            "claude-opus-5-5", "claude-fable-5-2", "claude-sonnet-5-5", "claude-haiku-5-5",
+            "claude-fable-5-1", "claude-haiku-4-5-20251001", "claude-sonnet-5", "claude-opus-5", "claude-fable-5",
+            "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6",
+        ])
+        XCTAssertEqual(Set(RunProfilesConfig.models.map(\.title)).count, RunProfilesConfig.models.count)
     }
 }
