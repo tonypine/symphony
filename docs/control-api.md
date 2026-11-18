@@ -6,8 +6,8 @@ the pages that read them.
 
 ## Reading again only on change
 
-`GET /api/v1/:issue_identifier` and `GET /api/v1/tickets/:issue_identifier/decisions` (the ticket's
-decisions, D1, D2…) answer with an `ETag`: a strong validator made of the SHA-256 of the answer's
+`GET /api/v1/:issue_identifier`, `GET /api/v1/tickets/:issue_identifier/decisions` (the ticket's
+decisions, D1, D2…) and `GET /api/v1/home` (the Home read) answer with an `ETag`: a strong validator made of the SHA-256 of the answer's
 body. A read whose `If-None-Match` names that tag (or `*`) gets `304 Not Modified` with the same
 `ETag` and no body while the answer is unchanged. Any change to the answer (a state move, a label, a
 new question, an answered decision, a run's progress) changes the tag, so the next read gets the
@@ -503,6 +503,84 @@ A step's slice holds the lines of every turn it ran (a retry adds to them), cut 
 session's slices concatenated are the lines of its whole transcript. A machine step has no slice, a turn that
 said nothing leaves none, and a session Symphony reads no transcript of (Codex's, or one on another host)
 has none.
+
+# The Home read
+
+`GET /api/v1/home`: the two lists the Director's Home page draws, already shaped
+(`SymphonyElixir.Home`, `docs/design/director-window-and-home.md`, section Home). It is built from the
+ticket records, their ledgers and what the orchestrator walked at its last poll cycle (the dispatch
+order below), makes no Linear request, carries no time of its own and answers conditional requests
+with an `ETag` and `304` as the ticket read does.
+
+```json
+{
+  "in_progress": [
+    {
+      "kind": "epic", "issue_id": "e1", "identifier": "SHOP-280", "title": "Checkout that survives a reload", "repo_key": "shop",
+      "counts": { "done": 4, "in_progress": 2, "needs_person": 0, "needs_fix": 0, "not_started": 3 }, "total": 9,
+      "tickets": [
+        { "kind": "ticket", "issue_id": "t5", "identifier": "SHOP-305", "title": "Checkout total rounding", "repo_key": "shop", "phase": "In Progress",
+          "situation": { "kind": "working", "...": "..." }, "since": "2026-11-18T09:46:00Z", "working": true, "move": null }
+      ]
+    },
+    { "kind": "ticket", "identifier": "TP-1480", "title": "A poll that changes nothing redraws nothing", "phase": "In Progress",
+      "situation": { "kind": "waiting_on_you", "...": "..." }, "since": "2026-11-18T09:55:00Z", "working": false,
+      "move": { "name": "unblock", "allowed": true, "reason": null }, "...": "..." }
+  ],
+  "queue": {
+    "roots": [
+      { "issue_id": "q1", "identifier": "SHOP-311", "title": "Gift card balance on the receipt", "repo_key": "shop",
+        "epic": { "identifier": "SHOP-280", "title": "Checkout that survives a reload" }, "after": "SHOP-305", "also_waits_on": [], "situation": null,
+        "children": [
+          { "identifier": "SHOP-312", "after": null, "also_waits_on": ["SHOP-309"], "situation": null, "children": [], "...": "..." }
+        ] },
+      { "identifier": "MOT-93", "epic": null, "after": null, "also_waits_on": [], "situation": { "kind": "waiting_for_slot", "...": "..." }, "children": [], "...": "..." }
+    ]
+  },
+  "outside": { "backlog": 12, "below_priority": 3, "epic": 2, "behind": 4 }
+}
+```
+
+`in_progress` is every ticket that has started and has not landed or been cancelled: its phase is past
+Todo (and Backlog) and not terminal, or a run works on it, whatever it is doing now. Its entries come in
+the dispatch order (a ticket the walk did not reach after the others, by identifier); an epic stands where
+its first ticket would.
+
+| Field | What it holds |
+| --- | --- |
+| `kind` | `ticket`, or `epic` for an epic's node. |
+| `issue_id`, `identifier`, `title`, `repo_key`, `phase` | The ticket. |
+| `situation` | The ticket's `situation`, as the ticket read gives it. |
+| `since` | The situation's `since`. |
+| `working` | Whether a run works on the ticket now. |
+| `move` | When the ticket waits on the Director (`situation.kind` `waiting_on_you`), the move that answers it: its `moves` entry (`allowed`, `reason`) with its `name`, `answer` when it has an open question, else `unblock`; null otherwise. |
+
+An epic's node holds the tickets of the epic in progress (`tickets`, entries as above) under the epic's
+`issue_id` (null when Symphony holds no record of the epic), `identifier`, `title` and `repo_key`, with
+`counts` of the epic's tickets by state, which `total` sums: `done`, `in_progress`, `needs_person` (it
+waits on the Director), `needs_fix` (in Rework or CI Fix) and `not_started` (Backlog or Todo). The epic's
+tickets are the records naming it as their parent and the sub-issues its own record lists; a cancelled
+one counts in none. An epic is a node only while one of its tickets is in progress; a ticket with no epic
+is an entry of its own.
+
+`queue.roots` is every ticket Symphony would dispatch that has not started, as a tree: a ticket in Todo
+that the dispatch walk reached (assigned, in a set-up repository) at a priority `tickets.priorities`
+dispatches, or forced. A ticket's `children` are the queued tickets it blocks. A ticket blocked by two
+queued tickets appears once, under the one that lands last (the one with more queued tickets above it,
+then the later in the dispatch order), and names its other open blockers in `also_waits_on`. A root waits
+on no queued ticket: when it waits on a ticket in progress, `after` names the one later in the dispatch
+order (the others in `also_waits_on`); a root that waits on nothing carries its `situation`, null on
+every other entry. Roots that are ready come in the dispatcher's order, then the roots with an `after`,
+in the order of the ticket they wait on; children come in the dispatch order. `epic` is the ticket's
+epic (`identifier`, `title`), null when it has none. An empty queue is `"roots": []`.
+
+`outside` counts the open tickets neither list holds, with no rows: `backlog` (in Backlog),
+`below_priority` (in Todo, at a priority `tickets.priorities` does not dispatch), `epic` (an epic none of
+whose tickets is in progress) and `behind` (a queued ticket whose open blocker is outside both lists, or
+behind one). A ticket in Todo the dispatch walk does not reach counts in none.
+
+When the orchestrator can't be read the situations are the records' alone, the queue is empty (no walk
+to read) and the answer carries `error` (`snapshot_timeout`, `snapshot_unavailable`).
 
 # The dispatch order
 

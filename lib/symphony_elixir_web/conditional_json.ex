@@ -7,7 +7,7 @@ defmodule SymphonyElixirWeb.ConditionalJSON do
   and of its decisions (`GET /api/v1/tickets/:issue_identifier/decisions`), so while nothing
   changes Symphony sends no body and the app decodes nothing. The tag is the body's, so any change
   to the answer (a state move, a label, a new question, an answered decision) gives a new tag and
-  the full answer on the same read.
+  the full answer on the same read. The Home read (`GET /api/v1/home`, TP-1495) answers the same way.
   """
 
   import Plug.Conn
