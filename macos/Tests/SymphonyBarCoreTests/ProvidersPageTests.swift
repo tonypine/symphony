@@ -314,7 +314,7 @@ final class ProvidersPageTests: XCTestCase {
         let keys = ProviderKeys(keys: ["opencode-go": "sk-go", "openrouter": "sk-or"], enabled: ["opencode-go", "openrouter"])
         let on = try runsPage().showing(nil, off: keys.off)
         let providerChoices = { (page: RunsPage, kind: RunKind?, line: Int) -> [String?] in
-            page.rows.first { $0.kind == kind }!.lines[line].fields.first { $0.field == .provider }!.choices.map(\.id)
+            page.rows.first { $0.kind == kind }!.lines[line].fields.first { $0.field == .provider }!.choices.map(\.value)
         }
         XCTAssertEqual(providerChoices(on, nil, 0), ["anthropic", "openrouter", "opencode-go"])
 
