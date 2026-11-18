@@ -81,4 +81,50 @@ final class ControlBarTests: XCTestCase {
         two.frame.size.width = 1200
         XCTAssertGreaterThan(two.fittingSize.height, one.fittingSize.height + DesignTokens.ControlBar.summaryGap)
     }
+
+    func testWhatNarrowsWrapsOntoTheNextLineWhenItDoesNotFitOnOne() {
+        let sizes = Array(repeating: CGSize(width: 100, height: 24), count: 3)
+        let gap = DesignTokens.ControlBar.gap
+        let (frames, size) = ControlBarFlow.arrange(width: 250, sizes: sizes, spacing: gap)
+        XCTAssertEqual(frames[1].minX, 100 + gap, accuracy: 0.5, "the second control fits on the first line")
+        XCTAssertEqual(frames[2].minX, 0, accuracy: 0.5, "the third starts the next line")
+        XCTAssertEqual(frames[2].minY, 24 + gap, accuracy: 0.5)
+        XCTAssertEqual(size.width, 200 + gap, accuracy: 0.5)
+        XCTAssertEqual(size.height, 48 + gap, accuracy: 0.5)
+        XCTAssertEqual(ControlBarFlow.arrange(width: nil, sizes: sizes, spacing: gap).size.height, 24, "unbounded, one line")
+    }
+
+    func testALineCentresItsControls() {
+        let (frames, _) = ControlBarFlow.arrange(width: 500, sizes: [CGSize(width: 50, height: 24), CGSize(width: 50, height: 16)], spacing: 8)
+        XCTAssertEqual(frames[1].minY, 4, accuracy: 0.5)
+    }
+
+    func testABarNarrowerThanItsControlsWrapsThemInsideItsWidth() {
+        let (_, act, size) = frames(width: 500) { left, right in
+            ControlBar("Page controls") {
+                ForEach(0 ..< 5) { _ in Color.clear.frame(width: 120, height: 24) }
+                left.frame(width: 120, height: 24)
+            } act: {
+                right.frame(width: 100, height: 24)
+            }
+            .frame(width: 500)
+        }
+        XCTAssertEqual(size.width, 500, accuracy: 0.5, "the bar is no wider than the page")
+        XCTAssertLessThanOrEqual(act.maxX, 500, "the action stays inside")
+        XCTAssertEqual(act.width, 100, accuracy: 0.5)
+        XCTAssertGreaterThan(size.height, 3 * 24, "the controls took several lines")
+    }
+
+    func testAControlWiderThanTheBarIsOfferedTheBarsWidth() {
+        let (narrow, _, size) = frames(width: 600) { left, right in
+            ControlBar("Page controls") {
+                left.frame(minWidth: 50, idealWidth: 2000, maxWidth: .infinity).frame(height: 24)
+            } act: {
+                right.frame(width: 60, height: 24)
+            }
+            .frame(width: 600)
+        }
+        XCTAssertEqual(size.width, 600, accuracy: 0.5)
+        XCTAssertLessThan(narrow.maxX, 600 - 60)
+    }
 }

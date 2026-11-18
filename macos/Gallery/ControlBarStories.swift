@@ -86,7 +86,7 @@ let controlBarStories: [ComponentStory] = {
         story("shipped", height: 128) { insightsBar(shipped: true) },
         story("learnings") { learningsBar() },
         story("tickets", height: 96) { ticketsBar() },
-        story("tickets-filtered", height: 96) { ticketsBar(ticketsFiltered) },
+        story("tickets-filtered", height: 128) { ticketsBar(ticketsFiltered) },
         story("audit") { auditBar() },
         story("journal") {
             AnyView(JournalFilterBar(query: .constant(JournalQuery()), values: JournalFilterValues(repos: controlBarRepos), page: controlBarPage))

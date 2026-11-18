@@ -520,28 +520,26 @@ struct TicketsFilterBar: View {
         ControlBar("Tickets controls") {
             if let viewsMenu {
                 TicketViewsMenuButton(menu: viewsMenu, actions: viewActions)
-                Divider().frame(height: DesignTokens.Control.small.height)
+                HairlineDivider(.vertical, length: DesignTokens.Control.small.height)
             }
             controls.page.scopePopUp
             PageSearchField(prompt: TicketsView.searchPrompt, text: controls.search, matches: count, requested: controls.searchRequested)
-            WrappingStack(spacing: DesignTokens.ControlBar.gap) {
-                ForEach(query.chips) { chip in
-                    TicketFilterChipView(chip: chip, values: values.values(chip.filter, query: query),
-                                         toggle: { query.toggle(chip.filter, $0) }, remove: { query.remove(chip.filter) })
-                }
-                MenuButton("Filter", glyph: "plus", size: .small, quiet: true, help: "Add a filter") {
-                    var items = TicketFilter.allCases.map { filter in
-                        MenuItem.submenu(filter.title, items: values.values(filter, query: query).map { value in
-                            MenuItem(filter.word(value), checked: query.holds(filter, value)) { query.toggle(filter, value) }
-                        })
-                    }
-                    if !query.chips.isEmpty {
-                        items += [.separator, MenuItem("Clear Filters") { query.chips = [] }]
-                    }
-                    return items
-                }
+            // Each chip and + Filter wrap on their own with the bar's other controls.
+            ForEach(query.chips) { chip in
+                TicketFilterChipView(chip: chip, values: values.values(chip.filter, query: query),
+                                     toggle: { query.toggle(chip.filter, $0) }, remove: { query.remove(chip.filter) })
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            MenuButton("Filter", glyph: "plus", size: .small, quiet: true, help: "Add a filter") {
+                var items = TicketFilter.allCases.map { filter in
+                    MenuItem.submenu(filter.title, items: values.values(filter, query: query).map { value in
+                        MenuItem(filter.word(value), checked: query.holds(filter, value)) { query.toggle(filter, value) }
+                    })
+                }
+                if !query.chips.isEmpty {
+                    items += [.separator, MenuItem("Clear Filters") { query.chips = [] }]
+                }
+                return items
+            }
         } act: {
             Text(count == 1 ? "1 ticket" : "\(count) tickets")
                 .textStyle(.secondary)

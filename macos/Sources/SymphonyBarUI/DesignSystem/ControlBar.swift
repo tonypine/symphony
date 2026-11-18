@@ -57,10 +57,12 @@ public struct ControlBar<Narrow: View, Act: View>: View {
     }
 
     /// What acts keeps its whole width (a title is never cut to "Force a Ti…"); what narrows takes the rest before the
-    /// gap between the sides does, and a side that wraps (Tickets' filters, Insights' groups) wraps within it.
+    /// gap between the sides does, its controls wrapping onto the next line when they don't fit on one, so no page's
+    /// bar is wider than the page (Audit beside its inspector) and a control that wraps itself (Insights' groups) wraps
+    /// within the line.
     private var controls: some View {
         HStack(spacing: DesignTokens.ControlBar.gap) {
-            HStack(spacing: DesignTokens.ControlBar.gap) { narrow }
+            ControlBarFlow(spacing: DesignTokens.ControlBar.gap) { narrow }
                 .layoutPriority(1)
             Spacer(minLength: DesignTokens.ControlBar.sidesGap)
             act
@@ -133,5 +135,61 @@ struct ControlBarLayout: Layout {
     /// Whether the summary sits beside controls `controls` big in a bar `width` wide.
     static func beside(width: CGFloat, controls: CGSize, summary: CGSize) -> Bool {
         DesignTokens.ControlBar.summaryBeside(width: width) && controls.width + DesignTokens.ControlBar.groupGap + summary.width <= width
+    }
+}
+
+/// What narrows the page, left to right, each control on the line while it fits and the next ones on the line under
+/// it; the controls of a line centred on it. A control wider than the bar on its own (a group that wraps itself) is
+/// offered the bar's width.
+struct ControlBarFlow: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        Self.arrange(width: proposal.width, sizes: Self.sizes(width: proposal.width, subviews: subviews), spacing: spacing).size
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let sizes = Self.sizes(width: bounds.width, subviews: subviews)
+        let frames = Self.arrange(width: bounds.width, sizes: sizes, spacing: spacing).frames
+        for (subview, frame) in zip(subviews, frames) {
+            subview.place(at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY), proposal: ProposedViewSize(frame.size))
+        }
+    }
+
+    /// Each control's size: its own, or in `width` when its own is wider.
+    private static func sizes(width: CGFloat?, subviews: Subviews) -> [CGSize] {
+        subviews.map { subview in
+            let size = subview.sizeThatFits(.unspecified)
+            guard let width, size.width > width else { return size }
+            return subview.sizeThatFits(ProposedViewSize(width: width, height: nil))
+        }
+    }
+
+    /// Where controls `sizes` big go in a bar `width` wide (one line when nil), and the size they take.
+    static func arrange(width: CGFloat?, sizes: [CGSize], spacing: CGFloat) -> (frames: [CGRect], size: CGSize) {
+        let maxWidth = width ?? .infinity
+        var lines: [[Int]] = [[]]
+        var x: CGFloat = 0
+        for (index, size) in sizes.enumerated() {
+            if !lines[lines.count - 1].isEmpty, x + spacing + size.width > maxWidth {
+                lines.append([])
+            }
+            x = lines[lines.count - 1].isEmpty ? size.width : x + spacing + size.width
+            lines[lines.count - 1].append(index)
+        }
+        var frames = [CGRect](repeating: .zero, count: sizes.count)
+        var y: CGFloat = 0
+        var widest: CGFloat = 0
+        for line in lines where !line.isEmpty {
+            let height = line.map { sizes[$0].height }.max() ?? 0
+            var x: CGFloat = 0
+            for index in line {
+                frames[index] = CGRect(origin: CGPoint(x: x, y: y + (height - sizes[index].height) / 2), size: sizes[index])
+                x += sizes[index].width + spacing
+            }
+            widest = max(widest, x - spacing)
+            y += height + spacing
+        }
+        return (frames, CGSize(width: widest, height: max(y - spacing, 0)))
     }
 }
