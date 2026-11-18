@@ -246,7 +246,10 @@ defmodule SymphonyElixir.Config.Cache do
         updated_at: now
     }
 
-    put_entry(stale)
+    # Only over the entry this reload started from. A `clear/0`, an `invalidate/1` or a newer entry
+    # that landed while the file was read wins: a read that began before them must not put the
+    # replaced value back, or the next read would serve it as the last known good config.
+    if :persistent_term.get(cache_key(entry.kind, entry.path), nil) == entry, do: put_entry(stale)
 
     Logger.warning("Failed to reload config path=#{entry.path} reason=#{inspect(reason)}; keeping last known good value")
 
@@ -474,19 +477,17 @@ defmodule SymphonyElixir.Config.Cache do
 
   defp safe_stop_watcher(_), do: :ok
 
+  # Every entry, not only the indexed ones: two reads that load different files at once each put
+  # the index back from the copy they read, so one key can drop out of it, and an entry the index
+  # no longer names would outlive every clear (TP-1545).
   defp do_clear do
-    # Two-pass clear so a concurrent put_entry between snapshot and final erase
-    # doesn't leak an orphan entry that would survive future clears.
-    clear_index_keys()
-    clear_index_keys()
+    for {{__MODULE__, kind, _path} = key, _entry} when kind in [:symphony, :workflow] <- :persistent_term.get() do
+      :persistent_term.erase(key)
+    end
+
+    :persistent_term.erase(@index_key)
     :persistent_term.erase(@watched_dirs_key)
     :ok
-  end
-
-  defp clear_index_keys do
-    keys = :persistent_term.get(@index_key, MapSet.new())
-    Enum.each(keys, &:persistent_term.erase/1)
-    :persistent_term.erase(@index_key)
   end
 
   defp reload_event?(events) do

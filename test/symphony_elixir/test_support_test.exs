@@ -30,6 +30,20 @@ defmodule SymphonyElixir.TestSupportTest do
       assert :ok = SymphonyElixir.TestSupport.settle_config_cache!([Workflow.workflow_file_path(), symphony])
       assert {:error, _reason} = Config.settings()
     end
+
+    test "a rejected rewrite reads as an error once the cache is settled, even after a read put a stale entry back" do
+      symphony = Path.expand(Workflow.symphony_file_path())
+      assert {:ok, _settings} = Config.settings()
+      old_entry = :persistent_term.get({Cache, :symphony, symphony})
+
+      write_workflow_file!(Workflow.workflow_file_path(), github: %{webhooks: %{silence_alert_minutes: 0}})
+
+      # A read that began before the rewrite found the new file rejected and kept the old value.
+      %File.Stat{mtime: mtime, size: size, type: type} = File.stat!(symphony, time: :posix)
+      put_cache_entry!(%{old_entry | stale?: true, failed_stamp: {mtime, size, type}})
+      assert :ok = SymphonyElixir.TestSupport.settle_config_cache!([Workflow.workflow_file_path(), symphony])
+      assert {:error, _reason} = Config.settings()
+    end
   end
 
   describe "stop_leftover_work/0" do
