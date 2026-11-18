@@ -270,6 +270,11 @@ private struct RowActions: ViewModifier {
 public struct TreeRowState: Equatable {
     public var selected: Bool
     public var focused: Bool
+
+    public init(selected: Bool, focused: Bool) {
+        self.selected = selected
+        self.focused = focused
+    }
 }
 
 /// C50, the catalog's tree (`.t-root`, `.t-kids`): `nodes` as rows, each child one step in under its parent on a rail
