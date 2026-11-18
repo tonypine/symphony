@@ -77,9 +77,9 @@ defmodule SymphonyElixir.Pauses do
   which a second write of the same reason never records again.
   """
 
+  alias SymphonyElixir.{AgentProviders, RuleActions, RunStore, TicketEvents, TicketState}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses.Projector
-  alias SymphonyElixir.{AgentProviders, RuleActions, RunStore, TicketEvents, TicketState}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @kinds [:question, :ticket, :build, :person, :environment]

@@ -118,14 +118,18 @@ defmodule SymphonyElixir.OrchestratorProviderPauseTest do
 
       log =
         capture_log(fn ->
-          {:noreply, state} = Orchestrator.handle_retry_issue_for_test(paused, "continuing", 1, metadata, fn _ids -> {:ok, [continuing]} end)
+          fetch = fn _ids -> {:ok, [continuing]} end
+          {:noreply, state} = Orchestrator.handle_retry_issue_for_test(paused, "continuing", 1, metadata, fetch)
           send(self(), {:held, state})
         end)
 
       assert_received {:held, state}
       assert log =~ "Not dispatching retry of issue_id=continuing issue_identifier=MT-CONT: #{@paused}"
       assert state.running == %{}
-      assert %{attempt: 1, delay_type: :continuation, held_by_provider: "anthropic", timer_ref: nil, retry_token: token} = state.retry_attempts["continuing"]
+
+      assert %{attempt: 1, delay_type: :continuation, held_by_provider: "anthropic", timer_ref: nil, retry_token: token} =
+               state.retry_attempts["continuing"]
+
       assert MapSet.member?(state.claimed, "continuing")
       assert %{rule: :provider_pause, provider: "anthropic"} = state.dispatch_skipped["continuing"]
 

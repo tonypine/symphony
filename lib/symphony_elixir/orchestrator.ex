@@ -7521,14 +7521,8 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp handle_active_retry_after_readiness(state, issue, attempt, metadata) do
     cond do
-      held = pause_held_retry(state, issue, attempt, metadata) ->
+      held = held_retry(state, issue, attempt, metadata) ->
         held
-
-      provider = provider_pause_hold(state, issue, metadata[:continuation] == true) ->
-        hold_retry_for_provider_pause(state, issue, attempt, metadata, provider)
-
-      hold = usage_limit_hold(state, issue, metadata[:continuation] == true) ->
-        hold_retry_for_usage_limit(state, issue, attempt, metadata, hold)
 
       workspace_quota_paused?(state) ->
         state = log_workspace_quota_pause(state)
@@ -7564,6 +7558,27 @@ defmodule SymphonyElixir.Orchestrator do
       true ->
         Logger.debug("No available slots for retrying #{issue_context(issue)}; waiting for a slot")
         wait_for_slot(state, issue, attempt, metadata, "no available orchestrator slots")
+    end
+  end
+
+  defp held_retry(state, issue, attempt, metadata) do
+    pause_held_retry(state, issue, attempt, metadata) || provider_held_retry(state, issue, attempt, metadata)
+  end
+
+  # A retry whose provider the Director paused, or a usage limit holds, waits on that provider:
+  # the held state, or nil when the provider can take it.
+  defp provider_held_retry(state, issue, attempt, metadata) do
+    continuation? = metadata[:continuation] == true
+
+    cond do
+      provider = provider_pause_hold(state, issue, continuation?) ->
+        hold_retry_for_provider_pause(state, issue, attempt, metadata, provider)
+
+      hold = usage_limit_hold(state, issue, continuation?) ->
+        hold_retry_for_usage_limit(state, issue, attempt, metadata, hold)
+
+      true ->
+        nil
     end
   end
 
@@ -9542,8 +9557,9 @@ defmodule SymphonyElixir.Orchestrator do
          {:ok, pause} <- Pauses.clear_reasons({:provider, provider}, &(&1.kind == :person), by: @director_setter) do
       Logger.warning("Operator resumed new runs on provider=#{provider}")
       notify_dashboard()
-      state = %{state | paused_providers: if(pause, do: state.paused_providers, else: MapSet.delete(state.paused_providers, provider))}
-      {:reply, {:ok, provider_status(provider, pause)}, schedule_tick(release_provider_held_retries(state, provider), 0)}
+      paused_providers = if(pause, do: state.paused_providers, else: MapSet.delete(state.paused_providers, provider))
+      state = release_provider_held_retries(%{state | paused_providers: paused_providers}, provider)
+      {:reply, {:ok, provider_status(provider, pause)}, schedule_tick(state, 0)}
     else
       {:error, reason} -> {:reply, {:error, reason}, state}
     end

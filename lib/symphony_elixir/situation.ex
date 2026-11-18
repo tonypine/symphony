@@ -52,7 +52,8 @@ defmodule SymphonyElixir.Situation do
 
   require Logger
 
-  alias SymphonyElixir.{AgentProviders, CiWait, Config, PrDecision, RunStore, TicketEvents, TicketPullRequest, TicketState}
+  alias SymphonyElixir.AgentProviders
+  alias SymphonyElixir.{CiWait, Config, PrDecision, RunStore, TicketEvents, TicketPullRequest, TicketState}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.PrWatch.{SilentWait, StalledRun}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
