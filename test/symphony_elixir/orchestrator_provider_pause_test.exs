@@ -153,6 +153,66 @@ defmodule SymphonyElixir.OrchestratorProviderPauseTest do
     end
   end
 
+  describe "a retry waiting for a slot" do
+    test "keeps its attempt and claim while its provider is paused, and resume sends it on at once" do
+      waiting_issue = issue("waiting", "MT-WAIT", "In Progress")
+      tracked([waiting_issue])
+      {:reply, {:ok, _status}, paused} = call({:pause_provider, "anthropic"}, orchestrator_state())
+      waiting = %{attempt: 2, repo_key: "default", worker_host: nil, since: DateTime.utc_now(), reason: "dispatch readiness task already in flight"}
+
+      state = Orchestrator.dispatch_chosen_issues_for_test([waiting_issue], %{paused | slot_waiting: %{"waiting" => waiting}})
+
+      assert state.running == %{}
+      assert state.slot_waiting == %{}
+      assert MapSet.member?(state.claimed, "waiting")
+      assert %{attempt: 2, held_by_provider: "anthropic", timer_ref: nil, retry_token: token} = state.retry_attempts["waiting"]
+      assert %{reason: @paused, rule: :provider_pause, provider: "anthropic"} = state.dispatch_skipped["waiting"]
+
+      {:reply, {:ok, %{pause: nil}}, resumed} = call({:resume_provider, "anthropic"}, state)
+      assert_received {:retry_issue, "waiting", ^token}
+      assert %{attempt: 2} = resumed.retry_attempts["waiting"]
+    end
+
+    test "with no attempt is skipped naming the provider and keeps no retry" do
+      fresh = issue("fresh", "MT-FRESH", "Todo")
+      tracked([fresh])
+      {:reply, {:ok, _status}, paused} = call({:pause_provider, "anthropic"}, orchestrator_state())
+      waiting = %{reason: "work slots full", since: DateTime.utc_now()}
+
+      state = Orchestrator.dispatch_chosen_issues_for_test([fresh], %{paused | slot_waiting: %{"fresh" => waiting}})
+
+      assert state.retry_attempts == %{}
+      assert %{rule: :provider_pause} = state.dispatch_skipped["fresh"]
+    end
+  end
+
+  describe "an operator PR dispatch" do
+    test "is refused naming the provider while it is paused", ctx do
+      root = Path.join(ctx.test_root, "pr-repo")
+      File.mkdir_p!(root)
+      {_, 0} = System.cmd("git", ["-C", root, "init", "-b", "main"], stderr_to_stdout: true)
+      {_, 0} = System.cmd("git", ["-C", root, "remote", "add", "origin", "git@github.com:example/repo.git"], stderr_to_stdout: true)
+      write_provider_workflow!(ctx, workspace_strategy: "worktree", workspace_repo: root)
+      pid = start_orchestrator(:ProviderPausePrDispatch)
+      assert {:ok, _status} = Orchestrator.pause_provider(pid, "anthropic")
+
+      pr =
+        Jason.encode!(%{
+          "number" => 123,
+          "state" => "OPEN",
+          "title" => "Fix CI",
+          "body" => "Build is red",
+          "url" => "https://github.com/example/repo/pull/123",
+          "headRefName" => "feature/fix-ci",
+          "baseRefName" => "main",
+          "headRepository" => %{"nameWithOwner" => "example/repo"}
+        })
+
+      gh_runner = fn ["pr", "view", "123" | _rest], _opts -> {pr, 0} end
+      assert {:error, {:provider_paused, "anthropic"}} = Orchestrator.dispatch_pr(pid, "123", gh_runner: gh_runner)
+    end
+  end
+
   defp situation(state, issue_id, phase) do
     record = TicketState.normalize(%{repo_key: "default", issue_id: issue_id, issue_identifier: issue_id, phase: phase})
     Situation.compute(record, [], Situation.live_facts(snapshot_of(state)))

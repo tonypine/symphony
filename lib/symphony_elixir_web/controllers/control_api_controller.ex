@@ -673,6 +673,9 @@ defmodule SymphonyElixirWeb.ControlApiController do
   defp respond(conn, {:error, reason}) when reason in [:invalid_issue_id, :invalid_pr_target],
     do: error_response(conn, 422, "invalid_request", Atom.to_string(reason))
 
+  defp respond(conn, {:error, {:provider_paused, provider}}),
+    do: error_response(conn, 409, "provider_paused", "You paused #{SymphonyElixir.AgentProviders.display_name(provider)}; resume it to start a run on it")
+
   defp respond(conn, {:error, reason}) do
     Logger.error("control_api unexpected orchestrator error: #{inspect(reason)}")
     error_response(conn, 500, "orchestrator_error", "Unexpected orchestrator error")

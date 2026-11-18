@@ -4512,7 +4512,11 @@ defmodule SymphonyElixir.Orchestrator do
         {state |> note_blocked_flow_head(issue) |> put_dispatch_skipped(issue, reason, rule, closed), hold}
 
       # A retry that started waiting for a slot while a dispatch readiness task ran is held again
-      # with its attempt, as a retry that comes due during the hold is.
+      # with its attempt, as a retry that comes due during the hold is: on a paused provider, as on
+      # a usage limit.
+      provider = waiting_retry_provider_pause(waiting, issue, state) ->
+        {hold_waiting_retry_for_provider_pause(state, issue, waiting, provider), hold}
+
       waiting_retry_held?(waiting, issue, state) ->
         {hold_waiting_retry_for_usage_limit(state, issue, waiting), hold}
 
@@ -6048,6 +6052,9 @@ defmodule SymphonyElixir.Orchestrator do
 
       !dispatch_slots_available?(issue, state) ->
         {:error, :no_available_orchestrator_slots}
+
+      provider = provider_pause_hold(state, issue) ->
+        {:error, {:provider_paused, provider}}
 
       usage_limit_hold(state, issue) ->
         {:error, :usage_limited}
@@ -11045,6 +11052,16 @@ defmodule SymphonyElixir.Orchestrator do
 
     %{state | claimed: MapSet.put(state.claimed, issue.id)}
     |> hold_retry_for_usage_limit(issue, waiting.attempt, metadata, usage_limit_hold(state, issue))
+  end
+
+  defp waiting_retry_provider_pause(waiting, %Issue{} = issue, %State{} = state) do
+    if retry_attempt?(Map.get(waiting, :attempt)), do: provider_pause_hold(state, issue)
+  end
+
+  # The retry keeps its attempt and its claim (`hold_retry_for_provider_pause/5` takes it back), so
+  # Resume sends it on and no poll dispatches it afresh.
+  defp hold_waiting_retry_for_provider_pause(%State{} = state, %Issue{} = issue, waiting, provider) do
+    hold_retry_for_provider_pause(state, issue, waiting.attempt, Map.take(waiting, [:repo_key, :worker_host]), provider)
   end
 
   defp release_usage_limit_retry(%State{} = state, issue_id, retry) do

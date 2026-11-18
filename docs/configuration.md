@@ -2784,8 +2784,9 @@ provider is not stopped. A new run whose first choice is on the paused provider 
 fallback (`runs.<kind>.fallbacks`) whose provider can take it, exactly as when a usage limit holds
 the provider; a continuation stays on its own choice and waits. A ticket with no free fallback is
 listed under `dispatch_skipped` with rule `provider_pause` and its `provider`, and reads "Waiting:
-you paused Anthropic". Landing runs and forced tickets wait too, as under a reached usage limit.
-Resume sends the waiting runs on without waiting for a poll. The pause is kept in the run store, so
+you paused Anthropic". Landing runs and forced tickets wait too, as under a reached usage limit,
+and a PR run (`POST /api/v1/control/dispatch_pr`) on the paused provider is refused with 409
+`provider_paused`, naming it. Resume sends the waiting runs on without waiting for a poll. The pause is kept in the run store, so
 it survives a restart; each call writes a `provider_paused` or `provider_resumed` audit record and
 answers the provider, its name and its `pause` (null once resumed); a provider no harness reaches
 answers 404 `provider_not_found`.

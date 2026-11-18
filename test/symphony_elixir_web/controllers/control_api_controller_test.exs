@@ -616,6 +616,16 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
     assert calls(pid) == [{:dispatch_pr, "https://example/pr/2", []}]
   end
 
+  test "POST /control/dispatch_pr on a paused provider is 409 naming it" do
+    pid = start_stub([{:error, {:provider_paused, "anthropic"}}])
+    params = %{"target" => "https://example/pr/3"}
+
+    conn = send_to(build_conn(:post, "/api/v1/control/dispatch_pr", params), :dispatch_pr, pid, params)
+
+    assert conn.status == 409
+    assert json_body(conn)["error"] == %{"code" => "provider_paused", "message" => "You paused Anthropic; resume it to start a run on it"}
+  end
+
   test "POST /control/dispatch_pr requires target" do
     pid = start_stub([])
 

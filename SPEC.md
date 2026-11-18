@@ -646,7 +646,10 @@ choice. A run with no such candidate waits, as under a reached usage limit (land
 tickets' runs included): a candidate is skipped with rule `provider_pause`, naming the `provider`
 (`you paused Anthropic, and no fallback of its run can take it`), and a retry or continuation keeps
 its claim and attempt with no timer. Its situation is `waiting_for_provider` ("Waiting: you paused
-Anthropic"). A run that works on the provider goes on. Resume sends each retry the pause held on at
+Anthropic"). A retry that waits for a slot keeps its attempt and claim the same way when its provider
+is paused. An operator's PR run (`dispatch_pr`) on a paused provider is refused with
+`{:provider_paused, provider}`, 409 `provider_paused` on the control API, as a usage limit refuses it.
+A run that works on the provider goes on. Resume sends each retry the pause held on at
 once and asks for a tick, so the waiting tickets start without waiting for a poll. The pause is kept
 in the run store, so it survives a restart.
 
