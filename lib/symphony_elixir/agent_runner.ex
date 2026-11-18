@@ -2291,9 +2291,7 @@ defmodule SymphonyElixir.AgentRunner do
     green_fix = if ci_action == :success, do: green_fix(issue, ci_status, run_context)
 
     cond do
-      ci_action in [:pending, :success] and rework_state?(issue.state) and
-          (pushed_new_head?(run_context) or
-             (is_map(run_context.opts[:ci_failure]) and pending_reviewer_comments(issue, run_context.opts) == [])) ->
+      idle_rework_handoff?(issue, ci_action, run_context) ->
         hand_off_idle_rework(issue, ci_action, run_context)
 
       ci_action == :pending ->
@@ -2306,6 +2304,12 @@ defmodule SymphonyElixir.AgentRunner do
       true ->
         park_idle_run(issue, run_context)
     end
+  end
+
+  defp idle_rework_handoff?(%Issue{} = issue, ci_action, run_context) do
+    ci_action in [:pending, :success] and rework_state?(issue.state) and
+      (pushed_new_head?(run_context) or
+         (is_map(run_context.opts[:ci_failure]) and pending_reviewer_comments(issue, run_context.opts) == []))
   end
 
   # The head moved past the one this run started on, or past the head the rework started from, so
