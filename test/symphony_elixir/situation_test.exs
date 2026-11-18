@@ -376,7 +376,7 @@ defmodule SymphonyElixir.SituationTest do
       assert %{kind: "paused_by_rule", cause: "It is in Backlog.", next: "Starts when you move it to Todo."} = compute(record(%{phase: "Backlog"}))
     end
 
-    defp skip(reason, rule \\ nil, gate \\ nil), do: live(%{skipped: %{@id => %{since: @later, reason: reason, rule: rule, gate: gate}}})
+    defp skip(reason, rule, gate \\ nil), do: live(%{skipped: %{@id => %{since: @later, reason: reason, rule: rule, gate: gate}}})
 
     test "a rule's skip says what passed it over and what lifts it" do
       assert %{kind: "paused_by_rule", cause: "Dispatch is paused: Deploy freeze.", next: "Starts when you resume dispatch.", since: @later} =
