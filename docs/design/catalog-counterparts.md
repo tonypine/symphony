@@ -59,7 +59,7 @@ story of a mapped entry has no variation of its name, naming the story.
 | `components/inline-refusal` | `Refusal` |
 | `components/keyboard-hint` | `KeyboardHint` |
 | `components/searchable-pop-up` | `SearchablePopUp` |
-| `components/reorderable-list` | not built |
+| `components/reorderable-list` | `ReorderableList` |
 | `components/save-bar` | `SaveBar` |
 | `components/list-card` | `ListCard` |
 

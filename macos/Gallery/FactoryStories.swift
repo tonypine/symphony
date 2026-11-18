@@ -1,8 +1,9 @@
-// The catalog's Searchable pop-up, Save bar, List card and Progress meter stories (TP-1530), the components the
-// Factory › Runs and Providers pages are built from, each drawn by the shared component under the id the catalog
-// gives the story (`docs/design/catalog/stories.js`), each a variation of its own. The Closed searchable pop-up and
-// the Changes not saved bar are live: in the gallery the pop-up opens, narrows as one types and picks, and the bar's
-// Revert and Save act.
+// The catalog's Searchable pop-up, Save bar, List card and Progress meter stories (TP-1530) and its Reorderable list
+// stories (TP-1531), the components the Factory › Runs and Providers pages are built from, each drawn by the shared
+// component under the id the catalog gives the story (`docs/design/catalog/stories.js`), each a variation of its own.
+// The Closed searchable pop-up, the Changes not saved bar and the Resting reorderable list are live: in the gallery
+// the pop-up opens, narrows as one types and picks, the bar's Revert and Save act, and the list's lines drag, move
+// from the keyboard and are removed.
 import SwiftUI
 import SymphonyBarCore
 import SymphonyBarUI
@@ -46,6 +47,95 @@ func searchablePopUpStory(
         )
         .fixedSize()
     )
+}
+
+// MARK: - Reorderable list
+
+/// One line of the catalog's Reorderable list story: a harness, a provider, a model and an effort.
+struct GalleryRunStep: Identifiable, Equatable {
+    let harness: String
+    let provider: String
+    let model: String
+    let effort: String
+
+    var id: String { "\(provider)/\(model)" }
+}
+
+/// The catalog's four steps (`steps` of the Reorderable list story), with the catalog's names (`NAMES`).
+let galleryRunSteps = [
+    GalleryRunStep(harness: "Claude", provider: "Anthropic", model: "claude-opus-5-5", effort: "medium"),
+    GalleryRunStep(harness: "OpenCode", provider: "OpenCode Go", model: "kimi-k3", effort: ""),
+    GalleryRunStep(harness: "Claude", provider: "OpenRouter", model: "deepseek/deepseek-flash", effort: "low"),
+    GalleryRunStep(harness: "Claude", provider: "Anthropic", model: "claude-haiku-5-5", effort: "low"),
+]
+
+/// A line's controls as the catalog draws them: four small pop-ups, the model in the mono face; a line that can't
+/// be used now carries the orange edge and says why.
+@MainActor
+@ViewBuilder
+func galleryRunStepLine(_ step: GalleryRunStep, off: Bool = false) -> some View {
+    galleryStepPop("Harness", step.harness, off: off)
+    galleryStepPop("Provider", step.provider, off: off)
+    SearchablePopUp("Model", selection: .constant(step.model), choices: [PopUpChoice(step.model, step.model)], noun: "model", mono: true)
+        .reorderLineOff(off)
+    galleryStepPop("Effort", step.effort, off: off)
+    if off { ReorderLineNote("\(step.provider) is paused") }
+}
+
+/// A small pop-up of a line, showing `value` ("None" when empty).
+@MainActor
+private func galleryStepPop(_ label: String, _ value: String, off: Bool) -> some View {
+    PopUp(label, selection: .constant(value), choices: [PopUpChoice(value, value.isEmpty ? "None" : value)], size: .small).reorderLineOff(off)
+}
+
+/// The live list: drag a line by its handle, or Space, the arrows and Space (Escape puts it back); remove a line;
+/// Add a Fallback brings back the first step not in the list.
+private struct LiveReorderableList: View {
+    @State var steps: [GalleryRunStep]
+    let removable: Bool
+
+    var body: some View {
+        ReorderableList(
+            steps,
+            onReorder: { order in steps = order.compactMap { id in steps.first { $0.id == id } } },
+            onRemove: removable ? { id in steps.removeAll { $0.id == id } } : nil,
+            addTitle: "Add a Fallback",
+            onAdd: {
+                if let next = galleryRunSteps.first(where: { step in !steps.contains(step) }) { steps.append(next) }
+            }
+        ) { step in
+            galleryRunStepLine(step)
+        }
+    }
+}
+
+/// The catalog's Reorderable list story: `count` of its steps, 760 pt, 24 pt above and below, the Add a Fallback
+/// button under them; live, or in a still state (`drawn`) with the line at `off` unusable now.
+@MainActor
+func reorderableListStory(count: Int = 3, drawn: ReorderableListDrawn? = nil, off: Int? = nil, removable: Bool = true) -> AnyView {
+    let steps = Array(galleryRunSteps.prefix(max(1, count)))
+    let list: AnyView
+    if drawn == nil, off == nil {
+        list = AnyView(LiveReorderableList(steps: steps, removable: removable))
+    } else {
+        list = AnyView(
+            ReorderableList(
+                steps, onReorder: { _ in }, onRemove: removable ? { _ in } : nil, addTitle: "Add a Fallback", onAdd: {}, drawn: drawn ?? .init()
+            ) { step in
+                galleryRunStepLine(step, off: steps.firstIndex(of: step).map { $0 + 1 } == off)
+            }
+        )
+    }
+    return AnyView(list.padding(.vertical, reorderableListStoryPadding).frame(width: reorderableListStoryWidth, alignment: .leading))
+}
+
+let reorderableListStoryWidth: CGFloat = 760
+let reorderableListStoryPadding: CGFloat = 24
+
+/// The story's height: its padding, the lines and their gaps, and the add button under them.
+func reorderableListStoryHeight(_ count: Int) -> CGFloat {
+    let list = DesignTokens.ReorderableList.self
+    return 2 * reorderableListStoryPadding + CGFloat(count) * (list.lineHeight + list.gap) + list.control.height
 }
 
 // MARK: - Save bar
@@ -120,6 +210,11 @@ let factoryStories: [ComponentStory] = {
     func picker(_ id: String, height: CGFloat = 40, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(component: "searchable-pop-up", id: id, title: "Searchable pop-up", width: 320, height: height, draw: draw)
     }
+    func reorder(_ id: String, count: Int = 3, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+        ComponentStory(
+            component: "reorderable-list", id: id, title: "Reorderable list", width: reorderableListStoryWidth,
+            height: reorderableListStoryHeight(count), draw: draw)
+    }
     func saveBar(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
         ComponentStory(component: "save-bar", id: id, title: "Save bar", width: saveBarStoryWidth, height: 48, draw: draw)
     }
@@ -139,6 +234,12 @@ let factoryStories: [ComponentStory] = {
         },
         picker("nothing-matches", height: 250) { searchablePopUpStory(open: true, query: "gpt") },
         picker("value-from-a-default") { searchablePopUpStory(inherited: true) },
+        reorder("resting") { reorderableListStory() },
+        reorder("handle-hover") { reorderableListStory(drawn: .init(hover: 2)) },
+        reorder("dragging") { reorderableListStory(drawn: .init(dragging: 3)) },
+        reorder("handle-focused") { reorderableListStory(drawn: .init(focused: 2)) },
+        reorder("a-line-that-can-t-be-used-now") { reorderableListStory(off: 1) },
+        reorder("one-line", count: 1) { reorderableListStory(count: 1) },
         saveBar("nothing-changed") { saveBarStory(changes: 0) },
         saveBar("changes-not-saved") { saveBarStory(live: true) },
         saveBar("saving") { saveBarStory(state: .saving) },

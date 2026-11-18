@@ -11,7 +11,7 @@ struct ComponentStory {
     /// (TP-1506), `row` (TP-1507), `segmented-control`, `pop-up` or `menu-button` (TP-1508), or `text-field`,
     /// `search-field` or `text-area` (TP-1509), `table-header-and-row` (TP-1510), or `key-value-list` or
     /// `collapsible-card` (TP-1511), `hairline-divider` or `priority-mark` (TP-1485), or `searchable-pop-up`,
-    /// `save-bar`, `list-card` or `progress-meter` (TP-1530).
+    /// `save-bar`, `list-card` or `progress-meter` (TP-1530), or `reorderable-list` (TP-1531).
     let component: String
     let id: String
     /// The catalog's component title, for the sheet.
