@@ -248,12 +248,23 @@ defmodule SymphonyElixir.Home do
   # link), each with the id of the ticket it names and its identifier.
   defp open_blockers(record, ctx) do
     record.blockers
-    |> Enum.map(&{&1, (&1.id && Map.get(ctx.by_id, &1.id)) || Map.get(ctx.by_identifier, &1.identifier)})
-    |> Enum.reject(fn {link, known} -> MapSet.member?(ctx.terminal, normalize((known && known.phase) || link.state)) end)
-    |> Enum.map(fn {link, known} ->
-      %{id: (known && known.issue_id) || link.id || link.identifier, identifier: (known && known.issue_identifier) || link.identifier}
-    end)
+    |> Enum.map(&{&1, known_blocker(&1, ctx)})
+    |> Enum.reject(fn {link, known} -> MapSet.member?(ctx.terminal, normalize(blocker_phase(link, known))) end)
+    |> Enum.map(fn {link, known} -> blocker_ref(link, known) end)
   end
+
+  defp known_blocker(%{id: id} = link, ctx) when is_binary(id),
+    do: Map.get(ctx.by_id, id) || Map.get(ctx.by_identifier, link.identifier)
+
+  defp known_blocker(link, ctx), do: Map.get(ctx.by_identifier, link.identifier)
+
+  defp blocker_phase(link, nil), do: link.state
+  defp blocker_phase(link, known), do: known.phase || link.state
+
+  defp blocker_ref(link, nil), do: %{id: link.id || link.identifier, identifier: link.identifier}
+
+  defp blocker_ref(link, known),
+    do: %{id: known.issue_id || link.id || link.identifier, identifier: known.issue_identifier || link.identifier}
 
   defp queue(queued, in_progress_ids, ctx) do
     queued_ids = MapSet.new(queued, & &1.issue_id)
@@ -270,9 +281,7 @@ defmodule SymphonyElixir.Home do
 
     parents =
       Map.new(placed, fn {issue_id, {_record, in_queue, waits}} ->
-        parent = in_queue |> Enum.max_by(&{Map.fetch!(depths, &1.id), walk_index(&1.id, ctx)}, fn -> nil end)
-        after_ticket = if parent, do: nil, else: Enum.max_by(waits, &order_key(&1.id, ctx), fn -> nil end)
-        {issue_id, {parent, after_ticket, Enum.map((in_queue ++ waits) -- [parent || after_ticket], & &1.identifier)}}
+        {issue_id, placement(in_queue, waits, depths, ctx)}
       end)
 
     kids = parents |> Enum.filter(fn {_id, {parent, _after, _also}} -> parent end) |> Enum.group_by(fn {_id, {parent, _a, _o}} -> parent.id end, &elem(&1, 0))
@@ -283,6 +292,14 @@ defmodule SymphonyElixir.Home do
     {orphan_roots, _reached} = orphan_roots(orphans, placed, parents, kids, reached, ctx)
 
     roots ++ orphan_roots
+  end
+
+  # The queued blocker a ticket sits under (the one that lands last), else the ticket in progress it
+  # waits on, and the identifiers of the others it also waits on.
+  defp placement(in_queue, waits, depths, ctx) do
+    parent = Enum.max_by(in_queue, &{Map.fetch!(depths, &1.id), walk_index(&1.id, ctx)}, fn -> nil end)
+    after_ticket = if parent, do: nil, else: Enum.max_by(waits, &order_key(&1.id, ctx), fn -> nil end)
+    {parent, after_ticket, Enum.map((in_queue ++ waits) -- [parent || after_ticket], & &1.identifier)}
   end
 
   # How many queued tickets stand above each one at most; a cycle of blockers counts once.

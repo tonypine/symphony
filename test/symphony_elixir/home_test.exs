@@ -42,7 +42,9 @@ defmodule SymphonyElixir.HomeTest do
       assert %{identifier: "MT-1", issue_id: "id-MT-1", title: "Checkout that survives a reload", total: 6} = node
       assert node.counts == %{done: 1, in_progress: 1, needs_person: 1, needs_fix: 0, not_started: 3}
 
-      assert [%{identifier: "MT-3", working: true, move: nil} = first, %{identifier: "MT-8", working: false} = second] = node.tickets
+      assert [first, second] = node.tickets
+      assert %{identifier: "MT-3", working: true, move: nil} = first
+      assert %{identifier: "MT-8", working: false} = second
       assert first.situation.kind == "working"
       assert first.since == first.situation.since
       assert second.situation.kind == "waiting_on_you"
@@ -50,8 +52,8 @@ defmodule SymphonyElixir.HomeTest do
       assert_received {:moves, "MT-8"}
       refute_received {:moves, "MT-3"}
 
-      assert [%{identifier: "MT-4", after: "MT-3", also_waits_on: [], situation: nil, children: [], epic: %{identifier: "MT-1", title: "Checkout that survives a reload"}}] =
-               read.queue.roots
+      assert [%{identifier: "MT-4", after: "MT-3", also_waits_on: [], situation: nil, children: []} = root] = read.queue.roots
+      assert root.epic == %{identifier: "MT-1", title: "Checkout that survives a reload"}
 
       assert read.outside == %{backlog: 0, below_priority: 0, epic: 0, behind: 0}
     end
@@ -75,8 +77,9 @@ defmodule SymphonyElixir.HomeTest do
       live = live(%{running: [%{issue_id: "id-MT-2", run_kind: "implementation", started_at: DateTime.utc_now()}]})
       read = Home.read(nil, [started, fixing], live)
 
-      assert [%{kind: "epic", identifier: "MT-1", issue_id: nil, title: "Annual plans", total: 2, counts: counts, tickets: [%{identifier: "MT-2"}, %{identifier: "MT-3"}]}] =
-               read.in_progress
+      assert [%{kind: "epic", identifier: "MT-1", issue_id: nil, title: "Annual plans", total: 2} = node] = read.in_progress
+      assert [%{identifier: "MT-2"}, %{identifier: "MT-3"}] = node.tickets
+      counts = node.counts
 
       assert counts == %{done: 0, in_progress: 1, needs_person: 0, needs_fix: 1, not_started: 0}
     end
@@ -91,8 +94,8 @@ defmodule SymphonyElixir.HomeTest do
 
       read = Home.read(walk(["MT-1", "MT-2", "MT-3"]), [landed, first, second, third], live())
 
-      assert [%{identifier: "MT-1", after: nil, situation: %{kind: _kind}, children: [%{identifier: "MT-2", situation: nil, children: [%{identifier: "MT-3", children: []}]}]}] =
-               read.queue.roots
+      assert [%{identifier: "MT-1", after: nil, situation: %{kind: _kind}, children: [second_node]}] = read.queue.roots
+      assert %{identifier: "MT-2", situation: nil, children: [%{identifier: "MT-3", children: []}]} = second_node
     end
 
     test "a fork puts both tickets under the one they wait on, in the dispatch order" do
