@@ -2893,7 +2893,11 @@ Important nuance:
   that `HEAD` differs from the head the `Rework` started
   from. That start head MUST be recorded by the first run dispatched in `Rework` and kept across
   re-dispatched runs until the issue leaves `Rework`, so rework an earlier run pushed counts and a
-  fresh `Rework` on an unchanged PR does not. Nothing else moves it out of `Rework`.
+  fresh `Rework` on an unchanged PR does not, except for the CI-caused repair below. Nothing else
+  moves it out of `Rework`. A `Rework` dispatched for a CI failure whose attached PR's head is the
+  workspace `HEAD`, with no pending reviewer comments and checks still running or all passed, MUST
+  end after its unchanged turns and move to the post-PR state even when that `HEAD` never moved:
+  the repair was already unnecessary, so another run would have nothing to fix.
 
   `Rework` continues the current attempt. Its run MUST NOT close the pull request, cut a branch
   from scratch or supersede the workpad: those belong to `Restart` (below). The post-PR state is
@@ -2919,7 +2923,7 @@ Important nuance:
   then owns that head (Section 7.5.1): QA on green, a re-run or a CI-fix run on red. A head with no checks reported yet
   or a failed check does not end the run this way.
 - A run on an active issue with an attached PR and no pending review, CI, QA or conflict signal
-  (outside `Rework` and `Merging`) MUST end after a turn only once its work is on the PR: the
+  (outside `Rework`, `Merging` and `CI Fix`) MUST end after a turn only once its work is on the PR: the
   workspace `HEAD` is the PR head. Otherwise it MUST log why and continue, so the agent pushes.
   When the workspace `HEAD` or the PR head cannot be read, the run ends as before and the post-PR
   transition's workspace check applies.
@@ -2936,9 +2940,11 @@ Important nuance:
   one the run started on or from the head the `Rework` started from, and its checks are still
   running or have all passed. The run pushed that head and is waiting on its CI, so it MUST end and
   move to the post-PR state instead. This includes a `Rework` run whose CI failure stays pending
-  until the run ends. Nor does it apply while the attached PR's head is the workspace `HEAD` and
-  that head has checks still pending; such a run (one that started on that head) keeps
-  turning up to `execution.limits.max_turns`, except in `CI Fix`: there the first idle turn with checks pending
+  until the run ends. A CI-caused `Rework` with no pending reviewer comments takes the same exit on
+  an unchanged head whose checks are running or green. Nor does the park apply while the attached
+  PR's head is the workspace `HEAD` and that head has checks still pending; such a reviewer-driven
+  `Rework` (one that started on that head) keeps turning up to `execution.limits.max_turns`, while a
+  CI-caused one follows the exception above. In `CI Fix`, the first idle turn with checks pending
   on that head MUST end the run in a wait on CI (`{:ci_pending, info}`), which counts towards no
   dispatch loop, and while the watcher's decision waits on those checks or reruns one no CI Fix run
   MAY start. Nor does it apply, outside `Rework`, to a run started by
@@ -3429,9 +3435,10 @@ Rules:
 - **Explicit handoff.** `In Progress` and `Rework` advance to `Code Review` only on the handoff
   signal the push and pull-request tool hooks record against the pushed head. A run that stops
   quiet with its open PR already on its workspace HEAD has nothing to push, a finished Rework run
-  may have pushed past the hooks, and a step list's machine `handoff` step pushes with its own
-  command, so in each the runner, on seeing the PR on that HEAD, records the signal for that head and
-  hands off in the same run. A machine `handoff` step does so only on the ticket as it stands when the
+  may have pushed past the hooks, an unchanged CI-caused Rework has no push to hook, and a step
+  list's machine `handoff` step pushes with its own command, so in each the runner, on seeing the PR
+  on that HEAD, records the signal for that head and hands off in the same run. A machine `handoff`
+  step does so only on the ticket as it stands when the
   step ends: not on a hold, still in the phase the run works, nothing pending, and in `Rework` the head
   moved past the one the `Rework` started from. A run that ends without it MUST record `handoff_missing`
   and leave the ticket where it is for the retry machinery, which MUST back off its quiet runs and

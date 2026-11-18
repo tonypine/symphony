@@ -521,6 +521,31 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue" <> _note}
       assert {:ok, nil} = Pauses.get({:ticket, "default", "issue-progress"})
     end
+
+    test "still waits on CI after the watcher clears the failure that dispatched the run" do
+      pending = [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil, url: "https://ci/pending"}]
+      :ok = put_pending_ci_failure(approved: false)
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: pending}})
+
+      Application.put_env(:symphony_elixir, :progress_turn_hook, fn _opts ->
+        PrWatchSupport.put_watch!("default", "issue-progress",
+          phase: :ci_fix,
+          head_sha: "sha-same",
+          pr_url: @pr_url,
+          facts: %{ci: :pending},
+          decision: %{rule: "R24", kind: :wait, owner: :ci, reason: "Checks are running on the PR head"}
+        )
+      end)
+
+      assert {:ci_pending, %{sha: "sha-same", run: "the CI Fix run", runs: [%{workflow_name: "make-all", url: "https://ci/pending"}]}} =
+               catch_exit(capture_log(fn -> run_issue!("CI Fix", heads: ["sha-same"], max_turns: 5, repos: designed_repos()) end))
+
+      assert turns() == 1
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+      refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue" <> _note}
+      assert {:ok, nil} = Pauses.get({:ticket, "default", "issue-progress"})
+      assert Questions.open({:ticket, "default", "issue-progress"}) == []
+    end
   end
 
   describe "a parked ticket (TP-1326)" do
@@ -1369,15 +1394,65 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       end
     end
 
-    test "in Rework is still parked on a green head: a rework that adds no commit is not done" do
+    test "in Rework after a CI failure moves to Code Review on a green head without a new commit or question" do
       :ok = put_pending_ci_failure(approved: true)
       Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: @green_checks}})
 
       run_issue!("Rework", heads: ["sha-same"], max_turns: 6)
 
       assert turns() == 2
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
       refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
       refute_received {:memory_tracker_state_update, "issue-progress", "Merging"}
+      refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue" <> _note}
+      assert Questions.open({:ticket, "default", "issue-progress"}) == []
+      assert {:ok, nil} = Pauses.get({:ticket, "default", "issue-progress"})
+      assert_handoff_recorded("sha-same", "pushed_pr_head")
+      assert RunStore.get_rework_base("default", "issue-progress") == nil
+    end
+
+    test "in Rework after a CI failure moves to Code Review while checks run, without retrying or asking" do
+      :ok = put_pending_ci_failure(approved: false)
+      pending = [%{name: "make-all", status: "IN_PROGRESS", conclusion: nil}]
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: pending}})
+
+      run_issue!("Rework", heads: ["sha-same"], max_turns: 6)
+
+      assert turns() == 2
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      refute_received {:memory_tracker_state_update, "issue-progress", "Backlog"}
+      refute_received {:memory_tracker_comment, "issue-progress", "Symphony parked this issue" <> _note}
+      assert Questions.open({:ticket, "default", "issue-progress"}) == []
+      assert {:ok, nil} = Pauses.get({:ticket, "default", "issue-progress"})
+      assert_handoff_recorded("sha-same", "pushed_pr_head")
+      assert RunStore.get_rework_base("default", "issue-progress") == nil
+    end
+
+    test "in Rework with unresolved reviewer comments keeps the no-progress guard on a green head" do
+      :ok = put_pending_ci_failure(approved: false)
+
+      assert :ok =
+               RunStore.put_pr_review(%{
+                 repo_key: "default",
+                 issue_id: "issue-progress",
+                 issue_identifier: "TP-337",
+                 pr_url: @pr_url,
+                 workspace_path: "/tmp",
+                 status: "rework_requested",
+                 pending_last_addressed_comment_id: "comment-337",
+                 pending_reviewer_comments: [%{id: "comment-337", kind: "inline_comment", author: "Reviewer", body: "Rename this."}],
+                 updated_at: ~U[2026-10-03 12:00:00Z]
+               })
+
+      Application.put_env(:symphony_elixir, :progress_pr_head_result, {:ok, %{commit_sha: "sha-same", checks: @green_checks}})
+
+      run_issue!("Rework", heads: ["sha-same"], max_turns: 6)
+
+      assert turns() == 2
+      refute_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+
+      assert [%{title: "TP-337 is paused in Rework: its last 2 turns changed nothing"}] =
+               Questions.open({:ticket, "default", "issue-progress"})
     end
 
     test "fails the run when its move back to Merging or to the post-PR state fails" do
