@@ -696,6 +696,7 @@ defmodule SymphonyElixir.ExtensionsTest do
       "phases" => Enum.map(SymphonyElixir.StateMachine.phases(Config.settings!()), &%{"name" => &1.name, "dispatches" => &1.dispatches}),
       "all_repositories_paused" => false,
       "repositories" => [],
+      "providers" => [],
       "counts" => %{
         "running" => 1,
         "between_turns" => 0,
