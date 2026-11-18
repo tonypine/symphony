@@ -200,14 +200,6 @@ private struct MenuControlStyle: ButtonStyle {
     }
 }
 
-/// Hands the control's own keyboard focus to its face, as the shared button does.
-private struct MenuControlFocus: ViewModifier {
-    @FocusState private var focused: Bool
-
-    func body(content: Content) -> some View {
-        content.environment(\.buttonKeyboardFocus, focused).focused($focused)
-    }
-}
 
 /// The control's button: it opens the menu on a click, Space, Return or Down, from the anchor's place on screen. To
 /// VoiceOver the anchor is the control: a pop-up button with its value, or a menu button, that a press opens (an
@@ -263,7 +255,7 @@ struct MenuTrigger: View {
                 content: content, size: size, quiet: quiet, open: shown || drawnOpen, monoValue: monoValue, inheritedValue: inheritedValue
             ))
             .focusEffectDisabled()
-            .modifier(MenuControlFocus())
+            .modifier(ReportsKeyboardFocus())
             .accessibilityHidden(true)
             .background {
                 // An offscreen snapshot can't draw an AppKit view, and needs no place on screen.

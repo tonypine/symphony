@@ -44,7 +44,7 @@ SymphonyBar/GitHubUpdatesSetupView.swift number 4
 SymphonyBar/GitHubUpdatesSetupView.swift button 1
 SymphonyBar/GitHubUpdatesSetupView.swift disabled 2
 SymphonyBar/GitHubUpdatesSetupView.swift field 1
-SymphonyBar/HomeInboxView.swift color 6
+SymphonyBar/HomeInboxView.swift color 5
 SymphonyBar/HomeInboxView.swift button 1
 SymphonyBar/HomeInboxView.swift disabled 2
 SymphonyBar/HomeView.swift font 1
@@ -113,8 +113,8 @@ SymphonyBar/TicketPageView.swift number 4
 SymphonyBar/TicketPageView.swift button 4
 SymphonyBar/TicketPageView.swift disabled 2
 SymphonyBar/TicketPageView.swift field 2
-SymphonyBar/TicketsView.swift font 2
-SymphonyBar/TicketsView.swift color 17
+SymphonyBar/TicketsView.swift font 1
+SymphonyBar/TicketsView.swift color 14
 SymphonyBar/TicketsView.swift number 3
 SymphonyBar/TicketsView.swift button 8
 SymphonyBar/TicketsView.swift disabled 3

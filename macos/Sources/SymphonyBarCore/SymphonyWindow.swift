@@ -194,7 +194,7 @@ public enum Journal {
 }
 
 /// The sidebar: the five destinations in the design's order, Factory with its pages under it (TP-1455).
-public struct Sidebar: Equatable {
+public struct SidebarRows: Equatable {
     public init() {}
 
     public var destinations: [Destination] { Destination.allCases }

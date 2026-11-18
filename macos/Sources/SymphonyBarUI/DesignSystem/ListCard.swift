@@ -116,7 +116,7 @@ public struct ListCard: View {
         Button(action: action) { Text(content.title) }
             .buttonStyle(ListCardStyle(content: content, selected: selected))
             .focusEffectDisabled()
-            .modifier(ListCardFocus())
+            .modifier(ReportsKeyboardFocus())
             .accessibilityLabel(content.spoken)
             .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -152,11 +152,3 @@ private struct ListCardStyle: ButtonStyle {
     }
 }
 
-/// Hands the card's own keyboard focus to its face, as the shared button does.
-private struct ListCardFocus: ViewModifier {
-    @FocusState private var focused: Bool
-
-    func body(content: Content) -> some View {
-        content.environment(\.buttonKeyboardFocus, focused).focused($focused)
-    }
-}
