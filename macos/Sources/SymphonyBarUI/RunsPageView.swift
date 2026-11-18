@@ -225,7 +225,19 @@ struct RunsLineView: View {
     var body: some View {
         ForEach(line.fields, id: \.field) { field in
             control(field)
+                .overlay { if line.providerNote != nil { offRing } }
         }
+        if let note = line.providerNote {
+            RunsProviderNoteView(note: note)
+        }
+    }
+
+    /// The ring inside each pop-up of a line whose provider can't take a new run now.
+    private var offRing: some View {
+        let tokens = DesignTokens.RunsPage.self
+        return RoundedRectangle(cornerRadius: tokens.control.radius, style: .continuous)
+            .strokeBorder(tokens.offRingColor.color, lineWidth: tokens.offRing)
+            .allowsHitTesting(false)
     }
 
     @ViewBuilder
@@ -253,6 +265,27 @@ struct RunsLineView: View {
         let field = line.fields.first { $0.isSearchable }
         let shown = (field?.choices ?? []).filter { MenuSearch.matches($0.title, query: drawn.query) }
         return .init(query: drawn.query, highlighted: shown.count > 1 ? shown[1].value : nil)
+    }
+}
+
+/// What a line says when its provider is paused or held by a usage limit (`.off-note`, TP-1534): a Status dot in the
+/// provider's state (the "waiting on you" orange for a pause, red for a limit) and "Anthropic is paused".
+struct RunsProviderNoteView: View {
+    let note: RunsPage.ProviderNote
+
+    var body: some View {
+        let tokens = DesignTokens.RunsPage.self
+        HStack(spacing: tokens.offNoteGap) {
+            StatusDot(note.status, diameter: tokens.offDot)
+            Text(note.text)
+                .textStyle(.secondary)
+                .foregroundStyle(tokens.offNoteColor.color)
+                .lineLimit(1)
+                .fixedSize()
+        }
+        .padding(.leading, tokens.offNoteInset)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(note.text)
     }
 }
 

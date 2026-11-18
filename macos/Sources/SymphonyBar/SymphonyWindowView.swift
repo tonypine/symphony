@@ -344,6 +344,8 @@ final class SymphonyWindowModel: ObservableObject {
     var appBuild = AppBuild(build: 0, isDevelopment: true)
     /// Factory › Runs (TP-1538): the run profiles read from `symphony.yml`, with the changes not saved yet.
     @Published var runsPage = RunsPage()
+    /// Factory › Providers (TP-1534): the provider whose page shows, by id; nil shows the first of the list.
+    @Published var providerSelection: String?
     /// The `symphony.yml` path in Settings.
     var configPath: () -> String = { "" }
     /// Check Again with no fix, a Linear fix with one: `POST /api/v1/setup/refresh` or `/fixes`.
@@ -1217,6 +1219,8 @@ struct SymphonyDetail: View {
             SetupContent(model: model)
         case .runs:
             RunsContent(model: model)
+        case .providers:
+            ProvidersContent(model: model)
         case .journal:
             JournalContent(model: model)
         default:
