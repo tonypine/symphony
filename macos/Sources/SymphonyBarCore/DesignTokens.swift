@@ -1270,6 +1270,38 @@ public enum DesignTokens {
 
     /// The catalog's Save bar (`.save-bar`, TP-1530): glass over a page edited whole, what is edited on the left and
     /// how much is not saved, Revert and Save on the right.
+    /// The catalog's Control bar (`sections/control-bar`, `.control-bar`, `.tk-bar`; TP-1497): the glass bar at the top
+    /// of a page that holds the page's own controls, what narrows the page at the left and what acts on it at the right,
+    /// with an optional one-line summary under them (beside them on a desktop).
+    public enum ControlBar {
+        /// `border-radius: var(--radius-card)`.
+        public static let radius = Radius.card
+        /// `padding: var(--space-2) var(--space-3)`.
+        public static let verticalPadding = Space.s2
+        public static let horizontalPadding = Space.s3
+        /// `gap: var(--space-2)` between the controls of a side (`.tk-bar`).
+        public static let gap = Space.s2
+        /// `gap: … var(--space-5)` between a labelled group and the next (`.control-bar`).
+        public static let groupGap = Space.s5
+        /// Between the controls and the summary under them.
+        public static let summaryGap = Space.s2
+        /// The summary's inset, `padding: 0 var(--space-1)`.
+        public static let summaryInset = Space.s1
+        /// Room left between what narrows and what acts.
+        public static let sidesGap = Space.s3
+        /// The bar's distance from the page's sides and from the window bar above it.
+        public static let pageInset = Space.s6
+        public static let pageGap = Space.s3
+        public static let glass = Glass.glass
+        public static let elevation = Elevation.level1
+        public static let control = Control.small
+        /// From this width (a desktop) the summary sits right aligned beside the controls when the line holds both.
+        public static let summaryBesideWidth: Double = 1600
+
+        /// Whether a bar `width` wide draws its summary beside its controls.
+        public static func summaryBeside(width: Double) -> Bool { width >= summaryBesideWidth }
+    }
+
     /// The window's own bar (`.win-bar`, TP-1496): glass over the page's top, a hairline under it.
     public enum WindowBar {
         /// `height: 44px`.

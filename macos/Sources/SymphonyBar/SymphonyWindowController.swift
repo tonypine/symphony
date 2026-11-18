@@ -256,7 +256,8 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
     // MARK: View menu
 
     /// The main menu's View items: one per destination on ⌘1–⌘5 (TP-1455), Open Inbox on ⇧⌘I (Home's drawer), Back
-    /// and Forward on ⌘[ and ⌘], Find a Ticket on ⌘F, the page's search on ⌥⌘F, and Refresh on ⌘R.
+    /// and Forward on ⌘[ and ⌘], ⌘F (the page's search on Tickets, Shipped and Audit, Find a Ticket elsewhere), Find a
+    /// Ticket on ⌥⌘F beside a page's search (TP-1497), and Refresh on ⌘R.
     func viewMenu() -> NSMenu {
         let menu = NSMenu(title: "View")
         for entry in Sidebar().menuItems {
@@ -277,13 +278,13 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         forward.target = self
         menu.addItem(forward)
         menu.addItem(.separator())
-        let find = NSMenuItem(title: TicketFinder.menuTitle, action: #selector(findTicket(_:)), keyEquivalent: "f")
+        let find = NSMenuItem(title: TicketFinder.menuTitle, action: #selector(find(_:)), keyEquivalent: "f")
         find.target = self
         menu.addItem(find)
-        let search = NSMenuItem(title: "Search Tickets", action: #selector(searchPage(_:)), keyEquivalent: "f")
-        search.keyEquivalentModifierMask = [.command, .option]
-        search.target = self
-        menu.addItem(search)
+        let findItem = NSMenuItem(title: TicketFinder.menuTitle, action: #selector(findTicket(_:)), keyEquivalent: "f")
+        findItem.keyEquivalentModifierMask = [.command, .option]
+        findItem.target = self
+        menu.addItem(findItem)
         let inspector = NSMenuItem(title: "Show Inspector", action: #selector(toggleInspector(_:)), keyEquivalent: "i")
         inspector.keyEquivalentModifierMask = [.command, .option]
         inspector.target = self
@@ -312,12 +313,12 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         if let model { model.refresh() } else { client.refresh() }
     }
 
-    @objc private func findTicket(_ sender: Any?) {
-        model?.findTicket()
+    @objc private func find(_ sender: Any?) {
+        model?.find()
     }
 
-    @objc private func searchPage(_ sender: Any?) {
-        model?.searchPage()
+    @objc private func findTicket(_ sender: Any?) {
+        model?.findTicket()
     }
 
     @objc private func toggleInspector(_ sender: Any?) {
@@ -345,8 +346,12 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             menuItem.title = model?.inspectorTitle ?? "Show Inspector"
             return model?.hasInspector ?? false
         case #selector(forceTicket(_:)): return model?.dispatchControl.canForce ?? false
-        case #selector(searchPage(_:)):
-            menuItem.title = model?.searchTitle ?? "Search Tickets"
+        case #selector(find(_:)):
+            menuItem.title = model?.commandF.menuTitle ?? TicketFinder.menuTitle
+            return true
+        case #selector(findTicket(_:)):
+            // ⌘F is Find a Ticket where the page has no search of its own: one item says it.
+            menuItem.isHidden = !(model?.hasPageSearch ?? false)
             return model?.hasPageSearch ?? false
         default: return true
         }

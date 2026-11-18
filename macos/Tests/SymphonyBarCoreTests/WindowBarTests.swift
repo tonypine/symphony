@@ -72,8 +72,8 @@ final class WindowBarTests: XCTestCase {
         XCTAssertEqual(WindowBarText.inbox(needYou: 0), "Inbox (⇧⌘I)")
         XCTAssertEqual(WindowBarText.inbox(needYou: 1), "Inbox: 1 needs you (⇧⌘I)")
         XCTAssertEqual(WindowBarText.inbox(needYou: 2), "Inbox: 2 need you (⇧⌘I)")
-        XCTAssertEqual(WindowBarText.refresh(checksSetup: false), "Refresh (⌘R)")
-        XCTAssertEqual(WindowBarText.refresh(checksSetup: true), "Check Again (⌘R)")
+        XCTAssertEqual(WindowBarText.refresh, "Refresh (⌘R)")
+        XCTAssertEqual(WindowBarText.checkAgain, "Check Again (⌘R)")
         XCTAssertEqual(WindowBarText.findPlaceholder, "Find a ticket")
     }
 
