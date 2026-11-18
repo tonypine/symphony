@@ -135,7 +135,9 @@ defmodule SymphonyElixir.Situation.RecorderTest do
     snapshot(pid)
     assert kinds() == ["waiting_for_slot"]
 
-    skip = fn rule, gate -> %{dispatch_skipped: [%{issue_id: @id, since: DateTime.utc_now(), reason: "a skip", rule: rule, gate: gate}]} end
+    skip = fn rule, gate ->
+      %{dispatch_skipped: [%{issue_id: @id, since: DateTime.utc_now(), reason: "a skip", rule: rule, gate: gate}]}
+    end
 
     snapshot(pid, skip.(nil, :update_hold))
     assert kinds() == ["waiting_for_slot", "waiting_for_build"]
