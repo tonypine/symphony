@@ -13,7 +13,7 @@ final class PageControlsTests: XCTestCase {
     }
 
     func testDiagnosticsAndTheWindowsOfTheirOwnHaveNoBar() {
-        for view in [SymphonyView.diagnostics, .repos, .settings] {
+        for view in [SymphonyView.diagnostics, .repos, .runs, .settings] {
             XCTAssertEqual(PageControls.of(view), .none, view.rawValue)
         }
     }

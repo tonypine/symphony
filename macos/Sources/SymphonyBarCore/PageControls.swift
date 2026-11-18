@@ -52,10 +52,11 @@ public struct PageControls: Equatable {
     ///   holds the Shipped and Learnings switch. Learnings: the switch, the scope as its one repo chooser, and its
     ///   search.
     /// - Setup: Check Again at the right; Setup is Symphony's own, so no scope.
-    /// - Diagnostics, and Repos and Settings (their own windows): none.
+    /// - Diagnostics, Runs (its Save bar holds its own For chooser, TP-1538), and Repos and Settings (their own
+    ///   windows): none.
     public static func of(_ view: SymphonyView, shippedTab: Shipped.Tab = .shipped) -> PageControls {
         switch view {
-        case .inbox, .overview, .diagnostics, .repos, .settings:
+        case .inbox, .overview, .diagnostics, .repos, .runs, .settings:
             .none
         case .journal, .initiatives:
             PageControls(hasBar: true, readsScope: true)
