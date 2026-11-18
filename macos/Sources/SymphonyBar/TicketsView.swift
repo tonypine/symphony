@@ -27,32 +27,24 @@ extension SymphonyWindowModel {
         DispatchControl(window: state, paused: paused, state: overviewState, update: updateHold, now: Date())
     }
 
-    /// ⌥⌘F: the search field of the page shown, Audit's, Learnings' on Shipped or Tickets'; ⌘F finds a ticket from any
-    /// page (TP-1455).
-    func searchPage() {
-        if searchesAudit {
+    /// ⌘F (TP-1497): the search of the page shown, Tickets', Audit's, or Learnings' on Shipped (which shows its
+    /// Learnings tab); Find a ticket in the window bar on every other page.
+    func find() {
+        switch commandF {
+        case .pageSearch(.audit):
             auditSearchRequested = true
-        } else if searchesLearnings {
+        case .pageSearch(.learnings):
             shippedTab = .learnings
             learningsSearchRequested = true
-        } else if hasPageSearch {
+        case .pageSearch(.tickets):
             searchRequested = true
+        case .findTicket:
+            findTicket()
         }
     }
 
-    /// Whether the page shown has a search field for ⌥⌘F.
-    var hasPageSearch: Bool { !showsPage && [.tickets, .shipped, .audit].contains(selection) }
-
-    /// Whether ⌘F searches Learnings rather than Tickets: on Shipped, whichever tab shows.
-    var searchesLearnings: Bool { selection == .shipped && !showsPage }
-
-    /// Whether ⌘F searches Audit's records.
-    var searchesAudit: Bool { selection == .audit && !showsPage }
-
-    /// The menu item ⌥⌘F presses: "Search Audit Records", "Search Learnings" or "Search Tickets".
-    var searchTitle: String {
-        searchesAudit ? "Search Audit Records" : searchesLearnings ? "Search Learnings" : "Search Tickets"
-    }
+    /// Whether the page shown has a search of its own, which ⌘F puts the keyboard in: ⌥⌘F is Find a ticket there.
+    var hasPageSearch: Bool { commandF != .findTicket }
 
     /// Whether the view shown has an inspector for ⌥⌘I.
     var hasInspector: Bool {
@@ -313,16 +305,16 @@ extension SymphonyWindowModel {
     }
 }
 
-/// A page's search field in its top row, Tickets', Audit's or Learnings' (TP-1509, TP-1496): the shared search field,
-/// small, with the count of what it found and ⌥⌘F, which puts the keyboard in it, while it is empty. ⌥⌘F sets
-/// `requested`; the field takes the keyboard through the window and clears it.
+/// A page's search field in its control bar, Tickets', Audit's or Learnings' (TP-1509, TP-1497): the shared search
+/// field, small, with the count of what it found and ⌘F, which puts the keyboard in it on its page, while it is empty.
+/// ⌘F sets `requested`; the field takes the keyboard through the window and clears it.
 struct PageSearchField: View {
     let prompt: String
     @Binding var text: String
     let matches: Int?
     @Binding var requested: Bool
 
-    static let shortcut = "⌥ ⌘ F"
+    static let shortcut = FindCommand.commandFShortcut
 
     var body: some View {
         SearchField(prompt, text: $text, matches: matches, shortcut: Self.shortcut, size: .small, focusRequest: $requested)
@@ -352,7 +344,11 @@ struct TicketsContent: View {
                     reference: model.overviewState?.generatedAt ?? Date(),
                     actions: actions,
                     viewsMenu: model.ticketViewsMenu,
-                    viewActions: viewActions
+                    viewActions: viewActions,
+                    controls: TicketsBarControls(
+                        page: model.pageBar, search: $model.ticketSearch, searchRequested: $model.searchRequested,
+                        force: { model.openForceSheet() }, canForce: model.dispatchControl.canForce
+                    )
                 )
             } else if model.ticketsResult == .unsupported {
                 EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
@@ -438,6 +434,8 @@ struct TicketsView: View {
     /// The views menu at the bar's left, nil before the views were read.
     var viewsMenu: TicketViewsMenu?
     var viewActions = TicketViewActions()
+    /// The window's part of the bar: the scope, the search and Force a Ticket….
+    var controls = TicketsBarControls()
     /// The table's own selection, handed to the model after the table's delegate call returns: updating the
     /// window's model inside it re-renders the table reentrantly.
     @State private var tableSelection: String?
@@ -446,11 +444,10 @@ struct TicketsView: View {
         let columns = query.shownColumns(catalog: catalog, scope: scope)
         VStack(spacing: 0) {
             TicketsFilterBar(query: $query, catalog: catalog, values: values, count: rows.count, drawerShown: $drawerShown,
-                             viewsMenu: viewsMenu, viewActions: viewActions)
+                             viewsMenu: viewsMenu, viewActions: viewActions, controls: controls)
             if let error = viewActions.error {
                 TicketViewErrorLine(message: error, dismiss: viewActions.dismissError)
             }
-            Divider()
             HStack(spacing: 0) {
                 Group {
                     if rows.isEmpty {
@@ -493,7 +490,19 @@ struct TicketsView: View {
     }
 }
 
-/// The filter bar: a chip per filter set, + Filter, the row count and Columns, in one bar that wraps on a laptop.
+/// The window's part of Tickets' control bar (TP-1497): the scope, the search and Force a Ticket….
+struct TicketsBarControls {
+    var page = PageBar()
+    var search: Binding<String> = .constant("")
+    /// Set by ⌘F to put the keyboard in the search.
+    var searchRequested: Binding<Bool> = .constant(false)
+    var force: () -> Void = {}
+    var canForce = true
+}
+
+/// Tickets' control bar (the catalog's `.tk-bar`): at the left what narrows the table, the saved view, the scope, the
+/// search, a chip per filter set and + Filter, wrapping on a laptop; at the right the row count, Columns, the details
+/// toggle and Force a Ticket….
 struct TicketsFilterBar: View {
     /// Why the Ticket column can't be hidden.
     static let identifierStays = "Every table shows the ticket."
@@ -505,34 +514,37 @@ struct TicketsFilterBar: View {
     @Binding var drawerShown: Bool
     var viewsMenu: TicketViewsMenu?
     var viewActions = TicketViewActions()
+    var controls = TicketsBarControls()
 
     var body: some View {
-        HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
+        ControlBar("Tickets controls") {
             if let viewsMenu {
                 TicketViewsMenuButton(menu: viewsMenu, actions: viewActions)
-                Divider().frame(height: DesignTokens.Control.small.height)
+                HairlineDivider(.vertical, length: DesignTokens.Control.small.height)
             }
-            WrappingStack(spacing: DesignTokens.Space.s2) {
-                ForEach(query.chips) { chip in
-                    TicketFilterChipView(chip: chip, values: values.values(chip.filter, query: query),
-                                         toggle: { query.toggle(chip.filter, $0) }, remove: { query.remove(chip.filter) })
-                }
-                MenuButton("Filter", glyph: "plus", size: .small, quiet: true, help: "Add a filter") {
-                    var items = TicketFilter.allCases.map { filter in
-                        MenuItem.submenu(filter.title, items: values.values(filter, query: query).map { value in
-                            MenuItem(filter.word(value), checked: query.holds(filter, value)) { query.toggle(filter, value) }
-                        })
-                    }
-                    if !query.chips.isEmpty {
-                        items += [.separator, MenuItem("Clear Filters") { query.chips = [] }]
-                    }
-                    return items
-                }
+            controls.page.scopePopUp
+            PageSearchField(prompt: TicketsView.searchPrompt, text: controls.search, matches: count, requested: controls.searchRequested)
+            // Each chip and + Filter wrap on their own with the bar's other controls.
+            ForEach(query.chips) { chip in
+                TicketFilterChipView(chip: chip, values: values.values(chip.filter, query: query),
+                                     toggle: { query.toggle(chip.filter, $0) }, remove: { query.remove(chip.filter) })
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            MenuButton("Filter", glyph: "plus", size: .small, quiet: true, help: "Add a filter") {
+                var items = TicketFilter.allCases.map { filter in
+                    MenuItem.submenu(filter.title, items: values.values(filter, query: query).map { value in
+                        MenuItem(filter.word(value), checked: query.holds(filter, value)) { query.toggle(filter, value) }
+                    })
+                }
+                if !query.chips.isEmpty {
+                    items += [.separator, MenuItem("Clear Filters") { query.chips = [] }]
+                }
+                return items
+            }
+        } act: {
             Text(count == 1 ? "1 ticket" : "\(count) tickets")
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .foregroundStyle(.secondary)
+                .textStyle(.secondary)
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                .monospacedDigit()
                 .frame(height: DesignTokens.Control.small.height)
                 .fixedSize()
             MenuButton("Columns", glyph: "tablecells", size: .small, alignment: .trailing, help: "Show or hide columns") {
@@ -551,9 +563,11 @@ struct TicketsFilterBar: View {
             .labelStyle(.iconOnly)
             .directorButton(.quiet, size: .small, selected: drawerShown)
             .help(drawerShown ? "Hide Inspector (Space)" : "Show Inspector (Space)")
+            Button(DispatchControl.forceTitle, action: controls.force)
+                .directorButton(.secondary, size: .small, glyph: DesignTokens.Status.forced.symbol)
+                .help("Force a ticket (⇧⌘F)")
+                .disabled(!controls.canForce)
         }
-        .padding(.horizontal, DesignTokens.Space.s4)
-        .padding(.vertical, DesignTokens.Space.s2)
     }
 }
 

@@ -74,7 +74,7 @@ struct ShippedContent: View {
     }
 
     private var shippedTab: some View {
-        InsightsPage(model: model, symbol: SymphonyView.shipped.symbol) { aggregate in
+        InsightsPage(model: model, symbol: SymphonyView.shipped.symbol, shippedTab: $model.shippedTab) { aggregate in
             ShippedView(
                 shipped: Shipped(aggregate: aggregate, slice: model.insightsSlice, details: model.shipped, today: model.insightsToday),
                 openTicket: model.openTicket,
@@ -84,19 +84,23 @@ struct ShippedContent: View {
         }
     }
 
-    @ViewBuilder private var learningsTab: some View {
-        if let payload = model.learnings {
-            LearningsView(
-                learnings: Learnings(payload: payload, filter: model.learningsFilter, scope: model.scope),
-                filter: $model.learningsFilter,
-                openTicket: model.openTicket,
-                openURL: model.onOpenURL,
-                perform: model.perform
+    /// The Learnings tab under its control bar, which stays at the top while the learnings read, so the switch back to
+    /// Shipped is always there.
+    private var learningsTab: some View {
+        let learnings = model.learnings.map { Learnings(payload: $0, filter: model.learningsFilter, scope: model.scope) }
+        return PinnedBarPage {
+            LearningsControlBar(
+                learnings: learnings, filter: $model.learningsFilter, tab: $model.shippedTab,
+                controls: LearningsBarControls(page: model.pageBar, search: $model.learningsFilter.search, searchRequested: $model.learningsSearchRequested)
             )
-        } else if model.learningsResult == .unsupported {
-            EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
-        } else {
-            EmptyState(title: "Reading the crew's learnings…", symbol: "lightbulb", showsSpinner: true)
+        } content: {
+            if let learnings {
+                LearningsView(learnings: learnings, openTicket: model.openTicket, openURL: model.onOpenURL, perform: model.perform)
+            } else if model.learningsResult == .unsupported {
+                EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
+            } else {
+                EmptyState(title: "Reading the crew's learnings…", symbol: "lightbulb", showsSpinner: true)
+            }
         }
     }
 }
@@ -185,49 +189,63 @@ private struct ShippedRowView: View {
 
 // MARK: - Learnings
 
+/// The Learnings tab's page under its control bar: the learnings by repo, or why none shows with the way out.
 struct LearningsView: View {
     let learnings: Learnings
-    @Binding var filter: Learnings.Filter
     var openTicket: (String) -> Void = { _ in }
     var openURL: (URL) -> Void = { _ in }
     var perform: (Learnings.Empty.Action) -> Void = { _ in }
 
     var body: some View {
         if let empty = learnings.empty {
-            VStack(spacing: 0) {
-                LearningsFilterBar(learnings: learnings, filter: $filter).padding([.horizontal, .top], DesignTokens.Space.s6)
-                EmptyState(title: empty.title, symbol: "lightbulb", actions: [(empty.action.title, { perform(empty.action) })])
-            }
+            EmptyState(title: empty.title, symbol: "lightbulb", actions: [(empty.action.title, { perform(empty.action) })])
         } else {
             ScrollView {
-                LearningsCards(learnings: learnings, filter: $filter, openTicket: openTicket, openURL: openURL)
+                LearningsCards(learnings: learnings, openTicket: openTicket, openURL: openURL)
             }
         }
     }
 }
 
-/// The repo and tag pop-ups, and how many records show.
-private struct LearningsFilterBar: View {
-    let learnings: Learnings
+/// The window's part of the Learnings tab's control bar (TP-1497): the scope and the search.
+struct LearningsBarControls {
+    var page = PageBar()
+    var search: Binding<String> = .constant("")
+    /// Set by ⌘F on Shipped to put the keyboard in the search.
+    var searchRequested: Binding<Bool> = .constant(false)
+}
+
+/// The Learnings tab's control bar: the Shipped and Learnings switch, the scope (the bar's one repo chooser), the search
+/// and the tag pop-up at the left; how many learnings show at the right. While the learnings read, only the switch, the
+/// scope and the search.
+struct LearningsControlBar: View {
+    let learnings: Learnings?
     @Binding var filter: Learnings.Filter
+    @Binding var tab: Shipped.Tab
+    var controls = LearningsBarControls()
 
     var body: some View {
-        HStack(spacing: DesignTokens.Space.s3) {
-            PopUp("Repo", selection: $filter.repo, choices: popUpChoices(all: "All repos", learnings.repos), size: .small)
-            PopUp("Tag", selection: $filter.tag, choices: popUpChoices(all: "All tags", learnings.tags), size: .small)
-            Spacer()
-            Text("\(learnings.count) \(learnings.count == 1 ? "learning" : "learnings")")
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
+        ControlBar("Learnings controls") {
+            ShippedTabSwitch(tab: $tab)
+            controls.page.scopePopUp
+            PageSearchField(prompt: Learnings.searchPrompt, text: controls.search, matches: learnings?.count, requested: controls.searchRequested)
+            if let learnings {
+                PopUp("Tag", selection: $filter.tag, choices: popUpChoices(all: "All tags", learnings.tags), size: .small)
+            }
+        } act: {
+            if let learnings {
+                Text("\(learnings.count) \(learnings.count == 1 ? "learning" : "learnings")")
+                    .textStyle(.secondary)
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    .monospacedDigit()
+            }
         }
     }
 }
 
-/// The Learnings tab's filters and repos, outside the scroll view so they also render offscreen.
+/// The Learnings tab's repos, outside the scroll view so they also render offscreen.
 struct LearningsCards: View {
     let learnings: Learnings
-    @Binding var filter: Learnings.Filter
     var openTicket: (String) -> Void = { _ in }
     var openURL: (URL) -> Void = { _ in }
     /// The row a click selected.
@@ -235,7 +253,6 @@ struct LearningsCards: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-            LearningsFilterBar(learnings: learnings, filter: $filter)
             ForEach(learnings.groups) { group in
                 Card(title: group.repoKey) {
                     VStack(alignment: .leading, spacing: 0) {

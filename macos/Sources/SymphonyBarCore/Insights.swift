@@ -597,10 +597,10 @@ public enum Insights {
 
     /// The control bar's width from which the summary sits beside the controls (a desktop); under it, the summary has
     /// its own line under them (a laptop), as the catalog's Control bar section draws it.
-    public static let summaryBesideWidth: Double = 1600
+    public static let summaryBesideWidth = DesignTokens.ControlBar.summaryBesideWidth
 
     /// Whether a control bar `width` wide draws the summary beside its controls.
-    public static func summaryBeside(width: Double) -> Bool { width >= summaryBesideWidth }
+    public static func summaryBeside(width: Double) -> Bool { DesignTokens.ControlBar.summaryBeside(width: width) }
 
     /// The summary line under the controls: "Last 7 days by day, symphony, epic TP-1381: 14 shipped, 31M tokens, 52 runs".
     /// Its figures are the charts' totals, read from the same buckets the charts draw.
