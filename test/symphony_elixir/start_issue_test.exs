@@ -271,14 +271,16 @@ defmodule SymphonyElixir.StartIssueTest do
   end
 
   # A process that answers the one call the orchestrator's start makes, telling the test what it got.
+  # It tells the test before it replies: messages between two processes keep their order, so the
+  # report is in the test's mailbox by the time the call returns (TP-1547).
   defp start_call_server do
     parent = self()
 
     spawn_link(fn ->
       receive do
         {:"$gen_call", from, {:start_issue, %Issue{} = issue, note}} ->
-          GenServer.reply(from, {:ok, %{started: true, issue_id: issue.id, run_id: "run-1", session_id: nil}})
           send(parent, {:start_issue_call, issue, note})
+          GenServer.reply(from, {:ok, %{started: true, issue_id: issue.id, run_id: "run-1", session_id: nil}})
       end
     end)
   end
