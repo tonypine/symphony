@@ -246,7 +246,10 @@ final class ChildLaunchTests: XCTestCase {
 
         XCTAssertEqual(launch.environment["LINEAR_API_KEY"], key)
         XCTAssertEqual(launch.environment["GITHUB_TOKEN"], "ghp_ALSO_SECRET")
-        XCTAssertEqual(launch.environment["PATH"], "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin:/Users/me/.local/bin")
+        XCTAssertEqual(
+            launch.environment["PATH"],
+            "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin:/Users/me/.local/bin:/Users/me/.opencode/bin"
+        )
         XCTAssertFalse(commandLine.contains(key))
         XCTAssertFalse(commandLine.contains("ghp_ALSO_SECRET"))
     }
@@ -319,7 +322,7 @@ final class ChildLaunchTests: XCTestCase {
 
         XCTAssertEqual(
             launch.environment["PATH"],
-            "/usr/bin:/opt/homebrew/bin:/bin:/usr/local/bin:/Users/me/.local/bin"
+            "/usr/bin:/opt/homebrew/bin:/bin:/usr/local/bin:/Users/me/.local/bin:/Users/me/.opencode/bin"
         )
     }
 
@@ -332,7 +335,7 @@ final class ChildLaunchTests: XCTestCase {
 
         XCTAssertEqual(
             launch.environment["PATH"],
-            "/usr/bin:/bin:\(shims):/opt/homebrew/bin:/usr/local/bin:/Users/me/.local/bin"
+            "/usr/bin:/bin:\(shims):/opt/homebrew/bin:/usr/local/bin:/Users/me/.local/bin:/Users/me/.opencode/bin"
         )
     }
 

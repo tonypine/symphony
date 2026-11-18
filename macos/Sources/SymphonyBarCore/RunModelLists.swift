@@ -60,7 +60,7 @@ public struct RunModelLists: Equatable {
     }
 }
 
-/// OpenCode Go's models, as `opencode models opencode-go` lists them: one `opencode-go/<model>` per line. A
+/// OpenCode Go's models, as `opencode models` lists them: one `opencode-go/<model>` per line. A
 /// run names the model without the provider.
 public enum OpenCodeModels {
     public static let timeout: TimeInterval = 30
@@ -82,12 +82,24 @@ public enum OpenCodeModels {
     /// else `opencode`.
     public static func script(command: String?) -> String {
         let program = command.flatMap(ShellWords.split)?.first ?? "opencode"
-        return ShellWords.quote(program) + " models " + RunProfilesConfig.openCodeGo
+        return ShellWords.quote(program) + " models"
     }
 
-    /// `script(command:)` through a login shell, so the operator's PATH finds the program.
-    public static func launch(command: String?, environment: [String: String], workingDirectory: String) -> ChildLaunch {
-        ChildLaunch(
+    /// `script(command:)` through a login shell, with the PATH fallbacks a Finder-launched app needs to find
+    /// `opencode` in `~/.opencode/bin`, `~/.local/bin`, Homebrew or mise's shims.
+    public static func launch(
+        command: String?,
+        environment: [String: String],
+        workingDirectory: String,
+        files: FileChecker = LocalFileChecker()
+    ) -> ChildLaunch {
+        var environment = environment
+        environment["PATH"] = ChildLaunchBuilder.pathWithFallbacks(
+            environment["PATH"],
+            home: environment["HOME"],
+            miseShims: ChildLaunchBuilder.miseShimsDirectory(base: environment, files: files)
+        )
+        return ChildLaunch(
             executable: ChildLaunch.shell,
             arguments: ["-lc", script(command: command)],
             workingDirectory: workingDirectory,

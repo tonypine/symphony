@@ -226,7 +226,9 @@ public enum ChildLaunchBuilder {
         if directories.isEmpty { directories = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] }
 
         var fallbacks = (miseShims.map { [$0] } ?? []) + ChildLaunch.fallbackPathDirectories
-        if let home, !home.isEmpty { fallbacks.append(home + "/.local/bin") }
+        if let home, !home.isEmpty {
+            fallbacks.append(contentsOf: [home + "/.local/bin", home + "/.opencode/bin"])
+        }
         for directory in fallbacks where !directories.contains(directory) {
             directories.append(directory)
         }

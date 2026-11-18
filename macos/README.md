@@ -269,7 +269,8 @@ In Development mode it runs this in the checkout folder:
 
 The login shell loads your zsh profile, so a Finder-launched app still finds `mise`. In both modes the app
 appends to PATH, after your own PATH: mise's shims folder (`$MISE_DATA_DIR/shims`, else
-`~/.local/share/mise/shims`) when it exists, then `/opt/homebrew/bin`, `/usr/local/bin` and `~/.local/bin`.
+`~/.local/share/mise/shims`) when it exists, then `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and
+`~/.opencode/bin`.
 Build `bin/symphony` first with `mise exec -- mix build`. An empty `LINEAR_API_KEY` counts as not set, and
 Start asks you to add one.
 
@@ -1043,6 +1044,12 @@ The sidebar has five destinations, on ⌘1 to ⌘5:
 for now), **Work** (**Initiatives** and **Tickets** as two tabs), **Insights** (**Quality**, **Usage**, **Shipped** and
 **Audit** as tabs) and **Factory** (its badge counts the setup problems, in red), with its pages listed under it:
 **Setup**, **Repos** (which opens the Repos window), **Diagnostics** and **Settings** (which opens the Settings window).
+The sidebar and the page sit on one background with a faint glow at its top. The destination shown is tinted in the
+accent (grey while the window is not in front), and stays so while a ticket's page opened from it is shown. The bar's
+sidebar button, or ⌃⌘S, folds the sidebar to its glyphs, each count a dot and each name the glyph's help; ↑ and ↓
+move the keyboard through its rows. Under the page, the status line has the dispatch control (**Dispatch on** or
+**Dispatch paused**, opening its menu), how many tickets are in progress, in the queue and need you, then the build of
+Symphony that answers and whether it does.
 Work and Insights open on their first tab and come back to the tab shown last while the app runs. **Find a ticket**
 (⌘F, from any page) finds a ticket by its identifier or title as you type, listing the matches under it; Return opens
 the best match's page, and **Back** returns to where you were. On Tickets, Shipped and Audit, ⌘F puts the focus in the

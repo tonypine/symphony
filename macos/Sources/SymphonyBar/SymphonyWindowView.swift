@@ -6,7 +6,7 @@ import SymphonyBarCore
 /// What the Symphony window shows, refreshed by its controller.
 @MainActor
 final class SymphonyWindowModel: ObservableObject {
-    let sidebar = Sidebar()
+    let sidebar = SidebarRows()
     let client: LiveAPIClient
 
     /// The page shown; Repos and Settings never are, as they open their own windows.
@@ -92,6 +92,11 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var inboxSelection: String?
     /// The Inbox's drawer (TP-1454): the review of `inboxSelection` in the window's inspector, on Home or a ticket page.
     @Published var inboxDrawerShown = false
+    /// The sidebar folded to its glyphs (TP-1498): the window bar's toggle and ⌃⌘S, or the drawer's need of room.
+    @Published var sidebarCollapsed = false
+    /// True while the sidebar is folded for the drawer, so closing the drawer, or widening the window, brings it back;
+    /// a sidebar the Director folded stays folded.
+    private var sidebarFoldedForDrawer = false
     /// The Director's picks in each item's decisions, and its write-in, by issue id (C16, N11). Not `@Published`: a
     /// keystroke in the write-in redraws the window only when the text turns blank or stops being blank.
     private(set) var inboxPicks = InboxPicks() {
@@ -1020,11 +1025,40 @@ final class SymphonyWindowModel: ObservableObject {
         openTicket(identifier)
     }
 
-    /// The status bar's health line (TP-1454): the build that answers and whether Symphony does.
+    /// The window bar's sidebar toggle and ⌃⌘S: the sidebar the Director folds stays folded, even once the drawer
+    /// closes.
+    func toggleSidebar() {
+        sidebarFoldedForDrawer = false
+        sidebarCollapsed.toggle()
+    }
+
+    /// The View menu's item for ⌃⌘S.
+    var sidebarMenuTitle: String { sidebarCollapsed ? "Show Sidebar" : "Hide Sidebar" }
+
+    /// Folds the sidebar while the drawer is open in a window `windowWidth` wide, too narrow for the sidebar, the page
+    /// and the drawer, so the drawer's Close is never pushed off the window's edge; unfolds it once there is room.
+    func fitDrawer(windowWidth: Double) {
+        if HomeInbox.drawerFoldsSidebar(windowWidth: windowWidth, drawerShown: inboxDrawerShown && presentsInboxDrawer) {
+            guard !sidebarCollapsed else { return }
+            sidebarCollapsed = true
+            sidebarFoldedForDrawer = true
+        } else if sidebarFoldedForDrawer {
+            sidebarCollapsed = false
+            sidebarFoldedForDrawer = false
+        }
+    }
+
+    /// The status line (TP-1454, TP-1498): what is in progress and queued, from Home's read of the dispatch order, and
+    /// what needs the Director, the Inbox's count, then the build that answers and whether Symphony does.
     var healthLine: HealthLine {
-        HealthLine(
+        let counts = state.countsKnown
+            ? overviewWithSetup.flatMap {
+                HealthLine.Counts(board: HomeBoard(state: $0, scope: .all, now: Date()), needYou: inboxBadge)
+            }
+            : nil
+        return HealthLine(
             window: state, dispatch: dispatchControl, build: client.diagnostics?.build, appVersion: appVersion,
-            lastUpdate: client.lastUpdate
+            lastUpdate: client.lastUpdate, counts: counts
         )
     }
 
@@ -1036,8 +1070,9 @@ final class SymphonyWindowModel: ObservableObject {
     }
 }
 
-/// The Symphony window: a sidebar of views, the selected view under the window's own bar (TP-1496), and the status
-/// bar with the dispatch control and the factory's health (TP-1454).
+/// The Symphony window (TP-1498): on the window's backdrop, the sidebar flush with its leading edge, and beside it the
+/// selected view under the window's own bar (TP-1496), over the status line with the dispatch control and the
+/// factory's health (TP-1454). Nothing of it is the system's but the window's three buttons.
 struct SymphonyWindowView: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
@@ -1047,131 +1082,75 @@ struct SymphonyWindowView: View {
         client = model.client
     }
 
-    /// The sidebar, shown unless the Inbox's drawer needs its room (TP-1454).
-    @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    /// True while the sidebar is folded for the drawer, so closing the drawer, or widening the window, brings it back;
-    /// a sidebar the Director folded stays folded.
-    @State private var sidebarFoldedForDrawer = false
     @State private var windowWidth: Double = DesignTokens.Layout.windowWidth
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
+        HStack(spacing: 0) {
             SymphonySidebar(model: model, client: client)
-                .navigationSplitViewColumnWidth(
-                    min: DesignTokens.Layout.minSidebarWidth,
-                    ideal: DesignTokens.Layout.sidebarWidth,
-                    max: DesignTokens.Layout.maxSidebarWidth
-                )
-        } detail: {
-            // The status bar under the page, in the layout rather than an inset, so nothing on the page (the decision
-            // banner, the drawer) is drawn under it: one line of the factory's health, and the dispatch control
-            // (TP-1454). The window bar over the page's top, which scrolls under its glass (TP-1496), from the window's
-            // top edge: the system draws no toolbar there.
+            // The status line under the page, in the layout rather than an inset, so nothing on the page (the decision
+            // banner, the drawer) is drawn under it. The window bar over the page's top, which scrolls under its glass
+            // (TP-1496), from the window's top edge: the system draws no toolbar there.
             VStack(spacing: 0) {
                 SymphonyDetail(model: model, client: client)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .safeAreaInset(edge: .top, spacing: 0) {
-                        DirectorWindowBar(model: model, sidebarShown: columnVisibility != .detailOnly, toggleSidebar: toggleSidebar)
+                        DirectorWindowBar(model: model, sidebarShown: !model.sidebarCollapsed, toggleSidebar: model.toggleSidebar)
                     }
-                    .windowBackdrop()
                 WindowStatusBar(model: model, client: client)
             }
-                .ignoresSafeArea(.container, edges: .top)
-                .modifier(StopRunSheetPresenter(model: model))
-                .modifier(MoveSheetPresenter(model: model))
-                .modifier(DispatchSheetsPresenter(model: model))
+            .modifier(StopRunSheetPresenter(model: model))
+            .modifier(MoveSheetPresenter(model: model))
+            .modifier(DispatchSheetsPresenter(model: model))
         }
-        // The window bar is the Director's own (TP-1496): no system toolbar, and no sidebar toggle of its own.
-        .toolbar(removing: .sidebarToggle)
+        .ignoresSafeArea(.container, edges: .top)
+        // One backdrop, with its glow, behind the sidebar and the page.
+        .windowBackdrop()
         .onGeometryChange(for: Double.self) { $0.size.width } action: { width in
             windowWidth = width
-            fitDrawer()
+            model.fitDrawer(windowWidth: width)
         }
-        .onChange(of: model.inboxDrawerShown) { fitDrawer() }
-        .onChange(of: model.presentsInboxDrawer) { fitDrawer() }
-    }
-
-    /// The window bar's sidebar toggle: the sidebar the Director folds stays folded, even once the drawer closes.
-    private func toggleSidebar() {
-        sidebarFoldedForDrawer = false
-        columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
-    }
-
-    /// Folds the sidebar while the drawer is open in a window too narrow for the sidebar, the page and the drawer, so
-    /// neither the sidebar nor the drawer's Close is pushed off the window's edge; unfolds it once there is room.
-    private func fitDrawer() {
-        if HomeInbox.drawerFoldsSidebar(
-            windowWidth: windowWidth, drawerShown: model.inboxDrawerShown && model.presentsInboxDrawer
-        ) {
-            guard columnVisibility != .detailOnly else { return }
-            columnVisibility = .detailOnly
-            sidebarFoldedForDrawer = true
-        } else if sidebarFoldedForDrawer {
-            columnVisibility = .all
-            sidebarFoldedForDrawer = false
-        }
+        .onChange(of: model.inboxDrawerShown) { model.fitDrawer(windowWidth: windowWidth) }
+        .onChange(of: model.presentsInboxDrawer) { model.fitDrawer(windowWidth: windowWidth) }
     }
 }
 
-/// The sidebar: the five destinations, Factory with its pages under it (TP-1455). Symphony's version and state are in
-/// the status bar (TP-1454).
+/// The sidebar (TP-1455, TP-1498): the five destinations, Factory with its pages under it, each with its count. The
+/// destination shown stays current while a ticket's page opened from it is shown; picking it goes back to it. Repos
+/// and Settings open their windows. Symphony's version and state are in the status line (TP-1454).
 struct SymphonySidebar: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
 
     var body: some View {
-        List(selection: selection) {
-            ForEach(model.sidebar.items, id: \.self) { item in
-                switch item {
-                case let .destination(destination):
-                    SidebarRowContent(title: destination.title, symbol: destination.symbol, badge: model.badge(destination))
-                        .help(destination.shortcutHelp)
-                        .tag(item)
-                case let .page(page):
-                    SidebarRowContent(title: page.title, symbol: page.symbol, badge: nil, indented: true)
-                        .help(page.opensOwnWindow ? "Opens the \(page.title) window" : page.title)
-                        .tag(item)
-                }
+        Sidebar(
+            Self.entries(model.sidebar.items, badge: model.badge), current: model.sidebar.item(for: model.selection),
+            collapsed: model.sidebarCollapsed
+        ) { item in
+            switch item {
+            case let .destination(destination): model.show(destination)
+            case let .page(page): model.show(page)
             }
         }
-        .listStyle(.sidebar)
     }
 
-    /// The list's selection: a destination opens on its last page, Repos and Settings open their windows instead of
-    /// being selected.
-    private var selection: Binding<SidebarItem?> {
-        Binding(
-            // On a page no row is selected, so choosing the destination the page came from goes back to it.
-            get: { model.showsPage ? nil : model.sidebar.item(for: model.selection) },
-            set: { item in
-                switch item {
-                case let .destination(destination): model.show(destination)
-                case let .page(page): model.show(page)
-                case nil: break
-                }
-            }
-        )
-    }
-}
-
-/// A row of the sidebar: its label, and C1's count (`CountBadge`) when it has one. One VoiceOver element: "Home, 4
-/// waiting".
-struct SidebarRowContent: View {
-    let title: String
-    let symbol: String
-    let badge: DestinationBadge?
-    var indented = false
-
-    var body: some View {
-        HStack(spacing: DesignTokens.Space.s2) {
-            Label(title, systemImage: symbol)
-            Spacer(minLength: 0)
-            if let badge {
-                CountBadge(badge.count, role: badge.status, spoken: badge.accessibilityValue)
+    /// The sidebar's rows for `items`: a destination with its help ("Work (⌘3)") and its count, a page under Factory
+    /// one step in.
+    static func entries(_ items: [SidebarItem], badge: (Destination) -> DestinationBadge?) -> [SidebarEntry<SidebarItem>] {
+        items.map { item in
+            switch item {
+            case let .destination(destination):
+                let badge = badge(destination)
+                return SidebarEntry(
+                    id: item, title: destination.title, symbol: destination.symbol, help: destination.shortcutHelp,
+                    count: badge?.count ?? 0, countRole: badge?.status, spoken: badge?.accessibilityValue
+                )
+            case let .page(page):
+                return SidebarEntry(
+                    id: item, title: page.title, symbol: page.symbol,
+                    help: page.opensOwnWindow ? "Opens the \(page.title) window" : page.title, child: true
+                )
             }
         }
-        .padding(.leading, indented ? DesignTokens.Space.s4 : 0)
-        .accessibilityElement(children: .combine)
     }
 }
 
