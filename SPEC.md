@@ -5502,6 +5502,10 @@ Token accounting rules:
   `max(input_tokens - cached_input_tokens, 0)` unless an explicit uncached field is present.
 - For Anthropic payloads, treat `input_tokens` as uncached input and preserve
   `cache_read_input_tokens` as cached input plus `cache_creation_input_tokens`.
+- Count each model message's usage once. Claude Code's stream writes one `assistant` line per
+  content block of a message (its text, then each tool call), each repeating the whole message's
+  `usage` under the same `message.id`; the Claude adapter sums a turn's lines by message id, adding
+  only what a repeated message's usage grew by.
 - For absolute totals, track deltas relative to last reported totals to avoid double-counting.
 - Do not treat generic `usage` maps as cumulative totals unless the event type defines them that
   way.

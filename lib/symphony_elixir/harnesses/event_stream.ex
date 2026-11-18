@@ -6,7 +6,9 @@ defmodule SymphonyElixir.Harnesses.EventStream do
 
     * `{:session_started, id}`, `{:agent_text, text}`, `{:tool_use, name}`,
       `{:tool_result, text}`, `{:tool_progress, name}`, `{:notification, text}`;
-    * `{:token_usage_delta, usage}`, summed into the turn's token counts;
+    * `{:token_usage_delta, usage}`, summed into the turn's token counts; a delta that names its
+      model message (`:message_id`) counts once per message, as Claude repeats a message's usage
+      on the line of each of its content blocks;
     * `{:turn_completed, result}` and `{:turn_failed, reason}`, which end the turn, as do
       `{:usage_limited, info}`, `{:api_unreachable, info}` and `{:rate_limited, info, reason}`;
     * `{:usage_window, message, window}` and `{:rate_limit_info, info}`;
@@ -43,6 +45,7 @@ defmodule SymphonyElixir.Harnesses.EventStream do
       session_id: nil,
       input_tokens: 0,
       output_tokens: 0,
+      counted_usage: %{},
       turn_failed: nil,
       turn_completed: false,
       diagnostic_output_lines: [],
@@ -199,7 +202,8 @@ defmodule SymphonyElixir.Harnesses.EventStream do
      |> Map.delete(:api_unreachable)
      |> Map.delete(:provider)
      |> Map.delete(:usage_windows)
-     |> Map.delete(:label)}
+     |> Map.delete(:label)
+     |> Map.delete(:counted_usage)}
   end
 
   defp update_command_tracking(%{command_timeout_ms: timeout_ms} = loop_state, _event)
@@ -279,6 +283,8 @@ defmodule SymphonyElixir.Harnesses.EventStream do
   end
 
   defp apply_event({:token_usage_delta, delta}, on_message, acc) do
+    {delta, acc} = uncounted_usage(delta, acc)
+
     uncached_input =
       Map.get(acc, :uncached_input_tokens, Map.get(acc, :input_tokens, 0)) +
         Map.get(delta, :uncached_input_tokens, Map.get(delta, :input_tokens, 0))
@@ -370,6 +376,26 @@ defmodule SymphonyElixir.Harnesses.EventStream do
     on_message.(event)
     acc
   end
+
+  # Claude writes one stream line per content block of a model message (its text, then each tool
+  # call), and every line repeats the whole message's usage, so summing the lines counts a message
+  # once per block. A delta that names its message adds only what that message's usage grew by
+  # since its last line: each message counts once.
+  @counted_usage_fields [:uncached_input_tokens, :cached_input_tokens, :cache_creation_input_tokens, :output_tokens]
+
+  defp uncounted_usage(%{message_id: message_id} = delta, acc) when is_binary(message_id) do
+    counted = Map.get(acc.counted_usage, message_id, %{})
+
+    usage =
+      Map.new(@counted_usage_fields, fn field ->
+        {field, max(Map.get(delta, field, 0), Map.get(counted, field, 0))}
+      end)
+
+    growth = Map.new(@counted_usage_fields, fn field -> {field, usage[field] - Map.get(counted, field, 0)} end)
+    {growth, %{acc | counted_usage: Map.put(acc.counted_usage, message_id, usage)}}
+  end
+
+  defp uncounted_usage(delta, acc), do: {delta, acc}
 
   defp record_diagnostic_output(acc, raw) when is_binary(raw) do
     line = normalize_diagnostic_output_line(raw)
