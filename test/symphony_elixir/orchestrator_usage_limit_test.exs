@@ -537,7 +537,9 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
     assert Map.has_key?(:sys.get_state(pid).usage_limits, @anthropic)
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [issue])
-    :sys.replace_state(pid, &%{&1 | repo_poll_due_at_ms: %{}})
+    # A forced poll reads the new list even when a poll that read the old one is still in flight;
+    # resetting the due times would let that poll's result put the repo out of reach again.
+    :ok = Orchestrator.request_refresh(pid, Config.repo_key!(), due: :now)
     set_clock(ctx, DateTime.add(ctx.now, 3720))
 
     log =

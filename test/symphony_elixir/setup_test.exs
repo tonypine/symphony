@@ -330,10 +330,18 @@ defmodule SymphonyElixir.SetupTest do
         File.write!(workflow, "---\nnot_a_key: 1\n---\nPrompt\n")
         bump_mtime!(workflow)
         assert {:ok, _workflow, [stale: true]} = Cache.get_workflow(workflow)
+
+        # The workflow store's poll reads the workflow every second; a read of the removed file
+        # would replace the rejection with the missing file before the check runs (TP-1546).
+        store = Process.whereis(SymphonyElixir.WorkflowStore)
+        :ok = :sys.suspend(store)
+        on_exit(fn -> if Process.alive?(store), do: :sys.resume(store) end)
+
         File.rm!(workflow)
         assert %{problems: [problem]} = Setup.check()
         assert Enum.any?(problem.details, &(&1.label == "Key"))
         refute Enum.any?(problem.details, &(&1.label == "Line"))
+        :ok = :sys.resume(store)
       end)
     end
 
