@@ -5,7 +5,7 @@ import Foundation
 public enum SymphonyView: String, CaseIterable, Equatable, Hashable, Identifiable {
     /// `overview` is Home (TP-1453); the raw value stays, so the view the window remembers still opens. The Inbox is
     /// Home's drawer (TP-1454): a window that remembers it opens on Home.
-    case inbox, overview, journal, initiatives, tickets, quality, usage, shipped, audit, setup, repos, diagnostics, settings
+    case inbox, overview, journal, initiatives, tickets, quality, usage, shipped, audit, setup, repos, runs, diagnostics, settings
 
     public var id: String { rawValue }
 
@@ -22,6 +22,7 @@ public enum SymphonyView: String, CaseIterable, Equatable, Hashable, Identifiabl
         case .audit: "Audit"
         case .setup: "Setup"
         case .repos: "Repos"
+        case .runs: "Runs"
         case .diagnostics: "Diagnostics"
         case .settings: "Settings"
         }
@@ -41,6 +42,7 @@ public enum SymphonyView: String, CaseIterable, Equatable, Hashable, Identifiabl
         case .audit: "Every move on record, hash-chained"
         case .setup: "What's wrong with the setup, and how to fix it"
         case .repos: "Repositories Symphony works on"
+        case .runs: "Each kind of run and its fallbacks"
         case .diagnostics: "Symphony's own health"
         case .settings: "The app's and Symphony's settings"
         }
@@ -60,6 +62,7 @@ public enum SymphonyView: String, CaseIterable, Equatable, Hashable, Identifiabl
         case .audit: "checklist"
         case .setup: "wrench.and.screwdriver"
         case .repos: "square.stack.3d.up"
+        case .runs: "play.square.stack"
         case .diagnostics: "stethoscope"
         case .settings: "gearshape"
         }
@@ -72,7 +75,7 @@ public enum SymphonyView: String, CaseIterable, Equatable, Hashable, Identifiabl
         case .journal: .journal
         case .initiatives, .tickets: .work
         case .quality, .usage, .shipped, .audit: .insights
-        case .setup, .repos, .diagnostics, .settings: .factory
+        case .setup, .repos, .runs, .diagnostics, .settings: .factory
         }
     }
 
@@ -127,7 +130,7 @@ public enum Destination: String, CaseIterable, Equatable, Hashable, Identifiable
         case .journal: [.journal]
         case .work: [.initiatives, .tickets]
         case .insights: [.quality, .usage, .shipped, .audit]
-        case .factory: [.setup, .repos, .diagnostics, .settings]
+        case .factory: [.setup, .repos, .runs, .diagnostics, .settings]
         }
     }
 

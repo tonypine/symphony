@@ -1,0 +1,324 @@
+import SwiftUI
+import SymphonyBarCore
+
+// Factory › Runs (TP-1538), as the catalog draws it (`runsPage`, `.runs-page`): the Save bar with For on its left, then
+// one panel with Default and the nine kinds of run, each always open, each a Reorderable list of its first choice and
+// fallbacks, then the Harnesses block (TP-1539) for All repositories. Built from the shared Save bar, Pop-up,
+// Searchable pop-up, Text field and Reorderable list (TP-1530, TP-1531).
+
+/// What the page asks of whoever holds it. Every edit changes the page's values only; Save writes them.
+public struct RunsPageActions {
+    public var show: (RunProfilesScope) -> Void
+    public var pick: (_ kind: RunKind?, _ line: Int, _ field: RunProfileField, _ value: String?) -> Void
+    public var useDefaults: (RunKind?) -> Void
+    public var addFallback: (RunKind?) -> Void
+    public var remove: (_ kind: RunKind?, _ line: Int) -> Void
+    public var reorder: (_ kind: RunKind?, _ order: [Int]) -> Void
+    public var revert: () -> Void
+    public var save: () -> Void
+    public var setCommand: (_ harness: Harness, _ command: String) -> Void
+    public var pickSmallModel: (_ harness: Harness, _ provider: String, _ value: String?) -> Void
+
+    public init(
+        show: @escaping (RunProfilesScope) -> Void, pick: @escaping (RunKind?, Int, RunProfileField, String?) -> Void,
+        useDefaults: @escaping (RunKind?) -> Void, addFallback: @escaping (RunKind?) -> Void, remove: @escaping (RunKind?, Int) -> Void,
+        reorder: @escaping (RunKind?, [Int]) -> Void, revert: @escaping () -> Void, save: @escaping () -> Void,
+        setCommand: @escaping (Harness, String) -> Void, pickSmallModel: @escaping (Harness, String, String?) -> Void
+    ) {
+        self.show = show
+        self.pick = pick
+        self.useDefaults = useDefaults
+        self.addFallback = addFallback
+        self.remove = remove
+        self.reorder = reorder
+        self.revert = revert
+        self.save = save
+        self.setCommand = setCommand
+        self.pickSmallModel = pickSmallModel
+    }
+
+    /// Actions that do nothing, for a still picture.
+    public static var none: RunsPageActions {
+        RunsPageActions(
+            show: { _ in }, pick: { _, _, _, _ in }, useDefaults: { _ in }, addFallback: { _ in }, remove: { _, _ in },
+            reorder: { _, _ in }, revert: {}, save: {}, setCommand: { _, _ in }, pickSmallModel: { _, _, _ in }
+        )
+    }
+}
+
+/// A still state of the page, for a story: a model list drawn open on a line, and a line drawn lifted.
+public struct RunsPageDrawn: Equatable {
+    /// The row (`RunsPage.Row.id`) and the line (0 for the first choice) whose Model list is open, and what is typed.
+    public var modelOpen: (row: String, line: Int)?
+    public var query: String
+    /// The row and line drawn being dragged.
+    public var dragging: (row: String, line: Int)?
+
+    public init(modelOpen: (row: String, line: Int)? = nil, query: String = "", dragging: (row: String, line: Int)? = nil) {
+        self.modelOpen = modelOpen
+        self.query = query
+        self.dragging = dragging
+    }
+
+    public static func == (lhs: RunsPageDrawn, rhs: RunsPageDrawn) -> Bool {
+        lhs.modelOpen?.row == rhs.modelOpen?.row && lhs.modelOpen?.line == rhs.modelOpen?.line && lhs.query == rhs.query
+            && lhs.dragging?.row == rhs.dragging?.row && lhs.dragging?.line == rhs.dragging?.line
+    }
+}
+
+/// The page: the Save bar pinned at the top, the rows scrolling under it, at most 1320 pt wide.
+public struct RunsPageView: View {
+    let page: RunsPage
+    let actions: RunsPageActions
+    let drawn: RunsPageDrawn?
+    /// Snapshots draw the list unscrolled, its whole height: a picture renderer draws a scroll view empty.
+    let scrolls: Bool
+    /// Bumped at each reorder, so a list the editor didn't take (a refused move) is drawn again from the page's order.
+    @State private var reorders = 0
+
+    public init(page: RunsPage, actions: RunsPageActions, drawn: RunsPageDrawn? = nil, scrolls: Bool = true) {
+        self.page = page
+        self.actions = actions
+        self.drawn = drawn
+        self.scrolls = scrolls
+    }
+
+    public var body: some View {
+        let tokens = DesignTokens.RunsPage.self
+        VStack(alignment: .leading, spacing: tokens.gap) {
+            bar
+                .frame(maxWidth: tokens.maxWidth)
+                .padding(.top, tokens.top)
+                .padding(.horizontal, tokens.sides)
+            if scrolls {
+                ScrollView { content }
+            } else {
+                content
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var content: some View {
+        let tokens = DesignTokens.RunsPage.self
+        let harnesses = page.harnessRows
+        return VStack(alignment: .leading, spacing: tokens.gap) {
+            list
+            if !harnesses.isEmpty {
+                RunsHarnessesView(rows: harnesses, actions: actions, editable: page.isEditable)
+            }
+        }
+            .frame(maxWidth: tokens.maxWidth)
+            .padding(.horizontal, tokens.sides)
+            .padding(.bottom, tokens.bottom)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var saveState: SaveBarState {
+        switch page.save {
+        case .editing: .editing
+        case .saving: .saving
+        case .saved: .saved
+        case .refused(let reason): .refused(reason)
+        }
+    }
+
+    private var bar: some View {
+        SaveBar(changes: page.changeCount, state: saveState, onRevert: actions.revert, onSave: actions.save) {
+            PopUp(
+                RunsPage.scopeLabel,
+                selection: Binding(get: { page.scope }, set: { actions.show($0) }),
+                choices: page.scopes.map { PopUpChoice($0.scope, $0.title) },
+                size: DesignTokens.RunsPage.control
+            )
+        }
+    }
+
+    private var list: some View {
+        let tokens = DesignTokens.RunsPage.self
+        let rows = page.rows
+        return VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                if index > 0, !rows[index - 1].isDefault {
+                    HairlineDivider()
+                }
+                RunsRowView(row: row, actions: actions, drawn: drawn, reordered: { reorders += 1 })
+                    .id("\(row.id)-\(reorders)")
+            }
+        }
+        .padding(tokens.listPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .panelSurface(in: PanelStyle.shape)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(SymphonyView.runs.title)
+    }
+}
+
+/// One kind of run: its name and "Use Default's" on the left, its lines as a Reorderable list on the right, with Add a
+/// Fallback under them and, with no fallback, the line saying a run waits.
+struct RunsRowView: View {
+    let row: RunsPage.Row
+    let actions: RunsPageActions
+    let drawn: RunsPageDrawn?
+    /// Tells the page a list was reordered, so it draws the lists again from its order.
+    var reordered: () -> Void = {}
+
+    var body: some View {
+        let tokens = DesignTokens.RunsPage.self
+        let shape = RoundedRectangle(cornerRadius: tokens.defaultRadius, style: .continuous)
+        HStack(alignment: .top, spacing: tokens.rowGap) {
+            VStack(alignment: .leading, spacing: tokens.kindGap) {
+                Text(row.title)
+                    .textStyle(.rowTitle)
+                    .foregroundStyle(DesignTokens.TextColor.primary.color)
+                    .lineLimit(1)
+                    .frame(minHeight: tokens.kindLineHeight)
+                    .accessibilityAddTraits(.isHeader)
+                if row.canUseDefaults {
+                    Button(RunsPage.useDefaults) { actions.useDefaults(row.kind) }
+                        .buttonStyle(DirectorButtonStyle(kind: .quiet, size: tokens.control))
+                        .padding(.leading, tokens.useDefaultsInset)
+                        .accessibilityLabel("\(RunsPage.useDefaults) for \(row.title)")
+                }
+            }
+            .frame(width: tokens.kindWidth, alignment: .leading)
+            ReorderableList(
+                row.lines,
+                onReorder: { order in
+                    actions.reorder(row.kind, order)
+                    reordered()
+                },
+                onRemove: { actions.remove(row.kind, $0) },
+                removable: { place in row.lines.first { $0.id == place }?.removable ?? false },
+                removeHelp: { RunsPage.Line.removeHelp($0 - 1) },
+                addTitle: RunsPage.addFallback,
+                onAdd: { actions.addFallback(row.kind) },
+                footNote: row.waits.map { ReorderFootNote($0, status: .you) },
+                drawn: drawnList
+            ) { line in
+                RunsLineView(row: row, line: line, actions: actions, drawn: drawn)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(tokens.rowPadding)
+        .background { if row.isDefault { shape.fill(tokens.defaultFill.color) } }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(row.title)
+    }
+
+    /// The still list of a story: the line it drags, or none.
+    private var drawnList: ReorderableListDrawn? {
+        guard let drawn else { return nil }
+        guard let dragging = drawn.dragging, dragging.row == row.id else { return ReorderableListDrawn() }
+        return ReorderableListDrawn(dragging: dragging.line + 1)
+    }
+}
+
+/// A line's four pop-ups: Harness, Provider, Model (searchable, in the mono face) and Effort, each grey while its value
+/// comes from Default.
+struct RunsLineView: View {
+    let row: RunsPage.Row
+    let line: RunsPage.Line
+    let actions: RunsPageActions
+    let drawn: RunsPageDrawn?
+
+    var body: some View {
+        ForEach(line.fields, id: \.field) { field in
+            control(field)
+        }
+    }
+
+    @ViewBuilder
+    private func control(_ field: RunsPage.Field) -> some View {
+        let selection = Binding<String?>(get: { field.value }, set: { actions.pick(row.kind, line.id, field.field, $0) })
+        let choices = field.choices.map { PopUpChoice($0.value, $0.title) }
+        let spoken = "\(field.label), \(row.title) line \(line.id + 1)"
+        if field.isSearchable {
+            SearchablePopUp(
+                field.label, selection: selection, choices: choices, noun: field.label.lowercased(), mono: true,
+                inherited: !field.isOwn, drawnOpen: open
+            )
+            .accessibilityLabel(spoken)
+        } else {
+            PopUp(
+                field.label, selection: selection, choices: choices, size: DesignTokens.RunsPage.control, accessibilityLabel: spoken,
+                inherited: !field.isOwn
+            )
+        }
+    }
+
+    /// The Model list drawn open on this line, for a story.
+    private var open: SearchablePopUp<String?>.DrawnOpen? {
+        guard let drawn, let modelOpen = drawn.modelOpen, modelOpen.row == row.id, modelOpen.line == line.id else { return nil }
+        let field = line.fields.first { $0.isSearchable }
+        let shown = (field?.choices ?? []).filter { MenuSearch.matches($0.title, query: drawn.query) }
+        return .init(query: drawn.query, highlighted: shown.count > 1 ? shown[1].value : nil)
+    }
+}
+
+/// The Harnesses block (`.run-harnesses`): under its zone title, one row per harness with its name, its Command field
+/// and a Searchable pop-up of the small model it calls on each provider in use, rows split by a hairline.
+struct RunsHarnessesView: View {
+    let rows: [RunsPage.HarnessRow]
+    let actions: RunsPageActions
+    var editable = true
+
+    var body: some View {
+        let tokens = DesignTokens.RunsPage.self
+        TitledPanel(title: RunsPage.harnessesTitle, spacing: tokens.harnessRowGap) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                if index > 0 { HairlineDivider() }
+                RunsHarnessRowView(row: row, actions: actions, editable: editable)
+            }
+        }
+    }
+}
+
+/// One harness: its name, its command, and its small models wrapping when they don't fit.
+struct RunsHarnessRowView: View {
+    let row: RunsPage.HarnessRow
+    let actions: RunsPageActions
+    var editable = true
+
+    /// Why the fields are off: while the page takes no edits (a save under way), both say so.
+    private var reason: String? { editable ? nil : RunsPage.savingReason }
+
+    var body: some View {
+        let tokens = DesignTokens.RunsPage.self
+        HStack(alignment: .top, spacing: tokens.harnessColumnGap) {
+            Text(row.title)
+                .textStyle(.rowTitle)
+                .foregroundStyle(DesignTokens.TextColor.primary.color)
+                .lineLimit(1)
+                .padding(.top, tokens.harnessNameTop)
+                .frame(width: tokens.harnessNameWidth, alignment: .leading)
+                .accessibilityAddTraits(.isHeader)
+            HStack(spacing: tokens.commandLabelGap) {
+                Text(RunsPage.commandLabel)
+                    .textStyle(.secondary)
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    .accessibilityHidden(true)
+                DirectorTextField(
+                    nil, text: Binding(get: { row.command }, set: { actions.setCommand(row.harness, $0) }),
+                    placeholder: RunsPage.commandLabel, size: tokens.control, disabledReason: reason, mono: true
+                )
+                .frame(width: tokens.commandWidth)
+                .accessibilityLabel("\(row.title) \(RunsPage.commandLabel.lowercased())")
+            }
+            FlowLayout(spacing: tokens.smallModelGap, lineSpacing: tokens.smallModelLineGap) {
+                ForEach(row.smallModels) { model in
+                    SearchablePopUp(
+                        model.label,
+                        selection: Binding(get: { model.value }, set: { actions.pickSmallModel(row.harness, model.provider, $0) }),
+                        choices: model.choices.map { PopUpChoice($0.value, $0.title) }, noun: "model", mono: true,
+                        disabledReason: reason
+                    )
+                    .accessibilityLabel("\(row.title) \(model.label.lowercased())")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(row.title)
+    }
+}
