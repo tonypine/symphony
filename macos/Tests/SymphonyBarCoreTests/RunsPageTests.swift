@@ -85,7 +85,7 @@ final class RunsPageTests: XCTestCase {
         let first = row(.qa, of: page).lines[0].fields
         XCTAssertEqual(first[0].choices.map(\.title), ["Claude", "Codex", "OpenCode"])
         XCTAssertEqual(first[1].choices.map(\.title), ["Anthropic", "OpenRouter", "OpenCode Go"])
-        XCTAssertEqual(first[2].choices.map(\.value), ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-4-5-20251001"])
+        XCTAssertEqual(first[2].choices.map(\.value), RunProfilesConfig.models.map(\.id))
         XCTAssertEqual(first[2].choices.map(\.title), first[2].choices.map(\.value), "models show as their identifiers")
         XCTAssertEqual(first[3].choices.map(\.title), ["low", "medium", "high", "xhigh", "max"])
         XCTAssertEqual(row(.qa, of: page).lines[1].fields[2].choices.map(\.title), ["deepseek/deepseek-flash"], "a list not loaded offers the value")
