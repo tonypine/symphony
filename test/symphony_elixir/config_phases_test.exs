@@ -224,11 +224,125 @@ defmodule SymphonyElixir.ConfigPhasesTest do
     end
   end
 
-  test "each kind's steps are one setting of symphony.yml" do
+  test "each kind's steps are one setting of symphony.yml, and QA's switch and playbook lists are two more" do
     paths = SystemSchema.operator_key_paths()
 
     assert "phases.implementation.steps" in paths
     assert "phases.rework.steps" in paths
+    assert "phases.qa.stepped" in paths
+    assert "phases.qa.playbooks" in paths
+  end
+
+  describe "an agent step's model, effort, session and repeat" do
+    test "an agent step of any kind's list takes them" do
+      steps =
+        steps!([
+          %{"id" => "code", "mode" => "delegated", "model" => "claude-test", "effort" => "high", "session" => "lead"},
+          %{"id" => "look", "mode" => "orchestrated", "prompt" => "Look.", "session" => "fresh", "repeat" => "walkthrough", "model" => "small"}
+        ])
+
+      assert [%Step{model: "claude-test", effort: "high", session: "lead", repeat: nil}, %Step{model: "small", session: "fresh", repeat: "walkthrough"}] = steps
+      assert Step.repeats() == ["walkthrough"]
+      assert Step.fresh_session() == "fresh"
+    end
+
+    test "a step that sets none keeps the run's" do
+      assert [%Step{model: nil, effort: nil, session: nil, repeat: nil}] = steps!([code()])
+    end
+
+    test "a machine step is refused them, naming the key" do
+      for key <- ~w(model effort session repeat) do
+        assert refused_steps([machine("build", %{key => "x"})]) =~ "phases.implementation.steps.#{key} is only for an agent step; step `build` is machine"
+      end
+    end
+
+    test "a bad value is refused, naming the key" do
+      assert refused_steps([%{"id" => "code", "mode" => "delegated", "effort" => "huge"}]) =~
+               "phases.implementation.steps.effort of step `code` must be one of: low, medium, high, xhigh, max"
+
+      assert refused_steps([%{"id" => "code", "mode" => "delegated", "session" => "Lead one"}]) =~
+               "phases.implementation.steps.session of step `code` must be `fresh` or a name"
+
+      assert refused_steps([%{"id" => "code", "mode" => "delegated", "repeat" => "always"}]) =~
+               "phases.implementation.steps.repeat of step `code` must be one of: walkthrough"
+
+      assert [%Step{model: nil}] = steps!([%{"id" => "code", "mode" => "delegated", "model" => " "}])
+    end
+  end
+
+  describe "QA's stepped passes" do
+    test "are off by default, and a file with no phases.qa has the macos_app default list" do
+      assert {:ok, system} = SystemSchema.parse(symphony(%{}))
+
+      refute Phases.qa_stepped?(system.phases)
+      steps = Phases.qa_steps(system.phases, "macos_app")
+
+      assert Enum.map(steps, &{&1.id, &1.mode}) == [
+               {"pre_checks", "machine"},
+               {"build", "machine"},
+               {"plan", "orchestrated"},
+               {"launch", "machine"},
+               {"walk", "orchestrated"},
+               {"design_check", "orchestrated"},
+               {"wide_pass", "orchestrated"},
+               {"quit", "machine"},
+               {"attach", "machine"},
+               {"review", "orchestrated"}
+             ]
+
+      by_id = Map.new(steps, &{&1.id, &1})
+      assert %Step{session: "lead", effort: "high", answer: %{"needs_app" => "boolean", "walk" => "list"}} = by_id["plan"]
+      assert %Step{repeat: "walkthrough", session: "fresh", model: "small"} = by_id["walk"]
+      assert %Step{session: "lead", answer: %{}} = by_id["review"]
+      assert by_id["plan"].prompt =~ "You plan this QA pass"
+      assert [%Command{run: "symphony:qa_launch"}] = by_id["launch"].command
+      assert Phases.qa_steps(system.phases, "cli") == []
+      assert Phases.default_qa_steps("web") == []
+      assert "symphony:qa_build" in Phases.qa_commands()
+    end
+
+    test "stepped turns them on, with only the switch set" do
+      assert {:ok, system} = parse(%{"qa" => %{"stepped" => true}})
+      assert Phases.qa_stepped?(system.phases)
+      assert Phases.steps(system.phases, :qa) == []
+      assert length(Phases.qa_steps(system.phases, "macos_app")) == 10
+    end
+
+    test "a playbook's list replaces its default, and an orchestrated step with no prompt takes Symphony's own" do
+      list = [
+        %{"id" => "build", "mode" => "machine", "command" => "symphony:qa_build"},
+        %{"id" => "walk", "mode" => "orchestrated", "repeat" => "walkthrough"},
+        %{"id" => "review", "mode" => "orchestrated", "prompt" => "Judge it."}
+      ]
+
+      assert {:ok, system} = parse(%{"qa" => %{"stepped" => true, "playbooks" => %{"macos_app" => %{"steps" => list}, "cli" => %{"steps" => [code()]}}}})
+
+      assert [%Step{id: "build"}, %Step{id: "walk", prompt: walk_prompt}, %Step{id: "review", prompt: "Judge it."}] = Phases.qa_steps(system.phases, "macos_app")
+      assert walk_prompt =~ "You walk one step"
+      assert [%Step{id: "code"}] = Phases.qa_steps(system.phases, "cli")
+    end
+
+    test "a bad playbook list is refused, naming its key" do
+      qa = &%{"qa" => %{"stepped" => true, "playbooks" => &1}}
+
+      assert refused(qa.(%{"cli" => %{"steps" => [%{"id" => "look", "mode" => "orchestrated"}]}})) =~
+               "phases.qa.playbooks.cli.steps.prompt is required for orchestrated step `look`"
+
+      assert refused(qa.(%{"macos_app" => %{"steps" => [code(), code()]}})) =~ "phases.qa.playbooks.macos_app.steps has two steps with the id `code`"
+      assert refused(qa.(%{"macos_app" => %{"steps" => [code()], "when" => "x"}})) =~ "unknown symphony.yml key `phases.qa.playbooks.macos_app.when`"
+      assert refused(qa.(%{"macos_app" => %{}})) =~ "`phases.qa.playbooks.macos_app.steps` is required"
+      assert refused(qa.(%{"macos_app" => "x"})) =~ "`phases.qa.playbooks.macos_app` must be an object"
+      assert refused(qa.(["macos_app"])) =~ "`phases.qa.playbooks` must be an object"
+      assert refused(qa.(%{"Mac App" => %{"steps" => []}})) =~ "phases.qa.playbooks.Mac App must be named in lowercase letters"
+      assert refused(%{"qa" => %{"stepped" => "yes"}}) =~ "phases.qa.stepped is invalid"
+    end
+
+    test "only a QA playbook's list runs the QA pass's own commands" do
+      assert refused_steps([code(), machine("build", %{"command" => "symphony:qa_build"})]) =~
+               "phases.implementation.steps step `build` runs `symphony:qa_build`, which only a QA playbook's list"
+
+      assert refused(%{"qa" => %{"steps" => [machine("launch", %{"command" => "symphony:qa_launch"})]}}) =~ "phases.qa.steps step `launch` runs `symphony:qa_launch`"
+    end
   end
 
   test "the step model's modes and conditions" do
