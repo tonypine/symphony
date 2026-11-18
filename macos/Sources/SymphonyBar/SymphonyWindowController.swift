@@ -135,7 +135,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
                 base: { [weak self] in self.flatMap { StateRoot.controlURL(in: $0.stateRoot(), fallback: AppStores.current.apiFallback) } },
                 connect: AppStores.current.apiStreamTransport
             )
-            let model = SymphonyWindowModel(client: client, eventStream: eventStream, selection: Sidebar().restoredView(saved: saved))
+            let model = SymphonyWindowModel(client: client, eventStream: eventStream, selection: SidebarRows().restoredView(saved: saved))
             model.state = state
             model.paused = paused
             model.updateHold = updateHold
@@ -255,12 +255,13 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
 
     // MARK: View menu
 
-    /// The main menu's View items: one per destination on ⌘1–⌘5 (TP-1455), Open Inbox on ⇧⌘I (Home's drawer), Back
+    /// The main menu's View items: one per destination on ⌘1–⌘5 (TP-1455), Open Inbox on ⇧⌘I (Home's drawer), Hide or
+    /// Show Sidebar on ⌃⌘S (TP-1498), Back
     /// and Forward on ⌘[ and ⌘], ⌘F (the page's search on Tickets, Shipped and Audit, Find a Ticket elsewhere), Find a
     /// Ticket on ⌥⌘F beside a page's search (TP-1497), and Refresh on ⌘R.
     func viewMenu() -> NSMenu {
         let menu = NSMenu(title: "View")
-        for entry in Sidebar().menuItems {
+        for entry in SidebarRows().menuItems {
             let item = NSMenuItem(title: entry.title, action: #selector(selectDestination(_:)), keyEquivalent: entry.keyEquivalent)
             item.representedObject = entry.destination.rawValue
             item.target = self
@@ -270,6 +271,12 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         inbox.keyEquivalentModifierMask = [.command, .shift]
         inbox.target = self
         menu.addItem(inbox)
+        menu.addItem(.separator())
+        // The sidebar folds to its glyphs and back (TP-1498), as the window bar's toggle does.
+        let sidebar = NSMenuItem(title: "Hide Sidebar", action: #selector(toggleSidebar(_:)), keyEquivalent: "s")
+        sidebar.keyEquivalentModifierMask = [.command, .control]
+        sidebar.target = self
+        menu.addItem(sidebar)
         menu.addItem(.separator())
         let back = NSMenuItem(title: NavigationHistory.backTitle, action: #selector(goBack(_:)), keyEquivalent: String(NavigationHistory.backKey))
         back.target = self
@@ -329,6 +336,10 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         model?.openForceSheet()
     }
 
+    @objc private func toggleSidebar(_ sender: Any?) {
+        model?.toggleSidebar()
+    }
+
     @objc private func goBack(_ sender: Any?) {
         model?.goBack()
     }
@@ -346,6 +357,9 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             menuItem.title = model?.inspectorTitle ?? "Show Inspector"
             return model?.hasInspector ?? false
         case #selector(forceTicket(_:)): return model?.dispatchControl.canForce ?? false
+        case #selector(toggleSidebar(_:)):
+            menuItem.title = model?.sidebarMenuTitle ?? "Hide Sidebar"
+            return model != nil
         case #selector(find(_:)):
             menuItem.title = model?.commandF.menuTitle ?? TicketFinder.menuTitle
             return true

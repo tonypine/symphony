@@ -1313,10 +1313,10 @@ public enum DesignTokens {
         /// bar runs under them, so its first control starts `--space-2` after the zoom button instead.
         public static let windowButtonsEnd: Double = 70
 
-        /// The bar's leading padding: the catalog's `--space-3` beside the sidebar; clear of the window's buttons when the
-        /// sidebar is hidden and the bar starts at the window's edge.
+        /// The bar's leading padding: the catalog's `--space-3` beside the sidebar; beside the sidebar folded to its glyphs
+        /// (TP-1498), which is narrower than the window's buttons, clear of the zoom button by `--space-2`.
         public static func leading(sidebarShown: Bool) -> Double {
-            sidebarShown ? leadingPadding : windowButtonsEnd + Space.s2
+            sidebarShown ? leadingPadding : max(leadingPadding, windowButtonsEnd + Space.s2 - Sidebar.collapsedWidth)
         }
         /// `gap: var(--space-2)` between its controls.
         public static let gap = Space.s2
@@ -1341,6 +1341,100 @@ public enum DesignTokens {
         public static let refreshSymbol = "arrow.clockwise"
         /// The gap between Find a ticket and the list of what it found under it (the menu's gap).
         public static let findGap = Menu.gap
+    }
+
+    /// The catalog's window sidebar (`.win-side`, `.nav-row`, TP-1498): 232 pt flush with the window and a hairline on
+    /// its right, 60 pt of glyphs folded. Its top is the room of the window's buttons, as tall as the window bar.
+    /// Rows are 30 pt (`--control-md`) with its corner, 2 pt apart; a row is a 16 pt glyph and its name at 13 pt 500,
+    /// and the count. The current destination is the accent tint with accent text at 600; with the window not in
+    /// front, the pressed grey with primary text.
+    public enum Sidebar {
+        public static let width: Double = 232
+        public static let collapsedWidth: Double = 60
+        /// `.win-lights { height: 44px }`: the room the window's buttons sit in, over the rows.
+        public static let topInset = WindowBar.height
+        /// `padding: 0 var(--space-2) var(--space-2)`.
+        public static let inset = Space.s2
+        /// `.win-nav { gap: 2px }`.
+        public static let rowGap: Double = 2
+        public static let rowHeight = Control.medium.height
+        public static let rowRadius = Control.medium.radius
+        /// `.nav-row { padding: 0 var(--space-2); gap: var(--space-2) }`.
+        public static let rowInset = Space.s2
+        public static let rowGapInside = Space.s2
+        public static let glyph: Double = 16
+        /// `.nav-row.child`: a page under Factory starts where its parent's name does.
+        public static let childIndent = Space.s2 + glyph
+        public static let textSize: Double = 13
+        public static let weight = 500
+        public static let currentWeight = 600
+        /// `.side-collapsed .nav-row .count { top: 3px; right: 6px }`: the count's dot over the glyph's corner.
+        public static let dotTop: Double = 3
+        public static let dotTrailing: Double = 6
+        /// The width change between the two forms: the fold's spring, instant under Reduce Motion.
+        public static let fold = Motion.Curve.fold
+        public static let separator = Surface.separator
+
+        /// The width for the form shown.
+        public static func width(collapsed: Bool) -> Double { collapsed ? collapsedWidth : width }
+
+        /// The row's fill: pressed, else the current destination's (the accent tint in the front window, the pressed
+        /// grey behind), else hover; none at rest.
+        public static func fill(_ state: Interaction, current: Bool, windowActive: Bool) -> ColorToken? {
+            if state.pressed { return .surfacePressed }
+            if current { return windowActive ? .accentTint : .surfacePressed }
+            if state.hovered { return .surfaceHover }
+            return nil
+        }
+
+        /// The name's colour: accent text on the current destination in the front window; secondary for a page under
+        /// Factory at rest; primary otherwise.
+        public static func text(current: Bool, child: Bool, hovered: Bool, windowActive: Bool) -> ColorToken {
+            if current { return windowActive ? .accentText : .textPrimary }
+            return child && !hovered ? .textSecondary : .textPrimary
+        }
+
+        /// The glyph's colour: accent text on the current destination in the front window, secondary otherwise.
+        public static func glyphColor(current: Bool, windowActive: Bool) -> ColorToken {
+            current && windowActive ? .accentText : .textSecondary
+        }
+    }
+
+    /// The catalog's status line (`.win-status`, `.dispatch`, TP-1498): 30 pt of glass under the page with a hairline
+    /// over it, `--type-secondary` in secondary text. The dispatch control first, a hairline, the counts, then at the
+    /// right the build (tertiary) and the connection with its dot.
+    public enum StatusLine {
+        public static let height: Double = 30
+        /// `padding: 0 var(--space-4) 0 var(--space-2)`.
+        public static let leadingPadding = Space.s2
+        public static let trailingPadding = Space.s4
+        public static let gap = Space.s3
+        public static let glass = Glass.glass
+        /// `.sep`: a hairline 16 pt tall with `--space-1` on each side.
+        public static let separatorHeight = WindowBar.separatorHeight
+        public static let separatorInset = Space.s1
+        /// The connection's dot and its words.
+        public static let dotGap = Space.s1
+        public static let build = TextColor.tertiary
+
+        /// `.dispatch`: a quiet control 24 pt tall (`--control-sm`) with its corner, `--space-2` inside and between its
+        /// dot, words and chevron; 12 pt at 500 in primary text; the hover surface under the pointer, pressed while
+        /// held or while its menu is open.
+        public enum Dispatch {
+            public static let control = Control.small
+            public static let inset = Space.s2
+            public static let gap = Space.s2
+            public static let textSize: Double = 12
+            public static let weight = 500
+            public static let chevron: Double = 10
+            public static let chevronSymbol = "chevron.down"
+
+            public static func fill(_ state: Interaction, open: Bool) -> ColorToken? {
+                if state.pressed || open { return .surfacePressed }
+                if state.hovered { return .surfaceHover }
+                return nil
+            }
+        }
     }
 
     /// The window bar's breadcrumb (`.win-crumbs`, TP-1496): where the window is, links up to the place shown.
@@ -1895,9 +1989,9 @@ public enum DesignTokens {
         public static let windowHeight: Double = 760
         public static let minWindowWidth: Double = 960
         public static let minWindowHeight: Double = 600
-        public static let sidebarWidth: Double = 200
-        public static let minSidebarWidth: Double = 180
-        public static let maxSidebarWidth: Double = 260
+        /// The sidebar's width (`.win { --side-w: 232px }`), and folded to its glyphs.
+        public static let sidebarWidth: Double = Sidebar.width
+        public static let collapsedSidebarWidth: Double = Sidebar.collapsedWidth
         /// The list column of the Inbox (and later Initiatives).
         public static let listColumnWidth: Double = 340
         public static let minListColumnWidth: Double = 300

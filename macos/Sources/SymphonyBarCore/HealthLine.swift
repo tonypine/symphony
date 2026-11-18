@@ -18,8 +18,39 @@ public struct HealthLine: Equatable {
         }
     }
 
+    /// The status line's counts (TP-1498), from Home's read of the dispatch order: what is in progress, in the queue
+    /// and needs the Director. Nil while that read is unavailable, and the line shows none of them.
+    public struct Counts: Equatable {
+        public var inProgress: Int
+        public var queued: Int
+        public var needYou: Int
+
+        public init(inProgress: Int, queued: Int, needYou: Int) {
+            self.inProgress = inProgress
+            self.queued = queued
+            self.needYou = needYou
+        }
+
+        /// Home's board: its working, CI and build groups are in progress, its slot group is the queue, its waiting on
+        /// you group needs the Director. Nil for a Symphony that serves no dispatch order.
+        public init?(board: HomeBoard) {
+            guard board.hasOrder else { return nil }
+            func count(_ kinds: Set<DesignTokens.SituationKind>) -> Int {
+                board.groups.filter { kinds.contains($0.kind) }.reduce(0) { $0 + $1.count }
+            }
+            self.init(inProgress: count([.working, .ci, .build]), queued: count([.slot]), needYou: count([.you]))
+        }
+
+        /// "7 in progress", "18 in the queue", "2 need you" (or "1 needs you"), in that order.
+        public var texts: [String] {
+            ["\(inProgress) in progress", "\(queued) in the queue", "\(needYou) \(needYou == 1 ? "needs" : "need") you"]
+        }
+    }
+
     /// What the dispatch control says, for the line's VoiceOver label.
     public var dispatch: String
+    /// The counts after the dispatch control; nil without Home's read.
+    public var counts: Counts?
     /// "Symphony 0.0.1.866 · a0be0aa", the build that answers; the app's version while none does.
     public var build: Part?
     /// "Answering", or why Symphony doesn't.
@@ -34,9 +65,11 @@ public struct HealthLine: Equatable {
         build: DiagnosticsPayload.Build?,
         appVersion: String,
         lastUpdate: Date?,
+        counts: Counts? = nil,
         timeZone: TimeZone = .current
     ) {
         self.dispatch = dispatch.word
+        self.counts = counts
         self.build = Self.buildPart(window: window, build: build, appVersion: appVersion)
         let help = lastUpdate.map { date in
             let formatter = DateFormatter()
@@ -59,8 +92,10 @@ public struct HealthLine: Equatable {
     /// The line's parts after the dispatch control, in order.
     public var parts: [Part] { [build].compactMap { $0 } + [connection] }
 
-    /// What VoiceOver reads for the status bar: "Dispatch on, Symphony 0.0.1.866 · a0be0aa, Symphony answering".
+    /// What VoiceOver reads for the status line: "Dispatch on, 7 in progress, 18 in the queue, 2 need you, Symphony
+    /// 0.0.1.866 · a0be0aa, Symphony answering".
     public var accessibilityLabel: String {
-        ([dispatch] + [build?.text].compactMap { $0 } + ["Symphony \(connection.text.lowercased())"]).joined(separator: ", ")
+        ([dispatch] + (counts?.texts ?? []) + [build?.text].compactMap { $0 } + ["Symphony \(connection.text.lowercased())"])
+            .joined(separator: ", ")
     }
 }

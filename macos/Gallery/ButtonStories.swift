@@ -12,7 +12,7 @@ struct ComponentStory {
     /// `search-field` or `text-area` (TP-1509), `table-header-and-row` (TP-1510), or `key-value-list` or
     /// `collapsible-card` (TP-1511), `hairline-divider` or `priority-mark` (TP-1485), or `searchable-pop-up`,
     /// `save-bar`, `list-card` or `progress-meter` (TP-1530), `reorderable-list` (TP-1531), `window-bar` or
-    /// `breadcrumb` (TP-1496), or `control-bar` (TP-1497).
+    /// `breadcrumb` (TP-1496), or `control-bar` (TP-1497), or `sidebar` or `status-line` (TP-1498).
     let component: String
     let id: String
     /// The catalog's component title, for the sheet.
@@ -30,7 +30,7 @@ struct ComponentStory {
 @MainActor
 var allComponentStories: [ComponentStory] {
     componentStories + badgeStories + rowStories + menuStories + fieldStories + tableStories + foldStories + markStories
-        + factoryStories + windowStories + controlBarStories
+        + factoryStories + windowStories + sidebarStatusStories + controlBarStories
 }
 
 /// The component stories' variation names, as `Gallery/component-variations.txt` lists them.

@@ -69,3 +69,96 @@ let windowStories: [ComponentStory] = {
         crumbs("pull-request", pullRequestCrumbs),
     ]
 }()
+
+// MARK: - The sidebar and the status line (TP-1498)
+
+// The catalog's window sidebar and status line (`winSidebar`, `winStatus`, `dispatchControl`): the sidebar expanded and
+// folded to its glyphs, in a front window and behind one, with a row under the pointer, pressed and with the keyboard;
+// the status line with dispatch on, paused, its menu open, without Home's read and with Symphony stopped.
+
+/// The sidebar's rows as the window fills them: Home with two that need the Director, Factory with two problems.
+@MainActor
+func sidebarStoryEntries(waiting: Int = 2, problems: Int = 2) -> [SidebarEntry<SidebarItem>] {
+    SymphonySidebar.entries(SidebarRows().items) { destination in
+        destination.badge(waitingOnYou: waiting, setup: SetupSummary(errors: problems))
+    }
+}
+
+/// The sidebar's height: the window buttons' room, then every row.
+let sidebarStoryHeight: CGFloat = {
+    let tokens = DesignTokens.Sidebar.self
+    let rows = Double(SidebarRows().items.count)
+    return CGFloat(tokens.topInset + rows * tokens.rowHeight + (rows - 1) * tokens.rowGap + 2 * tokens.inset)
+}()
+
+/// A sidebar story: Work current, `drawn` naming a row's state.
+@MainActor
+func sidebarStory(
+    collapsed: Bool = false, windowActive: Bool = true, drawn: [SidebarItem: DesignTokens.Interaction] = [:], waiting: Int = 2,
+    problems: Int = 2
+) -> AnyView {
+    AnyView(
+        Sidebar(
+            sidebarStoryEntries(waiting: waiting, problems: problems), current: .destination(.work), collapsed: collapsed,
+            windowActive: windowActive, drawn: drawn
+        ) { _ in }
+            .frame(height: sidebarStoryHeight)
+            .windowBackdrop()
+    )
+}
+
+/// The status line's width in a laptop window beside the sidebar.
+let statusLineStoryWidth = windowBarStoryWidth
+
+/// A status line story: dispatch on or paused, its control in `face`, with Home's counts unless `counts` is nil.
+@MainActor
+func statusLineStory(
+    window: WindowState = .connected, paused: Bool = false, face: DesignTokens.Interaction? = nil, open: Bool = false,
+    counts: HealthLine.Counts? = HealthLine.Counts(inProgress: 7, queued: 18, needYou: 2)
+) -> AnyView {
+    let now = Date(timeIntervalSince1970: 1_794_000_000)
+    let control = DispatchControl(window: window, paused: paused, state: nil, now: now)
+    let line = HealthLine(
+        window: window, dispatch: control, build: DiagnosticsPayload.Build(version: "0.0.1.926", sha: "a0be0aa5c1d2e3f4"),
+        appVersion: "0.0.1.926", lastUpdate: now, counts: window == .connected ? counts : nil, timeZone: TimeZone(identifier: "UTC")!
+    )
+    return AnyView(
+        StatusLine(line) { DispatchStatusControl(control, open: open, drawnAs: face) {} }
+            .frame(width: statusLineStoryWidth)
+            .windowBackdrop()
+    )
+}
+
+/// Every story of the sidebar and the status line.
+@MainActor
+let sidebarStatusStories: [ComponentStory] = {
+    func side(_ id: String, collapsed: Bool = false, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+        ComponentStory(
+            component: "sidebar", id: id, title: "Sidebar", width: CGFloat(DesignTokens.Sidebar.width(collapsed: collapsed)),
+            height: sidebarStoryHeight, draw: draw
+        )
+    }
+    func line(_ id: String, _ draw: @escaping @MainActor () -> AnyView) -> ComponentStory {
+        ComponentStory(
+            component: "status-line", id: id, title: "Status line", width: statusLineStoryWidth, height: CGFloat(DesignTokens.StatusLine.height),
+            draw: draw
+        )
+    }
+    return [
+        side("expanded") { sidebarStory() },
+        side("expanded-row-hover") { sidebarStory(drawn: [.destination(.journal): .hover]) },
+        side("expanded-row-pressed") { sidebarStory(drawn: [.destination(.journal): .press]) },
+        side("expanded-row-keyboard-focus") { sidebarStory(drawn: [.destination(.insights): .focus]) },
+        side("expanded-window-not-focused") { sidebarStory(windowActive: false) },
+        side("expanded-no-counts") { sidebarStory(waiting: 0, problems: 0) },
+        side("collapsed", collapsed: true) { sidebarStory(collapsed: true) },
+        side("collapsed-window-not-focused", collapsed: true) { sidebarStory(collapsed: true, windowActive: false) },
+        line("dispatch-on") { statusLineStory() },
+        line("dispatch-on-hover") { statusLineStory(face: .hover) },
+        line("dispatch-on-menu-open") { statusLineStory(open: true) },
+        line("dispatch-on-keyboard-focus") { statusLineStory(face: .focus) },
+        line("dispatch-paused") { statusLineStory(paused: true) },
+        line("without-home-read") { statusLineStory(counts: nil) },
+        line("symphony-stopped") { statusLineStory(window: .stopped) },
+    ]
+}()

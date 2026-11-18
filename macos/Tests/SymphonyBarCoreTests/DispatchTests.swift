@@ -260,4 +260,22 @@ final class DispatchTests: XCTestCase {
         XCTAssertEqual(control.pauseFacts.last, TicketList.Fact(label: "Why", value: "Deploy freeze"))
         XCTAssertTrue(control.canCancelUpdate)
     }
+
+    // MARK: - The status line's word (TP-1498)
+
+    func testTheStatusLineSaysDispatchPausedAndKeepsTheReasonForItsHelp() {
+        let paused = DispatchControl(window: .connected, paused: true, state: nil, now: Date())
+        XCTAssertEqual(paused.lineWord, "Dispatch paused")
+        XCTAssertEqual(paused.word, "Paused")
+        XCTAssertEqual(paused.status, .you, "the dot turns orange")
+        XCTAssertFalse(paused.live)
+
+        let on = DispatchControl(window: .connected, paused: false, state: nil, now: Date())
+        XCTAssertEqual(on.lineWord, "Dispatch on")
+        XCTAssertTrue(on.live)
+
+        let stopped = DispatchControl(window: .stopped, paused: false, state: nil, now: Date())
+        XCTAssertEqual(stopped.lineWord, stopped.word)
+        XCTAssertFalse(stopped.live)
+    }
 }

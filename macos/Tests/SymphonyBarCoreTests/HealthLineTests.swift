@@ -69,6 +69,51 @@ final class HealthLineTests: XCTestCase {
         XCTAssertNil(empty.build)
     }
 
+    // MARK: - The counts (TP-1498)
+
+    func testTheCountsAreHomesBoardInProgressQueuedAndWaitingOnTheDirector() throws {
+        let board = HomeBoard(state: try state("home"), now: Date())
+        let counts = try XCTUnwrap(HealthLine.Counts(board: board))
+        func rows(_ kinds: [DesignTokens.SituationKind]) -> Int {
+            board.groups.filter { kinds.contains($0.kind) }.map(\.count).reduce(0, +)
+        }
+        XCTAssertEqual(counts.inProgress, rows([.working, .ci, .build]))
+        XCTAssertEqual(counts.queued, rows([.slot]))
+        XCTAssertEqual(counts.needYou, rows([.you]))
+        XCTAssertGreaterThan(counts.inProgress + counts.queued + counts.needYou, 0, "the fixture has tickets on the board")
+    }
+
+    func testTheCountsSayWhatTheyCount() {
+        XCTAssertEqual(HealthLine.Counts(inProgress: 7, queued: 18, needYou: 2).texts, ["7 in progress", "18 in the queue", "2 need you"])
+        XCTAssertEqual(HealthLine.Counts(inProgress: 0, queued: 0, needYou: 1).texts, ["0 in progress", "0 in the queue", "1 needs you"])
+    }
+
+    func testASymphonyWithoutTheDispatchOrderGivesNoCounts() throws {
+        var board = HomeBoard(state: try state("home"), now: Date())
+        board.hasOrder = false
+        XCTAssertNil(HealthLine.Counts(board: board))
+    }
+
+    func testTheLineReadsTheCountsAfterTheDispatchControl() {
+        let line = HealthLine(
+            window: .connected,
+            dispatch: DispatchControl(window: .connected, paused: false, state: nil, now: Date()),
+            build: DiagnosticsPayload.Build(version: "0.0.1.926", sha: "a0be0aa"),
+            appVersion: "",
+            lastUpdate: nil,
+            counts: HealthLine.Counts(inProgress: 7, queued: 18, needYou: 2)
+        )
+        XCTAssertEqual(
+            line.accessibilityLabel, "Dispatch on, 7 in progress, 18 in the queue, 2 need you, Symphony 0.0.1.926 · a0be0aa, Symphony answering"
+        )
+        let unread = HealthLine(
+            window: .connected, dispatch: DispatchControl(window: .connected, paused: false, state: nil, now: Date()), build: nil,
+            appVersion: "", lastUpdate: nil
+        )
+        XCTAssertNil(unread.counts)
+        XCTAssertEqual(unread.accessibilityLabel, "Dispatch on, Symphony answering")
+    }
+
     private func state(_ name: String) throws -> OverviewState {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
