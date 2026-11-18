@@ -942,7 +942,7 @@ public enum DesignTokens {
     /// word and its status color, never color alone. The cases are in the order that picks one when several are true.
     /// `unknown` is what Symphony says when it can tell nothing, and what the app reads a kind it does not know as.
     public enum SituationKind: String, CaseIterable, Equatable {
-        case you, retrying, blocked, subTickets, paused, ci, build, slot, working, done, cancelled, unknown
+        case you, retrying, blocked, subTickets, provider, paused, ci, build, slot, working, done, cancelled, unknown
 
         /// Where it ranks when more than one is true: the lowest wins.
         public var precedence: Int { Self.allCases.firstIndex(of: self) ?? 0 }
@@ -955,7 +955,7 @@ public enum DesignTokens {
         public var status: Status {
             switch self {
             case .working, .ci, .build: .working
-            case .slot, .blocked, .subTickets, .paused, .cancelled, .unknown: .idle
+            case .slot, .blocked, .subTickets, .provider, .paused, .cancelled, .unknown: .idle
             case .you: .you
             case .retrying: .problem
             case .done: .done
@@ -963,7 +963,8 @@ public enum DesignTokens {
         }
 
         /// The SF Symbol: a dashed circle for work and CI, a clock for a slot, a box for a build, a person with a
-        /// mark, a lock, a stack for sub-tickets, a pause, an arrow round, a filled tick, a slashed circle, a question mark.
+        /// mark, a lock, a stack for sub-tickets, a paused rectangle for a paused provider, a pause, an arrow round, a
+        /// filled tick, a slashed circle, a question mark.
         public var symbol: String {
             switch self {
             case .working, .ci: "circle.dotted.circle"
@@ -973,6 +974,7 @@ public enum DesignTokens {
             case .build: "shippingbox"
             case .you: "person.crop.circle.badge.exclamationmark"
             case .blocked: "lock.fill"
+            case .provider: "pause.rectangle"
             case .paused: "pause.circle"
             case .retrying: "arrow.clockwise"
             case .done: "checkmark.circle.fill"
@@ -991,6 +993,7 @@ public enum DesignTokens {
             case .blocked: "Blocked"
             case .subTickets: "Waiting on its sub-tickets"
             case .unknown: "Not known"
+            case .provider: "Waiting on a paused provider"
             case .paused: "Paused"
             case .retrying: "Retrying"
             case .done: "Shipped"

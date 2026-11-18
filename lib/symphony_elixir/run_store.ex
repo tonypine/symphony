@@ -1492,7 +1492,8 @@ defmodule SymphonyElixir.RunStore do
 
   @doc """
   The pause of a subject that is not a ticket (`SymphonyElixir.Pauses`): a repository
-  (`{:repository, repo_key}`) or Symphony itself (`:symphony`), or nil when it has none. It is kept
+  (`{:repository, repo_key}`), a provider (`{:provider, provider}`) or Symphony itself
+  (`:symphony`), or nil when it has none. It is kept
   in the pause table under `{:subject, subject}`, next to the operator pause, which keeps its key.
   """
   @spec get_subject_pause(term()) :: map() | nil | {:error, term()}
@@ -2698,6 +2699,7 @@ defmodule SymphonyElixir.RunStore do
 
   defp valid_pause_subject(:symphony), do: :ok
   defp valid_pause_subject({:repository, repo_key}) when is_binary(repo_key) and repo_key != "", do: :ok
+  defp valid_pause_subject({:provider, provider}) when is_binary(provider) and provider != "", do: :ok
   defp valid_pause_subject(_subject), do: {:error, :invalid_subject}
 
   defp read_subject_pause(subject, lock \\ :read) do

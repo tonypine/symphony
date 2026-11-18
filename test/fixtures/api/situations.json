@@ -180,6 +180,21 @@
         "run": null,
         "retry": null
       }
+    },
+    {
+      "identifier": "SHOP-513",
+      "situation": {
+        "kind": "waiting_for_provider",
+        "word": "Waiting: you paused Anthropic",
+        "cause": "The implementation run runs on Anthropic, and none of its fallbacks can take it.",
+        "next": "Starts when you resume Anthropic.",
+        "since": "2026-10-30T16:05:00Z",
+        "waits_on": { "provider": "anthropic" },
+        "and_more": 0,
+        "step": null,
+        "run": null,
+        "retry": null
+      }
     }
   ]
 }

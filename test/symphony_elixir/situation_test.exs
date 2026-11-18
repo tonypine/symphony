@@ -77,6 +77,11 @@ defmodule SymphonyElixir.SituationTest do
     %{}
   end
 
+  defp arrange("waiting_for_provider") do
+    skip = %{since: @at, reason: "you paused Anthropic, and no fallback of its run can take it", rule: :provider_pause, provider: "anthropic"}
+    %{skipped: %{@id => skip}}
+  end
+
   defp arrange("paused_by_rule") do
     reason = %{kind: :person, waits_on: %{action: "unblock"}, text: "Deploy freeze", releasable: true}
     {:ok, _pause} = Pauses.set({:ticket, @repo, @id}, reason, at: @at)
@@ -222,6 +227,27 @@ defmodule SymphonyElixir.SituationTest do
 
       assert Situation.headline(todo, live()) == headline_of_read(todo, live())
       assert Situation.headline(nil, live()) == headline_of_read(nil, live())
+    end
+  end
+
+  describe "waiting_for_provider (TP-1532)" do
+    test "names the provider the Director paused, never a slot's or a rule's words" do
+      skipped = %{@id => %{since: @at, reason: "you paused OpenRouter, and no fallback of its run can take it", rule: :provider_pause, provider: "openrouter"}}
+      slot = %{@id => %{since: @at, reason: "work slots full"}}
+
+      assert %{
+               kind: "waiting_for_provider",
+               word: "Waiting: you paused OpenRouter",
+               cause: "The rework run runs on OpenRouter, and none of its fallbacks can take it.",
+               next: "Starts when you resume OpenRouter.",
+               since: @at,
+               waits_on: %{provider: "openrouter"}
+             } = compute(record(%{phase: "Rework"}), [], live(%{skipped: skipped, slot_waiting: slot}))
+    end
+
+    test "a skip of another rule is no provider's" do
+      skipped = %{@id => %{since: @at, reason: "Claude 5-hour limit reached", rule: :usage_limit}}
+      assert %{kind: "paused_by_rule"} = compute(record(), [], live(%{skipped: skipped}))
     end
   end
 
