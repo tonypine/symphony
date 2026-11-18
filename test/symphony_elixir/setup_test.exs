@@ -530,17 +530,23 @@ defmodule SymphonyElixir.SetupTest do
     end
 
     test "a config reload runs the checks once, however many events it sends" do
-      server = start_setup!(checks: [BlockingStub], reload_debounce_ms: 0)
+      server = start_setup!(checks: [BlockingStub], reload_debounce_ms: 60_000)
       assert_receive {:blocked, task}
       send(task, :go)
       await_idle(server, 1_000)
 
-      # Both events wait in the mailbox before the first one starts the debounce timer.
+      # Both events wait in the mailbox before the first one starts the debounce timer. The state
+      # read after the resume comes after both, and the test fires the one timer they started
+      # itself, rather than racing a short one.
       :sys.suspend(server)
       send(server, {:config_reloaded, "a"})
       send(server, {:config_reloaded, "b"})
       :sys.resume(server)
-      assert_receive {:blocked, task}
+      assert %{reload_timer: timer} = :sys.get_state(server)
+      assert is_reference(timer)
+      assert is_integer(Process.cancel_timer(timer))
+      send(server, :config_reloaded)
+      assert_receive {:blocked, task}, 5_000
       send(task, :go)
       await_idle(server, 1_000)
       refute_received {:blocked, _task}

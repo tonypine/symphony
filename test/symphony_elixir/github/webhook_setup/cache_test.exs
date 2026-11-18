@@ -80,16 +80,19 @@ defmodule SymphonyElixir.GitHub.WebhookSetup.CacheTest do
 
   test "a config reload builds once, however many events it sends, drops the build it interrupts and reads the repositories again",
        %{opts: opts, port: port} do
-    server = start_cache!(section_opts: Keyword.put(opts, :secret, gate(self())))
+    server = start_cache!(section_opts: Keyword.put(opts, :secret, gate(self())), reload_debounce_ms: 60_000)
     assert_receive :repos_read
     assert_receive {:building, first}
 
-    # Both events wait in the mailbox before the first one starts the debounce timer.
+    # Both events wait in the mailbox before the first one starts the debounce timer. The state
+    # read after the resume comes after both, and the test fires the one timer they started
+    # itself, rather than racing a short one.
     :sys.suspend(server)
     :telemetry.execute(Cache.reloaded_event(), %{}, %{path: "a"})
     :telemetry.execute(Cache.reloaded_event(), %{}, %{path: "b"})
     :sys.resume(server)
-    wait_until(server, & &1.rerun?, 1_000)
+    fire_reload_timer(server, :reload)
+    assert %{rerun?: true, reload_timer: nil} = :sys.get_state(server)
 
     # The first build read port 4040 before the reload; the one after it reads 4041.
     Agent.update(port, fn _port -> 4041 end)
@@ -174,7 +177,10 @@ defmodule SymphonyElixir.GitHub.WebhookSetup.CacheTest do
     end
   end
 
-  defp wait_until(server, condition, attempts) when attempts > 0 do
-    if condition.(:sys.get_state(server)), do: :ok, else: wait_until(server, condition, attempts - 1)
+  defp fire_reload_timer(server, message) do
+    assert %{reload_timer: timer} = :sys.get_state(server)
+    assert is_reference(timer)
+    assert is_integer(Process.cancel_timer(timer))
+    send(server, message)
   end
 end
