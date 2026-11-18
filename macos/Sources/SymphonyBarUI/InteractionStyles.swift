@@ -411,14 +411,27 @@ extension EnvironmentValues {
     }
 }
 
-/// Tracks whether the button it wraps has keyboard focus and hands that to the button's style.
+/// Where focus came from, for the catalog's `:focus-visible` (TP-1498): the ring shows only for focus the keyboard
+/// moved (Tab, the arrow keys), never for the focus the window hands its first control on opening or a click leaves.
+public enum FocusOrigin {
+    /// Whether `event`, the event being handled as focus moves, is a key press.
+    public static func byKeyboard(_ event: NSEvent?) -> Bool { event?.type == .keyDown }
+
+    /// The event the app is handling now; nil without a running app (a test, the gallery's offscreen render).
+    static var currentEvent: NSEvent? { NSApp?.currentEvent }
+}
+
+/// Tracks whether the button it wraps has keyboard focus the keyboard moved there, and hands that to the button's
+/// style.
 struct ReportsKeyboardFocus: ViewModifier {
     @FocusState private var focused: Bool
+    @State private var byKeyboard = false
 
     func body(content: Content) -> some View {
         content
-            .environment(\.buttonKeyboardFocus, focused)
+            .environment(\.buttonKeyboardFocus, focused && byKeyboard)
             .focused($focused)
+            .onChange(of: focused) { byKeyboard = focused && FocusOrigin.byKeyboard(FocusOrigin.currentEvent) }
     }
 }
 

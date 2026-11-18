@@ -31,14 +31,15 @@ public struct HealthLine: Equatable {
             self.needYou = needYou
         }
 
-        /// Home's board: its working, CI and build groups are in progress, its slot group is the queue, its waiting on
-        /// you group needs the Director. Nil for a Symphony that serves no dispatch order.
-        public init?(board: HomeBoard) {
+        /// Home's board: its working, CI and build groups are in progress, its slot group is the queue. `needYou` is the
+        /// Inbox's count, the one the sidebar's Home badge and the window bar's Inbox show, so the three agree. Nil for
+        /// a Symphony that serves no dispatch order.
+        public init?(board: HomeBoard, needYou: Int) {
             guard board.hasOrder else { return nil }
             func count(_ kinds: Set<DesignTokens.SituationKind>) -> Int {
                 board.groups.filter { kinds.contains($0.kind) }.reduce(0) { $0 + $1.count }
             }
-            self.init(inProgress: count([.working, .ci, .build]), queued: count([.slot]), needYou: count([.you]))
+            self.init(inProgress: count([.working, .ci, .build]), queued: count([.slot]), needYou: needYou)
         }
 
         /// "7 in progress", "18 in the queue", "2 need you" (or "1 needs you"), in that order.

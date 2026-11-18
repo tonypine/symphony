@@ -71,15 +71,16 @@ final class HealthLineTests: XCTestCase {
 
     // MARK: - The counts (TP-1498)
 
-    func testTheCountsAreHomesBoardInProgressQueuedAndWaitingOnTheDirector() throws {
+    func testTheCountsAreHomesBoardInProgressAndQueuedAndTheInboxsCount() throws {
         let board = HomeBoard(state: try state("home"), now: Date())
-        let counts = try XCTUnwrap(HealthLine.Counts(board: board))
+        // The Inbox's count, not the board's waiting on you group, so the line agrees with the sidebar and the Inbox.
+        let counts = try XCTUnwrap(HealthLine.Counts(board: board, needYou: 5))
         func rows(_ kinds: [DesignTokens.SituationKind]) -> Int {
             board.groups.filter { kinds.contains($0.kind) }.map(\.count).reduce(0, +)
         }
         XCTAssertEqual(counts.inProgress, rows([.working, .ci, .build]))
         XCTAssertEqual(counts.queued, rows([.slot]))
-        XCTAssertEqual(counts.needYou, rows([.you]))
+        XCTAssertEqual(counts.needYou, 5)
         XCTAssertGreaterThan(counts.inProgress + counts.queued + counts.needYou, 0, "the fixture has tickets on the board")
     }
 
@@ -91,7 +92,7 @@ final class HealthLineTests: XCTestCase {
     func testASymphonyWithoutTheDispatchOrderGivesNoCounts() throws {
         var board = HomeBoard(state: try state("home"), now: Date())
         board.hasOrder = false
-        XCTAssertNil(HealthLine.Counts(board: board))
+        XCTAssertNil(HealthLine.Counts(board: board, needYou: 2))
     }
 
     func testTheLineReadsTheCountsAfterTheDispatchControl() {

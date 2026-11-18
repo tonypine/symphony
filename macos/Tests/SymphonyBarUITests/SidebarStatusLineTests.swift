@@ -54,6 +54,29 @@ final class SidebarStatusLineTests: XCTestCase {
         }
     }
 
+    // The catalog's `:focus-visible`: the ring shows for focus the keyboard moved, never for the focus the window hands
+    // its first row on opening, nor after a click, nor while the window is not in front.
+    func testOnlyAKeyPressMakesTheFocusVisible() throws {
+        let key = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            characters: "\t", charactersIgnoringModifiers: "\t", isARepeat: false, keyCode: 48
+        ))
+        let click = try XCTUnwrap(NSEvent.mouseEvent(
+            with: .leftMouseUp, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+            eventNumber: 0, clickCount: 1, pressure: 0
+        ))
+        XCTAssertTrue(FocusOrigin.byKeyboard(key))
+        XCTAssertFalse(FocusOrigin.byKeyboard(click))
+        XCTAssertFalse(FocusOrigin.byKeyboard(nil), "the focus a window hands on opening")
+    }
+
+    func testARowDrawsTheRingOnlyForTheKeyboardsFocusInAWindowInFront() {
+        XCTAssertTrue(Sidebar<Place>.showsRing(true, byKeyboard: true, windowActive: true))
+        XCTAssertFalse(Sidebar<Place>.showsRing(true, byKeyboard: false, windowActive: true), "after a click")
+        XCTAssertFalse(Sidebar<Place>.showsRing(true, byKeyboard: true, windowActive: false), "window behind")
+        XCTAssertFalse(Sidebar<Place>.showsRing(false, byKeyboard: true, windowActive: true))
+    }
+
     func testTheStatusLineIs30PointsTall() throws {
         let build = DiagnosticsPayload.Build(version: "0.0.1.926", sha: "a0be0aa")
         let control = DispatchControl(window: .connected, paused: true, state: nil, now: Date())

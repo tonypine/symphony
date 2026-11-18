@@ -1048,11 +1048,13 @@ final class SymphonyWindowModel: ObservableObject {
         }
     }
 
-    /// The status line (TP-1454, TP-1498): what is in progress, queued and needs the Director, from Home's read of the
-    /// dispatch order, then the build that answers and whether Symphony does.
+    /// The status line (TP-1454, TP-1498): what is in progress and queued, from Home's read of the dispatch order, and
+    /// what needs the Director, the Inbox's count, then the build that answers and whether Symphony does.
     var healthLine: HealthLine {
         let counts = state.countsKnown
-            ? overviewWithSetup.flatMap { HealthLine.Counts(board: HomeBoard(state: $0, scope: .all, now: Date())) }
+            ? overviewWithSetup.flatMap {
+                HealthLine.Counts(board: HomeBoard(state: $0, scope: .all, now: Date()), needYou: inboxBadge)
+            }
             : nil
         return HealthLine(
             window: state, dispatch: dispatchControl, build: client.diagnostics?.build, appVersion: appVersion,
