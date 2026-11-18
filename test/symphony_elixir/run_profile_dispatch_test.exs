@@ -225,12 +225,13 @@ defmodule SymphonyElixir.RunProfileDispatchTest do
       sub_ticket = issue("issue-profile-sub", "MT-PROFILE-2")
       Application.put_env(:symphony_elixir, :memory_tracker_issues, [sub_ticket])
 
-      # The repo was just polled; make it due again instead of waiting for the poll interval.
-      :sys.replace_state(pid, &%{&1 | repo_poll_due_at_ms: %{}})
-
+      # The repo was just polled; ask for its poll at once instead of waiting for the poll interval.
+      # A forced poll, not a reset of the due times: a poll already in flight read the tracker before
+      # the new ticket was listed, and its result would put the repo's next poll back out of reach.
+      # A forcing keeps the repo due past that result (`keep_forced_repo_due/2`).
       {sub_run, log} =
         with_log(fn ->
-          send(pid, :run_poll_cycle)
+          :ok = Orchestrator.request_refresh(pid, Config.repo_key!(), due: :now)
           assert [_first, second | _rest] = wait_for_argv_lines(ctx.argv_trace, 2)
           assert String.ends_with?(second, "--print --model claude-test --effort low")
           wait_for_run("issue-profile-sub")
