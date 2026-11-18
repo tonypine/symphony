@@ -87,11 +87,14 @@ final class WindowBarTests: XCTestCase {
         XCTAssertEqual(DesignTokens.Breadcrumb.chevron, 10)
     }
 
-    func testWithTheSidebarHiddenTheBarsFirstControlStartsAfterTheWindowsButtons() {
+    func testWithTheSidebarFoldedTheBarsFirstControlStartsAfterTheWindowsButtons() {
         XCTAssertEqual(DesignTokens.WindowBar.leading(sidebarShown: true), DesignTokens.Space.s3)
-        // Close, minimize and zoom span 8 to 70 pt from the window's edge; the sidebar toggle starts past them.
-        XCTAssertEqual(DesignTokens.WindowBar.leading(sidebarShown: false), 78)
-        XCTAssertGreaterThan(DesignTokens.WindowBar.leading(sidebarShown: false), DesignTokens.WindowBar.windowButtonsEnd)
+        // Close, minimize and zoom span 8 to 70 pt from the window's edge; beside the 60 pt folded sidebar, the sidebar
+        // toggle starts 8 pt past them.
+        XCTAssertEqual(DesignTokens.WindowBar.leading(sidebarShown: false), 18)
+        XCTAssertGreaterThan(
+            DesignTokens.Sidebar.collapsedWidth + DesignTokens.WindowBar.leading(sidebarShown: false), DesignTokens.WindowBar.windowButtonsEnd
+        )
     }
 
     // MARK: - A double-click on the bar

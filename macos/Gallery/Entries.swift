@@ -111,6 +111,15 @@ let galleryEntries: [GalleryEntry] = [
             "SymphonyBar/JournalView.swift",
         ]),
     GalleryEntry(
+        id: "sidebar", title: "Sidebar", kind: .component, prefixes: ["sidebar-"],
+        files: ["SymphonyBarUI/DesignSystem/Sidebar.swift", "SymphonyBar/SymphonyWindowView.swift", "SymphonyBarCore/SymphonyWindow.swift"]),
+    GalleryEntry(
+        id: "status-line", title: "Status line", kind: .component, prefixes: ["status-line-"],
+        files: [
+            "SymphonyBarUI/DesignSystem/StatusLine.swift", "SymphonyBarUI/DesignSystem/WindowBar.swift", "SymphonyBar/HomeInboxView.swift",
+            "SymphonyBarCore/HealthLine.swift", "SymphonyBarCore/Dispatch.swift",
+        ]),
+    GalleryEntry(
         id: "breadcrumb", title: "Breadcrumb", kind: .component, prefixes: ["breadcrumb-"],
         files: ["SymphonyBarUI/DesignSystem/Breadcrumb.swift", "SymphonyBarCore/WindowBar.swift"]),
     GalleryEntry(
@@ -149,7 +158,7 @@ let galleryEntries: [GalleryEntry] = [
         id: "ticket-page", title: "Ticket page", kind: .screen, prefixes: ["ticket-page-"],
         files: ["SymphonyBar/TicketPageView.swift", "SymphonyBarCore/TicketPage"]),
     GalleryEntry(
-        id: "home", title: "Home", kind: .screen, prefixes: ["home-board", "home-questions", "status-bar"],
+        id: "home", title: "Home", kind: .screen, prefixes: ["home-board", "home-questions"],
         files: ["SymphonyBar/HomeView.swift", "SymphonyBar/HomeInboxView.swift", "SymphonyBarCore/Home"]),
     GalleryEntry(
         id: "inbox", title: "Inbox, its reviews and the peek", kind: .screen,
@@ -184,7 +193,7 @@ let galleryEntries: [GalleryEntry] = [
         prefixes: ["linear-webhooks-", "dispatch-shadow-", "reconcile-"],
         files: ["SymphonyBar/SetupView.swift", "SymphonyBarCore/LinearWebhook", "SymphonyBarCore/DispatchShadow", "SymphonyBarCore/Reconcile"]),
     GalleryEntry(
-        id: "repos", title: "Repos: pausing one, and the sidebar", kind: .screen, prefixes: ["repo-pause-", "sidebar-destinations"],
+        id: "repos", title: "Repos: pausing one", kind: .screen, prefixes: ["repo-pause-"],
         files: ["SymphonyBar/ReposView.swift", "SymphonyBar/SymphonyWindowView.swift", "SymphonyBarCore/RepoPause"]),
     GalleryEntry(
         id: "runs", title: "Factory › Runs", kind: .screen, prefixes: ["runs-page"],

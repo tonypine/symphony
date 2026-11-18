@@ -221,7 +221,8 @@ final class TicketPageLayoutTests: XCTestCase {
     // MARK: - The layout
 
     func testTheLaptopPageKeepsTheRailBesideAMainColumnThatFits() {
-        XCTAssertEqual(TicketPageLayout.laptopPageWidth, 1240)
+        // 1440 less the 232 pt sidebar (TP-1498).
+        XCTAssertEqual(TicketPageLayout.laptopPageWidth, 1208)
         XCTAssertTrue(TicketPageLayout.railBeside(page: TicketPageLayout.laptopPageWidth))
         // 1240 less two 24 pt margins, the gap and the 340 pt rail.
         XCTAssertEqual(TicketPageLayout.mainColumnWidth(page: 1240), 828)
