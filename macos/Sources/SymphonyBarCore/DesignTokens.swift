@@ -1270,6 +1270,53 @@ public enum DesignTokens {
 
     /// The catalog's Save bar (`.save-bar`, TP-1530): glass over a page edited whole, what is edited on the left and
     /// how much is not saved, Revert and Save on the right.
+    /// The window's own bar (`.win-bar`, TP-1496): glass over the page's top, a hairline under it.
+    public enum WindowBar {
+        /// `height: 44px`.
+        public static let height: Double = 44
+        /// `padding: 0 var(--space-4) 0 var(--space-3)`.
+        public static let leadingPadding = Space.s3
+        public static let trailingPadding = Space.s4
+        /// `gap: var(--space-2)` between its controls.
+        public static let gap = Space.s2
+        /// `.nav-pair { gap: 2px }`: Back and Forward.
+        public static let navGap: Double = 2
+        /// `.sep`: a hairline 16 pt tall with `--space-1` on each side.
+        public static let separatorHeight: Double = 16
+        public static let separatorInset = Space.s1
+        /// `.win-search { width: 232px }`: Find a ticket.
+        public static let searchWidth: Double = 232
+        /// `.win-bar .segmented { margin-left: var(--space-2) }`: Work's switch after the breadcrumb.
+        public static let switchLeading = Space.s2
+        /// `.with-count .count { top: -3px; right: -5px }`: the Inbox's count over its icon's corner.
+        public static let countTop: Double = -3
+        public static let countTrailing: Double = -5
+        public static let glass = Glass.glass
+        public static let control = Control.medium
+        public static let sidebarSymbol = "sidebar.left"
+        public static let backSymbol = "chevron.left"
+        public static let forwardSymbol = "chevron.right"
+        public static let inboxSymbol = "tray"
+        public static let refreshSymbol = "arrow.clockwise"
+        /// The gap between Find a ticket and the list of what it found under it (the menu's gap).
+        public static let findGap = Menu.gap
+    }
+
+    /// The window bar's breadcrumb (`.win-crumbs`, TP-1496): where the window is, links up to the place shown.
+    public enum Breadcrumb {
+        /// `gap: 6px` between a part and its chevron.
+        public static let gap: Double = 6
+        /// `.win-crumbs > .glyph`: the chevron between parts, 10 pt, tertiary.
+        public static let chevron: Double = 10
+        public static let chevronSymbol = "chevron.right"
+        /// `.win-crumb .glyph`: a part's own glyph (the epic's), 12 pt, 5 pt before its words.
+        public static let glyph: Double = 12
+        public static let glyphGap: Double = 5
+        /// `.win-crumb`'s focus ring corner, `--radius-mark`.
+        public static let radius = Radius.mark
+        public static let epicSymbol = "flag.pattern.checkered"
+    }
+
     public enum SaveBar {
         public static let radius = Radius.card
         public static let gap = Space.s2
@@ -1774,10 +1821,6 @@ public enum DesignTokens {
         public static let sidebarWidth: Double = 200
         public static let minSidebarWidth: Double = 180
         public static let maxSidebarWidth: Double = 260
-        /// The toolbar's title and subtitle at most, each on one line cut at the end. The widest view's (Setup's) is
-        /// about 240 pt; a pull request's title (D15) runs past 400, which would push the window's own toolbar items
-        /// into its overflow menu. The page's header shows the title whole.
-        public static let toolbarTitleMaxWidth: Double = 260
         /// The list column of the Inbox (and later Initiatives).
         public static let listColumnWidth: Double = 340
         public static let minListColumnWidth: Double = 300

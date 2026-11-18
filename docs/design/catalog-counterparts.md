@@ -81,4 +81,4 @@ by the page's own views.
 | `sections/board-group` | Drawn by the app's Home, waiting on the Home ticket |
 | `sections/table-with-filters` | Drawn by the app's Tickets page, waiting on the Tickets ticket |
 | `sections/control-bar` | Drawn by the app's Tickets page, waiting on the Tickets ticket |
-| `sections/window` | Drawn by the app's `SymphonyWindowView`, waiting on the window ticket |
+| `sections/window` | Its bar is `WindowBar` with its `Breadcrumb` (TP-1496); the rest is drawn by the app's `SymphonyWindowView`, its stories not in the gallery one by one yet |

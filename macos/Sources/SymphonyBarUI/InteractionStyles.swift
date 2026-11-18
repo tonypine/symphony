@@ -412,7 +412,7 @@ extension EnvironmentValues {
 }
 
 /// Tracks whether the button it wraps has keyboard focus and hands that to the button's style.
-private struct ReportsKeyboardFocus: ViewModifier {
+struct ReportsKeyboardFocus: ViewModifier {
     @FocusState private var focused: Bool
 
     func body(content: Content) -> some View {

@@ -557,7 +557,7 @@ func pullRequest(_ change: (inout [String: Any]) -> Void = { _ in }) -> PullRequ
     return PullRequestPageResult(.answered(try! JSONSerialization.data(withJSONObject: json), statusCode: 200))
 }
 
-/// The page in a `window` pt wide window beside the sidebar, with the toolbar's title and subtitle above it.
+/// The page in a `window` pt wide window beside the sidebar, under the window's bar.
 @MainActor
 func pullRequestPage(_ result: PullRequestPageResult?, window: CGFloat = DesignTokens.Layout.windowWidth) -> some View {
     let inbox = InboxPayload.decode(try! Data(contentsOf: pullRequestAPI.appendingPathComponent("inbox.json")))
@@ -568,19 +568,11 @@ func pullRequestPage(_ result: PullRequestPageResult?, window: CGFloat = DesignT
     )
     let width = window - DesignTokens.Layout.sidebarWidth
     return VStack(alignment: .leading, spacing: 0) {
-        // The window's toolbar holds the page's title and subtitle (with its spinner while it reads), cut short as the
-        // window cuts them; the page's buttons are in its header, below.
-        VStack(alignment: .leading, spacing: 0) {
-            Text(screen.title).font(.headline).lineLimit(1)
-            HStack(spacing: DesignTokens.Space.s1) {
-                Text(screen.subtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                // `ImageRenderer` can't draw a spinner: its symbol stands in.
-                if screen.isLoading { Image(systemName: "progress.indicator").font(.caption).foregroundStyle(.secondary) }
-            }
-        }
-        .frame(maxWidth: DesignTokens.Layout.toolbarTitleMaxWidth, alignment: .leading)
-        .padding(DesignTokens.Space.s3)
-        Divider()
+        // The window's bar says where the page is (TP-1496); the page's title and buttons are in its header, below.
+        WindowBar(
+            WindowBarControls(canGoBack: true, breadcrumb: WindowBreadcrumb(place: .pullRequest(pullRequestPlace), shownFrom: .tickets)),
+            actions: WindowBarActions(), findText: .constant("")
+        ) { EmptyView() }
         PullRequestPageBody(screen: screen, actions: PullRequestPageActions(), width: width)
             .frame(minHeight: 360)
     }
