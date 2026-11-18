@@ -197,4 +197,18 @@ final class HomeReadTests: XCTestCase {
         let read = try XCTUnwrap(HomeRead.decode(try Data(contentsOf: url)))
         return HomeLists(read: read, reference: reference)
     }
+
+    // MARK: - No read to show
+
+    /// A read that gives Home nothing to show says why: an older Symphony asks for an update, a failure names itself,
+    /// and a body that doesn't decode says so, never the "Reading Home…" spinner for good.
+    func testAReadWithNothingToShowSaysWhy() {
+        XCTAssertEqual(HomeLists.failure(after: .changed(.unsupported, etag: nil)), .unsupported)
+        XCTAssertEqual(
+            HomeLists.failure(after: .changed(.failed("Symphony isn't answering"), etag: nil)),
+            .failed("Symphony isn't answering")
+        )
+        XCTAssertEqual(HomeLists.failure(after: .changed(.loaded(Data("not json".utf8)), etag: "v1")), .failed(HomeLists.unreadable))
+        XCTAssertEqual(HomeLists.failure(after: .unchanged), .failed(HomeLists.unreadable))
+    }
 }

@@ -1259,6 +1259,8 @@ struct OverviewContent: View {
             .modifier(InboxSheetPresenter(model: model))
         } else if model.homeResult == .unsupported || client.stateResult == .unsupported {
             EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
+        } else if case let .failed(message)? = model.homeResult {
+            EmptyState(title: message, symbol: HomeLists.failureSymbol)
         } else {
             EmptyState(title: HomeLists.reading, symbol: SymphonyView.overview.symbol, showsSpinner: true)
         }
@@ -1310,14 +1312,10 @@ extension SymphonyWindowModel {
                 return
             }
             // No read to show: an older Symphony's 404 drops the lists for the Empty state that asks for an update; a
-            // failure keeps the lists the page shows. Either forgot the tag, so the next read is whole.
-            var failure = EndpointResult.failed(HomeLists.unreadable)
-            if case let .changed(answer, _) = result {
-                switch answer {
-                case .loaded: break
-                case .unsupported, .failed: failure = answer
-                }
-            }
+            // failure keeps the lists the page shows, or says what went wrong when it shows none. A body that came but
+            // doesn't decode keeps its tag, so it is forgotten here: the next read is whole, never a 304 for good.
+            homeReads.forget(HomeRead.path)
+            let failure = HomeLists.failure(after: result)
             if failure == .unsupported { home = nil }
             if homeResult != failure { homeResult = failure }
         }

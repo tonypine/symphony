@@ -264,6 +264,20 @@ public struct HomeLists: Equatable {
     public static let reading = "Reading Home…"
     /// A read that came back and doesn't decode.
     public static let unreadable = "Symphony's Home read doesn't read."
+    /// The failure symbol of the Empty state Home shows while it has no read to show.
+    public static let failureSymbol = "exclamationmark.triangle"
+
+    /// What `result`, a Home read that gave no Home to show, tells the page: `unsupported` for an older Symphony's
+    /// 404, its failure for one that got no answer, and `unreadable` for a body that came and doesn't decode.
+    public static func failure(after result: ConditionalResult) -> EndpointResult {
+        if case let .changed(answer, _) = result {
+            switch answer {
+            case .loaded: break
+            case .unsupported, .failed: return answer
+            }
+        }
+        return .failed(unreadable)
+    }
 
     /// One row of either list.
     public struct Row: Equatable, Identifiable {
