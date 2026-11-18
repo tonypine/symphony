@@ -211,6 +211,12 @@ private struct StepRow: View {
             ) {
                 StepHeaderLabel(step: step)
             }
+            // The screenshots the run recorded in this step, folded or not.
+            if !step.screenshots.isEmpty {
+                ScreenshotRow(shots: step.screenshots)
+                    .padding(.leading, Self.linesLeading)
+                    .padding(.vertical, DesignTokens.Space.s1)
+            }
             if unfolded {
                 StepLines(step: step, transcripts: transcripts)
                     .padding(.leading, Self.linesLeading)

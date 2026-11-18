@@ -1182,7 +1182,38 @@ func runGroup(_ run: RunGroupModel, unfolded: Bool? = nil) -> some View {
         .padding(DesignTokens.Space.s5)
         .frame(width: 760)
         .background(DesignTokens.Surface.content.color)
+        .environment(\.artifactImages, ticketPageImages())
 }
+
+/// A QA run that walks no steps, live: its newest lines under the run (the ticket read's `recent_lines` with no
+/// `current_step`).
+let liveSteplessRun: RunGroupModel = {
+    var run = RunGroupModel(
+        id: "qa-run-1", title: "QA run 1", state: .running, word: "Running", durationSeconds: 340, tokens: 1_200_000,
+        model: "Claude Opus 5.5"
+    )
+    run.liveLines = [
+        TranscriptLine(kind: .say, text: "Opening the ticket page on the fixture server to walk step 2.", at: "2026-10-07T12:21:40Z"),
+        TranscriptLine(kind: .tool, text: "mcp__symphony__qa_open: TP-1244", at: "2026-10-07T12:21:44Z"),
+        TranscriptLine(kind: .result, text: "Opened the ticket page at 1440×900.", at: "2026-10-07T12:21:52Z", durationMs: 8_100),
+        TranscriptLine(kind: .say, text: "The run header shows its step bars; checking the timeline's newest line next.", at: "2026-10-07T12:22:05Z"),
+    ]
+    return run
+}()
+
+/// The fixture's screenshot, as a run's evidence carries it.
+let runScreenshot = TicketScreenshot(
+    id: "1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0", label: "Ticket page at 1440×900",
+    path: "api/v1/artifacts/1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0", available: true
+)
+
+/// Run 2 with the screenshots it recorded: two in its code step, one on the run itself.
+let runWithScreenshots: RunGroupModel = {
+    var run = runStepGroups[0]
+    run.steps[0].screenshots = [runScreenshot, runScreenshot]
+    run.screenshots = [runScreenshot]
+    return run
+}()
 
 // MARK: - The Timeline section (TP-1444)
 
@@ -1786,6 +1817,10 @@ MainActor.assumeIsolated {
         render(runGroup(runStepGroups[0]), scheme, to: "run-group-folded-\(suffix).png")
         render(runGroup(runStepGroups[0], unfolded: true), scheme, to: "run-group-failed-step-\(suffix).png")
         render(runGroup(runStepGroups[1]), scheme, to: "run-group-run-now-\(suffix).png")
+        // A QA run that walks no steps, live with its newest lines under it; a run with the screenshots it recorded,
+        // under its step and under the run.
+        render(runGroup(liveSteplessRun), scheme, to: "run-group-no-steps-live-lines-\(suffix).png")
+        render(runGroup(runWithScreenshots, unfolded: true), scheme, to: "run-group-screenshots-\(suffix).png")
         // The Timeline section (TP-1444): a day with every entry class at the laptop's and the desktop's column widths,
         // and an entry selected with the failed run unfolded.
         render(timeline(width: 780), scheme, to: "timeline-laptop-\(suffix).png")
