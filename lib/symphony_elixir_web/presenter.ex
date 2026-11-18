@@ -118,6 +118,7 @@ defmodule SymphonyElixirWeb.Presenter do
           pause: normalize_pause(Map.get(snapshot, :pause)),
           repositories: Enum.map(repositories, &repository_payload/1),
           all_repositories_paused: repositories != [] and Enum.all?(repositories, & &1.pause),
+          providers: snapshot |> Map.get(:providers, []) |> Enum.map(&provider_state_payload/1),
           usage_limits: snapshot |> Map.get(:usage_limits, []) |> Enum.map(&usage_limit_payload(&1, now)),
           stray_processes: stray_processes |> StrayProcesses.warnings() |> Enum.map(&Map.delete(&1, :start_time)),
           budget: normalize_budget(Map.get(snapshot, :budget)),
@@ -556,6 +557,20 @@ defmodule SymphonyElixirWeb.Presenter do
   @spec provider_payload(%{provider: String.t(), pause: map() | nil}) :: map()
   def provider_payload(%{provider: provider} = status) do
     %{provider: provider, name: AgentProviders.display_name(provider), paused: not is_nil(status.pause), pause: pause_payload(status)}
+  end
+
+  @doc """
+  A provider as `/api/v1/state`'s `providers` lists it (`SymphonyElixir.Providers`): its times as
+  ISO 8601, each usage window's reset too.
+  """
+  @spec provider_state_payload(SymphonyElixir.Providers.entry()) :: map()
+  def provider_state_payload(%{provider: _provider} = entry) do
+    %{
+      entry
+      | paused_since: iso8601(entry.paused_since),
+        held_until: iso8601(entry.held_until),
+        usage_windows: Enum.map(entry.usage_windows, &%{&1 | resets_at: iso8601(&1.resets_at)})
+    }
   end
 
   @doc """

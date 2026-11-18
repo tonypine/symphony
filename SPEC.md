@@ -5436,6 +5436,15 @@ SHOULD return:
   `provider`, `scope`, `reason`, `window`, `phase`, `since`, `resets_at`, `resume_at`, `source` and
   `utilization` (the latest utilization seen for the window, else the one the hold recorded, or null)
   and `banner` (the dashboard line for the hold, in Symphony's local time, which the menu bar shows)
+- `providers` (every provider some harness reaches, in use first, then not in use), each with
+  `provider`, `name`, `in_use` (a kind of run or one of its fallbacks names it), `paused` and
+  `paused_since` (the Director's pause of the provider), `held` and `held_until` (a usage limit
+  holds it, until the latest resume time of its holds), `usage_windows` (each window Symphony read
+  for it from its runs: `name`, `utilization` from 0 to 1, `resets_at`; empty when it can read
+  none), `harnesses` (those that reach it), `kinds` and `fallback_for` (the kinds of run whose own
+  choice, or one of whose fallbacks, is on it), `working` (runs working on it now),
+  `tokens_today` (its runs' tokens on the daily budget's UTC day) and `reserve` (null for now). A
+  Pause or a Resume of a provider pushes the new state at once.
 - `pause`, `budget`, `dispatch_state`, and `workspace_lifecycle` when those extensions are enabled.
   `pause` is Symphony's own pause (Section 4.1.11): `paused` while a `person` or `build` reason
   stops all dispatch, with the first such reason's line as `reason` (an update's is
