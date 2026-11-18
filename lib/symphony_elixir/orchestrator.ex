@@ -9157,7 +9157,7 @@ defmodule SymphonyElixir.Orchestrator do
   Pauses new runs on one provider (`SymphonyElixir.Harnesses.all_providers/0`) on the Director's
   reason (`SymphonyElixir.Pauses.provider_reason/1`): a new run takes its first fallback on another
   provider, one that has none waits, and a run that works goes on. Returns the provider and its
-  pause; `{:error, :provider_not_found}` for a provider no harness reaches.
+  pause; `{:error, {:provider_not_found, provider}}` for a provider no harness reaches.
   """
   @spec pause_provider(String.t()) :: {:ok, map()} | :unavailable | {:error, term()}
   def pause_provider(provider), do: pause_provider(__MODULE__, provider)
