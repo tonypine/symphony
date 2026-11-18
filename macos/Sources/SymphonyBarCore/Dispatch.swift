@@ -59,6 +59,14 @@ public struct DispatchControl: Equatable {
     /// Update Now Anyway, once the agent runs outlast the restart timeout.
     public var canUpdateNow: Bool { canCancelUpdate && update?.offersUpdateNow == true }
 
+    /// What the status line's control says (TP-1498): "Dispatch paused" while paused, the reason in its help; the
+    /// word otherwise.
+    public var lineWord: String { mode == .paused ? Self.pausedWord : word }
+    public static let pausedWord = "Dispatch paused"
+
+    /// The control's dot pulses while dispatch is on.
+    public var live: Bool { mode == .on }
+
     /// "Dispatch on, 3 working", or "Dispatch paused, updating to v0.0.1.42" while an update holds dispatch.
     public var accessibilityLabel: String {
         if let updatingTo {

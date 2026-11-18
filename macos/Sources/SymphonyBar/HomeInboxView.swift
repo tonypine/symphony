@@ -286,13 +286,14 @@ struct InboxSheetPresenter: ViewModifier {
     }
 }
 
-// MARK: - The status bar
+// MARK: - The status line
 
-/// The window's status bar: the dispatch control, then the factory's health in one line.
+/// The window's status line (TP-1498): the dispatch control, then what is in progress, queued and needs the Director,
+/// the build and the connection.
 struct WindowStatusBar: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
-    /// When the last state arrived, for the health line's help: the status bar alone draws again each poll (TP-1480).
+    /// When the last state arrived, for the health line's help: the status line alone draws again each poll (TP-1480).
     @ObservedObject var heartbeat: StateHeartbeat
 
     init(model: SymphonyWindowModel, client: LiveAPIClient) {
@@ -302,42 +303,8 @@ struct WindowStatusBar: View {
     }
 
     var body: some View {
-        StatusBarContent(line: model.healthLine) {
+        StatusLine(model.healthLine) {
             DispatchControlButton(model: model, client: client)
         }
-    }
-}
-
-/// The status bar's layout, with the control it is given: outside the window, so it also renders offscreen.
-struct StatusBarContent<Control: View>: View {
-    let line: HealthLine
-    @ViewBuilder let control: Control
-
-    static var height: CGFloat { 32 }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Divider()
-            HStack(spacing: DesignTokens.Space.s3) {
-                control
-                ForEach(Array(line.parts.enumerated()), id: \.offset) { _, part in
-                    HStack(spacing: DesignTokens.Space.s1) {
-                        if let status = part.status { StatusDot(status) }
-                        Text(part.text)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                    .help(part.help ?? part.text)
-                }
-                Spacer(minLength: 0)
-            }
-            .font(DesignTokens.TypeStyle.secondary.font)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, DesignTokens.Space.s3)
-            .frame(height: Self.height)
-        }
-        .background(DesignTokens.Surface.window.color)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(line.accessibilityLabel)
     }
 }

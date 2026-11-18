@@ -1061,23 +1061,16 @@ struct TicketInspectorBody: View {
 
 // MARK: - C2 and D12a: the dispatch control and its popover
 
-/// The status bar's dispatch control (TP-1454): a quiet button with the catalog's hover and pressed faces, pressed
-/// while its popover is open.
+/// The status line's dispatch control (TP-1454, TP-1498): the shared control, pressed while its popover is open.
 struct DispatchControlButton: View {
     @ObservedObject var model: SymphonyWindowModel
     @ObservedObject var client: LiveAPIClient
 
     var body: some View {
         let control = model.dispatchControl
-        Button {
+        DispatchStatusControl(control, open: model.dispatchPopoverShown) {
             if control.canStart { model.startSymphony() } else { model.dispatchPopoverShown.toggle() }
-        } label: {
-            DispatchControlLabel(control: control)
         }
-        .directorButton(.quiet, size: .small, selected: model.dispatchPopoverShown)
-        .help(control.canStart ? DispatchControl.startTitle : "Dispatch")
-        .accessibilityLabel(control.accessibilityLabel)
-        .accessibilityAddTraits(.isButton)
         .popover(isPresented: $model.dispatchPopoverShown, arrowEdge: .top) {
             DispatchPopover(
                 control: control,
@@ -1092,26 +1085,6 @@ struct DispatchControlButton: View {
                     updateNow: { model.performUpdateAction(.updateNow) }
                 )
             )
-        }
-    }
-}
-
-/// The control's face: status dot, word and chevron (or Start Symphony); the button's style draws its surface.
-struct DispatchControlLabel: View {
-    let control: DispatchControl
-
-    var body: some View {
-        HStack(spacing: DesignTokens.Space.s2) {
-            StatusDot(control.status)
-            Text(control.word)
-                // Plain colors: the quiet button's own foreground is the accent, which a hierarchical style would take.
-                .foregroundStyle(control.mode == .paused ? control.status.tint : Color.primary)
-                .lineLimit(1)
-            if control.canStart {
-                Text(DispatchControl.startTitle).foregroundStyle(Color.accentColor)
-            } else {
-                Image(systemName: "chevron.up").font(.caption2.weight(.semibold)).foregroundStyle(Color.secondary)
-            }
         }
     }
 }

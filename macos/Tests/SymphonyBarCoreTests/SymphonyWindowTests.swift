@@ -85,7 +85,7 @@ final class SymphonyWindowTests: XCTestCase {
     // MARK: - Sidebar
 
     func testSidebarListsTheFiveDestinationsWithFactorysPagesUnderIt() {
-        let sidebar = Sidebar()
+        let sidebar = SidebarRows()
         XCTAssertEqual(sidebar.destinations, [.home, .journal, .work, .insights, .factory])
         XCTAssertEqual(sidebar.destinations.map(\.title), ["Home", "Journal", "Work", "Insights", "Factory"])
         XCTAssertEqual(sidebar.items, [
@@ -104,7 +104,7 @@ final class SymphonyWindowTests: XCTestCase {
     }
 
     func testTheSelectedRowIsTheDestinationOrFactorysPage() {
-        let sidebar = Sidebar()
+        let sidebar = SidebarRows()
         XCTAssertEqual(sidebar.item(for: .overview), .destination(.home))
         XCTAssertEqual(sidebar.item(for: .inbox), .destination(.home))
         XCTAssertEqual(sidebar.item(for: .journal), .destination(.journal))
@@ -115,7 +115,7 @@ final class SymphonyWindowTests: XCTestCase {
 
     func testCommandOneToFivePickTheDestinations() {
         // The View menu's items, which carry ⌘1–⌘5.
-        let items = Sidebar().menuItems
+        let items = SidebarRows().menuItems
         XCTAssertEqual(items.map(\.title), ["Home", "Journal", "Work", "Insights", "Factory"])
         XCTAssertEqual(items.map(\.keyEquivalent), ["1", "2", "3", "4", "5"])
         XCTAssertEqual(items.map(\.destination), [.home, .journal, .work, .insights, .factory])
@@ -176,7 +176,7 @@ final class SymphonyWindowTests: XCTestCase {
     }
 
     func testRestoresTheSavedViewWhenItShowsInTheWindow() {
-        let sidebar = Sidebar()
+        let sidebar = SidebarRows()
         XCTAssertEqual(sidebar.restoredView(saved: "diagnostics"), .diagnostics)
         XCTAssertEqual(sidebar.restoredView(saved: "overview"), .overview)
         // The first time, the window opens on Home: what needs you first. A window that remembers the Inbox opens on

@@ -412,34 +412,6 @@ func repoPausedSidebar() -> some View {
     .background(DesignTokens.Surface.window.color)
 }
 
-/// The sidebar's five destinations (TP-1455), Factory's pages under it: with Home's waiting-on-you count and Factory's
-/// setup problems, and with neither.
-@MainActor
-func destinationsSidebar() -> some View {
-    func column(waiting: Int, setup: SetupSummary) -> some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            ForEach(Sidebar().items, id: \.self) { item in
-                switch item {
-                case let .destination(destination):
-                    SidebarRowContent(
-                        title: destination.title, symbol: destination.symbol,
-                        badge: destination.badge(waitingOnYou: waiting, setup: setup)
-                    )
-                case let .page(page):
-                    SidebarRowContent(title: page.title, symbol: page.symbol, badge: nil, indented: true)
-                }
-            }
-        }
-        .frame(width: DesignTokens.Layout.sidebarWidth - 2 * DesignTokens.Space.s3, alignment: .leading)
-        .padding(DesignTokens.Space.s3)
-    }
-    return HStack(alignment: .top, spacing: DesignTokens.Space.s6) {
-        column(waiting: 4, setup: SetupSummary(errors: 1, warnings: 2))
-        column(waiting: 0, setup: SetupSummary())
-    }
-    .background(DesignTokens.Surface.window.color)
-}
-
 /// Ten drifts, as many as Symphony keeps, newest first; every third move back failed.
 let reconcileDrifts: [ReconcileReport.Drift] = (0..<10).map { index in
     let at = githubNow.addingTimeInterval(TimeInterval(-40 - index * 120))
@@ -1045,34 +1017,6 @@ func inboxDrawer() -> some View {
         InboxReviewBody(item: item, perform: { _ in }, narrow: true, now: situationsNow, state: situationsState("home-questions").snapshot)
     }
     .frame(width: HomeInbox.drawerIdealWidth)
-    .background(DesignTokens.Surface.content.color)
-}
-
-/// The status bar at `window`'s width less the sidebar: the dispatch control at rest, under the pointer and pressed,
-/// then the health line; dispatch on and Symphony answering, or paused, or Symphony stopped.
-@MainActor
-func statusBar(window: CGFloat) -> some View {
-    let width = window - DesignTokens.Layout.sidebarWidth
-    let build = DiagnosticsPayload.decode(try! Data(contentsOf: homeQuestionsAPI.appendingPathComponent("state.json")))?.build
-    let utc = TimeZone(identifier: "UTC")!
-    func bar(_ window: WindowState, _ state: String?, _ face: DesignTokens.Interaction) -> some View {
-        let control = DispatchControl(
-            window: window, paused: false, state: state.map(situationsState), now: situationsNow, timeZone: utc
-        )
-        let line = HealthLine(window: window, dispatch: control, build: build, appVersion: "0.0.1.866", lastUpdate: situationsNow, timeZone: utc)
-        return StatusBarContent(line: line) {
-            ButtonFace(label: DispatchControlLabel(control: control), kind: .quiet, size: .small, state: face, reduceMotion: false)
-        }
-        .frame(width: width)
-    }
-    return VStack(spacing: DesignTokens.Space.s3) {
-        bar(.connected, "home-questions", .rest)
-        bar(.connected, "home-questions", .hover)
-        bar(.connected, "home-questions", .press)
-        bar(.connected, "paused", .rest)
-        bar(.stopped, nil, .rest)
-    }
-    .padding(.vertical, DesignTokens.Space.s3)
     .background(DesignTokens.Surface.content.color)
 }
 
@@ -1822,11 +1766,10 @@ MainActor.assumeIsolated {
             renderScreen(scheme, to: "home-board") { window in homeBoard("home", window: window, selection: "SHOP-320") }
             renderScreen(scheme, to: "home-board-quiet") { window in homeBoard("home-quiet", window: window) }
         }
-        // Home's top (TP-1454): two questions and a pause above the board, the drawer, the status bar, at the laptop's and
-        // the desktop's widths.
+        // Home's top (TP-1454): two questions and a pause above the board, and the drawer, at the laptop's and the
+        // desktop's widths.
         do {
             renderScreen(scheme, to: "home-questions") { window in homeWithQuestions(window: window) }
-            renderScreen(scheme, to: "status-bar") { window in statusBar(window: window) }
         }
         render(inboxDrawer(), scheme, to: "inbox-drawer-\(suffix).png")
         // The Action rail (TP-1440): every move allowed, and each refusal with its reason and More open, at the
@@ -2031,8 +1974,6 @@ MainActor.assumeIsolated {
         for (name, providers, selection) in providersStates {
             renderScreen(scheme, to: name) { providersScreen(providers, selection: selection, window: $0) }
         }
-        // The five destinations (TP-1455): Home's and Factory's badges, and none.
-        render(destinationsSidebar(), scheme, to: "sidebar-destinations-\(suffix).png")
         // Move to… (TP-1328): the move's sheet, also with a refusal.
         render(moveSheet(), scheme, to: "move-sheet-\(suffix).png")
         render(moveSheet(error: "Couldn't move SHOP-430 to In Progress: Symphony has no record of SHOP-430 yet, so it can't move it (HTTP 409)"),

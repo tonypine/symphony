@@ -685,7 +685,7 @@ final class SetupTests: XCTestCase {
     // MARK: - Sidebar
 
     func testSetupLeadsFactorysPages() {
-        let sidebar = Sidebar()
+        let sidebar = SidebarRows()
         XCTAssertEqual(Destination.factory.pages, [.setup, .repos, .runs, .providers, .diagnostics, .settings])
         XCTAssertEqual(SymphonyView.setup.title, "Setup")
         XCTAssertEqual(SymphonyView.setup.symbol, "wrench.and.screwdriver")

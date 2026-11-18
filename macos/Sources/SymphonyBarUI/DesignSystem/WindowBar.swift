@@ -74,8 +74,6 @@ public struct WindowBar<Switch: View, Results: View>: View {
     var hoveredCrumb: Int?
     let workSwitch: Switch?
     let findResults: Results
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
     /// A bar with Work's `workSwitch` after the breadcrumb, when given, and `findResults` under Find a ticket.
     /// `findDrawnAs` and `hoveredCrumb` draw the field and a link in a state, for the gallery.
@@ -122,7 +120,7 @@ public struct WindowBar<Switch: View, Results: View>: View {
         .padding(.trailing, bar.trailingPadding)
         .frame(maxWidth: .infinity)
         .frame(height: bar.height)
-        .background { background }
+        .background { BarGlass(DesignTokens.WindowBar.glass, dragsWindow: true) }
         .overlay(alignment: .bottom) { HairlineDivider().accessibilityHidden(true) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(WindowBarText.toolbarLabel)
@@ -158,16 +156,31 @@ public struct WindowBar<Switch: View, Results: View>: View {
         }
     }
 
-    /// The glass, solid under Reduce Transparency and offscreen, which draws no material; and the area that drags
-    /// the window.
-    @ViewBuilder private var background: some View {
-        let glass = DesignTokens.WindowBar.glass
+}
+
+/// The window's glass bars' material (`--material-glass` with `--material-blur`): the window bar over the page's top
+/// and the status line under it (TP-1498). Solid under Reduce Transparency and offscreen, which draws no material.
+/// `dragsWindow` makes its empty room a title bar.
+public struct BarGlass: View {
+    let glass: DesignTokens.Glass
+    let dragsWindow: Bool
+    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+    public init(_ glass: DesignTokens.Glass = .glass, dragsWindow: Bool = false) {
+        self.glass = glass
+        self.dragsWindow = dragsWindow
+    }
+
+    public var body: some View {
         if offscreenSnapshot || reduceTransparency {
             Rectangle().fill(glass.solid.color)
         } else {
             Rectangle().fill(glass.fill.color)
                 .background(.ultraThinMaterial)
-                .overlay { WindowDragArea().accessibilityHidden(true) }
+                .overlay {
+                    if dragsWindow { WindowDragArea().accessibilityHidden(true) }
+                }
         }
     }
 }
@@ -187,8 +200,9 @@ extension WindowBar where Switch == EmptyView {
 }
 
 /// The bar's empty room as a title bar: a press drags the window, a double-click does what the system's setting says
-/// a double-click on a title bar does (zoom, minimize or nothing).
-private struct WindowDragArea: NSViewRepresentable {
+/// a double-click on a title bar does (zoom, minimize or nothing). The sidebar's top, where the window's buttons sit,
+/// is one too (TP-1498).
+struct WindowDragArea: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { DragView() }
     func updateNSView(_ nsView: NSView, context: Context) {}
 
