@@ -97,6 +97,12 @@ progress-meter-one-line-at-the-cap
 progress-meter-one-line-at-the-stop-mark
 progress-meter-one-line-with-a-stop-mark
 progress-meter-ticket-cap
+reorderable-list-a-line-that-can-t-be-used-now
+reorderable-list-dragging
+reorderable-list-handle-focused
+reorderable-list-handle-hover
+reorderable-list-one-line
+reorderable-list-resting
 row-default
 row-fix-disabled-with-reason
 row-focused

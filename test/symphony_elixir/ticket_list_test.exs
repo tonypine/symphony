@@ -15,7 +15,7 @@ defmodule SymphonyElixir.TicketListTest do
        phase: "Waiting on sub-tickets",
        priority: 2,
        sub_issues: [%{id: "ep-2", identifier: "EP-2", state: "Todo"}]
-     }, "blocked_by_ticket"},
+     }, "waiting_on_sub_tickets"},
     {%{issue_id: "ep-2", issue_identifier: "EP-2", phase: "Todo", priority: 2, parent: @epic, labels: ["Bug"]}, "waiting_for_slot"},
     {%{issue_id: "ep-3", issue_identifier: "EP-3", phase: "Plan Review", priority: 1, parent: @epic}, "waiting_on_you"},
     {%{issue_id: "ep-4", issue_identifier: "EP-4", phase: "Backlog", priority: 1, parent: @epic}, "paused_by_rule"},

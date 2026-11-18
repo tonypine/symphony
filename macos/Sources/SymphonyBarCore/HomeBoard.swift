@@ -86,7 +86,7 @@ public struct DispatchOrder: Equatable {
             computedAt: (object["computed_at"] as? String).flatMap(SymphonyState.parseDate),
             next: object["next"] as? String,
             groups: groups.compactMap { group in
-                guard let kind = (group["kind"] as? String).flatMap(DesignTokens.SituationKind.init(apiKind:)) else { return nil }
+                guard let kind = (group["kind"] as? String).map(DesignTokens.SituationKind.init(reading:)) else { return nil }
                 return Group(kind: kind, tickets: (group["tickets"] as? [[String: Any]] ?? []).compactMap(ticket))
             }
         )

@@ -8,8 +8,15 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/build-store-test.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 failures=0
 check() { # name expected actual
-  if [ "$2" = "$3" ]; then echo "ok [$1]"; else echo "FAIL [$1]: wanted '$2', got '$3'"; failures=$((failures + 1)); fi
+  if [ "$2" = "$3" ]; then echo "ok [$1]"; return; fi
+  echo "FAIL [$1]: wanted '$2', got '$3'"; failures=$((failures + 1))
+  # An annotation, so the failing check is read from the run's summary, not from its whole log.
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::error::build store test: $1: wanted '$2', got '$3'"; fi
 }
+# Gives <path> the time of <seconds> ago. The prune checks set every time they compare: their
+# order never rests on the clock moving on between two steps (a sleep, a touch a moment later),
+# which a busy or resynced VM clock does not promise.
+age() { touch -t "$(date -r $(( $(date +%s) - $2 )) +%Y%m%d%H%M.%S)" "$1"; }
 
 # A made-up repository with the script in it, so keys read its HEAD.
 repo="$tmp/repo"
@@ -85,13 +92,13 @@ echo "let c = 3" >> "$repo/macos/Sources/App/a.swift"; commit c; $store stamp
 check "new content has a new time" changed "$([ "$before" != "$(stat -f %m "$repo/macos/Sources/App/a.swift")" ] && echo changed || echo same)"
 
 # Pruning keeps the newest.
-# Each piece gets its own time, minutes apart and set here: times a second apart from `sleep` came out of order once
-# on a busy runner.
-touch -t "$(date -v-10M +%Y%m%d%H%M.%S)" "$SYMPHONY_CI_CACHE/store/app/k1"
-for n in 1 2 3 4; do
-  echo "$n" > "$tmp/piece"; $store put app "old$n" "$tmp/piece" incremental 2>/dev/null
-  touch -t "$(date -v-$((5 - n))M +%Y%m%d%H%M.%S)" "$SYMPHONY_CI_CACHE/store/app/old$n"
-done
+for n in 1 2 3 4; do echo "$n" > "$tmp/piece"; $store put app "old$n" "$tmp/piece" incremental 2>/dev/null; done
+# k1 was used 50 minutes ago, old1 to old4 40 to 10 minutes ago: all within the last 3 hours.
+age "$SYMPHONY_CI_CACHE/store/app/k1" 3000
+for n in 1 2 3 4; do age "$SYMPHONY_CI_CACHE/store/app/old$n" $(( (5 - n) * 600 )); done
+# pr-a was used last, then main, then feature/b.
+refs=$(echo "$SYMPHONY_CI_CACHE"/work/*/refs)
+age "$refs/pr-a" 600; age "$refs/main" 900; age "$refs/feature_b" 1200
 SYMPHONY_CI_KEEP_PIECES=2 $store prune 2>/dev/null
 check "prune keeps what was used in the last 3 hours" "k1 old1 old2 old3 old4" "$(ls "$SYMPHONY_CI_CACHE/store/app" | tr '\n' ' ' | sed 's/ $//')"
 SYMPHONY_CI_KEEP_REFS=1 $store prune 2>/dev/null

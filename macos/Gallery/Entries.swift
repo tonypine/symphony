@@ -85,6 +85,9 @@ let galleryEntries: [GalleryEntry] = [
             "SymphonyBarUI/DesignSystem/MenuPresenter.swift",
         ]),
     GalleryEntry(
+        id: "reorderable-list", title: "Reorderable list", kind: .component, prefixes: ["reorderable-list-"],
+        files: ["SymphonyBarUI/DesignSystem/ReorderableList.swift", "SymphonyBarCore/ReorderModel.swift"]),
+    GalleryEntry(
         id: "save-bar", title: "Save bar", kind: .component, prefixes: ["save-bar-"], files: ["SymphonyBarUI/DesignSystem/SaveBar.swift"]),
     GalleryEntry(
         id: "list-card", title: "List card", kind: .component, prefixes: ["list-card-"], files: ["SymphonyBarUI/DesignSystem/ListCard.swift"]),

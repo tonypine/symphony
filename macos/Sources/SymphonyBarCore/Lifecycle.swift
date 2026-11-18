@@ -300,7 +300,8 @@ public struct LifecycleModel: Equatable {
 
     /// What a held ticket waits on, by its situation's kind.
     static let waitsOn: [DesignTokens.SituationKind: String] = [
-        .you: "it waits on your answer", .blocked: "it waits on another ticket", .paused: "it waits for the pause to lift",
+        .you: "it waits on your answer", .blocked: "it waits on another ticket", .subTickets: "it waits on its sub-tickets",
+        .paused: "it waits for the pause to lift",
         .ci: "it waits on CI", .build: "it waits on the build", .slot: "it waits for a free slot", .retrying: "it waits to retry",
     ]
 

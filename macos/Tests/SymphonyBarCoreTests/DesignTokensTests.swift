@@ -60,10 +60,12 @@ final class DesignTokensTests: XCTestCase {
             .build: (.working, "shippingbox", "Waiting for a build"),
             .you: (.you, "person.crop.circle.badge.exclamationmark", "Waiting on you"),
             .blocked: (.idle, "lock.fill", "Blocked"),
+            .subTickets: (.idle, "square.stack.3d.up", "Waiting on its sub-tickets"),
             .paused: (.idle, "pause.circle", "Paused"),
             .retrying: (.problem, "arrow.clockwise", "Retrying"),
             .done: (.done, "checkmark.circle.fill", "Shipped"),
             .cancelled: (.idle, "circle.slash", "Cancelled"),
+            .unknown: (.idle, "questionmark.circle", "Not known"),
         ]
         XCTAssertEqual(Set(DesignTokens.SituationKind.allCases), Set(expected.keys))
         for kind in DesignTokens.SituationKind.allCases {
@@ -77,10 +79,11 @@ final class DesignTokensTests: XCTestCase {
     func testTheFirstSituationByPrecedenceIsShown() {
         XCTAssertEqual(
             DesignTokens.SituationKind.allCases,
-            [.you, .retrying, .blocked, .paused, .ci, .build, .slot, .working, .done, .cancelled]
+            [.you, .retrying, .blocked, .subTickets, .paused, .ci, .build, .slot, .working, .done, .cancelled, .unknown]
         )
         XCTAssertEqual(DesignTokens.SituationKind.you.precedence, 0)
-        XCTAssertEqual(DesignTokens.SituationKind.cancelled.precedence, 9)
+        XCTAssertEqual(DesignTokens.SituationKind.cancelled.precedence, 10)
+        XCTAssertEqual(DesignTokens.SituationKind.shown([.unknown, .slot]), .slot)
         XCTAssertEqual(DesignTokens.SituationKind.shown([.working, .paused, .blocked]), .blocked)
         XCTAssertEqual(DesignTokens.SituationKind.shown([.done, .you]), .you)
         XCTAssertNil(DesignTokens.SituationKind.shown([]))

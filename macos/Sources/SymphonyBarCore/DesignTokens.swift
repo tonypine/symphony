@@ -940,8 +940,9 @@ public enum DesignTokens {
 
     /// The situation a ticket is in (`director-ticket-page.md` §3): exactly one at a time, said with its glyph, its
     /// word and its status color, never color alone. The cases are in the order that picks one when several are true.
+    /// `unknown` is what Symphony says when it can tell nothing, and what the app reads a kind it does not know as.
     public enum SituationKind: String, CaseIterable, Equatable {
-        case you, retrying, blocked, paused, ci, build, slot, working, done, cancelled
+        case you, retrying, blocked, subTickets, paused, ci, build, slot, working, done, cancelled, unknown
 
         /// Where it ranks when more than one is true: the lowest wins.
         public var precedence: Int { Self.allCases.firstIndex(of: self) ?? 0 }
@@ -954,7 +955,7 @@ public enum DesignTokens {
         public var status: Status {
             switch self {
             case .working, .ci, .build: .working
-            case .slot, .blocked, .paused, .cancelled: .idle
+            case .slot, .blocked, .subTickets, .paused, .cancelled, .unknown: .idle
             case .you: .you
             case .retrying: .problem
             case .done: .done
@@ -962,11 +963,13 @@ public enum DesignTokens {
         }
 
         /// The SF Symbol: a dashed circle for work and CI, a clock for a slot, a box for a build, a person with a
-        /// mark, a lock, a pause, an arrow round, a filled tick, a slashed circle.
+        /// mark, a lock, a stack for sub-tickets, a pause, an arrow round, a filled tick, a slashed circle, a question mark.
         public var symbol: String {
             switch self {
             case .working, .ci: "circle.dotted.circle"
             case .slot: "clock"
+            case .subTickets: "square.stack.3d.up"
+            case .unknown: "questionmark.circle"
             case .build: "shippingbox"
             case .you: "person.crop.circle.badge.exclamationmark"
             case .blocked: "lock.fill"
@@ -986,6 +989,8 @@ public enum DesignTokens {
             case .build: "Waiting for a build"
             case .you: "Waiting on you"
             case .blocked: "Blocked"
+            case .subTickets: "Waiting on its sub-tickets"
+            case .unknown: "Not known"
             case .paused: "Paused"
             case .retrying: "Retrying"
             case .done: "Shipped"
@@ -1306,6 +1311,53 @@ public enum DesignTokens {
         /// The selection: a 1.5 pt accent edge and its tint 2.5 pt past it; grey while the window is not focused.
         public static let ringWidth: Double = 1.5
         public static let tintWidth: Double = 2.5
+    }
+
+    /// The catalog's Reorderable list (`.reorder-line`, `.run-edit`, TP-1531): lines 6 pt apart, each at least 28 pt,
+    /// a 16 × 24 pt handle of six dots, the place in a 20 pt disc, the line's own controls and, at its end, the
+    /// remove button. The lifted line is the content surface at the third elevation with a 1.5 pt accent edge, 4 pt
+    /// above and below and 6 pt to the sides past the line, turned 0.4°.
+    public enum ReorderableList {
+        public static let gap: Double = 6
+        public static let lineHeight: Double = 28
+        public static let lineGap = Space.s2
+        public static let radius = Control.medium.radius
+        public static let handleWidth: Double = 16
+        public static let handleHeight: Double = 24
+        public static let handleRadius = Radius.mark
+        public static let handleGlyph: Double = 14
+        /// The six dots, on the catalog's 16 pt grid: columns at 6 and 10, rows at 4, 8 and 12, 1.1 pt across each.
+        public static let dotColumns: [Double] = [6, 10]
+        public static let dotRows: [Double] = [4, 8, 12]
+        public static let dotRadius: Double = 1.1
+        public static let dotGrid: Double = 16
+        public static let number: Double = 20
+        public static let numberSize: Double = 11
+        public static let numberWeight = 600
+        public static let elevation = Elevation.level3
+        public static let liftEdge: Double = 1.5
+        public static let liftVertical: Double = 4
+        public static let liftHorizontal: Double = 6
+        public static let liftRotation: Double = -0.4
+        /// Where the catalog's Dragging story draws the lifted line: 14 pt right of and 70 pt above its place, with a
+        /// line's room (`dropGap`) opened over the line it is above.
+        public static let drawnLiftX: Double = 14
+        public static let drawnLiftY: Double = -70
+        public static let dropGap: Double = 34
+        /// The quiet add button under the lines, in line with their controls.
+        public static let footIndent: Double = 38
+        public static let footGap = Space.s4
+        public static let addSymbol = "plus"
+        public static let removeSymbol = "xmark"
+        public static let control = Control.small
+        /// A line that can't be used now: a 1 pt orange edge inside its controls, and the reason after a 6 pt dot.
+        public static let offEdge: Double = 1
+        public static let offDot: Double = 6
+        public static let offGap: Double = 6
+        public static let offIndent = Space.s2
+
+        /// From one line's top to the next's: its height and the gap.
+        public static func pitch(_ height: Double) -> Double { max(height, lineHeight) + gap }
     }
 
     /// The catalog's Progress meter (`.meter`, `.meter-line`, TP-1530): how much of a cap is used. The full form is

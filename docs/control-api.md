@@ -83,26 +83,41 @@ When more than one holds, the first in this order is the situation:
 | `waiting_on_you` | Waiting on you | `question_id`, or `phase` for a plan in review |
 | `retrying` | Retrying | null |
 | `blocked_by_ticket` | Blocked by TP-n | `ticket` |
+| `waiting_on_sub_tickets` | Waiting on its sub-tickets | `sub_tickets`: the open ones' identifiers |
 | `paused_by_rule` | Paused | the pause reason's own |
-| `waiting_for_ci` | Waiting for CI | `pr`, `check` |
+| `waiting_for_ci` | Waiting for CI | `pr`, `check`; for a wait on a commit, the pause reason's own |
 | `waiting_for_build` | Waiting for a build | the pause reason's own |
 | `waiting_for_slot` | Waiting for a slot | `slot`: why the slot is taken |
 | `working` | Working on the *step* step | `step`, `run_id` |
 | `done` | Shipped | null |
 | `cancelled` | Cancelled | null |
+| `unknown` | Not known | null |
 
-Some tickets have no kind of their own in the design, and read the closest one:
+`waiting_for_slot` is said only of a ticket that passed every dispatch condition but a free slot:
+one in `slot_waiting`, or one whose run is due with every slot in use. With a slot free, a due run
+reads "Starting" until it starts. Some tickets have no kind of their own in the design, and read the
+closest one:
 
-- A ticket nothing holds and no run works on reads `waiting_for_slot`, with the PR watcher's reason
-  as its cause when it has one.
+- A ticket `dispatch_skipped` lists never reads `waiting_for_slot`. One a rule passed over (Symphony's
+  or its repository's pause, the release gate, the usage limit, a spent token budget, the priority
+  filter, a reviewer turned off) reads `paused_by_rule`, unless a run works on it. Any other skip is
+  told by its `gate`, what closed: a run on it (`working`), a claim in flight (`working`,
+  "Starting"), its sub-tickets (`waiting_on_sub_tickets`), Linear's relations or a plan being
+  replaced ("Waiting on Linear", "Waiting on Symphony"), the PR watcher or a `Merging` hold
+  (`waiting_for_ci`), a build or an update (`waiting_for_build`), its own pause by its reasons, a
+  phase that is not active (`paused_by_rule`), and one the pass can't tell apart reads "Not started"
+  (`unknown`).
 - A plan in `Plan Review` reads `waiting_on_you`.
-- A parent in `Waiting on sub-tickets` reads `blocked_by_ticket` on its first open sub-ticket.
-- A ticket in `Backlog`, or one a rule passed over at dispatch (Symphony's or its repository's pause,
-  the usage limit, a spent token budget, the priority filter, a reviewer turned off), reads
-  `paused_by_rule`, unless a run works on it. Any other skip (a run on it, CI, its own pause) is told
-  by what it waits on.
+- A parent the dispatch pass held for its sub-tickets, or one in `Waiting on sub-tickets` with one
+  still open, reads `waiting_on_sub_tickets`: its cause says how many are done ("2 of 5 done.").
+- A ticket paused on a wait for CI on a commit (an epic review held for CI on its base branch), and
+  one whose run ended on CI still running and starts again after it, read `waiting_for_ci` naming the
+  commit and the workflows still running.
+- A ticket in `Backlog` reads `paused_by_rule`.
 - A ticket waiting for a slot while Symphony is paused reads `paused_by_rule`.
 - A `Merging` ticket held until CI settles reads `waiting_for_ci`.
+- A ticket Symphony can tell nothing of reads `unknown` ("Not known", "Symphony can't tell what it
+  waits on."); the Inbox lists it, and Symphony logs a warning naming the ticket and its phase.
 
 ## The `situation.changed` event
 
@@ -708,7 +723,7 @@ ticket entity, and nothing more. Its columns and filters come from one catalog
 | `repo` | `repo` | Any of its values, in any case. |
 | `epic` | `epic` | The epic itself and the tickets whose record names it as parent, as the Journal's and the aggregation read's `epic`. |
 | `phase` | `phase` | Any of its values, in any case. |
-| `situation` | `situation` | Any of its kinds (`waiting_on_you`, `retrying`, `blocked_by_ticket`, `paused_by_rule`, `waiting_for_ci`, `waiting_for_build`, `waiting_for_slot`, `working`, `done`, `cancelled`). |
+| `situation` | `situation` | Any of its kinds (`waiting_on_you`, `retrying`, `blocked_by_ticket`, `waiting_on_sub_tickets`, `paused_by_rule`, `waiting_for_ci`, `waiting_for_build`, `waiting_for_slot`, `working`, `done`, `cancelled`, `unknown`). |
 | `label` | `labels` | A ticket holding any of its labels, in any case. |
 | `priority` | `priority` | Any of its values, integers from 0 to 4. |
 | `since` | `updated_at` | The tickets whose record was written after its one ISO 8601 time. |
