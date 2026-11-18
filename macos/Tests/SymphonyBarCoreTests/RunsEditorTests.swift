@@ -342,7 +342,8 @@ final class RunsEditorTests: XCTestCase {
     func testSettingTheFirstChoiceOnAnotherHarnessDropsTheKindsOwnCommand() throws {
         var editor = RunsEditor(try RunProfilesConfig.scopedProfiles(in: "runs:\n  qa: { harness: claude, command: claude --fast }\n"))
         XCTAssertTrue(editor.set(.model, of: 0, kind: .qa, to: "claude-sonnet-5-5"))
-        XCTAssertTrue(editor.set(.harness, of: 0, kind: .qa, to: "claude"))
+        // The same harness changes nothing and keeps the command.
+        XCTAssertFalse(editor.set(.harness, of: 0, kind: .qa, to: "claude"))
         XCTAssertEqual(editor.profiles.global[.qa].command, "claude --fast")
         XCTAssertTrue(editor.set(.harness, of: 0, kind: .qa, to: "codex"))
         XCTAssertNil(editor.profiles.global[.qa].command)
