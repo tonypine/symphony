@@ -280,6 +280,9 @@ struct RunsHarnessRowView: View {
     let actions: RunsPageActions
     var editable = true
 
+    /// Why the fields are off: while the page takes no edits (a save under way), both say so.
+    private var reason: String? { editable ? nil : RunsPage.savingReason }
+
     var body: some View {
         let tokens = DesignTokens.RunsPage.self
         HStack(alignment: .top, spacing: tokens.harnessColumnGap) {
@@ -297,7 +300,7 @@ struct RunsHarnessRowView: View {
                     .accessibilityHidden(true)
                 DirectorTextField(
                     nil, text: Binding(get: { row.command }, set: { actions.setCommand(row.harness, $0) }),
-                    placeholder: RunsPage.commandLabel, size: tokens.control, mono: true
+                    placeholder: RunsPage.commandLabel, size: tokens.control, disabledReason: reason, mono: true
                 )
                 .frame(width: tokens.commandWidth)
                 .accessibilityLabel("\(row.title) \(RunsPage.commandLabel.lowercased())")
@@ -307,14 +310,14 @@ struct RunsHarnessRowView: View {
                     SearchablePopUp(
                         model.label,
                         selection: Binding(get: { model.value }, set: { actions.pickSmallModel(row.harness, model.provider, $0) }),
-                        choices: model.choices.map { PopUpChoice($0.value, $0.title) }, noun: "model", mono: true
+                        choices: model.choices.map { PopUpChoice($0.value, $0.title) }, noun: "model", mono: true,
+                        disabledReason: reason
                     )
                     .accessibilityLabel("\(row.title) \(model.label.lowercased())")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .disabled(!editable)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(row.title)
     }

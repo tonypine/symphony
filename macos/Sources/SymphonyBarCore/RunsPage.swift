@@ -123,6 +123,7 @@ public struct RunsPage: Equatable {
     public static let readAgain = "Read Again"
     public static let harnessesTitle = "Harnesses"
     public static let commandLabel = "Command"
+    public static let savingReason = "Saving symphony.yml…"
 
     /// "Small model on Anthropic".
     public static func smallModelLabel(_ provider: String) -> String {
