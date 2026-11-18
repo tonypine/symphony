@@ -182,7 +182,7 @@ final class HomeBoardTests: XCTestCase {
         ]}
         """#
         let order = try XCTUnwrap(DispatchOrder.decode(Data(json.utf8)))
-        XCTAssertEqual(order.groups.map(\.kind), [.slot])
+        XCTAssertEqual(order.groups.map(\.kind), [.unknown, .slot], "a kind the app does not know reads as not known")
         let board = HomeBoard(state: OverviewState(order: order), now: wallClock)
         let slot = try XCTUnwrap(board.groups.first { $0.kind == .slot })
         XCTAssertEqual(slot.rows.map(\.identifier), ["X-2"], "each ticket once")

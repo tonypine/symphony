@@ -124,7 +124,15 @@ defmodule SymphonyElixir.EpicReviewDispatchTest do
 
       next = Orchestrator.dispatch_chosen_issues_for_test([parent], state())
       refute Map.has_key?(next.running, @issue_id)
-      assert %{reason: "Waiting for CI on main at b98572e58594: release, macos still running", rule: nil} = next.dispatch_skipped[@issue_id]
+      assert %{reason: "Waiting for CI on main at b98572e58594: release, macos still running", rule: nil, gate: :paused} = next.dispatch_skipped[@issue_id]
+
+      # The ticket read says the same wait: for CI on main, at that commit, with those workflows.
+      live = SymphonyElixir.Situation.live_facts(%{dispatch_skipped: [Map.put(next.dispatch_skipped[@issue_id], :issue_id, @issue_id)]})
+      record = @issue_id |> SymphonyElixir.RunStore.get_ticket_state() |> SymphonyElixir.TicketState.normalize()
+
+      assert %{kind: "waiting_for_ci", word: "Waiting for CI", cause: "Waiting for CI on main at b98572e58594: release, macos still running."} =
+               SymphonyElixir.Situation.compute(record, [], live)
+
       refute Orchestrator.should_dispatch_issue_for_test(parent, state())
 
       # A run finishing while another is still going lifts nothing; the last one's completion does.

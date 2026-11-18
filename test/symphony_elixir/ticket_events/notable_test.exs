@@ -98,8 +98,8 @@ defmodule SymphonyElixir.TicketEvents.NotableTest do
     refute holds?(:factory_paused, event("pause.set", %{reason: "person"}))
   end
 
-  test "situation: a situation changed to waiting on you, retrying or blocked" do
-    for kind <- ["waiting_on_you", "retrying", "blocked_by_ticket"], do: assert(holds?(:situation, event("situation.changed", %{to: kind})), kind)
+  test "situation: a situation changed to waiting on you, retrying, blocked or not known" do
+    for kind <- ["waiting_on_you", "retrying", "blocked_by_ticket", "unknown"], do: assert(holds?(:situation, event("situation.changed", %{to: kind})), kind)
 
     for kind <- ["working", "waiting_for_ci", "done"], do: refute(holds?(:situation, event("situation.changed", %{to: kind})), kind)
     refute holds?(:situation, event("situation.changed", %{to: true}))

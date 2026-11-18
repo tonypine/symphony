@@ -150,6 +150,36 @@
         "run": null,
         "retry": null
       }
+    },
+    {
+      "identifier": "SHOP-511",
+      "situation": {
+        "kind": "waiting_on_sub_tickets",
+        "word": "Waiting on its sub-tickets",
+        "cause": "2 of 5 done.",
+        "next": "It moves on when every sub-ticket has ended.",
+        "since": "2026-10-30T14:17:00Z",
+        "waits_on": { "sub_tickets": ["SHOP-513", "SHOP-514", "SHOP-515"] },
+        "and_more": 0,
+        "step": null,
+        "run": null,
+        "retry": null
+      }
+    },
+    {
+      "identifier": "SHOP-512",
+      "situation": {
+        "kind": "unknown",
+        "word": "Not known",
+        "cause": "Symphony can't tell what it waits on.",
+        "next": "It is listed in the Inbox; check it now from its page.",
+        "since": "2026-10-30T16:02:00Z",
+        "waits_on": null,
+        "and_more": 0,
+        "step": null,
+        "run": null,
+        "retry": null
+      }
     }
   ]
 }

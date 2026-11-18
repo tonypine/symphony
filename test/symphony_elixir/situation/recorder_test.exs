@@ -52,7 +52,7 @@ defmodule SymphonyElixir.Situation.RecorderTest do
 
     assert kinds() == ["waiting_for_slot"]
     # A record with no phase: Symphony can't tell what it waits on, and says so.
-    assert kinds("no-phase") == ["waiting_on_you"]
+    assert kinds("no-phase") == ["unknown"]
     assert kinds("shipped") == []
   end
 
@@ -130,18 +130,20 @@ defmodule SymphonyElixir.Situation.RecorderTest do
     assert Process.alive?(pid)
   end
 
-  test "a skip no rule is behind writes no change; a rule's skip on an idle ticket does" do
+  test "a skip on an idle ticket writes what closed: its gate, or the rule behind it" do
     pid = start()
     snapshot(pid)
     assert kinds() == ["waiting_for_slot"]
 
-    skip = fn rule -> %{dispatch_skipped: [%{issue_id: @id, since: DateTime.utc_now(), reason: "a skip", rule: rule}]} end
+    skip = fn rule, gate ->
+      %{dispatch_skipped: [%{issue_id: @id, since: DateTime.utc_now(), reason: "a skip", rule: rule, gate: gate}]}
+    end
 
-    snapshot(pid, skip.(nil))
-    assert kinds() == ["waiting_for_slot"]
+    snapshot(pid, skip.(nil, :update_hold))
+    assert kinds() == ["waiting_for_slot", "waiting_for_build"]
 
-    snapshot(pid, skip.(:priority))
-    assert kinds() == ["waiting_for_slot", "paused_by_rule"]
+    snapshot(pid, skip.(:priority, nil))
+    assert kinds() == ["waiting_for_slot", "waiting_for_build", "paused_by_rule"]
   end
 
   test "with no recorder running a notice is nothing" do

@@ -350,12 +350,12 @@ defmodule SymphonyElixir.TicketObservationTest do
     recorder = start_supervised!(Recorder)
     Recorder.snapshot_published(%{running: [], retrying: [], slot_waiting: [], dispatch_skipped: []})
     settle_recorder(recorder)
-    assert situation_kinds() == ["blocked_by_ticket"]
+    assert situation_kinds() == ["waiting_on_sub_tickets"]
 
     ended = %{waiting | sub_issues: [%{id: "issue-c", identifier: "ACME-8", state: "Done"}]}
     {:ok, :updated} = TicketObservation.observe(repo_key, ended, now: @now)
     settle_recorder(recorder)
-    assert situation_kinds() == ["blocked_by_ticket", "waiting_for_slot"]
+    assert situation_kinds() == ["waiting_on_sub_tickets", "waiting_for_slot"]
   end
 
   # The notice in its mailbox, then the flush it queued behind it.

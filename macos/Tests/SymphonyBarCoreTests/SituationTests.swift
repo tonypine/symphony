@@ -39,16 +39,53 @@ final class SituationTests: XCTestCase {
         XCTAssertEqual(Set(try sample().situations.keys), Set(DesignTokens.SituationKind.allCases.map(\.apiKind)))
     }
 
-    func testEachAPIKindNamesOneOfTheTenKinds() {
+    func testEachAPIKindNamesOneOfTheKinds() {
         XCTAssertEqual(
             DesignTokens.SituationKind.allCases.map(\.apiKind),
-            ["waiting_on_you", "retrying", "blocked_by_ticket", "paused_by_rule", "waiting_for_ci", "waiting_for_build",
-             "waiting_for_slot", "working", "done", "cancelled"]
+            ["waiting_on_you", "retrying", "blocked_by_ticket", "waiting_on_sub_tickets", "paused_by_rule", "waiting_for_ci",
+             "waiting_for_build", "waiting_for_slot", "working", "done", "cancelled", "unknown"]
         )
         for kind in DesignTokens.SituationKind.allCases {
             XCTAssertEqual(DesignTokens.SituationKind(apiKind: kind.apiKind), kind)
+            XCTAssertEqual(DesignTokens.SituationKind(reading: kind.apiKind), kind)
         }
         XCTAssertNil(DesignTokens.SituationKind(apiKind: "needs_attention"))
+        XCTAssertEqual(DesignTokens.SituationKind(reading: "needs_attention"), .unknown)
+    }
+
+    /// TP-1494: a kind a newer Symphony serves reads as not known with its own words, never as waiting for a slot.
+    func testAKindTheAppDoesNotKnowIsNeverASlot() throws {
+        let json = #"{"kind":"needs_attention","word":"Needs attention","cause":"The fix ticket failed.","next":null}"#
+        let situation = try XCTUnwrap(Situation.decode(Data(json.utf8)))
+        XCTAssertEqual(situation.kind, .unknown)
+        XCTAssertEqual(situation.word, "Needs attention")
+        XCTAssertNotEqual(situation.kind.symbol, DesignTokens.SituationKind.slot.symbol)
+
+        let bare = try XCTUnwrap(Situation.decode(Data(#"{"kind":"needs_attention"}"#.utf8)))
+        XCTAssertEqual(SituationText(bare, reference: Date()).word, "Not known")
+
+        let order = DispatchOrder.decode(object: ["groups": [["kind": "needs_attention", "tickets": [["identifier": "TP-1"]]]]])
+        XCTAssertEqual(order?.groups.map(\.kind), [.unknown])
+    }
+
+    func testWaitingOnItsSubTickets() throws {
+        let (situation, text) = try line("waiting_on_sub_tickets")
+        XCTAssertEqual(situation.kind, .subTickets)
+        XCTAssertEqual(
+            text.sentence,
+            "Waiting on its sub-tickets · 2 of 5 done. · It moves on when every sub-ticket has ended. · for 2 h"
+        )
+        XCTAssertEqual(text.kind.status, .idle)
+        XCTAssertEqual(text.kind.symbol, "square.stack.3d.up")
+    }
+
+    func testNotKnown() throws {
+        let (situation, text) = try line("unknown")
+        XCTAssertEqual(situation.kind, .unknown)
+        XCTAssertEqual(text.word, "Not known")
+        XCTAssertEqual(text.cause, "Symphony can't tell what it waits on.")
+        XCTAssertEqual(text.kind.status, .idle)
+        XCTAssertEqual(text.kind.symbol, "questionmark.circle")
     }
 
     // MARK: - One test per kind
@@ -197,7 +234,8 @@ final class SituationTests: XCTestCase {
     }
 
     func testAnythingElseIsNoSituation() {
-        XCTAssertNil(Situation.decode(Data(#"{"kind":"needs_attention","word":"Needs attention"}"#.utf8)))
+        XCTAssertEqual(Situation.decode(Data(#"{"kind":"needs_attention","word":"Needs attention"}"#.utf8))?.kind, .unknown)
+        XCTAssertNil(Situation.decode(Data(#"{"word":"Needs attention"}"#.utf8)), "no kind is no situation")
         XCTAssertNil(Situation.decode(Data("null".utf8)))
         XCTAssertNil(Situation.decode(object: nil))
         XCTAssertNil(Situation.decode(object: NSNull()))
@@ -241,7 +279,8 @@ final class SituationTests: XCTestCase {
                    {"situation":{"kind":"done"}}]}
         """.utf8)
         let situations = Situation.byTicket(state: data)
-        XCTAssertEqual(situations.keys.sorted(), ["A-1", "A-2", "A-3", "A-4"])
+        XCTAssertEqual(situations.keys.sorted(), ["A-1", "A-2", "A-3", "A-4", "A-5"])
+        XCTAssertEqual(situations["A-5"]?.kind, .unknown, "a kind the app does not know reads as not known")
         XCTAssertEqual(situations["A-1"]?.cause, "From the groups.")
         XCTAssertEqual(situations["A-3"]?.kind, .ci)
         XCTAssertEqual(situations["A-4"]?.kind, .done)
