@@ -137,6 +137,7 @@ extension DesignTokens.SituationKind {
         case .retrying: "retrying"
         case .blocked: "blocked_by_ticket"
         case .subTickets: "waiting_on_sub_tickets"
+        case .provider: "waiting_for_provider"
         case .paused: "paused_by_rule"
         case .ci: "waiting_for_ci"
         case .build: "waiting_for_build"

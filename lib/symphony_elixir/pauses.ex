@@ -40,6 +40,12 @@ defmodule SymphonyElixir.Pauses do
   A repository's pause stops dispatch for that repository alone while it has the Director's reason
   (`repository_reason/1`); its candidates are skipped with `repository_skip_reason/1`.
 
+  A provider's pause (`{:provider, provider}`, a provider some harness reaches,
+  `SymphonyElixir.Harnesses.all_providers/0`) stops new runs on that provider alone while it has
+  the Director's reason (`provider_reason/1`): a new run takes its first fallback on another
+  provider, a run that can't waits (`provider_skip_reason/1`), and a run that works goes on. Like a
+  repository's, it is kept by the run store under its subject and records no event.
+
   A reason is known by its kind and `waits_on`: setting the same one again changes nothing and
   records nothing. Each write reads, changes and writes the pause in one store transaction that
   holds its lock (`RunStore.update_ticket_pause/4`, `RunStore.update_subject_pause/2`), so
@@ -71,9 +77,9 @@ defmodule SymphonyElixir.Pauses do
   which a second write of the same reason never records again.
   """
 
+  alias SymphonyElixir.{AgentProviders, RuleActions, RunStore, TicketEvents, TicketState}
   alias SymphonyElixir.Linear.Issue
   alias SymphonyElixir.Pauses.Projector
-  alias SymphonyElixir.{RuleActions, RunStore, TicketEvents, TicketState}
   alias SymphonyElixirWeb.ObservabilityPubSub
 
   @kinds [:question, :ticket, :build, :person, :environment]
@@ -96,8 +102,8 @@ defmodule SymphonyElixir.Pauses do
   @repository_text "You paused this repository"
   @symphony_text "You paused Symphony"
 
-  @typedoc "What a pause holds: a ticket of a repository, a repository, or Symphony itself."
-  @type subject :: {:ticket, String.t(), String.t()} | {:repository, String.t()} | :symphony
+  @typedoc "What a pause holds: a ticket of a repository, a repository, a provider, or Symphony itself."
+  @type subject :: {:ticket, String.t(), String.t()} | {:repository, String.t()} | {:provider, String.t()} | :symphony
 
   @type kind :: :question | :ticket | :build | :person | :environment
 
@@ -223,6 +229,25 @@ defmodule SymphonyElixir.Pauses do
     [director_skip_text(director, since), others != [] && "the repository is paused: #{Enum.map_join(others, "; ", & &1.text)}"]
     |> Enum.filter(&is_binary/1)
     |> Enum.join("; ")
+  end
+
+  @doc """
+  The reason the Director's Pause of a provider gives its pause: a `:person` reason waiting on
+  `unblock`, its line `You paused Anthropic` with the provider's name for a person
+  (`SymphonyElixir.AgentProviders.display_name/1`).
+  """
+  @spec provider_reason(String.t()) :: reason_input()
+  def provider_reason(provider) when is_binary(provider) do
+    %{kind: :person, waits_on: %{action: "unblock"}, text: "You paused #{AgentProviders.display_name(provider)}", releasable: true}
+  end
+
+  @doc """
+  The line a run that waits on a paused provider is skipped with: `you paused Anthropic, and no
+  fallback of its run can take it`.
+  """
+  @spec provider_skip_reason(String.t()) :: String.t()
+  def provider_skip_reason(provider) when is_binary(provider) do
+    "you paused #{AgentProviders.display_name(provider)}, and no fallback of its run can take it"
   end
 
   defp director_skip_text([], _since), do: nil
@@ -754,6 +779,10 @@ defmodule SymphonyElixir.Pauses do
 
   defp subject({:repository, repo_key} = subject) when is_binary(repo_key) do
     if line(repo_key), do: {:ok, subject}, else: {:error, {:invalid_subject, subject}}
+  end
+
+  defp subject({:provider, provider} = subject) when is_binary(provider) do
+    if line(provider), do: {:ok, subject}, else: {:error, {:invalid_subject, subject}}
   end
 
   defp subject(:symphony), do: {:ok, :symphony}
