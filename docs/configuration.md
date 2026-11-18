@@ -1693,14 +1693,15 @@ ticket type, the start, execution and rework steps) have the implementer plan a 
 code can drive and record each with `linear_record_walkthrough_proofs` before the handoff push,
 naming only tests in its PR.
 
-**OpenRouter in QA.** QA never uses a real, paid OpenRouter key. OpenRouter flows (Test connection
-in the macOS app's Settings, OpenRouter's model list on Factory › Runs, `symphony check` on an `openrouter`
+**OpenRouter in QA.** QA never uses a real, paid OpenRouter or OpenCode Go key. OpenRouter flows (Test
+connection on the macOS app's provider pages, OpenRouter's model list on Factory › Runs, `symphony check` on an `openrouter`
 profile, an OpenRouter run) are tested against a stub OpenRouter, `SymphonyElixir.OpenRouter.Stub`,
 which listens on `127.0.0.1` only and answers with canned data:
 
 | Request | Answer |
 | --- | --- |
-| `GET /api/v1/key` | for the key `sk-or-v1-symphony-qa-stub`, the label `Symphony QA stub`, $1.25 used of a $10.00 limit, $8.75 left; any other key or none gets a 401, so Settings says the key is rejected |
+| `GET /api/v1/key` | for the key `sk-or-v1-symphony-qa-stub`, the label `Symphony QA stub`, $1.25 used of a $10.00 limit, $8.75 left; any other key or none gets a 401, so the provider page says the key is rejected |
+| `GET /api/opencode-go/v1/models` | OpenCode Go's models list for Test connection on its provider page: `kimi-k3` and `symphony-qa-go` for the same valid key; any other key or none gets a 401 |
 | `GET /api/v1/models` | `symphony-qa/reasoning-tools` (tools and reasoning), `symphony-qa/tools-only` (tools, no reasoning) and `symphony-qa/no-tools` (no tools) |
 | `POST /api/v1/messages` | with the valid key, a canned Anthropic message (JSON, or SSE when the request streams) naming the model it was asked for |
 

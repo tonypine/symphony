@@ -3,7 +3,8 @@ import Foundation
 /// QA mode, for test launches: `SYMPHONY_BAR_QA_ROOT=<dir>` keeps the app's settings, secrets, Launch at Login,
 /// logs, update downloads, Symphony's state and logs and the embedded Symphony's unpacked release under `<dir>`,
 /// never in UserDefaults, the app's secrets file or the folders a normal launch uses. With
-/// `SYMPHONY_QA_OPENROUTER_URL` it talks to Symphony's OpenRouter stub instead of openrouter.ai, with
+/// `SYMPHONY_QA_OPENROUTER_URL` it talks to Symphony's OpenRouter stub instead of openrouter.ai (and to the stub's
+/// OpenCode Go models list instead of OpenCode Go's), with
 /// `SYMPHONY_BAR_QA_API_FIXTURES` it reads Symphony's local API from files (see `APIFixtures`), with
 /// `SYMPHONY_QA_LINEAR_URL` the Add Repo sheet asks a Linear stub instead of api.linear.app, and with
 /// `SYMPHONY_BAR_QA_OPEN_PANEL_DIR` the sheet's folder picker opens in that folder. With `SYMPHONY_BAR_QA_APPEARANCE`
@@ -214,6 +215,9 @@ public struct AppStores {
     /// The OpenRouter API base Settings talks to: openrouter.ai's, whatever the environment says, except in QA mode
     /// with a stub.
     public let openRouterBaseURL: URL
+    /// The OpenCode Go API base a provider page's Test connection asks: OpenCode Go's, except in QA mode with the
+    /// OpenRouter stub, which answers its models list too.
+    public let openCodeGoBaseURL: URL
     /// The Linear GraphQL endpoint the Add Repo sheet asks: Linear's, except in QA mode with a stub.
     public let linearEndpoint: URL
     /// The control URL used while Symphony hasn't written one. Nil in QA mode, so the app never mistakes the
@@ -245,6 +249,7 @@ public struct AppStores {
             updateURL = UpdateChecker.latestReleaseURL
             updateCheckInterval = nil
             openRouterBaseURL = OpenRouterClient.baseURL
+            openCodeGoBaseURL = OpenCodeGoClient.baseURL
             linearEndpoint = LinearClient.endpoint
             controlURLFallback = SymphonyState.defaultBaseURL
             apiFixtures = nil
@@ -263,6 +268,7 @@ public struct AppStores {
         updateURL = qaMode.updateURL ?? UpdateChecker.latestReleaseURL
         updateCheckInterval = qaMode.updateCheckInterval
         openRouterBaseURL = qaMode.openRouterURL.map(OpenRouterClient.baseURL(api:)) ?? OpenRouterClient.baseURL
+        openCodeGoBaseURL = qaMode.openRouterURL.map(OpenCodeGoClient.baseURL(stub:)) ?? OpenCodeGoClient.baseURL
         linearEndpoint = qaMode.linearURL ?? LinearClient.endpoint
         controlURLFallback = nil
         apiFixtures = qaMode.apiFixtures

@@ -5,7 +5,9 @@ import SymphonyBarCore
 // in a column on the left, In use then Not in use, and beside them the picked provider's page: its id and Pause or
 // Resume, its name, its state as a Situation line, then its Usage as one-line Progress meters and its facts as a
 // Key-value list, each block drawn only when it has content. Built from the shared List card, Button, Progress meter,
-// Key-value list, Status dot and titled panel (TP-1530).
+// Key-value list, Status dot and titled panel (TP-1530). A provider set up with an API key (TP-1540) has a Key
+// block between its head and Usage: the key in the Text field's secure form, Test connection, Enable or Disable and
+// Remove Key on one line, and the test's result as a one-line Situation line under it.
 
 /// What the page asks of whoever holds it.
 public struct ProvidersPageActions {
@@ -13,10 +15,26 @@ public struct ProvidersPageActions {
     public var select: (String) -> Void
     /// Sends Pause or Resume.
     public var send: (ControlAction) -> Void
+    /// The Director types in a provider's key field: the provider's id and the text.
+    public var editKey: (String, String) -> Void
+    /// Test connection on a provider's key.
+    public var testKey: (String) -> Void
+    /// Enable (true) or Disable (false) a provider.
+    public var setEnabled: (String, Bool) -> Void
+    /// Remove Key on a provider.
+    public var removeKey: (String) -> Void
 
-    public init(select: @escaping (String) -> Void, send: @escaping (ControlAction) -> Void) {
+    public init(
+        select: @escaping (String) -> Void, send: @escaping (ControlAction) -> Void,
+        editKey: @escaping (String, String) -> Void = { _, _ in }, testKey: @escaping (String) -> Void = { _ in },
+        setEnabled: @escaping (String, Bool) -> Void = { _, _ in }, removeKey: @escaping (String) -> Void = { _ in }
+    ) {
         self.select = select
         self.send = send
+        self.editKey = editKey
+        self.testKey = testKey
+        self.setEnabled = setEnabled
+        self.removeKey = removeKey
     }
 
     /// Actions that do nothing, for a still picture.
@@ -103,7 +121,8 @@ public struct ProvidersPageView: View {
     }
 }
 
-/// The picked provider's page: its head, then Usage when Symphony reads its windows, then Access.
+/// The picked provider's page: its head, then its Key block when it takes a key, then Usage when Symphony reads its
+/// windows, then Access.
 struct ProviderDetailView: View {
     let detail: ProvidersPage.Detail
     let actions: ProvidersPageActions
@@ -114,6 +133,9 @@ struct ProviderDetailView: View {
         VStack(alignment: .leading, spacing: tokens.blockGap) {
             head
                 .padding(.bottom, tokens.headBottom)
+            if let key = detail.key {
+                ProviderKeyBlock(id: detail.id, name: detail.name, key: key, actions: actions)
+            }
             if !detail.usage.isEmpty {
                 TitledPanel(title: ProvidersPage.usageTitle, spacing: tokens.meterGap) {
                     ForEach(detail.usage) { meter in
@@ -160,6 +182,49 @@ struct ProviderDetailView: View {
     }
 }
 
+/// The Key block (TP-1540): the key masked, Test connection, then Enable once a test passed or Disable while the
+/// provider is on, and Remove Key while a key is stored, on one line; under it the test's result on one line, or the
+/// test's spinner while it runs.
+struct ProviderKeyBlock: View {
+    let id: String
+    let name: String
+    let key: ProvidersPage.KeyBlock
+    let actions: ProvidersPageActions
+
+    var body: some View {
+        let tokens = DesignTokens.ProvidersPage.self
+        TitledPanel(title: ProvidersPage.keyTitle, spacing: tokens.meterGap) {
+            HStack(spacing: DesignTokens.Space.s3) {
+                DirectorTextField(
+                    nil, text: Binding(get: { key.text }, set: { actions.editKey(id, $0) }), placeholder: key.variable,
+                    size: tokens.control, mono: true, secure: true, onSubmit: { if key.canTest { actions.testKey(id) } }
+                )
+                .accessibilityLabel("\(name) key")
+                Button(ProvidersPage.testTitle) { actions.testKey(id) }
+                    .directorButton(.secondary, size: tokens.control)
+                    .disabled(!key.canTest)
+                    .fixedSize()
+                if let on = key.toggle {
+                    Button(on ? ProvidersPage.enableTitle : ProvidersPage.disableTitle) { actions.setEnabled(id, on) }
+                        .directorButton(on ? .primary : .secondary, size: tokens.control)
+                        .fixedSize()
+                        .accessibilityLabel("\(on ? ProvidersPage.enableTitle : ProvidersPage.disableTitle) \(name)")
+                }
+                if key.stored {
+                    Button(ProvidersPage.removeKeyTitle) { actions.removeKey(id) }
+                        .directorButton(.secondary, size: tokens.control)
+                        .fixedSize()
+                }
+            }
+            if key.testing {
+                ProgressView().controlSize(.small)
+            } else if let result = key.result {
+                ProviderSituationLine(state: ProvidersPage.state(result), oneLine: true)
+            }
+        }
+    }
+}
+
 /// The catalog's Situation line (`situation()`, `.situation`) as a provider's page draws it: the status glyph and the
 /// word in the status's colour, the cause, and what waits on it in the secondary colour, wrapping at the reading
 /// measure. The app's own `SituationLine` reads a ticket's situation kinds; a provider's states are the catalog's
@@ -167,6 +232,8 @@ struct ProviderDetailView: View {
 /// it as one sentence.
 struct ProviderSituationLine: View {
     let state: ProvidersPage.State
+    /// On one line, cut short at its end: a key test's result.
+    var oneLine = false
 
     var body: some View {
         let tokens = DesignTokens.ProvidersPage.self
@@ -182,6 +249,8 @@ struct ProviderSituationLine: View {
                 .foregroundStyle(state.status.text)
                 .fixedSize()
             reading
+                .lineLimit(oneLine ? 1 : nil)
+                .truncationMode(.tail)
                 .frame(maxWidth: DesignTokens.Measure.reading, alignment: .leading)
                 .fixedSize(horizontal: false, vertical: true)
         }

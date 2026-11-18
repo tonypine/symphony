@@ -56,6 +56,11 @@ public struct RunsPage: Equatable {
             if provider.held { return ProviderNote(status: .problem, text: "\(provider.name) is at its limit") }
             return nil
         }
+
+        /// The note on a line set to a provider the Director turned off, or that has no key (TP-1540): "OpenCode Go is off".
+        public static func off(_ id: String) -> ProviderNote {
+            ProviderNote(status: .idle, text: "\(RunsPage.providerTitle(id)) is off")
+        }
     }
 
     /// One line of a kind: its place (0 for the first choice), its four pop-ups, whether it can be removed, and what it
@@ -129,6 +134,9 @@ public struct RunsPage: Equatable {
     public private(set) var save: Save = .editing
     /// What a line on each paused or held provider says, by provider id, from the state's `providers`.
     public private(set) var providerNotes: [String: ProviderNote] = [:]
+    /// The providers set up with an API key that aren't enabled (TP-1540): Provider doesn't offer them, except on a line
+    /// already set to one.
+    public private(set) var offProviders: Set<String> = []
 
     public init() {}
 
@@ -194,19 +202,24 @@ public struct RunsPage: Equatable {
         if case .repository(let key) = scope, !repositories.contains(key) { scope = .global }
     }
 
-    /// Takes in the providers the state lists, so each line whose provider is paused or held says so.
-    public mutating func showProviders(_ providers: [StateSnapshot.Provider]?) {
+    /// Takes in the providers the state lists, so each line whose provider is paused or held says so, and the providers
+    /// that are off, which Provider doesn't offer and whose lines say so first.
+    public mutating func showProviders(_ providers: [StateSnapshot.Provider]?, off: Set<String> = []) {
         var notes: [String: ProviderNote] = [:]
         for provider in providers ?? [] {
             notes[provider.id] = ProviderNote.of(provider)
         }
+        for id in off {
+            notes[id] = .off(id)
+        }
         providerNotes = notes
+        offProviders = off
     }
 
-    /// The page with the providers the state lists: what the window draws.
-    public func showing(_ providers: [StateSnapshot.Provider]?) -> RunsPage {
+    /// The page with the providers the state lists and those that are off: what the window draws.
+    public func showing(_ providers: [StateSnapshot.Provider]?, off: Set<String> = []) -> RunsPage {
         var page = self
-        page.showProviders(providers)
+        page.showProviders(providers, off: off)
         return page
     }
 
@@ -282,7 +295,10 @@ public struct RunsPage: Equatable {
             ?? model.value.map { [RunProfileChoice(id: $0, title: $0)] } ?? []
         return [
             Self.field(.harness, "Harness", harness, RunProfilesConfig.harnesses, title: Self.harnessTitle),
-            Self.field(.provider, "Provider", provider, RunProfilesConfig.providers(for: harness.value), title: Self.providerTitle),
+            Self.field(
+                .provider, "Provider", provider, RunProfilesConfig.providers(for: harness.value).filter { !offProviders.contains($0.id) },
+                title: Self.providerTitle
+            ),
             Self.field(.model, "Model", model, models.map { RunProfileChoice(id: $0.id, title: $0.id) }, title: { $0 }),
             Self.field(.effort, "Effort", effort, RunProfilesConfig.efforts, title: { $0 }),
         ]

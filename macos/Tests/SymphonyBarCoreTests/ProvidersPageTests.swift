@@ -232,4 +232,101 @@ final class ProvidersPageTests: XCTestCase {
         XCTAssertEqual(try runsPage().showing(nil).providerNotes, [:])
         XCTAssertNil(RunsPage.ProviderNote.of(anthropic()))
     }
+
+    // MARK: Keys (TP-1540)
+
+    private let openCodeGo = StateSnapshot.Provider(id: "opencode-go", name: "OpenCode Go", harnesses: ["claude", "codex", "opencode"])
+
+    private func keyed(_ keys: ProviderKeys, _ editor: ProviderKeyEditor = ProviderKeyEditor()) -> ProvidersPage {
+        ProvidersPage(providers: [anthropic(), openRouter, openCodeGo], now: now, timeZone: utc, keys: keys, keyEditor: editor)
+    }
+
+    func testAProviderNotInUseWithNoKeyHasAnEmptyKeyBlockAndNoEnable() throws {
+        let detail = try XCTUnwrap(keyed(ProviderKeys()).detail("opencode-go"))
+        let key = try XCTUnwrap(detail.key)
+        XCTAssertEqual(key.variable, "OPENCODE_API_KEY")
+        XCTAssertEqual(key.text, "")
+        XCTAssertFalse(key.stored)
+        XCTAssertFalse(key.canTest)
+        XCTAssertNil(key.toggle, "no Enable yet")
+        XCTAssertNil(key.result)
+        XCTAssertEqual(detail.state.word, "Off")
+        XCTAssertEqual(detail.state.cause, "It has no key.")
+        XCTAssertEqual(detail.facts.first, .init(label: "Key", value: "OPENCODE_API_KEY · not set"))
+        // Anthropic signs in through its harness: no Key block, no Key fact.
+        let anthropic = try XCTUnwrap(keyed(ProviderKeys()).detail("anthropic"))
+        XCTAssertNil(anthropic.key)
+        XCTAssertFalse(anthropic.facts.contains { $0.label == "Key" })
+        // Until the keys are read, no provider has a Key block, and nothing reads Off.
+        XCTAssertNil(page([openCodeGo]).detail(nil)?.key)
+        XCTAssertEqual(page([openCodeGo]).detail(nil)?.state.word, "Not in use")
+    }
+
+    func testATestThatPassesOffersEnableAndEnableMakesItAvailable() throws {
+        var editor = ProviderKeyEditor()
+        var keys = ProviderKeys()
+        editor.edit("opencode-go", to: "sk-go", keys: keys)
+        XCTAssertEqual(keyed(keys, editor).detail("opencode-go")?.key?.canTest, true)
+        _ = editor.beginTest("opencode-go", keys: keys)
+        XCTAssertEqual(keyed(keys, editor).detail("opencode-go")?.key?.testing, true)
+        keys = try XCTUnwrap(editor.finishTest("opencode-go", key: "sk-go", result: .works("OpenCode Go accepted the key · 2 models"), keys: keys))
+
+        let tested = try XCTUnwrap(keyed(keys, editor).detail("opencode-go"))
+        XCTAssertEqual(tested.key?.result, .works("OpenCode Go accepted the key · 2 models"))
+        XCTAssertEqual(tested.key?.toggle, true, "Enable")
+        XCTAssertEqual(tested.key?.stored, true)
+        XCTAssertEqual(tested.state.word, "Off")
+        XCTAssertEqual(tested.state.cause, "You turned it off.")
+
+        let enabled = try XCTUnwrap(keyed(keys.enabling("opencode-go", true), editor).detail("opencode-go"))
+        XCTAssertEqual(enabled.state.word, "Available")
+        XCTAssertEqual(enabled.state.status, .done)
+        XCTAssertEqual(enabled.key?.toggle, false, "Disable")
+        XCTAssertEqual(enabled.facts.first?.value, "OPENCODE_API_KEY · set")
+        XCTAssertEqual(keyed(keys.enabling("opencode-go", true), editor).sections.last?.cards.last?.statusLine, "Available")
+
+        // Disabled: off, and the key is still set.
+        let disabled = try XCTUnwrap(keyed(keys, editor).detail("opencode-go"))
+        XCTAssertEqual(disabled.state.word, "Off")
+        XCTAssertEqual(disabled.facts.first?.value, "OPENCODE_API_KEY · set")
+        XCTAssertEqual(keyed(keys, editor).sections.last?.cards.last?.statusLine, "Off")
+    }
+
+    func testAKeyTestsResultReadsAsASituationLine() {
+        XCTAssertEqual(ProvidersPage.state(.works("ok")).status, .done)
+        XCTAssertEqual(ProvidersPage.state(.works("ok")).spoken, "Works. ok")
+        XCTAssertEqual(ProvidersPage.state(.fails("no")).status, .problem)
+        XCTAssertEqual(ProvidersPage.state(.fails("no")).word, "Failed")
+    }
+
+    func testAnEnabledProviderInUseReadsAsBeforeAndThePausePrevails() throws {
+        let keys = ProviderKeys(keys: ["openrouter": "sk-or"], enabled: ["openrouter"])
+        XCTAssertEqual(keyed(keys).detail("openrouter")?.state.word, "Available")
+        XCTAssertEqual(keyed(keys).detail("openrouter")?.move, .pause)
+        XCTAssertEqual(keyed(ProviderKeys(keys: ["openrouter": "sk-or"])).detail("openrouter")?.state.word, "Off")
+        var paused = openRouter
+        paused.paused = true
+        let page = ProvidersPage(providers: [paused], now: now, timeZone: utc, keys: ProviderKeys())
+        XCTAssertEqual(page.detail(nil)?.state.word, "Paused")
+    }
+
+    func testRunsProviderOffersOnlyEnabledProvidersExceptOnALineAlreadySetToOne() throws {
+        let keys = ProviderKeys(keys: ["opencode-go": "sk-go", "openrouter": "sk-or"], enabled: ["opencode-go", "openrouter"])
+        let on = try runsPage().showing(nil, off: keys.off)
+        let providerChoices = { (page: RunsPage, kind: RunKind?, line: Int) -> [String?] in
+            page.rows.first { $0.kind == kind }!.lines[line].fields.first { $0.field == .provider }!.choices.map(\.id)
+        }
+        XCTAssertEqual(providerChoices(on, nil, 0), ["anthropic", "openrouter", "opencode-go"])
+
+        let off = try runsPage().showing(nil, off: keys.enabling("opencode-go", false).off)
+        XCTAssertEqual(providerChoices(off, nil, 0), ["anthropic", "openrouter"], "OpenCode Go is no longer offered")
+        // QA's last fallback is already set to OpenCode Go: it keeps it, and says the provider is off.
+        let qa = try XCTUnwrap(off.rows.first { $0.kind == .qa })
+        XCTAssertEqual(providerChoices(off, .qa, 2), ["opencode-go"])
+        XCTAssertEqual(qa.lines[2].providerNote, .init(status: .idle, text: "OpenCode Go is off"))
+        XCTAssertNil(qa.lines[1].providerNote)
+        // Off reads before a pause.
+        let both = try runsPage().showing([anthropic(), StateSnapshot.Provider(id: "opencode-go", name: "OpenCode Go", inUse: true, paused: true)], off: ["opencode-go"])
+        XCTAssertEqual(both.rows.first { $0.kind == .qa }?.lines[2].providerNote?.text, "OpenCode Go is off")
+    }
 }
