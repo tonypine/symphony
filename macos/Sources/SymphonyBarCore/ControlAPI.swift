@@ -68,6 +68,11 @@ public enum ControlAction: Equatable {
     case pauseRepository(key: String, reason: String)
     /// Resumes dispatch for the repository `key`.
     case resumeRepository(key: String)
+    /// Pauses the provider `id` (`anthropic`), with no reason (TP-1532): no new run starts on it, and a working run
+    /// goes on. `name` is its name for a person, for the failure line.
+    case pauseProvider(String, name: String)
+    /// Resumes the provider `id`: the runs waiting on it go on at once.
+    case resumeProvider(String, name: String)
     /// Marks that the Director looked at the ticket now (TP-1451), in the repository `repoKey` when known: its next
     /// page shows what came after as new. A view mark, not a move: Symphony records no history for it.
     case looked(String, repoKey: String?)
@@ -174,6 +179,10 @@ public enum ControlAction: Equatable {
             return "api/v1/control/repos/\(key)/pause"
         case let .resumeRepository(key):
             return "api/v1/control/repos/\(key)/resume"
+        case let .pauseProvider(id, _):
+            return "api/v1/control/providers/\(id)/pause"
+        case let .resumeProvider(id, _):
+            return "api/v1/control/providers/\(id)/resume"
         case .looked:
             return "api/v1/control/looked"
         case .saveView:
@@ -200,7 +209,8 @@ public enum ControlAction: Equatable {
              let .decide(identifier, _, _, _), let .unblock(identifier), let .undo(identifier):
             return identifier
         case .pause, .pauseWithReason, .pauseForUpdate, .resume, .resumeUpdate, .tryNow, .force, .stopForcing, .stop, .start, .note, .blocker,
-             .priority, .label, .decision, .pauseRepository, .resumeRepository, .looked, .saveView, .deleteView:
+             .priority, .label, .decision, .pauseRepository, .resumeRepository, .pauseProvider, .resumeProvider, .looked, .saveView,
+             .deleteView:
             return nil
         }
     }
@@ -214,7 +224,7 @@ public enum ControlAction: Equatable {
         case let .pauseForUpdate(version):
             // The reason's kind and its field; `reason` is the line a Symphony that reads no kind makes it from.
             return ["kind": "build", "version": version, "reason": "updating to v\(version)"]
-        case .resume, .resumeRepository, .deleteView:
+        case .resume, .resumeRepository, .pauseProvider, .resumeProvider, .deleteView:
             return [:]
         case let .resumeUpdate(version):
             return ["kind": "build", "version": version]
@@ -321,6 +331,10 @@ public enum ControlAction: Equatable {
             return "Couldn't pause \(key)"
         case let .resumeRepository(key):
             return "Couldn't resume \(key)"
+        case let .pauseProvider(_, name):
+            return "Couldn't pause \(name)"
+        case let .resumeProvider(_, name):
+            return "Couldn't resume \(name)"
         case let .looked(identifier, _):
             return "Couldn't mark \(identifier) as looked at"
         case let .saveView(draft):

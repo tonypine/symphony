@@ -2025,6 +2025,12 @@ MainActor.assumeIsolated {
         for (name, page, drawn) in runsStates {
             renderScreen(scheme, to: name) { runsScreen(page, drawn: drawn, window: $0) }
         }
+        // Factory › Runs while Anthropic is paused, and Factory › Providers (TP-1534): available, paused, at its
+        // limit, one with no usage to read and one not in use.
+        renderScreen(scheme, to: "runs-page-provider-paused") { runsScreen(runsWithProviderPaused(), window: $0) }
+        for (name, providers, selection) in providersStates {
+            renderScreen(scheme, to: name) { providersScreen(providers, selection: selection, window: $0) }
+        }
         // The five destinations (TP-1455): Home's and Factory's badges, and none.
         render(destinationsSidebar(), scheme, to: "sidebar-destinations-\(suffix).png")
         // Move to… (TP-1328): the move's sheet, also with a refusal.

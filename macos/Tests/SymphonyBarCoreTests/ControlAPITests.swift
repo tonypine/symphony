@@ -295,6 +295,33 @@ final class ControlAPITests: XCTestCase {
         )
     }
 
+    /// Pause and Resume of a provider (TP-1534) post to its own path, with no reason, and name it for a person when
+    /// Symphony refuses.
+    func testProviderPauseRequestsAndResponses() throws {
+        let pause = ControlAPI.request(.pauseProvider("anthropic", name: "Anthropic"), base: base, token: "secret")
+        XCTAssertEqual(pause.httpMethod, "POST")
+        XCTAssertEqual(pause.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/providers/anthropic/pause")
+        XCTAssertEqual(try json(pause), [:])
+        let resume = ControlAPI.request(.resumeProvider("anthropic", name: "Anthropic"), base: base, token: "secret")
+        XCTAssertEqual(resume.url?.absoluteString, "http://127.0.0.1:4010/api/v1/control/providers/anthropic/resume")
+        XCTAssertEqual(try json(resume), [:])
+        XCTAssertNil(ControlAction.pauseProvider("anthropic", name: "Anthropic").moveIdentifier)
+        XCTAssertNil(ControlAction.resumeProvider("anthropic", name: "Anthropic").moveIdentifier)
+
+        XCTAssertEqual(ControlAPI.result(.pauseProvider("anthropic", name: "Anthropic"), statusCode: 200, data: Data("{}".utf8)), .done)
+        XCTAssertEqual(
+            ControlAPI.result(
+                .pauseProvider("gone", name: "gone"), statusCode: 404,
+                data: Data(#"{"error":{"code":"provider_not_found","message":"Symphony has no provider gone"}}"#.utf8)
+            ),
+            .failed("Couldn't pause gone: Symphony has no provider gone (HTTP 404)")
+        )
+        XCTAssertEqual(
+            ControlAPI.result(.resumeProvider("anthropic", name: "Anthropic"), statusCode: 401, data: Data()),
+            .failed("Couldn't resume Anthropic: it rejected the control token (HTTP 401)")
+        )
+    }
+
     func testSendFallsBackToTheDefaultURL() async throws {
         try "0123abcd".write(to: root.appendingPathComponent("control_token"), atomically: false, encoding: .utf8)
         var sent: URLRequest?

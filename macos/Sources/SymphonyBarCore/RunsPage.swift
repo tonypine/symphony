@@ -43,11 +43,28 @@ public struct RunsPage: Equatable {
         public var isSearchable: Bool { field == .model }
     }
 
-    /// One line of a kind: its place (0 for the first choice), its four pop-ups and whether it can be removed.
+    /// What a line says when its provider can't take a new run now (TP-1534): "Anthropic is paused" beside a Status
+    /// dot in the "waiting on you" orange, or "Anthropic is at its limit" beside a red one.
+    public struct ProviderNote: Equatable {
+        public let status: DesignTokens.Status
+        public let text: String
+
+        /// The note for `provider` as the state lists it; nil while it can take new runs. The Director's pause reads
+        /// before a usage limit's hold.
+        public static func of(_ provider: StateSnapshot.Provider) -> ProviderNote? {
+            if provider.paused { return ProviderNote(status: .you, text: "\(provider.name) is paused") }
+            if provider.held { return ProviderNote(status: .problem, text: "\(provider.name) is at its limit") }
+            return nil
+        }
+    }
+
+    /// One line of a kind: its place (0 for the first choice), its four pop-ups, whether it can be removed, and what it
+    /// says when its provider is paused or held by a usage limit.
     public struct Line: Equatable, Identifiable {
         public let id: Int
         public let fields: [Field]
         public let removable: Bool
+        public var providerNote: ProviderNote? = nil
 
         /// The remove button's help.
         public var removeHelp: String { Self.removeHelp(id) }
@@ -110,6 +127,8 @@ public struct RunsPage: Equatable {
     public var lists = RunModelLists()
     public var listsRequested = false
     public private(set) var save: Save = .editing
+    /// What a line on each paused or held provider says, by provider id, from the state's `providers`.
+    public private(set) var providerNotes: [String: ProviderNote] = [:]
 
     public init() {}
 
@@ -175,6 +194,22 @@ public struct RunsPage: Equatable {
         if case .repository(let key) = scope, !repositories.contains(key) { scope = .global }
     }
 
+    /// Takes in the providers the state lists, so each line whose provider is paused or held says so.
+    public mutating func showProviders(_ providers: [StateSnapshot.Provider]?) {
+        var notes: [String: ProviderNote] = [:]
+        for provider in providers ?? [] {
+            notes[provider.id] = ProviderNote.of(provider)
+        }
+        providerNotes = notes
+    }
+
+    /// The page with the providers the state lists: what the window draws.
+    public func showing(_ providers: [StateSnapshot.Provider]?) -> RunsPage {
+        var page = self
+        page.showProviders(providers)
+        return page
+    }
+
     // MARK: What the page shows
 
     /// The For pop-up's choices: All repositories, then each repository.
@@ -215,7 +250,10 @@ public struct RunsPage: Equatable {
     private func row(_ kind: RunKind?, editor: RunsEditor) -> Row {
         let lines = editor.lines(kind, in: scope)
         let shown = lines.enumerated().map { place, line in
-            Line(id: place, fields: fields(of: line), removable: editor.canRemove(place, of: kind, in: scope))
+            Line(
+                id: place, fields: fields(of: line), removable: editor.canRemove(place, of: kind, in: scope),
+                providerNote: line.provider.value.flatMap { providerNotes[$0] }
+            )
         }
         let waits = lines.count == 1 ? Self.waits(provider: lines[0].provider.value) : nil
         return Row(kind: kind, title: Self.title(kind), lines: shown, canUseDefaults: editor.canUseDefaults(kind, in: scope), waits: waits)

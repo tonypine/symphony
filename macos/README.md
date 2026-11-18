@@ -1399,7 +1399,10 @@ Ten more variables, read only in QA mode:
   v9.9.9" with two runs finishing) and `update-paused-idle` (the same pause with nothing running), which QA runs with
   the shared update feed's `--fake-release 9.9.9 9999` ([`test/support/README.md`](../test/support/README.md#the-update-feed)). Pausing one
   repository: `repo-paused` (`running`'s content with `symphony` paused "focusing on Symphony this week" and its
-  ticket TP-237 saying its repository is paused).
+  ticket TP-237 saying its repository is paused). Factory › Providers: `providers` (`flowing`'s content with
+  Anthropic available, two runs on it and its two usage windows, OpenRouter paused, OpenAI with no usage to read and
+  OpenCode Go not in use; after the app posts a provider's Pause the state reads Anthropic paused, and after a Resume
+  available again).
   `APIFixturesTests` decodes every fixture's state and repos, so one that drifts from the API fails CI. Ages in them
   count from the payload's `generated_at`, so they read the same on any day; clock times show in the Mac's time zone:
 

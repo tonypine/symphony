@@ -90,11 +90,11 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertEqual(sidebar.destinations.map(\.title), ["Home", "Journal", "Work", "Insights", "Factory"])
         XCTAssertEqual(sidebar.items, [
             .destination(.home), .destination(.journal), .destination(.work), .destination(.insights), .destination(.factory),
-            .page(.setup), .page(.repos), .page(.runs), .page(.diagnostics), .page(.settings),
+            .page(.setup), .page(.repos), .page(.runs), .page(.providers), .page(.diagnostics), .page(.settings),
         ])
         XCTAssertEqual(Destination.work.pages, [.initiatives, .tickets])
         XCTAssertEqual(Destination.insights.pages, [.quality, .usage, .shipped, .audit])
-        XCTAssertEqual(Destination.factory.pages, [.setup, .repos, .runs, .diagnostics, .settings])
+        XCTAssertEqual(Destination.factory.pages, [.setup, .repos, .runs, .providers, .diagnostics, .settings])
         XCTAssertEqual(Destination.allCases.map(\.presentation), [.single, .single, .tabs, .tabs, .list])
         // Every page belongs to the destination that lists it; the Inbox is Home's drawer.
         for destination in Destination.allCases {

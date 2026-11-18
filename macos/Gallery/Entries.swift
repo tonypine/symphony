@@ -189,6 +189,9 @@ let galleryEntries: [GalleryEntry] = [
     GalleryEntry(
         id: "runs", title: "Factory › Runs", kind: .screen, prefixes: ["runs-page"],
         files: ["SymphonyBarUI/RunsPageView.swift", "SymphonyBar/RunsPageContent.swift", "SymphonyBarCore/RunsPage.swift"]),
+    GalleryEntry(
+        id: "providers", title: "Factory › Providers", kind: .screen, prefixes: ["providers-page"],
+        files: ["SymphonyBarUI/ProvidersPageView.swift", "SymphonyBar/ProvidersPageContent.swift", "SymphonyBarCore/ProvidersPage.swift"]),
 ]
 
 /// The files every entry is drawn with: a change to one is a reason to look at all of them.
