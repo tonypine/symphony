@@ -6,7 +6,7 @@ defmodule SymphonyElixirWeb.ProvidersStateTest do
 
   # Answers the snapshot it is given.
   defmodule SnapshotOrchestrator do
-    use GenServer
+    use GenServer, restart: :temporary
 
     def start_link(snapshot), do: GenServer.start_link(__MODULE__, snapshot)
 
@@ -23,9 +23,7 @@ defmodule SymphonyElixirWeb.ProvidersStateTest do
   end
 
   defp orchestrator(snapshot) do
-    {:ok, pid} = SnapshotOrchestrator.start_link(Map.merge(%{running: [], retrying: [], rate_limits: nil}, snapshot))
-    on_exit(fn -> if Process.alive?(pid), do: GenServer.stop(pid) end)
-    pid
+    start_supervised!({SnapshotOrchestrator, Map.merge(%{running: [], retrying: [], rate_limits: nil}, snapshot)})
   end
 
   test "the state payload lists the providers with their times in ISO 8601, in use first" do
