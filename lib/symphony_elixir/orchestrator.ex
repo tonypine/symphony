@@ -4415,7 +4415,7 @@ defmodule SymphonyElixir.Orchestrator do
         {%{outcome: :running, reason: running_reason(issue.id), slot: dispatch_slot_label(pass, issue, forced_entry?(running))}, pass, hold}
 
       gate = dispatch_gate_closed(issue, pass, active_states, terminal_states) ->
-        {reason, rule} = gate
+        {reason, rule, _gate} = gate
         {%{outcome: :held, reason: reason, rule: rule}, pass, hold}
 
       limit = usage_limit_hold(pass, issue) ->
@@ -4500,8 +4500,8 @@ defmodule SymphonyElixir.Orchestrator do
 
     cond do
       gate = dispatch_gate_closed(issue, state, active_states, terminal_states) ->
-        {reason, rule} = gate
-        {state |> note_blocked_flow_head(issue) |> put_dispatch_skipped(issue, reason, rule), hold}
+        {reason, rule, closed} = gate
+        {state |> note_blocked_flow_head(issue) |> put_dispatch_skipped(issue, reason, rule, closed), hold}
 
       # A retry that started waiting for a slot while a dispatch readiness task ran is held again
       # with its attempt, as a retry that comes due during the hold is.
@@ -4529,7 +4529,7 @@ defmodule SymphonyElixir.Orchestrator do
     if Settle.settling?(state.dispatch_settle, issue_id) or
          Enum.any?([state.running, state.slot_waiting, state.retry_attempts], &Map.has_key?(&1, issue_id)),
        do: state,
-       else: put_dispatch_skipped(state, issue, "not started: the issue read again before dispatch was no longer dispatchable, or no worker was free")
+       else: put_dispatch_skipped(state, issue, "not started: the issue read again before dispatch was no longer dispatchable, or no worker was free", nil, :dropped)
   end
 
   # A pause starts no dispatch pass, so its candidates are listed here: each with the gate that
@@ -4542,16 +4542,18 @@ defmodule SymphonyElixir.Orchestrator do
     |> Enum.filter(&match?(%Issue{}, &1))
     |> Enum.reject(&Map.has_key?(state.slot_waiting, &1.id))
     |> Enum.reduce(%{state | dispatch_skipped: %{}}, fn issue, acc ->
-      {reason, rule} = dispatch_gate_closed(issue, acc, active_states, terminal_states) || {pause_reason, pause_rule}
-      put_dispatch_skipped(acc, issue, reason, rule)
+      {reason, rule, closed} = dispatch_gate_closed(issue, acc, active_states, terminal_states) || {pause_reason, pause_rule, nil}
+      put_dispatch_skipped(acc, issue, reason, rule, closed)
     end)
     |> list_pause_held_retries(pause_reason, pause_rule)
     |> settle_dispatch_skipped(state.dispatch_skipped || %{})
   end
 
   # `rule` names the rule that stops the ticket being dispatched (`dispatch_gate_closed/4`); nil for a
-  # skip no rule is behind: a run already on it, CI, its own pause.
-  defp put_dispatch_skipped(%State{} = state, %Issue{} = issue, reason, rule \\ nil) do
+  # skip no rule is behind: a run already on it, CI, its own pause. `gate` names which of those
+  # others closed (`:sub_tickets`, `:claimed`, `:watch`…), so a ticket read words it from what
+  # Symphony knows and never from the reason's text (`SymphonyElixir.Situation`); nil for a rule's.
+  defp put_dispatch_skipped(%State{} = state, %Issue{} = issue, reason, rule, gate \\ nil) do
     entry = %{
       identifier: issue.identifier,
       title: issue.title,
@@ -4559,6 +4561,7 @@ defmodule SymphonyElixir.Orchestrator do
       repo_key: issue.repo_key,
       reason: reason,
       rule: rule,
+      gate: gate,
       connected: Connected.build(issue, nil)
     }
 
@@ -4761,21 +4764,25 @@ defmodule SymphonyElixir.Orchestrator do
   defp pause_gate(%Issue{} = issue, %State{} = state, terminal_states) do
     closed_gate(repository_pause_reason(issue), :repository_pause) ||
       closed_gate(no_repo_key_reason(issue), :no_repo_key) ||
-      closed_gate(hold_reason(issue, state, terminal_states), nil) ||
+      hold_reason(issue, state, terminal_states) ||
       closed_gate(ReleaseGate.hold_reason(hold_repo_key(issue), issue.identifier), :release_gate)
   end
 
   defp flow_gate(%Issue{} = issue, %State{} = state) do
-    closed_gate(reviewer_off_reason(issue), :reviewer_off) || closed_gate(review_flow_reason(issue, state), nil)
+    closed_gate(reviewer_off_reason(issue), :reviewer_off) || review_flow_reason(issue, state)
   end
 
   defp taken_gate(%Issue{} = issue, %State{} = state) do
-    closed_gate(taken_reason(issue, state), nil) || closed_gate(spent_budget_reason(issue, state), :token_budget) ||
+    taken_reason(issue, state) || closed_gate(spent_budget_reason(issue, state), :token_budget) ||
       closed_gate(priority_gate_reason(issue, state), :priority)
   end
 
+  # A rule's gate is named by its rule; any other gate by what closed it (`put_dispatch_skipped/5`).
   defp closed_gate(nil, _rule), do: nil
-  defp closed_gate(reason, rule), do: {reason, rule}
+  defp closed_gate(reason, rule), do: {reason, rule, nil}
+
+  defp open_gate(nil, _gate), do: nil
+  defp open_gate(reason, gate), do: {reason, nil, gate}
 
   defp no_repo_key_reason(%Issue{} = issue) do
     if is_nil(hold_repo_key(issue)), do: "it has no repo key and several repos are configured, so its pause can't be read"
@@ -4793,12 +4800,12 @@ defmodule SymphonyElixir.Orchestrator do
     repo_key = hold_repo_key(issue)
 
     cond do
-      paused?(repo_key, issue) -> pause_reason(repo_key, issue)
-      waiting_on_sub_issues?(issue, terminal_states) -> "waiting on its sub-tickets"
-      reason = instructions_hold_reason(repo_key, issue) -> reason
-      reason = update_hold_reason(repo_key, issue, state.update_hold_cache) -> reason
-      reason = qa_build_hold_reason(repo_key, issue) -> reason
-      replan_pending?(issue, state) -> "its plan waits to be replaced before it runs again"
+      paused?(repo_key, issue) -> open_gate(pause_reason(repo_key, issue), :paused)
+      waiting_on_sub_issues?(issue, terminal_states) -> open_gate("waiting on its sub-tickets", :sub_tickets)
+      reason = instructions_hold_reason(repo_key, issue) -> open_gate(reason, :instructions_hold)
+      reason = update_hold_reason(repo_key, issue, state.update_hold_cache) -> open_gate(reason, :update_hold)
+      reason = qa_build_hold_reason(repo_key, issue) -> open_gate(reason, :qa_build)
+      replan_pending?(issue, state) -> open_gate("its plan waits to be replaced before it runs again", :replan)
       true -> nil
     end
   end
@@ -4857,16 +4864,16 @@ defmodule SymphonyElixir.Orchestrator do
 
   defp review_flow_reason(%Issue{id: issue_id} = issue, %State{merging_ci_waits: merging_ci_waits}) do
     if is_map_key(merging_ci_waits, issue_id) do
-      "held in Merging until CI settles on #{merging_ci_waits[issue_id].commit_sha}"
+      open_gate("held in Merging until CI settles on #{merging_ci_waits[issue_id].commit_sha}", :merging_ci)
     else
-      watch_gate_reason(issue)
+      open_gate(watch_gate_reason(issue), :watch)
     end
   end
 
   defp taken_reason(%Issue{id: issue_id}, %State{} = state) do
     cond do
-      Map.has_key?(state.running, issue_id) -> running_reason(issue_id)
-      MapSet.member?(state.claimed, issue_id) -> "claimed by a retry or a Linear update in flight"
+      Map.has_key?(state.running, issue_id) -> open_gate(running_reason(issue_id), :running)
+      MapSet.member?(state.claimed, issue_id) -> open_gate("claimed by a retry or a Linear update in flight", :claimed)
       true -> nil
     end
   end
@@ -4887,7 +4894,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  defp not_candidate_gate(%Issue{assigned_to_worker: false}, _active_states, _terminal_states), do: {"not assigned to this Symphony's worker", :not_assigned}
+  defp not_candidate_gate(%Issue{assigned_to_worker: false}, _active_states, _terminal_states), do: {"not assigned to this Symphony's worker", :not_assigned, nil}
 
   defp not_candidate_gate(%Issue{state: state_name}, active_states, terminal_states) do
     reason =
@@ -4897,7 +4904,7 @@ defmodule SymphonyElixir.Orchestrator do
         true -> "Linear returned it without an id, identifier or title"
       end
 
-    {reason, nil}
+    {reason, nil, :not_candidate}
   end
 
   defp priority_reason(%Issue{priority: priority}) do
@@ -5786,7 +5793,7 @@ defmodule SymphonyElixir.Orchestrator do
     if Settle.pending?(state.dispatch_settle, issue, now, settle_ms) do
       state
       |> start_dispatch_settle(issue, now, settle_ms)
-      |> put_dispatch_skipped(issue, @settle_reason)
+      |> put_dispatch_skipped(issue, @settle_reason, nil, :settle)
       |> release_undispatched_claim(issue.id)
     else
       dispatch_settled_issue(state, issue, attempt, preferred_worker_host)
@@ -7569,11 +7576,12 @@ defmodule SymphonyElixir.Orchestrator do
            repo_key: Map.get(retry, :repo_key),
            reason: reason,
            rule: rule,
+           gate: nil,
            connected: nil
          }}
       end
 
-    %{state | dispatch_skipped: Map.merge(entries, state.dispatch_skipped, fn _issue_id, _held, listed -> Map.merge(listed, %{reason: reason, rule: rule}) end)}
+    %{state | dispatch_skipped: Map.merge(entries, state.dispatch_skipped, fn _issue_id, _held, listed -> Map.merge(listed, %{reason: reason, rule: rule, gate: nil}) end)}
   end
 
   # Once no Symphony-wide reason stops dispatch, every retry the pause held is sent on at once, with

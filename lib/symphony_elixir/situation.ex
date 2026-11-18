@@ -24,25 +24,36 @@ defmodule SymphonyElixir.Situation do
   (`waiting_for_ci`), a person (`waiting_on_you`), Symphony's upkeep, or a run that already ended,
   whose PR the watcher reads next. A ticket in `Code Review`, `QA` or `Merging` the watcher has not
   decided on yet reads "Reading the PR", as the dispatch gate says. When Symphony can tell none of
-  that, the situation says so ("Not known", `waiting_on_you`) and never borrows another one's words;
+  that, the situation says so ("Not known", `unknown`) and never borrows another one's words, and
+  `sync/3` logs a warning naming the ticket and its phase when a ticket comes to it;
   `not_known?/2` is the same reading, and the Inbox lists the ticket from it
-  (`SymphonyElixir.Inbox.FromRecord`). A plan in
-  `Plan Review` reads `waiting_on_you`, a parent in `Waiting on sub-tickets` `blocked_by_ticket` on
-  its first open sub-ticket, and a ticket in `Backlog` `paused_by_rule`.
+  (`SymphonyElixir.Inbox.FromRecord`). A plan in `Plan Review` reads `waiting_on_you`, a parent the
+  dispatch pass held for its sub-tickets, or one in `Waiting on sub-tickets` with one still open,
+  `waiting_on_sub_tickets` ("2 of 5 done", `waits_on` the open ones), and a ticket in `Backlog`
+  `paused_by_rule`.
 
+  `waiting_for_slot` is said only of a ticket that passed every dispatch condition but a free slot.
   A dispatch skip reads `paused_by_rule` only when the orchestrator names the rule behind it (its
-  entry's `rule`); the others (a run already on it, CI, its own pause) are told by what they wait on.
-  A rule stops dispatch and nothing else, so a ticket a run works on is not paused by it. A Merging
-  ticket the orchestrator holds until CI settles shows among its slot waits (`ci_wait`) and reads
-  `waiting_for_ci`; any other slot wait reads `paused_by_rule` while Symphony's own pause lasts.
+  entry's `rule`); any other skip is told by the gate that closed (its entry's `gate`), never by the
+  slot: a run already on it, a claim in flight ("Starting"), Linear's relations or a plan being
+  replaced, CI, a build, its own pause, and one the pass can't tell apart reads "Not started"
+  (`unknown`). A rule stops dispatch and nothing else, so a ticket a run works on is not paused by
+  it. A Merging ticket the orchestrator holds until CI settles shows among its slot waits
+  (`ci_wait`) and reads `waiting_for_ci`; any other slot wait reads `paused_by_rule` while
+  Symphony's own pause lasts. A ticket paused on a wait for CI on a commit (an epic review held for
+  CI on its base branch, `SymphonyElixir.EpicReview.MainCi`) and one whose run ended on CI still
+  running and starts again after it read `waiting_for_ci` in the wait's own words: the commit and the
+  workflows still running.
   """
 
-  alias SymphonyElixir.{Config, PrDecision, RunStore, TicketEvents, TicketPullRequest, TicketState}
+  require Logger
+
+  alias SymphonyElixir.{CiWait, Config, PrDecision, RunStore, TicketEvents, TicketPullRequest, TicketState}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.PrWatch.{SilentWait, StalledRun}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
 
-  @kinds ~w(waiting_on_you retrying blocked_by_ticket paused_by_rule waiting_for_ci waiting_for_build waiting_for_slot working done cancelled)
+  @kinds ~w(waiting_on_you retrying blocked_by_ticket waiting_on_sub_tickets paused_by_rule waiting_for_ci waiting_for_build waiting_for_slot working done cancelled unknown)
 
   # A retry that follows a run's normal end, or a wait on something that is not broken, is no retry
   # to a person: only a failure, or a usage limit, reads as `retrying`.
@@ -149,7 +160,7 @@ defmodule SymphonyElixir.Situation do
       running: by_issue(snapshot, :running, &Map.take(&1, [:run_kind, :started_at, :step])),
       retrying: by_issue(snapshot, :retrying, &retry_facts(&1, now)),
       slot_waiting: by_issue(snapshot, :slot_waiting, &Map.take(&1, [:since, :reason, :ci_wait])),
-      skipped: by_issue(snapshot, :dispatch_skipped, &Map.take(&1, [:since, :reason, :rule])),
+      skipped: by_issue(snapshot, :dispatch_skipped, &Map.take(&1, [:since, :reason, :rule, :gate])),
       limit: snapshot |> Map.get(:concurrency) |> max_total(),
       symphony_pause: snapshot |> Map.get(:pause) |> symphony_pause(),
       max_tries: settings.watchdog.dispatch_loop_runs,
@@ -181,9 +192,10 @@ defmodule SymphonyElixir.Situation do
     |> Enum.flat_map(&Map.keys/1)
     |> Map.new(fn issue_id ->
       slot = slot_signature(Map.get(live.slot_waiting, issue_id), live)
-      rule = get_in(live.skipped, [issue_id, :rule])
+      skip = Map.get(live.skipped, issue_id) || %{}
+      retry = Map.get(live.retrying, issue_id)
 
-      {issue_id, {Map.has_key?(live.running, issue_id), failure_retry?(Map.get(live.retrying, issue_id)), slot, rule}}
+      {issue_id, {Map.has_key?(live.running, issue_id), failure_retry?(retry), ci_retry?(retry), slot, skip[:rule], skip[:gate]}}
     end)
   end
 
@@ -273,9 +285,17 @@ defmodule SymphonyElixir.Situation do
       since: iso8601(situation.since)
     }
 
+    warn_unknown(record, situation)
     key = "situation.changed:#{(last && last.id) || "first"}:#{situation.kind}"
     TicketEvents.record(record.repo_key, record.issue_id, "situation.changed", payload, phase: record.phase, idempotency: key)
   end
+
+  # A ticket Symphony can tell nothing of is a gap in what it knows: said once, when it starts.
+  defp warn_unknown(record, %{kind: "unknown"} = situation) do
+    Logger.warning("Situation not known: issue_id=#{record.issue_id} issue_identifier=#{record.issue_identifier} repo_key=#{record.repo_key} phase=#{inspect(record.phase)}; #{situation.cause}")
+  end
+
+  defp warn_unknown(_record, _situation), do: :ok
 
   @doc "A situation as the API serves it: its times in ISO 8601."
   @spec payload(t()) :: map()
@@ -318,7 +338,8 @@ defmodule SymphonyElixir.Situation do
   @spec not_known?(TicketState.t(), live_facts()) :: boolean()
   def not_known?(record, live) do
     ctx = context(record, [], live, fn _identifier -> nil end)
-    is_binary(record.phase) and not Enum.any?(@kinds, &holds?(&1, ctx)) and next_of(ctx) == :unknown
+    watched_or_unskipped? = is_nil(ctx.gate_skip) or ctx.gate_skip[:gate] == :watch
+    is_binary(record.phase) and watched_or_unskipped? and not Enum.any?(@kinds, &holds?(&1, ctx)) and next_of(ctx) == :unknown
   end
 
   defp context(record, events, live, phase_of) do
@@ -334,8 +355,10 @@ defmodule SymphonyElixir.Situation do
       phase: normalized(record.phase),
       running: running,
       retry: live.retrying |> Map.get(issue_id) |> failure_retry(),
+      ci_retry: live.retrying |> Map.get(issue_id) |> ci_retry(),
       slot: Map.get(live.slot_waiting, issue_id),
       skipped: live.skipped |> Map.get(issue_id) |> rule_skip(running),
+      gate_skip: live.skipped |> Map.get(issue_id) |> gate_skip(running),
       facts: facts(record)
     }
   end
@@ -349,6 +372,17 @@ defmodule SymphonyElixir.Situation do
   defp rule_skip(%{rule: rule} = skip, nil) when not is_nil(rule), do: skip
   defp rule_skip(_skip, _running), do: nil
 
+  # A skip no rule is behind, on a ticket no run works on: what closed is its `gate`.
+  defp gate_skip(%{} = skip, nil), do: if(is_nil(skip[:rule]), do: skip)
+  defp gate_skip(_skip, _running), do: nil
+
+  # A run that ended on CI still going on its commit starts again once CI had a while more: it waits
+  # for CI, which is no failure.
+  defp ci_retry(retry), do: if(ci_retry?(retry), do: retry)
+
+  defp ci_retry?(%{delay_type: :ci_wait}), do: true
+  defp ci_retry?(_retry), do: false
+
   defp failure_retry(retry), do: if(failure_retry?(retry), do: retry)
 
   defp failure_retry?(%{delay_type: delay_type}), do: delay_type not in @quiet_retries
@@ -356,31 +390,46 @@ defmodule SymphonyElixir.Situation do
 
   defp holds?("waiting_on_you", ctx), do: open_questions(ctx) != [] or reason(ctx, :question) != nil or ctx.phase == "plan review"
   defp holds?("retrying", ctx), do: ctx.retry != nil
-  defp holds?("blocked_by_ticket", ctx), do: reason(ctx, :ticket) != nil or open_sub_issue(ctx) != nil
+  defp holds?("blocked_by_ticket", ctx), do: reason(ctx, :ticket) != nil
+  defp holds?("waiting_on_sub_tickets", ctx), do: waits_on_sub_tickets?(ctx)
   defp holds?("paused_by_rule", ctx), do: rule_reason(ctx) != nil or ctx.phase == "backlog" or ctx.skipped != nil or pause_holds_slot?(ctx)
-  defp holds?("waiting_for_ci", ctx), do: waiting_for_ci?(ctx)
+  defp holds?("waiting_for_ci", ctx), do: ci_wait_reason(ctx) != nil or ctx.ci_retry != nil or waiting_for_ci?(ctx)
   defp holds?("waiting_for_build", ctx), do: reason(ctx, :build) != nil
   defp holds?("waiting_for_slot", ctx), do: ctx.slot != nil
   defp holds?("working", ctx), do: ctx.running != nil
   defp holds?("done", ctx), do: ctx.phase == "done" or match?(%{pr: :merged}, ctx.facts)
   defp holds?("cancelled", ctx), do: ctx.record.phase != nil and ctx.phase in Enum.map(ctx.live.terminal_states, &normalized/1)
+  # Never true of its own: it is what a ticket reads when Symphony can tell nothing (`situation(:nothing, ctx)`).
+  defp holds?("unknown", _ctx), do: false
 
   defp open_questions(ctx), do: Enum.filter(ctx.record.questions, &(&1.state == :open))
 
   defp reason(ctx, kind), do: Enum.find(ctx.reasons, &(&1.kind == kind))
 
-  # The pause a run that never started set says nothing once a run works on the ticket.
-  defp rule_reason(ctx), do: Enum.find(ctx.reasons, &(&1.kind in [:person, :environment] and not (ctx.running != nil and StalledRun.reason?(&1))))
+  # The pause a run that never started set says nothing once a run works on the ticket. A wait for
+  # CI on a commit is no rule's: it reads as the wait for CI it is.
+  defp rule_reason(ctx) do
+    Enum.find(ctx.reasons, &(&1.kind in [:person, :environment] and not CiWait.reason?(&1) and not (ctx.running != nil and StalledRun.reason?(&1))))
+  end
+
+  # The pause of a ticket waiting for CI on a commit: an epic review held for CI on its base branch
+  # (`SymphonyElixir.EpicReview.MainCi`), or a wait past its limit (`SymphonyElixir.CiWait`).
+  defp ci_wait_reason(ctx), do: Enum.find(ctx.reasons, &CiWait.reason?/1)
 
   defp pause_holds_slot?(%{slot: %{ci_wait: true}}), do: false
   defp pause_holds_slot?(ctx), do: ctx.slot != nil and ctx.live.symphony_pause != nil
 
-  defp open_sub_issue(%{phase: "waiting on sub-tickets"} = ctx) do
-    terminal = Enum.map(ctx.live.terminal_states, &normalized/1)
-    Enum.find(ctx.record.sub_issues, &(is_binary(&1.identifier) and normalized(&1.state) not in terminal))
-  end
+  # A parent waits on its sub-tickets when the dispatch pass held it for them, or when it is in the
+  # waiting state with one still open. One whose sub-tickets all ended has its epic review next.
+  defp waits_on_sub_tickets?(%{gate_skip: %{gate: :sub_tickets}}), do: true
+  defp waits_on_sub_tickets?(%{phase: "waiting on sub-tickets"} = ctx), do: open_sub_issues(ctx) != []
+  defp waits_on_sub_tickets?(_ctx), do: false
 
-  defp open_sub_issue(_ctx), do: nil
+  # A sub-ticket without a known state counts as open, as the dispatch gate counts it.
+  defp open_sub_issues(ctx) do
+    terminal = Enum.map(ctx.live.terminal_states, &normalized/1)
+    Enum.filter(ctx.record.sub_issues, &(normalized(&1.state) not in terminal))
+  end
 
   # A head handed off waits for its checks whatever else runs on the ticket; a run still writing the
   # next head on a ticket not yet handed off is working, not waiting.
@@ -418,15 +467,20 @@ defmodule SymphonyElixir.Situation do
   end
 
   defp situation("blocked_by_ticket", ctx) do
-    case reason(ctx, :ticket) do
-      nil ->
-        link = open_sub_issue(ctx)
-        blocked(link.identifier, phase_of_ticket(link.identifier, ctx) || link.state, "It is waiting on its sub-tickets.", ctx.record.phase_at)
+    reason = reason(ctx, :ticket)
+    identifier = Map.get(reason.waits_on, :identifier, "another ticket")
+    blocked(identifier, phase_of_ticket(identifier, ctx), reason.text, reason.set_at)
+  end
 
-      reason ->
-        identifier = Map.get(reason.waits_on, :identifier, "another ticket")
-        blocked(identifier, phase_of_ticket(identifier, ctx), reason.text, reason.set_at)
-    end
+  defp situation("waiting_on_sub_tickets", ctx) do
+    subs = ctx.record.sub_issues
+    open = open_sub_issues(ctx)
+    cause = if subs == [], do: "Its sub-tickets are still open.", else: "#{length(subs) - length(open)} of #{length(subs)} done."
+    since = (ctx.gate_skip && ctx.gate_skip[:since]) || ctx.record.phase_at
+
+    base("waiting_on_sub_tickets", "Waiting on its sub-tickets", cause, "It moves on when every sub-ticket has ended.", since, %{
+      sub_tickets: open |> Enum.map(& &1.identifier) |> Enum.filter(&is_binary/1)
+    })
   end
 
   defp situation("paused_by_rule", ctx) do
@@ -437,14 +491,20 @@ defmodule SymphonyElixir.Situation do
     end
   end
 
-  defp situation("waiting_for_ci", ctx) do
-    number = ticket_pr_number(ctx)
-    subject = if number, do: "PR ##{number}", else: "its PR"
+  defp situation("waiting_for_ci", %{ci_retry: nil} = ctx) do
+    case ci_wait_reason(ctx) do
+      nil -> pr_checks(ctx)
+      reason -> base("waiting_for_ci", "Waiting for CI", sentence(reason.text), "#{next_run_label(ctx)} starts when CI finishes.", reason.set_at, reason.waits_on)
+    end
+  end
 
-    base("waiting_for_ci", "Waiting for CI", "Checks are running on #{subject}.", "#{next_phase(ctx)} starts when they pass.", checks_started(ctx), %{
-      pr: number,
-      check: first_check(ctx.facts)
-    })
+  # The run ended on CI still going on its commit, and starts again after it: the run's words name
+  # the commit and the workflows still running.
+  defp situation("waiting_for_ci", %{ci_retry: retry} = ctx) do
+    cause = if is_binary(retry.error) and retry.error != "", do: retry.error |> capitalized() |> sentence(), else: "CI is still running on its commit."
+    time = if retry.due_at, do: " at #{clock(retry.due_at)}.", else: " soon."
+
+    base("waiting_for_ci", "Waiting for CI", cause, "#{next_run_label(ctx)} starts again#{time}", last_run_end(ctx) || ctx.record.phase_at)
   end
 
   defp situation("waiting_for_build", ctx) do
@@ -496,14 +556,81 @@ defmodule SymphonyElixir.Situation do
     base("cancelled", "Cancelled", cancelled_sentence(event), nil, (event && event.at) || ctx.record.phase_at)
   end
 
-  # Nothing holds the ticket and no run works on it: what it waits on is read from the watcher's
-  # decision and its outcome, the run store and the slots, the record the machine acts on.
-  defp situation(:nothing, ctx) do
+  # Nothing holds the ticket and no run works on it. When the dispatch pass passed it over, what
+  # closed (the skip's `gate`) says what it waits on: it passed no condition but a slot, so it never
+  # waits for one. The watcher's own gate is read from its decision, as for a ticket nothing skipped.
+  defp situation(:nothing, %{gate_skip: %{} = skip} = ctx) do
+    case skip[:gate] do
+      :watch -> watched(skip, ctx)
+      gate -> skipped(gate, skip, ctx)
+    end
+  end
+
+  # What it waits on is read from the watcher's decision and its outcome, the run store and the
+  # slots, the record the machine acts on.
+  defp situation(:nothing, ctx), do: from_record(ctx)
+
+  defp from_record(ctx) do
     case next_of(ctx) do
       {:run, run} -> due(run, ctx)
       {:wait, decision} -> undecided(decision, ctx)
       :reading -> base("waiting_for_ci", "Reading the PR", "The PR watcher reads its PR next.", "The next step follows that read.", ctx.record.phase_at)
-      :unknown -> base("waiting_on_you", "Not known", "Symphony can't tell what it waits on.", unknown_next(ctx.record), ctx.record.phase_at)
+      :unknown -> base("unknown", "Not known", "Symphony can't tell what it waits on.", unknown_next(ctx.record), ctx.record.phase_at)
+    end
+  end
+
+  # The watcher's gate closed while its record names a run: the gate is the newer read, and the
+  # watcher reads the PR again next. Under Symphony's pause the pause holds it.
+  defp watched(skip, ctx) do
+    case {next_of(ctx), ctx.live.symphony_pause} do
+      {{:run, _run}, nil} -> base("waiting_for_ci", "Reading the PR", skip_cause(skip), "The next step follows that read.", skip[:since])
+      _other -> from_record(ctx)
+    end
+  end
+
+  defp skipped(:claimed, skip, ctx) do
+    case ctx.live.retrying |> Map.get(ctx.record.issue_id) do
+      %{delay_type: :linear_wait} = retry -> base("waiting_for_ci", "Waiting on Linear", linear_cause(retry), retry_next(retry), skip[:since])
+      _retry_or_dispatch -> base("working", "Starting", "#{run_label_now(ctx)} is starting.", "It is working in a moment.", skip[:since])
+    end
+  end
+
+  defp skipped(:settle, skip, _ctx) do
+    base("waiting_for_ci", "Waiting on Linear", "Linear created it a moment ago; Symphony reads its relations first.", "It starts on the next dispatch pass.", skip[:since])
+  end
+
+  defp skipped(:replan, skip, _ctx) do
+    base("waiting_for_ci", "Waiting on Symphony", skip_cause(skip), "It starts once the new plan is in.", skip[:since])
+  end
+
+  defp skipped(:running, skip, _ctx), do: base("working", "Working", "A run is working on it.", nil, skip[:since])
+  defp skipped(:merging_ci, skip, _ctx), do: base("waiting_for_ci", "Waiting for CI", skip_cause(skip), "Merging starts when they pass.", skip[:since])
+
+  defp skipped(gate, skip, _ctx) when gate in [:paused, :not_candidate] do
+    base("paused_by_rule", "Paused", skip_cause(skip), "Starts when that clears.", skip[:since])
+  end
+
+  defp skipped(gate, skip, _ctx) when gate in [:instructions_hold, :update_hold, :qa_build] do
+    base("waiting_for_build", "Waiting for a build", skip_cause(skip), "It starts when the build is ready.", skip[:since])
+  end
+
+  # The run was due and did not start, for a reason the pass could not tell apart.
+  defp skipped(_gate, skip, _ctx) do
+    base("unknown", "Not started", skip_cause(skip), "Symphony tries again on its next poll.", skip[:since])
+  end
+
+  defp skip_cause(skip), do: (skip[:reason] || "Dispatch passed over it") |> capitalized() |> sentence()
+
+  defp linear_cause(%{error: error}) when is_binary(error) and error != "", do: error |> String.split("\n") |> hd() |> capitalized() |> sentence()
+  defp linear_cause(_retry), do: "Linear did not answer."
+
+  defp retry_next(%{due_at: %DateTime{} = at}), do: "It starts again at #{clock(at)}."
+  defp retry_next(_retry), do: "It starts again soon."
+
+  defp run_label_now(ctx) do
+    case due_run(ctx) do
+      %{label: label} -> label
+      nil -> "A run"
     end
   end
 
@@ -660,6 +787,7 @@ defmodule SymphonyElixir.Situation do
       "waiting_on_you" -> reason(ctx, :question) != nil or stalled_reason(ctx) != nil
       "blocked_by_ticket" -> reason(ctx, :ticket) != nil
       "paused_by_rule" -> rule_reason(ctx) != nil
+      "waiting_for_ci" -> ctx.ci_retry == nil and ci_wait_reason(ctx) != nil
       "waiting_for_build" -> reason(ctx, :build) != nil
       _other -> false
     end
@@ -734,6 +862,25 @@ defmodule SymphonyElixir.Situation do
 
   defp first_check(%PrDecision.Facts{missing_checks: missing, running_checks: running}), do: List.first(missing ++ running)
   defp first_check(nil), do: nil
+
+  # Checks running on the ticket's PR, or a Merging hold until CI settles.
+  defp pr_checks(ctx) do
+    number = ticket_pr_number(ctx)
+    subject = if number, do: "PR ##{number}", else: "its PR"
+
+    base("waiting_for_ci", "Waiting for CI", "Checks are running on #{subject}.", "#{next_phase(ctx)} starts when they pass.", checks_started(ctx), %{
+      pr: number,
+      check: first_check(ctx.facts)
+    })
+  end
+
+  # The run that waits for CI on a commit: its phase's own (the epic review), else the next run.
+  defp next_run_label(ctx) do
+    case phase_run(ctx) do
+      %{label: label} -> label
+      nil -> "The next run"
+    end
+  end
 
   # The phase that starts when the checks pass: the one the ticket is in, once it was handed off; a
   # CI Fix returns where it came from.

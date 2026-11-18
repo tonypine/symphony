@@ -2,7 +2,7 @@ defmodule SymphonyElixir.SituationTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.Inbox.{FromRecord, Item}
-  alias SymphonyElixir.{Pauses, Questions, Situation, TicketEvents, TicketPullRequest, TicketState, TransitionGuard}
+  alias SymphonyElixir.{CiWait, Pauses, Questions, Situation, TicketEvents, TicketPullRequest, TicketState, TransitionGuard}
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.TicketEvents.{Event, Types}
 
@@ -69,6 +69,12 @@ defmodule SymphonyElixir.SituationTest do
     %{}
   end
 
+  defp arrange("waiting_on_sub_tickets") do
+    sub_issues = [%{id: "a", identifier: "TP-2", state: "Done"}, %{id: "b", identifier: "TP-3", state: "QA"}]
+    :ok = RunStore.update_ticket_state(@id, %{phase: "Waiting on sub-tickets", phase_at: @at, sub_issues: sub_issues})
+    %{}
+  end
+
   defp arrange("paused_by_rule") do
     reason = %{kind: :person, waits_on: %{action: "unblock"}, text: "Deploy freeze", releasable: true}
     {:ok, _pause} = Pauses.set({:ticket, @repo, @id}, reason, at: @at)
@@ -96,6 +102,12 @@ defmodule SymphonyElixir.SituationTest do
 
   defp arrange("cancelled") do
     :ok = RunStore.update_ticket_state(@id, %{phase: "Canceled", phase_at: @at})
+    %{}
+  end
+
+  # A phase Symphony has no run or wait for.
+  defp arrange("unknown") do
+    :ok = RunStore.update_ticket_state(@id, %{phase: "Human Review", phase_at: @at})
     %{}
   end
 
@@ -139,8 +151,8 @@ defmodule SymphonyElixir.SituationTest do
     end
 
     # One case per pair: the kind listed first wins, whichever was arranged last.
-    for {first, index} <- Enum.with_index(~w(waiting_on_you retrying blocked_by_ticket paused_by_rule waiting_for_ci waiting_for_build waiting_for_slot working done cancelled)),
-        second <- Enum.drop(~w(waiting_on_you retrying blocked_by_ticket paused_by_rule waiting_for_ci waiting_for_build waiting_for_slot working done cancelled), index + 1) do
+    for {first, index} <- Enum.with_index(Situation.kinds()),
+        second <- Enum.drop(Situation.kinds(), index + 1) do
       test "#{first} goes before #{second}" do
         :ok = RunStore.put_ticket_state(%{repo_key: @repo, issue_id: @id, issue_identifier: "TP-1", phase: "In Progress"})
         low = arrange(unquote(second))
@@ -268,7 +280,7 @@ defmodule SymphonyElixir.SituationTest do
     test "a continuation or a wait is no retry" do
       for delay_type <- [:continuation, :linear_wait, :ci_wait] do
         facts = live(%{retrying: %{@id => %{attempt: 1, error: nil, delay_type: delay_type, due_at: nil}}})
-        assert compute(record(), [], facts).kind == "waiting_for_slot"
+        refute compute(record(), [], facts).kind == "retrying"
       end
     end
   end
@@ -298,12 +310,41 @@ defmodule SymphonyElixir.SituationTest do
       :ok = RunStore.put_ticket_state(blocker)
       assert Situation.read(paused, live()).cause == "It is in Merging."
     end
+  end
 
-    test "a parent waits on its first open sub-ticket" do
-      parent = %{phase: "Waiting on sub-tickets", sub_issues: [%{id: "a", identifier: "TP-2", state: "Done"}, %{id: "b", identifier: "TP-3", state: "QA"}]}
+  describe "waiting_on_sub_tickets" do
+    @subs [
+      %{id: "a", identifier: "TP-2", state: "Done"},
+      %{id: "b", identifier: "TP-3", state: "QA"},
+      %{id: "c", identifier: "TP-4", state: "Canceled"},
+      %{id: "d", identifier: "TP-5", state: "Todo"},
+      %{id: "e", identifier: "TP-6", state: nil}
+    ]
 
-      assert %{kind: "blocked_by_ticket", word: "Blocked by TP-3", cause: "It is in QA."} = compute(record(parent))
-      assert compute(record(%{parent | sub_issues: [%{id: "b", identifier: "TP-3", state: nil}]})).cause == "It is waiting on its sub-tickets."
+    test "MOT-70: a parent waiting on its sub-tickets says so, how many are done and which are open" do
+      assert %{
+               kind: "waiting_on_sub_tickets",
+               word: "Waiting on its sub-tickets",
+               cause: "2 of 5 done.",
+               next: "It moves on when every sub-ticket has ended.",
+               since: @at,
+               waits_on: %{sub_tickets: ["TP-3", "TP-5", "TP-6"]}
+             } = compute(record(%{phase: "Waiting on sub-tickets", sub_issues: @subs}))
+    end
+
+    test "the dispatch pass's hold for its sub-tickets is the wait, whatever the record knows of them" do
+      held = live(%{skipped: %{@id => %{since: @later, reason: "waiting on its sub-tickets", rule: nil, gate: :sub_tickets}}})
+
+      assert %{kind: "waiting_on_sub_tickets", cause: "Its sub-tickets are still open.", since: @later, waits_on: %{sub_tickets: []}} =
+               compute(record(%{phase: "Waiting on sub-tickets"}), [], held)
+
+      assert %{kind: "waiting_on_sub_tickets", cause: "2 of 5 done."} = compute(record(%{phase: "In Progress", sub_issues: @subs}), [], held)
+    end
+
+    test "a ticket blocked by a ticket reads that first" do
+      reasons = [%{kind: :ticket, waits_on: %{identifier: "TP-9"}, text: "Waiting for TP-9 to finish"}]
+
+      assert compute(record(%{phase: "Waiting on sub-tickets", sub_issues: @subs, pause: pause(reasons)})).kind == "blocked_by_ticket"
     end
 
     test "a parent whose sub-tickets all ended has its epic review next" do
@@ -333,7 +374,7 @@ defmodule SymphonyElixir.SituationTest do
       assert %{kind: "paused_by_rule", cause: "It is in Backlog.", next: "Starts when you move it to Todo."} = compute(record(%{phase: "Backlog"}))
     end
 
-    defp skip(reason, rule \\ nil), do: live(%{skipped: %{@id => %{since: @later, reason: reason, rule: rule}}})
+    defp skip(reason, rule \\ nil, gate \\ nil), do: live(%{skipped: %{@id => %{since: @later, reason: reason, rule: rule, gate: gate}}})
 
     test "a rule's skip says what passed it over and what lifts it" do
       assert %{kind: "paused_by_rule", cause: "Dispatch is paused: Deploy freeze.", next: "Starts when you resume dispatch.", since: @later} =
@@ -360,13 +401,15 @@ defmodule SymphonyElixir.SituationTest do
     test "a skip no rule is behind is told by what the ticket waits on" do
       running = %{running: %{@id => %{run_kind: "implementation", started_at: @at}}}
 
-      assert compute(record(), [], Map.merge(skip("already running"), running)).kind == "working"
-      assert compute(record(), [], skip("claimed by a retry or a Linear update in flight")).kind == "waiting_for_slot"
+      assert compute(record(), [], Map.merge(skip("already running", nil, :running), running)).kind == "working"
+
+      assert %{kind: "working", word: "Starting", cause: "The implementation run is starting.", since: @later} =
+               compute(record(), [], skip("claimed by a retry or a Linear update in flight", nil, :claimed))
 
       pending = record(%{phase: "Code Review", pr_watch: watch(%{})})
-      assert compute(pending, [], skip("the PR watcher (R27): The head is not green")).kind == "waiting_for_ci"
-      assert compute(record(%{phase: "Done"}), [], skip("Done is a terminal state")).kind == "done"
-      assert compute(record(%{phase: "Canceled"}), [], skip("Canceled is a terminal state")).kind == "cancelled"
+      assert compute(pending, [], skip("the PR watcher (R27): The head is not green", nil, :watch)).kind == "waiting_for_ci"
+      assert compute(record(%{phase: "Done"}), [], skip("Done is a terminal state", nil, :not_candidate)).kind == "done"
+      assert compute(record(%{phase: "Canceled"}), [], skip("Canceled is a terminal state", nil, :not_candidate)).kind == "cancelled"
     end
 
     test "a rule stops dispatch and nothing else: a ticket a run works on is working" do
@@ -379,7 +422,7 @@ defmodule SymphonyElixir.SituationTest do
       reasons = [%{kind: :build, waits_on: %{commit: "cedfe01"}, text: "Holding for a build"}]
 
       assert %{kind: "paused_by_rule", and_more: 1} = compute(record(%{pause: pause(reasons)}), [], skip("the repository is paused by you", :repository_pause))
-      assert compute(record(%{pause: pause(reasons)}), [], skip("Holding for a build")).kind == "waiting_for_build"
+      assert compute(record(%{pause: pause(reasons)}), [], skip("Holding for a build", nil, :paused)).kind == "waiting_for_build"
     end
 
     test "a slot wait under Symphony's pause is paused: no slot starts it" do
@@ -389,6 +432,125 @@ defmodule SymphonyElixir.SituationTest do
                compute(record(), [], live(Map.put(slot, :symphony_pause, %{reason: "Deploy freeze", paused_at: @later})))
 
       assert compute(record(), [], live(Map.put(slot, :symphony_pause, %{}))).cause == "Dispatch is paused."
+    end
+  end
+
+  describe "a ticket the dispatch pass passed over" do
+    defp gate_skip(gate, reason), do: live(%{skipped: %{@id => %{since: @later, reason: reason, rule: nil, gate: gate}}})
+
+    # Every gate no rule is behind, as `SymphonyElixir.Orchestrator` names it, with the kind and word
+    # a ticket nothing else holds reads from it.
+    @gates [
+      {:paused, "Stopped by you at 08:41", "paused_by_rule", "Paused"},
+      {:sub_tickets, "waiting on its sub-tickets", "waiting_on_sub_tickets", "Waiting on its sub-tickets"},
+      {:instructions_hold, "Holding for the build of d1dffa9: the instructions on main need it", "waiting_for_build", "Waiting for a build"},
+      {:update_hold, "Waiting for a Symphony update that includes MT-5's fix", "waiting_for_build", "Waiting for a build"},
+      {:qa_build, "Holding for the build of cedfe01", "waiting_for_build", "Waiting for a build"},
+      {:replan, "its plan waits to be replaced before it runs again", "waiting_for_ci", "Waiting on Symphony"},
+      {:merging_ci, "held in Merging until CI settles on abc1234", "waiting_for_ci", "Waiting for CI"},
+      {:watch, "the PR watcher (R27): The head is not green", "waiting_for_ci", "Reading the PR"},
+      {:running, "already running", "working", "Working"},
+      {:claimed, "claimed by a retry or a Linear update in flight", "working", "Starting"},
+      {:not_candidate, "\"Human Review\" is not an active state", "paused_by_rule", "Paused"},
+      {:dropped, "not started: the issue read again before dispatch was no longer dispatchable, or no worker was free", "unknown", "Not started"},
+      {:settle, "waiting for its relations: Linear created it a moment ago", "waiting_for_ci", "Waiting on Linear"},
+      {nil, "a reason from an older Symphony", "unknown", "Not started"}
+    ]
+
+    test "no skip reads as waiting for a slot, with a slot free or every slot in use" do
+      # The watcher's record names a run, so only the gate says it is held.
+      decided = %{kind: :dispatch, rule: "R27", args: %{phase: :qa}, reason: "The head is green", since: @at}
+
+      for {gate, reason, kind, word} <- @gates,
+          phase <- ["Todo", "In Progress", "QA"],
+          running <- [%{}, %{"a" => %{}, "b" => %{}, "c" => %{}, "d" => %{}}] do
+        record = if phase == "QA", do: record(%{phase: phase, pr_watch: watch(%{ci: :green}, %{decision: decided})}), else: record(%{phase: phase})
+        situation = compute(record, [], %{gate_skip(gate, reason) | running: running})
+        state = inspect({gate, phase, map_size(running)})
+
+        refute situation.kind == "waiting_for_slot", state
+        refute situation.word == "Waiting for a slot", state
+
+        assert %{kind: ^kind, word: ^word} = situation, state
+      end
+    end
+
+    test "each says the skip's reason, from when it began" do
+      for {gate, reason, _kind, _word} <- @gates, gate not in [:sub_tickets, :running, :claimed, :settle] do
+        situation = compute(record(), [], gate_skip(gate, reason))
+
+        assert situation.since == @later, inspect(gate)
+        assert situation.cause =~ String.slice(reason, 1..20), inspect(gate)
+      end
+    end
+
+    test "a claim on a retry that waits on Linear says so, and when it starts again" do
+      facts = gate_skip(:claimed, "claimed by a retry or a Linear update in flight")
+      waiting = %{facts | retrying: %{@id => %{attempt: 1, error: "waiting for Linear: :timeout\nmore", delay_type: :linear_wait, due_at: @later}}}
+
+      assert %{kind: "waiting_for_ci", word: "Waiting on Linear", cause: "Waiting for Linear: :timeout.", next: next} = compute(record(), [], waiting)
+      assert next == "It starts again at #{Situation.clock(@later)}."
+
+      silent = %{facts | retrying: %{@id => %{attempt: 1, error: nil, delay_type: :linear_wait, due_at: nil}}}
+      assert %{cause: "Linear did not answer.", next: "It starts again soon."} = compute(record(), [], silent)
+
+      # A claim on a ticket whose phase has no run of its own names none.
+      assert %{word: "Starting", cause: "A run is starting."} = compute(record(%{phase: "Human Review"}), [], facts)
+    end
+
+    test "a skip with no reason says dispatch passed over it" do
+      assert compute(record(), [], live(%{skipped: %{@id => %{gate: :dropped}}})).cause == "Dispatch passed over it."
+    end
+
+    test "the watcher's gate under Symphony's pause is the pause" do
+      decided = %{kind: :dispatch, rule: "R27", args: %{phase: :qa}, reason: "The head is green", since: @at}
+      paused = %{gate_skip(:watch, "the PR watcher (R27): x") | symphony_pause: %{reason: "Deploy freeze"}}
+
+      assert %{kind: "paused_by_rule", word: "Paused"} = compute(record(%{phase: "QA", pr_watch: watch(%{ci: :green}, %{decision: decided})}), [], paused)
+    end
+
+    test "a skipped ticket is not listed as one Symphony can tell nothing of, but the watcher's gate is read from its record" do
+      refute Situation.not_known?(record(%{phase: "Human Review"}), gate_skip(:not_candidate, "\"Human Review\" is not an active state"))
+      assert Situation.not_known?(record(%{phase: "Human Review"}), gate_skip(:watch, "the PR watcher: x"))
+    end
+  end
+
+  describe "a wait for CI on a commit" do
+    test "TP-1381: an epic review held for CI on main names the commit and the workflows still running" do
+      reason = SymphonyElixir.EpicReview.MainCi.reason("main", "b98572e58594deadbeef", [%{workflow_name: "make-all"}, %{workflow_name: "macos"}])
+      held = record(%{phase: "Epic Review", pause: pause([reason])})
+      skipped = live(%{skipped: %{@id => %{since: @later, reason: reason.text, rule: nil, gate: :paused}}})
+
+      assert %{
+               kind: "waiting_for_ci",
+               word: "Waiting for CI",
+               cause: "Waiting for CI on main at b98572e58594: make-all, macos still running.",
+               next: "The epic review starts when CI finishes.",
+               since: @at,
+               waits_on: %{condition: "ci_wait:b98572e58594", head: "b98572e58594deadbeef"},
+               and_more: 0
+             } = compute(held, [], skipped)
+    end
+
+    test "a wait past its limit reads as the wait for CI, never as a rule's pause" do
+      held = record(%{phase: "In Progress", pause: pause([CiWait.reason("abc1234def5678")])})
+
+      assert %{kind: "waiting_for_ci", cause: "Waiting for CI on abc1234def56 to finish.", next: "The implementation run starts when CI finishes."} = compute(held)
+      assert compute(%{held | phase: "Human Review"}).next == "The next run starts when CI finishes."
+    end
+
+    test "TP-1381: a run that ended on CI still running waits for CI, and says when it starts again" do
+      error = "waiting for CI on b98572e58594: make-all still running"
+      facts = live(%{retrying: %{@id => %{attempt: 1, error: error, delay_type: :ci_wait, due_at: @later}}})
+      ended = event("run.ended", %{run_id: "run-3", exit: "waiting_for_ci"}, %{at: @later})
+
+      assert %{kind: "waiting_for_ci", word: "Waiting for CI", cause: "Waiting for CI on b98572e58594: make-all still running.", next: next, since: @later} =
+               compute(record(%{phase: "Epic Review"}), [ended], facts)
+
+      assert next == "The epic review starts again at #{Situation.clock(@later)}."
+
+      quiet = live(%{retrying: %{@id => %{attempt: 1, error: nil, delay_type: :ci_wait, due_at: nil}}})
+      assert %{cause: "CI is still running on its commit.", next: "The epic review starts again soon.", since: @at} = compute(record(%{phase: "Epic Review"}), [], quiet)
     end
   end
 
@@ -648,7 +810,7 @@ defmodule SymphonyElixir.SituationTest do
       unknowns = [to_rework, record(%{phase: "Human Review"})]
 
       for record <- unknowns do
-        assert %{kind: "waiting_on_you", word: "Not known", cause: "Symphony can't tell what it waits on.", next: "It is listed in the Inbox; check it now from its page.", since: @at} =
+        assert %{kind: "unknown", word: "Not known", cause: "Symphony can't tell what it waits on.", next: "It is listed in the Inbox; check it now from its page.", since: @at} =
                  compute(record)
 
         assert Situation.not_known?(record, live())
@@ -921,22 +1083,23 @@ defmodule SymphonyElixir.SituationTest do
     end
 
     test "the signature says what decides a kind" do
-      retrying = %{"b" => %{delay_type: :continuation}, "c" => %{delay_type: nil}}
+      retrying = %{"b" => %{delay_type: :continuation}, "c" => %{delay_type: nil}, "h" => %{delay_type: :ci_wait}}
       slots = %{"d" => %{}, "f" => %{ci_wait: true}}
-      skipped = %{"e" => %{rule: :priority}, "g" => %{rule: nil}}
+      skipped = %{"e" => %{rule: :priority}, "g" => %{rule: nil, gate: :claimed}}
       facts = live(%{running: %{"a" => %{}}, retrying: retrying, slot_waiting: slots, skipped: skipped})
 
       assert Situation.live_signature(facts) == %{
-               "a" => {true, false, nil, nil},
-               "b" => {false, false, nil, nil},
-               "c" => {false, true, nil, nil},
-               "d" => {false, false, :slot, nil},
-               "e" => {false, false, nil, :priority},
-               "f" => {false, false, :ci, nil},
-               "g" => {false, false, nil, nil}
+               "a" => {true, false, false, nil, nil, nil},
+               "b" => {false, false, false, nil, nil, nil},
+               "c" => {false, true, false, nil, nil, nil},
+               "d" => {false, false, false, :slot, nil, nil},
+               "e" => {false, false, false, nil, :priority, nil},
+               "f" => {false, false, false, :ci, nil, nil},
+               "g" => {false, false, false, nil, nil, :claimed},
+               "h" => {false, false, true, nil, nil, nil}
              }
 
-      assert Situation.live_signature(%{facts | symphony_pause: %{}})["d"] == {false, false, :paused, nil}
+      assert Situation.live_signature(%{facts | symphony_pause: %{}})["d"] == {false, false, false, :paused, nil, nil}
     end
   end
 
@@ -967,6 +1130,15 @@ defmodule SymphonyElixir.SituationTest do
       assert [_first, _second] = changes()
     end
 
+    test "a ticket coming to a situation Symphony can tell nothing of logs a warning with the ticket and its phase, once" do
+      :ok = RunStore.update_ticket_state(@id, %{phase: "Human Review"})
+
+      log = ExUnit.CaptureLog.capture_log(fn -> assert {:ok, %Event{payload: %{to: "unknown"}}} = Situation.sync(stored_record(), live()) end)
+      assert log =~ ~s(Situation not known: issue_id=#{@id} issue_identifier=TP-1 repo_key=#{@repo} phase="Human Review"; Symphony can't tell what it waits on.)
+
+      refute ExUnit.CaptureLog.capture_log(fn -> assert Situation.sync(stored_record(), live()) == :unchanged end) =~ "Situation not known"
+    end
+
     test "a read never writes" do
       for _read <- 1..3, do: Situation.read(stored_record(), live(arrange("working")))
 
@@ -979,6 +1151,6 @@ defmodule SymphonyElixir.SituationTest do
   end
 
   test "a read of a record with no ticket reads an empty ledger" do
-    assert %{kind: "waiting_on_you", word: "Not known"} = Situation.read(nil, live())
+    assert %{kind: "unknown", word: "Not known"} = Situation.read(nil, live())
   end
 end

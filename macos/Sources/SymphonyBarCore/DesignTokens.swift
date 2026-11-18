@@ -940,8 +940,9 @@ public enum DesignTokens {
 
     /// The situation a ticket is in (`director-ticket-page.md` §3): exactly one at a time, said with its glyph, its
     /// word and its status color, never color alone. The cases are in the order that picks one when several are true.
+    /// `unknown` is what Symphony says when it can tell nothing, and what the app reads a kind it does not know as.
     public enum SituationKind: String, CaseIterable, Equatable {
-        case you, retrying, blocked, paused, ci, build, slot, working, done, cancelled
+        case you, retrying, blocked, subTickets, paused, ci, build, slot, working, done, cancelled, unknown
 
         /// Where it ranks when more than one is true: the lowest wins.
         public var precedence: Int { Self.allCases.firstIndex(of: self) ?? 0 }
@@ -954,7 +955,7 @@ public enum DesignTokens {
         public var status: Status {
             switch self {
             case .working, .ci, .build: .working
-            case .slot, .blocked, .paused, .cancelled: .idle
+            case .slot, .blocked, .subTickets, .paused, .cancelled, .unknown: .idle
             case .you: .you
             case .retrying: .problem
             case .done: .done
@@ -962,11 +963,13 @@ public enum DesignTokens {
         }
 
         /// The SF Symbol: a dashed circle for work and CI, a clock for a slot, a box for a build, a person with a
-        /// mark, a lock, a pause, an arrow round, a filled tick, a slashed circle.
+        /// mark, a lock, a stack for sub-tickets, a pause, an arrow round, a filled tick, a slashed circle, a question mark.
         public var symbol: String {
             switch self {
             case .working, .ci: "circle.dotted.circle"
             case .slot: "clock"
+            case .subTickets: "square.stack.3d.up"
+            case .unknown: "questionmark.circle"
             case .build: "shippingbox"
             case .you: "person.crop.circle.badge.exclamationmark"
             case .blocked: "lock.fill"
@@ -986,6 +989,8 @@ public enum DesignTokens {
             case .build: "Waiting for a build"
             case .you: "Waiting on you"
             case .blocked: "Blocked"
+            case .subTickets: "Waiting on its sub-tickets"
+            case .unknown: "Not known"
             case .paused: "Paused"
             case .retrying: "Retrying"
             case .done: "Shipped"

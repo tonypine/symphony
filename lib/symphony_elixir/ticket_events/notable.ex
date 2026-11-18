@@ -20,7 +20,7 @@ defmodule SymphonyElixir.TicketEvents.Notable do
     * `:factory_paused` - Symphony's own pause was set or cleared (`pause.set`, `pause.cleared` on
       Symphony's stream): the factory paused or resumed;
     * `:situation` - the ticket's situation (`situation.changed`) became one a person reads first:
-      waiting on you, retrying or blocked by a ticket.
+      waiting on you, retrying, blocked by a ticket, or not known.
 
   A rule reads the event and its context (`t:context/0`): the events of its stream, oldest first,
   and the time the read is made, so a pause still going counts the time it has lasted.
@@ -43,7 +43,7 @@ defmodule SymphonyElixir.TicketEvents.Notable do
   ]
   @symphony_stream "symphony"
   @shipped_phases ["done", "canceled", "cancelled"]
-  @situations ["waiting_on_you", "retrying", "blocked_by_ticket"]
+  @situations ["waiting_on_you", "retrying", "blocked_by_ticket", "unknown"]
 
   @type rule ::
           :verdict

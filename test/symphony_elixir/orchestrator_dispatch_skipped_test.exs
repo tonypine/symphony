@@ -177,6 +177,19 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
              "spent" => "its token budget is spent (agent.max_tokens_per_issue)"
            }
 
+    # Every other gate names what closed, which a ticket read words it from (`SymphonyElixir.Situation`).
+    assert Map.new(Enum.reject(state.dispatch_skipped, fn {_issue_id, entry} -> entry.rule end), fn {issue_id, entry} -> {issue_id, entry.gate} end) == %{
+             "done" => :not_candidate,
+             "backlog" => :not_candidate,
+             "untitled" => :not_candidate,
+             "blocked" => :paused,
+             "skipped-decision" => :paused,
+             "update" => :update_hold,
+             "landing" => :merging_ci,
+             "running" => :running,
+             "claimed" => :claimed
+           }
+
     # Only a rule's gate names its rule: a ticket read says those as paused (`SymphonyElixir.Situation`).
     assert Map.new(Enum.filter(state.dispatch_skipped, fn {_issue_id, entry} -> entry.rule end), fn {issue_id, entry} -> {issue_id, entry.rule} end) == %{
              "unassigned" => :not_assigned,
@@ -185,6 +198,68 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
 
     # The ticket page shows a passed-over ticket's blockers from the entry (`SymphonyElixir.Connected`).
     assert %{blocked_by: [%{identifier: "MT-7", title: nil, state: "In Progress"}], parent: nil} = state.dispatch_skipped["blocked"].connected
+  end
+
+  # `/api/v1/state`'s `dispatch_skipped` and `slot_waiting` and the ticket read's situation are read
+  # from one snapshot, so they never disagree: a ticket the pass skipped never waits for a slot, and
+  # one it left waiting for a slot does.
+  test "the skip list and the situation agree for every ticket of one pass", ctx do
+    on_exit(fn -> RunStore.clear() end)
+    write_skipped_workflow!(ctx, max_concurrent_agents: 1)
+
+    {:ok, _pause} = Pauses.set({:ticket, "default", "blocked"}, Pauses.ticket_reason(:dependency, "MT-7"))
+    _question = ask!("asked", "Which reading is right?")
+    subs = [%{id: "s1", identifier: "MT-71", state: "Todo"}]
+
+    candidates = [
+      issue("running", "MT-RUN", "In Progress"),
+      issue("claimed", "MT-CLAIMED", "Todo"),
+      issue("blocked", "MT-BLOCKED", "Todo", blocked_by: [%{id: "b", identifier: "MT-7", state: "In Progress"}]),
+      issue("asked", "MT-ASKED", "In Progress"),
+      issue("landing", "MT-LANDING", "Merging"),
+      issue("backlog", "MT-BACKLOG", "Backlog"),
+      issue("spent", "MT-SPENT", "Todo"),
+      epic("epic", "MT-70", subs),
+      issue("free-1", "MT-FREE1", "Todo"),
+      issue("free-2", "MT-FREE2", "Todo", priority: 4)
+    ]
+
+    state =
+      orchestrator_state()
+      |> Map.put(:max_concurrent_agents, 1)
+      |> run(hd(candidates))
+      |> Map.merge(%{
+        claimed: MapSet.new(["running", "claimed"]),
+        budget_exhausted: MapSet.new(["spent"]),
+        merging_ci_waits: %{
+          "landing" => %{identifier: "MT-LANDING", title: "Land", repo_key: "default", pull_request_url: nil, commit_sha: "abc1234", since: DateTime.utc_now()}
+        }
+      })
+
+    state = Orchestrator.dispatch_chosen_issues_for_test(candidates, state)
+    snapshot = snapshot_of(state)
+    live = Situation.live_facts(snapshot)
+    skipped = Map.new(snapshot.dispatch_skipped, &{&1.issue_id, &1})
+    waiting = Map.new(snapshot.slot_waiting, &{&1.issue_id, &1})
+
+    assert Map.keys(waiting) |> Enum.sort() == ["free-1", "free-2", "landing"]
+
+    for %Issue{id: issue_id, state: phase} = issue <- candidates do
+      fields = %{repo_key: "default", issue_id: issue_id, issue_identifier: issue.identifier, phase: phase, sub_issues: issue.sub_issues}
+      # A paused ticket's record holds its pause already.
+      :ok = if RunStore.get_ticket_state(issue_id), do: RunStore.update_ticket_state(issue_id, fields), else: RunStore.put_ticket_state(fields)
+      situation = Situation.read(issue_id |> RunStore.get_ticket_state() |> TicketState.normalize(), live)
+      said = inspect({issue.identifier, skipped[issue_id], waiting[issue_id], situation})
+
+      cond do
+        Map.has_key?(skipped, issue_id) -> refute situation.kind == "waiting_for_slot", said
+        waiting[issue_id][:ci_wait] -> assert situation.kind == "waiting_for_ci", said
+        Map.has_key?(waiting, issue_id) -> assert situation.kind == "waiting_for_slot", said
+        true -> assert situation.kind == "working", said
+      end
+    end
+
+    assert Situation.read(TicketState.normalize(RunStore.get_ticket_state("epic")), live).kind == "waiting_on_sub_tickets"
   end
 
   describe "a ticket read of what dispatch skipped" do
@@ -201,10 +276,25 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
       assert situation(state, "running", "In Progress").kind == "working"
     end
 
-    test "a claimed ticket is not paused" do
+    test "a claimed ticket is starting, neither paused nor waiting for a slot" do
       state = Orchestrator.dispatch_chosen_issues_for_test([issue("claimed", "MT-CLAIMED", "Todo")], %{orchestrator_state() | claimed: MapSet.new(["claimed"])})
 
-      assert situation(state, "claimed", "Todo").kind == "waiting_for_slot"
+      assert %{gate: :claimed, rule: nil} = state.dispatch_skipped["claimed"]
+      assert %{kind: "working", word: "Starting", cause: "The implementation run is starting."} = situation(state, "claimed", "Todo")
+    end
+
+    test "MOT-70: an epic held for its sub-tickets waits on them, never for a slot" do
+      subs = [%{id: "s1", identifier: "MT-71", state: "Done"}, %{id: "s2", identifier: "MT-72", state: "In Progress"}]
+      parent = epic("epic", "MT-70", subs)
+      state = Orchestrator.dispatch_chosen_issues_for_test([parent], orchestrator_state())
+
+      assert %{reason: "waiting on its sub-tickets", gate: :sub_tickets} = state.dispatch_skipped["epic"]
+
+      assert %{kind: "waiting_on_sub_tickets", word: "Waiting on its sub-tickets", cause: "1 of 2 done.", waits_on: %{sub_tickets: ["MT-72"]}} =
+               situation(state, "epic", @waiting, %{sub_issues: subs})
+
+      # The record may know none of them yet: the pass's hold still says what it waits on.
+      assert %{kind: "waiting_on_sub_tickets", cause: "Its sub-tickets are still open."} = situation(state, "epic", @waiting)
     end
 
     test "a Merging ticket held until CI settles waits for CI" do

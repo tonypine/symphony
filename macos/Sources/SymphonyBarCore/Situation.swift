@@ -82,10 +82,7 @@ public struct Situation: Equatable, Decodable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let name = try container.decode(String.self, forKey: .kind)
-        guard let kind = DesignTokens.SituationKind(apiKind: name) else {
-            throw DecodingError.dataCorruptedError(forKey: .kind, in: container, debugDescription: "No situation kind \(name)")
-        }
+        let kind = DesignTokens.SituationKind(reading: try container.decode(String.self, forKey: .kind))
         self.kind = kind
         word = try container.decodeIfPresent(String.self, forKey: .word) ?? kind.word
         cause = try container.decodeIfPresent(String.self, forKey: .cause) ?? ""
@@ -97,7 +94,8 @@ public struct Situation: Equatable, Decodable {
         retry = try container.decodeIfPresent(Retry.self, forKey: .retry)
     }
 
-    /// The `situation` object as JSON; nil for anything else, or a kind outside the vocabulary.
+    /// The `situation` object as JSON; nil for anything else. A kind outside the vocabulary reads as `unknown`, with
+    /// the served word and cause.
     public static func decode(_ data: Data) -> Situation? {
         try? JSONDecoder().decode(Situation.self, from: data)
     }
@@ -138,6 +136,7 @@ extension DesignTokens.SituationKind {
         case .you: "waiting_on_you"
         case .retrying: "retrying"
         case .blocked: "blocked_by_ticket"
+        case .subTickets: "waiting_on_sub_tickets"
         case .paused: "paused_by_rule"
         case .ci: "waiting_for_ci"
         case .build: "waiting_for_build"
@@ -145,12 +144,19 @@ extension DesignTokens.SituationKind {
         case .working: "working"
         case .done: "done"
         case .cancelled: "cancelled"
+        case .unknown: "unknown"
         }
     }
 
     public init?(apiKind: String) {
         guard let kind = Self.byAPIKind[apiKind] else { return nil }
         self = kind
+    }
+
+    /// The kind a served situation reads as: its own, or `unknown` for one this app does not know, so a newer
+    /// Symphony's kind is never drawn as another one's (a slot's clock and words).
+    public init(reading apiKind: String) {
+        self = Self.byAPIKind[apiKind] ?? .unknown
     }
 
     /// Every kind by its name in the API, so a table of a thousand rows reads each one's kind by a lookup.
