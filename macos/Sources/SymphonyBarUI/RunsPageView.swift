@@ -65,13 +65,16 @@ public struct RunsPageView: View {
     let page: RunsPage
     let actions: RunsPageActions
     let drawn: RunsPageDrawn?
+    /// Snapshots draw the list unscrolled, its whole height: a picture renderer draws a scroll view empty.
+    let scrolls: Bool
     /// Bumped at each reorder, so a list the editor didn't take (a refused move) is drawn again from the page's order.
     @State private var reorders = 0
 
-    public init(page: RunsPage, actions: RunsPageActions, drawn: RunsPageDrawn? = nil) {
+    public init(page: RunsPage, actions: RunsPageActions, drawn: RunsPageDrawn? = nil, scrolls: Bool = true) {
         self.page = page
         self.actions = actions
         self.drawn = drawn
+        self.scrolls = scrolls
     }
 
     public var body: some View {
@@ -81,15 +84,22 @@ public struct RunsPageView: View {
                 .frame(maxWidth: tokens.maxWidth)
                 .padding(.top, tokens.top)
                 .padding(.horizontal, tokens.sides)
-            ScrollView {
-                list
-                    .frame(maxWidth: tokens.maxWidth)
-                    .padding(.horizontal, tokens.sides)
-                    .padding(.bottom, tokens.bottom)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if scrolls {
+                ScrollView { content }
+            } else {
+                content
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private var content: some View {
+        let tokens = DesignTokens.RunsPage.self
+        return list
+            .frame(maxWidth: tokens.maxWidth)
+            .padding(.horizontal, tokens.sides)
+            .padding(.bottom, tokens.bottom)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var saveState: SaveBarState {

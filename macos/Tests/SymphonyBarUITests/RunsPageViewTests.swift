@@ -76,6 +76,10 @@ final class RunsPageViewTests: XCTestCase {
             host.layoutSubtreeIfNeeded()
             XCTAssertEqual(shown.save, save)
         }
+        let unscrolled = NSHostingView(rootView: RunsPageView(page: page, actions: .none, scrolls: false))
+        unscrolled.frame = CGRect(x: 0, y: 0, width: 1180, height: 900)
+        unscrolled.layoutSubtreeIfNeeded()
+        XCTAssertGreaterThan(unscrolled.fittingSize.height, 400, "unscrolled, the page is drawn at its whole height")
         XCTAssertEqual(RunsPageDrawn(modelOpen: ("qa", 1)), RunsPageDrawn(modelOpen: ("qa", 1)))
         XCTAssertNotEqual(RunsPageDrawn(modelOpen: ("qa", 1)), RunsPageDrawn(dragging: ("qa", 1)))
     }

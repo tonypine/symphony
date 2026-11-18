@@ -37,11 +37,13 @@ func runsPageState(_ change: (inout RunsPage) -> Void = { _ in }) -> RunsPage {
     return page
 }
 
-/// The page in a window `window` pt wide, beside the sidebar.
+/// The page in a window `window` pt wide, beside the sidebar, drawn unscrolled at its whole height: the picture
+/// renderer draws a scroll view empty.
 @MainActor
 func runsScreen(_ page: RunsPage, drawn: RunsPageDrawn? = nil, window: CGFloat) -> some View {
-    RunsPageView(page: page, actions: .none, drawn: drawn)
-        .frame(width: window - DesignTokens.Layout.sidebarWidth, height: 900, alignment: .top)
+    RunsPageView(page: page, actions: .none, drawn: drawn, scrolls: false)
+        .frame(width: window - DesignTokens.Layout.sidebarWidth, alignment: .top)
+        .fixedSize(horizontal: false, vertical: true)
         .background(DesignTokens.Surface.window.color)
 }
 
