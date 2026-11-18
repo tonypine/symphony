@@ -600,9 +600,11 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     # An update's pause is nobody's: neither its skip line nor its log line names the operator (TP-1315).
     {:ok, _pause} = Pauses.set(:symphony, Pauses.dispatch_reason("updating to v0.0.1.756"))
 
+    # The orchestrator's own tick may log the pause before the capture starts, and logs it once;
+    # each check below starts from a pause not yet logged (TP-1546).
     log =
       capture_log(fn ->
-        assert skipped_after.(%{}) == %{
+        assert skipped_after.(%{operator_pause_logged: false}) == %{
                  "runnable" => "dispatch is paused: updating to v0.0.1.756",
                  "blocked" => "Waiting for MT-7 to finish"
                }

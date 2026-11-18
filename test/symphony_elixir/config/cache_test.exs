@@ -116,6 +116,43 @@ defmodule SymphonyElixir.Config.CacheTest do
     end
   end
 
+  describe "a good load that a clear overtakes" do
+    test "returns what it read but leaves the cleared cache empty", %{root: root} do
+      # No watcher: only this test's reads may read the file.
+      Application.put_env(:symphony_elixir, :config_cache_watch, false)
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :config_cache_file_reader) end)
+      symphony_path = Path.join(root, "symphony.yml")
+      File.write!(symphony_path, config(1))
+      key = {Cache, :symphony, Path.expand(symphony_path)}
+
+      # A test rewrites the file and clears the cache while this read has the old file in hand: the
+      # read must not cache the file the clear dropped, or the next read serves it as the last good one.
+      Application.put_env(:symphony_elixir, :config_cache_file_reader, fn path ->
+        content = File.read(path)
+        Cache.clear()
+        content
+      end)
+
+      assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
+      assert :persistent_term.get(key, nil) == nil
+
+      # The same for an invalidate.
+      Application.put_env(:symphony_elixir, :config_cache_file_reader, fn path ->
+        content = File.read(path)
+        Cache.invalidate(path)
+        content
+      end)
+
+      assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
+      assert :persistent_term.get(key, nil) == nil
+
+      # With nothing in between, the load is cached.
+      Application.delete_env(:symphony_elixir, :config_cache_file_reader)
+      assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
+      assert %Cache.Entry{} = :persistent_term.get(key, nil)
+    end
+  end
+
   describe "a symphony.yml edit the schema rejects" do
     test "keeps the last good config, says since when, and reads the rejected file only once", %{root: root} do
       # No watcher: only this test's reads may read the file.

@@ -21,6 +21,8 @@ defmodule SymphonyElixir.Config.Cache do
 
   @index_key {__MODULE__, :index}
   @watched_dirs_key {__MODULE__, :watched_dirs}
+  # Bumped by every `clear/0` and `invalidate/1`: a load that began before one doesn't cache what it read.
+  @generation_key {__MODULE__, :generation}
   @stale_option [stale: true]
   @telemetry_stale_event [:symphony, :config, :cache, :stale]
   @telemetry_reloaded_event [:symphony, :config, :cache, :reloaded]
@@ -121,6 +123,7 @@ defmodule SymphonyElixir.Config.Cache do
     path = Path.expand(path)
     stale = for kind <- [:workflow, :symphony], do: cache_key(kind, path)
     keys = :persistent_term.get(@index_key, MapSet.new())
+    bump_generation()
     Enum.each(stale, &:persistent_term.erase/1)
     :persistent_term.put(@index_key, MapSet.difference(keys, MapSet.new(stale)))
     if Enum.any?(stale, &MapSet.member?(keys, &1)), do: reloaded(path)
@@ -175,32 +178,33 @@ defmodule SymphonyElixir.Config.Cache do
   def handle_info(_message, state), do: {:noreply, state}
 
   defp cached(kind, path) do
+    generation = generation()
     path = Path.expand(path)
     key = cache_key(kind, path)
     ensure_watch(path)
 
     case :persistent_term.get(key, nil) do
-      %Entry{} = entry -> refresh_entry(entry, loader_for(kind))
-      nil -> load_entry(kind, path, loader_for(kind))
+      %Entry{} = entry -> refresh_entry(entry, loader_for(kind), generation)
+      nil -> load_entry(kind, path, loader_for(kind), generation)
     end
   end
 
   defp loader_for(:symphony), do: &load_symphony/1
   defp loader_for(:workflow), do: &load_workflow/1
 
-  defp refresh_entry(%Entry{} = entry, loader) do
+  defp refresh_entry(%Entry{} = entry, loader, generation) do
     case current_stamp(entry.path) do
       {:ok, stamp} ->
         if current?(entry, stamp) and instructions_current?(entry.instructions),
           do: entry_result(entry),
-          else: load_entry(entry.kind, entry.path, loader, entry, stamp)
+          else: load_entry(entry.kind, entry.path, loader, generation, entry, stamp)
 
       {:error, reason} ->
         stale_entry(entry, {:missing_file, reason}, nil)
     end
   end
 
-  defp load_entry(kind, path, loader, previous \\ nil, known_stamp \\ nil) do
+  defp load_entry(kind, path, loader, generation, previous \\ nil, known_stamp \\ nil) do
     with {:ok, stamp} <- stamp_for(path, known_stamp),
          {:ok, value, instructions} <- loader.(path) do
       entry = %Entry{
@@ -212,7 +216,9 @@ defmodule SymphonyElixir.Config.Cache do
         updated_at: System.system_time(:millisecond)
       }
 
-      put_entry(entry)
+      # Not over a `clear/0` or an `invalidate/1` that ran while the file was read: the file this
+      # load read may be the one they dropped, and the next read would serve it (TP-1546).
+      if generation() == generation, do: put_entry(entry)
       if previous, do: reloaded(path)
       {:ok, value}
     else
@@ -281,14 +287,19 @@ defmodule SymphonyElixir.Config.Cache do
 
   # A file event refreshes the entries that read `path`; the refresh emits the reload when it finds one.
   defp reload_path(path) do
+    generation = generation()
+
     :persistent_term.get(@index_key, MapSet.new())
     |> Enum.each(fn key ->
       case :persistent_term.get(key, nil) do
-        %Entry{path: ^path, kind: kind} = entry -> refresh_entry(entry, loader_for(kind))
+        %Entry{path: ^path, kind: kind} = entry -> refresh_entry(entry, loader_for(kind), generation)
         _entry -> :ok
       end
     end)
   end
+
+  defp generation, do: :persistent_term.get(@generation_key, 0)
+  defp bump_generation, do: :persistent_term.put(@generation_key, generation() + 1)
 
   defp reloaded(path), do: :telemetry.execute(@telemetry_reloaded_event, %{count: 1}, %{path: path})
 
@@ -481,6 +492,8 @@ defmodule SymphonyElixir.Config.Cache do
   # the index back from the copy they read, so one key can drop out of it, and an entry the index
   # no longer names would outlive every clear (TP-1545).
   defp do_clear do
+    bump_generation()
+
     for {{__MODULE__, kind, _path} = key, _entry} when kind in [:symphony, :workflow] <- :persistent_term.get() do
       :persistent_term.erase(key)
     end
