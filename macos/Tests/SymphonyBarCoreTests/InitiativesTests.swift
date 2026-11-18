@@ -5,10 +5,10 @@ import XCTest
 final class InitiativesTests: XCTestCase {
     // MARK: - The shipped fixture
 
-    func testTheFixtureHasTwoActiveInitiativesOneInReviewAndOneDone() throws {
+    func testTheFixtureGroupsActiveAndInReviewTogetherAndDoneRecently() throws {
         let list = InitiativesList(initiatives: try payload().initiatives)
-        XCTAssertEqual(list.sections.map(\.title), ["Active", "In review", "Done recently"])
-        XCTAssertEqual(list.sections.map { $0.initiatives.map(\.identifier) }, [["BIL-200", "DOCS-20"], ["SHOP-330"], ["SHOP-300"]])
+        XCTAssertEqual(list.sections.map(\.title), ["Active", "Done recently"])
+        XCTAssertEqual(list.sections.map { $0.initiatives.map(\.identifier) }, [["BIL-200", "DOCS-20", "SHOP-330"], ["SHOP-300"]])
         XCTAssertEqual(list.active.map(\.identifier), ["BIL-200", "DOCS-20"])
         XCTAssertEqual(list.selection(nil)?.identifier, "BIL-200")
         XCTAssertEqual(list.selection("p-20")?.identifier, "DOCS-20")

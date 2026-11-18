@@ -430,7 +430,7 @@ extension Initiative.SubTicket {
     }
 }
 
-/// The Initiatives list under the window's scope, grouped as Active, In review and Done recently.
+/// The Initiatives list under the window's scope, grouped as Active (including the plans in review) and Done recently.
 public struct InitiativesList: Equatable {
     public struct Section: Equatable, Identifiable {
         public var group: Initiative.Group
@@ -456,9 +456,12 @@ public struct InitiativesList: Equatable {
             }
             return initiative
         }
-        sections = Initiative.Group.allCases.compactMap { group in
-            let inGroup = shown.filter { $0.group == group }
-            return inGroup.isEmpty ? nil : Section(group: group, initiatives: inGroup)
+        let sectionGroups: [(section: Initiative.Group, members: [Initiative.Group])] = [
+            (.active, [.active, .inReview]), (.done, [.done]),
+        ]
+        sections = sectionGroups.compactMap { section in
+            let inGroup = shown.filter { section.members.contains($0.group) }
+            return inGroup.isEmpty ? nil : Section(group: section.section, initiatives: inGroup)
         }
     }
 

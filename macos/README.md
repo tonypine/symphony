@@ -1092,8 +1092,8 @@ Home the first time, and on the page it showed last after that.
 
 - **Initiatives** follows each plan you approved to done (`/api/v1/initiatives`), as designed in TP-1500: the
   epics at the left (340 pt, 400 pt from 1600 pt of content, where the two columns are centred and the story stops
-  at 1040 pt), the picked epic's story at the right. Each epic is a card under "Active", "In review" or "Done
-  recently" (a label with none is not drawn): its identifier and "3 of 26 done", its title on at most two lines, its
+  at 1040 pt), the picked epic's story at the right. Each epic is a card under "Active" (including a plan in review)
+  or "Done recently" (a label with none is not drawn): its identifier and "3 of 26 done", its title on at most two lines, its
   progress strip, and only what is not done ("1 working · 22 waiting"), or, once it landed, "Landed Mon 9 Nov". The
   picked card has the accent ring, grey while the window is behind another; Up and Down move through the epics, and
   Tab goes on into the story. The story's head gives the identifier, the repo chip and **Open TP-1441** (the ticket

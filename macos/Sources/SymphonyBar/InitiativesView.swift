@@ -95,7 +95,7 @@ struct InitiativeActions {
     var inbox: Set<String> = []
     /// Review on a sub-ticket that waits on the Director opens its Inbox item, by issue id.
     var review: (String) -> Void = { _ in }
-    /// Any other row opens the ticket's page, by identifier.
+    /// A row opens the ticket's page, by identifier.
     var openTicket: (String) -> Void = { _ in }
     var openURL: (URL) -> Void = { _ in }
 }
@@ -393,8 +393,8 @@ struct InitiativeStoryView: View {
 }
 
 /// One sub-ticket of the story on the shared story row: its mark for its state, and at the right what matters for it,
-/// or, for one being worked on, its situation under its title, its step bars and how long. Review when it waits on the
-/// Director in the Inbox; else the row opens the ticket's page.
+/// or, for one being worked on, its situation under its title, its step bars and how long. A row opens the ticket's
+/// page; Review on one that waits on the Director opens its Inbox item instead.
 struct InitiativeStoryRow: View {
     let row: InitiativeStory.Row
     var run: RunGroupModel?
@@ -450,6 +450,6 @@ struct InitiativeStoryRow: View {
     private var reviewIssueID: String? { row.ticket?.reviewIssueID(inbox: actions.inbox) }
 
     private func open() {
-        if let issueID = reviewIssueID { actions.review(issueID) } else { actions.openTicket(row.identifier) }
+        actions.openTicket(row.identifier)
     }
 }
