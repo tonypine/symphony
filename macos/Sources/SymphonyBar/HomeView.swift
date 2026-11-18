@@ -4,9 +4,9 @@ import SymphonyBarUI
 
 /// What Home's rows do.
 struct HomeActions {
-    /// A double click on a ticket's row, or Return on it, opens the ticket's page, by identifier; a click picks it.
+    /// A click on a ticket's row, or Return on it, opens the ticket's page, by identifier.
     var openTicket: (String) -> Void = { _ in }
-    /// A double click on an epic's row, or Return on it, opens Initiatives on the epic, by issue id.
+    /// A click on an epic's row, or Return on it, opens Initiatives on the epic, by issue id.
     var openEpic: (String) -> Void = { _ in }
     /// A row's button, or Space on its row: the move the read names (Answer, Unblock), through the ticket page's path.
     var perform: (HomeLists.Row) -> Void = { _ in }
@@ -150,7 +150,7 @@ struct HomeRow: View {
     var body: some View {
         Row(
             row.title, identifier: row.identifier, lead: lead, value: row.value, valueWidth: DesignTokens.Row.homeValueWidth,
-            selected: state.selected, focused: state.focused, open: open
+            selected: state.selected, focused: state.focused, open: open, opensOnClick: true
         ) {
             if let after = row.after {
                 HStack(spacing: DesignTokens.Space.s1) {

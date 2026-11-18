@@ -1,0 +1,62 @@
+{
+  "items": [
+    {
+      "ask": "Prorate a mid-cycle plan change by the day, or start the new price at the next cycle?",
+      "context": {
+        "blocked_by": [],
+        "blocks": [],
+        "earlier_decisions": [],
+        "parent": null,
+        "pull_request": null,
+        "related": []
+      },
+      "identifier": "BIL-306",
+      "issue_id": "issue-bil-306",
+      "kind": "action",
+      "references": {},
+      "repo_key": "billing",
+      "review": {
+        "comment_id": "c-306-request",
+        "confirm": null,
+        "if_unanswered": "BIL-306 stays in In Progress with the plan change unpriced.",
+        "options": [
+          {
+            "effect": "The next run charges or credits the difference for the days left in the cycle.",
+            "label": "Prorate by the day",
+            "recommended": true,
+            "tradeoffs": [
+              {
+                "kind": "good",
+                "text": "Customers pay for what they use."
+              }
+            ]
+          },
+          {
+            "effect": "The next run keeps the old price until the cycle ends and starts the new one after.",
+            "label": "Start at the next cycle",
+            "recommended": false,
+            "tradeoffs": [
+              {
+                "kind": "cost",
+                "text": "An upgrade waits up to a month for its price."
+              }
+            ]
+          }
+        ],
+        "question": "BIL-306 (Proration when a plan changes mid-cycle) changes a customer's plan in the middle of a billing cycle. Should the price change prorate by the day, or start at the next cycle?",
+        "question_id": "q-306",
+        "recommendation_reason": "Daily proration is what the pricing page promises.",
+        "requested_at": "2026-10-07T11:08:00Z",
+        "steps": [],
+        "title": "Prorate a mid-cycle plan change by the day, or start the new price at the next cycle?",
+        "unblocks": "BIL-306",
+        "why": "The run reached the plan change and found no rule for the days left in the cycle. The pricing page promises a fair charge."
+      },
+      "state": "In Progress",
+      "title": "Proration when a plan changes mid-cycle",
+      "url": "https://linear.app/acme/issue/BIL-306",
+      "waiting_seconds": 600,
+      "waiting_since": "2026-10-07T11:08:00Z"
+    }
+  ]
+}

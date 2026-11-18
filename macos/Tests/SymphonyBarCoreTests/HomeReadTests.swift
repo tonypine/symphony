@@ -189,13 +189,28 @@ final class HomeReadTests: XCTestCase {
         XCTAssertNil(TreeLines.end([TreeLine<String>](), last: true))
     }
 
+    /// The QA fixture's Inbox holds the question of every row that offers Answer, so Answer opens it in the drawer
+    /// instead of leaving the drawer reading.
+    func testTheFixturesInboxHoldsTheQuestionOfEveryAnswerRow() throws {
+        let answering = try lists().rows.values.filter { $0.move?.name == "answer" }.map(\.identifier).sorted()
+        XCTAssertEqual(answering, ["BIL-306"])
+        let inbox = try XCTUnwrap(InboxPayload.decode(Data(contentsOf: fixture("inbox.json"))))
+        for identifier in answering {
+            let item = try XCTUnwrap(inbox.items.first { $0.identifier == identifier }, identifier)
+            XCTAssertTrue(item.isDecision, identifier)
+        }
+    }
+
     private func lists() throws -> HomeLists {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/director-app/home/api/v1/home.json")
-        let read = try XCTUnwrap(HomeRead.decode(try Data(contentsOf: url)))
+        let read = try XCTUnwrap(HomeRead.decode(try Data(contentsOf: fixture("home.json"))))
         return HomeLists(read: read, reference: reference)
+    }
+
+    private func fixture(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/home/api/v1/\(name)")
     }
 
     // MARK: - No read to show

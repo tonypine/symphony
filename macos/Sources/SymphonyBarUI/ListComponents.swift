@@ -50,7 +50,8 @@ public struct RowValue: View {
 /// column at least `valueWidth` wide so a list's values align. It shows hover, pressed (settling to 99.5 %), selected
 /// (the accent fill with white words; the pressed grey with the words in their colours when the window is not in
 /// front) and the keyboard focus ring; `current` marks the page's own item with the accent tint. A click calls
-/// `select`, a double click or Return `open`; with either, the row takes keyboard focus unless its list owns it
+/// `select`, a double click or Return `open`; with `opensOnClick` a click calls `open` (a button in its trail keeps its
+/// own click). With either, the row takes keyboard focus unless its list owns it
 /// (`focused`). VoiceOver reads it as one element. `state` draws one state still, for a snapshot.
 public struct Row<Trail: View>: View {
     let title: String
@@ -66,6 +67,7 @@ public struct Row<Trail: View>: View {
     let windowActive: Bool?
     let select: (() -> Void)?
     let open: (() -> Void)?
+    let opensOnClick: Bool
     let trail: Trail
 
     @State private var hovered = false
@@ -79,7 +81,7 @@ public struct Row<Trail: View>: View {
         _ title: String, identifier: String? = nil, lead: RowLead = .none, line2: String? = nil, value: String? = nil,
         valueWidth: Double = DesignTokens.Row.valueWidth, selected: Bool = false, current: Bool = false, focused: Bool? = nil,
         state: DesignTokens.Interaction? = nil, windowActive: Bool? = nil,
-        select: (() -> Void)? = nil, open: (() -> Void)? = nil, @ViewBuilder trail: () -> Trail
+        select: (() -> Void)? = nil, open: (() -> Void)? = nil, opensOnClick: Bool = false, @ViewBuilder trail: () -> Trail
     ) {
         self.title = title
         self.identifier = identifier
@@ -94,6 +96,7 @@ public struct Row<Trail: View>: View {
         self.windowActive = windowActive
         self.select = select
         self.open = open
+        self.opensOnClick = opensOnClick
         self.trail = trail()
     }
 
@@ -140,7 +143,7 @@ public struct Row<Trail: View>: View {
             .focusEffectDisabled()
             .focused($focused)
             // After focus, so Return reaches it from the focused row: key presses go up from the focused view.
-            .modifier(RowActions(select: select, open: open))
+            .modifier(RowActions(select: select, open: open, opensOnClick: opensOnClick))
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(state.selected ? .isSelected : [])
     }
@@ -241,18 +244,19 @@ extension Row where Trail == EmptyView {
     }
 }
 
-/// A row's click, double click and Return, and the same as VoiceOver actions; nothing when it has neither.
+/// A row's click, double click and Return, and the same as VoiceOver actions; nothing when it has neither. A row that
+/// opens on a click takes the click as its own gesture, not beside its children's, so a button in its trail presses
+/// the button and nothing else.
 private struct RowActions: ViewModifier {
     let select: (() -> Void)?
     let open: (() -> Void)?
+    var opensOnClick = false
 
     func body(content: Content) -> some View {
         if select == nil, open == nil {
             content
         } else {
-            content
-                .onTapGesture(count: 2) { open?() }
-                .simultaneousGesture(TapGesture().onEnded { select?() })
+            clicks(content)
                 .onKeyPress(.return) {
                     guard let open else { return .ignored }
                     open()
@@ -260,6 +264,16 @@ private struct RowActions: ViewModifier {
                 }
                 .accessibilityAddTraits(.isButton)
                 .accessibilityAction { (open ?? select)?() }
+        }
+    }
+
+    @ViewBuilder private func clicks(_ content: Content) -> some View {
+        if opensOnClick {
+            content.onTapGesture { (open ?? select)?() }
+        } else {
+            content
+                .onTapGesture(count: 2) { open?() }
+                .simultaneousGesture(TapGesture().onEnded { select?() })
         }
     }
 }
