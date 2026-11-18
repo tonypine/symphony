@@ -6294,11 +6294,13 @@ Minimum endpoints:
     their sub-issues, each sub-issue's state and the issues it is blocked by. A failed read keeps
     the last list. Its Linear requests count as `initiatives`.
   - Each initiative has `issue_id`, `identifier`, `title`, `state`, `repo_key`, `url`, `group`
-    (`active`, `in_review`, `done`), `completed_at`, `sub_tickets`, `counts`
-    and `slot`.
+    (`active`, `in_review`, `done`), `started_at` and `completed_at` (when the tracker says the plan
+    started and finished, or null), `tokens` (the sub-tickets' ended runs' tokens, summed from their
+    ledgers), `sub_tickets`, `counts` and `slot`.
   - `sub_tickets` are the sub-issues in landing order (blocked-by order between them, then creation
     order; a cycle is broken by creation order), canceled ones left out. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
-    `blocked_by` (identifiers), `blockers` (each blocker's `identifier`, `open` and `completed_at`, when
+    `completed_at` (when it landed, or null), `pull_request` (the number of the pull request its
+    record last read, or null), `blocked_by` (identifiers), `blockers` (each blocker's `identifier`, `open` and `completed_at`, when
     Linear says it was completed), `waits_on` and `waiting_for` (the open blockers it waits on when
     `waits_on` is `blocker`). `waits_on` is worked out at GET time from what Symphony knows
     locally: `done` (completed), `working` (the orchestrator runs it), `you` (an Inbox item, a review

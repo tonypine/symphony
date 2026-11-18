@@ -1798,6 +1798,18 @@ defmodule SymphonyElixir.ExtensionsTest do
     initiatives = {:test, make_ref()}
     inbox = {:test, make_ref()}
 
+    # A landed sub-ticket with its PR on its record and three ended runs in its ledger (TP-1500).
+    landed_id = "issue-landed-#{System.unique_integer([:positive])}"
+    on_exit(fn -> RunStore.delete_ticket_state(landed_id) end)
+    pull_request = %{number: 812, url: "https://github.com/example/app/pull/812", state: "merged"}
+    :ok = RunStore.put_ticket_state(TicketState.new("default", landed_id, %{issue_identifier: "MT-LANDED", phase: "Done", pull_request: pull_request}))
+
+    for tokens <- [1_200, %{total_tokens: 300}, nil] do
+      run_id = "run-#{System.unique_integer([:positive])}"
+      payload = if tokens, do: %{run_id: run_id, exit: "success", tokens: tokens}, else: %{run_id: run_id, exit: "success"}
+      {:ok, _event} = TicketEvents.record("default", landed_id, "run.ended", payload, run_id: run_id)
+    end
+
     child = fn identifier, state, type, extra ->
       Map.merge(
         %{
@@ -1853,7 +1865,13 @@ defmodule SymphonyElixir.ExtensionsTest do
         ],
         %{}
       ),
-      plan.("MT-QUEUED", "Waiting on sub-tickets", "started", [], %{})
+      plan.(
+        "MT-QUEUED",
+        "Waiting on sub-tickets",
+        "started",
+        [child.("MT-LANDED", "Done", "completed", %{"id" => landed_id, "completedAt" => "2026-10-03T10:00:00Z"})],
+        %{"startedAt" => "2026-10-01T08:00:00Z"}
+      )
     ]
 
     linear_client = fn query, _variables, _opts ->
@@ -1922,7 +1940,14 @@ defmodule SymphonyElixir.ExtensionsTest do
              ]
            } = hd(listed)
 
-    assert %{"slot" => %{"status" => "queued", "position" => 1}} = Enum.at(listed, 1)
+    assert %{
+             "slot" => %{"status" => "queued", "position" => 1},
+             "started_at" => "2026-10-01T08:00:00Z",
+             "tokens" => 1_500,
+             "sub_tickets" => [%{"identifier" => "MT-LANDED", "completed_at" => "2026-10-03T10:00:00Z", "pull_request" => 812}]
+           } = Enum.at(listed, 1)
+
+    assert %{"sub_tickets" => [%{"pull_request" => nil, "completed_at" => nil} | _rest]} = hd(listed)
     refute Map.has_key?(hd(listed), "final_verification")
     assert %{"slot" => nil} = Enum.at(listed, 2)
 

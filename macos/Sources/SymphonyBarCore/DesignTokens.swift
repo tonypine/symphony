@@ -927,6 +927,12 @@ public enum DesignTokens {
         public static let color = ColorToken.accent
         public static let rowRingWidth: Double = 1.5
         public static let cardRingWidth: Double = 2
+        /// A selectable card's ring (the catalog's `.ini-item[aria-selected]`): 1.5 pt of the accent with the accent
+        /// tint's halo 2.5 pt past it in the front window, 1.5 pt of the strong stroke and no halo behind it.
+        public static let selectableCardRingWidth: Double = 1.5
+        public static let selectableCardHaloWidth: Double = 2.5
+        public static let selectableCardHalo = ColorToken.accentTint
+        public static let inactiveColor = ColorToken.strokeStrong
     }
 
     /// The focus ring (§3.10): the iris at about half strength (`--focus-ring-color`), outside the shape and following
@@ -1179,6 +1185,67 @@ public enum DesignTokens {
             } + (waiting == 0 ? [] : ["\(waiting) \(word(nil))"])
             return parts.isEmpty ? "Nothing yet" : parts.joined(separator: ", ")
         }
+    }
+
+    /// The catalog's story row (`.story-row`, `.panel.story`, `.story-more`, TP-1500): an epic's sub-ticket on one 36 pt
+    /// line, its number in a 22 pt column, its mark in an 18 pt square, its identifier and title, and at the right what
+    /// matters for its state and an arrow. A row being worked on sits on the working tint with a ring of the working
+    /// colour and grows to hold its situation under its title.
+    public enum StoryRow {
+        public static let height: Double = 36
+        public static let numberWidth: Double = 22
+        public static let markSize: Double = 18
+        public static let markGlyph: Double = 15
+        /// Between the number, the mark, the words, the trail and the arrow (`gap: var(--space-3)`).
+        public static let gap = Space.s3
+        /// `padding: 6px var(--space-3) 6px var(--space-2)`; 10 pt above and below on a row being worked on.
+        public static let verticalInset: Double = 6
+        public static let currentVerticalInset: Double = 10
+        public static let leadingInset = Space.s2
+        public static let trailingInset = Space.s3
+        /// Between the title's line and the situation under it (`.what { gap: 3px }`).
+        public static let lineGap: Double = 3
+        public static let arrowSize: Double = 10
+        /// The working ring's strength over the tint (`color-mix(… var(--status-working) 28%, transparent)`).
+        public static let currentRingOpacity: Double = 0.28
+        public static let currentRingWidth: Double = 1
+        public static let currentTitleWeight = 600
+        public static let numberWeight = 400
+        public static let currentNumberWeight = 650
+        /// The step bars' column on a row being worked on (`.mini-steps { width: 72px }`).
+        public static let stepsWidth: Double = 72
+        /// Between the rows of the panel, and the panel's padding (`.panel.story { gap: 2px; padding: var(--space-2) }`).
+        public static let panelGap: Double = 2
+        public static let panelPadding = Space.s2
+        /// The fold's line starts under the marks (`margin-left: calc(22px + var(--space-3))`).
+        public static let foldLeading = numberWidth + gap
+        public static let foldVerticalInset: Double = 6
+        public static let foldHorizontalInset = Space.s2
+    }
+
+    /// Work › Initiatives (TP-1500): the epics' column beside the picked epic's story; from `wideFrom` of content the
+    /// column widens and the two are centred, the story stopping at `storyMaxWidth`.
+    public enum Initiatives {
+        public static let listWidth: Double = 340
+        public static let wideListWidth: Double = 400
+        public static let wideFrom: Double = 1600
+        public static let storyMaxWidth: Double = 1040
+        /// Between the two columns (`gap: var(--space-8)`).
+        public static let columnGap = Space.s8
+        /// Between the epics' cards (`gap: var(--space-2)`), and above a second label (`margin-top: var(--space-6)`).
+        public static let cardGap = Space.s2
+        public static let groupGap = Space.s6
+        /// The card's padding (`padding: var(--space-3) var(--space-4)`) and the gap between its lines (`gap: 6px`).
+        public static let cardVerticalPadding = Space.s3
+        public static let cardHorizontalPadding = Space.s4
+        public static let cardLineGap: Double = 6
+        /// The title's weight on the card (`font: 500 13px/18px`).
+        public static let cardTitleWeight = 500
+        /// The head's lines (`.story-head { gap: var(--space-2) }`) and the title's measure (`max-width: 30em`).
+        public static let headGap = Space.s2
+        public static let titleMaxWidth: Double = 640
+        /// The story's parts (`.ini-main { gap: var(--space-4) }`).
+        public static let storyGap = Space.s4
     }
 
     /// The catalog's Segmented control (`.segmented`, TP-1508): two to five equal segments on a sunken capsule track,

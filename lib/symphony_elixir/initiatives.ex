@@ -38,6 +38,7 @@ defmodule SymphonyElixir.Initiatives do
         identifier
         title
         url
+        startedAt
         completedAt
         state { name type }
         children(first: $childrenFirst) {
@@ -47,6 +48,7 @@ defmodule SymphonyElixir.Initiatives do
             title
             url
             createdAt
+            completedAt
             state { name type }
             inverseRelations(first: $relationsFirst) {
               nodes { type issue { identifier completedAt state { name type } } }

@@ -42,7 +42,7 @@ story of a mapped entry has no variation of its name, naming the story.
 | `components/tooltip` | not built |
 | `components/row` | `Row` |
 | `components/table-header-and-row` | `DataTable` |
-| `components/card` | `Card` and `CardFace` draw it; its stories are not in the gallery one by one yet |
+| `components/card` | `Card` and `CardFace` draw it, and `SelectableCard` its selectable form (Initiatives' epics, TP-1500); its stories are not in the gallery one by one yet |
 | `components/collapsible-card` | `CollapsibleCard` |
 | `components/key-value-list` | `KeyValueList` |
 | `components/timeline-entry` | Drawn inside `TimelineSection`, not shared on its own yet |

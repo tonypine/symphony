@@ -198,22 +198,8 @@ public struct Row<Trail: View>: View {
         }
     }
 
-    @ViewBuilder private func leadView(onAccent: Bool) -> some View {
-        let font = DesignTokens.TypeStyle.font(size: DesignTokens.Row.leadGlyph, weight: DesignTokens.Row.titleWeight)
-        switch lead {
-        case .none, .blank:
-            Color.clear
-        case let .status(status):
-            Image(systemName: status.symbol)
-                .font(font)
-                .foregroundStyle(onAccent ? Self.secondaryColor(onAccent: true) : status.tint)
-        case let .dot(status, live):
-            StatusDot(status, size: .large, live: live)
-        case let .glyph(symbol, colour):
-            Image(systemName: symbol)
-                .font(font)
-                .foregroundStyle(onAccent ? Self.secondaryColor(onAccent: true) : colour.color)
-        }
+    private func leadView(onAccent: Bool) -> some View {
+        RowLeadMark(lead: lead, onAccent: onAccent)
     }
 
     /// Two lines' text: the first's 18 pt, the gap, the second's 16 pt, under the system's text size.
@@ -243,6 +229,32 @@ extension Row where Trail == EmptyView {
             title, identifier: identifier, lead: lead, line2: line2, value: value, valueWidth: valueWidth, selected: selected,
             current: current, focused: focused, state: state, windowActive: windowActive, select: select, open: open
         ) { EmptyView() }
+    }
+}
+
+/// A row's lead as `Row` draws it in its square: a status glyph in its colour, the status dot, a glyph in a colour, or
+/// nothing; the glyphs secondary white on the accent. The story row draws its mark with it too (TP-1500).
+struct RowLeadMark: View {
+    let lead: RowLead
+    var onAccent = false
+    var glyphSize = DesignTokens.Row.leadGlyph
+
+    var body: some View {
+        let font = DesignTokens.TypeStyle.font(size: glyphSize, weight: DesignTokens.Row.titleWeight)
+        switch lead {
+        case .none, .blank:
+            Color.clear
+        case let .status(status):
+            Image(systemName: status.symbol)
+                .font(font)
+                .foregroundStyle(onAccent ? Row<EmptyView>.secondaryColor(onAccent: true) : status.tint)
+        case let .dot(status, live):
+            StatusDot(status, size: .large, live: live)
+        case let .glyph(symbol, colour):
+            Image(systemName: symbol)
+                .font(font)
+                .foregroundStyle(onAccent ? Row<EmptyView>.secondaryColor(onAccent: true) : colour.color)
+        }
     }
 }
 

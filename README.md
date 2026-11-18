@@ -488,8 +488,8 @@ is down.
 **Initiatives.** The Mac app's Initiatives (`/api/v1/initiatives`) follow each plan ticket (`plan`
 or `breakdown`) to done: the active ones, those in review and those done in the last 7 days, each
 with its sub-tickets in landing order (blocked-by order, then creation order), what each waits on
-(you, a blocker, CI, a slot), counts by stage and its lane in
-`epic_lanes`. Symphony reads the plan tickets on its poll and serves them from that read, so a GET
+(you, a blocker, CI, a slot), when each landed and its pull request, counts by stage, the plan's
+start and its tokens, and its lane in `epic_lanes`. Symphony reads the plan tickets on its poll and serves them from that read, so a GET
 makes no Linear request; the reads show as `initiatives` in the Linear usage table.
 
 You answer from the Inbox too. A plan offers **Approve Plan…** and **Send Decisions** (once a pick
