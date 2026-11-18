@@ -92,12 +92,12 @@ SymphonyBar/ReposView.swift button 18
 SymphonyBar/ReposView.swift disabled 11
 SymphonyBar/ReposView.swift field 1
 SymphonyBar/SettingsView.swift font 1
-SymphonyBar/SettingsView.swift color 60
+SymphonyBar/SettingsView.swift color 57
 SymphonyBar/SettingsView.swift number 4
-SymphonyBar/SettingsView.swift button 8
-SymphonyBar/SettingsView.swift disabled 23
+SymphonyBar/SettingsView.swift button 7
+SymphonyBar/SettingsView.swift disabled 21
 SymphonyBar/SettingsView.swift picker 6
-SymphonyBar/SettingsView.swift field 21
+SymphonyBar/SettingsView.swift field 20
 SymphonyBar/SetupView.swift color 29
 SymphonyBar/SetupView.swift number 6
 SymphonyBar/SetupView.swift button 7

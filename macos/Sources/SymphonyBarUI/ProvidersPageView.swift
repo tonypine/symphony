@@ -182,7 +182,7 @@ struct ProviderDetailView: View {
     }
 }
 
-/// The Key block (TP-1540): the key masked, Test connection, then Enable once a test passed or Disable while the
+/// The Key block (TP-1540): the key masked, Test connection while the field holds a key and no test runs, then Enable once a test passed or Disable while the
 /// provider is on, and Remove Key while a key is stored, on one line; under it the test's result on one line, or the
 /// test's spinner while it runs.
 struct ProviderKeyBlock: View {
@@ -200,10 +200,11 @@ struct ProviderKeyBlock: View {
                     size: tokens.control, mono: true, secure: true, onSubmit: { if key.canTest { actions.testKey(id) } }
                 )
                 .accessibilityLabel("\(name) key")
-                Button(ProvidersPage.testTitle) { actions.testKey(id) }
-                    .directorButton(.secondary, size: tokens.control)
-                    .disabled(!key.canTest)
-                    .fixedSize()
+                if key.canTest {
+                    Button(ProvidersPage.testTitle) { actions.testKey(id) }
+                        .directorButton(.secondary, size: tokens.control)
+                        .fixedSize()
+                }
                 if let on = key.toggle {
                     Button(on ? ProvidersPage.enableTitle : ProvidersPage.disableTitle) { actions.setEnabled(id, on) }
                         .directorButton(on ? .primary : .secondary, size: tokens.control)
