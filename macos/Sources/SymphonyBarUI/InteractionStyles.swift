@@ -411,27 +411,65 @@ extension EnvironmentValues {
     }
 }
 
-/// Where focus came from, for the catalog's `:focus-visible` (TP-1498): the ring shows only for focus the keyboard
-/// moved (Tab, the arrow keys), never for the focus the window hands its first control on opening or a click leaves.
+/// Where focus came from, for the catalog's `:focus-visible` (TP-1498): the ring shows only while the keyboard is the
+/// input in use (Tab, the arrow keys), never for the focus the window hands its first control on opening or a click
+/// leaves. Which input is in use is read from the events as the app receives them, not from the event at hand when the
+/// focus change reaches a view: by then the key press that moved it is no longer the app's current event.
 public enum FocusOrigin {
-    /// Whether `event`, the event being handled as focus moves, is a key press.
-    public static func byKeyboard(_ event: NSEvent?) -> Bool { event?.type == .keyDown }
+    /// Whether `event` is a key press that moves the keyboard: a key without ⌘ or ⌃ (a shortcut picks, it does not move
+    /// the focus).
+    public static func byKeyboard(_ event: NSEvent?) -> Bool {
+        guard let event, event.type == .keyDown else { return false }
+        return event.modifierFlags.intersection([.command, .control]).isEmpty
+    }
 
-    /// The event the app is handling now; nil without a running app (a test, the gallery's offscreen render).
-    static var currentEvent: NSEvent? { NSApp?.currentEvent }
+    /// The input in use after `event`: the keyboard after a key press that moves it, not after a click, and as it was
+    /// (`keyboard`) after any other event.
+    public static func keyboard(after event: NSEvent, was keyboard: Bool) -> Bool {
+        switch event.type {
+        case .leftMouseDown, .rightMouseDown, .otherMouseDown: false
+        case .keyDown: byKeyboard(event) ? true : keyboard
+        default: keyboard
+        }
+    }
 }
 
-/// Tracks whether the button it wraps has keyboard focus the keyboard moved there, and hands that to the button's
-/// style.
+/// Whether the keyboard is the input in use, app-wide, for the focus ring: it follows every key press and click the
+/// app receives. Without a running app (a test, the gallery's offscreen render) it stays as it starts, the pointer.
+@MainActor
+public final class InputModality: ObservableObject {
+    public static let shared = InputModality()
+
+    @Published public private(set) var keyboard = false
+    private var monitor: Any?
+
+    init() {
+        guard NSApp != nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+        ) { [weak self] event in
+            self?.receive(event)
+            return event
+        }
+    }
+
+    /// Follows `event`: publishes only a change, so a run of key presses redraws nothing.
+    func receive(_ event: NSEvent) {
+        let next = FocusOrigin.keyboard(after: event, was: keyboard)
+        if next != keyboard { keyboard = next }
+    }
+}
+
+/// Tracks whether the button it wraps has keyboard focus while the keyboard is the input in use, and hands that to the
+/// button's style.
 struct ReportsKeyboardFocus: ViewModifier {
     @FocusState private var focused: Bool
-    @State private var byKeyboard = false
+    @ObservedObject private var modality = InputModality.shared
 
     func body(content: Content) -> some View {
         content
-            .environment(\.buttonKeyboardFocus, focused && byKeyboard)
+            .environment(\.buttonKeyboardFocus, focused && modality.keyboard)
             .focused($focused)
-            .onChange(of: focused) { byKeyboard = focused && FocusOrigin.byKeyboard(FocusOrigin.currentEvent) }
     }
 }
 

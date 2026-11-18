@@ -59,9 +59,9 @@ public struct Sidebar<ID: Hashable>: View {
     let select: (ID) -> Void
 
     @FocusState private var focus: ID?
-    /// Whether the keyboard moved the focus to where it is: the ring shows only then (the catalog's `:focus-visible`),
-    /// never for the focus the window hands its first row on opening, and a click on a row takes it away.
-    @State private var focusByKeyboard = false
+    /// Whether the keyboard is the input in use: the ring shows only then (the catalog's `:focus-visible`), never for
+    /// the focus the window hands its first row on opening, and a click takes it away.
+    @ObservedObject private var modality = InputModality.shared
     @Environment(\.appearsActive) private var appearsActive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
@@ -87,10 +87,9 @@ public struct Sidebar<ID: Hashable>: View {
             ForEach(entries) { entry in
                 SidebarRow(
                     entry: entry, current: entry.id == current, collapsed: collapsed, windowActive: active,
-                    focused: Self.showsRing(focus == entry.id, byKeyboard: focusByKeyboard, windowActive: active),
+                    focused: Self.showsRing(focus == entry.id, byKeyboard: modality.keyboard, windowActive: active),
                     drawn: drawn[entry.id]
                 ) {
-                    focusByKeyboard = FocusOrigin.byKeyboard(FocusOrigin.currentEvent)
                     select(entry.id)
                 }
                     .focused($focus, equals: entry.id)
@@ -109,7 +108,6 @@ public struct Sidebar<ID: Hashable>: View {
         .clipped()
         .animation(.motion(tokens.fold, reduceMotion: reduceMotion), value: collapsed)
         .onMoveCommand(perform: move)
-        .onChange(of: focus) { focusByKeyboard = focus != nil && FocusOrigin.byKeyboard(FocusOrigin.currentEvent) }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(SidebarText.label)
         .accessibilityValue(SidebarText.value(current: entries.first { $0.id == current }?.title))
@@ -122,7 +120,6 @@ public struct Sidebar<ID: Hashable>: View {
 
     /// The arrow keys: the keyboard to the row above or under the one it is on, from the current row.
     private func move(_ direction: MoveCommandDirection) {
-        focusByKeyboard = true
         let ids = entries.map(\.id)
         guard let from = ids.firstIndex(where: { $0 == (focus ?? current) }) else {
             focus = ids.first

@@ -70,6 +70,46 @@ final class SidebarStatusLineTests: XCTestCase {
         XCTAssertFalse(FocusOrigin.byKeyboard(nil), "the focus a window hands on opening")
     }
 
+    // QA (TP-1498): the arrow keys and Tab moved the focus through the rows but no ring showed, because the key press
+    // was read when the focus change reached the view, after it stopped being the app's current event. The input in
+    // use is now followed from the events themselves: a key press turns the ring on, a click turns it off.
+    func testTheKeyboardIsInUseFromAKeyPressUntilAClick() throws {
+        func key(_ characters: String, _ code: UInt16, _ flags: NSEvent.ModifierFlags = []) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.keyEvent(
+                with: .keyDown, location: .zero, modifierFlags: flags, timestamp: 0, windowNumber: 0, context: nil,
+                characters: characters, charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code
+            ))
+        }
+        func mouse(_ type: NSEvent.EventType) throws -> NSEvent {
+            try XCTUnwrap(NSEvent.mouseEvent(
+                with: type, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0, context: nil,
+                eventNumber: 0, clickCount: 1, pressure: 0
+            ))
+        }
+        let down = try key(String(UnicodeScalar(NSDownArrowFunctionKey)!), 125)
+        let shortcut = try key("2", 19, .command)
+
+        let modality = InputModality()
+        XCTAssertFalse(modality.keyboard, "the focus a window hands on opening")
+        modality.receive(shortcut)
+        XCTAssertFalse(modality.keyboard, "a shortcut picks, it does not move the focus")
+        modality.receive(down)
+        XCTAssertTrue(modality.keyboard)
+        modality.receive(try mouse(.leftMouseUp))
+        XCTAssertTrue(modality.keyboard, "only a press ends it")
+        modality.receive(shortcut)
+        XCTAssertTrue(modality.keyboard)
+        modality.receive(try mouse(.leftMouseDown))
+        XCTAssertFalse(modality.keyboard, "after a click")
+        modality.receive(try key("\t", 48))
+        XCTAssertTrue(modality.keyboard)
+        modality.receive(try mouse(.rightMouseDown))
+        XCTAssertFalse(modality.keyboard)
+        modality.receive(down)
+        modality.receive(try mouse(.otherMouseDown))
+        XCTAssertFalse(modality.keyboard)
+    }
+
     func testARowDrawsTheRingOnlyForTheKeyboardsFocusInAWindowInFront() {
         XCTAssertTrue(Sidebar<Place>.showsRing(true, byKeyboard: true, windowActive: true))
         XCTAssertFalse(Sidebar<Place>.showsRing(true, byKeyboard: false, windowActive: true), "after a click")
