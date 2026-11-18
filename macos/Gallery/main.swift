@@ -1238,15 +1238,31 @@ let timelineModel: TimelineModel = {
 /// The timeline in a main column `width` wide: the laptop's (780 pt, the column's widest) or the desktop's (1040 pt,
 /// where the column stops at 780 pt).
 @MainActor
-func timeline(width: CGFloat, selection: String? = nil, unfoldedRuns: Set<String>? = nil) -> some View {
+func timeline(
+    width: CGFloat, selection: String? = nil, unfoldedRuns: Set<String>? = nil, model: TimelineModel = timelineModel,
+    showAllEvents: Bool = false
+) -> some View {
     TimelineSection(
-        model: timelineModel, transcripts: StepTranscripts { _ in .unreachable }, calendar: timelineCalendar,
-        selection: selection, unfoldedRuns: unfoldedRuns
+        model: model, transcripts: StepTranscripts { _ in .unreachable }, calendar: timelineCalendar,
+        selection: selection, unfoldedRuns: unfoldedRuns, showAllEvents: showAllEvents
     )
     .padding(DesignTokens.Space.s5)
     .frame(width: width, alignment: .leading)
     .background(DesignTokens.Surface.content.color)
 }
+
+/// The fixture's timeline with its finding resolved by a later run: the card says so, and no entry of its own does.
+let timelineModelResolved: TimelineModel = {
+    var model = timelineModel
+    for day in model.days.indices {
+        for index in model.days[day].items.indices {
+            guard case var .entry(entry) = model.days[day].items[index], entry.finding != nil else { continue }
+            entry.finding?.resolution = "Resolved in Implementation run 2"
+            model.days[day].items[index] = .entry(entry)
+        }
+    }
+    return model
+}()
 
 // MARK: - The Lifecycle section and the Phase path (TP-1445)
 
@@ -1826,6 +1842,11 @@ MainActor.assumeIsolated {
         render(timeline(width: 780), scheme, to: "timeline-laptop-\(suffix).png")
         render(timeline(width: 1040), scheme, to: "timeline-desktop-\(suffix).png")
         render(timeline(width: 780, selection: "entry-b2", unfoldedRuns: ["run-2", "run-1"]), scheme, to: "timeline-selected-\(suffix).png")
+        // The quieter timeline: the entries that restate the runs folded behind "Show all events", the same timeline
+        // with all events shown, and a finding a later run resolved.
+        render(timeline(width: 780), scheme, to: "timeline-events-folded-\(suffix).png")
+        render(timeline(width: 780, showAllEvents: true), scheme, to: "timeline-all-events-\(suffix).png")
+        render(timeline(width: 780, model: timelineModelResolved), scheme, to: "timeline-finding-resolved-\(suffix).png")
         // The marks (TP-1451): the Timeline title's count, the line where you last looked and the dots above it.
         render(timelineSinceLooked(), scheme, to: "timeline-since-looked-\(suffix).png")
         // The run in place (TP-1452): the run now on top with its newest lines, the no-run line for three situations, and

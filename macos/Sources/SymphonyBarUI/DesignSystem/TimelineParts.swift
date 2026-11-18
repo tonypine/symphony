@@ -92,6 +92,17 @@ struct TimelineFindingCard: View {
                     .font(DesignTokens.TypeStyle.body.font)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let resolution = finding.resolution {
+                Label {
+                    Text(resolution)
+                } icon: {
+                    Image(systemName: DesignTokens.Status.done.symbol)
+                        .foregroundStyle(DesignTokens.Status.done.tint)
+                }
+                .font(DesignTokens.TypeStyle.secondary.font)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
             if !finding.screenshots.isEmpty {
                 HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                     ForEach(finding.screenshots) { shot in

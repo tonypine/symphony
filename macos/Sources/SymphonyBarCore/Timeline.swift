@@ -100,6 +100,10 @@ public struct TimelineEntry: Equatable, Identifiable {
     public var isNew: Bool
     /// What QA found, drawn as the finding card under the entry, with its screenshots.
     public var finding: TimelineFinding?
+    /// It restates what the runs and the moves around it say (a phase entered, a workspace synced, an attempt pushed,
+    /// the PR watcher updating the branch, a short pause that waited on no one): the timeline folds it behind "Show
+    /// all events".
+    public var isMechanical = false
 
     public init(
         id: String, kind: Kind, at: Date, title: String, detail: String? = nil, actor: String, endedAt: Date? = nil,
@@ -163,11 +167,14 @@ public struct TimelineFinding: Equatable {
     public var title: String
     public var text: String?
     public var screenshots: [TicketScreenshot]
+    /// Who resolved it, once a run or a person did: "Resolved in Implementation run 3". Nil while it is open.
+    public var resolution: String?
 
-    public init(title: String, text: String? = nil, screenshots: [TicketScreenshot] = []) {
+    public init(title: String, text: String? = nil, screenshots: [TicketScreenshot] = [], resolution: String? = nil) {
         self.title = title
         self.text = text
         self.screenshots = screenshots
+        self.resolution = resolution
     }
 
     /// The card's badge word.
@@ -197,7 +204,7 @@ public struct TimelineFinding: Equatable {
     /// The card for VoiceOver: "Finding, QA found content clipped, The row is cut at its right edge, 1 screenshot".
     public var accessibilityLabel: String {
         let shots = screenshots.isEmpty ? nil : (screenshots.count == 1 ? "1 screenshot" : "\(screenshots.count) screenshots")
-        return [Self.word, title, text, shots].compactMap { $0 }.joined(separator: ", ")
+        return [Self.word, title, text, shots, resolution].compactMap { $0 }.joined(separator: ", ")
     }
 }
 
@@ -330,6 +337,38 @@ public struct TimelineModel: Equatable {
     }
 
     public static let empty = "Nothing has happened to this ticket yet."
+
+    /// How many entries restate what is around them (`TimelineEntry.isMechanical`): the ones "Show all events" brings.
+    public var mechanicalCount: Int {
+        items.count { item in
+            if case let .entry(entry) = item { return entry.isMechanical }
+            return false
+        }
+    }
+
+    /// The timeline as the page shows it: every entry with `allEvents`, else without the mechanical ones, each day
+    /// that held only those gone with them. The marker stays above the newest item the person saw that still shows.
+    public func showing(allEvents: Bool) -> TimelineModel {
+        guard !allEvents, mechanicalCount > 0 else { return self }
+        let hidden: (TimelineItem) -> Bool = { item in
+            if case let .entry(entry) = item { return entry.isMechanical }
+            return false
+        }
+        var shown = self
+        shown.days = days.compactMap { day in
+            var day = day
+            day.items.removeAll(where: hidden)
+            return day.items.isEmpty ? nil : day
+        }
+        if let marker {
+            let below = items.firstIndex { $0.id == marker.before }.flatMap { index in items[index...].first { !hidden($0) } }
+            shown.marker = below.map { TimelineMarker(lookedAt: marker.lookedAt, before: $0.id) }
+        }
+        return shown
+    }
+
+    /// The toggle at the timeline's head that shows the folded entries.
+    public static let showAllEvents = "Show all events"
 
     /// The item that holds `focus`'s event: the entry it folded into, else its run's group; nil while the history read
     /// holds neither (the page selects and scrolls to it once it does).
@@ -470,6 +509,15 @@ public struct TimelineModel: Equatable {
 
     /// A pause set again this soon after it cleared, for the same reason, is the same pause.
     static let pauseRejoin: TimeInterval = 120
+    /// A pause shorter than this that waited on no person restates the runs around it: it folds behind "Show all
+    /// events".
+    static let shortPause: TimeInterval = 120
+    /// The writes that restate the runs and moves around them: they fold behind "Show all events".
+    static let mechanicalTypes: Set<String> = ["workspace.synced", "workspace.rebuilt", "attempt.pushed"]
+    /// The rule actions that restate a run's work: the PR watcher keeping the branch current.
+    static let mechanicalRuleActions: Set<String> = ["updated_branch"]
+    /// The pause reasons that wait on a person.
+    static let personReasons: Set<String> = ["question", "person"]
     /// A rule's action or a phase entered this close to the entry it caused folds into it.
     static let causeWindow: TimeInterval = 10
 
@@ -489,6 +537,14 @@ public struct TimelineModel: Equatable {
                 continue
             }
             let draft = Draft(event, at: at, order: order, kind: kind(event), actor: actor(event, history: history))
+
+            // A finding resolved says so on its finding's card, not as an entry of its own.
+            if event.type == "finding.resolved", let findingID = event.payload.findingID,
+               let index = drafts.lastIndex(where: { $0.entry.id == findingID && $0.entry.finding != nil }) {
+                drafts[index].entry.finding?.resolution = resolution(event, history: history)
+                drafts[index].fold(event, at: at)
+                continue
+            }
 
             // A pause: its set opens one entry, each reason added or cleared folds into it, and its clear ends it.
             if let slot = pauseSlot(event.type) {
@@ -546,7 +602,12 @@ public struct TimelineModel: Equatable {
 
         // The same write recorded again, with nothing between them, is the one entry.
         var entries: [TimelineEntry] = []
-        for draft in drafts {
+        for var draft in drafts {
+            draft.entry.isMechanical = draft.mechanical
+            if draft.entry.kind == .pause, !draft.waitsOnPerson, let ended = draft.entry.endedAt,
+               ended.timeIntervalSince(draft.entry.at) < shortPause {
+                draft.entry.isMechanical = true
+            }
             if let last = entries.indices.last, draft.slot == nil, entries[last].kind != .pause, entries[last].sameWrite(as: draft.entry) {
                 entries[last].eventIDs += draft.entry.eventIDs
                 entries[last].isNew = entries[last].isNew || draft.entry.isNew
@@ -609,6 +670,10 @@ public struct TimelineModel: Equatable {
         var slot: String?
         var moments: [Date]
         var target: String?
+        /// It restates what is around it (`TimelineEntry.isMechanical`).
+        var mechanical: Bool
+        /// A pause one of whose reasons is a person (a question, a person's hold).
+        var waitsOnPerson: Bool
 
         init(_ event: TicketEventsPayload.Event, at: Date, order: Int, kind: TimelineEntry.Kind, actor: String) {
             let title = event.summary?.title?.trimmedNonEmpty ?? event.type
@@ -616,13 +681,18 @@ public struct TimelineModel: Equatable {
                 ? TimelineFinding.card(description: event.payload.description, screenshots: event.screenshots)
                     ?? TimelineFinding(title: title, screenshots: event.screenshots)
                 : nil
+            // A note a run or a person wrote reads whole: the summary's detail is its first line only.
+            let note = event.type == "note" && event.payload.signal == nil ? event.payload.text?.trimmedNonEmpty : nil
             entry = TimelineEntry(
-                id: event.id, kind: kind, at: at, title: title, detail: event.summary?.detail?.trimmedNonEmpty, actor: actor,
+                id: event.id, kind: kind, at: at, title: title, detail: note ?? event.summary?.detail?.trimmedNonEmpty, actor: actor,
                 isNew: event.isNew, finding: finding
             )
             type = event.type
             self.order = order
             moments = [at]
+            mechanical = (event.type == "phase.entered" && kind != .sendBack) || TimelineModel.mechanicalTypes.contains(event.type)
+                || (event.type == "rule.action" && TimelineModel.mechanicalRuleActions.contains(event.payload.action ?? ""))
+            waitsOnPerson = TimelineModel.personReasons.contains(event.payload.reason ?? "")
             let moves = event.type == "phase.entered" || event.type == "ticket.moved" || event.type == "person.action"
             target = moves ? event.payload.to?.trimmedNonEmpty : nil
         }
@@ -632,6 +702,7 @@ public struct TimelineModel: Equatable {
             entry.eventIDs.append(event.id)
             entry.isNew = entry.isNew || event.isNew
             moments.append(at)
+            if TimelineModel.personReasons.contains(event.payload.reason ?? "") { waitsOnPerson = true }
             guard let also, also != entry.title, !(entry.detail ?? "").contains(also) else { return }
             entry.detail = [entry.detail, also].compactMap { $0 }.joined(separator: "\n")
         }
@@ -704,6 +775,12 @@ public struct TimelineModel: Equatable {
     }
 
     static let you = "You"
+
+    /// The finding card's line for `event`, a `finding.resolved`: the run that resolved it, else who did.
+    static func resolution(_ event: TicketEventsPayload.Event, history: TicketEventsPayload) -> String {
+        if let runID = event.runID, history.runs[runID] != nil { return "Resolved in " + runName(runID, kind: nil, history: history) }
+        return "Resolved by " + actor(event, history: history)
+    }
 
     /// "Rule: blockers first": the rule as the feed names it, by what it does; a Symphony that doesn't name it gives
     /// the payload's name.

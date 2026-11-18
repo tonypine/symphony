@@ -155,17 +155,24 @@ public struct TicketEventsPayload: Equatable {
         public var setter: Setter?
         /// What a finding is (`finding.recorded`), in QA's words.
         public var description: String?
+        /// A note's whole text (`note`); the summary's detail is cut to one line.
+        public var text: String?
+        /// The signal a note of Symphony's stands for (`note`); nil on a note a run or a person wrote.
+        public var signal: String?
+        /// The finding a `finding.resolved` resolves.
+        public var findingID: String?
 
         enum CodingKeys: String, CodingKey {
             case kind, outcome, exit, stepId, title, reason, returnsTo, returnsToTitle, questionId, model, effort, tokens, durationMs
-            case to, from, action, rule, setBy, by, askedBy, description
+            case to, from, action, rule, setBy, by, askedBy, description, text, signal, findingId
         }
 
         public init(
             kind: String? = nil, outcome: String? = nil, exit: String? = nil, stepID: String? = nil, title: String? = nil,
             reason: String? = nil, returnsTo: String? = nil, returnsToTitle: String? = nil, questionID: String? = nil,
             model: String? = nil, effort: String? = nil, tokens: Int? = nil, durationMs: Int? = nil, to: String? = nil,
-            from: String? = nil, action: String? = nil, rule: String? = nil, setter: Setter? = nil, description: String? = nil
+            from: String? = nil, action: String? = nil, rule: String? = nil, setter: Setter? = nil, description: String? = nil,
+            text: String? = nil, signal: String? = nil, findingID: String? = nil
         ) {
             self.kind = kind
             self.outcome = outcome
@@ -186,6 +193,9 @@ public struct TicketEventsPayload: Equatable {
             self.rule = rule
             self.setter = setter
             self.description = description
+            self.text = text
+            self.signal = signal
+            self.findingID = findingID
         }
 
         public init(from decoder: Decoder) throws {
@@ -201,7 +211,10 @@ public struct TicketEventsPayload: Equatable {
                 setter: [CodingKeys.setBy, .by, .askedBy].lazy.compactMap { key in
                     (try? container?.decodeIfPresent(Setter.self, forKey: key)) ?? nil
                 }.first,
-                description: text(.description)
+                description: text(.description),
+                text: text(.text),
+                signal: text(.signal),
+                findingID: text(.findingId)
             )
         }
     }
