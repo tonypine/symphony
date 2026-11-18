@@ -1,0 +1,145 @@
+name: flaky sweep
+
+# Runs the whole test suite many times in CI's four coverage partitions, each run with its own
+# seed, and lists every test that failed in any run (its partition, seed and failure) in the run's
+# summary and as annotations. Started by hand from the Actions tab; it never runs on pull requests
+# or on main.
+on:
+  workflow_dispatch:
+    inputs:
+      runs:
+        description: Suite runs per partition
+        type: number
+        default: 20
+  # TEMPORARY (TP-1546): lists the sweep's failures on this ticket's branch before the workflow is
+  # on main, where workflow_dispatch can start it. Removed before the handoff.
+  push:
+    branches:
+      - auto/TP-1546
+
+permissions:
+  contents: read
+
+jobs:
+  runs:
+    name: runs
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+
+    steps:
+      - name: List the runs
+        id: list
+        env:
+          RUNS: ${{ inputs.runs || 20 }}
+        run: echo "list=$(jq -nc --argjson n "$RUNS" '[range(1; $n + 1)]')" >> "$GITHUB_OUTPUT"
+
+  sweep:
+    name: sweep (${{ matrix.partition }}/4, run ${{ matrix.run }})
+    runs-on: ubuntu-latest
+    needs: runs
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: [1, 2, 3, 4]
+        run: ${{ fromJSON(needs.runs.outputs.list) }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Set up mise tools
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+        with:
+          install: true
+          cache: true
+
+      - name: Restore deps and build
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
+        with:
+          path: |
+            deps
+            _build/test/lib
+          key: ${{ runner.os }}-mix-test-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-mix-test-${{ hashFiles('mix.lock', 'mix.exs', 'mise.toml') }}-
+            ${{ runner.os }}-mix-test-
+
+      - name: Install dependencies
+        run: time mix deps.get
+
+      # The same sandbox tools as make-all's coverage job, so the `:bwrap` tests run here too.
+      - name: Install the dev server sandbox tools
+        run: |
+          scripts/ci/apt-install.sh bubblewrap socat
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+
+      - name: Compile
+        run: time MIX_ENV=test mix compile
+
+      # As make-all's coverage job runs it, with a seed of this run's own. A failing run doesn't
+      # fail the job: the report job lists it.
+      - name: Run the partition
+        timeout-minutes: 30
+        env:
+          MIX_TEST_PARTITION: ${{ matrix.partition }}
+          RUN: ${{ matrix.run }}
+        run: |
+          seed=$(( (GITHUB_RUN_ID + RUN * 104729 + MIX_TEST_PARTITION * 7919) % 1000000 ))
+          echo "SWEEP_SEED=$seed" >> "$GITHUB_ENV"
+          echo "seed $seed"
+          time mix test --cover --partitions 4 --seed "$seed" > "$RUNNER_TEMP/test.log" 2>&1 || true
+          tail -n 60 "$RUNNER_TEMP/test.log"
+
+      - name: Record the failures
+        if: always()
+        env:
+          PARTITION: ${{ matrix.partition }}
+          RUN: ${{ matrix.run }}
+        run: |
+          mkdir -p sweep-rows
+          sh scripts/ci/sweep-failures.sh rows "$PARTITION" "${SWEEP_SEED:-unknown}" "$RUNNER_TEMP/test.log" \
+            > "sweep-rows/rows-$PARTITION-$RUN.md"
+          cat "sweep-rows/rows-$PARTITION-$RUN.md"
+
+      - name: Upload the failures
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: sweep-rows-${{ matrix.partition }}-${{ matrix.run }}
+          path: sweep-rows/
+          if-no-files-found: error
+          retention-days: 7
+
+  report:
+    name: report
+    runs-on: ubuntu-latest
+    needs: sweep
+    if: ${{ !cancelled() }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - name: Test the failure report
+        run: sh scripts/ci/sweep-failures-test.sh
+
+      - name: Download the failures
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
+        with:
+          pattern: sweep-rows-*
+          path: sweep-rows
+          merge-multiple: true
+
+      # The table goes to the run's summary and the log; each failure is an annotation too, which
+      # reads without admin rights. The job fails when any run failed.
+      - name: Report
+        run: |
+          status=0
+          sh scripts/ci/sweep-failures.sh report sweep-rows > report.md || status=$?
+          cat report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+          cat sweep-rows/*.md 2>/dev/null | awk -F' [|] ' '{ printf "::error title=Flaky: %s::partition %s, seed %s: %s\n", $3, substr($1, 3), $2, $5 }' || true
+          exit "$status"
