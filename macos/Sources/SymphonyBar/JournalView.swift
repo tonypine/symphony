@@ -174,7 +174,8 @@ struct JournalContent: View {
                     model: model.journalModel, query: $model.journalQuery, values: model.journalFilterValues,
                     readingEarlier: model.journalReadingEarlier, questions: model.journalReportQuestions,
                     sending: model.holdsAnswer || model.inboxMoveInFlight, open: model.openJournalRow,
-                    showEarlier: model.showEarlierJournal, openCitation: model.openCitation, openMention: model.openMentionDirectly
+                    showEarlier: model.showEarlierJournal, openCitation: model.openCitation, openMention: model.openMentionDirectly,
+                    page: model.pageBar
                 )
                 // The banner of an answer sent from a report's card, with its Undo.
                 if let banner = model.inboxBanner {
@@ -210,6 +211,8 @@ struct JournalView: View {
     var showEarlier: () -> Void = {}
     var openCitation: (TimelineFocus) -> Void = { _ in }
     var openMention: (Mention) -> Void = { _ in }
+    /// The window's part of the bar: the scope (TP-1497).
+    var page = PageBar()
     /// Snapshots draw the list unscrolled, its whole height.
     var scrolls = true
     var calendar: Calendar = .current
@@ -224,8 +227,7 @@ struct JournalView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            JournalFilterBar(query: $query, values: values)
-            Divider()
+            JournalFilterBar(query: $query, values: values, page: page)
             if model.isEmpty {
                 EmptyState(title: JournalModel.emptyTitle(query), symbol: Destination.journal.symbol)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -271,20 +273,18 @@ struct JournalView: View {
     }
 }
 
-/// The filter bar: the Repo, Epic and Class chips, each a menu, and the Reports only and Everything switches, in one bar
-/// that wraps.
+/// The Journal's control bar (TP-1497): the scope, the Journal's one repo chooser as on Learnings, then the Epic and
+/// Class chips, each a menu, and the Reports only and Everything toggles, wrapping on a laptop. Everything in it
+/// narrows the Journal.
 struct JournalFilterBar: View {
     @Binding var query: JournalQuery
     let values: JournalFilterValues
-    @Environment(\.offscreenSnapshot) private var offscreenSnapshot
+    var page = PageBar()
 
     var body: some View {
-        HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
-            WrappingStack(spacing: DesignTokens.Space.s2) {
-                chip(.repo) {
-                    [MenuItem(OverviewScope.allTitle, checked: query.repo == nil) { query.repo = nil }, .separator]
-                        + values.repos.map { repo in MenuItem(repo, checked: query.repo == repo) { query.repo = repo } }
-                }
+        ControlBar("Journal controls") {
+            page.scopePopUp
+            WrappingStack(spacing: DesignTokens.ControlBar.gap) {
                 chip(.epic) {
                     [MenuItem(JournalQuery.allEpics, checked: query.epic == nil) { query.epic = nil }, .separator]
                         + values.epics.map { epic in MenuItem(epic, checked: query.epic == epic) { query.epic = epic } }
@@ -295,42 +295,25 @@ struct JournalFilterBar: View {
                             MenuItem(value.title, checked: query.classes.contains(value)) { query.toggle(value) }
                         }
                 }
+                // The toggles narrow the Journal too: they follow the chips, at the left.
+                filterToggle(JournalQuery.reportsOnlyTitle, isOn: $query.reportsOnly, help: JournalQuery.reportsOnlyHelp)
+                filterToggle(JournalFilter.everything.title, isOn: $query.everything, help: Self.everythingHelp)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            filterSwitch(JournalQuery.reportsOnlyTitle, isOn: $query.reportsOnly)
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .fixedSize()
-                .frame(height: DesignTokens.Control.small.height)
-                .help(JournalQuery.reportsOnlyHelp)
-            filterSwitch(JournalFilter.everything.title, isOn: $query.everything)
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .fixedSize()
-                .frame(height: DesignTokens.Control.small.height)
-                .help(Self.everythingHelp)
         }
-        .padding(.horizontal, DesignTokens.Space.s4)
-        .padding(.vertical, DesignTokens.Space.s2)
     }
 
     static let everythingHelp = "Show every event, not only the notable ones"
 
-    /// A switch of the bar (Reports only, Everything); offscreen, where the AppKit switch can't draw, its face.
-    @ViewBuilder private func filterSwitch(_ title: String, isOn: Binding<Bool>) -> some View {
-        if offscreenSnapshot {
-            HStack(spacing: DesignTokens.Space.s2) {
-                Text(title)
-                Capsule()
-                    .fill(isOn.wrappedValue ? DesignTokens.ColorToken.accent.color : DesignTokens.Surface.separator.color)
-                    .frame(width: 26, height: 15)
-                    .overlay(alignment: isOn.wrappedValue ? .trailing : .leading) {
-                        Circle().fill(.white).frame(width: 13, height: 13).padding(1)
-                    }
-            }
-        } else {
-            Toggle(title, isOn: isOn)
-                .toggleStyle(.switch)
-                .controlSize(.small)
-        }
+    /// A toggle of the bar (Reports only, Everything): the catalog's quiet button, held pressed while it is on, as the
+    /// Tickets bar's details toggle.
+    private func filterToggle(_ title: String, isOn: Binding<Bool>, help: String) -> some View {
+        Button(title) { isOn.wrappedValue.toggle() }
+            .directorButton(.quiet, size: .small, selected: isOn.wrappedValue)
+            .fixedSize()
+            .help(help)
+            .accessibilityAddTraits(.isToggle)
+            .accessibilityValue(isOn.wrappedValue ? "On" : "Off")
     }
 
     /// A filter's chip (C54): its value on the secondary face once set, the quiet form while it isn't.

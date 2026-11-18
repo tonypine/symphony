@@ -75,7 +75,9 @@ public enum WindowBarText {
     public static let forward = "Forward (⌘])"
     public static let findPlaceholder = "Find a ticket"
     public static let findShortcut = "⌘ F"
+    /// The same on every page; on Setup ⌘R also runs Check Again, which is in Setup's own bar (TP-1497).
     public static let refresh = "Refresh (⌘R)"
+    /// Check Again's help, in Setup's control bar.
     public static let checkAgain = "Check Again (⌘R)"
     /// Work's switch, for VoiceOver.
     public static let workSwitch = "Work shows"
@@ -87,9 +89,6 @@ public enum WindowBarText {
     public static func inbox(needYou count: Int) -> String {
         count > 0 ? "Inbox: \(count) need\(count == 1 ? "s" : "") you (⇧⌘I)" : "Inbox (⇧⌘I)"
     }
-
-    /// Refresh's help: Check Again on Setup.
-    public static func refresh(checksSetup: Bool) -> String { checksSetup ? checkAgain : refresh }
 }
 
 /// What a double-click on the bar does, as it does on a title bar: the system's choice in Desktop & Dock ("Double-click

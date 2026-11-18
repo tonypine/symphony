@@ -118,7 +118,11 @@ struct AuditContent: View {
                     today: model.auditToday,
                     exportError: model.auditExportError,
                     openTicket: model.openTicket,
-                    perform: model.perform
+                    perform: model.perform,
+                    controls: AuditBarControls(
+                        page: model.pageBar, search: $model.auditFilter.search, searchRequested: $model.auditSearchRequested,
+                        export: model.exportAudit, canExport: !model.auditExporting && model.auditRecords != nil
+                    )
                 )
             } else if model.auditResult == .unsupported {
                 EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
@@ -138,11 +142,14 @@ struct AuditView: View {
     var exportError: String?
     var openTicket: (String) -> Void = { _ in }
     var perform: (Audit.Empty.Action) -> Void = { _ in }
+    /// The window's part of the bar: the scope, the search and Export….
+    var controls = AuditBarControls()
     @State private var sort: DesignTokens.Table.Sort? = DesignTokens.Table.Sort(AuditTable.timeColumn, ascending: false)
 
     var body: some View {
         VStack(spacing: 0) {
-            AuditHeader(audit: audit, filter: $filter, today: today, exportError: exportError)
+            AuditControlBar(audit: audit, filter: $filter, today: today, controls: controls)
+            AuditHeader(audit: audit, exportError: exportError)
                 .layoutPriority(1)
             Divider()
             if let empty = audit.empty {
@@ -166,16 +173,14 @@ struct AuditView: View {
     }
 }
 
-/// The filters and each shown day's chain, outside the table so they also render offscreen.
+/// Each shown day's chain and what went wrong with an export, under the bar and outside the table so they also render
+/// offscreen.
 struct AuditHeader: View {
     let audit: Audit
-    @Binding var filter: Audit.Filter
-    let today: String
     var exportError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-            AuditFilterBar(audit: audit, filter: $filter, today: today)
             ForEach(audit.chain) { line in
                 AuditChainLineView(line: line)
             }
@@ -186,21 +191,36 @@ struct AuditHeader: View {
             }
         }
         .padding(.horizontal, DesignTokens.Space.s4)
-        .padding(.vertical, DesignTokens.Space.s2)
+        .padding(.bottom, DesignTokens.Space.s2)
         // No vertical fixedSize: the split view measures the detail at a near-zero width, where a fixed-height
         // header wraps a letter per line and grows the window's content taller than the window.
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-/// The kind and date pop-ups, the ticket a ticket page filtered to, and how many records show.
-private struct AuditFilterBar: View {
+/// The window's part of Audit's control bar (TP-1497): the scope, the search and Export….
+struct AuditBarControls {
+    var page = PageBar()
+    var search: Binding<String> = .constant("")
+    /// Set by ⌘F to put the keyboard in the search.
+    var searchRequested: Binding<Bool> = .constant(false)
+    var export: () -> Void = {}
+    /// Off while an export is under way or before the first records are read.
+    var canExport = true
+}
+
+/// Audit's control bar: the scope, the search, the kind and date pop-ups and the ticket a ticket page filtered to at
+/// the left; how many records show and Export… at the right.
+struct AuditControlBar: View {
     let audit: Audit
     @Binding var filter: Audit.Filter
     let today: String
+    var controls = AuditBarControls()
 
     var body: some View {
-        HStack(spacing: DesignTokens.Space.s3) {
+        ControlBar("Audit controls") {
+            controls.page.scopePopUp
+            PageSearchField(prompt: Audit.searchPrompt, text: controls.search, matches: audit.rows.count, requested: controls.searchRequested)
             PopUp(
                 "Kind", selection: $filter.kind,
                 choices: [PopUpChoice(String?.none, "All kinds")]
@@ -221,11 +241,15 @@ private struct AuditFilterBar: View {
                 .help("Show every ticket's records")
                 .accessibilityLabel("Filtered to \(ticket). Remove the filter")
             }
-            Spacer()
+        } act: {
             Text(audit.countText)
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .foregroundStyle(.secondary)
+                .textStyle(.secondary)
+                .foregroundStyle(DesignTokens.TextColor.secondary.color)
                 .monospacedDigit()
+            Button(Audit.exportTitle, action: controls.export)
+                .directorButton(.secondary, size: .small, glyph: "square.and.arrow.up")
+                .help("Export the filtered records as NDJSON")
+                .disabled(!controls.canExport)
         }
     }
 }
