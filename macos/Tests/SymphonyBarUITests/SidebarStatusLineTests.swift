@@ -54,10 +54,11 @@ final class SidebarStatusLineTests: XCTestCase {
         }
     }
 
-    func testTheStatusLineIs30PointsTall() {
+    func testTheStatusLineIs30PointsTall() throws {
+        let build = try JSONDecoder().decode(DiagnosticsPayload.Build.self, from: Data(#"{"version":"0.0.1.926","sha":"a0be0aa"}"#.utf8))
         let control = DispatchControl(window: .connected, paused: true, state: nil, now: Date())
         let line = HealthLine(
-            window: .connected, dispatch: control, build: DiagnosticsPayload.Build(version: "0.0.1.926", sha: "a0be0aa"), appVersion: "",
+            window: .connected, dispatch: control, build: build, appVersion: "",
             lastUpdate: nil, counts: HealthLine.Counts(inProgress: 7, queued: 18, needYou: 2)
         )
         let drawn = size(StatusLine(line) { DispatchStatusControl(control, open: true) {} }.frame(width: 968))
