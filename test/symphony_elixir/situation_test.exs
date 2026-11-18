@@ -1,8 +1,10 @@
 defmodule SymphonyElixir.SituationTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.CiWait
+  alias SymphonyElixir.EpicReview.MainCi
   alias SymphonyElixir.Inbox.{FromRecord, Item}
-  alias SymphonyElixir.{CiWait, Pauses, Questions, Situation, TicketEvents, TicketPullRequest, TicketState, TransitionGuard}
+  alias SymphonyElixir.{Pauses, Questions, Situation, TicketEvents, TicketPullRequest, TicketState, TransitionGuard}
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.TicketEvents.{Event, Types}
 
@@ -464,7 +466,11 @@ defmodule SymphonyElixir.SituationTest do
       for {gate, reason, kind, word} <- @gates,
           phase <- ["Todo", "In Progress", "QA"],
           running <- [%{}, %{"a" => %{}, "b" => %{}, "c" => %{}, "d" => %{}}] do
-        record = if phase == "QA", do: record(%{phase: phase, pr_watch: watch(%{ci: :green}, %{decision: decided})}), else: record(%{phase: phase})
+        record =
+          if phase == "QA",
+            do: record(%{phase: phase, pr_watch: watch(%{ci: :green}, %{decision: decided})}),
+            else: record(%{phase: phase})
+
         situation = compute(record, [], %{gate_skip(gate, reason) | running: running})
         state = inspect({gate, phase, map_size(running)})
 
@@ -506,7 +512,9 @@ defmodule SymphonyElixir.SituationTest do
       decided = %{kind: :dispatch, rule: "R27", args: %{phase: :qa}, reason: "The head is green", since: @at}
       paused = %{gate_skip(:watch, "the PR watcher (R27): x") | symphony_pause: %{reason: "Deploy freeze"}}
 
-      assert %{kind: "paused_by_rule", word: "Paused"} = compute(record(%{phase: "QA", pr_watch: watch(%{ci: :green}, %{decision: decided})}), [], paused)
+      held = record(%{phase: "QA", pr_watch: watch(%{ci: :green}, %{decision: decided})})
+
+      assert %{kind: "paused_by_rule", word: "Paused"} = compute(held, [], paused)
     end
 
     test "a skipped ticket is not listed as one Symphony can tell nothing of, but the watcher's gate is read from its record" do
@@ -517,7 +525,8 @@ defmodule SymphonyElixir.SituationTest do
 
   describe "a wait for CI on a commit" do
     test "TP-1381: an epic review held for CI on main names the commit and the workflows still running" do
-      reason = SymphonyElixir.EpicReview.MainCi.reason("main", "b98572e58594deadbeef", [%{workflow_name: "make-all"}, %{workflow_name: "macos"}])
+      workflows = [%{workflow_name: "make-all"}, %{workflow_name: "macos"}]
+      reason = MainCi.reason("main", "b98572e58594deadbeef", workflows)
       held = record(%{phase: "Epic Review", pause: pause([reason])})
       skipped = live(%{skipped: %{@id => %{since: @later, reason: reason.text, rule: nil, gate: :paused}}})
 

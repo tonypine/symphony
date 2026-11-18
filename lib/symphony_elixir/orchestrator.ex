@@ -4542,7 +4542,9 @@ defmodule SymphonyElixir.Orchestrator do
     |> Enum.filter(&match?(%Issue{}, &1))
     |> Enum.reject(&Map.has_key?(state.slot_waiting, &1.id))
     |> Enum.reduce(%{state | dispatch_skipped: %{}}, fn issue, acc ->
-      {reason, rule, closed} = dispatch_gate_closed(issue, acc, active_states, terminal_states) || {pause_reason, pause_rule, nil}
+      {reason, rule, closed} =
+        dispatch_gate_closed(issue, acc, active_states, terminal_states) || {pause_reason, pause_rule, nil}
+
       put_dispatch_skipped(acc, issue, reason, rule, closed)
     end)
     |> list_pause_held_retries(pause_reason, pause_rule)

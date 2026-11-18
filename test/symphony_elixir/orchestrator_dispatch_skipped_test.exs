@@ -232,7 +232,14 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
         claimed: MapSet.new(["running", "claimed"]),
         budget_exhausted: MapSet.new(["spent"]),
         merging_ci_waits: %{
-          "landing" => %{identifier: "MT-LANDING", title: "Land", repo_key: "default", pull_request_url: nil, commit_sha: "abc1234", since: DateTime.utc_now()}
+          "landing" => %{
+            identifier: "MT-LANDING",
+            title: "Land",
+            repo_key: "default",
+            pull_request_url: nil,
+            commit_sha: "abc1234",
+            since: DateTime.utc_now()
+          }
         }
       })
 
@@ -245,9 +252,20 @@ defmodule SymphonyElixir.OrchestratorDispatchSkippedTest do
     assert Map.keys(waiting) |> Enum.sort() == ["free-1", "free-2", "landing"]
 
     for %Issue{id: issue_id, state: phase} = issue <- candidates do
-      fields = %{repo_key: "default", issue_id: issue_id, issue_identifier: issue.identifier, phase: phase, sub_issues: issue.sub_issues}
+      fields = %{
+        repo_key: "default",
+        issue_id: issue_id,
+        issue_identifier: issue.identifier,
+        phase: phase,
+        sub_issues: issue.sub_issues
+      }
+
       # A paused ticket's record holds its pause already.
-      :ok = if RunStore.get_ticket_state(issue_id), do: RunStore.update_ticket_state(issue_id, fields), else: RunStore.put_ticket_state(fields)
+      :ok =
+        if RunStore.get_ticket_state(issue_id),
+          do: RunStore.update_ticket_state(issue_id, fields),
+          else: RunStore.put_ticket_state(fields)
+
       situation = Situation.read(issue_id |> RunStore.get_ticket_state() |> TicketState.normalize(), live)
       said = inspect({issue.identifier, skipped[issue_id], waiting[issue_id], situation})
 

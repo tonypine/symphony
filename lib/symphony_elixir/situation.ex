@@ -195,7 +195,9 @@ defmodule SymphonyElixir.Situation do
       skip = Map.get(live.skipped, issue_id) || %{}
       retry = Map.get(live.retrying, issue_id)
 
-      {issue_id, {Map.has_key?(live.running, issue_id), failure_retry?(retry), ci_retry?(retry), slot, skip[:rule], skip[:gate]}}
+      running? = Map.has_key?(live.running, issue_id)
+
+      {issue_id, {running?, failure_retry?(retry), ci_retry?(retry), slot, skip[:rule], skip[:gate]}}
     end)
   end
 
