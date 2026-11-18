@@ -134,16 +134,18 @@ public struct Row<Trail: View>: View {
             .animation(.motion(.fast, reduceMotion: reduceMotion), value: state)
             .contentShape(shape)
             .onHover { hovered = $0 }
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in pressed = true }
-                    .onEnded { _ in pressed = false }
-            )
             .focusable(acts && listFocused == nil)
             .focusEffectDisabled()
             .focused($focused)
             // After focus, so Return reaches it from the focused row: key presses go up from the focused view.
             .modifier(RowActions(select: select, open: open, opensOnClick: opensOnClick))
+            // Outside the clicks and beside them: inside, a drag that starts at once would win every click before the
+            // row's own tap saw it, so a click or a double click would only press the row.
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in pressed = true }
+                    .onEnded { _ in pressed = false }
+            )
             .accessibilityElement(children: .combine)
             .accessibilityAddTraits(state.selected ? .isSelected : [])
     }
