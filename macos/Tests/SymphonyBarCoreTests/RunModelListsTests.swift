@@ -66,15 +66,27 @@ final class RunModelListsTests: XCTestCase {
     }
 
     func testRunsTheOpenCodeHarnessesProgram() {
-        XCTAssertEqual(OpenCodeModels.script(command: nil), "opencode models opencode-go")
-        XCTAssertEqual(OpenCodeModels.script(command: "/opt/tools/opencode --print-logs"), "/opt/tools/opencode models opencode-go")
-        XCTAssertEqual(OpenCodeModels.script(command: "'/Applications/Open Code/opencode'"), "'/Applications/Open Code/opencode' models opencode-go")
-        XCTAssertEqual(OpenCodeModels.script(command: "'unclosed"), "opencode models opencode-go")
+        XCTAssertEqual(OpenCodeModels.script(command: nil), "opencode models")
+        XCTAssertEqual(OpenCodeModels.script(command: "/opt/tools/opencode --print-logs"), "/opt/tools/opencode models")
+        XCTAssertEqual(OpenCodeModels.script(command: "'/Applications/Open Code/opencode'"), "'/Applications/Open Code/opencode' models")
+        XCTAssertEqual(OpenCodeModels.script(command: "'unclosed"), "opencode models")
 
-        let launch = OpenCodeModels.launch(command: nil, environment: ["PATH": "/usr/bin"], workingDirectory: "/tmp")
+        let shims = "/Users/me/.local/share/mise/shims"
+        let launch = OpenCodeModels.launch(
+            command: nil,
+            environment: ["HOME": "/Users/me", "PATH": "/usr/bin"],
+            workingDirectory: "/tmp",
+            files: StubFileChecker(directories: [shims])
+        )
         XCTAssertEqual(launch.executable, ChildLaunch.shell)
-        XCTAssertEqual(launch.arguments, ["-lc", "opencode models opencode-go"])
-        XCTAssertEqual(launch.environment, ["PATH": "/usr/bin"])
+        XCTAssertEqual(launch.arguments, ["-lc", "opencode models"])
+        XCTAssertEqual(
+            launch.environment,
+            [
+                "HOME": "/Users/me",
+                "PATH": "/usr/bin:\(shims):/opt/homebrew/bin:/usr/local/bin:/Users/me/.local/bin:/Users/me/.opencode/bin",
+            ]
+        )
         XCTAssertEqual(launch.workingDirectory, "/tmp")
     }
 
