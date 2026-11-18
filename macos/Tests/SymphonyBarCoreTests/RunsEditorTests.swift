@@ -392,7 +392,7 @@ final class RunsEditorTests: XCTestCase {
         XCTAssertTrue(editor.setCommand("codex app-server", of: .codex))
         XCTAssertFalse(editor.setCommand("codex app-server", of: .codex))
         XCTAssertEqual(editor.changeCount, 1)
-        XCTAssertEqual(try written(editor), yaml + "execution:\n  harnesses:\n    codex:\n      command: codex app-server\n")
+        XCTAssertEqual(try written(editor), yaml + "execution:\n  harnesses:\n    codex:\n      command: \"codex app-server\"\n")
 
         XCTAssertTrue(editor.setCommand(" ", of: .codex))
         XCTAssertFalse(editor.hasChanges)
