@@ -318,6 +318,54 @@ final class RunsEditorTests: XCTestCase {
         XCTAssertEqual(editor.profiles.global[.qa], RunProfile(model: "acme/chat", provider: "openrouter"))
     }
 
+    func testAMoveOntoAnotherHarnessDropsTheKindsOwnCommand() throws {
+        let yaml = "runs:\n  qa:\n    harness: claude\n    provider: anthropic\n    model: claude-opus-5-5\n    command: claude --fast\n    fallbacks:\n      - { harness: codex, provider: openai, model: gpt-5.5 }\n      - { model: claude-haiku-4-5-20251001 }\n"
+        let original = RunsEditor(try RunProfilesConfig.scopedProfiles(in: yaml))
+
+        var editor = original
+        XCTAssertTrue(editor.move(1, to: 0, of: .qa))
+        XCTAssertEqual(editor.profiles.global[.qa].harness, "codex")
+        XCTAssertNil(editor.profiles.global[.qa].command)
+        XCTAssertFalse(try RunProfilesConfig.updating(yaml, from: editor.loaded, to: editor.profiles).contains("claude --fast"))
+
+        // A line on the same harness keeps the command.
+        editor = original
+        XCTAssertTrue(editor.move(2, to: 0, of: .qa))
+        XCTAssertEqual(editor.profiles.global[.qa].command, "claude --fast")
+
+        // Moving the first choice down puts codex first too.
+        editor = original
+        XCTAssertTrue(editor.move(0, to: 2, of: .qa))
+        XCTAssertNil(editor.profiles.global[.qa].command)
+    }
+
+    func testSettingTheFirstChoiceOnAnotherHarnessDropsTheKindsOwnCommand() throws {
+        var editor = RunsEditor(try RunProfilesConfig.scopedProfiles(in: "runs:\n  qa: { harness: claude, command: claude --fast }\n"))
+        XCTAssertTrue(editor.set(.model, of: 0, kind: .qa, to: "claude-sonnet-5-5"))
+        XCTAssertTrue(editor.set(.harness, of: 0, kind: .qa, to: "claude"))
+        XCTAssertEqual(editor.profiles.global[.qa].command, "claude --fast")
+        XCTAssertTrue(editor.set(.harness, of: 0, kind: .qa, to: "codex"))
+        XCTAssertNil(editor.profiles.global[.qa].command)
+    }
+
+    func testARepositoryCannotPutAnotherHarnessFirstOverACommandFromAllRepositories() throws {
+        let yaml = "runs:\n  qa:\n    harness: claude\n    provider: anthropic\n    model: claude-opus-5-5\n    command: claude --fast\nrepositories:\n  - key: web\n    runs:\n      qa:\n        fallbacks:\n          - { harness: codex, provider: openai, model: gpt-5.5 }\n          - { model: claude-haiku-4-5-20251001 }\n"
+        var editor = RunsEditor(try RunProfilesConfig.scopedProfiles(in: yaml))
+
+        XCTAssertFalse(editor.canMove(1, to: 0, of: .qa, in: web))
+        XCTAssertFalse(editor.move(0, to: 1, of: .qa, in: web))
+        XCTAssertTrue(editor.canMove(2, to: 0, of: .qa, in: web))
+        XCTAssertTrue(editor.canMove(2, to: 1, of: .qa, in: web))
+        XCTAssertFalse(editor.canRemove(0, of: .qa, in: web))
+        XCTAssertFalse(editor.remove(0, of: .qa, in: web))
+        XCTAssertEqual(editor.changeCount, 0)
+
+        // Without that command the same move goes through.
+        editor = RunsEditor(try RunProfilesConfig.scopedProfiles(in: yaml.replacingOccurrences(of: "    command: claude --fast\n", with: "")))
+        XCTAssertTrue(editor.move(1, to: 0, of: .qa, in: web))
+        XCTAssertEqual(editor.profiles[web][.qa].harness, "codex")
+    }
+
     func testEveryMoveKeepsWhatEachLineRunsWithAndSurvivesASave() throws {
         let original = try editor()
         for scope in [RunProfilesScope.global, web] {

@@ -99,7 +99,8 @@ public struct RunsEditor: Equatable {
 
     /// Sets `field` of line `line` (0 for the first choice) to `value`. A nil or empty value clears what the
     /// kind sets itself: the first choice then takes it from Default, a fallback from the first choice. A
-    /// fallback sets no `command`. Returns false when the line doesn't exist or nothing changed.
+    /// fallback sets no `command`. A first choice put on another harness drops the kind's own `command`, which
+    /// served the old one. Returns false when the line doesn't exist or nothing changed.
     @discardableResult
     public mutating func set(
         _ field: RunProfileField,
@@ -111,7 +112,11 @@ public struct RunsEditor: Equatable {
         let value = value.flatMap { $0.trimmingWhitespace().isEmpty ? nil : $0 }
         let before = profiles
         if line == 0 {
+            let harness = lines(kind, in: scope)[0].harness.value
             profiles[scope][kind][field] = value
+            if field == .harness, lines(kind, in: scope)[0].harness.value != harness {
+                profiles[scope][kind].command = nil
+            }
         } else {
             var list = profiles.effectiveFallbacks(kind, in: scope)
             guard list.indices.contains(line - 1), RunFallback.fields.contains(field) else { return false }
@@ -146,10 +151,11 @@ public struct RunsEditor: Equatable {
     }
 
     /// Whether line `line` can be removed: never the only line, and never the last fallback of a kind that would
-    /// then take Default's list, since Symphony reads an empty list as none set.
+    /// then take Default's list, since Symphony reads an empty list as none set. The first choice goes only when
+    /// the first fallback can take its place (`canMove`).
     public func canRemove(_ line: Int, of kind: RunKind?, in scope: RunProfilesScope = .global) -> Bool {
         let count = lines(kind, in: scope).count
-        guard count > 1, (0..<count).contains(line) else { return false }
+        guard count > 1, (0..<count).contains(line), line > 0 || canMove(1, to: 0, of: kind, in: scope) else { return false }
         return count > 2 || profiles.inheritedFallbacks(kind, in: scope) == nil
     }
 
@@ -165,13 +171,26 @@ public struct RunsEditor: Equatable {
         return true
     }
 
-    /// Moves line `from` to position `to`, the first choice included. Every line keeps the harness, provider,
-    /// model and effort it runs with: when a fallback becomes the first choice, the others are written again
-    /// against it. Returns false for a move that changes nothing.
-    @discardableResult
-    public mutating func move(_ from: Int, to: Int, of kind: RunKind?, in scope: RunProfilesScope = .global) -> Bool {
+    /// Whether line `from` can move to position `to`. A kind's own `command` runs its first choice and the
+    /// fallbacks on the same harness, and a fallback can't carry one, so a move that puts a line on another
+    /// harness first drops the command. It can't drop one a repository's kind takes from all repositories'
+    /// entry: that move stays refused until the command is changed there.
+    public func canMove(_ from: Int, to: Int, of kind: RunKind?, in scope: RunProfilesScope = .global) -> Bool {
         let lines = self.lines(kind, in: scope)
         guard from != to, lines.indices.contains(from), lines.indices.contains(to) else { return false }
+        let leader = to == 0 ? from : (from == 0 ? 1 : 0)
+        guard case .repository = scope, lines[leader].harness.value != lines[0].harness.value else { return true }
+        return profiles.global[kind].command == nil
+    }
+
+    /// Moves line `from` to position `to`, the first choice included. Every line keeps the harness, provider,
+    /// model and effort it runs with: when a fallback becomes the first choice, the others are written again
+    /// against it. When the new first choice is on another harness, the kind's own `command`, which served the
+    /// old harness, is dropped: no fallback can carry it. Returns false when `canMove` is false.
+    @discardableResult
+    public mutating func move(_ from: Int, to: Int, of kind: RunKind?, in scope: RunProfilesScope = .global) -> Bool {
+        guard canMove(from, to: to, of: kind, in: scope) else { return false }
+        let lines = self.lines(kind, in: scope)
         var order = Array(lines.indices)
         order.insert(order.remove(at: from), at: to)
         let list = profiles.effectiveFallbacks(kind, in: scope)
@@ -191,6 +210,7 @@ public struct RunsEditor: Equatable {
                 first[field] = nil
             }
         }
+        if lines[leader].harness.value != lines[0].harness.value { first.command = nil }
         profiles[scope][kind] = first
         let newFirst = profiles.lines(kind, in: scope)[0]
         var demoted = RunFallback()
