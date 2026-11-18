@@ -60,7 +60,9 @@ extension SymphonyWindowModel {
             remove: { [weak self] kind, line in self?.runsPage.remove(line, of: kind) },
             reorder: { [weak self] kind, order in self?.runsPage.reorder(kind, to: order) },
             revert: { [weak self] in self?.runsPage.revert() },
-            save: { [weak self] in self?.saveRuns() }
+            save: { [weak self] in self?.saveRuns() },
+            setCommand: { [weak self] harness, command in self?.runsPage.setCommand(command, of: harness) },
+            pickSmallModel: { [weak self] harness, provider, value in self?.runsPage.pickSmallModel(value, of: harness, on: provider) }
         )
     }
 }

@@ -1,6 +1,6 @@
 import Foundation
 
-/// The `symphony.yml` settings the app's Settings, Models and Repos sections read and write, as dotted key
+/// The `symphony.yml` settings the app's Settings, Repos and Factory › Runs read and write, as dotted key
 /// paths: `execution.concurrency.max_total`, or `repositories[].route.team` for a key of every `repositories`
 /// item. A key holding a free-form map, such as `runs`, covers everything under it.
 ///
