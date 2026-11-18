@@ -172,7 +172,8 @@ defmodule SymphonyElixir.OrchestratorSetupBlockTest do
   # task that set a pause announced it before its own result, so once the orchestrator handled that
   # result, the cycle the pause asked for is the one in flight or due.
   defp cycle_settled?(state) do
-    poll_idle?(state) and is_integer(state.next_poll_due_at_ms) and state.next_poll_due_at_ms > System.monotonic_time(:millisecond)
+    due_at = state.next_poll_due_at_ms
+    poll_idle?(state) and is_integer(due_at) and due_at > System.monotonic_time(:millisecond)
   end
 
   # Starts a run for `issue` in the orchestrator, then ends it with `reason`, as the runner's exit would.
