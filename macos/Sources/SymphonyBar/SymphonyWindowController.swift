@@ -204,15 +204,17 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
             let hostingController = NSHostingController(
                 rootView: SymphonyWindowView(model: model).environment(\.openURL, URLOpener.action)
             )
-            // SwiftUI's toolbar goes in the window's; the window keeps its own title.
-            hostingController.sceneBridgingOptions = [.toolbars]
+            // The Director draws its own bar (TP-1496): nothing of SwiftUI's goes in a system toolbar, the window has
+            // none, and its title is not drawn; the window buttons stay over the sidebar's top.
+            hostingController.sceneBridgingOptions = []
             // The window keeps the size the user set: the content's minimum never widens it, `contentMinSize` bounds it.
             hostingController.sizingOptions = []
             let window = NSWindow(contentViewController: hostingController)
             window.title = Self.windowTitle
             window.titleVisibility = .hidden
+            window.titlebarAppearsTransparent = true
             window.styleMask = [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView]
-            window.toolbarStyle = .unified
+            window.toolbar = nil
             window.setContentSize(NSSize(width: DesignTokens.Layout.windowWidth, height: DesignTokens.Layout.windowHeight))
             window.contentMinSize = NSSize(
                 width: DesignTokens.Layout.minWindowWidth,

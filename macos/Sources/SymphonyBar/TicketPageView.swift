@@ -41,10 +41,11 @@ extension SymphonyWindowModel {
         Task { await store.update(identifier: identifier, sources: sources) }
     }
 
-    /// The store took a built page: the toolbar takes its title, and its repo, now known, starts the feed and the look.
+    /// The store took a built page: the window bar's breadcrumb takes its epic, and its repo, now known, starts the feed
+    /// and the look.
     func ticketPageBuilt(_ model: TicketPageModel?) {
-        let title = model.flatMap { $0.identifier == shownTicket ? $0.title : nil }
-        if ticketTitle != title { ticketTitle = title }
+        let epic = model.flatMap { $0.identifier == shownTicket ? $0.page.epicChip : nil }
+        if ticketEpic != epic { ticketEpic = epic }
         guard let model, model.identifier == shownTicket else { return }
         ticketLook.repoKnown(model.repoKey, for: model.identifier)
         followTicketFeed(afterPoll: false)

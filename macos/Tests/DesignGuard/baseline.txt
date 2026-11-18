@@ -104,10 +104,8 @@ SymphonyBar/SetupView.swift disabled 3
 SymphonyBar/ShippedView.swift color 2
 SymphonyBar/SituationLine.swift color 2
 SymphonyBar/SituationLine.swift number 8
-SymphonyBar/SymphonyWindowView.swift font 3
-SymphonyBar/SymphonyWindowView.swift color 1
-SymphonyBar/SymphonyWindowView.swift button 13
-SymphonyBar/SymphonyWindowView.swift disabled 7
+SymphonyBar/SymphonyWindowView.swift button 2
+SymphonyBar/SymphonyWindowView.swift disabled 1
 SymphonyBar/TicketPageView.swift font 2
 SymphonyBar/TicketPageView.swift color 14
 SymphonyBar/TicketPageView.swift number 4
@@ -123,6 +121,8 @@ SymphonyBar/TicketsView.swift menu 1
 SymphonyBar/TicketsView.swift table 1
 SymphonyBar/UpdatePoller.swift font 1
 SymphonyBar/UsageView.swift color 1
+SymphonyBar/WindowBarView.swift button 1
+SymphonyBar/WindowBarView.swift disabled 2
 SymphonyBar/WorkflowSetupPage.swift font 1
 SymphonyBar/WorkflowSetupPage.swift color 2
 SymphonyBar/WorkflowSetupPage.swift number 1

@@ -313,10 +313,9 @@ extension SymphonyWindowModel {
     }
 }
 
-/// A page's search field in the window's toolbar, Tickets', Audit's or Learnings' (TP-1509): the shared search field,
-/// small and as wide as the toolbar keeps it, with the count of what it found and ⌥⌘F, which puts the keyboard in it,
-/// while it is empty. ⌥⌘F sets `requested`; the field takes the keyboard through the window and clears it, since a
-/// page's focus state does not reach a field in the toolbar.
+/// A page's search field in its top row, Tickets', Audit's or Learnings' (TP-1509, TP-1496): the shared search field,
+/// small, with the count of what it found and ⌥⌘F, which puts the keyboard in it, while it is empty. ⌥⌘F sets
+/// `requested`; the field takes the keyboard through the window and clears it.
 struct PageSearchField: View {
     let prompt: String
     @Binding var text: String
@@ -371,14 +370,6 @@ struct TicketsContent: View {
             }
         }
         .modifier(TicketViewSheetsPresenter(model: model))
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                PageSearchField(
-                    prompt: TicketsView.searchPrompt, text: $model.ticketSearch,
-                    matches: model.ticketsPayload.map { _ in model.ticketRows.count }, requested: $model.searchRequested
-                )
-            }
-        }
     }
 
     private var viewActions: TicketViewActions {
