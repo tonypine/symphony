@@ -23,7 +23,7 @@ final class ProvidersPageViewTests: XCTestCase {
 
     func testThePageFitsTheLaptopViewportBesideTheSidebar() {
         let page = ProvidersPage(providers: [anthropic, openAI])
-        let width = 1440 - DesignTokens.Layout.maxSidebarWidth
+        let width = 1440 - DesignTokens.Layout.sidebarWidth
         let host = NSHostingView(rootView: ProvidersPageView(page: page, selection: nil, actions: .none, scrolls: false).frame(width: width))
         host.layoutSubtreeIfNeeded()
         XCTAssertLessThanOrEqual(Double(host.fittingSize.width), width)
