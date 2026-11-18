@@ -72,6 +72,50 @@ defmodule SymphonyElixir.Config.CacheTest do
     end
   end
 
+  describe "clear/0 after two reads at once" do
+    test "drops an entry the index lost", %{root: root} do
+      symphony_path = Path.join(root, "symphony.yml")
+      File.write!(symphony_path, config(1))
+      assert {:ok, _value} = Cache.get_symphony(symphony_path)
+      key = {Cache, :symphony, Path.expand(symphony_path)}
+
+      # The other read put the index back from a copy taken before this entry was added.
+      index = :persistent_term.get({Cache, :index})
+      :persistent_term.put({Cache, :index}, MapSet.delete(index, key))
+
+      assert :ok = Cache.clear()
+      assert :persistent_term.get(key, nil) == nil
+    end
+  end
+
+  describe "a rejected reload that a clear overtakes" do
+    test "returns the last good config but leaves the cleared cache empty", %{root: root} do
+      # No watcher: only this test's reads may read the file.
+      Application.put_env(:symphony_elixir, :config_cache_watch, false)
+      symphony_path = Path.join(root, "symphony.yml")
+      File.write!(symphony_path, config(1))
+      assert {:ok, %{"repositories" => [%{"key" => "r1"}]}} = Cache.get_symphony(symphony_path)
+
+      File.write!(symphony_path, "tracker: [unterminated\n")
+      bump_mtime!(symphony_path)
+
+      # The entry is dropped while the reload reads the rejected file, as a test's rewrite clears it.
+      Application.put_env(:symphony_elixir, :config_cache_file_reader, fn path ->
+        Cache.invalidate(path)
+        File.read(path)
+      end)
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, %{"repositories" => [%{"key" => "r1"}]}, [stale: true]} = Cache.get_symphony(symphony_path)
+      end)
+
+      assert :persistent_term.get({Cache, :symphony, Path.expand(symphony_path)}, nil) == nil
+
+      Application.delete_env(:symphony_elixir, :config_cache_file_reader)
+      assert {:error, _reason} = Cache.get_symphony(symphony_path)
+    end
+  end
+
   describe "a symphony.yml edit the schema rejects" do
     test "keeps the last good config, says since when, and reads the rejected file only once", %{root: root} do
       # No watcher: only this test's reads may read the file.

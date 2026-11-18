@@ -197,10 +197,10 @@ defmodule SymphonyElixir.TestSupport do
     end
   end
 
-  # A stale entry is the file on disk when it rejected exactly that file: a background reader that
-  # loaded the old file just before the rewrite then read the rejected one, which is the state a
-  # rejected rewrite should leave.
-  defp entry_stamp_current?(%{stale?: true, failed_stamp: failed}, stamp), do: failed == stamp
+  # A stale entry is never the file on disk: it serves the file from before the rewrite. After the
+  # clear, a read of a rejected file leaves no entry, so a stale one was put back by a read that
+  # began before the clear, and a test asserting the rejection would read the old config (TP-1545).
+  defp entry_stamp_current?(%{stale?: true}, _stamp), do: false
   defp entry_stamp_current?(%{stale?: false, stamp: entry}, stamp), do: entry == stamp
 
   # Waits until `fun` returns a truthy value and returns it, trying again every few milliseconds. A
