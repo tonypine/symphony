@@ -383,6 +383,44 @@ final class APIFixturesTests: XCTestCase {
         }
     }
 
+    /// The fixture QA walks Factory › Providers with (TP-1534): Anthropic in use and available with runs on it, then
+    /// paused once the Director pressed Pause, and available again after Resume; OpenRouter paused, OpenAI with no
+    /// usage to read, OpenCode Go not in use.
+    func testTheProvidersFixturePausesAndResumesAnthropic() async throws {
+        let directory = Self.shippedRunning.deletingLastPathComponent().appendingPathComponent("providers", isDirectory: true)
+        let shipped = APIFixtures(directory: directory, requestLog: root.appendingPathComponent("api-requests.jsonl"))
+        func page() throws -> ProvidersPage {
+            let data = shipped.answer(URLRequest(url: SymphonyState.stateURL(base: APIFixtures.baseURL))).0
+            guard case let .state(snapshot) = SymphonyState.poll(data: data, statusCode: 200) else {
+                XCTFail("the providers fixture doesn't read as a state")
+                return ProvidersPage(providers: nil)
+            }
+            return ProvidersPage(providers: snapshot.providers)
+        }
+        let before = try page()
+        XCTAssertEqual(before.sections.map(\.title), ["In use", "Not in use"])
+        XCTAssertEqual(before.ordered.map(\.id), ["anthropic", "openrouter", "openai", "opencode-go"])
+        let anthropic = try XCTUnwrap(before.detail("anthropic"))
+        XCTAssertEqual(anthropic.state.word, "Available")
+        XCTAssertEqual(anthropic.state.cause, "2 runs are working on it.")
+        XCTAssertEqual(anthropic.usage.map(\.label), ["5 hours", "Week"])
+        XCTAssertEqual(try XCTUnwrap(before.detail("openai")).usage, [])
+        XCTAssertEqual(try XCTUnwrap(before.detail("openrouter")).state.word, "Paused")
+
+        let pause = try XCTUnwrap(anthropic.action)
+        let control = { (action: ControlAction) async in
+            await ControlAPI.send(action, stateRoot: self.root, fallback: APIFixtures.baseURL, token: APIFixtures.token, transport: shipped.transport)
+        }
+        let paused = await control(pause)
+        XCTAssertEqual(paused, .done)
+        let after = try XCTUnwrap(try page().detail("anthropic"))
+        XCTAssertEqual(after.state.word, "Paused")
+        XCTAssertEqual(after.move, .resume)
+        let resumed = await control(try XCTUnwrap(after.action))
+        XCTAssertEqual(resumed, .done)
+        XCTAssertEqual(try page().detail("anthropic")?.state.word, "Available")
+    }
+
     /// The fixture QA walks Pause this repository with (TP-1238): `symphony` paused with the Director's reason, the
     /// others dispatching, its running ticket saying its repository is paused, and a checked setup so Setup shows its
     /// Repositories card.

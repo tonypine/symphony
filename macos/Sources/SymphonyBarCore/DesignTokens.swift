@@ -1518,6 +1518,41 @@ public enum DesignTokens {
         public static let commandLabelGap = Space.s2
         public static let smallModelGap = Space.s3
         public static let smallModelLineGap = Space.s2
+        /// A line whose provider is paused or held (`.reorder-line.is-off`, `.off-note`, TP-1534): its pop-ups ringed
+        /// 1 pt inside in the "waiting on you" orange, and after them, 8 pt in, a 6 pt Status dot 6 pt before the
+        /// note in that orange's text colour.
+        public static let offRing: Double = 1
+        public static let offRingColor = ColorToken.statusYou
+        public static let offNoteInset = Space.s2
+        public static let offNoteGap: Double = 6
+        public static let offDot: Double = 6
+        public static let offNoteColor = ColorToken.statusYouText
+    }
+
+    /// Factory › Providers (`.ini.prov`, `.ini-side`, `.ini-main`, `.story-head`, `.prov-usage`, TP-1534): the list of
+    /// List cards in a 340 pt column, 32 pt from the page beside it, which is at most 1040 pt wide; the list's cards
+    /// 8 pt apart under each group's zone title, the groups 24 pt apart; the page's blocks 16 pt apart, its head's lines
+    /// 8 pt apart with 8 pt more under it; the meters 12 pt apart. The page sits 24 pt from the top, 32 pt from the
+    /// sides and 40 pt from the bottom, as Runs.
+    public enum ProvidersPage {
+        public static let listWidth: Double = 340
+        public static let columnGap = Space.s8
+        public static let mainMaxWidth: Double = 1040
+        public static let top = Space.s6
+        public static let sides = Space.s8
+        public static let bottom = Space.s10
+        public static let cardGap = Space.s2
+        public static let groupGap = Space.s6
+        public static let blockGap = Space.s4
+        public static let headGap = Space.s2
+        public static let headBottom = Space.s2
+        public static let meterGap = Space.s3
+        /// The head's first line, the id and the button: as tall as a medium control.
+        public static let idLineHeight = Control.medium.height
+        public static let control = Control.medium
+        /// The Situation line's glyph, and between its parts.
+        public static let glyph: Double = 15
+        public static let situationGap = Space.s2
     }
 
     /// The catalog's List card (`.list-card`, TP-1530): one thing of the list beside a page, its name and one fact on
