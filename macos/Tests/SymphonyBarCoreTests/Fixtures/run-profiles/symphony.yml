@@ -1,0 +1,34 @@
+# Symphony operator config.
+execution:
+  # Each harness's command.
+  harnesses:
+    claude:
+      command: claude --verbose  # launcher
+      small_model:
+        anthropic: claude-haiku-4-5
+
+runs:
+  # What every run starts with.
+  default:
+    harness: claude
+    provider: anthropic
+    model: claude-opus-5-5  # the best
+    effort: medium
+    fallbacks:
+      # When Anthropic is held.
+      - { provider: openrouter, model: acme/chat }  # cheap
+  # Plans think hard.
+  breakdown: { effort: xhigh }  # big tickets
+  qa:
+    model: claude-sonnet-5-5
+
+repositories:
+  # The web app.
+  - key: web
+    workflow: ./web.md  # web workflow
+    runs:
+      landing:
+        model: claude-haiku-4-5-20251001
+
+workspaces:
+  root: ~/work
