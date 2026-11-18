@@ -122,7 +122,7 @@ public struct WindowBar<Switch: View, Results: View>: View {
             IconButton(bar.refreshSymbol, help: WindowBarText.refresh(checksSetup: controls.checksSetup), size: bar.control, action: actions.refresh)
                 .disabled(controls.refreshing)
         }
-        .padding(.leading, bar.leadingPadding)
+        .padding(.leading, bar.leading(sidebarShown: controls.sidebarShown))
         .padding(.trailing, bar.trailingPadding)
         .frame(maxWidth: .infinity)
         .frame(height: bar.height)

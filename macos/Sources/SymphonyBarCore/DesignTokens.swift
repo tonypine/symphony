@@ -1277,6 +1277,15 @@ public enum DesignTokens {
         /// `padding: 0 var(--space-4) 0 var(--space-3)`.
         public static let leadingPadding = Space.s3
         public static let trailingPadding = Space.s4
+        /// The window's close, minimize and zoom buttons end 70 pt from its leading edge. With the sidebar hidden the
+        /// bar runs under them, so its first control starts `--space-2` after the zoom button instead.
+        public static let windowButtonsEnd: Double = 70
+
+        /// The bar's leading padding: the catalog's `--space-3` beside the sidebar; clear of the window's buttons when the
+        /// sidebar is hidden and the bar starts at the window's edge.
+        public static func leading(sidebarShown: Bool) -> Double {
+            sidebarShown ? leadingPadding : windowButtonsEnd + Space.s2
+        }
         /// `gap: var(--space-2)` between its controls.
         public static let gap = Space.s2
         /// `.nav-pair { gap: 2px }`: Back and Forward.
