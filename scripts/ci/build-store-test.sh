@@ -85,7 +85,13 @@ echo "let c = 3" >> "$repo/macos/Sources/App/a.swift"; commit c; $store stamp
 check "new content has a new time" changed "$([ "$before" != "$(stat -f %m "$repo/macos/Sources/App/a.swift")" ] && echo changed || echo same)"
 
 # Pruning keeps the newest.
-for n in 1 2 3 4; do echo "$n" > "$tmp/piece"; $store put app "old$n" "$tmp/piece" incremental 2>/dev/null; sleep 1; done
+# Each piece gets its own time, minutes apart and set here: times a second apart from `sleep` came out of order once
+# on a busy runner.
+touch -t "$(date -v-10M +%Y%m%d%H%M.%S)" "$SYMPHONY_CI_CACHE/store/app/k1"
+for n in 1 2 3 4; do
+  echo "$n" > "$tmp/piece"; $store put app "old$n" "$tmp/piece" incremental 2>/dev/null
+  touch -t "$(date -v-$((5 - n))M +%Y%m%d%H%M.%S)" "$SYMPHONY_CI_CACHE/store/app/old$n"
+done
 SYMPHONY_CI_KEEP_PIECES=2 $store prune 2>/dev/null
 check "prune keeps what was used in the last 3 hours" "k1 old1 old2 old3 old4" "$(ls "$SYMPHONY_CI_CACHE/store/app" | tr '\n' ' ' | sed 's/ $//')"
 SYMPHONY_CI_KEEP_REFS=1 $store prune 2>/dev/null
