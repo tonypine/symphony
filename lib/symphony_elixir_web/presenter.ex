@@ -8,6 +8,7 @@ defmodule SymphonyElixirWeb.Presenter do
     BuildInfo,
     Config,
     ForcedStatus,
+    Home,
     Inbox,
     Initiatives,
     Lifecycle,
@@ -176,6 +177,42 @@ defmodule SymphonyElixirWeb.Presenter do
       :unavailable ->
         %{generated_at: generated_at, error: %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
     end
+  end
+
+  @doc """
+  The Director's Home read (`GET /api/v1/home`, `SymphonyElixir.Home.read/4`): the tickets in
+  progress under their epics, the queue as the tree of what waits on what, and how many open
+  tickets neither holds, by reason. Read from the ticket records, their ledgers and what the
+  orchestrator walked at its last poll cycle: it makes no Linear request. It carries no time of its
+  own, so an unchanged read has an unchanged `ETag`. When the snapshot can't be read the situations
+  are the records' alone, the queue is empty and the answer carries an `error`.
+  """
+  @spec home_payload(GenServer.name(), timeout()) :: map()
+  def home_payload(orchestrator, snapshot_timeout_ms) do
+    records = ticket_state_records() |> Map.values()
+
+    {snapshot, error} =
+      case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
+        %{} = snapshot -> {snapshot, nil}
+        :timeout -> {%{}, %{code: "snapshot_timeout", message: "Snapshot timed out"}}
+        :unavailable -> {%{}, %{code: "snapshot_unavailable", message: "Snapshot unavailable"}}
+      end
+
+    live = Situation.live_facts(snapshot)
+    pauses = %{repositories: Map.get(snapshot, :repositories, []), symphony_pause: symphony_pause_reason()}
+
+    moves = fn record ->
+      moves_payload(record, %{
+        identifier: record.issue_identifier,
+        repo_key: record.repo_key,
+        symphony_pause: pauses.symphony_pause,
+        repository_pause: repository_pause_in(pauses.repositories, record.repo_key),
+        running?: Map.has_key?(live.running, record.issue_id)
+      })
+    end
+
+    payload = Home.read(Map.get(snapshot, :dispatch_order), records, live, priority_filter: Config.ticket_priority_filter(), moves: moves)
+    if error, do: Map.put(payload, :error, error), else: payload
   end
 
   defp dispatch_order_read(snapshot, records), do: DispatchOrder.read(Map.get(snapshot, :dispatch_order), records, Situation.live_facts(snapshot))

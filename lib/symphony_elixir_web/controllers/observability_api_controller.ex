@@ -52,6 +52,11 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
     json(conn, Presenter.dispatch_order_payload(orchestrator(), snapshot_timeout_ms()))
   end
 
+  @spec home(Conn.t(), map()) :: Conn.t()
+  def home(conn, _params) do
+    ConditionalJSON.json(conn, Presenter.home_payload(orchestrator(), snapshot_timeout_ms()))
+  end
+
   @spec repos(Conn.t(), map()) :: Conn.t()
   def repos(conn, _params) do
     case Presenter.repos_payload(orchestrator(), snapshot_timeout_ms()) do
