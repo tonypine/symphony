@@ -275,21 +275,25 @@ public struct TreeRowState: Equatable {
 /// C50, the catalog's tree (`.t-root`, `.t-kids`): `nodes` as rows, each child one step in under its parent on a rail
 /// with a tick to its row. Past `foldDepth` (nil: never) the rest of a chain folds into a pill counting it ("+6"), which
 /// a click or the Right arrow opens (`opened` holds the roots whose chains are open) and the Left arrow closes. The up
-/// and down arrows walk the lines in order; Return opens the selected row's item (`open`). In a window it makes only
-/// the rows on screen (a lazy stack); offscreen, where a snapshot has no scroll view, all of them.
+/// and down arrows walk the lines in order; Return opens the selected row's item (`open`). Two lists one above the
+/// other walk as one: `leave` is called with 1 or −1 when an arrow goes past the last or the first line, and `focus`
+/// gives the list the keyboard when it turns true and turns true while the list has it. In a window it makes only the
+/// rows on screen (a lazy stack); offscreen, where a snapshot has no scroll view, all of them.
 public struct TreeList<ID: Hashable, RowContent: View>: View {
     let nodes: [TreeNode<ID>]
     let foldDepth: Int?
     @Binding var opened: Set<ID>
     @Binding var selection: TreeKey<ID>?
     let open: ((ID) -> Void)?
+    let leave: ((Int) -> Void)?
+    let focus: Binding<Bool>?
     let row: (ID, TreeRowState) -> RowContent
     @FocusState private var focused: Bool
     @Environment(\.offscreenSnapshot) private var offscreenSnapshot
 
     public init(
         _ nodes: [TreeNode<ID>], foldDepth: Int? = DesignTokens.Tree.foldDepth, opened: Binding<Set<ID>>,
-        selection: Binding<TreeKey<ID>?>, open: ((ID) -> Void)? = nil,
+        selection: Binding<TreeKey<ID>?>, open: ((ID) -> Void)? = nil, leave: ((Int) -> Void)? = nil, focus: Binding<Bool>? = nil,
         @ViewBuilder row: @escaping (ID, TreeRowState) -> RowContent
     ) {
         self.nodes = nodes
@@ -297,7 +301,19 @@ public struct TreeList<ID: Hashable, RowContent: View>: View {
         _opened = opened
         _selection = selection
         self.open = open
+        self.leave = leave
+        self.focus = focus
         self.row = row
+    }
+
+    /// An arrow `by` lines from the selection: the next line, or past the first or the last, the list above or below.
+    private func step(_ offset: Int, in lines: [TreeLine<ID>]) -> KeyPress.Result {
+        if let leave, let selection, TreeLines.isEdge(selection, going: offset, in: lines) {
+            leave(offset)
+            return .handled
+        }
+        selection = TreeLines.move(from: selection, by: offset, in: lines)
+        return .handled
     }
 
     public var body: some View {
@@ -313,14 +329,14 @@ public struct TreeList<ID: Hashable, RowContent: View>: View {
         .focusable()
         .focusEffectDisabled()
         .focused($focused)
-        .onKeyPress(.downArrow) {
-            selection = TreeLines.move(from: selection, by: 1, in: lines)
-            return .handled
+        .onChange(of: focus?.wrappedValue ?? false) { _, wanted in
+            if wanted, !focused { focused = true }
         }
-        .onKeyPress(.upArrow) {
-            selection = TreeLines.move(from: selection, by: -1, in: lines)
-            return .handled
+        .onChange(of: focused) { _, has in
+            if let focus, focus.wrappedValue != has { focus.wrappedValue = has }
         }
+        .onKeyPress(.downArrow) { step(1, in: lines) }
+        .onKeyPress(.upArrow) { step(-1, in: lines) }
         .onKeyPress(.rightArrow) {
             guard let next = TreeLines.open(selection, in: lines, opened: opened) else { return .ignored }
             opened = next

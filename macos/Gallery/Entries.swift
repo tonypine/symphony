@@ -158,8 +158,8 @@ let galleryEntries: [GalleryEntry] = [
         id: "ticket-page", title: "Ticket page", kind: .screen, prefixes: ["ticket-page-"],
         files: ["SymphonyBar/TicketPageView.swift", "SymphonyBarCore/TicketPage"]),
     GalleryEntry(
-        id: "home", title: "Home", kind: .screen, prefixes: ["home-board", "home-questions"],
-        files: ["SymphonyBar/HomeView.swift", "SymphonyBar/HomeInboxView.swift", "SymphonyBarCore/Home"]),
+        id: "home", title: "Home", kind: .screen, prefixes: ["home-lists", "home-unavailable"],
+        files: ["SymphonyBar/HomeView.swift", "SymphonyBarCore/Home"]),
     GalleryEntry(
         id: "inbox", title: "Inbox, its reviews and the peek", kind: .screen,
         prefixes: ["inbox-drawer", "inbox-blocked-", "plan-questions", "plan-unapplied", "plan-unasked", "watcher-decision", "peek-"],

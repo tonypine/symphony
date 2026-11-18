@@ -1028,6 +1028,8 @@ public enum DesignTokens {
         public static let valueWidth: Double = 52
         /// The column for a longer value: a duration ("1 day 4 h") or an amount ("182K of 500K").
         public static let wideValueWidth: Double = 96
+        /// Home's column for how long a situation has held (`.home .row .age`).
+        public static let homeValueWidth: Double = 64
         /// A selected row's secondary words, lead and values: white at 85 % on the accent.
         public static let onAccentSecondary: Double = 0.85
 
@@ -1989,6 +1991,8 @@ public enum DesignTokens {
     /// The main window's layout (§3.5).
     public enum Layout {
         public static let windowWidth: Double = 1200
+        /// Home's two lists are at most this wide, centred on a wide window (`.home`).
+        public static let homeMaxWidth: Double = 1480
         public static let windowHeight: Double = 760
         public static let minWindowWidth: Double = 960
         public static let minWindowHeight: Double = 600
