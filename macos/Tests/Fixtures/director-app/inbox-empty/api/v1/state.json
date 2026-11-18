@@ -167,5 +167,108 @@
   "uptime_seconds": 11580,
   "usage_limits": [],
   "waiting_on_you": [],
-  "watching": []
+  "watching": [],
+  "providers": [
+    {
+      "fallback_for": [],
+      "harnesses": [
+        "claude"
+      ],
+      "held": true,
+      "held_until": "2026-10-07T18:05:00Z",
+      "in_use": true,
+      "kinds": [
+        "implementation",
+        "breakdown",
+        "rework",
+        "landing",
+        "code_review",
+        "epic_review",
+        "ci_fix",
+        "review_feedback"
+      ],
+      "name": "Anthropic",
+      "paused": false,
+      "paused_since": null,
+      "provider": "anthropic",
+      "reserve": null,
+      "tokens_today": 1840000,
+      "usage_windows": [
+        {
+          "name": "five_hour",
+          "resets_at": "2026-10-07T18:00:00Z",
+          "utilization": 0.97
+        },
+        {
+          "name": "seven_day",
+          "resets_at": "2026-10-10T09:00:00Z",
+          "utilization": 0.64
+        }
+      ],
+      "working": 2
+    },
+    {
+      "fallback_for": [
+        "implementation",
+        "rework"
+      ],
+      "harnesses": [
+        "claude"
+      ],
+      "held": false,
+      "held_until": null,
+      "in_use": true,
+      "kinds": [],
+      "name": "OpenRouter",
+      "paused": true,
+      "paused_since": "2026-10-07T13:30:00Z",
+      "provider": "openrouter",
+      "reserve": null,
+      "tokens_today": 52000,
+      "usage_windows": [],
+      "working": 0
+    },
+    {
+      "fallback_for": [
+        "code_review"
+      ],
+      "harnesses": [
+        "codex"
+      ],
+      "held": false,
+      "held_until": null,
+      "in_use": true,
+      "kinds": [
+        "qa"
+      ],
+      "name": "OpenAI",
+      "paused": false,
+      "paused_since": null,
+      "provider": "openai",
+      "reserve": null,
+      "tokens_today": 310000,
+      "usage_windows": [],
+      "working": 1
+    },
+    {
+      "fallback_for": [],
+      "harnesses": [
+        "claude",
+        "codex",
+        "opencode"
+      ],
+      "held": false,
+      "held_until": null,
+      "in_use": false,
+      "kinds": [],
+      "name": "OpenCode Go",
+      "paused": false,
+      "paused_since": null,
+      "provider": "opencode-go",
+      "reserve": null,
+      "tokens_today": 0,
+      "usage_windows": [],
+      "working": 0
+    }
+  ]
 }
