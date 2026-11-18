@@ -71,7 +71,7 @@ defmodule SymphonyElixir.Home do
     %{
       in_progress: in_progress,
       queue: %{roots: queue(queued, in_progress_ids, ctx)},
-      outside: Map.put(outside, :behind, MapSet.size(behind))
+      outside: Map.put(outside, :behind, length(behind))
     }
   end
 
@@ -235,12 +235,12 @@ defmodule SymphonyElixir.Home do
 
     case held do
       [] ->
-        {queued, MapSet.new()}
+        {queued, []}
 
       held ->
         held_ids = MapSet.new(held, & &1.issue_id)
         {left, behind} = queued |> Enum.reject(&MapSet.member?(held_ids, &1.issue_id)) |> behind(in_progress_ids, ctx)
-        {left, MapSet.union(behind, held_ids)}
+        {left, behind ++ MapSet.to_list(held_ids)}
     end
   end
 
@@ -304,7 +304,7 @@ defmodule SymphonyElixir.Home do
 
   # How many queued tickets stand above each one at most; a cycle of blockers counts once.
   defp depths(placed) do
-    Enum.reduce(Map.keys(placed), %{}, fn issue_id, memo -> elem(depth(issue_id, placed, memo, MapSet.new()), 1) end)
+    Enum.reduce(Map.keys(placed), %{}, fn issue_id, memo -> elem(depth(issue_id, placed, memo, []), 1) end)
   end
 
   defp depth(issue_id, placed, memo, visiting) do
@@ -314,11 +314,11 @@ defmodule SymphonyElixir.Home do
 
       :error ->
         {_record, in_queue, _waits} = Map.fetch!(placed, issue_id)
-        visiting = MapSet.put(visiting, issue_id)
+        visiting = [issue_id | visiting]
 
         {depth, memo} =
           in_queue
-          |> Enum.reject(&MapSet.member?(visiting, &1.id))
+          |> Enum.reject(&(&1.id in visiting))
           |> Enum.reduce({0, memo}, fn blocker, {deepest, memo} ->
             {depth, memo} = depth(blocker.id, placed, memo, visiting)
             {max(deepest, depth + 1), memo}
