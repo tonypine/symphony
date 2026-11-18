@@ -28,7 +28,7 @@ public enum SymphonyView: String, CaseIterable, Equatable, Hashable, Identifiabl
         }
     }
 
-    /// The toolbar's line under the title.
+    /// What the page is for, in a line.
     public var subtitle: String {
         switch self {
         case .inbox: "What waits on you"
@@ -82,7 +82,8 @@ public enum SymphonyView: String, CaseIterable, Equatable, Hashable, Identifiabl
     /// Repos and Settings open their own windows rather than showing in this one.
     public var opensOwnWindow: Bool { self == .repos || self == .settings }
 
-    /// The toolbar's title: a tabbed destination's name, as its tabs name the page; else the page's.
+    /// Where the window is, as the window bar's breadcrumb names it (TP-1496): a tabbed destination's name, as its tabs
+    /// name the page; else the page's.
     public var toolbarTitle: String { destination.presentation == .tabs ? destination.title : title }
 }
 

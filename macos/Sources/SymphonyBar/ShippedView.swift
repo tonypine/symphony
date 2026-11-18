@@ -69,15 +69,6 @@ struct ShippedContent: View {
                 shippedTab
             case .learnings:
                 learningsTab
-                    .toolbar {
-                        ToolbarItem(placement: .automatic) {
-                            PageSearchField(
-                                prompt: Learnings.searchPrompt, text: $model.learningsFilter.search,
-                                matches: model.learnings.map { Learnings(payload: $0, filter: model.learningsFilter, scope: model.scope).count },
-                                requested: $model.learningsSearchRequested
-                            )
-                        }
-                    }
             }
         }
     }

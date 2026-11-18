@@ -98,6 +98,15 @@ let galleryEntries: [GalleryEntry] = [
         id: "collapsible-card", title: "Collapsible card", kind: .component, prefixes: ["collapsible-card-"],
         files: ["SymphonyBarUI/DesignSystem/Collapsible.swift"]),
     GalleryEntry(
+        id: "window-bar", title: "Window bar", kind: .component, prefixes: ["window-bar-"],
+        files: [
+            "SymphonyBarUI/DesignSystem/WindowBar.swift", "SymphonyBarUI/DesignSystem/Breadcrumb.swift", "SymphonyBar/WindowBarView.swift",
+            "SymphonyBarCore/WindowBar.swift",
+        ]),
+    GalleryEntry(
+        id: "breadcrumb", title: "Breadcrumb", kind: .component, prefixes: ["breadcrumb-"],
+        files: ["SymphonyBarUI/DesignSystem/Breadcrumb.swift", "SymphonyBarCore/WindowBar.swift"]),
+    GalleryEntry(
         id: "mention-chips", title: "Mention chips and their popovers", kind: .component,
         prefixes: ["ticket-popover", "pr-popover", "missing-popover", "plan-chips", "pr-chips", "clarify-chips", "blocked-chips", "decision-chips-"],
         files: ["SymphonyBarUI/Chip", "SymphonyBarUI/ReferencePopoverView.swift", "SymphonyBarCore/Mention"]),

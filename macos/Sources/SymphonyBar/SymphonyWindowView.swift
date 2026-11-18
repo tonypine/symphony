@@ -193,8 +193,8 @@ final class SymphonyWindowModel: ObservableObject {
     /// The ticket page's own model (TP-1480): the page observes it, not the window, and its parts publish only when
     /// they changed.
     let ticketPageStore = TicketPageStore()
-    /// The shown page's title, set only when it changed: the toolbar's subtitle draws again with it.
-    @Published var ticketTitle: String?
+    /// The shown page's epic, set only when it changed: the window bar's breadcrumb draws again with it.
+    @Published var ticketEpic: EpicChip?
     /// Whether the page's context is to be set again once the window's change in flight is made.
     var ticketContextDue = false
     /// What the pull request page shown read from its endpoint, nil while it reads (D15).
@@ -297,8 +297,10 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var inspectorShown = true
     /// Set by ⌥⌘F on Tickets to put the focus in its search field.
     @Published var searchRequested = false
-    /// ⌘F's Find a Ticket sheet, from any page (TP-1455).
-    @Published var ticketFinderShown = false
+    /// ⌘F: puts the keyboard in the window bar's Find a ticket, from any page (TP-1455, TP-1496); the field clears it.
+    @Published var findRequested = false
+    /// What is typed in Find a ticket.
+    @Published var findQuery = ""
     /// Each destination's page shown last this session: Work and Insights open on the tab left last (TP-1455).
     private(set) var destinationMemory = DestinationMemory()
     /// The dispatch control's popover (D12a).
@@ -1005,29 +1007,17 @@ final class SymphonyWindowModel: ObservableObject {
         return destination.badge(waitingOnYou: inboxBadge, setup: setupSummary, epicsWaiting: epicsWaiting)
     }
 
-    /// ⌘F: the Find a Ticket sheet, from any page.
+    /// ⌘F: the keyboard in the window bar's Find a ticket, from any page.
     func findTicket() {
-        ticketFinderShown = true
+        findRequested = true
     }
 
-    /// Return in Find a Ticket: the best match's page, pushed over the page the sheet opened on, so Back returns to it.
+    /// Return in Find a ticket, or a match picked under it: the best match's page, pushed over the page shown, so
+    /// Back returns to it. The field empties.
     func openFound(_ query: String) {
         guard let identifier = TicketFinder.target(query, in: allTickets) else { return }
-        ticketFinderShown = false
+        findQuery = ""
         openTicket(identifier)
-    }
-
-    /// The toolbar's title: the destination's or the page's, the ticket's identifier on its page, or "#448 · <title>"
-    /// on a pull request's.
-    var toolbarTitle: String { shownTicket ?? pullRequestScreen?.title ?? selection.toolbarTitle }
-
-    /// The toolbar's line under the title: the view's, the ticket's title on its page, or "<repo> · for <ticket>" on a
-    /// pull request's.
-    var toolbarSubtitle: String {
-        if let screen = pullRequestScreen { return screen.subtitle }
-        guard shownTicket != nil else { return selection.subtitle }
-        // `ticketTitle` changing is what draws it again.
-        return ticketPage?.title ?? "Ticket"
     }
 
     /// The status bar's health line (TP-1454): the build that answers and whether Symphony does.
@@ -1046,7 +1036,7 @@ final class SymphonyWindowModel: ObservableObject {
     }
 }
 
-/// The Symphony window: a sidebar of views, the selected view, a toolbar with its title and Refresh, and the status
+/// The Symphony window: a sidebar of views, the selected view under the window's own bar (TP-1496), and the status
 /// bar with the dispatch control and the factory's health (TP-1454).
 struct SymphonyWindowView: View {
     @ObservedObject var model: SymphonyWindowModel
@@ -1075,121 +1065,36 @@ struct SymphonyWindowView: View {
         } detail: {
             // The status bar under the page, in the layout rather than an inset, so nothing on the page (the decision
             // banner, the drawer) is drawn under it: one line of the factory's health, and the dispatch control
-            // (TP-1454).
+            // (TP-1454). The window bar over the page's top, which scrolls under its glass (TP-1496), from the window's
+            // top edge: the system draws no toolbar there.
             VStack(spacing: 0) {
                 SymphonyDetail(model: model, client: client)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .safeAreaInset(edge: .top, spacing: 0) {
+                        DirectorWindowBar(model: model, sidebarShown: columnVisibility != .detailOnly, toggleSidebar: toggleSidebar)
+                    }
                     .windowBackdrop()
                 WindowStatusBar(model: model, client: client)
             }
+                .ignoresSafeArea(.container, edges: .top)
                 .modifier(StopRunSheetPresenter(model: model))
                 .modifier(MoveSheetPresenter(model: model))
                 .modifier(DispatchSheetsPresenter(model: model))
-                .sheet(isPresented: $model.ticketFinderShown) {
-                    TicketFinderSheet(model: model)
-                }
-                .toolbar {
-                    ToolbarItemGroup(placement: .navigation) {
-                        // P10: ⌘[ and ⌘] between the views and the ticket pages shown.
-                        ControlGroup {
-                            Button(action: model.goBack) { Label(NavigationHistory.backTitle, systemImage: "chevron.left") }
-                                .disabled(!model.canGoBack)
-                                .help("Back (⌘[)")
-                            Button(action: model.goForward) { Label(NavigationHistory.forwardTitle, systemImage: "chevron.right") }
-                                .disabled(!model.history.canGoForward)
-                                .help("Forward (⌘])")
-                        }
-                        VStack(alignment: .leading, spacing: 0) {
-                            Text(model.toolbarTitle).font(.headline).lineLimit(1)
-                            HStack(spacing: DesignTokens.Space.s1) {
-                                Text(model.toolbarSubtitle).font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
-                                // D15 reading: the spinner in the subtitle, over its placeholder cards.
-                                if model.pullRequestScreen?.isLoading == true {
-                                    ProgressView().controlSize(.mini).accessibilityLabel(PullRequestScreen.readingTitle)
-                                }
-                            }
-                        }
-                        // A pull request's long title is cut short here, so the window's items stay out of the
-                        // toolbar's overflow; its page's header shows it whole.
-                        .frame(maxWidth: DesignTokens.Layout.toolbarTitleMaxWidth, alignment: .leading)
-                        .accessibilityElement(children: .combine)
-                    }
-                    ToolbarItem(placement: .automatic) {
-                        ScopePicker(model: model)
-                    }
-                    ToolbarItem(placement: .automatic) {
-                        // ⌘F from any page (TP-1455).
-                        Button { model.findTicket() } label: {
-                            Label(TicketFinder.title, systemImage: "magnifyingglass")
-                        }
-                        .help("\(TicketFinder.title) (⌘F)")
-                    }
-                    if model.selection == .shipped, !model.showsPage {
-                        ToolbarItem(placement: .principal) {
-                            SegmentedControl(
-                                "Shipped or Learnings", selection: $model.shippedTab,
-                                segments: Shipped.Tab.allCases.map { Segment($0, $0.title) }, size: .small
-                            )
-                        }
-                    }
-                    if model.selection == .audit, !model.showsPage {
-                        ToolbarItem(placement: .automatic) {
-                            Button { model.exportAudit() } label: {
-                                Label(Audit.exportTitle, systemImage: "square.and.arrow.up")
-                            }
-                            .help("Export the filtered records as NDJSON")
-                            .disabled(model.auditExporting || model.auditRecords == nil)
-                        }
-                    }
-                    if model.selection == .tickets, !model.showsPage {
-                        ToolbarItem(placement: .automatic) {
-                            Button { model.openForceSheet() } label: {
-                                Label(DispatchControl.forceTitle, systemImage: DesignTokens.Status.forced.symbol)
-                            }
-                            .help("Force a ticket (⇧⌘F)")
-                            .disabled(!model.dispatchControl.canForce)
-                        }
-                    }
-                    if model.presentsInboxDrawer, model.state == .connected {
-                        ToolbarItem(placement: .primaryAction) {
-                            // The Inbox's drawer, on Home and on a ticket page (TP-1454).
-                            Button { model.toggleInboxDrawer() } label: {
-                                Label(model.inboxDrawerShown ? HomeInbox.hideDrawerTitle : HomeInbox.showDrawerTitle, systemImage: "sidebar.trailing")
-                            }
-                            .help(model.selection == .overview && !model.showsPage
-                                ? "\(model.inspectorTitle) (⌥⌘I)"
-                                : model.inboxDrawerShown ? HomeInbox.hideDrawerTitle : HomeInbox.showDrawerTitle)
-                        }
-                    }
-                    ToolbarItem(placement: .primaryAction) {
-                        // On Setup, ⌘R is Check Again, with a spinner while it runs (SU3).
-                        if model.showsSetupCheck {
-                            Button { model.refresh() } label: {
-                                if model.setupChecking {
-                                    ProgressView().controlSize(.small).accessibilityLabel("Checking")
-                                } else {
-                                    Label(SetupPage.checkAgainTitle, systemImage: "arrow.clockwise")
-                                }
-                            }
-                            .help("\(SetupPage.checkAgainTitle) (⌘R)")
-                            .disabled(model.setupChecking)
-                        } else {
-                            Button {
-                                model.refresh()
-                            } label: {
-                                Label("Refresh", systemImage: "arrow.clockwise")
-                            }
-                            .help("Refresh (⌘R)")
-                        }
-                    }
-                }
         }
+        // The window bar is the Director's own (TP-1496): no system toolbar, and no sidebar toggle of its own.
+        .toolbar(removing: .sidebarToggle)
         .onGeometryChange(for: Double.self) { $0.size.width } action: { width in
             windowWidth = width
             fitDrawer()
         }
         .onChange(of: model.inboxDrawerShown) { fitDrawer() }
         .onChange(of: model.presentsInboxDrawer) { fitDrawer() }
+    }
+
+    /// The window bar's sidebar toggle: the sidebar the Director folds stays folded, even once the drawer closes.
+    private func toggleSidebar() {
+        sidebarFoldedForDrawer = false
+        columnVisibility = columnVisibility == .detailOnly ? .all : .detailOnly
     }
 
     /// Folds the sidebar while the drawer is open in a window too narrow for the sidebar, the page and the drawer, so
@@ -1304,11 +1209,10 @@ struct SymphonyDetail: View {
             PullRequestPageContent(model: model)
         } else {
             VStack(spacing: 0) {
-                if model.destination.presentation == .tabs {
-                    DestinationTabs(model: model)
-                }
-                // The page takes the rest of the height, so the tabs stay at the top over a page that isn't full
-                // (an empty state centres in the space under them).
+                // Insights' tabs and the page's own controls; Work's tabs are the window bar's switch (TP-1496).
+                PageControlsRow(model: model)
+                // The page takes the rest of the height, so the row stays at the top over a page that isn't full
+                // (an empty state centres in the space under it).
                 page
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -1344,26 +1248,6 @@ struct SymphonyDetail: View {
         default:
             EmptyState(title: EndpointPlaceholder.updateSymphony, symbol: EndpointPlaceholder.updateSymbol)
         }
-    }
-}
-
-/// Work's and Insights' tabs over the page (TP-1455): a tab shows its page as it was, and the destination remembers it.
-struct DestinationTabs: View {
-    @ObservedObject var model: SymphonyWindowModel
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Read once more as the window leaves for a destination with one page (⌘1 to Home): no tabs then.
-            if model.destination.pages.count >= DesignTokens.Segmented.fewest {
-                SegmentedControl(
-                    "\(model.destination.title) tabs", selection: Binding(get: { model.selection }, set: { model.show($0) }),
-                    segments: model.destination.pages.map { Segment($0, $0.title) }, size: .small
-                )
-                .padding(.vertical, DesignTokens.Space.s2)
-            }
-            Divider()
-        }
-        .frame(maxWidth: .infinity)
     }
 }
 
@@ -1495,55 +1379,5 @@ private struct DiagnosticsRow: View {
             valueWidth: DesignTokens.Row.wideValueWidth
         )
         .accessibilityLabel([row.label, row.status?.word, row.value, row.detail].compactMap { $0 }.joined(separator: ", "))
-    }
-}
-
-/// ⌘F's Find a Ticket (TP-1455): the shared search field (TP-1509), which finds a tracked ticket by its identifier or
-/// title as it is typed, counts the matches and, when none matches and nothing would open, says what it searched.
-/// Return opens the best match's page, or the page of the identifier typed. Escape clears the field, then lets it go,
-/// then closes the sheet.
-struct TicketFinderSheet: View {
-    @ObservedObject var model: SymphonyWindowModel
-    @State private var query = ""
-    @FocusState private var fieldFocused: Bool
-
-    var body: some View {
-        let matches = TicketFinder.matches(query, in: model.allTickets)
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-            Text(TicketFinder.title).font(.headline)
-            SearchField(
-                TicketFinder.prompt, text: $query, matches: matches.count,
-                searched: TicketFinder.target(query, in: model.allTickets) == nil ? TicketFinder.searched : nil,
-                focused: $fieldFocused, onSubmit: { model.openFound(query) }
-            )
-            if !matches.isEmpty {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(matches) { row in
-                        // Every row is a link to its ticket's page, with the catalog's hover (TP-1438).
-                        Button { model.openFound(row.identifier) } label: {
-                            Text(TicketFinder.line(row))
-                                .lineLimit(1)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.vertical, DesignTokens.Space.s1)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .rowStyle()
-                        .accessibilityLabel(row.accessibilityLabel(reference: model.allTickets?.reference ?? Date()))
-                    }
-                }
-            }
-            HStack {
-                Spacer()
-                Button("Cancel", role: .cancel) { model.ticketFinderShown = false }
-                    .keyboardShortcut(.cancelAction)
-                Button(TicketFinder.openTitle) { model.openFound(query) }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(TicketFinder.target(query, in: model.allTickets) == nil)
-            }
-        }
-        .padding(DesignTokens.Space.s5)
-        .frame(width: 420)
-        .onAppear { fieldFocused = true }
     }
 }

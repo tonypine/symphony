@@ -206,7 +206,7 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertTrue(SymphonyView.repos.opensOwnWindow)
         XCTAssertTrue(SymphonyView.settings.opensOwnWindow)
         XCTAssertFalse(SymphonyView.diagnostics.opensOwnWindow)
-        // A tabbed destination's name heads the toolbar, as its tabs name the page.
+        // A tabbed destination's name is where the window bar's breadcrumb says the window is, as its tabs name the page.
         XCTAssertEqual(SymphonyView.tickets.toolbarTitle, "Work")
         XCTAssertEqual(SymphonyView.usage.toolbarTitle, "Insights")
         XCTAssertEqual(SymphonyView.overview.toolbarTitle, "Home")
