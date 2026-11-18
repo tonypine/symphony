@@ -159,14 +159,81 @@ public struct RunProfile: Equatable {
     }
 }
 
-/// A `runs` block: its `default` entry and the run kinds it sets.
+/// One alternative of an entry's `fallbacks` list: what it sets on top of the entry's own choice. A nil field is
+/// missing from the file. See `RunsEditor` for how it resolves.
+public struct RunFallback: Equatable {
+    public var harness: String?
+    public var provider: String?
+    public var model: String?
+    public var effort: String?
+    public var smallModel: String?
+
+    public init(
+        harness: String? = nil,
+        provider: String? = nil,
+        model: String? = nil,
+        effort: String? = nil,
+        smallModel: String? = nil
+    ) {
+        self.harness = harness
+        self.provider = provider
+        self.model = model
+        self.effort = effort
+        self.smallModel = smallModel
+    }
+
+    /// The fields a fallback may set: every run profile field but `command`.
+    public static let fields: [RunProfileField] = [.harness, .provider, .model, .effort, .smallModel]
+
+    public subscript(field: RunProfileField) -> String? {
+        get {
+            switch field {
+            case .harness: return harness
+            case .provider: return provider
+            case .model: return model
+            case .effort: return effort
+            case .smallModel: return smallModel
+            case .command: return nil
+            }
+        }
+        set {
+            switch field {
+            case .harness: harness = newValue
+            case .provider: provider = newValue
+            case .model: model = newValue
+            case .effort: effort = newValue
+            case .smallModel: smallModel = newValue
+            case .command: break
+            }
+        }
+    }
+}
+
+/// A `runs` block: its `default` entry, the run kinds it sets, and the `fallbacks` lists its entries set, keyed
+/// by run kind (nil for `default`). A missing list is unset; Symphony reads an empty one the same way.
 public struct RunProfiles: Equatable {
     public var defaults: RunProfile
     public var kinds: [RunKind: RunProfile]
+    public var fallbacks: [RunKind?: [RunFallback]]
 
-    public init(defaults: RunProfile = RunProfile(), kinds: [RunKind: RunProfile] = [:]) {
+    public init(
+        defaults: RunProfile = RunProfile(),
+        kinds: [RunKind: RunProfile] = [:],
+        fallbacks: [RunKind?: [RunFallback]] = [:]
+    ) {
         self.defaults = defaults
         self.kinds = kinds
+        self.fallbacks = fallbacks
+    }
+
+    /// The `fallbacks` list the entry for `kind` sets itself, or nil. An empty list reads the same as a missing one.
+    public func fallbacks(of kind: RunKind?) -> [RunFallback]? {
+        fallbacks[kind].flatMap { $0.isEmpty ? nil : $0 }
+    }
+
+    /// Sets the entry's own `fallbacks` list; nil or an empty list removes it.
+    public mutating func setFallbacks(_ list: [RunFallback]?, of kind: RunKind?) {
+        fallbacks[kind] = list.flatMap { $0.isEmpty ? nil : $0 }
     }
 
     /// The profile of `kind`, or the defaults for nil. An empty profile reads the same as a missing one.
@@ -244,15 +311,16 @@ public struct ScopedRunProfiles: Equatable {
         }
     }
 
-    /// The providers each harness runs on in some scope's run kind, as the rows resolve: the small models
-    /// those harnesses need.
+    /// The providers each harness runs on in some scope's run kind, first choices and fallbacks as they
+    /// resolve: the small models those harnesses need.
     public var providersInUse: [Harness: Set<String>] {
         var inUse: [Harness: Set<String>] = [:]
         for scope in [RunProfilesScope.global] + repositories.keys.map(RunProfilesScope.repository) {
             for kind in RunKind.allCases {
-                let run = self[scope][kind].merged(over: inherited(kind, in: scope))
-                guard let harness = run.harness.flatMap(Harness.init) else { continue }
-                inUse[harness, default: []].formUnion(run.provider.map { [$0] } ?? [])
+                for line in lines(kind, in: scope) {
+                    guard let harness = line.harness.value.flatMap(Harness.init) else { continue }
+                    inUse[harness, default: []].formUnion(line.provider.value.map { [$0] } ?? [])
+                }
             }
         }
         return inUse
@@ -280,6 +348,11 @@ public enum RunProfilesConfig {
         RunProfileChoice(id: "claude-opus-5-5", title: "Opus 5.5"),
         RunProfileChoice(id: "claude-sonnet-5-5", title: "Sonnet 5.5"),
         RunProfileChoice(id: "claude-haiku-4-5-20251001", title: "Haiku 4.5"),
+    ]
+
+    /// OpenAI's models for Codex runs.
+    public static let openAIModels = [
+        RunProfileChoice(id: "gpt-5.5", title: "GPT-5.5"),
     ]
 
     public static let efforts = ["low", "medium", "high", "xhigh", "max"].map { RunProfileChoice(id: $0, title: $0) }
@@ -320,6 +393,7 @@ public enum RunProfilesConfig {
     static let defaultEntry = "default"
     static let harnessesPath = ["execution", "harnesses"]
     static let commandKey = "command"
+    static let fallbacksKey = "fallbacks"
     static let smallModelKey = "small_model"
     static let fieldOrder = RunProfileField.allCases.map(\.rawValue)
     static let defaultIndentStep = 2
@@ -341,6 +415,7 @@ public enum RunProfilesConfig {
                 guard let kind = kind(named: entry.key) else { continue }
                 guard case .map(let fields) = entry.value else { throw runs.unsupported(notAnEntry(entry.key)) }
                 profiles[kind] = try profile(from: fields, on: runs)
+                profiles.setFallbacks(try fallbacks(from: fields, on: runs), of: kind)
             }
             return profiles
         }
@@ -350,7 +425,9 @@ public enum RunProfilesConfig {
             guard let key = document.child(entryName(kind), in: range) else { continue }
             let entryInline = try InlineText(key)
             if entryInline.isFlowMap {
-                profiles[kind] = try profile(from: entryInline.flowMap(key), on: key)
+                let fields = try entryInline.flowMap(key)
+                profiles[kind] = try profile(from: fields, on: key)
+                profiles.setFallbacks(try fallbacks(from: fields, on: key), of: kind)
             } else {
                 try requireBlock(key, entryInline)
                 let entryRange = document.children(of: key)
@@ -359,9 +436,140 @@ public enum RunProfilesConfig {
                     profile[field] = try scalar(field.rawValue, in: entryRange, of: document)
                 }
                 profiles[kind] = profile
+                profiles.setFallbacks(try fallbacks(under: key, in: document), of: kind)
             }
         }
         return profiles
+    }
+
+    /// The `fallbacks` list among an entry's `{ ... }` keys.
+    private static func fallbacks(from entries: [FlowEntry], on key: Document.Key) throws -> [RunFallback]? {
+        guard let entry = entries.first(where: { $0.key == fallbacksKey }) else { return nil }
+        guard case .text(let raw) = entry.value else { throw key.unsupported(notAList) }
+        return try fallbacks(fromFlow: Substring(raw), on: key)
+    }
+
+    /// A `[ { ... }, ... ]` list, or nil for a null value.
+    private static func fallbacks(fromFlow text: Substring, on key: Document.Key) throws -> [RunFallback]? {
+        if ["", "~", "null", "Null", "NULL"].contains(text) { return nil }
+        guard text.first == "[" else { throw key.unsupported(notAList) }
+        var scanner = FlowScanner(text, key: key)
+        return try scanner.list().map { item -> RunFallback in
+            guard case .map(let fields) = item else { throw key.unsupported(notAFallback) }
+            return try fallback(from: fields, on: key)
+        }
+    }
+
+    /// The `fallbacks:` child of a block entry: an inline `[ ... ]` list, or `- ` items under it, each a
+    /// `{ ... }` map or indented keys.
+    private static func fallbacks(under entry: Document.Key, in document: Document) throws -> [RunFallback]? {
+        guard let key = document.child(fallbacksKey, in: document.children(of: entry)) else { return nil }
+        let inline = try InlineText(key)
+        guard inline.isNull else { return try fallbacks(fromFlow: inline.value, on: key) }
+        return try listItems(of: key, in: document).items.map { try fallback(of: $0, in: document) }
+    }
+
+    /// One `- ` item of a block `fallbacks` list: a `{ ... }` map, or keys indented under the `-`.
+    private static func fallback(of item: ListItems.Item, in document: Document) throws -> RunFallback {
+        if item.isFlow {
+            guard document.childIndent(in: item.body) == nil else { throw item.key.unsupported(notAFallback) }
+            return try fallback(from: InlineText(item.key).flowMap(item.key), on: item.key)
+        }
+        var alternative = RunFallback()
+        for field in RunFallback.fields {
+            let name = field.rawValue
+            let fieldKey = item.key.name == name ? item.key : document.child(name, in: item.body, indent: item.column)
+            guard let fieldKey else { continue }
+            try requireScalar(fieldKey, in: document)
+            alternative[field] = try decodeScalar(InlineText(fieldKey).value, on: fieldKey)
+        }
+        return alternative
+    }
+
+    private static func fallback(from entries: [FlowEntry], on key: Document.Key) throws -> RunFallback {
+        var fallback = RunFallback()
+        for entry in entries {
+            guard let field = RunProfileField(rawValue: entry.key), RunFallback.fields.contains(field) else { continue }
+            guard case .text(let raw) = entry.value else { throw key.unsupported("`\(field.rawValue)` should be a single value") }
+            fallback[field] = try decodeScalar(Substring(raw), on: key)
+        }
+        return fallback
+    }
+
+    /// The `- ` items of a block list under `key`, which may sit at the key's own column.
+    struct ListItems {
+        struct Item {
+            /// The item's first key, on its `-` line, or a `{ ... }` map as the value of a key named `fallbacks`.
+            let key: Document.Key
+            /// The text after `- `.
+            let content: Substring
+            /// Column of the item's keys.
+            let column: Int
+            /// The lines after the `-` line, up to the next item.
+            let body: Range<Int>
+
+            var isFlow: Bool { content.first == "{" }
+
+            /// The item's lines, from its `-` line to its last structural line.
+            func lines(in document: Document) -> ClosedRange<Int> {
+                key.index...(document.lastStructural(in: body) ?? key.index)
+            }
+        }
+
+        let items: [Item]
+        /// Column of the `-` lines, or nil for an empty list.
+        let indent: Int?
+        /// The list's last structural line, or nil for an empty list.
+        let last: Int?
+    }
+
+    static func listItems(of key: Document.Key, in document: Document) throws -> ListItems {
+        func isDash(_ index: Int, _ indent: Int) -> Bool {
+            let content = document.lines[index].dropFirst(indent)
+            return content == "-" || content.hasPrefix("- ")
+        }
+        var structure: [Int] = []
+        var listIndent: Int?
+        for index in (key.index + 1)..<document.lines.count {
+            guard let indent = document.indent(at: index) else { continue }
+            let column = listIndent ?? indent
+            if listIndent == nil {
+                guard indent > key.indent || (indent == key.indent && isDash(index, indent)) else { break }
+                guard isDash(index, indent) else { throw key.unsupported(notAList) }
+                listIndent = indent
+            }
+            guard indent > column || (indent == column && isDash(index, indent)) else { break }
+            structure.append(index)
+        }
+        guard let dashIndent = listIndent, let last = structure.last else { return ListItems(items: [], indent: nil, last: nil) }
+        let dashes = structure.filter { document.indent(at: $0) == dashIndent }
+        let items = try dashes.enumerated().map { position, dash -> ListItems.Item in
+            let body = (dash + 1)..<(position + 1 < dashes.count ? dashes[position + 1] : last + 1)
+            let afterDash = document.lines[dash].dropFirst(dashIndent + 1)
+            let spaces = afterDash.prefix { $0 == " " }.count
+            let content = afterDash.dropFirst(spaces)
+            let column = dashIndent + 1 + spaces
+            if content.first == "{" {
+                return ListItems.Item(
+                    key: Document.Key(name: fallbacksKey, index: dash, indent: column, rest: " " + String(content)),
+                    content: content, column: column, body: body
+                )
+            }
+            guard spaces > 0, let colon = content.firstIndex(of: ":"), !content.hasPrefix("#") else {
+                throw key.unsupported(notAFallback, line: dash)
+            }
+            return ListItems.Item(
+                key: Document.Key(name: String(content[..<colon]), index: dash, indent: column, rest: String(content[content.index(after: colon)...])),
+                content: content, column: column, body: body
+            )
+        }
+        return ListItems(items: items, indent: dashIndent, last: last)
+    }
+
+    private static let notAList = "`fallbacks` should be a list of `- { ... }` alternatives"
+
+    private static var notAFallback: String {
+        "each fallback should be a map with any of: \(RunFallback.fields.map(\.rawValue).joined(separator: ", "))"
     }
 
     /// The profiles of the top-level `runs` block and of every repository, and `execution.harnesses`.
@@ -479,6 +687,9 @@ public enum RunProfilesConfig {
                 for field in RunProfileField.allCases where old[scope][kind][field] != new[scope][kind][field] {
                     text = try setting(field, of: kind, to: new[scope][kind][field], in: text, scope: scope)
                 }
+                if old[scope].fallbacks(of: kind) != new[scope].fallbacks(of: kind) {
+                    text = try settingFallbacks(new[scope].fallbacks(of: kind), of: kind, in: text, scope: scope)
+                }
             }
         }
         for harness in Harness.allCases {
@@ -570,8 +781,34 @@ public enum RunProfilesConfig {
         in yaml: String,
         scope: RunProfilesScope = .global
     ) throws -> String {
+        let value = EntryValue(name: field.rawValue, inline: value.map(RepositoriesConfig.scalar), items: nil)
+        return try setting(value, of: kind, in: yaml, scope: scope)
+    }
+
+    /// The same text with the entry's `fallbacks` list replaced by `list`, or removed for nil or an empty list,
+    /// then an entry or `runs:` it left empty. The list's own lines are written again; nothing else changes.
+    public static func settingFallbacks(
+        _ list: [RunFallback]?,
+        of kind: RunKind?,
+        in yaml: String,
+        scope: RunProfilesScope = .global
+    ) throws -> String {
+        let items = (list ?? []).map(renderFallback)
+        let value = EntryValue(name: fallbacksKey, inline: items.isEmpty ? nil : "[" + items.joined(separator: ", ") + "]", items: items)
+        return try setting(value, of: kind, in: yaml, scope: scope)
+    }
+
+    /// A fallback as a `{ ... }` map, its keys in field order.
+    static func renderFallback(_ fallback: RunFallback) -> String {
+        let entries = RunFallback.fields.compactMap { field in
+            fallback[field].map { FlowEntry(key: field.rawValue, value: .text(RepositoriesConfig.scalar($0))) }
+        }
+        return renderFlow(entries, padded: true)
+    }
+
+    private static func setting(_ value: EntryValue, of kind: RunKind?, in yaml: String, scope: RunProfilesScope) throws -> String {
         var document = Document(yaml)
-        let rendered = value.map(RepositoriesConfig.scalar)
+        let rendered = value.inline
         let name = entryName(kind)
         var step = defaultIndentStep
         let blocks: Bool
@@ -584,14 +821,14 @@ public enum RunProfilesConfig {
         }
 
         guard let runs = try runsKey(in: document, scope: scope) else {
-            guard let rendered else { return yaml }
+            guard rendered != nil else { return yaml }
             guard let item else {
-                document.append([runsSection + ":"] + entryLines(name, field, rendered, column: step, step: step, blocks: blocks))
+                document.append([runsSection + ":"] + entryLines(name, value, column: step, step: step, blocks: blocks))
                 return document.text
             }
             let pad = String(repeating: " ", count: item.column)
             document.lines.insert(
-                contentsOf: [pad + runsSection + ":"] + entryLines(name, field, rendered, column: item.column + step, step: step, blocks: blocks),
+                contentsOf: [pad + runsSection + ":"] + entryLines(name, value, column: item.column + step, step: step, blocks: blocks),
                 at: item.insertionIndex(in: document)
             )
             return document.text
@@ -602,15 +839,15 @@ public enum RunProfilesConfig {
             var entries = try inline.flowMap(runs)
             if entries.isEmpty {
                 // `runs: {}` turns into a block holding the new entry.
-                guard let rendered else { return yaml }
+                guard rendered != nil else { return yaml }
                 document.lines[runs.index] = inline.replacingValue(in: runs, with: "")
                 document.lines.insert(
-                    contentsOf: entryLines(name, field, rendered, column: runs.indent + step, step: step, blocks: blocks),
+                    contentsOf: entryLines(name, value, column: runs.indent + step, step: step, blocks: blocks),
                     at: runs.index + 1
                 )
                 return document.text
             }
-            guard try set([name, field.rawValue], to: rendered, in: &entries, on: runs) else { return yaml }
+            guard try set([name, value.name], to: rendered, in: &entries, on: runs) else { return yaml }
             if entries.isEmpty {
                 document.lines.remove(at: runs.index)
             } else {
@@ -625,14 +862,14 @@ public enum RunProfilesConfig {
         let runsStep = entryColumn - runs.indent
 
         guard let entry = document.child(name, in: runsRange) else {
-            guard let rendered else { return yaml }
+            guard rendered != nil else { return yaml }
             // `default` leads the block; a run kind goes after the last entry.
             var index = runs.index + 1
             if kind != nil, let last = document.lastStructural(in: runsRange) {
                 index = document.blockEnd(last, deeperThan: entryColumn) + 1
             }
             document.lines.insert(
-                contentsOf: entryLines(name, field, rendered, column: entryColumn, step: runsStep, blocks: blocks),
+                contentsOf: entryLines(name, value, column: entryColumn, step: runsStep, blocks: blocks),
                 at: index
             )
             return document.text
@@ -641,7 +878,7 @@ public enum RunProfilesConfig {
 
         if entryInline.isFlowMap {
             var fields = try entryInline.flowMap(entry)
-            guard try set([field.rawValue], to: rendered, in: &fields, on: entry) else { return yaml }
+            guard try set([value.name], to: rendered, in: &fields, on: entry) else { return yaml }
             if fields.isEmpty {
                 document.lines.remove(at: entry.index)
             } else {
@@ -650,7 +887,11 @@ public enum RunProfilesConfig {
         } else {
             try requireBlock(entry, entryInline)
             let fieldColumn = document.childIndent(in: document.children(of: entry)) ?? entry.indent + runsStep
-            try set(field.rawValue, to: rendered, under: entry, column: fieldColumn, order: fieldOrder, in: &document)
+            if value.items != nil {
+                try setList(value, under: entry, column: fieldColumn, step: runsStep, in: &document)
+            } else {
+                try set(value.name, to: rendered, under: entry, column: fieldColumn, order: fieldOrder, in: &document)
+            }
             if document.childIndent(in: document.children(of: entry)) == nil {
                 document.lines.remove(at: entry.index)
             }
@@ -659,6 +900,55 @@ public enum RunProfilesConfig {
             document.lines.remove(at: runs.index)
         }
         return document.text
+    }
+
+    /// Sets a list child of a block entry: rewrites an inline `[ ... ]` value in place, writes a block list's
+    /// items again at their column, inserts a new list as a block after the entry's other keys, or removes the
+    /// list for nil.
+    private static func setList(
+        _ value: EntryValue,
+        under entry: Document.Key,
+        column: Int,
+        step: Int,
+        in document: inout Document
+    ) throws {
+        let range = document.children(of: entry)
+        guard let key = document.child(value.name, in: range) else {
+            guard value.inline != nil else { return }
+            let index = insertionIndex(for: value.name, in: range, order: fieldOrder + [value.name], after: entry, of: document)
+            document.lines.insert(contentsOf: fieldLines(value, column: column, step: step), at: index)
+            return
+        }
+        let inline = try InlineText(key)
+        guard inline.isNull else {
+            if let rendered = value.inline {
+                document.lines[key.index] = inline.replacingValue(in: key, with: rendered)
+            } else {
+                document.lines.remove(at: key.index)
+            }
+            return
+        }
+        let list = try listItems(of: key, in: document)
+        guard value.inline != nil, let items = value.items else {
+            document.lines.removeSubrange(key.index...(list.last ?? key.index))
+            return
+        }
+        // Item by item, from the end: new items go after the last one, extra ones go, and a changed one is
+        // written again on one line, so comments between the items stay.
+        let pad = String(repeating: " ", count: list.indent ?? key.indent + step)
+        let old = list.items
+        let end = old.last.map { $0.lines(in: document).upperBound } ?? key.index
+        document.lines.insert(contentsOf: items.dropFirst(old.count).map { pad + "- " + $0 }, at: end + 1)
+        for item in old.dropFirst(items.count).reversed() {
+            document.lines.removeSubrange(item.lines(in: document))
+        }
+        for (item, rendered) in zip(old, items).reversed() {
+            guard try renderFallback(fallback(of: item, in: document)) != rendered else { continue }
+            var line = pad + "- " + rendered
+            if item.isFlow, let tail = try? InlineText(item.key).tail, tail.contains("#") { line += tail }
+            document.lines.replaceSubrange(item.lines(in: document), with: [line])
+        }
+        if !inline.value.isEmpty { document.lines[key.index] = inline.replacingValue(in: key, with: "") }
     }
 
     /// Sets the scalar child `name:` of `parent` (the top level for nil): rewrites its value, inserts it in
@@ -749,19 +1039,28 @@ public enum RunProfilesConfig {
         return document.blockEnd(last, deeperThan: previous.indent) + 1
     }
 
-    /// A new entry holding one field, at `column`: `name: { field: value }`, or `name:` with the field
+    /// A value written under a `runs` entry: a field's scalar, or a list.
+    struct EntryValue {
+        let name: String
+        /// The value as it goes on the key's line, in flow style; nil removes the key.
+        let inline: String?
+        /// A list's items in flow style, written one `- ` line each under a block entry.
+        let items: [String]?
+    }
+
+    /// A new entry holding one value, at `column`: `name: { key: value }`, or `name:` with the value
     /// indented under it.
-    private static func entryLines(
-        _ name: String,
-        _ field: RunProfileField,
-        _ rendered: String,
-        column: Int,
-        step: Int,
-        blocks: Bool
-    ) -> [String] {
+    private static func entryLines(_ name: String, _ value: EntryValue, column: Int, step: Int, blocks: Bool) -> [String] {
         let pad = String(repeating: " ", count: column)
-        guard blocks else { return [pad + name + ": { " + field.rawValue + ": " + rendered + " }"] }
-        return [pad + name + ":", pad + String(repeating: " ", count: step) + field.rawValue + ": " + rendered]
+        guard blocks else { return [pad + name + ": { " + value.name + ": " + (value.inline ?? "") + " }"] }
+        return [pad + name + ":"] + fieldLines(value, column: column + step, step: step)
+    }
+
+    /// `key: value` at `column`, or for a list `key:` with its `- ` items indented under it.
+    private static func fieldLines(_ value: EntryValue, column: Int, step: Int) -> [String] {
+        let pad = String(repeating: " ", count: column)
+        guard let items = value.items else { return [pad + value.name + ": " + (value.inline ?? "")] }
+        return [pad + value.name + ":"] + items.map { pad + String(repeating: " ", count: step) + "- " + $0 }
     }
 
     // MARK: Checks
@@ -1045,6 +1344,42 @@ private struct FlowScanner {
             }
         }
         throw error("a `[` list has no closing `]`")
+    }
+
+    /// The items of a `[ ... ]` list: maps, or other values as written.
+    mutating func list() throws -> [FlowValue] {
+        advance()
+        var items: [FlowValue] = []
+        skipSpace()
+        if current == "]" {
+            advance()
+            return items
+        }
+        while true {
+            skipSpace()
+            switch current {
+            case "{"?:
+                items.append(.map(try map()))
+            case "\""?, "'"?, "["?:
+                let start = index
+                try skipValue()
+                items.append(.text(String(text[start..<index])))
+            default:
+                let start = index
+                while let character = current, character != ",", character != "]" { advance() }
+                items.append(.text(text[start..<index].trimmingCharacters(in: .whitespaces)))
+            }
+            skipSpace()
+            switch current {
+            case ","?:
+                advance()
+            case "]"?:
+                advance()
+                return items
+            default:
+                throw error("a `[` list has no closing `]`")
+            }
+        }
     }
 
     mutating func map() throws -> [FlowEntry] {
