@@ -116,8 +116,8 @@ job), lists every setting as a dotted key path from the config schema
 in neither of these:
 
 - **The app's manifest**, `SettingsUIManifest.keyPaths` in
-  `macos/Sources/SymphonyBarCore/SettingsUIManifest.swift`: the keys the Settings, Models and
-  Repos sections read and write, one string literal per line. A key holding a free-form map, such
+  `macos/Sources/SymphonyBarCore/SettingsUIManifest.swift`: the keys Settings, Repos and the
+  Director's Factory › Runs read and write, one string literal per line. A key holding a free-form map, such
   as `runs`, covers everything under it. A Swift test runs every line-editor write
   and fails when one writes a key the manifest doesn't list, or the manifest lists a key no editor
   writes. The task also fails when the manifest lists a key that is not a setting. It may list a
@@ -1694,7 +1694,7 @@ code can drive and record each with `linear_record_walkthrough_proofs` before th
 naming only tests in its PR.
 
 **OpenRouter in QA.** QA never uses a real, paid OpenRouter key. OpenRouter flows (Test connection
-in the macOS app's Settings, its Models list and Effort note, `symphony check` on an `openrouter`
+in the macOS app's Settings, OpenRouter's model list on Factory › Runs, `symphony check` on an `openrouter`
 profile, an OpenRouter run) are tested against a stub OpenRouter, `SymphonyElixir.OpenRouter.Stub`,
 which listens on `127.0.0.1` only and answers with canned data:
 

@@ -83,4 +83,26 @@ final class RunsPageViewTests: XCTestCase {
         XCTAssertEqual(RunsPageDrawn(modelOpen: ("qa", 1)), RunsPageDrawn(modelOpen: ("qa", 1)))
         XCTAssertNotEqual(RunsPageDrawn(modelOpen: ("qa", 1)), RunsPageDrawn(dragging: ("qa", 1)))
     }
+
+    func testTheHarnessesBlockFitsTheLaptopPageWithOneLinePerHarness() throws {
+        let page = try page()
+        let rows = page.harnessRows
+        XCTAssertEqual(rows.map(\.harness), [.claude, .opencode])
+        XCTAssertEqual(rows[0].smallModels.map(\.provider), [RunProfilesConfig.anthropic, RunProfilesConfig.openRouter])
+        let block = fittingSize(RunsHarnessesView(rows: rows, actions: .none).frame(width: laptopPage))
+        let one = fittingSize(RunsHarnessesView(rows: Array(rows.prefix(1)), actions: .none).frame(width: laptopPage))
+        let row = fittingSize(RunsHarnessRowView(row: rows[0], actions: .none).frame(width: laptopPage))
+        XCTAssertLessThan(row.height, 2 * DesignTokens.Control.small.height, "a harness and its small models fit one line")
+        XCTAssertGreaterThan(block.height, one.height + row.height - 1, "each harness is a row of its own")
+
+        var repository = page
+        repository.show(.repository("web-shop"))
+        let all = NSHostingView(rootView: RunsPageView(page: page, actions: .none, scrolls: false))
+        let oneRepository = NSHostingView(rootView: RunsPageView(page: repository, actions: .none, scrolls: false))
+        for host in [all, oneRepository] {
+            host.frame = CGRect(x: 0, y: 0, width: 1180, height: 900)
+            host.layoutSubtreeIfNeeded()
+        }
+        XCTAssertGreaterThan(all.fittingSize.height, oneRepository.fittingSize.height, "a repository's values show no Harnesses")
+    }
 }

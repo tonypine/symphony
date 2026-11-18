@@ -3,7 +3,8 @@ import SymphonyBarCore
 
 // Factory › Runs (TP-1538), as the catalog draws it (`runsPage`, `.runs-page`): the Save bar with For on its left, then
 // one panel with Default and the nine kinds of run, each always open, each a Reorderable list of its first choice and
-// fallbacks. Built from the shared Save bar, Pop-up, Searchable pop-up and Reorderable list (TP-1530, TP-1531).
+// fallbacks, then the Harnesses block (TP-1539) for All repositories. Built from the shared Save bar, Pop-up,
+// Searchable pop-up, Text field and Reorderable list (TP-1530, TP-1531).
 
 /// What the page asks of whoever holds it. Every edit changes the page's values only; Save writes them.
 public struct RunsPageActions {
@@ -15,11 +16,14 @@ public struct RunsPageActions {
     public var reorder: (_ kind: RunKind?, _ order: [Int]) -> Void
     public var revert: () -> Void
     public var save: () -> Void
+    public var setCommand: (_ harness: Harness, _ command: String) -> Void
+    public var pickSmallModel: (_ harness: Harness, _ provider: String, _ value: String?) -> Void
 
     public init(
         show: @escaping (RunProfilesScope) -> Void, pick: @escaping (RunKind?, Int, RunProfileField, String?) -> Void,
         useDefaults: @escaping (RunKind?) -> Void, addFallback: @escaping (RunKind?) -> Void, remove: @escaping (RunKind?, Int) -> Void,
-        reorder: @escaping (RunKind?, [Int]) -> Void, revert: @escaping () -> Void, save: @escaping () -> Void
+        reorder: @escaping (RunKind?, [Int]) -> Void, revert: @escaping () -> Void, save: @escaping () -> Void,
+        setCommand: @escaping (Harness, String) -> Void, pickSmallModel: @escaping (Harness, String, String?) -> Void
     ) {
         self.show = show
         self.pick = pick
@@ -29,13 +33,15 @@ public struct RunsPageActions {
         self.reorder = reorder
         self.revert = revert
         self.save = save
+        self.setCommand = setCommand
+        self.pickSmallModel = pickSmallModel
     }
 
     /// Actions that do nothing, for a still picture.
     public static var none: RunsPageActions {
         RunsPageActions(
             show: { _ in }, pick: { _, _, _, _ in }, useDefaults: { _ in }, addFallback: { _ in }, remove: { _, _ in },
-            reorder: { _, _ in }, revert: {}, save: {}
+            reorder: { _, _ in }, revert: {}, save: {}, setCommand: { _, _ in }, pickSmallModel: { _, _, _ in }
         )
     }
 }
@@ -95,7 +101,13 @@ public struct RunsPageView: View {
 
     private var content: some View {
         let tokens = DesignTokens.RunsPage.self
-        return list
+        let harnesses = page.harnessRows
+        return VStack(alignment: .leading, spacing: tokens.gap) {
+            list
+            if !harnesses.isEmpty {
+                RunsHarnessesView(rows: harnesses, actions: actions, editable: page.isEditable)
+            }
+        }
             .frame(maxWidth: tokens.maxWidth)
             .padding(.horizontal, tokens.sides)
             .padding(.bottom, tokens.bottom)
@@ -241,5 +253,69 @@ struct RunsLineView: View {
         let field = line.fields.first { $0.isSearchable }
         let shown = (field?.choices ?? []).filter { MenuSearch.matches($0.title, query: drawn.query) }
         return .init(query: drawn.query, highlighted: shown.count > 1 ? shown[1].value : nil)
+    }
+}
+
+/// The Harnesses block (`.run-harnesses`): under its zone title, one row per harness with its name, its Command field
+/// and a Searchable pop-up of the small model it calls on each provider in use, rows split by a hairline.
+struct RunsHarnessesView: View {
+    let rows: [RunsPage.HarnessRow]
+    let actions: RunsPageActions
+    var editable = true
+
+    var body: some View {
+        let tokens = DesignTokens.RunsPage.self
+        TitledPanel(title: RunsPage.harnessesTitle, spacing: tokens.harnessRowGap) {
+            ForEach(Array(rows.enumerated()), id: \.element.id) { index, row in
+                if index > 0 { HairlineDivider() }
+                RunsHarnessRowView(row: row, actions: actions, editable: editable)
+            }
+        }
+    }
+}
+
+/// One harness: its name, its command, and its small models wrapping when they don't fit.
+struct RunsHarnessRowView: View {
+    let row: RunsPage.HarnessRow
+    let actions: RunsPageActions
+    var editable = true
+
+    var body: some View {
+        let tokens = DesignTokens.RunsPage.self
+        HStack(alignment: .top, spacing: tokens.harnessColumnGap) {
+            Text(row.title)
+                .textStyle(.rowTitle)
+                .foregroundStyle(DesignTokens.TextColor.primary.color)
+                .lineLimit(1)
+                .padding(.top, tokens.harnessNameTop)
+                .frame(width: tokens.harnessNameWidth, alignment: .leading)
+                .accessibilityAddTraits(.isHeader)
+            HStack(spacing: tokens.commandLabelGap) {
+                Text(RunsPage.commandLabel)
+                    .textStyle(.secondary)
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    .accessibilityHidden(true)
+                DirectorTextField(
+                    nil, text: Binding(get: { row.command }, set: { actions.setCommand(row.harness, $0) }),
+                    placeholder: RunsPage.commandLabel, size: tokens.control, mono: true
+                )
+                .frame(width: tokens.commandWidth)
+                .accessibilityLabel("\(row.title) \(RunsPage.commandLabel.lowercased())")
+            }
+            FlowLayout(spacing: tokens.smallModelGap, lineSpacing: tokens.smallModelLineGap) {
+                ForEach(row.smallModels) { model in
+                    SearchablePopUp(
+                        model.label,
+                        selection: Binding(get: { model.value }, set: { actions.pickSmallModel(row.harness, model.provider, $0) }),
+                        choices: model.choices.map { PopUpChoice($0.value, $0.title) }, noun: "model", mono: true
+                    )
+                    .accessibilityLabel("\(row.title) \(model.label.lowercased())")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .disabled(!editable)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(row.title)
     }
 }

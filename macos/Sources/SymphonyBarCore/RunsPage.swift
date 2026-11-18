@@ -3,7 +3,8 @@ import Foundation
 /// Factory › Runs (TP-1538), as the catalog draws it (`runsPage` in `docs/design/catalog/stories.js`): Default and the
 /// nine kinds of run, each always open, with one line per choice, the first choice then each fallback in the order
 /// Symphony tries them. Each line has Harness, Provider, Model and Effort. A value the kind takes from Default is
-/// drawn grey, one it sets itself dark. Nothing is applied until Save; the Save bar counts the changes and has Revert.
+/// drawn grey, one it sets itself dark. Under them the Harnesses block (TP-1539) sets each harness's command and its
+/// small model per provider. Nothing is applied until Save; the Save bar counts the changes and has Revert.
 /// The edits are `RunsEditor`'s (TP-1537); this is what the page shows of it and the page's own steps around it.
 public struct RunsPage: Equatable {
     /// Where the page's Save stands.
@@ -70,6 +71,27 @@ public struct RunsPage: Equatable {
         public var isDefault: Bool { kind == nil }
     }
 
+    /// A small model of the Harnesses block: the provider it is for, its pop-up's label, its value and its choices.
+    public struct SmallModel: Equatable, Identifiable {
+        public let provider: String
+        public let label: String
+        public let value: String?
+        public let title: String
+        public let choices: [Choice]
+
+        public var id: String { provider }
+    }
+
+    /// One harness of the Harnesses block: its name, its command and a small model for each provider it needs one for.
+    public struct HarnessRow: Equatable, Identifiable {
+        public let harness: Harness
+        public let command: String
+        public let smallModels: [SmallModel]
+
+        public var id: String { harness.rawValue }
+        public var title: String { harness.title }
+    }
+
     /// A choice of the For pop-up.
     public struct ScopeChoice: Equatable {
         public let scope: RunProfilesScope
@@ -99,6 +121,13 @@ public struct RunsPage: Equatable {
     public static let none = "None"
     public static let reading = "Reading symphony.yml…"
     public static let readAgain = "Read Again"
+    public static let harnessesTitle = "Harnesses"
+    public static let commandLabel = "Command"
+
+    /// "Small model on Anthropic".
+    public static func smallModelLabel(_ provider: String) -> String {
+        "Small model on \(providerTitle(provider))"
+    }
 
     /// Default first, then the nine kinds in the catalog's order.
     public static let kinds: [RunKind?] = [nil, .implementation, .breakdown, .rework, .codeReview, .qa, .ciFix, .reviewFeedback, .landing, .epicReview]
@@ -159,6 +188,28 @@ public struct RunsPage: Equatable {
     }
 
     public var changeCount: Int { editor?.changeCount ?? 0 }
+
+    /// The Harnesses block: each harness a line runs on or the file sets, with its command and a small model per
+    /// provider it needs one for. Harnesses are set once for every repository, so a repository's values show none.
+    public var harnessRows: [HarnessRow] {
+        guard let editor, scope == .global else { return [] }
+        // A harness read with settings stays while its command is cleared, so the field isn't taken away mid-edit.
+        let shown = Harness.allCases.filter { editor.harnesses.contains($0) || editor.loaded[$0] != HarnessSettings() }
+        return shown.map { harness in
+            let settings = editor.profiles[harness]
+            let models = editor.smallModelProviders(of: harness).map { provider in
+                smallModel(settings.smallModels[provider], on: provider)
+            }
+            return HarnessRow(harness: harness, command: settings.command ?? "", smallModels: models)
+        }
+    }
+
+    private func smallModel(_ value: String?, on provider: String) -> SmallModel {
+        let models = lists.models(for: provider, including: value) ?? value.map { [RunProfileChoice(id: $0, title: $0)] } ?? []
+        var choices = models.map { Choice($0.id, $0.id) }
+        if value == nil { choices.insert(Choice(nil, Self.none), at: 0) }
+        return SmallModel(provider: provider, label: Self.smallModelLabel(provider), value: value, title: value ?? Self.none, choices: choices)
+    }
 
     private func row(_ kind: RunKind?, editor: RunsEditor) -> Row {
         let lines = editor.lines(kind, in: scope)
@@ -273,6 +324,18 @@ public struct RunsPage: Equatable {
             if old == new { return (from, to) }
         }
         return nil
+    }
+
+    /// Sets the command `harness` is started with; an empty one clears it.
+    public mutating func setCommand(_ value: String, of harness: Harness) {
+        guard var editor = editable, editor.setCommand(value, of: harness) else { return }
+        edited(editor)
+    }
+
+    /// Picks the small model `harness` calls on `provider`.
+    public mutating func pickSmallModel(_ value: String?, of harness: Harness, on provider: String) {
+        guard var editor = editable, editor.setSmallModel(value, of: harness, on: provider) else { return }
+        edited(editor)
     }
 
     /// Puts every value back as it was read.

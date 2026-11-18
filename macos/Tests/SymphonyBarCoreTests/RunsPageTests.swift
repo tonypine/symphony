@@ -370,4 +370,104 @@ final class RunsPageTests: XCTestCase {
         XCTAssertEqual(page.save, .editing)
         XCTAssertEqual(page.changeCount, 2)
     }
+
+    // MARK: Harnesses (TP-1539)
+
+    private let harnessesYAML = """
+        runs:
+          default: { harness: claude, provider: anthropic, model: claude-opus-5-5 }
+          landing: { harness: opencode, provider: opencode-go, model: kimi-k3 }
+        # How each harness starts.
+        execution:
+          harnesses:
+            claude:
+              command: claude --dangerously-skip-permissions  # sandboxed anyway
+              small_model:
+                # Cheap and quick.
+                anthropic: claude-haiku-4-5-20251001
+            codex:
+              command: codex app-server
+
+        """
+
+    func testTheHarnessesBlockShowsEachHarnessWithItsCommandAndASmallModelPerProviderInUse() throws {
+        var page = RunsPage()
+        page.load(try RunProfilesConfig.scopedProfiles(in: harnessesYAML), repositories: [])
+        let rows = page.harnessRows
+        XCTAssertEqual(rows.map(\.harness), [.claude, .codex, .opencode], "those a line runs on and those the file sets")
+        XCTAssertEqual(rows.map(\.title), ["Claude", "Codex", "OpenCode"])
+        XCTAssertEqual(rows.map(\.id), ["claude", "codex", "opencode"])
+        XCTAssertEqual(rows.map(\.command), ["claude --dangerously-skip-permissions", "codex app-server", ""])
+
+        let claude = try XCTUnwrap(rows.first?.smallModels.first)
+        XCTAssertEqual(rows[0].smallModels.count, 1)
+        XCTAssertEqual(claude.id, "anthropic")
+        XCTAssertEqual(claude.label, "Small model on Anthropic")
+        XCTAssertEqual(claude.value, "claude-haiku-4-5-20251001")
+        XCTAssertEqual(claude.title, "claude-haiku-4-5-20251001")
+        XCTAssertEqual(claude.choices.map(\.value), RunProfilesConfig.models.map(\.id), "the same models a line offers, no None")
+        XCTAssertEqual(rows[1].smallModels, [], "Codex calls no small model")
+
+        let openCode = try XCTUnwrap(rows[2].smallModels.first)
+        XCTAssertEqual(openCode.label, "Small model on OpenCode Go")
+        XCTAssertNil(openCode.value)
+        XCTAssertEqual(openCode.title, RunsPage.none)
+        XCTAssertEqual(openCode.choices, [RunsPage.Choice(nil, RunsPage.none)], "OpenCode Go's list isn't read yet")
+        page.lists.openCodeGo = .success([RunProfileChoice(id: "hy4-flash", title: "hy4-flash")])
+        XCTAssertEqual(page.harnessRows[2].smallModels[0].choices.map(\.value), [nil, "hy4-flash"])
+
+        page.show(.repository("web"))
+        XCTAssertEqual(page.harnessRows, [], "harnesses are set once, for all repositories")
+        XCTAssertEqual(RunsPage().harnessRows, [], "nothing before the file is read")
+    }
+
+    func testCommandAndSmallModelEditsJoinTheCountAndRevert() throws {
+        var page = RunsPage()
+        page.load(try RunProfilesConfig.scopedProfiles(in: harnessesYAML), repositories: [])
+        page.pickSmallModel("claude-sonnet-5-5", of: .claude, on: RunProfilesConfig.anthropic)
+        XCTAssertEqual(page.changeCount, 1)
+        XCTAssertEqual(page.harnessRows[0].smallModels[0].value, "claude-sonnet-5-5")
+        page.pickSmallModel("claude-sonnet-5-5", of: .claude, on: RunProfilesConfig.anthropic)
+        XCTAssertEqual(page.changeCount, 1, "picking the same model again changes nothing")
+
+        page.setCommand("claude --fast", of: .claude)
+        XCTAssertEqual(page.changeCount, 2)
+        XCTAssertEqual(page.harnessRows[0].command, "claude --fast")
+        page.setCommand("claude --fast", of: .claude)
+        XCTAssertEqual(page.changeCount, 2)
+
+        page.setCommand("", of: .codex)
+        XCTAssertEqual(page.changeCount, 3)
+        XCTAssertEqual(page.harnessRows.map(\.harness), [.claude, .codex, .opencode], "a cleared command keeps its field")
+        XCTAssertEqual(page.harnessRows[1].command, "")
+
+        page.revert()
+        XCTAssertEqual(page.changeCount, 0)
+        XCTAssertEqual(page.harnessRows[0].command, "claude --dangerously-skip-permissions")
+    }
+
+    func testSavingTheHarnessesKeepsTheCommentsAndRefusesEditsWhileItRuns() async throws {
+        let (file, directory) = try file(harnessesYAML)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var page = RunsPage()
+        page.read(file)
+        page.pickSmallModel("claude-sonnet-5-5", of: .claude, on: RunProfilesConfig.anthropic)
+        page.pickSmallModel("hy4-flash", of: .opencode, on: RunProfilesConfig.openCodeGo)
+        let editor = try XCTUnwrap(page.beginSave())
+
+        page.setCommand("claude --fast", of: .claude)
+        page.pickSmallModel("claude-opus-5-5", of: .claude, on: RunProfilesConfig.anthropic)
+        XCTAssertEqual(page.harnessRows[0].command, "claude --dangerously-skip-permissions", "no edit while the save runs")
+        XCTAssertEqual(page.changeCount, 2)
+
+        page.finishSave(await editor.save(to: file) { _ in .passed })
+        XCTAssertEqual(page.save, .saved)
+        XCTAssertEqual(page.changeCount, 0)
+        let text = try String(contentsOfFile: file.path, encoding: .utf8)
+        XCTAssertTrue(text.contains("# How each harness starts."))
+        XCTAssertTrue(text.contains("command: claude --dangerously-skip-permissions  # sandboxed anyway"))
+        XCTAssertTrue(text.contains("# Cheap and quick.\n        anthropic: claude-sonnet-5-5"))
+        XCTAssertTrue(text.contains("opencode-go: hy4-flash"))
+        XCTAssertEqual(page.harnessRows[2].smallModels[0].value, "hy4-flash", "read back from the file")
+    }
 }
