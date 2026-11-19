@@ -445,6 +445,17 @@ defmodule SymphonyElixir.ConductorTest do
 
   test "a turn's result reads as its text candidates and tokens" do
     assert Conductor.turn_result({:ok, %{result: "{}"}}, []) == {:ok, ["{}"], 0}
+    # The Claude harness streams tuples: the deduplicated `token_usage` totals are the turn's tokens, not the result's.
+    claude = [
+      {:session_started, "s1"},
+      {:token_usage, %{total_tokens: 12_000}},
+      {:agent_text, "{}"},
+      {:token_usage, %{total_tokens: 35_000}},
+      {:turn_completed, %{total_tokens: 99_000}}
+    ]
+
+    assert {:ok, ["{}" | _], 35_000} = Conductor.turn_result({:ok, %{result: "{}"}}, claude)
+    assert Conductor.turn_result({:ok, %{result: "{}"}}, [{:turn_completed, %{total_tokens: 7}}]) == {:ok, ["{}"], 7}
     assert Conductor.turn_result({:error, :boom}, [%{"tokenUsage" => %{"total" => %{"total_tokens" => 9}}}]) == {:error, :boom, 9}
   end
 end

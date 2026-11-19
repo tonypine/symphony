@@ -55,6 +55,7 @@ defmodule SymphonyElixir.Conductor do
     TicketState
   }
 
+  alias SymphonyElixir.ClaudeCode.AppServer, as: ClaudeAppServer
   alias SymphonyElixir.Conductor.{Answer, Blocks, Facts, Steer, Watch}
   alias SymphonyElixir.Config.Runs.Run
   alias SymphonyElixir.Config.Schema
@@ -561,12 +562,16 @@ defmodule SymphonyElixir.Conductor do
     end
   end
 
-  # The session's cumulative total, the largest any message reported.
+  # The session's cumulative total, the largest any message reported. The Claude harness streams its
+  # events as tuples, which `ClaudeAppServer.event_to_update/1` turns into the updates the run
+  # path reads (as `AgentRunner` does); its `token_count` totals already count each model message once
+  # (`SymphonyElixir.Harnesses.EventStream`) and win over the turn result's own usage line.
   defp turn_tokens(messages) do
-    messages
-    |> Enum.map(&(&1 |> AgentTelemetry.extract_token_usage() |> AgentTelemetry.get_token_usage(:total)))
-    |> Enum.filter(&is_integer/1)
-    |> Enum.max(fn -> 0 end)
+    updates = Enum.map(messages, &(ClaudeAppServer.event_to_update(&1) || &1))
+    counts = Enum.filter(updates, &(is_map(&1) and Map.get(&1, :event) == :token_count))
+    totals = Enum.map(if(counts == [], do: updates, else: counts), &(&1 |> AgentTelemetry.extract_token_usage() |> AgentTelemetry.get_token_usage(:total)))
+
+    totals |> Enum.filter(&is_integer/1) |> Enum.max(fn -> 0 end)
   end
 
   @doc """
