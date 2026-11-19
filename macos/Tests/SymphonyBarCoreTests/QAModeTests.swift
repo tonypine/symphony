@@ -257,6 +257,7 @@ final class QAModeTests: XCTestCase {
         XCTAssertEqual(stores.environment, ["HOME": "/Users/me"])
         XCTAssertEqual(stores.updateHelperEnvironment, ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"])
         XCTAssertEqual(stores.openRouterBaseURL, OpenRouterClient.baseURL)
+        XCTAssertEqual(stores.openCodeGoBaseURL, OpenCodeGoClient.baseURL)
     }
 
     func testANormalLaunchAlwaysTalksToOpenRouterWhateverTheEnvironmentSays() {
@@ -275,6 +276,9 @@ final class QAModeTests: XCTestCase {
 
         let stores = qaStores([QAMode.openRouterURLKey: "http://127.0.0.1:4100/api"])
         XCTAssertEqual(stores.openRouterBaseURL.absoluteString, "http://127.0.0.1:4100/api/v1/")
+        // The stub answers OpenCode Go's models list too, so QA tests both providers' keys with no real one.
+        XCTAssertEqual(stores.openCodeGoBaseURL.absoluteString, "http://127.0.0.1:4100/api/opencode-go/v1/")
+        XCTAssertEqual(qaStores().openCodeGoBaseURL, OpenCodeGoClient.baseURL)
         // The Symphony the app runs gets the URL too, and reads it only in QA mode.
         XCTAssertEqual(stores.environment[QAMode.openRouterURLKey], "http://127.0.0.1:4100/api")
     }

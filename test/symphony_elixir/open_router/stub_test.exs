@@ -37,6 +37,21 @@ defmodule SymphonyElixir.OpenRouter.StubTest do
     assert_receive {:stub_log, "OpenRouter stub: GET /api/v1/key key=rejected status=401"}, 1_000
   end
 
+  test "lists OpenCode Go's models for the valid key only, as its provider page's test reads them", %{url: url} do
+    response = request(:get, url <> "/opencode-go/v1/models", valid_key())
+    assert response.status == 200
+    assert %{"object" => "list", "data" => models} = Jason.decode!(response.body)
+    assert models == Stub.opencode_go_models()
+    assert Enum.map(models, & &1["id"]) == ["kimi-k3", "symphony-qa-go"]
+    assert_receive {:stub_log, "OpenRouter stub: GET /api/opencode-go/v1/models key=accepted status=200"}, 1_000
+
+    for opts <- [[auth: {:bearer, "sk-go-made-up"}], []] do
+      assert request(:get, url <> "/opencode-go/v1/models", opts).status == 401
+    end
+
+    assert_receive {:stub_log, "OpenRouter stub: GET /api/opencode-go/v1/models key=rejected status=401"}, 1_000
+  end
+
   test "lists a model with tools and reasoning, one with tools only and one without tools", %{url: url} do
     response = request(:get, url <> "/v1/models")
     assert response.status == 200
