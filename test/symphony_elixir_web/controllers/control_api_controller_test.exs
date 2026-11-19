@@ -407,7 +407,7 @@ defmodule SymphonyElixirWeb.ControlApiControllerTest do
         end)
 
       assert log =~ "Failed to record director_note audit event: issue_identifier=#{ticket.issue_identifier}"
-      assert [%{type: "note"}] = RunStore.list_ticket_events(ticket.issue_id, [])
+      assert [%{type: "message.sent"}] = RunStore.list_ticket_events(ticket.issue_id, [])
     end
   end
 
