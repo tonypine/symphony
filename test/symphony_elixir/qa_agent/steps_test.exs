@@ -538,7 +538,8 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert {:error, {:qa_token_limit, 1_100, 1_000}, %{total_tokens: 1_100}} = limited
 
       answers(%{"review" => [{:then_messages, {:verdict, @pass}, [usage]}]})
-      assert {:ok, %{result: %{verdict: :pass}, tokens: %{total_tokens: 1_100}}} = run(ctx, %{token_limit: 1_000}, [], [review()])
+      given = run(ctx, %{token_limit: 1_000}, [], [review()])
+      assert {:ok, %{result: %{verdict: :pass}, tokens: %{total_tokens: 1_100}}} = given
 
       answers(%{"review" => [{:messages, [usage], {:verdict, @pass}}]})
       forwarded = self()
