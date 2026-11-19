@@ -267,6 +267,7 @@ defmodule SymphonyElixir.Conductor.Facts do
         returns_to: payload(step, :returns_to),
         reason: payload(step, :reason),
         result: result(payload(step, :result)),
+        answer: answer(payload(step, :answer)),
         verdict_summary: payload(step, :verdict_summary)
       }
       |> drop_nil()
@@ -280,6 +281,16 @@ defmodule SymphonyElixir.Conductor.Facts do
   end
 
   defp result(_none), do: nil
+
+  # A step's structured answer (`SymphonyElixir.PhaseSteps.StepAnswer`), each value cut for the facts.
+  defp answer([_ | _] = entries) do
+    for %{} = entry <- entries do
+      field = fn key -> Map.get(entry, key, Map.get(entry, Atom.to_string(key))) end
+      %{label: field.(:label), value: cut(field.(:value), @text_max)}
+    end
+  end
+
+  defp answer(_none), do: nil
 
   defp resolved(events, run_id) do
     for %Event{type: "finding.resolved", run_id: ^run_id} = resolution <- events do

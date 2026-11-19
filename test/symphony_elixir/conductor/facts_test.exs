@@ -142,6 +142,11 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     assert walked.result == %{status: "blocked", expected: "Rows", actual: "Empty state"}
     assert walked.verdict_summary == "Blocked."
 
+    layout = %{answered | payload: Map.put(answered.payload, :answer, [%{label: "layout", value: "two columns"}, %{"label" => "why", "value" => "fits"}, "junk"])}
+
+    assert %{steps: [_build, %{answer: [%{label: "layout", value: "two columns"}, %{label: "why", value: "fits"}]}]} =
+             Facts.build(ctx.record, nil, events: first_run ++ [layout], diff_stat: fn _record -> nil end).last_run
+
     string_keys = %{answered | payload: %{answered.payload | result: %{"status" => "blocked", "expected" => "Rows", "actual" => "Empty"}}}
     assert %{steps: [_build, %{result: %{status: "blocked", actual: "Empty"}}]} = Facts.build(ctx.record, nil, events: first_run ++ [string_keys], diff_stat: fn _record -> nil end).last_run
 
