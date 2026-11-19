@@ -15,8 +15,9 @@ defmodule SymphonyElixir.Conductor.Watch do
     * the run passed `watch.run_minutes` (`run_minutes`) or `watch.run_tokens` (`run_tokens`).
 
   Never more often than `watch.min_interval_minutes` per run, at most `watch.max_turns_per_run`
-  turns per run, one at a time. It checks the running runs on a timer and as each step or note of a
-  running run is recorded. A failed watch turn changes nothing for the run. It owns the steer table;
+  turns per run, one at a time. It checks the running runs on a timer and, while it is on, as each
+  step or note of a running run is recorded (it listens to the ticket events only while on). A failed
+  watch turn changes nothing for the run. It owns the steer table;
   a run that ended drops what still waited for it (`Steer.drop/1`).
   """
 
@@ -41,7 +42,6 @@ defmodule SymphonyElixir.Conductor.Watch do
   @impl true
   def init(opts) do
     Steer.create_table()
-    if Keyword.get(opts, :subscribe, true), do: ObservabilityPubSub.subscribe_ticket_events()
     tick_ms = Keyword.get(opts, :tick_ms, @tick_ms)
     Process.send_after(self(), :tick, tick_ms)
 
@@ -49,6 +49,8 @@ defmodule SymphonyElixir.Conductor.Watch do
      %{
        runs: %{},
        tick_ms: tick_ms,
+       subscribe: Keyword.get(opts, :subscribe, true),
+       subscribed: false,
        running: Keyword.get(opts, :running, &running/0),
        start_turn: Keyword.get(opts, :start_turn) || (&start_turn/3),
        now_ms: Keyword.get(opts, :now_ms, fn -> System.monotonic_time(:millisecond) end)
@@ -73,7 +75,10 @@ defmodule SymphonyElixir.Conductor.Watch do
   defp look(state, issue_id) do
     settings = Config.conductor_settings()
 
-    if settings.enabled and settings.watch.enabled do
+    on? = settings.enabled and settings.watch.enabled
+    state = listen(state, on?)
+
+    if on? do
       running = state.running.()
       state = if is_nil(issue_id), do: forget_ended(state, running), else: state
       running |> Enum.filter(&(is_nil(issue_id) or &1.issue_id == issue_id)) |> Enum.reduce(state, &consider(&2, &1, settings.watch))
@@ -81,6 +86,19 @@ defmodule SymphonyElixir.Conductor.Watch do
       state
     end
   end
+
+  # The ticket events are heard only while the watch is on.
+  defp listen(%{subscribe: true, subscribed: false} = state, true) do
+    ObservabilityPubSub.subscribe_ticket_events()
+    %{state | subscribed: true}
+  end
+
+  defp listen(%{subscribed: true} = state, false) do
+    ObservabilityPubSub.unsubscribe_ticket_events()
+    %{state | subscribed: false}
+  end
+
+  defp listen(state, _on?), do: state
 
   defp forget_ended(state, running) do
     live = MapSet.new(running, & &1.run_id)

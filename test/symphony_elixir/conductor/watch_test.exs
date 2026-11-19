@@ -127,6 +127,25 @@ defmodule SymphonyElixir.Conductor.WatchTest do
       assert Process.alive?(pid)
     end
 
+    test "listens to the ticket events only while it is on" do
+      %{pid: pid} = start_watch!(subscribe: true, running: fn -> [] end)
+      send(pid, :tick)
+      refute :sys.get_state(pid).subscribed
+
+      path = Workflow.symphony_file_path()
+      original = File.read!(path)
+      watch_on!()
+      send(pid, :tick)
+      assert :sys.get_state(pid).subscribed
+      send(pid, :tick)
+      assert :sys.get_state(pid).subscribed
+
+      File.write!(path, original)
+      Cache.clear()
+      send(pid, :tick)
+      refute :sys.get_state(pid).subscribed
+    end
+
     test "drops what still waited for a run that ended", %{run: run, issue_id: issue_id} do
       watch_on!()
       test = self()
