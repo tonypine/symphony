@@ -77,10 +77,14 @@ final class SettingsViewModel: ObservableObject {
     @Published var riskRules = RiskRuleSettings()
     /// Why `symphony check` rejected the changed risk rule settings, shown above Save.
     @Published private(set) var riskRulesError: String?
-    /// `phases.<kind>.steps` in the configured symphony.yml: the step list each run kind follows.
+    /// `phases.<kind>.steps` in the configured symphony.yml: the step list each run kind follows; with
+    /// `phases.qa.stepped` and each QA playbook's list (`phases.qa.playbooks.<kind>.steps`).
     @Published var phases = PhaseSettings()
     /// The run kind whose list the Phases group shows.
     @Published var phaseKind: PhaseKind = .implementation
+    /// The QA playbook whose list the Phases group shows while the run kind is QA; nil shows QA's own list
+    /// (`phases.qa.steps`).
+    @Published var phaseQAPlaybook: QAPlaybookKind?
     /// Why the step lists weren't saved: a step the rules refuse, or `symphony check`'s reason.
     @Published private(set) var phasesError: String?
     /// Today's tokens from Symphony's latest state, nil while it isn't answering.
@@ -454,8 +458,17 @@ final class SettingsViewModel: ObservableObject {
     /// The Phases editor is off until a symphony.yml has been read, and while Save checks it.
     var canEditPhases: Bool { loadedPhases != nil && !isSaving }
 
-    /// What is wrong with the shown kind's list, by the rules Symphony loads it with.
-    var phaseValidation: PhaseValidation { PhaseValidation.check(phases[phaseKind].steps) }
+    /// The list the Phases group shows: the run kind's, or the picked QA playbook's while the run kind is QA.
+    var phaseListOwner: StepListOwner {
+        if phaseKind == .qa, let phaseQAPlaybook { return .qaPlaybook(phaseQAPlaybook) }
+        return .runKind(phaseKind)
+    }
+
+    /// What is wrong with the shown list, by the rules Symphony loads it with.
+    var phaseValidation: PhaseValidation {
+        let owner = phaseListOwner
+        return PhaseValidation.check(phases[owner].steps, inQAPlaybook: owner.qaPlaybook != nil)
+    }
 
     private func loadPhases() {
         let path = settings.trimmed().configPath
@@ -767,9 +780,19 @@ final class SettingsViewModel: ObservableObject {
         phasesError = nil
         let newPhases = phases
         let oldPhases = loadedPhases.flatMap { $0 != newPhases ? $0 : nil }
-        if oldPhases != nil, let kind = PhaseKind.allCases.first(where: { !PhaseValidation.check(newPhases[$0].steps).isValid }) {
-            phaseKind = kind
-            phasesError = "The \(kind.title) step list has a step that can't be saved, so nothing was saved; see Phases."
+        if oldPhases != nil, let owner = newPhases.owners.first(where: {
+            !PhaseValidation.check(newPhases[$0].steps, inQAPlaybook: $0.qaPlaybook != nil).isValid
+        }) {
+            switch owner {
+            case .runKind(let kind):
+                phaseKind = kind
+                phaseQAPlaybook = nil
+                phasesError = "The \(kind.title) step list has a step that can't be saved, so nothing was saved; see Phases."
+            case .qaPlaybook(let playbook):
+                phaseKind = .qa
+                phaseQAPlaybook = playbook
+                phasesError = "The \(playbook.title) QA playbook's step list has a step that can't be saved, so nothing was saved; see Phases."
+            }
             return
         }
 

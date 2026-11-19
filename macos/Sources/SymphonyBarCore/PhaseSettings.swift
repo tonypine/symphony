@@ -50,6 +50,101 @@ public enum PhaseKind: String, CaseIterable, Identifiable {
     public var keyPath: String { "phases.\(rawValue).steps" }
 }
 
+/// A QA playbook kind, as `phases.qa.playbooks` names it: the four Symphony knows, or one of the file's own
+/// (lowercase letters, digits and underscores, starting with a letter).
+public struct QAPlaybookKind: Hashable, Identifiable, Comparable {
+    public let rawValue: String
+
+    public init(_ rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let macosApp = QAPlaybookKind("macos_app")
+    public static let cli = QAPlaybookKind("cli")
+    public static let web = QAPlaybookKind("web")
+    public static let androidApp = QAPlaybookKind("android_app")
+
+    /// The kinds Symphony knows, in the order the picker lists them.
+    public static let builtIn: [QAPlaybookKind] = [.macosApp, .cli, .web, .androidApp]
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .macosApp: return "macOS app"
+        case .cli: return "CLI"
+        case .web: return "Web"
+        case .androidApp: return "Android app"
+        default: return rawValue
+        }
+    }
+
+    /// The setting's key path for this kind's list.
+    public var keyPath: String { "phases.qa.playbooks.\(rawValue).steps" }
+
+    /// Whether Symphony takes it as a kind's name.
+    public var isValid: Bool { PhaseValidation.isValidID(rawValue) }
+
+    public static func < (lhs: QAPlaybookKind, rhs: QAPlaybookKind) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
+/// Whose step list it is, as Symphony checks it (`Config.Schema.Phases.Phase.changeset/3`): a run kind's
+/// (`phases.<kind>.steps`) or a QA playbook's (`phases.qa.playbooks.<kind>.steps`), which may run the QA pass's own
+/// commands and leave an orchestrated step's prompt to Symphony.
+public enum StepListOwner: Hashable {
+    case runKind(PhaseKind)
+    case qaPlaybook(QAPlaybookKind)
+
+    /// The setting's key path.
+    public var keyPath: String {
+        switch self {
+        case .runKind(let kind): return kind.keyPath
+        case .qaPlaybook(let playbook): return playbook.keyPath
+        }
+    }
+
+    /// The keys from the top of the file to the list's `steps:`.
+    var path: [String] {
+        switch self {
+        case .runKind(let kind): return ["phases", kind.rawValue, "steps"]
+        case .qaPlaybook(let playbook): return ["phases", "qa", "playbooks", playbook.rawValue, "steps"]
+        }
+    }
+
+    /// The QA playbook it is, nil for a run kind.
+    public var qaPlaybook: QAPlaybookKind? {
+        if case .qaPlaybook(let playbook) = self { return playbook }
+        return nil
+    }
+}
+
+/// An agent step's reasoning effort (`effort`): the efforts a run takes (`runs.<kind>.effort`).
+public enum StepEffort: String, CaseIterable, Identifiable {
+    case low
+    case medium
+    case high
+    case xhigh
+    case max
+
+    public var id: String { rawValue }
+
+    /// As Factory › Runs shows an effort: its name.
+    public var title: String { rawValue }
+}
+
+/// What an agent step runs once for (`repeat`): `walkthrough`, once per walkthrough step the QA pass walks.
+public enum StepRepeat: String, CaseIterable, Identifiable {
+    case walkthrough
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .walkthrough: return "Once per walkthrough step"
+        }
+    }
+}
+
 /// How a step runs: a shell command Symphony runs, an agent turn Symphony starts from a prompt, or work the agent
 /// does in its session and records itself.
 public enum StepMode: String, CaseIterable, Identifiable {
@@ -170,9 +265,20 @@ public struct PhaseStep: Identifiable, Equatable {
     public var onFail: String?
     public var noResultLimit: Int?
     public var when: StepCondition
+    /// An agent step's model: a model id, or `small` for the run's small model; nil runs the run's model.
+    public var model: String?
+    /// An agent step's effort; nil runs the run's effort.
+    public var effort: StepEffort?
+    /// An agent step's session: steps with the same name continue one agent session, and `fresh` starts one for the
+    /// step alone; nil runs in the run's one session.
+    public var session: String?
+    /// What an agent step runs once for; nil runs it once.
+    public var `repeat`: StepRepeat?
 
     /// A machine step that sets no timeout gets ten minutes, as Symphony gives it.
     public static let machineTimeoutMs = 600_000
+    /// The `session` that starts a new agent session for its step alone.
+    public static let freshSession = "fresh"
 
     public init(
         stepID: String,
@@ -184,7 +290,11 @@ public struct PhaseStep: Identifiable, Equatable {
         timeoutMs: Int? = nil,
         onFail: String? = nil,
         noResultLimit: Int? = nil,
-        when: StepCondition = .always
+        when: StepCondition = .always,
+        model: String? = nil,
+        effort: StepEffort? = nil,
+        session: String? = nil,
+        repeat: StepRepeat? = nil
     ) {
         self.stepID = stepID
         self.title = title
@@ -196,12 +306,24 @@ public struct PhaseStep: Identifiable, Equatable {
         self.onFail = onFail
         self.noResultLimit = noResultLimit
         self.when = when
+        self.model = model
+        self.effort = effort
+        self.session = session
+        self.repeat = `repeat`
     }
 
     public static func == (lhs: PhaseStep, rhs: PhaseStep) -> Bool {
         lhs.stepID == rhs.stepID && lhs.title == rhs.title && lhs.mode == rhs.mode && lhs.commands == rhs.commands
             && lhs.prompt == rhs.prompt && lhs.answer == rhs.answer && lhs.timeoutMs == rhs.timeoutMs && lhs.onFail == rhs.onFail
-            && lhs.noResultLimit == rhs.noResultLimit && lhs.when == rhs.when
+            && lhs.noResultLimit == rhs.noResultLimit && lhs.when == rhs.when && lhs.model == rhs.model && lhs.effort == rhs.effort
+            && lhs.session == rhs.session && lhs.repeat == rhs.repeat
+    }
+
+    /// The keys only an agent step takes that this step sets, in the file's order.
+    public var agentKeys: [String] {
+        [("model", model != nil), ("effort", effort != nil), ("session", session != nil), ("repeat", self.repeat != nil)]
+            .filter(\.1)
+            .map(\.0)
     }
 
     /// The title Symphony shows: the step's id when it has none.
@@ -292,6 +414,14 @@ public struct PhaseSteps: Equatable {
     public static func defaults(for kind: PhaseKind) -> PhaseSteps {
         PhaseSteps(steps: PhaseDefaults.steps(for: kind), isDefault: true)
     }
+
+    /// The default list of `owner`, followed while symphony.yml doesn't set it.
+    public static func defaults(for owner: StepListOwner) -> PhaseSteps {
+        switch owner {
+        case .runKind(let kind): return defaults(for: kind)
+        case .qaPlaybook(let playbook): return PhaseSteps(steps: PhaseDefaults.qaSteps(for: playbook), isDefault: true)
+        }
+    }
 }
 
 /// The default step lists, as `Config.Schema.Phases.default_steps/1` gives them (decision 2 of TP-1085):
@@ -315,6 +445,52 @@ public enum PhaseDefaults {
         default:
             return []
         }
+    }
+
+    /// The machine step commands the QA pass runs itself, with the QA host it holds (`Config.Schema.Phases.qa_commands/0`).
+    /// Only a QA playbook's list runs them.
+    public static let qaCommands = ["symphony:qa_pre_checks", "symphony:qa_build", "symphony:qa_launch", "symphony:qa_quit", "symphony:qa_attach"]
+
+    /// A QA playbook's default list, as `Config.Schema.Phases.default_qa_steps/1` gives it: only `macos_app` has one.
+    /// Its orchestrated steps leave the prompt to Symphony (`priv/qa_steps/macos_app/<id>.md`).
+    public static func qaSteps(for playbook: QAPlaybookKind) -> [PhaseStep] {
+        guard playbook == .macosApp else { return [] }
+        let judged = [
+            AnswerField(name: "status"), AnswerField(name: "expected"), AnswerField(name: "actual"), AnswerField(name: "details"),
+            AnswerField(name: "evidence", type: .list),
+        ]
+        return [
+            PhaseStep(
+                stepID: "pre_checks", title: "Pre-checks", mode: .machine, commands: [StepCommand(run: "symphony:qa_pre_checks")], timeoutMs: 60_000
+            ),
+            PhaseStep(
+                stepID: "build", title: "Build the app", mode: .machine, commands: [StepCommand(run: "symphony:qa_build")],
+                timeoutMs: 1_800_000, onFail: "quit"
+            ),
+            PhaseStep(
+                stepID: "plan", title: "Plan the pass", mode: .orchestrated,
+                answer: [
+                    AnswerField(name: "needs_app", type: .boolean), AnswerField(name: "walk", type: .list),
+                    AnswerField(name: "gallery", type: .list), AnswerField(name: "notes"),
+                ],
+                effort: .high, session: "lead"
+            ),
+            PhaseStep(
+                stepID: "launch", title: "Launch the app", mode: .machine, commands: [StepCommand(run: "symphony:qa_launch")],
+                timeoutMs: 300_000, onFail: "quit"
+            ),
+            PhaseStep(
+                stepID: "walk", title: "Walk a step", mode: .orchestrated, answer: judged,
+                model: "small", session: PhaseStep.freshSession, repeat: .walkthrough
+            ),
+            PhaseStep(stepID: "design_check", title: "Design check", mode: .orchestrated, answer: judged, model: "small", session: PhaseStep.freshSession),
+            PhaseStep(stepID: "wide_pass", title: "Wide pass", mode: .orchestrated, answer: judged, model: "small", session: PhaseStep.freshSession),
+            PhaseStep(stepID: "quit", title: "Quit the app", mode: .machine, commands: [StepCommand(run: "symphony:qa_quit")], timeoutMs: 60_000),
+            PhaseStep(
+                stepID: "attach", title: "Attach the evidence", mode: .machine, commands: [StepCommand(run: "symphony:qa_attach")], timeoutMs: 60_000
+            ),
+            PhaseStep(stepID: "review", title: "Review and verdict", mode: .orchestrated, effort: .high, session: "lead"),
+        ]
     }
 
     private static var implementation: [PhaseStep] {
@@ -375,11 +551,13 @@ public struct PhaseValidation: Equatable {
         return id.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "_" }
     }
 
-    public static func check(_ steps: [PhaseStep]) -> PhaseValidation {
+    /// What is wrong with `steps`: a run kind's list, or a QA playbook's (`inQAPlaybook`), which may run the QA pass's
+    /// own commands and leave an orchestrated step's prompt to Symphony's prompt file for its id.
+    public static func check(_ steps: [PhaseStep], inQAPlaybook: Bool = false) -> PhaseValidation {
         var reasons: [UUID: String] = [:]
         let ids = steps.map(\.stepID)
         for step in steps {
-            if let reason = stepReason(step, ids: ids) { reasons[step.id] = reason }
+            if let reason = stepReason(step, ids: ids, inQAPlaybook: inQAPlaybook) { reasons[step.id] = reason }
         }
         if reasons.isEmpty, let (step, loop) = loopWithoutDelegated(steps) {
             reasons[step.id] = "Failures can loop through " + loop.map { "`\($0)`" }.joined(separator: " → ")
@@ -388,7 +566,7 @@ public struct PhaseValidation: Equatable {
         return PhaseValidation(reasons: reasons)
     }
 
-    private static func stepReason(_ step: PhaseStep, ids: [String]) -> String? {
+    private static func stepReason(_ step: PhaseStep, ids: [String], inQAPlaybook: Bool) -> String? {
         let id = step.stepID
         if id.isEmpty { return "Give the step an id." }
         if !isValidID(id) {
@@ -401,16 +579,32 @@ public struct PhaseValidation: Equatable {
             if step.commands.contains(where: { $0.run.trimmingWhitespace().isEmpty }) {
                 return "Every command needs a shell line to run."
             }
+            if !inQAPlaybook, let command = step.commands.first(where: { PhaseDefaults.qaCommands.contains($0.run) }) {
+                return "Runs `\(command.run)`, which only a QA playbook's list runs."
+            }
+            if let key = step.agentKeys.first { return "`\(key)` is only for an agent step; this step is machine." }
         case .orchestrated:
-            if step.prompt.trimmingWhitespace().isEmpty { return "An orchestrated step needs a prompt." }
+            if !inQAPlaybook, step.prompt.trimmingWhitespace().isEmpty { return "An orchestrated step needs a prompt." }
             if let reason = step.answer.lazy.compactMap({ answerReason(for: $0, in: step.answer) }).first { return reason }
+            if let reason = agentReason(step) { return reason }
         case .delegated:
-            break
+            if let reason = agentReason(step) { return reason }
         }
         if let timeout = step.timeoutMs, timeout <= 0 { return "The timeout must be more than 0." }
         if let limit = step.noResultLimit, limit <= 0 { return "The no-result limit must be more than 0." }
         if let target = step.returnsTo, !ids.contains(target) {
             return "Returns to `\(target)` on failure, but no step in this list has that id."
+        }
+        return nil
+    }
+
+    /// Why Symphony would refuse an agent step's model or session, nil when it takes them.
+    private static func agentReason(_ step: PhaseStep) -> String? {
+        if let model = step.model, model.trimmingWhitespace().isEmpty {
+            return "Name the model, or leave it empty for the run's model."
+        }
+        if let session = step.session, session != PhaseStep.freshSession, !isValidID(session) {
+            return "The session must be `fresh` or a name of lowercase letters, digits and underscores, starting with a letter."
         }
         return nil
     }
@@ -464,24 +658,45 @@ public enum PhasePreview {
         guard !list.steps.isEmpty else {
             return "## Steps\n\n\(article) \(name) run follows no step list (\(source)): it is one agent session.\n"
         }
-        let lines = list.steps.enumerated().map { stepText($1, number: $0 + 1) }.joined()
+        let lines = list.steps.enumerated().map { stepText($1, number: $0 + 1, playbook: nil) }.joined()
         return "## Steps\n\n\(article) \(name) run follows these steps (\(source), `\(kind.keyPath)`):\n\n" + lines + "\n"
     }
 
-    private static func stepText(_ step: PhaseStep, number: Int) -> String {
+    /// A run kind's list as `text(kind:list:)` prints it; a QA playbook's, which `symphony workflow preview` doesn't
+    /// print, in the same words, an orchestrated step with no prompt saying Symphony gives it.
+    public static func text(owner: StepListOwner, list: PhaseSteps) -> String {
+        switch owner {
+        case .runKind(let kind): return text(kind: kind, list: list)
+        case .qaPlaybook(let playbook): return text(playbook: playbook, list: list)
+        }
+    }
+
+    private static func text(playbook: QAPlaybookKind, list: PhaseSteps) -> String {
+        let source = list.isDefault ? "the default list" : "symphony.yml"
+        guard !list.steps.isEmpty else {
+            return "## Steps\n\nA stepped \(playbook.rawValue) QA pass follows no step list (\(source)): it is one agent session.\n"
+        }
+        let lines = list.steps.enumerated().map { stepText($1, number: $0 + 1, playbook: playbook) }.joined()
+        return "## Steps\n\nA stepped \(playbook.rawValue) QA pass follows these steps (\(source), `\(playbook.keyPath)`):\n\n" + lines + "\n"
+    }
+
+    private static func stepText(_ step: PhaseStep, number: Int, playbook: QAPlaybookKind?) -> String {
         let facts = [step.mode.rawValue, step.mode == .machine ? step.when.previewText : nil, timeout(step), onFail(step)]
             .compactMap { $0 }
             .joined(separator: " · ")
-        return "\(number). `\(step.stepID)` \(step.shownTitle) · \(facts)\n" + body(step)
+        return "\(number). `\(step.stepID)` \(step.shownTitle) · \(facts)\n" + body(step, playbook: playbook)
     }
 
-    private static func body(_ step: PhaseStep) -> String {
+    private static func body(_ step: PhaseStep, playbook: QAPlaybookKind?) -> String {
         switch step.mode {
         case .machine:
             return step.commands.map { command in
                 "   - " + (command.when.previewText.map { $0 + ": " } ?? "") + "`\(command.run)`\n"
             }.joined()
         case .orchestrated:
+            if let playbook, step.prompt.trimmingWhitespace().isEmpty {
+                return "   - prompt: Symphony's own (`priv/qa_steps/\(playbook.rawValue)/\(step.stepID).md`)\n" + answer(step)
+            }
             return "   - prompt:\n" + step.prompt.components(separatedBy: "\n").map { "     > \($0)\n" }.joined() + answer(step)
         case .delegated:
             return ""
@@ -506,14 +721,21 @@ public enum PhasePreview {
     }
 }
 
-/// The step list of every kind under `phases` in the configured symphony.yml. Settings edits them in the Phases
-/// group; saving rewrites only the `steps:` block of a kind that changed, or removes `phases.<kind>` when it was
-/// reset to its default.
+/// The step list of every kind under `phases` in the configured symphony.yml, with QA's own settings: whether a QA
+/// pass walks a step list (`phases.qa.stepped`) and each QA playbook's list (`phases.qa.playbooks.<kind>.steps`).
+/// Settings edits them in the Phases group; saving rewrites only the `steps:` block of a list that changed, removes a
+/// list reset to its default, and writes `stepped` when it changed.
 public struct PhaseSettings: Equatable {
     public var lists: [PhaseKind: PhaseSteps]
+    /// `phases.qa.stepped`: on, a QA pass walks its playbook's step list; off, every pass is one agent session.
+    public var qaStepped: Bool
+    /// The QA playbooks' lists the file sets, and those the editor opened; a kind missing here follows its default.
+    public var qaPlaybooks: [QAPlaybookKind: PhaseSteps]
 
-    public init(lists: [PhaseKind: PhaseSteps] = [:]) {
+    public init(lists: [PhaseKind: PhaseSteps] = [:], qaStepped: Bool = false, qaPlaybooks: [QAPlaybookKind: PhaseSteps] = [:]) {
         self.lists = Dictionary(uniqueKeysWithValues: PhaseKind.allCases.map { ($0, lists[$0] ?? .defaults(for: $0)) })
+        self.qaStepped = qaStepped
+        self.qaPlaybooks = qaPlaybooks
     }
 
     public subscript(kind: PhaseKind) -> PhaseSteps {
@@ -521,14 +743,58 @@ public struct PhaseSettings: Equatable {
         set { lists[kind] = newValue }
     }
 
-    /// Each kind's list in `yaml`, its default when the file doesn't set it.
+    public subscript(owner: StepListOwner) -> PhaseSteps {
+        get {
+            switch owner {
+            case .runKind(let kind): return self[kind]
+            case .qaPlaybook(let playbook): return qaPlaybooks[playbook] ?? .defaults(for: owner)
+            }
+        }
+        set {
+            switch owner {
+            case .runKind(let kind): self[kind] = newValue
+            case .qaPlaybook(let playbook): qaPlaybooks[playbook] = newValue
+            }
+        }
+    }
+
+    /// The QA playbook kinds the picker offers: Symphony's four, then the others the file or the editor named, by name.
+    public var qaPlaybookKinds: [QAPlaybookKind] {
+        QAPlaybookKind.builtIn + Set(qaPlaybooks.keys).subtracting(QAPlaybookKind.builtIn).sorted()
+    }
+
+    /// Every list: the run kinds', then the QA playbooks' in the picker's order.
+    public var owners: [StepListOwner] {
+        PhaseKind.allCases.map { .runKind($0) } + qaPlaybookKinds.map { .qaPlaybook($0) }
+    }
+
+    /// Equal when `qaStepped` and every list are: a QA playbook missing from one equals its default in the other.
+    public static func == (lhs: PhaseSettings, rhs: PhaseSettings) -> Bool {
+        let playbooks = Set(lhs.qaPlaybooks.keys).union(rhs.qaPlaybooks.keys)
+        return lhs.lists == rhs.lists && lhs.qaStepped == rhs.qaStepped
+            && playbooks.allSatisfy { lhs[.qaPlaybook($0)] == rhs[.qaPlaybook($0)] }
+    }
+
+    // MARK: Reading
+
+    /// Each list in `yaml`, its default when the file doesn't set it, and whether QA passes are stepped. `phases.qa`
+    /// may hold only `stepped` or `playbooks`, and then QA follows its default list.
     public static func values(in yaml: String) throws -> PhaseSettings {
         let document = Document(yaml)
         var settings = PhaseSettings()
         for kind in PhaseKind.allCases {
             guard let kindKey = try key(at: ["phases", kind.rawValue], in: document) else { continue }
             let range = try notABlockAsPhaseError { try document.block(of: kindKey) }
+            var setsQASettings = false
+            if kind == .qa {
+                let stepped = document.child("stepped", in: range)
+                let playbooks = document.child("playbooks", in: range)
+                settings.qaStepped = try stepped.map(steppedValue) ?? false
+                settings.qaPlaybooks = try playbooks.map { try playbookLists(under: $0, in: document) } ?? [:]
+                setsQASettings = stepped != nil || playbooks != nil
+            }
             guard let stepsKey = document.child("steps", in: range) else {
+                if setsQASettings { continue }
                 throw PhaseSettingsError.unsupported(line: kindKey.index + 1, reason: "`\(kind.rawValue):` has no `steps:` list")
             }
             settings[kind] = PhaseSteps(steps: try StepsReader(document: document).steps(under: stepsKey), isDefault: false)
@@ -536,21 +802,76 @@ public struct PhaseSettings: Equatable {
         return settings
     }
 
-    /// The same text with the kinds whose list differs between `old` and `new` written: the `steps:` block of a set
-    /// list, or `phases.<kind>` removed for a list reset to its default.
+    /// `stepped:`'s value: true, or false for false or a null.
+    private static func steppedValue(_ key: Document.Key) throws -> Bool {
+        let value = ValueLine(key.rest).value
+        switch value {
+        case "true": return true
+        case "false": return false
+        case let value where Scalar.nulls.contains(value): return false
+        default: throw PhaseSettingsError.unsupported(line: key.index + 1, reason: "`stepped: \(value)` is not true or false")
+        }
+    }
+
+    /// Whether a key's value is an empty map: `{}`, or a null written out.
+    private static func isEmptyMap(_ value: String) -> Bool {
+        value == "{}" || (!value.isEmpty && Scalar.nulls.contains(value))
+    }
+
+    /// The lists under `playbooks:` by kind, each kind an indented block holding its `steps:`; none for `{}` or a null.
+    private static func playbookLists(under key: Document.Key, in document: Document) throws -> [QAPlaybookKind: PhaseSteps] {
+        let value = ValueLine(key.rest).value
+        if isEmptyMap(value) { return [:] }
+        guard value.isEmpty else {
+            throw PhaseSettingsError.unsupported(line: key.index + 1, reason: "write the playbooks as an indented block under `playbooks:`")
+        }
+        let children = document.children(of: key)
+        guard let indent = document.childIndent(in: children) else { return [:] }
+        var lists: [QAPlaybookKind: PhaseSteps] = [:]
+        for index in children {
+            guard let lineIndent = document.indent(at: index), lineIndent <= indent else { continue }
+            let content = document.lines[index].dropFirst(indent)
+            let name = String(content.prefix { $0.isLetter || $0.isNumber || $0 == "_" })
+            let rest = content.dropFirst(name.count)
+            guard lineIndent == indent, !name.isEmpty, rest.hasPrefix(":") else {
+                throw PhaseSettingsError.unsupported(line: index + 1, reason: "`\(String(content).trimmingWhitespace())` is not a playbook kind's `name:` line")
+            }
+            let kindKey = Document.Key(name: name, index: index, indent: indent, rest: String(rest.dropFirst()))
+            let block = try notABlockAsPhaseError { try document.block(of: kindKey) }
+            guard let stepsKey = document.child("steps", in: block) else {
+                throw PhaseSettingsError.unsupported(line: index + 1, reason: "`\(name):` has no `steps:` list")
+            }
+            lists[QAPlaybookKind(name)] = PhaseSteps(steps: try StepsReader(document: document).steps(under: stepsKey), isDefault: false)
+        }
+        return lists
+    }
+
+    // MARK: Writing
+
+    static let steppedPath = ["phases", "qa", "stepped"]
+
+    /// The same text with the lists that differ between `old` and `new` written (the `steps:` block of a set list, or
+    /// the list removed when it was reset to its default), then `phases.qa.stepped`: `true`, or removed when off.
     public static func updating(_ yaml: String, from old: PhaseSettings, to new: PhaseSettings) throws -> String {
         var yaml = yaml
-        for kind in PhaseKind.allCases where old[kind] != new[kind] {
-            yaml = new[kind].isDefault ? try resetting(yaml, kind: kind) : try setting(yaml, kind: kind, to: new[kind].steps)
+        var seen = Set<StepListOwner>()
+        for owner in old.owners + new.owners where seen.insert(owner).inserted && old[owner] != new[owner] {
+            yaml = new[owner].isDefault ? try resetting(yaml, owner: owner) : try setting(yaml, owner: owner, to: new[owner].steps)
+        }
+        if old.qaStepped != new.qaStepped {
+            yaml = new.qaStepped
+                ? try notABlockAsPhaseError { try ConfigSetting.setting(at: steppedPath, to: "true", in: yaml) }
+                : try removing(steppedPath, in: yaml)
         }
         return yaml
     }
 
-    /// The same text with `phases.<kind>.steps` holding `steps`, inserting the keys when missing. Only that block
-    /// is rewritten.
-    static func setting(_ yaml: String, kind: PhaseKind, to steps: [PhaseStep]) throws -> String {
-        let path = ["phases", kind.rawValue, "steps"]
-        let text = try notABlockAsPhaseError { try ConfigSetting.setting(at: path, to: "[]", in: yaml) }
+    /// The same text with `owner`'s `steps:` holding `steps`, inserting the keys when missing. Only that block is
+    /// rewritten.
+    static func setting(_ yaml: String, owner: StepListOwner, to steps: [PhaseStep]) throws -> String {
+        let path = owner.path
+        let opened = owner.qaPlaybook == nil ? yaml : try openingPlaybooks(in: yaml)
+        let text = try notABlockAsPhaseError { try ConfigSetting.setting(at: path, to: "[]", in: opened) }
         var document = Document(text)
         guard let stepsKey = try key(at: path, in: document),
               let kindKey = try key(at: Array(path.dropLast()), in: document) else { return text }
@@ -569,15 +890,43 @@ public struct PhaseSettings: Equatable {
         return document.text
     }
 
-    /// The same text without `phases.<kind>`, so the kind follows its default list; without `phases:` too when
-    /// nothing else is under it.
-    static func resetting(_ yaml: String, kind: PhaseKind) throws -> String {
+    /// The text with a `playbooks: {}` or null turned into an empty block, so a kind can go under it.
+    private static func openingPlaybooks(in yaml: String) throws -> String {
         var document = Document(yaml)
-        guard let kindKey = try key(at: ["phases", kind.rawValue], in: document) else { return yaml }
-        document.lines.removeSubrange(kindKey.index...end(of: kindKey, in: document))
-        if let phasesKey = try key(at: ["phases"], in: document),
-           document.lastStructural(in: document.children(of: phasesKey)) == nil {
-            document.lines.removeSubrange(phasesKey.index...end(of: phasesKey, in: document))
+        guard let key = try key(at: ["phases", "qa", "playbooks"], in: document), isEmptyMap(ValueLine(key.rest).value) else {
+            return yaml
+        }
+        let comment = ValueLine(key.rest).tail.trimmingWhitespace()
+        document.lines[key.index] = String(repeating: " ", count: key.indent) + "playbooks:" + (comment.isEmpty ? "" : " " + comment)
+        return document.text
+    }
+
+    /// The same text without `phases.<kind>`, so the kind follows its default list; without `phases:` too when
+    /// nothing else is under it. For `qa`, only its `steps:` goes, so `stepped` and `playbooks` stay.
+    static func resetting(_ yaml: String, kind: PhaseKind) throws -> String {
+        try resetting(yaml, owner: .runKind(kind))
+    }
+
+    /// The same text without `owner`'s list, so it follows its default: a run kind's `phases.<kind>` (only
+    /// `phases.qa.steps` for `qa`) or a playbook's `phases.qa.playbooks.<kind>`, and without each key above it the
+    /// removal leaves empty.
+    static func resetting(_ yaml: String, owner: StepListOwner) throws -> String {
+        switch owner {
+        case .runKind(let kind) where kind != .qa: return try removing(["phases", kind.rawValue], in: yaml)
+        case .runKind, .qaPlaybook: return try removing(owner.path, in: yaml)
+        }
+    }
+
+    /// The same text without the key at `path` and its block, and without each key above it the removal leaves with
+    /// nothing under it.
+    static func removing(_ path: [String], in yaml: String) throws -> String {
+        var document = Document(yaml)
+        guard let target = try key(at: path, in: document) else { return yaml }
+        document.lines.removeSubrange(target.index...end(of: target, in: document))
+        for depth in stride(from: path.count - 1, through: 1, by: -1) {
+            guard let parent = try key(at: Array(path.prefix(depth)), in: document),
+                  document.lastStructural(in: document.children(of: parent)) == nil else { break }
+            document.lines.removeSubrange(parent.index...end(of: parent, in: document))
         }
         return document.text
     }
@@ -619,12 +968,19 @@ enum StepsWriter {
         }
     }
 
-    /// The step's `key: value` lines, relative to the item's column: only the fields its mode takes.
+    /// The step's `key: value` lines, relative to the item's column: only the fields its mode takes. An orchestrated
+    /// step with no prompt has no `prompt:`, so a QA playbook's step takes Symphony's own.
     private static func fields(of item: PhaseStep, step: Int) -> [String] {
         var fields = ["id: " + scalar(item.stepID)]
         let title = item.title.trimmingWhitespace()
         if !title.isEmpty { fields.append("title: " + scalar(title)) }
         fields.append("mode: " + item.mode.rawValue)
+        if item.mode != .machine {
+            if let repeats = item.repeat { fields.append("repeat: " + repeats.rawValue) }
+            if let session = item.session { fields.append("session: " + scalar(session)) }
+            if let model = item.model { fields.append("model: " + scalar(model)) }
+            if let effort = item.effort { fields.append("effort: " + effort.rawValue) }
+        }
         switch item.mode {
         case .machine:
             if item.when != .always { fields.append("when: " + item.when.rawValue) }
@@ -639,7 +995,7 @@ enum StepsWriter {
                 }
             }
         case .orchestrated:
-            fields.append(contentsOf: prompt(item.prompt, step: step))
+            if !item.prompt.trimmingWhitespace().isEmpty { fields.append(contentsOf: prompt(item.prompt, step: step)) }
             if !item.answer.isEmpty {
                 fields.append("answer: {" + item.answer.map { scalar($0.name) + ": " + $0.type.rawValue }.joined(separator: ", ") + "}")
             }
@@ -713,7 +1069,10 @@ struct StepsReader {
         let content: String
     }
 
-    static let stepKeys: Set<String> = ["id", "title", "mode", "command", "prompt", "answer", "timeout_ms", "on_fail", "no_result_limit", "when"]
+    static let stepKeys: Set<String> = [
+        "id", "title", "mode", "command", "prompt", "answer", "timeout_ms", "on_fail", "no_result_limit", "when", "model", "effort", "session",
+        "repeat",
+    ]
 
     func steps(under key: Document.Key) throws -> [PhaseStep] {
         let value = ValueLine(key.rest).value
@@ -766,8 +1125,24 @@ struct StepsReader {
             timeoutMs: try number("timeout_ms"),
             onFail: try text("on_fail"),
             noResultLimit: try number("no_result_limit"),
-            when: try condition(try text("when"), line: fields["when"]?.0.index ?? start)
+            when: try condition(try text("when"), line: fields["when"]?.0.index ?? start),
+            model: try text("model"),
+            effort: try choice("effort", from: try text("effort"), line: fields["effort"]?.0.index ?? start),
+            session: try text("session"),
+            repeat: try choice("repeat", from: try text("repeat"), line: fields["repeat"]?.0.index ?? start)
         )
+    }
+
+    /// The value of the `key:` whose values are `Choice`'s cases, nil when missing or null.
+    private func choice<Choice: RawRepresentable & CaseIterable>(_ key: String, from value: String?, line: Int) throws -> Choice?
+    where Choice.RawValue == String {
+        guard let value else { return nil }
+        guard let choice = Choice(rawValue: value) else {
+            let names = Choice.allCases.map(\.rawValue)
+            let list = names.count == 1 ? names[0] : names.dropLast().joined(separator: ", ") + " or " + names[names.count - 1]
+            throw unsupported(line, "`\(key): \(value)` is not \(list)")
+        }
+        return choice
     }
 
     /// The entries of the list item starting at `start`: its `key: value` lines with the lines nested under each.

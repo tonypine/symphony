@@ -6,6 +6,7 @@ defmodule SymphonyElixir.QaAgentTest do
   alias SymphonyElixir.{AgentSandboxConfig, Artifacts}
   alias SymphonyElixir.Artifacts.Store
   alias SymphonyElixir.Codex.DynamicTool
+  alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.LeftoverProcesses.Table
   alias SymphonyElixir.QaAgent
   alias SymphonyElixir.QaAgent.{Report, Selection}
@@ -1564,6 +1565,25 @@ defmodule SymphonyElixir.QaAgentTest do
       assert_receive {:forwarded, _message}
       assert_receive {:qa_session_stopped, _session}
       refute File.exists?(worktree)
+    end
+
+    test "walks the pass's step list when it has one, the review giving the verdict" do
+      review =
+        %Step{}
+        |> Step.changeset(%{"id" => "review", "mode" => "orchestrated", "prompt" => "Give the verdict."})
+        |> Ecto.Changeset.apply_action!(:validate)
+
+      verdict = %{"verdict" => "pass", "summary" => "Stepped.", "steps" => [%{"name" => "Step 1", "status" => "pass", "details" => "ok"}]}
+      Application.put_env(:symphony_elixir, :qa_test_verdict_calls, [[verdict]])
+      Application.put_env(:symphony_elixir, :qa_test_turn_result, {:ok, %{}})
+
+      {result, _log} =
+        with_log(fn -> QaAgent.run(job(), Config.settings!(), git: fake_git(), qa_agent_module: FakeSession, qa_step_list: [review]) end)
+
+      assert {:ok, %{result: %{verdict: :pass, summary: "Stepped."}}} = result
+      assert_receive {:qa_turn, _session, prompt, _issue, _opts}
+      assert prompt =~ "This turn is the `review` step"
+      refute prompt =~ "### Playbook: cli"
     end
 
     test "stops processes left running under the worktree before removing it" do

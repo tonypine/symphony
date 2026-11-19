@@ -57,6 +57,8 @@ public enum SettingsUIManifest {
         "phases.epic_review.steps",
         "phases.implementation.steps",
         "phases.landing.steps",
+        "phases.qa.playbooks",
+        "phases.qa.stepped",
         "phases.qa.steps",
         "phases.review_feedback.steps",
         "phases.rework.steps",

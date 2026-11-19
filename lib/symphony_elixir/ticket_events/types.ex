@@ -52,7 +52,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   and how it runs (`mode`): `machine` (a command Symphony runs, `command`), `orchestrated` (an agent
   turn Symphony drives from a prompt, `prompt_ref`) or `delegated` (work the agent does and reports
   itself). Symphony records the machine and orchestrated steps; an agent records only delegated
-  ones (`agent_values`). `step.completed` says how the step ended (`outcome`): `passed`; `failed`,
+  ones (`agent_values`). An agent step's `step.started` may say what its turn runs with: `model`,
+  `effort` and `session`, and `model_ignored` (with `model_ignored_reason`) when a run on a fallback
+  provider kept its own model (`SymphonyElixir.QaAgent.Steps`). `step.completed` says how the step ended (`outcome`): `passed`; `failed`,
   with the step the run goes back to (`returns_to`, and its title in `returns_to_title`); `paused`,
   with the Question it waits on (`question_id`, from `SymphonyElixir.Questions`); or `skipped`, with
   why (`reason`); and how long it took (`duration_ms`). Those fields are `conditional`: each is
@@ -369,7 +371,16 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine, :agent],
       run_kinds: :any,
       required: @step,
-      optional: [command: {:string, 2_000}, prompt_ref: {:string, 200}] ++ @signal,
+      optional:
+        [
+          command: {:string, 2_000},
+          prompt_ref: {:string, 200},
+          model: {:string, 200},
+          effort: {:string, 20},
+          session: {:string, 100},
+          model_ignored: {:string, 200},
+          model_ignored_reason: {:string, 300}
+        ] ++ @signal,
       conditional: [command: {:mode, "machine"}, prompt_ref: {:mode, "orchestrated"}],
       agent_values: @agent_steps,
       idempotency: :writer

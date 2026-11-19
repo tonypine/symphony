@@ -83,7 +83,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
   # The keys each section of symphony.yml accepts, by dotted path; `repositories[]` is an item of
   # the `repositories` list. A key that is itself a path here is a nested section. The parser
   # rejects any other key, and `operator_key_paths/0` lists the leaves.
-  @phase_sections Map.new(Schema.Phases.kinds(), &{"phases." <> &1, ~w(steps)})
+  # `phases.qa` also says whether a QA pass walks a step list (`stepped`) and holds each QA playbook's
+  # list (`playbooks`, a free-form map of playbook kinds, one setting).
+  @phase_sections Map.new(Schema.Phases.kinds(), &{"phases." <> &1, if(&1 == "qa", do: ~w(steps stepped playbooks), else: ~w(steps))})
   @operator_sections %{
     "issues" => ~w(provider poll_interval_ms linear memory states),
     "issues.memory" => ~w(issues_file),
@@ -1388,17 +1390,43 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
     with {:ok, phase} <- section_map(phase, path),
          :ok <- reject_unknown_section_keys(phase, section_keys(path), path),
-         :ok <- phase_steps(Map.fetch(phase, "steps"), path) do
+         :ok <- phase_steps(Map.fetch(phase, "steps"), path, qa_settings?(kind, phase)),
+         :ok <- qa_playbooks(Map.get(phase, "playbooks"), path) do
       {:cont, {:ok, Map.put(phases, kind, phase)}}
     else
       error -> {:halt, error}
     end
   end
 
-  defp phase_steps(:error, path),
+  # `phases.qa` may set only `stepped` or `playbooks`, and then follows the kind's default list.
+  defp qa_settings?("qa", phase), do: Map.has_key?(phase, "stepped") or Map.has_key?(phase, "playbooks")
+  defp qa_settings?(_kind, _phase), do: false
+
+  defp qa_playbooks(nil, _path), do: :ok
+
+  defp qa_playbooks(playbooks, path) do
+    with {:ok, playbooks} <- section_map(playbooks, path <> ".playbooks") do
+      Enum.find_value(playbooks, :ok, fn {kind, playbook} -> refused(qa_playbook(playbook, "#{path}.playbooks.#{kind}")) end)
+    end
+  end
+
+  defp refused(:ok), do: nil
+  defp refused(error), do: error
+
+  defp qa_playbook(playbook, path) do
+    with {:ok, playbook} <- section_map(playbook, path),
+         :ok <- reject_unknown_section_keys(playbook, ~w(steps), path) do
+      phase_steps(Map.fetch(playbook, "steps"), path)
+    end
+  end
+
+  defp phase_steps(fetched, path, optional? \\ false)
+  defp phase_steps(:error, _path, true), do: :ok
+
+  defp phase_steps(:error, path, _optional?),
     do: {:error, {:invalid_symphony_config, "`#{path}.steps` is required; remove `#{path}` to follow the default list"}}
 
-  defp phase_steps({:ok, steps}, path) do
+  defp phase_steps({:ok, steps}, path, _optional?) do
     if is_list(steps) and Enum.all?(steps, &is_map/1),
       do: :ok,
       else: {:error, {:invalid_symphony_config, "`#{path}.steps` must be a list of steps, each an object"}}
