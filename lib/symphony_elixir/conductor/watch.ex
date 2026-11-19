@@ -10,13 +10,12 @@ defmodule SymphonyElixir.Conductor.Watch do
     * a step of the run ended `failed` (`step_failed`), or the same step failed twice
       (`step_failed_twice`);
     * a step of a stepped QA pass answered `plan_mismatch` or `blocked` (`qa_step_answer`), read from
-      the machine note the pass records for the step's answer (`SymphonyElixir.QaAgent.Steps`: "<step
-      title>: <status>. Expected: ... Actual: ...");
+      the `result` the pass puts on the step's own `step.completed` (`SymphonyElixir.QaAgent.StepPayload`);
     * the run passed `watch.run_minutes` (`run_minutes`) or `watch.run_tokens` (`run_tokens`).
 
   Never more often than `watch.min_interval_minutes` per run, at most `watch.max_turns_per_run`
   turns per run, one at a time. It checks the running runs on a timer and, while it is on, as each
-  step or note of a running run is recorded (it listens to the ticket events only while on). A failed
+  step of a running run is recorded (it listens to the ticket events only while on). A failed
   watch turn changes nothing for the run. It owns the steer table;
   a run that ended drops what still waited for it (`Steer.drop/1`).
   """
@@ -33,7 +32,7 @@ defmodule SymphonyElixir.Conductor.Watch do
   @tick_ms 30_000
   @output_lines 40
   @output_chars 3_000
-  @qa_answer ~r/\A[^\n]+: (plan_mismatch|blocked)\. Expected:/
+  @qa_answer_statuses ["plan_mismatch", "blocked"]
 
   @typedoc "One run's watch: turns run, when the last started (monotonic ms), the events already read, and whether a turn runs."
   @type run_watch :: %{turns: non_neg_integer(), last_ms: integer() | nil, seen: MapSet.t(String.t()), busy: boolean()}
@@ -65,7 +64,7 @@ defmodule SymphonyElixir.Conductor.Watch do
     {:noreply, look(state, nil)}
   end
 
-  def handle_info({:ticket_event, %{type: type, issue_id: issue_id}}, state) when type in ["step.completed", "note"],
+  def handle_info({:ticket_event, %{type: "step.completed", issue_id: issue_id}}, state),
     do: {:noreply, look(state, issue_id)}
 
   def handle_info({:watch_done, run_id}, state), do: {:noreply, update_in(state, [:runs], &mark_done(&1, run_id))}
@@ -168,16 +167,17 @@ defmodule SymphonyElixir.Conductor.Watch do
     end
   end
 
-  defp qa_answer?(%Event{type: "note", actor: %{kind: :machine}, payload: %{text: text}}) when is_binary(text),
-    do: Regex.match?(@qa_answer, text)
+  # A QA step's answer that says the step could not be judged is on its own `step.completed` (`result`).
+  defp qa_answer?(%Event{type: "step.completed", actor: %{kind: :machine}, payload: %{result: %{} = result}}),
+    do: Map.get(result, :status, Map.get(result, "status")) in @qa_answer_statuses
 
   defp qa_answer?(_event), do: false
 
-  defp new_failure?(new), do: Enum.any?(new, &(&1.type == "step.completed"))
+  defp new_failure?(new), do: Enum.any?(new, &(&1.type == "step.completed" and &1.payload[:outcome] == "failed"))
 
   defp failed_twice?(failed, new) do
     counts = Enum.frequencies_by(failed, & &1.payload[:step_id])
-    Enum.any?(new, &(&1.type == "step.completed" and Map.get(counts, &1.payload[:step_id], 0) >= 2))
+    Enum.any?(new, &(&1.type == "step.completed" and &1.payload[:outcome] == "failed" and Map.get(counts, &1.payload[:step_id], 0) >= 2))
   end
 
   defp minutes(%{started_at: %DateTime{} = started_at}), do: DateTime.diff(DateTime.utc_now(), started_at, :second) / 60
