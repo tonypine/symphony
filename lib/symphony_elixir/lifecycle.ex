@@ -24,7 +24,9 @@ defmodule SymphonyElixir.Lifecycle do
   stage when it ends. The run working now counts too, with its tokens and time so far, from what the
   orchestrator holds of it, so the stages and the total move while it works. A run that started
   outside any stage (a first run starts before its move out of
-  Todo, a plan run never enters one) counts in Coding, so the stages' tokens always add up to the
+  Todo, a plan run never enters one) counts in Coding. The Conductor's own runs (run kind `conductor`)
+  belong to no stage: they stay out of every stage's tokens, runs and agent time, and count in the
+  total and in `conductor_tokens`, so the stages' tokens and the Conductor's always add up to the
   total.
 
   Code Review, QA and CI Fix go by the names the repository configures for them
@@ -54,7 +56,7 @@ defmodule SymphonyElixir.Lifecycle do
           lifecycle: %{
             current: String.t() | nil,
             stages: [stage()],
-            tokens: %{total: non_neg_integer(), cap: non_neg_integer() | nil}
+            tokens: %{total: non_neg_integer(), conductor_tokens: non_neg_integer(), cap: non_neg_integer() | nil}
           },
           phase_path: %{
             current: String.t() | nil,
@@ -72,6 +74,7 @@ defmodule SymphonyElixir.Lifecycle do
   @type running ::
           %{
             optional(:run_id) => term(),
+            optional(:run_profile) => map() | nil,
             optional(:started_at) => DateTime.t() | nil,
             optional(:total_tokens) => term()
           }
@@ -139,7 +142,8 @@ defmodule SymphonyElixir.Lifecycle do
   def compute(events, %{now: now, terminal_states: terminal_states, token_cap: token_cap, phase_names: phase_names} = facts) do
     moves = moves(events, now, Enum.map(terminal_states, &normalized/1), phases(phase_names))
     started = runs_started(events)
-    runs = runs(events, started, moves) ++ running_run(events, started, moves, Map.get(facts, :running), now)
+    kinds = run_kinds(events)
+    runs = runs(events, started, kinds, moves) ++ running_run(events, started, moves, Map.get(facts, :running), now)
 
     %{lifecycle: lifecycle(moves, runs, token_cap, Map.get(facts, :held?, false)), phase_path: phase_path(moves)}
   end
@@ -203,14 +207,19 @@ defmodule SymphonyElixir.Lifecycle do
     end
   end
 
+  defp run_kinds(events) do
+    for %Event{type: "run.started", payload: %{run_id: run_id, run_kind: kind}} <- events, into: %{}, do: {run_id, kind}
+  end
+
   # Each ended run with its stage, its tokens and how long it ran. A run whose start the ledger lacks
   # counts at its end.
-  defp runs(events, started, moves) do
+  defp runs(events, started, kinds, moves) do
     for %Event{type: "run.ended", payload: %{run_id: run_id} = payload, at: %DateTime{} = ended_at} <- events do
       started_at = Map.get(started, run_id, ended_at)
 
       %{
         stage: stage_at(moves, started_at),
+        conductor?: Map.get(payload, :run_kind, Map.get(kinds, run_id)) == "conductor",
         tokens: tokens(Map.get(payload, :tokens)),
         agent_time_ms: Map.get(payload, :duration_ms) || time_ms(started_at, ended_at)
       }
@@ -229,7 +238,8 @@ defmodule SymphonyElixir.Lifecycle do
     else
       started_at = Map.get(started, run_id) || Map.get(running, :started_at) || now
 
-      [%{stage: stage_at(moves, started_at), tokens: tokens(Map.get(running, :total_tokens)), agent_time_ms: time_ms(started_at, now)}]
+      conductor? = to_string(get_in(running, [:run_profile, :kind])) == "conductor"
+      [%{stage: stage_at(moves, started_at), conductor?: conductor?, tokens: tokens(Map.get(running, :total_tokens)), agent_time_ms: time_ms(started_at, now)}]
     end
   end
 
@@ -253,7 +263,8 @@ defmodule SymphonyElixir.Lifecycle do
       |> Enum.with_index()
       |> Enum.map(fn {stage, index} -> stage_row(stage, index, where, moves, runs) end)
 
-    %{current: current, stages: stages, tokens: %{total: runs |> Enum.map(& &1.tokens) |> Enum.sum(), cap: token_cap}}
+    conductor_tokens = runs |> Enum.filter(& &1.conductor?) |> Enum.map(& &1.tokens) |> Enum.sum()
+    %{current: current, stages: stages, tokens: %{total: runs |> Enum.map(& &1.tokens) |> Enum.sum(), conductor_tokens: conductor_tokens, cap: token_cap}}
   end
 
   # Done is where the ticket stands once it ended, not a stage it works in: nothing is current then.
@@ -292,7 +303,7 @@ defmodule SymphonyElixir.Lifecycle do
 
   defp stage_row({id, name}, index, where, moves, runs) do
     in_stage = Enum.filter(moves, &(&1.stage == id))
-    runs_in_stage = Enum.filter(runs, &(&1.stage == id))
+    runs_in_stage = Enum.filter(runs, &(&1.stage == id and not &1.conductor?))
     visits = Enum.count(in_stage, & &1.opens_visit?)
 
     %{
