@@ -3829,8 +3829,12 @@ model, through the QA driver the pass holds:
 - `symphony:qa_build`: the app Symphony built for the commit (`qa_build`); a failed build fails
   the step;
 - `symphony:qa_launch`: `qa_launch_app` on the default fixtures, then `qa_check_app`; an app that is
-  not healthy fails the step. It is skipped when the plan answered `needs_app: false` and no
-  walkthrough step is walked, and so are the agent steps between it and the quit;
+  not healthy fails the step, and the agent steps between it and the quit are skipped. It always
+  runs: a pass with nothing on screen to judge rests on the app building, starting and checking
+  healthy. When the plan answered `needs_app: false` and no walkthrough step is walked, the agent
+  steps between the launch and the quit (the design check and the wide pass) are skipped, saying the
+  plan found nothing on screen to judge, and the review's `pass` is a `pass` with `scope: none`,
+  accepted on the app check like any such pass;
 - `symphony:qa_quit`: `qa_quit_app` for every app the pass launched;
 - `symphony:qa_attach`: the evidence files the steps named and wrote under `qa-evidence/`, and any
   named but missing. The pass keeps them with its other files when it ends, as before.

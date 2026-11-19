@@ -6,8 +6,11 @@ Read the ticket, its parent and design (named below), the PR's diff (`git diff <
 in this worktree), the facts Symphony gathered (the steps QA walks, the pre-checks' results, the
 gallery entries the changed files affect) and the screen rules below. Then answer:
 
-- `needs_app` (true or false): whether anything in this pass needs the running app. False only
-  when no walkthrough step is walked and nothing on screen changed.
+- `needs_app` (true or false): whether anything in this pass judges the running app's screens.
+  False only when no walkthrough step is walked and nothing on screen changed. Symphony builds,
+  launches and health-checks the app either way (a pass with nothing on screen to judge rests on the
+  app starting); false skips the design check and the wide pass, and the pass is a `pass` with
+  `scope: none` once the app checked healthy.
 - `walk`: one brief for every walkthrough step QA walks (listed below), never fewer. Each brief is
   an object:
   - `step`: the walkthrough step's number;

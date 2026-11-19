@@ -19,9 +19,13 @@ defmodule SymphonyElixir.QaAgent.Steps do
   - `symphony:qa_build`: `qa_build`, the app Symphony built for the commit; a build that failed
     fails the step;
   - `symphony:qa_launch`: `qa_launch_app` on the default fixtures, then `qa_check_app` once the app
-    had a moment to start; an app that is not healthy fails the step. It is skipped, with the
-    reason, when the plan answered `needs_app: false` and no walkthrough step is walked, and then
-    the agent steps between it and the quit step are skipped too;
+    had a moment to start; an app that is not healthy fails the step, and the agent steps between it
+    and the quit step are skipped. It always runs: a pass with nothing on screen to judge rests on
+    the app building, starting and checking healthy (`QaDriver.app_check/1`). When the plan answered
+    `needs_app: false` and no walkthrough step is walked, the agent steps between the launch and the
+    quit (the design check and the wide pass) are skipped, saying the plan found nothing on screen to
+    judge, and the review's `pass` is a pass with `scope: none`, which `SymphonyElixir.QaVerification`
+    accepts on the app check;
   - `symphony:qa_quit`: `qa_quit_app` for every app the pass launched;
   - `symphony:qa_attach`: the evidence files the steps named and wrote under `qa-evidence/`, with
     any named but missing; the pass keeps them with its other files when it ends, as before.
@@ -83,8 +87,12 @@ defmodule SymphonyElixir.QaAgent.Steps do
   @answer_bytes 4_000
   @launch_settle_ms 3_000
   @app_key {__MODULE__, :app}
+  @nothing_on_screen "the plan found nothing on screen to judge: it needs no app and no walkthrough step is walked"
   @output_key {__MODULE__, :output}
   @evidence_dir "qa-evidence"
+
+  @typedoc "What a stepped pass gives back: `QaAgent.run_result/0`'s, with the review's session (`session_id`)."
+  @type run_result :: %{result: QaAgent.result(), tokens: map(), session_id: String.t() | nil}
 
   @doc """
   The step list `job`'s pass walks, or `[]` for a pass that is one agent session: the list of its
@@ -119,7 +127,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   pass forwards them), `:qa_driver_module` (default `SymphonyElixir.QaDriver`) and
   `:qa_launch_settle_ms`.
   """
-  @spec run(module(), QaAgent.job(), Path.t(), Schema.t(), [Step.t()], keyword()) :: {:ok, QaAgent.run_result()} | {:error, term(), map()}
+  @spec run(module(), QaAgent.job(), Path.t(), Schema.t(), [Step.t()], keyword()) :: {:ok, run_result()} | {:error, term(), map()}
   def run(agent_module, job, worktree, %Schema{} = qa_settings, [_ | _] = steps, opts) do
     state = new_state(agent_module, job, worktree, qa_settings, steps, opts)
     Process.delete(@app_key)
@@ -140,7 +148,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
     context =
       %{
-        repo_key: Map.get(job, :repo_key),
+        repo_key: Map.get(job, :repo_key) || Map.get(job.issue, :repo_key) || "default",
         issue_id: job.issue.id,
         identifier: job.issue.identifier,
         phase: job.issue.state,
@@ -241,15 +249,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   # -- machine steps -------------------------------------------------------------
 
   defp machine(state, step, attempt) do
-    case machine_skip(state, step) do
-      nil ->
-        step |> PhaseSteps.run_machine_step(machine_context(state), attempt) |> after_machine(state, step, attempt)
-
-      reason ->
-        PhaseSteps.record_turn_completed(step, state.context, %{outcome: "skipped", reason: reason}, 0)
-        state = if runs?(step, @launch), do: %{state | launch: {:skipped, reason}}, else: state
-        {add_result(state, step, "skipped", reason), :passed}
-    end
+    step |> PhaseSteps.run_machine_step(machine_context(state), attempt) |> after_machine(state, step, attempt)
   end
 
   defp after_machine(:passed, state, step, _attempt), do: {state |> machine_passed(step) |> add_result(step, "passed", Process.delete(@output_key)), :passed}
@@ -283,12 +283,10 @@ defmodule SymphonyElixir.QaAgent.Steps do
     state
   end
 
-  # A launch with nothing to drive: the plan needs no app and no walkthrough step is walked.
-  defp machine_skip(%{plan: %{"needs_app" => false}, targets: []}, step) do
-    if runs?(step, @launch), do: "the plan found nothing in this pass that needs the app, and no walkthrough step is walked"
-  end
-
-  defp machine_skip(_state, _step), do: nil
+  # Nothing on screen to judge: the plan needs no app and no walkthrough step is walked. The launch
+  # still runs, since such a pass rests on the app building, starting and checking healthy.
+  defp nothing_on_screen?(%{plan: %{"needs_app" => false}, targets: []}), do: true
+  defp nothing_on_screen?(_state), do: false
 
   defp machine_context(state) do
     Process.delete(@output_key)
@@ -403,13 +401,14 @@ defmodule SymphonyElixir.QaAgent.Steps do
     end
   end
 
+  # The steps that drive the app run only on an app that launched, and the listed ones only when
+  # there is something on screen to judge; a recheck the review asked for runs whatever the plan said.
   defp agent_skip(state, step) do
-    if MapSet.member?(state.app_steps, step.id) do
-      case state.launch do
-        {:launched, _app} -> nil
-        {:skipped, reason} -> "the app was not launched: #{reason}"
-        _failed_or_never_run -> "the app did not launch"
-      end
+    cond do
+      not MapSet.member?(state.app_steps, step.id) -> nil
+      not match?({:launched, _app}, state.launch) -> "the app did not launch"
+      state.rounds == 0 and nothing_on_screen?(state) -> @nothing_on_screen
+      true -> nil
     end
   end
 
@@ -966,6 +965,12 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp tail(output), do: output
 
   # -- the result -------------------------------------------------------------------
+
+  defp finish(%{verdict: %{verdict: :pass} = verdict} = state) do
+    if nothing_on_screen?(state),
+      do: {:ok, run_result(state, Map.put(verdict, :scope, :none))},
+      else: {:ok, run_result(state, verdict)}
+  end
 
   defp finish(%{verdict: %{} = verdict} = state), do: {:ok, run_result(state, verdict)}
   defp finish(%{error: error} = state) when not is_nil(error), do: {:error, error, state.tokens}

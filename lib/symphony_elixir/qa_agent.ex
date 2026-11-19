@@ -163,7 +163,7 @@ defmodule SymphonyElixir.QaAgent do
           optional(:host_ports) => [pos_integer()],
           optional(:epic_review) => boolean(),
           optional(:base_ref) => String.t(),
-          optional(:journey) => %{source: String.t(), text: String.t() | nil},
+          optional(:journey) => %{required(:source) => String.t(), required(:text) => String.t() | nil, optional(:steps) => [Walkthrough.step()]},
           optional(:proofs) => [QaPreCheck.result()],
           optional(:design_files) => [Design.file()],
           optional(:unprovable) => unprovable()

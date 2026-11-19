@@ -100,8 +100,9 @@ defmodule SymphonyElixir.PhaseSteps do
   What a machine step runs for: the ticket (`repo_key`, `issue_id`, `identifier`, `phase`), the run
   (`run_id`), the workspace and its host, the changed files (`changes/1`), the command runner
   (`runner`, default the workspace's), the options its output is kept with (`artifact_opts`), who
-  hears the step start and end (`on_step`) and, on an agent step, the lines of its turns so far
-  (`transcript_lines`).
+  hears the step start and end (`on_step`), on an agent step the lines of its turns so far
+  (`transcript_lines`) and where its answer goes (`answer_dir`, `answer_path/2`), and the walk's own
+  commands (`builtins`).
   """
   @type context :: %{
           required(:repo_key) => String.t(),
@@ -118,7 +119,8 @@ defmodule SymphonyElixir.PhaseSteps do
           optional(:artifact_opts) => [Artifacts.ingest_opt()],
           optional(:on_step) => (notice() -> term()),
           optional(:transcript_lines) => [Transcript.line()],
-          optional(:builtins) => %{String.t() => (map() -> runner_result())}
+          optional(:builtins) => %{String.t() => (map() -> runner_result())},
+          optional(:answer_dir) => Path.t() | nil
         }
 
   @type runner_result :: {:ok, {String.t(), integer()}} | {:timeout, String.t()} | {:error, term()}

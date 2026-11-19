@@ -184,6 +184,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
   end
 
   @pass %{"verdict" => "pass", "summary" => "Every step behaved.", "steps" => [%{"name" => "Step 1", "status" => "pass", "details" => "shown"}]}
+  @fail %{"verdict" => "fail", "summary" => "It broke.", "findings" => ["The app crashed at launch."]}
 
   defp turns do
     receive_turns([])
@@ -290,16 +291,35 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert second.turn[:resume_session_id] == "session-plan"
     end
 
-    test "skips the launch and the steps that drive the app when the plan needs no app and no step is walked", ctx do
+    test "with nothing on screen to judge still launches and checks the app, skips the design check and wide pass, and passes with scope none",
+         ctx do
       answers(%{"plan" => [{:write, plan([], %{needs_app: false, gallery: []})}], "review" => [{:verdict, @pass}]})
 
-      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{journey: %{steps: []}})
+      assert {:ok, %{result: %{verdict: :pass, scope: :none}}} = run(ctx, %{journey: %{steps: []}})
       assert Enum.map(turns(), & &1.id) == ["plan", "review"]
+      assert_received {:tool, _driver, "qa_launch_app", %{}}
+      assert_received {:tool, _driver, "qa_check_app", %{"pid" => 4242, "page" => "launch"}}
 
-      skipped = for %{payload: %{outcome: "skipped"} = payload} <- events("step.completed"), into: %{}, do: {payload.step_id, payload.reason}
-      assert skipped["launch"] =~ "the plan found nothing in this pass that needs the app"
-      assert skipped["design_check"] =~ "the app was not launched"
-      assert skipped["wide_pass"] =~ "the app was not launched"
+      outcomes = Map.new(events("step.completed"), &{&1.payload.step_id, &1.payload})
+      assert %{outcome: "passed"} = outcomes["launch"]
+      assert outcomes["design_check"].reason =~ "the plan found nothing on screen to judge"
+      assert outcomes["wide_pass"].reason =~ "the plan found nothing on screen to judge"
+
+      # A fail stays a fail, with no scope.
+      answers(%{"plan" => [{:write, plan([], %{needs_app: false, gallery: []})}], "review" => [{:verdict, @fail}]})
+      :ok = RunStore.clear()
+      assert {:ok, %{result: %{verdict: :fail} = failed}} = run(ctx, %{journey: %{steps: []}})
+      refute Map.has_key?(failed, :scope)
+    end
+
+    test "a recheck the review asks for runs even when the plan found nothing on screen", ctx do
+      answers(%{
+        "plan" => [{:write, plan([], %{needs_app: false, gallery: []})}],
+        "review" => [{:write, %{recheck: [%{where: "The menu"}]}}, {:verdict, @pass}]
+      })
+
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{journey: %{steps: []}})
+      assert Enum.map(turns(), & &1.id) == ["plan", "review", "recheck_1_1", "review"]
     end
 
     test "a build that failed goes to the quit, and the review sees it", ctx do
