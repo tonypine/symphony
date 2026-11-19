@@ -284,12 +284,25 @@ final class ProvidersPageTests: XCTestCase {
         XCTAssertEqual(enabled.key?.toggle, false, "Disable")
         XCTAssertEqual(enabled.facts.first?.value, "OPENCODE_API_KEY · set")
         XCTAssertEqual(keyed(keys.enabling("opencode-go", true), editor).sections.last?.cards.last?.statusLine, "Available")
+    }
 
-        // Disabled: off, and the key is still set.
-        let disabled = try XCTUnwrap(keyed(keys, editor).detail("opencode-go"))
-        XCTAssertEqual(disabled.state.word, "Off")
-        XCTAssertEqual(disabled.facts.first?.value, "OPENCODE_API_KEY · set")
-        XCTAssertEqual(keyed(keys, editor).sections.last?.cards.last?.statusLine, "Off")
+    func testDisableTurnsAProviderOffAndKeepsItsKey() throws {
+        let enabled = ProviderKeys(keys: ["opencode-go": "sk-go", "openrouter": "sk-or"], enabled: ["opencode-go", "openrouter"])
+        let disabled = enabled.enabling("opencode-go", false)
+        XCTAssertEqual(disabled.keys, enabled.keys, "Disable keeps the key")
+
+        let detail = try XCTUnwrap(keyed(disabled).detail("opencode-go"))
+        XCTAssertEqual(detail.state.word, "Off")
+        XCTAssertEqual(detail.facts.first?.value, "OPENCODE_API_KEY · set")
+        XCTAssertEqual(detail.key?.stored, true)
+        XCTAssertEqual(keyed(disabled).sections.last?.cards.last?.statusLine, "Off")
+
+        // Provider on Factory › Runs no longer offers OpenCode Go.
+        let choices = { (page: RunsPage) -> [String?] in
+            page.rows.first { $0.kind == nil }!.lines[0].fields.first { $0.field == .provider }!.choices.map(\.value)
+        }
+        XCTAssertTrue(choices(try runsPage().showing(nil, off: enabled.off)).contains("opencode-go"))
+        XCTAssertFalse(choices(try runsPage().showing(nil, off: disabled.off)).contains("opencode-go"))
     }
 
     func testAKeyTestsResultReadsAsASituationLine() {
