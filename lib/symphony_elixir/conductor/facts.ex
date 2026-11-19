@@ -39,7 +39,7 @@ defmodule SymphonyElixir.Conductor.Facts do
   @section_max 3_000
   @text_max 1_000
   @max_findings 30
-  @max_verdicts 10
+  @verdicts_shown 10
   @max_notes 10
   @max_conductor 6
   @max_files 40
@@ -341,7 +341,7 @@ defmodule SymphonyElixir.Conductor.Facts do
   defp verdicts(events) do
     events
     |> Enum.filter(&(&1.type == "verdict.recorded" and is_nil(payload(&1, :signal))))
-    |> Enum.take(-@max_verdicts)
+    |> Enum.take(-@verdicts_shown)
     |> Enum.map(&drop_nil(%{event_id: &1.id, kind: payload(&1, :kind), outcome: payload(&1, :outcome), head: payload(&1, :head), reason: cut(payload(&1, :reason), @text_max)}))
   end
 
