@@ -513,7 +513,7 @@ struct SettingsView: View {
                     Text("symphony check rejected the report settings; see Reports.").foregroundStyle(.red)
                 }
                 if model.conductorError != nil {
-                    Text("symphony check rejected the Conductor settings; see Conductor.").foregroundStyle(.red)
+                    Text("symphony check rejected the Conductor settings; see Conductor.").foregroundStyle(DesignTokens.Status.problem.tint)
                 }
                 if model.macAppQAError != nil {
                     Text("symphony check rejected the macOS app QA settings; see macOS app QA.").foregroundStyle(.red)
