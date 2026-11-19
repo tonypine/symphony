@@ -494,7 +494,7 @@ defmodule SymphonyElixir.LifecycleTest do
 
     test "the running snapshot's profile is the orchestrator's struct, or absent" do
       events = [entered("2026-10-30T10:00", "In Progress")]
-      profile = %SymphonyElixir.Config.Runs.Run{kind: :implementation, harness: "claude", command: "claude", provider: "anthropic", model: "claude-opus-5-5"}
+      profile = %SymphonyElixir.Config.Runs.Run{kind: :implementation, harness: "claude", command: "claude", provider: "anthropic"}
       running = %{run_id: "r1", started_at: at("2026-10-30T10:01"), total_tokens: 700, run_profile: profile}
 
       result = Lifecycle.compute(events, Map.merge(@facts, %{now: at("2026-10-30T10:05"), running: running}))
