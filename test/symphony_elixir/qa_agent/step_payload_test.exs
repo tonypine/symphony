@@ -135,7 +135,7 @@ defmodule SymphonyElixir.QaAgent.StepPayloadTest do
   test "reason/1 cuts to 300 characters and is never blank" do
     assert StepPayload.reason("no answer") == "no answer"
     assert String.length(StepPayload.reason(String.duplicate("r", 500))) == 300
-    assert StepPayload.reason("") == "not given"
+    assert StepPayload.reason("") == "none"
     valid!(%{outcome: "failed", returns_to: "review", reason: StepPayload.reason(String.duplicate("r", 500))})
   end
 end

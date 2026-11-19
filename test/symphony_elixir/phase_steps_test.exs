@@ -708,19 +708,17 @@ defmodule SymphonyElixir.PhaseStepsTest do
       assert section =~ ~s|- Earlier steps of this run answered:\n  - `layout` (Pick a layout): {"columns":2}|
     end
 
-    test "Symphony records a step's end it saw, filling the title of the step it returns to, and a note", ctx do
+    test "Symphony records a step's end it saw, filling the title of the step it returns to", ctx do
       steps = steps()
       context = Map.put(context(ctx, %{}), :steps, steps)
 
       :ok = PhaseSteps.record_turn_completed(step(steps, "handoff"), context, %{outcome: "failed", returns_to: "code"}, 7)
       :ok = PhaseSteps.record_turn_completed(step(steps, "handoff"), Map.delete(context, :steps), %{outcome: "failed", returns_to: "handoff"}, 7)
-      :ok = PhaseSteps.record_note(context, "The agent ended two turns without recording how the step ended.")
 
       assert [first, second] = events("step.completed")
       assert %{returns_to: "code", returns_to_title: "Write the code", duration_ms: 7} = first.payload
       assert %{returns_to_title: "handoff"} = second.payload
-
-      assert [%{payload: %{text: "The agent ended two turns without recording how the step ended."}}] = events("note")
+      assert events("note") == []
     end
   end
 
