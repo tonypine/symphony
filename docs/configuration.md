@@ -3454,6 +3454,13 @@ conductor:
   enabled: false
   junctions: [after_coding, after_qa_fail, after_rework, before_merge]
   timeout_ms: 180000
+  watch:
+    enabled: false
+    run_minutes: 30
+    run_tokens: 30000000
+    min_interval_minutes: 10
+    max_turns_per_run: 3
+    allow_stop: false
 ```
 
 - `enabled` (default `false`): whether the Conductor runs at all. Off, nothing reads or writes
@@ -3475,6 +3482,31 @@ run is recorded on the ticket (`run.started`, `run.ended` with its model and tok
 so the dispatch-loop guard ignores it), and its tokens count toward the ticket under the phase it ran
 in. A dispatch pause stops it as it stops any run. Read on each dispatch, so a change applies without
 a restart. The prompt lives in `priv/conductor/prompt.md`.
+
+**Watching running runs** (`conductor.watch`, off by default; `conductor.enabled` must be on too).
+The Conductor looks at a running run when one of its steps ended `failed`, the same step failed
+twice, a step of a stepped QA pass answered `plan_mismatch` or `blocked`, or the run passed
+`run_minutes` or `run_tokens`; never more often than `min_interval_minutes` per run, and at most
+`max_turns_per_run` times per run, one turn at a time. The turn reads the facts at the junction
+`during_run` plus the live run (its kind and model, steps so far with results, the step it is on,
+its newest lines, elapsed time and tokens) and may answer:
+
+- `steer` with `when: next_turn`: the message waits on the run and opens its next agent turn (the
+  next step's prompt, a stepped QA pass's included, or the next continuation turn), marked as
+  guidance from the Conductor and wrapped as untrusted data;
+- `steer` with `when: now`: on the Claude harness, the agent turn the run is in ends and the same
+  session resumes with the message as a new turn, which counts as no turn of its own and spends no
+  retry. A run in a machine step, between turns, on another harness, or in a QA or Code Review turn is
+  never interrupted: the message waits for its next turn instead;
+- `stop`, only with `allow_stop: true` and together with a question to the person (`ask_person`):
+  the run ends through the run-stop path (the one behind `POST /api/v1/control/stop`, never the
+  ticket cancel) and the ticket pauses on the question.
+
+Each steer is recorded as it reaches the run, a `conductor.steer` event under the run's `run_id` with
+its text, `when`, `trigger` and how and when it was delivered; one the run never reached is recorded
+without `delivered` once the run ends. The Mac app shows it inside the run's group as "Conductor
+steered" with the message. A watch turn that fails changes nothing for the run. Every key has a
+control in the Mac app's Settings, under Conductor.
 
 These keys are new: no existing `symphony.yml` key is renamed, so nothing migrates.
 

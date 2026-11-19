@@ -65,6 +65,27 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     end
   end
 
+  test "a watch turn may steer or stop the run and leave the instructions null" do
+    assert {:ok, %{instructions: nil, steer: %{message: "Read the error first.", when: "now"}, stop: %{reason: "It loops."}}} =
+             Answer.parse(json(%{"instructions" => nil, "steer" => %{"message" => " Read the error first. ", "when" => "now"}, "stop" => %{"reason" => "It loops."}}), watch: true)
+
+    assert {:ok, %{steer: nil, stop: nil}} = Answer.parse(json(%{"instructions" => "Go on."}))
+    assert Answer.parse(json(%{"instructions" => nil})) == {:error, "`instructions` must be a string"}
+    assert {:ok, %{instructions: nil}} = Answer.read([json(%{"steer" => nil})], watch: true)
+
+    steer = "`steer` must be null or hold a `message` and `when` (`next_turn` or `now`)"
+
+    for {answer, why} <- [
+          {%{"steer" => %{"message" => "x", "when" => "later"}}, steer},
+          {%{"steer" => "x"}, steer},
+          {%{"steer" => %{"message" => " ", "when" => "now"}}, "`steer.message` is blank"},
+          {%{"steer" => %{"message" => String.duplicate("s", 1_501), "when" => "now"}}, "`steer.message` is over 1500 characters"},
+          {%{"stop" => %{"reason" => ""}}, "`stop` must be null or hold a `reason`"}
+        ] do
+      assert Answer.parse(json(answer), watch: true) == {:error, why}
+    end
+  end
+
   test "reads the first answer that meets the schema among the turn's texts, else the first refusal" do
     assert {:ok, %{instructions: "Second."}} =
              Answer.read(["Here it is: ```json\n{\"instructions\": \"\"}\n```", "{\"instructions\": \"Second.\"}"])

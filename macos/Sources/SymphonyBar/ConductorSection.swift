@@ -3,8 +3,9 @@ import SymphonyBarCore
 import SymphonyBarUI
 
 /// Settings › Conductor: whether Symphony runs the Conductor (`conductor.enabled`), the junctions of a ticket's life it
-/// runs at, one row each (`conductor.junctions`), and how long one turn may take (`conductor.timeout_ms`). The junctions
-/// and the time limit wait while it is off.
+/// runs at, one row each (`conductor.junctions`), how long one turn may take (`conductor.timeout_ms`), and its watch over
+/// running runs (`conductor.watch`): on or off, when it looks, how often, and whether it may stop a run. Everything
+/// below the first switch waits while it is off, and the watch's limits wait while the watch is off.
 struct ConductorSection: View {
     @Binding var settings: ConductorSettings
     /// Why `symphony check` refused the changed settings; nil when nothing was refused.
@@ -16,9 +17,26 @@ struct ConductorSection: View {
     static let notEditable = "Waits for symphony.yml to be read or saved"
     /// Why the junctions and the time limit wait.
     static let off = "Turn on Run the Conductor first"
+    /// Why the watch's limits wait.
+    static let watchOff = "Turn on Watch running runs first"
 
     private var sectionReason: String? { editable ? nil : Self.notEditable }
     private var detailReason: String? { sectionReason ?? (settings.enabled ? nil : Self.off) }
+    private var watchReason: String? { detailReason ?? (settings.watch.enabled ? nil : Self.watchOff) }
+
+    /// A whole-number field for one of the watch's limits.
+    private func limitField(_ label: String, key: String, value: WritableKeyPath<ConductorWatchSettings, Int>) -> some View {
+        DirectorTextField(
+            label,
+            text: Binding(
+                get: { String(settings.watch[keyPath: value]) },
+                set: { text in if let number = Int(text) { settings.watch[keyPath: value] = number } }
+            ),
+            disabledReason: watchReason,
+            mono: true
+        )
+        .help("conductor.watch.\(key)")
+    }
 
     var body: some View {
         Section {
@@ -45,6 +63,16 @@ struct ConductorSection: View {
                 mono: true
             )
             .help("conductor.timeout_ms")
+            Toggle("Watch running runs", isOn: $settings.watch.enabled)
+                .help("conductor.watch.enabled")
+                .disabledReason(detailReason)
+            limitField("Look at a run after minutes", key: "run_minutes", value: \.runMinutes)
+            limitField("Look at a run after tokens", key: "run_tokens", value: \.runTokens)
+            limitField("Minutes between looks at a run", key: "min_interval_minutes", value: \.minIntervalMinutes)
+            limitField("Looks per run", key: "max_turns_per_run", value: \.maxTurnsPerRun)
+            Toggle("May stop a run, with a question to you", isOn: $settings.watch.allowStop)
+                .help("conductor.watch.allow_stop")
+                .disabledReason(watchReason)
         } header: {
             Text("Conductor (saved in symphony.yml)")
         }

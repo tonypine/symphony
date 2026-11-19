@@ -22,6 +22,8 @@ defmodule SymphonyElixir.Harnesses.EventStream do
 
   require Logger
 
+  alias SymphonyElixir.Conductor.Steer
+
   @type event :: tuple()
 
   @diagnostic_output_line_count 5
@@ -68,7 +70,8 @@ defmodule SymphonyElixir.Harnesses.EventStream do
       post_completion_deadline: nil,
       parse: Keyword.fetch!(opts, :parse),
       after_line: Keyword.get(opts, :after_line, fn _line, acc -> acc end),
-      label: Keyword.get(opts, :label, "Agent")
+      label: Keyword.get(opts, :label, "Agent"),
+      run_id: Keyword.get(opts, :run_id)
     }
 
     read_loop(port, on_message, acc, loop_state)
@@ -76,8 +79,17 @@ defmodule SymphonyElixir.Harnesses.EventStream do
 
   defp read_loop(port, on_message, acc, loop_state) do
     timeout = compute_read_timeout(loop_state)
+    run_id = loop_state.run_id
 
     receive do
+      # The Conductor steered the run now (`SymphonyElixir.Conductor.Steer.interrupt/1`): the turn ends
+      # here, its process stopped, and the run resumes its session with the steer. One that waited
+      # in the mailbox past a turn is dropped: its steer reaches the next turn instead.
+      {:conductor_interrupt, ^run_id, sent_ms} when is_binary(run_id) ->
+        if Steer.fresh?(sent_ms),
+          do: interrupted(port, acc, loop_state),
+          else: read_loop(port, on_message, acc, loop_state)
+
       {^port, {:data, {:eol, line}}} ->
         handle_eol_line(port, on_message, acc, loop_state, line)
 
@@ -93,6 +105,12 @@ defmodule SymphonyElixir.Harnesses.EventStream do
       timeout ->
         handle_read_loop_timeout(acc, loop_state)
     end
+  end
+
+  defp interrupted(port, acc, loop_state) do
+    Logger.info("#{loop_state.label} turn interrupted by the Conductor run_id=#{loop_state.run_id} session_id=#{inspect(acc.session_id)}")
+    close(port)
+    {:error, {:conductor_interrupted, acc.session_id}}
   end
 
   defp compute_read_timeout(%{turn_deadline: turn_deadline, command_deadline: command_deadline, post_completion_deadline: post_completion_deadline}) do

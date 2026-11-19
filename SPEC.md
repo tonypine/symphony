@@ -565,8 +565,11 @@ what the Conductor's turn at a junction wrote, naming the junction: an update fo
 900 characters, with the ids of the events it rests on in `refs`, which the timeline shows as an
 entry titled Update; and advice for the next run, at most 2,000 characters, which the next run's
 prompt carries as its own section, marked as advice and wrapped as untrusted data; a question the
-Conductor asks goes through the decision path, pauses the ticket and holds the run it came before)
-and `note`. `GET /api/v1/events` reads every ticket's events, and
+Conductor asks goes through the decision path, pauses the ticket and holds the run it came before),
+`conductor.steer` (machine only: guidance the Conductor's watch gave a running run, under that run's
+`run_id`, with its `text`, `when` it asked for it, `next_turn`, `now` or `stop`, the `trigger` that
+made it look and how and when it was `delivered`; `conductor.watch` in `docs/configuration.md`) and
+`note`. `GET /api/v1/events` reads every ticket's events, and
 Symphony's own stream, newest first, with the notable rule set (`docs/control-api.md`).
 
 A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)

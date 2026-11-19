@@ -166,6 +166,6 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     assert identifier == ctx.identifier
     assert {:ok, %{junction: nil}} = Facts.read(ctx.issue_id, "", diff_stat: fn _ -> nil end, token_cap: 1)
     assert Facts.read("NOPE-1", nil) == {:error, :not_found}
-    assert {:error, {:invalid, "junction must be one of: after_coding, after_qa_fail, after_rework, before_merge"}} = Facts.read(ctx.identifier, "whenever")
+    assert {:error, {:invalid, "junction must be one of: after_coding, after_qa_fail, after_rework, before_merge, during_run"}} = Facts.read(ctx.identifier, "whenever")
   end
 end

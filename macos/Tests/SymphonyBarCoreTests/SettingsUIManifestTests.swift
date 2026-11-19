@@ -107,11 +107,15 @@ final class SettingsUIManifestTests: XCTestCase {
                 to: ReportSettings(model: "claude-sonnet-5-5", cadence: .hourly, triggers: flipped)
             )
         }, from: yaml)
-        yaml = try record("setting the Conductor, its junctions and its time limit", {
+        yaml = try record("setting the Conductor, its junctions, its time limit and its watch", {
             try ConductorSettings.updating(
                 $0,
                 from: ConductorSettings(),
-                to: ConductorSettings(enabled: true, junctions: [.afterQAFail], timeoutMs: 60_000)
+                to: ConductorSettings(
+                    enabled: true, junctions: [.afterQAFail], timeoutMs: 60_000,
+                    watch: ConductorWatchSettings(
+                        enabled: true, runMinutes: 20, runTokens: 1_000_000, minIntervalMinutes: 5, maxTurnsPerRun: 2, allowStop: true)
+                )
             )
         }, from: yaml)
         yaml = try record("setting allowed ticket priorities", {

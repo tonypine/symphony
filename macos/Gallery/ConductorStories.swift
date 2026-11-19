@@ -9,6 +9,10 @@ import SymphonyBarUI
 let conductorSettingsStates: [(name: String, settings: ConductorSettings, error: String?)] = [
     ("off", ConductorSettings(), nil),
     ("on", ConductorSettings(enabled: true, junctions: [.afterCoding, .afterQAFail], timeoutMs: 120_000), nil),
+    ("watching", ConductorSettings(
+        enabled: true, timeoutMs: 120_000,
+        watch: ConductorWatchSettings(enabled: true, runMinutes: 45, minIntervalMinutes: 15, maxTurnsPerRun: 2, allowStop: true)
+    ), nil),
     ("refused", ConductorSettings(enabled: true), "symphony check rejected these settings, so nothing was saved: conductor.timeout_ms must be greater than 0"),
 ]
 
