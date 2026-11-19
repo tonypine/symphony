@@ -96,9 +96,7 @@ private struct SessionReaderSections: View {
                 if case let .lines(lines) = session {
                     lineRows(lines)
                 } else {
-                    Text(SessionReader.sessionNote(session) ?? "")
-                        .font(DesignTokens.TypeStyle.secondary.font)
-                        .foregroundStyle(.secondary)
+                    note(SessionReader.sessionNote(session))
                 }
             } else if reader.sections.isEmpty {
                 Text(SessionReader.noSteps)
@@ -112,15 +110,20 @@ private struct SessionReaderSections: View {
                     case let .lines(lines):
                         lineRows(lines)
                     default:
-                        Text(SessionReader.note(section.content, live: section.step.isLive) ?? "")
-                            .font(DesignTokens.TypeStyle.secondary.font)
-                            .foregroundStyle(.secondary)
+                        note(SessionReader.note(section.content, live: section.step.isLive))
                             .padding(.leading, SessionLineRow.indent)
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// What a step, or a run without steps, says when it has no lines.
+    private func note(_ text: String?) -> some View {
+        Text(text ?? "")
+            .font(DesignTokens.TypeStyle.secondary.font)
+            .foregroundStyle(.secondary)
     }
 
     private func lineRows(_ lines: [SessionReader.Line]) -> some View {
