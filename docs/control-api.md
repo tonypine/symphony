@@ -147,7 +147,7 @@ run working on the ticket now.
     { "id": "merging", "name": "Merging", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0, "runs": 0 },
     { "id": "done", "name": "Done", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0, "runs": 0 }
   ],
-  "tokens": { "total": 3600000, "cap": 8000000 }
+  "tokens": { "total": 3900000, "conductor_tokens": 300000, "cap": 8000000 }
 }
 ```
 
@@ -159,9 +159,10 @@ run working on the ticket now.
 | `stages[].visits` | How many times the ticket entered the stage. |
 | `stages[].time_ms` | Wall time in the stage, summed over its visits, up to now for the phase it is in. Pauses count. Done takes none. |
 | `stages[].agent_time_ms` | How long the runs of the stage ran: the ended ones, and the one working now up to now. |
-| `stages[].tokens` | The tokens of the runs of the stage: the ended ones, and the one working now so far. |
+| `stages[].tokens` | The tokens of the runs of the stage, the Conductor's left out: the ended ones, and the one working now so far. |
 | `stages[].runs` | How many runs the stage holds: the ended ones, and the one working now. |
-| `tokens.total` | The tokens of the ticket's runs, the one working now included: the stages' `tokens` add up to it. |
+| `tokens.total` | The tokens of all the ticket's runs, the one working now and the Conductor's included: the stages' `tokens` and `conductor_tokens` add up to it. |
+| `tokens.conductor_tokens` | The tokens of the Conductor's own runs (run kind `conductor`). They belong to no stage: they are left out of every stage's `tokens`, `runs` and `agent_time_ms`. |
 | `tokens.cap` | The ticket's cap, `execution.limits.tokens_per_issue`; null when there is none. |
 
 Rework and CI Fix have no stage of their own; they count as visits of the stage they serve:
