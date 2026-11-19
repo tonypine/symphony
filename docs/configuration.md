@@ -3438,9 +3438,11 @@ The Conductor: a short, strong-model turn Symphony runs at fixed junctions of a 
 turn is a fresh session (run kind `conductor`, model from `runs.conductor`) that reads the ticket's
 facts in one piece (`GET /api/v1/tickets/<identifier>/facts`, see `docs/control-api.md`) and writes
 instructions for the next run, which its prompt carries as advice, and, when it is worth it, a short
-update for the person, which the ticket's timeline shows as an entry titled Update. When the same
-class of finding came back or the budget is going wrong, it may ask the person a question, which
-pauses the ticket as any question does. Each setting has a control in the Mac app's Settings, under
+update for the person, which the ticket's timeline shows as an entry titled Update. Every run's
+prompt carries the newest instructions, Code Review's reviewer and QA included. When the same class
+of finding came back or the budget is going wrong, it may ask the person a question, through the
+same validated decision path as any other: the ticket pauses on it, and the run the turn came before
+does not start. Each setting has a control in the Mac app's Settings, under
 Conductor.
 
 ```yaml
@@ -3455,8 +3457,10 @@ conductor:
 - `junctions` (default all four): `after_coding` (an implementation run handed off, before Code
   Review or QA), `after_qa_fail` (QA failed, before rework), `after_rework` (a rework run handed
   off, before Code Review or QA again) and `before_merge` (QA passed or was skipped, before
-  Merging). The first three run in the next run's own task before its agent starts; `before_merge`
-  runs as the QA or Code Review run that carried the ticket into Merging ends, on its own.
+  Merging). The first three run in the next run's own task before its agent starts, and that run's
+  start is recorded once the turn is done, so the turn sits between the two runs on the timeline;
+  `before_merge` runs as the QA or Code Review run that carried the ticket into Merging ends, on its
+  own.
 - `timeout_ms` (default `180000`): how long one turn may take. A turn that runs over, fails, answers
   outside its schema or whose provider is held with no free fallback is logged, records nothing for
   the person, and the next run starts as if the Conductor were off.

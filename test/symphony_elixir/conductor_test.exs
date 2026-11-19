@@ -167,7 +167,7 @@ defmodule SymphonyElixir.ConductorTest do
                RunStore.list_issue_runs("default", ctx.issue_id)
     end
 
-    test "asks the person through the question path, which pauses the ticket", ctx do
+    test "asks the person through the decision path, which pauses the ticket and holds the next run", ctx do
       question = %{
         "title" => "Login failed three times",
         "question" => "Should the next rework start over, or wait for you?",
@@ -180,11 +180,20 @@ defmodule SymphonyElixir.ConductorTest do
         ]
       }
 
-      assert Conductor.run(plan(ctx), ctx.issue, turn: turn({:ok, [answer(%{"ask_person" => question})], 10}), facts: %{}) == :ok
-      assert [%{payload: %{title: "Login failed three times"}}] = events(ctx.issue_id, "question.asked")
+      assert Conductor.run(plan(ctx), ctx.issue, turn: turn({:ok, [answer(%{"ask_person" => question})], 10}), facts: %{}) == :held
+      assert [%{payload: %{title: "Login failed three times", asked_by: %{name: "Conductor"}}}] = events(ctx.issue_id, "question.asked")
+      assert SymphonyElixir.Pauses.paused?({:ticket, "default", ctx.issue_id})
+
+      # A question whose Linear comment could not be posted still stands, so it still holds the run.
+      Application.put_env(:symphony_elixir, :memory_tracker_create_comment_result, {:error, :linear_down})
+      on_exit(fn -> Application.delete_env(:symphony_elixir, :memory_tracker_create_comment_result) end)
+
+      other = %{question | "title" => "The budget is nearly spent", "question" => "Should the next run go on?"}
+      log = capture_log(fn -> assert Conductor.run(plan(ctx), ctx.issue, turn: turn({:ok, [answer(%{"ask_person" => other})], 10}), facts: %{}) == :held end)
+      assert log =~ "Failed to post the decision request"
 
       bad = Map.put(question, "options", [%{"label" => "A", "effect" => "x", "recommended" => true}, %{"label" => "B", "effect" => "y", "recommended" => true}])
-      log = capture_log(fn -> Conductor.run(plan(ctx), ctx.issue, turn: turn({:ok, [answer(%{"ask_person" => bad})], 10}), facts: %{}) end)
+      log = capture_log(fn -> assert Conductor.run(plan(ctx), ctx.issue, turn: turn({:ok, [answer(%{"ask_person" => bad})], 10}), facts: %{}) == :ok end)
       assert log =~ "Conductor's question was not asked"
     end
 

@@ -14,7 +14,9 @@ defmodule SymphonyElixir.Conductor do
 
   The orchestrator plans a turn as it dispatches the next run (`plan/4`): the newest run that ended
   and the kind about to start name the junction. The turn runs in the run's own task before its
-  agent starts (`run/3`), so the run's prompt carries the instructions (`prompt_section/2`). A QA or
+  agent starts (`run/3`), and the run's `run.started` is recorded once it is done, so the run's
+  prompt carries the instructions (`prompt_section/2`) and the timeline shows the turn between the
+  two runs. A QA or
   Code Review run that carried its ticket into Merging is also planned when it ends
   (`plan_after_run/4`), since no run may follow it; that turn runs on its own. One turn runs per
   junction: one that ran since the last run ended is not run again.
@@ -25,8 +27,9 @@ defmodule SymphonyElixir.Conductor do
   recorded as a run (`run.started`, `run.ended` with its tokens and model, `counted: false` so the
   dispatch-loop guard never counts it, and a run record whose tokens count toward the ticket), and
   writes `conductor.instructions` and, when it has one, `conductor.update` on the ticket's record.
-  An `ask_person` goes through `SymphonyElixir.Questions.ask/3`, which pauses the ticket as any
-  Question does.
+  An `ask_person` goes through the one validated decision path (`SymphonyElixir.DecisionRequest.ask/4`),
+  which pauses the ticket on the Question as any other: a turn that asked holds the run it came
+  before (`run/3` answers `:held`), which does not start.
 
   It never holds a ticket up: a turn that times out (`conductor.timeout_ms`), fails, answers
   outside the schema, or whose provider a usage limit holds with no free fallback is logged, records
@@ -42,9 +45,9 @@ defmodule SymphonyElixir.Conductor do
     AgentTelemetry,
     CiPoller,
     Config,
+    DecisionRequest,
     Pauses,
     PromptSafety,
-    Questions,
     ReviewAgent,
     RunStore,
     TicketEvents,
@@ -220,13 +223,14 @@ defmodule SymphonyElixir.Conductor do
   end
 
   @doc """
-  Runs the planned turn on `issue` and records what it wrote; always `:ok`, so the run that follows
-  starts whatever happened. Nil plans nothing. `opts`: `turn` (`(plan, issue, run_id, prompt) ->
+  Runs the planned turn on `issue` and records what it wrote. Answers `:held` when the turn asked the
+  person a question, which pauses the ticket, so the run that would follow does not start; `:ok`
+  otherwise, whatever happened, so a failed turn never holds the ticket up. Nil plans nothing. `opts`: `turn` (`(plan, issue, run_id, prompt) ->
   {:ok, [String.t()], tokens} | {:error, reason, tokens}`, the turn's text candidates; default a
   harness session, whose launcher `agent_module` overrides), `facts` (the document, default
   `Facts.build/3` of the record) and `record`.
   """
-  @spec run(plan() | nil, Issue.t(), keyword()) :: :ok
+  @spec run(plan() | nil, Issue.t(), keyword()) :: :ok | :held
   def run(nil, _issue, _opts), do: :ok
 
   def run(%{} = plan, %Issue{} = issue, opts) do
@@ -249,9 +253,9 @@ defmodule SymphonyElixir.Conductor do
     turn = Keyword.get(opts, :turn, &harness_turn(&1, &2, &3, &4, Keyword.get(opts, :agent_module)))
     outcome = timed_turn(plan, issue, run_id, prompt(junction, facts), turn)
     tokens = elem(outcome, 2)
-    exit = record_outcome(outcome, plan, issue, run_id, facts)
+    {exit, held} = record_outcome(outcome, plan, %{issue | state: phase}, run_id, facts)
     record_run_ended(plan, issue, run_id, %{exit: exit, tokens: tokens, started_at: started_at, phase: phase})
-    :ok
+    held
   end
 
   defp record(issue_id, opts) do
@@ -292,14 +296,14 @@ defmodule SymphonyElixir.Conductor do
   defp record_outcome({:ok, answer, _tokens}, plan, issue, run_id, facts) do
     record_event(plan, "conductor.instructions", %{junction: plan.junction, text: answer.instructions}, run_id)
     record_update(answer, plan, run_id, facts)
-    ask_person(answer.ask_person, plan, issue, run_id)
-    Logger.info("Conductor turn wrote #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction} update=#{answer.update != nil} ask_person=#{answer.ask_person != nil}")
-    "answered"
+    held = ask_person(answer.ask_person, plan, issue, run_id)
+    Logger.info("Conductor turn wrote #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction} update=#{answer.update != nil} held=#{held == :held}")
+    {"answered", held}
   end
 
   defp record_outcome({:error, reason, _tokens}, plan, issue, run_id, _facts) do
     Logger.warning("Conductor turn wrote nothing #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction}: #{inspect(reason)}; the next run starts without it")
-    exit_text(reason)
+    {exit_text(reason), :ok}
   end
 
   defp exit_text(:timeout), do: "timed out"
@@ -321,12 +325,17 @@ defmodule SymphonyElixir.Conductor do
   defp event_id(key, id) when key in [:event_id, "event_id", :started_event_id] and is_binary(id), do: [id]
   defp event_id(_key, _value), do: []
 
+  # The question goes through the one validated decision path: once asked, the ticket pauses on it,
+  # even when its Linear comment could not be posted.
   defp ask_person(nil, _plan, _issue, _run_id), do: :ok
 
   defp ask_person(request, plan, issue, run_id) do
-    case Questions.ask({:ticket, plan.repo_key, plan.issue_id}, request, asked_by: %{kind: :run, name: "Conductor", run_id: run_id}, asked_in: issue.state) do
-      {:ok, _question} -> :ok
-      {:error, reason} -> Logger.warning("Conductor's question was not asked #{context(issue, plan)} run_id=#{run_id}: #{inspect(reason)}")
+    ticket = %{id: plan.issue_id, state: issue.state, repo_key: plan.repo_key}
+
+    case DecisionRequest.ask(ticket, request, repo_key: plan.repo_key, asked_by: %{kind: :run, name: "Conductor", run_id: run_id}) do
+      {:error, {:decision_request_failed, _reason}} -> :held
+      {:error, reason} -> tap(:ok, fn _ok -> Logger.warning("Conductor's question was not asked #{context(issue, plan)} run_id=#{run_id}: #{inspect(reason)}") end)
+      _asked -> :held
     end
   end
 

@@ -564,7 +564,9 @@ newest one is the ticket read's `brief`), `conductor.update` and `conductor.inst
 what the Conductor's turn at a junction wrote, naming the junction: an update for the person, at most
 900 characters, with the ids of the events it rests on in `refs`, which the timeline shows as an
 entry titled Update; and advice for the next run, at most 2,000 characters, which the next run's
-prompt carries as its own section, marked as advice and wrapped as untrusted data) and `note`. `GET /api/v1/events` reads every ticket's events, and
+prompt carries as its own section, marked as advice and wrapped as untrusted data; a question the
+Conductor asks goes through the decision path, pauses the ticket and holds the run it came before)
+and `note`. `GET /api/v1/events` reads every ticket's events, and
 Symphony's own stream, newest first, with the notable rule set (`docs/control-api.md`).
 
 A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)
