@@ -167,6 +167,8 @@ public struct TicketEventsPayload: Equatable {
         public var watch: ConductorWatch?
         /// The blocks a Conductor's update carries, in the order they are drawn (`conductor.update`).
         public var blocks: [ConductorBlock] = []
+        /// What a stepped QA pass's step answered (`step.completed`): a check's result, the plan, rechecks, a verdict.
+        public var answer: StepAnswer?
 
         enum CodingKeys: String, CodingKey {
             case kind, outcome, exit, stepId, title, reason, returnsTo, returnsToTitle, questionId, model, effort, tokens, durationMs
@@ -179,7 +181,7 @@ public struct TicketEventsPayload: Equatable {
             model: String? = nil, effort: String? = nil, tokens: Int? = nil, durationMs: Int? = nil, to: String? = nil,
             from: String? = nil, action: String? = nil, rule: String? = nil, setter: Setter? = nil, description: String? = nil,
             text: String? = nil, signal: String? = nil, findingID: String? = nil, junction: String? = nil, watch: ConductorWatch? = nil,
-            blocks: [ConductorBlock] = []
+            blocks: [ConductorBlock] = [], answer: StepAnswer? = nil
         ) {
             self.kind = kind
             self.outcome = outcome
@@ -206,6 +208,7 @@ public struct TicketEventsPayload: Equatable {
             self.junction = junction
             self.watch = watch
             self.blocks = blocks
+            self.answer = answer
         }
 
         public init(from decoder: Decoder) throws {
@@ -227,7 +230,8 @@ public struct TicketEventsPayload: Equatable {
                 findingID: text(.findingId),
                 junction: text(.junction),
                 watch: (try? container?.decodeIfPresent(ConductorWatch.self, forKey: .watch)) ?? nil,
-                blocks: ((try? container?.decodeIfPresent([LossyConductorBlock].self, forKey: .blocks)) ?? nil)?.compactMap(\.block) ?? []
+                blocks: ((try? container?.decodeIfPresent([LossyConductorBlock].self, forKey: .blocks)) ?? nil)?.compactMap(\.block) ?? [],
+                answer: BlockFields(decoder).flatMap(StepAnswer.init(fields:))
             )
         }
     }
