@@ -1282,6 +1282,56 @@ let timelineModelConductorSteer: TimelineModel = {
     return TimelineModel.build(history, reference: timelineReference, calendar: timelineCalendar)
 }()
 
+/// The Conductor speaking in its three shapes (`Tests/Fixtures/timeline/conductor-watch.json`): a message at a junction
+/// between runs, a steer inside the rework run it steered (with a code block of added and removed lines), and a quiet
+/// line inside the run for a watch that left it alone. A last watch of a run this page does not have falls back to the
+/// timeline.
+let timelineModelConductorWatch: TimelineModel = {
+    guard let events = try? Data(contentsOf: timelineFixtures.appendingPathComponent("conductor-watch.json")),
+          let history = TicketEventsPayload.decode(events)
+    else { fatalError("The Conductor's watch fixture is missing from \(timelineFixtures.path)") }
+    return TimelineModel.build(history, reference: timelineReference, calendar: timelineCalendar)
+}()
+
+/// The same page with the junction message alone: its name, the junction in words, bold, italic, code, a list, a link and
+/// status tags, and a last paragraph that says what happens next.
+let timelineModelConductorJunction: TimelineModel = {
+    var model = timelineModelConductorWatch
+    for day in model.days.indices { model.days[day].items = model.days[day].items.filter { $0.id == "entry-c4" } }
+    model.days.removeAll { $0.items.isEmpty }
+    return model
+}()
+
+/// The rework run with only what the Conductor sent it: the steer, whole, with its chip, or the quiet line.
+func conductorRun(steered: Bool) -> RunGroupModel {
+    var run = timelineModelConductorWatch.run("run-2")!
+    run.conductorMessages = run.conductorMessages.filter { $0.message.actedOnRun == steered }
+    run.steers = []
+    return run
+}
+
+/// The reading styles side by side: the Briefing's `reading`, the Conductor's message at 16 pt and the compact one at 14 pt
+/// it takes inside a run's group.
+@MainActor
+func typeStylesMessageReading() -> some View {
+    let sample = "The build failed twice on the same line, so I told the run where to look. Both failures are in the same assertion."
+    return VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
+        ForEach([DesignTokens.TypeStyle.reading, .messageReading, .messageReadingCompact], id: \.self) { style in
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                Text("\(style.cssName ?? style.rawValue): \(Int(style.size)) pt, line \(String(format: "%.2f", style.lineHeight / style.size)), tracking \(String(format: "%.2f", style.tracking * 100)) %")
+                    .font(DesignTokens.TypeStyle.caption.font)
+                    .foregroundStyle(DesignTokens.TextColor.tertiary.color)
+                Text(sample)
+                    .textStyle(style)
+                    .foregroundStyle(DesignTokens.TextColor.primary.color)
+                    .frame(width: 620, alignment: .leading)
+            }
+        }
+    }
+    .padding(DesignTokens.Space.s5)
+    .background(DesignTokens.Surface.content.color)
+}
+
 /// The fixture's timeline with its finding resolved by a later run: the card says so, and no entry of its own does.
 let timelineModelResolved: TimelineModel = {
     var model = timelineModel
@@ -1891,6 +1941,13 @@ MainActor.assumeIsolated {
         render(timeline(width: 780, model: timelineModelConductor, showAllEvents: true), scheme, to: "timeline-conductor-all-events-\(suffix).png")
         // The Conductor steering a running run: "Conductor steered" with its message inside the run's group.
         render(timeline(width: 780, model: timelineModelConductorSteer), scheme, to: "timeline-conductor-steer-\(suffix).png")
+        // The Conductor speaking: a message between runs, a steer inside the run it steered, a quiet line inside a run it
+        // watched and left alone, and the three on one timeline.
+        render(timeline(width: 780, model: timelineModelConductorJunction), scheme, to: "timeline-conductor-junction-message-\(suffix).png")
+        render(runGroup(conductorRun(steered: true), unfolded: true), scheme, to: "run-group-conductor-steer-\(suffix).png")
+        render(runGroup(conductorRun(steered: false), unfolded: true), scheme, to: "run-group-conductor-watch-\(suffix).png")
+        render(timeline(width: 780, unfoldedRuns: ["run-2"], model: timelineModelConductorWatch), scheme, to: "timeline-conductor-voice-\(suffix).png")
+        render(typeStylesMessageReading(), scheme, to: "type-styles-message-reading-\(suffix).png")
         // The marks (TP-1451): the Timeline title's count, the line where you last looked and the dots above it.
         render(timelineSinceLooked(), scheme, to: "timeline-since-looked-\(suffix).png")
         // The run in place (TP-1452): the run now on top with its newest lines, the no-run line for three situations, and

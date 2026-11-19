@@ -106,6 +106,9 @@ public struct TimelineEntry: Equatable, Identifiable {
     /// the PR watcher updating the branch, a short pause that waited on no one): the timeline folds it behind "Show
     /// all events".
     public var isMechanical = false
+    /// The Conductor's words, for a `conductor.update`: the row draws them as the Conductor speaking, not as an entry
+    /// with a title.
+    public var conductor: ConductorMessage?
 
     public init(
         id: String, kind: Kind, at: Date, title: String, detail: String? = nil, actor: String, endedAt: Date? = nil,
@@ -541,6 +544,8 @@ public struct TimelineModel: Equatable {
         for (order, event) in history.events.enumerated() {
             guard let at = event.date, !silentTypes.contains(event.type), !event.bookkeeping else { continue }
             if let runID = event.runID, history.runs[runID] != nil, runTypes.contains(event.type) { continue }
+            // What the Conductor said while it watched a run is drawn inside that run's group, when the page has the run.
+            if let watched = ConductorMessage(event: event)?.watchedRunID, history.runs[watched] != nil { continue }
             if event.type == "situation.changed", !situationsShown.contains(event.payload.to ?? "") { continue }
             if event.type == "rule.action", ruleCauses.contains(event.payload.action ?? "") {
                 rules.append((event, at, order))
@@ -699,6 +704,7 @@ public struct TimelineModel: Equatable {
                 id: event.id, kind: kind, at: at, title: title, detail: note ?? event.summary?.detail?.trimmedNonEmpty, actor: actor,
                 isNew: event.isNew, finding: finding
             )
+            entry.conductor = ConductorMessage(event: event, runTitle: actor)
             type = event.type
             self.order = order
             moments = [at]

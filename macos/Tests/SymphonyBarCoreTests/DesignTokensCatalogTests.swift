@@ -103,6 +103,16 @@ final class DesignTokensCatalogTests: XCTestCase {
         XCTAssertEqual(DesignTokens.TypeStyle.title.tracking, -0.022)
         XCTAssertEqual(DesignTokens.TypeStyle.reading.lineHeight, 16 * 1.4, accuracy: 1e-9)
         XCTAssertEqual(DesignTokens.TypeStyle.reading.tracking, 0.02)
+        // The Conductor's message reads 16 pt on a 1.45 line tracked 3 %, 14 pt inside a run's group; the Briefing's
+        // `reading` is its own (1.4, 2 %).
+        XCTAssertEqual(DesignTokens.TypeStyle.messageReading.size, 16)
+        XCTAssertEqual(DesignTokens.TypeStyle.messageReading.lineHeight, 16 * 1.45, accuracy: 1e-9)
+        XCTAssertEqual(DesignTokens.TypeStyle.messageReadingCompact.size, 14)
+        XCTAssertEqual(DesignTokens.TypeStyle.messageReadingCompact.lineHeight, 14 * 1.45, accuracy: 1e-9)
+        XCTAssertEqual(DesignTokens.TypeStyle.messageReading.tracking, 0.03)
+        XCTAssertEqual(DesignTokens.TypeStyle.messageReadingCompact.tracking, 0.03)
+        XCTAssertEqual(DesignTokens.TypeStyle.messageReading.cssName, "--type-message-reading")
+        XCTAssertEqual(DesignTokens.TypeStyle.messageReadingCompact.cssName, "--type-message-reading-compact")
         XCTAssertNil(DesignTokens.TypeStyle.figure.cssName)
         // The system's text size scales size and line height alike.
         XCTAssertEqual(DesignTokens.TypeStyle.body.scaledSize(by: 1.25), 16.25)
@@ -174,6 +184,7 @@ final class DesignTokensCatalogTests: XCTestCase {
         checks["--tracking-display"] = ratio(DesignTokens.Tracking.display, "em")
         checks["--tracking-label"] = ratio(DesignTokens.Tracking.label, "em")
         checks["--tracking-reading"] = ratio(DesignTokens.Tracking.reading, "em")
+        checks["--tracking-message-reading"] = ratio(DesignTokens.Tracking.messageReading, "em")
         checks["--measure"] = ratio(Double(DesignTokens.Measure.characters), "ch")
         checks["--measure-narrow"] = ratio(Double(DesignTokens.Measure.narrowCharacters), "ch")
         let space = DesignTokens.Space.self
