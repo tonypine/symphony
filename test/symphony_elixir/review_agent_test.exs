@@ -1179,7 +1179,8 @@ defmodule SymphonyElixir.ReviewAgentTest do
         put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
         write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
 
-        assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(issue, repo, Config.settings!(), review_agent_module: SequenceReviewer)
+        opts = [review_agent_module: SequenceReviewer]
+        assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(issue, repo, Config.settings!(), opts)
 
         assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
         refute prompt =~ "Messages from the person"
