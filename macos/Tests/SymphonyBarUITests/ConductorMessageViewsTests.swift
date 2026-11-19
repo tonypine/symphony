@@ -9,7 +9,7 @@ import XCTest
 final class ConductorMessageViewsTests: XCTestCase {
     private func runs(_ text: String, bold: Bool = false) -> [(text: String, run: AttributedString.Runs.Element)] {
         let phrases = ConductorMarkup.phrases(in: text)
-        let attributed = ConductorMarkupText.attributed(phrases, style: .messageReading, bold: bold)
+        let attributed = ConductorMarkupText.attributed(phrases, style: .reading, bold: bold)
         return attributed.runs.map { (String(attributed[$0.range].characters), $0) }
     }
 

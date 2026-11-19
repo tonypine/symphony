@@ -15,11 +15,14 @@ final class ConductorMarkupTests: XCTestCase {
     func testPlainTextIsItsParagraphs() {
         let markup = ConductorMarkup("The first run built the filter.\nIts tests pass.\n\nCode Review looks at the empty state.")
         XCTAssertEqual(markup.blocks, [
-            .paragraph([.plain("The first run built the filter.\nIts tests pass.")]),
+            .paragraph([.plain("The first run built the filter.")]),
+            .paragraph([.plain("Its tests pass.")]),
             .paragraph([.plain("Code Review looks at the empty state.")]),
         ])
-        XCTAssertEqual(markup.roles, [.headline, .body])
+        XCTAssertEqual(markup.roles, [.headline, .body, .body])
         XCTAssertEqual(markup.plainText, "The first run built the filter.\nIts tests pass.\nCode Review looks at the empty state.")
+        // With any markup, a single newline stays a soft break inside its paragraph.
+        XCTAssertEqual(ConductorMarkup("One **bold**\nsame paragraph.").blocks.count, 1)
     }
 
     func testEmptyTextHasNoBlocks() {

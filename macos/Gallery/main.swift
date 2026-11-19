@@ -1310,13 +1310,13 @@ func conductorRun(steered: Bool) -> RunGroupModel {
     return run
 }
 
-/// The reading styles side by side: the Briefing's `reading`, the Conductor's message at 16 pt and the compact one at 14 pt
-/// it takes inside a run's group.
+/// The reading styles: `reading` at 16 pt, the body standard of the Briefing and the Conductor's messages, and
+/// `readingCompact` at 14 pt, as it reads inside a run's group.
 @MainActor
-func typeStylesMessageReading() -> some View {
+func typeStylesReading() -> some View {
     let sample = "The build failed twice on the same line, so I told the run where to look. Both failures are in the same assertion."
     return VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-        ForEach([DesignTokens.TypeStyle.reading, .messageReading, .messageReadingCompact], id: \.self) { style in
+        ForEach([DesignTokens.TypeStyle.reading, .readingCompact], id: \.self) { style in
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                 Text("\(style.cssName ?? style.rawValue): \(Int(style.size)) pt, line \(String(format: "%.2f", style.lineHeight / style.size)), tracking \(String(format: "%.2f", style.tracking * 100)) %")
                     .font(DesignTokens.TypeStyle.caption.font)
@@ -1947,7 +1947,7 @@ MainActor.assumeIsolated {
         render(runGroup(conductorRun(steered: true), unfolded: true), scheme, to: "run-group-conductor-steer-\(suffix).png")
         render(runGroup(conductorRun(steered: false), unfolded: true), scheme, to: "run-group-conductor-watch-\(suffix).png")
         render(timeline(width: 780, unfoldedRuns: ["run-2"], model: timelineModelConductorWatch), scheme, to: "timeline-conductor-voice-\(suffix).png")
-        render(typeStylesMessageReading(), scheme, to: "type-styles-message-reading-\(suffix).png")
+        render(typeStylesReading(), scheme, to: "type-styles-reading-\(suffix).png")
         // The marks (TP-1451): the Timeline title's count, the line where you last looked and the dots above it.
         render(timelineSinceLooked(), scheme, to: "timeline-since-looked-\(suffix).png")
         // The run in place (TP-1452): the run now on top with its newest lines, the no-run line for three situations, and

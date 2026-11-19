@@ -20,8 +20,8 @@ struct ConductorMark: View {
 
         var glyph: CGFloat {
             switch self {
-            case .regular: 13
-            case .small: 9
+            case .regular: 14
+            case .small: 10
             }
         }
 
@@ -31,11 +31,9 @@ struct ConductorMark: View {
 
     let size: Size
 
-    static let symbol = "wand.and.rays"
-
     var body: some View {
-        Image(systemName: Self.symbol)
-            .font(.system(size: size.glyph, weight: .semibold))
+        ConductorBaton(lineWidth: size == .regular ? 1.8 : 2)
+            .frame(width: size.glyph, height: size.glyph)
             .foregroundStyle(DesignTokens.TextColor.onAccent.color)
             .frame(width: size.side, height: size.side)
             .background(Circle().fill(DesignTokens.ColorToken.accent.color))
@@ -49,7 +47,7 @@ struct ConductorMark: View {
 /// between runs, 14 pt inside a run.
 struct ConductorMarkupText: View {
     let markup: ConductorMarkup
-    var style: DesignTokens.TypeStyle = .messageReading
+    var style: DesignTokens.TypeStyle = .reading
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
@@ -198,7 +196,7 @@ struct ConductorVoice: View {
     var isNew = false
 
     /// No line of the message runs past 68 characters of its own style.
-    static var measure: CGFloat { CGFloat(DesignTokens.Measure.width(for: .messageReading)) }
+    static var measure: CGFloat { CGFloat(DesignTokens.Measure.width(for: .reading)) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
@@ -219,7 +217,7 @@ struct ConductorVoice: View {
                 }
             }
             .help(message.runTitle ?? "")
-            ConductorMarkupText(markup: message.markup, style: .messageReading)
+            ConductorMarkupText(markup: message.markup, style: .reading)
         }
     }
 }
@@ -258,7 +256,7 @@ struct ConductorRunNote: View {
                     time
                 }
                 .help(message.runTitle ?? "")
-                ConductorMarkupText(markup: message.markup, style: .messageReadingCompact)
+                ConductorMarkupText(markup: message.markup, style: .readingCompact)
             }
         }
         .padding(.vertical, DesignTokens.Space.s1)
@@ -307,5 +305,47 @@ private struct TimingChip: View {
             .padding(.vertical, 1)
             .background(Capsule().fill(DesignTokens.ColorToken.accentTint.color))
             .fixedSize()
+    }
+}
+
+/// A conductor's baton: a stick running from the lower left to the upper right with a small filled dot at its tip, in
+/// the colour it is given, drawn on a 16 × 16 grid scaled to its frame.
+struct ConductorBaton: View {
+    let lineWidth: CGFloat
+
+    var body: some View {
+        GeometryReader { geometry in
+            let scale = min(geometry.size.width, geometry.size.height) / Self.grid
+            ZStack {
+                BatonStick()
+                    .stroke(style: StrokeStyle(lineWidth: lineWidth * scale, lineCap: .round))
+                BatonTip()
+            }
+            .frame(width: Self.grid * scale, height: Self.grid * scale)
+        }
+        .accessibilityHidden(true)
+    }
+
+    static let grid: CGFloat = 16
+}
+
+/// The baton's stick, from (3, 13) to (11, 5) on the 16-point grid.
+struct BatonStick: Shape {
+    func path(in rect: CGRect) -> Path {
+        let unit = rect.width / ConductorBaton.grid
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + 3 * unit, y: rect.minY + 13 * unit))
+        path.addLine(to: CGPoint(x: rect.minX + 11 * unit, y: rect.minY + 5 * unit))
+        return path
+    }
+}
+
+/// The baton's tip: a dot of 1.4 radius at (12.5, 3.5) on the 16-point grid.
+struct BatonTip: Shape {
+    func path(in rect: CGRect) -> Path {
+        let unit = rect.width / ConductorBaton.grid
+        let radius = 1.4 * unit
+        let center = CGPoint(x: rect.minX + 12.5 * unit, y: rect.minY + 3.5 * unit)
+        return Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
     }
 }

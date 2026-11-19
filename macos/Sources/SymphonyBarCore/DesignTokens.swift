@@ -423,20 +423,18 @@ public enum DesignTokens {
         case caption
         /// 450 12/16, SF Mono: paths, commands, ids.
         case mono
-        /// 400 16, line height 1.4, tracked +2 %: a text the Director reads through, such as a ticket's brief.
+        /// 400 16, line height 1.45, tracked +3 %: the body standard for a text the Director reads through, such as a
+        /// ticket's brief or the Conductor's message.
         case reading
-        /// 400 16/1.45, tracked +3 %: the Conductor's message to a person, read through on the timeline.
-        case messageReading
-        /// 400 14/1.45, tracked +3 %: the same message inside a run's group.
-        case messageReadingCompact
+        /// 400 14, line height 1.45, tracked +3 %: the same reading text where it sits inside a run's group.
+        case readingCompact
 
         /// The custom property in `tokens.css`; nil for the app's own style.
         public var cssName: String? {
             switch self {
             case .figure: nil
             case .rowTitle: "--type-row-title"
-            case .messageReading: "--type-message-reading"
-            case .messageReadingCompact: "--type-message-reading-compact"
+            case .readingCompact: "--type-reading-compact"
             default: "--type-" + rawValue
             }
         }
@@ -447,7 +445,7 @@ public enum DesignTokens {
             case .title: 700
             case .sentence: 650
             case .figure, .heading, .rowTitle: 600
-            case .body, .secondary, .reading, .messageReading, .messageReadingCompact: 400
+            case .body, .secondary, .reading, .readingCompact: 400
             case .label: 550
             case .caption: 500
             case .mono: 450
@@ -465,8 +463,8 @@ public enum DesignTokens {
             case .secondary, .mono: 12
             case .label: 11
             case .caption: 10
-            case .reading, .messageReading: 16
-            case .messageReadingCompact: 14
+            case .reading: 16
+            case .readingCompact: 14
             }
         }
 
@@ -482,9 +480,8 @@ public enum DesignTokens {
             case .secondary, .mono: 16
             case .label: 14
             case .caption: 13
-            case .reading: 16 * 1.4
-            case .messageReading: 16 * Tracking.messageLineHeight
-            case .messageReadingCompact: 14 * Tracking.messageLineHeight
+            case .reading: 16 * Tracking.readingLineHeight
+            case .readingCompact: 14 * Tracking.readingLineHeight
             }
         }
 
@@ -501,8 +498,7 @@ public enum DesignTokens {
             switch self {
             case .title: Tracking.display
             case .label: Tracking.label
-            case .reading: Tracking.reading
-            case .messageReading, .messageReadingCompact: Tracking.messageReading
+            case .reading, .readingCompact: Tracking.reading
             default: 0
             }
         }
@@ -534,11 +530,9 @@ public enum DesignTokens {
     public enum Tracking {
         public static let display = -0.022
         public static let label = 0.02
-        public static let reading = 0.02
-        /// The Conductor's message: `--tracking-message-reading`.
-        public static let messageReading = 0.03
-        /// The Conductor's message: its line height as a multiple of its size (`--type-message-reading`'s `1.45`).
-        public static let messageLineHeight = 1.45
+        public static let reading = 0.03
+        /// The reading styles' line height as a multiple of their size (`--type-reading`'s `1.45`).
+        public static let readingLineHeight = 1.45
     }
 
     /// The 4 pt spacing grid (§3.5).

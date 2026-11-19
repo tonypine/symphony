@@ -66,7 +66,19 @@ public struct ConductorMarkup: Equatable {
 
     /// Reads `text`.
     public init(_ text: String) {
-        self.init(blocks: Self.blocks(of: text))
+        let blocks = Self.blocks(of: text)
+        // A text with no markup at all is plain words (the Conductor's older updates): each line is a paragraph.
+        let isPlain = blocks.allSatisfy { block in
+            if case let .paragraph(phrases) = block { return phrases.allSatisfy { if case .plain = $0 { true } else { false } } }
+            return false
+        }
+        if isPlain, blocks.count == 1 || text.contains("\n") {
+            let lines = text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+            self.init(blocks: lines.map { .paragraph([.plain($0)]) })
+        } else {
+            self.init(blocks: blocks)
+        }
     }
 
     /// The word a last paragraph starts with when it says what happens next.
