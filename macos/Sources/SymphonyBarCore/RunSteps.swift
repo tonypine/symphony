@@ -219,10 +219,12 @@ public struct RunStep: Equatable, Identifiable {
     public var transcript: TicketOutput?
     /// The newest lines of the run now's current step.
     public var liveLines: [TranscriptLine] = []
+    /// The screenshots the run recorded while it was in this step.
+    public var screenshots: [TicketScreenshot] = []
 
     public init(
         id: String, stepID: String, title: String, state: State, reason: String? = nil, durationSeconds: Int? = nil,
-        transcript: TicketOutput? = nil, liveLines: [TranscriptLine] = []
+        transcript: TicketOutput? = nil, liveLines: [TranscriptLine] = [], screenshots: [TicketScreenshot] = []
     ) {
         self.id = id
         self.stepID = stepID
@@ -232,6 +234,7 @@ public struct RunStep: Equatable, Identifiable {
         self.durationSeconds = durationSeconds
         self.transcript = transcript
         self.liveLines = liveLines
+        self.screenshots = screenshots
     }
 
     public var isLive: Bool { state == .current }
@@ -344,6 +347,14 @@ public struct RunGroupModel: Equatable, Identifiable {
     public var steps: [RunStep]
     /// One of its events is newer than the person's last look (TP-1451): an ended run's header carries the new dot.
     public var isNew = false
+    /// The run now's newest lines while it is on no step: a run that walks no steps (a QA or Code Review run), or
+    /// one between two steps. Drawn under the run.
+    public var liveLines: [TranscriptLine] = []
+    /// The run's whole session as lines, once it ended with a transcript: what the session reader reads for a run
+    /// that walks no steps.
+    public var transcript: TicketOutput?
+    /// The screenshots the run recorded outside its steps, oldest first.
+    public var screenshots: [TicketScreenshot] = []
 
     public init(
         id: String, title: String, state: State, word: String, durationSeconds: Int? = nil, tokens: Int? = nil,
@@ -458,7 +469,10 @@ public struct RunGroupModel: Equatable, Identifiable {
         let modelID = (run.model ?? started?.payload.model)?.trimmingWhitespace().nonEmpty
         let model = run.modelName?.trimmingWhitespace().nonEmpty ?? modelID.map(ModelName.display)
         let effort = (run.effort ?? started?.payload.effort)?.trimmingWhitespace().nonEmpty
-        return RunGroupModel(
+        let live = state == .running
+        var (steps, spans) = stepsAndSpans(events, live: live, runNow: runNow, reference: reference)
+        let outside = placeScreenshots(events, in: &steps, spans: spans)
+        var group = RunGroupModel(
             id: run.runID,
             title: TicketEventsPayload.runTitle(kind: run.runKind, number: run.runNumber),
             state: state,
@@ -468,15 +482,51 @@ public struct RunGroupModel: Equatable, Identifiable {
             model: model,
             effort: effort,
             outcome: state == .running ? nil : run.outcome?.trimmingWhitespace().nonEmpty,
-            steps: steps(events, live: state == .running, runNow: runNow, reference: reference)
+            steps: steps
         )
+        // A run on no step (one that walks none, a QA or Code Review run, or one between steps) has its newest lines
+        // under the run itself.
+        if live, let runNow, runNow.currentStep == nil { group.liveLines = runNow.lines }
+        group.transcript = ended?.artifacts.first { $0.kind == "transcript" }?.sessionLines
+        group.screenshots = outside
+        return group
     }
 
     /// The run's steps top to bottom: each `step.started` opens one, its `step.completed` ends it; a step completed
     /// without a start (skipped) is one of its own. A step a run that ended left open failed in it.
     static func steps(_ events: [TicketEventsPayload.Event], live: Bool, runNow: RunNow?, reference: Date) -> [RunStep] {
+        stepsAndSpans(events, live: live, runNow: runNow, reference: reference).steps
+    }
+
+    /// When a step ran: from its start to its end, open while it has none (the step the run is on, or the one a run
+    /// ended in).
+    struct StepSpan: Equatable {
+        var start: Date
+        var end: Date?
+
+        func contains(_ date: Date) -> Bool { date >= start && end.map { date <= $0 } ?? true }
+    }
+
+    /// The screenshots the run's events carry, each under the step whose span holds when it was recorded (the newest
+    /// such step), else returned as the run's own. A finding's screenshots are its card's, never the run's.
+    static func placeScreenshots(_ events: [TicketEventsPayload.Event], in steps: inout [RunStep], spans: [Int: StepSpan]) -> [TicketScreenshot] {
+        var outside: [TicketScreenshot] = []
+        var seen = Set<String>()
+        for event in events where event.type != "finding.recorded" {
+            let shots = event.screenshots.filter { seen.insert($0.id).inserted }
+            guard !shots.isEmpty else { continue }
+            let index = event.date.flatMap { date in steps.indices.last { spans[$0]?.contains(date) == true } }
+            if let index { steps[index].screenshots += shots } else { outside += shots }
+        }
+        return outside
+    }
+
+    static func stepsAndSpans(
+        _ events: [TicketEventsPayload.Event], live: Bool, runNow: RunNow?, reference: Date
+    ) -> (steps: [RunStep], spans: [Int: StepSpan]) {
         var steps: [RunStep] = []
         var startedAt: [Int: Date] = [:]
+        var endedAt: [Int: Date] = [:]
         var times: [String: Int] = [:]
 
         func begin(_ stepID: String, title: String?, at: Date?) -> Int {
@@ -508,6 +558,7 @@ public struct RunGroupModel: Equatable, Identifiable {
             }
             step.transcript = event.artifacts.first { $0.kind == "transcript" }.map(\.output)
             steps[index] = step
+            if let at { endedAt[index] = at }
         }
 
         // The run now's step, written to the read before the feed has its start.
@@ -524,7 +575,8 @@ public struct RunGroupModel: Equatable, Identifiable {
                 steps[index].reason = endedInStep
             }
         }
-        return steps
+        let spans = Dictionary(uniqueKeysWithValues: startedAt.map { index, start in (index, StepSpan(start: start, end: endedAt[index])) })
+        return (steps, spans)
     }
 
     static let endedInStep = "The run ended during this step"

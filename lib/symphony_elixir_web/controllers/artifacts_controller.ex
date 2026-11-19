@@ -5,12 +5,17 @@ defmodule SymphonyElixirWeb.ArtifactsController do
 
       GET /api/v1/artifacts/:id
       GET /api/v1/artifacts/:id/meta
+      GET /api/v1/artifacts/:id/lines
 
   The first answers the bytes, sent from the file, with the artifact's mime as `Content-Type`
   (`; charset=utf-8` for text), `Cache-Control: public, max-age=31536000, immutable` (the id is the
   bytes' sha256, so they never change), `X-Content-Type-Options: nosniff` and a
   `Content-Disposition` naming the label as file name: `inline`, or `attachment` for
-  `application/octet-stream`. The second answers the artifact's metadata as JSON.
+  `application/octet-stream`. The second answers the artifact's metadata as JSON. The third answers
+  a session transcript (a `transcript` artifact holding a Claude Code session, as a run's
+  `run.ended` keeps it) as the lines a step's transcript holds
+  (`SymphonyElixir.PhaseSteps.Transcript.lines/1`): one JSON object a line, cached as the bytes are.
+  It is 404 for an artifact of another kind.
 
   An expired artifact, or one whose file is gone (which the store then marks expired), is 410 on
   both, with the metadata in the body. An id that is not 64 lowercase hex characters is 404 before
@@ -23,6 +28,7 @@ defmodule SymphonyElixirWeb.ArtifactsController do
   alias Plug.Conn
   alias SymphonyElixir.Artifacts
   alias SymphonyElixir.Artifacts.Store
+  alias SymphonyElixir.PhaseSteps.Transcript
 
   # Every mime the store sniffs from text is sniffed only from valid UTF-8.
   @utf8_mimes ["application/x-ndjson"]
@@ -36,6 +42,21 @@ defmodule SymphonyElixirWeb.ArtifactsController do
       |> put_resp_header("x-content-type-options", "nosniff")
       |> put_resp_header("content-disposition", content_disposition(artifact))
       |> send_file(200, path)
+    end)
+  end
+
+  @spec lines(Conn.t(), map()) :: Conn.t()
+  def lines(conn, %{"id" => id}) do
+    with_artifact(conn, id, fn
+      %{kind: "transcript"}, path ->
+        conn
+        |> put_resp_header("content-type", "application/x-ndjson; charset=utf-8")
+        |> put_resp_header("cache-control", "public, max-age=31536000, immutable")
+        |> put_resp_header("x-content-type-options", "nosniff")
+        |> send_resp(200, path |> File.read!() |> Transcript.lines() |> Transcript.encode())
+
+      _other_kind, _path ->
+        not_found(conn, id)
     end)
   end
 
