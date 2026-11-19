@@ -66,6 +66,10 @@ defmodule SymphonyElixir.MessagesTest do
       assert Messages.read_by(other, events()) == nil
       assert Messages.run_title("run-unknown", events()) == "a run"
       assert Messages.run_title(nil, events()) == "a run"
+
+      # A read event without a time (a hand-built one) says when as nil.
+      untimed = %Event{type: "message.read", payload: %{message_id: other.id, run_id: "run-7"}, at: nil}
+      assert %{run: "Code Review run 2", at: nil} = Messages.read_by(other, [untimed | events()])
     end
 
     test "a read the store refuses is logged, and the prompt goes on" do
@@ -79,6 +83,7 @@ defmodule SymphonyElixir.MessagesTest do
 
     test "the prompt's section, and who wrote a message" do
       assert Messages.prompt_section([]) == nil
+      assert Messages.person() == "the Director"
       assert Messages.writer(%{kind: :person, name: "Sam"}) == "Sam"
       assert Messages.writer(%{kind: :person}) == "the Director"
       assert Messages.prompt_section([%Event{type: "message.sent", actor: %{kind: :person}, payload: %{}, at: nil}]) =~ "### the Director wrote, at an unknown time\n\n"
