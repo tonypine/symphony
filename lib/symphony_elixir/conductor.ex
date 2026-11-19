@@ -349,9 +349,11 @@ defmodule SymphonyElixir.Conductor do
 
     {:ok, run_profile} = profile(repo_key, fn _profile -> true end)
     events = Facts.events(issue_id)
-    facts = record |> Facts.build("during_run", Keyword.put(opts, :events, events)) |> Map.put(:live, Watch.live(run, Enum.filter(events, &(&1.run_id == run_id))))
+    live = Watch.live(run, Enum.filter(events, &(&1.run_id == run_id)))
+    facts = record |> Facts.build("during_run", Keyword.put(opts, :events, events)) |> Map.put(:live, live)
     watch = %{run: run, trigger: trigger, allow_stop: settings.watch.allow_stop, stop: Keyword.get(opts, :stop, &Orchestrator.stop_running/1)}
-    plan = %{junction: "during_run", issue_id: issue_id, repo_key: repo_key, run_profile: run_profile, timeout_ms: settings.timeout_ms, watch: watch}
+    plan = %{junction: "during_run", issue_id: issue_id, repo_key: repo_key, run_profile: run_profile, watch: watch}
+    plan = Map.put(plan, :timeout_ms, settings.timeout_ms)
     issue = %Issue{id: issue_id, identifier: Map.get(run, :identifier) || record.issue_identifier, title: record.title, state: record.phase}
     _ran = run(plan, issue, Keyword.put(opts, :facts, facts))
     :ok

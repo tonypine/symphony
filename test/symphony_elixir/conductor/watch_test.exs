@@ -5,13 +5,20 @@ defmodule SymphonyElixir.Conductor.WatchTest do
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.TicketEvents.Event
 
-  @watch %Schema.Conductor.Watch{enabled: true, min_interval_minutes: 10, max_turns_per_run: 2, run_minutes: 30, run_tokens: 1_000}
+  @watch %Schema.Conductor.Watch{
+    enabled: true,
+    min_interval_minutes: 10,
+    max_turns_per_run: 2,
+    run_minutes: 30,
+    run_tokens: 1_000
+  }
 
   setup do
     n = System.unique_integer([:positive])
     issue_id = "issue-watch-#{n}"
     :ok = RunStore.put_ticket_state(%{repo_key: "default", issue_id: issue_id, issue_identifier: "WATCH-#{n}", phase: "In Progress"})
-    run = %{issue_id: issue_id, run_id: "run-watch-#{n}", started_at: DateTime.utc_now(), total_tokens: 10, run_profile: %{kind: :implementation, model: "m", harness: "claude"}}
+    profile = %{kind: :implementation, model: "m", harness: "claude"}
+    run = %{issue_id: issue_id, run_id: "run-watch-#{n}", started_at: DateTime.utc_now(), total_tokens: 10, run_profile: profile}
     %{issue_id: issue_id, run: run}
   end
 
@@ -51,6 +58,9 @@ defmodule SymphonyElixir.Conductor.WatchTest do
       answer = %Event{id: "n1", type: "note", payload: %{text: "Walk step 2: plan_mismatch. Expected: a list. Actual: nothing."}}
       assert {"qa_step_answer", _seen} = Watch.trigger([answer], run, @watch, MapSet.new())
       assert Watch.trigger([%Event{id: "n2", type: "note", payload: %{text: "A plain note."}}], run, @watch, MapSet.new()) == nil
+      # An agent's note that reads like a step's answer is not the pass's answer.
+      agent_note = %{answer | id: "n3", actor: %{kind: :agent, run_kind: "qa", run_id: "r"}}
+      assert Watch.trigger([agent_note], run, @watch, MapSet.new()) == nil
     end
 
     test "a run past its minutes or its tokens counts while it stays over", %{run: run} do

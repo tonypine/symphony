@@ -10,7 +10,8 @@ defmodule SymphonyElixir.Conductor.Watch do
     * a step of the run ended `failed` (`step_failed`), or the same step failed twice
       (`step_failed_twice`);
     * a step of a stepped QA pass answered `plan_mismatch` or `blocked` (`qa_step_answer`), read from
-      the note the pass records for the step's answer;
+      the machine note the pass records for the step's answer (`SymphonyElixir.QaAgent.Steps`: "<step
+      title>: <status>. Expected: ... Actual: ...");
     * the run passed `watch.run_minutes` (`run_minutes`) or `watch.run_tokens` (`run_tokens`).
 
   Never more often than `watch.min_interval_minutes` per run, at most `watch.max_turns_per_run`
@@ -23,7 +24,7 @@ defmodule SymphonyElixir.Conductor.Watch do
 
   require Logger
 
-  alias SymphonyElixir.{Config, Conductor, Orchestrator}
+  alias SymphonyElixir.{Conductor, Config, Orchestrator}
   alias SymphonyElixir.Conductor.{Facts, Steer}
   alias SymphonyElixir.TicketEvents.Event
   alias SymphonyElixirWeb.ObservabilityPubSub
@@ -117,22 +118,40 @@ defmodule SymphonyElixir.Conductor.Watch do
   read now added, or nil. A failed step or a QA step's answer counts once; time and tokens count
   while they stay over the limit.
   """
-  @spec trigger([Event.t()], map(), Config.Schema.Conductor.Watch.t(), MapSet.t(String.t())) :: {String.t(), MapSet.t(String.t())} | nil
+  @spec trigger([Event.t()], map(), Config.Schema.Conductor.Watch.t(), MapSet.t(String.t())) ::
+          {String.t(), MapSet.t(String.t())} | nil
   def trigger(events, run, watch, seen) do
     failed = Enum.filter(events, &(&1.type == "step.completed" and &1.payload[:outcome] == "failed"))
-    answers = Enum.filter(events, &(&1.type == "note" and is_binary(&1.payload[:text]) and Regex.match?(@qa_answer, &1.payload[:text])))
-    new = Enum.reject(failed ++ answers, &MapSet.member?(seen, &1.id))
+    new = Enum.reject(failed ++ Enum.filter(events, &qa_answer?/1), &MapSet.member?(seen, &1.id))
     seen = Enum.reduce(new, seen, &MapSet.put(&2, &1.id))
 
+    case event_trigger(new, failed) || limit_trigger(run, watch) do
+      nil -> nil
+      trigger -> {trigger, seen}
+    end
+  end
+
+  defp event_trigger(new, failed) do
     cond do
-      new_failure?(new) and failed_twice?(failed, new) -> {"step_failed_twice", seen}
-      new_failure?(new) -> {"step_failed", seen}
-      new != [] -> {"qa_step_answer", seen}
-      minutes(run) >= watch.run_minutes -> {"run_minutes", seen}
-      (run[:total_tokens] || 0) >= watch.run_tokens -> {"run_tokens", seen}
+      new_failure?(new) and failed_twice?(failed, new) -> "step_failed_twice"
+      new_failure?(new) -> "step_failed"
+      new != [] -> "qa_step_answer"
       true -> nil
     end
   end
+
+  defp limit_trigger(run, watch) do
+    cond do
+      minutes(run) >= watch.run_minutes -> "run_minutes"
+      (run[:total_tokens] || 0) >= watch.run_tokens -> "run_tokens"
+      true -> nil
+    end
+  end
+
+  defp qa_answer?(%Event{type: "note", actor: %{kind: :machine}, payload: %{text: text}}) when is_binary(text),
+    do: Regex.match?(@qa_answer, text)
+
+  defp qa_answer?(_event), do: false
 
   defp new_failure?(new), do: Enum.any?(new, &(&1.type == "step.completed"))
 

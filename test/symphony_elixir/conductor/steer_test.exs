@@ -40,7 +40,9 @@ defmodule SymphonyElixir.Conductor.SteerTest do
     assert prompt =~ "<conductor_guidance>\nRead the build error before you change the code again.\n\nThen run only the failing test.\n</conductor_guidance>"
     assert String.ends_with?(prompt, "\n\nthe step's prompt")
 
-    assert [%{run_id: run_id, payload: %{when: "next_turn", trigger: "step_failed", delivered: %{how: "next_turn", at: _at}}}, _second] = steers(ctx.issue_id)
+    assert [%{run_id: run_id, payload: %{when: "next_turn", trigger: "step_failed", delivered: %{how: "next_turn", at: _at}}}, _second] =
+             steers(ctx.issue_id)
+
     assert run_id == ctx.run_id
     assert Steer.turn_prompt(ctx.run_id, false, fn -> "again" end) == "again"
     assert Steer.turn_prompt(nil, false, fn -> "no run" end) == "no run"

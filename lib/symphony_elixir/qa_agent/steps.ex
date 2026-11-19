@@ -65,6 +65,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   require Logger
 
   alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, PhaseSteps, PromptSafety, QaAgent, QaDriver}
+  alias SymphonyElixir.Conductor.Steer
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
@@ -424,7 +425,10 @@ defmodule SymphonyElixir.QaAgent.Steps do
     # Only an answer written in this turn counts.
     _removed = File.rm(answer_path(state, step))
 
-    case run_turn(state, step, run.profile, prompt(state, step, notes), run.resume) do
+    # The Conductor's steers waiting for the pass open its next step's prompt (`SymphonyElixir.Conductor.Steer`).
+    prompt = Steer.turn_prompt(Map.get(state.job, :run_id), false, fn -> prompt(state, step, notes) end)
+
+    case run_turn(state, step, run.profile, prompt, run.resume) do
       {:ok, state, session_id, lines} ->
         run = %{run | resume: session_id || run.resume, lines: run.lines ++ lines}
         state = remember_session(state, step, session_id)

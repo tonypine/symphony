@@ -152,4 +152,39 @@ final class ConductorSettingsTests: XCTestCase {
         let old = before.components(separatedBy: "\n")
         return after.components(separatedBy: "\n").filter { !old.contains($0) }
     }
+
+    // MARK: The watch
+
+    func testTheWatchIsOffWithItsLimitsWhenMissing() throws {
+        XCTAssertEqual(try ConductorSettings.values(in: "").watch, ConductorWatchSettings())
+        XCTAssertEqual(
+            ConductorWatchSettings(),
+            ConductorWatchSettings(enabled: false, runMinutes: 30, runTokens: 30_000_000, minIntervalMinutes: 10, maxTurnsPerRun: 3, allowStop: false)
+        )
+        XCTAssertEqual(ConductorWatchSettings.keyPaths.count, 6)
+        XCTAssertTrue(ConductorWatchSettings.keyPaths.allSatisfy(SettingsUIManifest.keyPaths.contains))
+    }
+
+    func testReadsAndWritesTheWatchUnderConductor() throws {
+        let yaml = "conductor:\n  enabled: true\n  watch:\n    enabled: true\n    run_minutes: 45\n    allow_stop: true\n"
+        let read = try ConductorSettings.values(in: yaml)
+        XCTAssertEqual(read.watch, ConductorWatchSettings(enabled: true, runMinutes: 45, allowStop: true))
+
+        var changed = read
+        changed.watch.maxTurnsPerRun = 1
+        changed.watch.runTokens = 5_000_000
+        let written = try ConductorSettings.updating(yaml, from: read, to: changed)
+        XCTAssertEqual(try ConductorSettings.values(in: written), changed)
+        XCTAssertTrue(written.contains("    max_turns_per_run: 1"), written)
+
+        var on = ConductorSettings()
+        on.watch.enabled = true
+        let inserted = try ConductorSettings.updating("issues:\n  provider: memory\n", from: ConductorSettings(), to: on)
+        XCTAssertEqual(try ConductorSettings.values(in: inserted).watch.enabled, true, inserted)
+    }
+
+    func testRefusesAWatchLimitItCantRead() {
+        XCTAssertThrowsError(try ConductorSettings.values(in: "conductor:\n  watch:\n    run_minutes: soon\n"))
+        XCTAssertThrowsError(try ConductorSettings.values(in: "conductor:\n  watch:\n    allow_stop: maybe\n"))
+    }
 }

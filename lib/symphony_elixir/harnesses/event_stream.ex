@@ -22,6 +22,8 @@ defmodule SymphonyElixir.Harnesses.EventStream do
 
   require Logger
 
+  alias SymphonyElixir.Conductor.Steer
+
   @type event :: tuple()
 
   @diagnostic_output_line_count 5
@@ -84,7 +86,7 @@ defmodule SymphonyElixir.Harnesses.EventStream do
       # here, its process stopped, and the run resumes its session with the steer. One that waited
       # in the mailbox past a turn is dropped: its steer reaches the next turn instead.
       {:conductor_interrupt, ^run_id, sent_ms} when is_binary(run_id) ->
-        if SymphonyElixir.Conductor.Steer.fresh?(sent_ms),
+        if Steer.fresh?(sent_ms),
           do: interrupted(port, acc, loop_state),
           else: read_loop(port, on_message, acc, loop_state)
 

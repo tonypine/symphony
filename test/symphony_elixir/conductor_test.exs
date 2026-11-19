@@ -2,7 +2,7 @@ defmodule SymphonyElixir.ConductorTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{Conductor, TicketEvents}
-  alias SymphonyElixir.Conductor.Facts
+  alias SymphonyElixir.Conductor.{Facts, Steer}
   alias SymphonyElixir.Config.Schema
 
   @on %Schema.Conductor{enabled: true}
@@ -307,7 +307,7 @@ defmodule SymphonyElixir.ConductorTest do
 
   describe "watch/3" do
     setup ctx do
-      SymphonyElixir.Conductor.Steer.create_table()
+      Steer.create_table()
       run = %{issue_id: ctx.issue_id, run_id: "run-watched-#{System.unique_integer([:positive])}", repo_key: "default", started_at: DateTime.utc_now()}
       %{run: Map.put(run, :run_profile, %{kind: :implementation, model: "m", harness: "claude"})}
     end
@@ -330,7 +330,7 @@ defmodule SymphonyElixir.ConductorTest do
       assert prompt =~ ~s("live": {)
       assert events(ctx.issue_id, "conductor.instructions") == []
 
-      SymphonyElixir.Conductor.Steer.drop(ctx.run.run_id)
+      Steer.drop(ctx.run.run_id)
       assert [%{run_id: run_id, payload: %{text: "Read the build error first.", when: "next_turn", trigger: "step_failed"}}] = steers(ctx.issue_id)
       assert run_id == ctx.run.run_id
     end

@@ -5,6 +5,7 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
   import ExUnit.CaptureLog
 
   alias SymphonyElixir.Codex.DynamicTool
+  alias SymphonyElixir.Conductor.Steer
   alias SymphonyElixir.Config.Runs.Run
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
@@ -379,6 +380,32 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert {:ok, _result} = run(ctx, %{playbooks: [%{kind: "macos_app"}]}, [qa_driver: nil], [plan_step(), review()])
       [plan_turn, _review] = turns()
       refute plan_turn.prompt =~ "Component Gallery"
+    end
+  end
+
+  describe "the Conductor's steer" do
+    test "a steer waiting for the pass opens its next step's prompt, recorded as delivered there", ctx do
+      path = Workflow.symphony_file_path()
+      File.write!(path, File.read!(path) <> "conductor:\n  enabled: true\n  watch:\n    enabled: true\n")
+      Cache.clear()
+      Steer.create_table()
+
+      Steer.queue("qa-steps-run", %{
+        text: "The plan missed step 2; walk it.",
+        when: "next_turn",
+        trigger: "qa_step_answer",
+        repo_key: "default",
+        issue_id: @issue_id
+      })
+
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+      assert {:ok, _run} = run(ctx)
+
+      [first | rest] = turns()
+      assert first.prompt =~ ~r/\AGuidance from the Conductor/
+      assert first.prompt =~ "The plan missed step 2; walk it."
+      refute Enum.any?(rest, &(&1.prompt =~ "Guidance from the Conductor"))
+      assert [%{run_id: "qa-steps-run", payload: %{delivered: %{how: "next_turn"}}}] = events("conductor.steer")
     end
   end
 
