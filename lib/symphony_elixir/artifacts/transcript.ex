@@ -39,6 +39,26 @@ defmodule SymphonyElixir.Artifacts.Transcript do
 
   def locate(_runtime, _cwd, _session_id, _reported_path), do: :none
 
+  @doc """
+  The transcript of the Claude Code session `session_id` in whichever working directory's folder
+  under `root/1` holds it, for a session run outside the working directory its run records (a QA
+  pass runs in a worktree of its own). A session id is unique, so one file at most answers; none
+  when no folder holds it, or the id would name a path outside its folder.
+  """
+  @spec find_session(runtime() | nil, String.t() | nil) :: {:ok, Path.t()} | :none
+  def find_session(:claude, session_id) when is_binary(session_id) do
+    if String.match?(session_id, ~r/\A[A-Za-z0-9_-]+\z/) do
+      case Path.wildcard(Path.join([root(:claude), "*", session_id <> ".jsonl"])) do
+        [path] -> {:ok, path}
+        _none_or_ambiguous -> :none
+      end
+    else
+      :none
+    end
+  end
+
+  def find_session(_runtime, _session_id), do: :none
+
   defp reported(path) when is_binary(path) and path != "" do
     expanded = Path.expand(path)
 

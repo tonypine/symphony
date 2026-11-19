@@ -323,6 +323,20 @@ If Symphony documents token reporting externally, the contract should be:
 - Do not classify generic `usage` by field name alone
 - Do not double-count turn-completed usage after live updates
 
+## Claude Code Stream
+
+The `claude` harness reads `claude -p --output-format stream-json`. Claude Code writes one
+`assistant` line per content block of a model message (its text, then each tool call), and every
+one of those lines carries the whole message's `usage` under the same `message.id`. Summing the
+lines counts a message once per block: a QA pass whose messages hold several tool calls each read
+about 2.4 times what it spent.
+
+The Claude parser puts the message id on each `{:token_usage_delta, usage}` it emits, and
+`SymphonyElixir.Harnesses.EventStream` keeps, per turn, the usage it already counted for each id: a
+repeated message adds only what its usage grew by, so each message counts once. The turn's
+cumulative `{:token_usage, totals}` the orchestrator and the QA agent read then matches the
+transcript counted once per message, and the `result` event's `usage` at the end of the turn.
+
 ## Budget Enforcement
 
 `execution.limits.tokens_per_issue` and `execution.limits.tokens_per_day` use the same accepted cumulative token

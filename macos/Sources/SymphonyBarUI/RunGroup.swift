@@ -48,13 +48,21 @@ public struct RunGroup: View {
                     .padding(.bottom, DesignTokens.Space.s1)
             }
             if unfolded {
-                Group {
-                    if run.steps.isEmpty {
+                VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+                    if !run.steps.isEmpty {
+                        StepList(steps: run.steps, transcripts: transcripts, unfolded: unfoldedSteps)
+                    }
+                    // The run now on no step (a QA or Code Review run walks none) has its newest lines here.
+                    if !run.liveLines.isEmpty {
+                        LineList(lines: run.liveLines, live: true)
+                    }
+                    if !run.screenshots.isEmpty {
+                        ScreenshotRow(shots: run.screenshots)
+                    }
+                    if run.steps.isEmpty, run.liveLines.isEmpty, run.screenshots.isEmpty {
                         Text(Self.noSteps)
                             .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)
-                    } else {
-                        StepList(steps: run.steps, transcripts: transcripts, unfolded: unfoldedSteps)
                     }
                 }
                 .padding(.leading, DesignTokens.Space.s4)

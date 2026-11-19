@@ -1813,6 +1813,61 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
       end
     end
 
+    # Claude writes one line per content block of a message, each repeating the message's usage
+    # (TP-1496's QA runs counted 69.2M for 28.1M spent).
+    test "counts each model message's usage once, however many content-block lines repeat it" do
+      test_root =
+        Path.join(
+          System.tmp_dir!(),
+          "symphony-elixir-claude-code-usage-once-#{System.unique_integer([:positive])}"
+        )
+
+      try do
+        workspace_root = Path.join(test_root, "workspaces")
+        workspace = Path.join(workspace_root, "ACME-1")
+        fake_claude = Path.join(test_root, "fake-claude")
+        File.mkdir_p!(workspace)
+
+        usage = ~s("usage":{"input_tokens":2,"output_tokens":5,"cache_read_input_tokens":100,"cache_creation_input_tokens":3})
+        grown = ~s("usage":{"input_tokens":2,"output_tokens":9,"cache_read_input_tokens":100,"cache_creation_input_tokens":3})
+
+        File.write!(fake_claude, """
+        #!/bin/sh
+        printf '%s\\n' '{"type":"system","subtype":"init","session_id":"sess-once","cwd":"/tmp","tools":[],"mcp_servers":[],"model":"claude-opus-4-5","permissionMode":"default","apiKeySource":"env"}'
+        printf '%s\\n' '{"type":"assistant","message":{"id":"msg-a","type":"message","role":"assistant","content":[{"type":"text","text":"Looking."}],#{usage}},"session_id":"sess-once"}'
+        printf '%s\\n' '{"type":"assistant","message":{"id":"msg-a","type":"message","role":"assistant","content":[{"type":"tool_use","id":"t-1","name":"bash","input":{}}],#{usage}},"session_id":"sess-once"}'
+        printf '%s\\n' '{"type":"assistant","message":{"id":"msg-a","type":"message","role":"assistant","content":[{"type":"tool_use","id":"t-2","name":"read","input":{}}],#{usage}},"session_id":"sess-once"}'
+        printf '%s\\n' '{"type":"assistant","message":{"id":"msg-b","type":"message","role":"assistant","content":[{"type":"text","text":"Done"}],#{usage}},"session_id":"sess-once"}'
+        printf '%s\\n' '{"type":"assistant","message":{"id":"msg-b","type":"message","role":"assistant","content":[{"type":"text","text":"Done."}],#{grown}},"session_id":"sess-once"}'
+        printf '%s\\n' '{"type":"result","subtype":"success","duration_ms":500,"duration_api_ms":400,"is_error":false,"num_turns":2,"result":"Done.","session_id":"sess-once","total_cost_usd":0.001,"usage":{"input_tokens":4,"output_tokens":14,"cache_creation_input_tokens":6,"cache_read_input_tokens":200}}'
+        exit 0
+        """)
+
+        File.chmod!(fake_claude, 0o755)
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          workspace_root: workspace_root,
+          agent_kind: "claude",
+          agent_command: fake_claude
+        )
+
+        {:ok, session} = AppServer.start_session(workspace)
+        test_pid = self()
+        on_message = fn msg -> send(test_pid, {:turn_msg, msg}) end
+
+        assert {:ok, _result} = AppServer.run_turn(session, "do the thing", %{}, on_message: on_message)
+
+        totals = receive_token_totals([])
+
+        # msg-a counts once (110) over its three lines; msg-b counts once and then its growth (4).
+        assert totals == [110, 110, 110, 220, 224]
+
+        assert_received {:turn_msg, {:turn_completed, %{total_tokens: 224}}}
+      after
+        File.rm_rf(test_root)
+      end
+    end
+
     test "logs the pid, command and run id of the Claude process it starts" do
       test_root =
         Path.join(
@@ -4110,6 +4165,15 @@ defmodule SymphonyElixir.ClaudeCode.AppServerTest do
     printf '%s\\n' '{"type":"result","subtype":"success","duration_ms":500,"duration_api_ms":400,"is_error":false,"num_turns":1,"result":"Done.","session_id":"#{session_id}","total_cost_usd":0.001,"usage":{"input_tokens":#{input_tokens},"output_tokens":#{output_tokens},"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"server_tool_use":{"web_search_requests":0}}}'
     exit 0
     """
+  end
+
+  # The `total_tokens` of every `{:token_usage, cumulative}` the turn sent so far, oldest first.
+  defp receive_token_totals(totals) do
+    receive do
+      {:turn_msg, {:token_usage, %{total_tokens: total}}} -> receive_token_totals([total | totals])
+    after
+      0 -> Enum.reverse(totals)
+    end
   end
 
   defp with_claude_cache_root(cache_root, fun) do
