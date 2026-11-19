@@ -44,16 +44,12 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
   end
 
   test "refuses an answer outside the schema, saying why" do
-    long = String.duplicate("a", Answer.instructions_max() + 1)
-
     for {answer, why} <- [
           {"[1]", "the answer is not a JSON object"},
           {"{not json", "the answer is not valid JSON"},
           {json(%{}), "`instructions` must be a string"},
           {json(%{"instructions" => " "}), "`instructions` is blank"},
-          {json(%{"instructions" => long}), "`instructions` is over 2000 characters"},
           {json(%{"instructions" => "x", "update" => 3}), "`update` must be a string or null"},
-          {json(%{"instructions" => "x", "update" => String.duplicate("u", Answer.update_max() + 1)}), "`update` is over 1200 characters"},
           {json(%{"instructions" => "x", "refs" => [1]}), "`refs` must list event ids"},
           {json(%{"instructions" => "x", "refs" => "evt_1"}), "`refs` must list event ids"},
           {json(%{"instructions" => "x", "ask_person" => "yes"}), "`ask_person` must be an object or null"},
@@ -63,6 +59,34 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
         ] do
       assert Answer.parse(answer) == {:error, why}, answer
     end
+  end
+
+  test "a text over its limit is cut at a boundary and the answer accepted" do
+    sentence = "This is one sentence of the advice. "
+    instructions = String.duplicate(sentence, 100)
+    steer = String.duplicate("word ", 400)
+    title = String.duplicate("t", 130)
+    question = Map.put(@question, "title", title)
+    update = String.duplicate("u", Answer.update_max() + 5)
+
+    log =
+      ExUnit.CaptureLog.capture_log(fn ->
+        text = json(%{"instructions" => instructions, "update" => update, "ask_person" => question, "steer" => %{"message" => steer, "when" => "now"}})
+        assert {:ok, answer} = Answer.parse(text, watch: true)
+        send(self(), {:answer, answer})
+      end)
+
+    assert_received {:answer, answer}
+    assert String.length(answer.instructions) <= Answer.instructions_max()
+    assert String.ends_with?(answer.instructions, "advice. [cut by Symphony]")
+    assert String.length(answer.update) == Answer.update_max()
+    assert String.length(answer.steer.message) <= 1_500
+    assert String.ends_with?(answer.steer.message, "word [cut by Symphony]")
+    assert String.length(answer.ask_person.title) == 120
+    assert log =~ "`instructions` was"
+    assert log =~ "`update` was"
+    assert log =~ "`steer.message` was"
+    assert log =~ "`ask_person.title` was"
   end
 
   test "blocks: well formed picks are kept, the first 3, and the rest are dropped one by one" do
@@ -137,7 +161,6 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
           {%{"steer" => %{"message" => "x", "when" => "later"}}, steer},
           {%{"steer" => "x"}, steer},
           {%{"steer" => %{"message" => " ", "when" => "now"}}, "`steer.message` is blank"},
-          {%{"steer" => %{"message" => String.duplicate("s", 1_501), "when" => "now"}}, "`steer.message` is over 1500 characters"},
           {%{"stop" => %{"reason" => ""}}, "`stop` must be null or hold a `reason`"}
         ] do
       assert Answer.parse(json(answer), watch: true) == {:error, why}

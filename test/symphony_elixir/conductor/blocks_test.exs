@@ -79,8 +79,7 @@ defmodule SymphonyElixir.Conductor.BlocksTest do
     with_shot = record!(ctx, "evidence", %{caption: "The login page after the click"}, actor: agent("run-1", "qa"), artifacts: [log, shot])
     without = record!(ctx, "evidence", %{caption: "Only a log"}, actor: agent("run-1", "qa"), artifacts: [log])
 
-    finding =
-      long = "A very long description " <> String.duplicate("x", 100)
+    long = "A very long description " <> String.duplicate("x", 100)
 
     finding = record!(ctx, "finding.recorded", %{class: "login", severity: "high", description: long}, actor: agent("run-1", "qa"), artifacts: [shot])
 

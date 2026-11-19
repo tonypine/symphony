@@ -134,7 +134,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   junction of the ticket's life wrote (`SymphonyElixir.Conductor`), naming the junction
   (`after_coding`, `after_qa_fail`, `after_rework`, `before_merge`). The update is for the person
   (`text`, at most 900 characters) with the ids of the events it rests on (`refs`); the
-  instructions are advice for the next run's prompt (`text`, at most 2,000). A turn that watched a
+  instructions are advice for the next run's prompt (`text`, at most 3,000). A turn that watched a
   running run names the junction `during_run`. `conductor.steer` is machine-only too: guidance the
   Conductor's watch gave a running run (`SymphonyElixir.Conductor.Watch`), under that run's
   `run_id`: its `text` (at most 1,500 characters), when it asked for it (`when`: `next_turn`, `now`
@@ -553,7 +553,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
     "conductor.instructions" => %{
       writers: [:machine],
       run_kinds: [],
-      required: [junction: {:enum, @conductor_junctions}, text: {:string, 2_000}],
+      required: [junction: {:enum, @conductor_junctions}, text: {:string, 3_000}],
       optional: @signal,
       idempotency: :writer
     },
