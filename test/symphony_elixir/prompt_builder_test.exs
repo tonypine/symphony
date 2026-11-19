@@ -1079,8 +1079,11 @@ defmodule SymphonyElixir.PromptBuilderTest do
       message = message!("Stop after the first screen.", ~U[2026-11-19 10:00:00Z])
       assert reads() == []
 
-      # The run building its prompt again (its next step, a retry) is not given it.
-      refute PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1") =~ "Stop after the first screen."
+      # The run building its prompt again (its next step, a retry) is not given it as new: it sees it
+      # only in the history, unread, and records no read.
+      rebuilt = PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1")
+      refute rebuilt =~ "## Messages from the person"
+      assert rebuilt =~ "the Director wrote (not read by a run yet): Stop after the first screen."
       assert reads() == []
 
       prompt = PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-2")
