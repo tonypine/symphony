@@ -10,7 +10,8 @@
     "paused": false,
     "paused_since": null,
     "provider": "anthropic",
-    "reserve": null,
+    "reserve": 0.9,
+    "at_reserve": true,
     "tokens_today": 1840000,
     "usage_windows": [
       {"name": "five_hour", "resets_at": "2026-10-07T18:00:00Z", "utilization": 0.97},

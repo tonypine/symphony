@@ -7,7 +7,9 @@ import SymphonyBarCore
 // Key-value list, each block drawn only when it has content. Built from the shared List card, Button, Progress meter,
 // Key-value list, Status dot and titled panel (TP-1530). A provider set up with an API key (TP-1540) has a Key
 // block between its head and Usage: the key in the Text field's secure form, Test connection, Enable or Disable and
-// Remove Key on one line, and the test's result as a one-line Situation line under it.
+// Remove Key on one line, and the test's result as a one-line Situation line under it. A provider whose usage Symphony
+// reads (TP-1535) has "Stop new runs at" and its pop-up on one line under its meters, after a separator (`.use-set`),
+// and each meter's stop mark at that reserve.
 
 /// What the page asks of whoever holds it.
 public struct ProvidersPageActions {
@@ -23,11 +25,14 @@ public struct ProvidersPageActions {
     public var setEnabled: (String, Bool) -> Void
     /// Remove Key on a provider.
     public var removeKey: (String) -> Void
+    /// "Stop new runs at" on a provider: its id and the share in whole percent, nil for no reserve.
+    public var setReserve: (String, Int?) -> Void
 
     public init(
         select: @escaping (String) -> Void, send: @escaping (ControlAction) -> Void,
         editKey: @escaping (String, String) -> Void = { _, _ in }, testKey: @escaping (String) -> Void = { _ in },
-        setEnabled: @escaping (String, Bool) -> Void = { _, _ in }, removeKey: @escaping (String) -> Void = { _ in }
+        setEnabled: @escaping (String, Bool) -> Void = { _, _ in }, removeKey: @escaping (String) -> Void = { _ in },
+        setReserve: @escaping (String, Int?) -> Void = { _, _ in }
     ) {
         self.select = select
         self.send = send
@@ -35,6 +40,7 @@ public struct ProvidersPageActions {
         self.testKey = testKey
         self.setEnabled = setEnabled
         self.removeKey = removeKey
+        self.setReserve = setReserve
     }
 
     /// Actions that do nothing, for a still picture.
@@ -136,10 +142,13 @@ struct ProviderDetailView: View {
             if let key = detail.key {
                 ProviderKeyBlock(id: detail.id, name: detail.name, key: key, actions: actions)
             }
-            if !detail.usage.isEmpty {
+            if !detail.usage.isEmpty || detail.reserve != nil {
                 TitledPanel(title: ProvidersPage.usageTitle, spacing: tokens.meterGap) {
                     ForEach(detail.usage) { meter in
-                        ProgressMeter(line: meter.label, percent: meter.percent, resets: meter.resets)
+                        ProgressMeter(line: meter.label, percent: meter.percent, stop: meter.stop, resets: meter.resets)
+                    }
+                    if let reserve = detail.reserve {
+                        ProviderReserveRow(id: detail.id, name: detail.name, reserve: reserve, ruled: !detail.usage.isEmpty, actions: actions)
                     }
                 }
             }
@@ -221,6 +230,44 @@ struct ProviderKeyBlock: View {
                 ProgressView().controlSize(.small)
             } else if let result = key.result {
                 ProviderSituationLine(state: ProvidersPage.state(result), oneLine: true)
+            }
+        }
+    }
+}
+
+/// "Stop new runs at" (TP-1535, `.use-set`): the word in the secondary colour and a small pop-up of shares, then No
+/// reserve, on one line under the meters and a separator. Picking one saves it to `symphony.yml` once `symphony check`
+/// passes; the pop-up waits while a save is on its way.
+struct ProviderReserveRow: View {
+    let id: String
+    let name: String
+    let reserve: ProvidersPage.ReserveControl
+    /// Meters stand above it: a separator parts them.
+    var ruled = true
+    let actions: ProvidersPageActions
+
+    var body: some View {
+        let tokens = DesignTokens.ProvidersPage.self
+        VStack(alignment: .leading, spacing: tokens.reserveTop) {
+            if ruled { HairlineDivider() }
+            HStack(spacing: tokens.reserveGap) {
+                Text(ProvidersPage.reserveTitle)
+                    .textStyle(.secondary)
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    .fixedSize()
+                PopUp(
+                    nil,
+                    selection: Binding(get: { reserve.percent }, set: { if !reserve.saving { actions.setReserve(id, $0) } }),
+                    choices: reserve.choices.map { PopUpChoice(Int?.some($0), ProvidersPage.ReserveControl.title($0)) }
+                        + [PopUpChoice(Int?.none, ProviderReserve.noneTitle, separatorBefore: true)],
+                    size: tokens.reserveControl,
+                    accessibilityLabel: "\(ProvidersPage.reserveTitle), \(name)"
+                )
+                .fixedSize()
+                if reserve.saving {
+                    ProgressView().controlSize(.small)
+                }
+                Spacer(minLength: 0)
             }
         }
     }

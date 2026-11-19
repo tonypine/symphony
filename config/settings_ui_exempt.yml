@@ -66,7 +66,6 @@ exemptions:
   - reason: How Symphony pauses and resumes around provider usage limits. No control in the app yet.
     keys:
       - execution.usage_limit.auto_pause
-      - execution.usage_limit.headroom_utilization
       - execution.usage_limit.resume_margin_seconds
       - execution.usage_limit.unknown_reset_retry_seconds
 

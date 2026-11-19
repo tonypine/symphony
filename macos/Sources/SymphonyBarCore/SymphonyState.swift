@@ -141,7 +141,8 @@ public struct StateSnapshot: Equatable {
 
     /// A provider as `/api/v1/state`'s `providers` lists it (`SymphonyElixir.Providers`): whether a kind of run uses it,
     /// the Director's pause, a usage limit's hold, its usage windows, the harnesses that reach it, the kinds of run on it,
-    /// the runs working on it and its tokens today. Its `reserve` isn't read until Symphony fills it.
+    /// the runs working on it and its tokens today, and its reserve (TP-1535): where new runs on it stop, and whether a
+    /// window reached it.
     public struct Provider: Equatable {
         /// A usage window Symphony read for the provider from its runs, for example `five_hour`.
         public struct UsageWindow: Equatable {
@@ -180,6 +181,10 @@ public struct StateSnapshot: Equatable {
         /// How many runs work on it now.
         public var working: Int
         public var tokensToday: Int
+        /// Where new runs on it stop, a share from 0 to 1 of any of its usage windows; nil when it has none.
+        public var reserve: Double?
+        /// A window reached the reserve, so new runs on it wait until the window resets.
+        public var atReserve: Bool
 
         public init(
             id: String,
@@ -194,7 +199,9 @@ public struct StateSnapshot: Equatable {
             kinds: [String] = [],
             fallbackFor: [String] = [],
             working: Int = 0,
-            tokensToday: Int = 0
+            tokensToday: Int = 0,
+            reserve: Double? = nil,
+            atReserve: Bool = false
         ) {
             self.id = id
             self.name = name ?? id
@@ -209,6 +216,8 @@ public struct StateSnapshot: Equatable {
             self.fallbackFor = fallbackFor
             self.working = working
             self.tokensToday = tokensToday
+            self.reserve = reserve
+            self.atReserve = atReserve
         }
     }
 
@@ -346,7 +355,8 @@ public struct StateSnapshot: Equatable {
             case paused
             /// The window reset, and one run checks the limit before the rest resume.
             case canary
-            /// The window is close to used up, so new runs wait for it to reset.
+            /// The window reached the provider's reserve (`execution.providers.<provider>.reserve`), so new runs wait
+            /// for it to reset.
             case headroom
         }
 
@@ -367,6 +377,8 @@ public struct StateSnapshot: Equatable {
         public var error: String?
         /// A check of the limit (its canary) was refused by the provider: the limit is still on (`still_on`).
         public var stillOn: Bool
+        /// The reserve a headroom hold was set at, from 0 to 1, when Symphony says.
+        public var reserve: Double?
 
         /// Symphony holds the provider because its API couldn't be reached, not for a usage limit.
         public var isAPIUnreachable: Bool { reason == "model_api_unreachable" }
@@ -388,7 +400,8 @@ public struct StateSnapshot: Equatable {
             utilization: Double? = nil,
             reason: String? = nil,
             error: String? = nil,
-            stillOn: Bool = false
+            stillOn: Bool = false,
+            reserve: Double? = nil
         ) {
             self.provider = provider
             self.scope = scope
@@ -400,6 +413,7 @@ public struct StateSnapshot: Equatable {
             self.reason = reason
             self.error = error
             self.stillOn = stillOn
+            self.reserve = reserve
         }
     }
 
@@ -954,7 +968,8 @@ public enum SymphonyState {
                 utilization: limit.utilization,
                 reason: limit.reason,
                 error: limit.error,
-                stillOn: limit.stillOn ?? false
+                stillOn: limit.stillOn ?? false,
+                reserve: limit.reserve
             )
         }
         snapshot.budget = payload.budget.map { budget in
@@ -1047,7 +1062,9 @@ public enum SymphonyState {
                 kinds: provider.kinds ?? [],
                 fallbackFor: provider.fallbackFor ?? [],
                 working: provider.working ?? 0,
-                tokensToday: provider.tokensToday ?? 0
+                tokensToday: provider.tokensToday ?? 0,
+                reserve: provider.reserve,
+                atReserve: provider.atReserve ?? false
             )
         }
         return .state(snapshot)
@@ -1119,6 +1136,7 @@ public enum SymphonyState {
             let reason: String?
             let error: String?
             let stillOn: Bool?
+            let reserve: Double?
         }
 
         struct Budget: Decodable {
@@ -1210,6 +1228,8 @@ public enum SymphonyState {
             let fallbackFor: [String]?
             let working: Int?
             let tokensToday: Int?
+            let reserve: Double?
+            let atReserve: Bool?
         }
 
         struct Waiting: Decodable {

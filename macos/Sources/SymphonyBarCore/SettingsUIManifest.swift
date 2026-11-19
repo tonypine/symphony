@@ -9,7 +9,7 @@ import Foundation
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
 /// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `DispatchSettings`, `LedgerSettings`,
 /// `LinearWebhookSettings`, `ReportSettings`, `BuiltInTicketPatterns`, `RiskRuleSettings`, `QAHostTools`, `MacAppQAPlaybook`, `PhaseSettings`,
-/// `ConductorSettings`) write is here, and that the rest are `writtenBySymphony`. Keep one string literal per line, sorted.
+/// `ConductorSettings`, `ProviderReserve`) write is here, and that the rest are `writtenBySymphony`. Keep one string literal per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
         "auto_review.acceptance_gate.escalate.on_match.busy_files",
@@ -39,6 +39,7 @@ public enum SettingsUIManifest {
         "execution.harnesses",
         "execution.limits.tokens_per_day",
         "execution.limits.tokens_per_issue",
+        "execution.providers.anthropic.reserve",
         "execution.timeouts.mcp_tool_ms",
         "github.webhooks.enabled",
         "github.webhooks.events",

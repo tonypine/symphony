@@ -31,10 +31,11 @@ defmodule SymphonyElixirWeb.ProvidersStateTest do
       Providers.list(%{
         runs: [%{kind: :implementation, provider: "anthropic", fallback: nil}],
         pauses: %{"anthropic" => %{since: ~U[2026-11-18 09:00:00.123456Z]}},
-        usage_limits: [%{provider: "anthropic", resume_at: ~U[2026-11-18 14:05:00Z]}],
+        usage_limits: [%{provider: "anthropic", phase: :headroom, reserve: 0.85, resume_at: ~U[2026-11-18 14:05:00Z]}],
         usage_windows: %{{"anthropic", "five_hour"} => %{resets_at: ~U[2026-11-18 14:00:00Z], utilization: 0.91}},
         working: ["anthropic"],
-        tokens_today: %{"anthropic" => 1_200}
+        tokens_today: %{"anthropic" => 1_200},
+        reserves: %{"anthropic" => 0.85}
       })
 
     payload = Presenter.state_payload(orchestrator(%{providers: providers}), 1_000)
@@ -54,12 +55,13 @@ defmodule SymphonyElixirWeb.ProvidersStateTest do
                fallback_for: [],
                working: 1,
                tokens_today: 1_200,
-               reserve: nil
+               reserve: 0.85,
+               at_reserve: true
              },
              %{provider: "openrouter", in_use: false, paused_since: nil, held_until: nil, usage_windows: []} | _rest
            ] = payload.providers
 
-    assert payload |> Jason.encode!() |> Jason.decode!() |> Map.fetch!("providers") |> hd() |> Map.fetch!("reserve") == nil
+    assert payload |> Jason.encode!() |> Jason.decode!() |> Map.fetch!("providers") |> hd() |> Map.take(["reserve", "at_reserve"]) == %{"reserve" => 0.85, "at_reserve" => true}
   end
 
   test "a snapshot without providers gives an empty list" do
