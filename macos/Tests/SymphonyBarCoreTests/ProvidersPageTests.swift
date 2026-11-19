@@ -201,7 +201,7 @@ final class ProvidersPageTests: XCTestCase {
         let detail = try XCTUnwrap(saved.detail(nil))
         XCTAssertEqual(detail.reserve?.percent, 80)
         XCTAssertEqual(detail.usage.map(\.stop), [80, 80])
-        let cleared = ProvidersPage(providers: [reserved()], now: now, timeZone: utc, savedReserves: ["anthropic": .some(nil)])
+        let cleared = ProvidersPage(providers: [reserved()], now: now, timeZone: utc, savedReserves: ["anthropic": Int?.none])
         XCTAssertNil(try XCTUnwrap(cleared.detail(nil)).reserve?.percent)
         let saving = ProvidersPage(providers: [reserved()], now: now, timeZone: utc, savingReserve: "anthropic")
         XCTAssertEqual(saving.detail(nil)?.reserve?.saving, true)
@@ -209,7 +209,7 @@ final class ProvidersPageTests: XCTestCase {
         // Once Symphony's state says 80 %, the saved one goes; a different one stays.
         XCTAssertEqual(ProvidersPage.settledReserves(["anthropic": 80], providers: [reserved(0.8)]), [:])
         XCTAssertEqual(ProvidersPage.settledReserves(["anthropic": 80], providers: [reserved(0.9)]), ["anthropic": 80])
-        XCTAssertEqual(ProvidersPage.settledReserves(["anthropic": .some(nil)], providers: [reserved(nil)]), [:])
+        XCTAssertEqual(ProvidersPage.settledReserves(["anthropic": Int?.none], providers: [reserved(nil)]), [:])
         XCTAssertEqual(ProvidersPage.settledReserves(["anthropic": 80], providers: nil), ["anthropic": 80])
     }
 
