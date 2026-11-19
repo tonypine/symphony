@@ -2,7 +2,7 @@ import SwiftUI
 import SymphonyBarCore
 
 // Factory › Runs (TP-1538), as the catalog draws it (`runsPage`, `.runs-page`): the Save bar with For on its left, then
-// one panel with Default and the nine kinds of run, each always open, each a Reorderable list of its first choice and
+// one panel with Default and the ten kinds of run, each always open, each a Reorderable list of its first choice and
 // fallbacks, then the Harnesses block (TP-1539) for All repositories. Built from the shared Save bar, Pop-up,
 // Searchable pop-up, Text field and Reorderable list (TP-1530, TP-1531).
 

@@ -934,3 +934,30 @@ a headroom hold, which the provider never refused, is `409` `usage_limit_headroo
 
 The reason's time is local to Symphony's host and names its zone (`UTC-3`), so it reads in one clock
 beside the hold's UTC `resume_at` and `resets_at`.
+
+# The Conductor's facts
+
+`GET /api/v1/tickets/:issue_identifier/facts?junction=<name>` answers the facts the Conductor reads at
+a junction of a ticket's life (`SymphonyElixir.Conductor`, `conductor` in `docs/configuration.md`): one
+deterministic JSON document built only from what Symphony already holds on the ticket, its record and
+its events, plus the workspace's git diff stat when the workspace exists. Like the other reads of
+`/api/v1`, it needs no token. The identifier resolves through the ticket's record, by identifier in any
+case or by id: a ticket with none is `404` `ticket_not_found`. `junction` is optional; one that is not
+`after_coding`, `after_qa_fail`, `after_rework` or `before_merge` is `400` `invalid_query`.
+
+| Key | What it holds |
+| --- | --- |
+| `schema` | `symphony.conductor.facts/1`. |
+| `junction`, `focus` | The junction the document is shaped for (null for none) and what the turn there is for. |
+| `ticket` | `identifier`, `title`, `url`; the description's `problem`, `acceptance` and `walkthrough` sections; the newest `brief`; the person's `decisions`, `notes` and `answers` to questions. |
+| `standing` | `phase`, `attempt` (the implementation and rework runs started), `pull_request` (`number`, `url`, `state`) and its `head`. |
+| `last_run` | The newest run that ended other than the Conductor's own: `kind`, `model`, `exit`, `duration_ms`, `tokens`, its `steps` and their results, `files_changed` (`path`, `added`, `removed`; left out when the workspace does not exist) and `resolved_findings`. |
+| `findings` | Every finding: `state` (`open`, `resolved`, `reopened`, `confirmed`), `class`, `class_count` (how many times that class was recorded on the ticket), `severity`, `step`, `description`, `evidence`, its `resolution` and the event that reopened it. |
+| `verdicts` | The newest verdicts: `kind`, `outcome`, `head`, `reason`. |
+| `conductor` | The Conductor's earlier updates and instructions on the ticket. |
+| `budget` | `tokens_used` (every run's, the Conductor's among them), `tokens_cap` (`execution.limits.tokens_per_issue`), `qa_passes` and `rework_runs`. |
+
+Each fact read from an event carries its `event_id`, so a claim built on it can be traced; the
+Conductor's update keeps only the ids the facts carry as its `refs`. Long texts end in ` [cut by
+Symphony]`, lists keep their newest entries and no transcript is read, so a normal ticket's document
+stays well under 20,000 tokens.

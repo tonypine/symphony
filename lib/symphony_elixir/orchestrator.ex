@@ -17,6 +17,7 @@ defmodule SymphonyElixir.Orchestrator do
     BuildInfo,
     CiPoller,
     CiWait,
+    Conductor,
     Config,
     Connected,
     DispatchLoop,
@@ -853,6 +854,7 @@ defmodule SymphonyElixir.Orchestrator do
         Verification.release(Map.get(running_entry, :verification), "agent process exit")
         reason = held_exit(reason, running_entry)
         record_dispatch_outcome(running_entry, reason)
+        start_conductor_after_run(state, running_entry, reason)
         state = record_session_completion_totals(state, running_entry)
         session_id = running_entry_session_id(running_entry)
 
@@ -6241,8 +6243,12 @@ defmodule SymphonyElixir.Orchestrator do
     run_profile = run_profile_for_issue(state, issue, state.continuation_dispatch == issue.id)
     reviewer_run_profile = if run_profile.kind == :code_review and review_agent_enabled?(settings), do: Config.run(settings, :code_review)
     forced? = forced_slot_available?(issue, state)
+    conductor = conductor_plan(state, issue, run_profile, repo_key, running_attrs)
+    record_started = fn -> record_dispatch(issue, repo_key, run_id, run_profile, running_attrs) end
 
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+           :ok = conduct_before_run(conductor, issue, record_started)
+
            opts =
              [
                attempt: attempt,
@@ -6267,7 +6273,7 @@ defmodule SymphonyElixir.Orchestrator do
           "Dispatching issue to agent: #{issue_context(issue)} pid=#{inspect(pid)} attempt=#{inspect(attempt)} worker_host=#{worker_host || "local"} slot=#{slot} forced=#{forced?} #{run_profile_log_fields(run_profile)}#{trigger_comment_log_fields(issue, run_profile, repo_key)}"
         )
 
-        record_dispatch(issue, repo_key, run_id, run_profile, running_attrs)
+        if is_nil(conductor), do: record_started.()
 
         running_entry =
           %{
@@ -6327,6 +6333,7 @@ defmodule SymphonyElixir.Orchestrator do
             started_at: started_at
           }
           |> Map.merge(running_attrs)
+          |> Map.put(:conductor_turn, conductor != nil)
 
         persist_run_start(issue, running_entry, attempt)
         state = delete_persisted_retry(state, issue.id, repo_key)
@@ -6356,6 +6363,48 @@ defmodule SymphonyElixir.Orchestrator do
           worker_host: worker_host
         })
     end
+  end
+
+  # The Conductor's turn at a junction of the ticket's life (`SymphonyElixir.Conductor`), planned as
+  # the next run is dispatched, with the providers that can take a run now; it runs in that run's own
+  # task before its agent starts, so the run's prompt carries its instructions. Nil when the
+  # Conductor is off or no junction is due; a PR run has no ticket.
+  defp conductor_plan(_state, _issue, _run_profile, _repo_key, %{run_kind: :pr}), do: nil
+
+  defp conductor_plan(%State{} = state, %Issue{} = issue, %{kind: kind}, repo_key, _running_attrs),
+    do: Conductor.plan(issue, kind, repo_key, available?: conductor_available?(state, issue))
+
+  # The Conductor's turn runs in the run's task before its agent, and the run's `run.started` is
+  # recorded once the turn is done, so the turn sits before the run on the timeline. A turn that asked
+  # the person a question paused the ticket: the run ends here, before it starts, and the orchestrator
+  # reads its normal end as held.
+  defp conduct_before_run(nil, _issue, _record_started), do: :ok
+
+  defp conduct_before_run(plan, issue, record_started) do
+    case Conductor.run(plan, issue, []) do
+      :held -> exit(:normal)
+      :ok -> record_started.()
+    end
+
+    :ok
+  end
+
+  # A QA or Code Review run that carried its ticket into Merging meets the `before_merge` junction,
+  # and no run may follow it: the Conductor's turn runs on its own (`Conductor.plan_after_run/4`).
+  defp start_conductor_after_run(%State{} = state, %{issue: %Issue{} = issue, run_profile: %{kind: kind}} = running_entry, :normal) do
+    repo_key = running_entry_repo_key(running_entry)
+
+    case Conductor.plan_after_run(issue, kind, repo_key, available?: conductor_available?(state, issue)) do
+      nil -> :ok
+      plan -> Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn -> Conductor.run(plan, issue, []) end)
+    end
+  end
+
+  defp start_conductor_after_run(_state, _running_entry, _reason), do: :ok
+
+  # A provider can take the Conductor's turn when it is not paused and no usage limit holds it.
+  defp conductor_available?(%State{} = state, %Issue{} = issue) do
+    fn profile -> not MapSet.member?(state.paused_providers, profile.provider) and is_nil(usage_limit_holding(state, issue, profile, false)) end
   end
 
   # Every run started for a ticket is recorded as its `run.started` event, best effort, which the
@@ -6399,6 +6448,14 @@ defmodule SymphonyElixir.Orchestrator do
   # which the next run's `SymphonyElixir.WorkspaceSync` compares. A run a usage limit, an
   # unreachable model API, a CI wait or its ticket's hold stopped records `counted: false`, as its
   # dispatch outcome is dropped.
+  # A run the Conductor's turn came before records its start after the turn (`conduct_before_run/3`):
+  # one the turn's question held, or one stopped during the turn, never started, and records no end.
+  defp record_run_ended(repo_key, issue_id, run_id, %{conductor_turn: true} = running_entry, reason) do
+    if run_events(issue_id, "run.started", &(&1[:run_id] == run_id)) == [],
+      do: :ok,
+      else: record_run_ended(repo_key, issue_id, run_id, Map.delete(running_entry, :conductor_turn), reason)
+  end
+
   defp record_run_ended(repo_key, issue_id, run_id, running_entry, reason) do
     head = pr_head(issue_id, repo_key)
     started = run_events(issue_id, "run.started", &(&1[:run_id] == run_id)) |> List.first() || %{}

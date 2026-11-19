@@ -23,6 +23,9 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     "lib/symphony_elixir/closed_pull_request.ex" => [:ask],
     # A Code Review escalation.
     "lib/symphony_elixir/code_review.ex" => [:ask],
+    # The Conductor's question at a junction: the same class of finding came back, or the budget is
+    # going wrong.
+    "lib/symphony_elixir/conductor.ex" => [:ask],
     # A dependency change the package check keeps out.
     "lib/symphony_elixir/dependency_gate.ex" => [:ask],
     # The step into Merging with manual review on.

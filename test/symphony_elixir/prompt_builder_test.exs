@@ -1370,7 +1370,8 @@ defmodule SymphonyElixir.PromptBuilderTest do
         "qa" => "This QA run records `evidence` for each walkthrough step it proves, with the environment it proved it in"
       }
 
-      assert Map.keys(records) |> Enum.sort() == RunKind.names() |> Enum.sort()
+      # The Conductor's turn is no run with a workflow prompt (`SymphonyElixir.Conductor`).
+      assert Map.keys(records) |> Enum.sort() == (RunKind.names() -- ["conductor"]) |> Enum.sort()
 
       for {kind, line} <- records do
         prompt = tools_prompt(run_kind: kind)

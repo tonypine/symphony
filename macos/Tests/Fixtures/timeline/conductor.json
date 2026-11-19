@@ -1,0 +1,35 @@
+{
+  "timeline": [
+    {
+      "kind": "run", "run_id": "run-1", "run_kind": "implementation", "run_number": 1,
+      "model": "claude-opus-5-5", "model_name": "Claude Opus 5.5", "effort": "high", "status": "ended", "exit": "handoff", "outcome": "Handed off",
+      "verdict": null, "started_at": "2026-10-08T09:00:00Z", "ended_at": "2026-10-08T09:40:00Z", "head": "8f3e2a1c9d",
+      "events": [
+        {"id": "i1", "seq": 1, "at": "2026-10-08T09:00:00Z", "type": "run.started", "run_id": "run-1",
+         "payload": {"run_kind": "implementation", "run_number": 1, "model": "claude-opus-5-5", "effort": "high"}, "summary": {"title": "Implementation run 1 started"}, "artifacts": [], "children": []},
+        {"id": "i2", "seq": 2, "at": "2026-10-08T09:40:00Z", "type": "run.ended", "run_id": "run-1",
+         "payload": {"run_kind": "implementation", "run_number": 1, "exit": "handoff", "duration_ms": 2400000, "tokens": 1200000}, "summary": {"title": "Implementation run 1 handed off"}, "artifacts": [], "children": []}
+      ]
+    },
+    {"id": "p1", "seq": 3, "at": "2026-10-08T09:40:02Z", "type": "phase.entered", "actor": {"kind": "machine"},
+     "payload": {"from": "In Progress", "to": "Code Review", "signal": "handoff"}, "summary": {"title": "Entered Code Review from In Progress"}, "artifacts": [], "children": [], "new": false},
+    {
+      "kind": "run", "run_id": "run-c1", "run_kind": "conductor", "run_number": 1,
+      "model": "claude-opus-5-5", "model_name": "Claude Opus 5.5", "effort": "high", "status": "ended", "exit": "ended", "outcome": null,
+      "verdict": null, "started_at": "2026-10-08T09:40:05Z", "ended_at": "2026-10-08T09:41:20Z", "head": "8f3e2a1c9d",
+      "events": [
+        {"id": "c1", "seq": 4, "at": "2026-10-08T09:40:05Z", "type": "run.started", "run_id": "run-c1",
+         "payload": {"run_kind": "conductor", "run_number": 1, "model": "claude-opus-5-5", "effort": "high"}, "summary": {"title": "Conductor run 1 started"}, "artifacts": [], "children": []},
+        {"id": "c2", "seq": 5, "at": "2026-10-08T09:41:10Z", "type": "conductor.update", "run_id": "run-c1", "actor": {"kind": "machine"},
+         "payload": {"junction": "after_coding", "text": "The first run built the Inbox filter and its tests pass.\nIt left the empty state untouched, which the walkthrough's third step needs, so Code Review looks at that first.", "refs": ["i2", "p1"]},
+         "summary": {"title": "Update", "detail": "The first run built the Inbox filter and its tests pass."}, "artifacts": [], "children": []},
+        {"id": "c3", "seq": 6, "at": "2026-10-08T09:41:12Z", "type": "conductor.instructions", "run_id": "run-c1", "actor": {"kind": "machine"},
+         "payload": {"junction": "after_coding", "text": "Check the empty state against the walkthrough's third step.\nThe filter's tests already pass on this head."},
+         "summary": {"title": "Conductor instructions", "detail": "Check the empty state against the walkthrough's third step."}, "artifacts": [], "children": []},
+        {"id": "c4", "seq": 7, "at": "2026-10-08T09:41:20Z", "type": "run.ended", "run_id": "run-c1",
+         "payload": {"run_kind": "conductor", "run_number": 1, "exit": "ended", "duration_ms": 75000, "tokens": 18000}, "summary": {"title": "Conductor run 1 ended"}, "artifacts": [], "children": []}
+      ]
+    }
+  ],
+  "next_since": "2026-10-08T09:41:20Z"
+}

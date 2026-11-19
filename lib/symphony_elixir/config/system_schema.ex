@@ -21,6 +21,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   require Schema.Execution
   require Schema.AutoReview
   require Schema.Ci
+  require Schema.Conductor
   require Schema.Dependencies
   require Schema.Dispatch
   require Schema.GitHub
@@ -52,7 +53,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @retired_human_review_state "the Human Review state (`tracker.human_review_state`) is retired; a decision request pauses " <>
                                 "the ticket on a Needs Decision hold, and a plan waits in `issues.states.plan_review`"
   @allowed_keys ~w(
-    auto_review code_review dashboard dependency_audit dispatch execution github human_actions issue_gate issues ledger linear
+    auto_review code_review conductor dashboard dependency_audit dispatch execution github human_actions issue_gate issues ledger linear
     notifications phases poller pull_requests reports
     repositories runs tickets verification watchdog workers workspaces
   )
@@ -135,6 +136,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "reports" => ~w(model cadence triggers),
     "reports.triggers" => ~w(ticket_shipped epic_closed ci_fix_loop self_heal_filed release_installed paused_by_rule),
     "dispatch" => ~w(source shadow_window),
+    "conductor" => ~w(enabled junctions timeout_ms),
     # A run kind's step list (`Schema.Phases`); each kind holds one setting, its `steps` list.
     "phases" => Schema.Phases.kinds(),
     "dashboard" => ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size)
@@ -477,6 +479,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     embeds_one(:ledger, Schema.Ledger, on_replace: :update, defaults_to_struct: true)
     embeds_one(:reports, Schema.Reports, on_replace: :update, defaults_to_struct: true)
     embeds_one(:dispatch, Schema.Dispatch, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:conductor, Schema.Conductor, on_replace: :update, defaults_to_struct: true)
     embeds_one(:phases, Schema.Phases, on_replace: :update, defaults_to_struct: true)
     embeds_many(:repos, Repo, on_replace: :delete)
   end
@@ -728,6 +731,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     |> cast_embed(:ledger, with: &Schema.Ledger.changeset/2)
     |> cast_embed(:reports, with: &Schema.Reports.changeset/2)
     |> cast_embed(:dispatch, with: &Schema.Dispatch.changeset/2)
+    |> cast_embed(:conductor, with: &Schema.Conductor.changeset/2)
     |> cast_embed(:phases, with: &Schema.Phases.changeset/2)
     |> cast_embed(:repos, with: &Repo.changeset/2, required: true)
     |> validate_length(:repos, min: 1)
@@ -789,6 +793,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, ledger} <- normalize_ledger(Map.get(config, "ledger", %{})),
          {:ok, reports} <- normalize_reports(Map.get(config, "reports", %{})),
          {:ok, dispatch} <- normalize_dispatch(Map.get(config, "dispatch", %{})),
+         {:ok, conductor} <- normalize_conductor(Map.get(config, "conductor", %{})),
          {:ok, phases} <- normalize_phases(Map.get(config, "phases", %{})) do
       workspace = merge_section(workspace, "sandbox", Map.get(execution_config, "workspace_sandbox"))
 
@@ -817,6 +822,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("ledger", ledger)
        |> maybe_put("reports", reports)
        |> maybe_put("dispatch", dispatch)
+       |> maybe_put("conductor", conductor)
        |> maybe_put("phases", phases)}
     end
   end
@@ -1357,6 +1363,13 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp normalize_dispatch(config) do
     with {:ok, config} <- section_map(config, "dispatch"),
          :ok <- reject_unknown_section_keys(config, section_keys("dispatch"), "dispatch") do
+      {:ok, config}
+    end
+  end
+
+  defp normalize_conductor(config) do
+    with {:ok, config} <- section_map(config, "conductor"),
+         :ok <- reject_unknown_section_keys(config, section_keys("conductor"), "conductor") do
       {:ok, config}
     end
   end

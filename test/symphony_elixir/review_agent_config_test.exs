@@ -54,7 +54,7 @@ defmodule SymphonyElixir.ReviewAgentConfigTest do
 
       assert message ==
                "runs.pre_push_review is not a run kind; expected default or one of: " <>
-                 "implementation, breakdown, rework, landing, code_review, epic_review, ci_fix, review_feedback, qa"
+                 "implementation, breakdown, rework, landing, code_review, epic_review, ci_fix, review_feedback, qa, conductor"
     end
 
     test "pre_push_review is not a run kind in a repository's runs either" do
