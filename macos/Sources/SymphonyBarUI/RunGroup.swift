@@ -122,10 +122,15 @@ struct RunMetaLine: View {
         .monospacedDigit()
         .lineLimit(1)
         .truncationMode(.tail)
-        .help(Self.help)
+        .help(run.endAnswer.map(Self.entriesHelp) ?? Self.help)
     }
 
     static let help = "The model, how long the run took and the tokens it spent"
+
+    /// What the run answered when it ended, a line each: "Verdict: approved".
+    static func entriesHelp(_ answer: StepAnswer) -> String {
+        answer.entries.map { "\($0.label): \($0.value)" }.joined(separator: "\n")
+    }
 }
 
 /// Opens the session reader on a run: the window that reads its whole session (TP-1452). A Run group shows its More
