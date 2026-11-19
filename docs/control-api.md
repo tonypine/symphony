@@ -963,6 +963,21 @@ A watch turn (`during_run`) reads the same document plus `live`: the run's `run_
 characters; null `output` for an agent step, which keeps none), `current_step`, `newest_lines`,
 `elapsed_minutes` and `tokens`.
 
+A recorded `conductor.update` carries the blocks the Conductor picked, resolved from the ticket's
+records, as `blocks` (absent when none), in this order, each a map with a `type`:
+
+| `type` | Shape |
+| --- | --- |
+| `steps` | `run_id`, `run_kind`, `steps`: `step_id`, `title`, `outcome` (`passed`, `failed`, `skipped`), `duration_ms`, `returns_to` (the newest 8). |
+| `evidence` | `items`: `event_id`, `artifact_id` (the screenshot artifact of the event, as its timeline entry loads it), `caption` (1 to 4). |
+| `budget` | `tokens_used`, `tokens_cap` (absent without a cap), `parts`: `kind`, `runs`, `tokens` by run kind, largest first (5). |
+| `path` | `stops`: `phase`, `state` (`done`, `failed`, `current`, `upcoming`), `times`, `run_number`; `loops` (entries of Rework); `elapsed_ms`. |
+| `attempts` | `run_id`, `step_id`, `title`, `tries`: `at`, `outcome`, `duration_ms`, `line` (the newest 5); `same_line`. |
+| `compare` | `expected`, `actual`: `{text}` or `{event_id, artifact_id}`. |
+| `findings` | `items`: `id`, `title`, `state` (`open`, `resolved`), `severity` (8, open first); `open`, `resolved`. |
+| `epic` | `identifier`, `title`, `rows`: `identifier`, `title`, `state`, `current`. |
+| `question` | `decision_id`, `title`, `question`, `options`: `label`, `recommended`. |
+
 Each fact read from an event carries its `event_id`, so a claim built on it can be traced; the
 Conductor's update keeps only the ids the facts carry as its `refs`. Long texts end in ` [cut by
 Symphony]`, lists keep their newest entries and no transcript is read, so a normal ticket's document

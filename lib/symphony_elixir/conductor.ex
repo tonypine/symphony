@@ -55,7 +55,7 @@ defmodule SymphonyElixir.Conductor do
     TicketState
   }
 
-  alias SymphonyElixir.Conductor.{Answer, Facts, Steer, Watch}
+  alias SymphonyElixir.Conductor.{Answer, Blocks, Facts, Steer, Watch}
   alias SymphonyElixir.Config.Runs.Run
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Harnesses.Launcher
@@ -259,7 +259,7 @@ defmodule SymphonyElixir.Conductor do
     turn = Keyword.get(opts, :turn, &harness_turn(&1, &2, &3, &4, Keyword.get(opts, :agent_module)))
     outcome = timed_turn(plan, issue, run_id, prompt(junction, facts), turn)
     tokens = elem(outcome, 2)
-    {exit, held} = record_outcome(outcome, plan, %{issue | state: phase}, run_id, facts)
+    {exit, held} = record_outcome(outcome, plan, %{issue | state: phase}, run_id, {facts, record})
     record_run_ended(plan, issue, run_id, %{exit: exit, tokens: tokens, started_at: started_at, phase: phase})
     held
   end
@@ -302,16 +302,17 @@ defmodule SymphonyElixir.Conductor do
 
   # What the turn wrote: its instructions, its update for the person and its question. A turn that
   # failed writes nothing and only logs why.
-  defp record_outcome({:ok, answer, _tokens}, plan, issue, run_id, facts) do
+  defp record_outcome({:ok, answer, _tokens}, plan, issue, run_id, {facts, record}) do
     if answer.instructions, do: record_event(plan, "conductor.instructions", %{junction: plan.junction, text: answer.instructions}, run_id)
-    record_update(answer, plan, run_id, facts)
+    # The question goes first: the update's `question` block names the decision it opened.
     held = ask_person(answer.ask_person, plan, issue, run_id)
+    record_update(answer, plan, run_id, {facts, record})
     steer(plan, answer, held)
     Logger.info("Conductor turn wrote #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction} update=#{answer.update != nil} held=#{held == :held}")
     {"answered", held}
   end
 
-  defp record_outcome({:error, reason, _tokens}, plan, issue, run_id, _facts) do
+  defp record_outcome({:error, reason, _tokens}, plan, issue, run_id, _context) do
     Logger.warning("Conductor turn wrote nothing #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction}: #{inspect(reason)}; the next run starts without it")
     {exit_text(reason), :ok}
   end
@@ -320,13 +321,39 @@ defmodule SymphonyElixir.Conductor do
   defp exit_text({:unreadable_answer, why}), do: "unreadable answer: " <> why
   defp exit_text(_reason), do: "failed"
 
-  defp record_update(%{update: nil}, _plan, _run_id, _facts), do: :ok
+  defp record_update(%{update: nil}, _plan, _run_id, _context), do: :ok
 
-  defp record_update(%{update: text, refs: refs} = answer, plan, run_id, facts) do
+  defp record_update(%{update: text, refs: refs} = answer, plan, run_id, {facts, record}) do
     known = facts |> event_ids() |> MapSet.new()
     payload = %{junction: plan.junction, text: text, refs: Enum.filter(refs, &MapSet.member?(known, &1))}
-    record_event(plan, "conductor.update", with_watch(payload, plan, answer), run_id)
+    payload = payload |> with_watch(plan, answer) |> with_blocks(plan, answer, facts, record)
+    record_event(plan, "conductor.update", payload, run_id)
   end
+
+  # The blocks the answer picked, resolved from the ticket's records, and the question block when the
+  # answer asked the person; no `blocks` key when none is left.
+  defp with_blocks(payload, plan, answer, facts, record) do
+    events = Facts.events(plan.issue_id)
+
+    context = %{
+      record: record,
+      events: events,
+      budget: Map.get(facts, :budget) || %{tokens_used: 0, tokens_cap: nil},
+      default_run_id: default_run_id(plan, facts),
+      now: DateTime.utc_now()
+    }
+
+    asked = answer.ask_person && Blocks.question(events, answer.ask_person)
+
+    case Blocks.resolve(answer.blocks, context) ++ List.wrap(asked) do
+      [] -> payload
+      blocks -> Map.put(payload, :blocks, blocks)
+    end
+  end
+
+  # The run a block without a `run_id` is about: the watched run, else the facts' last run.
+  defp default_run_id(%{watch: %{run: %{run_id: run_id}}}, _facts), do: run_id
+  defp default_run_id(_plan, facts), do: get_in(facts, [:last_run, :run_id])
 
   # A watch turn's update says which run it is about, what made Symphony look, and whether the same
   # answer steered or stopped it; a junction's carries no `watch`.

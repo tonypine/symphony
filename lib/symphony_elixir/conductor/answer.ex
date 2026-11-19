@@ -14,6 +14,10 @@ defmodule SymphonyElixir.Conductor.Answer do
       `recommended` (the request `SymphonyElixir.Questions.ask/3` takes);
     * `steer` (a watch turn's, `SymphonyElixir.Conductor.Watch`): null, or guidance for the running
       run: `message` (at most 1,500 characters) and `when` (`next_turn` or `now`);
+    * `blocks` (optional): at most 3 message blocks to pick, each `{"type": ...}` with the facts it
+      points at (`steps`, `evidence`, `budget`, `path`, `attempts`, `compare`, `findings`, `epic`;
+      `SymphonyElixir.Conductor.Blocks` resolves them); an unknown or malformed entry is dropped, and
+      never fails the answer;
     * `stop` (a watch turn's): null, or `{"reason": ...}` to end the running run.
 
   A watch turn (`watch: true`) may leave `instructions` null. An answer that misses the schema is
@@ -25,6 +29,9 @@ defmodule SymphonyElixir.Conductor.Answer do
   @instructions_max 2_000
   @update_max 1_200
   @steer_max 1_500
+  @blocks_max 3
+  @evidence_max 4
+  @compare_text_max 80
   @question_fields ~w(title question why if_unanswered recommendation_reason)
 
   @type t :: %{
@@ -33,7 +40,8 @@ defmodule SymphonyElixir.Conductor.Answer do
           refs: [String.t()],
           ask_person: map() | nil,
           steer: %{message: String.t(), when: String.t()} | nil,
-          stop: %{reason: String.t()} | nil
+          stop: %{reason: String.t()} | nil,
+          blocks: [map()]
         }
 
   @doc "The most characters `instructions` may hold."
@@ -73,7 +81,7 @@ defmodule SymphonyElixir.Conductor.Answer do
          {:ok, ask_person} <- ask_person(Map.get(answer, "ask_person")),
          {:ok, steer} <- steer(Map.get(answer, "steer")),
          {:ok, stop} <- stop(Map.get(answer, "stop")) do
-      {:ok, %{instructions: instructions, update: update, refs: refs, ask_person: ask_person, steer: steer, stop: stop}}
+      {:ok, %{instructions: instructions, update: update, refs: refs, ask_person: ask_person, steer: steer, stop: stop, blocks: blocks(Map.get(answer, "blocks"))}}
     end
   end
 
@@ -130,6 +138,52 @@ defmodule SymphonyElixir.Conductor.Answer do
   end
 
   defp update(_text), do: {:error, "`update` must be a string or null"}
+
+  # The picks that are well formed, the first three; the rest are dropped one by one.
+  defp blocks(picks) when is_list(picks), do: picks |> Enum.flat_map(&block/1) |> Enum.take(@blocks_max)
+  defp blocks(_picks), do: []
+
+  defp block(%{"type" => type} = pick) when type in ["budget", "path", "findings", "epic"],
+    do: if(map_size(pick) == 1, do: [%{type: type}], else: [])
+
+  defp block(%{"type" => "steps"} = pick), do: with_run(pick, "steps", [])
+
+  defp block(%{"type" => "attempts", "step_id" => step_id} = pick) when is_binary(step_id) and step_id != "",
+    do: with_run(Map.delete(pick, "step_id"), "attempts", step_id: step_id)
+
+  defp block(%{"type" => "evidence", "refs" => refs} = pick) when is_list(refs) and refs != [] and map_size(pick) == 2 do
+    if length(refs) <= @evidence_max and Enum.all?(refs, &id?/1), do: [%{type: "evidence", refs: Enum.uniq(refs)}], else: []
+  end
+
+  defp block(%{"type" => "compare", "expected" => expected, "actual" => actual} = pick) when map_size(pick) == 3 do
+    with {:ok, expected} <- side(expected),
+         {:ok, actual} <- side(actual) do
+      [%{type: "compare", expected: expected, actual: actual}]
+    else
+      :error -> []
+    end
+  end
+
+  defp block(_pick), do: []
+
+  # `steps` and `attempts` take an optional `run_id`, and nothing else.
+  defp with_run(pick, type, fields) do
+    case Map.delete(pick, "type") do
+      empty when map_size(empty) == 0 -> [Map.merge(%{type: type}, Map.new(fields))]
+      %{"run_id" => run_id} = only when map_size(only) == 1 -> if id?(run_id), do: [Map.merge(%{type: type, run_id: run_id}, Map.new(fields))], else: []
+      _extra -> []
+    end
+  end
+
+  defp side(%{"text" => text} = side) when is_binary(text) and map_size(side) == 1 do
+    text = String.trim(text)
+    if text != "" and String.length(text) <= @compare_text_max, do: {:ok, %{text: text}}, else: :error
+  end
+
+  defp side(%{"ref" => ref} = side) when map_size(side) == 1, do: if(id?(ref), do: {:ok, %{ref: ref}}, else: :error)
+  defp side(_side), do: :error
+
+  defp id?(value), do: is_binary(value) and value != ""
 
   defp refs(nil), do: {:ok, []}
 

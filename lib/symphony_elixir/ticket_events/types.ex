@@ -547,7 +547,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine],
       run_kinds: [],
       required: [junction: {:enum, @conductor_junctions}, text: {:string, 1_200}],
-      optional: [refs: {:list, :string}, watch: :map] ++ @signal,
+      optional: [refs: {:list, :string}, watch: :map, blocks: :list] ++ @signal,
       idempotency: :writer
     },
     "conductor.instructions" => %{

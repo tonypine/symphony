@@ -65,6 +65,64 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     end
   end
 
+  test "blocks: well formed picks are kept, the first 3, and the rest are dropped one by one" do
+    picks = [
+      %{"type" => "steps"},
+      %{"type" => "steps", "run_id" => "run-1"},
+      %{"type" => "steps", "run_id" => 4},
+      %{"type" => "steps", "extra" => 1},
+      %{"type" => "budget"},
+      %{"type" => "budget", "extra" => 1},
+      %{"type" => "path"},
+      %{"type" => "nonsense"},
+      %{"type" => "question"},
+      "steps",
+      %{"type" => "findings"}
+    ]
+
+    assert {:ok, %{blocks: blocks}} = Answer.parse(json(%{"instructions" => "x", "blocks" => picks}))
+    assert blocks == [%{type: "steps"}, %{type: "steps", run_id: "run-1"}, %{type: "budget"}]
+
+    assert {:ok, %{blocks: [%{type: "epic"}, %{type: "findings"}, %{type: "path"}]}} =
+             Answer.parse(json(%{"instructions" => "x", "blocks" => [%{"type" => "epic"}, %{"type" => "findings"}, %{"type" => "path"}, %{"type" => "budget"}]}))
+
+    assert {:ok, %{blocks: []}} = Answer.parse(json(%{"instructions" => "x", "blocks" => "steps"}))
+    assert {:ok, %{blocks: []}} = Answer.parse(json(%{"instructions" => "x"}))
+  end
+
+  test "blocks: evidence, attempts and compare picks are checked for their own fields" do
+    picks = [
+      %{"type" => "evidence", "refs" => ["e1", "e1", "e2"]},
+      %{"type" => "evidence", "refs" => []},
+      %{"type" => "evidence", "refs" => ["a", "b", "c", "d", "e"]},
+      %{"type" => "evidence", "refs" => [1]},
+      %{"type" => "evidence", "refs" => ["a"], "extra" => 1},
+      %{"type" => "attempts", "step_id" => "build"},
+      %{"type" => "attempts", "step_id" => "build", "run_id" => "run-1"},
+      %{"type" => "attempts", "step_id" => "build", "run_id" => ""},
+      %{"type" => "attempts", "step_id" => "build", "extra" => 1},
+      %{"type" => "attempts"},
+      %{"type" => "compare", "expected" => %{"text" => " A list "}, "actual" => %{"ref" => "e1"}},
+      %{"type" => "compare", "expected" => %{"text" => String.duplicate("a", 81)}, "actual" => %{"ref" => "e1"}},
+      %{"type" => "compare", "expected" => %{"text" => " "}, "actual" => %{"ref" => "e1"}},
+      %{"type" => "compare", "expected" => %{"text" => "A", "label" => "x"}, "actual" => %{"ref" => "e1"}},
+      %{"type" => "compare", "expected" => %{"ref" => ""}, "actual" => %{"ref" => "e1"}},
+      %{"type" => "compare", "expected" => %{"text" => "A"}, "actual" => %{"ref" => "e1"}, "expected_label" => "x"}
+    ]
+
+    for {pick, expected} <- [
+          {Enum.at(picks, 0), [%{type: "evidence", refs: ["e1", "e2"]}]},
+          {Enum.at(picks, 5), [%{type: "attempts", step_id: "build"}]},
+          {Enum.at(picks, 6), [%{type: "attempts", step_id: "build", run_id: "run-1"}]},
+          {Enum.at(picks, 10), [%{type: "compare", expected: %{text: "A list"}, actual: %{ref: "e1"}}]}
+        ] do
+      assert {:ok, %{blocks: ^expected}} = Answer.parse(json(%{"instructions" => "x", "blocks" => [pick]}))
+    end
+
+    dropped = Enum.reject(picks, &(&1 in [Enum.at(picks, 0), Enum.at(picks, 5), Enum.at(picks, 6), Enum.at(picks, 10)]))
+    assert {:ok, %{blocks: []}} = Answer.parse(json(%{"instructions" => "x", "blocks" => dropped}))
+  end
+
   test "a watch turn may steer or stop the run and leave the instructions null" do
     assert {:ok, %{instructions: nil, steer: %{message: "Read the error first.", when: "now"}, stop: %{reason: "It loops."}}} =
              Answer.parse(json(%{"instructions" => nil, "steer" => %{"message" => " Read the error first. ", "when" => "now"}, "stop" => %{"reason" => "It loops."}}), watch: true)
