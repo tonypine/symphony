@@ -259,16 +259,16 @@ public struct TicketSituationCell: View {
         let wordFont = NSFont.systemFont(
             ofSize: CGFloat(body.size * scale), weight: NSFont.Weight(rawValue: CGFloat(DesignTokens.TypeStyle.systemWeight(css: wordWeight)))
         )
-        var width = glyphWidth + DesignTokens.Space.s2 + DataTableCache<TicketsRow>.width(word, font: wordFont)
-        if forced {
-            let size = DesignTokens.Badge.Size.small
-            let badgeFont = NSFont.systemFont(
-                ofSize: CGFloat(size.textSize * scale), weight: NSFont.Weight(rawValue: CGFloat(DesignTokens.TypeStyle.systemWeight(css: size.weight)))
-            )
-            width += DesignTokens.Space.s2 + DataTableCache<TicketsRow>.width(DesignTokens.Status.forced.word, font: badgeFont) + size.tableRoom
-        }
+        // Each text is laid out on whole points, as SwiftUI draws it, so each is rounded up on its own.
+        var width = glyphWidth + DesignTokens.Space.s2 + DataTableCache<TicketsRow>.width(word, font: wordFont).rounded(.up)
+        if forced { width += DesignTokens.Space.s2 + forcedBadgeWidth }
         return width.rounded(.up)
     }
+
+    /// The small Forced badge's width as drawn, measured once: its word never changes.
+    @MainActor static let forcedBadgeWidth: Double = {
+        Double(NSHostingView(rootView: Badge(status: .forced, size: .small).fixedSize()).fittingSize.width).rounded(.up)
+    }()
 
     /// The widest of the kinds' glyphs in the body's size, measured once.
     static let glyphWidth: Double = {

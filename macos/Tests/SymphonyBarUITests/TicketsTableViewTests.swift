@@ -69,7 +69,7 @@ final class TicketsTableViewTests: XCTestCase {
         for row in try rows() {
             let shown = state.situation(row)
             XCTAssertGreaterThanOrEqual(
-                TicketSituationCell.leadWidth(word: shown.text.word, forced: shown.forced), leadWidth(shown.text, forced: shown.forced).rounded(.down),
+                TicketSituationCell.leadWidth(word: shown.text.word, forced: shown.forced), leadWidth(shown.text, forced: shown.forced),
                 row.identifier
             )
         }
