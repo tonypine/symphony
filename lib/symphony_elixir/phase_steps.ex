@@ -30,7 +30,10 @@ defmodule SymphonyElixir.PhaseSteps do
   One command is Symphony's own and runs in this process, not in a shell: the findings command
   (`Phases.findings_command/0`, `SymphonyElixir.PhaseSteps.Findings`) keeps the open findings by class
   as the step's output and, when a failure came back, ends the step `paused` on a Question before
-  any code is written. A step that runs only that holds on to the run's slot.
+  any code is written. A step that runs only that holds on to the run's slot. A walk may bring
+  commands of its own the same way (`builtins` in the context): the QA pass's
+  (`Phases.qa_commands/0`, `SymphonyElixir.QaAgent.Steps`) run with the QA host the pass holds, one
+  step at a time (`run_machine_step/3`).
 
   A delegated or orchestrated step is an agent turn the agent runner starts
   (`SymphonyElixir.AgentRunner`): this module says which step comes next (`next/3`), what the turn's
@@ -97,8 +100,9 @@ defmodule SymphonyElixir.PhaseSteps do
   What a machine step runs for: the ticket (`repo_key`, `issue_id`, `identifier`, `phase`), the run
   (`run_id`), the workspace and its host, the changed files (`changes/1`), the command runner
   (`runner`, default the workspace's), the options its output is kept with (`artifact_opts`), who
-  hears the step start and end (`on_step`) and, on an agent step, the lines of its turns so far
-  (`transcript_lines`).
+  hears the step start and end (`on_step`), on an agent step the lines of its turns so far
+  (`transcript_lines`) and where its answer goes (`answer_dir`, `answer_path/2`), and the walk's own
+  commands (`builtins`).
   """
   @type context :: %{
           required(:repo_key) => String.t(),
@@ -114,7 +118,9 @@ defmodule SymphonyElixir.PhaseSteps do
           optional(:runner) => (String.t(), map(), pos_integer() -> runner_result()),
           optional(:artifact_opts) => [Artifacts.ingest_opt()],
           optional(:on_step) => (notice() -> term()),
-          optional(:transcript_lines) => [Transcript.line()]
+          optional(:transcript_lines) => [Transcript.line()],
+          optional(:builtins) => %{String.t() => (map() -> runner_result())},
+          optional(:answer_dir) => Path.t() | nil
         }
 
   @type runner_result :: {:ok, {String.t(), integer()}} | {:timeout, String.t()} | {:error, term()}
@@ -275,6 +281,19 @@ defmodule SymphonyElixir.PhaseSteps do
     end
   end
 
+  @typedoc "How one attempt of a machine step ended (`run_machine_step/3`)."
+  @type machine_outcome :: :passed | :skipped | {:failed, String.t()} | {:again, String.t()} | {:paused, String.t()}
+
+  @doc """
+  Runs one attempt (`attempt`, from 1) of the machine `step` and records it, as a walk does
+  (`run_machine_steps/3`), but leaves where to go next to the caller: `:passed`, `:skipped`,
+  `{:failed, output}`, `{:again, output}` (no result, under the step's `no_result_limit`) or
+  `{:paused, question_id}` (no result at the limit, or a command that asked). `context` needs
+  `changes` (`changes/1`).
+  """
+  @spec run_machine_step(Step.t(), context(), pos_integer()) :: machine_outcome()
+  def run_machine_step(%Step{} = step, context, attempt \\ 1), do: run_machine(step, context, attempt)
+
   defp after_machine(:passed, steps, step, context, _attempt), do: go_on(steps, step, :passed, context, nil)
   defp after_machine(:skipped, steps, step, context, _attempt), do: go_on(steps, step, :passed, context, nil)
   defp after_machine({:failed, output}, steps, step, context, _attempt), do: go_on(steps, step, :failed, context, %{step: step, output: output})
@@ -342,10 +361,10 @@ defmodule SymphonyElixir.PhaseSteps do
   end
 
   defp run_command(command, context, env, timeout_ms) do
-    if command == Phases.findings_command() do
-      read_findings(context)
-    else
-      runner(context).(command, env, timeout_ms)
+    cond do
+      command == Phases.findings_command() -> read_findings(context)
+      builtin = Map.get(Map.get(context, :builtins, %{}), command) -> builtin.(context)
+      true -> runner(context).(command, env, timeout_ms)
     end
   end
 
@@ -728,9 +747,12 @@ defmodule SymphonyElixir.PhaseSteps do
 
   def machine_resume(_question), do: :words
 
-  @doc "Records a delegated or orchestrated step's start, as the turn for it starts."
-  @spec record_turn_started(Step.t(), context()) :: :ok
-  def record_turn_started(%Step{} = step, context), do: record(context, "step.started", step_payload(step), [])
+  @doc """
+  Records a delegated or orchestrated step's start, as the turn for it starts, with `extra` fields
+  on its payload (what the turn runs with: its `model`, `effort` and `session`).
+  """
+  @spec record_turn_started(Step.t(), context(), map()) :: :ok
+  def record_turn_started(%Step{} = step, context, extra \\ %{}), do: record(context, "step.started", Map.merge(extra, step_payload(step)), [])
 
   @doc "Records a delegated or orchestrated step `passed` after `duration_ms`, as its turn ended."
   @spec record_turn_passed(Step.t(), context(), non_neg_integer()) :: :ok

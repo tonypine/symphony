@@ -140,6 +140,12 @@ final class SettingsUIManifestTests: XCTestCase {
             reset[.qa] = .defaults(for: .qa)
             return try PhaseSettings.updating($0, from: phases, to: reset)
         }, from: yaml)
+        var steppedQA = try PhaseSettings.values(in: yaml)
+        steppedQA.qaStepped = true
+        steppedQA[.qaPlaybook(.cli)] = PhaseSteps(steps: [PhaseStep(stepID: "work", mode: .delegated, model: "small")], isDefault: false)
+        yaml = try record("turning stepped QA passes on and setting a QA playbook's step list", {
+            try PhaseSettings.updating($0, from: PhaseSettings.values(in: $0), to: steppedQA)
+        }, from: yaml)
         _ = try record("removing a repository", { try RepositoriesConfig.removing("api", from: $0) }, from: yaml)
 
         // The acceptance gate's retired mode keys still load, with a deprecation warning, until the schema drops

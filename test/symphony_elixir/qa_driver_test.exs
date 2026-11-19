@@ -3858,6 +3858,7 @@ defmodule SymphonyElixir.QaDriverTest do
       {driver, pid} = launched_app(worktree, host: host(%{helper_replies: %{"ax-resize" => reply}}))
       assert QaDriver.wide_pass(driver) == nil
       assert QaDriver.launched_app?(driver)
+      assert QaDriver.launched_pids(driver) == [pid]
 
       assert {:ok, %{"window" => %{"w" => 1400, "h" => 900}, "screen" => %{"w" => 1920}, "limited" => false, "note" => note}} =
                QaDriver.call_tool(driver, "qa_resize_window", %{"pid" => pid})
@@ -3882,7 +3883,10 @@ defmodule SymphonyElixir.QaDriverTest do
       assert {:ok, %{"quit" => true}} = QaDriver.call_tool(driver, "qa_quit_app", %{"pid" => pid})
       assert %{limited: false} = QaDriver.wide_pass(driver)
       assert QaDriver.launched_app?(driver)
+      assert QaDriver.launched_pids(driver) == []
       QaDriver.stop(driver)
+      assert QaDriver.launched_pids(driver) == []
+      assert QaDriver.launched_pids(nil) == []
       assert QaDriver.wide_pass(driver) == nil
       assert QaDriver.wide_pass(nil) == nil
       assert QaDriver.launched_app?(driver) == false
