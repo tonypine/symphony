@@ -58,7 +58,7 @@ final class MigratingSecretStoreTests: XCTestCase {
     func testCopiesBothKeysAndExtraVariablesOutOfTheKeychainOnce() throws {
         let legacy = [
             SecretSettings.linearAPIKeyName: "lin_api_1",
-            SecretSettings.openRouterAPIKeyName: "sk-or-v1-1",
+            "OPENROUTER_API_KEY": "sk-or-v1-1",
             "GITHUB_TOKEN": "ghp-1",
         ]
         keychain.values = legacy
@@ -68,7 +68,7 @@ final class MigratingSecretStoreTests: XCTestCase {
             try settings.loadSecrets(),
             SecretSettings(
                 linearAPIKey: "lin_api_1",
-                openRouterAPIKey: "sk-or-v1-1",
+                providers: ProviderKeys(keys: ["openrouter": "sk-or-v1-1"], enabled: ["openrouter"]),
                 extraEnvironment: [EnvironmentVariable(name: "GITHUB_TOKEN", value: "ghp-1")]
             )
         )
@@ -81,13 +81,14 @@ final class MigratingSecretStoreTests: XCTestCase {
         // As after an update: a new store over the same file never reads the Keychain again.
         keychain.values = [SecretSettings.linearAPIKeyName: "stale"]
         let updated = MigratingSecretStore(file: store.file, keychain: keychain)
-        try SettingsStore(defaults: MemoryKeyValueStore(), secrets: updated).saveSecrets(
-            SecretSettings(linearAPIKey: "lin_api_2", openRouterAPIKey: "sk-or-v1-2", extraEnvironment: [])
-        )
+        let settingsStore = SettingsStore(defaults: MemoryKeyValueStore(), secrets: updated)
+        try settingsStore.saveSecrets(SecretSettings(linearAPIKey: "lin_api_2", extraEnvironment: []))
+        let keys = try settingsStore.loadProviderKeys()
+        try settingsStore.saveProviderKeys(keys.setting("sk-or-v1-2", for: "openrouter"), over: keys)
         let loaded = try SettingsStore(defaults: MemoryKeyValueStore(), secrets: updated).loadSecrets()
 
         XCTAssertEqual(loaded.linearAPIKey, "lin_api_2")
-        XCTAssertEqual(loaded.openRouterAPIKey, "sk-or-v1-2")
+        XCTAssertEqual(loaded.providers.keys["openrouter"], "sk-or-v1-2")
         XCTAssertEqual(keychain.reads, 3)
         XCTAssertEqual(keychain.values, [SecretSettings.linearAPIKeyName: "stale"])
     }

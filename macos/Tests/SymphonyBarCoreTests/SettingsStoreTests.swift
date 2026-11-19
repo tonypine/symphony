@@ -203,51 +203,75 @@ final class SettingsStoreTests: XCTestCase {
         XCTAssertEqual(keychain.values[SecretSettings.linearAPIKeyName], "lin_api_secret")
     }
 
-    func testOpenRouterKeyRoundTripsThroughTheKeychainAndIsNotAnExtraVariable() throws {
+    func testAKeySavedByTheOldSettingsIsReadAsTheProvidersAndStartsEnabled() throws {
         let keychain = MemorySecretStore()
-        try SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain).saveSecrets(
-            SecretSettings(
-                linearAPIKey: "lin_api_secret",
-                openRouterAPIKey: "sk-or-v1-secret",
-                extraEnvironment: [EnvironmentVariable(name: "GITHUB_TOKEN", value: "ghp-a")]
-            )
-        )
-
-        XCTAssertEqual(keychain.values[SecretSettings.openRouterAPIKeyName], "sk-or-v1-secret")
-        let loaded = try SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain).loadSecrets()
-        XCTAssertEqual(loaded.openRouterAPIKey, "sk-or-v1-secret")
-        XCTAssertEqual(loaded.extraEnvironment, [EnvironmentVariable(name: "GITHUB_TOKEN", value: "ghp-a")])
-        XCTAssertEqual(SecretSettings.openRouterAPIKeyName, "OPENROUTER_API_KEY")
-    }
-
-    func testOpenRouterKeyStoredAsAnExtraVariableLoadsIntoItsField() throws {
-        let keychain = MemorySecretStore()
-        keychain.values = [SecretSettings.linearAPIKeyName: "one", "OPENROUTER_API_KEY": "sk-or-v1-old"]
+        keychain.values = [
+            SecretSettings.linearAPIKeyName: "one", "OPENROUTER_API_KEY": "sk-or-v1-old", "GITHUB_TOKEN": "ghp-a",
+        ]
 
         let loaded = try SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain).loadSecrets()
 
-        XCTAssertEqual(loaded, SecretSettings(linearAPIKey: "one", openRouterAPIKey: "sk-or-v1-old"))
+        XCTAssertEqual(loaded.providers.keys, ["openrouter": "sk-or-v1-old"])
+        XCTAssertTrue(loaded.providers.isEnabled("openrouter"), "nothing that works today stops")
+        XCTAssertEqual(loaded.extraEnvironment, [EnvironmentVariable(name: "GITHUB_TOKEN", value: "ghp-a")], "never an extra variable")
     }
 
-    func testABlankOpenRouterKeyIsRemovedOnlyWhenNamed() throws {
+    func testAnOpenCodeKeySetAsAVariableMovesToItsProviderAndStartsEnabled() throws {
         let keychain = MemorySecretStore()
-        keychain.values = [SecretSettings.linearAPIKeyName: "one", SecretSettings.openRouterAPIKeyName: "sk-or-v1-a"]
+        keychain.values = [SecretSettings.linearAPIKeyName: "one", "OPENCODE_API_KEY": "sk-go-old"]
+
+        let loaded = try SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain).loadSecrets()
+
+        XCTAssertEqual(loaded, SecretSettings(linearAPIKey: "one", providers: ProviderKeys(keys: ["opencode-go": "sk-go-old"], enabled: ["opencode-go"])))
+    }
+
+    func testSettingsNeverWritesOrRemovesAProviderKey() throws {
+        let keychain = MemorySecretStore()
+        keychain.values = [
+            SecretSettings.linearAPIKeyName: "one", "OPENROUTER_API_KEY": "sk-or-v1-a", ProviderKeys.enabledAccount: "openrouter",
+        ]
         let store = SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain)
 
-        // As after a failed Keychain read: the field is blank but the stored key was never loaded.
-        try store.saveSecrets(SecretSettings(linearAPIKey: "one"))
-        XCTAssertEqual(keychain.values[SecretSettings.openRouterAPIKeyName], "sk-or-v1-a")
-
-        // A set key is kept even when named.
         try store.saveSecrets(
-            SecretSettings(linearAPIKey: "one", openRouterAPIKey: "sk-or-v1-b"),
-            removing: [SecretSettings.openRouterAPIKeyName]
+            SecretSettings(linearAPIKey: "two", providers: ProviderKeys(keys: ["opencode-go": "sk-go"], enabled: ["opencode-go"])),
+            removing: ["OPENROUTER_API_KEY", ProviderKeys.enabledAccount]
         )
-        XCTAssertEqual(keychain.values[SecretSettings.openRouterAPIKeyName], "sk-or-v1-b")
 
-        try store.saveSecrets(SecretSettings(linearAPIKey: "one"), removing: [SecretSettings.openRouterAPIKeyName])
-        XCTAssertEqual(keychain.values, [SecretSettings.linearAPIKeyName: "one"])
-        XCTAssertEqual(try store.loadSecrets().openRouterAPIKey, "")
+        XCTAssertEqual(
+            keychain.values,
+            [SecretSettings.linearAPIKeyName: "two", "OPENROUTER_API_KEY": "sk-or-v1-a", ProviderKeys.enabledAccount: "openrouter"]
+        )
+    }
+
+    func testProviderKeysSaveLoadAndRemove() throws {
+        let keychain = MemorySecretStore()
+        let store = SettingsStore(defaults: MemoryKeyValueStore(), secrets: keychain)
+        let none = try store.loadProviderKeys()
+        XCTAssertEqual(none, ProviderKeys())
+
+        let saved = none.setting(" sk-go-1 ", for: "opencode-go")
+        try store.saveProviderKeys(saved, over: none)
+        XCTAssertEqual(keychain.values["OPENCODE_API_KEY"], "sk-go-1")
+        XCTAssertEqual(keychain.values[ProviderKeys.enabledAccount], "", "saving a key doesn't enable it")
+        let loaded = try store.loadProviderKeys()
+        XCTAssertEqual(loaded.keys, ["opencode-go": "sk-go-1"])
+        XCTAssertFalse(loaded.isEnabled("opencode-go"))
+
+        let enabled = loaded.enabling("opencode-go", true)
+        try store.saveProviderKeys(enabled, over: loaded)
+        XCTAssertEqual(keychain.values[ProviderKeys.enabledAccount], "opencode-go")
+        XCTAssertTrue(try store.loadProviderKeys().isEnabled("opencode-go"))
+
+        let disabled = enabled.enabling("opencode-go", false)
+        try store.saveProviderKeys(disabled, over: enabled)
+        XCTAssertEqual(try store.loadProviderKeys().keys, ["opencode-go": "sk-go-1"], "Disable keeps the key")
+
+        let removed = enabled.setting("", for: "opencode-go")
+        try store.saveProviderKeys(removed, over: enabled)
+        XCTAssertNil(keychain.values["OPENCODE_API_KEY"])
+        let reloaded = try store.loadProviderKeys()
+        XCTAssertEqual(reloaded.enabled, ["opencode-go"], "removing a key doesn't change Enable")
+        XCTAssertFalse(reloaded.isEnabled("opencode-go"), "a provider with no key is never on")
     }
 
     func testSavingSecretsRemovesOnlyTheNamedVariables() throws {
@@ -302,7 +326,7 @@ final class SettingsStoreTests: XCTestCase {
         try store.saveSecrets(
             SecretSettings(
                 linearAPIKey: "lin_api_secret",
-                openRouterAPIKey: "sk-or-v1-secret",
+                providers: ProviderKeys(keys: ["openrouter": "sk-or-v1-secret"], enabled: ["openrouter"]),
                 extraEnvironment: [EnvironmentVariable(name: "OTHER_TOKEN", value: "other-secret")]
             )
         )
