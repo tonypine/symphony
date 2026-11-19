@@ -48,10 +48,13 @@ struct ConductorMark: View {
 struct ConductorMarkupText: View {
     let markup: ConductorMarkup
     var style: DesignTokens.TypeStyle = .reading
+    /// The message's blocks: drawn after its words and before a closing `Next:` paragraph, or at the end without one.
+    var blocks: [ConductorBlock] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
             ForEach(Array(markup.blocks.enumerated()), id: \.offset) { index, block in
+                if markup.roles[index] == .next { blocksView }
                 switch block {
                 case let .paragraph(phrases):
                     paragraph(phrases, role: markup.roles[index])
@@ -61,16 +64,30 @@ struct ConductorMarkupText: View {
                     ConductorCodeBlock(lines: lines)
                 }
             }
+            if !markup.roles.contains(.next) { blocksView }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func paragraph(_ phrases: [ConductorMarkup.Phrase], role: ConductorMarkup.Role) -> some View {
-        Text(Self.attributed(phrases, style: style, bold: role == .headline))
-            .textStyle(style)
-            .foregroundStyle(role == .next ? DesignTokens.TextColor.secondary.color : DesignTokens.TextColor.primary.color)
-            .fixedSize(horizontal: false, vertical: true)
-            .textSelection(.enabled)
+    @ViewBuilder private var blocksView: some View {
+        if !blocks.isEmpty {
+            ConductorBlocksView(blocks: blocks)
+                .padding(.vertical, DesignTokens.Space.s1)
+        }
+    }
+
+    @ViewBuilder private func paragraph(_ phrases: [ConductorMarkup.Phrase], role: ConductorMarkup.Role) -> some View {
+        let color = role == .next ? DesignTokens.TextColor.secondary.color : DesignTokens.TextColor.primary.color
+        if ConductorMarkup.hasReference(phrases) {
+            ConductorReferenceParagraph(phrases: phrases, style: style, bold: role == .headline)
+                .foregroundStyle(color)
+        } else {
+            Text(Self.attributed(phrases, style: style, bold: role == .headline))
+                .textStyle(style)
+                .foregroundStyle(color)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
+        }
     }
 
     private func list(_ items: [[ConductorMarkup.Phrase]]) -> some View {
@@ -110,6 +127,10 @@ struct ConductorMarkupText: View {
             if italic { font = font.italic() }
             return font
         }
+    }
+
+    fileprivate static func appendPhrases(_ phrases: [ConductorMarkup.Phrase], to result: inout AttributedString, style: DesignTokens.TypeStyle, bold: Bool) {
+        append(phrases, to: &result, style: style, traits: Traits(bold: bold))
     }
 
     private static func append(_ phrases: [ConductorMarkup.Phrase], to result: inout AttributedString, style: DesignTokens.TypeStyle, traits: Traits) {
@@ -217,7 +238,7 @@ struct ConductorVoice: View {
                 }
             }
             .help(message.runTitle ?? "")
-            ConductorMarkupText(markup: message.markup, style: .reading)
+            ConductorMarkupText(markup: message.markup, style: .reading, blocks: message.blocks)
         }
     }
 }
@@ -256,7 +277,7 @@ struct ConductorRunNote: View {
                     time
                 }
                 .help(message.runTitle ?? "")
-                ConductorMarkupText(markup: message.markup, style: .readingCompact)
+                ConductorMarkupText(markup: message.markup, style: .readingCompact, blocks: message.blocks)
             }
         }
         .padding(.vertical, DesignTokens.Space.s1)
@@ -347,5 +368,124 @@ struct BatonTip: Shape {
         let radius = 1.4 * unit
         let center = CGPoint(x: rect.minX + 12.5 * unit, y: rect.minY + 3.5 * unit)
         return Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: 2 * radius, height: 2 * radius))
+    }
+}
+
+/// A paragraph that holds ticket or pull request references: the words flow and wrap as a `Text` would, and each
+/// reference is the reference chip (`ChipText`), with the live state of the ticket or pull request when the app has it
+/// and as plain text when it does not.
+struct ConductorReferenceParagraph: View {
+    let phrases: [ConductorMarkup.Phrase]
+    let style: DesignTokens.TypeStyle
+    var bold = false
+
+    enum Fragment: Equatable {
+        case words(AttributedString)
+        case reference(String)
+    }
+
+    var body: some View {
+        ConductorFlowLayout(lineHeight: CGFloat(style.scaledLineHeight(by: DesignTokens.TypeStyle.textScale))) {
+            ForEach(Array(Self.fragments(phrases, style: style, bold: bold).enumerated()), id: \.offset) { _, fragment in
+                switch fragment {
+                case let .words(words):
+                    Text(words).textStyle(style).fixedSize()
+                case let .reference(key):
+                    ChipText(text: key, font: style.nsFont).fixedSize()
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(ConductorMarkup.plainText(of: phrases))
+    }
+
+    /// The paragraph cut into words, each with its own styling, and its references.
+    static func fragments(_ phrases: [ConductorMarkup.Phrase], style: DesignTokens.TypeStyle, bold: Bool) -> [Fragment] {
+        var fragments: [Fragment] = []
+        var pending: [ConductorMarkup.Phrase] = []
+
+        func flush() {
+            guard !pending.isEmpty else { return }
+            var text = AttributedString()
+            ConductorMarkupText.appendPhrases(pending, to: &text, style: style, bold: bold)
+            fragments += words(of: text).map(Fragment.words)
+            pending = []
+        }
+        func walk(_ phrases: [ConductorMarkup.Phrase], wrap: (([ConductorMarkup.Phrase]) -> ConductorMarkup.Phrase)?) {
+            for phrase in phrases {
+                switch phrase {
+                case let .code(text) where ConductorMarkup.isReference(text):
+                    flush()
+                    fragments.append(.reference(text))
+                case let .bold(inner): walk(inner, wrap: { wrap?([.bold($0)]) ?? .bold($0) })
+                case let .italic(inner): walk(inner, wrap: { wrap?([.italic($0)]) ?? .italic($0) })
+                case let .status(status, inner): walk(inner, wrap: { wrap?([.status(status, $0)]) ?? .status(status, $0) })
+                case let .link(label, destination): walk(label, wrap: { wrap?([.link(label: $0, destination: destination)]) ?? .link(label: $0, destination: destination) })
+                default: pending.append(wrap?([phrase]) ?? phrase)
+                }
+            }
+        }
+        walk(phrases, wrap: nil)
+        flush()
+        return fragments
+    }
+
+    /// `text` cut after each space, so a line breaks between words.
+    static func words(of text: AttributedString) -> [AttributedString] {
+        var words: [AttributedString] = []
+        var start = text.startIndex
+        var index = start
+        while index < text.endIndex {
+            let next = text.characters.index(after: index)
+            if text.characters[index] == " " {
+                words.append(AttributedString(text[start..<next]))
+                start = next
+            }
+            index = next
+        }
+        if start < text.endIndex { words.append(AttributedString(text[start...])) }
+        return words
+    }
+}
+
+/// Lays its children out left to right and wraps to a new line when the next does not fit; a line is as tall as its
+/// tallest child or `lineHeight`, whichever is more, and the children sit in the middle of it.
+struct ConductorFlowLayout: Layout {
+    let lineHeight: CGFloat
+
+    private struct Line {
+        var items: [(index: Int, size: CGSize)] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func lines(_ subviews: Subviews, width: CGFloat) -> [Line] {
+        var lines = [Line()]
+        for (index, subview) in subviews.enumerated() {
+            let size = subview.sizeThatFits(.unspecified)
+            if lines[lines.count - 1].width + size.width > width, !lines[lines.count - 1].items.isEmpty { lines.append(Line()) }
+            lines[lines.count - 1].items.append((index, size))
+            lines[lines.count - 1].width += size.width
+            lines[lines.count - 1].height = max(lines[lines.count - 1].height, size.height, lineHeight)
+        }
+        return lines
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        let lines = lines(subviews, width: width)
+        return CGSize(width: min(width, lines.map(\.width).max() ?? 0), height: lines.map(\.height).reduce(0, +))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for line in lines(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for (index, size) in line.items {
+                subviews[index].place(at: CGPoint(x: x, y: y + line.height / 2), anchor: .leading, proposal: ProposedViewSize(size))
+                x += size.width
+            }
+            y += line.height
+        }
     }
 }

@@ -213,7 +213,10 @@ public struct LifecycleModel: Equatable {
         public var tokens: Int
         /// "2.4M".
         public var value: String
-        public var series: DesignTokens.ChartSeries
+        /// The chart series the stage is drawn in; nil for the Conductor's segment, which takes the accent.
+        public var series: DesignTokens.ChartSeries?
+        /// The Conductor's own segment: its runs' tokens, apart from the stages'.
+        public var isConductor: Bool { series == nil }
     }
 
     /// One token bar: the stages fill the ticket's cap from the left and the rest stays empty.
@@ -247,7 +250,9 @@ public struct LifecycleModel: Equatable {
 
     /// The section from `lifecycle`, said in one sentence with the phase path (`path`: the phase it is in and the
     /// move that sent it back) and the ticket's `situation` (what it waits on, and how a finished ticket ended).
-    public static func build(_ lifecycle: TicketLifecycle, path: TicketPhasePath? = nil, situation: Situation? = nil) -> LifecycleModel {
+    public static func build(
+        _ lifecycle: TicketLifecycle, path: TicketPhasePath? = nil, situation: Situation? = nil, conductorTokens: Int = 0
+    ) -> LifecycleModel {
         let stages = lifecycle.stages.map(stage(of:))
         let current = lifecycle.stages.first { $0.id == lifecycle.current }
         let ended = ended(lifecycle, path: path, situation: situation)
@@ -263,7 +268,7 @@ public struct LifecycleModel: Equatable {
         }
         return LifecycleModel(
             whereLine: whereLine(lifecycle, current: current, ended: ended, path: path, situation: situation), summary: summary,
-            live: current?.state == .current && !ended, stages: stages, tokens: tokenBar(lifecycle, ended: ended)
+            live: current?.state == .current && !ended, stages: stages, tokens: tokenBar(lifecycle, ended: ended, conductorTokens: conductorTokens)
         )
     }
 
@@ -363,16 +368,30 @@ public struct LifecycleModel: Equatable {
         part.replacingOccurrences(of: " ", with: "\u{00A0}")
     }
 
+    /// The Conductor's segment of the token bar.
+    public static let conductorSegmentID = "conductor"
+    public static let conductorName = "Conductor"
+
     static let series: [String: DesignTokens.ChartSeries] = ["coding": .series1, "code_review": .series2, "qa": .series3, "merging": .series4]
 
     /// The bar; a ticket that `ended` keeps its bar and totals, without a warning: it spends nothing more.
-    static func tokenBar(_ lifecycle: TicketLifecycle, ended: Bool = false) -> TokenBar {
+    static func tokenBar(_ lifecycle: TicketLifecycle, ended: Bool = false, conductorTokens: Int = 0) -> TokenBar {
         // Done takes no tokens: the four working stages fill the bar, in their landing order.
-        let segments = lifecycle.stages.compactMap { stage -> Segment? in
+        var segments = lifecycle.stages.compactMap { stage -> Segment? in
             guard let series = series[stage.id] else { return nil }
             return Segment(id: stage.id, name: stage.name, tokens: stage.tokens, value: Overview.tokens(stage.tokens), series: series)
         }
         let total = lifecycle.tokens.total
+        // The Conductor's runs have a segment of their own, drawn only when it has tokens. Its tokens are in the ticket's
+        // total once: the segment is drawn when the stages' tokens and the Conductor's make up the total, which is when
+        // Symphony keeps the Conductor's runs out of the stage they started in. A Symphony that still counts them in
+        // that stage has them in the stages already, and a second segment would count them twice.
+        let stageTokens = segments.reduce(0) { $0 + $1.tokens }
+        if conductorTokens > 0, stageTokens + conductorTokens <= total {
+            segments.append(Segment(
+                id: conductorSegmentID, name: conductorName, tokens: conductorTokens, value: Overview.tokens(conductorTokens), series: nil
+            ))
+        }
         let cap = lifecycle.tokens.cap.flatMap { $0 > 0 ? $0 : nil }
         let fraction = cap.map { Double(total) / Double($0) }
         let percent = cap.map { total * 100 / $0 }
@@ -484,5 +503,15 @@ public struct PhasePathModel: Equatable {
     static func clock(_ date: Date, reference: Date, calendar: Calendar) -> String {
         let format = calendar.isDate(date, inSameDayAs: reference) ? "HH:mm" : "EEE d MMM HH:mm"
         return SharedDateFormatter.string(date, format: format, locale: SharedDateFormatter.british, calendar: calendar)
+    }
+}
+
+extension TicketEventsPayload {
+    /// The tokens the Conductor's runs spent on the ticket, summed: the `tokens` each of them recorded when it ended.
+    public var conductorTokens: Int {
+        events.reduce(0) { sum, event in
+            guard event.type == "run.ended", let run = event.runID.flatMap({ runs[$0] }), run.runKind == "conductor" else { return sum }
+            return sum + max(event.payload.tokens ?? 0, 0)
+        }
     }
 }
