@@ -1084,11 +1084,14 @@ defmodule SymphonyElixir.PromptBuilderTest do
     end
 
     test "a run of each kind is given the messages no run read yet", %{issue: issue, record: record} do
-      for {kind, state} <- [implementation: "In Progress", rework: "Rework", code_review: "Code Review", qa: "QA", ci_fix: "CI Fix"] do
+      kinds = [implementation: "In Progress", rework: "Rework", code_review: "Code Review", qa: "QA", ci_fix: "CI Fix"]
+
+      for {kind, state} <- kinds do
         message = message!("For the #{kind} run.", DateTime.utc_now())
         run_id = "run-#{kind}"
 
-        prompt = PromptBuilder.build_prompt(%{issue | state: state}, ticket_state: record, run_id: run_id, run_kind: kind)
+        opts = [ticket_state: record, run_id: run_id, run_kind: kind]
+        prompt = PromptBuilder.build_prompt(%{issue | state: state}, opts)
 
         assert String.starts_with?(prompt, "## Messages from the person\n"), "#{kind}"
         assert prompt =~ "For the #{kind} run.", "#{kind}"

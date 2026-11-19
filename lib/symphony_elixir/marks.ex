@@ -27,7 +27,12 @@ defmodule SymphonyElixir.Marks do
           read_by: %{run_id: String.t() | nil, at: String.t() | nil} | nil
         }
 
-  @type read :: %{looked_at: String.t() | nil, new_since_looked: non_neg_integer(), unread_messages: non_neg_integer(), note: note() | nil}
+  @type read :: %{
+          looked_at: String.t() | nil,
+          new_since_looked: non_neg_integer(),
+          unread_messages: non_neg_integer(),
+          note: note() | nil
+        }
 
   @doc "The one person the control API names today."
   @spec person() :: String.t()
