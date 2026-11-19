@@ -420,9 +420,13 @@ defmodule SymphonyElixir.Conductor do
 
   defp steer_run(%{message: text, when: moment}, plan, %{run: run, trigger: trigger}) do
     Steer.queue(run.run_id, %{text: text, when: moment, trigger: trigger, repo_key: plan.repo_key, issue_id: plan.issue_id})
-    if moment == "now" and to_string(get_in(run, [:run_profile, :harness])) == "claude", do: Steer.interrupt(run.run_id)
+    if moment == "now" and claude_run?(run), do: Steer.interrupt(run.run_id)
     :ok
   end
+
+  # The run's profile is a `Config.Runs.Run` struct or a plain map: match the key, never `Access`.
+  defp claude_run?(%{run_profile: %{harness: harness}}), do: to_string(harness) == "claude"
+  defp claude_run?(_run), do: false
 
   defp stop_run(nil, _held, _plan, _watch), do: :ok
 

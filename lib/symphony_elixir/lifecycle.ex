@@ -238,10 +238,14 @@ defmodule SymphonyElixir.Lifecycle do
     else
       started_at = Map.get(started, run_id) || Map.get(running, :started_at) || now
 
-      conductor? = to_string(get_in(running, [:run_profile, :kind])) == "conductor"
+      conductor? = conductor_profile?(Map.get(running, :run_profile))
       [%{stage: stage_at(moves, started_at), conductor?: conductor?, tokens: tokens(Map.get(running, :total_tokens)), agent_time_ms: time_ms(started_at, now)}]
     end
   end
+
+  # The running snapshot's profile is a `Config.Runs.Run` struct or a plain map: match the key, never `Access`.
+  defp conductor_profile?(%{kind: kind}), do: to_string(kind) == "conductor"
+  defp conductor_profile?(_profile), do: false
 
   defp stage_at(moves, at) do
     moves
