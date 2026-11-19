@@ -337,6 +337,14 @@ repeated message adds only what its usage grew by, so each message counts once. 
 cumulative `{:token_usage, totals}` the orchestrator and the QA agent read then matches the
 transcript counted once per message, and the `result` event's `usage` at the end of the turn.
 
+## Stepped QA Passes
+
+A stepped QA pass (`SymphonyElixir.QaAgent.Steps`) runs one agent session per agent step turn, each
+on the step's own model, and a step that continues a named session resumes its conversation in a new
+session. Each session's cumulative totals are read as above, and the pass's tokens are their sum, so
+a resumed conversation is counted for what each of its turns spent. The per-issue limit stops the
+pass once that sum, across every turn of the pass, reaches it.
+
 ## Budget Enforcement
 
 `execution.limits.tokens_per_issue` and `execution.limits.tokens_per_day` use the same accepted cumulative token
