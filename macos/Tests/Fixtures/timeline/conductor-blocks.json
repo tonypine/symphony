@@ -1,0 +1,452 @@
+{
+ "timeline": [
+  {
+   "kind": "run",
+   "run_id": "run-c1",
+   "run_kind": "conductor",
+   "run_number": 1,
+   "status": "ended",
+   "exit": "ended",
+   "verdict": null,
+   "started_at": "2026-10-08T09:09:00Z",
+   "ended_at": "2026-10-08T09:30:00Z",
+   "head": null,
+   "model": "claude-opus-5-5",
+   "effort": "high",
+   "model_name": "Claude Opus 5.5",
+   "events": [
+    {
+     "id": "b1",
+     "seq": 10,
+     "at": "2026-10-08T09:10:00Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "The rework fixed the row, and the build and tests {done}pass{/}.\n\nNext: QA walks the page again.",
+      "blocks": [
+       {
+        "type": "steps",
+        "run_id": "run-2",
+        "run_kind": "rework",
+        "steps": [
+         {
+          "step_id": "code",
+          "title": "Write the code",
+          "outcome": "passed",
+          "duration_ms": 180000
+         },
+         {
+          "step_id": "build",
+          "title": "Build",
+          "outcome": "failed",
+          "duration_ms": 15000,
+          "returns_to": "Write the code"
+         },
+         {
+          "step_id": "code",
+          "title": "Write the code",
+          "outcome": "passed",
+          "duration_ms": 60000
+         },
+         {
+          "step_id": "build",
+          "title": "Build",
+          "outcome": "passed",
+          "duration_ms": 22000
+         },
+         {
+          "step_id": "tests",
+          "title": "Tests",
+          "outcome": "passed",
+          "duration_ms": 94000
+         }
+        ]
+       }
+      ],
+      "junction": "after_rework"
+     },
+     "actor": {
+      "kind": "machine"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "b2",
+     "seq": 11,
+     "at": "2026-10-08T09:11:00Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "QA found {problem}1 problem{/}: the line for `SHOP-305` does not say it needs a fix.\n\nNext: QA walks the page again.",
+      "blocks": [
+       {
+        "type": "evidence",
+        "items": [
+         {
+          "event_id": "v2",
+          "artifact_id": "1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0",
+          "caption": "Strip at 1440"
+         },
+         {
+          "event_id": "v3",
+          "artifact_id": "1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0",
+          "caption": "Strip in dark"
+         }
+        ]
+       }
+      ],
+      "junction": "after_qa_fail"
+     },
+     "actor": {
+      "kind": "machine"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "b3",
+     "seq": 12,
+     "at": "2026-10-08T09:12:00Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "This ticket has used {you}62M of its 100M tokens{/}, most of it in QA.\n\nNext: QA walks the page again.",
+      "blocks": [
+       {
+        "type": "budget",
+        "tokens_used": 62000000,
+        "tokens_cap": 100000000,
+        "parts": [
+         {
+          "kind": "qa",
+          "runs": 2,
+          "tokens": 26000000
+         },
+         {
+          "kind": "implementation",
+          "runs": 3,
+          "tokens": 21000000
+         },
+         {
+          "kind": "code_review",
+          "runs": 1,
+          "tokens": 11000000
+         },
+         {
+          "kind": "conductor",
+          "runs": 4,
+          "tokens": 4000000
+         }
+        ]
+       }
+      ],
+      "junction": "after_rework"
+     },
+     "actor": {
+      "kind": "machine"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "b4",
+     "seq": 13,
+     "at": "2026-10-08T09:13:00Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "I want to {problem}stop this run{/}: it has rebuilt the same file for 40 minutes without a new approach.\n\nNext: QA walks the page again.",
+      "blocks": [
+       {
+        "type": "question",
+        "decision_id": "c-1245-request",
+        "title": "Stop Rework run 2?",
+        "question": "Stop Rework run 2 and send the ticket back with the build error?",
+        "options": [
+         {
+          "label": "Stop and send back",
+          "recommended": true
+         },
+         {
+          "label": "Let it run",
+          "recommended": false
+         }
+        ]
+       }
+      ],
+      "watch": {
+       "run_id": "run-2",
+       "trigger": "no_progress",
+       "steered": false,
+       "when": null,
+       "stopped": false
+      }
+     },
+     "actor": {
+      "kind": "machine"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "b5",
+     "seq": 14,
+     "at": "2026-10-08T09:14:00Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "Ready to merge: review, QA and CI are all {done}green{/}.\n\nThe change is `#448` for `TP-892`. It unblocks `TP-891` and `TP-893`, which start as soon as it lands.",
+      "blocks": [],
+      "junction": "before_merge"
+     },
+     "actor": {
+      "kind": "machine"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "b6",
+     "seq": 15,
+     "at": "2026-10-08T09:15:00Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "The epic is 1 ticket from done; this one is the last that changes the page.\n\nNext: QA walks the page again.",
+      "blocks": [
+       {
+        "type": "epic",
+        "identifier": "TP-1381",
+        "title": "Phase 3b",
+        "rows": [
+         {
+          "identifier": "TP-1499",
+          "title": "Home is two lists",
+          "state": "done",
+          "current": false
+         },
+         {
+          "identifier": "TP-1500",
+          "title": "Initiatives as designed",
+          "state": "in_review",
+          "current": true
+         },
+         {
+          "identifier": "TP-1501",
+          "title": "Tickets table",
+          "state": "queued",
+          "current": false
+         }
+        ]
+       }
+      ],
+      "junction": "after_coding"
+     },
+     "actor": {
+      "kind": "machine"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "b7",
+     "seq": 16,
+     "at": "2026-10-08T09:16:00Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "Second time through QA; the ticket goes {problem}back to rework{/}.\n\nNext: QA walks the page again.",
+      "blocks": [
+       {
+        "type": "path",
+        "loops": 1,
+        "elapsed_ms": 11520000,
+        "stops": [
+         {
+          "phase": "Backlog",
+          "state": "done",
+          "times": 1
+         },
+         {
+          "phase": "Todo",
+          "state": "done",
+          "times": 1
+         },
+         {
+          "phase": "Coding",
+          "state": "done",
+          "times": 1
+         },
+         {
+          "phase": "QA",
+          "state": "failed",
+          "times": 2
+         },
+         {
+          "phase": "Rework",
+          "state": "current",
+          "times": 1,
+          "run_number": 2
+         },
+         {
+          "phase": "QA",
+          "state": "upcoming",
+          "times": 1
+         },
+         {
+          "phase": "Merge",
+          "state": "upcoming",
+          "times": 1
+         }
+        ]
+       }
+      ],
+      "junction": "after_qa_fail"
+     },
+     "actor": {
+      "kind": "machine"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "b8",
+     "seq": 17,
+     "at": "2026-10-08T09:17:00Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "The build {problem}failed twice{/} the same way, so I told the run where to look.\n\nNext: QA walks the page again.",
+      "blocks": [
+       {
+        "type": "attempts",
+        "run_id": "run-2",
+        "step_id": "build",
+        "title": "Build",
+        "same_line": true,
+        "tries": [
+         {
+          "at": "2026-10-08T09:02:30Z",
+          "outcome": "failed",
+          "duration_ms": 15000,
+          "line": "InitiativesView.swift:443: reference to member 'status' cannot be resolved"
+         },
+         {
+          "at": "2026-10-08T09:04:45Z",
+          "outcome": "failed",
+          "duration_ms": 14000,
+          "line": "InitiativesView.swift:443: reference to member 'status' cannot be resolved"
+         }
+        ]
+       }
+      ],
+      "junction": "after_rework"
+     },
+     "actor": {
+      "kind": "machine"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "b9",
+     "seq": 18,
+     "at": "2026-10-08T09:18:00Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "The story's row {problem}disagrees{/} with the strip above it.\n\nNext: QA walks the page again.",
+      "blocks": [
+       {
+        "type": "compare",
+        "expected": {
+         "text": "Checkout total rounding: Needs a fix, with the problem mark"
+        },
+        "actual": {
+         "text": "Checkout total rounding: Next in line, with the neutral clock"
+        }
+       }
+      ],
+      "junction": "after_qa_fail"
+     },
+     "actor": {
+      "kind": "machine"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "b10",
+     "seq": 19,
+     "at": "2026-10-08T09:19:00Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "The strip and the story disagree in dark as well.\n\nNext: QA walks the page again.",
+      "blocks": [
+       {
+        "type": "compare",
+        "expected": {
+         "event_id": "v2",
+         "artifact_id": "1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0"
+        },
+        "actual": {
+         "event_id": "v3",
+         "artifact_id": "1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0"
+        }
+       }
+      ],
+      "junction": "after_qa_fail"
+     },
+     "actor": {
+      "kind": "machine"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "b11",
+     "seq": 20,
+     "at": "2026-10-08T09:20:00Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "The rework answered {done}2 of 3{/} findings; 1 is still open.\n\nNext: QA walks the page again.",
+      "blocks": [
+       {
+        "type": "findings",
+        "open": 1,
+        "resolved": 2,
+        "items": [
+         {
+          "id": "f1",
+          "title": "Needs-a-fix row reads \"Next in line\"",
+          "state": "open"
+         },
+         {
+          "id": "f2",
+          "title": "Duplicate of the row finding",
+          "state": "resolved"
+         },
+         {
+          "id": "f3",
+          "title": "Strip legend counts the wrong ticket",
+          "state": "resolved"
+         }
+        ]
+       }
+      ],
+      "junction": "after_rework"
+     },
+     "actor": {
+      "kind": "machine"
+     },
+     "artifacts": [],
+     "children": []
+    }
+   ]
+  }
+ ],
+ "next_since": "2026-10-08T09:30:00Z"
+}

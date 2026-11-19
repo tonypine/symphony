@@ -249,6 +249,19 @@ private struct StepRow: View {
     }
 }
 
+/// A step's row as the run group draws it, with no fold: its mark, name and reason, state and duration. A Conductor
+/// message draws the steps of a run with it, where the lines of a step are not the point.
+struct StepSummaryRow: View {
+    let step: RunStep
+
+    var body: some View {
+        StepHeaderLabel(step: step)
+            .padding(.vertical, DesignTokens.Space.s1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(step.accessibilityLabel)
+    }
+}
+
 /// A step's head (the catalog's `.sl-head`): its mark, its name with its reason after it, then its state and its
 /// duration in right-aligned columns, so the steps of a run line up.
 private struct StepHeaderLabel: View {

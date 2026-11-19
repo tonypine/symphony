@@ -103,7 +103,7 @@ final class TicketViewsTests: XCTestCase {
         let body = draft.body
         XCTAssertNil(body["id"])
         XCTAssertEqual(body["name"] as? String, "Epic 6 needs me")
-        XCTAssertEqual(body["columns"] as? [String], ["identifier", "title", "epic", "situation", "priority", "created_at"])
+        XCTAssertEqual(body["columns"] as? [String], ["identifier", "title", "epic", "situation", "situation_since", "priority"])
         // An age's ascending is the server's `desc`.
         XCTAssertEqual(body["sort"] as? [String: String], ["column": "created_at", "direction": "desc"])
         let filters = try XCTUnwrap(body["filters"] as? [[String: Any]])
@@ -289,7 +289,7 @@ final class TicketViewsTests: XCTestCase {
         XCTAssertEqual(posted["path"] as? String, "/api/v1/control/view")
         let body = try XCTUnwrap(posted["body"] as? [String: Any])
         XCTAssertEqual(body["name"] as? String, "Epic 6 needs me")
-        XCTAssertEqual(body["columns"] as? [String], ["identifier", "title", "epic", "situation", "priority", "created_at"])
+        XCTAssertEqual(body["columns"] as? [String], ["identifier", "title", "epic", "situation", "situation_since", "priority"])
 
         // Picking it reads its rows by its id.
         let path = query.path(view: menu.current, scope: .all, now: Date())
