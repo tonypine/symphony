@@ -1273,6 +1273,15 @@ let timelineModelConductor: TimelineModel = {
     return TimelineModel.build(history, reference: timelineReference, calendar: timelineCalendar)
 }()
 
+/// A running rework run the Conductor steered (`Tests/Fixtures/timeline/conductor-steer.json`): its steer is one entry
+/// inside the run's group.
+let timelineModelConductorSteer: TimelineModel = {
+    guard let events = try? Data(contentsOf: timelineFixtures.appendingPathComponent("conductor-steer.json")),
+          let history = TicketEventsPayload.decode(events)
+    else { fatalError("The Conductor's steer fixture is missing from \(timelineFixtures.path)") }
+    return TimelineModel.build(history, reference: timelineReference, calendar: timelineCalendar)
+}()
+
 /// The fixture's timeline with its finding resolved by a later run: the card says so, and no entry of its own does.
 let timelineModelResolved: TimelineModel = {
     var model = timelineModel
@@ -1880,6 +1889,8 @@ MainActor.assumeIsolated {
         // The Conductor (its update for you always shows; its instructions and its own run under Show all events).
         render(timeline(width: 780, model: timelineModelConductor), scheme, to: "timeline-conductor-update-\(suffix).png")
         render(timeline(width: 780, model: timelineModelConductor, showAllEvents: true), scheme, to: "timeline-conductor-all-events-\(suffix).png")
+        // The Conductor steering a running run: "Conductor steered" with its message inside the run's group.
+        render(timeline(width: 780, model: timelineModelConductorSteer), scheme, to: "timeline-conductor-steer-\(suffix).png")
         // The marks (TP-1451): the Timeline title's count, the line where you last looked and the dots above it.
         render(timelineSinceLooked(), scheme, to: "timeline-since-looked-\(suffix).png")
         // The run in place (TP-1452): the run now on top with its newest lines, the no-run line for three situations, and

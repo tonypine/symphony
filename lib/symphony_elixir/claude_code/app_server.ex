@@ -92,7 +92,9 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
       provider: session |> Map.get(:run_profile) |> run_profile_provider(),
       parse: &parse_event/1,
       after_line: &check_symphony_mcp_server/2,
-      label: "Claude"
+      label: "Claude",
+      # The run the turn belongs to, which the Conductor may interrupt to steer it now.
+      run_id: Keyword.get(opts, :run_id)
     ]
 
     # `claude -p` starts a new conversation each turn unless told which one to resume.

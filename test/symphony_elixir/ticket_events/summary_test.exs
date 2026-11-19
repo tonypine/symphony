@@ -77,6 +77,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     {"brief.written", %{text: "Each ticket says what it delivers.", walkthrough: "Read a ticket."}, [], %{title: "Brief written", detail: "Each ticket says what it delivers."}},
     {"conductor.update", %{junction: "after_qa_fail", text: "QA failed the login step again.", refs: ["evt_1"]}, [], %{title: "Update", detail: "QA failed the login step again."}},
     {"conductor.instructions", %{junction: "after_coding", text: "Check the empty list first."}, [], %{title: "Conductor instructions", detail: "Check the empty list first."}},
+    {"conductor.steer", %{text: "Stop retrying the build; read its error first.", when: "now", trigger: "step_failed_twice"}, [],
+     %{title: "Conductor steered", detail: "Stop retrying the build; read its error first."}},
     {"report.published", %{run_id: "report-1", text: "TP-1 merged."}, [], %{title: "Report published", detail: "TP-1 merged."}},
     {"rule.action", %{rule: "PR watcher R22", action: "rerun", text: "A check failed on PR #741: Symphony reran it once"}, [],
      %{title: "Reran the failed checks", detail: "A check failed on PR #741: Symphony reran it once"}},
@@ -503,6 +505,7 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       {"brief.written", %{text: "Plain words.", walkthrough: "Read it."}},
       {"conductor.update", %{junction: "before_merge", text: "QA passed every step; it merges next."}},
       {"conductor.instructions", %{junction: "after_rework", text: "Walk the empty state first."}},
+      {"conductor.steer", %{text: "Read the failing test before you change the code again.", when: "next_turn", trigger: "step_failed"}},
       {"report.published", %{run_id: "report_1", text: "TP-1 merged."}},
       {"note.read", %{note_id: "evt_1", run_id: "run_4"}},
       {"note", %{text: @old_note}}

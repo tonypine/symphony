@@ -57,6 +57,8 @@ public struct ConductorSettings: Equatable {
     public var enabled: Bool
     public var junctions: Set<ConductorJunction>
     public var timeoutMs: Int
+    /// `conductor.watch`: whether it watches running runs and may steer them, and its limits.
+    public var watch: ConductorWatchSettings
 
     /// What Symphony uses when a key is missing or null.
     public static let defaultEnabled = false
@@ -70,10 +72,14 @@ public struct ConductorSettings: Equatable {
     static let junctionsPath = ["conductor", "junctions"]
     static let timeoutPath = ["conductor", "timeout_ms"]
 
-    public init(enabled: Bool = defaultEnabled, junctions: Set<ConductorJunction> = defaultJunctions, timeoutMs: Int = defaultTimeoutMs) {
+    public init(
+        enabled: Bool = defaultEnabled, junctions: Set<ConductorJunction> = defaultJunctions, timeoutMs: Int = defaultTimeoutMs,
+        watch: ConductorWatchSettings = ConductorWatchSettings()
+    ) {
         self.enabled = enabled
         self.junctions = junctions
         self.timeoutMs = timeoutMs
+        self.watch = watch
     }
 
     /// The time limit in whole seconds, for the field.
@@ -103,14 +109,31 @@ public struct ConductorSettings: Equatable {
         ConductorSettings(
             enabled: try onOff(enabledPath, default: defaultEnabled, in: yaml),
             junctions: try junctions(in: yaml),
-            timeoutMs: try number(timeoutPath, default: defaultTimeoutMs, in: yaml)
+            timeoutMs: try number(timeoutPath, default: defaultTimeoutMs, in: yaml),
+            watch: ConductorWatchSettings(
+                enabled: try onOff(ConductorWatchSettings.path("enabled"), default: false, in: yaml),
+                runMinutes: try number(ConductorWatchSettings.path("run_minutes"), default: ConductorWatchSettings.defaultRunMinutes, in: yaml),
+                runTokens: try number(ConductorWatchSettings.path("run_tokens"), default: ConductorWatchSettings.defaultRunTokens, in: yaml),
+                minIntervalMinutes: try number(
+                    ConductorWatchSettings.path("min_interval_minutes"), default: ConductorWatchSettings.defaultMinIntervalMinutes, in: yaml),
+                maxTurnsPerRun: try number(
+                    ConductorWatchSettings.path("max_turns_per_run"), default: ConductorWatchSettings.defaultMaxTurnsPerRun, in: yaml),
+                allowStop: try onOff(ConductorWatchSettings.path("allow_stop"), default: false, in: yaml)
+            )
         )
     }
 
     /// The same text with the settings that differ between `old` and `new` set to their `new` values. A missing key is
     /// inserted at the top of `conductor:`, so they are written last to first and read in order.
     public static func updating(_ yaml: String, from old: ConductorSettings, to new: ConductorSettings) throws -> String {
+        let (w, o) = (new.watch, old.watch)
         let changes: [(path: [String], changed: Bool, value: String)] = [
+            (ConductorWatchSettings.path("allow_stop"), w.allowStop != o.allowStop, w.allowStop ? "true" : "false"),
+            (ConductorWatchSettings.path("max_turns_per_run"), w.maxTurnsPerRun != o.maxTurnsPerRun, String(w.maxTurnsPerRun)),
+            (ConductorWatchSettings.path("min_interval_minutes"), w.minIntervalMinutes != o.minIntervalMinutes, String(w.minIntervalMinutes)),
+            (ConductorWatchSettings.path("run_tokens"), w.runTokens != o.runTokens, String(w.runTokens)),
+            (ConductorWatchSettings.path("run_minutes"), w.runMinutes != o.runMinutes, String(w.runMinutes)),
+            (ConductorWatchSettings.path("enabled"), w.enabled != o.enabled, w.enabled ? "true" : "false"),
             (timeoutPath, new.timeoutMs != old.timeoutMs, String(new.timeoutMs)),
             (junctionsPath, new.junctions != old.junctions, inline(new.junctions)),
             (enabledPath, new.enabled != old.enabled, new.enabled ? "true" : "false"),
@@ -212,4 +235,41 @@ extension SymphonyConfigFile {
     ) async throws -> ConfigCheckResult {
         try await rewrite({ try ConductorSettings.updating($0, from: old, to: new) }, checkingWith: check)
     }
+}
+
+/// `conductor.watch`: whether the Conductor watches running runs and may steer them (`enabled`), when it looks at one
+/// past its start (`run_minutes`, `run_tokens`), how often at most (`min_interval_minutes`, `max_turns_per_run`) and
+/// whether it may stop one, always with a question to the person (`allow_stop`).
+public struct ConductorWatchSettings: Equatable {
+    public var enabled: Bool
+    public var runMinutes: Int
+    public var runTokens: Int
+    public var minIntervalMinutes: Int
+    public var maxTurnsPerRun: Int
+    public var allowStop: Bool
+
+    /// What Symphony uses when a key is missing or null.
+    public static let defaultRunMinutes = 30
+    public static let defaultRunTokens = 30_000_000
+    public static let defaultMinIntervalMinutes = 10
+    public static let defaultMaxTurnsPerRun = 3
+
+    /// The key paths of the settings, as `SettingsUIManifest` lists them.
+    public static let keyPaths = ["enabled", "run_minutes", "run_tokens", "min_interval_minutes", "max_turns_per_run", "allow_stop"]
+        .map { "conductor.watch." + $0 }
+
+    public init(
+        enabled: Bool = false, runMinutes: Int = defaultRunMinutes, runTokens: Int = defaultRunTokens,
+        minIntervalMinutes: Int = defaultMinIntervalMinutes, maxTurnsPerRun: Int = defaultMaxTurnsPerRun, allowStop: Bool = false
+    ) {
+        self.enabled = enabled
+        self.runMinutes = runMinutes
+        self.runTokens = runTokens
+        self.minIntervalMinutes = minIntervalMinutes
+        self.maxTurnsPerRun = maxTurnsPerRun
+        self.allowStop = allowStop
+    }
+
+    /// `conductor.watch.<key>` as a path.
+    static func path(_ key: String) -> [String] { ["conductor", "watch", key] }
 }

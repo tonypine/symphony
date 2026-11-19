@@ -2,7 +2,7 @@ defmodule SymphonyElixir.ConductorTest do
   use SymphonyElixir.TestSupport
 
   alias SymphonyElixir.{Conductor, TicketEvents}
-  alias SymphonyElixir.Conductor.Facts
+  alias SymphonyElixir.Conductor.{Facts, Steer}
   alias SymphonyElixir.Config.Schema
 
   @on %Schema.Conductor{enabled: true}
@@ -303,6 +303,83 @@ defmodule SymphonyElixir.ConductorTest do
   test "plan_after_run/3 reads the Conductor's settings, off by default", ctx do
     ran!(ctx.issue_id, "qa")
     assert Conductor.plan_after_run(ctx.issue, :qa, "default") == nil
+  end
+
+  describe "watch/3" do
+    setup ctx do
+      Steer.create_table()
+      run = %{issue_id: ctx.issue_id, run_id: "run-watched-#{System.unique_integer([:positive])}", repo_key: "default", started_at: DateTime.utc_now()}
+      %{run: Map.put(run, :run_profile, %{kind: :implementation, model: "m", harness: "claude"})}
+    end
+
+    defp watch_answer(attrs), do: {:ok, [Jason.encode!(Map.merge(%{"instructions" => nil}, attrs))], 5}
+
+    defp steers(issue_id), do: events(issue_id, "conductor.steer")
+
+    test "a steer for the next turn waits on the run, and its turn reads the run's live state", ctx do
+      test = self()
+
+      turn = fn _plan, _issue, _run_id, prompt ->
+        send(test, {:prompt, prompt})
+        watch_answer(%{"steer" => %{"message" => "Read the build error first.", "when" => "next_turn"}})
+      end
+
+      assert Conductor.watch(ctx.run, "step_failed", turn: turn, settings: %{@on | watch: %{@on.watch | enabled: true}}) == :ok
+      assert_received {:prompt, prompt}
+      assert prompt =~ "watching a run that is working on a ticket now"
+      assert prompt =~ ~s("live": {)
+      assert events(ctx.issue_id, "conductor.instructions") == []
+
+      Steer.drop(ctx.run.run_id)
+      assert [%{run_id: run_id, payload: %{text: "Read the build error first.", when: "next_turn", trigger: "step_failed"}}] = steers(ctx.issue_id)
+      assert run_id == ctx.run.run_id
+    end
+
+    test "a steer for now interrupts the run's live Claude turn", ctx do
+      :ets.insert(:symphony_conductor_steer, {{:turn, ctx.run.run_id}, self()})
+      turn = turn(watch_answer(%{"steer" => %{"message" => "Stop retrying; read the error.", "when" => "now"}}))
+
+      assert Conductor.watch(ctx.run, "step_failed_twice", turn: turn) == :ok
+      run_id = ctx.run.run_id
+      assert_received {:conductor_interrupt, ^run_id, _sent_ms}
+
+      other = %{ctx.run | run_profile: %{harness: "codex"}}
+      assert Conductor.watch(other, "step_failed_twice", turn: turn) == :ok
+      refute_received {:conductor_interrupt, _run_id, _sent_ms}
+      :ets.delete(:symphony_conductor_steer, {:turn, ctx.run.run_id})
+    end
+
+    test "a stop ends the run only when allowed and asked with a question, through the run-stop path", ctx do
+      test = self()
+
+      question = %{
+        "title" => "The run repeats the same failure",
+        "question" => "Should the run end so you can look?",
+        "why" => "It failed the same step three times.",
+        "if_unanswered" => "The ticket stays paused.",
+        "recommendation_reason" => "A fourth try would repeat the third.",
+        "options" => [
+          %{"label" => "End it", "effect" => "The run ends and waits for you.", "recommended" => true},
+          %{"label" => "Let it go on", "effect" => "The run goes on."}
+        ]
+      }
+
+      stop = fn name -> tap({:ok, %{stopped: true}}, fn _ -> send(test, {:stopped, name}) end) end
+      allowed = %{@on | watch: %{@on.watch | allow_stop: true}}
+      answer = watch_answer(%{"stop" => %{"reason" => "It loops on the build."}, "ask_person" => question})
+
+      assert Conductor.watch(Map.put(ctx.run, :identifier, "COND-1"), "step_failed_twice", turn: turn(answer), stop: stop, settings: allowed) == :ok
+      assert_received {:stopped, "COND-1"}
+      assert [%{payload: %{when: "stop", text: "It loops on the build.", delivered: %{how: "stopped"}}}] = steers(ctx.issue_id)
+
+      log = capture_log(fn -> Conductor.watch(ctx.run, "run_minutes", turn: turn(answer), stop: fn _ -> :unavailable end, settings: allowed) end)
+      assert log =~ "Conductor watch could not stop"
+
+      no_question = watch_answer(%{"stop" => %{"reason" => "It loops."}})
+      log = capture_log(fn -> Conductor.watch(ctx.run, "run_minutes", turn: turn(no_question), stop: stop, settings: allowed) end)
+      assert log =~ "a stop needs conductor.watch.allow_stop and a question"
+      refute_received {:stopped, _name}
+    end
   end
 
   test "a turn's result reads as its text candidates and tokens" do

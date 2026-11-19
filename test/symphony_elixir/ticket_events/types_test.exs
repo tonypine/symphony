@@ -10,7 +10,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     ticket.cancelled ticket.moved drift.detected drift.reverted drift.revert_failed
     pause.set pause.reason_added pause.reason_cleared pause.cleared
     question.asked question.answered question.withdrawn question.reopened question.not_asked park.backfilled workspace.synced workspace.rebuilt workspace.removed situation.changed rule.action ticket.filed note.read brief.written report.published note
-    conductor.update conductor.instructions
+    conductor.update conductor.instructions conductor.steer
   )
 
   describe "catalog/0" do

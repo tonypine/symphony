@@ -59,7 +59,10 @@ public struct RunGroup: View {
                     if !run.screenshots.isEmpty {
                         ScreenshotRow(shots: run.screenshots)
                     }
-                    if run.steps.isEmpty, run.liveLines.isEmpty, run.screenshots.isEmpty {
+                    ForEach(run.steers) { steer in
+                        RunSteerEntry(steer: steer)
+                    }
+                    if run.steps.isEmpty, run.liveLines.isEmpty, run.screenshots.isEmpty, run.steers.isEmpty {
                         Text(Self.noSteps)
                             .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)
@@ -348,4 +351,29 @@ public struct StepBars: View {
     /// The working bar's breath: down to 45 % and back, 0.9 s each way.
     static let breath = LayerPulse.Motion.opacity(from: 1, to: 0.45)
     static let breathDuration = 0.9
+}
+
+/// The Conductor's guidance inside a run's group: its time, "Conductor steered" and the message, whole.
+struct RunSteerEntry: View {
+    let steer: RunSteer
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
+            if let at = steer.at {
+                Text(at, format: .dateTime.hour().minute())
+                    .font(DesignTokens.TypeStyle.secondary.font)
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    .monospacedDigit()
+            }
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                Text(RunSteer.title)
+                    .font(DesignTokens.TypeStyle.body.font)
+                Text(steer.text)
+                    .font(DesignTokens.TypeStyle.secondary.font)
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                    .textSelection(.enabled)
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
 }

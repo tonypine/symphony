@@ -48,7 +48,8 @@ defmodule SymphonyElixir.Conductor.Facts do
     "after_coding" => "The implementation run handed off; Code Review or QA judges it next.",
     "after_qa_fail" => "QA failed; a rework run answers its findings next.",
     "after_rework" => "The rework run handed off; Code Review or QA judges it again next.",
-    "before_merge" => "QA passed or was skipped; the pull request merges next."
+    "before_merge" => "QA passed or was skipped; the pull request merges next.",
+    "during_run" => "A run is working on the ticket now; its live state is under `live`."
   }
   @problem_heading ~r/\A(problem|why|context|background|summary|goal|what)\b/i
   @acceptance_heading ~r/acceptance/i
@@ -56,9 +57,9 @@ defmodule SymphonyElixir.Conductor.Facts do
   @typedoc "`build/3`'s options: `events:` (the ticket's events, oldest first), `token_cap:`, `diff_stat:` (`(record -> [map()] | nil)`)."
   @type opt :: {:events, [Event.t()]} | {:token_cap, pos_integer() | nil} | {:diff_stat, (map() -> [map()] | nil)}
 
-  @doc "The junctions a document may be shaped for."
+  @doc "The junctions a document may be shaped for: the Conductor's, and `during_run` for a watch turn."
   @spec junctions() :: [String.t()]
-  def junctions, do: Schema.Conductor.junctions()
+  def junctions, do: Schema.Conductor.junctions() ++ ["during_run"]
 
   @doc """
   The document for the ticket `name` (its identifier, in any case, or its id) at `junction` (nil for

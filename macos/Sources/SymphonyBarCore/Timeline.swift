@@ -505,7 +505,7 @@ public struct TimelineModel: Equatable {
     /// The events a run's group stands for: they fold into it.
     static let runTypes: Set<String> = [
         "run.started", "run.ended", "step.started", "step.completed", "step.skipped", "attempt.pushed", "verdict.recorded",
-        "evidence", "checklist.answered",
+        "evidence", "checklist.answered", "conductor.steer",
     ]
 
     /// Bookkeeping that changes nothing a person reads.

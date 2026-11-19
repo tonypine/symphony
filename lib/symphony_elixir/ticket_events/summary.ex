@@ -323,6 +323,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary("brief.written", payload, _event), do: {"Brief written", [text(payload, :text)]}
   defp summary("conductor.update", payload, _event), do: {"Update", [text(payload, :text)]}
   defp summary("conductor.instructions", payload, _event), do: {"Conductor instructions", [text(payload, :text)]}
+  defp summary("conductor.steer", payload, _event), do: {"Conductor steered", [text(payload, :text)]}
   defp summary("report.published", payload, _event), do: {"Report published", [text(payload, :text)]}
   defp summary(_type, _payload, _event), do: :unknown
 
