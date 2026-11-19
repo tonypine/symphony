@@ -125,20 +125,18 @@ public struct SecretSettings: Equatable {
     /// Environment variable name, and secret store account, of the Linear API key.
     public static let linearAPIKeyName = "LINEAR_API_KEY"
 
-    /// Environment variable name, and secret store account, of the OpenRouter API key.
-    public static let openRouterAPIKeyName = "OPENROUTER_API_KEY"
-
     /// Secret store account of the GitHub webhook secret instant updates sign with (`WebhookSecret`), passed to Symphony
     /// as `SYMPHONY_GITHUB_WEBHOOK_SECRET`. The app keeps it; Settings never shows it.
     public static let githubWebhookSecretItem = WebhookSecret.item
 
-    /// Names set by their own fields, never as extra variables.
-    public static let reservedNames: Set<String> = [linearAPIKeyName, openRouterAPIKeyName, githubWebhookSecretItem]
+    /// Names set by their own fields or pages, never as extra variables: the Linear key, the webhook secret, and the
+    /// provider keys and enabled set Factory › Providers keeps (`ProviderKeys`).
+    public static let reservedNames: Set<String> = Set([linearAPIKeyName, githubWebhookSecretItem]).union(ProviderKeys.reservedNames)
 
     public var linearAPIKey: String
 
-    /// Optional; empty means Symphony gets no `OPENROUTER_API_KEY`.
-    public var openRouterAPIKey: String
+    /// The provider keys and which providers are enabled, read for the launch: Settings never edits or saves them.
+    public var providers: ProviderKeys
 
     /// Extra environment variables, sorted by name when loaded.
     public var extraEnvironment: [EnvironmentVariable]
@@ -148,10 +146,11 @@ public struct SecretSettings: Equatable {
     public var githubWebhookSecret: String
 
     public init(
-        linearAPIKey: String = "", openRouterAPIKey: String = "", extraEnvironment: [EnvironmentVariable] = [], githubWebhookSecret: String = ""
+        linearAPIKey: String = "", providers: ProviderKeys = ProviderKeys(), extraEnvironment: [EnvironmentVariable] = [],
+        githubWebhookSecret: String = ""
     ) {
         self.linearAPIKey = linearAPIKey
-        self.openRouterAPIKey = openRouterAPIKey
+        self.providers = providers
         self.extraEnvironment = extraEnvironment
         self.githubWebhookSecret = githubWebhookSecret
     }
@@ -161,7 +160,7 @@ public struct SecretSettings: Equatable {
     public func trimmed() -> SecretSettings {
         SecretSettings(
             linearAPIKey: linearAPIKey.trimmingWhitespace(),
-            openRouterAPIKey: openRouterAPIKey.trimmingWhitespace(),
+            providers: providers,
             extraEnvironment: extraEnvironment.compactMap { variable in
                 let name = variable.name.trimmingWhitespace()
                 if name.isEmpty && variable.value.isEmpty { return nil }

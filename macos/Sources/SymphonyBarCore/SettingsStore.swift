@@ -75,8 +75,8 @@ public final class SettingsStore {
         defaults.set(settings.releaseCheckMinutes, forKey: Key.releaseCheckMinutes)
     }
 
-    /// Reads the Linear and OpenRouter API keys, the GitHub webhook secret, and every other account in the secret store
-    /// as an extra variable.
+    /// Reads the Linear API key, the provider keys and which providers are enabled (`ProviderKeys`), the GitHub webhook
+    /// secret, and every other account in the secret store as an extra variable.
     public func loadSecrets() throws -> SecretSettings {
         let extra = try secrets.accounts()
             .filter { !SecretSettings.reservedNames.contains($0) }
@@ -85,7 +85,7 @@ public final class SettingsStore {
 
         return SecretSettings(
             linearAPIKey: try secrets.value(forAccount: SecretSettings.linearAPIKeyName) ?? "",
-            openRouterAPIKey: try secrets.value(forAccount: SecretSettings.openRouterAPIKeyName) ?? "",
+            providers: try ProviderKeys.load(from: secrets),
             extraEnvironment: extra,
             githubWebhookSecret: try secrets.value(forAccount: SecretSettings.githubWebhookSecretItem) ?? ""
         )
@@ -99,19 +99,16 @@ public final class SettingsStore {
     /// True when the secret store holds a GitHub webhook secret.
     public var hasWebhookSecret: Bool { WebhookSecret.isStored(in: secrets) }
 
-    /// Writes the secrets, then removes the named extra variables. Only names in `removing` are ever
-    /// deleted, so a list that failed to load or is stale can't wipe stored variables. Names still listed,
-    /// the Linear API key and the GitHub webhook secret (which Settings never edits) are never removed. A
-    /// blank OpenRouter key is removed only when `removing` names it, like an extra variable.
+    /// Writes the Linear API key and the extra variables, then removes the named extra variables. Only names in
+    /// `removing` are ever deleted, so a list that failed to load or is stale can't wipe stored variables. Names still
+    /// listed and the reserved names (the Linear key, the webhook secret, the provider keys and the enabled set, which
+    /// Settings never edits) are never removed or written here: Factory › Providers writes the provider keys
+    /// (`saveProviderKeys`).
     public func saveSecrets(_ settings: SecretSettings, removing removed: Set<String> = []) throws {
         let keyName = SecretSettings.linearAPIKeyName
         try secrets.setValue(settings.linearAPIKey, forAccount: keyName)
 
-        var kept = Set(settings.extraEnvironment.map(\.name)).union([keyName, SecretSettings.githubWebhookSecretItem])
-        if !settings.openRouterAPIKey.isEmpty {
-            try secrets.setValue(settings.openRouterAPIKey, forAccount: SecretSettings.openRouterAPIKeyName)
-            kept.insert(SecretSettings.openRouterAPIKeyName)
-        }
+        let kept = Set(settings.extraEnvironment.map(\.name)).union(SecretSettings.reservedNames)
 
         for variable in settings.extraEnvironment {
             try secrets.setValue(variable.value, forAccount: variable.name)
@@ -119,5 +116,15 @@ public final class SettingsStore {
         for account in removed.subtracting(kept).sorted() {
             try secrets.removeValue(forAccount: account)
         }
+    }
+
+    /// Reads the provider keys and which providers are enabled.
+    public func loadProviderKeys() throws -> ProviderKeys {
+        try ProviderKeys.load(from: secrets)
+    }
+
+    /// Writes the provider keys and the enabled set, over `old`, what was read.
+    public func saveProviderKeys(_ keys: ProviderKeys, over old: ProviderKeys) throws {
+        try keys.save(to: secrets, over: old)
     }
 }

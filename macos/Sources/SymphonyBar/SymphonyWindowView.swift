@@ -357,6 +357,10 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var runsPage = RunsPage()
     /// Factory › Providers (TP-1534): the provider whose page shows, by id; nil shows the first of the list.
     @Published var providerSelection: String?
+    /// The provider keys and which providers are enabled (TP-1540), from the app's secrets; nil until they are read.
+    @Published var providerKeys: ProviderKeys?
+    /// The Key blocks' keys typed, tests and results.
+    @Published var providerKeyEditor = ProviderKeyEditor()
     /// The `symphony.yml` path in Settings.
     var configPath: () -> String = { "" }
     /// Check Again with no fix, a Linear fix with one: `POST /api/v1/setup/refresh` or `/fixes`.

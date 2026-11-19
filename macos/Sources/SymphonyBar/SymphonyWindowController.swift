@@ -200,6 +200,7 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
                 self?.readers.open(identifier: identifier, run: run, follow: follow)
             }
             self.model = model
+            model.loadProviderKeys(with: secrets)
 
             let hostingController = NSHostingController(
                 rootView: SymphonyWindowView(model: model).environment(\.openURL, URLOpener.action)

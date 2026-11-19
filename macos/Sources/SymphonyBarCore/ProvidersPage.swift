@@ -4,7 +4,9 @@ import Foundation
 /// providers in use, then those not in use, each a List card with its name, one fact and its state in a line; beside
 /// them the picked provider's page: its state as a Situation line, Pause or Resume, its usage windows as one-line
 /// meters and its facts. A block is drawn only when it has content. Everything is read from the state's `providers`
-/// (TP-1533), so a Pause or a Resume shows as soon as Symphony's next state says so.
+/// (TP-1533), so a Pause or a Resume shows as soon as Symphony's next state says so. A provider set up with an API key
+/// (TP-1540, `ProviderKeys`) also has a Key block: its key, Test connection, and Enable or Disable; its state reads Off
+/// while it isn't enabled, and its facts say whether its key is set. The keys are the app's, not Symphony's.
 public struct ProvidersPage: Equatable {
     /// The move the page's button makes.
     public enum Move: Equatable {
@@ -75,6 +77,23 @@ public struct ProvidersPage: Equatable {
         public var id: String { label }
     }
 
+    /// The Key block of a provider set up with an API key: the key field, Test connection, the test's result, and
+    /// Enable (once a test passed) or Disable (while it is on), and Remove Key while one is stored.
+    public struct KeyBlock: Equatable {
+        public let variable: String
+        /// What the field holds: the key typed, else the key stored.
+        public let text: String
+        public let stored: Bool
+        public let enabled: Bool
+        public let testing: Bool
+        public let canTest: Bool
+        public let canEnable: Bool
+        public let result: ProviderKeyCheck.Result?
+
+        /// The switch the block offers: Disable while on, Enable once a test passed, else none.
+        public var toggle: Bool? { enabled ? false : canEnable ? true : nil }
+    }
+
     /// The picked provider's page.
     public struct Detail: Equatable {
         public let id: String
@@ -86,6 +105,8 @@ public struct ProvidersPage: Equatable {
         public let usage: [Meter]
         /// Its facts, each only when known.
         public let facts: [Fact]
+        /// Its Key block; none for a provider that takes no key, or while the keys aren't read yet.
+        public var key: KeyBlock? = nil
 
         /// The control the button sends.
         public var action: ControlAction? { move.map { ProvidersPage.action($0, provider: id, name: name) } }
@@ -98,17 +119,33 @@ public struct ProvidersPage: Equatable {
     public static let pauseTitle = "Pause"
     public static let resumeTitle = "Resume"
     public static let emptyTitle = "Symphony lists no provider."
+    public static let keyTitle = "Key"
+    public static let testTitle = "Test connection"
+    public static let enableTitle = "Enable"
+    public static let disableTitle = "Disable"
+    public static let removeKeyTitle = "Remove Key"
+    public static let keySet = "set"
+    public static let keyNotSet = "not set"
 
     /// The providers as the state lists them; nil when Symphony predates the list.
     public let providers: [StateSnapshot.Provider]?
     /// Symphony's clock, so ages and times read as on every other page.
     public let now: Date
     public let timeZone: TimeZone
+    /// The provider keys and which providers are enabled, from the app's secrets; nil until they are read.
+    public let keys: ProviderKeys?
+    /// The Key blocks' keys typed, tests and results.
+    public let keyEditor: ProviderKeyEditor
 
-    public init(providers: [StateSnapshot.Provider]?, now: Date = Date(), timeZone: TimeZone = .current) {
+    public init(
+        providers: [StateSnapshot.Provider]?, now: Date = Date(), timeZone: TimeZone = .current, keys: ProviderKeys? = nil,
+        keyEditor: ProviderKeyEditor = ProviderKeyEditor()
+    ) {
         self.providers = providers
         self.now = now
         self.timeZone = timeZone
+        self.keys = keys
+        self.keyEditor = keyEditor
     }
 
     /// The providers in the list's order: in use first, then not in use, each in Symphony's order.
@@ -143,7 +180,18 @@ public struct ProvidersPage: Equatable {
         guard let provider = selected(selection) else { return nil }
         let move: Move? = provider.paused ? .resume : provider.inUse ? .pause : nil
         return Detail(
-            id: provider.id, name: provider.name, state: state(provider), move: move, usage: meters(provider), facts: facts(provider)
+            id: provider.id, name: provider.name, state: state(provider), move: move, usage: meters(provider), facts: facts(provider),
+            key: keyBlock(provider.id)
+        )
+    }
+
+    /// The Key block of the provider `id`, nil for one that takes no key or while the keys aren't read.
+    func keyBlock(_ id: String) -> KeyBlock? {
+        guard let keys, let spec = ProviderKeys.spec(id) else { return nil }
+        return KeyBlock(
+            variable: spec.variable, text: keyEditor.text(id, keys: keys), stored: keys.hasKey(id), enabled: keys.isEnabled(id),
+            testing: keyEditor.testing == id, canTest: keyEditor.canTest(id, keys: keys), canEnable: keyEditor.canEnable(id, keys: keys),
+            result: keyEditor.result(id, keys: keys)
         )
     }
 
@@ -175,8 +223,8 @@ public struct ProvidersPage: Equatable {
 
     // MARK: The state
 
-    /// Where `provider` stands. Not in use reads first, unless the Director paused it; the Director's pause before a
-    /// usage limit's hold.
+    /// Where `provider` stands. The Director's pause reads first, then Off for a provider set up with a key that isn't
+    /// enabled, then Not in use (Available for such a provider once it is enabled), then a usage limit's hold.
     public func state(_ provider: StateSnapshot.Provider) -> State {
         if provider.paused {
             let age = provider.pausedSince.map { Overview.duration(Int(now.timeIntervalSince($0))) }
@@ -185,8 +233,14 @@ public struct ProvidersPage: Equatable {
                 waits: provider.inUse ? Self.waits : nil, short: age.map { "Paused by you · \($0)" } ?? "Paused by you", live: false
             )
         }
+        let keyed = keys != nil && ProviderKeys.spec(provider.id) != nil
+        if keyed, let keys, !keys.isEnabled(provider.id) {
+            let cause = keys.hasKey(provider.id) ? "You turned it off." : "It has no key."
+            return State(status: .idle, word: Self.offWord, cause: cause, waits: nil, short: Self.offWord, live: false)
+        }
         if !provider.inUse {
-            return State(status: .idle, word: "Not in use", cause: "No kind of run is set to it.", waits: nil, short: "Not in use", live: false)
+            let word = keyed ? "Available" : "Not in use"
+            return State(status: keyed ? .done : .idle, word: word, cause: "No kind of run is set to it.", waits: nil, short: word, live: false)
         }
         if provider.held {
             let until = provider.heldUntil
@@ -204,6 +258,13 @@ public struct ProvidersPage: Equatable {
         )
     }
 
+    public static let offWord = "Off"
+
+    /// A key test's result as a Situation line: Works in green, Failed in red.
+    public static func state(_ result: ProviderKeyCheck.Result) -> State {
+        State(status: result.passed ? .done : .problem, word: result.word, cause: result.detail, waits: nil, short: result.word, live: false)
+    }
+
     /// What a pause or a limit means for the runs.
     static let waits = "New runs start on their fallbacks, or wait."
 
@@ -219,11 +280,15 @@ public struct ProvidersPage: Equatable {
         }
     }
 
-    /// Harnesses, the kinds of run set to it, the kinds it backs up, the runs working on it and its tokens today; a
-    /// fact with nothing to say is left out.
+    /// Its key, set or not set, for a provider set up with one; harnesses, the kinds of run set to it, the kinds it
+    /// backs up, the runs working on it and its tokens today; a fact with nothing to say is left out.
     func facts(_ provider: StateSnapshot.Provider) -> [Fact] {
         let working = provider.working
+        let key = keys.flatMap { keys in
+            ProviderKeys.spec(provider.id).map { "\($0.variable) · \(keys.hasKey(provider.id) ? Self.keySet : Self.keyNotSet)" }
+        }
         let facts: [(String, String)] = [
+            (Self.keyTitle, key ?? ""),
             ("Harnesses", provider.harnesses.map { Harness(rawValue: $0)?.title ?? $0 }.joined(separator: ", ")),
             ("Runs set to it", Self.kinds(provider.kinds)),
             ("Fallback for", Self.kinds(provider.fallbackFor)),
