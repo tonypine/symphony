@@ -358,6 +358,8 @@ public struct RunGroupModel: Equatable, Identifiable {
     /// The Conductor's turn (run kind `conductor`): the timeline folds it behind "Show all events", where its update
     /// stands on its own.
     public var isMechanical = false
+    /// The Conductor's guidance to the run while it ran (`conductor.steer`), oldest first.
+    public var steers: [RunSteer] = []
 
     public init(
         id: String, title: String, state: State, word: String, durationSeconds: Int? = nil, tokens: Int? = nil,
@@ -496,6 +498,7 @@ public struct RunGroupModel: Equatable, Identifiable {
         group.transcript = ended?.artifacts.first { $0.kind == "transcript" }?.sessionLines
         group.screenshots = outside
         group.isMechanical = run.runKind == conductorKind
+        group.steers = events.compactMap(RunSteer.init(event:))
         return group
     }
 
@@ -703,4 +706,27 @@ public final class StepTranscripts: ObservableObject {
 
 private extension String {
     var nonEmpty: String? { isEmpty ? nil : self }
+}
+
+/// The Conductor's guidance to a running run (`conductor.steer`): one entry inside the run's group, at its time,
+/// "Conductor steered" with the message.
+public struct RunSteer: Equatable, Identifiable {
+    public var id: String
+    public var at: Date?
+    public var text: String
+
+    /// The entry's title.
+    public static let title = "Conductor steered"
+
+    public init(id: String, at: Date?, text: String) {
+        self.id = id
+        self.at = at
+        self.text = text
+    }
+
+    /// The steer `event` records; nil for any other event, or one with no text.
+    public init?(event: TicketEventsPayload.Event) {
+        guard event.type == "conductor.steer", let text = event.payload.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
+        self.init(id: event.id, at: event.date, text: text)
+    }
 }

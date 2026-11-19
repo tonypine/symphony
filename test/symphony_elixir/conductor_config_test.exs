@@ -32,10 +32,33 @@ defmodule SymphonyElixir.ConductorConfigTest do
              SystemSchema.parse(Map.put(@base, "conductor", %{"timeout_ms" => 0}))
   end
 
+  test "the watch is off by default, and refuses an unknown key or a limit of 0" do
+    assert {:ok, %{conductor: %{watch: watch}}} = SystemSchema.parse(@base)
+
+    assert watch == %Schema.Conductor.Watch{
+             enabled: false,
+             run_minutes: 30,
+             run_tokens: 30_000_000,
+             min_interval_minutes: 10,
+             max_turns_per_run: 3,
+             allow_stop: false
+           }
+
+    assert {:ok, %{conductor: %{watch: %{enabled: true, allow_stop: true, max_turns_per_run: 1}}}} =
+             SystemSchema.parse(Map.put(@base, "conductor", %{"watch" => %{"enabled" => true, "allow_stop" => true, "max_turns_per_run" => 1}}))
+
+    assert {:error, {:invalid_symphony_config, "unknown symphony.yml key `conductor.watch.every`"}} =
+             SystemSchema.parse(Map.put(@base, "conductor", %{"watch" => %{"every" => 1}}))
+
+    assert {:error, {:invalid_symphony_config, "conductor.watch.max_turns_per_run must be greater than 0"}} =
+             SystemSchema.parse(Map.put(@base, "conductor", %{"watch" => %{"max_turns_per_run" => 0}}))
+  end
+
   test "its keys are symphony.yml settings, which the macOS app must edit" do
     keys = SystemSchema.operator_key_paths()
 
-    for key <- ~w(conductor.enabled conductor.junctions conductor.timeout_ms), do: assert(key in keys)
+    watch = ~w(enabled run_minutes run_tokens min_interval_minutes max_turns_per_run allow_stop) |> Enum.map(&("conductor.watch." <> &1))
+    for key <- ~w(conductor.enabled conductor.junctions conductor.timeout_ms) ++ watch, do: assert(key in keys)
     refute "phases.conductor.steps" in keys
   end
 

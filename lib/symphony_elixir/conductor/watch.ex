@@ -49,7 +49,7 @@ defmodule SymphonyElixir.Conductor.Watch do
        runs: %{},
        tick_ms: tick_ms,
        running: Keyword.get(opts, :running, &running/0),
-       start_turn: Keyword.get(opts, :start_turn, &start_turn/3),
+       start_turn: Keyword.get(opts, :start_turn) || (&start_turn/3),
        now_ms: Keyword.get(opts, :now_ms, fn -> System.monotonic_time(:millisecond) end)
      }}
   end

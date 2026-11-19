@@ -338,8 +338,8 @@ defmodule SymphonyElixir.Conductor do
   A watch turn on the running `run` (an orchestrator snapshot's running entry: its `issue_id`,
   `run_id`, `run_profile`, `started_at`, `total_tokens` and newest lines), looked at for `trigger`
   (`SymphonyElixir.Conductor.Watch`): the facts at `during_run` with the run's live state, then what
-  the turn answered (`run/3`), which may steer or stop the run. Always `:ok`; a turn whose provider
-  can't run is skipped.
+  the turn answered (`run/3`), which may steer or stop the run. Always `:ok`. It runs on
+  `runs.conductor`'s own choice: the watch sees no provider's hold.
   """
   @spec watch(map(), String.t(), keyword()) :: :ok
   def watch(%{issue_id: issue_id, run_id: run_id} = run, trigger, opts) do
@@ -347,19 +347,14 @@ defmodule SymphonyElixir.Conductor do
     record = record(issue_id, opts)
     repo_key = Map.get(run, :repo_key) || record.repo_key
 
-    case profile(repo_key, fn _profile -> true end) do
-      {:ok, run_profile} ->
-        events = Facts.events(issue_id)
-        facts = record |> Facts.build("during_run", Keyword.put(opts, :events, events)) |> Map.put(:live, Watch.live(run, Enum.filter(events, &(&1.run_id == run_id))))
-        watch = %{run: run, trigger: trigger, allow_stop: settings.watch.allow_stop, stop: Keyword.get(opts, :stop, &Orchestrator.stop_running/1)}
-        plan = %{junction: "during_run", issue_id: issue_id, repo_key: repo_key, run_profile: run_profile, timeout_ms: settings.timeout_ms, watch: watch}
-        issue = %Issue{id: issue_id, identifier: Map.get(run, :identifier) || record.issue_identifier, title: record.title, state: record.phase}
-        _ran = run(plan, issue, Keyword.put(opts, :facts, facts))
-        :ok
-
-      {:held, provider} ->
-        Logger.info("Conductor watch skipped issue_id=#{issue_id} run_id=#{run_id}: no provider of runs.conductor can take a run now (#{provider})")
-    end
+    {:ok, run_profile} = profile(repo_key, fn _profile -> true end)
+    events = Facts.events(issue_id)
+    facts = record |> Facts.build("during_run", Keyword.put(opts, :events, events)) |> Map.put(:live, Watch.live(run, Enum.filter(events, &(&1.run_id == run_id))))
+    watch = %{run: run, trigger: trigger, allow_stop: settings.watch.allow_stop, stop: Keyword.get(opts, :stop, &Orchestrator.stop_running/1)}
+    plan = %{junction: "during_run", issue_id: issue_id, repo_key: repo_key, run_profile: run_profile, timeout_ms: settings.timeout_ms, watch: watch}
+    issue = %Issue{id: issue_id, identifier: Map.get(run, :identifier) || record.issue_identifier, title: record.title, state: record.phase}
+    _ran = run(plan, issue, Keyword.put(opts, :facts, facts))
+    :ok
   end
 
   # A watch turn's steer waits for the run's next agent turn, and one asked for `now` interrupts the
