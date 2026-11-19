@@ -127,6 +127,7 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     facts = Facts.build(ctx.record, "after_rework", events: rework, diff_stat: fn _record -> nil end, token_cap: nil)
     assert facts.last_run.resolved_findings == [%{event_id: seeded.resolution.id, finding_id: seeded.finding.id, how: "Wired the handler."}]
     refute Map.has_key?(facts.last_run, :files_changed)
+    refute Map.has_key?(Facts.build(%{ctx.record | issue_identifier: nil}, nil, events: rework, token_cap: nil).last_run, :files_changed)
     assert [%{state: "resolved", resolution: %{how: "Wired the handler."}}] = facts.findings
   end
 
@@ -139,7 +140,7 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     assert facts.standing.pull_request == %{number: 7, url: "https://github.com/o/r/pull/7", state: "OPEN"}
     assert facts.standing.head == "def456"
 
-    assert Facts.build(%{issue_id: nil}, nil, diff_stat: fn _ -> nil end).findings == []
+    assert Facts.build(%{issue_id: nil}, nil).findings == []
   end
 
   test "a description with no heading is the problem; long texts are cut with a marker", ctx do

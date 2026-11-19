@@ -82,23 +82,19 @@ defmodule SymphonyElixir.Conductor.Facts do
   defp find(name) do
     name = String.trim(name)
 
-    case RunStore.list_all_ticket_states() do
-      records when is_list(records) ->
-        records
-        |> Enum.map(&TicketState.normalize/1)
-        |> Enum.find(&(is_binary(&1.issue_id) and (&1.issue_id == name or same_identifier?(&1.issue_identifier, name))))
-        |> case do
-          nil -> {:error, :not_found}
-          record -> {:ok, record}
-        end
-
-      _store_error ->
-        {:error, :not_found}
+    # A store that can't be read lists no record, so its tickets read as unknown.
+    with({:error, _reason} <- RunStore.list_all_ticket_states(), do: [])
+    |> List.wrap()
+    |> Enum.map(&TicketState.normalize/1)
+    |> Enum.find(&named?(&1, name))
+    |> case do
+      nil -> {:error, :not_found}
+      record -> {:ok, record}
     end
   end
 
-  defp same_identifier?(identifier, name) when is_binary(identifier), do: String.upcase(identifier) == String.upcase(name)
-  defp same_identifier?(_identifier, _name), do: false
+  defp named?(%{issue_id: id, issue_identifier: identifier}, name),
+    do: is_binary(id) and (id == name or (is_binary(identifier) and String.upcase(identifier) == String.upcase(name)))
 
   @doc "The document for the ticket `record` at `junction` (see the module doc and `t:opt/0`)."
   @spec build(map(), String.t() | nil, [opt()]) :: map()
@@ -290,7 +286,7 @@ defmodule SymphonyElixir.Conductor.Facts do
 
   defp workspace_diff_stat(%{issue_identifier: identifier, repo_key: repo_key}) when is_binary(identifier) and is_binary(repo_key) do
     with {:ok, workspace} <- Workspace.local_path_for_issue(identifier, repo_key),
-         true <- File.dir?(Path.join(workspace, ".git")) or File.regular?(Path.join(workspace, ".git")),
+         true <- File.exists?(Path.join(workspace, ".git")),
          {output, 0} <- Workspace.safe_git(["-C", workspace, "diff", "--numstat", "origin/HEAD...HEAD"]) do
       numstat(output)
     else
@@ -416,6 +412,5 @@ defmodule SymphonyElixir.Conductor.Facts do
   defp blank_to_nil(value) when value in [nil, ""], do: nil
   defp blank_to_nil(value), do: value
 
-  defp iso8601(%DateTime{} = at), do: DateTime.to_iso8601(at)
-  defp iso8601(_at), do: nil
+  defp iso8601(at), do: at && DateTime.to_iso8601(at)
 end

@@ -273,6 +273,29 @@ defmodule SymphonyElixir.ConductorTest do
     end
   end
 
+  test "the facts read the workspace's diff stat when it exists, and the repo's token cap", ctx do
+    {:ok, workspace} = Workspace.local_path_for_issue(ctx.record.issue_identifier, "default")
+    refute Map.has_key?(Facts.build(ctx.record, nil).last_run || %{}, :files_changed)
+    File.mkdir_p!(workspace)
+    git = fn args -> {_output, 0} = System.cmd("git", ["-C", workspace | args], stderr_to_stdout: true) end
+    git.(["init", "-q"])
+    git.(["-c", "user.email=t@e.st", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "base"])
+    git.(["update-ref", "refs/remotes/origin/HEAD", "HEAD"])
+    File.write!(Path.join(workspace, "b.txt"), "one\n")
+    git.(["add", "b.txt"])
+    git.(["-c", "user.email=t@e.st", "-c", "user.name=t", "commit", "-q", "-m", "change"])
+    ran!(ctx.issue_id, "implementation")
+
+    facts = Facts.build(ctx.record, "after_coding")
+    assert facts.last_run.files_changed == [%{path: "b.txt", added: 1, removed: 0}]
+    assert facts.budget.tokens_cap == Config.settings_for_repo!("default").execution.max_tokens_per_issue
+  end
+
+  test "plan_after_run/3 reads the Conductor's settings, off by default", ctx do
+    ran!(ctx.issue_id, "qa")
+    assert Conductor.plan_after_run(ctx.issue, :qa, "default") == nil
+  end
+
   test "a turn's result reads as its text candidates and tokens" do
     assert Conductor.turn_result({:ok, %{result: "{}"}}, []) == {:ok, ["{}"], 0}
     assert Conductor.turn_result({:error, :boom}, [%{"tokenUsage" => %{"total" => %{"total_tokens" => 9}}}]) == {:error, :boom, 9}
