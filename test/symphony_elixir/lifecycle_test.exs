@@ -491,6 +491,23 @@ defmodule SymphonyElixir.LifecycleTest do
       assert %{tokens: 0, runs: 0} = stages(result)["coding"]
       assert %{total: 700, conductor_tokens: 700} = result.lifecycle.tokens
     end
+
+    test "the running snapshot's profile is the orchestrator's struct, or absent" do
+      events = [entered("2026-10-30T10:00", "In Progress")]
+      profile = %SymphonyElixir.Config.Runs.Run{kind: :implementation, harness: "claude", command: "claude", provider: "anthropic", model: "claude-opus-5-5"}
+      running = %{run_id: "r1", started_at: at("2026-10-30T10:01"), total_tokens: 700, run_profile: profile}
+
+      result = Lifecycle.compute(events, Map.merge(@facts, %{now: at("2026-10-30T10:05"), running: running}))
+      assert %{tokens: 700} = stages(result)["coding"]
+      assert %{total: 700, conductor_tokens: 0} = result.lifecycle.tokens
+
+      conductor = %{running | run_profile: %{profile | kind: :conductor}}
+      result = Lifecycle.compute(events, Map.merge(@facts, %{now: at("2026-10-30T10:05"), running: conductor}))
+      assert %{total: 700, conductor_tokens: 700} = result.lifecycle.tokens
+
+      result = Lifecycle.compute(events, Map.merge(@facts, %{now: at("2026-10-30T10:05"), running: %{running | run_profile: nil}}))
+      assert %{total: 700, conductor_tokens: 0} = result.lifecycle.tokens
+    end
   end
 
   describe "the run working now" do

@@ -404,8 +404,16 @@ defmodule SymphonyElixir.ConductorTest do
       run_id = ctx.run.run_id
       assert_received {:conductor_interrupt, ^run_id, _sent_ms}
 
+      # The orchestrator's running snapshot holds the profile as its struct.
+      live = %{ctx.run | run_profile: %SymphonyElixir.Config.Runs.Run{kind: :implementation, harness: "claude", command: "claude", provider: "anthropic", model: "m"}}
+      assert Conductor.watch(live, "step_failed_twice", turn: turn) == :ok
+      assert_received {:conductor_interrupt, ^run_id, _sent_ms}
+
       other = %{ctx.run | run_profile: %{harness: "codex"}}
       assert Conductor.watch(other, "step_failed_twice", turn: turn) == :ok
+      refute_received {:conductor_interrupt, _run_id, _sent_ms}
+
+      assert Conductor.watch(%{ctx.run | run_profile: nil}, "step_failed_twice", turn: turn) == :ok
       refute_received {:conductor_interrupt, _run_id, _sent_ms}
       :ets.delete(:symphony_conductor_steer, {:turn, ctx.run.run_id})
     end
