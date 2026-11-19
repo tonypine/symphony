@@ -2677,6 +2677,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                "source" => nil,
                "error" => nil,
                "utilization" => nil,
+               "reserve" => nil,
                "issue_identifier" => "MT-HELD",
                "still_on" => false,
                "condition" => "usage_limit:anthropic:all"
@@ -2693,6 +2694,7 @@ defmodule SymphonyElixir.ExtensionsTest do
                  "reason" => "claude_usage_limit",
                  "window" => "five_hour",
                  "phase" => "paused",
+                 "reserve" => nil,
                  "resets_at" => "2026-10-03T14:03:00Z",
                  "resume_at" => DateTime.to_iso8601(resume_at),
                  "text" => "Claude's 5-hour limit until 14:05"

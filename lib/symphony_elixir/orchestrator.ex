@@ -4596,8 +4596,14 @@ defmodule SymphonyElixir.Orchestrator do
     }
 
     entry = if rule == :provider_pause, do: Map.put(entry, :provider, paused_provider_of(state, issue)), else: entry
+    entry = if rule == :usage_limit, do: Map.merge(entry, reserve_of(usage_limit_hold(state, issue))), else: entry
     %{state | dispatch_skipped: Map.put(state.dispatch_skipped, issue.id, entry)}
   end
+
+  # A skip for a provider at its reserve names the provider and the reserve, so the ticket's situation
+  # says which provider and where it stops new runs; a skip for a reached limit names neither.
+  defp reserve_of(%{phase: :headroom, provider: provider} = hold), do: %{provider: provider, reserve: Map.get(hold, :reserve)}
+  defp reserve_of(_hold), do: %{}
 
   # An entry keeps its `since` while its reason stays the same; a new or changed reason is logged once.
   defp settle_dispatch_skipped(%State{dispatch_skipped: skipped} = state, previous) do
@@ -10799,10 +10805,11 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # `execution.usage_limit.headroom_utilization`: an allowed_warning at or above it holds new runs of
-  # the provider until the window resets. A pause or canary already in place is left as it is.
+  # `execution.providers.anthropic.reserve`: a window at or above it puts the provider at its reserve,
+  # holding new runs on it until the window resets. A pause or canary already in place is left as it
+  # is. The windows a run reports are Anthropic's (Claude Code's rate-limit events).
   defp hold_for_usage_headroom(%State{} = state, running_entry, %{usage_windows: %{} = windows}) do
-    case Config.settings!().execution.usage_limit.headroom_utilization do
+    case Schema.Execution.reserve(Config.settings!().execution, "anthropic") do
       threshold when is_number(threshold) ->
         windows
         |> UsageLimit.headroom_crossings(threshold, state.clock.())
@@ -10840,7 +10847,7 @@ defmodule SymphonyElixir.Orchestrator do
     end
 
     Logger.warning(
-      "Usage limit headroom hold provider=#{entry.provider} utilization=#{entry.utilization} threshold=#{threshold} " <>
+      "Usage limit headroom hold provider=#{entry.provider} utilization=#{entry.utilization} reserve=#{threshold} " <>
         "scope=#{UsageLimit.scope_label(entry.scope)} window=#{entry.window} resets_at=#{DateTime.to_iso8601(entry.resets_at)} " <>
         "resume_at=#{DateTime.to_iso8601(entry.resume_at)} issue_identifier=#{entry.issue_identifier}"
     )
@@ -10882,7 +10889,7 @@ defmodule SymphonyElixir.Orchestrator do
     reason =
       case event do
         :usage_limit_paused -> "#{UsageLimit.limit_label(entry)}; resumes at #{DateTime.to_iso8601(entry.resume_at)}"
-        :usage_limit_headroom -> "#{UsageLimit.limit_label(entry)} at #{round(entry.utilization * 100)}%; holding new runs until #{DateTime.to_iso8601(entry.resume_at)}"
+        :usage_limit_headroom -> "#{UsageLimit.hold_label(entry)} (#{UsageLimit.limit_label(entry)} at #{round(entry.utilization * 100)}%) until #{DateTime.to_iso8601(entry.resume_at)}"
         :usage_limit_resumed -> UsageLimit.limit_label(entry)
       end
 
@@ -10907,7 +10914,8 @@ defmodule SymphonyElixir.Orchestrator do
   defp format_optional_datetime(nil), do: "unknown"
 
   defp usage_limit_error(%{phase: :headroom} = entry) do
-    "usage limit headroom hold (provider=#{entry.provider} scope=#{UsageLimit.scope_label(entry.scope)}); resuming at #{DateTime.to_iso8601(entry.resume_at)}"
+    "provider at its reserve (provider=#{entry.provider} reserve=#{Map.get(entry, :reserve)} scope=#{UsageLimit.scope_label(entry.scope)}); " <>
+      "resuming at #{DateTime.to_iso8601(entry.resume_at)}"
   end
 
   defp usage_limit_error(%{reason: "model_api_unreachable"} = entry) do
@@ -11450,7 +11458,8 @@ defmodule SymphonyElixir.Orchestrator do
       usage_limits: Map.values(state.usage_limits),
       usage_windows: state.usage_windows,
       working: for({_issue_id, %{run_profile: %{provider: provider}}} <- state.running, do: provider),
-      tokens_today: state.provider_tokens_today
+      tokens_today: state.provider_tokens_today,
+      reserves: Providers.reserves(Config.settings!())
     })
   end
 

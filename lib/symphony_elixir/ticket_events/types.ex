@@ -72,6 +72,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   brief, a `title` up to 120, its `do` instructions one string each up to 400, `expect` up to 1,500
   and an optional `design` up to 600); and `verdict_summary` (the review's own summary, up to 600).
   A step whose answer Symphony could not take ends `failed` with its `reason`.
+
+  In every other run kind a step's structured answer is its `answer` (`SymphonyElixir.PhaseSteps.StepAnswer`):
+  a list of at most 12 `label` (up to 60 characters) and `value` (up to 1,500, as text) entries in
+  the answer's key order. Symphony never writes a machine `note` to carry a step's output: what a
+  step answered and why it failed live on its `step.completed`.
   A skipped step is a `step.completed` with
   `outcome: skipped`: there is no `step.skipped` type. A `question.answered` naming the question a
   paused step waits on is what resumes that step.
@@ -429,7 +434,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
                 expect: {:string, 1_500},
                 design: {:optional, {:string, 600}}
               ]}},
-          verdict_summary: {:string, 600}
+          verdict_summary: {:string, 600},
+          answer: {:list, {:map, [label: {:string, 60}, value: {:string, 1_500}]}}
         ] ++ @signal,
       conditional: [returns_to: {:outcome, "failed"}, question_id: {:outcome, "paused"}, reason: {:outcome, "skipped", ["failed"]}],
       agent_values: @agent_steps,

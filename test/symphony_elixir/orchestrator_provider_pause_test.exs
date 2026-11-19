@@ -153,6 +153,92 @@ defmodule SymphonyElixir.OrchestratorProviderPauseTest do
     end
   end
 
+  describe "while a provider is at its reserve" do
+    test "a new run starts on its fallback, as under a pause", ctx do
+      fallbacks = [%{"provider" => "openrouter", "model" => "openai/gpt-5"}]
+
+      write_provider_workflow!(ctx,
+        agent_run_profiles: %{"implementation" => %{"fallbacks" => fallbacks}},
+        execution_providers: %{anthropic: %{reserve: 0.8}}
+      )
+
+      state = at_reserve(orchestrator_state())
+      todo = issue("fallback", "MT-FALLBACK", "Todo")
+
+      assert %{provider: "openrouter", fallback: 0} = Orchestrator.run_profile_for_test(state, todo, false)
+      assert Orchestrator.should_dispatch_issue_for_test(todo, state)
+
+      # A continuation stays on its own choice, and the reserve does not hold it.
+      assert %{provider: "anthropic", fallback: nil} = Orchestrator.run_profile_for_test(state, todo, true)
+    end
+
+    test "a ticket with no free fallback is skipped naming the provider and its reserve" do
+      state = at_reserve(orchestrator_state())
+      todo = issue("todo", "MT-TODO", "Todo")
+      tracked([todo])
+
+      state = Orchestrator.dispatch_chosen_issues_for_test([todo], state)
+
+      assert state.running == %{}
+
+      assert %{reason: "Anthropic at its 80% reserve: holding new runs", rule: :usage_limit, provider: "anthropic", reserve: 0.8} =
+               state.dispatch_skipped["todo"]
+
+      assert %{
+               kind: "waiting_for_provider",
+               word: "Waiting: Anthropic is at its 80% reserve",
+               cause: "The implementation run runs on Anthropic, which stops new runs at its 80% reserve, and none of its fallbacks can take it.",
+               next: "Starts when Anthropic's usage resets.",
+               waits_on: %{provider: "anthropic"}
+             } = situation(state, "todo", "Todo")
+
+      # A hold that doesn't say its reserve still names the provider.
+      state = %{state | usage_limits: Map.new(state.usage_limits, fn {key, hold} -> {key, Map.delete(hold, :reserve)} end)}
+      state = Orchestrator.dispatch_chosen_issues_for_test([todo], state)
+      assert %{word: "Waiting: Anthropic is at its reserve"} = situation(state, "todo", "Todo")
+    end
+
+    test "a landing run and a forced ticket's run are not held" do
+      state = at_reserve(orchestrator_state())
+      landing = issue("landing", "MT-LAND", "Merging")
+      assert Orchestrator.should_dispatch_issue_for_test(landing, state)
+
+      todo = issue("todo", "MT-TODO", "Todo")
+      refute Orchestrator.should_dispatch_issue_for_test(todo, state)
+      assert Orchestrator.should_dispatch_issue_for_test(%{todo | labels: ["expedite"]}, state)
+    end
+
+    test "the state's providers fill the reserve and say the provider is at it", ctx do
+      write_provider_workflow!(ctx, execution_providers: %{anthropic: %{reserve: 0.8}})
+
+      assert %{reserve: 0.8, at_reserve: false} = provider(snapshot_of(orchestrator_state()), "anthropic")
+      assert %{reserve: 0.8, at_reserve: true, held: true} = provider(snapshot_of(at_reserve(orchestrator_state())), "anthropic")
+      assert %{reserve: nil, at_reserve: false} = provider(snapshot_of(orchestrator_state()), "openai")
+    end
+  end
+
+  defp at_reserve(state) do
+    now = DateTime.utc_now()
+
+    hold = %{
+      provider: "anthropic",
+      scope: :all,
+      reason: "claude_usage_headroom",
+      window: "seven_day",
+      phase: :headroom,
+      since: now,
+      resets_at: DateTime.add(now, 3600),
+      resume_at: DateTime.add(now, 3720),
+      source: :rate_limit_event,
+      canary_issue_id: nil,
+      issue_identifier: nil,
+      utilization: 0.83,
+      reserve: 0.8
+    }
+
+    %{state | usage_limits: %{{"anthropic", :all} => hold}}
+  end
+
   describe "a retry waiting for a slot" do
     test "keeps its attempt and claim while its provider is paused, and resume sends it on at once" do
       waiting_issue = issue("waiting", "MT-WAIT", "In Progress")

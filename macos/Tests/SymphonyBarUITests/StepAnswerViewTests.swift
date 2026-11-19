@@ -52,4 +52,19 @@ final class StepAnswerViewTests: XCTestCase {
         XCTAssertTrue(step.canUnfold)
         XCTAssertEqual(step.answer?.result?.extraWord, "blocked")
     }
+
+    func testAnAnswersEntriesAreKeyValueRowsWithValuesCutAtEightLines() {
+        let long = (1...30).map { "line \($0)" }.joined(separator: "\n")
+        let cut = size(StepAnswerView(answer: StepAnswer(entries: [.init(label: "Files", value: long)])))
+        let whole = size(KeyValueList(style: .secondary) { KeyValueRow("Files", text: long) })
+        XCTAssertLessThan(cut.height, whole.height)
+        XCTAssertEqual(StepAnswerView.valueLines, 8)
+        let three = size(StepAnswerView(answer: StepAnswer(entries: [.init(label: "A", value: "1"), .init(label: "B", value: "2"), .init(label: "C", value: "3")])))
+        XCTAssertGreaterThan(three.height, size(StepAnswerView(answer: StepAnswer(entries: [.init(label: "A", value: "1")]))).height)
+    }
+
+    func testAFailedStepsLongReasonIsShownWholeWhenOpened() {
+        let reason = (1...5).map { "Reason line \($0)" }.joined(separator: "\n")
+        XCTAssertGreaterThan(size(StepAnswerView(reason: reason)).height, size(StepAnswerView(reason: "One line")).height * 3)
+    }
 }

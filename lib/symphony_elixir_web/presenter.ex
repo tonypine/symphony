@@ -1610,6 +1610,7 @@ defmodule SymphonyElixirWeb.Presenter do
       source: optional_string(Map.get(entry, :source)),
       error: Map.get(entry, :error),
       utilization: Map.get(entry, :utilization),
+      reserve: Map.get(entry, :reserve),
       issue_identifier: Map.get(entry, :issue_identifier),
       still_on: Map.get(entry, :still_on) == true,
       condition: UsageLimit.condition(entry),
@@ -1884,6 +1885,7 @@ defmodule SymphonyElixirWeb.Presenter do
       reason: Map.get(b, :reason),
       window: Map.get(b, :window),
       phase: optional_string(Map.get(b, :phase)),
+      reserve: Map.get(b, :reserve),
       resets_at: iso8601(Map.get(b, :resets_at)),
       resume_at: iso8601(Map.get(b, :resume_at)),
       text: Map.get(b, :text)

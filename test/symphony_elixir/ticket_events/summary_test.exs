@@ -347,6 +347,25 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
                %{title: "Step failed", detail: "Writing the code · back to step code"}
     end
 
+    test "a step's own answer, failure reason and verdict summary are in its detail, never in a note" do
+      completed = fn attrs -> render("step.completed", Map.merge(@build, attrs)) end
+
+      answered = %{outcome: "passed", answer: [%{label: "layout", value: "two columns"}, %{"label" => "reason", "value" => String.duplicate("v", 400)}]}
+      assert %{title: "Build passed", detail: detail} = completed.(answered)
+      assert detail =~ "layout: two columns"
+      assert detail =~ ~r/reason: v+…/
+
+      result = %{status: "blocked", expected: "Rows", actual: "Empty state"}
+      assert completed.(%{outcome: "passed", result: result, verdict_summary: "Blocked."}) == %{title: "Build passed", detail: "blocked · Empty state · Blocked."}
+      assert completed.(%{outcome: "passed", result: %{status: "pass"}}) == %{title: "Build passed", detail: "pass"}
+
+      assert completed.(%{outcome: "failed", returns_to: "code", reason: "refused twice"}) ==
+               %{title: "Build failed: back to step code", detail: "refused twice"}
+
+      delegated = %{step_id: "code", title: "Writing the code", mode: "delegated", outcome: "failed", returns_to: "code", reason: "no end"}
+      assert render("step.completed", delegated) == %{title: "Step failed", detail: "Writing the code · back to step code · no end"}
+    end
+
     test "a step stored before its outcome was recorded, and a stored step.skipped, still read" do
       assert render("step.completed", %{title: "Open the Activity tab", mode: "orchestrated"}) == %{title: "Open the Activity tab completed", detail: nil}
       assert render("step.completed", %{title: "Open the Activity tab", mode: "output"}) == %{title: "Step completed", detail: "Open the Activity tab"}

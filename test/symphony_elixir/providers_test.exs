@@ -63,8 +63,17 @@ defmodule SymphonyElixir.ProvidersTest do
                fallback_for: [],
                working: 2,
                tokens_today: 120_000,
-               reserve: nil
+               reserve: nil,
+               at_reserve: false
              } = entry(Providers.list(facts()), "anthropic")
+    end
+
+    test "a provider whose usage Symphony reads takes its reserve, and a headroom hold puts it at the reserve" do
+      list = Providers.list(%{reserves: %{"anthropic" => 0.9, "openai" => 0.5}, usage_limits: [%{provider: "anthropic", phase: :headroom}]})
+
+      assert %{reserve: 0.9, at_reserve: true, held: true} = entry(list, "anthropic")
+      assert %{reserve: nil, at_reserve: false} = entry(list, "openai")
+      assert %{at_reserve: false, held: true} = entry(Providers.list(%{usage_limits: [%{provider: "anthropic", phase: :paused}]}), "anthropic")
     end
 
     test "an available provider a fallback names, with no readable usage" do
@@ -81,7 +90,8 @@ defmodule SymphonyElixir.ProvidersTest do
                fallback_for: ["implementation", "qa"],
                working: 1,
                tokens_today: 3_400,
-               reserve: nil
+               reserve: nil,
+               at_reserve: false
              } = entry(Providers.list(facts()), "openrouter")
     end
 

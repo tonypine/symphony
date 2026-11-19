@@ -64,7 +64,7 @@ defmodule SymphonyElixir.PrWatch.Sweep do
     {"has no repo key", "gate: no repo key"},
     {"dispatch is paused", "gate: paused"},
     {"usage limit holds", "gate: usage limit"},
-    {~r/ (limit reached|limit headroom: holding new runs|API unreachable)$/, "gate: usage limit"},
+    {~r/ (limit reached|at its (?:\d+% )?reserve: holding new runs|API unreachable)$/, "gate: usage limit"},
     {"quality gate task failure", "gate: quality gate failed"},
     {"readiness task failure", "gate: readiness failed"},
     {"previous Symphony may still be running", "gate: leftover agent"},

@@ -240,12 +240,18 @@ public struct RunStep: Equatable, Identifiable {
 
     /// What the step answered, when Symphony recorded it on the step: shown above its lines.
     public var answer: StepAnswer?
+    /// Why the step failed, whole, as Symphony recorded it; the row shows it in one line and the opened step in full.
+    public var reasonDetail: String?
+
+    /// The reason is longer than the row shows: more than a line's worth, or on several lines.
+    public var hasLongReason: Bool { reasonDetail.map { $0.count > Self.rowReasonLimit || $0.contains("\n") } ?? false }
+    static let rowReasonLimit = 80
 
     public var isLive: Bool { state == .current }
 
     /// Whether the step has lines to unfold into: a transcript, or the run now's lines. The step the run now is on
     /// unfolds before its first line comes, so that line fades in where the person sees it.
-    public var canUnfold: Bool { isLive || transcript != nil || !liveLines.isEmpty || answer != nil }
+    public var canUnfold: Bool { isLive || transcript != nil || !liveLines.isEmpty || answer != nil || hasLongReason }
 
     /// What the pointer shows on a step that can't unfold.
     public var cannotUnfoldReason: String? { canUnfold ? nil : Self.nothingYet }
@@ -348,6 +354,9 @@ public struct RunGroupModel: Equatable, Identifiable {
     public var effort: String?
     /// How it came out, the meta line's last words: "Asked you a question"; nil while it runs.
     public var outcome: String?
+    /// Why the run ended as it did, and what it answered, when Symphony put them on its `run.ended` and no step held them.
+    public var endReason: String?
+    public var endAnswer: StepAnswer?
     public var steps: [RunStep]
     /// One of its events is newer than the person's last look (TP-1451): an ended run's header carries the new dot.
     public var isNew = false
@@ -402,7 +411,8 @@ public struct RunGroupModel: Equatable, Identifiable {
     /// The line under the run's head (the prototype's `.run-meta`): "Claude Opus 5.5 · 12 min · 600K tokens · Asked
     /// you a question", the time so far while it runs. Nil when it has none of them.
     public var meta: String? {
-        let parts: [String] = [model, duration, tokensText, outcome].compactMap { $0 }
+        let reason = endReason.map { $0.split(whereSeparator: \.isNewline).joined(separator: " ") }
+        let parts: [String] = [model, duration, tokensText, outcome, reason].compactMap { $0 }
         return parts.isEmpty ? nil : parts.joined(separator: Self.metaSeparator)
     }
 
@@ -509,6 +519,8 @@ public struct RunGroupModel: Equatable, Identifiable {
         // A run on no step (one that walks none, a QA or Code Review run, or one between steps) has its newest lines
         // under the run itself.
         if live, let runNow, runNow.currentStep == nil { group.liveLines = runNow.lines }
+        group.endReason = ended?.payload.reason?.trimmingWhitespace().nonEmpty
+        group.endAnswer = ended?.payload.answer.flatMap { $0.entries.isEmpty ? nil : $0 }
         group.transcript = ended?.artifacts.first { $0.kind == "transcript" }?.sessionLines
         group.screenshots = outside
         group.isMechanical = run.runKind == conductorKind
@@ -587,6 +599,7 @@ public struct RunGroupModel: Equatable, Identifiable {
             if let title = event.payload.title?.trimmingWhitespace().nonEmpty { step.title = title }
             (step.state, step.reason) = completion(event.payload)
             step.answer = event.payload.answer
+            if step.state == .failed { step.reasonDetail = event.payload.reason?.trimmingWhitespace().nonEmpty }
             if let ms = event.payload.durationMs {
                 step.durationSeconds = ms / 1_000
             } else if let begun = startedAt[index], let at {

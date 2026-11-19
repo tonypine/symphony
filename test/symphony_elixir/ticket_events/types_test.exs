@@ -499,6 +499,20 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
                Enum.find(Types.schema("step.completed").optional, &(&1.name == "recheck"))
     end
 
+    test "a step's structured answer is a list of label and value entries on its step.completed" do
+      completed = fn attrs -> Types.validate("step.completed", Map.merge(%{step_id: "layout", title: "Layout", mode: "orchestrated", outcome: "passed"}, attrs), :machine, nil) end
+
+      answer = [%{label: "layout", value: "two columns"}, %{"label" => "files", "value" => "a.ex\nb.ex"}]
+      assert {:ok, %{answer: [%{label: "layout"}, %{label: "files", value: "a.ex\nb.ex"}]}} = completed.(%{answer: answer})
+      assert {:ok, %{answer: []}} = completed.(%{answer: []})
+      assert {:error, {:invalid_payload, [:answer]}} = completed.(%{answer: ~s({"layout":"x"})})
+      assert {:error, {:invalid_payload, [:answer]}} = completed.(%{answer: [%{label: "layout"}]})
+      long_label = [%{label: String.duplicate("l", 61), value: "x"}]
+      long_value = [%{label: "l", value: String.duplicate("v", 1_501)}]
+      assert {:error, {:invalid_payload, [:answer]}} = completed.(%{answer: long_label})
+      assert {:error, {:invalid_payload, [:answer]}} = completed.(%{answer: long_value})
+    end
+
     test "a skip is a step.completed: the type list stays closed" do
       refute Map.has_key?(Types.catalog(), "step.skipped")
       assert Types.validate("step.skipped", step(), :agent, "implementation") == {:error, {:unknown_type, "step.skipped"}}

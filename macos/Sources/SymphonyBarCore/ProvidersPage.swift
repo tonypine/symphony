@@ -6,7 +6,10 @@ import Foundation
 /// meters and its facts. A block is drawn only when it has content. Everything is read from the state's `providers`
 /// (TP-1533), so a Pause or a Resume shows as soon as Symphony's next state says so. A provider set up with an API key
 /// (TP-1540, `ProviderKeys`) also has a Key block: its key, Test connection, and Enable or Disable; its state reads Off
-/// while it isn't enabled, and its facts say whether its key is set. The keys are the app's, not Symphony's.
+/// while it isn't enabled, and its facts say whether its key is set. The keys are the app's, not Symphony's. A provider
+/// whose usage Symphony reads (TP-1535, `ProviderReserve`) has "Stop new runs at" under its meters, saved to
+/// `symphony.yml`, and each meter draws its stop mark at that reserve; once a window reaches it the provider reads
+/// "At your reserve".
 public struct ProvidersPage: Equatable {
     /// The move the page's button makes.
     public enum Move: Equatable {
@@ -61,12 +64,28 @@ public struct ProvidersPage: Equatable {
         public var id: String { title }
     }
 
-    /// A usage window as a one-line meter: its name, the share used and when it resets.
+    /// A usage window as a one-line meter: its name, the share used, where new runs stop (the provider's reserve) and
+    /// when it resets.
     public struct Meter: Equatable, Identifiable {
         public let id: String
         public let label: String
         public let percent: Int
+        public var stop: Int? = nil
         public let resets: String?
+    }
+
+    /// "Stop new runs at": the provider's reserve as a whole percent (nil for none), the shares offered, and whether a
+    /// save is on its way.
+    public struct ReserveControl: Equatable {
+        public let percent: Int?
+        public let choices: [Int]
+        public let saving: Bool
+
+        /// The pop-up's word for `percent`: "90 %", or "No reserve".
+        public static func title(_ percent: Int?) -> String { percent.map { "\($0) %" } ?? ProviderReserve.noneTitle }
+
+        /// What the pop-up shows.
+        public var title: String { Self.title(percent) }
     }
 
     /// A fact of the Access block.
@@ -107,6 +126,8 @@ public struct ProvidersPage: Equatable {
         public let facts: [Fact]
         /// Its Key block; none for a provider that takes no key, or while the keys aren't read yet.
         public var key: KeyBlock? = nil
+        /// "Stop new runs at"; none for a provider whose usage Symphony can't read.
+        public var reserve: ReserveControl? = nil
 
         /// The control the button sends.
         public var action: ControlAction? { move.map { ProvidersPage.action($0, provider: id, name: name) } }
@@ -124,6 +145,9 @@ public struct ProvidersPage: Equatable {
     public static let enableTitle = "Enable"
     public static let disableTitle = "Disable"
     public static let removeKeyTitle = "Remove Key"
+    public static let reserveTitle = "Stop new runs at"
+    public static let reserveRefusedTitle = "Could not save the reserve"
+    public static let atReserveWord = "At your reserve"
     public static let keySet = "set"
     public static let keyNotSet = "not set"
 
@@ -136,16 +160,23 @@ public struct ProvidersPage: Equatable {
     public let keys: ProviderKeys?
     /// The Key blocks' keys typed, tests and results.
     public let keyEditor: ProviderKeyEditor
+    /// The reserves saved to `symphony.yml` since Symphony last said, by provider id (nil for none), so a save shows at
+    /// once; Symphony's own word replaces each once it reads the file again.
+    public let savedReserves: [String: Int?]
+    /// The provider whose reserve is being saved.
+    public let savingReserve: String?
 
     public init(
         providers: [StateSnapshot.Provider]?, now: Date = Date(), timeZone: TimeZone = .current, keys: ProviderKeys? = nil,
-        keyEditor: ProviderKeyEditor = ProviderKeyEditor()
+        keyEditor: ProviderKeyEditor = ProviderKeyEditor(), savedReserves: [String: Int?] = [:], savingReserve: String? = nil
     ) {
         self.providers = providers
         self.now = now
         self.timeZone = timeZone
         self.keys = keys
         self.keyEditor = keyEditor
+        self.savedReserves = savedReserves
+        self.savingReserve = savingReserve
     }
 
     /// The providers in the list's order: in use first, then not in use, each in Symphony's order.
@@ -181,8 +212,31 @@ public struct ProvidersPage: Equatable {
         let move: Move? = provider.paused ? .resume : provider.inUse ? .pause : nil
         return Detail(
             id: provider.id, name: provider.name, state: state(provider), move: move, usage: meters(provider), facts: facts(provider),
-            key: keyBlock(provider.id)
+            key: keyBlock(provider.id), reserve: reserveControl(provider)
         )
+    }
+
+    /// The reserve of `provider` as a whole percent: one saved since Symphony last said, else Symphony's; nil for none.
+    public func reservePercent(_ provider: StateSnapshot.Provider) -> Int? {
+        if let saved = savedReserves[provider.id] { return saved }
+        return provider.reserve.map(ProviderReserve.percent)
+    }
+
+    /// `saved` without each reserve the state's `providers` now say the same of.
+    public static func settledReserves(_ saved: [String: Int?], providers: [StateSnapshot.Provider]?) -> [String: Int?] {
+        saved.filter { id, percent in
+            guard let provider = providers?.first(where: { $0.id == id }) else { return true }
+            return provider.reserve.map(ProviderReserve.percent) != percent
+        }
+    }
+
+    /// "Stop new runs at" for a provider whose usage Symphony reads, offering the current share too when it isn't one
+    /// of the usual ones.
+    func reserveControl(_ provider: StateSnapshot.Provider) -> ReserveControl? {
+        guard ProviderReserve.takesReserve(provider.id) else { return nil }
+        let percent = reservePercent(provider)
+        let choices = Set(ProviderReserve.choices + [percent].compactMap { $0 }).sorted()
+        return ReserveControl(percent: percent, choices: choices, saving: savingReserve == provider.id)
     }
 
     /// The Key block of the provider `id`, nil for one that takes no key or while the keys aren't read.
@@ -242,6 +296,14 @@ public struct ProvidersPage: Equatable {
             let word = keyed ? "Available" : "Not in use"
             return State(status: keyed ? .done : .idle, word: word, cause: "No kind of run is set to it.", waits: nil, short: word, live: false)
         }
+        if provider.atReserve {
+            let until = provider.heldUntil
+            return State(
+                status: .you, word: Self.atReserveWord, cause: reserveCause(provider),
+                waits: Self.waits + (until.map { " Resumes \(longTime($0))." } ?? ""),
+                short: Self.atReserveWord + (until.map { " · until \(shortTime($0))" } ?? ""), live: false
+            )
+        }
         if provider.held {
             let until = provider.heldUntil
             return State(
@@ -260,6 +322,28 @@ public struct ProvidersPage: Equatable {
 
     public static let offWord = "Off"
 
+    /// "The week is at 90 %, where you stop new runs.": the fullest window at or past the reserve.
+    func reserveCause(_ provider: StateSnapshot.Provider) -> String {
+        let reserve = reservePercent(provider)
+        let reached = provider.usageWindows
+            .compactMap { window in window.utilization.map { (window.name, Self.percent($0)) } }
+            .filter { window in reserve.map { window.1 >= $0 } ?? true }
+            .max { $0.1 < $1.1 }
+        guard let reached else { return "It is at your reserve, where you stop new runs." }
+        return "\(Self.windowSubject(reached.0)) is at \(reached.1) %, where you stop new runs."
+    }
+
+    /// A window as the subject of a sentence: "The week", "The 5 hours".
+    static func windowSubject(_ name: String) -> String {
+        switch name {
+        case weekWindow: "The week"
+        case "five_hour": "The 5 hours"
+        case "seven_day_opus": "The Opus week"
+        case "seven_day_sonnet": "The Sonnet week"
+        default: "The " + windowLabel(name).lowercased()
+        }
+    }
+
     /// A key test's result as a Situation line: Works in green, Failed in red.
     public static func state(_ result: ProviderKeyCheck.Result) -> State {
         State(status: result.passed ? .done : .problem, word: result.word, cause: result.detail, waits: nil, short: result.word, live: false)
@@ -272,11 +356,15 @@ public struct ProvidersPage: Equatable {
 
     static let weekWindow = "seven_day"
 
-    /// Each usage window Symphony read a share for, as a one-line meter.
+    /// Each usage window Symphony read a share for, as a one-line meter with its stop mark at the reserve.
     func meters(_ provider: StateSnapshot.Provider) -> [Meter] {
-        provider.usageWindows.compactMap { window in
+        let stop = reservePercent(provider)
+        return provider.usageWindows.compactMap { window in
             guard let used = window.utilization else { return nil }
-            return Meter(id: window.name, label: Self.windowLabel(window.name), percent: Self.percent(used), resets: window.resetsAt.map(longTime))
+            return Meter(
+                id: window.name, label: Self.windowLabel(window.name), percent: Self.percent(used), stop: stop,
+                resets: window.resetsAt.map(longTime)
+            )
         }
     }
 

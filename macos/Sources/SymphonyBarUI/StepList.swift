@@ -230,8 +230,8 @@ private struct StepRow: View {
                     .padding(.vertical, DesignTokens.Space.s1)
             }
             if unfolded {
-                if let answer = step.answer {
-                    StepAnswerView(answer: answer)
+                if step.answer != nil || step.hasLongReason {
+                    StepAnswerView(answer: step.answer ?? StepAnswer(), reason: step.hasLongReason ? step.reasonDetail : nil)
                         .padding(.leading, Self.linesLeading)
                         .padding(.top, DesignTokens.Space.s1)
                 }

@@ -1620,9 +1620,11 @@ Fields:
   - Default: `120`. Added to the reported reset time before runs resume.
 - `usage_limit.unknown_reset_retry_seconds` (integer `>= 60`)
   - Default: `900`. How long the hold lasts when no reset time is known.
-- `usage_limit.headroom_utilization` (number in `(0, 1]` or null)
-  - Default: `null` (off). When set, an `allowed_warning` at or above it puts a headroom hold on
-    new runs of that provider until the window resets (Section 8.4.2).
+- `providers.<provider>.reserve` (number in `(0, 1]` or null)
+  - Default: `null` (no reserve). Where new runs on the provider stop, as a share of any of its
+    usage windows: a window at or above it puts the provider at its reserve, a headroom hold on its
+    new runs until the window resets (Section 8.4.2). Only a provider whose usage Symphony reads
+    takes one (`anthropic`); the config is refused for any other, with a message naming the key.
 - `prompts.include_project_guides` (boolean)
   - Default: `true`.
   - When enabled, implementations MAY append a `## Project conventions` section to the rendered
@@ -2720,7 +2722,10 @@ not require recognizing or validating extension fields unless that extension is 
 - `execution.usage_limit.auto_pause`: boolean, default `true`
 - `execution.usage_limit.resume_margin_seconds`: integer `>= 0`, default `120`
 - `execution.usage_limit.unknown_reset_retry_seconds`: integer `>= 60`, default `900`
-- `execution.usage_limit.headroom_utilization`: number in `(0, 1]` or null, default `null`
+- `execution.providers.<provider>.reserve`: number in `(0, 1]` or null, default `null`; only for a
+  provider whose usage Symphony reads (`anthropic`). It replaces
+  `execution.usage_limit.headroom_utilization`, which a start migrates to
+  `execution.providers.anthropic.reserve`.
 - `execution.harnesses`: map of harness (`claude`, `codex`, `opencode`) to `{command,
   small_model}`. `command` is a shell command string, REQUIRED for every harness a run kind
   resolves to. `small_model` is a map of provider to model id, REQUIRED for the provider of every
@@ -4164,15 +4169,16 @@ reached (for Claude, a used-up five-hour or weekly window; for Codex, an error w
 - Show each hold in the status surfaces (Section 13), for example
   `Paused: Claude 5-hour limit, resumes ~14:05` in local time.
 
-#### 8.4.2 Usage-Limit Headroom Holds
+#### 8.4.2 Usage-Limit Headroom Holds (a Provider at Its Reserve)
 
-When `execution.usage_limit.headroom_utilization` is set and a running Claude agent reports a
-`rate_limit_event` with status `allowed_warning` whose `utilization` is at or above it, for a
-window whose `resetsAt` is still ahead, Symphony leaves the rest of the limit to the operator's own
-sessions:
+When `execution.providers.anthropic.reserve` is set and a running Claude agent reports a
+`rate_limit_event` still allowed (`allowed` or `allowed_warning`) whose `utilization` is at or above
+it, for a window whose `resetsAt` is still ahead, Symphony leaves the rest of the limit to the
+operator's own sessions: the provider is at its reserve.
 
 - Create a hold as in Section 8.4.1, keyed by `{provider, scope}` for that window, with
-  `reason: "claude_usage_headroom"`, `phase: headroom`, the reported `utilization`, and
+  `reason: "claude_usage_headroom"`, `phase: headroom`, the `reserve` it was set at, the reported
+  `utilization`, and
   `resume_at = resetsAt + usage_limit.resume_margin_seconds`. A later warning for a window that
   resets later moves `resume_at` out; a higher warning for the same window raises the held
   `utilization`; an earlier window changes nothing. A `paused` or `canary` hold
@@ -4183,14 +4189,20 @@ sessions:
   run scheduled when a run ends with the issue still active, landing runs (`kind: landing`), or a
   forced issue's run (Section 8.3).
   `dispatch_state.active?` stays true while landing runs can still dispatch.
+- The provider is unavailable for new runs the way a paused one is: a new run resolves to the first
+  fallback of its run kind whose provider is neither paused nor held. A ticket whose run has no
+  such fallback is skipped with `rule: usage_limit`, naming the `provider` and its `reserve`, and its
+  situation is `waiting_for_provider`, "Waiting: Anthropic is at its 90% reserve", never another
+  situation's words.
 - At `resume_at` the hold clears without a canary, and held retries return to normal candidate
   selection. It is persisted and restored on startup as a headroom hold.
-- Log `Usage limit headroom hold provider=… utilization=… threshold=…` when the hold is created,
+- Log `Usage limit headroom hold provider=… utilization=… reserve=…` when the hold is created,
   moved out or raised. Emit one `usage_limit_headroom` notification when it is created and one
   `usage_limit_resumed` when it clears.
-- Show it in the status surfaces as `Holding new runs: Claude at 91%, resets ~14:05`.
+- Show it in the status surfaces as `Holding new runs: Anthropic at its 90% reserve, resets ~14:05`,
+  and as a blocker line `Anthropic at its 90% reserve: holding new runs`.
 - The Claude CLI only reports utilization once it passes its own warning threshold (seen at
-  `0.75`), so a lower setting behaves as if set at that point.
+  `0.75`), so a lower reserve behaves as if set at that point.
 
 #### 8.4.3 Unreachable Model API Holds
 
@@ -5490,7 +5502,9 @@ SHOULD return:
   for it from its runs: `name`, `utilization` from 0 to 1, `resets_at`; empty when it can read
   none), `harnesses` (those that reach it), `kinds` and `fallback_for` (the kinds of run whose own
   choice, or one of whose fallbacks, is on it), `working` (runs working on it now),
-  `tokens_today` (its runs' tokens on the daily budget's UTC day) and `reserve` (null for now). A
+  `tokens_today` (its runs' tokens on the daily budget's UTC day), `reserve` (its
+  `execution.providers.<provider>.reserve`, null when it has none or Symphony can't read its usage)
+  and `at_reserve` (a headroom hold keeps new runs off it, Section 8.4.2). A
   Pause or a Resume of a provider pushes the new state at once.
 - `pause`, `budget`, `dispatch_state`, and `workspace_lifecycle` when those extensions are enabled.
   `pause` is Symphony's own pause (Section 4.1.11): `paused` while a `person` or `build` reason
