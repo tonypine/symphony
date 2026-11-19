@@ -883,7 +883,8 @@ private struct ChipTextCapLayout: Layout {
 /// `.chip`: a compact tag for what a ticket is or where it belongs. One height, 24 pt (`--control-sm`), in the label
 /// style, on a capsule: plain and repo on the content surface with a hairline ring, epic transparent with a strong
 /// ring, status on its tint with its glyph in its colour. A label chip (`.chip-label`) is 20 pt on the raised
-/// surface, with its role's swatch.
+/// surface, with its role's swatch. On a selected row (`rowOnAccent`) it is white at 18 % behind its words and glyph in
+/// `text-on-accent`, without its ring.
 public struct Chip: View {
     public enum Kind: Equatable {
         case plain
@@ -928,6 +929,7 @@ public struct Chip: View {
     let maxTextWidth: Double?
     /// The whole of what a cut chip stands for: its tooltip and VoiceOver's words; nil says the text.
     let fullText: String?
+    @Environment(\.rowOnAccent) private var onAccent
 
     /// A chip saying `text`. With `maxTextWidth` the text stops at that width with an ellipsis, and `fullText` (the
     /// epic's whole title) is the tooltip and what VoiceOver says.
@@ -966,7 +968,8 @@ public struct Chip: View {
     }
 
     private var textColor: DesignTokens.ColorToken {
-        isLabel ? .textSecondary : .textPrimary
+        if onAccent { return .textOnAccent }
+        return isLabel ? .textSecondary : .textPrimary
     }
 
     @ViewBuilder private var lead: some View {
@@ -989,11 +992,20 @@ public struct Chip: View {
     }
 
     private var glyphColor: Color {
+        if onAccent { return DesignTokens.TextColor.onAccent.color }
         if case let .status(status) = kind { return status.tint }
         return DesignTokens.TextColor.secondary.color
     }
 
     @ViewBuilder private var face: some View {
+        if onAccent {
+            Capsule().fill(DesignTokens.TextColor.onAccent.color.opacity(DesignTokens.Chip.onAccentFill))
+        } else {
+            restingFace
+        }
+    }
+
+    @ViewBuilder private var restingFace: some View {
         switch kind {
         case .plain, .repo:
             Capsule()

@@ -255,9 +255,20 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert %{model: "claude-big", effort: "high", session: "lead"} = started["plan"]
       assert %{model: "claude-small", effort: "medium", session: "fresh"} = started["walk_1"]
 
-      notes = Enum.map(events("note"), & &1.payload.text)
-      assert Enum.any?(notes, &(&1 =~ "QA plan. Needs the app: yes." and &1 =~ "- Step 2: Page 2"))
-      assert Enum.any?(notes, &(&1 =~ "Walk a step 1: pass."))
+      # The answers ride on their steps' own `step.completed`; no note is written.
+      assert events("note") == []
+      by_step = Map.new(completed, &{&1.payload.step_id, &1.payload})
+
+      assert %{
+               checks: [%{title: "Step 1: Page 1", expect: "It shows"}, %{title: "Step 2: Page 2"}, %{title: "Gallery: button", expect: "primary"}],
+               skips: [],
+               summary: "QA plan. Needs the app: yes." <> _
+             } = by_step["plan"].plan
+
+      assert by_step["walk_1"].result == %{status: "pass", expected: "It shows", actual: "It shows"}
+      assert %{result: %{status: "pass"}} = by_step["design_check"]
+      assert by_step["review"].verdict_summary == "Every step behaved."
+      refute Map.has_key?(by_step["build"], :result)
 
       [plan_turn, walk_1, _walk_2, design, _wide, review] = turns
       assert plan_turn.prompt =~ "You plan this QA pass"
@@ -420,7 +431,12 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       completed = Enum.map(events("step.completed"), & &1.payload.step_id)
       assert Enum.take(completed, -6) == ["review", "launch", "recheck_1_1", "quit", "attach", "review"]
-      assert Enum.any?(events("note"), &(&1.payload.text =~ "The QA review asked for a recheck of 1 step(s)"))
+      assert events("note") == []
+
+      assert [%{payload: %{recheck: [%{title: "Step 2: Page 2, scrolled", do: ["Scroll"], expect: "Row 9 shows"}]}}] =
+               Enum.filter(events("step.completed"), &Map.has_key?(&1.payload, :recheck))
+
+      assert %{result: %{status: "pass"}} = events("step.completed") |> Enum.find(&(&1.payload.step_id == "recheck_1_1")) |> Map.fetch!(:payload)
     end
 
     test "a recheck turn walks its own brief and the walkthrough step it names", ctx do
@@ -486,8 +502,32 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
       assert second.prompt =~ "`status` must be one of pass, fail, blocked, plan_mismatch"
       assert review_turn.prompt =~ "- `look` (look): failed: no answer was written to"
 
-      assert [%{payload: %{outcome: "failed", returns_to: "review"}}, _review] = events("step.completed")
-      assert Enum.any?(events("note"), &(&1.payload.text =~ "The look step of the QA pass gave no answer Symphony takes"))
+      assert [%{payload: %{outcome: "failed", returns_to: "review", reason: reason}}, _review] = events("step.completed")
+      assert reason =~ "gave no answer Symphony takes: no answer was written to"
+      assert events("note") == []
+    end
+
+    test "a verdict with no summary puts none on the review's step", ctx do
+      answers(%{"review" => [{:verdict, Map.delete(@pass, "summary")}]})
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{}, [], [review()])
+      assert [%{payload: payload}] = events("step.completed")
+      refute Map.has_key?(payload, :verdict_summary)
+    end
+
+    test "a step that could not judge answers blocked: the pass goes on and the review sees it, never as a pass", ctx do
+      blocked = %{status: "blocked", expected: "Rows show", actual: "The page showed only its empty state; nothing was judged"}
+      answers(%{"look" => [{:write, blocked}], "review" => [{:verdict, @pass}]})
+
+      steps = [orchestrated("look", %{"answer" => %{"status" => "string"}}), review()]
+      assert {:ok, %{result: %{verdict: :pass}}} = run(ctx, %{}, [], steps)
+
+      [look, review_turn] = turns()
+      assert look.prompt =~ "`pass` only when every check in its brief was actually seen and judged"
+      assert review_turn.prompt =~ "- `look` (look): passed"
+      assert review_turn.prompt =~ "empty state; nothing was judged"
+      assert review_turn.prompt =~ ~s("status":"blocked")
+
+      assert [%{payload: %{outcome: "passed", result: %{status: "blocked", actual: "The page showed only" <> _}}}, _review] = events("step.completed")
     end
 
     test "a failed agent step with an on_fail goes there", ctx do

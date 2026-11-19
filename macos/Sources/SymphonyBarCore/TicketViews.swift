@@ -189,6 +189,15 @@ public struct TicketViewsMenu: Equatable {
     /// Update View saves the bar into the view in force, a saved one only, when it changed.
     public var canUpdate: Bool { current != nil && changed }
 
+    /// The bar's Save View, shown only while the bar differs from the view in force.
+    public static let saveChangesTitle = "Save View"
+
+    /// What the bar's Save View does: Update View on a saved view, Save View… on "All open"; nil while nothing changed.
+    public var saveChanges: Move? {
+        guard changed else { return nil }
+        return canUpdate ? .update : .save
+    }
+
     /// Rename… and Delete… act on a saved view, never on "All open".
     public var canEdit: Bool { current != nil }
 

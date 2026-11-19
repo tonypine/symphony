@@ -47,8 +47,8 @@ defmodule SymphonyElixir.QaAgent.Steps do
   Three steps are read by their id:
 
   - `plan`: its `walk` must hold a brief (`step`: the walkthrough step's number) for every
-    walkthrough step the pass walks, else it is refused and asked again. Its answer is recorded as a
-    `note`, and gives the walk steps their briefs, the design check its gallery entries, and the
+    walkthrough step the pass walks, else it is refused and asked again. Its answer is recorded on its `step.completed` (`plan`,
+    `SymphonyElixir.QaAgent.StepPayload`), and gives the walk steps their briefs, the design check its gallery entries, and the
     launch its `needs_app`;
   - `review` (required in every QA playbook's list): the verdict. It records it with `qa_verdict`
     in today's contract (`SymphonyElixir.QaAgent.Verdict`), or writes it to its answer file, or asks
@@ -70,7 +70,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.PhaseSteps.Transcript
-  alias SymphonyElixir.QaAgent.{StepPrompts, Verdict}
+  alias SymphonyElixir.QaAgent.{StepPayload, StepPrompts, Verdict}
   alias SymphonyElixir.QaPreCheck
   alias SymphonyElixir.Walkthrough
 
@@ -91,6 +91,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   @nothing_on_screen "the plan found nothing on screen to judge: it needs no app and no walkthrough step is walked"
   @output_key {__MODULE__, :output}
   @evidence_dir "qa-evidence"
+  @judged_rule "A step's answer `status` is `pass` only when every check in its brief was actually seen and judged. When any part could not be reached, seen or judged (the wrong fixture, an empty state, a screenshot not viewed), the status is `blocked` and `actual` says what blocked it: never `pass`, never `fail`."
 
   @typedoc "What a stepped pass gives back: `QaAgent.run_result/0`'s, with the review's session (`session_id`)."
   @type run_result :: %{result: QaAgent.result(), tokens: map(), session_id: String.t() | nil}
@@ -470,11 +471,28 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp retry_notes(_step, notes, why), do: Map.put(notes, :answer_error, why)
 
   defp passed(state, step, run, answer) do
-    PhaseSteps.record_turn_passed(step, step_context(state, run), duration(run))
     state = %{state | answers: state.answers ++ [{step, answer}]}
     state = if step.id == @plan, do: %{state | plan: answer}, else: state
-    note(state, step, answer)
+    PhaseSteps.record_turn_completed(step, step_context(state, run), answer_fields(state, step, answer), duration(run))
     {add_result(state, step, "passed", nil), :passed}
+  end
+
+  # The step's answer rides on its own `step.completed` (`SymphonyElixir.QaAgent.StepPayload`), where
+  # the Director reads it as fields, never as a note.
+  defp answer_fields(state, %Step{id: @plan}, answer), do: %{outcome: "passed", plan: StepPayload.plan(answer, plan_skips(state))}
+
+  defp answer_fields(_state, _step, answer) do
+    case StepPayload.result(answer) do
+      nil -> %{outcome: "passed"}
+      result -> %{outcome: "passed", result: result}
+    end
+  end
+
+  # The steps a plan that finds nothing on screen leaves unrun.
+  defp plan_skips(state) do
+    if nothing_on_screen?(state),
+      do: for(step <- state.steps, MapSet.member?(state.app_steps, step.id), do: %{title: step.title, why: @nothing_on_screen}),
+      else: []
   end
 
   # A step whose agent gave nothing Symphony takes ends `failed`, and the pass goes on to its
@@ -482,20 +500,25 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp failed(state, step, run, why) do
     target = Enum.find(state.steps, &(&1.id == step.on_fail)) || next_step(state, step, :passed)
     returns_to = if target, do: target.id, else: "end"
-    fields = %{outcome: "failed", returns_to: returns_to}
+    fields = %{outcome: "failed", returns_to: returns_to, reason: StepPayload.reason("gave no answer Symphony takes: #{why}")}
     PhaseSteps.record_turn_completed(step, step_context(state, run), fields, duration(run))
-    PhaseSteps.record_note(state.context, "The #{step.title} step of the QA pass gave no answer Symphony takes: #{why}")
     {add_result(state, step, "failed", why), if(step.on_fail, do: :failed, else: :passed)}
   end
 
   defp give_verdict(state, step, run, result) do
-    PhaseSteps.record_turn_passed(step, step_context(state, run), duration(run))
+    fields =
+      case StepPayload.verdict_summary(Map.get(result, :summary)) do
+        nil -> %{outcome: "passed"}
+        summary -> %{outcome: "passed", verdict_summary: summary}
+      end
+
+    PhaseSteps.record_turn_completed(step, step_context(state, run), fields, duration(run))
     {%{add_result(state, step, "passed", nil) | verdict: result, session_id: run.resume}, :passed}
   end
 
   defp asked_recheck(state, step, run, briefs) do
-    PhaseSteps.record_turn_passed(step, step_context(state, run), duration(run))
-    PhaseSteps.record_note(state.context, "The QA review asked for a recheck of #{length(briefs)} step(s): #{briefs |> Jason.encode!() |> String.slice(0, @answer_bytes)}")
+    fields = %{outcome: "passed", recheck: StepPayload.recheck(briefs)}
+    PhaseSteps.record_turn_completed(step, step_context(state, run), fields, duration(run))
     state = %{state | session_id: run.resume}
 
     if state.rounds >= @max_recheck_rounds,
@@ -635,28 +658,6 @@ defmodule SymphonyElixir.QaAgent.Steps do
   end
 
   defp brief_number(_brief), do: nil
-
-  defp note(state, %Step{id: @plan}, answer), do: PhaseSteps.record_note(state.context, plan_text(answer))
-
-  defp note(state, step, %{"status" => status} = answer),
-    do: PhaseSteps.record_note(state.context, "#{step.title}: #{status}. Expected: #{answer["expected"]}. Actual: #{answer["actual"]}")
-
-  defp note(_state, _step, _answer), do: :ok
-
-  defp plan_text(answer) do
-    walk = for brief <- List.wrap(answer["walk"]), is_map(brief), do: "- Step #{brief["step"]}: #{brief["where"]}; #{brief["do"]}; expect #{brief["expect"]}"
-    gallery = for entry <- List.wrap(answer["gallery"]), do: "- #{if is_map(entry), do: entry["entry"], else: entry}"
-
-    Enum.join(
-      [
-        "QA plan. Needs the app: #{if answer["needs_app"], do: "yes", else: "no"}.",
-        if(walk == [], do: "Walk: nothing.", else: Enum.join(["Walk:" | walk], "\n")),
-        if(gallery == [], do: "Gallery: nothing.", else: Enum.join(["Gallery:" | gallery], "\n")),
-        "Notes: #{answer["notes"]}"
-      ],
-      "\n"
-    )
-  end
 
   # -- one turn ---------------------------------------------------------------------
 
@@ -851,6 +852,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
   defp general_rules do
     """
     This turn is one step of a QA pass Symphony runs as a list of steps; other turns run the rest.
+    #{@judged_rule}
     Write every file under `#{@evidence_dir}/` in this worktree or under `$TMPDIR`. Never start an
     emulator, a simulator or a device tool yourself. Ending your turn ends the step: stop every
     process you started, and leave nothing running in the background.\

@@ -29,7 +29,7 @@ public struct TicketColumn: Equatable, Hashable, Identifiable {
 
     private static let titles = [
         "identifier": "Ticket", "title": "Title", "repo": "Repo", "epic": "Epic", "phase": "Phase", "situation": "Situation",
-        "situation_since": "In situation", "labels": "Labels", "priority": "Priority", "assignee": "Assignee", "url": "Link",
+        "situation_since": "Since", "labels": "Labels", "priority": "Priority", "assignee": "Assignee", "url": "Link",
         "created_at": "Age", "phase_at": "In phase", "updated_at": "Updated",
     ]
 
@@ -51,8 +51,9 @@ public struct TicketColumn: Equatable, Hashable, Identifiable {
         TicketColumn(name: "updated_at", type: "time", description: "When Symphony last wrote the ticket's record."),
     ]
 
-    /// The columns the table opens with.
-    public static let defaultColumns = ["identifier", "title", "repo", "epic", "situation", "priority", "labels", "created_at"]
+    /// The columns the table opens with (`docs/design/director-window-and-home.md` § Work: Tickets): Ticket, Title,
+    /// Repo, Epic, Situation, Since, Labels and Priority; Repo and Labels show from `DesignTokens.Tickets.wideFrom`.
+    public static let defaultColumns = ["identifier", "title", "repo", "epic", "situation", "situation_since", "labels", "priority"]
 
     /// The columns every read asks for besides the ones shown: the row's menu needs the repo and the phase, the search
     /// the identifier and the title, and the filters' menus learn their values from the epic and the labels.
@@ -151,10 +152,15 @@ public struct TicketFilterChip: Equatable, Identifiable {
     }
 
     /// What the chip reads: "Epic is TP-1400", "Situation is Waiting for CI or Working", "Updated in the last 24 hours".
-    public var text: String {
+    public var text: String { "\(field) \(valueWords)" }
+
+    /// The chip's first words, in the secondary colour: "Epic is", "Updated".
+    public var field: String { filter == .since ? filter.title : "\(filter.title) is" }
+
+    /// What it holds, in the primary colour: "TP-1400", "Waiting for CI or Working", "in the last 24 hours".
+    public var valueWords: String {
         let words = values.map(filter.word)
-        if filter == .since { return "\(filter.title) \(words.joined())" }
-        return "\(filter.title) is \(Self.either(words))"
+        return filter == .since ? words.joined() : Self.either(words)
     }
 
     /// Its × button's name for VoiceOver.
@@ -262,6 +268,32 @@ public struct TicketsQuery: Equatable {
     public func shownColumns(catalog: [TicketColumn], scope: OverviewScope) -> [TicketColumn] {
         let hidesRepo = repo(scope: scope) != nil
         return catalog.filter { columns.contains($0.name) && !(hidesRepo && $0.name == "repo") }
+    }
+
+    /// Whether the wide columns (Repo and Labels) wait for a wider page: at the default columns, on a page narrower
+    /// than `DesignTokens.Tickets.wideFrom`.
+    public func hidesWideColumns(width: Double) -> Bool {
+        columns == TicketColumn.defaultColumns && !DesignTokens.Tickets.showsWideColumns(width: width)
+    }
+
+    /// The columns the table draws on a page `width` wide: the shown ones, less the wide ones while they wait.
+    public func drawnColumns(catalog: [TicketColumn], scope: OverviewScope, width: Double) -> [TicketColumn] {
+        let hidden = hidesWideColumns(width: width) ? Set(DesignTokens.Tickets.wideColumns) : []
+        return shownColumns(catalog: catalog, scope: scope).filter { !hidden.contains($0.name) }
+    }
+
+    /// Whether the Columns menu ticks `name` on a page `width` wide: chosen, and not a wide column that waits.
+    public func ticksColumn(_ name: String, width: Double) -> Bool {
+        columns.contains(name) && !(hidesWideColumns(width: width) && DesignTokens.Tickets.wideColumns.contains(name))
+    }
+
+    /// A pick in the Columns menu on a page `width` wide: the column the menu ticks goes, one it doesn't shows. The
+    /// columns become the ones drawn first, so a wide column that waits shows when it is picked.
+    public mutating func pickColumn(_ name: String, width: Double, catalog: [TicketColumn] = TicketColumn.catalog) {
+        guard name != "identifier" else { return }
+        let ticked = ticksColumn(name, width: width)
+        if hidesWideColumns(width: width) { columns.removeAll { DesignTokens.Tickets.wideColumns.contains($0) } }
+        setColumn(name, shown: !ticked, catalog: catalog)
     }
 
     /// The query string: each chip's parameter in the catalog's filter order (the window's repo scope when there is no
@@ -579,5 +611,41 @@ extension TicketList.Stage {
         case .done?: self = .shipped
         default: self = .queued
         }
+    }
+}
+
+/// The Tickets details (`.tk-inspector`, TP-1501) for the picked ticket: its identifier with its repo and epic, its
+/// title, its situation, then Since, Phase, Pull request, Priority and Tokens, each only when it is known. The state's
+/// row (`tracked`) says where a ticket Symphony works on stands; the table's row (`row`) what the server read.
+public struct TicketDetails: Equatable {
+    public var identifier: String
+    public var title: String
+    public var repo: String?
+    public var epic: String?
+    public var situation: Situation
+    public var forced: Bool
+    public var facts: [TicketList.Fact]
+
+    /// Nil when neither the state nor the table has the ticket. `situation` is the state's for it.
+    public init?(
+        identifier: String, tracked: TicketList.Row?, row: TicketsRow?, situation: Situation? = nil, pullRequest: Int? = nil, reference: Date
+    ) {
+        guard tracked != nil || row != nil else { return nil }
+        self.identifier = identifier
+        title = tracked?.title ?? row?.title ?? ""
+        repo = tracked?.repoKey ?? row?.repoKey
+        epic = row?.epic
+        self.situation = situation ?? tracked?.line ?? row?.situation(tracked: nil) ?? Situation(kind: .unknown, cause: "")
+        forced = tracked?.forced ?? false
+        let since = tracked.flatMap { $0.sinceText.isEmpty ? nil : $0.sinceText }
+            ?? row?.time("situation_since").map { Overview.duration(Int(reference.timeIntervalSince($0))) }
+        let facts: [(String, String?)] = [
+            ("Since", since),
+            ("Phase", tracked?.state ?? row?.phase),
+            ("Pull request", pullRequest.map { "PR #\($0)" }),
+            ("Priority", row?.number("priority").map(TicketsRow.priorityName)),
+            ("Tokens", tracked?.facts.first { $0.label == "Tokens" }?.value),
+        ]
+        self.facts = facts.compactMap { label, value in value.map { TicketList.Fact(label: label, value: $0) } }
     }
 }

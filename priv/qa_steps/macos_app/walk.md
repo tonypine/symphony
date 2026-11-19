@@ -43,8 +43,8 @@ review gives the verdict from your answer.
 
 Answer with:
 
-- `status`: `pass` when the step behaved as the brief expects; `fail` when it shows a real defect;
-  `blocked` when you could not walk it (a tool, a fixture or a stand-in missing; say which);
+- `status`: `pass` when the step behaved as the brief expects and you saw and judged every part of it; `fail` when it shows a real defect;
+  `blocked` when you could not walk it, or could not reach, see or judge any part of it (a tool, a fixture or a stand-in missing, an empty state, a screenshot not viewed; say which), never `pass` then;
   `plan_mismatch` when the app is not where the brief says (a window, a control or a fixture the
   brief names does not exist), so the review can write a new brief.
 - `expected`: what the brief said must be true.

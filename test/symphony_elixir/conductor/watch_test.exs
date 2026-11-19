@@ -56,12 +56,21 @@ defmodule SymphonyElixir.Conductor.WatchTest do
       assert {"step_failed", _seen} = Watch.trigger([step("e1", "build", "failed"), step("e3", "tests", "failed")], run, @watch, seen)
       assert Watch.trigger([step("e4", "build", "passed")], run, @watch, MapSet.new()) == nil
 
-      answer = %Event{id: "n1", type: "note", payload: %{text: "Walk step 2: plan_mismatch. Expected: a list. Actual: nothing."}}
-      assert {"qa_step_answer", _seen} = Watch.trigger([answer], run, @watch, MapSet.new())
-      assert Watch.trigger([%Event{id: "n2", type: "note", payload: %{text: "A plain note."}}], run, @watch, MapSet.new()) == nil
-      # An agent's note that reads like a step's answer is not the pass's answer.
-      agent_note = %{answer | id: "n3", actor: %{kind: :agent, run_kind: "qa", run_id: "r"}}
-      assert Watch.trigger([agent_note], run, @watch, MapSet.new()) == nil
+      answer = fn id, status ->
+        result = %{status: status, expected: "a list", actual: "nothing"}
+        %Event{id: id, type: "step.completed", actor: %{kind: :machine}, payload: %{step_id: "walk_2", outcome: "passed", result: result}}
+      end
+
+      # A QA step's answer that could not be judged counts, and is no failed step.
+      assert {"qa_step_answer", _seen} = Watch.trigger([answer.("n1", "plan_mismatch")], run, @watch, MapSet.new())
+      assert {"qa_step_answer", _seen} = Watch.trigger([answer.("n4", "blocked")], run, @watch, MapSet.new())
+      assert {"qa_step_answer", _seen} = Watch.trigger([%{answer.("n5", "blocked") | payload: %{step_id: "w", outcome: "passed", result: %{"status" => "blocked"}}}], run, @watch, MapSet.new())
+      assert Watch.trigger([answer.("n2", "pass")], run, @watch, MapSet.new()) == nil
+      assert Watch.trigger([answer.("n6", "fail")], run, @watch, MapSet.new()) == nil
+      assert Watch.trigger([%Event{id: "n7", type: "note", payload: %{text: "A plain note."}}], run, @watch, MapSet.new()) == nil
+      # An agent's step.completed that carries a result is not the pass's answer.
+      agent_answer = %{answer.("n3", "blocked") | actor: %{kind: :agent, run_kind: "qa", run_id: "r"}}
+      assert Watch.trigger([agent_answer], run, @watch, MapSet.new()) == nil
     end
 
     test "a run past its minutes or its tokens counts while it stays over", %{run: run} do

@@ -124,6 +124,27 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     assert %{kind: "implementation", model: "model-a", steps: [step]} = Facts.build(ctx.record, nil, events: first_run, diff_stat: fn _record -> nil end).last_run
     assert step == %{event_id: seeded.build.id, step_id: "build", title: "Build", mode: "machine", outcome: "failed", returns_to: "code"}
 
+    answered = %SymphonyElixir.TicketEvents.Event{
+      id: "s9",
+      type: "step.completed",
+      run_id: "run-1",
+      payload: %{
+        step_id: "walk_1",
+        title: "Walk",
+        mode: "orchestrated",
+        outcome: "passed",
+        result: %{status: "blocked", expected: "Rows", actual: "Empty state"},
+        verdict_summary: "Blocked."
+      }
+    }
+
+    assert %{steps: [_build, walked]} = Facts.build(ctx.record, nil, events: first_run ++ [answered], diff_stat: fn _record -> nil end).last_run
+    assert walked.result == %{status: "blocked", expected: "Rows", actual: "Empty state"}
+    assert walked.verdict_summary == "Blocked."
+
+    string_keys = %{answered | payload: %{answered.payload | result: %{"status" => "blocked", "expected" => "Rows", "actual" => "Empty"}}}
+    assert %{steps: [_build, %{result: %{status: "blocked", actual: "Empty"}}]} = Facts.build(ctx.record, nil, events: first_run ++ [string_keys], diff_stat: fn _record -> nil end).last_run
+
     facts = Facts.build(ctx.record, "after_rework", events: rework, diff_stat: fn _record -> nil end, token_cap: nil)
     assert facts.last_run.resolved_findings == [%{event_id: seeded.resolution.id, finding_id: seeded.finding.id, how: "Wired the handler."}]
     refute Map.has_key?(facts.last_run, :files_changed)

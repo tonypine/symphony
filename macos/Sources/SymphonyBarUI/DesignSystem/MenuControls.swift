@@ -170,9 +170,14 @@ private struct MenuControlStyle: ButtonStyle {
     let open: Bool
     var monoValue = false
     var inheritedValue = false
+    /// A face of the control's own (a filter chip's words) in place of the pop-up's or the menu button's.
+    var face: MenuTriggerFace?
 
     func makeBody(configuration: Configuration) -> some View {
-        Face(configuration: configuration, content: content, size: size, quiet: quiet, open: open, monoValue: monoValue, inheritedValue: inheritedValue)
+        Face(
+            configuration: configuration, content: content, size: size, quiet: quiet, open: open, monoValue: monoValue,
+            inheritedValue: inheritedValue, face: face
+        )
     }
 
     private struct Face: View {
@@ -183,23 +188,33 @@ private struct MenuControlStyle: ButtonStyle {
         let open: Bool
         let monoValue: Bool
         let inheritedValue: Bool
+        let face: MenuTriggerFace?
         @State private var hovered = false
         @Environment(\.isEnabled) private var isEnabled
         @Environment(\.buttonKeyboardFocus) private var keyboardFocus
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
         var body: some View {
-            MenuControlFace(
-                content, size: size, quiet: quiet,
-                state: DesignTokens.Interaction(hovered: hovered, pressed: configuration.isPressed, focused: keyboardFocus, disabled: !isEnabled),
-                open: open, monoValue: monoValue, inheritedValue: inheritedValue, reduceMotion: reduceMotion
-            )
+            let state = DesignTokens.Interaction(hovered: hovered, pressed: configuration.isPressed, focused: keyboardFocus, disabled: !isEnabled)
+            Group {
+                if let face {
+                    face(state, open)
+                } else {
+                    MenuControlFace(
+                        content, size: size, quiet: quiet, state: state, open: open, monoValue: monoValue, inheritedValue: inheritedValue,
+                        reduceMotion: reduceMotion
+                    )
+                }
+            }
             .contentShape(RoundedRectangle(cornerRadius: size.radius, style: .continuous))
             .onHover { hovered = $0 }
         }
     }
 }
 
+
+/// A control's own face for its state and whether its menu is open.
+typealias MenuTriggerFace = (DesignTokens.Interaction, Bool) -> AnyView
 
 /// The control's button: it opens the menu on a click, Space, Return or Down, from the anchor's place on screen. To
 /// VoiceOver the anchor is the control: a pop-up button with its value, or a menu button, that a press opens (an
@@ -219,6 +234,7 @@ struct MenuTrigger: View {
     let spokenLabel: String?
     let spokenValue: String?
     let reason: String?
+    let face: MenuTriggerFace?
     let items: () -> (items: [MenuItem], highlighted: Int?)
     @State private var open = false
     @State private var anchor = MenuAnchorBox()
@@ -227,7 +243,7 @@ struct MenuTrigger: View {
     init(
         content: MenuControlContent, size: DesignTokens.Control, quiet: Bool, monoValue: Bool = false, inheritedValue: Bool = false,
         search: MenuSearch? = nil, alignment: MenuNavigation.Alignment, label: String, drawnOpen: Bool, role: NSAccessibility.Role = .menuButton,
-        spokenLabel: String? = nil, spokenValue: String? = nil, reason: String? = nil,
+        spokenLabel: String? = nil, spokenValue: String? = nil, reason: String? = nil, face: MenuTriggerFace? = nil,
         items: @escaping () -> (items: [MenuItem], highlighted: Int?)
     ) {
         self.content = content
@@ -243,6 +259,7 @@ struct MenuTrigger: View {
         self.spokenLabel = spokenLabel
         self.spokenValue = spokenValue
         self.reason = reason
+        self.face = face
         self.items = items
     }
 
@@ -252,7 +269,8 @@ struct MenuTrigger: View {
     var body: some View {
         Button(action: toggle) { Text(label) }
             .buttonStyle(MenuControlStyle(
-                content: content, size: size, quiet: quiet, open: shown || drawnOpen, monoValue: monoValue, inheritedValue: inheritedValue
+                content: content, size: size, quiet: quiet, open: shown || drawnOpen, monoValue: monoValue, inheritedValue: inheritedValue,
+                face: face
             ))
             .focusEffectDisabled()
             .modifier(ReportsKeyboardFocus())
