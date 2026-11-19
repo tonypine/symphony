@@ -282,7 +282,7 @@ struct TokenBarView: View {
             HStack(spacing: 3) {
                 ForEach(filled) { segment in
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(segment.series.color)
+                        .fill(segment.color)
                         .frame(width: max(width * Double(segment.tokens) / scale, 3))
                 }
                 if bar.total < bar.scale || filled.isEmpty {
@@ -305,7 +305,7 @@ struct TokenBarView: View {
             ForEach(bar.segments) { segment in
                 HStack(spacing: 6) {
                     RoundedRectangle(cornerRadius: 3, style: .continuous)
-                        .fill(segment.series.color)
+                        .fill(segment.color)
                         .frame(width: 8, height: 8)
                     Text(segment.name)
                         .foregroundStyle(.secondary)
@@ -475,4 +475,9 @@ struct FlowLayout: Layout {
 /// The Lifecycle card draws again only when its model changed (TP-1480).
 extension LifecycleSection: Equatable {
     nonisolated public static func == (lhs: LifecycleSection, rhs: LifecycleSection) -> Bool { lhs.model == rhs.model }
+}
+
+extension LifecycleModel.Segment {
+    /// The segment's colour: its chart series, or the accent for the Conductor's.
+    var color: Color { series?.color ?? DesignTokens.ColorToken.accent.color }
 }
