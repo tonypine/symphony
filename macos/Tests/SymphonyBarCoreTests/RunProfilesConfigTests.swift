@@ -426,16 +426,18 @@ final class RunProfilesConfigTests: XCTestCase {
     }
 
     func testEveryKindHasATitleAndTheSettingsOrder() {
-        XCTAssertEqual(RunProfilesConfig.scopes.count, 10)
+        XCTAssertEqual(RunProfilesConfig.scopes.count, 11)
         XCTAssertEqual(RunKind.allCases.map(\.title), [
             "Breakdown", "Implementation", "Rework", "CI fix",
-            "Review feedback", "Landing", "Code review", "Epic review", "QA",
+            "Review feedback", "Landing", "Code review", "Epic review", "QA", "Conductor",
         ])
         XCTAssertEqual(RunKind.ciFix.id, "ci_fix")
         // The kinds `SymphonyElixir.RunKind` lists.
         XCTAssertEqual(Set(RunKind.allCases.map(\.rawValue)), [
-            "implementation", "breakdown", "rework", "landing", "code_review", "epic_review", "ci_fix", "review_feedback", "qa",
+            "implementation", "breakdown", "rework", "landing", "code_review", "epic_review", "ci_fix", "review_feedback", "qa", "conductor",
         ])
+        // The Conductor's turn takes no step list.
+        XCTAssertNil(PhaseKind(rawValue: RunKind.conductor.rawValue))
     }
 
     func testInheritedTitleNamesTheValueAnUnsetFieldFallsBackTo() {

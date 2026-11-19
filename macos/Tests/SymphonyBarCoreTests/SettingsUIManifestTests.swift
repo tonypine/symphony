@@ -107,6 +107,13 @@ final class SettingsUIManifestTests: XCTestCase {
                 to: ReportSettings(model: "claude-sonnet-5-5", cadence: .hourly, triggers: flipped)
             )
         }, from: yaml)
+        yaml = try record("setting the Conductor, its junctions and its time limit", {
+            try ConductorSettings.updating(
+                $0,
+                from: ConductorSettings(),
+                to: ConductorSettings(enabled: true, junctions: [.afterQAFail], timeoutMs: 60_000)
+            )
+        }, from: yaml)
         yaml = try record("setting allowed ticket priorities", {
             try TicketPriorities.updating($0, from: TicketPriorities(), to: TicketPriorities(priorities: [.urgent, .high]))
         }, from: yaml)

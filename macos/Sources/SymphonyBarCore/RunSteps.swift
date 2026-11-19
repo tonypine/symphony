@@ -355,6 +355,9 @@ public struct RunGroupModel: Equatable, Identifiable {
     public var transcript: TicketOutput?
     /// The screenshots the run recorded outside its steps, oldest first.
     public var screenshots: [TicketScreenshot] = []
+    /// The Conductor's turn (run kind `conductor`): the timeline folds it behind "Show all events", where its update
+    /// stands on its own.
+    public var isMechanical = false
 
     public init(
         id: String, title: String, state: State, word: String, durationSeconds: Int? = nil, tokens: Int? = nil,
@@ -425,6 +428,9 @@ public struct RunGroupModel: Equatable, Identifiable {
 
     // MARK: - Building
 
+    /// The run kind of the Conductor's turn.
+    static let conductorKind = "conductor"
+
     /// Every run the history holds, oldest first; the running one with `runNow`'s current step and lines and
     /// `liveTokens`, and its duration so far against `reference`.
     public static func groups(
@@ -489,6 +495,7 @@ public struct RunGroupModel: Equatable, Identifiable {
         if live, let runNow, runNow.currentStep == nil { group.liveLines = runNow.lines }
         group.transcript = ended?.artifacts.first { $0.kind == "transcript" }?.sessionLines
         group.screenshots = outside
+        group.isMechanical = run.runKind == conductorKind
         return group
     }
 

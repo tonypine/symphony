@@ -401,6 +401,8 @@ struct SettingsView: View {
 
                 ReportsSection(model: model)
 
+                ConductorSection(settings: $model.conductor, error: model.conductorError, editable: model.canEditConductor)
+
                 MacAppQASection(model: model)
 
                 Section {
@@ -509,6 +511,9 @@ struct SettingsView: View {
                 }
                 if model.reportsError != nil {
                     Text("symphony check rejected the report settings; see Reports.").foregroundStyle(.red)
+                }
+                if model.conductorError != nil {
+                    Text("symphony check rejected the Conductor settings; see Conductor.").foregroundStyle(.red)
                 }
                 if model.macAppQAError != nil {
                     Text("symphony check rejected the macOS app QA settings; see macOS app QA.").foregroundStyle(.red)
