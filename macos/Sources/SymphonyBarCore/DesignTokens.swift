@@ -423,14 +423,18 @@ public enum DesignTokens {
         case caption
         /// 450 12/16, SF Mono: paths, commands, ids.
         case mono
-        /// 400 16, line height 1.4, tracked +2 %: a text the Director reads through, such as a ticket's brief.
+        /// 400 16, line height 1.45, tracked +3 %: the body standard for a text the Director reads through, such as a
+        /// ticket's brief or the Conductor's message.
         case reading
+        /// 400 14, line height 1.45, tracked +3 %: the same reading text where it sits inside a run's group.
+        case readingCompact
 
         /// The custom property in `tokens.css`; nil for the app's own style.
         public var cssName: String? {
             switch self {
             case .figure: nil
             case .rowTitle: "--type-row-title"
+            case .readingCompact: "--type-reading-compact"
             default: "--type-" + rawValue
             }
         }
@@ -441,7 +445,7 @@ public enum DesignTokens {
             case .title: 700
             case .sentence: 650
             case .figure, .heading, .rowTitle: 600
-            case .body, .secondary, .reading: 400
+            case .body, .secondary, .reading, .readingCompact: 400
             case .label: 550
             case .caption: 500
             case .mono: 450
@@ -460,6 +464,7 @@ public enum DesignTokens {
             case .label: 11
             case .caption: 10
             case .reading: 16
+            case .readingCompact: 14
             }
         }
 
@@ -475,7 +480,8 @@ public enum DesignTokens {
             case .secondary, .mono: 16
             case .label: 14
             case .caption: 13
-            case .reading: 16 * 1.4
+            case .reading: 16 * Tracking.readingLineHeight
+            case .readingCompact: 14 * Tracking.readingLineHeight
             }
         }
 
@@ -492,7 +498,7 @@ public enum DesignTokens {
             switch self {
             case .title: Tracking.display
             case .label: Tracking.label
-            case .reading: Tracking.reading
+            case .reading, .readingCompact: Tracking.reading
             default: 0
             }
         }
@@ -524,7 +530,9 @@ public enum DesignTokens {
     public enum Tracking {
         public static let display = -0.022
         public static let label = 0.02
-        public static let reading = 0.02
+        public static let reading = 0.03
+        /// The reading styles' line height as a multiple of their size (`--type-reading`'s `1.45`).
+        public static let readingLineHeight = 1.45
     }
 
     /// The 4 pt spacing grid (§3.5).
@@ -564,6 +572,19 @@ public enum DesignTokens {
         public static let padding: Double = 4
         /// How long the pointer rests on a chip before its popover opens.
         public static let hoverDelay: Double = 0.5
+        /// A chip on a selected row (`tr[aria-selected] .chip`): white at 18 % behind its words in `text-on-accent`.
+        public static let onAccentFill = 0.18
+
+        /// The filter chip (`.fchip`, the Tickets bar's): its words' room at the leading and trailing ends
+        /// (`padding: 0 2px 0 10px`), the field's weight (`span { font-weight: 450 }`), and its joined remove button,
+        /// 22 pt wide, with a 9 pt cross (`.fchip-x`).
+        public enum Filter {
+            public static let leading: Double = 10
+            public static let trailing: Double = 2
+            public static let fieldWeight = 450
+            public static let removeWidth: Double = 22
+            public static let removeGlyph: Double = 9
+        }
     }
 
     /// The badge (`.badge`, design-system.md C7): a status glyph and word on the status tint, in a capsule.
@@ -1246,6 +1267,34 @@ public enum DesignTokens {
         public static let titleMaxWidth: Double = 640
         /// The story's parts (`.ini-main { gap: var(--space-4) }`).
         public static let storyGap = Space.s4
+    }
+
+    /// Work › Tickets (`.tk`, `.tk-table`, `.tk-inspector` in `components.css`, TP-1501): the table in a panel and the
+    /// details beside it.
+    public enum Tickets {
+        /// The details panel's width (`grid-template-columns: … 340px`), and the gap before it (`gap: var(--space-6)`).
+        public static let detailsWidth: Double = 340
+        public static let columnGap = Space.s6
+        /// The table's panel's padding (`.panel.tk-wrap { padding: var(--space-2) }`).
+        public static let tableInset = Space.s2
+        /// From this width of the page, the Repo and Labels columns show at the default columns (`.col-wide`).
+        public static let wideFrom: Double = 1600
+        public static let wideColumns = ["repo", "labels"]
+        /// Title and Situation share the width left, two parts to three (`width: 40%` and `60%`).
+        public static let titleShare: Double = 2
+        public static let situationShare: Double = 3
+        /// The narrowest a title is drawn before the table scrolls sideways.
+        public static let titleMinimum: Double = 120
+        /// A title's weight (`td.tk-title { font-weight: 500 }`) and Urgent's (`.tk-urgent { font-weight: 650 }`).
+        public static let titleWeight = 500
+        public static let urgentWeight = 650
+        /// The details' parts (`.tk-inspector { gap: var(--space-3) }`) and the room above its buttons (`padding-top:
+        /// var(--space-1)`).
+        public static let detailsGap = Space.s3
+        public static let movesTopPadding = Space.s1
+
+        /// Whether a page `width` wide shows the wide columns at the default columns.
+        public static func showsWideColumns(width: Double) -> Bool { width >= wideFrom }
     }
 
     /// The catalog's Segmented control (`.segmented`, TP-1508): two to five equal segments on a sunken capsule track,

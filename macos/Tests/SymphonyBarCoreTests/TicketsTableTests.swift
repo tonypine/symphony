@@ -63,11 +63,11 @@ final class TicketsTableTests: XCTestCase {
         XCTAssertEqual(query.chips.map(\.text), ["Epic is TP-1400", "Situation is Waiting for CI"])
         XCTAssertEqual(
             query.path(scope: .all, now: now),
-            "api/v1/tickets?epic=TP-1400&situation=waiting_for_ci&columns=identifier,title,repo,epic,phase,situation,labels,priority,created_at"
+            "api/v1/tickets?epic=TP-1400&situation=waiting_for_ci&columns=identifier,title,repo,epic,phase,situation,situation_since,labels,priority"
                 + "&sort=identifier&direction=asc"
         )
         XCTAssertEqual(query.shownColumns(catalog: TicketColumn.catalog, scope: .all).map(\.title),
-                       ["Ticket", "Title", "Epic", "Situation", "Labels", "Priority", "Age"])
+                       ["Ticket", "Title", "Epic", "Situation", "Since", "Labels", "Priority"])
     }
 
     /// Walkthrough step 2: Age sorts youngest first, then oldest first.
@@ -117,6 +117,104 @@ final class TicketsTableTests: XCTestCase {
         XCTAssertEqual(query.shownColumns(catalog: TicketColumn.catalog, scope: .all).count, 14)
     }
 
+    // MARK: - As designed (TP-1501)
+
+    func testTheChipsWordsAreItsFieldAndItsValue() {
+        let epic = TicketFilterChip(filter: .epic, values: ["Phase 3b"])
+        XCTAssertEqual(epic.field, "Epic is")
+        XCTAssertEqual(epic.valueWords, "Phase 3b")
+        let since = TicketFilterChip(filter: .since, values: ["day"])
+        XCTAssertEqual(since.field, "Updated")
+        XCTAssertEqual(since.valueWords, "in the last 24 hours")
+        XCTAssertEqual(TicketFilterChip(filter: .priority, values: ["1", "2"]).valueWords, "Urgent or High")
+    }
+
+    func testTheDefaultsShowRepoAndLabelsFrom1600PtOfPage() {
+        let query = TicketsQuery()
+        XCTAssertTrue(query.hidesWideColumns(width: 1208))
+        XCTAssertEqual(query.drawnColumns(catalog: TicketColumn.catalog, scope: .all, width: 1208).map(\.title),
+                       ["Ticket", "Title", "Epic", "Situation", "Since", "Priority"])
+        XCTAssertFalse(query.hidesWideColumns(width: 1600))
+        XCTAssertEqual(query.drawnColumns(catalog: TicketColumn.catalog, scope: .all, width: 2328).map(\.title),
+                       ["Ticket", "Title", "Repo", "Epic", "Situation", "Since", "Labels", "Priority"])
+        // Columns the chooser set show whole, at any width.
+        let chosen = TicketsQuery(columns: ["identifier", "title", "repo", "labels"])
+        XCTAssertFalse(chosen.hidesWideColumns(width: 900))
+        XCTAssertEqual(chosen.drawnColumns(catalog: TicketColumn.catalog, scope: .all, width: 900).map(\.name), chosen.columns)
+    }
+
+    func testTheColumnsMenuTicksWhatIsDrawnAndAPickShowsAWideColumn() {
+        var query = TicketsQuery()
+        XCTAssertFalse(query.ticksColumn("repo", width: 1208), "a wide column waiting is not ticked")
+        XCTAssertTrue(query.ticksColumn("repo", width: 1600))
+        XCTAssertTrue(query.ticksColumn("title", width: 1208))
+        query.pickColumn("repo", width: 1208)
+        XCTAssertEqual(query.columns, ["identifier", "title", "repo", "epic", "situation", "situation_since", "priority"])
+        XCTAssertTrue(query.ticksColumn("repo", width: 1208))
+        query.pickColumn("title", width: 1208)
+        XCTAssertFalse(query.columns.contains("title"))
+        // The identifier always shows, and a pick of it changes nothing.
+        var defaults = TicketsQuery()
+        defaults.pickColumn("identifier", width: 1208)
+        XCTAssertEqual(defaults, TicketsQuery())
+        // On a wide page the defaults are what is drawn: a pick hides the column.
+        defaults.pickColumn("labels", width: 1600)
+        XCTAssertFalse(defaults.columns.contains("labels"))
+        XCTAssertTrue(defaults.columns.contains("repo"))
+    }
+
+    func testTheDetailsSayWhereTheTicketStands() throws {
+        let since = now.addingTimeInterval(-25 * 60)
+        let row = TicketsRow(identifier: "TP-1441", values: [
+            "title": .text("The Situation line everywhere"), "repo": .text("symphony"), "epic": .text("Phase 3b"),
+            "phase": .text("In Progress"), "situation": .text("working"), "situation_since": .time(since), "priority": .number(1),
+        ])
+        let situation = Situation(kind: .working, cause: "Implementation run 1 is writing the code.", since: since)
+        let details = try XCTUnwrap(TicketDetails(identifier: "TP-1441", tracked: nil, row: row, situation: situation, pullRequest: 812, reference: now))
+        XCTAssertEqual(details.title, "The Situation line everywhere")
+        XCTAssertEqual(details.repo, "symphony")
+        XCTAssertEqual(details.epic, "Phase 3b")
+        XCTAssertEqual(details.situation, situation)
+        XCTAssertFalse(details.forced)
+        XCTAssertEqual(details.facts, [
+            TicketList.Fact(label: "Since", value: "25 min"), TicketList.Fact(label: "Phase", value: "In Progress"),
+            TicketList.Fact(label: "Pull request", value: "PR #812"), TicketList.Fact(label: "Priority", value: "Urgent"),
+        ])
+        // What is not known is left out, and a ticket neither the state nor the table has has no details.
+        let bare = try XCTUnwrap(TicketDetails(identifier: "TP-9", tracked: nil, row: TicketsRow(identifier: "TP-9", values: [:]), reference: now))
+        XCTAssertEqual(bare.facts, [])
+        XCTAssertEqual(bare.situation.kind, .unknown)
+        XCTAssertNil(TicketDetails(identifier: "TP-9", tracked: nil, row: nil, reference: now))
+    }
+
+    func testTheDetailsOfATrackedTicketTakeTheStatesFacts() throws {
+        let state = try XCTUnwrap(OverviewState.decode(try designed("state.json")))
+        let list = TicketList(state: state, now: designedNow, timeZone: TimeZone(identifier: "UTC")!)
+        let tracked = try XCTUnwrap(list.row("TP-1441"))
+        let details = try XCTUnwrap(TicketDetails(identifier: "TP-1441", tracked: tracked, row: nil, reference: designedNow))
+        XCTAssertEqual(details.situation.cause, "Implementation run 1 is writing the code.")
+        XCTAssertEqual(details.facts.map(\.label), ["Since", "Phase", "Tokens"])
+        XCTAssertEqual(details.facts.first { $0.label == "Tokens" }?.value, "1.8M")
+        XCTAssertEqual(details.repo, "symphony")
+    }
+
+    func testTheBarsSaveViewSavesOrUpdatesOnlyWhileTheBarChanged() throws {
+        var query = TicketsQuery()
+        XCTAssertNil(TicketViewsMenu(views: [], currentID: nil, query: query).saveChanges)
+        query.toggle(.epic, "Phase 3b")
+        XCTAssertEqual(TicketViewsMenu(views: [], currentID: nil, query: query).saveChanges, .save)
+        let view = try XCTUnwrap(TicketView.views(fromViews: Data(#"{"views": [{"id": "v1", "name": "Mine"}]}"#.utf8))?.first)
+        XCTAssertEqual(TicketViewsMenu(views: [view], currentID: "v1", query: query).saveChanges, .update)
+        XCTAssertNil(TicketViewsMenu(views: [view], currentID: "v1", query: view.query).saveChanges)
+    }
+
+    private let designedNow = ISO8601DateFormatter().date(from: "2026-11-12T16:00:00Z")!
+
+    private func designed(_ name: String) throws -> Data {
+        try Data(contentsOf: URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/director-app/tickets-designed/api/v1/\(name)"))
+    }
+
     func testTheRepoColumnHidesWhileOneRepoIsFiltered() {
         var query = TicketsQuery()
         XCTAssertNil(query.repo(scope: .all))
@@ -147,7 +245,7 @@ final class TicketsTableTests: XCTestCase {
 
     func testTheColumnsHaveTheirHeaders() {
         XCTAssertEqual(TicketColumn.catalog.map(\.title), [
-            "Ticket", "Title", "Repo", "Epic", "Phase", "Situation", "In situation", "Labels", "Priority", "Assignee", "Link", "Age",
+            "Ticket", "Title", "Repo", "Epic", "Phase", "Situation", "Since", "Labels", "Priority", "Assignee", "Link", "Age",
             "In phase", "Updated",
         ])
         XCTAssertEqual(TicketColumn(name: "lead_time", type: "time").title, "Lead Time")

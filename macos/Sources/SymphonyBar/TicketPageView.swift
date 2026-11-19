@@ -856,6 +856,11 @@ struct TicketPageBody: View {
         .padding(gap)
         .frame(maxWidth: .infinity, alignment: arrangement.desktop ? .top : .topLeading)
         .environment(\.openMention, OpenMentionAction(handler: actions.openMention))
+        // A Conductor message's Question block is the Inbox's, answered through the same picks and Send as the decisions column.
+        .environment(\.conductorQuestions, ConductorQuestionContext(
+            questions: questions, picks: answers.picks, pick: answers.pick, writeIn: answers.writeIn, send: answers.send,
+            decisions: decisions, narrow: !arrangement.desktop
+        ))
     }
 
     private func mainColumn(desktop: Bool) -> some View {
@@ -865,7 +870,9 @@ struct TicketPageBody: View {
                 DecisionsLineView(line: line, open: sheetOpen, focus: answerFocus, answer: answer, review: actions.review)
             }
             if let lifecycle = page.lifecycleRead?.lifecycle {
-                LifecycleSection(model: LifecycleModel.build(lifecycle, path: page.lifecycleRead?.phasePath, situation: page.situation))
+                LifecycleSection(model: LifecycleModel.build(
+                    lifecycle, path: page.lifecycleRead?.phasePath, situation: page.situation, conductorTokens: page.history?.conductorTokens ?? 0
+                ))
                     .equatable()
             }
             VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {

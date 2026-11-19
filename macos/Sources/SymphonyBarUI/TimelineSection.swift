@@ -509,33 +509,43 @@ struct TimelineEntryRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: TimelineSection.timeColumn, alignment: .trailing)
                 .padding(.top, Self.textTop)
-            TimelineMark(symbol: entry.kind.symbol, tone: entry.kind.tone)
-                .frame(width: TimelineSection.markColumn)
-                .help(Self.glyphHelp(entry.kind))
+            Group {
+                if entry.conductor != nil {
+                    ConductorMark(size: .regular)
+                } else {
+                    TimelineMark(symbol: entry.kind.symbol, tone: entry.kind.tone)
+                }
+            }
+            .frame(width: TimelineSection.markColumn)
+            .help(entry.conductor != nil ? ConductorMessage.name : Self.glyphHelp(entry.kind))
             VStack(alignment: .leading, spacing: 2) {
                 if let ticket {
                     TimelineTicketChipView(chip: ticket)
                 }
-                Text("\(newDot)\(Text(entry.lead).fontWeight(.semibold))\(entry.rest.map { " " + $0 } ?? "")")
-                    .font(DesignTokens.TypeStyle.body.font)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .help(entry.isNew ? TimelineEntry.newHelp : "")
-                if let detail = entry.detail {
-                    Text(detail)
-                        .font(DesignTokens.TypeStyle.secondary.font)
-                        .foregroundStyle(.secondary)
+                if let message = entry.conductor {
+                    ConductorVoice(message: message, isNew: entry.isNew)
+                } else {
+                    Text("\(newDot)\(Text(entry.lead).fontWeight(.semibold))\(entry.rest.map { " " + $0 } ?? "")")
+                        .font(DesignTokens.TypeStyle.body.font)
                         .fixedSize(horizontal: false, vertical: true)
+                        .help(entry.isNew ? TimelineEntry.newHelp : "")
+                    if let detail = entry.detail {
+                        Text(detail)
+                            .font(DesignTokens.TypeStyle.secondary.font)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    if let finding = entry.finding {
+                        TimelineFindingCard(finding: finding)
+                            .padding(.vertical, DesignTokens.Space.s1)
+                    }
+                    Text(entry.actor)
+                        .font(DesignTokens.TypeStyle.secondary.font)
+                        .foregroundStyle(.tertiary)
                 }
-                if let finding = entry.finding {
-                    TimelineFindingCard(finding: finding)
-                        .padding(.vertical, DesignTokens.Space.s1)
-                }
-                Text(entry.actor)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .foregroundStyle(.tertiary)
             }
             .padding(.top, Self.textTop)
-            .frame(maxWidth: DesignTokens.Measure.reading, alignment: .leading)
+            .frame(maxWidth: entry.conductor != nil ? ConductorVoice.measure : DesignTokens.Measure.reading, alignment: .leading)
             Spacer(minLength: DesignTokens.Space.s2)
             if let seconds = entry.durationSeconds {
                 // An ongoing pause counts on by itself; the timeline isn't built again for it (TP-1479).
@@ -558,7 +568,7 @@ struct TimelineEntryRow: View {
             if connects {
                 TimelineRuleLine()
                     .padding(.leading, Self.ruleLeading)
-                    .padding(.top, Self.ruleTop)
+                    .padding(.top, entry.conductor != nil ? Self.conductorRuleTop : Self.ruleTop)
                     // Through the gap to the next entry's mark.
                     .padding(.bottom, Self.ruleBottom)
             }
@@ -585,7 +595,9 @@ struct TimelineEntryRow: View {
 
     /// What VoiceOver reads: the ticket's chip, the entry, and its finding.
     private var spokenLabel: String {
-        let parts: [String?] = [ticket?.spoken, entry.accessibilityLabel(time: time), entry.finding?.accessibilityLabel]
+        // The Conductor's message is one element that starts with its name and reads its words.
+        let said = entry.conductor?.accessibilityLabel(time: time).appending(entry.isNew ? ", " + TimelineEntry.newWords : "")
+        let parts: [String?] = [ticket?.spoken, said ?? entry.accessibilityLabel(time: time), entry.finding?.accessibilityLabel]
         return parts.compactMap { $0 }.joined(separator: ", ")
     }
 
@@ -597,6 +609,8 @@ struct TimelineEntryRow: View {
         return markStart + markMiddle - lineMiddle
     }()
     static let ruleTop: CGFloat = DesignTokens.Space.s1 + TimelineMark.size
+    /// The Conductor's mark is a little taller than the others, so its rule line starts lower.
+    static let conductorRuleTop: CGFloat = DesignTokens.Space.s1 + ConductorMark.Size.regular.side
     static let ruleBottom: CGFloat = -2 * DesignTokens.Space.s1
     /// The send-back's tint reaches a little past the row.
     static let highlightInsets = EdgeInsets(

@@ -160,6 +160,8 @@ defmodule SymphonyElixir.ConductorTest do
       assert [%{payload: %{junction: "after_coding", text: "Check the empty list first."}, run_id: run_id}] = events(ctx.issue_id, "conductor.instructions")
       assert [%{payload: %{text: "It handed off with every check green.", refs: refs}}] = events(ctx.issue_id, "conductor.update")
       assert refs == [verdict.id, "evt_started"]
+      assert [%{payload: junction_payload}] = events(ctx.issue_id, "conductor.update")
+      refute Map.has_key?(junction_payload, :watch)
       assert [%{payload: %{run_kind: "conductor", run_number: 1, state: "Code Review"}}] = events(ctx.issue_id, "run.started")
       assert [%{payload: %{run_kind: "conductor", exit: "answered", tokens: 1_234, counted: false}}] = events(ctx.issue_id, "run.ended")
 
@@ -335,6 +337,65 @@ defmodule SymphonyElixir.ConductorTest do
       assert run_id == ctx.run.run_id
     end
 
+    test "a watch update names the run, the trigger and whether the answer steered or stopped", ctx do
+      steered = watch_answer(%{"update" => "I told the run to read the **build error** first.", "steer" => %{"message" => "Read it.", "when" => "now"}})
+      assert Conductor.watch(ctx.run, "step_failed", turn: turn(steered), settings: @on) == :ok
+      run_id = ctx.run.run_id
+
+      assert [%{payload: %{text: "I told the run" <> _, watch: watch}}] = events(ctx.issue_id, "conductor.update")
+      assert watch == %{run_id: run_id, trigger: "step_failed", steered: true, when: "now", stopped: false}
+
+      Steer.drop(run_id)
+      quiet = %{ctx.run | run_id: "run-quiet-#{System.unique_integer([:positive])}"}
+      assert Conductor.watch(quiet, "run_minutes", turn: turn(watch_answer(%{"update" => "Thirty minutes in. I am leaving the run to work."})), settings: @on) == :ok
+
+      assert [_first, %{payload: %{watch: quiet_watch}}] = events(ctx.issue_id, "conductor.update")
+      assert quiet_watch == %{run_id: quiet.run_id, trigger: "run_minutes", steered: false, when: nil, stopped: false}
+    end
+
+    test "blocks are resolved from the records, the question block names the decision, and a block left empty is no key", ctx do
+      record!(ctx.issue_id, "step.completed", %{step_id: "build", title: "Build", mode: "machine", outcome: "failed", returns_to: "code"}, run_id: ctx.run.run_id)
+
+      question = %{
+        "title" => "The run repeats the same failure",
+        "question" => "Should the run end so you can look?",
+        "why" => "It failed the same step three times.",
+        "if_unanswered" => "The ticket stays paused.",
+        "recommendation_reason" => "A fourth try would repeat the third.",
+        "options" => [
+          %{"label" => "End it", "effect" => "The run ends and waits for you.", "recommended" => true},
+          %{"label" => "Let it go on", "effect" => "The run goes on."}
+        ]
+      }
+
+      answer = watch_answer(%{"update" => "The build failed.", "blocks" => [%{"type" => "steps"}, %{"type" => "epic"}], "ask_person" => question})
+      assert Conductor.watch(ctx.run, "step_failed", turn: turn(answer), settings: @on) == :ok
+
+      assert [%{payload: %{blocks: [steps, asked]}}] = events(ctx.issue_id, "conductor.update")
+      assert %{type: "steps", run_id: run_id, steps: [%{step_id: "build"}]} = steps
+      assert %{type: "question", title: title, options: [%{label: "End it", recommended: true}, _other]} = asked
+
+      assert run_id == ctx.run.run_id
+      assert title == "The run repeats the same failure"
+
+      Steer.drop(ctx.run.run_id)
+      other = %{ctx.run | run_id: "run-other-#{System.unique_integer([:positive])}"}
+      empty = watch_answer(%{"update" => "Nothing to draw.", "blocks" => [%{"type" => "epic"}]})
+      capture_log(fn -> assert Conductor.watch(other, "run_minutes", turn: turn(empty), settings: @on) == :ok end)
+      assert [_first, %{payload: payload}] = events(ctx.issue_id, "conductor.update")
+      refute Map.has_key?(payload, :blocks)
+    end
+
+    test "a junction's blocks default to the last run", ctx do
+      record!(ctx.issue_id, "run.started", %{run_id: "run-last", run_kind: "implementation"}, run_id: "run-last")
+      record!(ctx.issue_id, "step.completed", %{step_id: "tests", title: "Tests", mode: "machine", outcome: "passed"}, run_id: "run-last")
+      reply = {:ok, [answer(%{"update" => "Green.", "blocks" => [%{"type" => "steps"}]})], 5}
+      facts = %{last_run: %{run_id: "run-last"}, budget: %{tokens_used: 0, tokens_cap: nil}}
+
+      assert Conductor.run(plan(ctx), ctx.issue, turn: turn(reply), facts: facts) == :ok
+      assert [%{payload: %{blocks: [%{type: "steps", run_id: "run-last", run_kind: "implementation"}]}}] = events(ctx.issue_id, "conductor.update")
+    end
+
     test "a steer for now interrupts the run's live Claude turn", ctx do
       :ets.insert(:symphony_conductor_steer, {{:turn, ctx.run.run_id}, self()})
       turn = turn(watch_answer(%{"steer" => %{"message" => "Stop retrying; read the error.", "when" => "now"}}))
@@ -384,6 +445,17 @@ defmodule SymphonyElixir.ConductorTest do
 
   test "a turn's result reads as its text candidates and tokens" do
     assert Conductor.turn_result({:ok, %{result: "{}"}}, []) == {:ok, ["{}"], 0}
+    # The Claude harness streams tuples: the deduplicated `token_usage` totals are the turn's tokens, not the result's.
+    claude = [
+      {:session_started, "s1"},
+      {:token_usage, %{total_tokens: 12_000}},
+      {:agent_text, "{}"},
+      {:token_usage, %{total_tokens: 35_000}},
+      {:turn_completed, %{total_tokens: 99_000}}
+    ]
+
+    assert {:ok, ["{}" | _], 35_000} = Conductor.turn_result({:ok, %{result: "{}"}}, claude)
+    assert Conductor.turn_result({:ok, %{result: "{}"}}, [{:turn_completed, %{total_tokens: 7}}]) == {:ok, ["{}"], 7}
     assert Conductor.turn_result({:error, :boom}, [%{"tokenUsage" => %{"total" => %{"total_tokens" => 9}}}]) == {:error, :boom, 9}
   end
 end

@@ -3461,7 +3461,10 @@ The Conductor: a short, strong-model turn Symphony runs at fixed junctions of a 
 turn is a fresh session (run kind `conductor`, model from `runs.conductor`) that reads the ticket's
 facts in one piece (`GET /api/v1/tickets/<identifier>/facts`, see `docs/control-api.md`) and writes
 instructions for the next run, which its prompt carries as advice, and, when it is worth it, a short
-update for the person, which the ticket's timeline shows as an entry titled Update. Every run's
+update for the person, which the ticket's timeline shows as an entry titled Update. The update is
+markdown in the Conductor's own first-person voice, at most 1,200 characters: its first paragraph is
+the headline, a junction update's last paragraph starts with `Next:`, and a phrase may be wrapped in
+a status tag (`{problem}...{/}`, `{done}...{/}`, `{you}...{/}`) to colour it by meaning. Every run's
 prompt carries the newest instructions, Code Review's reviewer and QA included. When the same class
 of finding came back or the budget is going wrong, it may ask the person a question, through the
 same validated decision path as any other: the ticket pauses on it, and the run the turn came before
@@ -3502,13 +3505,27 @@ so the dispatch-loop guard ignores it), and its tokens count toward the ticket u
 in. A dispatch pause stops it as it stops any run. Read on each dispatch, so a change applies without
 a restart. The prompt lives in `priv/conductor/prompt.md`.
 
+**Message blocks.** An answer may pick at most 3 `blocks` to draw under the update's body: `steps`
+(`run_id`, optional), `evidence` (`refs`: 1 to 4 event ids of evidence or finding events that carry a
+screenshot), `budget`, `path`, `attempts` (`step_id`, `run_id` optional), `compare` (`expected` and
+`actual`, each `{"text": <at most 80 characters>}` or `{"ref": <evidence event id>}`), `findings` and
+`epic`. The Conductor only picks and points; Symphony resolves each one from the ticket's records
+(`SymphonyElixir.Conductor.Blocks`) and records the result as `blocks` on `conductor.update`, in the
+Conductor's order, after the question block Symphony adds itself when the answer asked the person. A
+block that cannot be resolved (no run, no screenshot, no epic, no findings...) is dropped and logged; an
+unknown or malformed pick is dropped without failing the answer; with none left there is no `blocks`
+key. The shapes are in `docs/control-api.md`. An inline code span holding exactly a ticket id or
+`#<pull request number>` is drawn as a chip, and numbers in the update are written as digits.
+
 **Watching running runs** (`conductor.watch`, off by default; `conductor.enabled` must be on too).
 The Conductor looks at a running run when one of its steps ended `failed`, the same step failed
 twice, a step of a stepped QA pass answered `plan_mismatch` or `blocked`, or the run passed
 `run_minutes` or `run_tokens`; never more often than `min_interval_minutes` per run, and at most
 `max_turns_per_run` times per run, one turn at a time. The turn reads the facts at the junction
 `during_run` plus the live run (its kind and model, steps so far with results, the step it is on,
-its newest lines, elapsed time and tokens) and may answer:
+its newest lines, elapsed time and tokens, and `failed_step`, the newest step that ended `failed`
+with its `step_id`, `title`, `reason` and `output`, the last 40 lines of its `step_output` artifact
+cut to 3,000 characters) and may answer:
 
 - `steer` with `when: next_turn`: the message waits on the run and opens its next agent turn (the
   next step's prompt, a stepped QA pass's included, or the next continuation turn), marked as
@@ -3524,7 +3541,11 @@ its newest lines, elapsed time and tokens) and may answer:
 Each steer is recorded as it reaches the run, a `conductor.steer` event under the run's `run_id` with
 its text, `when`, `trigger` and how and when it was delivered; one the run never reached is recorded
 without `delivered` once the run ends. The Mac app shows it inside the run's group as "Conductor
-steered" with the message. A watch turn that fails changes nothing for the run. Every key has a
+steered" with the message. A watch turn's update is never empty: one plain sentence of at most 140
+characters when it neither steers nor stops, a short markdown message when it does. Its
+`conductor.update` event carries `watch`: `run_id` (the watched run), `trigger`, `steered`, `when`
+(the steer's, else null) and `stopped`, so the Mac app draws it inside that run; a junction's update
+has no `watch`. A watch turn that fails changes nothing for the run. Every key has a
 control in the Mac app's Settings, under Conductor.
 
 These keys are new: no existing `symphony.yml` key is renamed, so nothing migrates.
@@ -3920,7 +3941,11 @@ QA pass's own commands (below). A playbook's orchestrated step that sets no `pro
 Symphony's prompt for its id, `priv/qa_steps/<kind>/<id>.md`, when there is one.
 
 Each step is recorded on the ticket's history under the QA run's `run_id`, so the Director's
-timeline shows the pass live; the plan's answer is a `note` there too. Machine steps run without a
+timeline shows the pass live. A step's answer rides on its own `step.completed` as structured fields
+(`result`, `plan`, `recheck`, `verdict_summary`; a step whose answer Symphony could not take ends
+`failed` with its `reason`), never as a `note`. A step answers `pass` only when every check in its
+brief was seen and judged; a part that could not be reached, seen or judged makes it `blocked`.
+Machine steps run without a
 model, through the QA driver the pass holds:
 
 - `symphony:qa_pre_checks`: the pre-checks' results (the steps a named test proves);

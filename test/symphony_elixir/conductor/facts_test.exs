@@ -124,6 +124,27 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     assert %{kind: "implementation", model: "model-a", steps: [step]} = Facts.build(ctx.record, nil, events: first_run, diff_stat: fn _record -> nil end).last_run
     assert step == %{event_id: seeded.build.id, step_id: "build", title: "Build", mode: "machine", outcome: "failed", returns_to: "code"}
 
+    answered = %SymphonyElixir.TicketEvents.Event{
+      id: "s9",
+      type: "step.completed",
+      run_id: "run-1",
+      payload: %{
+        step_id: "walk_1",
+        title: "Walk",
+        mode: "orchestrated",
+        outcome: "passed",
+        result: %{status: "blocked", expected: "Rows", actual: "Empty state"},
+        verdict_summary: "Blocked."
+      }
+    }
+
+    assert %{steps: [_build, walked]} = Facts.build(ctx.record, nil, events: first_run ++ [answered], diff_stat: fn _record -> nil end).last_run
+    assert walked.result == %{status: "blocked", expected: "Rows", actual: "Empty state"}
+    assert walked.verdict_summary == "Blocked."
+
+    string_keys = %{answered | payload: %{answered.payload | result: %{"status" => "blocked", "expected" => "Rows", "actual" => "Empty"}}}
+    assert %{steps: [_build, %{result: %{status: "blocked", actual: "Empty"}}]} = Facts.build(ctx.record, nil, events: first_run ++ [string_keys], diff_stat: fn _record -> nil end).last_run
+
     facts = Facts.build(ctx.record, "after_rework", events: rework, diff_stat: fn _record -> nil end, token_cap: nil)
     assert facts.last_run.resolved_findings == [%{event_id: seeded.resolution.id, finding_id: seeded.finding.id, how: "Wired the handler."}]
     refute Map.has_key?(facts.last_run, :files_changed)
@@ -167,5 +188,30 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     assert {:ok, %{junction: nil}} = Facts.read(ctx.issue_id, "", diff_stat: fn _ -> nil end, token_cap: 1)
     assert Facts.read("NOPE-1", nil) == {:error, :not_found}
     assert {:error, {:invalid, "junction must be one of: after_coding, after_qa_fail, after_rework, before_merge, during_run"}} = Facts.read(ctx.identifier, "whenever")
+  end
+
+  describe "fit/2" do
+    test "keeps a text that fits, trimmed" do
+      assert Facts.fit("  short  ", 20) == "short"
+    end
+
+    test "cuts at the last sentence end that leaves room for the marker" do
+      assert Facts.fit("One sentence here. Two sentence here. Three sentence here.", 56) == "One sentence here. Two sentence here. [cut by Symphony]"
+      "One sentence here. Two sentence here. [cut by Symphony]" |> then(fn _ -> Facts.fit("One sentence here. Two sentence here. Three sentence here.", 40) end)
+
+      assert Facts.fit("Alpha beta gamma. Delta epsilon zeta eta theta.", 40) == "Alpha beta gamma. [cut by Symphony]"
+    end
+
+    test "cuts at a line end, else at a word end, else mid-word" do
+      assert Facts.fit("First line is here\nsecond line is here too and more", 40) == "First line is here [cut by Symphony]"
+      assert Facts.fit("alpha beta gamma delta epsilon zeta", 30) == "alpha beta [cut by Symphony]"
+      assert Facts.fit(String.duplicate("x", 50), 30) == String.duplicate("x", 12) <> " [cut by Symphony]"
+    end
+
+    test "never goes over the limit" do
+      for max <- [25, 40, 100], text <- ["a. b. c. d. e. f. g. h. i. j. k. l. m. n.", String.duplicate("é ", 80)] do
+        assert String.length(Facts.fit(text, max)) <= max
+      end
+    end
   end
 end

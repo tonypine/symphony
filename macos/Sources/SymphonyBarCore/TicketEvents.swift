@@ -161,10 +161,16 @@ public struct TicketEventsPayload: Equatable {
         public var signal: String?
         /// The finding a `finding.resolved` resolves.
         public var findingID: String?
+        /// The junction a Conductor's update was written at (`conductor.update`), as Symphony names it.
+        public var junction: String?
+        /// The run a Conductor's update watched and what it did to it (`conductor.update`); nil at a junction.
+        public var watch: ConductorWatch?
+        /// The blocks a Conductor's update carries, in the order they are drawn (`conductor.update`).
+        public var blocks: [ConductorBlock] = []
 
         enum CodingKeys: String, CodingKey {
             case kind, outcome, exit, stepId, title, reason, returnsTo, returnsToTitle, questionId, model, effort, tokens, durationMs
-            case to, from, action, rule, setBy, by, askedBy, description, text, signal, findingId
+            case to, from, action, rule, setBy, by, askedBy, description, text, signal, findingId, junction, watch, blocks
         }
 
         public init(
@@ -172,7 +178,8 @@ public struct TicketEventsPayload: Equatable {
             reason: String? = nil, returnsTo: String? = nil, returnsToTitle: String? = nil, questionID: String? = nil,
             model: String? = nil, effort: String? = nil, tokens: Int? = nil, durationMs: Int? = nil, to: String? = nil,
             from: String? = nil, action: String? = nil, rule: String? = nil, setter: Setter? = nil, description: String? = nil,
-            text: String? = nil, signal: String? = nil, findingID: String? = nil
+            text: String? = nil, signal: String? = nil, findingID: String? = nil, junction: String? = nil, watch: ConductorWatch? = nil,
+            blocks: [ConductorBlock] = []
         ) {
             self.kind = kind
             self.outcome = outcome
@@ -196,6 +203,9 @@ public struct TicketEventsPayload: Equatable {
             self.text = text
             self.signal = signal
             self.findingID = findingID
+            self.junction = junction
+            self.watch = watch
+            self.blocks = blocks
         }
 
         public init(from decoder: Decoder) throws {
@@ -214,7 +224,10 @@ public struct TicketEventsPayload: Equatable {
                 description: text(.description),
                 text: text(.text),
                 signal: text(.signal),
-                findingID: text(.findingId)
+                findingID: text(.findingId),
+                junction: text(.junction),
+                watch: (try? container?.decodeIfPresent(ConductorWatch.self, forKey: .watch)) ?? nil,
+                blocks: ((try? container?.decodeIfPresent([LossyConductorBlock].self, forKey: .blocks)) ?? nil)?.compactMap(\.block) ?? []
             )
         }
     }

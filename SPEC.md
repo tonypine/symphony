@@ -561,9 +561,11 @@ this one, or an epic review's follow-up), `note.read` (machine only: the first r
 person's note, keyed by the note), `brief.written` (an implementation, rework or review-feedback run's
 brief of the ticket: what it does and why and its walkthrough, in a person's words, with no backtick; the
 newest one is the ticket read's `brief`), `conductor.update` and `conductor.instructions` (machine only:
-what the Conductor's turn at a junction wrote, naming the junction: an update for the person, at most
-900 characters, with the ids of the events it rests on in `refs`, which the timeline shows as an
-entry titled Update; and advice for the next run, at most 2,000 characters, which the next run's
+what the Conductor's turn at a junction wrote, naming the junction: an update for the person, markdown in the Conductor's voice, at most
+1,200 characters, with the ids of the events it rests on in `refs`, which the timeline shows as an
+entry titled Update (a watch turn's update also carries `watch`: the watched `run_id`, `trigger`, `steered`,
+`when` and `stopped`), and the `blocks` the Conductor picked, resolved from the ticket's records
+(`docs/control-api.md`); and advice for the next run, at most 3,000 characters, which the next run's
 prompt carries as its own section, marked as advice and wrapped as untrusted data; a question the
 Conductor asks goes through the decision path, pauses the ticket and holds the run it came before),
 `conductor.steer` (machine only: guidance the Conductor's watch gave a running run, under that run's

@@ -19,7 +19,7 @@ private let controlBarRepos = ["symphony", "web-shop"]
 
 /// The scope pop-up as the window gives it to a page, on all repos.
 @MainActor
-private var controlBarPage: PageBar { PageBar(scope: Binding.constant(OverviewScope.all), repos: controlBarRepos) }
+var controlBarPage: PageBar { PageBar(scope: Binding.constant(OverviewScope.all), repos: controlBarRepos) }
 
 /// Insights' bar: `slice`, and on Shipped its switch.
 @MainActor
@@ -52,7 +52,7 @@ private func ticketsBar(_ query: TicketsQuery = TicketsQuery()) -> AnyView {
     AnyView(
         TicketsFilterBar(
             query: .constant(query), catalog: TicketColumn.catalog, values: TicketFilterValues(), count: query.chips.isEmpty ? 9 : 2,
-            drawerShown: .constant(false), viewsMenu: TicketViewsMenu(views: [], currentID: nil, query: query),
+            detailsShown: .constant(false), viewsMenu: TicketViewsMenu(views: [], currentID: nil, query: query),
             controls: TicketsBarControls(page: controlBarPage)
         )
     )

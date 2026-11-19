@@ -1054,6 +1054,11 @@ pages that read it (Journal, Initiatives, Tickets, Learnings, Audit; Insights' o
 its value; on Journal and Learnings it is the bar's one repo chooser. Home and Diagnostics have no bar: Home shows every repo.
 Insights keeps its one bar under its tabs, and on Shipped the **Shipped** and **Learnings** switch is in it. A bar whose
 controls don't fit on one line wraps them onto the next; its actions at the right always keep their whole titles.
+On Tickets the bar holds the saved view (a dot beside its name while the filters, columns or sort differ from it), a
+chip per filter with its own remove button, **Filter**, **Save View** while there is something to save, the count,
+**Columns**, **Force a Ticket…** and the details toggle (Space). The table under it shows Repo and Labels from 1600 pt
+of page at the default columns; titles and causes shorten with an ellipsis, a situation's word never does. The
+details panel beside it shows the picked ticket's facts, with **Open Ticket** (Return or a double click).
 The sidebar has five destinations, on ⌘1 to ⌘5:
 **Home** (its badge counts what waits on you, in orange), **Journal** (its name and a line saying what it will hold,
 for now), **Work** (**Initiatives** and **Tickets** as two tabs), **Insights** (**Quality**, **Usage**, **Shipped** and
@@ -1415,7 +1420,8 @@ Ten more variables, read only in QA mode:
   block, whose texts mention tickets and pull requests for their chips), of the pull request page: `pull-request`
   (`inbox-decision`'s content plus PR #448's page: two Code Review verdicts, four areas and TP-891's PR #446
   overlapping it), of Tickets: `tickets` (tickets in every stage, a forced ticket, SHOP-325, a blocked one, a
-  conflict, and API-140, which a `tickets.priorities` filter passes over), of the dispatch control's limit hold: `holding` (a Claude 5-hour limit), and of Shipped: `shipped` (14 days of
+  conflict, and API-140, which a `tickets.priorities` filter passes over) and `tickets-designed` (the design catalog's
+  ten tickets, `TICKET_ROWS`, as the Tickets page is drawn from them), of the dispatch control's limit hold: `holding` (a Claude 5-hour limit), and of Shipped: `shipped` (14 days of
   merges in `web-shop` and `api` across the Gift cards and Rate limits initiatives, 14 of them in the last 7 days and 3
   shipped today, and learnings in both repos with tags), and of Audit: `audit` (two days of records of several kinds, your
   moves among them; Oct 7's chain verifies and Oct 6's breaks at its line 5, SHOP-298's PR opened, and SHOP-305's

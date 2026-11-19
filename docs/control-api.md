@@ -147,7 +147,7 @@ run working on the ticket now.
     { "id": "merging", "name": "Merging", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0, "runs": 0 },
     { "id": "done", "name": "Done", "state": "not_yet", "visits": 0, "time_ms": 0, "agent_time_ms": 0, "tokens": 0, "runs": 0 }
   ],
-  "tokens": { "total": 3600000, "cap": 8000000 }
+  "tokens": { "total": 3900000, "conductor_tokens": 300000, "cap": 8000000 }
 }
 ```
 
@@ -159,9 +159,10 @@ run working on the ticket now.
 | `stages[].visits` | How many times the ticket entered the stage. |
 | `stages[].time_ms` | Wall time in the stage, summed over its visits, up to now for the phase it is in. Pauses count. Done takes none. |
 | `stages[].agent_time_ms` | How long the runs of the stage ran: the ended ones, and the one working now up to now. |
-| `stages[].tokens` | The tokens of the runs of the stage: the ended ones, and the one working now so far. |
+| `stages[].tokens` | The tokens of the runs of the stage, the Conductor's left out: the ended ones, and the one working now so far. |
 | `stages[].runs` | How many runs the stage holds: the ended ones, and the one working now. |
-| `tokens.total` | The tokens of the ticket's runs, the one working now included: the stages' `tokens` add up to it. |
+| `tokens.total` | The tokens of all the ticket's runs, the one working now and the Conductor's included: the stages' `tokens` and `conductor_tokens` add up to it. |
+| `tokens.conductor_tokens` | The tokens of the Conductor's own runs (run kind `conductor`). They belong to no stage: they are left out of every stage's `tokens`, `runs` and `agent_time_ms`. |
 | `tokens.cap` | The ticket's cap, `execution.limits.tokens_per_issue`; null when there is none. |
 
 Rework and CI Fix have no stage of their own; they count as visits of the stage they serve:
@@ -956,6 +957,27 @@ case or by id: a ticket with none is `404` `ticket_not_found`. `junction` is opt
 | `verdicts` | The newest verdicts: `kind`, `outcome`, `head`, `reason`. |
 | `conductor` | The Conductor's earlier updates and instructions on the ticket. |
 | `budget` | `tokens_used` (every run's, the Conductor's among them), `tokens_cap` (`execution.limits.tokens_per_issue`), `qa_passes` and `rework_runs`. |
+
+A watch turn (`during_run`) reads the same document plus `live`: the run's `run_id`, `kind`, `model`,
+`harness`, its `steps` and their outcomes, `failed_step` (the newest step that ended `failed`: `step_id`,
+`title`, `reason` and `output`, the last 40 lines of the step's `step_output` artifact cut to 3,000
+characters; null `output` for an agent step, which keeps none), `current_step`, `newest_lines`,
+`elapsed_minutes` and `tokens`.
+
+A recorded `conductor.update` carries the blocks the Conductor picked, resolved from the ticket's
+records, as `blocks` (absent when none), in this order, each a map with a `type`:
+
+| `type` | Shape |
+| --- | --- |
+| `steps` | `run_id`, `run_kind`, `steps`: `step_id`, `title`, `outcome` (`passed`, `failed`, `skipped`), `duration_ms`, `returns_to` (the newest 8). |
+| `evidence` | `items`: `event_id`, `artifact_id` (the screenshot artifact of the event, as its timeline entry loads it), `caption` (1 to 4). |
+| `budget` | `tokens_used`, `tokens_cap` (absent without a cap), `parts`: `kind`, `runs`, `tokens` by run kind, largest first (5). |
+| `path` | `stops`: `phase`, `state` (`done`, `failed`, `current`, `upcoming`), `times`, `run_number`; `loops` (entries of Rework); `elapsed_ms`. |
+| `attempts` | `run_id`, `step_id`, `title`, `tries`: `at`, `outcome`, `duration_ms`, `line` (the newest 5); `same_line`. |
+| `compare` | `expected`, `actual`: `{text}` or `{event_id, artifact_id}`. |
+| `findings` | `items`: `id`, `title`, `state` (`open`, `resolved`), `severity` (8, open first); `open`, `resolved`. |
+| `epic` | `identifier`, `title`, `rows`: `identifier`, `title`, `state`, `current`. |
+| `question` | `decision_id`, `title`, `question`, `options`: `label`, `recommended`. |
 
 Each fact read from an event carries its `event_id`, so a claim built on it can be traced; the
 Conductor's update keeps only the ids the facts carry as its `refs`. Long texts end in ` [cut by

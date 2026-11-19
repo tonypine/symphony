@@ -37,6 +37,11 @@ differs from which screen of the design.
 Record each pair of screenshots as an `evidence` event with `ticket_record`, as you take them.
 Do not call `qa_verdict`.
 
+A design check is a `pass` only when every entry and variation the plan names was seen and compared
+with the design by eye. Any part that could not be reached, seen or judged (an entry that showed
+only its empty state, a screenshot you did not view) makes the status `blocked`, with what blocked
+it in `actual`: never `pass`, never `fail`.
+
 Answer with `status` (`pass`, `fail`, `blocked`, or `plan_mismatch` when the plan named a screen or
 entry that does not exist), `expected` (the designs you compared with, and the sizes), `actual`
 (what you saw, entry by entry), `details`, and `evidence` (every screenshot and gallery picture

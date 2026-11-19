@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.Conductor.WatchTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Artifacts
   alias SymphonyElixir.Conductor.{Facts, Steer, Watch}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.TicketEvents.Event
@@ -55,12 +56,21 @@ defmodule SymphonyElixir.Conductor.WatchTest do
       assert {"step_failed", _seen} = Watch.trigger([step("e1", "build", "failed"), step("e3", "tests", "failed")], run, @watch, seen)
       assert Watch.trigger([step("e4", "build", "passed")], run, @watch, MapSet.new()) == nil
 
-      answer = %Event{id: "n1", type: "note", payload: %{text: "Walk step 2: plan_mismatch. Expected: a list. Actual: nothing."}}
-      assert {"qa_step_answer", _seen} = Watch.trigger([answer], run, @watch, MapSet.new())
-      assert Watch.trigger([%Event{id: "n2", type: "note", payload: %{text: "A plain note."}}], run, @watch, MapSet.new()) == nil
-      # An agent's note that reads like a step's answer is not the pass's answer.
-      agent_note = %{answer | id: "n3", actor: %{kind: :agent, run_kind: "qa", run_id: "r"}}
-      assert Watch.trigger([agent_note], run, @watch, MapSet.new()) == nil
+      answer = fn id, status ->
+        result = %{status: status, expected: "a list", actual: "nothing"}
+        %Event{id: id, type: "step.completed", actor: %{kind: :machine}, payload: %{step_id: "walk_2", outcome: "passed", result: result}}
+      end
+
+      # A QA step's answer that could not be judged counts, and is no failed step.
+      assert {"qa_step_answer", _seen} = Watch.trigger([answer.("n1", "plan_mismatch")], run, @watch, MapSet.new())
+      assert {"qa_step_answer", _seen} = Watch.trigger([answer.("n4", "blocked")], run, @watch, MapSet.new())
+      assert {"qa_step_answer", _seen} = Watch.trigger([%{answer.("n5", "blocked") | payload: %{step_id: "w", outcome: "passed", result: %{"status" => "blocked"}}}], run, @watch, MapSet.new())
+      assert Watch.trigger([answer.("n2", "pass")], run, @watch, MapSet.new()) == nil
+      assert Watch.trigger([answer.("n6", "fail")], run, @watch, MapSet.new()) == nil
+      assert Watch.trigger([%Event{id: "n7", type: "note", payload: %{text: "A plain note."}}], run, @watch, MapSet.new()) == nil
+      # An agent's step.completed that carries a result is not the pass's answer.
+      agent_answer = %{answer.("n3", "blocked") | actor: %{kind: :agent, run_kind: "qa", run_id: "r"}}
+      assert Watch.trigger([agent_answer], run, @watch, MapSet.new()) == nil
     end
 
     test "a run past its minutes or its tokens counts while it stays over", %{run: run} do
@@ -101,6 +111,44 @@ defmodule SymphonyElixir.Conductor.WatchTest do
     assert live.current_step == %{step_id: "build", title: "Build", mode: "machine"}
     assert live.newest_lines == ["compiling", "error: undefined", "{:raw, 1}"]
     assert Watch.live(%{run | run_profile: nil}, []).current_step == nil
+  end
+
+  describe "the failed step's output" do
+    defp kept(ctx, kind, name, text) do
+      path = Path.join(System.tmp_dir!(), "#{name}-#{System.unique_integer([:positive])}")
+      File.write!(path, text)
+      on_exit(fn -> File.rm(path) end)
+      meta = %{repo_key: "default", issue_id: ctx.issue_id, run_id: ctx.run.run_id, kind: kind, label: name}
+      {:ok, %{id: id}} = Artifacts.ingest(path, meta)
+      id
+    end
+
+    defp failed(id, artifacts), do: %Event{id: id, type: "step.completed", payload: %{step_id: "build", title: "Build", outcome: "failed"}, artifacts: artifacts}
+
+    test "the newest failed step carries the tail of its output", ctx do
+      old = kept(ctx, "step_output", "old", "an old failure")
+      output = kept(ctx, "step_output", "new", Enum.map_join(1..60, "\n", &"line #{&1}"))
+
+      live = Watch.live(ctx.run, [failed("f1", [old]), step("c1", "code", "passed"), failed("f2", [output])])
+
+      assert %{step_id: "build", title: "Build", output: text} = live.failed_step
+      assert String.starts_with?(text, "line 21")
+      assert String.ends_with?(text, "line 60")
+    end
+
+    test "an output over 3000 characters keeps its end", ctx do
+      id = kept(ctx, "step_output", "long", String.duplicate("x", 5_000) <> "\nthe real error")
+      %{failed_step: %{output: text}} = Watch.live(ctx.run, [failed("f1", [id])])
+      assert String.length(text) <= 3_003 + String.length(" [cut by Symphony]")
+      assert String.ends_with?(text, "the real error")
+    end
+
+    test "a failed step with no readable output has none, and no failure has no failed step", ctx do
+      log = kept(ctx, "log", "log", "not step output")
+      assert %{failed_step: %{output: nil}} = Watch.live(ctx.run, [failed("f1", [])])
+      assert %{failed_step: %{output: nil}} = Watch.live(ctx.run, [failed("f2", [log, "missing"])])
+      assert Watch.live(ctx.run, [step("c1", "code", "passed")]).failed_step == nil
+    end
   end
 
   describe "the watch" do
