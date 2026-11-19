@@ -22,13 +22,18 @@ defmodule SymphonyElixir.RunKindTest do
              :epic_review,
              :ci_fix,
              :review_feedback,
-             :qa
+             :qa,
+             :conductor
            ]
 
     assert RunKind.names() == Enum.map(RunKind.kinds(), &Atom.to_string/1)
   end
 
-  test "classify/2 can return every kind" do
+  test "the phase kinds are every kind but the Conductor's, which takes no step list" do
+    assert RunKind.phase_kinds() == RunKind.kinds() -- [:conductor]
+  end
+
+  test "classify/2 can return every phase kind, and never the Conductor's" do
     samples = [
       {:implementation, issue(), []},
       {:breakdown, breakdown_parent(sub_issues: []), []},
@@ -46,7 +51,7 @@ defmodule SymphonyElixir.RunKindTest do
     end
 
     assert Enum.map(samples, &elem(&1, 0)) |> Enum.sort() ==
-             Enum.sort(RunKind.kinds())
+             Enum.sort(RunKind.phase_kinds())
   end
 
   describe "classify/2" do

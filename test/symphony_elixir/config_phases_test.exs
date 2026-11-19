@@ -80,9 +80,10 @@ defmodule SymphonyElixir.ConfigPhasesTest do
       assert Phases.default_steps(:code_review) == []
     end
 
-    test "names the kinds phases takes: every run kind" do
+    test "names the kinds phases takes: every run kind but the Conductor's" do
       assert "implementation" in Phases.kinds()
-      assert Phases.kinds() == SymphonyElixir.RunKind.names()
+      assert Phases.kinds() == SymphonyElixir.RunKind.names() -- ["conductor"]
+      assert Phases.kind("conductor") == nil
       assert Phases.kind("rework") == :rework
       assert Phases.kind(:qa) == :qa
       assert Phases.kind("not_a_kind") == nil
