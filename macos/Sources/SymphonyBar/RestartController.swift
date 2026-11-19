@@ -78,6 +78,9 @@ final class RestartController {
                 }
             case .pollNow:
                 poller.pollNow()
+            case .checkRuns:
+                let stateRoot = runner.stateRoot
+                Task { handle(.runsChecked(await StatusPoller.fetchDrain(stateRoot: stateRoot))) }
             case .stop:
                 // The exit comes back through `handle(.exited)`.
                 guard let beforeStop else {

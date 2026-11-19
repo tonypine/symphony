@@ -2085,10 +2085,14 @@ defmodule SymphonyElixirWeb.Presenter do
 
   defp current_repo_key, do: Config.repo_key_or_nil()
 
-  # A run holding no agent session and running nothing until its next turn: Symphony can stop with
-  # it there, and a run on a machine step or one ending finishes by itself first.
-  defp between_turns?(%{step: %{waiting: waiting}}) when waiting in ["slot", "pause", "answer"], do: true
-  defp between_turns?(_entry), do: false
+  @doc """
+  Whether a running entry waits between turns, for a slot, the pause or an answer: it holds no
+  agent session and runs nothing until its next turn, so Symphony can stop with it there. A run
+  on a machine step or one ending finishes by itself first.
+  """
+  @spec between_turns?(map()) :: boolean()
+  def between_turns?(%{step: %{waiting: waiting}}) when waiting in ["slot", "pause", "answer"], do: true
+  def between_turns?(_entry), do: false
 
   # A run waiting out a Linear rate limit or outage has no new agent message to show.
   defp running_message(%{linear_wait_until: %DateTime{}}), do: "waiting for Linear"
