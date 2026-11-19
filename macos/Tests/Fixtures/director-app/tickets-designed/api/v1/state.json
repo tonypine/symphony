@@ -1,0 +1,484 @@
+{
+  "auto_merge": [],
+  "awaiting_clarification": [],
+  "blocked": [],
+  "budget": {
+    "daily_limit": 5000000,
+    "daily_paused": false,
+    "daily_remaining": 1900000,
+    "daily_used": 3100000,
+    "per_issue_limit": 2000000
+  },
+  "build": {
+    "sha": "9f54098c3a1e5b7d2f4c6a8e0b1d3f5a7c9e1b3d",
+    "version": "0.0.1.412"
+  },
+  "codex_totals": {
+    "cache_creation_input_tokens": 6568666,
+    "cached_input_tokens": 149857148,
+    "input_tokens": 156430436,
+    "output_tokens": 629302,
+    "seconds_running": 23413,
+    "total_tokens": 156465114,
+    "uncached_input_tokens": 4622
+  },
+  "concurrency": {
+    "finishing_max": 2,
+    "forced_max": 1,
+    "max_total": 10
+  },
+  "conflicts": [],
+  "counts": {
+    "claimed": 3,
+    "conflicts": 1,
+    "forced": 1,
+    "retrying": 2,
+    "running": 3,
+    "shipped_today": 3,
+    "waiting_on_you": 2,
+    "watching": 5
+  },
+  "dispatch_skipped": [],
+  "dispatch_state": {
+    "active?": true,
+    "blockers": []
+  },
+  "epic_lanes": {
+    "lanes": [
+      {
+        "id": "e1",
+        "identifier": "SHOP-300",
+        "status": "running",
+        "sub_issue": {
+          "identifier": "SHOP-302",
+          "issue_id": "i-302",
+          "state": "In Progress",
+          "via": "blocked_by"
+        },
+        "title": "Gift cards"
+      },
+      {
+        "id": "e2",
+        "identifier": "API-120",
+        "status": "waiting",
+        "sub_issue": null,
+        "title": "Rate limits"
+      }
+    ],
+    "max_total": 10,
+    "queued_epics": [
+      {
+        "id": "e3",
+        "identifier": "WEB-88",
+        "title": "Dark mode"
+      }
+    ],
+    "shared": {
+      "slots": 8,
+      "used": 2
+    }
+  },
+  "finishing": {
+    "running": [
+      {
+        "identifier": "SHOP-298",
+        "issue_id": "i-298",
+        "state": "Merging"
+      }
+    ],
+    "slots": 2,
+    "used": 1
+  },
+  "forced": [],
+  "generated_at": "2026-11-12T16:00:00Z",
+  "linear_usage": {
+    "callers": [
+      {
+        "caller": "poll",
+        "requests": 720
+      },
+      {
+        "caller": "reconcile",
+        "requests": 402
+      },
+      {
+        "caller": "agent_tool",
+        "requests": 151
+      },
+      {
+        "caller": "qa",
+        "requests": 11
+      }
+    ],
+    "queries": [
+      {
+        "query": "CandidateIssues",
+        "requests": 720
+      }
+    ],
+    "total": 1284,
+    "window_ms": 3600000
+  },
+  "orchestrator": {
+    "message_queue_len": 0,
+    "snapshot_age_ms": 420,
+    "snapshot_build_ms": 12,
+    "snapshot_parts_ms": {}
+  },
+  "pause": {
+    "paused": false,
+    "paused_at": null,
+    "reason": null
+  },
+  "pollers": {
+    "ci": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": {
+        "enabled": true,
+        "events_received": 214,
+        "last_event_at": "2026-10-07T13:58:40Z",
+        "rejected": 2,
+        "relay": "smee.io",
+        "results_via_poll": 7,
+        "results_via_webhook": 96
+      }
+    },
+    "pr_review": {
+      "consecutive_failures": 0,
+      "current_backoff_ms": null,
+      "poll_interval_ms": 60000,
+      "status": "running",
+      "webhooks": null
+    }
+  },
+  "qa": {
+    "queued": [],
+    "running": [
+      {
+        "forced": false,
+        "identifier": "SHOP-301",
+        "issue_id": "i-301",
+        "sha": "4be1c0d9"
+      }
+    ]
+  },
+  "rate_limits": null,
+  "repos": [
+    "api",
+    "docs",
+    "web-shop"
+  ],
+  "retrying": [],
+  "run_history": [],
+  "running": [
+    {
+      "forced": false,
+      "issue_id": "issue-tp-1441",
+      "issue_identifier": "TP-1441",
+      "last_event": "notification",
+      "last_event_at": "2026-11-12T15:59:40Z",
+      "last_message": "Writing the Situation line",
+      "linear_wait_until": null,
+      "pending_tool": null,
+      "pull_request_url": null,
+      "repo_key": "symphony",
+      "reviewer_profile": null,
+      "run_kind": "implementation",
+      "run_profile": null,
+      "session_id": "session-TP-1441",
+      "started_at": "2026-11-12T15:35:00Z",
+      "state": "In Progress",
+      "title": "The Situation line everywhere",
+      "tokens": {
+        "cache_creation_input_tokens": 0,
+        "cached_input_tokens": 1214000,
+        "input_tokens": 1215200,
+        "output_tokens": 24800,
+        "total_tokens": 1800000,
+        "uncached_input_tokens": 1200
+      },
+      "transcript_path": null,
+      "turn_count": 7,
+      "url": "https://linear.app/example/issue/TP-1441",
+      "worker_host": null,
+      "workspace_path": "/Users/director/symphony-workspaces/symphony/TP-1441"
+    }
+  ],
+  "shipped_today": [],
+  "skipped": [],
+  "slot_waiting": [],
+  "stray_processes": [],
+  "uptime_seconds": 11580,
+  "usage_limits": [],
+  "waiting_on_you": [],
+  "watching": [],
+  "order": {
+    "computed_at": "2026-11-12T16:00:00Z",
+    "next": null,
+    "queue": [],
+    "groups": [
+      {
+        "kind": "mixed",
+        "count": 10,
+        "tickets": [
+          {
+            "identifier": "TP-1441",
+            "situation": {
+              "kind": "working",
+              "word": "Working",
+              "cause": "Implementation run 1 is writing the code.",
+              "next": null,
+              "since": "2026-11-12T15:35:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "BIL-306",
+            "situation": {
+              "kind": "waiting_on_you",
+              "word": "Waiting on you",
+              "cause": "A question: which day does the new price start?",
+              "next": null,
+              "since": "2026-11-12T12:48:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "SHOP-305",
+            "situation": {
+              "kind": "retrying",
+              "word": "Needs a fix",
+              "cause": "Two checks failed on PR #812.",
+              "next": null,
+              "since": "2026-11-12T15:38:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "SHOP-301",
+            "situation": {
+              "kind": "waiting_for_ci",
+              "word": "Waiting for CI",
+              "cause": "Checks are running on PR #790.",
+              "next": null,
+              "since": "2026-11-12T15:54:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "TP-1442",
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked",
+              "cause": "Starts when TP-1441 lands.",
+              "next": null,
+              "since": "2026-11-11T16:00:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "TP-1480",
+            "situation": {
+              "kind": "working",
+              "word": "Code Review",
+              "cause": "Review run 2 is reading the change.",
+              "next": null,
+              "since": "2026-11-12T15:51:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "BIL-307",
+            "situation": {
+              "kind": "waiting_for_slot",
+              "word": "Queued",
+              "cause": "Waits for a slot.",
+              "next": null,
+              "since": "2026-11-12T15:20:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "SHOP-311",
+            "situation": {
+              "kind": "waiting_for_slot",
+              "word": "Forced",
+              "cause": "You pushed it ahead of the queue.",
+              "next": null,
+              "since": "2026-11-12T15:58:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "TP-1443",
+            "situation": {
+              "kind": "blocked_by_ticket",
+              "word": "Blocked",
+              "cause": "Starts when TP-1442 lands.",
+              "next": null,
+              "since": "2026-11-11T16:00:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          },
+          {
+            "identifier": "SHOP-298",
+            "situation": {
+              "kind": "done",
+              "word": "Merging",
+              "cause": "PR #781 is green and merges next.",
+              "next": null,
+              "since": "2026-11-12T15:59:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "providers": [
+    {
+      "fallback_for": [],
+      "harnesses": [
+        "claude"
+      ],
+      "held": true,
+      "held_until": "2026-10-07T18:05:00Z",
+      "in_use": true,
+      "kinds": [
+        "implementation",
+        "breakdown",
+        "rework",
+        "landing",
+        "code_review",
+        "epic_review",
+        "ci_fix",
+        "review_feedback"
+      ],
+      "name": "Anthropic",
+      "paused": false,
+      "paused_since": null,
+      "provider": "anthropic",
+      "reserve": null,
+      "tokens_today": 1840000,
+      "usage_windows": [
+        {
+          "name": "five_hour",
+          "resets_at": "2026-10-07T18:00:00Z",
+          "utilization": 0.97
+        },
+        {
+          "name": "seven_day",
+          "resets_at": "2026-10-10T09:00:00Z",
+          "utilization": 0.64
+        }
+      ],
+      "working": 2
+    },
+    {
+      "fallback_for": [
+        "implementation",
+        "rework"
+      ],
+      "harnesses": [
+        "claude"
+      ],
+      "held": false,
+      "held_until": null,
+      "in_use": true,
+      "kinds": [],
+      "name": "OpenRouter",
+      "paused": true,
+      "paused_since": "2026-10-07T13:30:00Z",
+      "provider": "openrouter",
+      "reserve": null,
+      "tokens_today": 52000,
+      "usage_windows": [],
+      "working": 0
+    },
+    {
+      "fallback_for": [
+        "code_review"
+      ],
+      "harnesses": [
+        "codex"
+      ],
+      "held": false,
+      "held_until": null,
+      "in_use": true,
+      "kinds": [
+        "qa"
+      ],
+      "name": "OpenAI",
+      "paused": false,
+      "paused_since": null,
+      "provider": "openai",
+      "reserve": null,
+      "tokens_today": 310000,
+      "usage_windows": [],
+      "working": 1
+    },
+    {
+      "fallback_for": [],
+      "harnesses": [
+        "claude",
+        "codex",
+        "opencode"
+      ],
+      "held": false,
+      "held_until": null,
+      "in_use": false,
+      "kinds": [],
+      "name": "OpenCode Go",
+      "paused": false,
+      "paused_since": null,
+      "provider": "opencode-go",
+      "reserve": null,
+      "tokens_today": 0,
+      "usage_windows": [],
+      "working": 0
+    }
+  ]
+}

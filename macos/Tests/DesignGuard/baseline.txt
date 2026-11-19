@@ -104,13 +104,11 @@ SymphonyBar/TicketPageView.swift number 4
 SymphonyBar/TicketPageView.swift button 4
 SymphonyBar/TicketPageView.swift disabled 2
 SymphonyBar/TicketPageView.swift field 2
-SymphonyBar/TicketsView.swift font 1
-SymphonyBar/TicketsView.swift color 14
-SymphonyBar/TicketsView.swift number 3
+SymphonyBar/TicketsView.swift color 7
+SymphonyBar/TicketsView.swift number 1
 SymphonyBar/TicketsView.swift button 8
-SymphonyBar/TicketsView.swift disabled 3
+SymphonyBar/TicketsView.swift disabled 2
 SymphonyBar/TicketsView.swift menu 1
-SymphonyBar/TicketsView.swift table 1
 SymphonyBar/UpdatePoller.swift font 1
 SymphonyBar/UsageView.swift color 1
 SymphonyBar/WindowBarView.swift button 1
