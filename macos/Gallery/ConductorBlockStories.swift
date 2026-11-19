@@ -156,6 +156,7 @@ func conductorBlockRenders(_ scheme: ColorScheme, suffix: String) {
     let mixed = findings([("Needs-a-fix row reads Next in line", false), ("Duplicate of the row finding", true), ("Strip legend counts the wrong ticket", true)])
     render(conductorBlockAlone { FindingsLedger(findings: mixed) }, scheme, to: "findings-ledger-mixed-\(suffix).png")
 
+    qaStepRenders(scheme, suffix: suffix)
     render(lifecycleWithConductor(), scheme, to: "lifecycle-conductor-segment-\(suffix).png")
 
     // Each block inside a message.
@@ -164,4 +165,34 @@ func conductorBlockRenders(_ scheme: ColorScheme, suffix: String) {
     ].enumerated() {
         render(conductorBlockMessage("b\(index + 1)"), scheme, to: "conductor-blocks-\(name)-\(suffix).png")
     }
+}
+
+// MARK: - A stepped QA pass
+
+/// A QA run whose steps carry their answers (`Tests/Fixtures/timeline/qa-steps.json`): a plan, two checks with results, a
+/// review asking for two rechecks and a verdict.
+let qaStepsRun: RunGroupModel = {
+    guard let events = try? Data(contentsOf: timelineFixtures.appendingPathComponent("qa-steps.json")),
+          let history = TicketEventsPayload.decode(events),
+          let run = TimelineModel.build(history, reference: timelineReference, calendar: timelineCalendar).run("qa-1")
+    else { fatalError("The QA steps fixture is missing from \(timelineFixtures.path)") }
+    return run
+}()
+
+/// The QA run with the step `stepID` unfolded.
+@MainActor
+func qaRunGroup(unfolding stepID: String) -> AnyView {
+    AnyView(
+        RunGroup(run: qaStepsRun, transcripts: StepTranscripts { _ in .unreachable }, unfolded: true, unfoldedSteps: [stepID])
+            .padding(DesignTokens.Space.s5)
+            .frame(width: 760)
+            .background(DesignTokens.Surface.content.color)
+    )
+}
+
+@MainActor
+func qaStepRenders(_ scheme: ColorScheme, suffix: String) {
+    render(qaRunGroup(unfolding: "check-1"), scheme, to: "run-group-qa-check-result-\(suffix).png")
+    render(qaRunGroup(unfolding: "plan"), scheme, to: "run-group-qa-plan-\(suffix).png")
+    render(qaRunGroup(unfolding: "review"), scheme, to: "run-group-qa-recheck-\(suffix).png")
 }

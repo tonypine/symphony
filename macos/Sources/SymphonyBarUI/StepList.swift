@@ -230,6 +230,11 @@ private struct StepRow: View {
                     .padding(.vertical, DesignTokens.Space.s1)
             }
             if unfolded {
+                if let answer = step.answer {
+                    StepAnswerView(answer: answer)
+                        .padding(.leading, Self.linesLeading)
+                        .padding(.top, DesignTokens.Space.s1)
+                }
                 StepLines(step: step, transcripts: transcripts)
                     .padding(.leading, Self.linesLeading)
                     .padding(.top, DesignTokens.Space.s1)
@@ -284,7 +289,7 @@ private struct StepHeaderLabel: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            Text(step.state.word)
+            Text(step.state.word + (step.answer?.result?.extraWord.map { " · " + $0 } ?? ""))
                 .font(DesignTokens.TypeStyle.secondary.font.weight(.medium))
                 .foregroundStyle(stateStyle)
                 .lineLimit(1)
