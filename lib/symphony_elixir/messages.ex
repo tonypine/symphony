@@ -38,10 +38,6 @@ defmodule SymphonyElixir.Messages do
   @spec person() :: String.t()
   def person, do: @person
 
-  @doc "The event types a message and its read are: what a reader of messages queries."
-  @spec types() :: [String.t()]
-  def types, do: @types
-
   @doc "The run store marker the migration of notes sets once it is done."
   @spec marker() :: String.t()
   def marker, do: @marker
