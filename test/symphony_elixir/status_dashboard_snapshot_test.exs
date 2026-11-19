@@ -574,7 +574,16 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
          usage_limits: [
            %{provider: "anthropic", scope: :all, window: "five_hour", resume_at: now},
            %{provider: "anthropic", scope: "opus", window: "seven_day_opus", resume_at: later},
-           %{provider: "anthropic", scope: :all, window: "seven_day", phase: :headroom, utilization: 0.92, reserve: 0.9, resets_at: now, resume_at: now}
+           %{
+             provider: "anthropic",
+             scope: :all,
+             window: "seven_day",
+             phase: :headroom,
+             utilization: 0.92,
+             reserve: 0.9,
+             resets_at: now,
+             resume_at: now
+           }
          ],
          dispatch_state: %{
            active?: false,

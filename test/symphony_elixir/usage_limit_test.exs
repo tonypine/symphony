@@ -1,9 +1,10 @@
 defmodule SymphonyElixir.UsageLimitTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.Config.Schema.Execution.UsageLimit, as: UsageLimitConfig
-  alias SymphonyElixir.{Pauses, Providers, UsageLimit}
   alias SymphonyElixir.Config.Schema
+  alias SymphonyElixir.Config.Schema.Execution.UsageLimit, as: UsageLimitConfig
+  alias SymphonyElixir.Config.SystemSchema
+  alias SymphonyElixir.{Pauses, Providers, UsageLimit}
 
   @now ~U[2026-10-03 03:46:00Z]
   @config %UsageLimitConfig{auto_pause: true, resume_margin_seconds: 120, unknown_reset_retry_seconds: 900}
@@ -447,8 +448,8 @@ defmodule SymphonyElixir.UsageLimitTest do
 
     test "only the providers whose usage Symphony reads take a reserve" do
       assert Providers.usage_readable() == ["anthropic"]
-      assert "execution.providers.anthropic.reserve" in SymphonyElixir.Config.SystemSchema.operator_key_paths()
-      refute "execution.providers.openai.reserve" in SymphonyElixir.Config.SystemSchema.operator_key_paths()
+      assert "execution.providers.anthropic.reserve" in SystemSchema.operator_key_paths()
+      refute "execution.providers.openai.reserve" in SystemSchema.operator_key_paths()
     end
 
     test "rejects invalid values and unknown keys" do
@@ -545,7 +546,15 @@ defmodule SymphonyElixir.UsageLimitTest do
       }
 
       assert [
-               %{provider: "anthropic", window: "five_hour", scope: :all, resets_at: ~U[2026-10-03 05:00:00Z], utilization: 0.9, reserve: 0.9, source: :rate_limit_event},
+               %{
+                 provider: "anthropic",
+                 window: "five_hour",
+                 scope: :all,
+                 resets_at: ~U[2026-10-03 05:00:00Z],
+                 utilization: 0.9,
+                 reserve: 0.9,
+                 source: :rate_limit_event
+               },
                %{window: "seven_day_extra", utilization: 0.91},
                %{window: "seven_day_opus", scope: "opus", utilization: 0.95}
              ] = UsageLimit.headroom_crossings(windows, 0.9, @now)

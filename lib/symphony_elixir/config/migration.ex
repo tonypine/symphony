@@ -214,15 +214,19 @@ defmodule SymphonyElixir.Config.Migration do
         if is_nil(value) or target_set?(migration, entry, entries) do
           {:cont, {:ok, text}}
         else
-          case LineEditor.put(text, path_of(to), Jason.encode!(value)) do
-            {:ok, text} -> {:cont, {:ok, text}}
-            {:error, _reason} -> {:halt, {:error, migration.key}}
-          end
+          put_moved(text, to, value, migration.key)
         end
 
       _rename_or_removal, acc ->
         {:cont, acc}
     end)
+  end
+
+  defp put_moved(text, to, value, key) do
+    case LineEditor.put(text, path_of(to), Jason.encode!(value)) do
+      {:ok, text} -> {:cont, {:ok, text}}
+      {:error, _reason} -> {:halt, {:error, key}}
+    end
   end
 
   defp verify(document, migrated, notes, entries) do

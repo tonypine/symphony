@@ -1125,12 +1125,16 @@ defmodule SymphonyElixir.Config.SystemSchema do
   defp normalize_execution_providers(raw) do
     with {:ok, providers} <- section_map(raw, "execution.providers") do
       Enum.reduce_while(Enum.sort(providers), {:ok, %{}}, fn {provider, section}, {:ok, acc} ->
-        case normalize_execution_provider(to_string(provider), section) do
-          {:ok, nil} -> {:cont, {:ok, acc}}
-          {:ok, reserve} -> {:cont, {:ok, Map.put(acc, to_string(provider), %{"reserve" => reserve})}}
-          error -> {:halt, error}
-        end
+        put_execution_provider(acc, to_string(provider), section)
       end)
+    end
+  end
+
+  defp put_execution_provider(acc, provider, section) do
+    case normalize_execution_provider(provider, section) do
+      {:ok, nil} -> {:cont, {:ok, acc}}
+      {:ok, reserve} -> {:cont, {:ok, Map.put(acc, provider, %{"reserve" => reserve})}}
+      error -> {:halt, error}
     end
   end
 

@@ -125,7 +125,10 @@ defmodule SymphonyElixir.Providers do
   @doc "Each provider's reserve in `settings`, by provider; a provider with none is left out."
   @spec reserves(Schema.t()) :: %{optional(String.t()) => float()}
   def reserves(%Schema{execution: execution}) do
-    for provider <- @usage_readable, reserve = Schema.Execution.reserve(execution, provider), into: %{}, do: {provider, reserve}
+    for provider <- @usage_readable,
+        reserve = Schema.Execution.reserve(execution, provider),
+        into: %{},
+        do: {provider, reserve}
   end
 
   @doc """

@@ -208,7 +208,10 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
     assert length(String.split(log, "Usage limit headroom hold")) == 3
 
     state = :sys.get_state(pid)
-    assert %{phase: :headroom, reason: "claude_usage_headroom", resume_at: ^resume_at, utilization: 0.93, reserve: 0.9} = state.usage_limits[@anthropic]
+
+    assert %{phase: :headroom, reason: "claude_usage_headroom", resume_at: ^resume_at, utilization: 0.93, reserve: 0.9} =
+             state.usage_limits[@anthropic]
+
     assert is_reference(state.usage_limit_timers[@anthropic])
     assert %{@anthropic => %{phase: :headroom}} = RunStore.get_usage_limits()
     assert Map.has_key?(state.running, running.id)
