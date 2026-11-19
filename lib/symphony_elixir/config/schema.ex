@@ -2090,6 +2090,7 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
+    alias SymphonyElixir.QaAgent.StepPrompts
     alias SymphonyElixir.RunKind
 
     @type t :: %__MODULE__{}
@@ -2126,6 +2127,8 @@ defmodule SymphonyElixir.Config.Schema do
       use Ecto.Schema
       import Ecto.Changeset
 
+      alias SymphonyElixir.Config.Runs
+
       @type t :: %__MODULE__{}
 
       @primary_key false
@@ -2133,6 +2136,7 @@ defmodule SymphonyElixir.Config.Schema do
       @conditions ~w(always macos_changed elixir_changed)
       @keys ~w(id title mode command prompt answer timeout_ms on_fail no_result_limit when model effort session repeat)
       @agent_keys ~w(model effort session repeat)
+      @cast ~w(id title mode prompt answer timeout_ms on_fail no_result_limit when model effort session repeat)a
       @repeats ~w(walkthrough)
       @fresh_session "fresh"
       @answer_types ~w(string number boolean list object)
@@ -2208,7 +2212,7 @@ defmodule SymphonyElixir.Config.Schema do
         step = step_name(attrs)
 
         schema
-        |> cast(attrs, [:id, :title, :mode, :prompt, :answer, :timeout_ms, :on_fail, :no_result_limit, :when, :model, :effort, :session, :repeat])
+        |> cast(attrs, @cast)
         |> reject_unknown_keys(attrs, @keys, step)
         |> validate_required([:id], message: "is required for every step")
         |> validate_format(:id, @id_format, message: "`#{step}` must be lowercase letters, digits and underscores, starting with a letter")
@@ -2263,7 +2267,7 @@ defmodule SymphonyElixir.Config.Schema do
             else: changeset
 
         changeset
-        |> validate_inclusion(:effort, SymphonyElixir.Config.Runs.efforts(), message: "of step `#{step}` must be one of: #{Enum.join(SymphonyElixir.Config.Runs.efforts(), ", ")}")
+        |> validate_inclusion(:effort, Runs.efforts(), message: "of step `#{step}` must be one of: #{Enum.join(Runs.efforts(), ", ")}")
         |> validate_change(:session, fn :session, session ->
           if session == @fresh_session or session =~ @id_format,
             do: [],
@@ -2358,8 +2362,13 @@ defmodule SymphonyElixir.Config.Schema do
         end
       end
 
-      # The QA pass's own commands drive the QA host the pass holds; no other run has one.
-      defp qa_command_outside(_steps, :qa_playbook), do: nil
+      # The QA pass's own commands drive the QA host the pass holds; no other run has one. A QA
+      # playbook's list, for its part, ends in the verdict, which its `review` step gives.
+      defp qa_command_outside(steps, :qa_playbook) do
+        if Enum.any?(steps, &(&1.id == "review" and &1.mode == "orchestrated")),
+          do: nil,
+          else: "has no orchestrated step `review`, which gives a QA pass's verdict"
+      end
 
       defp qa_command_outside(steps, :run_kind) do
         Enum.find_value(steps, fn %Step{id: id, command: commands} ->
@@ -2613,7 +2622,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     defp default_macos_app_qa_steps do
       judged = %{"status" => "string", "expected" => "string", "actual" => "string", "details" => "string", "evidence" => "list"}
-      prompt = &SymphonyElixir.QaAgent.StepPrompts.prompt("macos_app", &1)
+      prompt = &StepPrompts.prompt("macos_app", &1)
 
       [
         %{"id" => "pre_checks", "title" => "Pre-checks", "mode" => "machine", "command" => "symphony:qa_pre_checks", "timeout_ms" => 60_000},

@@ -315,11 +315,14 @@ defmodule SymphonyElixir.ConfigPhasesTest do
         %{"id" => "review", "mode" => "orchestrated", "prompt" => "Judge it."}
       ]
 
-      assert {:ok, system} = parse(%{"qa" => %{"stepped" => true, "playbooks" => %{"macos_app" => %{"steps" => list}, "cli" => %{"steps" => [code()]}}}})
+      review = %{"id" => "review", "mode" => "orchestrated", "prompt" => "Give the verdict."}
+
+      playbooks = %{"macos_app" => %{"steps" => list}, "cli" => %{"steps" => [code(), review]}}
+      assert {:ok, system} = parse(%{"qa" => %{"stepped" => true, "playbooks" => playbooks}})
 
       assert [%Step{id: "build"}, %Step{id: "walk", prompt: walk_prompt}, %Step{id: "review", prompt: "Judge it."}] = Phases.qa_steps(system.phases, "macos_app")
       assert walk_prompt =~ "You walk one step"
-      assert [%Step{id: "code"}] = Phases.qa_steps(system.phases, "cli")
+      assert [%Step{id: "code"}, %Step{id: "review"}] = Phases.qa_steps(system.phases, "cli")
     end
 
     test "a bad playbook list is refused, naming its key" do
@@ -329,12 +332,22 @@ defmodule SymphonyElixir.ConfigPhasesTest do
                "phases.qa.playbooks.cli.steps.prompt is required for orchestrated step `look`"
 
       assert refused(qa.(%{"macos_app" => %{"steps" => [code(), code()]}})) =~ "phases.qa.playbooks.macos_app.steps has two steps with the id `code`"
+
+      assert refused(qa.(%{"cli" => %{"steps" => [code()]}})) =~
+               "phases.qa.playbooks.cli.steps has no orchestrated step `review`, which gives a QA pass's verdict"
+
       assert refused(qa.(%{"macos_app" => %{"steps" => [code()], "when" => "x"}})) =~ "unknown symphony.yml key `phases.qa.playbooks.macos_app.when`"
       assert refused(qa.(%{"macos_app" => %{}})) =~ "`phases.qa.playbooks.macos_app.steps` is required"
       assert refused(qa.(%{"macos_app" => "x"})) =~ "`phases.qa.playbooks.macos_app` must be an object"
       assert refused(qa.(["macos_app"])) =~ "`phases.qa.playbooks` must be an object"
       assert refused(qa.(%{"Mac App" => %{"steps" => []}})) =~ "phases.qa.playbooks.Mac App must be named in lowercase letters"
       assert refused(%{"qa" => %{"stepped" => "yes"}}) =~ "phases.qa.stepped is invalid"
+    end
+
+    test "QA's step lists read alone refuse playbooks that are not objects" do
+      refute Phases.QaPhase.changeset(%Phases.QaPhase{}, %{"playbooks" => "macos_app"}).valid?
+      refute Phases.QaPhase.changeset(%Phases.QaPhase{}, %{"playbooks" => %{"cli" => %{"steps" => "x"}}}).valid?
+      assert Phases.QaPhase.changeset(%Phases.QaPhase{}, %{}).valid?
     end
 
     test "only a QA playbook's list runs the QA pass's own commands" do

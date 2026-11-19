@@ -1390,17 +1390,17 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp qa_playbooks(playbooks, path) do
     with {:ok, playbooks} <- section_map(playbooks, path <> ".playbooks") do
-      Enum.reduce_while(playbooks, :ok, fn {kind, playbook}, :ok ->
-        playbook_path = "#{path}.playbooks.#{kind}"
+      Enum.find_value(playbooks, :ok, fn {kind, playbook} -> refused(qa_playbook(playbook, "#{path}.playbooks.#{kind}")) end)
+    end
+  end
 
-        with {:ok, playbook} <- section_map(playbook, playbook_path),
-             :ok <- reject_unknown_section_keys(playbook, ~w(steps), playbook_path),
-             :ok <- phase_steps(Map.fetch(playbook, "steps"), playbook_path) do
-          {:cont, :ok}
-        else
-          error -> {:halt, error}
-        end
-      end)
+  defp refused(:ok), do: nil
+  defp refused(error), do: error
+
+  defp qa_playbook(playbook, path) do
+    with {:ok, playbook} <- section_map(playbook, path),
+         :ok <- reject_unknown_section_keys(playbook, ~w(steps), path) do
+      phase_steps(Map.fetch(playbook, "steps"), path)
     end
   end
 

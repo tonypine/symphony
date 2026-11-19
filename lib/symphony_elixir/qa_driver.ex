@@ -496,6 +496,19 @@ defmodule SymphonyElixir.QaDriver do
   end
 
   @doc """
+  The PIDs of the apps the pass launched and has not quit with `qa_quit_app`, running or not, for
+  the stepped pass's quit step (`SymphonyElixir.QaAgent.Steps`). None when there is no driver.
+  """
+  @spec launched_pids(pid() | nil) :: [pos_integer()]
+  def launched_pids(nil), do: []
+
+  def launched_pids(driver) when is_pid(driver) do
+    GenServer.call(driver, :launched_pids)
+  catch
+    :exit, _reason -> []
+  end
+
+  @doc """
   What the pass did with the app: `built` when the last `qa_build` produced the app, `launched`
   when `qa_launch_app` started one (even one that has quit since), and `checked` when the last
   `qa_check_app` answer found it healthy. All `false` when there is no driver.
@@ -2173,6 +2186,7 @@ defmodule SymphonyElixir.QaDriver do
   def handle_call(:helper, _from, state), do: {:reply, state.helper, state}
   def handle_call(:wide_pass, _from, state), do: {:reply, state.wide_pass, state}
   def handle_call(:launched_app?, _from, state), do: {:reply, state.launched_app?, state}
+  def handle_call(:launched_pids, _from, state), do: {:reply, state.apps |> Map.keys() |> Enum.sort(), state}
   def handle_call(:roots, _from, state), do: {:reply, %{roots: state.roots, last: state.last_root}, state}
 
   def handle_call(:app_check, _from, state),

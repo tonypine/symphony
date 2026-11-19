@@ -46,7 +46,9 @@ defmodule SymphonyElixir.QaAgent.StepPrompts do
   """
   @spec screen_rules(String.t()) :: String.t()
   def screen_rules(playbook) when is_binary(playbook) do
-    case {between(playbook, @screen_rules_start, @screen_rules_end), between(playbook, @release_pair_start, @release_pair_end)} do
+    screens = between(playbook, @screen_rules_start, @screen_rules_end)
+
+    case {screens, between(playbook, @release_pair_start, @release_pair_end)} do
       {nil, _pair} -> playbook
       {screens, nil} -> screens
       {screens, pair} -> screens <> "\n\n" <> pair

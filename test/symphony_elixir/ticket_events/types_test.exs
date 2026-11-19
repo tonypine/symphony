@@ -343,7 +343,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       modes = ~w(machine orchestrated delegated)
 
       assert %{required: [%{name: "step_id", max: 200}, %{name: "title", max: 200}, %{name: "mode", type: "enum", values: ^modes}]} = Types.schema("step.started")
-      assert %{optional: [command, prompt_ref]} = Types.schema("step.started")
+      assert %{optional: [command, prompt_ref | turn]} = Types.schema("step.started")
+      assert Enum.map(turn, & &1.name) == ~w(model effort session model_ignored model_ignored_reason)
       assert command.required_when == %{field: "mode", equals: "machine"}
       assert prompt_ref.required_when == %{field: "mode", equals: "orchestrated"}
 
