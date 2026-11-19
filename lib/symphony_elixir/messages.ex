@@ -5,8 +5,8 @@ defmodule SymphonyElixir.Messages do
   another.
 
   A message is given to one run as new. The next run of the ticket, of any kind, gets every message
-  no other run was given, oldest first, at the top of its prompt (`prompt_section/1`, which
-  `SymphonyElixir.PromptBuilder` puts there), and Symphony records a machine `message.read` naming
+  no other run was given, oldest first, at the top of its prompt (`prepend_unread/4`, which
+  `SymphonyElixir.PromptBuilder` and `SymphonyElixir.ReviewAgent` call), and Symphony records a machine `message.read` naming
   the message and the run (`record_read/4`), keyed by the message. A later run reads it in the
   ticket's history (`SymphonyElixir.TicketEvents.Brief`), not as a new instruction. A run builds its
   prompt once, when it starts, so a message sent while it works waits for the next run. Sending
@@ -113,6 +113,38 @@ defmodule SymphonyElixir.Messages do
     case is_binary(run_id) && Enum.find(events, &match?(%Event{type: "run.started", run_id: ^run_id}, &1)) do
       %Event{payload: payload} -> Summary.run_name(payload)
       _unknown -> "a run"
+    end
+  end
+
+  @doc """
+  `prompt` with the messages of `repo_key`'s ticket `issue_id` that the run `run_id` is given as new
+  (`for_run/2`) at its top, under `prompt_section/1`, and their reads recorded for that run. A
+  prompt with no run records no read; a store that can't be read gives no message, so the run still
+  starts and they wait for the next. Every run's prompt goes through it: `SymphonyElixir.PromptBuilder`
+  for the runs it builds, `SymphonyElixir.ReviewAgent` for Code Review.
+  """
+  @spec prepend_unread(String.t(), String.t() | nil, String.t() | nil, String.t() | nil) :: String.t()
+  def prepend_unread(prompt, repo_key, issue_id, run_id) when is_binary(repo_key) and is_binary(issue_id) do
+    events = issue_id |> RunStore.list_ticket_events(types: @types) |> List.wrap() |> Enum.filter(&is_struct(&1, Event))
+
+    case for_run(events, run_id) do
+      [] ->
+        prompt
+
+      messages ->
+        if is_binary(run_id), do: record_read(repo_key, issue_id, messages, run_id)
+        prepend(prompt, messages)
+    end
+  end
+
+  def prepend_unread(prompt, _repo_key, _issue_id, _run_id), do: prompt
+
+  @doc "`prompt` with `messages` at its top under `prompt_section/1`; `prompt` itself when there are none."
+  @spec prepend(String.t(), [Event.t()]) :: String.t()
+  def prepend(prompt, messages) do
+    case prompt_section(messages) do
+      nil -> prompt
+      section -> section <> "\n\n" <> prompt
     end
   end
 

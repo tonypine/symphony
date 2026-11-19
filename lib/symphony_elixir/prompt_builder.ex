@@ -866,30 +866,10 @@ defmodule SymphonyElixir.PromptBuilder do
   # messages passed in (`:messages`) records nothing. The prompt is built once, when the run starts,
   # so a message sent while it works waits for the next run.
   defp prepend_messages(prompt, opts) do
-    {messages, record?} = prompt_messages(opts)
-
-    case Messages.prompt_section(messages) do
-      nil ->
-        prompt
-
-      section ->
-        if record?, do: record_messages_read(opts, messages)
-        section <> "\n\n" <> prompt
-    end
-  end
-
-  # A store that can't be read gives no message: the run still starts, and they wait for the next.
-  defp prompt_messages(opts) do
     case {Keyword.fetch(opts, :messages), ticket_of(opts)} do
-      {{:ok, messages}, _ticket} ->
-        {messages, false}
-
-      {:error, {_repo_key, issue_id}} ->
-        events = issue_id |> RunStore.list_ticket_events(types: Messages.types()) |> List.wrap() |> Enum.filter(&is_struct(&1, Event))
-        {Messages.for_run(events, Keyword.get(opts, :run_id)), true}
-
-      {:error, nil} ->
-        {[], false}
+      {{:ok, messages}, _ticket} -> Messages.prepend(prompt, messages)
+      {:error, {repo_key, issue_id}} -> Messages.prepend_unread(prompt, repo_key, issue_id, Keyword.get(opts, :run_id))
+      {:error, nil} -> prompt
     end
   end
 
@@ -902,12 +882,6 @@ defmodule SymphonyElixir.PromptBuilder do
       _none ->
         nil
     end
-  end
-
-  defp record_messages_read(opts, messages) do
-    with {repo_key, issue_id} <- ticket_of(opts),
-         run_id when is_binary(run_id) <- Keyword.get(opts, :run_id),
-         do: Messages.record_read(repo_key, issue_id, messages, run_id)
   end
 
   defp warn_if_over_limit(%{tokens: tokens}, state) do

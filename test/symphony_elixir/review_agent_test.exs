@@ -1139,6 +1139,58 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
+  describe "the messages written to the ticket" do
+    # TP-1502: a Code Review run is a run like any other, so the person's messages open its prompt.
+    test "the Code Review prompt opens with the messages no run read yet, and marks them read by the review" do
+      test_root = unique_tmp("symphony-elixir-review-agent-messages")
+      issue = %{issue() | id: "issue-review-messages"}
+
+      try do
+        {:ok, first} = SymphonyElixir.Messages.send_message("r", issue.id, "Check the export path first.")
+        {:ok, second} = SymphonyElixir.Messages.send_message("r", issue.id, "And the empty state.")
+
+        repo = git_repo_with_change!(test_root)
+        put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
+        write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
+
+        opts = [review_agent_module: SequenceReviewer, repo_key: "r", run_id: "review-run-1"]
+        assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(issue, repo, Config.settings!(), opts)
+
+        assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+        assert String.starts_with?(prompt, "## Messages from the person")
+        assert prompt =~ ~r/Check the export path first\..*And the empty state\..*You are the reviewer agent/s
+
+        reads = issue.id |> SymphonyElixir.TicketEvents.query(types: ["message.read"]) |> Enum.map(&{&1.payload.message_id, &1.payload.run_id})
+        assert Enum.sort(reads) == Enum.sort([{first.id, "review-run-1"}, {second.id, "review-run-1"}])
+      after
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "a review without its ticket's repo is given no message" do
+      test_root = unique_tmp("symphony-elixir-review-agent-no-messages")
+      issue = %{issue() | id: "issue-review-no-repo"}
+
+      try do
+        {:ok, _message} = SymphonyElixir.Messages.send_message("r", issue.id, "Waits for a run that names the ticket.")
+
+        repo = git_repo_with_change!(test_root)
+        put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
+        write_workflow_file!(Workflow.workflow_file_path(), review_agent: %{enabled: true, kind: "codex", command: "codex app-server"})
+
+        assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(issue, repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+        assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+        refute prompt =~ "Messages from the person"
+        assert SymphonyElixir.TicketEvents.query(issue.id, types: ["message.read"]) == []
+      after
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end
+    end
+  end
+
   describe "a reviewer that ends in prose" do
     setup do
       test_root = unique_tmp("symphony-elixir-review-agent-json-nudge")
