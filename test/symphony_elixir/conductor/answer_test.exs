@@ -53,7 +53,7 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
           {json(%{"instructions" => " "}), "`instructions` is blank"},
           {json(%{"instructions" => long}), "`instructions` is over 2000 characters"},
           {json(%{"instructions" => "x", "update" => 3}), "`update` must be a string or null"},
-          {json(%{"instructions" => "x", "update" => String.duplicate("u", Answer.update_max() + 1)}), "`update` is over 900 characters"},
+          {json(%{"instructions" => "x", "update" => String.duplicate("u", Answer.update_max() + 1)}), "`update` is over 1200 characters"},
           {json(%{"instructions" => "x", "refs" => [1]}), "`refs` must list event ids"},
           {json(%{"instructions" => "x", "refs" => "evt_1"}), "`refs` must list event ids"},
           {json(%{"instructions" => "x", "ask_person" => "yes"}), "`ask_person` must be an object or null"},

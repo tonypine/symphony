@@ -275,7 +275,8 @@ final class FieldAnchorView: NSView {
 ///
 /// `drawnAs` draws the field still in a state, for the Component Gallery; the field is live otherwise, and draws its
 /// text still in an offscreen snapshot, which draws no text view. `mono` sets the text in the mono face, for an
-/// identifier such as a harness's command (`.h-field input`).
+/// identifier such as a harness's command (`.h-field input`). `secure` is its secure form, for a key: the text is
+/// masked as it is typed and drawn as dots.
 public struct DirectorTextField: View {
     let label: String?
     @Binding var text: String
@@ -288,6 +289,7 @@ public struct DirectorTextField: View {
     var drawnAs: DesignTokens.Field.State?
     var onSubmit: (() -> Void)?
     var mono: Bool
+    var secure: Bool
 
     @FocusState private var ownFocus: Bool
     @State private var hovering = false
@@ -298,7 +300,7 @@ public struct DirectorTextField: View {
     public init(
         _ label: String?, text: Binding<String>, placeholder: String = "", help: String? = nil, error: String? = nil,
         size: DesignTokens.Control = .medium, disabledReason: String? = nil, focused: FocusState<Bool>.Binding? = nil,
-        drawnAs: DesignTokens.Field.State? = nil, mono: Bool = false, onSubmit: (() -> Void)? = nil
+        drawnAs: DesignTokens.Field.State? = nil, mono: Bool = false, secure: Bool = false, onSubmit: (() -> Void)? = nil
     ) {
         self.label = label
         _text = text
@@ -310,7 +312,14 @@ public struct DirectorTextField: View {
         focus = focused
         self.drawnAs = drawnAs
         self.mono = mono
+        self.secure = secure
         self.onSubmit = onSubmit
+    }
+
+    /// What a still field draws: the placeholder while empty, the text masked in the secure form.
+    nonisolated static func stillText(_ text: String, placeholder: String, secure: Bool) -> String {
+        if text.isEmpty { return placeholder }
+        return secure ? String(repeating: "•", count: text.count) : text
     }
 
     private var focusBinding: FocusState<Bool>.Binding { focus ?? $ownFocus }
@@ -347,23 +356,20 @@ public struct DirectorTextField: View {
         let shape = RoundedRectangle(cornerRadius: size.radius, style: .continuous)
         return Group {
             if still {
-                Text(text.isEmpty ? placeholder : text)
+                Text(Self.stillText(text, placeholder: placeholder, secure: secure))
                     .foregroundStyle((text.isEmpty || disabled ? DesignTokens.TextColor.tertiary : DesignTokens.TextColor.primary).color)
                     .lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                TextField(
-                    label ?? placeholder, text: $text,
-                    prompt: Text(placeholder).foregroundStyle(DesignTokens.TextColor.tertiary.color)
-                )
-                .textFieldStyle(.plain)
-                .labelsHidden()
-                .foregroundStyle((disabled ? DesignTokens.TextColor.tertiary : DesignTokens.TextColor.primary).color)
-                .focused(focusBinding)
-                .disabled(disabled)
-                .onSubmit { onSubmit?() }
-                .accessibilityLabel(label ?? placeholder)
-                .accessibilityHint(help ?? "")
+                entry
+                    .textFieldStyle(.plain)
+                    .labelsHidden()
+                    .foregroundStyle((disabled ? DesignTokens.TextColor.tertiary : DesignTokens.TextColor.primary).color)
+                    .focused(focusBinding)
+                    .disabled(disabled)
+                    .onSubmit { onSubmit?() }
+                    .accessibilityLabel(label ?? placeholder)
+                    .accessibilityHint(help ?? "")
             }
         }
         .font(mono ? DesignTokens.TypeStyle.monoFont(weight: DesignTokens.Field.textWeight) : size.inputFont)
@@ -376,6 +382,16 @@ public struct DirectorTextField: View {
         .notAllowedPointer(disabled)
         .help(disabledReason ?? "")
         .modifier(Shake(trigger: shakes))
+    }
+
+    @ViewBuilder
+    private var entry: some View {
+        let prompt = Text(placeholder).foregroundStyle(DesignTokens.TextColor.tertiary.color)
+        if secure {
+            SecureField(label ?? placeholder, text: $text, prompt: prompt)
+        } else {
+            TextField(label ?? placeholder, text: $text, prompt: prompt)
+        }
     }
 }
 

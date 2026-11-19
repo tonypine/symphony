@@ -2117,14 +2117,14 @@ MainActor.assumeIsolated {
             renderScreen(scheme, to: name) { runsScreen(page, drawn: drawn, window: $0) }
         }
         // Factory › Runs while Anthropic is paused, and Factory › Providers (TP-1534): available, paused, at its
-        // limit, one with no usage to read and one not in use.
+        // limit, one with no usage to read and one not in use; and a provider's Key block (TP-1540).
         renderScreen(scheme, to: "runs-page-provider-paused") { runsScreen(runsWithProviderPaused(), window: $0) }
         // Settings › Conductor: off, on at two junctions, and refused by symphony check.
         for (name, settings, error) in conductorSettingsStates {
             render(conductorSettings(settings, error: error), scheme, to: "settings-conductor-\(name)-\(suffix).png")
         }
-        for (name, providers, selection) in providersStates {
-            renderScreen(scheme, to: name) { providersScreen(providers, selection: selection, window: $0) }
+        for (name, providers, selection, keys) in providersStates {
+            renderScreen(scheme, to: name) { providersScreen(providers, selection: selection, keys: keys, window: $0) }
         }
         // Move to… (TP-1328): the move's sheet, also with a refusal.
         render(moveSheet(), scheme, to: "move-sheet-\(suffix).png")

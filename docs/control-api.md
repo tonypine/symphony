@@ -957,6 +957,12 @@ case or by id: a ticket with none is `404` `ticket_not_found`. `junction` is opt
 | `conductor` | The Conductor's earlier updates and instructions on the ticket. |
 | `budget` | `tokens_used` (every run's, the Conductor's among them), `tokens_cap` (`execution.limits.tokens_per_issue`), `qa_passes` and `rework_runs`. |
 
+A watch turn (`during_run`) reads the same document plus `live`: the run's `run_id`, `kind`, `model`,
+`harness`, its `steps` and their outcomes, `failed_step` (the newest step that ended `failed`: `step_id`,
+`title`, `reason` and `output`, the last 40 lines of the step's `step_output` artifact cut to 3,000
+characters; null `output` for an agent step, which keeps none), `current_step`, `newest_lines`,
+`elapsed_minutes` and `tokens`.
+
 Each fact read from an event carries its `event_id`, so a claim built on it can be traced; the
 Conductor's update keeps only the ids the facts carry as its `refs`. Long texts end in ` [cut by
 Symphony]`, lists keep their newest entries and no transcript is read, so a normal ticket's document

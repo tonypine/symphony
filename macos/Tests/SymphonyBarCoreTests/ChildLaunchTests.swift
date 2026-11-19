@@ -121,29 +121,41 @@ final class ChildLaunchTests: XCTestCase {
         XCTAssertNil(environment[""])
     }
 
-    func testEnvironmentHasTheOpenRouterKeyOnlyWhenSet() throws {
+    func testEnvironmentHasAProviderKeyOnlyWhileTheProviderIsEnabled() throws {
         let base = ["PATH": "/usr/bin"]
-        let withKey = ChildLaunchBuilder.environment(
-            base: base,
-            secrets: SecretSettings(linearAPIKey: key, openRouterAPIKey: "sk-or-v1-SECRET")
-        )
+        let keys = ProviderKeys(keys: ["openrouter": "sk-or-v1-SECRET", "opencode-go": "sk-go-SECRET"], enabled: ["openrouter"])
+        let withKey = ChildLaunchBuilder.environment(base: base, secrets: SecretSettings(linearAPIKey: key, providers: keys))
         XCTAssertEqual(withKey["OPENROUTER_API_KEY"], "sk-or-v1-SECRET")
+        XCTAssertFalse(withKey.keys.contains("OPENCODE_API_KEY"), "OpenCode Go is off: its key stays out")
+
+        let both = ChildLaunchBuilder.environment(
+            base: base, secrets: SecretSettings(linearAPIKey: key, providers: keys.enabling("opencode-go", true))
+        )
+        XCTAssertEqual(both["OPENCODE_API_KEY"], "sk-go-SECRET")
 
         let withoutKey = ChildLaunchBuilder.environment(base: base, secrets: SecretSettings(linearAPIKey: key))
         XCTAssertFalse(withoutKey.keys.contains("OPENROUTER_API_KEY"))
 
-        // A blank field is trimmed to "not set", and the key never reaches the shell script.
+        // A disabled provider's variable is taken out even when the app itself was started with it.
+        let disabled = ChildLaunchBuilder.environment(
+            base: base.merging(["OPENROUTER_API_KEY": "sk-from-the-shell"]) { $1 },
+            secrets: SecretSettings(linearAPIKey: key, providers: keys.enabling("openrouter", false))
+        )
+        XCTAssertNil(disabled["OPENROUTER_API_KEY"])
+
+        // A blank key is "not set", and an enabled provider with no key passes nothing.
         let launch = try ChildLaunchBuilder.build(
             settings: settings(),
-            secrets: SecretSettings(linearAPIKey: key, openRouterAPIKey: " \n"),
+            secrets: SecretSettings(linearAPIKey: key, providers: ProviderKeys(keys: ["openrouter": ""], enabled: ["openrouter"])),
             baseEnvironment: base,
             files: files
         )
         XCTAssertFalse(launch.environment.keys.contains("OPENROUTER_API_KEY"))
 
+        // The key never reaches the shell script.
         let keyed = try ChildLaunchBuilder.build(
             settings: settings(),
-            secrets: SecretSettings(linearAPIKey: key, openRouterAPIKey: " sk-or-v1-SECRET "),
+            secrets: SecretSettings(linearAPIKey: key, providers: keys),
             baseEnvironment: base,
             files: files
         )
