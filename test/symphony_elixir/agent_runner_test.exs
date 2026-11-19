@@ -520,9 +520,8 @@ defmodule SymphonyElixir.AgentRunnerTest do
     assert [%{payload: %{step_id: "code"}}] = for(%{type: "step.started"} = event <- step_events(), do: event)
     assert [%{payload: failed, actor: %{kind: :machine}}] = step_completed()
     assert %{step_id: "code", outcome: "failed", returns_to: "code", returns_to_title: "Write the code"} = failed
-
-    assert [%{payload: %{text: "The agent ended two turns of the Write the code step without recording how it ended."}}] =
-             TicketEvents.query(@issue_id, types: ["note"])
+    assert failed.reason == "The agent ended two turns of the Write the code step without recording how it ended."
+    assert TicketEvents.query(@issue_id, types: ["note"]) == []
   end
 
   test "each agent step's end carries its slice of the session transcript, even the end of a turn that failed", ctx do
@@ -602,7 +601,7 @@ defmodule SymphonyElixir.AgentRunnerTest do
       ctx
     end
 
-    test "its answer is checked: one that misses is retried once, a good one is a note in the next turns' prompts", ctx do
+    test "its answer is checked: one that misses is retried once, a good one is the step's answer in the next turns' prompts", ctx do
       ctx = Map.put(ctx, :orchestrator, self())
       # The agent writes its answer in the run's own temp folder, where the prompt says.
       answer = fn opts, text -> opts |> Keyword.fetch!(:agent_tmp_dir) |> Path.join("symphony-step-answer-layout.json") |> File.write!(text) end
@@ -628,7 +627,10 @@ defmodule SymphonyElixir.AgentRunnerTest do
       assert again =~ ~s|`layout` (Pick a layout): {"layout":"two columns"}|
       Task.shutdown(task, :brutal_kill)
 
-      assert [%{payload: %{text: ~s|The Pick a layout step answered: {"layout":"two columns"}|}}] = TicketEvents.query(@issue_id, types: ["note"])
+      assert TicketEvents.query(@issue_id, types: ["note"]) == []
+
+      assert [%{payload: %{answer: [%{label: "layout", value: "two columns"}]}}] =
+               Enum.filter(step_completed(), &(&1.payload.step_id == "layout"))
     end
 
     test "one refused twice fails the step to its on_fail, and the run ends", ctx do
@@ -641,7 +643,8 @@ defmodule SymphonyElixir.AgentRunnerTest do
       assert [%{payload: code}, %{payload: layout}] = step_completed()
       assert %{step_id: "code", outcome: "passed"} = code
       assert %{step_id: "layout", outcome: "failed", returns_to: "code"} = layout
-      assert [%{payload: %{text: "The Pick a layout step's answer was refused twice: no answer was written to " <> _path}}] = TicketEvents.query(@issue_id, types: ["note"])
+      assert layout.reason =~ "The Pick a layout step's answer was refused twice: no answer was written to "
+      assert TicketEvents.query(@issue_id, types: ["note"]) == []
     end
   end
 
