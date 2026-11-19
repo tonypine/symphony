@@ -551,7 +551,9 @@ public struct TimelineModel: Equatable {
                 rules.append((event, at, order))
                 continue
             }
-            let draft = Draft(event, at: at, order: order, kind: kind(event), actor: actor(event, history: history))
+            var draft = Draft(event, at: at, order: order, kind: kind(event), actor: actor(event, history: history))
+            // A stepped QA pass's raw answers, written as notes before Symphony recorded them on the steps: they fold.
+            if isMachineQANote(event, history: history) { draft.mechanical = true }
 
             // A finding resolved says so on its finding's card, not as an entry of its own.
             if event.type == "finding.resolved", let findingID = event.payload.findingID,
@@ -636,6 +638,19 @@ public struct TimelineModel: Equatable {
             entry.durationSeconds = max(Int((entry.endedAt ?? reference).timeIntervalSince(entry.at)), 0)
             return entry
         }
+    }
+
+    /// A note recorded under a QA run whose words are one of the shapes a stepped QA pass wrote its answers in: a check's
+    /// "Build: failed. Expected: …", a review's "The QA review asked for a recheck of …", a step that "gave no answer
+    /// Symphony takes". Tickets from before the steps carried their answers still hold them.
+    static func isMachineQANote(_ event: TicketEventsPayload.Event, history: TicketEventsPayload) -> Bool {
+        guard event.type == "note", let runID = event.runID, history.runs[runID]?.runKind == "qa",
+              let text = event.payload.text?.trimmingCharacters(in: .whitespacesAndNewlines)
+        else { return false }
+        if text.hasPrefix("The QA review asked for a recheck of") { return true }
+        let firstLine = text.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? text
+        if firstLine.range(of: #"^The .+ step of the QA pass gave no answer Symphony takes"#, options: .regularExpression) != nil { return true }
+        return text.range(of: #"^[^\n]+: [A-Za-z][A-Za-z ]*\. Expected:"#, options: .regularExpression) != nil
     }
 
     /// The rule actions that fold into the entry they caused: a pause they set or lifted, a move they made.

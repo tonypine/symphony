@@ -119,6 +119,11 @@ public enum ConductorBlock: Equatable {
 
         public var expected: Side
         public var actual: Side
+
+        public init(expected: Side, actual: Side) {
+            self.expected = expected
+            self.actual = actual
+        }
     }
 
     /// Every finding on the ticket and what became of it.
@@ -225,6 +230,17 @@ struct BlockFields: Decodable {
     func list(_ key: String) -> [BlockFields] {
         let boxes = (try? container.decodeIfPresent([LossyFields].self, forKey: BlockKey(key))) ?? nil
         return (boxes ?? []).compactMap(\.fields)
+    }
+
+    /// The strings of a list; an element that is not a string is left out.
+    func strings(_ key: String) -> [String] {
+        let boxes = (try? container.decodeIfPresent([LossyString].self, forKey: BlockKey(key))) ?? nil
+        return (boxes ?? []).compactMap(\.text).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+
+    private struct LossyString: Decodable {
+        let text: String?
+        init(from decoder: Decoder) throws { text = try? decoder.singleValueContainer().decode(String.self) }
     }
 
     private struct LossyFields: Decodable {
