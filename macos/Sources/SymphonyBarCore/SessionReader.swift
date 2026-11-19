@@ -53,11 +53,15 @@ public struct SessionReader: Equatable {
     public var identifier: String
     public var run: RunGroupModel
     public var sections: [Section]
+    /// A run that walks no steps (a QA or Code Review run): its own lines, the run now's newest while it works, its
+    /// whole session once it ended with one. Nil for a run with steps.
+    public var session: Content?
 
-    public init(identifier: String, run: RunGroupModel, sections: [Section]) {
+    public init(identifier: String, run: RunGroupModel, sections: [Section], session: Content? = nil) {
         self.identifier = identifier
         self.run = run
         self.sections = sections
+        self.session = session
     }
 
     /// The characters a line shows in short.
@@ -68,7 +72,8 @@ public struct SessionReader: Equatable {
 
     /// Every line of the session, top to bottom.
     public var lines: [Line] {
-        sections.flatMap { section -> [Line] in
+        if case let .lines(lines)? = session { return lines }
+        return sections.flatMap { section -> [Line] in
             if case let .lines(lines) = section.content { return lines }
             return []
         }
@@ -80,12 +85,15 @@ public struct SessionReader: Equatable {
     public static let nothingToRead = "This run has nothing to read yet"
     public static let noSteps = "This run recorded no steps."
 
-    /// Whether `run` has anything for the reader: a step with a transcript, or lines, or the step the run now is on.
+    /// Whether `run` has anything for the reader: a step with a transcript, or lines, or the step the run now is on;
+    /// for a run that walks no steps, its newest lines or its session.
     public static func canRead(_ run: RunGroupModel) -> Bool {
-        run.steps.contains(where: \.canUnfold)
+        guard run.steps.isEmpty else { return run.steps.contains(where: \.canUnfold) }
+        return !run.liveLines.isEmpty || run.transcript != nil
     }
 
-    /// The reader of `run` on ticket `identifier`, each step's transcript as `lines` has it now.
+    /// The reader of `run` on ticket `identifier`, each step's transcript (or a stepless run's session) as `lines` has
+    /// it now.
     public static func build(
         identifier: String, run: RunGroupModel, lines: (TicketOutput) -> StepTranscripts.Lines
     ) -> SessionReader {
@@ -94,26 +102,54 @@ public struct SessionReader: Equatable {
                 return Section(step: step, content: keyed(step.liveLines, step: step))
             }
             guard let transcript = step.transcript else { return Section(step: step, content: .noTranscript) }
-            switch lines(transcript) {
-            case .loading: return Section(step: step, content: .loading)
-            case .unavailable: return Section(step: step, content: .unavailable)
-            case .failed: return Section(step: step, content: .failed)
-            case let .loaded(read): return Section(step: step, content: keyed(read, step: step))
-            }
+            return Section(step: step, content: content(lines(transcript), key: step.id))
         }
-        return SessionReader(identifier: identifier, run: run, sections: sections)
+        return SessionReader(identifier: identifier, run: run, sections: sections, session: session(run, lines: lines))
+    }
+
+    /// A stepless run's own lines: the run now's newest, else its whole session once it ended with one.
+    static func session(_ run: RunGroupModel, lines: (TicketOutput) -> StepTranscripts.Lines) -> Content? {
+        guard run.steps.isEmpty else { return nil }
+        if run.isLive, !run.liveLines.isEmpty || run.transcript == nil {
+            return run.liveLines.isEmpty ? nil : keyed(run.liveLines, key: run.id)
+        }
+        return run.transcript.map { content(lines($0), key: run.id) }
+    }
+
+    static func content(_ read: StepTranscripts.Lines, key: String) -> Content {
+        switch read {
+        case .loading: .loading
+        case .unavailable: .unavailable
+        case .failed: .failed
+        case let .loaded(read): keyed(read, key: key)
+        }
     }
 
     /// `lines` keyed under their step, so two steps' alike lines never share a key.
     static func keyed(_ lines: [TranscriptLine], step: RunStep) -> Content {
+        keyed(lines, key: step.id)
+    }
+
+    static func keyed(_ lines: [TranscriptLine], key: String) -> Content {
         guard !lines.isEmpty else { return .empty }
         var seen: [String: Int] = [:]
         return .lines(lines.map { line in
-            let base = "\(step.id)|\(line.at ?? "")|\(line.kind.rawValue)|\(line.text)"
+            let base = "\(key)|\(line.at ?? "")|\(line.kind.rawValue)|\(line.text)"
             seen[base, default: 0] += 1
             let count = seen[base]!
             return Line(id: count == 1 ? base : "\(base)#\(count)", line: line)
         })
+    }
+
+    /// What a stepless run's session says when it has no lines to show.
+    public static func sessionNote(_ content: Content) -> String? {
+        switch content {
+        case .lines: nil
+        case .loading: "Reading the session…"
+        case .unavailable: "Symphony no longer keeps this session."
+        case .failed: "Couldn't read this session. Close the window and open it again to try again."
+        case .empty, .noTranscript: "The agent said nothing in this run."
+        }
     }
 
     /// What a step without lines says.

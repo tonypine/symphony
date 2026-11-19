@@ -91,7 +91,14 @@ private struct SessionReaderSections: View {
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-            if reader.sections.isEmpty {
+            if let session = reader.session {
+                // A run that walks no steps: its own lines, with no step over them.
+                if case let .lines(lines) = session {
+                    lineRows(lines)
+                } else {
+                    note(SessionReader.sessionNote(session))
+                }
+            } else if reader.sections.isEmpty {
                 Text(SessionReader.noSteps)
                     .font(DesignTokens.TypeStyle.body.font)
                     .foregroundStyle(.secondary)
@@ -101,21 +108,30 @@ private struct SessionReaderSections: View {
                     SessionStepHeader(step: section.step)
                     switch section.content {
                     case let .lines(lines):
-                        VStack(alignment: .leading, spacing: 2) {
-                            ForEach(lines) { line in
-                                SessionLineRow(line: line, expanded: expanded.contains(line.id)) { toggle(line.id) }
-                            }
-                        }
+                        lineRows(lines)
                     default:
-                        Text(SessionReader.note(section.content, live: section.step.isLive) ?? "")
-                            .font(DesignTokens.TypeStyle.secondary.font)
-                            .foregroundStyle(.secondary)
+                        note(SessionReader.note(section.content, live: section.step.isLive))
                             .padding(.leading, SessionLineRow.indent)
                     }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// What a step, or a run without steps, says when it has no lines.
+    private func note(_ text: String?) -> some View {
+        Text(text ?? "")
+            .font(DesignTokens.TypeStyle.secondary.font)
+            .foregroundStyle(.secondary)
+    }
+
+    private func lineRows(_ lines: [SessionReader.Line]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            ForEach(lines) { line in
+                SessionLineRow(line: line, expanded: expanded.contains(line.id)) { toggle(line.id) }
+            }
+        }
     }
 
     private func toggle(_ id: String) {

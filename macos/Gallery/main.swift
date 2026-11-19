@@ -1182,7 +1182,38 @@ func runGroup(_ run: RunGroupModel, unfolded: Bool? = nil) -> some View {
         .padding(DesignTokens.Space.s5)
         .frame(width: 760)
         .background(DesignTokens.Surface.content.color)
+        .environment(\.artifactImages, ticketPageImages())
 }
+
+/// A QA run that walks no steps, live: its newest lines under the run (the ticket read's `recent_lines` with no
+/// `current_step`).
+let liveSteplessRun: RunGroupModel = {
+    var run = RunGroupModel(
+        id: "qa-run-1", title: "QA run 1", state: .running, word: "Running", durationSeconds: 340, tokens: 1_200_000,
+        model: "Claude Opus 5.5"
+    )
+    run.liveLines = [
+        TranscriptLine(kind: .say, text: "Opening the ticket page on the fixture server to walk step 2.", at: "2026-10-07T12:21:40Z"),
+        TranscriptLine(kind: .tool, text: "mcp__symphony__qa_open: TP-1244", at: "2026-10-07T12:21:44Z"),
+        TranscriptLine(kind: .result, text: "Opened the ticket page at 1440×900.", at: "2026-10-07T12:21:52Z", durationMs: 8_100),
+        TranscriptLine(kind: .say, text: "The run header shows its step bars; checking the timeline's newest line next.", at: "2026-10-07T12:22:05Z"),
+    ]
+    return run
+}()
+
+/// The fixture's screenshot, as a run's evidence carries it.
+let runScreenshot = TicketScreenshot(
+    id: "1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0", label: "Ticket page at 1440×900",
+    path: "api/v1/artifacts/1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0", available: true
+)
+
+/// Run 2 with the screenshots it recorded: two in its code step, one on the run itself.
+let runWithScreenshots: RunGroupModel = {
+    var run = runStepGroups[0]
+    run.steps[0].screenshots = [runScreenshot, runScreenshot]
+    run.screenshots = [runScreenshot]
+    return run
+}()
 
 // MARK: - The Timeline section (TP-1444)
 
@@ -1207,15 +1238,31 @@ let timelineModel: TimelineModel = {
 /// The timeline in a main column `width` wide: the laptop's (780 pt, the column's widest) or the desktop's (1040 pt,
 /// where the column stops at 780 pt).
 @MainActor
-func timeline(width: CGFloat, selection: String? = nil, unfoldedRuns: Set<String>? = nil) -> some View {
+func timeline(
+    width: CGFloat, selection: String? = nil, unfoldedRuns: Set<String>? = nil, model: TimelineModel = timelineModel,
+    showAllEvents: Bool = false
+) -> some View {
     TimelineSection(
-        model: timelineModel, transcripts: StepTranscripts { _ in .unreachable }, calendar: timelineCalendar,
-        selection: selection, unfoldedRuns: unfoldedRuns
+        model: model, transcripts: StepTranscripts { _ in .unreachable }, calendar: timelineCalendar,
+        selection: selection, unfoldedRuns: unfoldedRuns, showAllEvents: showAllEvents
     )
     .padding(DesignTokens.Space.s5)
     .frame(width: width, alignment: .leading)
     .background(DesignTokens.Surface.content.color)
 }
+
+/// The fixture's timeline with its finding resolved by a later run: the card says so, and no entry of its own does.
+let timelineModelResolved: TimelineModel = {
+    var model = timelineModel
+    for day in model.days.indices {
+        for index in model.days[day].items.indices {
+            guard case var .entry(entry) = model.days[day].items[index], entry.finding != nil else { continue }
+            entry.finding?.resolution = "Resolved in Implementation run 2"
+            model.days[day].items[index] = .entry(entry)
+        }
+    }
+    return model
+}()
 
 // MARK: - The Lifecycle section and the Phase path (TP-1445)
 
@@ -1786,11 +1833,20 @@ MainActor.assumeIsolated {
         render(runGroup(runStepGroups[0]), scheme, to: "run-group-folded-\(suffix).png")
         render(runGroup(runStepGroups[0], unfolded: true), scheme, to: "run-group-failed-step-\(suffix).png")
         render(runGroup(runStepGroups[1]), scheme, to: "run-group-run-now-\(suffix).png")
+        // A QA run that walks no steps, live with its newest lines under it; a run with the screenshots it recorded,
+        // under its step and under the run.
+        render(runGroup(liveSteplessRun), scheme, to: "run-group-no-steps-live-lines-\(suffix).png")
+        render(runGroup(runWithScreenshots, unfolded: true), scheme, to: "run-group-screenshots-\(suffix).png")
         // The Timeline section (TP-1444): a day with every entry class at the laptop's and the desktop's column widths,
         // and an entry selected with the failed run unfolded.
         render(timeline(width: 780), scheme, to: "timeline-laptop-\(suffix).png")
         render(timeline(width: 1040), scheme, to: "timeline-desktop-\(suffix).png")
         render(timeline(width: 780, selection: "entry-b2", unfoldedRuns: ["run-2", "run-1"]), scheme, to: "timeline-selected-\(suffix).png")
+        // The quieter timeline: the entries that restate the runs folded behind "Show all events", the same timeline
+        // with all events shown, and a finding a later run resolved.
+        render(timeline(width: 780), scheme, to: "timeline-events-folded-\(suffix).png")
+        render(timeline(width: 780, showAllEvents: true), scheme, to: "timeline-all-events-\(suffix).png")
+        render(timeline(width: 780, model: timelineModelResolved), scheme, to: "timeline-finding-resolved-\(suffix).png")
         // The marks (TP-1451): the Timeline title's count, the line where you last looked and the dots above it.
         render(timelineSinceLooked(), scheme, to: "timeline-since-looked-\(suffix).png")
         // The run in place (TP-1452): the run now on top with its newest lines, the no-run line for three situations, and

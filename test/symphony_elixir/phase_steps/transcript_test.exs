@@ -162,9 +162,27 @@ defmodule SymphonyElixir.PhaseSteps.TranscriptTest do
       assert Transcript.run_now(@issue_id, nil, []) == none
       assert Transcript.run_now(nil, @run_id, []) == none
 
-      record_step!("step.completed", "code")
-      hi = update(:agent_text, %{msg: %{content: "Hi"}}, DateTime.utc_now())
-      assert Transcript.run_now(@issue_id, @run_id, [hi]) == none
+      completed = record_step!("step.completed", "code")
+      in_step = update(:agent_text, %{msg: %{content: "In the step"}}, DateTime.add(completed.at, -1, :second))
+      hi = update(:agent_text, %{msg: %{content: "Hi"}}, DateTime.add(completed.at, 1, :second))
+
+      # Between steps, the lines since the last step completed.
+      assert Transcript.run_now(@issue_id, @run_id, [in_step, hi]) ==
+               %{current_step: nil, recent_lines: [%{kind: "say", text: "Hi", at: DateTime.to_iso8601(hi.timestamp)}]}
+    end
+
+    # A QA or Code Review run walks no steps: its lines are the whole stream's newest.
+    test "a run that walks no steps shows its newest lines" do
+      at = DateTime.utc_now()
+
+      stream =
+        [%{event: :tool_use}] ++
+          Enum.map(1..25, fn n -> update(:agent_text, %{msg: %{content: "Said #{n}"}}, at) end)
+
+      assert %{current_step: nil, recent_lines: lines} = Transcript.run_now(@issue_id, @run_id, stream)
+      assert length(lines) == Transcript.recent_lines_bound()
+      assert List.last(lines) == %{kind: "say", text: "Said 25", at: DateTime.to_iso8601(at)}
+      assert Transcript.run_now(nil, nil, stream).recent_lines == lines
     end
   end
 end

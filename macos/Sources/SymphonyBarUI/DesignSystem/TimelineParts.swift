@@ -92,6 +92,17 @@ struct TimelineFindingCard: View {
                     .font(DesignTokens.TypeStyle.body.font)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if let resolution = finding.resolution {
+                Label {
+                    Text(resolution)
+                } icon: {
+                    Image(systemName: DesignTokens.Status.done.symbol)
+                        .foregroundStyle(DesignTokens.Status.done.tint)
+                }
+                .font(DesignTokens.TypeStyle.secondary.font)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            }
             if !finding.screenshots.isEmpty {
                 HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
                     ForEach(finding.screenshots) { shot in
@@ -109,39 +120,141 @@ struct TimelineFindingCard: View {
     }
 }
 
-/// One screenshot of a finding: its thumbnail, cut from its top left, and its label under it. The thumbnail is read
-/// once through the page's `ArtifactImages`; without one (a snapshot that keeps none), or while it reads, the frame
-/// holds its place.
-struct FindingShot: View {
-    let shot: TicketScreenshot
-    @Environment(\.artifactImages) private var images
+/// The screenshots a run recorded, in its group: under the step they were recorded in, else under the run. One row of
+/// thumbnails with no captions; each opens large in the screenshot sheet.
+struct ScreenshotRow: View {
+    let shots: [TicketScreenshot]
 
-    static let size = CGSize(width: 160, height: 100)
+    static let size = CGSize(width: 120, height: 75)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+        HStack(alignment: .top, spacing: DesignTokens.Space.s2) {
+            ForEach(shots) { shot in
+                ScreenshotThumbnail(shot: shot, size: Self.size)
+            }
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+/// A screenshot's thumbnail, cut from its top left in a hairline frame: a button that opens it large in the screenshot
+/// sheet. It is read once through the page's `ArtifactImages`; without one (a snapshot that keeps none), or while it
+/// reads, the frame holds its place.
+struct ScreenshotThumbnail: View {
+    let shot: TicketScreenshot
+    var size: CGSize = FindingShot.size
+    @State private var opened = false
+    @Environment(\.artifactImages) private var images
+
+    var body: some View {
+        Button { opened = true } label: {
             Group {
                 if let images {
-                    FindingThumbnail(shot: shot, images: images)
+                    FindingThumbnail(shot: shot, images: images, size: size)
                 } else {
-                    Self.placeholder(nil)
+                    FindingShot.placeholder(nil)
                 }
             }
-            .frame(width: Self.size.width, height: Self.size.height)
+            .frame(width: size.width, height: size.height)
             .clipShape(RoundedRectangle(cornerRadius: DesignTokens.Radius.mark, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: DesignTokens.Radius.mark, style: .continuous)
                     .strokeBorder(DesignTokens.Surface.separator.color, lineWidth: 1)
             )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(!shot.available)
+        .help(shot.label)
+        .accessibilityLabel(shot.available ? shot.accessibilityLabel : shot.unavailableAccessibilityLabel)
+        .sheet(isPresented: $opened) {
+            ScreenshotSheet(shot: shot, images: images) { opened = false }
+        }
+    }
+}
+
+/// A screenshot large (§2 question 5): its label and Close over the whole image, fitted to the sheet.
+struct ScreenshotSheet: View {
+    let shot: TicketScreenshot
+    let images: ArtifactImages?
+    let close: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: DesignTokens.Space.s2) {
+                Text(shot.label)
+                    .font(DesignTokens.TypeStyle.heading.font)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .accessibilityAddTraits(.isHeader)
+                Spacer(minLength: DesignTokens.Space.s2)
+                Button(Self.closeTitle, action: close)
+                    .directorButton(.secondary, size: .small)
+                    .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, DesignTokens.Space.s5)
+            .padding(.vertical, DesignTokens.Space.s3)
+            Divider()
+            Group {
+                if let images {
+                    LargeScreenshot(shot: shot, images: images)
+                } else {
+                    FindingShot.placeholder(nil)
+                }
+            }
+            .padding(DesignTokens.Space.s5)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(minWidth: 720, minHeight: 480)
+        .background(DesignTokens.Surface.window.color)
+    }
+
+    static let closeTitle = "Close"
+}
+
+private struct LargeScreenshot: View {
+    let shot: TicketScreenshot
+    @ObservedObject var images: ArtifactImages
+
+    var body: some View {
+        Group {
+            switch images.image(shot) {
+            case let .loaded(data):
+                if let image = NSImage(data: data) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .accessibilityLabel("Screenshot \(shot.label)")
+                } else {
+                    FindingShot.placeholder(TicketScreenshot.unavailableTitle)
+                }
+            case .unavailable:
+                FindingShot.placeholder(TicketScreenshot.unavailableTitle)
+            case .loading, .failed:
+                FindingShot.placeholder(nil)
+            }
+        }
+        .onAppear { images.load(shot) }
+    }
+}
+
+/// One screenshot of a finding: its thumbnail, which opens it large, and its label under it.
+struct FindingShot: View {
+    let shot: TicketScreenshot
+
+    static let size = CGSize(width: 160, height: 100)
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+            ScreenshotThumbnail(shot: shot, size: Self.size)
             Text(shot.label)
                 .font(DesignTokens.TypeStyle.secondary.font)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .frame(width: Self.size.width, alignment: .leading)
+                .accessibilityHidden(true)
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(shot.available ? "Screenshot \(shot.label)" : shot.unavailableAccessibilityLabel)
     }
 
     static func placeholder(_ text: String?) -> some View {
@@ -161,6 +274,7 @@ struct FindingShot: View {
 private struct FindingThumbnail: View {
     let shot: TicketScreenshot
     @ObservedObject var images: ArtifactImages
+    var size: CGSize = FindingShot.size
 
     var body: some View {
         Group {
@@ -170,7 +284,7 @@ private struct FindingThumbnail: View {
                     Image(nsImage: image)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
-                        .frame(width: FindingShot.size.width, height: FindingShot.size.height, alignment: .topLeading)
+                        .frame(width: size.width, height: size.height, alignment: .topLeading)
                 } else {
                     FindingShot.placeholder(TicketScreenshot.unavailableTitle)
                 }

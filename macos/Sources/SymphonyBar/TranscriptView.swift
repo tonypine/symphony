@@ -60,6 +60,8 @@ final class SessionReaderModel: ObservableObject {
 
     private func load() {
         for transcript in run.steps.compactMap(\.transcript) { transcripts.load(transcript) }
+        // A run that walks no steps reads its whole session once it ended with one.
+        if run.steps.isEmpty, let transcript = run.transcript { transcripts.load(transcript) }
     }
 }
 

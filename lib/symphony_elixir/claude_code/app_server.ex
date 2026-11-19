@@ -1495,29 +1495,33 @@ defmodule SymphonyElixir.ClaudeCode.AppServer do
 
   defp extract_assistant_events(_), do: []
 
-  defp extract_assistant_usage_events(%{"usage" => usage}) when is_map(usage) do
+  # The message's id goes with its usage: Claude repeats a message's usage on the line of each of
+  # its content blocks, and `EventStream` counts a message once by that id.
+  defp extract_assistant_usage_events(%{"usage" => usage} = message) when is_map(usage) do
     uncached_input = token_count(usage, "input_tokens", 0)
     output = token_count(usage, "output_tokens", 0)
     cached = token_count(usage, "cache_read_input_tokens", 0)
     cache_creation = token_count(usage, "cache_creation_input_tokens", 0)
 
     if uncached_input + output + cached + cache_creation > 0 do
-      [
-        {:token_usage_delta,
-         %{
-           input_tokens: uncached_input + cached + cache_creation,
-           uncached_input_tokens: uncached_input,
-           cached_input_tokens: cached,
-           cache_creation_input_tokens: cache_creation,
-           output_tokens: output
-         }}
-      ]
+      delta = %{
+        input_tokens: uncached_input + cached + cache_creation,
+        uncached_input_tokens: uncached_input,
+        cached_input_tokens: cached,
+        cache_creation_input_tokens: cache_creation,
+        output_tokens: output
+      }
+
+      [{:token_usage_delta, put_message_id(delta, Map.get(message, "id"))}]
     else
       []
     end
   end
 
   defp extract_assistant_usage_events(_), do: []
+
+  defp put_message_id(delta, id) when is_binary(id) and id != "", do: Map.put(delta, :message_id, id)
+  defp put_message_id(delta, _id), do: delta
 
   defp assistant_block_event(%{"type" => "text", "text" => text}) when is_binary(text),
     do: [{:agent_text, text}]

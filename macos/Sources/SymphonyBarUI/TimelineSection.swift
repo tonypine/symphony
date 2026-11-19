@@ -39,7 +39,11 @@ public enum TimelineKeys {
 }
 
 public struct TimelineSection: View {
-    let model: TimelineModel
+    /// Every entry the history holds; `model` is what shows.
+    let allModel: TimelineModel
+    /// The entries that restate the runs around them show (the toggle at the timeline's head); off by default, for
+    /// this ticket's page only.
+    @State private var showAllEvents: Bool
     /// Why nothing runs, shown in the run now's place while no run works on the ticket.
     let idle: TimelineIdleLine?
     @ObservedObject var transcripts: StepTranscripts
@@ -69,9 +73,10 @@ public struct TimelineSection: View {
     /// opens by default. The times are `calendar`'s. `idle` is the line shown in the run now's place when no run works.
     public init(
         model: TimelineModel, idle: TimelineIdleLine? = nil, transcripts: StepTranscripts, calendar: Calendar = .current,
-        selection: String? = nil, unfoldedRuns: Set<String>? = nil, focus: TimelineFocus? = nil
+        selection: String? = nil, unfoldedRuns: Set<String>? = nil, focus: TimelineFocus? = nil, showAllEvents: Bool = false
     ) {
-        self.model = model
+        allModel = model
+        _showAllEvents = State(initialValue: showAllEvents)
         self.focus = focus
         self.idle = idle
         self.transcripts = transcripts
@@ -86,11 +91,19 @@ public struct TimelineSection: View {
         }
     }
 
+    /// The timeline as it shows: without the mechanical entries until the person shows all events.
+    private var model: TimelineModel { allModel.showing(allEvents: showAllEvents) }
+
     public var body: some View {
         ScrollViewReader { proxy in
-            column(proxy)
-                .onAppear { reveal(proxy) }
-                .onChange(of: focus.flatMap(model.item(holding:))) { _, _ in reveal(proxy) }
+            VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+                if allModel.mechanicalCount > 0 {
+                    ShowAllEventsToggle(on: $showAllEvents)
+                }
+                column(proxy)
+                    .onAppear { reveal(proxy) }
+                    .onChange(of: focus.flatMap(model.item(holding:))) { _, _ in reveal(proxy) }
+            }
         }
     }
 
@@ -156,6 +169,7 @@ public struct TimelineSection: View {
     /// no step rows, so a 500-event history costs about what a short one does to open and to scroll (TP-1481). The lines
     /// are one flat list so each item's row is the stack's own child, found by `scrollTo` before it is made.
     private func column(_ proxy: ScrollViewProxy) -> some View {
+        let model = model
         let idle = model.runNow == nil ? idle : nil
         let moves = Self.moves(arriving: model.items.count(where: { !seen.contains($0.id) }), seen: seen.count)
         let lines = Self.lines(model, idle: idle, clock: clock)
@@ -340,6 +354,26 @@ public struct TimelineTitle: View {
             TimelineSection.title, note: marks?.newText, noteColor: .accentText, noteHelp: TimelineEntry.newHelp,
             noteAccessibilityLabel: marks?.newAccessibilityLabel
         )
+    }
+}
+
+/// The toggle at the timeline's head: "Show all events" brings the entries that restate the runs around them (a phase
+/// entered, a workspace synced, an attempt pushed, the branch updated, a short pause); on, it is selected. Drawn only
+/// when the timeline holds such entries.
+struct ShowAllEventsToggle: View {
+    @Binding var on: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack {
+            Spacer(minLength: 0)
+            Button(TimelineModel.showAllEvents) {
+                withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { on.toggle() }
+            }
+            .directorButton(.quiet, size: .small, glyph: on ? "checkmark" : nil, selected: on)
+            .accessibilityAddTraits(.isToggle)
+            .accessibilityValue(on ? "On" : "Off")
+        }
     }
 }
 

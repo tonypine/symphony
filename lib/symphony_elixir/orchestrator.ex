@@ -6432,17 +6432,37 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # A local Claude Code run's transcript (`Transcript.locate/4`). A run whose end was already
-  # recorded keeps it, so a repeated end ingests nothing a second time.
+  # A local Claude Code run's transcript (`Transcript.locate/4`), else its session's file wherever
+  # it ran (`Transcript.find_session/2`): a QA pass runs in a worktree of its own, not the ticket's
+  # workspace. A run whose end was already recorded keeps it, so a repeated end ingests nothing a
+  # second time.
   defp run_transcript(issue_id, run_id, running_entry) do
     with nil <- Map.get(running_entry, :worker_host),
-         SymphonyElixir.ClaudeCode.AppServer <- Map.get(running_entry, :agent_module),
-         {:ok, path} <-
-           Transcript.locate(:claude, Map.get(running_entry, :workspace_path), Map.get(running_entry, :session_id), Map.get(running_entry, :transcript_path)),
+         true <- claude_run?(running_entry),
+         {:ok, path} <- locate_run_transcript(running_entry),
          [] <- run_events(issue_id, "run.ended", &(&1[:run_id] == run_id)) do
       {:ok, path}
     else
       _none -> :none
+    end
+  end
+
+  # A run that walks its turns reports the agent it started; a Code Review or QA run starts its
+  # agent itself and reports none, so its run profile's harness says it.
+  defp claude_run?(running_entry) do
+    case Map.get(running_entry, :agent_module) do
+      SymphonyElixir.ClaudeCode.AppServer -> true
+      nil -> match?(%{harness: "claude"}, Map.get(running_entry, :run_profile))
+      _other -> false
+    end
+  end
+
+  defp locate_run_transcript(running_entry) do
+    session_id = Map.get(running_entry, :session_id)
+
+    case Transcript.locate(:claude, Map.get(running_entry, :workspace_path), session_id, Map.get(running_entry, :transcript_path)) do
+      {:ok, path} -> {:ok, path}
+      :none -> Transcript.find_session(:claude, session_id)
     end
   end
 
