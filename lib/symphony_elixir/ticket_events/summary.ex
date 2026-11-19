@@ -352,7 +352,7 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   # "Step".
   defp step_outcome("passed", payload) do
     {name, detail} = step_name(payload, "", "Step")
-    {name <> " passed" <> suffix(" in ", duration(count(payload, :duration_ms))), detail}
+    {name <> " passed" <> suffix(" in ", duration(count(payload, :duration_ms))), detail ++ step_answer(payload)}
   end
 
   defp step_outcome("failed", payload) do
@@ -362,8 +362,8 @@ defmodule SymphonyElixir.TicketEvents.Summary do
 
     # The step it returns to is the agent's words for a delegated step, so it joins the detail.
     if text(payload, :mode) in @symphony_steps,
-      do: {failed <> suffix(": back to ", back), detail},
-      else: {failed, detail ++ [prefixed_text("back to", back)]}
+      do: {failed <> suffix(": back to ", back), detail ++ [text(payload, :reason)]},
+      else: {failed, detail ++ [prefixed_text("back to", back), text(payload, :reason)]}
   end
 
   defp step_outcome("paused", payload), do: {"Paused on your answer", [text(payload, :title)]}
@@ -380,6 +380,25 @@ defmodule SymphonyElixir.TicketEvents.Summary do
     {name, detail} = step_name(payload, "", "Step")
     {name <> " completed", detail}
   end
+
+  # What the step answered, on its own `step.completed`: a QA check's result, a step's `answer` entries
+  # and a review's summary, each line cut for a summary.
+  defp step_answer(payload) do
+    result =
+      case field(payload, :result) do
+        %{} = result -> [join([text(result, :status), text(result, :actual)])]
+        _none -> []
+      end
+
+    entries =
+      for %{} = entry <- List.wrap(field(payload, :answer)), label = text(entry, :label), value = text(entry, :value) do
+        cut_line("#{label}: #{value}")
+      end
+
+    result ++ entries ++ [text(payload, :verdict_summary)]
+  end
+
+  defp cut_line(line), do: if(String.length(line) > 300, do: String.slice(line, 0, 299) <> "…", else: line)
 
   # The step's title in the title when Symphony's step list wrote it (after `prefix`), else
   # `generic` with the title in the detail.

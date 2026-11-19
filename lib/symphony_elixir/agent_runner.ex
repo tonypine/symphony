@@ -38,6 +38,7 @@ defmodule SymphonyElixir.AgentRunner do
     PathUnlock,
     Pauses,
     PhaseSteps,
+    PhaseSteps.StepAnswer,
     PhaseSteps.Transcript,
     PromptBuilder,
     PrReviewPoller,
@@ -1219,8 +1220,7 @@ defmodule SymphonyElixir.AgentRunner do
         {:passed, nil}
 
       {:ok, answer} ->
-        PhaseSteps.record_turn_passed(step, context, walk_duration_ms(walk))
-        PhaseSteps.record_note(context, "The #{step.title} step answered: #{Jason.encode!(answer)}")
+        PhaseSteps.record_turn_completed(step, context, %{outcome: "passed", answer: StepAnswer.fields(answer)}, walk_duration_ms(walk))
         {:passed, {step, answer}}
 
       {:error, why} when not is_map_key(walk.notes, :answer_error) ->
@@ -1271,13 +1271,13 @@ defmodule SymphonyElixir.AgentRunner do
     do_run_codex_turns(agent_module, app_session, run_context, turn_number + 1, max_turns)
   end
 
-  # The step's second turn missed it too: it ends `failed` back to itself, with why as a note, and the
-  # run ends there rather than take the step as passed.
+  # The step's second turn missed it too: it ends `failed` back to itself, with why as its `reason`, and
+  # the run ends there rather than take the step as passed.
   defp fail_walk_step(%{walk: walk, issue: issue}, context, why) do
     step = walk.step
     returns_to = if step.mode == "orchestrated" and is_binary(step.on_fail), do: step.on_fail, else: step.id
-    PhaseSteps.record_turn_completed(step, context, %{outcome: "failed", returns_to: returns_to}, walk_duration_ms(walk))
-    PhaseSteps.record_note(context, why)
+    failed = %{outcome: "failed", returns_to: returns_to, reason: StepAnswer.reason(why)}
+    PhaseSteps.record_turn_completed(step, context, failed, walk_duration_ms(walk))
     Logger.warning("Step #{step.id} of #{issue_context(issue)} failed: #{why} Ending the run")
     :ok
   end

@@ -42,10 +42,11 @@ defmodule SymphonyElixir.PhaseSteps do
 
   - a delegated step ends when the agent records `step.completed` for it through `ticket_record`
     (`agent_outcome/3`); a turn that ends without it is retried once with a reminder, then the step
-    ends `failed` back to itself with a note (`record_turn_completed/4`, `record_note/2`);
+    ends `failed` back to itself with why as its `reason` (`record_turn_completed/4`);
   - an orchestrated step ends with the answer its agent writes to the file the prompt names
     (`answer_path/2`), checked against the step's `answer` (`check_answer/2`); one that misses it
-    is retried once, then the step ends `failed`;
+    is retried once, then the step ends `failed` with why as its `reason`; a good answer is the
+    step's `answer` on its `step.completed` (`SymphonyElixir.PhaseSteps.StepAnswer`), never a `note`;
   - either one pauses on a Question its agent asks through the question tool (`asked_question/2`):
     the step ends `paused` with the Question's id, the run stops its session and waits for the
     answer, which resumes it on the same step with the question and the answer verbatim in the
@@ -780,10 +781,6 @@ defmodule SymphonyElixir.PhaseSteps do
       nil -> id
     end
   end
-
-  @doc "Records `text` as a note of Symphony's on `context`'s ticket."
-  @spec record_note(context(), String.t()) :: :ok
-  def record_note(context, text) when is_binary(text), do: record(context, "note", %{text: String.slice(text, 0, 4_000)}, [])
 
   defp step_payload(%Step{id: id, title: title, mode: mode}), do: %{step_id: id, title: title, mode: mode}
 

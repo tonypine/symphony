@@ -22,7 +22,6 @@ defmodule SymphonyElixir.QaAgent.StepPayload do
   @instruction 400
   @design 600
   @summary 600
-  @reason 300
   @recheck_bytes 6_000
   @max_instructions 12
   @max_checks 40
@@ -79,7 +78,7 @@ defmodule SymphonyElixir.QaAgent.StepPayload do
 
   @doc "Why a step ended `failed`, cut to what the event takes."
   @spec reason(String.t()) :: String.t()
-  def reason(why), do: text(why, @reason)
+  defdelegate reason(why), to: SymphonyElixir.PhaseSteps.StepAnswer
 
   defp recheck_brief(brief) do
     base = %{title: check_title(brief), do: instructions(brief["do"]), expect: text(brief["expect"], @result_text)}
