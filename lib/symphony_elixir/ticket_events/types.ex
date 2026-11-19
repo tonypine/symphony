@@ -52,7 +52,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   and how it runs (`mode`): `machine` (a command Symphony runs, `command`), `orchestrated` (an agent
   turn Symphony drives from a prompt, `prompt_ref`) or `delegated` (work the agent does and reports
   itself). Symphony records the machine and orchestrated steps; an agent records only delegated
-  ones (`agent_values`). `step.completed` says how the step ended (`outcome`): `passed`; `failed`,
+  ones (`agent_values`). An agent step's `step.started` may say what its turn runs with: `model`,
+  `effort` and `session`, and `model_ignored` (with `model_ignored_reason`) when a run on a fallback
+  provider kept its own model (`SymphonyElixir.QaAgent.Steps`). `step.completed` says how the step ended (`outcome`): `passed`; `failed`,
   with the step the run goes back to (`returns_to`, and its title in `returns_to_title`); `paused`,
   with the Question it waits on (`question_id`, from `SymphonyElixir.Questions`); or `skipped`, with
   why (`reason`); and how long it took (`duration_ms`). Those fields are `conditional`: each is
@@ -128,6 +130,17 @@ defmodule SymphonyElixir.TicketEvents.Types do
   tickets and the events it rests on, its sentences, their text, each sentence's citations, the run,
   its model and the Question it raised (`question_id`).
 
+  `conductor.update` and `conductor.instructions` are machine-only: what the Conductor's turn at a
+  junction of the ticket's life wrote (`SymphonyElixir.Conductor`), naming the junction
+  (`after_coding`, `after_qa_fail`, `after_rework`, `before_merge`). The update is for the person
+  (`text`, at most 900 characters) with the ids of the events it rests on (`refs`); the
+  instructions are advice for the next run's prompt (`text`, at most 2,000). A turn that watched a
+  running run names the junction `during_run`. `conductor.steer` is machine-only too: guidance the
+  Conductor's watch gave a running run (`SymphonyElixir.Conductor.Watch`), under that run's
+  `run_id`: its `text` (at most 1,500 characters), when it asked for it (`when`: `next_turn`, `now`
+  or `stop`), what made it look (`trigger`) and how and when it reached the run (`delivered`: `how`,
+  `next_turn`, `now` or `stopped`, and `at`).
+
   `brief.written` is an agent's, in an implementation, rework or review-feedback run: what the ticket
   does and why, in a person's words (`text`, at most 1,200 characters), and its walkthrough as the
   steps a person takes (`walkthrough`, at most 4,000), both prose with no backtick. The newest one is
@@ -197,6 +210,11 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @agent_steps [mode: ["delegated"]]
 
   @rule_actions ~w(rerun paused parked filed_ticket lifted_pause moved updated_branch auto_merge asked other)
+
+  # The junctions of a ticket's life the Conductor runs at (`SymphonyElixir.Config.Schema.Conductor.junctions/0`).
+  @conductor_junctions ~w(after_coding after_qa_fail after_rework before_merge during_run)
+  # What made the Conductor's watch look at a running run (`SymphonyElixir.Conductor.Watch`).
+  @watch_triggers ~w(step_failed step_failed_twice qa_step_answer run_minutes run_tokens)
 
   @legacy_types ["hold.set", "hold.cleared", "decision.requested", "decision.recorded", "decision.withdrawn"]
 
@@ -353,7 +371,16 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine, :agent],
       run_kinds: :any,
       required: @step,
-      optional: [command: {:string, 2_000}, prompt_ref: {:string, 200}] ++ @signal,
+      optional:
+        [
+          command: {:string, 2_000},
+          prompt_ref: {:string, 200},
+          model: {:string, 200},
+          effort: {:string, 20},
+          session: {:string, 100},
+          model_ignored: {:string, 200},
+          model_ignored_reason: {:string, 300}
+        ] ++ @signal,
       conditional: [command: {:mode, "machine"}, prompt_ref: {:mode, "orchestrated"}],
       agent_values: @agent_steps,
       idempotency: :writer
@@ -515,6 +542,27 @@ defmodule SymphonyElixir.TicketEvents.Types do
       required: [identifier: :string, kind: {:enum, ~w(split_off follow_up)}],
       optional: [title: {:string, 300}] ++ @signal,
       idempotency: {:fields, [:identifier]}
+    },
+    "conductor.update" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [junction: {:enum, @conductor_junctions}, text: {:string, 900}],
+      optional: [refs: {:list, :string}] ++ @signal,
+      idempotency: :writer
+    },
+    "conductor.instructions" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [junction: {:enum, @conductor_junctions}, text: {:string, 2_000}],
+      optional: @signal,
+      idempotency: :writer
+    },
+    "conductor.steer" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [text: {:string, 1_500}, when: {:enum, ~w(next_turn now stop)}, trigger: {:enum, @watch_triggers}],
+      optional: [delivered: {:map, how: {:enum, ~w(next_turn now stopped)}, at: :string}] ++ @signal,
+      idempotency: :writer
     },
     "brief.written" => %{
       writers: [:agent],

@@ -21,6 +21,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   require Schema.Execution
   require Schema.AutoReview
   require Schema.Ci
+  require Schema.Conductor
   require Schema.Dependencies
   require Schema.Dispatch
   require Schema.GitHub
@@ -52,7 +53,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
   @retired_human_review_state "the Human Review state (`tracker.human_review_state`) is retired; a decision request pauses " <>
                                 "the ticket on a Needs Decision hold, and a plan waits in `issues.states.plan_review`"
   @allowed_keys ~w(
-    auto_review code_review dashboard dependency_audit dispatch execution github human_actions issue_gate issues ledger linear
+    auto_review code_review conductor dashboard dependency_audit dispatch execution github human_actions issue_gate issues ledger linear
     notifications phases poller pull_requests reports
     repositories runs tickets verification watchdog workers workspaces
   )
@@ -82,7 +83,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
   # The keys each section of symphony.yml accepts, by dotted path; `repositories[]` is an item of
   # the `repositories` list. A key that is itself a path here is a nested section. The parser
   # rejects any other key, and `operator_key_paths/0` lists the leaves.
-  @phase_sections Map.new(Schema.Phases.kinds(), &{"phases." <> &1, ~w(steps)})
+  # `phases.qa` also says whether a QA pass walks a step list (`stepped`) and holds each QA playbook's
+  # list (`playbooks`, a free-form map of playbook kinds, one setting).
+  @phase_sections Map.new(Schema.Phases.kinds(), &{"phases." <> &1, if(&1 == "qa", do: ~w(steps stepped playbooks), else: ~w(steps))})
   @operator_sections %{
     "issues" => ~w(provider poll_interval_ms linear memory states),
     "issues.memory" => ~w(issues_file),
@@ -133,6 +136,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "reports" => ~w(model cadence triggers),
     "reports.triggers" => ~w(ticket_shipped epic_closed ci_fix_loop self_heal_filed release_installed paused_by_rule),
     "dispatch" => ~w(source shadow_window),
+    "conductor" => ~w(enabled junctions timeout_ms watch),
+    "conductor.watch" => ~w(enabled run_minutes run_tokens min_interval_minutes max_turns_per_run allow_stop),
     # A run kind's step list (`Schema.Phases`); each kind holds one setting, its `steps` list.
     "phases" => Schema.Phases.kinds(),
     "dashboard" => ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size)
@@ -475,6 +480,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     embeds_one(:ledger, Schema.Ledger, on_replace: :update, defaults_to_struct: true)
     embeds_one(:reports, Schema.Reports, on_replace: :update, defaults_to_struct: true)
     embeds_one(:dispatch, Schema.Dispatch, on_replace: :update, defaults_to_struct: true)
+    embeds_one(:conductor, Schema.Conductor, on_replace: :update, defaults_to_struct: true)
     embeds_one(:phases, Schema.Phases, on_replace: :update, defaults_to_struct: true)
     embeds_many(:repos, Repo, on_replace: :delete)
   end
@@ -726,6 +732,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     |> cast_embed(:ledger, with: &Schema.Ledger.changeset/2)
     |> cast_embed(:reports, with: &Schema.Reports.changeset/2)
     |> cast_embed(:dispatch, with: &Schema.Dispatch.changeset/2)
+    |> cast_embed(:conductor, with: &Schema.Conductor.changeset/2)
     |> cast_embed(:phases, with: &Schema.Phases.changeset/2)
     |> cast_embed(:repos, with: &Repo.changeset/2, required: true)
     |> validate_length(:repos, min: 1)
@@ -787,6 +794,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
          {:ok, ledger} <- normalize_ledger(Map.get(config, "ledger", %{})),
          {:ok, reports} <- normalize_reports(Map.get(config, "reports", %{})),
          {:ok, dispatch} <- normalize_dispatch(Map.get(config, "dispatch", %{})),
+         {:ok, conductor} <- normalize_conductor(Map.get(config, "conductor", %{})),
          {:ok, phases} <- normalize_phases(Map.get(config, "phases", %{})) do
       workspace = merge_section(workspace, "sandbox", Map.get(execution_config, "workspace_sandbox"))
 
@@ -815,6 +823,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
        |> maybe_put("ledger", ledger)
        |> maybe_put("reports", reports)
        |> maybe_put("dispatch", dispatch)
+       |> maybe_put("conductor", conductor)
        |> maybe_put("phases", phases)}
     end
   end
@@ -1359,6 +1368,15 @@ defmodule SymphonyElixir.Config.SystemSchema do
     end
   end
 
+  defp normalize_conductor(config) do
+    with {:ok, config} <- section_map(config, "conductor"),
+         :ok <- reject_unknown_section_keys(config, section_keys("conductor"), "conductor"),
+         {:ok, watch} <- section_map(Map.get(config, "watch", %{}), "conductor.watch"),
+         :ok <- reject_unknown_section_keys(watch, section_keys("conductor.watch"), "conductor.watch") do
+      {:ok, config}
+    end
+  end
+
   # Each kind under `phases` holds its `steps` list; `Schema.Phases` checks the steps themselves.
   defp normalize_phases(config) do
     with {:ok, config} <- section_map(config, "phases"),
@@ -1372,17 +1390,43 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
     with {:ok, phase} <- section_map(phase, path),
          :ok <- reject_unknown_section_keys(phase, section_keys(path), path),
-         :ok <- phase_steps(Map.fetch(phase, "steps"), path) do
+         :ok <- phase_steps(Map.fetch(phase, "steps"), path, qa_settings?(kind, phase)),
+         :ok <- qa_playbooks(Map.get(phase, "playbooks"), path) do
       {:cont, {:ok, Map.put(phases, kind, phase)}}
     else
       error -> {:halt, error}
     end
   end
 
-  defp phase_steps(:error, path),
+  # `phases.qa` may set only `stepped` or `playbooks`, and then follows the kind's default list.
+  defp qa_settings?("qa", phase), do: Map.has_key?(phase, "stepped") or Map.has_key?(phase, "playbooks")
+  defp qa_settings?(_kind, _phase), do: false
+
+  defp qa_playbooks(nil, _path), do: :ok
+
+  defp qa_playbooks(playbooks, path) do
+    with {:ok, playbooks} <- section_map(playbooks, path <> ".playbooks") do
+      Enum.find_value(playbooks, :ok, fn {kind, playbook} -> refused(qa_playbook(playbook, "#{path}.playbooks.#{kind}")) end)
+    end
+  end
+
+  defp refused(:ok), do: nil
+  defp refused(error), do: error
+
+  defp qa_playbook(playbook, path) do
+    with {:ok, playbook} <- section_map(playbook, path),
+         :ok <- reject_unknown_section_keys(playbook, ~w(steps), path) do
+      phase_steps(Map.fetch(playbook, "steps"), path)
+    end
+  end
+
+  defp phase_steps(fetched, path, optional? \\ false)
+  defp phase_steps(:error, _path, true), do: :ok
+
+  defp phase_steps(:error, path, _optional?),
     do: {:error, {:invalid_symphony_config, "`#{path}.steps` is required; remove `#{path}` to follow the default list"}}
 
-  defp phase_steps({:ok, steps}, path) do
+  defp phase_steps({:ok, steps}, path, _optional?) do
     if is_list(steps) and Enum.all?(steps, &is_map/1),
       do: :ok,
       else: {:error, {:invalid_symphony_config, "`#{path}.steps` must be a list of steps, each an object"}}

@@ -2044,6 +2044,82 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Conductor do
+    @moduledoc """
+    `symphony.yml`'s `conductor` section (`SymphonyElixir.Conductor`): whether Symphony runs the
+    Conductor's short turn at a ticket's junctions (`enabled`, off by default), at which junctions
+    (`junctions`: `after_coding`, `after_qa_fail`, `after_rework`, `before_merge`; all four by
+    default) and how long one turn may take before the next run starts without it (`timeout_ms`,
+    three minutes by default), and whether it watches running runs to steer them (`watch`,
+    `SymphonyElixir.Conductor.Watch`, off by default). Its model is `runs.conductor`'s.
+    """
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @type t :: %__MODULE__{}
+
+    @primary_key false
+    @junctions ~w(after_coding after_qa_fail after_rework before_merge)
+
+    defmodule Watch do
+      @moduledoc """
+      `conductor.watch`: whether the Conductor looks at running runs and may steer them (`enabled`,
+      off by default); when a run is looked at past its start besides a failed step or a QA step
+      that answered `plan_mismatch` or `blocked` (`run_minutes`, 30; `run_tokens`, 30,000,000); how
+      often at most (`min_interval_minutes`, 10, and `max_turns_per_run`, 3); and whether it may
+      stop a run, always with a question to the person (`allow_stop`, off by default).
+      """
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @type t :: %__MODULE__{}
+
+      @primary_key false
+      @fields [:enabled, :run_minutes, :run_tokens, :min_interval_minutes, :max_turns_per_run, :allow_stop]
+
+      embedded_schema do
+        field(:enabled, :boolean, default: false)
+        field(:run_minutes, :integer, default: 30)
+        field(:run_tokens, :integer, default: 30_000_000)
+        field(:min_interval_minutes, :integer, default: 10)
+        field(:max_turns_per_run, :integer, default: 3)
+        field(:allow_stop, :boolean, default: false)
+      end
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        schema
+        |> cast(attrs, @fields, empty_values: [])
+        |> Schema.validate_present(@fields)
+        |> validate_number(:run_minutes, greater_than: 0)
+        |> validate_number(:run_tokens, greater_than: 0)
+        |> validate_number(:min_interval_minutes, greater_than_or_equal_to: 0)
+        |> validate_number(:max_turns_per_run, greater_than: 0)
+      end
+    end
+
+    embedded_schema do
+      field(:enabled, :boolean, default: false)
+      field(:junctions, {:array, :string}, default: @junctions)
+      field(:timeout_ms, :integer, default: 180_000)
+      embeds_one(:watch, Watch, on_replace: :update, defaults_to_struct: true)
+    end
+
+    @doc "Every junction the Conductor may run at, in the order a ticket meets them."
+    @spec junctions() :: [String.t()]
+    def junctions, do: @junctions
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:enabled, :junctions, :timeout_ms], empty_values: [])
+      |> Schema.validate_present([:enabled, :junctions, :timeout_ms])
+      |> validate_subset(:junctions, @junctions, message: "must name only #{Enum.join(@junctions, ", ")}")
+      |> validate_number(:timeout_ms, greater_than: 0)
+      |> cast_embed(:watch, with: &Watch.changeset/2)
+    end
+  end
+
   defmodule Dispatch do
     @moduledoc """
     `symphony.yml`'s `dispatch` section: where the dispatcher reads its candidates from (`source`:
@@ -2090,15 +2166,17 @@ defmodule SymphonyElixir.Config.Schema do
     use Ecto.Schema
     import Ecto.Changeset
 
+    alias SymphonyElixir.QaAgent.StepPrompts
     alias SymphonyElixir.RunKind
 
     @type t :: %__MODULE__{}
 
     @primary_key false
 
-    @kinds RunKind.kinds()
+    @kinds RunKind.phase_kinds()
     @kind_names Map.new(@kinds, &{Atom.to_string(&1), &1})
     @findings_command "symphony:findings"
+    @qa_commands ~w(symphony:qa_pre_checks symphony:qa_build symphony:qa_launch symphony:qa_quit symphony:qa_attach)
 
     defmodule Step do
       @moduledoc """
@@ -2113,16 +2191,30 @@ defmodule SymphonyElixir.Config.Schema do
       A machine step's `command` is a shell command, or a list of `{run, when}` entries run in
       order, each only when its condition holds: `build` runs `make build` (`swift build`)
       when `macos/` changed and `mix compile` when Elixir files did.
+
+      An agent step (orchestrated or delegated) may also set what its turn runs with and where:
+      `model` (a model id of the run's provider, or `small` for the run's small model) and `effort`
+      (one of `SymphonyElixir.Config.Runs.efforts/0`), `session` (steps with the same name continue
+      one agent session; `fresh` starts one for that step alone; none is the run's one session) and
+      `repeat: walkthrough` (the step runs once per walkthrough step a QA pass walks). None of them
+      means anything on a machine step, so setting one there is refused. The QA pass's step walk
+      (`SymphonyElixir.QaAgent.Steps`) honours them.
       """
       use Ecto.Schema
       import Ecto.Changeset
+
+      alias SymphonyElixir.Config.Runs
 
       @type t :: %__MODULE__{}
 
       @primary_key false
       @modes ~w(machine orchestrated delegated)
       @conditions ~w(always macos_changed elixir_changed)
-      @keys ~w(id title mode command prompt answer timeout_ms on_fail no_result_limit when)
+      @keys ~w(id title mode command prompt answer timeout_ms on_fail no_result_limit when model effort session repeat)
+      @agent_keys ~w(model effort session repeat)
+      @cast ~w(id title mode prompt answer timeout_ms on_fail no_result_limit when model effort session repeat)a
+      @repeats ~w(walkthrough)
+      @fresh_session "fresh"
       @answer_types ~w(string number boolean list object)
       @id_format ~r/^[a-z][a-z0-9_]*$/
       # A machine step that sets no timeout gets ten minutes; an agent turn has the agent's own.
@@ -2164,6 +2256,10 @@ defmodule SymphonyElixir.Config.Schema do
         field(:on_fail, :string)
         field(:no_result_limit, :integer, default: 2)
         field(:when, :string, default: "always")
+        field(:model, :string)
+        field(:effort, :string)
+        field(:session, :string)
+        field(:repeat, :string)
       end
 
       @doc "The modes a step runs in."
@@ -2178,13 +2274,21 @@ defmodule SymphonyElixir.Config.Schema do
       @spec answer_types() :: [String.t()]
       def answer_types, do: @answer_types
 
+      @doc "What an agent step's `repeat` takes."
+      @spec repeats() :: [String.t()]
+      def repeats, do: @repeats
+
+      @doc "The `session` that starts a new agent session for its step alone."
+      @spec fresh_session() :: String.t()
+      def fresh_session, do: @fresh_session
+
       @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
       def changeset(schema, attrs) do
         attrs = command_entries(attrs)
         step = step_name(attrs)
 
         schema
-        |> cast(attrs, [:id, :title, :mode, :prompt, :answer, :timeout_ms, :on_fail, :no_result_limit, :when])
+        |> cast(attrs, @cast)
         |> reject_unknown_keys(attrs, @keys, step)
         |> validate_required([:id], message: "is required for every step")
         |> validate_format(:id, @id_format, message: "`#{step}` must be lowercase letters, digits and underscores, starting with a letter")
@@ -2195,6 +2299,7 @@ defmodule SymphonyElixir.Config.Schema do
         |> validate_number(:no_result_limit, greater_than: 0, message: "of step `#{step}` must be greater than 0")
         |> cast_embed(:command, with: &Command.changeset(&1, &2, step, @conditions))
         |> validate_mode_fields(attrs, step)
+        |> validate_agent_fields(attrs, step)
         |> validate_answer(step)
         |> default_title()
         |> default_machine_timeout()
@@ -2229,6 +2334,28 @@ defmodule SymphonyElixir.Config.Schema do
         |> refuse_off_mode(mode, "machine", :when, Map.has_key?(attrs, "when"), step)
         |> refuse_off_mode(mode, "orchestrated", :answer, Map.has_key?(attrs, "answer"), step)
       end
+
+      # `model`, `effort`, `session` and `repeat` say how an agent turn runs; a machine step has none.
+      defp validate_agent_fields(changeset, attrs, step) do
+        changeset =
+          if get_field(changeset, :mode) == "machine",
+            do: Enum.reduce(@agent_keys, changeset, &refuse_on_machine(&2, &1, Map.has_key?(attrs, &1), step)),
+            else: changeset
+
+        changeset
+        |> validate_inclusion(:effort, Runs.efforts(), message: "of step `#{step}` must be one of: #{Enum.join(Runs.efforts(), ", ")}")
+        |> validate_change(:session, fn :session, session ->
+          if session == @fresh_session or session =~ @id_format,
+            do: [],
+            else: [session: "of step `#{step}` must be `#{@fresh_session}` or a name of lowercase letters, digits and underscores, starting with a letter"]
+        end)
+        |> validate_inclusion(:repeat, @repeats, message: "of step `#{step}` must be one of: #{Enum.join(@repeats, ", ")}")
+      end
+
+      defp refuse_on_machine(changeset, key, true, step),
+        do: add_error(changeset, String.to_existing_atom(key), "is only for an agent step; step `#{step}` is machine")
+
+      defp refuse_on_machine(changeset, _key, false, _step), do: changeset
 
       defp validate_answer(changeset, step) do
         validate_change(changeset, :answer, fn :answer, answer ->
@@ -2281,24 +2408,51 @@ defmodule SymphonyElixir.Config.Schema do
       end
 
       @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
-      def changeset(schema, attrs) do
+      def changeset(schema, attrs), do: changeset(schema, attrs, :run_kind)
+
+      @doc """
+      Checks a step list: a run kind's (`:run_kind`), which may not run the QA pass's own commands
+      (`Phases.qa_commands/0`), or a QA playbook's (`:qa_playbook`), which may.
+      """
+      @spec changeset(%__MODULE__{}, map(), :run_kind | :qa_playbook) :: Ecto.Changeset.t()
+      def changeset(schema, attrs, owner) do
         changeset = schema |> cast(attrs, []) |> cast_embed(:steps, with: &Step.changeset/2)
 
         if changeset.valid?,
-          do: validate_list(changeset, get_field(changeset, :steps)),
+          do: validate_list(changeset, get_field(changeset, :steps), owner),
           else: changeset
       end
 
-      defp validate_list(changeset, steps) do
+      @doc false
+      @spec validate_list(Ecto.Changeset.t(), [Step.t()], :run_kind | :qa_playbook) :: Ecto.Changeset.t()
+      def validate_list(changeset, steps, owner) do
         ids = Enum.map(steps, & &1.id)
 
         with nil <- duplicate_id(ids),
              nil <- unknown_on_fail(steps, ids),
-             nil <- loop_without_delegated(steps, ids) do
+             nil <- loop_without_delegated(steps, ids),
+             nil <- qa_command_outside(steps, owner) do
           changeset
         else
           message -> add_error(changeset, :steps, message)
         end
+      end
+
+      # The QA pass's own commands drive the QA host the pass holds; no other run has one. A QA
+      # playbook's list, for its part, ends in the verdict, which its `review` step gives.
+      defp qa_command_outside(steps, :qa_playbook) do
+        if Enum.any?(steps, &(&1.id == "review" and &1.mode == "orchestrated")),
+          do: nil,
+          else: "has no orchestrated step `review`, which gives a QA pass's verdict"
+      end
+
+      defp qa_command_outside(steps, :run_kind) do
+        Enum.find_value(steps, fn %Step{id: id, command: commands} ->
+          case Enum.find(commands, &(&1.run in Phases.qa_commands())) do
+            nil -> nil
+            %{run: run} -> "step `#{id}` runs `#{run}`, which only a QA playbook's list (`phases.qa.playbooks.<kind>.steps`) runs"
+          end
+        end)
       end
 
       defp duplicate_id(ids) do
@@ -2351,9 +2505,94 @@ defmodule SymphonyElixir.Config.Schema do
       end
     end
 
+    defmodule QaPhase do
+      @moduledoc """
+      `phases.qa`: the kind's own `steps` (as every kind has), whether a QA pass walks a step list
+      (`stepped`, default false) and the list each QA playbook's pass walks
+      (`playbooks.<playbook kind>.steps`, checked as a run kind's list is, and refused naming the
+      key). A playbook's orchestrated step with no `prompt` takes Symphony's own for its id
+      (`SymphonyElixir.QaAgent.StepPrompts`), when there is one.
+      """
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      alias SymphonyElixir.QaAgent.StepPrompts
+
+      @type t :: %__MODULE__{}
+
+      @primary_key false
+      @kind_format ~r/^[a-z][a-z0-9_]*$/
+
+      embedded_schema do
+        embeds_many(:steps, Step, on_replace: :delete)
+        field(:stepped, :boolean, default: false)
+        field(:playbooks, :map, default: %{})
+      end
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        changeset = schema |> cast(attrs, [:stepped]) |> cast_embed(:steps, with: &Step.changeset/2)
+        changeset = if changeset.valid?, do: Phase.validate_list(changeset, get_field(changeset, :steps), :run_kind), else: changeset
+        cast_playbooks(changeset, Map.get(attrs, "playbooks") || Map.get(attrs, :playbooks) || %{})
+      end
+
+      defp cast_playbooks(changeset, playbooks) when is_map(playbooks) do
+        playbooks
+        |> Enum.sort()
+        |> Enum.reduce(changeset |> put_change(:playbooks, %{}), fn {kind, entry}, changeset -> cast_playbook(changeset, to_string(kind), entry) end)
+      end
+
+      defp cast_playbooks(changeset, _playbooks), do: add_error(changeset, :playbooks, "must be an object of playbook kinds")
+
+      defp cast_playbook(changeset, kind, entry) do
+        path = "phases.qa.playbooks.#{kind}"
+
+        cond do
+          not (kind =~ @kind_format) ->
+            add_error(changeset, :playbooks, "#{path} must be named in lowercase letters, digits and underscores, starting with a letter")
+
+          not is_map(entry) or not is_list(Map.get(entry, "steps")) ->
+            add_error(changeset, :playbooks, "#{path}.steps must be a list of steps, each an object")
+
+          true ->
+            entry = Map.update!(entry, "steps", fn steps -> Enum.map(steps, &own_prompt(&1, kind)) end)
+            playbook = Phase.changeset(%Phase{}, entry, :qa_playbook)
+
+            if playbook.valid?,
+              do: put_change(changeset, :playbooks, Map.put(get_field(changeset, :playbooks), kind, get_field(playbook, :steps))),
+              else: Enum.reduce(errors(playbook, path), changeset, &add_error(&2, :playbooks, &1))
+        end
+      end
+
+      # An orchestrated step that names no prompt takes Symphony's own for its id, when there is one.
+      defp own_prompt(%{"mode" => "orchestrated", "id" => id} = step, kind) when is_binary(id) do
+        case {Map.get(step, "prompt"), StepPrompts.prompt(kind, id)} do
+          {nil, text} when is_binary(text) -> Map.put(step, "prompt", text)
+          _given -> step
+        end
+      end
+
+      defp own_prompt(step, _kind), do: step
+
+      # The errors of a playbook's list, each naming its key below `path`, as the load error says them.
+      defp errors(changeset, path) do
+        changeset
+        |> traverse_errors(fn {message, opts} -> Enum.reduce(opts, message, &String.replace(&2, "%{#{elem(&1, 0)}}", inspect(elem(&1, 1)))) end)
+        |> flatten(path)
+      end
+
+      defp flatten(errors, path) when is_map(errors), do: Enum.flat_map(errors, fn {key, value} -> flatten(value, "#{path}.#{key}") end)
+      defp flatten(errors, path) when is_list(errors), do: Enum.flat_map(errors, &flatten_entry(&1, path))
+
+      defp flatten_entry(message, path) when is_binary(message), do: ["#{path} #{message}"]
+      defp flatten_entry(nested, path), do: flatten(nested, path)
+    end
+
     embedded_schema do
       for kind <- @kinds do
-        embeds_one(kind, Phase, on_replace: :update)
+        if kind == :qa,
+          do: embeds_one(kind, QaPhase, on_replace: :update),
+          else: embeds_one(kind, Phase, on_replace: :update)
       end
     end
 
@@ -2369,7 +2608,10 @@ defmodule SymphonyElixir.Config.Schema do
 
     @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
     def changeset(schema, attrs) do
-      Enum.reduce(@kinds, cast(schema, attrs, []), fn kind, changeset -> cast_embed(changeset, kind, with: &Phase.changeset/2) end)
+      Enum.reduce(@kinds, cast(schema, attrs, []), fn
+        :qa, changeset -> cast_embed(changeset, :qa, with: &QaPhase.changeset/2)
+        kind, changeset -> cast_embed(changeset, kind, with: &Phase.changeset/2)
+      end)
     end
 
     @doc """
@@ -2380,6 +2622,28 @@ defmodule SymphonyElixir.Config.Schema do
     def findings_command, do: @findings_command
 
     @doc """
+    The machine step commands the QA pass runs itself, with the QA host it holds
+    (`SymphonyElixir.QaAgent.Steps`): the pre-checks' results, the build, the launch with a health
+    check, quitting every app the pass launched, and the evidence the steps recorded. Only a QA
+    playbook's list (`phases.qa.playbooks.<kind>.steps`) runs them.
+    """
+    @spec qa_commands() :: [String.t()]
+    def qa_commands, do: @qa_commands
+
+    @doc "Whether a QA pass walks a step list (`phases.qa.stepped`); off, every pass is one agent session."
+    @spec qa_stepped?(t()) :: boolean()
+    def qa_stepped?(%__MODULE__{qa: %QaPhase{stepped: stepped}}), do: stepped == true
+    def qa_stepped?(%__MODULE__{}), do: false
+
+    @doc """
+    The steps a QA pass of playbook `kind` walks: `phases.qa.playbooks.<kind>.steps`, else the
+    playbook's default list (`default_qa_steps/1`; only `macos_app` has one), else none.
+    """
+    @spec qa_steps(t(), String.t()) :: [Step.t()]
+    def qa_steps(%__MODULE__{qa: %QaPhase{playbooks: %{} = playbooks}}, kind) when is_map_key(playbooks, kind), do: Map.fetch!(playbooks, kind)
+    def qa_steps(%__MODULE__{}, kind) when is_binary(kind), do: default_qa_steps(kind)
+
+    @doc """
     The steps a run of `kind` follows: the file's `phases.<kind>.steps`, else the kind's default
     list (`default_steps/1`).
     """
@@ -2387,6 +2651,7 @@ defmodule SymphonyElixir.Config.Schema do
     def steps(%__MODULE__{} = phases, kind) when kind in @kinds do
       case Map.fetch!(phases, kind) do
         %Phase{steps: steps} -> steps
+        %QaPhase{steps: steps} -> steps
         nil -> default_steps(kind)
       end
     end
@@ -2410,11 +2675,60 @@ defmodule SymphonyElixir.Config.Schema do
     def default_steps(:rework), do: default_list([default_findings_step() | default_implementation_steps()])
     def default_steps(kind) when kind in @kinds, do: []
 
-    defp default_list(steps) do
+    defp default_list(steps, owner \\ :run_kind) do
       %Phase{}
-      |> Phase.changeset(%{"steps" => steps})
+      |> Phase.changeset(%{"steps" => steps}, owner)
       |> apply_action!(:validate)
       |> Map.fetch!(:steps)
+    end
+
+    @doc """
+    A QA playbook's default step list, for a stepped pass (`phases.qa.stepped`) whose
+    `symphony.yml` doesn't set `phases.qa.playbooks.<kind>`. Only `macos_app` has one: the
+    pre-checks, the build (before the plan, since the gallery's listing reads the built app), a plan
+    in the lead session on the run's model, the launch, one fresh turn on the small model for each
+    walkthrough step QA walks, the design check and the wide pass, quitting the app and keeping the
+    evidence, and the review in the lead session, which gives the verdict. Its orchestrated steps'
+    prompts are `priv/qa_steps/macos_app/<id>.md` (`SymphonyElixir.QaAgent.StepPrompts`). Every
+    other playbook has none: its pass is one agent session.
+    """
+    @spec default_qa_steps(String.t()) :: [Step.t()]
+    def default_qa_steps("macos_app"), do: default_list(default_macos_app_qa_steps(), :qa_playbook)
+    def default_qa_steps(kind) when is_binary(kind), do: []
+
+    defp default_macos_app_qa_steps do
+      judged = %{"status" => "string", "expected" => "string", "actual" => "string", "details" => "string", "evidence" => "list"}
+      prompt = &StepPrompts.prompt("macos_app", &1)
+
+      [
+        %{"id" => "pre_checks", "title" => "Pre-checks", "mode" => "machine", "command" => "symphony:qa_pre_checks", "timeout_ms" => 60_000},
+        %{"id" => "build", "title" => "Build the app", "mode" => "machine", "command" => "symphony:qa_build", "timeout_ms" => 1_800_000, "on_fail" => "quit"},
+        %{
+          "id" => "plan",
+          "title" => "Plan the pass",
+          "mode" => "orchestrated",
+          "session" => "lead",
+          "effort" => "high",
+          "prompt" => prompt.("plan"),
+          "answer" => %{"needs_app" => "boolean", "walk" => "list", "gallery" => "list", "notes" => "string"}
+        },
+        %{"id" => "launch", "title" => "Launch the app", "mode" => "machine", "command" => "symphony:qa_launch", "timeout_ms" => 300_000, "on_fail" => "quit"},
+        %{
+          "id" => "walk",
+          "title" => "Walk a step",
+          "mode" => "orchestrated",
+          "repeat" => "walkthrough",
+          "session" => "fresh",
+          "model" => "small",
+          "prompt" => prompt.("walk"),
+          "answer" => judged
+        },
+        %{"id" => "design_check", "title" => "Design check", "mode" => "orchestrated", "session" => "fresh", "model" => "small", "prompt" => prompt.("design_check"), "answer" => judged},
+        %{"id" => "wide_pass", "title" => "Wide pass", "mode" => "orchestrated", "session" => "fresh", "model" => "small", "prompt" => prompt.("wide_pass"), "answer" => judged},
+        %{"id" => "quit", "title" => "Quit the app", "mode" => "machine", "command" => "symphony:qa_quit", "timeout_ms" => 60_000},
+        %{"id" => "attach", "title" => "Attach the evidence", "mode" => "machine", "command" => "symphony:qa_attach", "timeout_ms" => 60_000},
+        %{"id" => "review", "title" => "Review and verdict", "mode" => "orchestrated", "session" => "lead", "effort" => "high", "prompt" => prompt.("review")}
+      ]
     end
 
     defp default_findings_step do

@@ -194,7 +194,7 @@ defmodule SymphonyElixir.CLICheckTest do
 
     cases = [
       {default, default <> "  bogus: {effort: low}\n",
-       "runs.bogus is not a run kind; expected default or one of: implementation, breakdown, rework, landing, code_review, epic_review, ci_fix, review_feedback, qa"},
+       "runs.bogus is not a run kind; expected default or one of: implementation, breakdown, rework, landing, code_review, epic_review, ci_fix, review_feedback, qa, conductor"},
       {default, default <> "  pre_push_review: {effort: low}\n", "runs.pre_push_review is not a run kind"},
       {default, "  default: {harness: codex, provider: openai, model: gpt-test, effort: extreme}\n", "runs.default.effort must be one of: low, medium, high, xhigh, max"},
       {codex, "    codex:\n      command: codex app-server --effort high\n", "execution.harnesses.codex.command must not pass --effort; the run's entry sets the model and effort"},

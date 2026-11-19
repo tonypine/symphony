@@ -906,22 +906,28 @@ func initiativesSituations() -> some View {
         fatalError("The inbox fixture's initiatives don't read")
     }
     let list = InitiativesList(initiatives: payload.initiatives, state: situationsState("inbox").snapshot)
-    return VStack(alignment: .leading, spacing: 0) {
+    return VStack(alignment: .leading, spacing: DesignTokens.Space.s8) {
         ForEach(list.active) { initiative in
-            InitiativeDetail(initiative: initiative, actions: InitiativeActions(), reference: situationsNow)
+            InitiativeStoryView(
+                initiative: initiative, story: InitiativeStory(initiative: initiative, reference: situationsNow), actions: InitiativeActions(),
+                reference: situationsNow
+            )
         }
     }
+    .padding(DesignTokens.Space.s6)
     .frame(width: 960)
-    .background(DesignTokens.Surface.content.color)
+    .background(DesignTokens.Surface.window.color)
 }
 
-// Initiatives as the epic's story (TP-1458): the `initiative-story` fixture's TP-1381 mid-chain, SHOP-500 done and
-// BIL-300 with a canceled sub-ticket, as the tab draws them beside the list at the laptop's and the desktop's widths.
+// Initiatives as designed (TP-1500): the `initiative-story` fixture, which holds the catalog's `EPICS` and
+// `STORY_TITLES` (`docs/design/catalog/stories.js`), TP-1381 mid-chain, SHOP-280 with a ticket that needs a fix,
+// BIL-300 with a canceled sub-ticket and SHOP-500 done, as the page draws them at the laptop's and the desktop's widths.
 let storyAPI = here.appendingPathComponent("../Tests/Fixtures/director-app/initiative-story/api/v1").standardizedFileURL
 
-/// `identifier`'s story beside the Initiatives list, in a window `window` pt wide less its sidebar.
+/// Initiatives with `identifier` picked, in a window `window` pt wide less its sidebar: its story's fold `unfolded`,
+/// the window in front or not (`windowActive`), a run's steps on the ticket being worked on.
 @MainActor
-func initiativeStory(_ identifier: String, window: CGFloat) -> some View {
+func initiativeStory(_ identifier: String, window: CGFloat, unfolded: Bool = false, windowActive: Bool = true) -> some View {
     func read(_ name: String) -> Data { try! Data(contentsOf: storyAPI.appendingPathComponent(name)) }
     guard let payload = InitiativesPayload.decode(read("initiatives.json")), let state = OverviewState.decode(read("state.json")),
           let records = TicketsPayload.decode(read("tickets.json"))?.rows
@@ -929,22 +935,29 @@ func initiativeStory(_ identifier: String, window: CGFloat) -> some View {
     let list = InitiativesList(initiatives: payload.initiatives, state: state.snapshot)
     guard let initiative = list.ordered.first(where: { $0.identifier == identifier }) else { fatalError("\(identifier) is missing") }
     var connected: [String: TicketConnected] = [:]
-    for ticket in initiative.subTickets {
+    for ticket in list.ordered.flatMap(\.subTickets) {
         if let data = try? Data(contentsOf: storyAPI.appendingPathComponent("\(ticket.identifier).json")) {
             connected[ticket.identifier] = TicketFactsRead.decode(data)?.connected
         }
     }
     let reference = state.generatedAt ?? Date()
-    let story = InitiativeStory(initiative: initiative, records: records, connected: connected, order: state.order, reference: reference)
-    return HStack(alignment: .top, spacing: 0) {
-        InitiativesListRows(list: list, selected: initiative.id, select: { _ in })
-            .frame(width: DesignTokens.Layout.listColumnWidth, alignment: .top)
-            .background(DesignTokens.Surface.content.color)
-        Divider()
-        InitiativeDetail(initiative: initiative, story: story, actions: InitiativeActions(), reference: reference)
+    let story = { (initiative: Initiative) in
+        InitiativeStory(initiative: initiative, records: records, connected: connected, order: state.order, reference: reference)
     }
-    .frame(width: window - DesignTokens.Layout.sidebarWidth, alignment: .top)
-    .background(DesignTokens.Surface.content.color)
+    // The step bars on the ticket being worked on: the step it passed and the one it is on.
+    let steps = [
+        RunStep(id: "step-pull", stepID: "pull", title: "Pull", state: .done),
+        RunStep(id: "step-code", stepID: "code", title: "Write the code", state: .current),
+    ]
+    let runs = Dictionary(uniqueKeysWithValues: story(initiative).currents.map {
+        ($0.identifier, RunGroupModel(id: "run-\($0.identifier)", title: "Implementation run 1", state: .running, word: "Running", steps: steps))
+    })
+    return InitiativesBody(
+        list: list, selection: .constant(initiative.id), story: story, runs: runs, actions: InitiativeActions(), reference: reference,
+        width: Double(window - DesignTokens.Layout.sidebarWidth), unfolded: unfolded, windowActive: windowActive
+    )
+    .frame(width: window - DesignTokens.Layout.sidebarWidth, alignment: .topLeading)
+    .background(DesignTokens.Surface.window.color)
 }
 
 /// The Inbox: TP-892's context card with its line and its connected tickets' lines.
@@ -1250,6 +1263,24 @@ func timeline(
     .frame(width: width, alignment: .leading)
     .background(DesignTokens.Surface.content.color)
 }
+
+/// The Conductor's turn after the first run handed off (`Tests/Fixtures/timeline/conductor.json`): its update for you,
+/// its instructions to the next run and its own run.
+let timelineModelConductor: TimelineModel = {
+    guard let events = try? Data(contentsOf: timelineFixtures.appendingPathComponent("conductor.json")),
+          let history = TicketEventsPayload.decode(events)
+    else { fatalError("The Conductor's timeline fixture is missing from \(timelineFixtures.path)") }
+    return TimelineModel.build(history, reference: timelineReference, calendar: timelineCalendar)
+}()
+
+/// A running rework run the Conductor steered (`Tests/Fixtures/timeline/conductor-steer.json`): its steer is one entry
+/// inside the run's group.
+let timelineModelConductorSteer: TimelineModel = {
+    guard let events = try? Data(contentsOf: timelineFixtures.appendingPathComponent("conductor-steer.json")),
+          let history = TicketEventsPayload.decode(events)
+    else { fatalError("The Conductor's steer fixture is missing from \(timelineFixtures.path)") }
+    return TimelineModel.build(history, reference: timelineReference, calendar: timelineCalendar)
+}()
 
 /// The fixture's timeline with its finding resolved by a later run: the card says so, and no entry of its own does.
 let timelineModelResolved: TimelineModel = {
@@ -1792,9 +1823,17 @@ MainActor.assumeIsolated {
         // The Situation line everywhere (TP-1441): Tickets, Initiatives, the Inbox's context, the menu bar.
         render(ticketsSituations(), scheme, to: "situations-tickets-\(suffix).png")
         render(initiativesSituations(), scheme, to: "situations-initiatives-\(suffix).png")
-        // Initiatives as the epic's story (TP-1458): mid-chain, done, and with a canceled sub-ticket, at both widths.
+        // Initiatives as designed (TP-1500): mid-chain folded and unfolded, the window behind another, a ticket that
+        // needs a fix, a canceled sub-ticket and a done epic, at the laptop's and the desktop's widths.
         do {
             renderScreen(scheme, to: "initiative-story-mid-chain") { window in initiativeStory("TP-1381", window: window) }
+            renderScreen(scheme, to: "initiative-story-every-sub-ticket") { window in
+                initiativeStory("TP-1381", window: window, unfolded: true)
+            }
+            renderScreen(scheme, to: "initiative-story-window-behind") { window in
+                initiativeStory("TP-1381", window: window, windowActive: false)
+            }
+            renderScreen(scheme, to: "initiative-story-needs-a-fix") { window in initiativeStory("SHOP-280", window: window) }
             renderScreen(scheme, to: "initiative-story-done") { window in initiativeStory("SHOP-500", window: window) }
             renderScreen(scheme, to: "initiative-story-canceled") { window in initiativeStory("BIL-300", window: window) }
         }
@@ -1847,6 +1886,11 @@ MainActor.assumeIsolated {
         render(timeline(width: 780), scheme, to: "timeline-events-folded-\(suffix).png")
         render(timeline(width: 780, showAllEvents: true), scheme, to: "timeline-all-events-\(suffix).png")
         render(timeline(width: 780, model: timelineModelResolved), scheme, to: "timeline-finding-resolved-\(suffix).png")
+        // The Conductor (its update for you always shows; its instructions and its own run under Show all events).
+        render(timeline(width: 780, model: timelineModelConductor), scheme, to: "timeline-conductor-update-\(suffix).png")
+        render(timeline(width: 780, model: timelineModelConductor, showAllEvents: true), scheme, to: "timeline-conductor-all-events-\(suffix).png")
+        // The Conductor steering a running run: "Conductor steered" with its message inside the run's group.
+        render(timeline(width: 780, model: timelineModelConductorSteer), scheme, to: "timeline-conductor-steer-\(suffix).png")
         // The marks (TP-1451): the Timeline title's count, the line where you last looked and the dots above it.
         render(timelineSinceLooked(), scheme, to: "timeline-since-looked-\(suffix).png")
         // The run in place (TP-1452): the run now on top with its newest lines, the no-run line for three situations, and
@@ -2018,6 +2062,10 @@ MainActor.assumeIsolated {
         // Factory › Runs while Anthropic is paused, and Factory › Providers (TP-1534): available, paused, at its
         // limit, one with no usage to read and one not in use; and a provider's Key block (TP-1540).
         renderScreen(scheme, to: "runs-page-provider-paused") { runsScreen(runsWithProviderPaused(), window: $0) }
+        // Settings › Conductor: off, on at two junctions, and refused by symphony check.
+        for (name, settings, error) in conductorSettingsStates {
+            render(conductorSettings(settings, error: error), scheme, to: "settings-conductor-\(name)-\(suffix).png")
+        }
         for (name, providers, selection, keys) in providersStates {
             renderScreen(scheme, to: name) { providersScreen(providers, selection: selection, keys: keys, window: $0) }
         }

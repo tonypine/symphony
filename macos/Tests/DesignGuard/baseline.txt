@@ -51,9 +51,6 @@ SymphonyBar/InboxMoveViews.swift field 1
 SymphonyBar/InboxView.swift color 13
 SymphonyBar/InboxView.swift number 2
 SymphonyBar/InboxView.swift button 1
-SymphonyBar/InitiativesView.swift color 21
-SymphonyBar/InitiativesView.swift number 3
-SymphonyBar/InitiativesView.swift button 7
 SymphonyBar/InsightsView.swift color 3
 SymphonyBar/InsightsView.swift number 3
 SymphonyBar/InsightsView.swift button 2

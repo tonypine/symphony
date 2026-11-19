@@ -3,7 +3,8 @@ defmodule SymphonyElixir.Initiatives.Initiative do
   One plan ticket followed to done, for the Mac app's Initiatives (`GET /api/v1/initiatives`).
 
   `from_node/4` reads what Linear said about the plan ticket on Symphony's poll: its group (`active`,
-  `in_review` or `done`), and its sub-tickets in landing order.
+  `in_review` or `done`), when it started and finished, and its sub-tickets in landing order, each
+  with when it landed.
   `live/2` adds what each open sub-ticket waits on from what Symphony knows locally at GET time (the
   running tickets, the Inbox, the epic lanes), so a GET never reads Linear:
 
@@ -32,6 +33,7 @@ defmodule SymphonyElixir.Initiatives.Initiative do
           state: String.t() | nil,
           state_type: String.t() | nil,
           created_at: String.t() | nil,
+          completed_at: String.t() | nil,
           blocked_by: [blocker()]
         }
 
@@ -50,6 +52,7 @@ defmodule SymphonyElixir.Initiatives.Initiative do
           state: String.t() | nil,
           repo_key: String.t(),
           group: String.t(),
+          started_at: String.t() | nil,
           completed_at: String.t() | nil,
           sub_tickets: [sub_ticket()],
           incomplete: boolean()
@@ -92,6 +95,7 @@ defmodule SymphonyElixir.Initiatives.Initiative do
           state: get_in(node, ["state", "name"]),
           repo_key: repo_key,
           group: group,
+          started_at: node["startedAt"],
           completed_at: node["completedAt"],
           sub_tickets: landing_order(children),
           incomplete: truncated?(node)
@@ -135,6 +139,7 @@ defmodule SymphonyElixir.Initiatives.Initiative do
       state: get_in(node, ["state", "name"]),
       state_type: get_in(node, ["state", "type"]),
       created_at: node["createdAt"],
+      completed_at: node["completedAt"],
       blocked_by: blockers(node)
     }
   end

@@ -11,7 +11,7 @@ public struct TimelineEntry: Equatable, Identifiable {
     /// The entry's class: its glyph, and its tone, which says the outcome only where there is one.
     public enum Kind: String, CaseIterable, Equatable {
         case phase, sendBack, pause, pauseCleared, questionAsked, questionAnswered, questionClosed, runStarted, runPassed
-        case runFailed, runStopped, person, rule, finding, findingResolved, note, ticket, situation, other
+        case runFailed, runStopped, person, rule, finding, findingResolved, note, update, ticket, situation, other
 
         /// The glyph inside the entry's round mark (the catalog's `.tl-entry .mark`, which draws the circle itself).
         public var symbol: String {
@@ -32,6 +32,7 @@ public struct TimelineEntry: Equatable, Identifiable {
             case .finding: "ladybug"
             case .findingResolved: "ladybug"
             case .note: "note.text"
+            case .update: "text.bubble"
             case .ticket: "doc.badge.plus"
             case .situation: "arrow.clockwise"
             case .other: "circle.fill"
@@ -41,7 +42,7 @@ public struct TimelineEntry: Equatable, Identifiable {
         public var tone: Tone {
             switch self {
             case .phase, .person: .accent
-            case .pause, .questionClosed, .runStopped, .rule, .findingResolved, .note, .ticket, .other: .status(.idle)
+            case .pause, .questionClosed, .runStopped, .rule, .findingResolved, .note, .update, .ticket, .other: .status(.idle)
             case .pauseCleared, .runStarted: .status(.working)
             case .questionAsked: .status(.you)
             case .questionAnswered, .runPassed: .status(.done)
@@ -68,6 +69,7 @@ public struct TimelineEntry: Equatable, Identifiable {
             case .finding: "finding"
             case .findingResolved: "finding resolved"
             case .note: "note"
+            case .update: "update"
             case .ticket: "ticket"
             case .situation: "situation"
             case .other: "event"
@@ -154,6 +156,9 @@ public struct TimelineEntry: Equatable, Identifiable {
         return ([time, kind.word, title, detail, lasted, "by " + actor, new].compactMap { $0 }).joined(separator: ", ")
     }
 
+    /// The title of the Conductor's update for the person (`conductor.update`).
+    public static let updateTitle = "Update"
+
     /// What the new dot says to VoiceOver.
     public static let newWords = "new since you last looked"
     /// The dot's help, under the pointer.
@@ -238,6 +243,14 @@ public enum TimelineItem: Equatable, Identifiable {
     public var run: RunGroupModel? {
         if case let .run(run, _) = self { return run }
         return nil
+    }
+
+    /// It folds behind "Show all events": an entry that restates what is around it, or the Conductor's run.
+    public var isMechanical: Bool {
+        switch self {
+        case let .entry(entry): entry.isMechanical
+        case let .run(run, _): run.isMechanical
+        }
     }
 
     /// Newer than the person's last look: an entry or a run with a new event.
@@ -326,9 +339,10 @@ public struct TimelineModel: Equatable {
 
     public var isEmpty: Bool { days.isEmpty }
 
-    /// The run working on the ticket, on top of the timeline; nil when none is.
+    /// The run working on the ticket, on top of the timeline; nil when none is. The Conductor's turn, live in the run's
+    /// first moments, is never it.
     public var runNow: RunGroupModel? {
-        items.first?.run.flatMap { $0.isLive ? $0 : nil }
+        items.lazy.compactMap(\.run).prefix { $0.isLive }.first { !$0.isMechanical }
     }
 
     /// The run `id`, as the timeline has it now.
@@ -338,22 +352,15 @@ public struct TimelineModel: Equatable {
 
     public static let empty = "Nothing has happened to this ticket yet."
 
-    /// How many entries restate what is around them (`TimelineEntry.isMechanical`): the ones "Show all events" brings.
-    public var mechanicalCount: Int {
-        items.count { item in
-            if case let .entry(entry) = item { return entry.isMechanical }
-            return false
-        }
-    }
+    /// How many entries and runs restate what is around them (`TimelineItem.isMechanical`): the ones "Show all events"
+    /// brings.
+    public var mechanicalCount: Int { items.count(where: \.isMechanical) }
 
-    /// The timeline as the page shows it: every entry with `allEvents`, else without the mechanical ones, each day
-    /// that held only those gone with them. The marker stays above the newest item the person saw that still shows.
+    /// The timeline as the page shows it: every item with `allEvents`, else without the mechanical ones, each day that
+    /// held only those gone with them. The marker stays above the newest item the person saw that still shows.
     public func showing(allEvents: Bool) -> TimelineModel {
         guard !allEvents, mechanicalCount > 0 else { return self }
-        let hidden: (TimelineItem) -> Bool = { item in
-            if case let .entry(entry) = item { return entry.isMechanical }
-            return false
-        }
+        let hidden: (TimelineItem) -> Bool = \.isMechanical
         var shown = self
         shown.days = days.compactMap { day in
             var day = day
@@ -498,7 +505,7 @@ public struct TimelineModel: Equatable {
     /// The events a run's group stands for: they fold into it.
     static let runTypes: Set<String> = [
         "run.started", "run.ended", "step.started", "step.completed", "step.skipped", "attempt.pushed", "verdict.recorded",
-        "evidence", "checklist.answered",
+        "evidence", "checklist.answered", "conductor.steer",
     ]
 
     /// Bookkeeping that changes nothing a person reads.
@@ -512,8 +519,11 @@ public struct TimelineModel: Equatable {
     /// A pause shorter than this that waited on no person restates the runs around it: it folds behind "Show all
     /// events".
     static let shortPause: TimeInterval = 120
-    /// The writes that restate the runs and moves around them: they fold behind "Show all events".
-    static let mechanicalTypes: Set<String> = ["workspace.synced", "workspace.rebuilt", "attempt.pushed"]
+    /// The writes that restate the runs and moves around them, and the Conductor's advice to the next run: they fold
+    /// behind "Show all events".
+    static let mechanicalTypes: Set<String> = ["workspace.synced", "workspace.rebuilt", "attempt.pushed", "conductor.instructions"]
+    /// The events whose payload `text` is the entry's body, whole: the summary's detail is their first line only.
+    static let wholeTextTypes: Set<String> = ["conductor.update", "conductor.instructions"]
     /// The rule actions that restate a run's work: the PR watcher keeping the branch current.
     static let mechanicalRuleActions: Set<String> = ["updated_branch"]
     /// The pause reasons that wait on a person.
@@ -676,13 +686,15 @@ public struct TimelineModel: Equatable {
         var waitsOnPerson: Bool
 
         init(_ event: TicketEventsPayload.Event, at: Date, order: Int, kind: TimelineEntry.Kind, actor: String) {
-            let title = event.summary?.title?.trimmedNonEmpty ?? event.type
+            let title = event.type == "conductor.update" ? TimelineEntry.updateTitle : event.summary?.title?.trimmedNonEmpty ?? event.type
             let finding = event.type == "finding.recorded"
                 ? TimelineFinding.card(description: event.payload.description, screenshots: event.screenshots)
                     ?? TimelineFinding(title: title, screenshots: event.screenshots)
                 : nil
-            // A note a run or a person wrote reads whole: the summary's detail is its first line only.
-            let note = event.type == "note" && event.payload.signal == nil ? event.payload.text?.trimmedNonEmpty : nil
+            // A note a run or a person wrote, and the Conductor's update and instructions, read whole: the summary's detail
+            // is their first line only.
+            let whole = (event.type == "note" && event.payload.signal == nil) || TimelineModel.wholeTextTypes.contains(event.type)
+            let note = whole ? event.payload.text?.trimmedNonEmpty : nil
             entry = TimelineEntry(
                 id: event.id, kind: kind, at: at, title: title, detail: note ?? event.summary?.detail?.trimmedNonEmpty, actor: actor,
                 isNew: event.isNew, finding: finding
@@ -730,7 +742,8 @@ public struct TimelineModel: Equatable {
         case "rule.action": return .rule
         case "finding.recorded": return .finding
         case "finding.resolved", "finding.confirmed": return .findingResolved
-        case "note", "brief.written": return .note
+        case "note", "brief.written", "conductor.instructions": return .note
+        case "conductor.update": return .update
         case "ticket.filed": return .ticket
         case "situation.changed": return .situation
         default: return .other

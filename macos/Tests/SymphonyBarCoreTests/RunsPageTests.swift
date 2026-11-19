@@ -52,10 +52,11 @@ final class RunsPageTests: XCTestCase {
 
     // MARK: What the page shows
 
-    func testListsDefaultAndTheNineKindsEachWithItsFirstChoiceThenItsFallbacks() throws {
+    func testListsDefaultAndTheTenKindsEachWithItsFirstChoiceThenItsFallbacks() throws {
         let page = try page()
         XCTAssertEqual(page.rows.map(\.title), [
             "Default", "Implementation", "Breakdown", "Rework", "Code Review", "QA", "CI Fix", "Review Feedback", "Landing", "Epic Review",
+            "Conductor",
         ])
         XCTAssertEqual(Set(page.rows.compactMap(\.kind)), Set(RunKind.allCases))
         XCTAssertEqual(describe(row(nil, of: page)), ["Claude* Anthropic* claude-opus-5-5* medium*"])

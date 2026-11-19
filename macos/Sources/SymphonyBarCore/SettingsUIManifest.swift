@@ -8,8 +8,8 @@ import Foundation
 /// nor in `config/settings_ui_exempt.yml`, so a new setting ships with a control. `SettingsUIManifestTests`
 /// checks that every key the line editors (`RepositoriesConfig`, `RunProfilesConfig`, `MaxConcurrentAgents`,
 /// `TokenLimits`, `OperationTimeouts`, `GitHubUpdates`, `DispatchLoopLimits`, `DispatchSettings`, `LedgerSettings`,
-/// `LinearWebhookSettings`, `ReportSettings`, `BuiltInTicketPatterns`, `RiskRuleSettings`, `QAHostTools`, `MacAppQAPlaybook`, `PhaseSettings`) write is
-/// here, and that the rest are `writtenBySymphony`. Keep one string literal per line, sorted.
+/// `LinearWebhookSettings`, `ReportSettings`, `BuiltInTicketPatterns`, `RiskRuleSettings`, `QAHostTools`, `MacAppQAPlaybook`, `PhaseSettings`,
+/// `ConductorSettings`) write is here, and that the rest are `writtenBySymphony`. Keep one string literal per line, sorted.
 public enum SettingsUIManifest {
     public static let keyPaths: [String] = [
         "auto_review.acceptance_gate.escalate.on_match.busy_files",
@@ -24,6 +24,15 @@ public enum SettingsUIManifest {
         "auto_review.playbooks.macos_app.dev_server_port",
         "auto_review.playbooks.macos_app.launch_env",
         "auto_review.playbooks.macos_app.requires",
+        "conductor.enabled",
+        "conductor.junctions",
+        "conductor.timeout_ms",
+        "conductor.watch.allow_stop",
+        "conductor.watch.enabled",
+        "conductor.watch.max_turns_per_run",
+        "conductor.watch.min_interval_minutes",
+        "conductor.watch.run_minutes",
+        "conductor.watch.run_tokens",
         "dispatch.shadow_window",
         "dispatch.source",
         "execution.concurrency.max_total",
@@ -54,6 +63,8 @@ public enum SettingsUIManifest {
         "phases.epic_review.steps",
         "phases.implementation.steps",
         "phases.landing.steps",
+        "phases.qa.playbooks",
+        "phases.qa.stepped",
         "phases.qa.steps",
         "phases.review_feedback.steps",
         "phases.rework.steps",

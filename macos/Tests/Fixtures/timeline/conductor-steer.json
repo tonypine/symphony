@@ -1,0 +1,25 @@
+{
+  "timeline": [
+    {
+      "kind": "run",
+      "run_id": "run-2",
+      "run_kind": "rework",
+      "run_number": 1,
+      "model": "claude-opus-5-5",
+      "model_name": "Claude Opus 5.5",
+      "effort": "high",
+      "status": "running",
+      "exit": null,
+      "outcome": null,
+      "verdict": null,
+      "started_at": "2026-10-08T09:00:00Z",
+      "ended_at": null,
+      "head": "8f3e2a1c9d",
+      "events": [
+        {"id": "s1", "seq": 1, "at": "2026-10-08T09:00:00Z", "type": "run.started", "run_id": "run-2", "payload": {"run_kind": "rework", "run_number": 1, "model": "claude-opus-5-5", "effort": "high"}, "summary": {"title": "Rework run 1 started"}, "artifacts": [], "children": []},
+        {"id": "s2", "seq": 2, "at": "2026-10-08T09:20:00Z", "type": "conductor.steer", "run_id": "run-2", "payload": {"text": "The build fails the same way twice. Read its first error before you change the code again.", "when": "now", "trigger": "step_failed_twice", "delivered": {"how": "now", "at": "2026-10-08T09:20:05Z"}}, "summary": {"title": "Conductor steered", "detail": "The build fails the same way twice. Read its first error before you change the code again."}, "artifacts": [], "children": []}
+      ]
+    }
+  ],
+  "next_since": "2026-10-08T09:20:00Z"
+}

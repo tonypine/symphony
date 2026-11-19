@@ -166,7 +166,7 @@ let galleryEntries: [GalleryEntry] = [
         files: ["SymphonyBar/InboxView.swift", "SymphonyBar/PeekView.swift", "SymphonyBar/PRWatchCardView.swift", "SymphonyBarCore/Inbox", "SymphonyBarCore/Peek"]),
     GalleryEntry(
         id: "initiatives", title: "Initiatives", kind: .screen, prefixes: ["initiative-story-"],
-        files: ["SymphonyBar/InitiativesView.swift", "SymphonyBarCore/Initiative"]),
+        files: ["SymphonyBar/InitiativesView.swift", "SymphonyBarCore/Initiative", "SymphonyBarUI/DesignSystem/StoryRow.swift"]),
     GalleryEntry(
         id: "tickets", title: "Tickets", kind: .screen, prefixes: ["tickets-table-", "ticket-views-"],
         files: ["SymphonyBar/TicketsView.swift", "SymphonyBarCore/Tickets", "SymphonyBarCore/TicketView"]),
@@ -198,6 +198,9 @@ let galleryEntries: [GalleryEntry] = [
     GalleryEntry(
         id: "runs", title: "Factory › Runs", kind: .screen, prefixes: ["runs-page"],
         files: ["SymphonyBarUI/RunsPageView.swift", "SymphonyBar/RunsPageContent.swift", "SymphonyBarCore/RunsPage.swift"]),
+    GalleryEntry(
+        id: "settings-conductor", title: "Settings › Conductor", kind: .screen, prefixes: ["settings-conductor-"],
+        files: ["SymphonyBar/ConductorSection.swift", "SymphonyBarCore/ConductorSettings.swift"]),
     GalleryEntry(
         id: "providers", title: "Factory › Providers", kind: .screen, prefixes: ["providers-page"],
         files: ["SymphonyBarUI/ProvidersPageView.swift", "SymphonyBar/ProvidersPageContent.swift", "SymphonyBarCore/ProvidersPage.swift"]),

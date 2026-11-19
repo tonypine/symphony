@@ -10,6 +10,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     ticket.cancelled ticket.moved drift.detected drift.reverted drift.revert_failed
     pause.set pause.reason_added pause.reason_cleared pause.cleared
     question.asked question.answered question.withdrawn question.reopened question.not_asked park.backfilled workspace.synced workspace.rebuilt workspace.removed situation.changed rule.action ticket.filed note.read brief.written report.published note
+    conductor.update conductor.instructions conductor.steer
   )
 
   describe "catalog/0" do
@@ -343,7 +344,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       modes = ~w(machine orchestrated delegated)
 
       assert %{required: [%{name: "step_id", max: 200}, %{name: "title", max: 200}, %{name: "mode", type: "enum", values: ^modes}]} = Types.schema("step.started")
-      assert %{optional: [command, prompt_ref]} = Types.schema("step.started")
+      assert %{optional: [command, prompt_ref | turn]} = Types.schema("step.started")
+      assert Enum.map(turn, & &1.name) == ~w(model effort session model_ignored model_ignored_reason)
       assert command.required_when == %{field: "mode", equals: "machine"}
       assert prompt_ref.required_when == %{field: "mode", equals: "orchestrated"}
 

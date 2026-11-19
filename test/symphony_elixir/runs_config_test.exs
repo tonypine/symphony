@@ -8,7 +8,7 @@ defmodule SymphonyElixir.RunsConfigTest do
   @claude %{"command" => "claude --dangerously-skip-permissions", "small_model" => %{"anthropic" => "claude-haiku-4-5", "openrouter" => "acme/small"}}
   @default %{"harness" => "claude", "provider" => "anthropic", "model" => "claude-opus-5-5"}
 
-  defp symphony(extra \\ %{}) do
+  defp symphony(extra) do
     Map.merge(
       %{
         "issues" => %{"provider" => "memory"},

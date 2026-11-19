@@ -560,7 +560,16 @@ ticket, with the rule's name and what it did), `ticket.filed` (machine only: a t
 this one, or an epic review's follow-up), `note.read` (machine only: the first run whose prompt carried a
 person's note, keyed by the note), `brief.written` (an implementation, rework or review-feedback run's
 brief of the ticket: what it does and why and its walkthrough, in a person's words, with no backtick; the
-newest one is the ticket read's `brief`) and `note`. `GET /api/v1/events` reads every ticket's events, and
+newest one is the ticket read's `brief`), `conductor.update` and `conductor.instructions` (machine only:
+what the Conductor's turn at a junction wrote, naming the junction: an update for the person, at most
+900 characters, with the ids of the events it rests on in `refs`, which the timeline shows as an
+entry titled Update; and advice for the next run, at most 2,000 characters, which the next run's
+prompt carries as its own section, marked as advice and wrapped as untrusted data; a question the
+Conductor asks goes through the decision path, pauses the ticket and holds the run it came before),
+`conductor.steer` (machine only: guidance the Conductor's watch gave a running run, under that run's
+`run_id`, with its `text`, `when` it asked for it, `next_turn`, `now` or `stop`, the `trigger` that
+made it look and how and when it was `delivered`; `conductor.watch` in `docs/configuration.md`) and
+`note`. `GET /api/v1/events` reads every ticket's events, and
 Symphony's own stream, newest first, with the notable rule set (`docs/control-api.md`).
 
 A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)
@@ -1625,8 +1634,11 @@ Fields:
 #### 5.4.8c `runs` (object)
 
 What each kind of run starts with. Entries are `default` and the run kinds: `implementation`,
-`breakdown`, `rework`, `landing`, `code_review`, `epic_review`, `ci_fix`, `review_feedback` and
-`qa`. Another entry name fails validation with `runs.<name> is not a run kind`.
+`breakdown`, `rework`, `landing`, `code_review`, `epic_review`, `ci_fix`, `review_feedback`, `qa`
+and `conductor`. Another entry name fails validation with `runs.<name> is not a run kind`.
+`conductor` is never classified from a ticket: it is the Conductor's turn at a junction of a ticket's
+life (`conductor` in `symphony.yml`, `docs/configuration.md`), and it takes no step list under
+`phases`.
 
 Entry fields:
 
@@ -3061,6 +3073,25 @@ the changed files, and records `step.started` and `step.completed` with its outp
 prompt carrying the output; no result runs it again, up to `no_result_limit` in a row, then ends it
 `paused` on a Question (go on past it, run it again, or the person's own words) that pauses the
 ticket; a `when` that doesn't match the change skips it with the reason.
+
+An agent step MAY set what its turn runs with (`model`, `effort`), the session it continues
+(`session`: steps with one name continue one session; `fresh` starts one for that step alone) and
+`repeat: walkthrough`; a machine step MUST NOT. Today only a stepped QA pass acts on them.
+
+A QA pass walks a step list instead of being one agent session when `phases.qa.stepped` is on and
+the pass (not an epic review) runs one playbook with a list (`phases.qa.playbooks.<kind>.steps`, or
+the `macos_app` default: pre-checks, build, plan, launch, one walk per walkthrough step, design
+check, wide pass, quit, attach, review). Off, it MUST run as one agent session as before
+(`SymphonyElixir.QaAgent.Steps`, `docs/configuration.md#stepped-qa-passes`). Every step MUST be
+recorded under the QA run's `run_id`. Its machine steps run the QA pass's own commands
+(`symphony:qa_pre_checks`, `symphony:qa_build`, `symphony:qa_launch`, `symphony:qa_quit`,
+`symphony:qa_attach`) through the pass's QA driver, with no model; only a QA playbook's list may run
+them. Its agent steps are turns with the QA tool scope, each ending with its answer file. The plan
+MUST brief every walkthrough step the pass walks, else it is refused and asked again. The `review`
+step, which every QA playbook's list MUST have, gives the verdict in the `qa_verdict` contract, or
+asks for at most three rechecks, each a fresh walk turn between the launch and the quit run again;
+past two rounds the pass is `inconclusive`. The wide pass audit, the QA host checks, turn timeouts,
+`tokens_per_issue` (across every turn of the pass) and the cleanup stay the pass's.
 
 When a machine step will run a command, the agent's session ends first and the run holds no slot:
 the orchestrator marks its running entry on the step (`session_id: nil`), counts it in no work,
@@ -6303,11 +6334,13 @@ Minimum endpoints:
     their sub-issues, each sub-issue's state and the issues it is blocked by. A failed read keeps
     the last list. Its Linear requests count as `initiatives`.
   - Each initiative has `issue_id`, `identifier`, `title`, `state`, `repo_key`, `url`, `group`
-    (`active`, `in_review`, `done`), `completed_at`, `sub_tickets`, `counts`
-    and `slot`.
+    (`active`, `in_review`, `done`), `started_at` and `completed_at` (when the tracker says the plan
+    started and finished, or null), `tokens` (the sub-tickets' ended runs' tokens, summed from their
+    ledgers), `sub_tickets`, `counts` and `slot`.
   - `sub_tickets` are the sub-issues in landing order (blocked-by order between them, then creation
     order; a cycle is broken by creation order), canceled ones left out. Each has `issue_id`, `identifier`, `title`, `state`, `url`,
-    `blocked_by` (identifiers), `blockers` (each blocker's `identifier`, `open` and `completed_at`, when
+    `completed_at` (when it landed, or null), `pull_request` (the number of the pull request its
+    record last read, or null), `blocked_by` (identifiers), `blockers` (each blocker's `identifier`, `open` and `completed_at`, when
     Linear says it was completed), `waits_on` and `waiting_for` (the open blockers it waits on when
     `waits_on` is `blocker`). `waits_on` is worked out at GET time from what Symphony knows
     locally: `done` (completed), `working` (the orchestrator runs it), `you` (an Inbox item, a review

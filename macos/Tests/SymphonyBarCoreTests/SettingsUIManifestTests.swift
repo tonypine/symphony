@@ -107,6 +107,17 @@ final class SettingsUIManifestTests: XCTestCase {
                 to: ReportSettings(model: "claude-sonnet-5-5", cadence: .hourly, triggers: flipped)
             )
         }, from: yaml)
+        yaml = try record("setting the Conductor, its junctions, its time limit and its watch", {
+            try ConductorSettings.updating(
+                $0,
+                from: ConductorSettings(),
+                to: ConductorSettings(
+                    enabled: true, junctions: [.afterQAFail], timeoutMs: 60_000,
+                    watch: ConductorWatchSettings(
+                        enabled: true, runMinutes: 20, runTokens: 1_000_000, minIntervalMinutes: 5, maxTurnsPerRun: 2, allowStop: true)
+                )
+            )
+        }, from: yaml)
         yaml = try record("setting allowed ticket priorities", {
             try TicketPriorities.updating($0, from: TicketPriorities(), to: TicketPriorities(priorities: [.urgent, .high]))
         }, from: yaml)
@@ -139,6 +150,12 @@ final class SettingsUIManifestTests: XCTestCase {
             var reset = phases
             reset[.qa] = .defaults(for: .qa)
             return try PhaseSettings.updating($0, from: phases, to: reset)
+        }, from: yaml)
+        var steppedQA = try PhaseSettings.values(in: yaml)
+        steppedQA.qaStepped = true
+        steppedQA[.qaPlaybook(.cli)] = PhaseSteps(steps: [PhaseStep(stepID: "work", mode: .delegated, model: "small")], isDefault: false)
+        yaml = try record("turning stepped QA passes on and setting a QA playbook's step list", {
+            try PhaseSettings.updating($0, from: PhaseSettings.values(in: $0), to: steppedQA)
         }, from: yaml)
         _ = try record("removing a repository", { try RepositoriesConfig.removing("api", from: $0) }, from: yaml)
 

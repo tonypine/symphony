@@ -9,9 +9,10 @@ import Foundation
 /// (`GET /api/v1/tickets?epic=`: priority, age, phase and when it entered it; the canceled sub-tickets, which the
 /// Initiatives leave out), the dispatch order on `/state`, and the sub-tickets' ticket reads (`connected`).
 public struct InitiativeStory: Equatable {
-    /// How a row stands out: the one Symphony works or starts next, a finished one, a canceled one, or none.
+    /// How a row stands out (TP-1500): one being worked on (`current`, every one of them), the one after the last of
+    /// them (`next`; the first in line when none is worked on), a finished one, a canceled one, or none.
     public enum Mark: Equatable {
-        case current, done, canceled, open
+        case current, next, done, canceled, open
     }
 
     public struct Row: Equatable, Identifiable {
@@ -28,6 +29,13 @@ public struct InitiativeStory: Equatable {
         public var blockers: [ConnectedPanelModel.Row]
         /// The Initiatives' sub-ticket, for Review; nil for a canceled one.
         public var ticket: Initiative.SubTicket?
+        /// What matters at the line's end for its state (TP-1500): "Landed Tue 10 Nov · PR #859", "Next: starts when
+        /// TP-1441 lands", "Waits for TP-1442", "Canceled"; nil for one being worked on, whose steps and age say it.
+        public var trail: String?
+        /// The status that needs someone, for a sub-ticket not worked on whose situation needs a fix (`problem`) or
+        /// waits on the Director (`you`), as the strip's segment says (TP-1500): its row draws that status's mark and
+        /// says its situation's word in place of its place in line. Nil for the others.
+        public var attention: DesignTokens.Status?
         public var accessibilityLabel: String
 
         public var id: String { identifier }
@@ -66,7 +74,10 @@ public struct InitiativeStory: Equatable {
     /// What VoiceOver reads for the header's progress.
     public var progressAccessibilityLabel: String
 
+    /// The first sub-ticket being worked on.
     public var current: Row? { rows.first { $0.mark == .current } }
+    /// Every sub-ticket being worked on, in chain order.
+    public var currents: [Row] { rows.filter { $0.mark == .current } }
 
     /// The story of `initiative`: `records` are the epic's ticket records, `connected` each sub-ticket's ticket read by
     /// identifier, `order` the dispatch order. Dates read in `calendar`, against `reference`'s day.
@@ -99,22 +110,31 @@ public struct InitiativeStory: Equatable {
 
         let epicRead = chain.lazy.compactMap { connected[$0.identifier]?.epic }.first { $0.identifier == initiative.identifier }
         let known = Self.kinds(chain, epicRead: epicRead, dispatched: dispatched)
-        let current = Self.current(chain.filter { !isDone($0) }, dispatched: dispatched)
+        let marks = Self.marks(chain.map { (ticket: $0, done: isDone($0)) }, dispatched: dispatched)
+        let open = Set(chain.filter { !isDone($0) }.map(\.identifier))
 
         var rows: [Row] = chain.enumerated().map { index, ticket in
             let done = isDone(ticket)
-            let mark: Mark = done ? .done : ticket.identifier == current ? .current : .open
+            let mark = marks[index]
             let finished = done
-                ? Self.finished(ticket.identifier, record: records[ticket.identifier], initiative: initiative, connected: connected)
+                ? ticket.completedAt
+                    ?? Self.finished(ticket.identifier, record: records[ticket.identifier], initiative: initiative, connected: connected)
                 : nil
             let doneLine = done ? ["Done", finished.map { ConnectedPanelModel.day($0, reference: reference, calendar: calendar) }].compactMap { $0 }.joined(separator: " ") : nil
             let blockers = done ? [] : (connected[ticket.identifier]?.blockedBy ?? []).map {
                 ConnectedPanelModel.row($0, situation: known[$0.identifier], reference: reference, calendar: calendar)
             }
             let line = done ? Situation(kind: .done, cause: "") : ticket.line
+            let waitsFor = Self.unique(ticket.blockedBy + (connected[ticket.identifier]?.blockedBy.map(\.identifier) ?? []))
+                .first { open.contains($0) }
+            let attention = Self.attention(mark, line: line)
             return Row(
                 number: index + 1, identifier: ticket.identifier, title: ticket.title, mark: mark, line: line, doneLine: doneLine,
                 blockers: blockers, ticket: ticket,
+                trail: attention == nil
+                    ? Self.trail(mark, landed: finished, pullRequest: ticket.pullRequest, waitsFor: waitsFor, line: line, calendar: calendar)
+                    : line.word,
+                attention: attention,
                 accessibilityLabel: Self.spoken(
                     number: index + 1, of: chain.count, identifier: ticket.identifier, title: ticket.title, mark: mark,
                     state: doneLine ?? SituationText(line, reference: reference).spoken(), blockers: blockers
@@ -128,7 +148,7 @@ public struct InitiativeStory: Equatable {
             let title = record.text("title")
             return Row(
                 number: nil, identifier: record.identifier, title: title, mark: .canceled, line: Situation(kind: .cancelled, cause: ""),
-                doneLine: nil, blockers: [], ticket: nil,
+                doneLine: nil, blockers: [], ticket: nil, trail: Self.canceled, attention: nil,
                 accessibilityLabel: [record.identifier, title, "canceled"].compactMap { $0 }.joined(separator: ", ")
             )
         }
@@ -200,15 +220,39 @@ public struct InitiativeStory: Equatable {
 
     // MARK: - The marks
 
-    /// The open sub-ticket to highlight: the first in the chain a run works on, else the one first in the dispatch
-    /// order; nil when none runs and none is in line.
-    static func current(_ open: [Initiative.SubTicket], dispatched: [String: DispatchOrder.Ticket]) -> String? {
-        if let running = open.first(where: { dispatched[$0.identifier]?.outcome == .running || $0.waits == .working }) {
-            return running.identifier
+    /// Whether an open sub-ticket is being worked on: a run works on it, or it is in a phase the machine owns (Code
+    /// Review, QA, Merging), which the strip counts as working too.
+    static func inProgress(_ ticket: Initiative.SubTicket, dispatched: [String: DispatchOrder.Ticket]) -> Bool {
+        dispatched[ticket.identifier]?.outcome == .running || ticket.waits.stage == .working
+    }
+
+    /// Each sub-ticket's mark, in chain order: done; `current` for every one being worked on; `next` for the first open
+    /// one after the last of those, or, when none is worked on, the first in the dispatch order, else the first open
+    /// one; `open` for the rest.
+    static func marks(_ chain: [(ticket: Initiative.SubTicket, done: Bool)], dispatched: [String: DispatchOrder.Ticket]) -> [Mark] {
+        var marks: [Mark] = chain.map { item in
+            item.done ? .done : inProgress(item.ticket, dispatched: dispatched) ? .current : .open
         }
-        return open
-            .compactMap { ticket in dispatched[ticket.identifier]?.position.map { (ticket.identifier, $0) } }
-            .min { $0.1 < $1.1 }?.0
+        let next: Int?
+        if let last = marks.lastIndex(of: .current) {
+            next = marks.indices.first { $0 > last && marks[$0] == .open }
+        } else {
+            let inLine = marks.indices
+                .filter { marks[$0] == .open }
+                .compactMap { index in dispatched[chain[index].ticket.identifier]?.position.map { (index, $0) } }
+                .min { $0.1 < $1.1 }?.0
+            next = inLine ?? marks.firstIndex(of: .open)
+        }
+        if let next { marks[next] = .next }
+        return marks
+    }
+
+    /// The status a row not worked on shows in place of its place in line: its situation's, when that needs a fix or
+    /// waits on the Director.
+    static func attention(_ mark: Mark, line: Situation) -> DesignTokens.Status? {
+        guard mark == .next || mark == .open else { return nil }
+        let status = line.kind.status
+        return status == .problem || status == .you ? status : nil
     }
 
     static func isDone(_ record: TicketsRow) -> Bool {
@@ -248,6 +292,7 @@ public struct InitiativeStory: Equatable {
         var parts = ["\(number) of \(total)", identifier]
         if let title { parts.append(title) }
         if mark == .current { parts.append("current") }
+        if mark == .next { parts.append("next") }
         parts.append(state)
         parts += blockers.map(\.accessibilityLabel)
         return parts.joined(separator: ", ")

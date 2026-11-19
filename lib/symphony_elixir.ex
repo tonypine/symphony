@@ -111,6 +111,8 @@ defmodule SymphonyElixir.Application do
            verification_child_specs(system_config) ++
            [
              SymphonyElixir.Orchestrator,
+             # After the orchestrator, whose running runs it watches (`conductor.watch`).
+             SymphonyElixir.Conductor.Watch,
              situation_recorder_child_spec(),
              pr_review_child_spec(system_config),
              pr_watch_child_spec(system_config),

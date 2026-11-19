@@ -1132,6 +1132,11 @@ Symphony classifies each run when it dispatches it. The first match wins:
 | `review_feedback` | A continuation after PR review comments. |
 | `implementation` | Everything else. |
 
+`conductor` is a run kind no dispatch classifies to: it is the Conductor's short turn at a junction of
+a ticket's life (see [`conductor`](#conductor)). `runs.conductor` picks its harness, provider, model,
+effort and fallbacks like any kind's entry, falling back to `runs.default`; a strong model suits it.
+It takes no step list under `phases`.
+
 **Resolution:**
 
 Each field resolves on its own, for the repository the issue is routed to. The first entry that
@@ -1504,6 +1509,10 @@ ticket can enter the `Auto Review` state any more; one still sitting there is na
 startup, for a person to move it on by hand.
 
 #### QA passes
+
+A QA pass is one agent session given its playbooks, unless `phases.qa.stepped` is on and the pass
+runs one playbook with a step list: then Symphony walks the list, step by step (see
+[Stepped QA passes](#stepped-qa-passes)).
 
 Before any agent runs, Symphony decides whether the PR needs QA and which playbooks apply:
 
@@ -3428,6 +3437,80 @@ reports:
 
 These keys are new: no existing `symphony.yml` key is renamed, so nothing migrates.
 
+### `conductor`
+
+The Conductor: a short, strong-model turn Symphony runs at fixed junctions of a ticket's life. Each
+turn is a fresh session (run kind `conductor`, model from `runs.conductor`) that reads the ticket's
+facts in one piece (`GET /api/v1/tickets/<identifier>/facts`, see `docs/control-api.md`) and writes
+instructions for the next run, which its prompt carries as advice, and, when it is worth it, a short
+update for the person, which the ticket's timeline shows as an entry titled Update. Every run's
+prompt carries the newest instructions, Code Review's reviewer and QA included. When the same class
+of finding came back or the budget is going wrong, it may ask the person a question, through the
+same validated decision path as any other: the ticket pauses on it, and the run the turn came before
+does not start. Each setting has a control in the Mac app's Settings, under
+Conductor.
+
+```yaml
+conductor:
+  enabled: false
+  junctions: [after_coding, after_qa_fail, after_rework, before_merge]
+  timeout_ms: 180000
+  watch:
+    enabled: false
+    run_minutes: 30
+    run_tokens: 30000000
+    min_interval_minutes: 10
+    max_turns_per_run: 3
+    allow_stop: false
+```
+
+- `enabled` (default `false`): whether the Conductor runs at all. Off, nothing reads or writes
+  anything, and prompts are unchanged.
+- `junctions` (default all four): `after_coding` (an implementation run handed off, before Code
+  Review or QA), `after_qa_fail` (QA failed, before rework), `after_rework` (a rework run handed
+  off, before Code Review or QA again) and `before_merge` (QA passed or was skipped, before
+  Merging). The first three run in the next run's own task before its agent starts, and that run's
+  start is recorded once the turn is done, so the turn sits between the two runs on the timeline;
+  `before_merge` runs as the QA or Code Review run that carried the ticket into Merging ends, on its
+  own.
+- `timeout_ms` (default `180000`): how long one turn may take. A turn that runs over, fails, answers
+  outside its schema or whose provider is held with no free fallback is logged, records nothing for
+  the person, and the next run starts as if the Conductor were off.
+
+The turn runs in an empty folder under the workspace root with read-only tools and no ticket, so it
+can neither change nor read the repository. It never moves the ticket or changes its plan. Its own
+run is recorded on the ticket (`run.started`, `run.ended` with its model and tokens, `counted: false`
+so the dispatch-loop guard ignores it), and its tokens count toward the ticket under the phase it ran
+in. A dispatch pause stops it as it stops any run. Read on each dispatch, so a change applies without
+a restart. The prompt lives in `priv/conductor/prompt.md`.
+
+**Watching running runs** (`conductor.watch`, off by default; `conductor.enabled` must be on too).
+The Conductor looks at a running run when one of its steps ended `failed`, the same step failed
+twice, a step of a stepped QA pass answered `plan_mismatch` or `blocked`, or the run passed
+`run_minutes` or `run_tokens`; never more often than `min_interval_minutes` per run, and at most
+`max_turns_per_run` times per run, one turn at a time. The turn reads the facts at the junction
+`during_run` plus the live run (its kind and model, steps so far with results, the step it is on,
+its newest lines, elapsed time and tokens) and may answer:
+
+- `steer` with `when: next_turn`: the message waits on the run and opens its next agent turn (the
+  next step's prompt, a stepped QA pass's included, or the next continuation turn), marked as
+  guidance from the Conductor and wrapped as untrusted data;
+- `steer` with `when: now`: on the Claude harness, the agent turn the run is in ends and the same
+  session resumes with the message as a new turn, which counts as no turn of its own and spends no
+  retry. A run in a machine step, between turns, on another harness, or in a QA or Code Review turn is
+  never interrupted: the message waits for its next turn instead;
+- `stop`, only with `allow_stop: true` and together with a question to the person (`ask_person`):
+  the run ends through the run-stop path (the one behind `POST /api/v1/control/stop`, never the
+  ticket cancel) and the ticket pauses on the question.
+
+Each steer is recorded as it reaches the run, a `conductor.steer` event under the run's `run_id` with
+its text, `when`, `trigger` and how and when it was delivered; one the run never reached is recorded
+without `delivered` once the run ends. The Mac app shows it inside the run's group as "Conductor
+steered" with the message. A watch turn that fails changes nothing for the run. Every key has a
+control in the Mac app's Settings, under Conductor.
+
+These keys are new: no existing `symphony.yml` key is renamed, so nothing migrates.
+
 ### `ledger`
 
 The largest artifact file (a QA screenshot, a run transcript) the ticket ledger stores, and the
@@ -3634,7 +3717,7 @@ _Symphony posts a new update when this list changes · list `b1712c40`_
 The list of steps a run of each kind follows: for an implementation run, writing the code, building
 it, checking it, testing it and handing it off; for a rework run, reading the open findings first. Each kind under `phases` (a run kind:
 `implementation`, `rework`, `ci_fix`, `review_feedback`, `qa`, `code_review`, `landing`,
-`breakdown`, `epic_review`) holds one setting, its `steps` list. A kind the file doesn't set follows
+`breakdown`, `epic_review`; not `conductor`, which takes no step list) holds one setting, its `steps` list. A kind the file doesn't set follows
 its default list; a `symphony.yml` with no `phases` key follows every default. `symphony workflow
 preview` prints the list a run will follow above its prompt (`--kind` names the run kind, default
 `implementation`), so a change to the list shows in the next preview. The step runner
@@ -3779,6 +3862,115 @@ Each step has:
 - `no_result_limit` (above 0; default `2`, decision 3 of TP-1085): how many times in a row the step
   may end with no result (its timeout) before the run pauses on a Question carrying the output and
   the ways forward; it never runs again on its own past it.
+- `model` (an agent step only; default the run's): the model the step's turn runs with, on the
+  run's harness and provider: a model id, or `small` for the run's small model. A run that started
+  on a fallback provider keeps its own model, and the step's `step.started` says so
+  (`model_ignored`).
+- `effort` (an agent step only; default the run's): `low`, `medium`, `high`, `xhigh` or `max`.
+- `session` (an agent step only; default the run's one session): a name; the steps with the same
+  name continue one agent session, resumed by its id (Claude resumes it; another harness starts a
+  new one). `fresh` starts a session for that step alone.
+- `repeat` (an agent step only): `walkthrough`, the step runs once per walkthrough step a QA pass
+  walks (below), as `<id>_<n>`.
+
+`model`, `effort`, `session` and `repeat` are refused on a machine step. Today only a stepped QA
+pass (below) acts on them; an implementation or rework run takes them and runs as before.
+
+#### Stepped QA passes
+
+`phases.qa` also holds `stepped` (default `false`) and `playbooks`, a step list per QA playbook:
+
+```yaml
+phases:
+  qa:
+    stepped: true
+    playbooks:
+      macos_app:
+        steps: [...]     # replaces the default list below
+      cli:
+        steps: [...]     # cli, web, android_app or a custom kind
+```
+
+With `stepped: true`, a QA pass (not an epic review) that runs one playbook with a step list walks
+it (`SymphonyElixir.QaAgent.Steps`) instead of giving one agent session the whole playbook. With
+`stepped: false`, on a pass that runs several playbooks, or for a playbook with no list, the pass is
+one agent session as before. `phases.qa.steps`, like every kind's `steps`, stays as it was; a file
+that sets only `stepped` or `playbooks` under `phases.qa` needs no `steps`. A playbook's list is
+checked as any list is, every load error naming its key (`phases.qa.playbooks.<kind>.steps…`), and
+must have an orchestrated step `review`, which gives the verdict. Only a playbook's list may run the
+QA pass's own commands (below). A playbook's orchestrated step that sets no `prompt` takes
+Symphony's prompt for its id, `priv/qa_steps/<kind>/<id>.md`, when there is one.
+
+Each step is recorded on the ticket's history under the QA run's `run_id`, so the Director's
+timeline shows the pass live; the plan's answer is a `note` there too. Machine steps run without a
+model, through the QA driver the pass holds:
+
+- `symphony:qa_pre_checks`: the pre-checks' results (the steps a named test proves);
+- `symphony:qa_build`: the app Symphony built for the commit (`qa_build`); a failed build fails
+  the step;
+- `symphony:qa_launch`: `qa_launch_app` on the default fixtures, then `qa_check_app`; an app that is
+  not healthy fails the step, and the agent steps between it and the quit are skipped. It always
+  runs: a pass with nothing on screen to judge rests on the app building, starting and checking
+  healthy. When the plan answered `needs_app: false` and no walkthrough step is walked, the agent
+  steps between the launch and the quit (the design check and the wide pass) are skipped, saying the
+  plan found nothing on screen to judge, and the review's `pass` is a `pass` with `scope: none`,
+  accepted on the app check like any such pass;
+- `symphony:qa_quit`: `qa_quit_app` for every app the pass launched;
+- `symphony:qa_attach`: the evidence files the steps named and wrote under `qa-evidence/`, and any
+  named but missing. The pass keeps them with its other files when it ends, as before.
+
+A failed machine step goes to its `on_fail`, else the pass ends `blocked` with its output. An agent
+step is a turn with the QA tool scope that ends with its answer file, checked against its `answer`;
+one that misses it is asked once more, then fails on to its `on_fail`, else to the next step, so the
+review sees it. Three steps are read by id: `plan` must brief every walkthrough step the pass walks
+(a `walk` entry whose `step` is its number), or it is refused and asked again; `review` records the
+verdict with `qa_verdict` in today's contract (or writes it to its answer file), or asks for a
+recheck, `{"recheck": [brief, ...]}`, at most three: each runs as a fresh turn of the list's
+`repeat: walkthrough` step between the launch and the quit and attach steps run again, then the
+review runs again. Past two rounds the pass is `inconclusive`. A walk-style answer's `status` is
+`pass`, `fail`, `blocked` or `plan_mismatch`.
+
+The mechanical rules are the pass's as before: the wide pass audit, the QA host and tunnel checks,
+each turn's timeout (`auto_review.timeout_ms`), `execution.limits.tokens_per_issue` (counted across
+every turn of the pass), and the cleanup of the worktree and its processes. A stepped pass does not
+count its turns against `auto_review.max_turns`: its list bounds them.
+
+The default `macos_app` list, used when `stepped` is on and the file doesn't set
+`phases.qa.playbooks.macos_app` (its prompts are `priv/qa_steps/macos_app/*.md`, each with only the
+playbook rules its step needs; the plan alone reads the playbook's screen rules):
+
+```yaml
+phases:
+  qa:
+    playbooks:
+      macos_app:
+        steps:
+          - {id: pre_checks, title: Pre-checks, mode: machine, command: "symphony:qa_pre_checks", timeout_ms: 60000}
+          - {id: build, title: Build the app, mode: machine, command: "symphony:qa_build", timeout_ms: 1800000, on_fail: quit}
+          - id: plan
+            title: Plan the pass
+            mode: orchestrated
+            session: lead
+            effort: high
+            answer: {needs_app: boolean, walk: list, gallery: list, notes: string}
+          - {id: launch, title: Launch the app, mode: machine, command: "symphony:qa_launch", timeout_ms: 300000, on_fail: quit}
+          - id: walk
+            title: Walk a step
+            mode: orchestrated
+            repeat: walkthrough
+            session: fresh
+            model: small
+            answer: {status: string, expected: string, actual: string, details: string, evidence: list}
+          - {id: design_check, title: Design check, mode: orchestrated, session: fresh, model: small, answer: {status: string, expected: string, actual: string, details: string, evidence: list}}
+          - {id: wide_pass, title: Wide pass, mode: orchestrated, session: fresh, model: small, answer: {status: string, expected: string, actual: string, details: string, evidence: list}}
+          - {id: quit, title: Quit the app, mode: machine, command: "symphony:qa_quit", timeout_ms: 60000}
+          - {id: attach, title: Attach the evidence, mode: machine, command: "symphony:qa_attach", timeout_ms: 60000}
+          - {id: review, title: Review and verdict, mode: orchestrated, session: lead, effort: high}
+```
+
+The build comes before the plan because the gallery's listing of the entries the change affects
+(`qa_gallery`) reads the built app. Settings › Phases edits `stepped` and each playbook's list
+(pick QA, then the list), and each agent step's `model`, `effort`, `session` and `repeat`.
 
 A list is refused when `symphony.yml` loads, with the step named: an `on_fail` that names a step not
 in the list, failures that can loop through steps none of which is delegated (`build` returning to

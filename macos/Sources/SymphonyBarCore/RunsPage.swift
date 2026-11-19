@@ -1,8 +1,8 @@
 import Foundation
 
 /// Factory › Runs (TP-1538), as the catalog draws it (`runsPage` in `docs/design/catalog/stories.js`): Default and the
-/// nine kinds of run, each always open, with one line per choice, the first choice then each fallback in the order
-/// Symphony tries them. Each line has Harness, Provider, Model and Effort. A value the kind takes from Default is
+/// ten kinds of run (the catalog's nine and the Conductor's turn), each always open, with one line per choice, the first
+/// choice then each fallback in the order Symphony tries them. Each line has Harness, Provider, Model and Effort. A value the kind takes from Default is
 /// drawn grey, one it sets itself dark. Under them the Harnesses block (TP-1539) sets each harness's command and its
 /// small model per provider. Nothing is applied until Save; the Save bar counts the changes and has Revert.
 /// The edits are `RunsEditor`'s (TP-1537); this is what the page shows of it and the page's own steps around it.
@@ -157,8 +157,10 @@ public struct RunsPage: Equatable {
         "Small model on \(providerTitle(provider))"
     }
 
-    /// Default first, then the nine kinds in the catalog's order.
-    public static let kinds: [RunKind?] = [nil, .implementation, .breakdown, .rework, .codeReview, .qa, .ciFix, .reviewFeedback, .landing, .epicReview]
+    /// Default first, then the catalog's nine kinds in its order, then the Conductor's turn.
+    public static let kinds: [RunKind?] = [
+        nil, .implementation, .breakdown, .rework, .codeReview, .qa, .ciFix, .reviewFeedback, .landing, .epicReview, .conductor,
+    ]
 
     /// A kind's name on the page, as the workflow's states name them.
     public static func title(_ kind: RunKind?) -> String {
@@ -173,6 +175,7 @@ public struct RunsPage: Equatable {
         case .reviewFeedback: "Review Feedback"
         case .landing: "Landing"
         case .epicReview: "Epic Review"
+        case .conductor: "Conductor"
         }
     }
 

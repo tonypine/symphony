@@ -623,6 +623,93 @@ public struct Card<Content: View>: View {
     }
 }
 
+/// The catalog's Card in its selectable form (`.ini-item`, TP-1500): content on the content surface with the card's
+/// corners and `--elevation-1`, one of a list the person picks from. It lifts under the pointer, settles when
+/// pressed, and the picked one carries the accent ring with its tint's halo in the front window, a grey ring behind
+/// it. A click picks it; it takes keyboard focus unless its list owns it (`focused`), and VoiceOver reads it as one
+/// button. `state` and `windowActive` draw one state still, for a snapshot.
+public struct SelectableCard<Content: View>: View {
+    let selected: Bool
+    let listFocused: Bool?
+    let state: DesignTokens.Interaction?
+    let windowActive: Bool?
+    let select: () -> Void
+    @ViewBuilder var content: Content
+
+    @State private var hovered = false
+    @State private var pressed = false
+    @FocusState private var focused: Bool
+    @Environment(\.appearsActive) private var appearsActive
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    public init(
+        selected: Bool, focused: Bool? = nil, state: DesignTokens.Interaction? = nil, windowActive: Bool? = nil,
+        select: @escaping () -> Void, @ViewBuilder content: () -> Content
+    ) {
+        self.selected = selected
+        listFocused = focused
+        self.state = state
+        self.windowActive = windowActive
+        self.select = select
+        self.content = content()
+    }
+
+    /// The state it draws: the one given, else the pointer's, the press's, the selection's and the focus's.
+    var shown: DesignTokens.Interaction {
+        state ?? DesignTokens.Interaction(hovered: hovered, pressed: pressed, selected: selected, focused: listFocused ?? focused)
+    }
+
+    public var body: some View {
+        let state = shown
+        let active = windowActive ?? appearsActive
+        let shape = RoundedRectangle(cornerRadius: DesignTokens.Radius.card, style: .continuous)
+        let raised = state.hovered && !state.pressed
+        content
+            .padding(.vertical, DesignTokens.Initiatives.cardVerticalPadding)
+            .padding(.horizontal, DesignTokens.Initiatives.cardHorizontalPadding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(DesignTokens.Surface.content.color, in: shape)
+            .edgeHighlight(shape)
+            .elevation(raised ? .level2 : .level1, in: shape)
+            .overlay {
+                if state.showsSelectionRing {
+                    // Both outside the card's edge, as the catalog's box shadows: the halo, then the ring on it.
+                    let ring = DesignTokens.Selection.selectableCardRingWidth
+                    let halo = ring + DesignTokens.Selection.selectableCardHaloWidth
+                    ZStack {
+                        if active {
+                            RoundedRectangle(cornerRadius: DesignTokens.Radius.card + halo, style: .continuous)
+                                .strokeBorder(DesignTokens.Selection.selectableCardHalo.color, lineWidth: halo)
+                                .padding(-halo)
+                        }
+                        RoundedRectangle(cornerRadius: DesignTokens.Radius.card + ring, style: .continuous)
+                            .strokeBorder((active ? DesignTokens.Selection.color : DesignTokens.Selection.inactiveColor).color, lineWidth: ring)
+                            .padding(-ring)
+                    }
+                    .allowsHitTesting(false)
+                }
+            }
+            .focusRing(state.showsFocusRing && !state.showsSelectionRing, shape)
+            .scaleEffect(DesignTokens.Motion.scale(DesignTokens.Motion.cardPressScale, pressed: state.pressed, reduceMotion: reduceMotion))
+            .offset(y: -DesignTokens.Motion.lift(hovered: raised, reduceMotion: reduceMotion))
+            .animation(.motion(.lift, reduceMotion: reduceMotion), value: state)
+            .contentShape(shape)
+            .onHover { hovered = $0 }
+            .focusable(listFocused == nil)
+            .focusEffectDisabled()
+            .focused($focused)
+            .onTapGesture { select() }
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in pressed = true }
+                    .onEnded { _ in pressed = false }
+            )
+            .accessibilityElement(children: .combine)
+            .accessibilityAddTraits(state.selected ? [.isButton, .isSelected] : .isButton)
+            .accessibilityAction { select() }
+    }
+}
+
 // MARK: - Panel, zone title and chip (the catalog's `.panel`, `.zone-title` and `.chip`, TP-1484)
 
 extension View {

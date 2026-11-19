@@ -66,10 +66,14 @@ final class SettingsViewModel: ObservableObject {
     @Published var riskRules = RiskRuleSettings()
     /// Why `symphony check` rejected the changed risk rule settings, shown above Save.
     @Published private(set) var riskRulesError: String?
-    /// `phases.<kind>.steps` in the configured symphony.yml: the step list each run kind follows.
+    /// `phases.<kind>.steps` in the configured symphony.yml: the step list each run kind follows; with
+    /// `phases.qa.stepped` and each QA playbook's list (`phases.qa.playbooks.<kind>.steps`).
     @Published var phases = PhaseSettings()
     /// The run kind whose list the Phases group shows.
     @Published var phaseKind: PhaseKind = .implementation
+    /// The QA playbook whose list the Phases group shows while the run kind is QA; nil shows QA's own list
+    /// (`phases.qa.steps`).
+    @Published var phaseQAPlaybook: QAPlaybookKind?
     /// Why the step lists weren't saved: a step the rules refuse, or `symphony check`'s reason.
     @Published private(set) var phasesError: String?
     /// Today's tokens from Symphony's latest state, nil while it isn't answering.
@@ -138,6 +142,11 @@ final class SettingsViewModel: ObservableObject {
     @Published var reportTriggers = ReportSettings.defaultTriggers
     /// Why `symphony check` rejected the changed report settings, shown in their section.
     @Published private(set) var reportsError: String?
+    /// `conductor.enabled`, `conductor.junctions` and `conductor.timeout_ms` in the configured symphony.yml: whether
+    /// Symphony runs the Conductor, at which junctions, and how long one turn may take.
+    @Published var conductor = ConductorSettings()
+    /// Why `symphony check` rejected the changed Conductor settings, shown in their section.
+    @Published private(set) var conductorError: String?
     /// `auto_review.playbooks.macos_app.dev_server`, `dev_server_port` and `launch_env` in the configured
     /// symphony.yml: whether a macOS app QA pass on the QA host starts the project's dev server there, on which port,
     /// and the variables the app under test gets.
@@ -181,6 +190,10 @@ final class SettingsViewModel: ObservableObject {
 
     /// The report settings read from symphony.yml, or nil when they couldn't be read. Only a model that changed is written.
     private var loadedReportSettings: ReportSettings?
+
+    /// The Conductor settings read from symphony.yml, or nil when they couldn't be read. Only a setting that changed is
+    /// written.
+    private var loadedConductor: ConductorSettings?
 
     /// The macOS app QA settings read from symphony.yml, or nil when they couldn't be read. Only a setting that
     /// changed is written.
@@ -262,6 +275,7 @@ final class SettingsViewModel: ObservableObject {
         loadDispatchSettings()
         loadLedgerSettings()
         loadReportSettings()
+        loadConductor()
         loadMacAppQA()
         // Off the main thread, so a Keychain prompt can't freeze the app while Settings opens.
         self.secrets.read { [weak self] result in self?.showSecrets(result) }
@@ -428,8 +442,17 @@ final class SettingsViewModel: ObservableObject {
     /// The Phases editor is off until a symphony.yml has been read, and while Save checks it.
     var canEditPhases: Bool { loadedPhases != nil && !isSaving }
 
-    /// What is wrong with the shown kind's list, by the rules Symphony loads it with.
-    var phaseValidation: PhaseValidation { PhaseValidation.check(phases[phaseKind].steps) }
+    /// The list the Phases group shows: the run kind's, or the picked QA playbook's while the run kind is QA.
+    var phaseListOwner: StepListOwner {
+        if phaseKind == .qa, let phaseQAPlaybook { return .qaPlaybook(phaseQAPlaybook) }
+        return .runKind(phaseKind)
+    }
+
+    /// What is wrong with the shown list, by the rules Symphony loads it with.
+    var phaseValidation: PhaseValidation {
+        let owner = phaseListOwner
+        return PhaseValidation.check(phases[owner].steps, inQAPlaybook: owner.qaPlaybook != nil)
+    }
 
     private func loadPhases() {
         let path = settings.trimmed().configPath
@@ -562,6 +585,21 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// The Conductor controls are off until a symphony.yml has been read, and while Save checks it.
+    var canEditConductor: Bool { loadedConductor != nil && !isSaving }
+
+    private func loadConductor() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let read = try SymphonyConfigFile(path: path).readConductorSettings()
+            conductor = read
+            loadedConductor = read
+        } catch {
+            configFileError = "Could not read the Conductor settings from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
     /// The macOS app QA controls are off until a symphony.yml has been read, and while Save checks it.
     var canEditMacAppQA: Bool { loadedMacAppQA != nil && !isSaving }
 
@@ -618,7 +656,8 @@ final class SettingsViewModel: ObservableObject {
     /// Validates and saves, then calls `onSaved` when everything was stored. Changed token limits and timeouts are
     /// written only after `symphony check` passes on them; until then the rest isn't saved, and a failure shows in
     /// `tokenLimitsError`, `timeoutsError`, `gitHubUpdatesError`,
-    /// `linearWebhooksError`, `dispatchLoopError`, `dispatchError`, `ledgerError`, `reportsError` or `macAppQAError`.
+    /// `linearWebhooksError`, `dispatchLoopError`, `dispatchError`, `ledgerError`, `reportsError`, `conductorError` or
+    /// `macAppQAError`.
     func save(onSaved: @escaping () -> Void) {
         guard canSave else { return }
         let settings = settings.trimmed()
@@ -681,6 +720,9 @@ final class SettingsViewModel: ObservableObject {
             ReportSettings(model: reportModel.trimmingCharacters(in: .whitespacesAndNewlines), cadence: reportCadence, triggers: reportTriggers)
         }
         let oldReports = loadedReportSettings.flatMap { $0 != reports ? $0 : nil }
+        conductorError = nil
+        let conductor = self.conductor
+        let oldConductor = loadedConductor.flatMap { $0 != conductor ? $0 : nil }
         macAppQAError = nil
         let qaPlaybook = macAppQA.trimmed()
         let oldQAPlaybook = loadedMacAppQA.flatMap { $0 != qaPlaybook ? $0 : nil }
@@ -702,14 +744,25 @@ final class SettingsViewModel: ObservableObject {
         phasesError = nil
         let newPhases = phases
         let oldPhases = loadedPhases.flatMap { $0 != newPhases ? $0 : nil }
-        if oldPhases != nil, let kind = PhaseKind.allCases.first(where: { !PhaseValidation.check(newPhases[$0].steps).isValid }) {
-            phaseKind = kind
-            phasesError = "The \(kind.title) step list has a step that can't be saved, so nothing was saved; see Phases."
+        if oldPhases != nil, let owner = newPhases.owners.first(where: {
+            !PhaseValidation.check(newPhases[$0].steps, inQAPlaybook: $0.qaPlaybook != nil).isValid
+        }) {
+            switch owner {
+            case .runKind(let kind):
+                phaseKind = kind
+                phaseQAPlaybook = nil
+                phasesError = "The \(kind.title) step list has a step that can't be saved, so nothing was saved; see Phases."
+            case .qaPlaybook(let playbook):
+                phaseKind = .qa
+                phaseQAPlaybook = playbook
+                phasesError = "The \(playbook.title) QA playbook's step list has a step that can't be saved, so nothing was saved; see Phases."
+            }
             return
         }
 
         guard loadedLimits != nil || oldTimeouts != nil || oldUpdates != nil || oldWebhooks != nil
-            || oldLoopLimits != nil || oldDispatch != nil || oldLedger != nil || oldReports != nil || oldQAPlaybook != nil || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil
+            || oldLoopLimits != nil || oldDispatch != nil || oldLedger != nil || oldReports != nil || oldConductor != nil || oldQAPlaybook != nil
+            || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil
             || builtInPatternsChanged || loadedRules != nil || oldPhases != nil else {
             if saveRest(settings, secrets) { onSaved() }
             return
@@ -740,6 +793,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, let reports, let oldReports {
                 saved = await saveReportSettings(reports, from: oldReports, settings: settings, secrets: secrets)
+            }
+            if saved, let oldConductor {
+                saved = await saveConductor(conductor, from: oldConductor, settings: settings, secrets: secrets)
             }
             if saved, let oldQAPlaybook {
                 saved = await saveMacAppQA(qaPlaybook, from: oldQAPlaybook, settings: settings, secrets: secrets)
@@ -1006,6 +1062,32 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedReportSettings = reports
+        return true
+    }
+
+    /// Writes the Conductor settings that changed to symphony.yml once `symphony check` passes on the result.
+    private func saveConductor(
+        _ conductor: ConductorSettings,
+        from loaded: ConductorSettings,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeConductorSettings(conductor, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the Conductor settings to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            conductorError = "symphony check rejected these settings, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        loadedConductor = conductor
         return true
     }
 
