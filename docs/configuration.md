@@ -3487,6 +3487,18 @@ so the dispatch-loop guard ignores it), and its tokens count toward the ticket u
 in. A dispatch pause stops it as it stops any run. Read on each dispatch, so a change applies without
 a restart. The prompt lives in `priv/conductor/prompt.md`.
 
+**Message blocks.** An answer may pick at most 3 `blocks` to draw under the update's body: `steps`
+(`run_id`, optional), `evidence` (`refs`: 1 to 4 event ids of evidence or finding events that carry a
+screenshot), `budget`, `path`, `attempts` (`step_id`, `run_id` optional), `compare` (`expected` and
+`actual`, each `{"text": <at most 80 characters>}` or `{"ref": <evidence event id>}`), `findings` and
+`epic`. The Conductor only picks and points; Symphony resolves each one from the ticket's records
+(`SymphonyElixir.Conductor.Blocks`) and records the result as `blocks` on `conductor.update`, in the
+Conductor's order, after the question block Symphony adds itself when the answer asked the person. A
+block that cannot be resolved (no run, no screenshot, no epic, no findings...) is dropped and logged; an
+unknown or malformed pick is dropped without failing the answer; with none left there is no `blocks`
+key. The shapes are in `docs/control-api.md`. An inline code span holding exactly a ticket id or
+`#<pull request number>` is drawn as a chip, and numbers in the update are written as digits.
+
 **Watching running runs** (`conductor.watch`, off by default; `conductor.enabled` must be on too).
 The Conductor looks at a running run when one of its steps ended `failed`, the same step failed
 twice, a step of a stepped QA pass answered `plan_mismatch` or `blocked`, or the run passed

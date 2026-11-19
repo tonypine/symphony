@@ -289,7 +289,7 @@ defmodule SymphonyElixir.LifecycleTest do
     test "a ticket with no event reads empty" do
       result = Lifecycle.compute([], @facts)
 
-      assert result.lifecycle.tokens == %{total: 0, cap: 8_000_000}
+      assert result.lifecycle.tokens == %{total: 0, conductor_tokens: 0, cap: 8_000_000}
       assert states(result) == List.duplicate("not_yet", 5)
       assert result.phase_path == %{current: nil, phases: [], moves: []}
     end
@@ -457,6 +457,39 @@ defmodule SymphonyElixir.LifecycleTest do
 
       assert Lifecycle.compute(events, @facts).lifecycle.tokens.total == 0
       assert Lifecycle.compute([], @facts) == Lifecycle.compute(events, @facts)
+    end
+  end
+
+  describe "the Conductor's runs" do
+    defp conductor_started(time, run_id), do: %Event{type: "run.started", payload: %{run_id: run_id, run_kind: "conductor"}, at: at(time)}
+
+    test "count in the total and in conductor_tokens, and in no stage's tokens, runs or agent time" do
+      events = [
+        entered("2026-10-30T10:00", "In Progress"),
+        started("2026-10-30T10:01", "r1"),
+        ended("2026-10-30T10:20", "r1", tokens: 1_000, duration_ms: 20 * @minute, run_kind: "implementation"),
+        conductor_started("2026-10-30T10:21", "c1"),
+        # The kind comes from its start when its end names none.
+        ended("2026-10-30T10:22", "c1", tokens: 300, duration_ms: @minute),
+        conductor_started("2026-10-30T10:23", "c2"),
+        ended("2026-10-30T10:24", "c2", tokens: 200, duration_ms: @minute, run_kind: "conductor")
+      ]
+
+      result = Lifecycle.compute(events, @facts)
+
+      assert %{tokens: 1_000, runs: 1, agent_time_ms: 1_200_000} = stages(result)["coding"]
+      assert result.lifecycle.tokens == %{total: 1_500, conductor_tokens: 500, cap: 8_000_000}
+      assert result.lifecycle.stages |> Enum.map(& &1.tokens) |> Enum.sum() == 1_000
+    end
+
+    test "a Conductor run working now counts in the total only" do
+      events = [entered("2026-10-30T10:00", "In Progress")]
+      running = %{run_id: "c1", started_at: at("2026-10-30T10:01"), total_tokens: 700, run_profile: %{kind: :conductor}}
+
+      result = Lifecycle.compute(events, Map.merge(@facts, %{now: at("2026-10-30T10:05"), running: running}))
+
+      assert %{tokens: 0, runs: 0} = stages(result)["coding"]
+      assert %{total: 700, conductor_tokens: 700} = result.lifecycle.tokens
     end
   end
 

@@ -168,4 +168,29 @@ defmodule SymphonyElixir.Conductor.FactsTest do
     assert Facts.read("NOPE-1", nil) == {:error, :not_found}
     assert {:error, {:invalid, "junction must be one of: after_coding, after_qa_fail, after_rework, before_merge, during_run"}} = Facts.read(ctx.identifier, "whenever")
   end
+
+  describe "fit/2" do
+    test "keeps a text that fits, trimmed" do
+      assert Facts.fit("  short  ", 20) == "short"
+    end
+
+    test "cuts at the last sentence end that leaves room for the marker" do
+      assert Facts.fit("One sentence here. Two sentence here. Three sentence here.", 56) == "One sentence here. Two sentence here. [cut by Symphony]"
+      "One sentence here. Two sentence here. [cut by Symphony]" |> then(fn _ -> Facts.fit("One sentence here. Two sentence here. Three sentence here.", 40) end)
+
+      assert Facts.fit("Alpha beta gamma. Delta epsilon zeta eta theta.", 40) == "Alpha beta gamma. [cut by Symphony]"
+    end
+
+    test "cuts at a line end, else at a word end, else mid-word" do
+      assert Facts.fit("First line is here\nsecond line is here too and more", 40) == "First line is here [cut by Symphony]"
+      assert Facts.fit("alpha beta gamma delta epsilon zeta", 30) == "alpha beta [cut by Symphony]"
+      assert Facts.fit(String.duplicate("x", 50), 30) == String.duplicate("x", 12) <> " [cut by Symphony]"
+    end
+
+    test "never goes over the limit" do
+      for max <- [25, 40, 100], text <- ["a. b. c. d. e. f. g. h. i. j. k. l. m. n.", String.duplicate("é ", 80)] do
+        assert String.length(Facts.fit(text, max)) <= max
+      end
+    end
+  end
 end
