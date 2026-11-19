@@ -1014,6 +1014,256 @@
           "new": false
         }
       ]
+    },
+    {
+      "kind": "run",
+      "run_id": "qa-1",
+      "run_kind": "qa",
+      "run_number": 1,
+      "status": "ended",
+      "exit": "failed",
+      "verdict": null,
+      "started_at": "2026-10-08T08:10:00Z",
+      "ended_at": "2026-10-08T08:19:00Z",
+      "head": null,
+      "model": "claude-sonnet-5-5",
+      "effort": "medium",
+      "model_name": "Claude Sonnet 5.5",
+      "events": [
+        {
+          "id": "q0",
+          "seq": 200,
+          "at": "2026-10-08T08:10:00Z",
+          "type": "run.started",
+          "run_id": "qa-1",
+          "payload": {
+            "run_kind": "qa",
+            "run_number": 1,
+            "model": "claude-sonnet-5-5",
+            "effort": "medium"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "q1",
+          "seq": 201,
+          "at": "2026-10-08T08:10:00Z",
+          "type": "step.started",
+          "run_id": "qa-1",
+          "payload": {
+            "step_id": "plan",
+            "title": "Plan the pass"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "q2",
+          "seq": 202,
+          "at": "2026-10-08T08:11:30Z",
+          "type": "step.completed",
+          "run_id": "qa-1",
+          "payload": {
+            "step_id": "plan",
+            "title": "Plan the pass",
+            "outcome": "passed",
+            "plan": {
+              "summary": "Three checks on the Initiatives page; the strip and the story must agree in every state.",
+              "checks": [
+                {
+                  "title": "Needs-a-fix row",
+                  "expect": "Problem mark and colour, as the strip"
+                },
+                {
+                  "title": "Done recently card",
+                  "expect": "Landed tickets, newest first"
+                },
+                {
+                  "title": "Light and dark",
+                  "expect": "Same layout in both appearances"
+                }
+              ],
+              "skips": [
+                {
+                  "title": "Narrow window",
+                  "why": "The page is laptop and desktop only"
+                }
+              ]
+            }
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "q3",
+          "seq": 203,
+          "at": "2026-10-08T08:11:00Z",
+          "type": "step.started",
+          "run_id": "qa-1",
+          "payload": {
+            "step_id": "check-1",
+            "title": "Check: Needs-a-fix row"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "q4",
+          "seq": 204,
+          "at": "2026-10-08T08:13:30Z",
+          "type": "step.completed",
+          "run_id": "qa-1",
+          "payload": {
+            "step_id": "check-1",
+            "title": "Check: Needs-a-fix row",
+            "outcome": "failed",
+            "result": {
+              "status": "failed",
+              "expected": "The Needs-a-fix row shows the problem mark and the problem colour, taken from the same source as the strip above it, in light and in dark, at 1440 and at 2560 pt.",
+              "actual": "The row still reads Next in line with the neutral clock. The strip is red at position 6 and its legend says 1 needs a fix.\nAt 2560 pt the row is cut at its right edge.\nIn dark the clock is the same grey as the idle rows."
+            }
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "q5",
+          "seq": 205,
+          "at": "2026-10-08T08:13:00Z",
+          "type": "step.started",
+          "run_id": "qa-1",
+          "payload": {
+            "step_id": "check-2",
+            "title": "Check: Done recently card"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "q6",
+          "seq": 206,
+          "at": "2026-10-08T08:14:30Z",
+          "type": "step.completed",
+          "run_id": "qa-1",
+          "payload": {
+            "step_id": "check-2",
+            "title": "Check: Done recently card",
+            "outcome": "failed",
+            "result": {
+              "status": "blocked",
+              "expected": "Landed tickets, newest first",
+              "actual": "The card did not draw: the fixture holds no landed ticket."
+            }
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "q7",
+          "seq": 207,
+          "at": "2026-10-08T08:15:00Z",
+          "type": "step.started",
+          "run_id": "qa-1",
+          "payload": {
+            "step_id": "review",
+            "title": "Review"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "q8",
+          "seq": 208,
+          "at": "2026-10-08T08:16:30Z",
+          "type": "step.completed",
+          "run_id": "qa-1",
+          "payload": {
+            "step_id": "review",
+            "title": "Review",
+            "outcome": "passed",
+            "recheck": [
+              {
+                "title": "Needs-a-fix row in dark",
+                "do": [
+                  "Open the Initiatives page in dark at 1440 pt",
+                  "Pick the epic with the failing sub-ticket",
+                  "Read the row of SHOP-305"
+                ],
+                "expect": "The row shows the problem mark in the dark problem colour"
+              },
+              {
+                "title": "Done recently card with a landed ticket",
+                "do": [
+                  "Add a landed ticket to the fixture",
+                  "Open the Initiatives page",
+                  "Read the Done recently card"
+                ],
+                "expect": "The landed ticket is the card's first row",
+                "design": "initiatives-done-recently"
+              }
+            ]
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "q9",
+          "seq": 209,
+          "at": "2026-10-08T08:17:00Z",
+          "type": "step.started",
+          "run_id": "qa-1",
+          "payload": {
+            "step_id": "verdict",
+            "title": "Verdict"
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "q10",
+          "seq": 210,
+          "at": "2026-10-08T08:18:30Z",
+          "type": "step.completed",
+          "run_id": "qa-1",
+          "payload": {
+            "step_id": "verdict",
+            "title": "Verdict",
+            "outcome": "passed",
+            "verdict_summary": "QA found one defect and could not check the Done recently card. The rework fixes the row; a recheck covers the card."
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "q90",
+          "seq": 290,
+          "at": "2026-10-08T08:19:00Z",
+          "type": "run.ended",
+          "run_id": "qa-1",
+          "payload": {
+            "run_kind": "qa",
+            "run_number": 1,
+            "exit": "failed",
+            "duration_ms": 540000,
+            "tokens": 3100000
+          },
+          "artifacts": [],
+          "children": []
+        },
+        {
+          "id": "qn",
+          "seq": 291,
+          "at": "2026-10-08T08:13:40Z",
+          "type": "note",
+          "run_id": "qa-1",
+          "payload": {
+            "text": "Check: Needs-a-fix row: failed. Expected: The row shows the problem mark. Actual: it reads Next in line."
+          },
+          "artifacts": [],
+          "children": []
+        }
+      ]
     }
   ],
   "next_since": "2026-10-08T10:15:06Z"

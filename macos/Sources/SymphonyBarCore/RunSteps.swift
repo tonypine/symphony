@@ -224,7 +224,7 @@ public struct RunStep: Equatable, Identifiable {
 
     public init(
         id: String, stepID: String, title: String, state: State, reason: String? = nil, durationSeconds: Int? = nil,
-        transcript: TicketOutput? = nil, liveLines: [TranscriptLine] = [], screenshots: [TicketScreenshot] = []
+        transcript: TicketOutput? = nil, liveLines: [TranscriptLine] = [], screenshots: [TicketScreenshot] = [], answer: StepAnswer? = nil
     ) {
         self.id = id
         self.stepID = stepID
@@ -235,13 +235,17 @@ public struct RunStep: Equatable, Identifiable {
         self.transcript = transcript
         self.liveLines = liveLines
         self.screenshots = screenshots
+        self.answer = answer
     }
+
+    /// What the step answered, when Symphony recorded it on the step: shown above its lines.
+    public var answer: StepAnswer?
 
     public var isLive: Bool { state == .current }
 
     /// Whether the step has lines to unfold into: a transcript, or the run now's lines. The step the run now is on
     /// unfolds before its first line comes, so that line fades in where the person sees it.
-    public var canUnfold: Bool { isLive || transcript != nil || !liveLines.isEmpty }
+    public var canUnfold: Bool { isLive || transcript != nil || !liveLines.isEmpty || answer != nil }
 
     /// What the pointer shows on a step that can't unfold.
     public var cannotUnfoldReason: String? { canUnfold ? nil : Self.nothingYet }
@@ -582,6 +586,7 @@ public struct RunGroupModel: Equatable, Identifiable {
             var step = steps[index]
             if let title = event.payload.title?.trimmingWhitespace().nonEmpty { step.title = title }
             (step.state, step.reason) = completion(event.payload)
+            step.answer = event.payload.answer
             if let ms = event.payload.durationMs {
                 step.durationSeconds = ms / 1_000
             } else if let begun = startedAt[index], let at {
@@ -617,10 +622,10 @@ public struct RunGroupModel: Equatable, Identifiable {
         switch payload.outcome?.lowercased() {
         case "failed":
             let back = payload.returnsToTitle?.trimmingWhitespace().nonEmpty ?? payload.returnsTo?.trimmingWhitespace().nonEmpty
-            return (.failed, back.map { "back to \($0)" })
+            return (.failed, back.map { "back to \($0)" } ?? payload.reason?.trimmingWhitespace().nonEmpty)
         case "paused": return (.paused, "waiting on your answer")
         case "skipped": return (.skipped, payload.reason?.trimmingWhitespace().nonEmpty)
-        default: return (.done, nil)
+        default: return (.done, payload.reason?.trimmingWhitespace().nonEmpty)
         }
     }
 }
