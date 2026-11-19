@@ -1,0 +1,331 @@
+{
+ "timeline": [
+  {
+   "kind": "run",
+   "run_id": "run-2",
+   "run_kind": "rework",
+   "run_number": 1,
+   "model": "claude-opus-5-5",
+   "model_name": "Claude Opus 5.5",
+   "effort": "high",
+   "status": "running",
+   "exit": null,
+   "outcome": null,
+   "verdict": null,
+   "started_at": "2026-10-08T09:00:00Z",
+   "ended_at": null,
+   "head": "8f3e2a1c9d",
+   "events": [
+    {
+     "id": "r1",
+     "seq": 1,
+     "at": "2026-10-08T09:00:00Z",
+     "type": "run.started",
+     "run_id": "run-2",
+     "payload": {
+      "run_kind": "rework",
+      "run_number": 1
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "r2",
+     "seq": 2,
+     "at": "2026-10-08T09:00:00Z",
+     "type": "step.started",
+     "run_id": "run-2",
+     "payload": {
+      "step_id": "read",
+      "title": "Read the open findings"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "r3",
+     "seq": 3,
+     "at": "2026-10-08T09:00:05Z",
+     "type": "step.completed",
+     "run_id": "run-2",
+     "payload": {
+      "step_id": "read",
+      "title": "Read the open findings",
+      "outcome": "passed"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "r4",
+     "seq": 4,
+     "at": "2026-10-08T09:00:10Z",
+     "type": "step.started",
+     "run_id": "run-2",
+     "payload": {
+      "step_id": "code",
+      "title": "Write the code"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "r5",
+     "seq": 5,
+     "at": "2026-10-08T09:02:10Z",
+     "type": "step.completed",
+     "run_id": "run-2",
+     "payload": {
+      "step_id": "code",
+      "title": "Write the code",
+      "outcome": "passed"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "r6",
+     "seq": 6,
+     "at": "2026-10-08T09:02:15Z",
+     "type": "step.started",
+     "run_id": "run-2",
+     "payload": {
+      "step_id": "build",
+      "title": "Build"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "r7",
+     "seq": 7,
+     "at": "2026-10-08T09:02:30Z",
+     "type": "step.completed",
+     "run_id": "run-2",
+     "payload": {
+      "step_id": "build",
+      "title": "Build",
+      "outcome": "failed",
+      "returns_to": "code",
+      "returns_to_title": "Write the code"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "r8",
+     "seq": 8,
+     "at": "2026-10-08T09:02:50Z",
+     "type": "conductor.steer",
+     "run_id": "run-2",
+     "payload": {
+      "text": "Read the first build error before you change the code.",
+      "when": "next_turn"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "r9",
+     "seq": 9,
+     "at": "2026-10-08T09:03:00Z",
+     "type": "step.started",
+     "run_id": "run-2",
+     "payload": {
+      "step_id": "code",
+      "title": "Write the code"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "r10",
+     "seq": 10,
+     "at": "2026-10-08T09:04:00Z",
+     "type": "step.completed",
+     "run_id": "run-2",
+     "payload": {
+      "step_id": "code",
+      "title": "Write the code",
+      "outcome": "passed"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "r11",
+     "seq": 11,
+     "at": "2026-10-08T09:04:21Z",
+     "type": "conductor.steer",
+     "run_id": "run-2",
+     "payload": {
+      "text": "**The build {problem}failed twice{/}** on the same line, so I told the run where to look.\n\nBoth failures are `InitiativesView.swift:443`:\n\n```\n- case .done: .status(.done)\n+ case .done: return .status(.done)\n```",
+      "when": "next_turn"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "r12",
+     "seq": 12,
+     "at": "2026-10-08T09:04:30Z",
+     "type": "step.started",
+     "run_id": "run-2",
+     "payload": {
+      "step_id": "build",
+      "title": "Build"
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "r13",
+     "seq": 13,
+     "at": "2026-10-08T09:04:45Z",
+     "type": "step.completed",
+     "run_id": "run-2",
+     "payload": {
+      "step_id": "build",
+      "title": "Build",
+      "outcome": "failed",
+      "returns_to": "code",
+      "returns_to_title": "Write the code"
+     },
+     "artifacts": [],
+     "children": []
+    }
+   ]
+  },
+  {
+   "kind": "run",
+   "run_id": "run-c1",
+   "run_kind": "conductor",
+   "run_number": 1,
+   "model": "claude-opus-5-5",
+   "model_name": "Claude Opus 5.5",
+   "effort": "high",
+   "status": "ended",
+   "exit": "ended",
+   "outcome": null,
+   "verdict": null,
+   "started_at": "2026-10-08T09:02:35Z",
+   "ended_at": "2026-10-08T09:05:30Z",
+   "head": "8f3e2a1c9d",
+   "events": [
+    {
+     "id": "c1",
+     "seq": 1,
+     "at": "2026-10-08T09:02:35Z",
+     "type": "run.started",
+     "run_id": "run-c1",
+     "payload": {
+      "run_kind": "conductor",
+      "run_number": 1
+     },
+     "artifacts": [],
+     "children": []
+    },
+    {
+     "id": "c2",
+     "seq": 2,
+     "at": "2026-10-08T09:02:45Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "First build failure, 3 minutes in. I am leaving the run to fix it.",
+      "watch": {
+       "run_id": "run-2",
+       "trigger": "step_failed",
+       "steered": false,
+       "when": null,
+       "stopped": false
+      }
+     },
+     "artifacts": [],
+     "children": [],
+     "actor": {
+      "kind": "machine"
+     }
+    },
+    {
+     "id": "c3",
+     "seq": 3,
+     "at": "2026-10-08T09:04:20Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "**The build {problem}failed twice{/}** on the same line, so I told the run where to look.\n\nBoth failures are `InitiativesView.swift:443`:\n\n```\n- case .done: .status(.done)\n+ case .done: return .status(.done)\n```",
+      "watch": {
+       "run_id": "run-2",
+       "trigger": "step_failed_twice",
+       "steered": true,
+       "when": "next_turn",
+       "stopped": false
+      }
+     },
+     "artifacts": [],
+     "children": [],
+     "actor": {
+      "kind": "machine"
+     }
+    },
+    {
+     "id": "c4",
+     "seq": 4,
+     "at": "2026-10-08T09:05:10Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "junction": "after_qa_fail",
+      "text": "**QA found {problem}one problem{/}; everything else {done}passed{/}.**\n\nThe story *contradicts its own strip*:\n\n- the strip is red at position 6;\n- the line, `SHOP-305`, still reads **Next in line**.\n\nSee [the finding](https://example.com/finding).\n\nNext: the rework makes that line show the problem mark.",
+      "refs": []
+     },
+     "artifacts": [],
+     "children": [],
+     "actor": {
+      "kind": "machine"
+     }
+    },
+    {
+     "id": "c5",
+     "seq": 5,
+     "at": "2026-10-08T09:05:20Z",
+     "type": "conductor.update",
+     "run_id": "run-c1",
+     "payload": {
+      "text": "Watching a run this page does not have.",
+      "watch": {
+       "run_id": "run-gone",
+       "trigger": "step_failed",
+       "steered": false,
+       "when": null,
+       "stopped": false
+      }
+     },
+     "artifacts": [],
+     "children": [],
+     "actor": {
+      "kind": "machine"
+     }
+    },
+    {
+     "id": "c6",
+     "seq": 6,
+     "at": "2026-10-08T09:05:30Z",
+     "type": "run.ended",
+     "run_id": "run-c1",
+     "payload": {
+      "run_kind": "conductor",
+      "run_number": 1,
+      "exit": "ended",
+      "duration_ms": 175000,
+      "tokens": 18000
+     },
+     "artifacts": [],
+     "children": []
+    }
+   ]
+  }
+ ],
+ "next_since": "2026-10-08T09:05:30Z"
+}
