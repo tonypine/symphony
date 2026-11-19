@@ -32,6 +32,10 @@ public struct InitiativeStory: Equatable {
         /// What matters at the line's end for its state (TP-1500): "Landed Tue 10 Nov · PR #859", "Next: starts when
         /// TP-1441 lands", "Waits for TP-1442", "Canceled"; nil for one being worked on, whose steps and age say it.
         public var trail: String?
+        /// The status that needs someone, for a sub-ticket not worked on whose situation needs a fix (`problem`) or
+        /// waits on the Director (`you`), as the strip's segment says (TP-1500): its row draws that status's mark and
+        /// says its situation's word in place of its place in line. Nil for the others.
+        public var attention: DesignTokens.Status?
         public var accessibilityLabel: String
 
         public var id: String { identifier }
@@ -123,10 +127,14 @@ public struct InitiativeStory: Equatable {
             let line = done ? Situation(kind: .done, cause: "") : ticket.line
             let waitsFor = Self.unique(ticket.blockedBy + (connected[ticket.identifier]?.blockedBy.map(\.identifier) ?? []))
                 .first { open.contains($0) }
+            let attention = Self.attention(mark, line: line)
             return Row(
                 number: index + 1, identifier: ticket.identifier, title: ticket.title, mark: mark, line: line, doneLine: doneLine,
                 blockers: blockers, ticket: ticket,
-                trail: Self.trail(mark, landed: finished, pullRequest: ticket.pullRequest, waitsFor: waitsFor, line: line, calendar: calendar),
+                trail: attention == nil
+                    ? Self.trail(mark, landed: finished, pullRequest: ticket.pullRequest, waitsFor: waitsFor, line: line, calendar: calendar)
+                    : line.word,
+                attention: attention,
                 accessibilityLabel: Self.spoken(
                     number: index + 1, of: chain.count, identifier: ticket.identifier, title: ticket.title, mark: mark,
                     state: doneLine ?? SituationText(line, reference: reference).spoken(), blockers: blockers
@@ -140,7 +148,7 @@ public struct InitiativeStory: Equatable {
             let title = record.text("title")
             return Row(
                 number: nil, identifier: record.identifier, title: title, mark: .canceled, line: Situation(kind: .cancelled, cause: ""),
-                doneLine: nil, blockers: [], ticket: nil, trail: Self.canceled,
+                doneLine: nil, blockers: [], ticket: nil, trail: Self.canceled, attention: nil,
                 accessibilityLabel: [record.identifier, title, "canceled"].compactMap { $0 }.joined(separator: ", ")
             )
         }
@@ -237,6 +245,14 @@ public struct InitiativeStory: Equatable {
         }
         if let next { marks[next] = .next }
         return marks
+    }
+
+    /// The status a row not worked on shows in place of its place in line: its situation's, when that needs a fix or
+    /// waits on the Director.
+    static func attention(_ mark: Mark, line: Situation) -> DesignTokens.Status? {
+        guard mark == .next || mark == .open else { return nil }
+        let status = line.kind.status
+        return status == .problem || status == .you ? status : nil
     }
 
     static func isDone(_ record: TicketsRow) -> Bool {

@@ -404,7 +404,7 @@ struct InitiativeStoryRow: View {
     var body: some View {
         StoryRow(
             number: row.number, mark: mark, identifier: row.identifier, title: row.title ?? row.identifier,
-            quiet: row.mark == .done || row.mark == .open || row.mark == .next || row.mark == .canceled,
+            quiet: row.attention == nil && [.done, .open, .next, .canceled].contains(row.mark),
             struck: row.mark == .canceled, current: row.mark == .current, label: row.accessibilityLabel, open: open
         ) {
             if row.mark == .current {
@@ -438,6 +438,7 @@ struct InitiativeStoryRow: View {
     }
 
     private var mark: RowLead {
+        if let attention = row.attention { return .status(attention) }
         switch row.mark {
         case .done: .status(.done)
         case .current: .dot(.working, live: true)

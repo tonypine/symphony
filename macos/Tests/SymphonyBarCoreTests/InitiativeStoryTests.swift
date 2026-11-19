@@ -287,6 +287,31 @@ final class InitiativeStoryTests: XCTestCase {
         )
     }
 
+    func testARowThatNeedsAFixOrWaitsOnYouSaysSoAsItsStripSegmentDoes() throws {
+        let story = try story("SHOP-280")
+        let fix = try XCTUnwrap(story.rows.first { $0.identifier == "SHOP-305" })
+        XCTAssertEqual(fix.attention, .problem)
+        XCTAssertEqual(fix.trail, "Retrying")
+        let index = try XCTUnwrap(story.chained.firstIndex { $0.identifier == "SHOP-305" })
+        XCTAssertEqual(story.stripItems[index].status, .problem, "the row agrees with its segment")
+        XCTAssertEqual(story.rows.filter { $0.attention != nil }.map(\.identifier), ["SHOP-305"])
+
+        let initiative = Initiative(
+            issueID: "p", identifier: "TP-1", title: nil, repoKey: nil, group: .active,
+            subTickets: [
+                Initiative.SubTicket(identifier: "TP-2", waits: .working),
+                Initiative.SubTicket(identifier: "TP-3", waits: .you),
+                Initiative.SubTicket(identifier: "TP-4", waits: .you),
+            ]
+        )
+        let asked = InitiativeStory(initiative: initiative)
+        XCTAssertEqual(asked.rows.map(\.mark), [.current, .next, .open])
+        XCTAssertEqual(asked.rows.map(\.attention), [nil, .you, .you])
+        XCTAssertEqual(asked.rows.map(\.trail), [nil, "Waiting on you", "Waiting on you"])
+        XCTAssertNil(InitiativeStory.attention(.done, line: Situation(kind: .you, cause: "")))
+        XCTAssertNil(InitiativeStory.attention(.open, line: Situation(kind: .slot, cause: "")))
+    }
+
     func testPastTheTwoAfterTheLastOneBeingWorkedOnTheRestFold() throws {
         let story = try story("TP-1381")
         XCTAssertEqual(story.foldIndex, 6)
