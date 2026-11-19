@@ -1132,6 +1132,11 @@ Symphony classifies each run when it dispatches it. The first match wins:
 | `review_feedback` | A continuation after PR review comments. |
 | `implementation` | Everything else. |
 
+`conductor` is a run kind no dispatch classifies to: it is the Conductor's short turn at a junction of
+a ticket's life (see [`conductor`](#conductor)). `runs.conductor` picks its harness, provider, model,
+effort and fallbacks like any kind's entry, falling back to `runs.default`; a strong model suits it.
+It takes no step list under `phases`.
+
 **Resolution:**
 
 Each field resolves on its own, for the repository the issue is routed to. The first entry that
@@ -3427,6 +3432,44 @@ reports:
 
 These keys are new: no existing `symphony.yml` key is renamed, so nothing migrates.
 
+### `conductor`
+
+The Conductor: a short, strong-model turn Symphony runs at fixed junctions of a ticket's life. Each
+turn is a fresh session (run kind `conductor`, model from `runs.conductor`) that reads the ticket's
+facts in one piece (`GET /api/v1/tickets/<identifier>/facts`, see `docs/control-api.md`) and writes
+instructions for the next run, which its prompt carries as advice, and, when it is worth it, a short
+update for the person, which the ticket's timeline shows as an entry titled Update. When the same
+class of finding came back or the budget is going wrong, it may ask the person a question, which
+pauses the ticket as any question does. Each setting has a control in the Mac app's Settings, under
+Conductor.
+
+```yaml
+conductor:
+  enabled: false
+  junctions: [after_coding, after_qa_fail, after_rework, before_merge]
+  timeout_ms: 180000
+```
+
+- `enabled` (default `false`): whether the Conductor runs at all. Off, nothing reads or writes
+  anything, and prompts are unchanged.
+- `junctions` (default all four): `after_coding` (an implementation run handed off, before Code
+  Review or QA), `after_qa_fail` (QA failed, before rework), `after_rework` (a rework run handed
+  off, before Code Review or QA again) and `before_merge` (QA passed or was skipped, before
+  Merging). The first three run in the next run's own task before its agent starts; `before_merge`
+  runs as the QA or Code Review run that carried the ticket into Merging ends, on its own.
+- `timeout_ms` (default `180000`): how long one turn may take. A turn that runs over, fails, answers
+  outside its schema or whose provider is held with no free fallback is logged, records nothing for
+  the person, and the next run starts as if the Conductor were off.
+
+The turn runs in an empty folder under the workspace root with read-only tools and no ticket, so it
+can neither change nor read the repository. It never moves the ticket or changes its plan. Its own
+run is recorded on the ticket (`run.started`, `run.ended` with its model and tokens, `counted: false`
+so the dispatch-loop guard ignores it), and its tokens count toward the ticket under the phase it ran
+in. A dispatch pause stops it as it stops any run. Read on each dispatch, so a change applies without
+a restart. The prompt lives in `priv/conductor/prompt.md`.
+
+These keys are new: no existing `symphony.yml` key is renamed, so nothing migrates.
+
 ### `ledger`
 
 The largest artifact file (a QA screenshot, a run transcript) the ticket ledger stores, and the
@@ -3633,7 +3676,7 @@ _Symphony posts a new update when this list changes · list `b1712c40`_
 The list of steps a run of each kind follows: for an implementation run, writing the code, building
 it, checking it, testing it and handing it off; for a rework run, reading the open findings first. Each kind under `phases` (a run kind:
 `implementation`, `rework`, `ci_fix`, `review_feedback`, `qa`, `code_review`, `landing`,
-`breakdown`, `epic_review`) holds one setting, its `steps` list. A kind the file doesn't set follows
+`breakdown`, `epic_review`; not `conductor`, which takes no step list) holds one setting, its `steps` list. A kind the file doesn't set follows
 its default list; a `symphony.yml` with no `phases` key follows every default. `symphony workflow
 preview` prints the list a run will follow above its prompt (`--kind` names the run kind, default
 `implementation`), so a change to the list shows in the next preview. The step runner

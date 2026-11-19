@@ -560,7 +560,11 @@ ticket, with the rule's name and what it did), `ticket.filed` (machine only: a t
 this one, or an epic review's follow-up), `note.read` (machine only: the first run whose prompt carried a
 person's note, keyed by the note), `brief.written` (an implementation, rework or review-feedback run's
 brief of the ticket: what it does and why and its walkthrough, in a person's words, with no backtick; the
-newest one is the ticket read's `brief`) and `note`. `GET /api/v1/events` reads every ticket's events, and
+newest one is the ticket read's `brief`), `conductor.update` and `conductor.instructions` (machine only:
+what the Conductor's turn at a junction wrote, naming the junction: an update for the person, at most
+900 characters, with the ids of the events it rests on in `refs`, which the timeline shows as an
+entry titled Update; and advice for the next run, at most 2,000 characters, which the next run's
+prompt carries as its own section, marked as advice and wrapped as untrusted data) and `note`. `GET /api/v1/events` reads every ticket's events, and
 Symphony's own stream, newest first, with the notable rule set (`docs/control-api.md`).
 
 A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)
@@ -1625,8 +1629,11 @@ Fields:
 #### 5.4.8c `runs` (object)
 
 What each kind of run starts with. Entries are `default` and the run kinds: `implementation`,
-`breakdown`, `rework`, `landing`, `code_review`, `epic_review`, `ci_fix`, `review_feedback` and
-`qa`. Another entry name fails validation with `runs.<name> is not a run kind`.
+`breakdown`, `rework`, `landing`, `code_review`, `epic_review`, `ci_fix`, `review_feedback`, `qa`
+and `conductor`. Another entry name fails validation with `runs.<name> is not a run kind`.
+`conductor` is never classified from a ticket: it is the Conductor's turn at a junction of a ticket's
+life (`conductor` in `symphony.yml`, `docs/configuration.md`), and it takes no step list under
+`phases`.
 
 Entry fields:
 
