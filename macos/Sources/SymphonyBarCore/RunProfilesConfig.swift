@@ -28,6 +28,8 @@ public enum RunKind: String, CaseIterable, Identifiable {
     case codeReview = "code_review"
     case epicReview = "epic_review"
     case qa
+    /// The Conductor's turn at a junction of a ticket's life. It takes no step list, so it is no `PhaseKind`.
+    case conductor
 
     public var id: String { rawValue }
 
@@ -42,6 +44,7 @@ public enum RunKind: String, CaseIterable, Identifiable {
         case .codeReview: return "Code review"
         case .epicReview: return "Epic review"
         case .qa: return "QA"
+        case .conductor: return "Conductor"
         }
     }
 }

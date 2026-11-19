@@ -1251,6 +1251,15 @@ func timeline(
     .background(DesignTokens.Surface.content.color)
 }
 
+/// The Conductor's turn after the first run handed off (`Tests/Fixtures/timeline/conductor.json`): its update for you,
+/// its instructions to the next run and its own run.
+let timelineModelConductor: TimelineModel = {
+    guard let events = try? Data(contentsOf: timelineFixtures.appendingPathComponent("conductor.json")),
+          let history = TicketEventsPayload.decode(events)
+    else { fatalError("The Conductor's timeline fixture is missing from \(timelineFixtures.path)") }
+    return TimelineModel.build(history, reference: timelineReference, calendar: timelineCalendar)
+}()
+
 /// The fixture's timeline with its finding resolved by a later run: the card says so, and no entry of its own does.
 let timelineModelResolved: TimelineModel = {
     var model = timelineModel
@@ -1847,6 +1856,9 @@ MainActor.assumeIsolated {
         render(timeline(width: 780), scheme, to: "timeline-events-folded-\(suffix).png")
         render(timeline(width: 780, showAllEvents: true), scheme, to: "timeline-all-events-\(suffix).png")
         render(timeline(width: 780, model: timelineModelResolved), scheme, to: "timeline-finding-resolved-\(suffix).png")
+        // The Conductor (its update for you always shows; its instructions and its own run under Show all events).
+        render(timeline(width: 780, model: timelineModelConductor), scheme, to: "timeline-conductor-update-\(suffix).png")
+        render(timeline(width: 780, model: timelineModelConductor, showAllEvents: true), scheme, to: "timeline-conductor-all-events-\(suffix).png")
         // The marks (TP-1451): the Timeline title's count, the line where you last looked and the dots above it.
         render(timelineSinceLooked(), scheme, to: "timeline-since-looked-\(suffix).png")
         // The run in place (TP-1452): the run now on top with its newest lines, the no-run line for three situations, and
@@ -2018,6 +2030,10 @@ MainActor.assumeIsolated {
         // Factory › Runs while Anthropic is paused, and Factory › Providers (TP-1534): available, paused, at its
         // limit, one with no usage to read and one not in use.
         renderScreen(scheme, to: "runs-page-provider-paused") { runsScreen(runsWithProviderPaused(), window: $0) }
+        // Settings › Conductor: off, on at two junctions, and refused by symphony check.
+        for (name, settings, error) in conductorSettingsStates {
+            render(conductorSettings(settings, error: error), scheme, to: "settings-conductor-\(name)-\(suffix).png")
+        }
         for (name, providers, selection) in providersStates {
             renderScreen(scheme, to: name) { providersScreen(providers, selection: selection, window: $0) }
         }

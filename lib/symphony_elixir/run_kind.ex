@@ -26,6 +26,11 @@ defmodule SymphonyElixir.RunKind do
        (non-empty `:reviewer_comments` signal).
     11. `implementation`: everything else.
 
+  `conductor` is never classified: it is the short turn Symphony itself runs at fixed junctions of a
+  ticket's life (`SymphonyElixir.Conductor`), before the next run starts. It is a run kind so
+  `runs.conductor` picks its harness, provider, model and effort; it takes no step list
+  (`phase_kinds/0` leaves it out).
+
   A ticket's title never names its run kind: `Final verification:` tickets are retired, and the
   epic review closes an epic parent instead.
 
@@ -46,6 +51,7 @@ defmodule SymphonyElixir.RunKind do
           | :ci_fix
           | :review_feedback
           | :qa
+          | :conductor
 
   @kinds [
     :implementation,
@@ -56,8 +62,12 @@ defmodule SymphonyElixir.RunKind do
     :epic_review,
     :ci_fix,
     :review_feedback,
-    :qa
+    :qa,
+    :conductor
   ]
+
+  # The kinds no dispatch classifies to, which take no step list.
+  @stepless_kinds [:conductor]
 
   @landing_state "merging"
   @rework_state "rework"
@@ -74,6 +84,10 @@ defmodule SymphonyElixir.RunKind do
   @doc "Every run kind as the string used for `runs:` entries."
   @spec names() :: [String.t()]
   def names, do: Enum.map(@kinds, &Atom.to_string/1)
+
+  @doc "The run kinds a dispatch classifies to, each of which takes a step list under `phases`: every kind but `conductor`."
+  @spec phase_kinds() :: [t()]
+  def phase_kinds, do: @kinds -- @stepless_kinds
 
   @doc """
   A one-line label for a run's profile, as the dashboards show it: `kind · model · effort`.

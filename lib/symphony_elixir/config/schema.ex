@@ -2044,6 +2044,42 @@ defmodule SymphonyElixir.Config.Schema do
     end
   end
 
+  defmodule Conductor do
+    @moduledoc """
+    `symphony.yml`'s `conductor` section (`SymphonyElixir.Conductor`): whether Symphony runs the
+    Conductor's short turn at a ticket's junctions (`enabled`, off by default), at which junctions
+    (`junctions`: `after_coding`, `after_qa_fail`, `after_rework`, `before_merge`; all four by
+    default) and how long one turn may take before the next run starts without it (`timeout_ms`,
+    three minutes by default). Its model is `runs.conductor`'s.
+    """
+    use Ecto.Schema
+    import Ecto.Changeset
+
+    @type t :: %__MODULE__{}
+
+    @primary_key false
+    @junctions ~w(after_coding after_qa_fail after_rework before_merge)
+
+    embedded_schema do
+      field(:enabled, :boolean, default: false)
+      field(:junctions, {:array, :string}, default: @junctions)
+      field(:timeout_ms, :integer, default: 180_000)
+    end
+
+    @doc "Every junction the Conductor may run at, in the order a ticket meets them."
+    @spec junctions() :: [String.t()]
+    def junctions, do: @junctions
+
+    @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+    def changeset(schema, attrs) do
+      schema
+      |> cast(attrs, [:enabled, :junctions, :timeout_ms], empty_values: [])
+      |> Schema.validate_present([:enabled, :junctions, :timeout_ms])
+      |> validate_subset(:junctions, @junctions, message: "must name only #{Enum.join(@junctions, ", ")}")
+      |> validate_number(:timeout_ms, greater_than: 0)
+    end
+  end
+
   defmodule Dispatch do
     @moduledoc """
     `symphony.yml`'s `dispatch` section: where the dispatcher reads its candidates from (`source`:
@@ -2097,7 +2133,7 @@ defmodule SymphonyElixir.Config.Schema do
 
     @primary_key false
 
-    @kinds RunKind.kinds()
+    @kinds RunKind.phase_kinds()
     @kind_names Map.new(@kinds, &{Atom.to_string(&1), &1})
     @findings_command "symphony:findings"
     @qa_commands ~w(symphony:qa_pre_checks symphony:qa_build symphony:qa_launch symphony:qa_quit symphony:qa_attach)

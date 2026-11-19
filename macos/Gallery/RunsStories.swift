@@ -87,4 +87,5 @@ let runsStates: [(name: String, page: RunsPage, drawn: RunsPageDrawn?)] = [
     ("runs-page-small-model-changed", runsPageState {
         $0.pickSmallModel("claude-sonnet-5-5", of: .claude, on: RunProfilesConfig.anthropic)
     }, nil),
+    ("runs-page-conductor", runsPageState { $0.pick(.effort, of: 0, kind: .conductor, to: "high") }, nil),
 ]

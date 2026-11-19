@@ -153,6 +153,11 @@ final class SettingsViewModel: ObservableObject {
     @Published var reportTriggers = ReportSettings.defaultTriggers
     /// Why `symphony check` rejected the changed report settings, shown in their section.
     @Published private(set) var reportsError: String?
+    /// `conductor.enabled`, `conductor.junctions` and `conductor.timeout_ms` in the configured symphony.yml: whether
+    /// Symphony runs the Conductor, at which junctions, and how long one turn may take.
+    @Published var conductor = ConductorSettings()
+    /// Why `symphony check` rejected the changed Conductor settings, shown in their section.
+    @Published private(set) var conductorError: String?
     /// `auto_review.playbooks.macos_app.dev_server`, `dev_server_port` and `launch_env` in the configured
     /// symphony.yml: whether a macOS app QA pass on the QA host starts the project's dev server there, on which port,
     /// and the variables the app under test gets.
@@ -196,6 +201,10 @@ final class SettingsViewModel: ObservableObject {
 
     /// The report settings read from symphony.yml, or nil when they couldn't be read. Only a model that changed is written.
     private var loadedReportSettings: ReportSettings?
+
+    /// The Conductor settings read from symphony.yml, or nil when they couldn't be read. Only a setting that changed is
+    /// written.
+    private var loadedConductor: ConductorSettings?
 
     /// The macOS app QA settings read from symphony.yml, or nil when they couldn't be read. Only a setting that
     /// changed is written.
@@ -280,6 +289,7 @@ final class SettingsViewModel: ObservableObject {
         loadDispatchSettings()
         loadLedgerSettings()
         loadReportSettings()
+        loadConductor()
         loadMacAppQA()
         // Off the main thread, so a Keychain prompt can't freeze the app while Settings opens.
         self.secrets.read { [weak self] result in self?.showSecrets(result) }
@@ -591,6 +601,21 @@ final class SettingsViewModel: ObservableObject {
         }
     }
 
+    /// The Conductor controls are off until a symphony.yml has been read, and while Save checks it.
+    var canEditConductor: Bool { loadedConductor != nil && !isSaving }
+
+    private func loadConductor() {
+        let path = settings.trimmed().configPath
+        guard !path.isEmpty else { return }
+        do {
+            let read = try SymphonyConfigFile(path: path).readConductorSettings()
+            conductor = read
+            loadedConductor = read
+        } catch {
+            configFileError = "Could not read the Conductor settings from symphony.yml: \(error.localizedDescription)"
+        }
+    }
+
     /// The macOS app QA controls are off until a symphony.yml has been read, and while Save checks it.
     var canEditMacAppQA: Bool { loadedMacAppQA != nil && !isSaving }
 
@@ -667,7 +692,8 @@ final class SettingsViewModel: ObservableObject {
     /// Validates and saves, then calls `onSaved` when everything was stored. Changed token limits and timeouts are
     /// written only after `symphony check` passes on them; until then the rest isn't saved, and a failure shows in
     /// `tokenLimitsError`, `timeoutsError`, `gitHubUpdatesError`,
-    /// `linearWebhooksError`, `dispatchLoopError`, `dispatchError`, `ledgerError`, `reportsError` or `macAppQAError`.
+    /// `linearWebhooksError`, `dispatchLoopError`, `dispatchError`, `ledgerError`, `reportsError`, `conductorError` or
+    /// `macAppQAError`.
     func save(onSaved: @escaping () -> Void) {
         guard canSave else { return }
         let settings = settings.trimmed()
@@ -730,6 +756,9 @@ final class SettingsViewModel: ObservableObject {
             ReportSettings(model: reportModel.trimmingCharacters(in: .whitespacesAndNewlines), cadence: reportCadence, triggers: reportTriggers)
         }
         let oldReports = loadedReportSettings.flatMap { $0 != reports ? $0 : nil }
+        conductorError = nil
+        let conductor = self.conductor
+        let oldConductor = loadedConductor.flatMap { $0 != conductor ? $0 : nil }
         macAppQAError = nil
         let qaPlaybook = macAppQA.trimmed()
         let oldQAPlaybook = loadedMacAppQA.flatMap { $0 != qaPlaybook ? $0 : nil }
@@ -768,7 +797,8 @@ final class SettingsViewModel: ObservableObject {
         }
 
         guard loadedLimits != nil || oldTimeouts != nil || oldUpdates != nil || oldWebhooks != nil
-            || oldLoopLimits != nil || oldDispatch != nil || oldLedger != nil || oldReports != nil || oldQAPlaybook != nil || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil
+            || oldLoopLimits != nil || oldDispatch != nil || oldLedger != nil || oldReports != nil || oldConductor != nil || oldQAPlaybook != nil
+            || loadedPriorities != nil || loadedHostTools != nil || loadedStates != nil
             || builtInPatternsChanged || loadedRules != nil || oldPhases != nil else {
             if saveRest(settings, secrets) { onSaved() }
             return
@@ -799,6 +829,9 @@ final class SettingsViewModel: ObservableObject {
             }
             if saved, let reports, let oldReports {
                 saved = await saveReportSettings(reports, from: oldReports, settings: settings, secrets: secrets)
+            }
+            if saved, let oldConductor {
+                saved = await saveConductor(conductor, from: oldConductor, settings: settings, secrets: secrets)
             }
             if saved, let oldQAPlaybook {
                 saved = await saveMacAppQA(qaPlaybook, from: oldQAPlaybook, settings: settings, secrets: secrets)
@@ -1065,6 +1098,32 @@ final class SettingsViewModel: ObservableObject {
         }
         configFileError = nil
         loadedReportSettings = reports
+        return true
+    }
+
+    /// Writes the Conductor settings that changed to symphony.yml once `symphony check` passes on the result.
+    private func saveConductor(
+        _ conductor: ConductorSettings,
+        from loaded: ConductorSettings,
+        settings: AppSettings,
+        secrets: SecretSettings
+    ) async -> Bool {
+        let check = configCheck
+        let result: ConfigCheckResult
+        do {
+            result = try await SymphonyConfigFile(path: settings.configPath).writeConductorSettings(conductor, from: loaded) { path in
+                await check(path, settings, secrets)
+            }
+        } catch {
+            configFileError = "Could not save the Conductor settings to symphony.yml: \(error.localizedDescription)"
+            return false
+        }
+        if case .failed(let message) = result {
+            conductorError = "symphony check rejected these settings, so nothing was saved: \(ConfigCheck.reasonFirst(message))"
+            return false
+        }
+        configFileError = nil
+        loadedConductor = conductor
         return true
     }
 

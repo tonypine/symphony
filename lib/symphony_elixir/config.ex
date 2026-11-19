@@ -575,6 +575,19 @@ defmodule SymphonyElixir.Config do
   end
 
   @doc """
+  The `conductor` section of symphony.yml (`Schema.Conductor`: whether the Conductor runs, at which
+  junctions and for how long, `SymphonyElixir.Conductor`), read on each call, else its defaults
+  (off).
+  """
+  @spec conductor_settings() :: Schema.Conductor.t()
+  def conductor_settings do
+    case system() do
+      {:ok, %{conductor: %Schema.Conductor{} = conductor}} -> conductor
+      _unreadable -> %Schema.Conductor{}
+    end
+  end
+
+  @doc """
   Whether agents' prompts carry the summary of the ticket's history
   (`SymphonyElixir.TicketEvents.Brief`): symphony.yml's `ledger.prompt_brief_enabled`, read on each
   call, else true.

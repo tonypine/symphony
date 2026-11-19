@@ -674,7 +674,7 @@ defmodule SymphonyElixir.ReviewAgent do
     Review the diff by reading it. Do not run the test suite, `make all`, coverage or static analysis such as Dialyzer: CI runs them after the push.
 
     Issue (context for what the diff is for):
-    #{present_issue(issue)}
+    #{present_issue(issue)}#{SymphonyElixir.Conductor.prompt_section(issue.id)}
     #{decisions_rule(issue, decision_opts)}
     Review criteria. Review the code, not the ticket:
     - Correctness: bugs in the changed code, such as wrong conditions, unhandled cases, broken callers, races and resource leaks.
