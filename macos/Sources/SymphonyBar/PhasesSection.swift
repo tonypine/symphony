@@ -1,17 +1,40 @@
 import SwiftUI
 import SymphonyBarCore
+import SymphonyBarUI
 
 /// Settings › Phases (`phases.<kind>.steps`): the step list a run kind follows, reorderable by drag or by the arrow
-/// buttons, each step's title, id, kind, command or prompt (with an orchestrated step's answer fields), timeout and the step it returns to on failure; Add step,
-/// Remove and Reset to default; a step the rules refuse says why on its row. Under the list, the list as
-/// `symphony workflow preview` prints it.
+/// buttons, each step's title, id, kind, command or prompt (with an orchestrated step's answer fields), what an agent
+/// step's turn runs with (model, effort, session, repeat), timeout and the step it returns to on failure; Add step,
+/// Remove and Reset to default; a step the rules refuse says why on its row. On QA, the Stepped QA passes switch
+/// (`phases.qa.stepped`) and the list to edit: QA's own or a QA playbook's (`phases.qa.playbooks.<kind>.steps`).
+/// Under the list, the list as `symphony workflow preview` prints it.
 struct PhasesSection: View {
     @ObservedObject var model: SettingsViewModel
     /// The rows open for editing.
     @State private var expanded: Set<UUID> = []
 
-    private var kind: PhaseKind { model.phaseKind }
-    private var list: PhaseSteps { model.phases[kind] }
+    private var owner: StepListOwner { model.phaseListOwner }
+    private var list: PhaseSteps { model.phases[owner] }
+
+    /// The list's name in a sentence: `Implementation`, or `macOS app QA playbook`.
+    private var listTitle: String {
+        switch owner {
+        case .runKind(let kind): return kind.title
+        case .qaPlaybook(let playbook): return "\(playbook.title) QA playbook"
+        }
+    }
+
+    /// What Reset to default removes on Save.
+    private var resetKeyPath: String {
+        owner.qaPlaybook.map { "phases.qa.playbooks.\($0.rawValue)" } ?? owner.keyPath
+    }
+
+    private var emptyListText: String {
+        switch owner {
+        case .runKind(let kind): return "No steps: a \(kind.title.lowercased()) run is one agent session."
+        case .qaPlaybook(let playbook): return "No steps: a \(playbook.title) QA pass is one agent session."
+        }
+    }
 
     var body: some View {
         Section {
@@ -21,15 +44,21 @@ struct PhasesSection: View {
                 }
             }
             .pointerStyle(.link)
+            if model.phaseKind == .qa {
+                QAPhaseControls(stepped: $model.phases.qaStepped, playbook: $model.phaseQAPlaybook, kinds: model.phases.qaPlaybookKinds) { kind in
+                    if model.phases.qaPlaybooks[kind] == nil { model.phases[.qaPlaybook(kind)] = .defaults(for: .qaPlaybook(kind)) }
+                    model.phaseQAPlaybook = kind
+                }
+            }
             Text(
                 list.isDefault
-                    ? "Follows its default list: symphony.yml doesn't set \(kind.keyPath)."
-                    : "Follows the list in symphony.yml (\(kind.keyPath))."
+                    ? "Follows its default list: symphony.yml doesn't set \(owner.keyPath)."
+                    : "Follows the list in symphony.yml (\(owner.keyPath))."
             )
             .foregroundStyle(.secondary)
 
             if list.steps.isEmpty {
-                Text("No steps: a \(kind.title.lowercased()) run is one agent session.")
+                Text(emptyListText)
                     .foregroundStyle(.secondary)
             }
             ForEach(Array(list.steps.enumerated()), id: \.element.id) { index, step in
@@ -38,38 +67,39 @@ struct PhasesSection: View {
                     step: binding(for: step.id),
                     stepIDs: list.steps.map(\.stepID),
                     reason: model.phaseValidation.reason(for: step),
+                    playbook: owner.qaPlaybook,
                     isExpanded: expandedBinding(step.id),
                     canMoveUp: index > 0,
                     canMoveDown: index < list.steps.count - 1,
-                    move: { offset in model.phases[kind].move(step.id, by: offset) },
+                    move: { offset in model.phases[owner].move(step.id, by: offset) },
                     remove: {
                         expanded.remove(step.id)
-                        model.phases[kind].removeStep(step.id)
+                        model.phases[owner].removeStep(step.id)
                     }
                 )
             }
-            .onMove { source, destination in model.phases[kind].move(fromOffsets: source, toOffset: destination) }
+            .onMove { source, destination in model.phases[owner].move(fromOffsets: source, toOffset: destination) }
 
             HStack {
                 Button("Add step") {
-                    expanded.insert(model.phases[kind].addStep())
+                    expanded.insert(model.phases[owner].addStep())
                 }
                 .pointerStyle(.link)
-                .accessibilityLabel("Add a step to the \(kind.title) list")
+                .accessibilityLabel("Add a step to the \(listTitle) list")
                 Spacer()
                 Button("Reset to default") {
                     expanded = []
-                    model.phases[kind] = .defaults(for: kind)
+                    model.phases[owner] = .defaults(for: owner)
                 }
                 .pointerStyle(.link)
                 .disabled(list.isDefault)
-                .help("Removes \(kind.keyPath) from symphony.yml on Save, so the run follows its default list.")
+                .help("Removes \(resetKeyPath) from symphony.yml on Save, so it follows its default list.")
             }
 
             VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
                 Text("Preview: the list the next run follows").font(.headline)
                 ScrollView {
-                    Text(PhasePreview.text(kind: kind, list: list))
+                    Text(PhasePreview.text(owner: owner, list: list))
                         .font(.system(.caption, design: .monospaced))
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -77,7 +107,7 @@ struct PhasesSection: View {
                 }
                 .frame(minHeight: 80, maxHeight: 260)
                 .background(RoundedRectangle(cornerRadius: DesignTokens.Radius.mark).fill(.quaternary.opacity(0.5)))
-                .accessibilityLabel("Preview of the \(kind.title) step list")
+                .accessibilityLabel("Preview of the \(listTitle) step list")
             }
             if model.phasesError != nil {
                 Text("These step lists weren't saved; the reason shows above Save.")
@@ -89,7 +119,8 @@ struct PhasesSection: View {
             SectionFooter(
                 "phases.<kind>.steps. The steps a run of each kind follows, in order: a machine step runs a shell "
                     + "command, an orchestrated step starts an agent turn from its prompt, and a delegated step is work "
-                    + "the agent does in its session. A failure returns to the step named, or ends the run. The preview "
+                    + "the agent does in its session. A failure returns to the step named, or ends the run. A stepped QA "
+                    + "pass (phases.qa.stepped) walks its playbook's list (phases.qa.playbooks.<kind>.steps). The preview "
                     + "is what symphony workflow preview prints. Save checks symphony.yml with symphony check first; the "
                     + "next run follows the saved list."
             )
@@ -98,12 +129,12 @@ struct PhasesSection: View {
     }
 
     private func binding(for id: UUID) -> Binding<PhaseStep> {
-        let kind = kind
+        let owner = owner
         return Binding(
-            get: { model.phases[kind].steps.first { $0.id == id } ?? PhaseStep(stepID: "", mode: .delegated) },
+            get: { model.phases[owner].steps.first { $0.id == id } ?? PhaseStep(stepID: "", mode: .delegated) },
             set: { step in
-                guard let index = model.phases[kind].steps.firstIndex(where: { $0.id == id }) else { return }
-                model.phases[kind].steps[index] = step
+                guard let index = model.phases[owner].steps.firstIndex(where: { $0.id == id }) else { return }
+                model.phases[owner].steps[index] = step
             }
         )
     }
@@ -118,13 +149,66 @@ struct PhasesSection: View {
     }
 }
 
+/// QA's own settings above its list (`phases.qa`): the Stepped QA passes switch (`stepped`), and the list the editor
+/// shows: QA's own (`steps`) or a QA playbook's (`playbooks.<kind>.steps`), with a field to name a kind of the
+/// project's own.
+struct QAPhaseControls: View {
+    @Binding var stepped: Bool
+    @Binding var playbook: QAPlaybookKind?
+    let kinds: [QAPlaybookKind]
+    let addKind: (QAPlaybookKind) -> Void
+    @State private var newKind = ""
+
+    private var candidate: QAPlaybookKind { QAPlaybookKind(newKind.trimmingCharacters(in: .whitespaces)) }
+
+    var body: some View {
+        Toggle("Stepped QA passes", isOn: $stepped)
+            .help(
+                "phases.qa.stepped. On, a QA pass walks its playbook's step list, one agent turn a step; off, every QA "
+                    + "pass is one agent session."
+            )
+        PopUp(
+            "List",
+            selection: $playbook,
+            choices: [PopUpChoice(QAPlaybookKind?.none, "QA's own list")] + kinds.map { PopUpChoice(Optional($0), "\($0.title) playbook") },
+            accessibilityLabel: "The QA step list to edit"
+        )
+        if playbook != nil, !stepped {
+            Text("Stepped QA passes is off, so QA passes don't walk this list yet.")
+                .textStyle(.secondary)
+        }
+        HStack {
+            DirectorTextField(
+                "Another playbook kind",
+                text: $newKind,
+                placeholder: "kind_name",
+                help: "A QA playbook kind of the project's own: lowercase letters, digits and underscores, starting with a letter.",
+                mono: true
+            )
+            Button("Add") {
+                addKind(candidate)
+                newKind = ""
+            }
+            .directorButton(.secondary, disabledReason: addReason)
+        }
+    }
+
+    /// Why Add is off: a name Symphony would refuse, or a kind already listed.
+    private var addReason: String? {
+        if !candidate.isValid { return "Name the kind first." }
+        if kinds.contains(candidate) { return "That kind is listed already." }
+        return nil
+    }
+}
+
 /// One step: a summary line (number, id, title, kind, what it returns to) with its reason when the rules refuse it,
-/// the move and remove buttons, and, open, the fields its kind takes.
-private struct PhaseStepRow: View {
+/// the move and remove buttons, and, open, the fields its kind takes. `playbook` is the QA playbook whose list it is in.
+struct PhaseStepRow: View {
     let number: Int
     @Binding var step: PhaseStep
     let stepIDs: [String]
     let reason: String?
+    let playbook: QAPlaybookKind?
     @Binding var isExpanded: Bool
     let canMoveUp: Bool
     let canMoveDown: Bool
@@ -179,7 +263,7 @@ private struct PhaseStepRow: View {
             }
 
             if isExpanded {
-                PhaseStepFields(step: $step, stepIDs: stepIDs)
+                PhaseStepFields(step: $step, stepIDs: stepIDs, playbook: playbook)
                     .padding(.leading, DesignTokens.Space.s5)
             }
         }
@@ -192,9 +276,15 @@ private struct PhaseStepRow: View {
         .onHover { hovering = $0 }
     }
 
-    /// The kind and what a failure does, as one line.
+    /// The kind, what an agent step's turn runs with, and what a failure does, as one line.
     private var summary: String {
         var parts = [step.mode.title]
+        if step.mode != .machine {
+            if step.repeat != nil { parts.append("once per walkthrough step") }
+            if let session = step.session { parts.append("session \(session)") }
+            if let model = step.model { parts.append("model \(model)") }
+            if let effort = step.effort { parts.append("\(effort.title) effort") }
+        }
         if let target = step.returnsTo {
             parts.append("returns to \(target)")
         } else if step.mode != .delegated {
@@ -252,10 +342,54 @@ private struct PhaseAnswerFields: View {
     }
 }
 
-/// The fields of one step, only those its kind takes.
+/// What an agent step's turn runs with and where: its model, effort, session and repeat, each empty for the run's
+/// own. A machine step shows them only while it still sets one, so the refused value can be cleared.
+private struct PhaseStepAgentFields: View {
+    @Binding var step: PhaseStep
+
+    var body: some View {
+        DirectorTextField(
+            "Model",
+            text: optionalText($step.model),
+            placeholder: "Run's model",
+            help: "A model id, or small for the run's small model. Empty runs the run's model.",
+            mono: true
+        )
+        PopUp(
+            "Effort",
+            selection: $step.effort,
+            choices: [PopUpChoice(StepEffort?.none, "Run's effort")] + StepEffort.allCases.map { PopUpChoice(Optional($0), $0.title) }
+        )
+        DirectorTextField(
+            "Session",
+            text: optionalText($step.session),
+            placeholder: "Run's session",
+            help: "Steps with the same session name continue one agent session; fresh starts a new session for this step alone. "
+                + "Empty runs in the run's one session.",
+            mono: true
+        )
+        PopUp(
+            "Repeat",
+            selection: $step.repeat,
+            choices: [PopUpChoice(StepRepeat?.none, "Once")] + StepRepeat.allCases.map { PopUpChoice(Optional($0), $0.title) }
+        )
+    }
+
+    /// An optional text as a field's text: empty is missing, so the run's own applies.
+    private func optionalText(_ value: Binding<String?>) -> Binding<String> {
+        Binding(
+            get: { value.wrappedValue ?? "" },
+            set: { value.wrappedValue = $0.isEmpty ? nil : $0 }
+        )
+    }
+}
+
+/// The fields of one step, only those its kind takes. `playbook` is the QA playbook whose list it is in, where an
+/// orchestrated step may leave its prompt to Symphony.
 private struct PhaseStepFields: View {
     @Binding var step: PhaseStep
     let stepIDs: [String]
+    let playbook: QAPlaybookKind?
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
@@ -300,9 +434,18 @@ private struct PhaseStepFields: View {
                         .frame(minHeight: 60, maxHeight: 160)
                         .accessibilityLabel("Prompt")
                 }
+                if let playbook, step.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text("Empty: Symphony uses its own prompt for this step, priv/qa_steps/\(playbook.rawValue)/\(step.stepID).md.")
+                        .textStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 PhaseAnswerFields(step: $step)
             case .delegated:
                 EmptyView()
+            }
+
+            if step.mode != .machine || !step.agentKeys.isEmpty {
+                PhaseStepAgentFields(step: $step)
             }
 
             LabeledContent("Timeout") {
