@@ -431,15 +431,15 @@ that ended holds nothing up.
 
 ## Marks
 
-What is new since the person last looked, and the note for the next run (facts 6 and 18 of
-`docs/design/director-ticket-page.md`; `SymphonyElixir.Marks`):
+What is new since the person last looked, and how many of the messages written to the ticket no run
+read yet (facts 6 and 18 of `docs/design/director-ticket-page.md`; `SymphonyElixir.Marks`):
 
 | Field | What it holds |
 | --- | --- |
 | `looked_at` | When the person last looked at the ticket, set by `POST /api/v1/control/looked`; null when they never did. |
 | `new_since_looked` | How many of the ticket's events are later than `looked_at`; every event when it is null. |
-| `note` | The note for the next run, null when no person left one: the newest `note` event a person wrote, as `id`, `text`, `at` (when it was set), `by` and `read_by`. |
-| `note.read_by` | The first run whose prompt carried the note, as `run_id` and `at`; null until a run read it. A newer note replaces the note, and its `read_by` starts null again. |
+| `unread_messages` | How many messages (see Messages below) no run was given yet. |
+| `note` | Served only for the Mac app release that reads one note: the newest unread message, as `id`, `text`, `at` (when it was written), `by` and `read_by` (always null); null when every message was read. It is removed once the app's ticket page reads the messages. |
 
 `POST /api/v1/control/looked` takes `issue_identifier` and an optional `repo_key`, and needs the control
 token. It writes the mark on the ticket's record, keyed by person (the Director, the one person the token
@@ -458,9 +458,37 @@ opening the page or from a read, so a page kept open keeps the `looked_at` it op
 its dot. A first visit (`looked_at` null) shows no line, no dots and no count, although the feed calls
 every event new then.
 
-A run reads the note when the prompt it builds carries the ticket's history summary, which holds every
-note in full. Symphony then records a machine `note.read` event naming the note (`note_id`) and the run
-(`run_id`), keyed by the note, so only the first read is kept. A preview of the prompt records nothing.
+## Messages
+
+Writing to a ticket works like a prompt sent to it (`SymphonyElixir.Messages`).
+`POST /api/v1/control/note` takes `repo_key`, `issue_identifier` and `text` (at most 4,000 characters),
+and needs the control token. It records a `message.sent` event on the ticket's ledger: the text, who wrote
+it (the person, the Director, whom the token names today) and when, and answers `200` with the event as the
+events feed shows it. Each message is its own event; none replaces or hides an earlier one. Blank or
+over-long text is `400` `invalid_note`, a ticket with no record `404` `ticket_not_found`, and a request
+without `repo_key` or `issue_identifier` `422`.
+
+The next run of the ticket, of any kind (implementation, rework, code review, QA, CI fix), is given every
+message no run was given yet, oldest first, at the very top of its prompt, under the heading "Messages from
+the person", each with when it was written. Symphony then records a machine `message.read` for each:
+the message (`message_id`, the `message.sent` event's id), the run (`run_id`) and when (`at`), keyed by the
+message, so a message is given to exactly one run as new. Later runs read it in the ticket's history
+summary (its Messages section), not as a new instruction. A run builds its prompt once, when it starts, so a
+message sent while it works waits for the next run. Sending a message never starts, stops or reorders a
+run. A preview of the prompt records nothing.
+
+In the events feed (`GET /api/v1/repos/:repo_key/tickets/:issue_identifier/events`, with or without
+`group=run`), a `message.sent` has `summary.title` "You wrote" ("<name> wrote" for a writer other than the
+Director), the text as `summary.detail`, and `read`: null while no run read it, else `run_id`, `run` (the
+run's title, "Implementation run 2") and `at`. A `message.read` sits in its run's group as "Message read by a
+run".
+
+Symphony's own notes (`note`: "QA waits on the PR watcher…", the notes of a stop or a move) are not
+messages: they keep their type and are never given to a run as the person's words.
+
+Before messages, a person left one note for the next run (a person's `note`, read by a `note.read`). Each
+ticket's note was turned into one `message.sent` at the note's time, with its `message.read` when a run had
+read it, once, at startup; the run store marker `messages_from_notes_v1` records that it ran.
 
 ## `brief`
 

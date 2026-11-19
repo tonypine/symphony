@@ -10,7 +10,7 @@ defmodule SymphonyElixir.Conductor.Facts do
 
     * `junction`: the junction it is shaped for, and `focus`, what the turn there is for;
     * `ticket`: identifier, title, URL, the description's `problem`, `acceptance` and `walkthrough`
-      sections, the newest brief, the person's decisions, notes and answers to questions;
+      sections, the newest brief, the person's decisions, notes and messages, and answers to questions;
     * `standing`: phase, coding attempt (the implementation and rework runs started), the pull
       request and its head;
     * `last_run`: the newest run that ended, other than the Conductor's own: its kind, model, exit,
@@ -181,7 +181,7 @@ defmodule SymphonyElixir.Conductor.Facts do
 
   defp person_notes(events) do
     events
-    |> Enum.filter(&(&1.type == "note" and person?(&1)))
+    |> Enum.filter(&(&1.type in ["note", "message.sent"] and person?(&1)))
     |> Enum.take(-@max_notes)
     |> Enum.map(&%{event_id: &1.id, at: iso8601(&1.at), text: cut(payload(&1, :text), @text_max)})
   end

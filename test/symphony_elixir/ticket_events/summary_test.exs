@@ -74,6 +74,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
      %{title: "Waiting for CI", detail: "Checks are running on PR #741."}},
     {"note", %{text: "History before 2026-10-20 was backfilled"}, [], %{title: "Note added", detail: "History before 2026-10-20 was backfilled"}},
     {"note.read", %{note_id: "evt-1", run_id: "run-4"}, [], %{title: "Note read by a run", detail: nil}},
+    {"message.sent", %{text: "Keep the export button where it is."}, [], %{title: "You wrote", detail: "Keep the export button where it is."}},
+    {"message.read", %{message_id: "evt-1", run_id: "run-4"}, [], %{title: "Message read by a run", detail: nil}},
     {"brief.written", %{text: "Each ticket says what it delivers.", walkthrough: "Read a ticket."}, [], %{title: "Brief written", detail: "Each ticket says what it delivers."}},
     {"conductor.update", %{junction: "after_qa_fail", text: "QA failed the login step again.", refs: ["evt_1"]}, [], %{title: "Update", detail: "QA failed the login step again."}},
     {"conductor.instructions", %{junction: "after_coding", text: "Check the empty list first."}, [], %{title: "Conductor instructions", detail: "Check the empty list first."}},
@@ -123,6 +125,13 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
     assert render("rule.action", %{}).title == "Acted"
     assert render("ticket.filed", %{identifier: "TP-1502", kind: "follow_up"}) == %{title: "Follow-up TP-1502 filed", detail: nil}
     assert render("ticket.filed", %{}).title == "Split off a ticket"
+  end
+
+  test "a message is the person's own words, and another writer is named" do
+    message = %Event{type: "message.sent", payload: %{text: "Ship it."}, actor: %{kind: :person, name: "the Director"}}
+
+    assert Summary.render(message) == %{title: "You wrote", detail: "Ship it."}
+    assert Summary.render(%{message | actor: %{kind: :person, name: "Sam"}}) == %{title: "Sam wrote", detail: "Ship it."}
   end
 
   test "an event of an unknown type renders its type and no detail" do
@@ -508,6 +517,8 @@ defmodule SymphonyElixir.TicketEvents.SummaryTest do
       {"conductor.steer", %{text: "Read the failing test before you change the code again.", when: "next_turn", trigger: "step_failed"}},
       {"report.published", %{run_id: "report_1", text: "TP-1 merged."}},
       {"note.read", %{note_id: "evt_1", run_id: "run_4"}},
+      {"message.sent", %{text: "Keep the button."}},
+      {"message.read", %{message_id: "evt_1", run_id: "run_4"}},
       {"note", %{text: @old_note}}
     ]
 

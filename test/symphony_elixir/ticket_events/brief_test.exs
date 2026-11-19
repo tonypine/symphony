@@ -85,6 +85,9 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
              Notes (0):
              - none
 
+             Messages (0):
+             - none
+
              Runs (0):
              - none
 
@@ -315,6 +318,30 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
                - 2026-10-22T10:02:00Z, Symphony: Restarted.
                - 2026-10-22T10:03:00Z, the Director: Ship it narrow.
                """
+    end
+
+    test "every message in full, with its writer and the run it was given to, and none repeated in Other events" do
+      events = [
+        event(0, "run.started", %{run_id: "run-1", run_kind: "implementation", run_number: 2, state: "In Progress"}, run_id: "run-1"),
+        event(1, "message.sent", %{text: "Keep the button.\nUsers know it."}, actor: {:person, "the Director"}),
+        event(2, "message.sent", %{text: "Use the new copy."}, actor: {:person, "Sam"})
+      ]
+
+      first = Enum.at(events, 1)
+      read = event(3, "message.read", %{message_id: first.id, run_id: "run-1"}, run_id: "run-1")
+
+      assert %{text: text} = Brief.build(nil, events ++ [read])
+
+      assert text =~
+               """
+               Messages (2):
+               - 2026-10-22T10:01:00Z, the Director wrote (given to Implementation run 2 at 2026-10-22T10:03:00Z): Keep the button.
+                 Users know it.
+               - 2026-10-22T10:02:00Z, Sam wrote (not read by a run yet): Use the new copy.
+               """
+
+      assert text =~ "Other events, newest first (0):"
+      assert text =~ "  - 2026-10-22T10:03:00Z Message read by a run"
     end
 
     test "one line per earlier run, and the latest run's events in full" do

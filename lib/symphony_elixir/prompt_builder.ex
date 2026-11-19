@@ -10,8 +10,8 @@ defmodule SymphonyElixir.PromptBuilder do
     Config,
     Decisions,
     LandingOrder,
-    Marks,
     MergeConfirmation,
+    Messages,
     PhaseSteps,
     PromptSafety,
     QaModeContract,
@@ -149,6 +149,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
     |> append_codex_transport_output_guard(agent_context)
+    |> prepend_messages(opts)
   end
 
   @doc """
@@ -232,6 +233,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
     |> append_codex_transport_output_guard(agent_context)
+    |> prepend_messages(opts)
   end
 
   defp prompt_template!({:ok, workflow}, prompt_mode) do
@@ -829,9 +831,8 @@ defmodule SymphonyElixir.PromptBuilder do
   # workflow preview's sample), else it is read from the store. It carries agent and person text, so
   # it is wrapped as untrusted input, and it is never cut: over `ledger.prompt_brief_max_tokens` it
   # is still rendered whole, since a run only gets here once the Director chose to go on with it
-  # (`ticket_ledger_gate/2`). The summary holds every note in full, so a run's prompt that carries the
-  # one read from the store has read the note for the next run (`SymphonyElixir.Marks`). The full and
-  # the compact prompt both carry it, so a Codex run sent the compact one has read the note too.
+  # (`ticket_ledger_gate/2`). It holds every message a person wrote, so a later run reads them as
+  # history; the messages no run read yet are at the prompt's top (`prepend_messages/2`).
   defp append_ticket_ledger(prompt, opts) do
     ticket_state = Keyword.get(opts, :ticket_state)
 
@@ -841,7 +842,6 @@ defmodule SymphonyElixir.PromptBuilder do
       case ticket_ledger(state, opts) do
         {:ok, brief} ->
           warn_if_over_limit(brief, state)
-          record_note_read(state, opts)
           prompt <> "\n\n" <> render_ticket_ledger(brief)
 
         {:error, reason} ->
@@ -860,11 +860,54 @@ defmodule SymphonyElixir.PromptBuilder do
     end
   end
 
-  defp record_note_read(%{repo_key: repo_key, issue_id: issue_id}, opts) do
-    run_id = Keyword.get(opts, :run_id)
+  # The messages the person wrote to the ticket that no other run was given, oldest first, at the
+  # very top of the prompt (`SymphonyElixir.Messages`), whatever the run's kind. A run's prompt
+  # records that the run was given them; a prompt with no run (the workflow preview) or with
+  # messages passed in (`:messages`) records nothing. The prompt is built once, when the run starts,
+  # so a message sent while it works waits for the next run.
+  defp prepend_messages(prompt, opts) do
+    {messages, record?} = prompt_messages(opts)
 
-    if is_binary(repo_key) and is_binary(issue_id) and is_binary(run_id) and not Keyword.has_key?(opts, :ticket_ledger),
-      do: Marks.record_note_read(repo_key, issue_id, run_id)
+    case Messages.prompt_section(messages) do
+      nil ->
+        prompt
+
+      section ->
+        if record?, do: record_messages_read(opts, messages)
+        section <> "\n\n" <> prompt
+    end
+  end
+
+  # A store that can't be read gives no message: the run still starts, and they wait for the next.
+  defp prompt_messages(opts) do
+    case {Keyword.fetch(opts, :messages), ticket_of(opts)} do
+      {{:ok, messages}, _ticket} ->
+        {messages, false}
+
+      {:error, {_repo_key, issue_id}} ->
+        events = issue_id |> RunStore.list_ticket_events(types: Messages.types()) |> List.wrap() |> Enum.filter(&is_struct(&1, Event))
+        {Messages.for_run(events, Keyword.get(opts, :run_id)), true}
+
+      {:error, nil} ->
+        {[], false}
+    end
+  end
+
+  defp ticket_of(opts) do
+    case Keyword.get(opts, :ticket_state) do
+      %{} = ticket_state ->
+        %{repo_key: repo_key, issue_id: issue_id} = TicketState.normalize(ticket_state)
+        if is_binary(repo_key) and is_binary(issue_id), do: {repo_key, issue_id}
+
+      _none ->
+        nil
+    end
+  end
+
+  defp record_messages_read(opts, messages) do
+    with {repo_key, issue_id} <- ticket_of(opts),
+         run_id when is_binary(run_id) <- Keyword.get(opts, :run_id),
+         do: Messages.record_read(repo_key, issue_id, messages, run_id)
   end
 
   defp warn_if_over_limit(%{tokens: tokens}, state) do

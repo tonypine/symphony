@@ -320,12 +320,18 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   end
 
   defp summary("note.read", _payload, _event), do: {"Note read by a run", []}
+  # The person using the app is the Director, whom the control API names; another writer is named.
+  defp summary("message.sent", payload, %Event{actor: actor}), do: {message_writer(actor), [text(payload, :text)]}
+  defp summary("message.read", _payload, _event), do: {"Message read by a run", []}
   defp summary("brief.written", payload, _event), do: {"Brief written", [text(payload, :text)]}
   defp summary("conductor.update", payload, _event), do: {"Update", [text(payload, :text)]}
   defp summary("conductor.instructions", payload, _event), do: {"Conductor instructions", [text(payload, :text)]}
   defp summary("conductor.steer", payload, _event), do: {"Conductor steered", [text(payload, :text)]}
   defp summary("report.published", payload, _event), do: {"Report published", [text(payload, :text)]}
   defp summary(_type, _payload, _event), do: :unknown
+
+  defp message_writer(%{name: name}) when is_binary(name) and name not in ["", "the Director"], do: "#{name} wrote"
+  defp message_writer(_actor), do: "You wrote"
 
   # What a rule did, as its line says it: "reran the failed checks", "filed TP-1501".
   @rule_did %{

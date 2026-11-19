@@ -19,6 +19,8 @@ defmodule SymphonyElixir.TicketEvents.Brief do
       viewport, its commit (the event's, else its run's), when it was last seen (its event, or the
       later event that reopened it) and its whole description.
     * **Notes**: every note, in full, with who wrote it; a person's is the Director's.
+    * **Messages**: every message a person wrote to the ticket (`SymphonyElixir.Messages`), in
+      full, with who wrote it, when, and the run that was given it, or that no run read it yet.
     * **Runs**: one line per run (kind, number, result or state, commit, when), with the latest
       run's events in full under it. An earlier run's steps are summed up in its line.
     * **Other events**: every event outside a run, one line each from its summary, newest first.
@@ -31,7 +33,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   same bytes.
   """
 
-  alias SymphonyElixir.{RunStore, TicketBrief, TicketEvents, TicketState}
+  alias SymphonyElixir.{Messages, RunStore, TicketBrief, TicketEvents, TicketState}
   alias SymphonyElixir.TicketEvents.{Event, Summary}
 
   @type t :: %{
@@ -46,11 +48,12 @@ defmodule SymphonyElixir.TicketEvents.Brief do
   # The types a section renders, which Other events doesn't repeat. A decision event is left out of
   # it only when Decisions renders it: a withdrawal or a second answer naming no request it shows is
   # one of the other events.
-  @section_types ["note", "brief.written", "finding.recorded", "finding.resolved"]
+  @section_types ["note", "message.sent", "brief.written", "finding.recorded", "finding.resolved"]
   @run_types ["run.started", "run.ended"]
   # The payload fields that hold an event's whole free text, which a summary's detail cuts.
   @full_fields %{
     "note" => [:text],
+    "message.sent" => [:text],
     "finding.recorded" => [:severity, :description],
     "finding.resolved" => [:how],
     "checklist.answered" => [:item, :answer],
@@ -97,6 +100,7 @@ defmodule SymphonyElixir.TicketEvents.Brief do
         decisions_section(decisions),
         findings_section(findings),
         notes_section(notes),
+        messages_section(events),
         runs_section(runs),
         other_section(events, decisions)
       ]
@@ -277,6 +281,20 @@ defmodule SymphonyElixir.TicketEvents.Brief do
 
   defp notes_section(notes) do
     section("Notes", notes, fn note -> [indent("- #{time(note.at)}, #{actor(note.actor)}: " <> (text(note, :text) || ""), "  ")] end)
+  end
+
+  # Messages
+
+  defp messages_section(events) do
+    section("Messages", Messages.messages(events), fn message ->
+      read =
+        case Messages.read_event(message, events) do
+          nil -> "not read by a run yet"
+          read -> "given to #{Messages.run_title(text(read, :run_id), events)} at #{time(read.at)}"
+        end
+
+      [indent("- #{time(message.at)}, #{Messages.writer(message.actor)} wrote (#{read}): " <> (text(message, :text) || ""), "  ")]
+    end)
   end
 
   # Runs: the events that carry a run id, grouped by it in the order the runs began.
