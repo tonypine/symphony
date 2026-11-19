@@ -6,6 +6,7 @@ defmodule SymphonyElixir.PromptBuilder do
   alias SymphonyElixir.{
     AgentLabels,
     CiPoller,
+    Conductor,
     Config,
     Decisions,
     LandingOrder,
@@ -143,6 +144,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_ticket_ledger(opts)
     |> append_decisions(Keyword.get(opts, :decisions))
+    |> append_conductor_instructions(issue)
     |> append_path_unlocks(Keyword.get(opts, :path_unlocks, []))
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
@@ -225,6 +227,7 @@ defmodule SymphonyElixir.PromptBuilder do
     |> append_ticket_state(Keyword.get(opts, :ticket_state))
     |> append_ticket_ledger(opts)
     |> append_decisions(Keyword.get(opts, :decisions))
+    |> append_conductor_instructions(issue)
     |> append_path_unlocks(Keyword.get(opts, :path_unlocks, []))
     |> append_feedback_protocol(Keyword.get(opts, :settings))
     |> append_linear_input_warnings(linear_input_warnings)
@@ -768,6 +771,10 @@ defmodule SymphonyElixir.PromptBuilder do
   end
 
   defp append_decisions(prompt, _decisions), do: prompt
+
+  # The newest instructions the Conductor wrote on the ticket (`SymphonyElixir.Conductor`), advice from
+  # an earlier model turn; nothing while the Conductor is off or wrote none.
+  defp append_conductor_instructions(prompt, issue), do: prompt <> Conductor.prompt_section(Map.get(issue, :id))
 
   # The per-ticket machine record is injected as continuation context (D9), never read through a
   # tool. A ticket with no record yet adds nothing to the prompt, so today's runs are unchanged.

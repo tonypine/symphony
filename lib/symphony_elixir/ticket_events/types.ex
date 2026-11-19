@@ -128,6 +128,12 @@ defmodule SymphonyElixir.TicketEvents.Types do
   tickets and the events it rests on, its sentences, their text, each sentence's citations, the run,
   its model and the Question it raised (`question_id`).
 
+  `conductor.update` and `conductor.instructions` are machine-only: what the Conductor's turn at a
+  junction of the ticket's life wrote (`SymphonyElixir.Conductor`), naming the junction
+  (`after_coding`, `after_qa_fail`, `after_rework`, `before_merge`). The update is for the person
+  (`text`, at most 900 characters) with the ids of the events it rests on (`refs`); the
+  instructions are advice for the next run's prompt (`text`, at most 2,000).
+
   `brief.written` is an agent's, in an implementation, rework or review-feedback run: what the ticket
   does and why, in a person's words (`text`, at most 1,200 characters), and its walkthrough as the
   steps a person takes (`walkthrough`, at most 4,000), both prose with no backtick. The newest one is
@@ -197,6 +203,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @agent_steps [mode: ["delegated"]]
 
   @rule_actions ~w(rerun paused parked filed_ticket lifted_pause moved updated_branch auto_merge asked other)
+
+  # The junctions of a ticket's life the Conductor runs at (`SymphonyElixir.Config.Schema.Conductor.junctions/0`).
+  @conductor_junctions ~w(after_coding after_qa_fail after_rework before_merge)
 
   @legacy_types ["hold.set", "hold.cleared", "decision.requested", "decision.recorded", "decision.withdrawn"]
 
@@ -515,6 +524,20 @@ defmodule SymphonyElixir.TicketEvents.Types do
       required: [identifier: :string, kind: {:enum, ~w(split_off follow_up)}],
       optional: [title: {:string, 300}] ++ @signal,
       idempotency: {:fields, [:identifier]}
+    },
+    "conductor.update" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [junction: {:enum, @conductor_junctions}, text: {:string, 900}],
+      optional: [refs: {:list, :string}] ++ @signal,
+      idempotency: :writer
+    },
+    "conductor.instructions" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [junction: {:enum, @conductor_junctions}, text: {:string, 2_000}],
+      optional: @signal,
+      idempotency: :writer
     },
     "brief.written" => %{
       writers: [:agent],

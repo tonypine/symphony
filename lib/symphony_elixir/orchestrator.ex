@@ -17,6 +17,7 @@ defmodule SymphonyElixir.Orchestrator do
     BuildInfo,
     CiPoller,
     CiWait,
+    Conductor,
     Config,
     Connected,
     DispatchLoop,
@@ -853,6 +854,7 @@ defmodule SymphonyElixir.Orchestrator do
         Verification.release(Map.get(running_entry, :verification), "agent process exit")
         reason = held_exit(reason, running_entry)
         record_dispatch_outcome(running_entry, reason)
+        start_conductor_after_run(state, running_entry, reason)
         state = record_session_completion_totals(state, running_entry)
         session_id = running_entry_session_id(running_entry)
 
@@ -6241,8 +6243,11 @@ defmodule SymphonyElixir.Orchestrator do
     run_profile = run_profile_for_issue(state, issue, state.continuation_dispatch == issue.id)
     reviewer_run_profile = if run_profile.kind == :code_review and review_agent_enabled?(settings), do: Config.run(settings, :code_review)
     forced? = forced_slot_available?(issue, state)
+    conductor = conductor_plan(state, issue, run_profile, repo_key, running_attrs)
 
     case Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn ->
+           :ok = Conductor.run(conductor, issue, [])
+
            opts =
              [
                attempt: attempt,
@@ -6356,6 +6361,33 @@ defmodule SymphonyElixir.Orchestrator do
           worker_host: worker_host
         })
     end
+  end
+
+  # The Conductor's turn at a junction of the ticket's life (`SymphonyElixir.Conductor`), planned as
+  # the next run is dispatched, with the providers that can take a run now; it runs in that run's own
+  # task before its agent starts, so the run's prompt carries its instructions. Nil when the
+  # Conductor is off or no junction is due; a PR run has no ticket.
+  defp conductor_plan(_state, _issue, _run_profile, _repo_key, %{run_kind: :pr}), do: nil
+
+  defp conductor_plan(%State{} = state, %Issue{} = issue, %{kind: kind}, repo_key, _running_attrs),
+    do: Conductor.plan(issue, kind, repo_key, available?: conductor_available?(state, issue))
+
+  # A QA or Code Review run that carried its ticket into Merging meets the `before_merge` junction,
+  # and no run may follow it: the Conductor's turn runs on its own (`Conductor.plan_after_run/4`).
+  defp start_conductor_after_run(%State{} = state, %{issue: %Issue{} = issue, run_profile: %{kind: kind}} = running_entry, :normal) do
+    repo_key = running_entry_repo_key(running_entry)
+
+    case Conductor.plan_after_run(issue, kind, repo_key, available?: conductor_available?(state, issue)) do
+      nil -> :ok
+      plan -> Task.Supervisor.start_child(SymphonyElixir.TaskSupervisor, fn -> Conductor.run(plan, issue, []) end)
+    end
+  end
+
+  defp start_conductor_after_run(_state, _running_entry, _reason), do: :ok
+
+  # A provider can take the Conductor's turn when it is not paused and no usage limit holds it.
+  defp conductor_available?(%State{} = state, %Issue{} = issue) do
+    fn profile -> not MapSet.member?(state.paused_providers, profile.provider) and is_nil(usage_limit_holding(state, issue, profile, false)) end
   end
 
   # Every run started for a ticket is recorded as its `run.started` event, best effort, which the

@@ -292,7 +292,7 @@ defmodule SymphonyElixir.QaAgent do
     Identifier: #{issue.identifier}
     Title: #{PromptSafety.linear_issue_title(issue.title || "")}
     Description (walkthrough and acceptance criteria):
-    #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}
+    #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}#{SymphonyElixir.Conductor.prompt_section(Map.get(issue, :id))}
     #{decisions_rule(issue, job)}#{parent_section(parent)}#{design_section(job, parent)}#{epic_section(job)}#{dev_server_section(job)}#{host_ports_section(Map.get(job, :host_ports, []))}#{android_section(job)}
     #{qa_jobs_section()}#{scope_section(job)}#{qa_mode_section(job)}
     Playbooks to follow:
