@@ -431,46 +431,6 @@ struct SettingsView: View {
                 } header: {
                     Text("Environment (stored in a file only you can read)")
                 }
-
-                Section {
-                    SecureField(
-                        SecretSettings.openRouterAPIKeyName,
-                        text: $model.openRouterAPIKey,
-                        prompt: Text("sk-or-…")
-                    )
-                    .disabled(model.isLoadingSecrets)
-                    HStack {
-                        Button("Test connection") { model.testOpenRouter() }
-                            .disabled(model.isTestingOpenRouter || model.openRouterAPIKey.isEmpty)
-                        if model.isTestingOpenRouter {
-                            ProgressView().controlSize(.small)
-                        }
-                    }
-                    switch model.openRouterResult {
-                    case .success(let key):
-                        Text(key.summary).foregroundStyle(.green)
-                    case .failure(let failure):
-                        Text(failure.message).foregroundStyle(.red)
-                    case nil:
-                        EmptyView()
-                    }
-                    switch model.openRouterModels {
-                    case .success(let summary):
-                        LabeledContent("Models", value: summary)
-                    case .failure(let failure):
-                        LabeledContent("Models") { Text(failure.message).foregroundStyle(.red) }
-                    case nil:
-                        EmptyView()
-                    }
-                } header: {
-                    Text("OpenRouter")
-                } footer: {
-                    SectionFooter(
-                        "Stored with your other secrets and passed to Symphony as \(SecretSettings.openRouterAPIKeyName) "
-                            + "for run profiles with provider: openrouter. Those run on the Claude harness only, with "
-                            + "models that support tools. Leave blank to turn OpenRouter off."
-                    )
-                }
             }
             .formStyle(.grouped)
             // A grouped Form is scroll-backed with no height of its own (ideal height 0), so without this it collapses.

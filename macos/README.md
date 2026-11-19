@@ -236,13 +236,21 @@ set (or, in Development mode, no checkout folder).
   JSON object of variable name to value. The file is readable only by you (`0600`), and agents' sandboxes
   can't read `~/Library/Application Support`. Unlike the Keychain, the file also goes into file backups such
   as Time Machine.
-- **OpenRouter** holds the optional `OPENROUTER_API_KEY`, which runs with `provider: openrouter`
-  need. It is stored in the secrets file like `LINEAR_API_KEY` and passed to Symphony only when set; it is
-  never written to `symphony.yml` or UserDefaults. **Test connection** checks the key with OpenRouter
-  (`GET /api/v1/key`) and shows its label and credit, or why it was rejected, and the **Models** line counts
-  the models OpenRouter offers and how many of them support tools.
-- When Save changes `LINEAR_API_KEY`, `OPENROUTER_API_KEY` or an extra variable while Symphony runs, the app
-  restarts Symphony the way Restart Symphony does, so it picks up the new environment.
+- Settings has no provider key. A provider Symphony reaches with an API key (OpenRouter's
+  `OPENROUTER_API_KEY`, OpenCode Go's `OPENCODE_API_KEY`) is set up on its own page in Factory › Providers:
+  its **Key** block holds the key, masked, **Test connection**, and **Enable** once a test passed, or
+  **Disable** while it is on, and **Remove Key**. OpenRouter's test reads its key and models API
+  (`GET /api/v1/key`, `GET /api/v1/models`); OpenCode Go's reads its models list with the key, never a paid
+  call. A test that passes keeps the key. Enable is a switch of its own: saving or removing a key never changes
+  it, Disable keeps the key, and a provider with no key is off. Each key is stored in the secrets file like
+  `LINEAR_API_KEY`, and the enabled providers under `SYMPHONY_ENABLED_PROVIDERS` there, never in `symphony.yml`
+  or UserDefaults; a key reaches Symphony only while its provider is enabled. A key saved by an earlier
+  version's OpenRouter section, or an `OPENCODE_API_KEY` set as an extra variable, shows on the provider's page
+  and starts enabled. Factory › Runs offers only enabled providers in Provider; a line already set to one that
+  is off keeps it and says so.
+- When Save changes `LINEAR_API_KEY` or an extra variable, or a provider page changes what Symphony is launched
+  with, while Symphony runs, the app restarts Symphony the way Restart Symphony does, so it picks up the new
+  environment.
 
 Earlier versions kept these in the login Keychain, which asked for the password again after every update.
 The first time a version with the secrets file reads them, it copies each `symphony` Keychain item into the
@@ -1377,8 +1385,8 @@ Ten more variables, read only in QA mode:
   a release in the background, in every update mode, in place of the mode's interval and **Check for releases
   every N minutes**, so a test or the e2e harness sees a release within seconds. A check that hit the rate limit
   still waits until the limit lifts, an hour when the 403 or 429 names no reset.
-- `SYMPHONY_QA_OPENROUTER_URL` points Settings' OpenRouter section (Test connection) and the model lists of Factory › Runs at a stub
-  OpenRouter instead of `https://openrouter.ai`, so QA never needs a real key: the API base `symphony
+- `SYMPHONY_QA_OPENROUTER_URL` points Test connection on OpenRouter's and OpenCode Go's provider pages and the model lists of
+  Factory › Runs at a stub OpenRouter instead of `https://openrouter.ai` and OpenCode Go, so QA never needs a real key: the API base `symphony
   openrouter-stub` prints, such as `http://127.0.0.1:4100/api`. Only an `http` or `https` URL on a loopback host
   counts. The Symphony the app runs gets it too and, also only in QA mode, checks and runs OpenRouter models
   against the stub. Outside QA mode the app always talks to `https://openrouter.ai`, whatever the environment

@@ -16,17 +16,6 @@ typealias SettingsConfigCheck = (_ configPath: String, AppSettings, SecretSettin
 final class SettingsViewModel: ObservableObject {
     @Published var settings: AppSettings
     @Published var linearAPIKey = ""
-    @Published var openRouterAPIKey = "" {
-        didSet {
-            guard openRouterAPIKey != oldValue else { return }
-            openRouterResult = nil
-        }
-    }
-    /// The last Test connection result: the key's label and credit, or why it failed.
-    @Published private(set) var openRouterResult: Result<OpenRouterKeyInfo, OpenRouterFailure>?
-    /// "312 models, 141 support tools", or why the model list couldn't be loaded.
-    @Published private(set) var openRouterModels: Result<String, OpenRouterFailure>?
-    @Published private(set) var isTestingOpenRouter = false
     @Published var extraRows: [EnvironmentRow] = []
     /// Launch at Login, read from macOS rather than UserDefaults so it follows changes made in System Settings.
     @Published var launchAtLogin: Bool
@@ -249,7 +238,6 @@ final class SettingsViewModel: ObservableObject {
     private let secrets: SecretsReader
     private let validator: SettingsValidator
     private let loginItem: LoginItemService
-    private let openRouter: OpenRouterClient
     private let configCheck: SettingsConfigCheck
     private let onSecretsChanged: () -> Void
 
@@ -258,7 +246,6 @@ final class SettingsViewModel: ObservableObject {
         secrets: SecretsReader? = nil,
         validator: SettingsValidator = SettingsValidator(embeddedSymphonyPath: SymphonyRunner.embeddedSymphonyPath),
         loginItem: LoginItemService = AppStores.current.loginItem,
-        openRouter: OpenRouterClient = OpenRouterClient(baseURL: AppStores.current.openRouterBaseURL),
         configCheck: @escaping SettingsConfigCheck = SettingsViewModel.runConfigCheck,
         onSecretsChanged: @escaping () -> Void = {}
     ) {
@@ -266,7 +253,6 @@ final class SettingsViewModel: ObservableObject {
         self.secrets = secrets ?? SecretsReader(load: store.loadSecrets)
         self.validator = validator
         self.loginItem = loginItem
-        self.openRouter = openRouter
         self.configCheck = configCheck
         self.onSecretsChanged = onSecretsChanged
         settings = store.loadSettings()
@@ -302,8 +288,6 @@ final class SettingsViewModel: ObservableObject {
         switch result {
         case .success(let secrets):
             linearAPIKey = secrets.linearAPIKey
-            // Setting a non-empty key loads the OpenRouter model list.
-            openRouterAPIKey = secrets.openRouterAPIKey
             extraRows = secrets.extraEnvironment.map { EnvironmentRow(name: $0.name, value: $0.value) }
             storedNames = Self.storedNames(secrets)
             loadedSecrets = secrets.trimmed()
@@ -639,30 +623,10 @@ final class SettingsViewModel: ObservableObject {
         macAppQA.launchEnv.removeAll { $0.id == id }
     }
 
-    /// Names that may be removed from the store on save: the extra variables and a stored OpenRouter key.
+    /// Names that may be removed from the store on save: the extra variables. The provider keys are Factory ›
+    /// Providers' (TP-1540), never Settings'.
     private static func storedNames(_ secrets: SecretSettings) -> Set<String> {
-        var names = Set(secrets.extraEnvironment.map(\.name))
-        if !secrets.openRouterAPIKey.isEmpty { names.insert(SecretSettings.openRouterAPIKeyName) }
-        return names
-    }
-
-    /// Checks the OpenRouter key and loads the model list, both at once.
-    func testOpenRouter() {
-        guard !isTestingOpenRouter else { return }
-        isTestingOpenRouter = true
-        openRouterResult = nil
-        openRouterModels = nil
-        let key = openRouterAPIKey
-        let client = openRouter
-        Task {
-            async let keyResult = client.checkKey(key)
-            async let modelsResult = client.models()
-            let (checked, models) = await (keyResult, modelsResult)
-            // A key edited during the test makes the result stale.
-            if openRouterAPIKey == key { openRouterResult = checked }
-            openRouterModels = models.map(OpenRouterModel.summary)
-            isTestingOpenRouter = false
-        }
+        Set(secrets.extraEnvironment.map(\.name))
     }
 
     func addRow() {
@@ -683,7 +647,7 @@ final class SettingsViewModel: ObservableObject {
     private var formSecrets: SecretSettings {
         SecretSettings(
             linearAPIKey: linearAPIKey,
-            openRouterAPIKey: openRouterAPIKey,
+            providers: loadedSecrets?.providers ?? ProviderKeys(),
             extraEnvironment: extraRows.map { EnvironmentVariable(name: $0.name, value: $0.value) },
             githubWebhookSecret: loadedSecrets?.githubWebhookSecret ?? ""
         ).trimmed()

@@ -305,8 +305,8 @@ model stops `symphony.yml` from loading. See [docs/configuration.md](docs/config
 To run a kind of run's model through OpenRouter, set `provider: openrouter` and an OpenRouter
 model id in `runs.default` or `runs.<kind>` (claude harness, local host only), name the small model
 for it in `execution.harnesses.claude.small_model.openrouter`, and export
-`OPENROUTER_API_KEY` in Symphony's environment (the macOS app sets it from the OpenRouter section of
-its Settings). The key reaches `claude` only through its process env. The model must support tool
+`OPENROUTER_API_KEY` in Symphony's environment (the macOS app sets it from OpenRouter's page in
+Factory › Providers while the provider is enabled). The key reaches `claude` only through its process env. The model must support tool
 use: `symphony check` asks OpenRouter's models API and rejects an unknown model id or one without
 `tools`.
 

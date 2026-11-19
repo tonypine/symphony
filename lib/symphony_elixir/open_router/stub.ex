@@ -8,6 +8,9 @@ defmodule SymphonyElixir.OpenRouter.Stub do
     any other key or none gets a 401, as OpenRouter answers an unknown key;
   - `GET /api/v1/models`: three models, one with tools and reasoning, one with tools and no
     reasoning, and one without tools;
+  - `GET /api/opencode-go/v1/models`: OpenCode Go's models list, which the macOS app's Test
+    connection on OpenCode Go's provider page reads; the same valid key gets two models, any
+    other key or none a 401, so QA tests that key with no real one either;
   - `POST /api/v1/messages` (and `/messages/count_tokens`): with the valid key, a canned
     Anthropic Messages answer that names the model it was asked for, as JSON or as an SSE stream
     when the request asks for one. That is enough to show a `claude` run's env and model id
@@ -57,6 +60,11 @@ defmodule SymphonyElixir.OpenRouter.Stub do
     }
   ]
 
+  @opencode_go_models [
+    %{"id" => "kimi-k3", "object" => "model", "owned_by" => "opencode-go"},
+    %{"id" => "symphony-qa-go", "object" => "model", "owned_by" => "opencode-go"}
+  ]
+
   @type log :: (String.t() -> any())
 
   @doc "The one key the stub accepts. It is not a secret."
@@ -66,6 +74,10 @@ defmodule SymphonyElixir.OpenRouter.Stub do
   @doc "The models `GET /api/v1/models` lists, in OpenRouter's format."
   @spec models() :: [map()]
   def models, do: @models
+
+  @doc "The models `GET /api/opencode-go/v1/models` lists, in OpenCode Go's (OpenAI's) format."
+  @spec opencode_go_models() :: [map()]
+  def opencode_go_models, do: @opencode_go_models
 
   @doc "The base URL to export as `SYMPHONY_QA_OPENROUTER_URL` for a stub on `port`."
   @spec url(:inet.port_number()) :: String.t()
@@ -137,6 +149,11 @@ defmodule SymphonyElixir.OpenRouter.Stub do
   defp route(conn, "GET", ["api", "v1", "key"], true), do: {json(conn, 200, %{"data" => @key_info}), 200, nil}
   defp route(conn, "GET", ["api", "v1", "key"], false), do: unauthorized(conn)
   defp route(conn, "GET", ["api", "v1", "models"], _accepted?), do: {json(conn, 200, %{"data" => @models}), 200, nil}
+
+  defp route(conn, "GET", ["api", "opencode-go", "v1", "models"], true),
+    do: {json(conn, 200, %{"object" => "list", "data" => @opencode_go_models}), 200, nil}
+
+  defp route(conn, "GET", ["api", "opencode-go", "v1", "models"], false), do: unauthorized(conn)
   defp route(conn, "POST", ["api", "v1", "messages" | _rest], false), do: unauthorized(conn)
 
   defp route(conn, "POST", ["api", "v1", "messages" | rest], true) do
