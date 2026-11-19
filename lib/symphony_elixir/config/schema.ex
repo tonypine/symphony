@@ -807,6 +807,18 @@ defmodule SymphonyElixir.Config.Schema do
       Map.new(harnesses || %{}, fn {id, harness} -> {id, %{command: harness["command"], small_model: harness["small_model"] || %{}}} end)
     end
 
+    @doc """
+    Where new runs on `provider` stop (`execution.providers.<provider>.reserve`), a share of any of
+    its usage windows; nil when it has none.
+    """
+    @spec reserve(t(), String.t()) :: float() | nil
+    def reserve(%{providers: providers}, provider) when is_binary(provider) do
+      case Map.get(providers || %{}, provider) do
+        %{"reserve" => reserve} when is_number(reserve) -> reserve / 1
+        _none -> nil
+      end
+    end
+
     @doc false
     @spec codex_default_approval_policy() :: map()
     def codex_default_approval_policy, do: @codex_default_approval_policy
@@ -882,10 +894,9 @@ defmodule SymphonyElixir.Config.Schema do
         field(:auto_pause, :boolean, default: true)
         field(:resume_margin_seconds, :integer, default: 120)
         field(:unknown_reset_retry_seconds, :integer, default: 900)
-        field(:headroom_utilization, :float)
       end
 
-      @fields [:auto_pause, :resume_margin_seconds, :unknown_reset_retry_seconds, :headroom_utilization]
+      @fields [:auto_pause, :resume_margin_seconds, :unknown_reset_retry_seconds]
 
       @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
       def changeset(schema, attrs) do
@@ -894,7 +905,6 @@ defmodule SymphonyElixir.Config.Schema do
         |> Schema.validate_present([:auto_pause, :resume_margin_seconds, :unknown_reset_retry_seconds])
         |> validate_number(:resume_margin_seconds, greater_than_or_equal_to: 0)
         |> validate_number(:unknown_reset_retry_seconds, greater_than_or_equal_to: 60)
-        |> validate_number(:headroom_utilization, greater_than: 0, less_than_or_equal_to: 1)
       end
     end
 
@@ -1134,6 +1144,9 @@ defmodule SymphonyElixir.Config.Schema do
       embeds_one(:network_access, NetworkAccess, on_replace: :update, defaults_to_struct: true)
       embeds_one(:sandbox_runtime, SandboxRuntime, on_replace: :update, defaults_to_struct: true)
       embeds_one(:usage_limit, UsageLimit, on_replace: :update, defaults_to_struct: true)
+      # `execution.providers`: each provider's section, by provider, as `SystemSchema` checked it
+      # (`%{"anthropic" => %{"reserve" => 0.9}}`); read through `reserve/2`.
+      field(:providers, :map, default: %{})
       field(:turn_timeout_ms, :integer, default: 3_600_000)
       field(:read_timeout_ms, :integer, default: 30_000)
       field(:stall_timeout_ms, :integer, default: 300_000)
@@ -1175,7 +1188,8 @@ defmodule SymphonyElixir.Config.Schema do
           :stall_timeout_ms,
           :command_timeout_ms,
           :mcp_tool_timeout_ms,
-          :codex_stdio_prompt_soft_limit
+          :codex_stdio_prompt_soft_limit,
+          :providers
         ],
         empty_values: []
       )

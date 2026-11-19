@@ -44,15 +44,20 @@ public struct RunsPage: Equatable {
     }
 
     /// What a line says when its provider can't take a new run now (TP-1534): "Anthropic is paused" beside a Status
-    /// dot in the "waiting on you" orange, or "Anthropic is at its limit" beside a red one.
+    /// dot in the "waiting on you" orange, "Anthropic is at its 90 % reserve" (TP-1535) beside an orange one too, or
+    /// "Anthropic is at its limit" beside a red one.
     public struct ProviderNote: Equatable {
         public let status: DesignTokens.Status
         public let text: String
 
         /// The note for `provider` as the state lists it; nil while it can take new runs. The Director's pause reads
-        /// before a usage limit's hold.
+        /// before its reserve, and its reserve before a usage limit's hold.
         public static func of(_ provider: StateSnapshot.Provider) -> ProviderNote? {
             if provider.paused { return ProviderNote(status: .you, text: "\(provider.name) is paused") }
+            if provider.atReserve {
+                let reserve = provider.reserve.map { " \(ProviderReserve.percent($0)) %" } ?? ""
+                return ProviderNote(status: .you, text: "\(provider.name) is at its\(reserve) reserve")
+            }
             if provider.held { return ProviderNote(status: .problem, text: "\(provider.name) is at its limit") }
             return nil
         }

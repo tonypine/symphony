@@ -248,6 +248,12 @@ set (or, in Development mode, no checkout folder).
   version's OpenRouter section, or an `OPENCODE_API_KEY` set as an extra variable, shows on the provider's page
   and starts enabled. Factory › Runs offers only enabled providers in Provider; a line already set to one that
   is off keeps it and says so.
+- A provider whose usage Symphony reads (Anthropic) has **Stop new runs at** under its usage meters on its page in
+  Factory › Providers: a pop-up of shares and **No reserve**, which sets `execution.providers.<provider>.reserve`
+  in `symphony.yml`, rewriting only its line once `symphony check` passes on the whole file. Each meter draws a
+  stop mark at the reserve, and once a window reaches it the provider reads **At your reserve**, as does each line
+  on it in Factory › Runs (`Anthropic is at its 90 % reserve`). A provider whose usage Symphony can't read has no
+  such control (see [`providers`](../docs/configuration.md)).
 - When Save changes `LINEAR_API_KEY` or an extra variable, or a provider page changes what Symphony is launched
   with, while Symphony runs, the app restarts Symphony the way Restart Symphony does, so it picks up the new
   environment.
@@ -353,7 +359,8 @@ when it isn't today:
 
 - `Paused: Claude limit, resumes ~14:05` while new runs wait for the reset.
 - `Resuming: checking Claude limit…` while one canary run checks the limit after the reset.
-- `Holding new runs: Claude at 91%, resets ~14:05` while Symphony leaves headroom before the limit runs out.
+- `Holding new runs: Claude at its 90% reserve, resets ~14:05` while a window is at the provider's reserve, so
+  Symphony leaves the rest of the limit to you.
 
 Symphony holds runs the same way when the model API can't be reached at all (a network or DNS outage), and
 the menu reads it as an outage, not a limit:

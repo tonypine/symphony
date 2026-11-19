@@ -404,7 +404,11 @@ final class APIFixturesTests: XCTestCase {
         XCTAssertEqual(anthropic.state.word, "Available")
         XCTAssertEqual(anthropic.state.cause, "2 runs are working on it.")
         XCTAssertEqual(anthropic.usage.map(\.label), ["5 hours", "Week"])
+        // Anthropic stops new runs at 90 % (TP-1535): "Stop new runs at" says so and each meter has its mark there.
+        XCTAssertEqual(anthropic.reserve?.title, "90 %")
+        XCTAssertEqual(anthropic.usage.map(\.stop), [90, 90])
         XCTAssertEqual(try XCTUnwrap(before.detail("openai")).usage, [])
+        XCTAssertNil(try XCTUnwrap(before.detail("openai")).reserve)
         XCTAssertEqual(try XCTUnwrap(before.detail("openrouter")).state.word, "Paused")
 
         let pause = try XCTUnwrap(anthropic.action)

@@ -1614,6 +1614,11 @@ public enum DesignTokens {
         public static let headGap = Space.s2
         public static let headBottom = Space.s2
         public static let meterGap = Space.s3
+        /// "Stop new runs at" under the meters (`.use-set`): a separator above it, `--space-3` over it and between its
+        /// word and its small pop-up.
+        public static let reserveTop = Space.s3
+        public static let reserveGap = Space.s3
+        public static let reserveControl = Control.small
         /// The head's first line, the id and the button: as tall as a medium control.
         public static let idLineHeight = Control.medium.height
         public static let control = Control.medium

@@ -480,14 +480,15 @@ final class StatusMenuTests: XCTestCase {
         stillOn.stillOn = true
         XCTAssertEqual(StatusMenu.usageLimitLine(stillOn, now: sameDay, timeZone: utc), "Paused: Claude limit still on, resumes ~12:18")
 
-        let headroom = StateSnapshot.UsageLimit(window: "five_hour", phase: .headroom, resetsAt: pausedAt, utilization: 0.906)
+        // The provider's reserve, not the share used, is where new runs stop (TP-1535).
+        let headroom = StateSnapshot.UsageLimit(window: "five_hour", phase: .headroom, resetsAt: pausedAt, utilization: 0.906, reserve: 0.85)
         XCTAssertEqual(
             StatusMenu.usageLimitLine(headroom, now: sameDay, timeZone: utc),
-            "Holding new runs: Claude at 91%, resets ~12:16"
+            "Holding new runs: Claude at its 85% reserve, resets ~12:16"
         )
         XCTAssertEqual(
             StatusMenu.usageLimitLine(.init(provider: "openai", phase: .headroom), now: sameDay, timeZone: utc),
-            "Holding new runs: Codex"
+            "Holding new runs: Codex at its reserve"
         )
     }
 

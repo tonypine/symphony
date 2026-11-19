@@ -21,14 +21,18 @@ defmodule SymphonyElixir.Providers do
       whose fallbacks is, in `SymphonyElixir.RunKind`'s order;
     * `working`: how many runs work on it now;
     * `tokens_today`: the tokens its runs used since the start of the daily budget's day;
-    * `reserve`: nil, until the reserve is a fact Symphony keeps.
+    * `reserve`: where new runs on it stop, a share of any of its usage windows
+      (`execution.providers.<provider>.reserve`); nil when it has none, and always for a provider
+      whose usage Symphony can't read (`usage_readable/0`);
+    * `at_reserve`: a window reached the reserve, so a hold keeps new runs off it (a headroom hold,
+      `SymphonyElixir.UsageLimit`) until the window resets.
 
   Providers in use come first, then those not in use, each group in the harnesses' order.
 
   `list/1` builds the list from facts its caller reads, so it reads nothing itself.
   """
 
-  alias SymphonyElixir.{AgentProviders, Config, Harnesses, RunKind}
+  alias SymphonyElixir.{AgentProviders, Config, Harnesses, RunKind, UsageLimit}
   alias SymphonyElixir.Config.Runs.Run
   alias SymphonyElixir.Config.Schema
 
@@ -46,7 +50,8 @@ defmodule SymphonyElixir.Providers do
           fallback_for: [String.t()],
           working: non_neg_integer(),
           tokens_today: non_neg_integer(),
-          reserve: nil
+          reserve: float() | nil,
+          at_reserve: boolean()
         }
 
   @typedoc """
@@ -58,7 +63,8 @@ defmodule SymphonyElixir.Providers do
     * `usage_limits`: the usage-limit holds (`provider` and `resume_at`);
     * `usage_windows`: the windows seen, `%{{provider, window} => %{resets_at:, utilization:}}`;
     * `working`: the provider of each run working now;
-    * `tokens_today`: the tokens used today, by provider.
+    * `tokens_today`: the tokens used today, by provider;
+    * `reserves`: each provider's reserve, by provider.
   """
   @type facts :: %{
           optional(:runs) => [Run.t() | map()],
@@ -66,8 +72,12 @@ defmodule SymphonyElixir.Providers do
           optional(:usage_limits) => [map()],
           optional(:usage_windows) => map(),
           optional(:working) => [String.t() | nil],
-          optional(:tokens_today) => %{optional(String.t()) => non_neg_integer()}
+          optional(:tokens_today) => %{optional(String.t()) => non_neg_integer()},
+          optional(:reserves) => %{optional(String.t()) => float() | nil}
         }
+
+  # The providers whose usage Symphony reads from their runs: Claude Code reports Anthropic's windows.
+  @usage_readable ["anthropic"]
 
   @doc "Every provider and its state, in use first (see the module doc)."
   @spec list(facts()) :: [entry()]
@@ -78,6 +88,7 @@ defmodule SymphonyElixir.Providers do
     windows = Map.get(facts, :usage_windows, %{})
     working = Map.get(facts, :working, [])
     tokens_today = Map.get(facts, :tokens_today, %{})
+    reserves = Map.get(facts, :reserves, %{})
 
     Harnesses.all_providers()
     |> Enum.map(fn provider ->
@@ -100,10 +111,21 @@ defmodule SymphonyElixir.Providers do
         fallback_for: fallback_for,
         working: Enum.count(working, &(&1 == provider)),
         tokens_today: Map.get(tokens_today, provider, 0),
-        reserve: nil
+        reserve: if(provider in @usage_readable, do: Map.get(reserves, provider)),
+        at_reserve: Enum.any?(holds, &UsageLimit.headroom?/1)
       }
     end)
     |> Enum.sort_by(&if(&1.in_use, do: 0, else: 1))
+  end
+
+  @doc "The providers whose usage Symphony reads, so they take a reserve (`execution.providers`)."
+  @spec usage_readable() :: [String.t()]
+  def usage_readable, do: @usage_readable
+
+  @doc "Each provider's reserve in `settings`, by provider; a provider with none is left out."
+  @spec reserves(Schema.t()) :: %{optional(String.t()) => float()}
+  def reserves(%Schema{execution: execution}) do
+    for provider <- @usage_readable, reserve = Schema.Execution.reserve(execution, provider), into: %{}, do: {provider, reserve}
   end
 
   @doc """

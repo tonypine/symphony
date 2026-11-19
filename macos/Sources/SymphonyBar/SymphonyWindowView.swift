@@ -361,6 +361,10 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var providerKeys: ProviderKeys?
     /// The Key blocks' keys typed, tests and results.
     @Published var providerKeyEditor = ProviderKeyEditor()
+    /// The reserves saved to `symphony.yml` (TP-1535) until Symphony's state says the same, by provider id.
+    @Published var savedProviderReserves: [String: Int?] = [:]
+    /// The provider whose reserve is being saved.
+    @Published var savingProviderReserve: String?
     /// The `symphony.yml` path in Settings.
     var configPath: () -> String = { "" }
     /// Check Again with no fix, a Linear fix with one: `POST /api/v1/setup/refresh` or `/fixes`.

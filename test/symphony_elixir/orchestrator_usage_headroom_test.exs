@@ -43,7 +43,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
           agent_command: ctx.fake_claude,
           max_turns: 1,
           tracker_active_states: ["Todo", "In Progress", "Rework", "Merging"],
-          agent_usage_limit: %{headroom_utilization: 0.9}
+          execution_providers: %{anthropic: %{reserve: 0.9}}
         ],
         overrides
       )
@@ -150,7 +150,8 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
         phase: :headroom,
         canary_issue_id: nil,
         issue_identifier: "MT-RUNNING",
-        utilization: 0.92
+        utilization: 0.92,
+        reserve: 0.9
       },
       attrs
     )
@@ -200,14 +201,14 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
       end)
 
     assert log =~
-             "Usage limit headroom hold provider=anthropic utilization=0.92 threshold=0.9 scope=all window=five_hour " <>
+             "Usage limit headroom hold provider=anthropic utilization=0.92 reserve=0.9 scope=all window=five_hour " <>
                "resets_at=#{DateTime.to_iso8601(resets_at)} resume_at=#{DateTime.to_iso8601(resume_at)} issue_identifier=MT-RUNNING"
 
-    assert log =~ "Usage limit headroom hold provider=anthropic utilization=0.93 threshold=0.9"
+    assert log =~ "Usage limit headroom hold provider=anthropic utilization=0.93 reserve=0.9"
     assert length(String.split(log, "Usage limit headroom hold")) == 3
 
     state = :sys.get_state(pid)
-    assert %{phase: :headroom, reason: "claude_usage_headroom", resume_at: ^resume_at, utilization: 0.93} = state.usage_limits[@anthropic]
+    assert %{phase: :headroom, reason: "claude_usage_headroom", resume_at: ^resume_at, utilization: 0.93, reserve: 0.9} = state.usage_limits[@anthropic]
     assert is_reference(state.usage_limit_timers[@anthropic])
     assert %{@anthropic => %{phase: :headroom}} = RunStore.get_usage_limits()
     assert Map.has_key?(state.running, running.id)
@@ -217,7 +218,10 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
 
     assert_receive {:notification_event, %Notifications.Event{event: "usage_limit_headroom"} = event}, 1_000
     assert event.issue_identifier == "MT-RUNNING"
-    assert event.reason == "Claude 5-hour limit at 92%; holding new runs until #{DateTime.to_iso8601(resume_at)}"
+
+    assert event.reason ==
+             "Anthropic at its 90% reserve: holding new runs (Claude 5-hour limit at 92%) until #{DateTime.to_iso8601(resume_at)}"
+
     refute_receive {:notification_event, %Notifications.Event{event: "usage_limit_" <> _}}, 100
 
     # Landing runs still go out, so dispatch stays active with the hold listed.
@@ -225,17 +229,17 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
     assert [%{phase: :headroom, utilization: 0.93}] = snapshot.usage_limits
     assert %{active?: true, blockers: [blocker]} = snapshot.dispatch_state
     assert %{kind: :usage_limit, phase: :headroom, resume_at: ^resume_at} = blocker
-    assert UsageLimit.banner(hd(snapshot.usage_limits), ctx.now, to_local: & &1) == "Holding new runs: Claude at 93%, resets ~13:00"
+    assert UsageLimit.banner(hd(snapshot.usage_limits), ctx.now, to_local: & &1) == "Holding new runs: Anthropic at its 90% reserve, resets ~13:00"
   end
 
-  test "below the threshold, a plain allowed window or headroom_utilization null holds nothing", ctx do
+  test "below the reserve, a refused window or no reserve holds nothing", ctx do
     resets_at = DateTime.add(ctx.now, 3600)
     running = issue("issue-headroom-off", "MT-OFF")
 
     for {name, overrides, update} <- [
           {:BelowOrchestrator, [], warning_update(0.89, resets_at)},
-          {:AllowedOrchestrator, [], warning_update(0.95, resets_at, "allowed")},
-          {:NullOrchestrator, [agent_usage_limit: %{}], warning_update(0.99, resets_at)}
+          {:RejectedOrchestrator, [], warning_update(0.95, resets_at, "rejected")},
+          {:NullOrchestrator, [execution_providers: nil], warning_update(0.99, resets_at)}
         ] do
       write_headroom_workflow!(ctx, overrides)
       pid = start_orchestrator(ctx, name)
@@ -283,7 +287,7 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
              Orchestrator.handle_retry_issue_for_test(state, held.id, 2, %{identifier: held.identifier}, fn _ids -> {:ok, [held]} end)
 
     assert %{attempt: 2, delay_type: :usage_limit, usage_limit_key: @anthropic, error: error} = state.retry_attempts[held.id]
-    assert error == "usage limit headroom hold (provider=anthropic scope=all); resuming at #{DateTime.to_iso8601(DateTime.add(ctx.now, 3720))}"
+    assert error == "provider at its reserve (provider=anthropic reserve=0.9 scope=all); resuming at #{DateTime.to_iso8601(DateTime.add(ctx.now, 3720))}"
     Process.cancel_timer(state.retry_attempts[held.id].timer_ref)
   end
 
@@ -468,7 +472,8 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
     File.chmod!(fake_claude, 0o755)
 
     write_headroom_workflow!(%{ctx | fake_claude: fake_claude},
-      agent_usage_limit: %{headroom_utilization: 0.9, resume_margin_seconds: 0},
+      agent_usage_limit: %{resume_margin_seconds: 0},
+      execution_providers: %{anthropic: %{reserve: 0.9}},
       tracker_active_states: ["Todo"],
       poll_interval_ms: 250
     )
@@ -488,8 +493,8 @@ defmodule SymphonyElixir.OrchestratorUsageHeadroomTest do
 
       # 2. The state API carries the banner; the issue's continuation runs while new work waits.
       payload = SymphonyElixirWeb.Presenter.state_payload(name, 1_000)
-      assert [%{phase: "headroom", reason: "claude_usage_headroom", utilization: 0.92} = hold] = payload.usage_limits
-      assert UsageLimit.banner(hold, ctx.now, to_local: & &1) == "Holding new runs: Claude at 92%, resets ~13:00"
+      assert [%{phase: "headroom", reason: "claude_usage_headroom", utilization: 0.92, reserve: 0.9} = hold] = payload.usage_limits
+      assert UsageLimit.banner(hold, ctx.now, to_local: & &1) == "Holding new runs: Anthropic at its 90% reserve, resets ~13:00"
       assert payload.dispatch_state.active? == true
 
       wait_until(fn -> length(runs_for.(first.id)) >= 2 end)

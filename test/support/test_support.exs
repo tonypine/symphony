@@ -1047,7 +1047,8 @@ defmodule SymphonyElixir.TestSupport do
           network_access: agent_network_access,
           sandbox_runtime: agent_sandbox_runtime,
           mcp: Keyword.get(config, :agent_mcp),
-          usage_limit: Keyword.get(config, :agent_usage_limit)
+          usage_limit: Keyword.get(config, :agent_usage_limit),
+          providers: Keyword.get(config, :execution_providers)
         }),
         runs_yaml(%{
           kind: agent_kind,
@@ -1109,6 +1110,7 @@ defmodule SymphonyElixir.TestSupport do
   end
 
   defp yaml_value(value) when is_integer(value), do: to_string(value)
+  defp yaml_value(value) when is_float(value), do: Float.to_string(value)
   defp yaml_value(true), do: "true"
   defp yaml_value(false), do: "false"
   defp yaml_value(nil), do: "null"
@@ -1329,7 +1331,8 @@ defmodule SymphonyElixir.TestSupport do
       config.network_access && "    network: #{yaml_value(config.network_access)}",
       outer_sandbox && "    outer_sandbox: #{yaml_value(outer_sandbox)}",
       config.mcp && "  mcp: #{yaml_value(config.mcp)}",
-      config.usage_limit && "  usage_limit: #{yaml_value(config.usage_limit)}"
+      config.usage_limit && "  usage_limit: #{yaml_value(config.usage_limit)}",
+      config.providers && "  providers: #{yaml_value(config.providers)}"
     ]
     |> Enum.reject(&(&1 in [nil, false]))
     |> Enum.join("\n")

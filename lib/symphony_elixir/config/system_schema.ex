@@ -105,7 +105,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "workspaces.cleanup" => ~w(enabled max_age_days interval_ms min_free_bytes orphan_action trash_dir),
     "workspaces.attachments" => ~w(allowed_hosts public_upload_extensions),
     # `harnesses` is a map of harness to its `command` and `small_model`, one setting.
-    "execution" => ~w(harnesses concurrency limits timeouts prompts permissions mcp usage_limit),
+    # `providers` holds a section per provider; only a provider whose usage Symphony reads takes one
+    # (`SymphonyElixir.Providers.usage_readable/0`), and its `reserve` is where new runs stop.
+    "execution" => ~w(harnesses concurrency limits timeouts prompts permissions mcp usage_limit providers),
     "execution.concurrency" => ~w(max_total max_by_issue_state epic_lanes finishing_max force_label forced_max forced_stale_after_hours),
     "execution.limits" => ~w(max_turns retry_backoff_max_ms tokens_per_issue tokens_per_day max_consecutive_identical_tool_failures),
     "execution.timeouts" => ~w(turn_ms read_ms stall_ms command_ms mcp_tool_ms),
@@ -115,7 +117,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "execution.permissions.network" => ~w(mode allowed_domains denied_domains),
     "execution.permissions.outer_sandbox" => ~w(kind command enable_weaker_network_isolation),
     "execution.mcp" => ~w(inherit allowed_servers servers),
-    "execution.usage_limit" => ~w(auto_pause resume_margin_seconds unknown_reset_retry_seconds headroom_utilization),
+    "execution.usage_limit" => ~w(auto_pause resume_margin_seconds unknown_reset_retry_seconds),
+    "execution.providers" => ~w(anthropic),
+    "execution.providers.anthropic" => ~w(reserve),
     "workers" => ~w(ssh_hosts max_concurrent_agents_per_host),
     "code_review" => ~w(enabled),
     "auto_review" => ~w(enabled state max_turns timeout_ms max_concurrent max_fix_attempts run_on skip_globs playbooks worker_host android acceptance_gate),
@@ -166,6 +170,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "ci" => "use `pull_requests.checks`",
     "dependencies" => "use `dependency_audit`",
     "dispatch.max_concurrent" => "remove it; use `execution.concurrency.max_total`",
+    "execution.usage_limit.headroom_utilization" => "use `execution.providers.anthropic.reserve`",
     "learnings" => "use `pull_requests.learnings`",
     "ledger.artifact_retention_days" => "remove it: Symphony now keeps every screenshot and run transcript",
     "observability" => "use `dashboard`",
@@ -1065,7 +1070,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
          :ok <- reject_unknown_section_keys(mcp, section_keys("execution.mcp"), "execution.mcp"),
          {:ok, usage_limit} <- section_map(Map.get(config, "usage_limit", %{}), "execution.usage_limit"),
          :ok <-
-           reject_unknown_section_keys(usage_limit, section_keys("execution.usage_limit"), "execution.usage_limit") do
+           reject_unknown_section_keys(usage_limit, section_keys("execution.usage_limit"), "execution.usage_limit"),
+         {:ok, providers} <- normalize_execution_providers(Map.get(config, "providers")) do
       sandbox_runtime =
         %{}
         |> maybe_put("kind", Map.get(outer_sandbox, "kind"))
@@ -1102,6 +1108,7 @@ defmodule SymphonyElixir.Config.SystemSchema do
         |> maybe_put("sandbox_runtime", sandbox_runtime)
         |> maybe_put("mcp", mcp)
         |> maybe_put("usage_limit", usage_limit)
+        |> maybe_put("providers", providers)
 
       workspace_sandbox =
         %{}
@@ -1111,6 +1118,45 @@ defmodule SymphonyElixir.Config.SystemSchema do
       {:ok, %{"execution" => execution, "workspace_sandbox" => workspace_sandbox}}
     end
   end
+
+  # `execution.providers`: a section per provider whose usage Symphony reads, holding its `reserve`, a
+  # share above 0 and at most 1 (or null, no reserve). A provider whose usage Symphony can't read
+  # takes no reserve, and a provider no harness reaches is unknown; each error names its key.
+  defp normalize_execution_providers(raw) do
+    with {:ok, providers} <- section_map(raw, "execution.providers") do
+      Enum.reduce_while(Enum.sort(providers), {:ok, %{}}, fn {provider, section}, {:ok, acc} ->
+        case normalize_execution_provider(to_string(provider), section) do
+          {:ok, nil} -> {:cont, {:ok, acc}}
+          {:ok, reserve} -> {:cont, {:ok, Map.put(acc, to_string(provider), %{"reserve" => reserve})}}
+          error -> {:halt, error}
+        end
+      end)
+    end
+  end
+
+  defp normalize_execution_provider(provider, section) do
+    path = "execution.providers.#{provider}"
+
+    cond do
+      provider not in SymphonyElixir.Harnesses.all_providers() ->
+        {:error, {:invalid_symphony_config, "unknown symphony.yml key `#{path}`: no harness reaches a provider named #{provider}"}}
+
+      provider not in Map.get(@operator_sections, "execution.providers") ->
+        {:error, {:invalid_symphony_config, "`#{path}.reserve` is not accepted: Symphony can't read #{SymphonyElixir.AgentProviders.display_name(provider)}'s usage, so it takes no reserve"}}
+
+      true ->
+        with {:ok, section} <- section_map(section, path),
+             :ok <- reject_unknown_section_keys(section, section_keys(path), path) do
+          provider_reserve(Map.get(section, "reserve"), path)
+        end
+    end
+  end
+
+  defp provider_reserve(nil, _path), do: {:ok, nil}
+  defp provider_reserve(reserve, _path) when is_number(reserve) and reserve > 0 and reserve <= 1, do: {:ok, reserve / 1}
+
+  defp provider_reserve(_reserve, path),
+    do: {:error, {:invalid_symphony_config, "`#{path}.reserve` must be a share above 0 and at most 1, such as 0.9"}}
 
   # A harness's entry is kept with string keys, as the settings map casts it.
   defp parse_harnesses(raw) do

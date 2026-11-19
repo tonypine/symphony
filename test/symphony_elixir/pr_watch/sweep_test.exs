@@ -66,7 +66,8 @@ defmodule SymphonyElixir.PrWatch.SweepTest do
         "dispatch is paused by the operator" => "gate: paused",
         "new dispatch is paused: the workspace quota is full" => "gate: paused",
         "Claude 5-hour limit reached" => "gate: usage limit",
-        "Claude weekly limit headroom: holding new runs" => "gate: usage limit",
+        "Anthropic at its 90% reserve: holding new runs" => "gate: usage limit",
+        "Anthropic at its reserve: holding new runs" => "gate: usage limit",
         "OpenRouter API unreachable" => "gate: usage limit",
         "the PR watcher hasn't decided on its PR yet" => "watcher: first read"
       }

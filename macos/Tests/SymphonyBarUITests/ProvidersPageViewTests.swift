@@ -34,12 +34,43 @@ final class ProvidersPageViewTests: XCTestCase {
     func testABlockWithNothingToSayIsNotDrawn() throws {
         let page = ProvidersPage(providers: [anthropic, openAI])
         let withUsage = fittingSize(ProviderDetailView(detail: try XCTUnwrap(page.detail("anthropic")), actions: .none).frame(width: 800))
+        // A provider whose usage Symphony can't read: no meters and no "Stop new runs at".
         var unread = anthropic
+        unread.id = "openrouter"
         unread.usageWindows = []
         let without = fittingSize(
             ProviderDetailView(detail: try XCTUnwrap(ProvidersPage(providers: [unread]).detail(nil)), actions: .none).frame(width: 800)
         )
         XCTAssertGreaterThan(withUsage.height, without.height + 2 * DesignTokens.ProvidersPage.meterGap, "the Usage block is gone")
+    }
+
+    /// "Stop new runs at" (TP-1535) is drawn under the meters, and a pick asks for the reserve to be saved; with no
+    /// window read yet the Usage block holds it alone.
+    func testStopNewRunsAtIsDrawnAndAPickSavesIt() throws {
+        var reserved = anthropic
+        reserved.reserve = 0.9
+        var picked: [(String, Int?)] = []
+        let actions = ProvidersPageActions(select: { _ in }, send: { _ in }, setReserve: { picked.append(($0, $1)) })
+        let detail = try XCTUnwrap(ProvidersPage(providers: [reserved]).detail(nil))
+        let reserve = try XCTUnwrap(detail.reserve)
+        let row = ProviderReserveRow(id: detail.id, name: detail.name, reserve: reserve, actions: actions)
+        XCTAssertGreaterThanOrEqual(Double(fittingSize(row.frame(width: 600)).height), DesignTokens.ProvidersPage.reserveControl.height)
+        row.actions.setReserve("anthropic", 80)
+        XCTAssertEqual(picked.map(\.0), ["anthropic"])
+        XCTAssertEqual(picked.map(\.1), [80])
+
+        var unread = reserved
+        unread.usageWindows = []
+        let alone = fittingSize(ProviderDetailView(detail: try XCTUnwrap(ProvidersPage(providers: [unread]).detail(nil)), actions: actions).frame(width: 800))
+        var unknown = unread
+        unknown.id = "openrouter"
+        let none = fittingSize(ProviderDetailView(detail: try XCTUnwrap(ProvidersPage(providers: [unknown]).detail(nil)), actions: actions).frame(width: 800))
+        XCTAssertGreaterThan(alone.height, none.height, "the Usage block holds Stop new runs at")
+
+        // While a save is on its way the row draws its spinner and asks for nothing more.
+        let saving = ProvidersPage.ReserveControl(percent: 90, choices: [80, 90], saving: true)
+        XCTAssertGreaterThan(fittingSize(ProviderReserveRow(id: "anthropic", name: "Anthropic", reserve: saving, ruled: false, actions: actions)).width, 0)
+        ProvidersPageActions.none.setReserve("anthropic", nil)
     }
 
     func testPauseSendsItsControl() throws {

@@ -202,6 +202,76 @@ defmodule SymphonyElixir.Config.MigrationTest do
       assert Migration.plan(text, @backup) == {:ok, text, []}
     end
 
+    test "the old headroom share moves to Anthropic's reserve, keeping the file's comments" do
+      text = """
+      # My settings.
+      execution:
+        # Limits.
+        usage_limit:
+          auto_pause: true # stays
+          headroom_utilization: 0.85 # leave room
+        mcp:
+          inherit: false
+      """
+
+      assert {:ok, migrated, [note]} = Migration.plan(text, @backup)
+      assert note == "v0.0.1.998 moved `execution.usage_limit.headroom_utilization` to `execution.providers.anthropic.reserve` in your settings"
+
+      assert migrated == """
+             # My settings.
+             execution:
+               providers:
+                 anthropic:
+                   reserve: 0.85
+               # Limits.
+               usage_limit:
+                 auto_pause: true # stays
+                 # Symphony: #{note} (TP-1535). The file as it was: #{@backup}.
+               mcp:
+                 inherit: false
+             """
+    end
+
+    test "a reserve already set stays, and a null headroom share moves nowhere" do
+      set = """
+      execution:
+        providers:
+          anthropic:
+            reserve: 0.7
+        usage_limit:
+          auto_pause: true
+          headroom_utilization: 0.9
+      """
+
+      assert {:ok, migrated, [note]} = Migration.plan(set, @backup)
+      assert note =~ "your `execution.providers.anthropic.reserve` stays and the old key is gone"
+
+      assert {:ok, %{"execution" => %{"providers" => %{"anthropic" => %{"reserve" => 0.7}}, "usage_limit" => %{"auto_pause" => true}}}} =
+               YamlElixir.read_from_string(migrated)
+
+      null = """
+      execution:
+        usage_limit:
+          auto_pause: true
+          headroom_utilization: null
+      """
+
+      assert {:ok, migrated, [_note]} = Migration.plan(null, @backup)
+      assert {:ok, %{"execution" => %{"usage_limit" => %{"auto_pause" => true}} = execution}} = YamlElixir.read_from_string(migrated)
+      refute Map.has_key?(execution, "providers")
+    end
+
+    test "a headroom share whose new key can't be written is refused, naming it and its line" do
+      text = """
+      execution:
+        providers: {openai: {}}
+        usage_limit:
+          headroom_utilization: 0.9
+      """
+
+      assert {:error, {:not_migrated, [{"execution.usage_limit.headroom_utilization", 4}]}} = Migration.plan(text, @backup)
+    end
+
     test "a rename of a scalar value keeps the value" do
       assert {:ok, migrated, [_note]} = Migration.plan("pre_push_review: 3\n", @backup)
       assert {:ok, %{"code_review" => 3}} = YamlElixir.read_from_string(migrated)
@@ -314,7 +384,10 @@ defmodule SymphonyElixir.Config.MigrationTest do
     assert %{"key" => "pre_push_review", "to" => "code_review", "ticket" => "TP-1203", "release" => "0.0.1.691"} =
              Migration.migrations_json() |> Jason.decode!() |> hd()
 
-    removal = Migration.migrations_json() |> Jason.decode!() |> List.last()
-    assert %{"key" => "ledger.artifact_retention_days", "to" => nil} = removal
+    table = Jason.decode!(Migration.migrations_json())
+    assert %{"key" => "ledger.artifact_retention_days", "to" => nil} = Enum.find(table, &(&1["key"] == "ledger.artifact_retention_days"))
+
+    assert %{"to" => "execution.providers.anthropic.reserve", "ticket" => "TP-1535"} =
+             Enum.find(table, &(&1["key"] == "execution.usage_limit.headroom_utilization"))
   end
 end
