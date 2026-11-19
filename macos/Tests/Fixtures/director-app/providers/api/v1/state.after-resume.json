@@ -176,7 +176,7 @@
       "paused": false,
       "paused_since": null,
       "provider": "anthropic",
-      "reserve": null,
+      "reserve": 0.9,
       "tokens_today": 1840000,
       "usage_windows": [
         {

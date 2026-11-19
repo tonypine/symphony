@@ -1,8 +1,10 @@
 defmodule SymphonyElixir.UsageLimitTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Execution.UsageLimit, as: UsageLimitConfig
-  alias SymphonyElixir.{Pauses, UsageLimit}
+  alias SymphonyElixir.Config.SystemSchema
+  alias SymphonyElixir.{Pauses, Providers, UsageLimit}
 
   @now ~U[2026-10-03 03:46:00Z]
   @config %UsageLimitConfig{auto_pause: true, resume_margin_seconds: 120, unknown_reset_retry_seconds: 900}
@@ -123,7 +125,8 @@ defmodule SymphonyElixir.UsageLimitTest do
       assert UsageLimit.limit_label(entry) == "Claude API unreachable"
       assert UsageLimit.hold_label(entry) == "Claude API unreachable"
       assert UsageLimit.hold_label(%{provider: "anthropic", window: "five_hour"}) == "Claude 5-hour limit reached"
-      assert UsageLimit.hold_label(%{provider: "anthropic", window: "seven_day", phase: "headroom"}) == "Claude weekly limit headroom: holding new runs"
+      assert UsageLimit.hold_label(%{provider: "anthropic", window: "seven_day", phase: "headroom"}) == "Anthropic at its reserve: holding new runs"
+      assert UsageLimit.hold_label(%{provider: "anthropic", window: "seven_day", phase: :headroom, reserve: 0.9}) == "Anthropic at its 90% reserve: holding new runs"
 
       to_local = [to_local: & &1]
       assert UsageLimit.banner(entry, @now, to_local) == "Paused: Claude API unreachable (ENOTFOUND), retries ~03:47"
@@ -160,10 +163,10 @@ defmodule SymphonyElixir.UsageLimitTest do
       # The last hour before midnight on a host in UTC, as on CI.
       now = ~U[2026-10-04 23:03:00Z]
       paused = %{provider: "anthropic", window: "five_hour", resume_at: ~U[2026-10-05 00:03:00Z]}
-      headroom = %{provider: "anthropic", window: "five_hour", phase: :headroom, utilization: 0.92, resets_at: ~U[2026-10-05 00:03:00Z]}
+      headroom = %{provider: "anthropic", window: "five_hour", phase: :headroom, utilization: 0.92, reserve: 0.9, resets_at: ~U[2026-10-05 00:03:00Z]}
 
       assert UsageLimit.banner(paused, now, to_local: & &1) == "Paused: Claude 5-hour limit, resumes ~Oct 5 00:03"
-      assert UsageLimit.banner(headroom, now, to_local: & &1) == "Holding new runs: Claude at 92%, resets ~Oct 5 00:03"
+      assert UsageLimit.banner(headroom, now, to_local: & &1) == "Holding new runs: Anthropic at its 90% reserve, resets ~Oct 5 00:03"
     end
 
     test "uses the host time zone by default and drops an unreadable resume time" do
@@ -335,10 +338,10 @@ defmodule SymphonyElixir.UsageLimitTest do
 
       assert UsageLimit.reason(hold(%{}), @now, @to_local).text == "Claude's 5-hour limit until 14:30 UTC-3"
 
-      assert UsageLimit.reason(hold(%{phase: :headroom, window: "seven_day"}), @now, @to_local).text ==
-               "Claude's weekly limit headroom: new runs wait until 14:00 UTC-3"
+      assert UsageLimit.reason(hold(%{phase: :headroom, window: "seven_day", reserve: 0.85}), @now, @to_local).text ==
+               "Anthropic at its 85% reserve: new runs wait until 14:00 UTC-3"
 
-      assert UsageLimit.reason(hold(%{phase: :headroom, resets_at: nil}), @now, @to_local).text == "Claude's 5-hour limit headroom: new runs wait"
+      assert UsageLimit.reason(hold(%{phase: :headroom, resets_at: nil}), @now, @to_local).text == "Anthropic at its reserve: new runs wait"
 
       outage = hold(%{reason: "model_api_unreachable", source: :api_unreachable, window: nil, resets_at: nil})
       assert UsageLimit.reason(outage, @now, @to_local).text == "Claude API unreachable, retrying at 14:30 UTC-3"
@@ -404,24 +407,53 @@ defmodule SymphonyElixir.UsageLimitTest do
                Config.settings!().execution.usage_limit
     end
 
-    test "headroom_utilization is off by default and takes a share in (0, 1]" do
+    test "a provider's reserve is off by default and takes a share in (0, 1]" do
       write_workflow_file!(Workflow.workflow_file_path())
-      assert %UsageLimitConfig{headroom_utilization: nil} = Config.settings!().execution.usage_limit
+      assert Schema.Execution.reserve(Config.settings!().execution, "anthropic") == nil
 
       for value <- [0.9, 1] do
-        write_workflow_file!(Workflow.workflow_file_path(),
-          agent_usage_limit: %{headroom_utilization: value}
-        )
+        write_workflow_file!(Workflow.workflow_file_path(), execution_providers: %{anthropic: %{reserve: value}})
 
-        assert Config.settings!().execution.usage_limit.headroom_utilization == value / 1
+        assert Schema.Execution.reserve(Config.settings!().execution, "anthropic") == value / 1
+        assert Providers.reserves(Config.settings!()) == %{"anthropic" => value / 1}
       end
+
+      write_workflow_file!(Workflow.workflow_file_path(), execution_providers: %{anthropic: %{reserve: nil}})
+      assert Providers.reserves(Config.settings!()) == %{}
+    end
+
+    test "a reserve is refused for a provider whose usage Symphony can't read, naming the key" do
+      for {providers, words} <- [
+            {%{openai: %{reserve: 0.9}}, "`execution.providers.openai.reserve` is not accepted: Symphony can't read OpenAI's usage"},
+            {%{openrouter: %{reserve: 0.9}}, "`execution.providers.openrouter.reserve` is not accepted: Symphony can't read OpenRouter's usage"},
+            {%{mystery: %{reserve: 0.9}}, "unknown symphony.yml key `execution.providers.mystery`"},
+            {%{anthropic: %{reserve: 0}}, "`execution.providers.anthropic.reserve` must be a share above 0 and at most 1"},
+            {%{anthropic: %{reserve: 1.5}}, "`execution.providers.anthropic.reserve` must be a share above 0 and at most 1"},
+            {%{anthropic: %{reserve: "high"}}, "`execution.providers.anthropic.reserve` must be a share above 0 and at most 1"},
+            {%{anthropic: %{stop_at: 0.9}}, "unknown symphony.yml key `execution.providers.anthropic.stop_at`"},
+            {%{anthropic: 0.9}, "`execution.providers.anthropic` must be an object"},
+            {"anthropic", "`execution.providers` must be an object"}
+          ] do
+        write_workflow_file!(Workflow.workflow_file_path(), execution_providers: providers)
+        assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
+        assert message =~ words
+      end
+    end
+
+    test "the old headroom setting is refused at load with where it went" do
+      write_workflow_file!(Workflow.workflow_file_path(), agent_usage_limit: %{headroom_utilization: 0.9})
+      assert {:error, {:invalid_workflow_config, message}} = Config.validate_repo_workflows()
+      assert message =~ "`execution.usage_limit.headroom_utilization` is not valid; use `execution.providers.anthropic.reserve`"
+    end
+
+    test "only the providers whose usage Symphony reads take a reserve" do
+      assert Providers.usage_readable() == ["anthropic"]
+      assert "execution.providers.anthropic.reserve" in SystemSchema.operator_key_paths()
+      refute "execution.providers.openai.reserve" in SystemSchema.operator_key_paths()
     end
 
     test "rejects invalid values and unknown keys" do
       for {usage_limit, key} <- [
-            {%{headroom_utilization: 0}, "execution.usage_limit.headroom_utilization"},
-            {%{headroom_utilization: 1.5}, "execution.usage_limit.headroom_utilization"},
-            {%{headroom_utilization: "high"}, "execution.usage_limit.headroom_utilization"},
             {%{auto_pause: "sometimes"}, "execution.usage_limit.auto_pause"},
             {%{resume_margin_seconds: -1}, "execution.usage_limit.resume_margin_seconds"},
             {%{unknown_reset_retry_seconds: 59}, "execution.usage_limit.unknown_reset_retry_seconds"},
@@ -502,18 +534,28 @@ defmodule SymphonyElixir.UsageLimitTest do
 
     defp headroom(existing, info), do: UsageLimit.put_headroom(existing, info, now: @now, config: @config, issue_identifier: "TP-330")
 
-    test "crossings are the allowed_warning windows at or above the threshold that reset later" do
+    test "crossings are the allowed windows at or above the reserve that reset later, each with the reserve" do
       windows = %{
         "five_hour" => warning(0.9),
         "seven_day_opus" => warning(0.95, ~U[2026-10-08 00:00:00Z]),
         "seven_day" => warning(0.89),
-        "seven_day_sonnet" => %{warning(0.99) | status: "allowed"},
+        "seven_day_sonnet" => %{warning(0.99) | status: "rejected"},
+        "seven_day_extra" => %{warning(0.91) | status: "allowed"},
         "overage" => warning(0.99, @now),
         "other" => warning(nil)
       }
 
       assert [
-               %{provider: "anthropic", window: "five_hour", scope: :all, resets_at: ~U[2026-10-03 05:00:00Z], utilization: 0.9, source: :rate_limit_event},
+               %{
+                 provider: "anthropic",
+                 window: "five_hour",
+                 scope: :all,
+                 resets_at: ~U[2026-10-03 05:00:00Z],
+                 utilization: 0.9,
+                 reserve: 0.9,
+                 source: :rate_limit_event
+               },
+               %{window: "seven_day_extra", utilization: 0.91},
                %{window: "seven_day_opus", scope: "opus", utilization: 0.95}
              ] = UsageLimit.headroom_crossings(windows, 0.9, @now)
 
@@ -532,8 +574,13 @@ defmodule SymphonyElixir.UsageLimitTest do
                resets_at: ~U[2026-10-03 05:00:00Z],
                resume_at: ~U[2026-10-03 05:02:00Z],
                utilization: 0.92,
+               reserve: 0.9,
                issue_identifier: "TP-330"
              } = entry
+
+      assert UsageLimit.reserve_percent(entry) == 90
+      assert UsageLimit.reserve_percent(%{phase: :headroom}) == nil
+      refute Map.has_key?(UsageLimit.put_headroom(nil, Map.delete(info, :reserve), now: @now, config: @config), :reserve)
 
       assert headroom(entry, %{info | utilization: 0.97}) == %{entry | utilization: 0.97}
       assert headroom(%{entry | utilization: 0.97}, info) == %{entry | utilization: 0.97}
@@ -571,16 +618,25 @@ defmodule SymphonyElixir.UsageLimitTest do
       assert UsageLimit.scope_for_window(nil) == :all
     end
 
-    test "the banner names the utilization and the local reset time" do
+    test "the banner names the provider, its reserve and the local reset time" do
       to_local = [to_local: &__MODULE__.three_hours_behind/1]
-      hold = %{provider: "anthropic", window: "five_hour", phase: :headroom, utilization: 0.914, resets_at: ~U[2026-10-03 17:05:00Z], resume_at: ~U[2026-10-03 17:07:00Z]}
 
-      assert UsageLimit.banner(hold, ~U[2026-10-03 12:00:00Z], to_local) == "Holding new runs: Claude at 91%, resets ~14:05"
+      hold = %{
+        provider: "anthropic",
+        window: "five_hour",
+        phase: :headroom,
+        utilization: 0.914,
+        reserve: 0.9,
+        resets_at: ~U[2026-10-03 17:05:00Z],
+        resume_at: ~U[2026-10-03 17:07:00Z]
+      }
+
+      assert UsageLimit.banner(hold, ~U[2026-10-03 12:00:00Z], to_local) == "Holding new runs: Anthropic at its 90% reserve, resets ~14:05"
 
       assert UsageLimit.banner(%{hold | phase: "headroom", resets_at: "2026-10-04T17:05:00Z"}, ~U[2026-10-03 12:00:00Z], to_local) ==
-               "Holding new runs: Claude at 91%, resets ~Oct 4 14:05"
+               "Holding new runs: Anthropic at its 90% reserve, resets ~Oct 4 14:05"
 
-      assert UsageLimit.banner(%{provider: "anthropic", window: "five_hour", phase: "headroom"}, @now) == "Holding new runs: Claude 5-hour limit"
+      assert UsageLimit.banner(%{provider: "anthropic", window: "five_hour", phase: "headroom"}, @now) == "Holding new runs: Anthropic at its reserve"
     end
   end
 end

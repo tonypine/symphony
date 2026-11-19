@@ -160,6 +160,83 @@ final class ProvidersPageTests: XCTestCase {
         XCTAssertEqual(page([anthropic(paused: true, held: true)]).detail(nil)?.state.word, "Paused")
     }
 
+    // MARK: The reserve (TP-1535)
+
+    private func reserved(_ reserve: Double? = 0.9, atReserve: Bool = false) -> StateSnapshot.Provider {
+        var provider = anthropic()
+        provider.reserve = reserve
+        if atReserve {
+            provider.atReserve = true
+            provider.held = true
+            provider.heldUntil = now.addingTimeInterval(48 * hour)
+            provider.usageWindows[1].utilization = 0.91
+        }
+        return provider
+    }
+
+    func testAProviderWhoseUsageSymphonyReadsHasStopNewRunsAtAndEachMeterItsMark() throws {
+        let detail = try XCTUnwrap(page([reserved(), openAI]).detail("anthropic"))
+        XCTAssertEqual(detail.reserve, .init(percent: 90, choices: [50, 60, 70, 75, 80, 85, 90, 95], saving: false))
+        XCTAssertEqual(detail.reserve?.title, "90 %")
+        XCTAssertEqual(detail.usage.map(\.stop), [90, 90])
+        XCTAssertEqual(ProvidersPage.reserveTitle, "Stop new runs at")
+
+        // No reserve: no mark, and the pop-up says so.
+        let none = try XCTUnwrap(page([reserved(nil)]).detail(nil))
+        XCTAssertEqual(none.reserve?.percent, nil)
+        XCTAssertEqual(none.reserve?.title, "No reserve")
+        XCTAssertEqual(none.usage.map(\.stop), [nil, nil])
+
+        // A share the pop-up doesn't usually offer is offered too, in order.
+        XCTAssertEqual(page([reserved(0.83)]).detail(nil)?.reserve?.choices, [50, 60, 70, 75, 80, 83, 85, 90, 95])
+    }
+
+    func testAProviderWhoseUsageSymphonyCantReadHasNoStopNewRunsAt() throws {
+        XCTAssertNil(try XCTUnwrap(page([openAI]).detail(nil)).reserve)
+        XCTAssertNil(try XCTUnwrap(page([openRouter]).detail(nil)).reserve)
+    }
+
+    func testASavedReserveShowsAtOnceAndTheMarkMovesUntilSymphonySaysTheSame() throws {
+        let saved = ProvidersPage(providers: [reserved()], now: now, timeZone: utc, savedReserves: ["anthropic": 80], savingReserve: nil)
+        let detail = try XCTUnwrap(saved.detail(nil))
+        XCTAssertEqual(detail.reserve?.percent, 80)
+        XCTAssertEqual(detail.usage.map(\.stop), [80, 80])
+        let cleared = ProvidersPage(providers: [reserved()], now: now, timeZone: utc, savedReserves: ["anthropic": Int?.none])
+        XCTAssertNil(try XCTUnwrap(cleared.detail(nil)).reserve?.percent)
+        let saving = ProvidersPage(providers: [reserved()], now: now, timeZone: utc, savingReserve: "anthropic")
+        XCTAssertEqual(saving.detail(nil)?.reserve?.saving, true)
+
+        // Once Symphony's state says 80 %, the saved one goes; a different one stays.
+        XCTAssertEqual(ProvidersPage.settledReserves(["anthropic": 80], providers: [reserved(0.8)]), [:])
+        XCTAssertEqual(ProvidersPage.settledReserves(["anthropic": 80], providers: [reserved(0.9)]), ["anthropic": 80])
+        XCTAssertEqual(ProvidersPage.settledReserves(["anthropic": Int?.none], providers: [reserved(nil)]), [:])
+        XCTAssertEqual(ProvidersPage.settledReserves(["anthropic": 80], providers: nil), ["anthropic": 80])
+    }
+
+    func testAProviderAtItsReserveSaysSoAndWhenItResumes() throws {
+        let detail = try XCTUnwrap(page([reserved(atReserve: true)]).detail(nil))
+        XCTAssertEqual(detail.state.word, "At your reserve")
+        XCTAssertEqual(detail.state.status, .you)
+        XCTAssertEqual(detail.state.cause, "The week is at 91 %, where you stop new runs.")
+        XCTAssertEqual(detail.state.waits, "New runs start on their fallbacks, or wait. Resumes Thu 19 Nov, 14:00.")
+        XCTAssertEqual(page([reserved(atReserve: true)]).sections[0].cards[0].statusLine, "At your reserve · until Thu 14:00")
+
+        var unknown = reserved(nil, atReserve: true)
+        unknown.heldUntil = nil
+        unknown.usageWindows = []
+        let state = try XCTUnwrap(page([unknown]).detail(nil)).state
+        XCTAssertEqual(state.cause, "It is at your reserve, where you stop new runs.")
+        XCTAssertEqual(state.short, "At your reserve")
+        // The Director's pause reads before the reserve.
+        var paused = reserved(atReserve: true)
+        paused.paused = true
+        XCTAssertEqual(page([paused]).detail(nil)?.state.word, "Paused")
+        XCTAssertEqual(ProvidersPage.windowSubject("five_hour"), "The 5 hours")
+        XCTAssertEqual(ProvidersPage.windowSubject("seven_day_opus"), "The Opus week")
+        XCTAssertEqual(ProvidersPage.windowSubject("seven_day_sonnet"), "The Sonnet week")
+        XCTAssertEqual(ProvidersPage.windowSubject("monthly_credits"), "The monthly credits")
+    }
+
     func testPauseAndResumeCallTheControlAPI() throws {
         XCTAssertEqual(ProvidersPage.action(.pause, provider: "anthropic", name: "Anthropic"), .pauseProvider("anthropic", name: "Anthropic"))
         XCTAssertEqual(ProvidersPage.action(.resume, provider: "anthropic", name: "Anthropic"), .resumeProvider("anthropic", name: "Anthropic"))
@@ -231,6 +308,12 @@ final class ProvidersPageTests: XCTestCase {
         XCTAssertTrue(resumed.rows.flatMap(\.lines).allSatisfy { $0.providerNote == nil })
         XCTAssertEqual(try runsPage().showing(nil).providerNotes, [:])
         XCTAssertNil(RunsPage.ProviderNote.of(anthropic()))
+    }
+
+    func testARunsLineOnAProviderAtItsReserveSaysSo() throws {
+        let page = try runsPage().showing([reserved(atReserve: true)])
+        XCTAssertEqual(page.rows.first { $0.isDefault }?.lines.first?.providerNote, .init(status: .you, text: "Anthropic is at its 90 % reserve"))
+        XCTAssertEqual(RunsPage.ProviderNote.of(reserved(nil, atReserve: true))?.text, "Anthropic is at its reserve")
     }
 
     // MARK: Keys (TP-1540)

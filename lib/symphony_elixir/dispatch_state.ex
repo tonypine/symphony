@@ -43,6 +43,7 @@ defmodule SymphonyElixir.DispatchState do
               consecutive_failures: non_neg_integer()
             }
           | %{
+              optional(:reserve) => float(),
               kind: :usage_limit,
               provider: String.t(),
               scope: String.t() | :all,
@@ -93,7 +94,7 @@ defmodule SymphonyElixir.DispatchState do
 
   defp usage_limit_blocker(hold, texts) do
     hold
-    |> Map.take([:provider, :scope, :reason, :window, :resets_at, :resume_at, :phase])
+    |> Map.take([:provider, :scope, :reason, :window, :resets_at, :resume_at, :phase, :reserve])
     |> Map.merge(%{kind: :usage_limit, text: Map.get(texts, UsageLimit.condition(hold))})
   end
 

@@ -18,9 +18,10 @@ defmodule SymphonyElixir.UsageLimit do
   canary phase at once (`checking/1`): the same canary decides, and a refused one keeps the hold
   with the provider's latest reset, marked `still_on`.
 
-  With `headroom_utilization` set, an `allowed_warning` at or above it puts a hold in
-  `phase: :headroom` on new runs of the provider until the window resets, so the rest of the
-  limit is left for interactive sessions. It holds no landing run, no continuation and no forced
+  With a reserve set for the provider (`execution.providers.<provider>.reserve`), a window at or
+  above it puts a hold in `phase: :headroom` on new runs of the provider until the window resets,
+  so the rest of the limit is left for interactive sessions: the provider is at its reserve. The
+  hold keeps the `reserve` it was set at. It holds no landing run, no continuation and no forced
   ticket's run, and clears at `resume_at` without a canary.
 
   A run whose agent could not reach the model API at all (`source: :api_unreachable`, reason
@@ -35,7 +36,7 @@ defmodule SymphonyElixir.UsageLimit do
   (`sync_reasons/3`); the hold keeps its headroom and canary details.
   """
 
-  alias SymphonyElixir.{Pauses, RunStore}
+  alias SymphonyElixir.{AgentProviders, Pauses, RunStore}
 
   @condition_prefix "usage_limit:"
 
@@ -49,6 +50,7 @@ defmodule SymphonyElixir.UsageLimit do
           optional(:error) => String.t(),
           optional(:retry_seconds) => pos_integer(),
           optional(:still_on) => true,
+          optional(:reserve) => float(),
           provider: String.t(),
           scope: String.t() | :all,
           reason: String.t(),
@@ -193,15 +195,17 @@ defmodule SymphonyElixir.UsageLimit do
   end
 
   @doc """
-  The windows in a worker update's `usage_windows` that report `allowed_warning` at or above
-  `threshold` (`headroom_utilization`) and reset after `now`, as hold infos for `put_headroom/3`.
+  The windows in a worker update's `usage_windows` still allowed (`allowed` or `allowed_warning`)
+  whose utilization is at or above `reserve` (the provider's `execution.providers.<provider>.reserve`)
+  and that reset after `now`, as hold infos for `put_headroom/3`, each with the `reserve`.
   """
   @spec headroom_crossings(map(), number(), DateTime.t()) :: [map()]
-  def headroom_crossings(usage_windows, threshold, %DateTime{} = now) when is_map(usage_windows) and is_number(threshold) do
-    for {window, %{status: "allowed_warning", utilization: utilization, resets_at: %DateTime{} = resets_at}} <-
-          Enum.sort(usage_windows),
-        is_number(utilization) and utilization >= threshold and DateTime.compare(resets_at, now) == :gt do
+  def headroom_crossings(usage_windows, reserve, %DateTime{} = now) when is_map(usage_windows) and is_number(reserve) do
+    for {window, %{status: status, utilization: utilization, resets_at: %DateTime{} = resets_at}} <- Enum.sort(usage_windows),
+        status in ["allowed", "allowed_warning"],
+        is_number(utilization) and utilization >= reserve and DateTime.compare(resets_at, now) == :gt do
       %{
+        reserve: reserve / 1,
         provider: "anthropic",
         window: window,
         scope: scope_for_window(window),
@@ -219,18 +223,40 @@ defmodule SymphonyElixir.UsageLimit do
   """
   @spec put_headroom(entry() | nil, map(), keyword()) :: entry()
   def put_headroom(existing, info, opts) when is_map(info) do
-    entry = nil |> put(info, opts) |> Map.merge(%{reason: "claude_usage_headroom", phase: :headroom})
+    entry = nil |> put(info, opts) |> Map.merge(%{reason: "claude_usage_headroom", phase: :headroom}) |> put_reserve(info)
 
     case existing do
       %{phase: :headroom} = existing ->
         cond do
           DateTime.compare(entry.resume_at, existing.resume_at) == :gt -> %{entry | since: existing.since}
-          entry.window == existing.window -> %{existing | utilization: max(existing.utilization || 0, entry.utilization)}
+          entry.window == existing.window -> %{existing | utilization: max(existing.utilization || 0, entry.utilization)} |> put_reserve(info)
           true -> existing
         end
 
       nil ->
         entry
+    end
+  end
+
+  defp put_reserve(entry, %{reserve: reserve}) when is_number(reserve), do: Map.put(entry, :reserve, reserve)
+  defp put_reserve(entry, _info), do: entry
+
+  @doc "The reserve a headroom hold was set at, as a whole percent (`90`); nil when it doesn't say."
+  @spec reserve_percent(map()) :: non_neg_integer() | nil
+  def reserve_percent(entry) when is_map(entry) do
+    case Map.get(entry, :reserve) do
+      reserve when is_number(reserve) -> round(reserve * 100)
+      _none -> nil
+    end
+  end
+
+  # `Anthropic at its 90% reserve`, or `Anthropic at its reserve` for a hold that doesn't say where.
+  defp at_reserve(entry) do
+    name = AgentProviders.display_name(Map.get(entry, :provider) || "anthropic")
+
+    case reserve_percent(entry) do
+      nil -> "#{name} at its reserve"
+      percent -> "#{name} at its #{percent}% reserve"
     end
   end
 
@@ -378,13 +404,13 @@ defmodule SymphonyElixir.UsageLimit do
   end
 
   @doc """
-  A hold as a blocker line reads: `Claude 5-hour limit reached`, `Claude weekly limit headroom:
+  A hold as a blocker line reads: `Claude 5-hour limit reached`, `Anthropic at its 90% reserve:
   holding new runs` or `Claude API unreachable`.
   """
   @spec hold_label(map()) :: String.t()
   def hold_label(entry) when is_map(entry) do
     cond do
-      headroom?(entry) -> "#{limit_label(entry)} headroom: holding new runs"
+      headroom?(entry) -> "#{at_reserve(entry)}: holding new runs"
       api_unreachable?(entry) -> limit_label(entry)
       true -> "#{limit_label(entry)} reached"
     end
@@ -403,7 +429,7 @@ defmodule SymphonyElixir.UsageLimit do
 
   @doc """
   The dashboard banner for a hold: `Paused: Claude 5-hour limit, resumes ~14:05`, for a
-  headroom hold `Holding new runs: Claude at 91%, resets ~14:05`, and for an unreachable API
+  headroom hold `Holding new runs: Anthropic at its 90% reserve, resets ~14:05`, and for an unreachable API
   `Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`. The time is in local time,
   with the date when it is not today. `resume_at` and `resets_at` may be `DateTime`s or ISO
   8601 strings. `opts[:to_local]` converts a UTC `NaiveDateTime` to local time (default: the
@@ -413,7 +439,7 @@ defmodule SymphonyElixir.UsageLimit do
   def banner(entry, %DateTime{} = now, opts \\ []) when is_map(entry) do
     cond do
       headroom?(entry) ->
-        "Holding new runs: #{headroom_label(entry)}" <> time_suffix("resets", datetime(Map.get(entry, :resets_at)), now, opts)
+        "Holding new runs: #{at_reserve(entry)}" <> time_suffix("resets", datetime(Map.get(entry, :resets_at)), now, opts)
 
       api_unreachable?(entry) ->
         "Paused: #{limit_label(entry)}#{error_suffix(entry)}" <> time_suffix("retries", datetime(Map.get(entry, :resume_at)), now, opts)
@@ -429,13 +455,6 @@ defmodule SymphonyElixir.UsageLimit do
     case Map.get(entry, :error) do
       error when is_binary(error) -> " (#{error})"
       _none -> ""
-    end
-  end
-
-  defp headroom_label(entry) do
-    case Map.get(entry, :utilization) do
-      utilization when is_number(utilization) -> "#{provider_label(Map.get(entry, :provider))} at #{round(utilization * 100)}%"
-      _unknown -> limit_label(entry)
     end
   end
 
@@ -480,7 +499,7 @@ defmodule SymphonyElixir.UsageLimit do
   The `:environment` reason `entry` gives Symphony's pause, waiting on condition
   `usage_limit:<provider>:<scope>`: `Claude's 5-hour limit until 14:30 UTC-3` (its resume time),
   `Claude's 5-hour limit is still on, until 17:30 UTC-3` once a canary was refused, for a
-  headroom hold `Claude's weekly limit headroom: new runs wait until 14:30 UTC-3` (its reset time)
+  headroom hold `Anthropic at its 90% reserve: new runs wait until 14:30 UTC-3` (its reset time)
   and for an unreachable API `Claude API unreachable, retrying at 14:05 UTC-3`. Times as
   `local_time/3`, followed by their zone (`zone_label/2`), so the line reads in one clock beside
   the hold's UTC times.
@@ -497,7 +516,7 @@ defmodule SymphonyElixir.UsageLimit do
   defp reason_text(entry, now, opts) do
     cond do
       headroom?(entry) ->
-        "#{provider_label(entry.provider)}'s #{window_label(entry.window)} headroom: new runs wait" <> at(" until ", entry.resets_at, now, opts)
+        "#{at_reserve(entry)}: new runs wait" <> at(" until ", entry.resets_at, now, opts)
 
       api_unreachable?(entry) ->
         limit_label(entry) <> at(", retrying at ", entry.resume_at, now, opts)
@@ -582,7 +601,7 @@ defmodule SymphonyElixir.UsageLimit do
       seen = Map.get(windows, {entry.provider, entry.window}, %{})
 
       entry
-      |> Map.take([:provider, :scope, :reason, :window, :phase, :since, :resets_at, :resume_at, :source, :issue_identifier, :error, :still_on])
+      |> Map.take([:provider, :scope, :reason, :window, :phase, :since, :resets_at, :resume_at, :source, :issue_identifier, :error, :still_on, :reserve])
       |> Map.put(:utilization, Map.get(seen, :utilization) || Map.get(entry, :utilization))
     end)
   end

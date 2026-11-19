@@ -574,7 +574,16 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
          usage_limits: [
            %{provider: "anthropic", scope: :all, window: "five_hour", resume_at: now},
            %{provider: "anthropic", scope: "opus", window: "seven_day_opus", resume_at: later},
-           %{provider: "anthropic", scope: :all, window: "seven_day", phase: :headroom, utilization: 0.92, resets_at: now, resume_at: now}
+           %{
+             provider: "anthropic",
+             scope: :all,
+             window: "seven_day",
+             phase: :headroom,
+             utilization: 0.92,
+             reserve: 0.9,
+             resets_at: now,
+             resume_at: now
+           }
          ],
          dispatch_state: %{
            active?: false,
@@ -595,7 +604,8 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
                window: "seven_day",
                resets_at: now,
                resume_at: now,
-               phase: :headroom
+               phase: :headroom,
+               reserve: 0.9
              }
            ]
          }
@@ -606,8 +616,8 @@ defmodule SymphonyElixir.StatusDashboardSnapshotTest do
     assert rendered =~ ~r/Paused: Claude 5-hour limit, resumes ~\d{2}:\d{2}\e/
     assert rendered =~ ~r/Paused: Claude weekly Opus limit, resumes ~[A-Z][a-z]{2} \d{1,2} \d{2}:\d{2}\e/
     assert rendered =~ "Claude 5-hour limit reached (resumes #{DateTime.to_iso8601(now)})"
-    assert rendered =~ ~r/Holding new runs: Claude at 92%, resets ~\d{2}:\d{2}\e/
-    assert rendered =~ "Claude weekly limit headroom: holding new runs (resumes #{DateTime.to_iso8601(now)})"
+    assert rendered =~ ~r/Holding new runs: Anthropic at its 90% reserve, resets ~\d{2}:\d{2}\e/
+    assert rendered =~ "Anthropic at its 90% reserve: holding new runs (resumes #{DateTime.to_iso8601(now)})"
 
     idle = render_snapshot({:ok, %{running: [], retrying: [], codex_totals: %{}, rate_limits: nil}}, 0.0)
     refute idle =~ "Paused:"

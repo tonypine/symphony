@@ -319,7 +319,7 @@ public enum StatusMenu {
     }
 
     /// For example "Paused: Claude limit, resumes ~14:05", "Resuming: checking Claude limit…" or
-    /// "Holding new runs: Claude at 91%, resets ~14:05". While the API can't be reached: "Paused: Claude API
+    /// "Holding new runs: Claude at its 90% reserve, resets ~14:05" once a window reached the provider's reserve (TP-1535). While the API can't be reached: "Paused: Claude API
     /// unreachable (ENOTFOUND), retries ~14:05" or "Resuming: checking Claude API…". Times are local, with the
     /// date when not today.
     public static func usageLimitLine(_ limit: StateSnapshot.UsageLimit, now: Date, timeZone: TimeZone) -> String {
@@ -336,8 +336,9 @@ public enum StatusMenu {
         case .canary:
             return "Resuming: checking \(provider) limit…"
         case .headroom:
-            let used = limit.utilization.map { " at \(Int(($0 * 100).rounded()))%" } ?? ""
-            return "Holding new runs: \(provider)\(used)" + approximateTime(", resets", limit.resetsAt, now: now, timeZone: timeZone)
+            let reserve = limit.reserve.map { " \(Int(($0 * 100).rounded()))%" } ?? ""
+            return "Holding new runs: \(provider) at its\(reserve) reserve"
+                + approximateTime(", resets", limit.resetsAt, now: now, timeZone: timeZone)
         }
     }
 

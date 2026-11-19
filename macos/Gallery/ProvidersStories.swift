@@ -6,25 +6,31 @@ import SymphonyBarUI
 // Anthropic in use with its two windows and three runs on it, OpenCode Go and OpenRouter in use with no window to
 // read, OpenAI not in use. Each story is one state the walkthrough reaches, and Runs with a provider paused. The Key
 // block (TP-1540) of a provider set up with an API key: OpenCode Go not in use with no key, a key under test, a test
-// that works (Enable offered) and one that fails, enabled (Disable and Remove Key), and off with its key set.
+// that works (Enable offered) and one that fails, enabled (Disable and Remove Key), and off with its key set. Anthropic
+// stops new runs at 90 % (TP-1535): "Stop new runs at" under its meters, each with its mark, and a story at that reserve.
 
 /// Symphony's clock for the stories: Tuesday 17 November 2026, 14:00 UTC.
 private let providersNow = Date(timeIntervalSince1970: 1_794_924_000)
 
-/// The catalog's providers, Anthropic in `anthropic`'s state.
-func galleryProviders(anthropic: (paused: Bool, held: Bool) = (false, false), openCodeGoInUse: Bool = true) -> [StateSnapshot.Provider] {
+/// The catalog's providers, Anthropic in `anthropic`'s state, stopping new runs at 90 %; at that reserve when
+/// `atReserve`, its week at 90 %.
+func galleryProviders(
+    anthropic: (paused: Bool, held: Bool) = (false, false), atReserve: Bool = false, openCodeGoInUse: Bool = true
+) -> [StateSnapshot.Provider] {
     let hour: TimeInterval = 3600
+    let held = anthropic.held || atReserve
+    let week = anthropic.held ? 1 : atReserve ? 0.9 : 0.62
     return [
         .init(
             id: "anthropic", name: "Anthropic", inUse: true, paused: anthropic.paused,
             pausedSince: anthropic.paused ? providersNow.addingTimeInterval(-12 * 60) : nil,
-            held: anthropic.held, heldUntil: anthropic.held ? providersNow.addingTimeInterval(48 * hour) : nil,
+            held: held, heldUntil: held ? providersNow.addingTimeInterval(48 * hour) : nil,
             usageWindows: [
                 .init(name: "five_hour", utilization: 0.41, resetsAt: providersNow.addingTimeInterval(2 * hour + 20 * 60)),
-                .init(name: "seven_day", utilization: anthropic.held ? 1 : 0.62, resetsAt: providersNow.addingTimeInterval(48 * hour)),
+                .init(name: "seven_day", utilization: week, resetsAt: providersNow.addingTimeInterval(48 * hour)),
             ],
-            harnesses: ["claude"], kinds: ["implementation", "breakdown", "rework", "code_review", "qa"], working: 3,
-            tokensToday: 14_600_000
+            harnesses: ["claude"], kinds: ["implementation", "breakdown", "rework", "code_review", "qa"], working: atReserve ? 0 : 3,
+            tokensToday: 14_600_000, reserve: 0.9, atReserve: atReserve
         ),
         openCodeGoInUse
             ? .init(
@@ -89,7 +95,7 @@ func galleryKeyTest(_ result: ProviderKeyCheck.Result?) -> GalleryProviderKeys {
     return state
 }
 
-/// The page's states, by name: Anthropic available, paused, at its limit, a provider with no usage to read and one
+/// The page's states, by name: Anthropic available, paused, at its limit, at its reserve, a provider with no usage to read and one
 /// not in use; then OpenCode Go's Key block: no key, a key under test, a test that works and one that fails, off with
 /// its key set.
 @MainActor
@@ -97,6 +103,7 @@ let providersStates: [(name: String, providers: [StateSnapshot.Provider], select
     ("providers-page", galleryProviders(), nil, galleryProviderKeys()),
     ("providers-page-paused", galleryProviders(anthropic: (true, false)), nil, galleryProviderKeys()),
     ("providers-page-at-its-limit", galleryProviders(anthropic: (false, true)), nil, galleryProviderKeys()),
+    ("providers-page-at-your-reserve", galleryProviders(atReserve: true), nil, galleryProviderKeys()),
     ("providers-page-no-usage", galleryProviders(), "opencode-go", galleryProviderKeys()),
     ("providers-page-not-in-use", galleryProviders(), "openai", galleryProviderKeys()),
     ("providers-page-key-empty", galleryProviders(openCodeGoInUse: false), "opencode-go", galleryProviderKeys(openCodeGo: false)),

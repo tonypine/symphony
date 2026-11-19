@@ -34,7 +34,9 @@ defmodule SymphonyElixir.Situation do
 
   A ticket the dispatch pass held because the Director paused its run's provider and no fallback of
   its run can take it (its skip's `rule` is `:provider_pause`, naming the `provider`) reads
-  `waiting_for_provider`, "Waiting: you paused Anthropic", never a slot's or a rule's words.
+  `waiting_for_provider`, "Waiting: you paused Anthropic", never a slot's or a rule's words; one held
+  because its provider is at its reserve (a `:usage_limit` skip naming the `provider` and its
+  `reserve`) reads `waiting_for_provider` too, "Waiting: Anthropic is at its 90% reserve".
 
   `waiting_for_slot` is said only of a ticket that passed every dispatch condition but a free slot.
   A dispatch skip reads `paused_by_rule` only when the orchestrator names the rule behind it (its
@@ -165,7 +167,7 @@ defmodule SymphonyElixir.Situation do
       running: by_issue(snapshot, :running, &Map.take(&1, [:run_kind, :started_at, :step])),
       retrying: by_issue(snapshot, :retrying, &retry_facts(&1, now)),
       slot_waiting: by_issue(snapshot, :slot_waiting, &Map.take(&1, [:since, :reason, :ci_wait])),
-      skipped: by_issue(snapshot, :dispatch_skipped, &Map.take(&1, [:since, :reason, :rule, :gate, :provider])),
+      skipped: by_issue(snapshot, :dispatch_skipped, &Map.take(&1, [:since, :reason, :rule, :gate, :provider, :reserve])),
       limit: snapshot |> Map.get(:concurrency) |> max_total(),
       symphony_pause: snapshot |> Map.get(:pause) |> symphony_pause(),
       max_tries: settings.watchdog.dispatch_loop_runs,
@@ -379,6 +381,7 @@ defmodule SymphonyElixir.Situation do
 
   # A skip for a paused provider names it; nil for any other.
   defp provider_skip(%{rule: :provider_pause, provider: provider} = skip) when is_binary(provider), do: skip
+  defp provider_skip(%{rule: :usage_limit, provider: provider} = skip) when is_binary(provider), do: skip
   defp provider_skip(_skip), do: nil
 
   defp rule_skip(%{rule: rule} = skip, nil) when not is_nil(rule), do: skip
@@ -494,6 +497,20 @@ defmodule SymphonyElixir.Situation do
     base("waiting_on_sub_tickets", "Waiting on its sub-tickets", cause, "It moves on when every sub-ticket has ended.", since, %{
       sub_tickets: open |> Enum.map(& &1.identifier) |> Enum.filter(&is_binary/1)
     })
+  end
+
+  defp situation("waiting_for_provider", %{provider_skip: %{rule: :usage_limit, provider: provider} = skip} = ctx) do
+    name = AgentProviders.display_name(provider)
+    reserve = if is_number(skip[:reserve]), do: "its #{round(skip[:reserve] * 100)}% reserve", else: "its reserve"
+
+    base(
+      "waiting_for_provider",
+      "Waiting: #{name} is at #{reserve}",
+      "#{next_run_label(ctx)} runs on #{name}, which stops new runs at #{reserve}, and none of its fallbacks can take it.",
+      "Starts when #{name}'s usage resets.",
+      skip[:since],
+      %{provider: provider}
+    )
   end
 
   defp situation("waiting_for_provider", ctx) do

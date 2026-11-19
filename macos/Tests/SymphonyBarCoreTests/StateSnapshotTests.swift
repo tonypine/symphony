@@ -260,7 +260,9 @@ final class StateSnapshotTests: XCTestCase {
             harnesses: ["claude"],
             kinds: ["implementation", "breakdown", "rework", "landing", "code_review", "epic_review", "ci_fix", "review_feedback"],
             working: 2,
-            tokensToday: 1_840_000
+            tokensToday: 1_840_000,
+            reserve: 0.9,
+            atReserve: true
         ))
         XCTAssertEqual(snapshot.provider("openrouter"), .init(
             id: "openrouter",
@@ -326,7 +328,7 @@ final class StateSnapshotTests: XCTestCase {
                 "issue_identifier": "TP-1",
             ],
             ["provider": "anthropic", "scope": "opus", "window": "seven_day_opus", "phase": "canary", "resume_at": NSNull()],
-            ["provider": "openai", "scope": "all", "phase": "headroom", "utilization": 0.91],
+            ["provider": "openai", "scope": "all", "phase": "headroom", "utilization": 0.91, "reserve": 0.85],
             [
                 "provider": "anthropic", "scope": "all", "reason": "model_api_unreachable", "window": NSNull(),
                 "phase": "paused", "resume_at": "2026-10-02T12:18:02Z", "source": "api_unreachable", "error": "ENOTFOUND",
@@ -350,7 +352,7 @@ final class StateSnapshotTests: XCTestCase {
                             reason: "claude_usage_limit"
                         ),
                         .init(scope: "opus", window: "seven_day_opus", phase: .canary),
-                        .init(provider: "openai", phase: .headroom, utilization: 0.91),
+                        .init(provider: "openai", phase: .headroom, utilization: 0.91, reserve: 0.85),
                         .init(
                             phase: .paused,
                             resumeAt: Date(timeIntervalSince1970: 1_790_943_482),

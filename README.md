@@ -555,12 +555,13 @@ the API after a minute, then after twice as long each time it still fails (up to
 `Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`; `/api/v1/state` lists the hold
 under `usage_limits` with `reason: model_api_unreachable`.
 
-To leave part of the Claude limit for your own sessions, set
-`execution.usage_limit.headroom_utilization` (for example `0.9`; off by default). Once Claude reports
-that share of a window used, Symphony holds new Claude runs until the window resets, while runs in
-flight finish and landing runs still start. The dashboards show
-`Holding new runs: Claude at 91%, resets ~14:05`. Claude only reports utilization from about 75%,
-so a lower setting acts as if set there.
+To leave part of the Claude limit for your own sessions, set Anthropic's reserve: "Stop new runs at" on
+Factory › Providers, or `execution.providers.anthropic.reserve` (for example `0.9`; off by default). Once
+Claude reports that share of a window used, Anthropic is at its reserve until the window resets: new runs
+start on their fallbacks or wait, while runs in flight finish and landing runs still start. The dashboards
+show `Holding new runs: Anthropic at its 90% reserve, resets ~14:05`. Claude only reports utilization from
+about 75%, so a lower reserve acts as if set there. Only a provider whose usage Symphony reads takes a
+reserve.
 
 ### Docker
 
