@@ -1083,8 +1083,10 @@ defmodule SymphonyElixir.PromptBuilderTest do
       assert reads() == [{message.id, "run-2"}]
     end
 
-    test "a run of each kind is given the messages no run read yet", %{issue: issue, record: record} do
-      kinds = [implementation: "In Progress", rework: "Rework", code_review: "Code Review", qa: "QA", ci_fix: "CI Fix"]
+    # The kinds whose prompt this builder writes; Code Review and QA build their own, and their
+    # suites (review_agent_test.exs, qa_agent_test.exs, qa_agent/steps_test.exs) prove they get them.
+    test "a run of each kind the builder writes is given the messages no run read yet", %{issue: issue, record: record} do
+      kinds = [implementation: "In Progress", rework: "Rework", ci_fix: "CI Fix"]
 
       for {kind, state} <- kinds do
         message = message!("For the #{kind} run.", DateTime.utc_now())
@@ -1098,7 +1100,7 @@ defmodule SymphonyElixir.PromptBuilderTest do
         assert {message.id, run_id} in reads(), "#{kind}"
       end
 
-      assert length(reads()) == 5
+      assert length(reads()) == 3
     end
 
     # A Codex prompt over the stdio soft limit is sent as the compact prompt: the run is given the

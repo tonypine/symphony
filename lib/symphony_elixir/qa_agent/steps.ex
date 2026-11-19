@@ -64,7 +64,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
 
   require Logger
 
-  alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, PhaseSteps, PromptSafety, QaAgent, QaDriver}
+  alias SymphonyElixir.{AgentTelemetry, AgentTmpDir, Messages, PhaseSteps, PromptSafety, QaAgent, QaDriver}
   alias SymphonyElixir.Conductor.Steer
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Config.Schema.Phases
@@ -427,7 +427,14 @@ defmodule SymphonyElixir.QaAgent.Steps do
     _removed = File.rm(answer_path(state, step))
 
     # The Conductor's steers waiting for the pass open its next step's prompt (`SymphonyElixir.Conductor.Steer`).
-    prompt = Steer.turn_prompt(Map.get(state.job, :run_id), false, fn -> prompt(state, step, notes) end)
+    # The person's messages no run was given yet open each step's prompt: every step is a turn of the
+    # same pass, so each is given them and their read is recorded once, for the pass.
+    run_id = Map.get(state.job, :run_id)
+
+    prompt =
+      run_id
+      |> Steer.turn_prompt(false, fn -> prompt(state, step, notes) end)
+      |> Messages.prepend_unread(Map.get(state.job, :repo_key), Map.get(state.job.issue, :id), run_id)
 
     case run_turn(state, step, run.profile, prompt, run.resume) do
       {:ok, state, session_id, lines} ->

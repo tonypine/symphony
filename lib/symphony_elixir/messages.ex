@@ -6,8 +6,9 @@ defmodule SymphonyElixir.Messages do
 
   A message is given to one run as new. The next run of the ticket, of any kind, gets every message
   no other run was given, oldest first, at the top of its prompt (`prepend_unread/4`, which
-  `SymphonyElixir.PromptBuilder` and `SymphonyElixir.ReviewAgent` call), and Symphony records a
-  machine `message.read` naming the message and the run (`record_read/4`), keyed by the message. A later run reads it in the
+  `SymphonyElixir.PromptBuilder`, `SymphonyElixir.ReviewAgent` and the QA passes call), and Symphony
+  records a machine `message.read` naming the message and the run (`record_read/4`), keyed by the
+  message. A later run reads it in the
   ticket's history (`SymphonyElixir.TicketEvents.Brief`), not as a new instruction. A run builds its
   prompt once, when it starts, so a message sent while it works waits for the next run. Sending
   never starts, stops or reorders a run.
@@ -117,7 +118,8 @@ defmodule SymphonyElixir.Messages do
   (`for_run/2`) at its top, under `prompt_section/1`, and their reads recorded for that run. A
   prompt with no run records no read; a store that can't be read gives no message, so the run still
   starts and they wait for the next. Every run's prompt goes through it: `SymphonyElixir.PromptBuilder`
-  for the runs it builds, `SymphonyElixir.ReviewAgent` for Code Review.
+  for the runs it builds, `SymphonyElixir.ReviewAgent` for Code Review, `SymphonyElixir.QaAgent` and
+  `SymphonyElixir.QaAgent.Steps` for QA.
   """
   @spec prepend_unread(String.t(), String.t() | nil, String.t() | nil, String.t() | nil) :: String.t()
   def prepend_unread(prompt, repo_key, issue_id, run_id) when is_binary(repo_key) and is_binary(issue_id) do

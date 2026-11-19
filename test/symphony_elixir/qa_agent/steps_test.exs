@@ -420,6 +420,23 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
     end
   end
 
+  describe "the messages written to the ticket" do
+    # TP-1502: a stepped QA pass is a run like any other, so the person's messages open its prompts.
+    test "each step's prompt opens with the messages no run read yet, and they are marked read by the pass", ctx do
+      {:ok, first} = SymphonyElixir.Messages.send_message("default", @issue_id, "Walk the empty state first.")
+      {:ok, second} = SymphonyElixir.Messages.send_message("default", @issue_id, "Then the export.")
+
+      answers(%{"plan" => [{:write, plan([1, 2])}], "review" => [{:verdict, @pass}]})
+      assert {:ok, _run} = run(ctx)
+
+      [first_turn | _rest] = turns()
+      assert first_turn.prompt =~ ~r/\A## Messages from the person.*Walk the empty state first\..*Then the export\./s
+
+      reads = Enum.map(events("message.read"), &{&1.payload.message_id, &1.payload.run_id})
+      assert Enum.sort(reads) == Enum.sort([{first.id, "qa-steps-run"}, {second.id, "qa-steps-run"}])
+    end
+  end
+
   describe "the review" do
     test "may ask for a recheck: the launch again, a fresh walk per brief, the quit and evidence, then the review again", ctx do
       recheck = %{recheck: [%{step: 2, where: "Page 2, scrolled", do: "Scroll", expect: "Row 9 shows"}]}
