@@ -6676,8 +6676,9 @@ Minimum endpoints:
     first, at the top of its prompt, under a heading that says they come from the person and when
     each was written, and Symphony records a machine `message.read` for each (the message's event id
     and the run's id), keyed by the message: a message is given to one run as new, and later runs read
-    it in the ticket's history summary. A run builds its prompt when it starts, so a message sent while
-    it works waits for the next run.
+    it in the ticket's history summary. A run is given only the messages written before it started,
+    however many prompts it builds (each step, a retry), so a message sent while it works waits for
+    the next run.
   - The ticket read carries `unread_messages`, the count no run read yet, and, for the Mac app release
     that reads one note, `note`: the newest unread message.
   - Each ticket's note from before messages (a person's `note`, read by a `note.read`) was turned into

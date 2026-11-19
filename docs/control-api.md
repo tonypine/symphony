@@ -473,7 +473,8 @@ message no run was given yet, oldest first, at the very top of its prompt, under
 the person", each with when it was written. Symphony then records a machine `message.read` for each:
 the message (`message_id`, the `message.sent` event's id), the run (`run_id`) and when (`at`), keyed by the
 message, so a message is given to exactly one run as new. Later runs read it in the ticket's history
-summary (its Messages section), not as a new instruction. A run builds its prompt once, when it starts, so a
+summary (its Messages section), not as a new instruction. A run is given only the messages written before it
+started (its `run.started`), however many prompts it builds (each step of a stepped pass, a retry), so a
 message sent while it works waits for the next run. Sending a message never starts, stops or reorders a
 run. A preview of the prompt records nothing.
 

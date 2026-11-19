@@ -56,6 +56,21 @@ defmodule SymphonyElixir.MessagesTest do
       assert events() |> Enum.count(&(&1.type == "message.read")) == 2
     end
 
+    test "for_run/2 gives a run only the messages written before it started" do
+      before = record!("message.sent", %{text: "Before."}, actor: {:person, "the Director"}, at: at(1))
+      record!("run.started", %{run_id: "run-1", run_kind: "qa", run_number: 1, state: "QA"}, run_id: "run-1", at: at(2))
+      during = record!("message.sent", %{text: "During."}, actor: {:person, "the Director"}, at: at(3))
+
+      assert events() |> Messages.for_run("run-1") |> Enum.map(& &1.id) == [before.id]
+      # The next run, and a prompt with no run, are given both.
+      assert events() |> Messages.for_run("run-2") |> Enum.map(& &1.id) == [before.id, during.id]
+      assert events() |> Messages.for_run(nil) |> Enum.map(& &1.id) == [before.id, during.id]
+
+      # A hand-built message without a time is given.
+      untimed = %Event{type: "message.sent", id: "untimed", payload: %{text: "?"}, at: nil}
+      assert [^untimed] = [untimed | events()] |> Messages.for_run("run-1") |> Enum.filter(&(&1.id == "untimed"))
+    end
+
     test "read_by/2 names the run that read a message by its title, and when" do
       record!("run.started", %{run_id: "run-7", run_kind: "code_review", run_number: 2, state: "Code Review"}, run_id: "run-7")
       message = record!("message.sent", %{text: "Look at the dialog."}, actor: {:person, "the Director"}, at: at(1))

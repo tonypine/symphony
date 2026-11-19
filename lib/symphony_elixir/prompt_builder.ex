@@ -863,8 +863,8 @@ defmodule SymphonyElixir.PromptBuilder do
   # The messages the person wrote to the ticket that no other run was given, oldest first, at the
   # very top of the prompt (`SymphonyElixir.Messages`), whatever the run's kind. A run's prompt
   # records that the run was given them; a prompt with no run (the workflow preview) or with
-  # messages passed in (`:messages`) records nothing. The prompt is built once, when the run starts,
-  # so a message sent while it works waits for the next run.
+  # messages passed in (`:messages`) records nothing. A run is given only the messages written before
+  # it started, so a message sent while it works waits for the next run.
   defp prepend_messages(prompt, opts) do
     case {Keyword.fetch(opts, :messages), ticket_of(opts)} do
       {{:ok, messages}, _ticket} -> Messages.prepend(prompt, messages)

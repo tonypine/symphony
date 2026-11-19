@@ -20,8 +20,8 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
   # Answers each turn from `:qa_steps_test_answers`: per step id (or the id before its `_<n>`), a
   # list of what the turn does, the last one repeating: `{:write, map}` writes the answer file,
   # `{:verdict, map}` calls `qa_verdict`, `{:raw, text}` writes text, `:nothing`, `{:error, reason}`
-  # fails the turn, `{:messages, list}` sends those messages first, `{:record, outcome}` records the
-  # step's end as the agent.
+  # fails the turn, `{:messages, list}` sends those messages first, `{:send_message, text, then}` has the person
+  # write to the ticket during the turn, `{:record, outcome}` records the step's end as the agent.
   defmodule FakeAgent do
     alias SymphonyElixir.Codex.DynamicTool
 
@@ -53,6 +53,11 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
     defp act({:messages, messages, then}, id, session_opts, opts) do
       Enum.each(messages, opts[:on_message])
+      act(then, id, session_opts, opts)
+    end
+
+    defp act({:send_message, text, then}, id, session_opts, opts) do
+      {:ok, _message} = SymphonyElixir.Messages.send_message("default", "issue-qa-steps", text)
       act(then, id, session_opts, opts)
     end
 
@@ -434,6 +439,21 @@ defmodule SymphonyElixir.QaAgent.StepsTest do
 
       reads = Enum.map(events("message.read"), &{&1.payload.message_id, &1.payload.run_id})
       assert Enum.sort(reads) == Enum.sort([{first.id, "qa-steps-run"}, {second.id, "qa-steps-run"}])
+    end
+
+    # A message written while the pass works is not injected into its later steps or retries.
+    test "a message written during a step waits for the next run", ctx do
+      started = DateTime.add(DateTime.utc_now(), -60)
+      run_started = %{run_id: "qa-steps-run", run_kind: "qa", run_number: 1, state: "QA"}
+      {:ok, _event} = SymphonyElixir.TicketEvents.record("default", @issue_id, "run.started", run_started, run_id: "qa-steps-run", at: started)
+
+      answers(%{"plan" => [{:send_message, "Also check the footer.", {:write, plan([1, 2])}}], "review" => [{:verdict, @pass}]})
+      assert {:ok, _run} = run(ctx)
+
+      assert [_first, _second | _rest] = turns()
+      refute Enum.any?(turns(), &(&1.prompt =~ "Also check the footer."))
+      assert events("message.read") == []
+      assert [%{type: "message.sent"}] = events("message.sent")
     end
   end
 

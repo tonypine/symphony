@@ -427,8 +427,9 @@ defmodule SymphonyElixir.QaAgent.Steps do
     _removed = File.rm(answer_path(state, step))
 
     # The Conductor's steers waiting for the pass open its next step's prompt (`SymphonyElixir.Conductor.Steer`).
-    # The person's messages no run was given yet open each step's prompt: every step is a turn of the
-    # same pass, so each is given them and their read is recorded once, for the pass.
+    # The person's messages no run was given yet, written before the pass started, open each step's
+    # prompt: every step is a turn of the same pass, so each is given the same ones and their read is
+    # recorded once, for the pass. A message written while the pass works waits for the next run.
     run_id = Map.get(state.job, :run_id)
 
     prompt =

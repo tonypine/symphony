@@ -1072,9 +1072,15 @@ defmodule SymphonyElixir.PromptBuilderTest do
     end
 
     test "a message sent while a run works waits for the next run", %{issue: issue, record: record} do
+      run_started = %{run_id: "run-1", run_kind: "implementation", run_number: 1, state: "In Progress"}
+      {:ok, _started} = TicketEvents.record("r", "i", "run.started", run_started, run_id: "run-1", at: ~U[2026-11-19 09:00:00Z])
       refute PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1") =~ "Messages from the person"
 
       message = message!("Stop after the first screen.", ~U[2026-11-19 10:00:00Z])
+      assert reads() == []
+
+      # The run building its prompt again (its next step, a retry) is not given it.
+      refute PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-1") =~ "Stop after the first screen."
       assert reads() == []
 
       prompt = PromptBuilder.build_prompt(issue, ticket_state: record, run_id: "run-2")

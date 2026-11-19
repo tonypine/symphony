@@ -9,9 +9,9 @@ defmodule SymphonyElixir.Messages do
   `SymphonyElixir.PromptBuilder`, `SymphonyElixir.ReviewAgent` and the QA passes call), and Symphony
   records a machine `message.read` naming the message and the run (`record_read/4`), keyed by the
   message. A later run reads it in the
-  ticket's history (`SymphonyElixir.TicketEvents.Brief`), not as a new instruction. A run builds its
-  prompt once, when it starts, so a message sent while it works waits for the next run. Sending
-  never starts, stops or reorders a run.
+  ticket's history (`SymphonyElixir.TicketEvents.Brief`), not as a new instruction. A run is given
+  only the messages written before it started, however many prompts it builds, so a message sent
+  while it works waits for the next run. Sending never starts, stops or reorders a run.
 
   Symphony's own notes (`note`) are not messages: they keep their type and are never given to a
   run as the person's words.
@@ -64,14 +64,36 @@ defmodule SymphonyElixir.Messages do
 
   @doc """
   The messages among `events` the run `run_id` is given as new, oldest first: those no other run
-  was given. A run that builds its prompt twice (a Codex run sent the compact one) is given the
-  same messages both times.
+  was given, written before the run started (its `run.started` among `events`). A message written
+  while the run works is not injected into it, even when the run builds a prompt again (each step
+  of a stepped pass, a retry): it waits for the next run. A run that builds its prompt twice (a
+  Codex run sent the compact one, the next step of a pass) is given the same messages each time.
   """
   @spec for_run([Event.t()], String.t() | nil) :: [Event.t()]
   def for_run(events, run_id) do
     read = read_ids(events)
-    events |> messages() |> Enum.filter(&(Map.get(read, &1.id, run_id) == run_id))
+    started = started_at(events, run_id)
+
+    events
+    |> messages()
+    |> Enum.filter(fn %Event{} = message ->
+      case Map.fetch(read, message.id) do
+        {:ok, reader} -> reader == run_id
+        :error -> written_before?(message, started)
+      end
+    end)
   end
+
+  # When the run `run_id` started, from its `run.started` among `events`; nil when they hold none.
+  defp started_at(events, run_id) do
+    Enum.find_value(events, fn
+      %Event{type: "run.started", payload: %{run_id: ^run_id}, at: at} -> at
+      _event -> nil
+    end)
+  end
+
+  defp written_before?(%Event{at: %DateTime{} = at}, %DateTime{} = started), do: DateTime.compare(at, started) != :gt
+  defp written_before?(_message, _started), do: true
 
   @doc """
   Records that the run `run_id` was given `messages` of `repo_key`'s ticket `issue_id`, one
@@ -123,7 +145,7 @@ defmodule SymphonyElixir.Messages do
   """
   @spec prepend_unread(String.t(), String.t() | nil, String.t() | nil, String.t() | nil) :: String.t()
   def prepend_unread(prompt, repo_key, issue_id, run_id) when is_binary(repo_key) and is_binary(issue_id) do
-    events = issue_id |> RunStore.list_ticket_events(types: @types) |> List.wrap() |> Enum.filter(&is_struct(&1, Event))
+    events = issue_id |> RunStore.list_ticket_events(types: ["run.started" | @types]) |> List.wrap() |> Enum.filter(&is_struct(&1, Event))
 
     case for_run(events, run_id) do
       [] ->
