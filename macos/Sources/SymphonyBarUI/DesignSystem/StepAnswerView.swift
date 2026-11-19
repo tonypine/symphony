@@ -4,13 +4,33 @@ import SymphonyBarCore
 /// What a QA step answered, above its lines when the step unfolds: a check's expected and actual, the plan, the rechecks a
 /// review asks for, a verdict in words. No JSON, no wrapper card beyond what `ExpectedAndActual` draws.
 struct StepAnswerView: View {
-    let answer: StepAnswer
+    var answer = StepAnswer()
+    /// Why the step failed, whole, when the row cuts it short.
+    var reason: String?
+
+    /// A value of a step's answer is cut at this many lines.
+    static let valueLines = 8
 
     /// A pane of a check's result is cut at this many lines.
     static let resultLines = 12
 
     var body: some View {
         VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
+            if let reason {
+                Text(reason)
+                    .font(DesignTokens.TypeStyle.body.font)
+                    .foregroundStyle(DesignTokens.Status.problem.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .textSelection(.enabled)
+            }
+            if !answer.entries.isEmpty {
+                KeyValueList(style: .secondary, rowGap: DesignTokens.KeyValue.compactRowGap) {
+                    ForEach(Array(answer.entries.enumerated()), id: \.offset) { _, entry in
+                        KeyValueRow(entry.label) { ClampedText(text: entry.value, lines: Self.valueLines) }
+                    }
+                }
+            }
             if let result = answer.result, result.expected != nil || result.actual != nil {
                 ExpectedAndActual(expected: result.expected, actual: result.actual, lineLimit: Self.resultLines)
             }

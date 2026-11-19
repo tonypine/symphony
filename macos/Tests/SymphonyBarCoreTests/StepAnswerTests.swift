@@ -95,7 +95,7 @@ final class StepAnswerTests: XCTestCase {
             let json = text.replacingOccurrences(of: "\n", with: "\\n").replacingOccurrences(of: "\"", with: "\\\"")
             let page = #"{"timeline":[{"kind":"run","run_id":"qa-1","run_kind":"\#(kind)","status":"ended","events":[{"id":"n1","at":"2026-10-08T09:01:00Z","type":"note","run_id":"qa-1","payload":{"text":"\#(json)"},"artifacts":[],"children":[]}]}]}"#
             let history = try XCTUnwrap(TicketEventsPayload.decode(Data(page.utf8)))
-            return TimelineModel.isMachineQANote(history.events[0], history: history)
+            return TimelineModel.isMachineNote(history.events[0], history: history)
         }
         XCTAssertTrue(try note("Check: Needs-a-fix row: failed. Expected: A row. Actual: none."))
         XCTAssertTrue(try note("Plan the pass: blocked. Expected: a plan"))
@@ -107,7 +107,7 @@ final class StepAnswerTests: XCTestCase {
         // A note under no run is a person's.
         let page = #"{"timeline":[{"id":"n2","at":"2026-10-08T09:01:00Z","type":"note","payload":{"text":"The QA review asked for a recheck of 1 check"},"artifacts":[],"children":[]}]}"#
         let history = try XCTUnwrap(TicketEventsPayload.decode(Data(page.utf8)))
-        XCTAssertFalse(TimelineModel.isMachineQANote(history.events[0], history: history))
+        XCTAssertFalse(TimelineModel.isMachineNote(history.events[0], history: history))
     }
 
     func testEveryOtherNoteStaysOnTheTimeline() throws {

@@ -157,6 +157,7 @@ func conductorBlockRenders(_ scheme: ColorScheme, suffix: String) {
     render(conductorBlockAlone { FindingsLedger(findings: mixed) }, scheme, to: "findings-ledger-mixed-\(suffix).png")
 
     qaStepRenders(scheme, suffix: suffix)
+    stepAnswerRenders(scheme, suffix: suffix)
     render(lifecycleWithConductor(), scheme, to: "lifecycle-conductor-segment-\(suffix).png")
 
     // Each block inside a message.
@@ -195,4 +196,30 @@ func qaStepRenders(_ scheme: ColorScheme, suffix: String) {
     render(qaRunGroup(unfolding: "check-1"), scheme, to: "run-group-qa-check-result-\(suffix).png")
     render(qaRunGroup(unfolding: "plan"), scheme, to: "run-group-qa-plan-\(suffix).png")
     render(qaRunGroup(unfolding: "review"), scheme, to: "run-group-qa-recheck-\(suffix).png")
+}
+
+/// An implementation run (`Tests/Fixtures/timeline/step-answers.json`) whose first step answered in three entries, one of
+/// several lines, and whose Tests step failed with a long reason.
+let stepAnswersRun: RunGroupModel = {
+    guard let events = try? Data(contentsOf: timelineFixtures.appendingPathComponent("step-answers.json")),
+          let history = TicketEventsPayload.decode(events),
+          let run = TimelineModel.build(history, reference: timelineReference, calendar: timelineCalendar).run("impl-1")
+    else { fatalError("The step answers fixture is missing from \(timelineFixtures.path)") }
+    return run
+}()
+
+@MainActor
+func stepAnswersRunGroup(unfolding stepID: String) -> AnyView {
+    AnyView(
+        RunGroup(run: stepAnswersRun, transcripts: StepTranscripts { _ in .unreachable }, unfolded: true, unfoldedSteps: [stepID])
+            .padding(DesignTokens.Space.s5)
+            .frame(width: 760)
+            .background(DesignTokens.Surface.content.color)
+    )
+}
+
+@MainActor
+func stepAnswerRenders(_ scheme: ColorScheme, suffix: String) {
+    render(stepAnswersRunGroup(unfolding: "code"), scheme, to: "run-group-step-answer-\(suffix).png")
+    render(stepAnswersRunGroup(unfolding: "tests"), scheme, to: "run-group-failed-step-long-reason-\(suffix).png")
 }

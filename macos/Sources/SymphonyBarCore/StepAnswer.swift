@@ -45,13 +45,32 @@ public struct StepAnswer: Equatable {
         public var design: String?
     }
 
+    /// One line of a non-QA step's structured answer: a label and its plain text, which may run over several lines.
+    public struct Entry: Equatable {
+        public var label: String
+        public var value: String
+
+        public init(label: String, value: String) {
+            self.label = label
+            self.value = value
+        }
+    }
+
+    /// The most entries an answer holds.
+    public static let maxEntries = 12
+
+    /// A step's structured answer in a run that is not a QA pass (`answer`).
+    public var entries: [Entry] = []
     public var result: Result?
     public var plan: Plan?
     public var rechecks: [Recheck]
     /// The final review's verdict in words.
     public var verdictSummary: String?
 
-    public init(result: Result? = nil, plan: Plan? = nil, rechecks: [Recheck] = [], verdictSummary: String? = nil) {
+    public init(
+        result: Result? = nil, plan: Plan? = nil, rechecks: [Recheck] = [], verdictSummary: String? = nil, entries: [Entry] = []
+    ) {
+        self.entries = entries
         self.result = result
         self.plan = plan
         self.rechecks = rechecks
@@ -78,10 +97,17 @@ public struct StepAnswer: Equatable {
             guard let title = item.text("title") else { return nil }
             return Recheck(title: title, instructions: item.strings("do"), expect: item.text("expect"), design: item.text("design"))
         }
-        let answer = StepAnswer(result: result, plan: plan, rechecks: rechecks, verdictSummary: fields.text("verdictSummary"))
+        let entries = fields.list("answer").compactMap { entry -> Entry? in
+            guard let label = entry.text("label"), let value = entry.text("value") else { return nil }
+            return Entry(label: label, value: value)
+        }
+        let answer = StepAnswer(
+            result: result, plan: plan, rechecks: rechecks, verdictSummary: fields.text("verdictSummary"),
+            entries: Array(entries.prefix(Self.maxEntries))
+        )
         guard !answer.isEmpty else { return nil }
         self = answer
     }
 
-    public var isEmpty: Bool { result == nil && plan == nil && rechecks.isEmpty && verdictSummary == nil }
+    public var isEmpty: Bool { entries.isEmpty && result == nil && plan == nil && rechecks.isEmpty && verdictSummary == nil }
 }
