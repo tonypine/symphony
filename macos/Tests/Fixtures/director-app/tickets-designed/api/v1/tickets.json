@@ -1,0 +1,273 @@
+{
+  "view": null,
+  "filters": [],
+  "columns": [
+    {
+      "name": "identifier",
+      "type": "identifier",
+      "description": "The ticket's identifier."
+    },
+    {
+      "name": "title",
+      "type": "string",
+      "description": "The ticket's title."
+    },
+    {
+      "name": "repo",
+      "type": "string",
+      "description": "The key of the repository the ticket lives in."
+    },
+    {
+      "name": "epic",
+      "type": "identifier",
+      "description": "The identifier of the epic the ticket is a sub-ticket of."
+    },
+    {
+      "name": "phase",
+      "type": "string",
+      "description": "The phase (state) the ticket is in."
+    },
+    {
+      "name": "situation",
+      "type": "situation",
+      "description": "The kind of the ticket's situation."
+    },
+    {
+      "name": "situation_since",
+      "type": "time",
+      "description": "Since when the ticket's situation holds."
+    },
+    {
+      "name": "labels",
+      "type": "list",
+      "description": "The ticket's labels."
+    },
+    {
+      "name": "priority",
+      "type": "integer",
+      "description": "Linear's priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low."
+    },
+    {
+      "name": "assignee",
+      "type": "string",
+      "description": "Who the ticket is assigned to."
+    },
+    {
+      "name": "url",
+      "type": "string",
+      "description": "The ticket's page in Linear."
+    },
+    {
+      "name": "created_at",
+      "type": "time",
+      "description": "When the ticket was created."
+    },
+    {
+      "name": "phase_at",
+      "type": "time",
+      "description": "When the ticket entered its phase."
+    },
+    {
+      "name": "updated_at",
+      "type": "time",
+      "description": "When Symphony last wrote the ticket's record."
+    }
+  ],
+  "sort": {
+    "column": "situation_since",
+    "direction": "asc"
+  },
+  "count": 10,
+  "tickets": [
+    {
+      "issue_id": "issue-tp-1441",
+      "identifier": "TP-1441",
+      "title": "The Situation line everywhere",
+      "repo": "symphony",
+      "epic": "Phase 3b",
+      "phase": "In Progress",
+      "situation": "working",
+      "situation_since": "2026-11-12T15:35:00Z",
+      "labels": [
+        "mac"
+      ],
+      "priority": 1,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/TP-1441",
+      "created_at": "2026-11-09T16:00:00Z",
+      "phase_at": "2026-11-12T15:35:00Z",
+      "updated_at": "2026-11-12T15:35:00Z"
+    },
+    {
+      "issue_id": "issue-bil-306",
+      "identifier": "BIL-306",
+      "title": "Proration when a plan changes mid-cycle",
+      "repo": "billing",
+      "epic": "Annual plans",
+      "phase": "In Progress",
+      "situation": "waiting_on_you",
+      "situation_since": "2026-11-12T12:48:00Z",
+      "labels": [
+        "billing",
+        "decision"
+      ],
+      "priority": 2,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/BIL-306",
+      "created_at": "2026-11-09T16:00:00Z",
+      "phase_at": "2026-11-12T12:48:00Z",
+      "updated_at": "2026-11-12T12:48:00Z"
+    },
+    {
+      "issue_id": "issue-shop-305",
+      "identifier": "SHOP-305",
+      "title": "Checkout total rounding",
+      "repo": "web-shop",
+      "epic": "Checkout",
+      "phase": "In Progress",
+      "situation": "retrying",
+      "situation_since": "2026-11-12T15:38:00Z",
+      "labels": [
+        "checkout",
+        "bug"
+      ],
+      "priority": 1,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/SHOP-305",
+      "created_at": "2026-11-09T16:00:00Z",
+      "phase_at": "2026-11-12T15:38:00Z",
+      "updated_at": "2026-11-12T15:38:00Z"
+    },
+    {
+      "issue_id": "issue-shop-301",
+      "identifier": "SHOP-301",
+      "title": "Saved carts",
+      "repo": "web-shop",
+      "epic": "Checkout",
+      "phase": "Code Review",
+      "situation": "waiting_for_ci",
+      "situation_since": "2026-11-12T15:54:00Z",
+      "labels": [
+        "checkout"
+      ],
+      "priority": 2,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/SHOP-301",
+      "created_at": "2026-11-09T16:00:00Z",
+      "phase_at": "2026-11-12T15:54:00Z",
+      "updated_at": "2026-11-12T15:54:00Z"
+    },
+    {
+      "issue_id": "issue-tp-1442",
+      "identifier": "TP-1442",
+      "title": "The Question block",
+      "repo": "symphony",
+      "epic": "Phase 3b",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "situation_since": "2026-11-11T16:00:00Z",
+      "labels": [
+        "mac"
+      ],
+      "priority": 1,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/TP-1442",
+      "created_at": "2026-11-09T16:00:00Z",
+      "phase_at": "2026-11-11T16:00:00Z",
+      "updated_at": "2026-11-11T16:00:00Z"
+    },
+    {
+      "issue_id": "issue-tp-1480",
+      "identifier": "TP-1480",
+      "title": "A poll that changes nothing redraws nothing",
+      "repo": "symphony",
+      "epic": null,
+      "phase": "Code Review",
+      "situation": "working",
+      "situation_since": "2026-11-12T15:51:00Z",
+      "labels": [
+        "speed"
+      ],
+      "priority": 1,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/TP-1480",
+      "created_at": "2026-11-09T16:00:00Z",
+      "phase_at": "2026-11-12T15:51:00Z",
+      "updated_at": "2026-11-12T15:51:00Z"
+    },
+    {
+      "issue_id": "issue-bil-307",
+      "identifier": "BIL-307",
+      "title": "Invoice PDF shows the plan’s period",
+      "repo": "billing",
+      "epic": "Annual plans",
+      "phase": "Todo",
+      "situation": "waiting_for_slot",
+      "situation_since": "2026-11-12T15:20:00Z",
+      "labels": [
+        "billing"
+      ],
+      "priority": 3,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/BIL-307",
+      "created_at": "2026-11-09T16:00:00Z",
+      "phase_at": "2026-11-12T15:20:00Z",
+      "updated_at": "2026-11-12T15:20:00Z"
+    },
+    {
+      "issue_id": "issue-shop-311",
+      "identifier": "SHOP-311",
+      "title": "Gift card balance on the receipt",
+      "repo": "web-shop",
+      "epic": null,
+      "phase": "Todo",
+      "situation": "waiting_for_slot",
+      "situation_since": "2026-11-12T15:58:00Z",
+      "labels": [],
+      "priority": 2,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/SHOP-311",
+      "created_at": "2026-11-09T16:00:00Z",
+      "phase_at": "2026-11-12T15:58:00Z",
+      "updated_at": "2026-11-12T15:58:00Z"
+    },
+    {
+      "issue_id": "issue-tp-1443",
+      "identifier": "TP-1443",
+      "title": "The Run group and the Step list",
+      "repo": "symphony",
+      "epic": "Phase 3b",
+      "phase": "Todo",
+      "situation": "blocked_by_ticket",
+      "situation_since": "2026-11-11T16:00:00Z",
+      "labels": [
+        "mac"
+      ],
+      "priority": 1,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/TP-1443",
+      "created_at": "2026-11-09T16:00:00Z",
+      "phase_at": "2026-11-11T16:00:00Z",
+      "updated_at": "2026-11-11T16:00:00Z"
+    },
+    {
+      "issue_id": "issue-shop-298",
+      "identifier": "SHOP-298",
+      "title": "Address form remembers the country",
+      "repo": "web-shop",
+      "epic": "Checkout",
+      "phase": "Merging",
+      "situation": "done",
+      "situation_since": "2026-11-12T15:59:00Z",
+      "labels": [
+        "checkout"
+      ],
+      "priority": 3,
+      "assignee": "tonypine",
+      "url": "https://linear.app/example/issue/SHOP-298",
+      "created_at": "2026-11-09T16:00:00Z",
+      "phase_at": "2026-11-12T15:59:00Z",
+      "updated_at": "2026-11-12T15:59:00Z"
+    }
+  ]
+}

@@ -28,7 +28,7 @@ story of a mapped entry has no variation of its name, naming the story.
 | `components/icon-button` | `IconButton` |
 | `components/menu-button` | `MenuButton` |
 | `components/segmented-control` | `SegmentedControl` |
-| `components/chip` | `Chip` draws its kinds; its hover, pressed, selected, focused, removable and disabled stories are not built |
+| `components/chip` | `Chip` draws its kinds, and `FilterChip` its filter form (the Tickets bar's); its hover, pressed, selected, focused, removable and disabled stories are not built |
 | `components/badge` | `Badge` |
 | `components/count-badge` | `CountBadge` |
 | `components/status-dot` | `StatusDot` |
@@ -79,6 +79,6 @@ by the page's own views.
 | `sections/question-block` | `QuestionBlock` draws it; its stories are not in the gallery one by one yet |
 | `sections/decision-sheet` | `DecisionSheet` draws it; its stories are not in the gallery one by one yet |
 | `sections/board-group` | Nothing draws it since TP-1499: Home is two tree lists of rows, with no groups |
-| `sections/table-with-filters` | Drawn by the app's Tickets page, waiting on the Tickets ticket |
+| `sections/table-with-filters` | Drawn by the app's Tickets page (TP-1501) with `ControlBar`, `FilterChip` and `TicketsTable` on `DataTable`; its stories are not in the gallery one by one yet |
 | `sections/control-bar` | `ControlBar` |
 | `sections/window` | Its bar is `WindowBar` with its `Breadcrumb` (TP-1496), its sidebar `Sidebar` and its status line `StatusLine` (TP-1498); the pages in it are drawn by the app, its stories not in the gallery one by one yet |
