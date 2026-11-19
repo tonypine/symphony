@@ -406,6 +406,34 @@ defmodule SymphonyElixir.Conductor.Facts do
 
   def cut(_text, _max), do: nil
 
+  @doc """
+  `text` (trimmed) fitted to `max` characters: whole when it fits, else cut at the last sentence end
+  (or, failing that, the last word end) that leaves room for the marker, with the marker, so the
+  result never goes over `max`.
+  """
+  @spec fit(String.t(), pos_integer()) :: String.t()
+  def fit(text, max) when is_binary(text) do
+    text = String.trim(text)
+
+    if String.length(text) <= max do
+      text
+    else
+      room = max - String.length(@cut_marker)
+      head = String.slice(text, 0, room)
+      kept = boundary(head, ~r/[.!?](?=\s)|\n/u, 1) || boundary(head, ~r/\s/u, 0) || head
+      String.trim_trailing(kept) <> @cut_marker
+    end
+  end
+
+  # `head` up to its last match of `pattern` (plus `extra` characters of it) when that keeps at least
+  # half of it.
+  defp boundary(head, pattern, extra) do
+    case pattern |> Regex.scan(head, return: :index) |> List.last() do
+      [{start, length}] when start > div(byte_size(head), 2) -> binary_part(head, 0, start + min(extra, length))
+      _none -> nil
+    end
+  end
+
   defp payload(%Event{payload: payload}, key), do: Map.get(payload, key, Map.get(payload, Atom.to_string(key)))
 
   defp drop_nil(map), do: map |> Enum.reject(fn {_key, value} -> is_nil(value) end) |> Map.new()
