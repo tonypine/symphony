@@ -5,7 +5,8 @@ defmodule SymphonyElixir.Conductor.Answer do
 
     * `instructions`: what the next run should focus on, a non-blank string of at most 2,000
       characters;
-    * `update`: for the person, a string of at most 900 characters, or null (a blank string reads
+    * `update`: for the person, markdown in the Conductor's own voice, a string of at most 1,200
+      characters, or null (a blank string reads
       as null);
     * `refs`: the ids of the events the update rests on (optional; only ids the facts carry are kept);
     * `ask_person`: null, or a question to the person: `title`, `question`, `why`, `if_unanswered`,
@@ -22,7 +23,7 @@ defmodule SymphonyElixir.Conductor.Answer do
   alias SymphonyElixir.ReviewAgent
 
   @instructions_max 2_000
-  @update_max 900
+  @update_max 1_200
   @steer_max 1_500
   @question_fields ~w(title question why if_unanswered recommendation_reason)
 

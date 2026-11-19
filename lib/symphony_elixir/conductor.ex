@@ -322,10 +322,27 @@ defmodule SymphonyElixir.Conductor do
 
   defp record_update(%{update: nil}, _plan, _run_id, _facts), do: :ok
 
-  defp record_update(%{update: text, refs: refs}, plan, run_id, facts) do
+  defp record_update(%{update: text, refs: refs} = answer, plan, run_id, facts) do
     known = facts |> event_ids() |> MapSet.new()
-    record_event(plan, "conductor.update", %{junction: plan.junction, text: text, refs: Enum.filter(refs, &MapSet.member?(known, &1))}, run_id)
+    payload = %{junction: plan.junction, text: text, refs: Enum.filter(refs, &MapSet.member?(known, &1))}
+    record_event(plan, "conductor.update", with_watch(payload, plan, answer), run_id)
   end
+
+  # A watch turn's update says which run it is about, what made Symphony look, and whether the same
+  # answer steered or stopped it; a junction's carries no `watch`.
+  defp with_watch(payload, %{watch: %{run: run, trigger: trigger, allow_stop: allow_stop}}, answer) do
+    watch = %{
+      run_id: run.run_id,
+      trigger: trigger,
+      steered: answer.steer != nil,
+      when: answer.steer && answer.steer.when,
+      stopped: allow_stop and answer.stop != nil and answer.ask_person != nil
+    }
+
+    Map.put(payload, :watch, watch)
+  end
+
+  defp with_watch(payload, _plan, _answer), do: payload
 
   # Every `event_id` the facts carry, at any depth.
   defp event_ids(%{} = map), do: Enum.flat_map(map, fn {key, value} -> event_id(key, value) ++ event_ids(value) end)

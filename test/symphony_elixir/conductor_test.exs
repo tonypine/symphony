@@ -160,6 +160,8 @@ defmodule SymphonyElixir.ConductorTest do
       assert [%{payload: %{junction: "after_coding", text: "Check the empty list first."}, run_id: run_id}] = events(ctx.issue_id, "conductor.instructions")
       assert [%{payload: %{text: "It handed off with every check green.", refs: refs}}] = events(ctx.issue_id, "conductor.update")
       assert refs == [verdict.id, "evt_started"]
+      assert [%{payload: junction_payload}] = events(ctx.issue_id, "conductor.update")
+      refute Map.has_key?(junction_payload, :watch)
       assert [%{payload: %{run_kind: "conductor", run_number: 1, state: "Code Review"}}] = events(ctx.issue_id, "run.started")
       assert [%{payload: %{run_kind: "conductor", exit: "answered", tokens: 1_234, counted: false}}] = events(ctx.issue_id, "run.ended")
 
@@ -333,6 +335,22 @@ defmodule SymphonyElixir.ConductorTest do
       Steer.drop(ctx.run.run_id)
       assert [%{run_id: run_id, payload: %{text: "Read the build error first.", when: "next_turn", trigger: "step_failed"}}] = steers(ctx.issue_id)
       assert run_id == ctx.run.run_id
+    end
+
+    test "a watch update names the run, the trigger and whether the answer steered or stopped", ctx do
+      steered = watch_answer(%{"update" => "I told the run to read the **build error** first.", "steer" => %{"message" => "Read it.", "when" => "now"}})
+      assert Conductor.watch(ctx.run, "step_failed", turn: turn(steered), settings: @on) == :ok
+      run_id = ctx.run.run_id
+
+      assert [%{payload: %{text: "I told the run" <> _, watch: watch}}] = events(ctx.issue_id, "conductor.update")
+      assert watch == %{run_id: run_id, trigger: "step_failed", steered: true, when: "now", stopped: false}
+
+      Steer.drop(run_id)
+      quiet = %{ctx.run | run_id: "run-quiet-#{System.unique_integer([:positive])}"}
+      assert Conductor.watch(quiet, "run_minutes", turn: turn(watch_answer(%{"update" => "Thirty minutes in. I am leaving the run to work."})), settings: @on) == :ok
+
+      assert [_first, %{payload: %{watch: quiet_watch}}] = events(ctx.issue_id, "conductor.update")
+      assert quiet_watch == %{run_id: quiet.run_id, trigger: "run_minutes", steered: false, when: nil, stopped: false}
     end
 
     test "a steer for now interrupts the run's live Claude turn", ctx do

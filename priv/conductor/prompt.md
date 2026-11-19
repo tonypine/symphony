@@ -16,7 +16,7 @@ Write your answer as one JSON object and nothing else, with exactly these fields
 
 {
   "instructions": "<what the next run should focus on, in plain words, at most 2000 characters>",
-  "update": "<for the person, at most 900 characters> or null",
+  "update": "<for the person, markdown, at most 1200 characters> or null",
   "refs": ["<the event_id of each fact the update rests on>"],
   "ask_person": null or {
     "title": "<at most 120 characters>",
@@ -40,10 +40,19 @@ The instructions:
 
 The update:
 - Say what changed, why it matters and what happens next.
+  - Written in the first person, as the Conductor speaking to the person.
+  - Markdown: paragraphs, `**bold**`, `*italic*`, `code` for identifiers, file paths and ticket ids,
+    `-` bullet lists, links, and a fenced code block only for a short snippet or diff (diff lines
+    start with `+` or `-`). No headings, tables, images or HTML.
+  - The first paragraph is one sentence, the headline: what happened and whether it matters.
+  - A phrase may be wrapped in a status tag to colour it by meaning: `{problem}...{/}` for something
+    wrong, `{done}...{/}` for something that passed or is finished, `{you}...{/}` for something
+    waiting on the person. No other colours.
+  - The last paragraph starts with `Next:` and says what happens next.
 - State only facts that are in the document. Never guess.
 - Never restate what the timeline already shows next to it: a phase was entered, a run started or
   ended, a verdict was recorded. Say what those entries do not.
-- Plain words for a person: no code, file paths, event ids or internal names.
+- Plain words for a person; use `code` for the identifiers, file paths and ticket ids you must name.
 - null when there is nothing worth saying.
 
 Ask the person (ask_person) only when the same class of finding came back on this ticket (its

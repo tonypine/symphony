@@ -136,12 +136,16 @@ let galleryEntries: [GalleryEntry] = [
         files: ["SymphonyBarUI/QuestionBlock.swift", "SymphonyBarUI/SheetCover.swift", "SymphonyBarCore/Decision"]),
     GalleryEntry(
         id: "run-group", title: "Run group and its steps", kind: .component, prefixes: ["run-group-"],
-        files: ["SymphonyBarUI/RunGroup.swift", "SymphonyBarUI/StepList.swift", "SymphonyBarUI/LayerPulse.swift", "SymphonyBarCore/RunStep"]),
+        files: [
+            "SymphonyBarUI/RunGroup.swift", "SymphonyBarUI/StepList.swift", "SymphonyBarUI/LayerPulse.swift", "SymphonyBarCore/RunStep",
+            "SymphonyBarUI/DesignSystem/ConductorMessageViews.swift", "SymphonyBarCore/Conductor",
+        ]),
     GalleryEntry(
         id: "timeline", title: "Timeline", kind: .component, prefixes: ["timeline-", "session-reader"],
         files: [
             "SymphonyBarUI/TimelineSection.swift", "SymphonyBarUI/SessionReaderView.swift", "SymphonyBarUI/LiveDuration.swift",
             "SymphonyBarUI/RunGroup.swift", "SymphonyBar/TranscriptView.swift", "SymphonyBarCore/TicketEvents", "SymphonyBarCore/Timeline",
+            "SymphonyBarUI/DesignSystem/ConductorMessageViews.swift", "SymphonyBarCore/ConductorMarkup.swift", "SymphonyBarCore/ConductorMessage.swift",
         ]),
     GalleryEntry(
         id: "lifecycle", title: "Lifecycle and phase path", kind: .component, prefixes: ["lifecycle-", "phase-path-"],
@@ -153,6 +157,7 @@ let galleryEntries: [GalleryEntry] = [
         id: "action-rail", title: "Action rail, Move to… and Start now", kind: .component,
         prefixes: ["action-rail-", "move-sheet", "start-now-"],
         files: ["SymphonyBar/ActionRail.swift", "SymphonyBar/InboxMoveViews.swift", "SymphonyBarCore/TicketMoves", "SymphonyBarCore/TicketActionRail"]),
+    GalleryEntry(id: "type-styles", title: "Type styles", kind: .component, prefixes: ["type-styles-"], files: []),
     // Screens.
     GalleryEntry(
         id: "ticket-page", title: "Ticket page", kind: .screen, prefixes: ["ticket-page-"],

@@ -1,6 +1,7 @@
 defmodule SymphonyElixir.Conductor.WatchTest do
   use SymphonyElixir.TestSupport
 
+  alias SymphonyElixir.Artifacts
   alias SymphonyElixir.Conductor.{Facts, Steer, Watch}
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.TicketEvents.Event
@@ -101,6 +102,44 @@ defmodule SymphonyElixir.Conductor.WatchTest do
     assert live.current_step == %{step_id: "build", title: "Build", mode: "machine"}
     assert live.newest_lines == ["compiling", "error: undefined", "{:raw, 1}"]
     assert Watch.live(%{run | run_profile: nil}, []).current_step == nil
+  end
+
+  describe "the failed step's output" do
+    defp kept(ctx, kind, name, text) do
+      path = Path.join(System.tmp_dir!(), "#{name}-#{System.unique_integer([:positive])}")
+      File.write!(path, text)
+      on_exit(fn -> File.rm(path) end)
+      meta = %{repo_key: "default", issue_id: ctx.issue_id, run_id: ctx.run.run_id, kind: kind, label: name}
+      {:ok, %{id: id}} = Artifacts.ingest(path, meta)
+      id
+    end
+
+    defp failed(id, artifacts), do: %Event{id: id, type: "step.completed", payload: %{step_id: "build", title: "Build", outcome: "failed"}, artifacts: artifacts}
+
+    test "the newest failed step carries the tail of its output", ctx do
+      old = kept(ctx, "step_output", "old", "an old failure")
+      output = kept(ctx, "step_output", "new", Enum.map_join(1..60, "\n", &"line #{&1}"))
+
+      live = Watch.live(ctx.run, [failed("f1", [old]), step("c1", "code", "passed"), failed("f2", [output])])
+
+      assert %{step_id: "build", title: "Build", output: text} = live.failed_step
+      assert String.starts_with?(text, "line 21")
+      assert String.ends_with?(text, "line 60")
+    end
+
+    test "an output over 3000 characters keeps its end", ctx do
+      id = kept(ctx, "step_output", "long", String.duplicate("x", 5_000) <> "\nthe real error")
+      %{failed_step: %{output: text}} = Watch.live(ctx.run, [failed("f1", [id])])
+      assert String.length(text) <= 3_003 + String.length(" [cut by Symphony]")
+      assert String.ends_with?(text, "the real error")
+    end
+
+    test "a failed step with no readable output has none, and no failure has no failed step", ctx do
+      log = kept(ctx, "log", "log", "not step output")
+      assert %{failed_step: %{output: nil}} = Watch.live(ctx.run, [failed("f1", [])])
+      assert %{failed_step: %{output: nil}} = Watch.live(ctx.run, [failed("f2", [log, "missing"])])
+      assert Watch.live(ctx.run, [step("c1", "code", "passed")]).failed_step == nil
+    end
   end
 
   describe "the watch" do
