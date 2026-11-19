@@ -360,6 +360,9 @@ public struct RunGroupModel: Equatable, Identifiable {
     public var isMechanical = false
     /// The Conductor's guidance to the run while it ran (`conductor.steer`), oldest first.
     public var steers: [RunSteer] = []
+    /// What the Conductor said while it watched the run (`conductor.update` with a `watch` of this run), oldest first,
+    /// each with the step it comes after.
+    public var conductorMessages: [RunConductorMessage] = []
 
     public init(
         id: String, title: String, state: State, word: String, durationSeconds: Int? = nil, tokens: Int? = nil,
@@ -439,6 +442,10 @@ public struct RunGroupModel: Equatable, Identifiable {
         _ history: TicketEventsPayload, runNow: RunNow? = nil, liveTokens: Int? = nil, reference: Date
     ) -> [RunGroupModel] {
         let byRun = Dictionary(grouping: history.events.filter { $0.runID != nil }, by: { $0.runID! })
+        let watching = Dictionary(grouping: history.events.compactMap { event -> ConductorMessage? in
+            let ownRun = event.runID.flatMap { history.runs[$0] }
+            return ConductorMessage(event: event, runTitle: ownRun.map { TicketEventsPayload.runTitle(kind: $0.runKind, number: $0.runNumber) })
+        }.filter { $0.watchedRunID != nil }, by: { $0.watchedRunID! })
         return history.runs.values
             .map { run in (run, byRun[run.runID] ?? []) }
             .sorted { lhs, rhs in
@@ -447,14 +454,17 @@ public struct RunGroupModel: Equatable, Identifiable {
             }
             .map { run, events in
                 let live = run.status?.lowercased() == "running"
-                return group(run, events: events, runNow: live ? runNow : nil, liveTokens: live ? liveTokens : nil, reference: reference)
+                return group(
+                    run, events: events, runNow: live ? runNow : nil, liveTokens: live ? liveTokens : nil, reference: reference,
+                    conductorMessages: watching[run.runID] ?? []
+                )
             }
     }
 
     /// The run `run` from its events, in the order Symphony wrote them.
     public static func group(
         _ run: TicketEventsPayload.Run, events: [TicketEventsPayload.Event], runNow: RunNow? = nil, liveTokens: Int? = nil,
-        reference: Date
+        reference: Date, conductorMessages: [ConductorMessage] = []
     ) -> RunGroupModel {
         let (result, word) = TicketEventsPayload.runState(run)
         let state: State = switch result {
@@ -498,8 +508,19 @@ public struct RunGroupModel: Equatable, Identifiable {
         group.transcript = ended?.artifacts.first { $0.kind == "transcript" }?.sessionLines
         group.screenshots = outside
         group.isMechanical = run.runKind == conductorKind
-        group.steers = events.compactMap(RunSteer.init(event:))
+        // The steer's delivery stays a row of its own, unless the Conductor's message right beside it says the same words.
+        let said = Set(conductorMessages.filter(\.actedOnRun).map(\.text))
+        group.steers = events.compactMap(RunSteer.init(event:)).filter { !said.contains($0.text) }
+        group.conductorMessages = conductorMessages.sorted { ($0.at ?? .distantFuture) < ($1.at ?? .distantFuture) }
+            .map { RunConductorMessage(message: $0, afterStep: afterStep($0.at, steps: steps, spans: spans)) }
         return group
+    }
+
+    /// The step a message written at `at` comes after: the last that started before it. Nil puts it before the first step.
+    /// A message with no time, or in a run whose steps carry no times, comes after the last.
+    static func afterStep(_ at: Date?, steps: [RunStep], spans: [Int: StepSpan]) -> Int? {
+        guard let at, !spans.isEmpty else { return steps.indices.last }
+        return spans.filter { $0.value.start <= at }.keys.max()
     }
 
     /// The run's steps top to bottom: each `step.started` opens one, its `step.completed` ends it; a step completed
@@ -728,5 +749,19 @@ public struct RunSteer: Equatable, Identifiable {
     public init?(event: TicketEventsPayload.Event) {
         guard event.type == "conductor.steer", let text = event.payload.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
         self.init(id: event.id, at: event.date, text: text)
+    }
+}
+
+/// A message of the Conductor inside a run's group, with the step it comes after.
+public struct RunConductorMessage: Equatable, Identifiable {
+    public var message: ConductorMessage
+    /// The index of the step it follows; nil puts it above the first step.
+    public var afterStep: Int?
+
+    public var id: String { message.id }
+
+    public init(message: ConductorMessage, afterStep: Int?) {
+        self.message = message
+        self.afterStep = afterStep
     }
 }

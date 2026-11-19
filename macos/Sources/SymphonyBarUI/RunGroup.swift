@@ -50,7 +50,11 @@ public struct RunGroup: View {
             if unfolded {
                 VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
                     if !run.steps.isEmpty {
-                        StepList(steps: run.steps, transcripts: transcripts, unfolded: unfoldedSteps)
+                        StepList(steps: run.steps, transcripts: transcripts, unfolded: unfoldedSteps, conductorMessages: run.conductorMessages)
+                    } else {
+                        ForEach(run.conductorMessages) { placed in
+                            ConductorRunNote(message: placed.message)
+                        }
                     }
                     // The run now on no step (a QA or Code Review run walks none) has its newest lines here.
                     if !run.liveLines.isEmpty {
@@ -62,7 +66,7 @@ public struct RunGroup: View {
                     ForEach(run.steers) { steer in
                         RunSteerEntry(steer: steer)
                     }
-                    if run.steps.isEmpty, run.liveLines.isEmpty, run.screenshots.isEmpty, run.steers.isEmpty {
+                    if run.steps.isEmpty, run.liveLines.isEmpty, run.screenshots.isEmpty, run.steers.isEmpty, run.conductorMessages.isEmpty {
                         Text(Self.noSteps)
                             .font(DesignTokens.TypeStyle.secondary.font)
                             .foregroundStyle(.secondary)

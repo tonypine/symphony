@@ -162,28 +162,40 @@ struct TranscriptLineRow: View {
 /// newest lines live. The step it is on, and one that failed or asked a question, start unfolded.
 public struct StepList: View {
     let steps: [RunStep]
+    /// What the Conductor said while it watched the run, each between the steps its time puts it.
+    let conductorMessages: [RunConductorMessage]
     @ObservedObject var transcripts: StepTranscripts
     @State private var folds: FoldState
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// `unfolded` pins which steps are open (a render's fixed state); nil opens each step that opens by default,
     /// as the ticket read brings it, until the person folds it.
-    public init(steps: [RunStep], transcripts: StepTranscripts, unfolded: Set<String>? = nil) {
+    public init(steps: [RunStep], transcripts: StepTranscripts, unfolded: Set<String>? = nil, conductorMessages: [RunConductorMessage] = []) {
         self.steps = steps
+        self.conductorMessages = conductorMessages
         self.transcripts = transcripts
         _folds = State(initialValue: unfolded.map { FoldState(ids: steps.map(\.id), unfolded: $0) } ?? FoldState())
     }
 
     public var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(steps) { step in
+            conductorNotes(after: nil)
+            ForEach(Array(steps.enumerated()), id: \.element.id) { index, step in
                 StepRow(step: step, transcripts: transcripts, unfolded: folds.isUnfolded(step)) {
                     withAnimation(.motion(.standard, reduceMotion: reduceMotion)) { folds.toggle(step) }
                 }
+                conductorNotes(after: index)
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Self.accessibilityLabel)
+    }
+
+    /// The Conductor's messages that come after step `index` (nil: before the first).
+    @ViewBuilder private func conductorNotes(after index: Int?) -> some View {
+        ForEach(conductorMessages.filter { $0.afterStep == index }) { placed in
+            ConductorRunNote(message: placed.message)
+        }
     }
 
     public static let accessibilityLabel = "Steps of the run"
