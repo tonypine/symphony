@@ -6,8 +6,8 @@ defmodule SymphonyElixir.Messages do
 
   A message is given to one run as new. The next run of the ticket, of any kind, gets every message
   no other run was given, oldest first, at the top of its prompt (`prepend_unread/4`, which
-  `SymphonyElixir.PromptBuilder` and `SymphonyElixir.ReviewAgent` call), and Symphony records a machine `message.read` naming
-  the message and the run (`record_read/4`), keyed by the message. A later run reads it in the
+  `SymphonyElixir.PromptBuilder` and `SymphonyElixir.ReviewAgent` call), and Symphony records a
+  machine `message.read` naming the message and the run (`record_read/4`), keyed by the message. A later run reads it in the
   ticket's history (`SymphonyElixir.TicketEvents.Brief`), not as a new instruction. A run builds its
   prompt once, when it starts, so a message sent while it works waits for the next run. Sending
   never starts, stops or reorders a run.
