@@ -3911,7 +3911,11 @@ QA pass's own commands (below). A playbook's orchestrated step that sets no `pro
 Symphony's prompt for its id, `priv/qa_steps/<kind>/<id>.md`, when there is one.
 
 Each step is recorded on the ticket's history under the QA run's `run_id`, so the Director's
-timeline shows the pass live; the plan's answer is a `note` there too. Machine steps run without a
+timeline shows the pass live. A step's answer rides on its own `step.completed` as structured fields
+(`result`, `plan`, `recheck`, `verdict_summary`; a step whose answer Symphony could not take ends
+`failed` with its `reason`), never as a `note`. A step answers `pass` only when every check in its
+brief was seen and judged; a part that could not be reached, seen or judged makes it `blocked`.
+Machine steps run without a
 model, through the QA driver the pass holds:
 
 - `symphony:qa_pre_checks`: the pre-checks' results (the steps a named test proves);
