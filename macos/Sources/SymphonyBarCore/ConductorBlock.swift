@@ -165,6 +165,16 @@ public enum ConductorBlock: Equatable {
 
 // MARK: - Reading
 
+extension ConductorBlock {
+    /// The blocks a JSON list holds, as the events feed writes them (snake-case keys); a block that does not read is
+    /// left out. The Gallery draws its variations from these.
+    public static func read(json: String) -> [ConductorBlock] {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return ((try? decoder.decode([LossyConductorBlock].self, from: Data(json.utf8))) ?? []).compactMap(\.block)
+    }
+}
+
 /// A block, or nothing: one that does not read is skipped without failing the list around it.
 struct LossyConductorBlock: Decodable {
     let block: ConductorBlock?

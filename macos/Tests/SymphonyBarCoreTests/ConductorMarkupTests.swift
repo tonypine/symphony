@@ -117,4 +117,11 @@ final class ConductorMarkupTests: XCTestCase {
     func testWindowsLineEndsRead() {
         XCTAssertEqual(ConductorMarkup("One.\r\n\r\nTwo.").blocks.count, 2)
     }
+
+    func testOnlyATicketIdentifierOrAPullRequestNumberIsAReference() {
+        for reference in ["TP-1500", "SHOP-305", "A1-7", "#969"] { XCTAssertTrue(ConductorMarkup.isReference(reference), reference) }
+        for other in ["", "#", "#9a", "TP-", "-12", "TP-12-3", "1P-5", "make all", "TP 12", "tp-1x", "SwiftUI", "é-1"] {
+            XCTAssertFalse(ConductorMarkup.isReference(other), other)
+        }
+    }
 }
