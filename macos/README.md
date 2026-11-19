@@ -1090,17 +1090,21 @@ Home the first time, and on the page it showed last after that.
   `Plan Review`, so its banner just says "Sent your decisions" with no Undo. Unblock moves no ticket, so its banner
   just says "Hold cleared" with no Undo.
 
-- **Initiatives** follows each plan you approved to done (`/api/v1/initiatives`), in three columns like the
-  Inbox. The list groups the plan tickets as Active, In review and Done recently (a week after they are done),
-  each with "4 of 8 done" and a bar of its sub-tickets by stage (Done, Working, Waiting on you, Queued,
-  Blocked) with a legend that gives each stage's symbol, count and word; VoiceOver reads the counts too. The
-  detail opens with a sentence ("4 of 8 done. BIL-206 waits on you, and 2 tickets wait on it."), the bar and its
-  legend, the initiative's lane ("Holds a lane, running BIL-205"), and the sub-tickets in landing order, each
-  with what it waits on (you, a blocker, CI, a slot) and links to the tickets it is blocked by. **Review** on a
-  sub-ticket that waits on you opens its Inbox item; any other row opens its ticket page. The final
-  verification comes last and reads "Waits on 3 tickets" until the others are done, then its result. The
-  Overview's side column shows the active initiatives in an **Initiatives** card; a click opens one here. The
-  scope pop-up applies.
+- **Initiatives** follows each plan you approved to done (`/api/v1/initiatives`), as designed in TP-1500: the
+  epics at the left (340 pt, 400 pt from 1600 pt of content, where the two columns are centred and the story stops
+  at 1040 pt), the picked epic's story at the right. Each epic is a card under "Active" (including a plan in review)
+  or "Done recently" (a label with none is not drawn): its identifier and "3 of 26 done", its title on at most two lines, its
+  progress strip, and only what is not done ("1 working · 22 waiting"), or, once it landed, "Landed Mon 9 Nov". The
+  picked card has the accent ring, grey while the window is behind another; Up and Down move through the epics, and
+  Tab goes on into the story. The story's head gives the identifier, the repo chip and **Open TP-1441** (the ticket
+  being worked on, absent when none is), the title, one sentence ("3 of 26 done. TP-1441 is being worked on; 22 wait
+  behind it, in order."), the strip, and "Started Tue 10 Nov · 2 days so far · 14.6M tokens". Under it the
+  sub-tickets in landing order, one 36 pt line each: a landed one says "Landed Tue 10 Nov · PR #859", the next one
+  "Next: starts when TP-1441 lands", the others "Waits for TP-1442". Each one being worked on is highlighted on the
+  working tint with its situation under its title, its step bars and how long. Past the two after the last one being
+  worked on, the rest fold behind "20 more wait in line, in this order", which unfolds them in place and folds them
+  again. A row opens its ticket page, or, for one waiting on you in the Inbox, **Review** opens its item. The scope
+  pop-up applies.
 
 - **Home** is two lists read from `/api/v1/home` (TP-1499), and nothing else: **In progress**, every ticket that
   has started and has not landed, a ticket of an epic one step in under its epic's row (the epic glyph, its progress

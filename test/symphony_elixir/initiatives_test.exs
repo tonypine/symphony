@@ -79,6 +79,16 @@ defmodule SymphonyElixir.InitiativesTest do
       assert %{group: "active", state: nil} = Initiative.from_node(plan("BIL-11", {nil, "started"}, []), "billing", settings(), @now)
     end
 
+    test "keeps when the plan started and finished, and when each sub-ticket landed (TP-1500)" do
+      children = [child("BIL-2", @done, %{"completedAt" => "2026-10-06T09:00:00Z"}), child("BIL-3", @todo)]
+      node = plan("BIL-1", @done, children, %{"startedAt" => "2026-10-02T08:00:00Z", "completedAt" => "2026-10-08T00:00:00Z"})
+
+      assert %{started_at: "2026-10-02T08:00:00Z", completed_at: "2026-10-08T00:00:00Z", sub_tickets: sub_tickets} =
+               Initiative.from_node(node, "billing", settings(), @now)
+
+      assert Enum.map(sub_tickets, &{&1.identifier, &1.completed_at}) == [{"BIL-2", "2026-10-06T09:00:00Z"}, {"BIL-3", nil}]
+    end
+
     test "orders sub-tickets by blocked-by, then creation, and lists every open sub-ticket" do
       children = [
         child("BIL-4", @todo, Map.merge(%{"createdAt" => "2026-10-01T09:00:00Z"}, blocked_by([{"BIL-3", "unstarted"}]))),

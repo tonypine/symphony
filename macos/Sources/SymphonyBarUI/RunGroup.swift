@@ -318,12 +318,16 @@ struct RunHeaderLayout: Layout {
 /// A short bar per step, in its state's tint; the one it is on breathes while it works, still under Reduce Motion. On
 /// the window's page it breathes on Core Animation (`LayerPulse`), off the main thread (TP-1480); a snapshot draws it
 /// still.
-struct StepBars: View {
+public struct StepBars: View {
     let steps: [RunStep]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.liveDurations) private var live
 
-    var body: some View {
+    public init(steps: [RunStep]) {
+        self.steps = steps
+    }
+
+    public var body: some View {
         HStack(spacing: 3) {
             ForEach(steps) { step in
                 bar(step)

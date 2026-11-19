@@ -131,6 +131,10 @@ final class SymphonyWindowModel: ObservableObject {
     @Published var initiativeRecords: [String: [TicketsRow]] = [:]
     /// Each sub-ticket's ticket read `connected`, by identifier: its blockers and the epic's progress (TP-1458).
     @Published var initiativeConnected: [String: TicketConnected] = [:]
+    /// The run working on each sub-ticket being worked on, by identifier, for its step bars (TP-1500).
+    @Published var initiativeRuns: [String: RunGroupModel] = [:]
+    /// Each of those sub-tickets' events read so far, by identifier, so the next read pages on from where it stopped.
+    var initiativeHistories: [String: TicketEventsPayload] = [:]
     var readingInitiativeStory = false
     /// When the selected epic's story was last read, by the epic's identifier.
     var initiativeStoryReadAt: [String: Date] = [:]

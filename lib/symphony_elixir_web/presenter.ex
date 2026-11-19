@@ -232,12 +232,13 @@ defmodule SymphonyElixirWeb.Presenter do
     case Orchestrator.snapshot(orchestrator, snapshot_timeout_ms) do
       %{} = snapshot ->
         lanes = Map.get(snapshot, :epic_lanes)
+        records = ticket_state_records()
 
         listed =
           snapshot
           |> Initiatives.list(initiatives, inbox)
           |> Enum.sort_by(&{group_rank(&1.group), &1.identifier || ""})
-          |> Enum.map(&initiative_payload(&1, lanes))
+          |> Enum.map(&initiative_payload(&1, lanes, records))
 
         %{
           generated_at: generated_at,
@@ -258,7 +259,10 @@ defmodule SymphonyElixirWeb.Presenter do
   defp group_rank("in_review"), do: 1
   defp group_rank(_done), do: 2
 
-  defp initiative_payload(initiative, lanes) do
+  # The epic's `started_at` is Linear's and its `tokens` the sum of its sub-tickets' ended runs, from
+  # their ledgers; each sub-ticket's `completed_at` is Linear's and its `pull_request` the number of
+  # the PR its record last read.
+  defp initiative_payload(initiative, lanes, records) do
     %{
       issue_id: initiative.id,
       identifier: initiative.identifier,
@@ -267,26 +271,44 @@ defmodule SymphonyElixirWeb.Presenter do
       repo_key: initiative.repo_key,
       url: URLUtils.present_url(initiative.url),
       group: initiative.group,
+      started_at: Map.get(initiative, :started_at),
       completed_at: initiative.completed_at,
+      tokens: initiative.sub_tickets |> Enum.map(&run_tokens(&1.id)) |> Enum.sum(),
       counts: initiative.counts,
       slot: initiative_slot(lanes, initiative.id),
-      sub_tickets: Enum.map(initiative.sub_tickets, &sub_ticket_payload/1)
+      sub_tickets: Enum.map(initiative.sub_tickets, &sub_ticket_payload(&1, records))
     }
   end
 
-  defp sub_ticket_payload(sub_ticket) do
+  defp sub_ticket_payload(sub_ticket, records) do
     %{
       issue_id: sub_ticket.id,
       identifier: sub_ticket.identifier,
       title: sub_ticket.title,
       state: sub_ticket.state,
       url: URLUtils.present_url(sub_ticket.url),
+      completed_at: Map.get(sub_ticket, :completed_at),
+      pull_request: pull_request_number(Map.get(records, sub_ticket.id)),
       blocked_by: Enum.map(sub_ticket.blocked_by, & &1.identifier),
       blockers: Enum.map(sub_ticket.blocked_by, &Map.take(&1, [:identifier, :open, :completed_at])),
       waits_on: sub_ticket.waits_on,
       waiting_for: sub_ticket.waiting_for
     }
   end
+
+  defp pull_request_number(%{pull_request: %{number: number}}) when is_integer(number), do: number
+  defp pull_request_number(_record), do: nil
+
+  # The tokens of a ticket's ended runs, from its ledger; none for a ticket without one.
+  defp run_tokens(issue_id) do
+    for %{payload: payload} <- List.wrap(RunStore.list_ticket_events(issue_id, types: ["run.ended"])), reduce: 0 do
+      sum -> sum + ended_tokens(Map.get(payload, :tokens))
+    end
+  end
+
+  defp ended_tokens(tokens) when is_integer(tokens), do: tokens
+  defp ended_tokens(%{} = tokens), do: ended_tokens(Map.get(tokens, :total_tokens, Map.get(tokens, "total_tokens")))
+  defp ended_tokens(_tokens), do: 0
 
   # The initiative's line in the epic lanes: the lane it runs or holds, the reason it yielded it, or
   # its place in the queue for one; nil when it has no lane.

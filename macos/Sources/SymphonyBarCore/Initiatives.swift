@@ -168,11 +168,16 @@ public struct Initiative: Equatable, Identifiable {
         public var waits: InitiativeWait
         /// Where it stands, as every page says it (`StateSnapshot.situations`); nil when the state holds none for it.
         public var situation: Situation?
+        /// When it landed, as Linear says; nil while it is open or when Linear gave no date.
+        public var completedAt: Date?
+        /// The number of its pull request, as its record last read it; nil when it has none.
+        public var pullRequest: Int?
         public var id: String { identifier }
 
         public init(
             issueID: String? = nil, identifier: String, title: String? = nil, state: String? = nil, url: URL? = nil,
-            blockedBy: [String] = [], blockers: [Blocker]? = nil, waits: InitiativeWait, situation: Situation? = nil
+            blockedBy: [String] = [], blockers: [Blocker]? = nil, waits: InitiativeWait, situation: Situation? = nil,
+            completedAt: Date? = nil, pullRequest: Int? = nil
         ) {
             self.issueID = issueID
             self.identifier = identifier
@@ -183,6 +188,8 @@ public struct Initiative: Equatable, Identifiable {
             self.blockers = blockers ?? blockedBy.map { Blocker(identifier: $0) }
             self.waits = waits
             self.situation = situation
+            self.completedAt = completedAt
+            self.pullRequest = pullRequest
         }
 
         /// Its situation, or one of the kind closest to what it waits on when the state holds none (a done
@@ -245,6 +252,11 @@ public struct Initiative: Equatable, Identifiable {
     public var group: Group
     public var subTickets: [SubTicket]
     public var slot: Slot?
+    /// When the plan started and when it finished, as Linear says.
+    public var startedAt: Date?
+    public var completedAt: Date?
+    /// Its sub-tickets' ended runs' tokens; nil from a Symphony that serves none.
+    public var tokens: Int?
 
     public var id: String { issueID }
 
@@ -315,11 +327,14 @@ public struct Initiative: Equatable, Identifiable {
         slot = payload.slot.flatMap { slot in
             slot.status.map { Slot(status: $0, identifier: slot.identifier, reason: slot.reason, position: slot.position) }
         }
+        startedAt = payload.startedAt.flatMap(SymphonyState.parseDate)
+        completedAt = payload.completedAt.flatMap(SymphonyState.parseDate)
+        tokens = payload.tokens
     }
 
     public init(
         issueID: String, identifier: String, title: String?, state: String? = nil, repoKey: String?, url: URL? = nil,
-        group: Group, subTickets: [SubTicket], slot: Slot? = nil
+        group: Group, subTickets: [SubTicket], slot: Slot? = nil, startedAt: Date? = nil, completedAt: Date? = nil, tokens: Int? = nil
     ) {
         self.issueID = issueID
         self.identifier = identifier
@@ -330,6 +345,9 @@ public struct Initiative: Equatable, Identifiable {
         self.group = group
         self.subTickets = subTickets
         self.slot = slot
+        self.startedAt = startedAt
+        self.completedAt = completedAt
+        self.tokens = tokens
     }
 
     struct Payload: Decodable {
@@ -343,6 +361,8 @@ public struct Initiative: Equatable, Identifiable {
             let blockers: [BlockerPayload]?
             let waitsOn: String?
             let waitingFor: [String]?
+            let completedAt: String?
+            let pullRequest: Int?
         }
 
         struct BlockerPayload: Decodable {
@@ -367,6 +387,9 @@ public struct Initiative: Equatable, Identifiable {
         let group: String?
         let subTickets: [SubTicketPayload]?
         let slot: SlotPayload?
+        let startedAt: String?
+        let completedAt: String?
+        let tokens: Int?
     }
 }
 
@@ -381,7 +404,8 @@ extension Initiative.SubTicket {
                     Blocker(identifier: $0, open: blocker.open ?? true, completedAt: blocker.completedAt.flatMap(SymphonyState.parseDate))
                 }
             },
-            waits: InitiativeWait(payload.waitsOn, waitingFor: payload.waitingFor ?? [])
+            waits: InitiativeWait(payload.waitsOn, waitingFor: payload.waitingFor ?? []),
+            completedAt: payload.completedAt.flatMap(SymphonyState.parseDate), pullRequest: payload.pullRequest
         )
     }
 
@@ -406,7 +430,7 @@ extension Initiative.SubTicket {
     }
 }
 
-/// The Initiatives list under the window's scope, grouped as Active, In review and Done recently.
+/// The Initiatives list under the window's scope, grouped as Active (including the plans in review) and Done recently.
 public struct InitiativesList: Equatable {
     public struct Section: Equatable, Identifiable {
         public var group: Initiative.Group
@@ -432,9 +456,12 @@ public struct InitiativesList: Equatable {
             }
             return initiative
         }
-        sections = Initiative.Group.allCases.compactMap { group in
-            let inGroup = shown.filter { $0.group == group }
-            return inGroup.isEmpty ? nil : Section(group: group, initiatives: inGroup)
+        let sectionGroups: [(section: Initiative.Group, members: [Initiative.Group])] = [
+            (.active, [.active, .inReview]), (.done, [.done]),
+        ]
+        sections = sectionGroups.compactMap { section in
+            let inGroup = shown.filter { section.members.contains($0.group) }
+            return inGroup.isEmpty ? nil : Section(group: section.section, initiatives: inGroup)
         }
     }
 

@@ -52,7 +52,7 @@
     {
       "issue_id": "i-TP-1438",
       "identifier": "TP-1438",
-      "title": "3b (1/26): The shared styles",
+      "title": "The shared styles",
       "epic": "TP-1381",
       "phase": "Done",
       "situation": "done",
@@ -63,7 +63,7 @@
     {
       "issue_id": "i-TP-1439",
       "identifier": "TP-1439",
-      "title": "3b (2/26): The Situation line",
+      "title": "The Situation line",
       "epic": "TP-1381",
       "phase": "Done",
       "situation": "done",
@@ -74,7 +74,7 @@
     {
       "issue_id": "i-TP-1440",
       "identifier": "TP-1440",
-      "title": "3b (3/26): The Action rail",
+      "title": "The Action rail",
       "epic": "TP-1381",
       "phase": "Done",
       "situation": "done",
@@ -85,7 +85,7 @@
     {
       "issue_id": "i-TP-1441",
       "identifier": "TP-1441",
-      "title": "3b (4/26): The Situation line everywhere",
+      "title": "The Situation line everywhere",
       "epic": "TP-1381",
       "phase": "In Progress",
       "situation": "working",
@@ -96,7 +96,7 @@
     {
       "issue_id": "i-TP-1442",
       "identifier": "TP-1442",
-      "title": "3b (5/26): The Question block",
+      "title": "The Question block",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -107,7 +107,7 @@
     {
       "issue_id": "i-TP-1443",
       "identifier": "TP-1443",
-      "title": "3b (6/26): The Run group and the Step list",
+      "title": "The Run group and the Step list",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -118,7 +118,7 @@
     {
       "issue_id": "i-TP-1444",
       "identifier": "TP-1444",
-      "title": "3b (7/26): The Timeline",
+      "title": "The Timeline",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -129,7 +129,7 @@
     {
       "issue_id": "i-TP-1445",
       "identifier": "TP-1445",
-      "title": "3b (8/26): The ticket page at laptop width",
+      "title": "The ticket page at laptop width",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -140,7 +140,7 @@
     {
       "issue_id": "i-TP-1446",
       "identifier": "TP-1446",
-      "title": "3b (9/26): The ticket page at desktop width",
+      "title": "The ticket page at desktop width",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -151,7 +151,7 @@
     {
       "issue_id": "i-TP-1447",
       "identifier": "TP-1447",
-      "title": "3b (10/26): The Lifecycle section",
+      "title": "The Lifecycle section",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -162,7 +162,7 @@
     {
       "issue_id": "i-TP-1448",
       "identifier": "TP-1448",
-      "title": "3b (11/26): The facts rail",
+      "title": "The facts rail",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -173,7 +173,7 @@
     {
       "issue_id": "i-TP-1449",
       "identifier": "TP-1449",
-      "title": "3b (12/26): The decisions editor",
+      "title": "The decisions editor",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -184,7 +184,7 @@
     {
       "issue_id": "i-TP-1450",
       "identifier": "TP-1450",
-      "title": "3b (13/26): The labels and priority editors",
+      "title": "The labels and priority editors",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -195,7 +195,7 @@
     {
       "issue_id": "i-TP-1451",
       "identifier": "TP-1451",
-      "title": "3b (14/26): Home's board",
+      "title": "Home’s board",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -206,7 +206,7 @@
     {
       "issue_id": "i-TP-1452",
       "identifier": "TP-1452",
-      "title": "3b (15/26): Home's top",
+      "title": "Home’s top",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -217,7 +217,7 @@
     {
       "issue_id": "i-TP-1453",
       "identifier": "TP-1453",
-      "title": "3b (16/26): The five destinations",
+      "title": "The five destinations",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -228,7 +228,7 @@
     {
       "issue_id": "i-TP-1454",
       "identifier": "TP-1454",
-      "title": "3b (17/26): Tickets as the table",
+      "title": "Tickets as the table",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -239,7 +239,7 @@
     {
       "issue_id": "i-TP-1455",
       "identifier": "TP-1455",
-      "title": "3b (18/26): Saved views on Tickets",
+      "title": "Saved views on Tickets",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -250,7 +250,7 @@
     {
       "issue_id": "i-TP-1456",
       "identifier": "TP-1456",
-      "title": "3b (19/26): The Inbox drawer",
+      "title": "The Inbox drawer",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -261,7 +261,7 @@
     {
       "issue_id": "i-TP-1457",
       "identifier": "TP-1457",
-      "title": "3b (20/26): Initiatives as the epic's story",
+      "title": "Initiatives as the epic’s story",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -272,7 +272,7 @@
     {
       "issue_id": "i-TP-1458",
       "identifier": "TP-1458",
-      "title": "3b (21/26): The Journal page",
+      "title": "The Journal page",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -283,7 +283,7 @@
     {
       "issue_id": "i-TP-1459",
       "identifier": "TP-1459",
-      "title": "3b (22/26): Insights",
+      "title": "Insights",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -294,7 +294,7 @@
     {
       "issue_id": "i-TP-1460",
       "identifier": "TP-1460",
-      "title": "3b (23/26): Factory",
+      "title": "Factory",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -305,7 +305,7 @@
     {
       "issue_id": "i-TP-1461",
       "identifier": "TP-1461",
-      "title": "3b (24/26): The menu bar",
+      "title": "The menu bar",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -316,7 +316,7 @@
     {
       "issue_id": "i-TP-1462",
       "identifier": "TP-1462",
-      "title": "3b (25/26): Keyboard pass",
+      "title": "Keyboard pass",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",
@@ -327,7 +327,7 @@
     {
       "issue_id": "i-TP-1463",
       "identifier": "TP-1463",
-      "title": "3b (26/26): Accessibility pass",
+      "title": "Accessibility pass",
       "epic": "TP-1381",
       "phase": "Todo",
       "situation": "blocked_by_ticket",

@@ -906,22 +906,28 @@ func initiativesSituations() -> some View {
         fatalError("The inbox fixture's initiatives don't read")
     }
     let list = InitiativesList(initiatives: payload.initiatives, state: situationsState("inbox").snapshot)
-    return VStack(alignment: .leading, spacing: 0) {
+    return VStack(alignment: .leading, spacing: DesignTokens.Space.s8) {
         ForEach(list.active) { initiative in
-            InitiativeDetail(initiative: initiative, actions: InitiativeActions(), reference: situationsNow)
+            InitiativeStoryView(
+                initiative: initiative, story: InitiativeStory(initiative: initiative, reference: situationsNow), actions: InitiativeActions(),
+                reference: situationsNow
+            )
         }
     }
+    .padding(DesignTokens.Space.s6)
     .frame(width: 960)
-    .background(DesignTokens.Surface.content.color)
+    .background(DesignTokens.Surface.window.color)
 }
 
-// Initiatives as the epic's story (TP-1458): the `initiative-story` fixture's TP-1381 mid-chain, SHOP-500 done and
-// BIL-300 with a canceled sub-ticket, as the tab draws them beside the list at the laptop's and the desktop's widths.
+// Initiatives as designed (TP-1500): the `initiative-story` fixture, which holds the catalog's `EPICS` and
+// `STORY_TITLES` (`docs/design/catalog/stories.js`), TP-1381 mid-chain, SHOP-280 with a ticket that needs a fix,
+// BIL-300 with a canceled sub-ticket and SHOP-500 done, as the page draws them at the laptop's and the desktop's widths.
 let storyAPI = here.appendingPathComponent("../Tests/Fixtures/director-app/initiative-story/api/v1").standardizedFileURL
 
-/// `identifier`'s story beside the Initiatives list, in a window `window` pt wide less its sidebar.
+/// Initiatives with `identifier` picked, in a window `window` pt wide less its sidebar: its story's fold `unfolded`,
+/// the window in front or not (`windowActive`), a run's steps on the ticket being worked on.
 @MainActor
-func initiativeStory(_ identifier: String, window: CGFloat) -> some View {
+func initiativeStory(_ identifier: String, window: CGFloat, unfolded: Bool = false, windowActive: Bool = true) -> some View {
     func read(_ name: String) -> Data { try! Data(contentsOf: storyAPI.appendingPathComponent(name)) }
     guard let payload = InitiativesPayload.decode(read("initiatives.json")), let state = OverviewState.decode(read("state.json")),
           let records = TicketsPayload.decode(read("tickets.json"))?.rows
@@ -929,22 +935,29 @@ func initiativeStory(_ identifier: String, window: CGFloat) -> some View {
     let list = InitiativesList(initiatives: payload.initiatives, state: state.snapshot)
     guard let initiative = list.ordered.first(where: { $0.identifier == identifier }) else { fatalError("\(identifier) is missing") }
     var connected: [String: TicketConnected] = [:]
-    for ticket in initiative.subTickets {
+    for ticket in list.ordered.flatMap(\.subTickets) {
         if let data = try? Data(contentsOf: storyAPI.appendingPathComponent("\(ticket.identifier).json")) {
             connected[ticket.identifier] = TicketFactsRead.decode(data)?.connected
         }
     }
     let reference = state.generatedAt ?? Date()
-    let story = InitiativeStory(initiative: initiative, records: records, connected: connected, order: state.order, reference: reference)
-    return HStack(alignment: .top, spacing: 0) {
-        InitiativesListRows(list: list, selected: initiative.id, select: { _ in })
-            .frame(width: DesignTokens.Layout.listColumnWidth, alignment: .top)
-            .background(DesignTokens.Surface.content.color)
-        Divider()
-        InitiativeDetail(initiative: initiative, story: story, actions: InitiativeActions(), reference: reference)
+    let story = { (initiative: Initiative) in
+        InitiativeStory(initiative: initiative, records: records, connected: connected, order: state.order, reference: reference)
     }
-    .frame(width: window - DesignTokens.Layout.sidebarWidth, alignment: .top)
-    .background(DesignTokens.Surface.content.color)
+    // The step bars on the ticket being worked on: the step it passed and the one it is on.
+    let steps = [
+        RunStep(id: "step-pull", stepID: "pull", title: "Pull", state: .done),
+        RunStep(id: "step-code", stepID: "code", title: "Write the code", state: .current),
+    ]
+    let runs = Dictionary(uniqueKeysWithValues: story(initiative).currents.map {
+        ($0.identifier, RunGroupModel(id: "run-\($0.identifier)", title: "Implementation run 1", state: .running, word: "Running", steps: steps))
+    })
+    return InitiativesBody(
+        list: list, selection: .constant(initiative.id), story: story, runs: runs, actions: InitiativeActions(), reference: reference,
+        width: Double(window - DesignTokens.Layout.sidebarWidth), unfolded: unfolded, windowActive: windowActive
+    )
+    .frame(width: window - DesignTokens.Layout.sidebarWidth, alignment: .topLeading)
+    .background(DesignTokens.Surface.window.color)
 }
 
 /// The Inbox: TP-892's context card with its line and its connected tickets' lines.
@@ -1810,9 +1823,17 @@ MainActor.assumeIsolated {
         // The Situation line everywhere (TP-1441): Tickets, Initiatives, the Inbox's context, the menu bar.
         render(ticketsSituations(), scheme, to: "situations-tickets-\(suffix).png")
         render(initiativesSituations(), scheme, to: "situations-initiatives-\(suffix).png")
-        // Initiatives as the epic's story (TP-1458): mid-chain, done, and with a canceled sub-ticket, at both widths.
+        // Initiatives as designed (TP-1500): mid-chain folded and unfolded, the window behind another, a ticket that
+        // needs a fix, a canceled sub-ticket and a done epic, at the laptop's and the desktop's widths.
         do {
             renderScreen(scheme, to: "initiative-story-mid-chain") { window in initiativeStory("TP-1381", window: window) }
+            renderScreen(scheme, to: "initiative-story-every-sub-ticket") { window in
+                initiativeStory("TP-1381", window: window, unfolded: true)
+            }
+            renderScreen(scheme, to: "initiative-story-window-behind") { window in
+                initiativeStory("TP-1381", window: window, windowActive: false)
+            }
+            renderScreen(scheme, to: "initiative-story-needs-a-fix") { window in initiativeStory("SHOP-280", window: window) }
             renderScreen(scheme, to: "initiative-story-done") { window in initiativeStory("SHOP-500", window: window) }
             renderScreen(scheme, to: "initiative-story-canceled") { window in initiativeStory("BIL-300", window: window) }
         }

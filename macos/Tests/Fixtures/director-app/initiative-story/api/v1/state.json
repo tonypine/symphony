@@ -55,7 +55,7 @@
           "state": "In Progress",
           "via": "blocked_by"
         },
-        "title": "Phase 3b: the Director redesigned around a ticket's situation"
+        "title": "Phase 3b: the Director redesigned around a ticket’s situation"
       },
       {
         "id": "p-300",
@@ -177,7 +177,7 @@
     {
       "issue_id": "i-TP-1441",
       "issue_identifier": "TP-1441",
-      "title": "3b (4/26): The Situation line everywhere",
+      "title": "The Situation line everywhere",
       "state": "In Progress",
       "repo_key": "symphony",
       "started_at": "2026-11-12T03:05:00Z",
@@ -211,7 +211,35 @@
       },
       {
         "kind": "retrying",
-        "tickets": []
+        "tickets": [
+          {
+            "issue_id": "i-SHOP-305",
+            "identifier": "SHOP-305",
+            "title": "Checkout total rounding",
+            "state": "Rework",
+            "repo_key": "web-shop",
+            "outcome": "not_a_candidate",
+            "position": null,
+            "reason": null,
+            "forced": false,
+            "situation": {
+              "kind": "retrying",
+              "word": "Retrying",
+              "cause": "Two checks failed on PR #812.",
+              "next": "It tries again at 03:40.",
+              "since": "2026-11-12T03:08:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": {
+                "try": 2,
+                "of": 3,
+                "at": "2026-11-12T03:40:00Z"
+              }
+            }
+          }
+        ]
       },
       {
         "kind": "blocked_by_ticket",
@@ -219,7 +247,7 @@
           {
             "issue_id": "i-TP-1442",
             "identifier": "TP-1442",
-            "title": "3b (5/26): The Question block",
+            "title": "The Question block",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -242,7 +270,7 @@
           {
             "issue_id": "i-TP-1443",
             "identifier": "TP-1443",
-            "title": "3b (6/26): The Run group and the Step list",
+            "title": "The Run group and the Step list",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -265,7 +293,7 @@
           {
             "issue_id": "i-TP-1444",
             "identifier": "TP-1444",
-            "title": "3b (7/26): The Timeline",
+            "title": "The Timeline",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -288,7 +316,7 @@
           {
             "issue_id": "i-TP-1445",
             "identifier": "TP-1445",
-            "title": "3b (8/26): The ticket page at laptop width",
+            "title": "The ticket page at laptop width",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -311,7 +339,7 @@
           {
             "issue_id": "i-TP-1446",
             "identifier": "TP-1446",
-            "title": "3b (9/26): The ticket page at desktop width",
+            "title": "The ticket page at desktop width",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -334,7 +362,7 @@
           {
             "issue_id": "i-TP-1447",
             "identifier": "TP-1447",
-            "title": "3b (10/26): The Lifecycle section",
+            "title": "The Lifecycle section",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -357,7 +385,7 @@
           {
             "issue_id": "i-TP-1448",
             "identifier": "TP-1448",
-            "title": "3b (11/26): The facts rail",
+            "title": "The facts rail",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -380,7 +408,7 @@
           {
             "issue_id": "i-TP-1449",
             "identifier": "TP-1449",
-            "title": "3b (12/26): The decisions editor",
+            "title": "The decisions editor",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -403,7 +431,7 @@
           {
             "issue_id": "i-TP-1450",
             "identifier": "TP-1450",
-            "title": "3b (13/26): The labels and priority editors",
+            "title": "The labels and priority editors",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -426,7 +454,7 @@
           {
             "issue_id": "i-TP-1451",
             "identifier": "TP-1451",
-            "title": "3b (14/26): Home's board",
+            "title": "Home’s board",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -449,7 +477,7 @@
           {
             "issue_id": "i-TP-1452",
             "identifier": "TP-1452",
-            "title": "3b (15/26): Home's top",
+            "title": "Home’s top",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -472,7 +500,7 @@
           {
             "issue_id": "i-TP-1453",
             "identifier": "TP-1453",
-            "title": "3b (16/26): The five destinations",
+            "title": "The five destinations",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -495,7 +523,7 @@
           {
             "issue_id": "i-TP-1454",
             "identifier": "TP-1454",
-            "title": "3b (17/26): Tickets as the table",
+            "title": "Tickets as the table",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -518,7 +546,7 @@
           {
             "issue_id": "i-TP-1455",
             "identifier": "TP-1455",
-            "title": "3b (18/26): Saved views on Tickets",
+            "title": "Saved views on Tickets",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -541,7 +569,7 @@
           {
             "issue_id": "i-TP-1456",
             "identifier": "TP-1456",
-            "title": "3b (19/26): The Inbox drawer",
+            "title": "The Inbox drawer",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -564,7 +592,7 @@
           {
             "issue_id": "i-TP-1457",
             "identifier": "TP-1457",
-            "title": "3b (20/26): Initiatives as the epic's story",
+            "title": "Initiatives as the epic’s story",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -587,7 +615,7 @@
           {
             "issue_id": "i-TP-1458",
             "identifier": "TP-1458",
-            "title": "3b (21/26): The Journal page",
+            "title": "The Journal page",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -610,7 +638,7 @@
           {
             "issue_id": "i-TP-1459",
             "identifier": "TP-1459",
-            "title": "3b (22/26): Insights",
+            "title": "Insights",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -633,7 +661,7 @@
           {
             "issue_id": "i-TP-1460",
             "identifier": "TP-1460",
-            "title": "3b (23/26): Factory",
+            "title": "Factory",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -656,7 +684,7 @@
           {
             "issue_id": "i-TP-1461",
             "identifier": "TP-1461",
-            "title": "3b (24/26): The menu bar",
+            "title": "The menu bar",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -679,7 +707,7 @@
           {
             "issue_id": "i-TP-1462",
             "identifier": "TP-1462",
-            "title": "3b (25/26): Keyboard pass",
+            "title": "Keyboard pass",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -702,7 +730,7 @@
           {
             "issue_id": "i-TP-1463",
             "identifier": "TP-1463",
-            "title": "3b (26/26): Accessibility pass",
+            "title": "Accessibility pass",
             "state": "Todo",
             "repo_key": "symphony",
             "outcome": "held",
@@ -776,6 +804,29 @@
               "run": null,
               "retry": null
             }
+          },
+          {
+            "issue_id": "i-SHOP-301",
+            "identifier": "SHOP-301",
+            "title": "Saved carts",
+            "state": "Code Review",
+            "repo_key": "web-shop",
+            "outcome": "not_a_candidate",
+            "position": null,
+            "reason": null,
+            "forced": false,
+            "situation": {
+              "kind": "waiting_for_ci",
+              "word": "Waiting for CI",
+              "cause": "Checks are running on PR #790.",
+              "next": null,
+              "since": "2026-11-12T03:24:00Z",
+              "waits_on": null,
+              "and_more": 0,
+              "step": null,
+              "run": null,
+              "retry": null
+            }
           }
         ]
       },
@@ -817,7 +868,7 @@
           {
             "issue_id": "i-TP-1441",
             "identifier": "TP-1441",
-            "title": "3b (4/26): The Situation line everywhere",
+            "title": "The Situation line everywhere",
             "state": "In Progress",
             "repo_key": "symphony",
             "outcome": "running",

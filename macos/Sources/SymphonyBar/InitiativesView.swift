@@ -1,5 +1,6 @@
 import SwiftUI
 import SymphonyBarCore
+import SymphonyBarUI
 
 /// D5: Initiatives, from `/api/v1/initiatives`, under the window's scope.
 struct InitiativesContent: View {
@@ -12,6 +13,7 @@ struct InitiativesContent: View {
                 list: list,
                 selection: $model.initiativeSelection,
                 story: model.initiativeStory,
+                runs: model.initiativeRuns,
                 actions: InitiativeActions(
                     inbox: Set(model.inbox?.items.filter(\.waitsOnDirector).map(\.id) ?? []),
                     review: { model.showInbox(selecting: $0) },
@@ -40,8 +42,9 @@ extension SymphonyWindowModel {
         )
     }
 
-    /// Reads the selected epic's records and each open sub-ticket's ticket read while Initiatives shows: at once on a new
-    /// selection, and at most every `initiativeStoryInterval` after a state poll.
+    /// Reads the selected epic's records, each open sub-ticket's ticket read, and the runs of the ones being worked on
+    /// while Initiatives shows: at once on a new selection, and at most every `initiativeStoryInterval` after a state
+    /// poll.
     func readInitiativeStoryIfDue() {
         guard selection == .initiatives, !showsPage, state.countsKnown, !readingInitiativeStory,
               let initiative = initiativesList?.selection(initiativeSelection)
@@ -62,8 +65,27 @@ extension SymphonyWindowModel {
                 }
             }
             initiativeConnected.merge(connected) { _, new in new }
+            await readInitiativeRuns(initiative)
             initiativeStoryReadAt[epic] = Date()
             readingInitiativeStory = false
+        }
+    }
+
+    /// The run working on each sub-ticket of `initiative` being worked on, for its step bars: each one's events feed,
+    /// paged forward from where the last read stopped.
+    private func readInitiativeRuns(_ initiative: Initiative) async {
+        guard let repoKey = initiative.repoKey else { return }
+        let reference = overviewState?.generatedAt ?? Date()
+        for row in initiativeStory(initiative).currents {
+            var history = initiativeHistories[row.identifier] ?? TicketEventsPayload()
+            for _ in 0 ..< TicketEventsReader.maxPages {
+                let path = TicketPage.eventsPath(row.identifier, repoKey: repoKey, since: history.nextSince, limit: TicketEventsReader.pageLimit)
+                guard case let .loaded(data) = await client.get(path), let page = TicketEventsPayload.decode(data) else { break }
+                if history.merge(page) == 0 || page.events.count < TicketEventsReader.pageLimit { break }
+            }
+            initiativeHistories[row.identifier] = history
+            let run = RunGroupModel.groups(history, reference: reference).last { $0.isLive }
+            if initiativeRuns[row.identifier] != run { initiativeRuns[row.identifier] = run }
         }
     }
 }
@@ -73,366 +95,362 @@ struct InitiativeActions {
     var inbox: Set<String> = []
     /// Review on a sub-ticket that waits on the Director opens its Inbox item, by issue id.
     var review: (String) -> Void = { _ in }
-    /// Any other row opens the ticket's page, by identifier.
+    /// A row opens the ticket's page, by identifier.
     var openTicket: (String) -> Void = { _ in }
     var openURL: (URL) -> Void = { _ in }
 }
 
-/// The list grouped as Active, In review and Done recently beside the selected initiative, like the Inbox (P4).
+/// Work › Initiatives (TP-1500, `docs/design/director-window-and-home.md` § Work: Initiatives) in a scroll view, laid
+/// out for the width it gets.
 struct InitiativesView: View {
     let list: InitiativesList
     @Binding var selection: String?
     /// The selected initiative's story; without one, the story the initiative alone tells.
     var story: (Initiative) -> InitiativeStory = { InitiativeStory(initiative: $0) }
+    /// The run working on each sub-ticket being worked on, by identifier.
+    var runs: [String: RunGroupModel] = [:]
     let actions: InitiativeActions
-    /// Symphony's clock, so a sub-ticket's situation age reads as on every other page.
+    /// Symphony's clock, so the ages and days read as on every other page.
     var reference = Date()
 
     var body: some View {
         if list.isEmpty {
-            ContentUnavailableView {
-                Label(InitiativesList.emptyTitle, systemImage: SymphonyView.initiatives.symbol)
-            } description: {
-                Text(InitiativesList.emptyDescription)
-            }
+            EmptyState(title: InitiativesList.emptyTitle, symbol: SymphonyView.initiatives.symbol)
         } else {
-            HStack(spacing: 0) {
+            GeometryReader { proxy in
                 ScrollView {
-                    InitiativesListRows(list: list, selected: list.selection(selection)?.id, select: { selection = $0 })
-                }
-                .frame(width: DesignTokens.Layout.listColumnWidth)
-                .background(DesignTokens.Surface.content.color)
-                Divider()
-                if let initiative = list.selection(selection) {
-                    ScrollView {
-                        InitiativeDetail(initiative: initiative, story: story(initiative), actions: actions, reference: reference)
-                    }
-                    .id(initiative.id)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    InitiativesBody(
+                        list: list, selection: $selection, story: story, runs: runs, actions: actions, reference: reference,
+                        width: proxy.size.width
+                    )
                 }
             }
         }
     }
 }
 
-/// The groups and their rows, outside the scroll view so they also render offscreen.
-struct InitiativesListRows: View {
+/// The page outside its scroll view, so it also renders offscreen: the epics at the left, 340 pt (400 pt from 1600 pt),
+/// and the picked epic's story at the right; from 1600 pt the two are centred and the story stops at 1040 pt. Up and
+/// Down move through the epics; Tab goes on into the story.
+struct InitiativesBody: View {
     let list: InitiativesList
-    let selected: String?
-    let select: (String) -> Void
+    @Binding var selection: String?
+    var story: (Initiative) -> InitiativeStory = { InitiativeStory(initiative: $0) }
+    var runs: [String: RunGroupModel] = [:]
+    let actions: InitiativeActions
+    var reference = Date()
+    let width: Double
+    /// Whether the story's fold starts open, and whether the window is in front, for a snapshot.
+    var unfolded = false
+    var windowActive: Bool?
+
+    @FocusState private var listFocused: Bool
+
+    init(
+        list: InitiativesList, selection: Binding<String?>, story: @escaping (Initiative) -> InitiativeStory = { InitiativeStory(initiative: $0) },
+        runs: [String: RunGroupModel] = [:], actions: InitiativeActions, reference: Date = Date(), width: Double, unfolded: Bool = false,
+        windowActive: Bool? = nil
+    ) {
+        self.list = list
+        _selection = selection
+        self.story = story
+        self.runs = runs
+        self.actions = actions
+        self.reference = reference
+        self.width = width
+        self.unfolded = unfolded
+        self.windowActive = windowActive
+    }
+
+    private var wide: Bool { width >= DesignTokens.Initiatives.wideFrom }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            ForEach(list.sections) { section in
-                Text(section.title)
-                    .font(DesignTokens.TypeStyle.label.font)
-                    .foregroundStyle(.secondary)
-                    .padding(.top, DesignTokens.Space.s3)
-                    .padding(.horizontal, DesignTokens.Space.s3)
-                    .accessibilityAddTraits(.isHeader)
+        let picked = list.selection(selection)
+        HStack(alignment: .top, spacing: DesignTokens.Initiatives.columnGap) {
+            epics(picked: picked?.id)
+                .frame(width: wide ? DesignTokens.Initiatives.wideListWidth : DesignTokens.Initiatives.listWidth)
+            if let picked {
+                InitiativeStoryView(
+                    initiative: picked, story: story(picked), runs: runs, actions: actions, reference: reference, unfolded: unfolded
+                )
+                .id(picked.id)
+                .frame(maxWidth: wide ? DesignTokens.Initiatives.storyMaxWidth : .infinity, alignment: .topLeading)
+            }
+        }
+        .padding(DesignTokens.Space.s6)
+        .frame(maxWidth: .infinity, alignment: wide ? .top : .topLeading)
+    }
+
+    private func epics(picked: String?) -> some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Initiatives.cardGap) {
+            ForEach(Array(list.sections.enumerated()), id: \.element.id) { index, section in
+                ZoneTitle(section.title).padding(.top, gapAbove(section: index))
                 ForEach(section.initiatives) { initiative in
-                    InitiativeRow(initiative: initiative, selected: initiative.id == selected)
-                        .contentShape(Rectangle())
-                        .onTapGesture { select(initiative.id) }
-                        .accessibilityAction { select(initiative.id) }
+                    EpicCard(initiative: initiative, selected: initiative.id == picked, focused: listFocused, windowActive: windowActive) {
+                        selection = initiative.id
+                        listFocused = true
+                    }
                 }
             }
         }
-        .padding(DesignTokens.Space.s2)
+        .focusable()
+        .focusEffectDisabled()
+        .focused($listFocused)
+        .onKeyPress(.upArrow) { move(by: -1, from: picked) }
+        .onKeyPress(.downArrow) { move(by: 1, from: picked) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(SymphonyView.initiatives.title)
+    }
+
+    /// A second label sits further from the cards above it than the cards from each other.
+    private func gapAbove(section index: Int) -> Double {
+        index == 0 ? .zero : DesignTokens.Initiatives.groupGap - DesignTokens.Initiatives.cardGap
+    }
+
+    /// Up or Down: the epic before or after the picked one.
+    private func move(by offset: Int, from picked: String?) -> KeyPress.Result {
+        let ordered = list.ordered
+        guard let index = ordered.firstIndex(where: { $0.id == picked }) else { return .ignored }
+        let next = index + offset
+        guard ordered.indices.contains(next) else { return .handled }
+        selection = ordered[next].id
+        return .handled
     }
 }
 
-/// A list row: identifier and title, "4 of 8 done", and the bar with its legend.
-private struct InitiativeRow: View {
+/// An epic in the list (the catalog's `epicItem`): the selectable card with its identifier and "3 of 26 done", its title
+/// on at most two lines, its strip, and what is not done, or, once it landed, when.
+struct EpicCard: View {
     let initiative: Initiative
     let selected: Bool
+    var focused = false
+    var state: DesignTokens.Interaction?
+    var windowActive: Bool?
+    let select: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(initiative.identifier).font(DesignTokens.TypeStyle.rowTitle.font)
-                Spacer(minLength: DesignTokens.Space.s2)
-                Text(initiative.progress)
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
+        SelectableCard(selected: selected, focused: selected && focused, state: state, windowActive: windowActive, select: select) {
+            VStack(alignment: .leading, spacing: DesignTokens.Initiatives.cardLineGap) {
+                HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s3) {
+                    Text(initiative.identifier)
+                        .textStyle(.rowTitle)
+                        .monospacedDigit()
+                        .foregroundStyle(DesignTokens.TextColor.primary.color)
+                    Spacer(minLength: DesignTokens.Space.s3)
+                    Text(initiative.progress)
+                        .textStyle(.secondary)
+                        .monospacedDigit()
+                        .fixedSize()
+                        .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                }
+                if let title = initiative.title {
+                    Text(title)
+                        .font(DesignTokens.TypeStyle.font(size: DesignTokens.TypeStyle.rowTitle.size, weight: DesignTokens.Initiatives.cardTitleWeight))
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .foregroundStyle(DesignTokens.TextColor.primary.color)
+                }
+                if !initiative.subTickets.isEmpty {
+                    ProgressStrip(initiative.cardStripItems, live: false, label: initiative.progress)
+                }
+                legend
             }
-            if let title = initiative.title {
-                Text(title).font(DesignTokens.TypeStyle.body.font).lineLimit(1)
-            }
-            ProgressStrip(initiative.stripItems, live: false, label: initiative.progress)
-            InitiativeLegend(initiative: initiative)
         }
-        .padding(DesignTokens.Space.s3)
-        .background(
-            selected ? AnyShapeStyle(Color.accentColor.opacity(0.18)) : AnyShapeStyle(Color.clear),
-            in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
-        )
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(initiative.identifier), \(initiative.title ?? ""), \(initiative.barAccessibilityLabel)")
-        .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
+        .accessibilityLabel(initiative.cardAccessibilityLabel())
+        .help("Show \(initiative.identifier)'s story")
+    }
+
+    @ViewBuilder private var legend: some View {
+        if let landed = initiative.landedLine() {
+            Text(landed).textStyle(.secondary).foregroundStyle(DesignTokens.TextColor.secondary.color)
+        } else if !initiative.cardLegend.isEmpty {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: DesignTokens.Space.s3) { legendItems }
+                VStack(alignment: .leading, spacing: DesignTokens.Space.s1) { legendItems }
+            }
+            .textStyle(.secondary)
+            .foregroundStyle(DesignTokens.TextColor.secondary.color)
+        }
     }
 }
 
-// MARK: - C12: the progress strip's legend
-
-/// The strip's legend: each stage's symbol, count and word, so the strip never relies on color alone.
-struct InitiativeLegend: View {
-    let initiative: Initiative
-
-    var body: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: DesignTokens.Space.s3) { items }
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) { items }
-        }
-        .font(DesignTokens.TypeStyle.caption.font)
-        .accessibilityHidden(true)
-    }
-
-    @ViewBuilder private var items: some View {
-        ForEach(initiative.legend, id: \.stage) { item in
-            Label {
-                Text("\(item.count) \(item.stage.word)").foregroundStyle(.secondary).monospacedDigit()
-            } icon: {
-                Image(systemName: item.stage.symbol)
-                    .foregroundStyle(item.stage.status.tint.opacity(item.stage.isLight ? 0.6 : 1))
+extension EpicCard {
+    /// Each state not done: its dot, its count and its word, so the strip never relies on colour alone.
+    fileprivate var legendItems: some View {
+        ForEach(initiative.cardLegend) { item in
+            HStack(spacing: DesignTokens.Space.s1) {
+                StatusDot(item.status ?? .idle)
+                Text(item.text).monospacedDigit()
             }
-            .labelStyle(.titleAndIcon)
             .fixedSize()
         }
     }
 }
 
-// MARK: - The detail
-
-/// The selected initiative as the epic's story (TP-1458): its sentence, the epic read's progress strip and count, its
-/// slot line, and its sub-tickets in chain order, numbered, the current one highlighted.
-struct InitiativeDetail: View {
+/// The picked epic's story (the catalog's `initiativesPage` main column): its head, then its sub-tickets in landing
+/// order, one line each, those past the two after the last one being worked on folded behind one line.
+struct InitiativeStoryView: View {
     let initiative: Initiative
     let story: InitiativeStory
+    var runs: [String: RunGroupModel] = [:]
     let actions: InitiativeActions
-    /// The clock the sub-tickets' situation ages are measured against.
     var reference = Date()
+    @State private var unfolded: Bool
 
-    init(initiative: Initiative, story: InitiativeStory? = nil, actions: InitiativeActions, reference: Date = Date()) {
+    init(
+        initiative: Initiative, story: InitiativeStory, runs: [String: RunGroupModel] = [:], actions: InitiativeActions,
+        reference: Date = Date(), unfolded: Bool = false
+    ) {
         self.initiative = initiative
-        self.story = story ?? InitiativeStory(initiative: initiative, reference: reference)
+        self.story = story
+        self.runs = runs
         self.actions = actions
         self.reference = reference
+        _unfolded = State(initialValue: unfolded)
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: DesignTokens.Space.s4) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-                    Button { actions.openTicket(initiative.identifier) } label: {
-                        Text(initiative.identifier).font(DesignTokens.TypeStyle.label.font).foregroundStyle(Color.accentColor)
-                    }
-                    .buttonStyle(.plain)
-                    .help("Open the ticket page")
-                    if let title = initiative.title {
-                        Text(title).font(DesignTokens.TypeStyle.heading.font).accessibilityAddTraits(.isHeader)
-                    }
-                }
-                Spacer()
-                if let url = initiative.url {
-                    Button("Open in Linear") { actions.openURL(url) }
-                }
-            }
-            Text(initiative.sentence)
-                .font(DesignTokens.TypeStyle.sentence.font)
-                .fixedSize(horizontal: false, vertical: true)
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
-                if let strip = story.strip {
-                    ProgressStripView(strip: strip, header: true)
-                } else {
-                    ProgressStrip(initiative.stripItems, height: DesignTokens.ProgressStrip.headerHeight, label: initiative.progress)
-                        .frame(maxWidth: DesignTokens.ProgressStrip.headerMaxWidth)
-                    InitiativeLegend(initiative: initiative)
-                }
-                if let slot = initiative.slot {
-                    Label(slot.line, systemImage: "square.stack.3d.up")
-                        .font(DesignTokens.TypeStyle.secondary.font)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Card(title: "Sub-tickets") {
-                VStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(story.rows.enumerated()), id: \.element.id) { index, row in
-                        if index > 0 { Divider() }
-                        StoryRow(row: row, numberWidth: numberWidth, actions: actions, reference: reference)
-                    }
-                    if story.rows.isEmpty {
-                        Text("No sub-tickets yet.").foregroundStyle(.secondary)
-                    }
+        VStack(alignment: .leading, spacing: DesignTokens.Initiatives.storyGap) {
+            head
+            if !story.rows.isEmpty {
+                VStack(alignment: .leading, spacing: ZoneTitle.gap) {
+                    ZoneTitle("Sub-tickets", note: "in landing order")
+                    rows
                 }
             }
         }
-        .padding(DesignTokens.Space.s5)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Room for the widest number, so the identifiers line up.
-    private var numberWidth: CGFloat { story.rows.count >= 10 ? 26 : 16 }
+    // MARK: - The head
+
+    private var head: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Initiatives.headGap) {
+            HStack(spacing: DesignTokens.Space.s3) {
+                Text(initiative.identifier)
+                    .textStyle(.secondary)
+                    .monospacedDigit()
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+                if let repo = initiative.repoKey { Chip(repo, kind: .repo) }
+                Spacer(minLength: DesignTokens.Space.s3)
+                if let current = story.current {
+                    Button("Open \(current.identifier)") { actions.openTicket(current.identifier) }
+                        .directorButton(.secondary, size: .small, glyph: "arrow.right")
+                        .help("Open the ticket being worked on")
+                }
+            }
+            .frame(minHeight: DesignTokens.Control.medium.height)
+            if let title = initiative.title {
+                Text(title)
+                    .textStyle(.title)
+                    .foregroundStyle(DesignTokens.TextColor.primary.color)
+                    .frame(maxWidth: DesignTokens.Initiatives.titleMaxWidth, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            sentence
+                .textStyle(.sentence)
+                .foregroundStyle(DesignTokens.TextColor.primary.color)
+                .fixedSize(horizontal: false, vertical: true)
+            if !story.stripItems.isEmpty {
+                ProgressStrip(story.stripItems, height: DesignTokens.ProgressStrip.headerHeight, label: story.progress)
+                    .frame(maxWidth: DesignTokens.ProgressStrip.headerMaxWidth)
+            }
+            if let note = InitiativeStory.note(initiative, reference: reference) {
+                Text(note)
+                    .textStyle(.secondary)
+                    .foregroundStyle(DesignTokens.TextColor.secondary.color)
+            }
+        }
+    }
+
+    /// "3 of 26 done." and, softer, where the chain stands.
+    private var sentence: Text {
+        let sentence = story.sentence
+        guard let rest = sentence.rest else { return Text(sentence.lead) }
+        return Text("\(sentence.lead) \(Text(rest).foregroundStyle(DesignTokens.TextColor.secondary.color))")
+    }
+
+    // MARK: - The rows
+
+    private var rows: some View {
+        let shown = (unfolded ? nil : story.foldIndex).map { story.rows[..<$0] } ?? story.rows[...]
+        return VStack(alignment: .leading, spacing: DesignTokens.StoryRow.panelGap) {
+            ForEach(shown) { row in
+                InitiativeStoryRow(row: row, run: runs[row.identifier], actions: actions, reference: reference)
+            }
+            if let line = story.foldLine {
+                StoryFold(unfolded ? InitiativeStory.unfoldedLine : line, open: unfolded) {
+                    withAnimation(.motion(.standard)) { unfolded.toggle() }
+                }
+            }
+        }
+        .padding(DesignTokens.StoryRow.panelPadding)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .panelSurface(in: PanelStyle.shape)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Sub-tickets")
+    }
 }
 
-/// A sub-ticket of the story: its number, identifier and title, its situation line (C31) or, once done, the day it
-/// finished, and the blockers its ticket read names, a resolved one struck through with its date (analysis §2.3). The
-/// current one sits on the accent tint; a done one reads quietly; a canceled one is struck. Review when it waits on the
-/// Director in the Inbox, else the row opens the ticket page.
-private struct StoryRow: View {
+/// One sub-ticket of the story on the shared story row: its mark for its state, and at the right what matters for it,
+/// or, for one being worked on, its situation under its title, its step bars and how long. A row opens the ticket's
+/// page; Review on one that waits on the Director opens its Inbox item instead.
+struct InitiativeStoryRow: View {
     let row: InitiativeStory.Row
-    let numberWidth: CGFloat
+    var run: RunGroupModel?
     let actions: InitiativeActions
     var reference = Date()
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-            Text(row.number.map(String.init) ?? "")
-                .font(DesignTokens.TypeStyle.secondary.font)
-                .monospacedDigit()
-                .foregroundStyle(row.mark == .current ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
-                .frame(width: numberWidth, alignment: .trailing)
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) {
-                HStack(alignment: .firstTextBaseline, spacing: DesignTokens.Space.s2) {
-                    Text(row.identifier).font(DesignTokens.TypeStyle.rowTitle.font).strikethrough(row.mark == .canceled)
-                    if let title = row.title { Text(title).lineLimit(1).strikethrough(row.mark == .canceled) }
-                }
-                .foregroundStyle(quiet ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
-                if let done = row.doneLine {
-                    Label(done, systemImage: DesignTokens.SituationKind.done.symbol)
-                        .font(DesignTokens.TypeStyle.secondary.font)
-                        .foregroundStyle(.tertiary)
-                } else {
-                    SituationLine(row.line, reference: reference, size: .compact)
-                }
-                if !row.blockers.isEmpty {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: DesignTokens.Space.s3) { blockerLinks }
-                        VStack(alignment: .leading, spacing: DesignTokens.Space.s1 / 2) { blockerLinks }
-                    }
-                    .font(DesignTokens.TypeStyle.secondary.font)
-                }
+        StoryRow(
+            number: row.number, mark: mark, identifier: row.identifier, title: row.title ?? row.identifier,
+            quiet: row.attention == nil && [.done, .open, .next, .canceled].contains(row.mark),
+            struck: row.mark == .canceled, current: row.mark == .current, label: row.accessibilityLabel, open: open
+        ) {
+            if row.mark == .current {
+                SituationLine(undated, reference: reference, size: .compact)
             }
-            Spacer(minLength: DesignTokens.Space.s2)
+        } trail: {
             if let issueID = reviewIssueID {
                 Button("Review") { actions.review(issueID) }
                     .directorButton(.primary, size: .small)
                     .help("Open it in the Inbox")
-            } else {
-                Image(systemName: "chevron.right").foregroundStyle(.tertiary).accessibilityHidden(true)
+            }
+            if row.mark == .current {
+                if let steps = run?.steps, !steps.isEmpty {
+                    StepBars(steps: steps)
+                }
+                if let age = SituationText(row.line, reference: reference).age {
+                    Text(age)
+                }
+            } else if let trail = row.trail {
+                Text(trail)
             }
         }
-        .padding(.vertical, DesignTokens.Space.s2)
-        .padding(.horizontal, DesignTokens.Space.s2)
-        .background(
-            row.mark == .current ? AnyShapeStyle(Color.accentColor.opacity(0.14)) : AnyShapeStyle(Color.clear),
-            in: RoundedRectangle(cornerRadius: DesignTokens.Radius.row, style: .continuous)
-        )
-        .contentShape(Rectangle())
-        .onTapGesture { actions.openTicket(row.identifier) }
-        // One button-like element: its default action is the row's own (Review, else the ticket page);
-        // Review, the ticket page and each blocker are named actions.
-        .accessibilityElement(children: .ignore)
-        .accessibilityAddTraits(row.mark == .current ? [.isButton, .isSelected] : .isButton)
-        .accessibilityLabel(row.accessibilityLabel)
-        .accessibilityAction { primaryAction() }
-        .accessibilityActions {
-            if let issueID = reviewIssueID {
-                Button("Review") { actions.review(issueID) }
-            }
-            Button("Open Ticket") { actions.openTicket(row.identifier) }
-            ForEach(row.blockers) { blocker in
-                Button("Open \(blocker.identifier)") { actions.openTicket(blocker.identifier) }
-            }
-        }
+        .help("Open \(row.identifier)")
     }
 
-    private var quiet: Bool { row.mark == .done || row.mark == .canceled }
+    /// The line under the title without its age, which the trail says.
+    private var undated: Situation {
+        var line = row.line
+        line.since = nil
+        return line
+    }
 
-    @ViewBuilder private var blockerLinks: some View {
-        Text("Blocked by").foregroundStyle(.tertiary).fixedSize()
-        ForEach(row.blockers) { blocker in
-            BlockerLink(blocker: blocker, open: actions.openTicket).fixedSize()
+    private var mark: RowLead {
+        if let attention = row.attention { return .status(attention) }
+        return switch row.mark {
+        case .done: .status(.done)
+        case .current: .dot(.working, live: true)
+        case .next: .glyph("clock", DesignTokens.TextColor.secondary)
+        case .open: .glyph(row.line.kind.symbol, DesignTokens.TextColor.tertiary)
+        case .canceled: .glyph(DesignTokens.SituationKind.cancelled.symbol, DesignTokens.TextColor.tertiary)
         }
     }
 
     private var reviewIssueID: String? { row.ticket?.reviewIssueID(inbox: actions.inbox) }
 
-    private func primaryAction() {
-        if let issueID = reviewIssueID { actions.review(issueID) } else { actions.openTicket(row.identifier) }
-    }
-}
-
-/// A blocker as its ticket read names it: open with its situation and phase; resolved struck through and secondary,
-/// with the day it resolved.
-private struct BlockerLink: View {
-    let blocker: ConnectedPanelModel.Row
-    let open: (String) -> Void
-
-    var body: some View {
-        Button { open(blocker.identifier) } label: {
-            HStack(spacing: DesignTokens.Space.s1) {
-                if blocker.struck {
-                    Text(blocker.identifier).strikethrough().foregroundStyle(.secondary)
-                } else {
-                    Image(systemName: blocker.status.symbol).foregroundStyle(blocker.status.tint).accessibilityHidden(true)
-                    Text(blocker.identifier).foregroundStyle(Color.accentColor)
-                }
-                Text(blocker.detail).foregroundStyle(.tertiary)
-            }
-        }
-        .buttonStyle(.plain)
-        .help("Open \(blocker.identifier)")
-    }
-}
-
-// MARK: - D1: the Overview's Initiatives card
-
-/// The active initiatives and their progress; a click opens one in Initiatives.
-struct InitiativesCard: View {
-    let initiatives: [Initiative]
-    let open: (String) -> Void
-    static let limit = 4
-
-    var body: some View {
-        Card(title: SymphonyView.initiatives.title) {
-            VStack(alignment: .leading, spacing: DesignTokens.Space.s3) {
-                ForEach(initiatives.prefix(Self.limit)) { initiative in
-                    Button { open(initiative.id) } label: {
-                        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
-                            HStack(alignment: .firstTextBaseline) {
-                                Text(initiative.identifier).font(DesignTokens.TypeStyle.rowTitle.font)
-                                Text(initiative.title ?? "").lineLimit(1).foregroundStyle(.secondary)
-                                Spacer(minLength: DesignTokens.Space.s2)
-                                Text(initiative.progress).font(DesignTokens.TypeStyle.secondary.font).monospacedDigit()
-                            }
-                            ProgressStrip(initiative.stripItems, label: initiative.progress)
-                            InitiativeLegend(initiative: initiative)
-                            if let noLane = initiative.slot?.overviewLine {
-                                Text(noLane)
-                                    .font(DesignTokens.TypeStyle.secondary.font)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(2)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Open \(initiative.identifier) in Initiatives")
-                    .accessibilityLabel(
-                        [initiative.identifier, initiative.title ?? "", initiative.barAccessibilityLabel, initiative.slot?.overviewLine]
-                            .compactMap { $0 }
-                            .joined(separator: ", ")
-                    )
-                }
-                if initiatives.count > Self.limit {
-                    Text("\(initiatives.count - Self.limit) more in Initiatives")
-                        .font(DesignTokens.TypeStyle.secondary.font)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
+    private func open() {
+        actions.openTicket(row.identifier)
     }
 }
