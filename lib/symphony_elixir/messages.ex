@@ -84,6 +84,22 @@ defmodule SymphonyElixir.Messages do
     end)
   end
 
+  @doc """
+  The messages among `events` the ticket's history shows the run `run_id`, oldest first: every
+  message, less those no run was given yet that were written after the run started. Those wait for
+  the next run, so the run in progress never reads them, even as history. With no run (nil), or a
+  run with no `run.started` among `events`, every message.
+  """
+  @spec in_history([Event.t()], String.t() | nil) :: [Event.t()]
+  def in_history(events, run_id) do
+    read = read_ids(events)
+    started = started_at(events, run_id)
+
+    events
+    |> messages()
+    |> Enum.filter(&(Map.has_key?(read, &1.id) or written_before?(&1, started)))
+  end
+
   # When the run `run_id` started, from its `run.started` among `events`; nil when they hold none.
   defp started_at(events, run_id) do
     Enum.find_value(events, fn

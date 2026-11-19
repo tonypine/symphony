@@ -6692,7 +6692,7 @@ Minimum endpoints:
     and the run's id), keyed by the message: a message is given to one run as new, and later runs read
     it in the ticket's history summary. A run is given only the messages written before it started,
     however many prompts it builds (each step, a retry), so a message sent while it works waits for
-    the next run.
+    the next run; that run's own history summary leaves it out as well.
   - The ticket read carries `unread_messages`, the count no run read yet, and, for the Mac app release
     that reads one note, `note`: the newest unread message.
   - Each ticket's note from before messages (a person's `note`, read by a `note.read`) was turned into

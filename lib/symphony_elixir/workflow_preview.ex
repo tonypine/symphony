@@ -8,7 +8,7 @@ defmodule SymphonyElixir.WorkflowPreview do
   assembly) via its `:workflow` seam, so the preview never drifts from runtime.
 
   With `ledger.prompt_brief_enabled` on, the sample ticket carries a sample record and ledger,
-  whose summary `SymphonyElixir.TicketEvents.Brief.build/2` renders, so the preview shows the
+  whose summary `SymphonyElixir.TicketEvents.Brief.build/3` renders, so the preview shows the
   ticket history summary agents get; no store is read.
 
   With `:run_kind`, the preview opens with the step list a run of that kind follows

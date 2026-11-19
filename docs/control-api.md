@@ -475,7 +475,8 @@ the message (`message_id`, the `message.sent` event's id), the run (`run_id`) an
 message, so a message is given to exactly one run as new. Later runs read it in the ticket's history
 summary (its Messages section), not as a new instruction. A run is given only the messages written before it
 started (its `run.started`), however many prompts it builds (each step of a stepped pass, a retry), so a
-message sent while it works waits for the next run. Sending a message never starts, stops or reorders a
+message sent while it works waits for the next run: the run's own history summary leaves it out too,
+so the run in progress never reads it. Sending a message never starts, stops or reorders a
 run. A preview of the prompt records nothing.
 
 In the events feed (`GET /api/v1/repos/:repo_key/tickets/:issue_identifier/events`, with or without

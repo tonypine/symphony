@@ -832,7 +832,8 @@ defmodule SymphonyElixir.PromptBuilder do
   # it is wrapped as untrusted input, and it is never cut: over `ledger.prompt_brief_max_tokens` it
   # is still rendered whole, since a run only gets here once the Director chose to go on with it
   # (`ticket_ledger_gate/2`). It holds every message a person wrote, so a later run reads them as
-  # history; the messages no run read yet are at the prompt's top (`prepend_messages/2`).
+  # history; the messages no run read yet are at the prompt's top (`prepend_messages/2`). Built for
+  # a run, it leaves out the unread messages written after the run started: they wait for the next.
   defp append_ticket_ledger(prompt, opts) do
     ticket_state = Keyword.get(opts, :ticket_state)
 
@@ -856,7 +857,7 @@ defmodule SymphonyElixir.PromptBuilder do
   defp ticket_ledger(state, opts) do
     case Keyword.fetch(opts, :ticket_ledger) do
       {:ok, brief} -> {:ok, brief}
-      :error -> Brief.render(state.issue_id)
+      :error -> Brief.render(state.issue_id, run_id: Keyword.get(opts, :run_id))
     end
   end
 

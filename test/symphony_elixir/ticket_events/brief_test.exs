@@ -344,6 +344,31 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
       assert text =~ "  - 2026-10-22T10:03:00Z Message read by a run"
     end
 
+    test "built for a run, leaves out the unread messages written after it started" do
+      events = [
+        event(0, "message.sent", %{text: "Before the run."}, actor: {:person, "the Director"}),
+        event(1, "run.started", %{run_id: "run-1", run_kind: "implementation", run_number: 1, state: "In Progress"}, run_id: "run-1"),
+        event(2, "message.sent", %{text: "During the run."}, actor: {:person, "the Director"}),
+        event(3, "message.sent", %{text: "Read by an earlier run."}, actor: {:person, "the Director"})
+      ]
+
+      read = event(4, "message.read", %{message_id: Enum.at(events, 3).id, run_id: "run-0"}, run_id: "run-0")
+      events = events ++ [read]
+
+      assert %{text: text} = Brief.build(nil, events, run_id: "run-1")
+      assert text =~ "Messages (2):"
+      assert text =~ "Before the run."
+      assert text =~ "Read by an earlier run."
+      refute text =~ "During the run."
+
+      assert %{text: text} = Brief.build(nil, events)
+      assert text =~ "Messages (3):"
+      assert text =~ "During the run."
+
+      assert %{text: text} = Brief.build(nil, events, run_id: "run-2")
+      assert text =~ "During the run."
+    end
+
     test "one line per earlier run, and the latest run's events in full" do
       long = String.duplicate("checked ", 60) |> String.trim()
       rework = {:agent, "run-3", "rework"}
