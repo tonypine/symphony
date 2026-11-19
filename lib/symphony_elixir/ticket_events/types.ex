@@ -132,7 +132,12 @@ defmodule SymphonyElixir.TicketEvents.Types do
   junction of the ticket's life wrote (`SymphonyElixir.Conductor`), naming the junction
   (`after_coding`, `after_qa_fail`, `after_rework`, `before_merge`). The update is for the person
   (`text`, at most 900 characters) with the ids of the events it rests on (`refs`); the
-  instructions are advice for the next run's prompt (`text`, at most 2,000).
+  instructions are advice for the next run's prompt (`text`, at most 2,000). A turn that watched a
+  running run names the junction `during_run`. `conductor.steer` is machine-only too: guidance the
+  Conductor's watch gave a running run (`SymphonyElixir.Conductor.Watch`), under that run's
+  `run_id`: its `text` (at most 1,500 characters), when it asked for it (`when`: `next_turn`, `now`
+  or `stop`), what made it look (`trigger`) and how and when it reached the run (`delivered`: `how`,
+  `next_turn`, `now` or `stopped`, and `at`).
 
   `brief.written` is an agent's, in an implementation, rework or review-feedback run: what the ticket
   does and why, in a person's words (`text`, at most 1,200 characters), and its walkthrough as the
@@ -205,7 +210,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @rule_actions ~w(rerun paused parked filed_ticket lifted_pause moved updated_branch auto_merge asked other)
 
   # The junctions of a ticket's life the Conductor runs at (`SymphonyElixir.Config.Schema.Conductor.junctions/0`).
-  @conductor_junctions ~w(after_coding after_qa_fail after_rework before_merge)
+  @conductor_junctions ~w(after_coding after_qa_fail after_rework before_merge during_run)
+  # What made the Conductor's watch look at a running run (`SymphonyElixir.Conductor.Watch`).
+  @watch_triggers ~w(step_failed step_failed_twice qa_step_answer run_minutes run_tokens)
 
   @legacy_types ["hold.set", "hold.cleared", "decision.requested", "decision.recorded", "decision.withdrawn"]
 
@@ -537,6 +544,13 @@ defmodule SymphonyElixir.TicketEvents.Types do
       run_kinds: [],
       required: [junction: {:enum, @conductor_junctions}, text: {:string, 2_000}],
       optional: @signal,
+      idempotency: :writer
+    },
+    "conductor.steer" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [text: {:string, 1_500}, when: {:enum, ~w(next_turn now stop)}, trigger: {:enum, @watch_triggers}],
+      optional: [delivered: {:map, how: {:enum, ~w(next_turn now stopped)}, at: :string}] ++ @signal,
       idempotency: :writer
     },
     "brief.written" => %{

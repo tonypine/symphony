@@ -10,22 +10,29 @@ defmodule SymphonyElixir.Conductor.Answer do
     * `refs`: the ids of the events the update rests on (optional; only ids the facts carry are kept);
     * `ask_person`: null, or a question to the person: `title`, `question`, `why`, `if_unanswered`,
       `recommendation_reason` and two to four `options`, each with a `label`, an `effect` and
-      `recommended` (the request `SymphonyElixir.Questions.ask/3` takes).
+      `recommended` (the request `SymphonyElixir.Questions.ask/3` takes);
+    * `steer` (a watch turn's, `SymphonyElixir.Conductor.Watch`): null, or guidance for the running
+      run: `message` (at most 1,500 characters) and `when` (`next_turn` or `now`);
+    * `stop` (a watch turn's): null, or `{"reason": ...}` to end the running run.
 
-  An answer that misses the schema is refused with why, in plain words.
+  A watch turn (`watch: true`) may leave `instructions` null. An answer that misses the schema is
+  refused with why, in plain words.
   """
 
   alias SymphonyElixir.ReviewAgent
 
   @instructions_max 2_000
   @update_max 900
+  @steer_max 1_500
   @question_fields ~w(title question why if_unanswered recommendation_reason)
 
   @type t :: %{
           instructions: String.t(),
           update: String.t() | nil,
           refs: [String.t()],
-          ask_person: map() | nil
+          ask_person: map() | nil,
+          steer: %{message: String.t(), when: String.t()} | nil,
+          stop: %{reason: String.t()} | nil
         }
 
   @doc "The most characters `instructions` may hold."
@@ -40,12 +47,12 @@ defmodule SymphonyElixir.Conductor.Answer do
   The answer among `texts` (the turn's text candidates, most specific first): the first JSON object
   in them that meets the schema, else the first refusal.
   """
-  @spec read([String.t()]) :: {:ok, t()} | {:error, String.t()}
-  def read(texts) when is_list(texts) do
+  @spec read([String.t()], keyword()) :: {:ok, t()} | {:error, String.t()}
+  def read(texts, opts \\ []) when is_list(texts) do
     texts
     |> Enum.flat_map(&ReviewAgent.json_object_candidates/1)
     |> Enum.reduce_while({:error, "the answer holds no JSON object"}, fn candidate, error ->
-      case parse(candidate) do
+      case parse(candidate, opts) do
         {:ok, answer} -> {:halt, {:ok, answer}}
         {:error, _reason} = refused -> {:cont, first_error(error, refused)}
       end
@@ -55,15 +62,17 @@ defmodule SymphonyElixir.Conductor.Answer do
   defp first_error({:error, "the answer holds no JSON object"}, refused), do: refused
   defp first_error(error, _refused), do: error
 
-  @doc "Checks one JSON object's text against the schema."
-  @spec parse(String.t()) :: {:ok, t()} | {:error, String.t()}
-  def parse(text) when is_binary(text) do
+  @doc "Checks one JSON object's text against the schema; `watch: true` for a watch turn's."
+  @spec parse(String.t(), keyword()) :: {:ok, t()} | {:error, String.t()}
+  def parse(text, opts \\ []) when is_binary(text) do
     with {:ok, %{} = answer} <- decode(text),
-         {:ok, instructions} <- instructions(Map.get(answer, "instructions")),
+         {:ok, instructions} <- instructions(Map.get(answer, "instructions"), Keyword.get(opts, :watch, false)),
          {:ok, update} <- update(Map.get(answer, "update")),
          {:ok, refs} <- refs(Map.get(answer, "refs")),
-         {:ok, ask_person} <- ask_person(Map.get(answer, "ask_person")) do
-      {:ok, %{instructions: instructions, update: update, refs: refs, ask_person: ask_person}}
+         {:ok, ask_person} <- ask_person(Map.get(answer, "ask_person")),
+         {:ok, steer} <- steer(Map.get(answer, "steer")),
+         {:ok, stop} <- stop(Map.get(answer, "stop")) do
+      {:ok, %{instructions: instructions, update: update, refs: refs, ask_person: ask_person, steer: steer, stop: stop}}
     end
   end
 
@@ -75,7 +84,9 @@ defmodule SymphonyElixir.Conductor.Answer do
     end
   end
 
-  defp instructions(text) when is_binary(text) do
+  defp instructions(nil, true = _watch?), do: {:ok, nil}
+
+  defp instructions(text, _watch?) when is_binary(text) do
     text = String.trim(text)
 
     cond do
@@ -85,7 +96,25 @@ defmodule SymphonyElixir.Conductor.Answer do
     end
   end
 
-  defp instructions(_text), do: {:error, "`instructions` must be a string"}
+  defp instructions(_text, _watch?), do: {:error, "`instructions` must be a string"}
+
+  defp steer(nil), do: {:ok, nil}
+
+  defp steer(%{"message" => message, "when" => moment}) when is_binary(message) and moment in ["next_turn", "now"] do
+    message = String.trim(message)
+
+    cond do
+      message == "" -> {:error, "`steer.message` is blank"}
+      String.length(message) > @steer_max -> {:error, "`steer.message` is over #{@steer_max} characters"}
+      true -> {:ok, %{message: message, when: moment}}
+    end
+  end
+
+  defp steer(_steer), do: {:error, "`steer` must be null or hold a `message` and `when` (`next_turn` or `now`)"}
+
+  defp stop(nil), do: {:ok, nil}
+  defp stop(%{"reason" => reason}) when is_binary(reason) and reason != "", do: {:ok, %{reason: String.trim(reason)}}
+  defp stop(_stop), do: {:error, "`stop` must be null or hold a `reason`"}
 
   defp update(nil), do: {:ok, nil}
 

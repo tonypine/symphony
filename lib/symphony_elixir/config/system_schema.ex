@@ -134,7 +134,8 @@ defmodule SymphonyElixir.Config.SystemSchema do
     "reports" => ~w(model cadence triggers),
     "reports.triggers" => ~w(ticket_shipped epic_closed ci_fix_loop self_heal_filed release_installed paused_by_rule),
     "dispatch" => ~w(source shadow_window),
-    "conductor" => ~w(enabled junctions timeout_ms),
+    "conductor" => ~w(enabled junctions timeout_ms watch),
+    "conductor.watch" => ~w(enabled run_minutes run_tokens min_interval_minutes max_turns_per_run allow_stop),
     # A run kind's step list (`Schema.Phases`); each kind holds one setting, its `steps` list.
     "phases" => Schema.Phases.kinds(),
     "dashboard" => ~w(enabled host port refresh_ms render_interval_ms snapshot_publish_ms transcript_buffer_size)
@@ -1367,7 +1368,9 @@ defmodule SymphonyElixir.Config.SystemSchema do
 
   defp normalize_conductor(config) do
     with {:ok, config} <- section_map(config, "conductor"),
-         :ok <- reject_unknown_section_keys(config, section_keys("conductor"), "conductor") do
+         :ok <- reject_unknown_section_keys(config, section_keys("conductor"), "conductor"),
+         {:ok, watch} <- section_map(Map.get(config, "watch", %{}), "conductor.watch"),
+         :ok <- reject_unknown_section_keys(watch, section_keys("conductor.watch"), "conductor.watch") do
       {:ok, config}
     end
   end

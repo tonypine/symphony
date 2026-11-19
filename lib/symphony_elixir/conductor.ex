@@ -46,6 +46,7 @@ defmodule SymphonyElixir.Conductor do
     CiPoller,
     Config,
     DecisionRequest,
+    Orchestrator,
     Pauses,
     PromptSafety,
     ReviewAgent,
@@ -54,7 +55,7 @@ defmodule SymphonyElixir.Conductor do
     TicketState
   }
 
-  alias SymphonyElixir.Conductor.{Answer, Facts}
+  alias SymphonyElixir.Conductor.{Answer, Facts, Steer, Watch}
   alias SymphonyElixir.Config.Runs.Run
   alias SymphonyElixir.Config.Schema
   alias SymphonyElixir.Harnesses.Launcher
@@ -64,11 +65,15 @@ defmodule SymphonyElixir.Conductor do
   @prompt_path Path.expand(Path.join([__DIR__, "..", "..", "priv", "conductor", "prompt.md"]))
   @external_resource @prompt_path
   @prompt File.read!(@prompt_path)
+  @watch_prompt_path Path.expand(Path.join([__DIR__, "..", "..", "priv", "conductor", "watch_prompt.md"]))
+  @external_resource @watch_prompt_path
+  @watch_prompt File.read!(@watch_prompt_path)
   @junction_words %{
     "after_coding" => "an implementation run handed off; Code Review or QA judges it next",
     "after_qa_fail" => "QA failed; a rework run answers its findings next",
     "after_rework" => "a rework run handed off; Code Review or QA judges it again next",
-    "before_merge" => "QA passed or was skipped; the pull request merges next"
+    "before_merge" => "QA passed or was skipped; the pull request merges next",
+    "during_run" => "a run is working on the ticket now"
   }
   @review_kinds ["code_review", "qa"]
   @merging "Merging"
@@ -262,10 +267,13 @@ defmodule SymphonyElixir.Conductor do
     Keyword.get_lazy(opts, :record, fn -> TicketState.normalize(RunStore.get_ticket_state(issue_id)) end)
   end
 
-  @doc "The turn's prompt at `junction` with `facts` (`priv/conductor/prompt.md`)."
+  @doc """
+  The turn's prompt at `junction` with `facts`: `priv/conductor/prompt.md`, or
+  `priv/conductor/watch_prompt.md` for a watch turn (`during_run`).
+  """
   @spec prompt(String.t(), map()) :: String.t()
   def prompt(junction, facts) do
-    @prompt
+    if(junction == "during_run", do: @watch_prompt, else: @prompt)
     |> String.replace("{{junction}}", junction)
     |> String.replace("{{junction_words}}", Map.get(@junction_words, junction, junction))
     |> String.replace("{{facts}}", Jason.encode!(facts, pretty: true))
@@ -277,15 +285,15 @@ defmodule SymphonyElixir.Conductor do
     task = Task.Supervisor.async_nolink(SymphonyElixir.TaskSupervisor, fn -> turn.(plan, issue, run_id, prompt) end)
 
     case Task.yield(task, plan.timeout_ms) || Task.shutdown(task, :brutal_kill) do
-      {:ok, {:ok, texts, tokens}} -> answer(texts, tokens)
+      {:ok, {:ok, texts, tokens}} -> answer(texts, tokens, Map.has_key?(plan, :watch))
       {:ok, {:error, reason, tokens}} -> {:error, reason, tokens}
       {:exit, reason} -> {:error, {:crashed, reason}, 0}
       nil -> {:error, :timeout, 0}
     end
   end
 
-  defp answer(texts, tokens) do
-    case Answer.read(texts) do
+  defp answer(texts, tokens, watch?) do
+    case Answer.read(texts, watch: watch?) do
       {:ok, answer} -> {:ok, answer, tokens}
       {:error, why} -> {:error, {:unreadable_answer, why}, tokens}
     end
@@ -294,9 +302,10 @@ defmodule SymphonyElixir.Conductor do
   # What the turn wrote: its instructions, its update for the person and its question. A turn that
   # failed writes nothing and only logs why.
   defp record_outcome({:ok, answer, _tokens}, plan, issue, run_id, facts) do
-    record_event(plan, "conductor.instructions", %{junction: plan.junction, text: answer.instructions}, run_id)
+    if answer.instructions, do: record_event(plan, "conductor.instructions", %{junction: plan.junction, text: answer.instructions}, run_id)
     record_update(answer, plan, run_id, facts)
     held = ask_person(answer.ask_person, plan, issue, run_id)
+    steer(plan, answer, held)
     Logger.info("Conductor turn wrote #{context(issue, plan)} run_id=#{run_id} junction=#{plan.junction} update=#{answer.update != nil} held=#{held == :held}")
     {"answered", held}
   end
@@ -324,6 +333,70 @@ defmodule SymphonyElixir.Conductor do
 
   defp event_id(key, id) when key in [:event_id, "event_id", :started_event_id] and is_binary(id), do: [id]
   defp event_id(_key, _value), do: []
+
+  @doc """
+  A watch turn on the running `run` (an orchestrator snapshot's running entry: its `issue_id`,
+  `run_id`, `run_profile`, `started_at`, `total_tokens` and newest lines), looked at for `trigger`
+  (`SymphonyElixir.Conductor.Watch`): the facts at `during_run` with the run's live state, then what
+  the turn answered (`run/3`), which may steer or stop the run. Always `:ok`; a turn whose provider
+  can't run is skipped.
+  """
+  @spec watch(map(), String.t(), keyword()) :: :ok
+  def watch(%{issue_id: issue_id, run_id: run_id} = run, trigger, opts) do
+    settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
+    record = record(issue_id, opts)
+    repo_key = Map.get(run, :repo_key) || record.repo_key
+
+    case profile(repo_key, fn _profile -> true end) do
+      {:ok, run_profile} ->
+        events = Facts.events(issue_id)
+        facts = record |> Facts.build("during_run", Keyword.put(opts, :events, events)) |> Map.put(:live, Watch.live(run, Enum.filter(events, &(&1.run_id == run_id))))
+        watch = %{run: run, trigger: trigger, allow_stop: settings.watch.allow_stop, stop: Keyword.get(opts, :stop, &Orchestrator.stop_running/1)}
+        plan = %{junction: "during_run", issue_id: issue_id, repo_key: repo_key, run_profile: run_profile, timeout_ms: settings.timeout_ms, watch: watch}
+        issue = %Issue{id: issue_id, identifier: Map.get(run, :identifier) || record.issue_identifier, title: record.title, state: record.phase}
+        _ran = run(plan, issue, Keyword.put(opts, :facts, facts))
+        :ok
+
+      {:held, provider} ->
+        Logger.info("Conductor watch skipped issue_id=#{issue_id} run_id=#{run_id}: no provider of runs.conductor can take a run now (#{provider})")
+    end
+  end
+
+  # A watch turn's steer waits for the run's next agent turn, and one asked for `now` interrupts the
+  # turn it is in, on the Claude harness, which resumes its session; elsewhere it waits too. A stop
+  # needs `conductor.watch.allow_stop` and a question asked with it, which paused the ticket: then
+  # the run ends through the run-stop path.
+  defp steer(%{watch: watch} = plan, answer, held) do
+    steer_run(answer.steer, plan, watch)
+    stop_run(answer.stop, held, plan, watch)
+  end
+
+  defp steer(_plan, _answer, _held), do: :ok
+
+  defp steer_run(nil, _plan, _watch), do: :ok
+
+  defp steer_run(%{message: text, when: moment}, plan, %{run: run, trigger: trigger}) do
+    Steer.queue(run.run_id, %{text: text, when: moment, trigger: trigger, repo_key: plan.repo_key, issue_id: plan.issue_id})
+    if moment == "now" and to_string(get_in(run, [:run_profile, :harness])) == "claude", do: Steer.interrupt(run.run_id)
+    :ok
+  end
+
+  defp stop_run(nil, _held, _plan, _watch), do: :ok
+
+  defp stop_run(%{reason: reason}, :held, plan, %{allow_stop: true, run: run, trigger: trigger} = watch) do
+    case watch.stop.(Map.get(run, :identifier) || plan.issue_id) do
+      {:ok, %{stopped: true}} ->
+        steer = %{text: reason, when: "stop", trigger: trigger, repo_key: plan.repo_key, issue_id: plan.issue_id}
+        Steer.record(steer, run.run_id, %{how: "stopped", at: DateTime.to_iso8601(DateTime.utc_now())})
+
+      other ->
+        Logger.warning("Conductor watch could not stop run_id=#{run.run_id} issue_id=#{plan.issue_id}: #{inspect(other)}")
+    end
+  end
+
+  defp stop_run(_stop, _held, plan, %{run: run}) do
+    Logger.info("Conductor watch asked to stop run_id=#{run.run_id} issue_id=#{plan.issue_id}; not done: a stop needs conductor.watch.allow_stop and a question to the person")
+  end
 
   # The question goes through the one validated decision path: once asked, the ticket pauses on it,
   # even when its Linear comment could not be posted.

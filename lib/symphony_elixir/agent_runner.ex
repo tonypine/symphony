@@ -18,6 +18,7 @@ defmodule SymphonyElixir.AgentRunner do
     CiPoller,
     ClosedPullRequest,
     CodeReview,
+    Conductor.Steer,
     Config,
     Connected,
     DecisionRequest,
@@ -883,15 +884,23 @@ defmodule SymphonyElixir.AgentRunner do
       issue_state_fetcher: issue_state_fetcher
     } = run_context
 
-    prompt = walk_turn_prompt(run_context, turn_number, max_turns)
-    audit_prompt_sent(issue, Keyword.get(opts, :run_id), prompt, turn_number, max_turns, agent_module, opts)
+    run_id = Keyword.get(opts, :run_id)
+    # The Conductor's steers waiting for this run open its prompt (`SymphonyElixir.Conductor.Steer`).
+    prompt = Steer.turn_prompt(run_id, Map.get(run_context, :steer_now), fn -> walk_turn_prompt(run_context, turn_number, max_turns) end)
+    audit_prompt_sent(issue, run_id, prompt, turn_number, max_turns, agent_module, opts)
     run_context = start_walk_turn(run_context)
 
-    turn_result = run_agent_turn(agent_module, app_session, prompt, run_context)
+    turn_result = Steer.during_turn(run_id, fn -> run_agent_turn(agent_module, app_session, prompt, run_context) end)
     # A resumed step's conversation is resumed once, by its first turn.
-    run_context = run_context |> Map.delete(:resume_session_id) |> keep_turn_transcript(turn_result)
+    run_context = run_context |> Map.drop([:resume_session_id, :steer_now]) |> keep_turn_transcript(turn_result)
 
     case turn_result do
+      # The Conductor steered the run now: the same session goes on with its steer as a new turn,
+      # which counts as no turn of its own and spends no retry.
+      {:error, {:conductor_interrupted, session_id}} ->
+        resumed = if is_binary(session_id), do: %{resume_session_id: session_id, steer_now: true}, else: %{}
+        do_run_codex_turns(agent_module, app_session, Map.merge(run_context, resumed), turn_number, max_turns)
+
       {:ok, turn_session} ->
         Logger.info("Completed agent run for #{issue_context(issue)} session_id=#{turn_session[:session_id]} workspace=#{workspace} turn=#{turn_number}/#{max_turns}")
         run_context = remember_turn_session(run_context, turn_session)

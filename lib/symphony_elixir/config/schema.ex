@@ -2050,7 +2050,8 @@ defmodule SymphonyElixir.Config.Schema do
     Conductor's short turn at a ticket's junctions (`enabled`, off by default), at which junctions
     (`junctions`: `after_coding`, `after_qa_fail`, `after_rework`, `before_merge`; all four by
     default) and how long one turn may take before the next run starts without it (`timeout_ms`,
-    three minutes by default). Its model is `runs.conductor`'s.
+    three minutes by default), and whether it watches running runs to steer them (`watch`,
+    `SymphonyElixir.Conductor.Watch`, off by default). Its model is `runs.conductor`'s.
     """
     use Ecto.Schema
     import Ecto.Changeset
@@ -2060,10 +2061,48 @@ defmodule SymphonyElixir.Config.Schema do
     @primary_key false
     @junctions ~w(after_coding after_qa_fail after_rework before_merge)
 
+    defmodule Watch do
+      @moduledoc """
+      `conductor.watch`: whether the Conductor looks at running runs and may steer them (`enabled`,
+      off by default); when a run is looked at past its start besides a failed step or a QA step
+      that answered `plan_mismatch` or `blocked` (`run_minutes`, 30; `run_tokens`, 30,000,000); how
+      often at most (`min_interval_minutes`, 10, and `max_turns_per_run`, 3); and whether it may
+      stop a run, always with a question to the person (`allow_stop`, off by default).
+      """
+      use Ecto.Schema
+      import Ecto.Changeset
+
+      @type t :: %__MODULE__{}
+
+      @primary_key false
+      @fields [:enabled, :run_minutes, :run_tokens, :min_interval_minutes, :max_turns_per_run, :allow_stop]
+
+      embedded_schema do
+        field(:enabled, :boolean, default: false)
+        field(:run_minutes, :integer, default: 30)
+        field(:run_tokens, :integer, default: 30_000_000)
+        field(:min_interval_minutes, :integer, default: 10)
+        field(:max_turns_per_run, :integer, default: 3)
+        field(:allow_stop, :boolean, default: false)
+      end
+
+      @spec changeset(%__MODULE__{}, map()) :: Ecto.Changeset.t()
+      def changeset(schema, attrs) do
+        schema
+        |> cast(attrs, @fields, empty_values: [])
+        |> Schema.validate_present(@fields)
+        |> validate_number(:run_minutes, greater_than: 0)
+        |> validate_number(:run_tokens, greater_than: 0)
+        |> validate_number(:min_interval_minutes, greater_than_or_equal_to: 0)
+        |> validate_number(:max_turns_per_run, greater_than: 0)
+      end
+    end
+
     embedded_schema do
       field(:enabled, :boolean, default: false)
       field(:junctions, {:array, :string}, default: @junctions)
       field(:timeout_ms, :integer, default: 180_000)
+      embeds_one(:watch, Watch, on_replace: :update, defaults_to_struct: true)
     end
 
     @doc "Every junction the Conductor may run at, in the order a ticket meets them."
@@ -2077,6 +2116,7 @@ defmodule SymphonyElixir.Config.Schema do
       |> Schema.validate_present([:enabled, :junctions, :timeout_ms])
       |> validate_subset(:junctions, @junctions, message: "must name only #{Enum.join(@junctions, ", ")}")
       |> validate_number(:timeout_ms, greater_than: 0)
+      |> cast_embed(:watch, with: &Watch.changeset/2)
     end
   end
 
