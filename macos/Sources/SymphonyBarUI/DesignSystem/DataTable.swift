@@ -158,13 +158,15 @@ extension View {
 
 /// C59, the catalog's Table: `columns` over `rows`, sorted by `sort` (a click on a sortable header sorts by it, a
 /// second reverses), `selection` the picked row. Up and Down move the pick, Return or a double click calls `open`,
-/// Space calls `secondary`. With no rows it shows `empty`. VoiceOver reads it as `label`, each header with its sort and
+/// Space calls `secondary`. With `presorted` the rows come in `sort`'s order already (a server sorted them): the header
+/// shows and sets the sort, and the rows are drawn as given. With no rows it shows `empty`. VoiceOver reads it as `label`, each header with its sort and
 /// each row as its cells after their titles. `drawnAs` draws hover and focus still, for a snapshot.
 public struct DataTable<Item: Identifiable>: View {
     let columns: [DataTableColumn<Item>]
     let rows: [Item]
     @Binding var selection: Item.ID?
     @Binding var sort: DesignTokens.Table.Sort?
+    let presorted: Bool
     let label: String
     let empty: DataTableEmpty
     let surface: DesignTokens.ColorToken
@@ -182,7 +184,8 @@ public struct DataTable<Item: Identifiable>: View {
 
     public init(
         _ label: String, columns: [DataTableColumn<Item>], rows: [Item], selection: Binding<Item.ID?> = .constant(nil),
-        sort: Binding<DesignTokens.Table.Sort?> = .constant(nil), empty: DataTableEmpty = DataTableEmpty("Nothing to show."),
+        sort: Binding<DesignTokens.Table.Sort?> = .constant(nil), presorted: Bool = false,
+        empty: DataTableEmpty = DataTableEmpty("Nothing to show."),
         surface: DesignTokens.ColorToken = DesignTokens.Surface.content, drawnAs: DataTableShown? = nil,
         open: ((Item) -> Void)? = nil, secondary: ((Item) -> Void)? = nil, rowMenu: ((Item) -> AnyView)? = nil
     ) {
@@ -191,6 +194,7 @@ public struct DataTable<Item: Identifiable>: View {
         self.rows = rows
         _selection = selection
         _sort = sort
+        self.presorted = presorted
         self.empty = empty
         self.surface = surface
         self.drawnAs = drawnAs
@@ -200,7 +204,7 @@ public struct DataTable<Item: Identifiable>: View {
     }
 
     public var body: some View {
-        let laid = cache.layout(rows: rows, columns: columns, sort: sort)
+        let laid = cache.layout(rows: rows, columns: columns, sort: presorted ? nil : sort)
         GeometryReader { geometry in
             let available = Double(geometry.size.width)
             let widths = DesignTokens.Table.widths(available: available, columns: columns.map(\.width), measured: laid.measured)

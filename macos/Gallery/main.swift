@@ -892,8 +892,11 @@ func ticketsSituations() -> some View {
                 }
             }
             .frame(width: 900)
-            TicketInspectorBody(row: list.row("SHOP-325")!, reference: list.reference, actions: TicketsActions())
-                .frame(width: 300)
+            TicketDetailsPanel(
+                details: TicketDetails(identifier: "SHOP-325", tracked: list.row("SHOP-325"), row: nil, reference: list.reference)!,
+                reference: list.reference, actions: TicketsActions()
+            )
+            .frame(width: DesignTokens.Tickets.detailsWidth)
         },
         width: 1260
     )
@@ -1652,11 +1655,12 @@ let ticketsPayload: TicketsPayload = {
     return payload
 }()
 
-/// Tickets in a window `window` wide less its sidebar and 800 pt tall: the filter bar over the table, with the drawer
-/// on SHOP-301 when `drawer` is set. With chips, the rows are the ones the server lets through, as it would answer.
+/// Tickets in a window `window` wide less its sidebar and 800 pt tall: the bar over the table, with the details on
+/// SHOP-301 when `drawer` is set. With chips, the rows are the ones the server lets through, as it would answer.
 @MainActor
 func ticketsTable(window: CGFloat, query: TicketsQuery = TicketsQuery(), drawer: Bool = false) -> some View {
-    let list = TicketList(state: situationsState("tickets"), now: situationsNow, timeZone: TimeZone(identifier: "UTC")!)
+    let state = situationsState("tickets")
+    let list = TicketList(state: state, now: situationsNow, timeZone: TimeZone(identifier: "UTC")!)
     var payload = ticketsPayload
     payload.rows = payload.rows.filter { row in
         query.chips.allSatisfy { chip in
@@ -1675,11 +1679,43 @@ func ticketsTable(window: CGFloat, query: TicketsQuery = TicketsQuery(), drawer:
     values.learn(ticketsPayload.rows)
     return TicketsView(
         payload: payload, rows: payload.rows, list: list, query: .constant(query), values: values, search: "", selection: .constant("SHOP-301"),
-        drawerShown: .constant(drawer), reference: situationsNow, actions: TicketsActions(),
-        viewsMenu: TicketViewsMenu(views: savedTicketViews, currentID: nil, query: query)
+        detailsShown: .constant(drawer), reference: situationsNow, actions: TicketsActions(),
+        viewsMenu: TicketViewsMenu(views: savedTicketViews, currentID: nil, query: query), situations: state.snapshot.situations
     )
     .frame(width: window - DesignTokens.Layout.sidebarWidth, height: 800, alignment: .top)
-    .background(DesignTokens.Surface.content.color)
+    .background(DesignTokens.Surface.window.color)
+}
+
+// Tickets as designed (TP-1501): the `tickets-designed` fixture, which holds the catalog's `TICKET_ROWS`
+// (`docs/design/catalog/stories.js`), as the page draws it in a window `window` pt wide less its sidebar.
+let designedTicketsAPI = situationsAPI.appendingPathComponent("tickets-designed/api/v1")
+let designedTicketsNow = ISO8601DateFormatter().date(from: "2026-11-12T16:00:00Z")!
+
+/// Tickets with `picked` picked and the details on or off; `filtered` sets the catalog's one filter, Epic is Phase 3b,
+/// and the rows are the ones the server lets through.
+@MainActor
+func designedTickets(window: CGFloat, filtered: Bool = false, details: Bool = false, picked: String? = nil) -> some View {
+    func read(_ name: String) -> Data { try! Data(contentsOf: designedTicketsAPI.appendingPathComponent(name)) }
+    guard let state = OverviewState.decode(read("state.json")), var payload = TicketsPayload.decode(read("tickets.json")) else {
+        fatalError("The tickets-designed fixture doesn't read")
+    }
+    var values = TicketFilterValues()
+    values.learn(payload.rows)
+    var query = TicketsQuery(sort: TicketSort(column: "situation_since", ascending: false))
+    if filtered {
+        query.toggle(.epic, "Phase 3b")
+        payload.rows = payload.rows.filter { $0.epic == "Phase 3b" }
+    }
+    let list = TicketList(state: state, now: designedTicketsNow, timeZone: TimeZone(identifier: "UTC")!)
+    let pullRequests = ["TP-1441": 812, "BIL-306": 806, "SHOP-305": 812, "SHOP-301": 790, "TP-1480": 975, "SHOP-298": 781]
+    return TicketsView(
+        payload: payload, rows: payload.rows, list: list, query: .constant(query), values: values, search: "", selection: .constant(picked),
+        detailsShown: .constant(details), reference: designedTicketsNow, actions: TicketsActions(),
+        viewsMenu: TicketViewsMenu(views: [], currentID: nil, query: query), controls: TicketsBarControls(page: controlBarPage),
+        situations: state.snapshot.situations, pullRequests: pullRequests
+    )
+    .frame(width: window - DesignTokens.Layout.sidebarWidth, height: 800, alignment: .top)
+    .background(DesignTokens.Surface.window.color)
 }
 
 // MARK: - Saved views on Tickets (TP-1457)
@@ -2036,10 +2072,18 @@ MainActor.assumeIsolated {
         render(addRepoCheck(.checked(addRepoAnswer("add-repo-setup-warning", "refresh.1.json"))), scheme, to: "add-repo-check-warning-\(suffix).png")
         render(addRepoCheck(.onNextStart), scheme, to: "add-repo-check-stopped-\(suffix).png")
         render(firstLaunchSetup(), scheme, to: "setup-first-launch-\(suffix).png")
-        // Tickets as the table with filters (TP-1456): the default columns with the drawer, every column, and three
-        // chips set, at the laptop's and the desktop's widths.
+        // Tickets as designed (TP-1501), the catalog's stories: the default, filtered with the details on the first
+        // row, and the details on the third (the desktop's), at the laptop's and the desktop's widths.
         do {
-            renderScreen(scheme, to: "tickets-table-default") { window in ticketsTable(window: window, drawer: true) }
+            renderScreen(scheme, to: "tickets-default") { window in designedTickets(window: window) }
+            renderScreen(scheme, to: "tickets-filtered-with-the-details") { window in
+                designedTickets(window: window, filtered: true, details: true, picked: "TP-1441")
+            }
+            renderScreen(scheme, to: "tickets-with-the-details") { window in designedTickets(window: window, details: true, picked: "SHOP-305") }
+        }
+        // Tickets as the table with filters (TP-1456): every column (the table scrolls sideways, the Ticket column
+        // in place), and three chips set, at the laptop's and the desktop's widths.
+        do {
             renderScreen(scheme, to: "tickets-table-every-column") { window in ticketsTable(window: window, query: everyColumnQuery) }
             renderScreen(scheme, to: "tickets-table-three-chips") { window in ticketsTable(window: window, query: threeChipsQuery) }
         }
