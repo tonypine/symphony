@@ -439,7 +439,7 @@ struct InitiativeStoryRow: View {
 
     private var mark: RowLead {
         if let attention = row.attention { return .status(attention) }
-        switch row.mark {
+        return switch row.mark {
         case .done: .status(.done)
         case .current: .dot(.working, live: true)
         case .next: .glyph("clock", DesignTokens.TextColor.secondary)
