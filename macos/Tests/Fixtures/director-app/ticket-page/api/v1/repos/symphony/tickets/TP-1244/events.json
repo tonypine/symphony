@@ -812,6 +812,145 @@
           }
         },
         {
+          "id": "k6",
+          "seq": 105,
+          "at": "2026-10-07T09:26:00Z",
+          "type": "conductor.update",
+          "run_id": "run-c1",
+          "payload": {
+            "text": "**The second run starts from the failing test.**\n\nThe first run's tests failed on the time column; the path below shows where the ticket is.",
+            "blocks": [
+              {
+                "type": "path",
+                "loops": 1,
+                "elapsed_ms": 4980000,
+                "stops": [
+                  {
+                    "phase": "Todo",
+                    "state": "done",
+                    "times": 1
+                  },
+                  {
+                    "phase": "Coding",
+                    "state": "failed",
+                    "times": 1
+                  },
+                  {
+                    "phase": "Coding",
+                    "state": "current",
+                    "times": 1,
+                    "run_number": 2
+                  },
+                  {
+                    "phase": "Code Review",
+                    "state": "upcoming",
+                    "times": 1
+                  },
+                  {
+                    "phase": "QA",
+                    "state": "upcoming",
+                    "times": 1
+                  },
+                  {
+                    "phase": "Merge",
+                    "state": "upcoming",
+                    "times": 1
+                  }
+                ]
+              },
+              {
+                "type": "attempts",
+                "run_id": "run-1",
+                "step_id": "tests",
+                "title": "Tests",
+                "same_line": false,
+                "tries": [
+                  {
+                    "at": "2026-10-07T09:14:00Z",
+                    "outcome": "failed",
+                    "duration_ms": 120000,
+                    "line": "TimelineTests.swift:88: XCTAssertEqual failed: (\"06:02\") is not equal to (\"09:02\")"
+                  }
+                ]
+              },
+              {
+                "type": "compare",
+                "expected": {
+                  "text": "The time column reads 09:02, as the fixture's UTC"
+                },
+                "actual": {
+                  "text": "It reads 06:02, in the machine's time zone"
+                }
+              }
+            ],
+            "junction": "after_coding"
+          },
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "children": [],
+          "new": false
+        },
+        {
+          "id": "k7",
+          "seq": 106,
+          "at": "2026-10-07T09:27:00Z",
+          "type": "conductor.update",
+          "run_id": "run-c1",
+          "payload": {
+            "text": "It has used `3.9M` of its 8M tokens, and `TP-1244` has one finding open.\n\nNext: Code Review reads the time column first.",
+            "blocks": [
+              {
+                "type": "budget",
+                "tokens_used": 3900000,
+                "tokens_cap": 8000000,
+                "parts": [
+                  {
+                    "kind": "implementation",
+                    "runs": 2,
+                    "tokens": 3400000
+                  },
+                  {
+                    "kind": "conductor",
+                    "runs": 1,
+                    "tokens": 500000
+                  }
+                ]
+              },
+              {
+                "type": "evidence",
+                "items": [
+                  {
+                    "event_id": "v2",
+                    "artifact_id": "1a5944804739c3246135942da82f849565310c15e861390baa8bd75677fa48b0",
+                    "caption": "The time column at 1440"
+                  }
+                ]
+              },
+              {
+                "type": "findings",
+                "open": 1,
+                "resolved": 0,
+                "items": [
+                  {
+                    "id": "g1",
+                    "title": "The time column reads local time",
+                    "state": "open"
+                  }
+                ]
+              }
+            ],
+            "junction": "after_coding"
+          },
+          "actor": {
+            "kind": "machine"
+          },
+          "artifacts": [],
+          "children": [],
+          "new": false
+        },
+        {
           "id": "k3",
           "seq": 102,
           "at": "2026-10-08T10:15:30Z",

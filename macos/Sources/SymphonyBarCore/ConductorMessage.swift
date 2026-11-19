@@ -78,9 +78,12 @@ public struct ConductorMessage: Equatable, Identifiable {
     public var runTitle: String?
     /// What it says about the run it watched; nil at a junction.
     public var watch: ConductorWatch?
+    /// The blocks it carries, drawn after its words and before a closing `Next:` paragraph.
+    public var blocks: [ConductorBlock]
 
     public init(
-        id: String, at: Date?, text: String, junction: ConductorJunction? = nil, runTitle: String? = nil, watch: ConductorWatch? = nil
+        id: String, at: Date?, text: String, junction: ConductorJunction? = nil, runTitle: String? = nil, watch: ConductorWatch? = nil,
+        blocks: [ConductorBlock] = []
     ) {
         self.id = id
         self.at = at
@@ -88,6 +91,7 @@ public struct ConductorMessage: Equatable, Identifiable {
         self.junction = junction
         self.runTitle = runTitle
         self.watch = watch
+        self.blocks = blocks
     }
 
     /// The message `event` records; nil for any other event or one with no text. `runTitle` names the Conductor's run.
@@ -96,7 +100,7 @@ public struct ConductorMessage: Equatable, Identifiable {
         else { return nil }
         self.init(
             id: event.id, at: event.date, text: text, junction: event.payload.junction.flatMap(ConductorJunction.init(rawValue:)),
-            runTitle: runTitle, watch: event.payload.watch
+            runTitle: runTitle, watch: event.payload.watch, blocks: event.payload.blocks
         )
     }
 

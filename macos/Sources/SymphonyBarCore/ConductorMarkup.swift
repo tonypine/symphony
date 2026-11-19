@@ -282,3 +282,31 @@ public struct ConductorMarkup: Equatable {
         return (status, inner, name.count + 2 + inner.count + statusEnd.count)
     }
 }
+
+extension ConductorMarkup {
+    /// Whether an inline code span's whole content is a ticket identifier (`TP-1500`) or a pull request number
+    /// (`#969`): the app draws it as the reference chip.
+    public static func isReference(_ code: String) -> Bool {
+        if code.hasPrefix("#") { return code.count > 1 && code.dropFirst().allSatisfy(\.isASCIINumber) }
+        let parts = code.split(separator: "-", omittingEmptySubsequences: false)
+        guard parts.count == 2, let key = parts.first, let number = parts.last else { return false }
+        return key.first?.isASCIILetter == true && key.allSatisfy { $0.isASCIILetter || $0.isASCIINumber }
+            && !number.isEmpty && number.allSatisfy(\.isASCIINumber)
+    }
+
+    /// Whether any phrase of `phrases`, at any depth, is a reference span.
+    public static func hasReference(_ phrases: [Phrase]) -> Bool {
+        phrases.contains { phrase in
+            switch phrase {
+            case let .code(text): isReference(text)
+            case let .bold(inner), let .italic(inner), let .status(_, inner), let .link(inner, _): hasReference(inner)
+            case .plain: false
+            }
+        }
+    }
+}
+
+private extension Character {
+    var isASCIINumber: Bool { isASCII && isNumber }
+    var isASCIILetter: Bool { isASCII && isLetter }
+}
