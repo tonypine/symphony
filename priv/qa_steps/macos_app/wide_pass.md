@@ -18,7 +18,8 @@ the PR changes.
 
 Record the screenshots as `evidence` events with `ticket_record`. Do not call `qa_verdict`.
 
-Answer with `status` (`pass` when `qa_check_app` was `healthy` on every page; `fail` when it was not
+Answer with `status` (`pass` when `qa_check_app` was `healthy` on every page and each page showed the content the PR changes, not only its empty state; `fail` when it was not
 on any, quoting its `problems`, which name the page and the window size; `blocked` when the screen
-was too small or the app could not be driven), `expected`, `actual` (the window size reached, the
+was too small, the app could not be driven, or any page could not be reached, seen or judged, such as a
+page that showed only its empty state: never `pass` then), `expected`, `actual` (the window size reached, the
 screen size, and every page with its `qa_check_app` result), `details` and `evidence`.

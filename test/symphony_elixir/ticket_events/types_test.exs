@@ -455,6 +455,50 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
       assert {:error, {:invalid_payload, [:outcome]}} = completed.(%{})
     end
 
+    test "a failed step may say why; a passed one may not" do
+      completed = fn attrs -> Types.validate("step.completed", Map.merge(%{step_id: "look", title: "Look", mode: "orchestrated"}, attrs), :machine, nil) end
+
+      assert {:ok, %{reason: "gave no answer"}} = completed.(%{outcome: "failed", returns_to: "review", reason: "gave no answer"})
+      assert {:ok, %{returns_to: "review"}} = completed.(%{outcome: "failed", returns_to: "review"})
+      assert {:error, {:invalid_payload, [:reason]}} = completed.(%{outcome: "paused", question_id: "q", reason: "why"})
+      assert %{required_when: %{field: "outcome", equals: "skipped"}} = Enum.find(Types.schema("step.completed").optional, &(&1.name == "reason"))
+    end
+
+    test "a QA step's answer rides on its step.completed: result, plan, recheck and verdict_summary" do
+      completed = fn attrs -> Types.validate("step.completed", Map.merge(%{step_id: "walk_1", title: "Walk", mode: "orchestrated", outcome: "passed"}, attrs), :machine, nil) end
+
+      result = %{status: "blocked", expected: "Rows", actual: "Empty state"}
+      assert {:ok, %{result: ^result}} = completed.(%{result: result})
+      assert {:ok, %{result: %{status: "pass"}}} = completed.(%{result: %{"status" => "pass", "expected" => "a", "actual" => "b"}})
+      assert {:error, {:invalid_payload, [:result]}} = completed.(%{result: %{result | status: "great"}})
+      assert {:error, {:invalid_payload, [:result]}} = completed.(%{result: Map.put(result, :extra, "x")})
+      assert {:error, {:invalid_payload, [:result]}} = completed.(%{result: Map.delete(result, :actual)})
+      too_long = String.duplicate("a", 1_501)
+      assert {:error, {:invalid_payload, [:result]}} = completed.(%{result: %{result | actual: too_long}})
+
+      plan = %{checks: [%{title: "Step 1", expect: "Shows"}], skips: [%{title: "Wide pass", why: "nothing on screen"}], summary: "Plan"}
+      assert {:ok, %{plan: ^plan}} = completed.(%{plan: plan})
+      assert {:ok, %{plan: %{checks: [], skips: []}}} = completed.(%{plan: %{plan | checks: [], skips: []}})
+      assert {:error, {:invalid_payload, [:plan]}} = completed.(%{plan: %{plan | checks: [%{title: "x"}]}})
+      assert {:error, {:invalid_payload, [:plan]}} = completed.(%{plan: %{plan | checks: ["x"]}})
+
+      recheck = [%{title: "Step 2", do: ["Scroll", "Look"], expect: "Row 9", design: "Screen 3"}, %{title: "Menu", do: [], expect: "Opens"}]
+      assert {:ok, %{recheck: ^recheck}} = completed.(%{recheck: recheck})
+      assert {:error, {:invalid_payload, [:recheck]}} = completed.(%{recheck: [%{title: "x", do: "Scroll", expect: "y"}]})
+      blank_design = [%{title: "x", do: [], expect: "y", design: ""}]
+      assert {:error, {:invalid_payload, [:recheck]}} = completed.(%{recheck: blank_design})
+
+      assert {:ok, %{verdict_summary: "All good."}} = completed.(%{verdict_summary: "All good."})
+      too_long_summary = String.duplicate("a", 601)
+      assert {:error, {:invalid_payload, [:verdict_summary]}} = completed.(%{verdict_summary: too_long_summary})
+
+      assert %{type: "map", fields: [%{name: "status", type: "enum"}, %{name: "expected", max: 1_500}, _actual]} =
+               Enum.find(Types.schema("step.completed").optional, &(&1.name == "result"))
+
+      assert %{type: "list", item: %{type: "map", fields: [_title, %{name: "do", type: "list"}, _expect, %{name: "design", max: 600}]}} =
+               Enum.find(Types.schema("step.completed").optional, &(&1.name == "recheck"))
+    end
+
     test "a skip is a step.completed: the type list stays closed" do
       refute Map.has_key?(Types.catalog(), "step.skipped")
       assert Types.validate("step.skipped", step(), :agent, "implementation") == {:error, {:unknown_type, "step.skipped"}}

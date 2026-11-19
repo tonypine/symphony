@@ -265,11 +265,21 @@ defmodule SymphonyElixir.Conductor.Facts do
         mode: payload(step, :mode),
         outcome: payload(step, :outcome),
         returns_to: payload(step, :returns_to),
-        reason: payload(step, :reason)
+        reason: payload(step, :reason),
+        result: result(payload(step, :result)),
+        verdict_summary: payload(step, :verdict_summary)
       }
       |> drop_nil()
     end
   end
+
+  # A QA step's answer, as the pass put it on the step's `step.completed`.
+  defp result(%{} = result) do
+    field = fn key -> Map.get(result, key, Map.get(result, Atom.to_string(key))) end
+    %{status: field.(:status), expected: cut(field.(:expected), @text_max), actual: cut(field.(:actual), @text_max)}
+  end
+
+  defp result(_none), do: nil
 
   defp resolved(events, run_id) do
     for %Event{type: "finding.resolved", run_id: ^run_id} = resolution <- events do

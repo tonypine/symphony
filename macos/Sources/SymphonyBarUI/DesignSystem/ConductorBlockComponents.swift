@@ -206,10 +206,26 @@ public struct AttemptsList: View {
 /// while the width gives each pane its least width, stacked below that.
 public struct ExpectedAndActual: View {
     let compare: ConductorBlock.Compare
+    let actualLabel: String
+    /// A text pane longer than this many lines is cut there, with "Show more" under it; nil shows every line.
+    let lineLimit: Int?
 
-    public init(compare: ConductorBlock.Compare) {
+    public init(compare: ConductorBlock.Compare, actualLabel: String = ExpectedAndActual.actualLabel, lineLimit: Int? = nil) {
         self.compare = compare
+        self.actualLabel = actualLabel
+        self.lineLimit = lineLimit
     }
+
+    /// Two texts, as a check step's result gives them: "Expected" and "Actual", each cut at `lineLimit` lines.
+    public init(expected: String?, actual: String?, lineLimit: Int? = nil) {
+        self.init(
+            compare: ConductorBlock.Compare(expected: .text(expected ?? Self.nothing), actual: .text(actual ?? Self.nothing)),
+            actualLabel: Self.stepActualLabel, lineLimit: lineLimit
+        )
+    }
+
+    public static let stepActualLabel = "Actual"
+    static let nothing = "Nothing recorded"
 
     public static let expectedLabel = "Expected"
     public static let actualLabel = "QA saw"
@@ -219,7 +235,7 @@ public struct ExpectedAndActual: View {
     public var body: some View {
         EqualPanes(minimum: Self.paneMinimum, gap: DesignTokens.Space.s3 - 2) {
             pane(Self.expectedLabel, compare.expected)
-            pane(Self.actualLabel, compare.actual)
+            pane(actualLabel, compare.actual)
         }
         .accessibilityElement(children: .contain)
     }
@@ -234,11 +250,7 @@ public struct ExpectedAndActual: View {
                 .accessibilityHidden(true)
             switch side {
             case let .text(text):
-                Text(text)
-                    .font(DesignTokens.TypeStyle.body.font)
-                    .foregroundStyle(DesignTokens.TextColor.primary.color)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                ClampedText(text: text, lines: lineLimit)
                     .accessibilityLabel(label + ": " + text)
             case let .screenshot(artifactID, _):
                 ScreenshotThumbnail(
@@ -249,7 +261,7 @@ public struct ExpectedAndActual: View {
         }
         .padding(.vertical, DesignTokens.Space.s2 + 2)
         .padding(.horizontal, DesignTokens.Space.s3)
-        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(DesignTokens.Surface.content.color, in: shape)
         .overlay(shape.strokeBorder(DesignTokens.Surface.separator.color, lineWidth: 1))
     }
@@ -338,4 +350,60 @@ public struct FindingsLedger: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Findings, \(findings.open) open, \(findings.resolved) fixed")
     }
+}
+
+/// A text that wraps whole, or, past `lines` lines, is cut there with "Show more" under it and "Show less" once open.
+struct ClampedText: View {
+    let text: String
+    let lines: Int?
+    @State private var expanded = false
+    @State private var wholeHeight: CGFloat = 0
+    @State private var clampedHeight: CGFloat = 0
+
+    static let showMore = "Show more"
+    static let showLess = "Show less"
+
+    private var cut: Bool { lines != nil && wholeHeight > clampedHeight + 1 }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: DesignTokens.Space.s1) {
+            Text(text)
+                .font(DesignTokens.TypeStyle.body.font)
+                .foregroundStyle(DesignTokens.TextColor.primary.color)
+                .lineLimit(expanded ? nil : lines)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(alignment: .topLeading) { measure }
+            if cut {
+                Button(expanded ? Self.showLess : Self.showMore) { expanded.toggle() }
+                    .directorButton(.quiet, size: .small)
+            }
+        }
+    }
+
+    /// The text's height whole and cut at `lines`, measured out of sight.
+    private var measure: some View {
+        ZStack {
+            Text(text).font(DesignTokens.TypeStyle.body.font).fixedSize(horizontal: false, vertical: true)
+                .background(GeometryReader { Color.clear.preference(key: WholeHeightKey.self, value: $0.size.height) })
+            if let lines {
+                Text(text).font(DesignTokens.TypeStyle.body.font).lineLimit(lines).fixedSize(horizontal: false, vertical: true)
+                    .background(GeometryReader { Color.clear.preference(key: ClampedHeightKey.self, value: $0.size.height) })
+            }
+        }
+        .hidden()
+        .onPreferenceChange(WholeHeightKey.self) { wholeHeight = $0 }
+        .onPreferenceChange(ClampedHeightKey.self) { clampedHeight = $0 }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct WholeHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
+}
+
+private struct ClampedHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
