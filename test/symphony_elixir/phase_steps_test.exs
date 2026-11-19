@@ -75,6 +75,28 @@ defmodule SymphonyElixir.PhaseStepsTest do
 
   defp events(type), do: @issue_id |> TicketEvents.query(types: [type], limit: 200) |> Enum.sort_by(& &1.seq)
 
+  describe "one machine step at a time" do
+    test "runs a walk's own command in this process, records the step and leaves the next step to the caller", ctx do
+      [step] = steps([%{"id" => "launch", "mode" => "machine", "command" => "symphony:own_launch", "timeout_ms" => 5_000}])
+      builtins = %{"symphony:own_launch" => fn %{issue_id: @issue_id} -> {:ok, {"launched 42", 0}} end}
+
+      assert PhaseSteps.run_machine_step(step, context(ctx, %{}, %{builtins: builtins, steps: [step]})) == :passed
+      refute_received {:ran, _command, _env, _timeout}
+      assert [%{payload: %{step_id: "launch", outcome: "passed"}}] = events("step.completed")
+
+      failing = %{"symphony:own_launch" => fn _context -> {:ok, {"not healthy", 1}} end}
+      failing_context = context(ctx, %{}, %{builtins: failing, steps: [step]})
+      assert {:failed, output} = PhaseSteps.run_machine_step(step, failing_context, 1)
+      assert output =~ "not healthy"
+    end
+
+    test "an agent step's start carries what its turn runs with", ctx do
+      [step] = steps([%{"id" => "look", "mode" => "orchestrated", "prompt" => "Look."}])
+      :ok = PhaseSteps.record_turn_started(step, context(ctx, %{}), %{model: "claude-small", session: "fresh", prompt_ref: "phases.qa.playbooks.macos_app.steps.look"})
+      assert [%{payload: %{step_id: "look", model: "claude-small", session: "fresh"}}] = events("step.started")
+    end
+  end
+
   describe "the step list" do
     test "a run walks its list only when a step of it is a machine step" do
       assert [%Step{id: "code"} | _rest] = implementation = PhaseSteps.steps(:implementation)

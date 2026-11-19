@@ -89,6 +89,7 @@ defmodule SymphonyElixir.QaAgent do
   alias SymphonyElixir.{PathSafety, PromptSafety, QaDriver, QaModeContract, ReviewAgent}
   alias SymphonyElixir.PlaybookSettings
   alias SymphonyElixir.QaAgent.Design
+  alias SymphonyElixir.QaAgent.Steps
   alias SymphonyElixir.QaAgent.Verdict
   alias SymphonyElixir.QaAndroid.Driver, as: AndroidDriver
   alias SymphonyElixir.QaPreCheck
@@ -162,7 +163,7 @@ defmodule SymphonyElixir.QaAgent do
           optional(:host_ports) => [pos_integer()],
           optional(:epic_review) => boolean(),
           optional(:base_ref) => String.t(),
-          optional(:journey) => %{source: String.t(), text: String.t() | nil},
+          optional(:journey) => %{required(:source) => String.t(), required(:text) => String.t() | nil, optional(:steps) => [Walkthrough.step()]},
           optional(:proofs) => [QaPreCheck.result()],
           optional(:design_files) => [Design.file()],
           optional(:unprovable) => unprovable()
@@ -393,6 +394,39 @@ defmodule SymphonyElixir.QaAgent do
     it.
     """
   end
+
+  @doc """
+  The parts of `prompt/2` an agent step of a stepped pass reads (`SymphonyElixir.QaAgent.Steps`),
+  as `parts` names them: `:intro` (the pass, the worktree and what the agent may not do), `:issue`
+  (the ticket with its decisions and parent), `:design` (the design and the files Symphony
+  downloaded), `:servers` (the dev or live server and the host ports), `:qa_mode` (what the driver
+  gives the app) and `:unprovable` (the steps no playbook of the pass can prove).
+  """
+  @spec prompt_parts(job(), map() | nil, [atom()]) :: String.t()
+  def prompt_parts(job, parent, parts) when is_list(parts) do
+    parts
+    |> Enum.map(&prompt_part(&1, job, parent))
+    |> Enum.map_join("\n", &String.trim/1)
+    |> String.trim()
+  end
+
+  defp prompt_part(:intro, job, _parent), do: intro(job) <> "\n\n" <> test_suite_rule(job)
+
+  defp prompt_part(:issue, %{issue: issue} = job, parent) do
+    """
+    Issue:
+    Identifier: #{issue.identifier}
+    Title: #{PromptSafety.linear_issue_title(issue.title || "")}
+    Description (walkthrough and acceptance criteria):
+    #{PromptSafety.linear_issue_body(Decisions.strip(issue.description) || "")}
+    #{decisions_rule(issue, job)}#{parent_section(parent)}
+    """
+  end
+
+  defp prompt_part(:design, job, parent), do: design_section(job, parent)
+  defp prompt_part(:servers, job, _parent), do: dev_server_section(job) <> host_ports_section(Map.get(job, :host_ports, []))
+  defp prompt_part(:qa_mode, job, _parent), do: qa_mode_section(job)
+  defp prompt_part(:unprovable, job, _parent), do: unprovable_rule(job)
 
   # What the driver gives the app in QA mode, by the driver's own names (TP-1346).
   defp qa_mode_section(job) do
@@ -1052,10 +1086,10 @@ defmodule SymphonyElixir.QaAgent do
                {:ok, host_ports} <- host_ports(driver),
                {:ok, job} <- start_qa_host_dev_server(driver, job, settings, opts) do
             job = Map.merge(job, %{host_ports: host_ports, design_files: fetch_design(job, settings, opts)})
-            prompt = prompt(job, fetch_parent(job, worktree, settings, opts))
+            parent = fetch_parent(job, worktree, settings, opts)
 
             agent_module
-            |> run_tracked_session(job, worktree, qa_settings, prompt, opts)
+            |> run_pass(job, worktree, qa_settings, parent, opts)
             |> unavailable_host(driver)
             |> environment_fault(driver)
             |> limit_wide_pass(driver, QaDriver.wide_pass(driver), job)
@@ -1069,6 +1103,15 @@ defmodule SymphonyElixir.QaAgent do
 
       {:error, reason} ->
         {:error, reason, empty_tokens()}
+    end
+  end
+
+  # A pass whose playbook has a step list to walk, with `phases.qa.stepped` on, walks it
+  # (`SymphonyElixir.QaAgent.Steps`); any other is one agent session, as before.
+  defp run_pass(agent_module, job, worktree, qa_settings, parent, opts) do
+    case Steps.list(job, opts) do
+      [_ | _] = steps -> Steps.run(agent_module, job, worktree, qa_settings, steps, Keyword.put(opts, :qa_parent, parent))
+      [] -> run_tracked_session(agent_module, job, worktree, qa_settings, prompt(job, parent), opts)
     end
   end
 

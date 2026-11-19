@@ -3062,6 +3062,25 @@ prompt carrying the output; no result runs it again, up to `no_result_limit` in 
 `paused` on a Question (go on past it, run it again, or the person's own words) that pauses the
 ticket; a `when` that doesn't match the change skips it with the reason.
 
+An agent step MAY set what its turn runs with (`model`, `effort`), the session it continues
+(`session`: steps with one name continue one session; `fresh` starts one for that step alone) and
+`repeat: walkthrough`; a machine step MUST NOT. Today only a stepped QA pass acts on them.
+
+A QA pass walks a step list instead of being one agent session when `phases.qa.stepped` is on and
+the pass (not an epic review) runs one playbook with a list (`phases.qa.playbooks.<kind>.steps`, or
+the `macos_app` default: pre-checks, build, plan, launch, one walk per walkthrough step, design
+check, wide pass, quit, attach, review). Off, it MUST run as one agent session as before
+(`SymphonyElixir.QaAgent.Steps`, `docs/configuration.md#stepped-qa-passes`). Every step MUST be
+recorded under the QA run's `run_id`. Its machine steps run the QA pass's own commands
+(`symphony:qa_pre_checks`, `symphony:qa_build`, `symphony:qa_launch`, `symphony:qa_quit`,
+`symphony:qa_attach`) through the pass's QA driver, with no model; only a QA playbook's list may run
+them. Its agent steps are turns with the QA tool scope, each ending with its answer file. The plan
+MUST brief every walkthrough step the pass walks, else it is refused and asked again. The `review`
+step, which every QA playbook's list MUST have, gives the verdict in the `qa_verdict` contract, or
+asks for at most three rechecks, each a fresh walk turn between the launch and the quit run again;
+past two rounds the pass is `inconclusive`. The wide pass audit, the QA host checks, turn timeouts,
+`tokens_per_issue` (across every turn of the pass) and the cleanup stay the pass's.
+
 When a machine step will run a command, the agent's session ends first and the run holds no slot:
 the orchestrator marks its running entry on the step (`session_id: nil`), counts it in no work,
 state or finishing slot and runs a cycle at once, so another ticket may dispatch. The machine

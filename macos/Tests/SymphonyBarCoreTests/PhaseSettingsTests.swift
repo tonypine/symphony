@@ -667,4 +667,342 @@ final class PhaseSettingsTests: XCTestCase {
         )
         XCTAssertEqual(error("        answer:\n          layout\n"), .unsupported(line: 7, reason: "`layout` is not a `name: type` line"))
     }
+
+    // MARK: An agent step's model, effort, session and repeat
+
+    private var walk: PhaseStep {
+        PhaseStep(
+            stepID: "walk", mode: .orchestrated, prompt: "Walk it.", model: "small", effort: .low, session: PhaseStep.freshSession,
+            repeat: .walkthrough
+        )
+    }
+
+    func testAnAgentStepsModelEffortSessionAndRepeatAreWrittenAndReadBack() throws {
+        XCTAssertEqual(
+            StepsWriter.lines([walk], indent: 0, step: 2),
+            ["- id: walk", "  mode: orchestrated", "  repeat: walkthrough", "  session: fresh", "  model: small", "  effort: low", "  prompt: Walk it."]
+        )
+        let delegated = PhaseStep(stepID: "code", mode: .delegated, model: "claude-opus-5-5", effort: .xhigh, session: "lead")
+        var new = PhaseSettings()
+        new[.implementation] = PhaseSteps(steps: [walk, delegated], isDefault: false)
+        let yaml = try PhaseSettings.updating("", from: PhaseSettings(), to: new)
+        let read = try PhaseSettings.values(in: yaml)
+        XCTAssertEqual(read[.implementation], new[.implementation])
+        XCTAssertEqual(read[.implementation].steps[1].effort, .xhigh)
+
+        // Each one is part of the step: changing it changes the list.
+        var changed = walk
+        changed.session = "lead"
+        XCTAssertNotEqual(changed, walk)
+        changed = walk
+        changed.repeat = nil
+        XCTAssertNotEqual(changed, walk)
+        XCTAssertEqual(walk.agentKeys, ["model", "effort", "session", "repeat"])
+        XCTAssertEqual(PhaseStep(stepID: "x", mode: .delegated).agentKeys, [])
+    }
+
+    func testAMachineStepNeverWritesTheAgentFields() {
+        var machine = walk
+        machine.mode = .machine
+        machine.commands = [StepCommand(run: "make")]
+        XCTAssertEqual(StepsWriter.lines([machine], indent: 0, step: 2), ["- id: walk", "  mode: machine", "  command: make"])
+    }
+
+    func testTheAgentFieldsSymphonyWouldRefuseSayWhyOnTheirRow() {
+        func reason(_ step: PhaseStep, inQAPlaybook: Bool = false) -> String? {
+            PhaseValidation.check([step], inQAPlaybook: inQAPlaybook).reason(for: step)
+        }
+        let make = [StepCommand(run: "make")]
+        XCTAssertEqual(
+            reason(PhaseStep(stepID: "build", mode: .machine, commands: make, model: "small")),
+            "`model` is only for an agent step; this step is machine."
+        )
+        XCTAssertEqual(
+            reason(PhaseStep(stepID: "build", mode: .machine, commands: make, repeat: .walkthrough)),
+            "`repeat` is only for an agent step; this step is machine."
+        )
+        XCTAssertEqual(
+            reason(PhaseStep(stepID: "code", mode: .delegated, model: "  ")),
+            "Name the model, or leave it empty for the run's model."
+        )
+        XCTAssertEqual(
+            reason(PhaseStep(stepID: "code", mode: .orchestrated, prompt: "p", session: "Lead")),
+            "The session must be `fresh` or a name of lowercase letters, digits and underscores, starting with a letter."
+        )
+        XCTAssertNil(reason(PhaseStep(stepID: "code", mode: .delegated, session: "fresh")))
+        XCTAssertNil(reason(PhaseStep(stepID: "code", mode: .delegated, session: "lead_2")))
+        XCTAssertNil(reason(walk))
+    }
+
+    func testAnAgentFieldTheEditorDoesntReadIsReportedWithItsLine() {
+        func error(_ step: String) -> PhaseSettingsError? {
+            do {
+                _ = try PhaseSettings.values(in: "phases:\n  qa:\n    steps:\n      - " + step + "\n")
+                return nil
+            } catch {
+                return error as? PhaseSettingsError
+            }
+        }
+        XCTAssertEqual(
+            error("{id: a, mode: delegated, effort: extreme}"),
+            .unsupported(line: 4, reason: "`effort: extreme` is not low, medium, high, xhigh or max")
+        )
+        XCTAssertEqual(error("{id: a, mode: delegated, repeat: always}"), .unsupported(line: 4, reason: "`repeat: always` is not walkthrough"))
+        XCTAssertNil(error("{id: a, mode: delegated, effort: ~, repeat: null}"))
+    }
+
+    // MARK: QA's playbook lists and stepped passes
+
+    func testTheMacOSAppPlaybooksDefaultListIsSymphonysAndTheOthersHaveNone() {
+        let steps = PhaseDefaults.qaSteps(for: .macosApp)
+        XCTAssertEqual(
+            steps.map(\.stepID),
+            ["pre_checks", "build", "plan", "launch", "walk", "design_check", "wide_pass", "quit", "attach", "review"]
+        )
+        XCTAssertEqual(steps.filter { $0.mode == .machine }.map { $0.commands.map(\.run) }, PhaseDefaults.qaCommands.map { [$0] })
+        XCTAssertEqual(steps[1], PhaseStep(
+            stepID: "build", title: "Build the app", mode: .machine, commands: [StepCommand(run: "symphony:qa_build")],
+            timeoutMs: 1_800_000, onFail: "quit"
+        ))
+        XCTAssertEqual(steps[2].session, "lead")
+        XCTAssertEqual(steps[2].effort, .high)
+        XCTAssertEqual(steps[2].answer, [
+            AnswerField(name: "needs_app", type: .boolean), AnswerField(name: "walk", type: .list),
+            AnswerField(name: "gallery", type: .list), AnswerField(name: "notes"),
+        ])
+        XCTAssertEqual(steps[4].repeat, .walkthrough)
+        XCTAssertEqual(steps[4].session, "fresh")
+        XCTAssertEqual(steps[4].model, "small")
+        XCTAssertEqual(steps[4].answer.map(\.name), ["status", "expected", "actual", "details", "evidence"])
+        XCTAssertEqual(steps[5].answer, steps[4].answer)
+        XCTAssertEqual(steps[6].answer, steps[4].answer)
+        XCTAssertEqual(steps[9], PhaseStep(stepID: "review", title: "Review and verdict", mode: .orchestrated, effort: .high, session: "lead"))
+        XCTAssertTrue(steps.filter { $0.mode == .orchestrated }.allSatisfy { $0.prompt.isEmpty })
+
+        // Valid as a playbook's list, which may leave prompts to Symphony and run its QA commands; not as a run kind's.
+        XCTAssertTrue(PhaseValidation.check(steps, inQAPlaybook: true).isValid)
+        XCTAssertEqual(PhaseValidation.check(steps).reason(for: steps[0]), "Runs `symphony:qa_pre_checks`, which only a QA playbook's list runs.")
+        XCTAssertEqual(PhaseValidation.check(steps).reason(for: steps[2]), "An orchestrated step needs a prompt.")
+
+        for playbook in [QAPlaybookKind.cli, .web, .androidApp, QAPlaybookKind("tv_app")] {
+            XCTAssertEqual(PhaseSteps.defaults(for: .qaPlaybook(playbook)), PhaseSteps(steps: [], isDefault: true))
+        }
+        XCTAssertEqual(PhaseSettings()[.qaPlaybook(.macosApp)], PhaseSteps(steps: steps, isDefault: true))
+        XCTAssertEqual(PhaseSettings()[.runKind(.qa)], .defaults(for: .qa))
+    }
+
+    private let steppedQA = """
+        execution:
+          max_turns: 3
+        phases:
+          qa:
+            stepped: true
+            playbooks:
+              cli:
+                steps:
+                  - {id: run, mode: delegated, session: fresh}
+              macos_app:
+                steps:
+                  - id: plan
+                    mode: orchestrated
+                    session: lead
+                    effort: high
+                    answer: {needs_app: boolean}
+            steps: []
+        tickets:
+          priorities: [urgent]
+
+        """
+
+    func testReadsQAsSteppedSwitchAndPlaybookListsWithoutItsOwnSteps() throws {
+        let settings = try PhaseSettings.values(in: steppedQA)
+        XCTAssertTrue(settings.qaStepped)
+        XCTAssertEqual(settings[.qa], PhaseSteps(steps: [], isDefault: false))
+        XCTAssertEqual(
+            settings[.qaPlaybook(.cli)],
+            PhaseSteps(steps: [PhaseStep(stepID: "run", mode: .delegated, session: "fresh")], isDefault: false)
+        )
+        XCTAssertEqual(
+            settings[.qaPlaybook(.macosApp)].steps,
+            [PhaseStep(stepID: "plan", mode: .orchestrated, answer: [AnswerField(name: "needs_app", type: .boolean)], effort: .high, session: "lead")]
+        )
+        XCTAssertEqual(settings[.qaPlaybook(.web)], .defaults(for: .qaPlaybook(.web)))
+
+        // `phases.qa` may hold only `stepped` or `playbooks`; QA then follows its default list.
+        let onlyStepped = try PhaseSettings.values(in: "phases:\n  qa:\n    stepped: true\n")
+        XCTAssertTrue(onlyStepped.qaStepped)
+        XCTAssertEqual(onlyStepped[.qa], .defaults(for: .qa))
+        let ownKind = try PhaseSettings.values(in: "phases:\n  qa:\n    playbooks:\n      tv_app:\n        steps: []\n    stepped: ~\n")
+        XCTAssertFalse(ownKind.qaStepped)
+        XCTAssertEqual(ownKind[.qaPlaybook(QAPlaybookKind("tv_app"))], PhaseSteps(steps: [], isDefault: false))
+        XCTAssertEqual(ownKind.qaPlaybookKinds, [.macosApp, .cli, .web, .androidApp, QAPlaybookKind("tv_app")])
+        XCTAssertEqual(try PhaseSettings.values(in: "phases:\n  qa:\n    playbooks: {}\n").qaPlaybooks, [:])
+        XCTAssertEqual(try PhaseSettings.values(in: "phases:\n  qa:\n    stepped: false\n").qaStepped, false)
+    }
+
+    func testSavingOnePlaybooksListLeavesTheOthersAndSteppedAsTheyAre() throws {
+        let old = try PhaseSettings.values(in: steppedQA)
+        XCTAssertEqual(try PhaseSettings.updating(steppedQA, from: old, to: old), steppedQA)
+
+        var new = old
+        new[.qaPlaybook(.macosApp)].steps.append(PhaseStep(stepID: "review", mode: .orchestrated, effort: .max, session: "lead"))
+        let saved = try PhaseSettings.updating(steppedQA, from: old, to: new)
+        XCTAssertEqual(
+            saved,
+            steppedQA.replacingOccurrences(
+                of: "            answer: {needs_app: boolean}\n",
+                with: "            answer: {needs_app: boolean}\n          - id: review\n            mode: orchestrated\n"
+                    + "            session: lead\n            effort: max\n"
+            )
+        )
+        let read = try PhaseSettings.values(in: saved)
+        XCTAssertEqual(read, new)
+        XCTAssertEqual(read[.qaPlaybook(.cli)], old[.qaPlaybook(.cli)])
+        XCTAssertTrue(read.qaStepped)
+        XCTAssertEqual(read[.qa], old[.qa])
+    }
+
+    func testResettingQAsOwnListKeepsSteppedAndThePlaybooks() throws {
+        let old = try PhaseSettings.values(in: steppedQA)
+        var new = old
+        new[.qa] = .defaults(for: .qa)
+        XCTAssertEqual(try PhaseSettings.updating(steppedQA, from: old, to: new), steppedQA.replacingOccurrences(of: "    steps: []\n", with: ""))
+    }
+
+    func testResettingAPlaybookRemovesOnlyItsKindAndThenAnEmptiedPlaybooksKey() throws {
+        let old = try PhaseSettings.values(in: steppedQA)
+        var new = old
+        new[.qaPlaybook(.cli)] = .defaults(for: .qaPlaybook(.cli))
+        let cliBlock = "      cli:\n        steps:\n          - {id: run, mode: delegated, session: fresh}\n"
+        let withoutCLI = try PhaseSettings.updating(steppedQA, from: old, to: new)
+        XCTAssertEqual(withoutCLI, steppedQA.replacingOccurrences(of: cliBlock, with: ""))
+
+        new[.qaPlaybook(.macosApp)] = .defaults(for: .qaPlaybook(.macosApp))
+        let withoutPlaybooks = try PhaseSettings.updating(steppedQA, from: old, to: new)
+        XCTAssertFalse(withoutPlaybooks.contains("playbooks"))
+        XCTAssertTrue(withoutPlaybooks.contains("    stepped: true\n    steps: []\n"))
+
+        // With stepped off and QA's own list reset too, nothing is left under `phases:`.
+        new.qaStepped = false
+        new[.qa] = .defaults(for: .qa)
+        XCTAssertEqual(
+            try PhaseSettings.updating(steppedQA, from: old, to: new),
+            "execution:\n  max_turns: 3\ntickets:\n  priorities: [urgent]\n"
+        )
+    }
+
+    func testTurningSteppedOnWritesTrueAndOffRemovesTheKey() throws {
+        var on = PhaseSettings()
+        on.qaStepped = true
+        let yaml = try PhaseSettings.updating("execution:\n  max_turns: 3\n", from: PhaseSettings(), to: on)
+        XCTAssertEqual(yaml, "execution:\n  max_turns: 3\nphases:\n  qa:\n    stepped: true\n")
+        XCTAssertEqual(try PhaseSettings.values(in: yaml), on)
+        XCTAssertEqual(try PhaseSettings.updating(yaml, from: on, to: PhaseSettings()), "execution:\n  max_turns: 3\n")
+
+        let off = "phases:\n  qa:\n    stepped: false  # not yet\n    steps: []\n"
+        let read = try PhaseSettings.values(in: off)
+        var turned = read
+        turned.qaStepped = true
+        XCTAssertEqual(try PhaseSettings.updating(off, from: read, to: turned), "phases:\n  qa:\n    stepped: true  # not yet\n    steps: []\n")
+    }
+
+    func testANewPlaybookListGoesUnderPlaybooksWithSteppedAboveIt() throws {
+        var new = PhaseSettings()
+        new.qaStepped = true
+        new[.qaPlaybook(.web)] = PhaseSteps(steps: [PhaseStep(stepID: "look", mode: .delegated)], isDefault: false)
+        let yaml = try PhaseSettings.updating("", from: PhaseSettings(), to: new)
+        XCTAssertEqual(
+            yaml,
+            "phases:\n  qa:\n    stepped: true\n    playbooks:\n      web:\n        steps:\n          - id: look\n            mode: delegated\n"
+        )
+        XCTAssertEqual(try PhaseSettings.values(in: yaml), new)
+
+        // An empty `playbooks: {}` opens into a block, keeping its comment.
+        let empty = "phases:\n  qa:\n    playbooks: {}  # none yet\n    steps: []\n"
+        let old = try PhaseSettings.values(in: empty)
+        var cli = old
+        cli[.qaPlaybook(.cli)] = PhaseSteps(steps: [PhaseStep(stepID: "run", mode: .delegated)], isDefault: false)
+        XCTAssertEqual(
+            try PhaseSettings.updating(empty, from: old, to: cli),
+            "phases:\n  qa:\n    playbooks: # none yet\n      cli:\n        steps:\n          - id: run\n            mode: delegated\n    steps: []\n"
+        )
+    }
+
+    func testAnEditedDefaultMacOSAppListIsWrittenWholeWithoutPrompts() throws {
+        var new = PhaseSettings()
+        new[.qaPlaybook(.macosApp)].steps[4].model = "claude-haiku-5-5"
+        XCTAssertFalse(new[.qaPlaybook(.macosApp)].isDefault)
+        let yaml = try PhaseSettings.updating("", from: PhaseSettings(), to: new)
+        XCTAssertFalse(yaml.contains("prompt:"))
+        XCTAssertTrue(yaml.contains("          - id: walk\n            title: Walk a step\n            mode: orchestrated\n            repeat: walkthrough\n"
+            + "            session: fresh\n            model: claude-haiku-5-5\n"))
+        XCTAssertTrue(yaml.contains("            command: symphony:qa_build\n"))
+        XCTAssertEqual(try PhaseSettings.values(in: yaml), new)
+    }
+
+    func testAPlaybookKindMissingFromOneSettingsEqualsItsDefaultInTheOther() {
+        var opened = PhaseSettings()
+        opened[.qaPlaybook(QAPlaybookKind("tv_app"))] = .defaults(for: .qaPlaybook(QAPlaybookKind("tv_app")))
+        XCTAssertEqual(opened, PhaseSettings())
+        XCTAssertEqual(opened.qaPlaybookKinds.last, QAPlaybookKind("tv_app"))
+        XCTAssertEqual(opened.owners.last, .qaPlaybook(QAPlaybookKind("tv_app")))
+        opened[.qaPlaybook(QAPlaybookKind("tv_app"))].addStep()
+        XCTAssertNotEqual(opened, PhaseSettings())
+    }
+
+    func testQAYAMLTheEditorDoesntReadIsReportedWithItsLine() {
+        func error(_ yaml: String) -> PhaseSettingsError? {
+            do {
+                _ = try PhaseSettings.values(in: "phases:\n  qa:\n" + yaml)
+                return nil
+            } catch {
+                return error as? PhaseSettingsError
+            }
+        }
+        XCTAssertEqual(error("    stepped: maybe\n"), .unsupported(line: 3, reason: "`stepped: maybe` is not true or false"))
+        XCTAssertEqual(error("    other: 1\n"), .unsupported(line: 2, reason: "`qa:` has no `steps:` list"))
+        XCTAssertEqual(
+            error("    playbooks: [cli]\n"),
+            .unsupported(line: 3, reason: "write the playbooks as an indented block under `playbooks:`")
+        )
+        XCTAssertEqual(error("    playbooks:\n      cli:\n        other: 1\n"), .unsupported(line: 4, reason: "`cli:` has no `steps:` list"))
+        XCTAssertEqual(error("    playbooks:\n      - cli\n"), .unsupported(line: 4, reason: "`- cli` is not a playbook kind's `name:` line"))
+        XCTAssertEqual(error("    playbooks:\n      cli: {}\n"), .notABlock("cli"))
+    }
+
+    func testAPlaybooksListPreviewsInSymphonysWordsWithItsOwnPrompts() {
+        XCTAssertEqual(
+            PhasePreview.text(owner: .qaPlaybook(.cli), list: .defaults(for: .qaPlaybook(.cli))),
+            "## Steps\n\nA stepped cli QA pass follows no step list (the default list): it is one agent session.\n"
+        )
+        let preview = PhasePreview.text(owner: .qaPlaybook(.macosApp), list: .defaults(for: .qaPlaybook(.macosApp)))
+        XCTAssertTrue(preview.hasPrefix(
+            "## Steps\n\nA stepped macos_app QA pass follows these steps (the default list, `phases.qa.playbooks.macos_app.steps`):\n\n"
+                + "1. `pre_checks` Pre-checks · machine · times out after 1 min · on failure ends the run\n   - `symphony:qa_pre_checks`\n"
+        ))
+        XCTAssertTrue(preview.contains(
+            "3. `plan` Plan the pass · orchestrated · on failure ends the run\n   - prompt: Symphony's own (`priv/qa_steps/macos_app/plan.md`)\n"
+                + "   - answer: `gallery` list, `needs_app` boolean, `notes` string, `walk` list\n"
+        ))
+        let list = PhaseSteps.defaults(for: .implementation)
+        XCTAssertEqual(PhasePreview.text(owner: .runKind(.implementation), list: list), PhasePreview.text(kind: .implementation, list: list))
+    }
+
+    func testEveryEffortRepeatAndPlaybookKindHasWords() {
+        for effort in StepEffort.allCases { XCTAssertEqual(effort.title, effort.rawValue); XCTAssertEqual(effort.id, effort.rawValue) }
+        XCTAssertEqual(StepEffort.allCases.map(\.rawValue), ["low", "medium", "high", "xhigh", "max"])
+        XCTAssertEqual(StepRepeat.walkthrough.title, "Once per walkthrough step")
+        XCTAssertEqual(StepRepeat.walkthrough.id, "walkthrough")
+        XCTAssertEqual(QAPlaybookKind.builtIn.map(\.title), ["macOS app", "CLI", "Web", "Android app"])
+        XCTAssertEqual(QAPlaybookKind("tv_app").title, "tv_app")
+        XCTAssertEqual(QAPlaybookKind.macosApp.id, "macos_app")
+        XCTAssertEqual(QAPlaybookKind.macosApp.keyPath, "phases.qa.playbooks.macos_app.steps")
+        XCTAssertTrue(QAPlaybookKind("tv_app").isValid)
+        XCTAssertFalse(QAPlaybookKind("TV").isValid)
+        XCTAssertEqual(StepListOwner.runKind(.qa).keyPath, "phases.qa.steps")
+        XCTAssertNil(StepListOwner.runKind(.qa).qaPlaybook)
+        XCTAssertEqual(StepListOwner.qaPlaybook(.web).qaPlaybook, .web)
+        XCTAssertTrue(SettingsUIManifest.keyPaths.contains("phases.qa.playbooks"))
+        XCTAssertTrue(SettingsUIManifest.keyPaths.contains("phases.qa.stepped"))
+    }
 }
