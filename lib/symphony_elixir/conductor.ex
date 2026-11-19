@@ -84,11 +84,12 @@ defmodule SymphonyElixir.Conductor do
 
   @typedoc "A planned turn: the junction, the ticket, the run profile it starts with and its time limit."
   @type plan :: %{
-          junction: String.t(),
-          issue_id: String.t(),
-          repo_key: String.t(),
-          run_profile: Run.t(),
-          timeout_ms: pos_integer()
+          required(:junction) => String.t(),
+          required(:issue_id) => String.t(),
+          required(:repo_key) => String.t(),
+          required(:run_profile) => Run.t(),
+          required(:timeout_ms) => pos_integer(),
+          optional(:watch) => map()
         }
 
   @typedoc "What one turn answered: the answer, the turn's tokens, and how it ended."

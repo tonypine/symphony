@@ -71,6 +71,12 @@ defmodule SymphonyElixir.Conductor.WatchTest do
     end
   end
 
+  test "the running runs come from the orchestrator's snapshot, none while it can't answer" do
+    assert Watch.running_in(%{running: [%{run_id: "r"}]}) == [%{run_id: "r"}]
+    assert Watch.running_in(:unavailable) == []
+    assert Watch.running_in(:timeout) == []
+  end
+
   test "a run may be looked at when no turn runs on it, it has turns left and the interval passed" do
     idle = %{turns: 0, last_ms: nil, seen: MapSet.new(), busy: false}
     assert Watch.may_look?(idle, @watch, 0)

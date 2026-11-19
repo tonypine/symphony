@@ -183,13 +183,12 @@ defmodule SymphonyElixir.Conductor.Watch do
 
   defp run_events(%{issue_id: issue_id, run_id: run_id}), do: issue_id |> Facts.events() |> Enum.filter(&(&1.run_id == run_id))
 
-  # The orchestrator's running runs, none while it can't answer.
-  defp running do
-    case Orchestrator.snapshot() do
-      %{running: running} when is_list(running) -> running
-      _unavailable -> []
-    end
-  end
+  defp running, do: running_in(Orchestrator.snapshot())
+
+  @doc "The running runs of an orchestrator `snapshot`; none while it can't answer (`:timeout`, `:unavailable`)."
+  @spec running_in(map() | atom()) :: [map()]
+  def running_in(%{running: running}) when is_list(running), do: running
+  def running_in(_unavailable), do: []
 
   # The turn runs on its own: whatever it does, it tells the watch it is done.
   defp start_turn(run, trigger, watch) do

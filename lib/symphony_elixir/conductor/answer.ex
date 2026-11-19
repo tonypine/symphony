@@ -27,7 +27,7 @@ defmodule SymphonyElixir.Conductor.Answer do
   @question_fields ~w(title question why if_unanswered recommendation_reason)
 
   @type t :: %{
-          instructions: String.t(),
+          instructions: String.t() | nil,
           update: String.t() | nil,
           refs: [String.t()],
           ask_person: map() | nil,
