@@ -6042,6 +6042,16 @@ Minimum endpoints:
     liveness route for a dev server's health check (`verification.dev_server.health_check_url`),
     which gives each request 250 ms. `/api/v1/state` stays the app's poll.
 
+- `GET /api/v1/drain`
+  - Answers `200` `{"running": 2, "between_turns": 1, "paused": true}`: the agent runs, how many
+    of them wait between turns (as `counts.between_turns`), and whether dispatch is paused. Read
+    from the orchestrator's snapshot alone, with no page presenter, so it answers when
+    `/api/v1/state` fails. `503` with `snapshot_timeout` or `snapshot_unavailable` when the
+    orchestrator doesn't answer.
+  - The macOS app reads it while a restart or an update drain waits and a state poll fails, and
+    to start an update while the state fails: a broken state can't keep the app from installing
+    the release that fixes it.
+
 - `GET /api/v1/repos`
   - Returns one entry per configured repository, in config order: its key, `default` and
     `base_branch`, where its code comes from, its GitHub repository, its Linear routing, whether

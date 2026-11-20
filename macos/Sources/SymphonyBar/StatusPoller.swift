@@ -71,4 +71,17 @@ final class StatusPoller {
         guard let (data, response) = try? await stores.apiTransport(request) else { return .unreachable }
         return SymphonyState.poll(data: data, statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0)
     }
+
+    /// Fetches Symphony's drain read, which answers when its state fails (TP-1550); nil when it doesn't answer one.
+    static func fetchDrain(stateRoot: URL) async -> DrainStatus? {
+        let stores = AppStores.current
+        guard let base = StateRoot.controlURL(in: stateRoot, fallback: stores.apiFallback) else { return nil }
+        let request = URLRequest(
+            url: DrainStatus.url(base: base),
+            cachePolicy: .reloadIgnoringLocalCacheData,
+            timeoutInterval: StatusMachine.pollTimeout
+        )
+        guard let (data, response) = try? await stores.apiTransport(request) else { return nil }
+        return DrainStatus.parse(data: data, statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0)
+    }
 }

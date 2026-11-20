@@ -19,6 +19,30 @@ defmodule SymphonyElixirWeb.ObservabilityApiController do
   @spec health(Conn.t(), map()) :: Conn.t()
   def health(conn, _params), do: json(conn, %{ok: true})
 
+  # What a restart or an update drain waits on: the agent runs, how many of them wait between
+  # turns, and whether dispatch is paused. Read from the orchestrator's snapshot alone, so a page
+  # presenter that fails `GET /api/v1/state` can't keep the app from installing the release that
+  # fixes it (TP-1550).
+  @spec drain(Conn.t(), map()) :: Conn.t()
+  def drain(conn, _params) do
+    case Orchestrator.snapshot(orchestrator(), snapshot_timeout_ms()) do
+      %{} = snapshot ->
+        running = Map.get(snapshot, :running, [])
+
+        json(conn, %{
+          running: length(running),
+          between_turns: Enum.count(running, &Presenter.between_turns?/1),
+          paused: match?(%{paused: true}, Map.get(snapshot, :pause))
+        })
+
+      :timeout ->
+        error_response(conn, 503, "snapshot_timeout", "Snapshot timed out")
+
+      :unavailable ->
+        error_response(conn, 503, "snapshot_unavailable", "Snapshot unavailable")
+    end
+  end
+
   @spec state(Conn.t(), map()) :: Conn.t()
   def state(conn, %{"format" => "terminal"} = params) do
     case StatusDashboard.frame(terminal_columns(params), status_dashboard()) do

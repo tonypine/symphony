@@ -44,6 +44,8 @@ public struct RestartMachine: Equatable {
         case configChecked(ConfigCheckResult)
         case controlFinished(ControlAction, ControlResult)
         case polled(StatusPoll)
+        /// The drain read `checkRuns` asked for came back; nil when Symphony didn't give one.
+        case runsChecked(DrainStatus?)
         /// The app's Symphony exited.
         case exited(ChildExit)
         /// Start returned; `error` says why it failed.
@@ -60,6 +62,8 @@ public struct RestartMachine: Equatable {
         case send(ControlAction)
         /// Poll Symphony's state now instead of waiting out the interval.
         case pollNow
+        /// Read Symphony's agent runs and pause from its drain request (`DrainStatus`), for a state that failed.
+        case checkRuns
         case stop
         case start
         case alert(title: String, message: String)
@@ -151,6 +155,10 @@ public struct RestartMachine: Equatable {
 
         case let (.waitingForRuns, .polled(poll)):
             return waitedForRuns(poll, now: now)
+
+        case let (.waitingForRuns, .runsChecked(drain)):
+            // Asked for after a poll in this phase, so after the restart's own pause.
+            return waited(drain.map { (paused: $0.paused, activeRuns: $0.activeRuns) }, mayPredatePause: false, now: now)
 
         case (.waitingForRuns, .restartNow) where offersRestartNow:
             enter(.stopping, now: now)
@@ -262,14 +270,32 @@ public struct RestartMachine: Equatable {
         // Polls run one at a time, so only the first one after the restart's own pause can have started before it.
         let mayPredatePause = pollMayPredatePause
         pollMayPredatePause = false
-        if case let .state(snapshot) = poll {
-            if snapshot.pause != nil {
-                // A poll that shows dispatch paused was taken after the pause, so its count can't grow any more.
-                guard snapshot.activeRuns > 0 else {
+        switch poll {
+        case let .state(snapshot):
+            let runs = (paused: snapshot.pause != nil, activeRuns: snapshot.activeRuns)
+            return waited(runs, mayPredatePause: mayPredatePause, now: now)
+        case .failed:
+            // Symphony answers but its state doesn't load: the drain waits on its drain read instead (TP-1550).
+            return [.checkRuns]
+        case .unreachable:
+            return waited(nil, mayPredatePause: mayPredatePause, now: now)
+        }
+    }
+
+    /// Goes on from what Symphony said about its agent runs and pause; nil when it said nothing.
+    private mutating func waited(
+        _ runs: (paused: Bool, activeRuns: Int)?,
+        mayPredatePause: Bool,
+        now: Date
+    ) -> [Effect] {
+        if let runs {
+            if runs.paused {
+                // A read that shows dispatch paused was taken after the pause, so its count can't grow any more.
+                guard runs.activeRuns > 0 else {
                     enter(.stopping, now: now)
                     return [.stop]
                 }
-                phase = .waitingForRuns(running: snapshot.activeRuns)
+                phase = .waitingForRuns(running: runs.activeRuns)
                 if purpose == .automaticUpdate, now.timeIntervalSince(phaseStart) >= runsTimeout {
                     return postpone(now: now)
                 }

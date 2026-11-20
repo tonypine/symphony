@@ -715,4 +715,76 @@ final class RestartMachineTests: XCTestCase {
         XCTAssertEqual(machine.handle(.configChecked(.passed), now: began), [.send(.pause)])
         XCTAssertEqual(ControlAction.pause.body["reason"] as? String, ControlAction.pauseReason)
     }
+
+    // MARK: A state that fails to load (TP-1550)
+
+    private let stateFails = StatusPoll.failed("Symphony answered with HTTP 500")
+
+    /// An update that paused dispatch and waits for agent runs, its first poll already taken.
+    private func drainingUpdate(purpose: RestartMachine.Purpose = .update) -> RestartMachine {
+        var (machine, _) = beginUpdate(purpose: purpose)
+        _ = machine.handle(.controlFinished(.pause, .done), now: began)
+        return machine
+    }
+
+    func testAStateThatFailsToLoadReadsTheDrainRequestAndStopsOnceNoRunIsLeft() {
+        var machine = drainingUpdate()
+
+        XCTAssertEqual(machine.handle(.polled(stateFails), now: began), [.checkRuns])
+        XCTAssertEqual(machine.phase, .waitingForRuns(running: nil))
+        XCTAssertEqual(machine.handle(.runsChecked(DrainStatus(running: 1, betweenTurns: 1, paused: true)), now: began), [.stop])
+        XCTAssertEqual(machine.phase, .stopping)
+        XCTAssertEqual(machine.handle(.exited(.signaled(15)), now: began), [.stopped], "the update installs")
+        XCTAssertTrue(machine.pausedByRestart)
+    }
+
+    func testAStateThatFailsToLoadStillWaitsForAnActiveRun() {
+        var machine = drainingUpdate()
+
+        XCTAssertEqual(machine.handle(.polled(stateFails), now: began), [.checkRuns])
+        XCTAssertEqual(machine.handle(.runsChecked(DrainStatus(running: 2, betweenTurns: 1, paused: true)), now: began), [])
+        XCTAssertEqual(machine.phase, .waitingForRuns(running: 1))
+        XCTAssertEqual(machine.menuLine, "Waiting for 1 agent run…")
+
+        XCTAssertEqual(machine.handle(.polled(stateFails), now: began), [.checkRuns])
+        XCTAssertEqual(machine.handle(.runsChecked(DrainStatus(running: 0, paused: true)), now: began), [.stop])
+    }
+
+    func testADrainReadShowingDispatchResumedPausesItAgain() {
+        var machine = drainingUpdate()
+
+        // The read is asked for after the drain's own pause, so even the first one can't predate it.
+        XCTAssertEqual(machine.handle(.polled(stateFails), now: began), [.checkRuns])
+        XCTAssertEqual(machine.handle(.runsChecked(DrainStatus(running: 1, paused: false)), now: began), [.send(.pause)])
+        XCTAssertEqual(machine.phase, .pausing)
+    }
+
+    func testNoDrainReadWaitsAsWhenSymphonyDoesntAnswer() {
+        var machine = drainingUpdate()
+        let later = began.addingTimeInterval(runsTimeout)
+
+        XCTAssertEqual(machine.handle(.polled(stateFails), now: later), [.checkRuns])
+        XCTAssertEqual(machine.handle(.runsChecked(nil), now: later), [])
+        XCTAssertEqual(machine.phase, .waitingForRuns(running: nil))
+        XCTAssertTrue(machine.offersRestartNow, "Update Now Anyway is offered after the timeout, as today")
+
+        var unanswered = drainingUpdate()
+        XCTAssertEqual(unanswered.handle(.polled(.unreachable), now: later), [], "no answer at all reads nothing more")
+        XCTAssertTrue(unanswered.offersRestartNow)
+    }
+
+    func testAnAutomaticUpdatePostponesOnADrainReadWithARunActiveAfterTheTimeout() {
+        var machine = drainingUpdate(purpose: .automaticUpdate)
+        let later = began.addingTimeInterval(runsTimeout)
+
+        XCTAssertEqual(machine.handle(.polled(stateFails), now: later), [.checkRuns])
+        XCTAssertEqual(machine.handle(.runsChecked(DrainStatus(running: 1, paused: true)), now: later), [.send(.resume)])
+        XCTAssertTrue(machine.postponed)
+    }
+
+    func testADrainReadOutsideTheWaitIsIgnored() {
+        var idle = RestartMachine()
+        XCTAssertEqual(idle.handle(.runsChecked(DrainStatus(running: 0, paused: true))), [])
+        XCTAssertEqual(idle, RestartMachine())
+    }
 }
