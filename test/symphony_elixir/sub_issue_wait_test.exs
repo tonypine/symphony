@@ -574,13 +574,14 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       # Before its merge is recorded (a plan parent waits there with nothing recorded), the link holds.
       refute SubIssueWait.merged_blocker?(parent)
       assert Issue.blocked?(child, terminal_states)
-      refute Orchestrator.should_dispatch_issue_for_test(child, state)
+      assert [%{issue_id: "child-of-merged"}] = Orchestrator.put_blocked_for_test(state, [child]).blocked
 
       :ok = RunStore.put_merged_wait("merged-parent")
 
       assert SubIssueWait.merged_blocker?(parent)
       assert Issue.open_blockers(child, terminal_states) == []
       refute Issue.blocked?(child, terminal_states)
+      assert Orchestrator.put_blocked_for_test(state, [child]).blocked == []
       assert Orchestrator.should_dispatch_issue_for_test(child, state)
 
       # Once a person moves it out of the waiting state, it blocks again until it is terminal.
