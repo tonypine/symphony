@@ -223,8 +223,6 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
 
   # The QA pre-build: every request is reported to the test.
   defmodule FakeQaBuild do
-    def builds?(_repo_key), do: Application.get_env(:symphony_elixir, :pr_watch_test_builds?, true)
-    def selects_app?(_repo_key, %Issue{labels: labels}, _head), do: "no-app" not in labels
     def request(repo_key, head, ticket), do: send(Application.fetch_env!(:symphony_elixir, :pr_watch_test_pid), {:qa_build, repo_key, head, ticket}) && :ok
   end
 
@@ -235,8 +233,9 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       pid = start_repo!(repo_key, qa_build: FakeQaBuild)
 
       assert {:ok, _summary} = Repo.poll(pid)
-      assert_received {:qa_build, ^repo_key, "sha-1", %{identifier: "TP-1", issue_id: "1"}}
-      assert_received {:qa_build, ^repo_key, "sha-2", %{identifier: "TP-2", issue_id: "2"}}
+      # Each with the ticket's issue: the builder builds only a head whose QA pass selects the app.
+      assert_received {:qa_build, ^repo_key, "sha-1", %{identifier: "TP-1", issue_id: "1", issue: %Issue{id: "1"}}}
+      assert_received {:qa_build, ^repo_key, "sha-2", %{identifier: "TP-2", issue_id: "2", issue: %Issue{id: "2"}}}
       refute_received {:qa_build, _repo_key, _head, _ticket}
 
       # The same head on the next read asks for nothing.
@@ -259,19 +258,6 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
       issues!([repo_key |> with_pr(issue("1", "Code Review"), 1)])
       assert {:ok, _summary} = Repo.poll(pid)
       assert_received {:qa_build, ^repo_key, "sha-1", %{identifier: "TP-1"}}
-    end
-
-    test "a head whose QA pass selects no Mac app, or a repository with nothing to build, is not asked for", %{repo_key: repo_key} do
-      issues!([repo_key |> with_pr(issue("1", "Code Review", labels: ["no-app"]), 1)])
-      pid = start_repo!(repo_key, qa_build: FakeQaBuild)
-      assert {:ok, _summary} = Repo.poll(pid)
-      refute_received {:qa_build, _repo_key, _head, _ticket}
-
-      Application.put_env(:symphony_elixir, :pr_watch_test_builds?, false)
-      on_exit(fn -> Application.delete_env(:symphony_elixir, :pr_watch_test_builds?) end)
-      issues!([repo_key |> with_pr(issue("2", "QA"), 2)])
-      assert {:ok, _summary} = Repo.poll(pid)
-      refute_received {:qa_build, _repo_key, _head, _ticket}
     end
 
     test "without the builder a new head asks nothing of anyone", %{repo_key: repo_key} do

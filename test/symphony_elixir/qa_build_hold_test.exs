@@ -28,9 +28,9 @@ defmodule SymphonyElixir.QaBuildHoldTest do
     @moduledoc false
     def builds?(_repo_key), do: Process.get(:qa_builds?, true)
 
-    def selects_app?(repo_key, issue, head) do
+    def selection(repo_key, issue, head) do
       send(self(), {:selection_read, repo_key, issue.id, head})
-      Process.get(:qa_selects_app?, true)
+      Process.get(:qa_selection, :app)
     end
 
     def lookup(_repo_key, head), do: Map.get(Process.get(:qa_build_records, %{}), head)
@@ -77,7 +77,7 @@ defmodule SymphonyElixir.QaBuildHoldTest do
     test "asks for the build and holds the ticket on it, once" do
       log = capture_log(fn -> assert resolve(@head) == :held end)
       assert log =~ "Holding QA for its build: issue_id=#{@issue_id} issue_identifier=TP-7 repo_key=default head_sha=#{@head}"
-      assert_received {:requested, @repo_key, @head, %{identifier: "TP-7", issue_id: @issue_id, held: true}}
+      assert_received {:requested, @repo_key, @head, %{identifier: "TP-7", issue_id: @issue_id, held: true, issue: %Issue{id: @issue_id}}}
 
       assert [%{kind: :build, waits_on: %{commit: @head}, text: "Waiting for the QA build of e44298c", set_by: @setter} = reason] =
                QaBuildHold.reasons(@repo_key, @issue_id)
@@ -250,7 +250,7 @@ defmodule SymphonyElixir.QaBuildHoldTest do
     end
 
     test "a head whose QA pass selects no Mac app: no build, no hold, and a failed build sends nothing back" do
-      Process.put(:qa_selects_app?, false)
+      Process.put(:qa_selection, :none)
       record!(@head, @failed)
 
       assert resolve(@head) == :dispatch
@@ -260,9 +260,9 @@ defmodule SymphonyElixir.QaBuildHoldTest do
       assert commits() == []
 
       # A hold left for an earlier head that did select the app goes.
-      Process.put(:qa_selects_app?, true)
+      Process.put(:qa_selection, :app)
       capture_log(fn -> assert resolve(@new_head) == :held end)
-      Process.put(:qa_selects_app?, false)
+      Process.put(:qa_selection, :none)
       assert capture_log(fn -> assert resolve(@head) == :dispatch end) =~ "Released from the QA build hold"
       assert commits() == []
     end
@@ -273,7 +273,7 @@ defmodule SymphonyElixir.QaBuildHoldTest do
       assert commits() == [@head]
 
       # The pass no longer selects the app (a hold older than the selection, a qa:skip label since).
-      Process.put(:qa_selects_app?, false)
+      Process.put(:qa_selection, :none)
       record!(@head, @failed)
 
       capture_log(fn -> assert resolve(@head) == :dispatch end)
@@ -282,20 +282,19 @@ defmodule SymphonyElixir.QaBuildHoldTest do
       assert commits() == []
     end
 
-    test "a head already held for its build is not read again" do
-      capture_log(fn -> assert resolve(@head) == :held end)
-      assert_received {:selection_read, @repo_key, @issue_id, @head}
-      Process.put(:qa_selects_app?, false)
+    test "a head the builder has not read yet is held and asked for with its issue, whatever record it has" do
+      Process.put(:qa_selection, :unread)
+      record!(@head, @failed)
 
-      record!(@head, %{status: :building, tree: @tree})
-      assert resolve(@head) == :held
-      refute_received {:selection_read, _repo_key, _issue_id, _head}
-
-      record!(@head, %{status: :unavailable, tree: @tree, reason: "ssh: timeout"})
       capture_log(fn -> assert resolve(@head) == :held end)
-      assert resolve(@head) == :held
-      refute_received {:selection_read, _repo_key, _issue_id, _head}
-      assert commits() == ["qa_build:" <> @head]
+      assert_received {:requested, @repo_key, @head, %{held: true, issue: %Issue{id: @issue_id}}}
+      refute_received {:marked, _repo_key, _tree, _issue_id, _arrival}
+      assert commits() == [@head]
+
+      # The builder read it and its pass selects no Mac app: the next pass dispatches.
+      Process.put(:qa_selection, :none)
+      capture_log(fn -> assert resolve(@head) == :dispatch end)
+      assert commits() == []
     end
 
     test "without the builder nothing is held" do

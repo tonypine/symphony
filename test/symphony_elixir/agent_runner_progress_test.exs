@@ -103,31 +103,16 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert_signal("handoff", %{to: "Code Review", reason: "after rework", head: "sha-rework", move: true})
   end
 
-  test "the head a ticket enters Code Review with is asked of the QA pre-build when its pass selects the app" do
-    # Stands in for the builder: the request is a cast to its name. The workspace's head (a branch
-    # named after it) changes a Swift file, so the pass selects the macos_app playbook.
-    Process.register(self(), SymphonyElixir.QaBuild)
-    auto_review = %{enabled: true, worker_host: "qa-vm", playbooks: %{macos_app: %{build: "make app", app: "build/Demo.app"}}}
-
-    run_issue!("Rework",
-      heads: ["sha-old", "sha-rework"],
-      handoff: "sha-rework",
-      auto_review: auto_review,
-      workspace_setup: &swift_head_workspace!/1
-    )
-
-    assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
-    assert_received {:"$gen_cast", {:request, "default", "sha-rework", %{identifier: identifier, issue_id: "issue-progress"}}}
-    assert is_binary(identifier)
-  end
-
-  test "a head whose QA pass selects no Mac app is not asked of the QA pre-build" do
+  test "the head a ticket enters Code Review with is asked of the QA pre-build" do
+    # Stands in for the builder: the request is a cast to its name.
     Process.register(self(), SymphonyElixir.QaBuild)
 
     run_issue!("Rework", heads: ["sha-old", "sha-rework"], handoff: "sha-rework")
 
     assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
-    refute_received {:"$gen_cast", {:request, _repo_key, _sha, _ticket}}
+    # With the ticket's issue: the builder builds only a head whose QA pass selects the app.
+    assert_received {:"$gen_cast", {:request, "default", "sha-rework", %{identifier: identifier, issue_id: "issue-progress", issue: %Issue{id: "issue-progress"}}}}
+    assert is_binary(identifier)
   end
 
   describe "the designed handoff signal" do
@@ -1918,25 +1903,6 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     after
       File.rm_rf(test_root)
     end
-  end
-
-  # A workspace whose `sha-rework` branch adds a Swift file over `origin/main`.
-  defp swift_head_workspace!(workspace) do
-    git = fn args ->
-      {output, 0} = System.cmd("git", ["-C", workspace, "-c", "user.name=Test", "-c", "user.email=test@example.com" | args], stderr_to_stdout: true)
-      output
-    end
-
-    git.(["init", "--quiet", "--initial-branch=main"])
-    File.write!(Path.join(workspace, "a.txt"), "one\n")
-    git.(["add", "--all"])
-    git.(["commit", "--quiet", "-m", "one"])
-    git.(["update-ref", "refs/remotes/origin/main", "HEAD"])
-    git.(["checkout", "--quiet", "-b", "sha-rework"])
-    File.mkdir_p!(Path.join(workspace, "macos"))
-    File.write!(Path.join(workspace, "macos/App.swift"), "import SwiftUI\n")
-    git.(["add", "--all"])
-    git.(["commit", "--quiet", "-m", "swift"])
   end
 
   defp append_symphony_steps!(yaml) do
