@@ -1743,7 +1743,9 @@ defmodule SymphonyElixir.CoreTest do
 
         send(pid, {:retry_issue, issue_id, retry_token})
         moved_or_ran? = &(Map.has_key?(&1.running, issue_id) or Map.has_key?(&1.watching, issue_id))
-        state = wait_for_orchestrator_state(pid, moved_or_ran?)
+        # The dispatch prepares the workspace before the run is listed, which takes longer than the
+        # default deadline under a loaded cover run; the wait ends as soon as the run is listed.
+        state = wait_for_orchestrator_state(pid, moved_or_ran?, 5_000)
         assert %{issue: %Issue{repo_key: "designed-repo"}} = state.running[issue_id]
       end)
 

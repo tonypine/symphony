@@ -110,7 +110,8 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     run_issue!("Rework", heads: ["sha-old", "sha-rework"], handoff: "sha-rework")
 
     assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
-    assert_received {:"$gen_cast", {:request, "default", "sha-rework", %{identifier: identifier, issue_id: "issue-progress"}}}
+    # With the ticket's issue: the builder builds only a head whose QA pass selects the app.
+    assert_received {:"$gen_cast", {:request, "default", "sha-rework", %{identifier: identifier, issue_id: "issue-progress", issue: %Issue{id: "issue-progress"}}}}
     assert is_binary(identifier)
   end
 
