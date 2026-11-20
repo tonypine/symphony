@@ -30,8 +30,12 @@ defmodule SymphonyElixir.CodeReview.Rounds do
   @spec previous_head([map()], String.t() | nil) :: String.t() | nil
   def previous_head(verdicts, head) when is_list(verdicts) do
     Enum.find_value(verdicts, fn
-      %{outcome: outcome, head_sha: previous} when outcome in @reviewed_outcomes and is_binary(previous) and previous != head -> previous
-      _verdict -> nil
+      %{outcome: outcome, head_sha: previous}
+      when outcome in @reviewed_outcomes and is_binary(previous) and previous != head ->
+        previous
+
+      _verdict ->
+        nil
     end)
   end
 
@@ -111,10 +115,18 @@ defmodule SymphonyElixir.CodeReview.Rounds do
          |> String.split("\n")
          |> Enum.flat_map(fn line ->
            case Regex.run(@hunk_header, line) do
-             [_header, start] -> [{String.to_integer(start), String.to_integer(start)}]
-             [_header, start, "0"] -> [{String.to_integer(start), String.to_integer(start) + 1}]
-             [_header, start, count] -> [{String.to_integer(start), String.to_integer(start) + String.to_integer(count) - 1}]
-             nil -> []
+             [_header, start] ->
+               [{String.to_integer(start), String.to_integer(start)}]
+
+             [_header, start, "0"] ->
+               [{String.to_integer(start), String.to_integer(start) + 1}]
+
+             [_header, start, count] ->
+               first = String.to_integer(start)
+               [{first, first + String.to_integer(count) - 1}]
+
+             nil ->
+               []
            end
          end)}
 

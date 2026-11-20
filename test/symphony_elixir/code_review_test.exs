@@ -10,6 +10,8 @@ defmodule SymphonyElixir.CodeReviewTest do
   alias SymphonyElixir.Pauses
   alias SymphonyElixir.Questions
   alias SymphonyElixir.RunStore
+  alias SymphonyElixir.TicketEvents
+  alias SymphonyElixir.TicketEvents.Summary
   alias SymphonyElixir.TicketSignals
 
   @repo_key "repo-code-review"
@@ -678,17 +680,23 @@ defmodule SymphonyElixir.CodeReviewTest do
 
       assert [%{head_sha: ^head, details: details}, %{head_sha: ^previous}] = verdicts()
 
-      assert %{findings_count: 2, missed_earlier: 1, previous_head: ^previous, missed_findings: [%{summary: "Was there before.", file: "lib.ex", line_range: [2, 3]}]} =
-               details
+      assert %{
+               findings_count: 2,
+               missed_earlier: 1,
+               previous_head: ^previous,
+               missed_findings: [%{summary: "Was there before.", file: "lib.ex", line_range: [2, 3]}]
+             } = details
 
-      assert [verdict | _older] = @issue_id |> SymphonyElixir.TicketEvents.query(types: ["verdict.recorded"]) |> Enum.reverse()
-      assert SymphonyElixir.TicketEvents.Summary.render(verdict).detail =~ "2 findings · 1 missed earlier"
+      assert [verdict | _older] = @issue_id |> TicketEvents.query(types: ["verdict.recorded"]) |> Enum.reverse()
+      assert Summary.render(verdict).detail =~ "2 findings · 1 missed earlier"
     end
 
     test "a review that could not read the whole change names the files it did not read on its verdict" do
-      Process.put(:fake_review_result, {:error, {:review_agent_inconclusive, {:review_incomplete, ["lib/b.ex", "lib/c.ex"]}}})
+      incomplete = {:review_incomplete, ["lib/b.ex", "lib/c.ex"]}
+      Process.put(:fake_review_result, {:error, {:review_agent_inconclusive, incomplete}})
 
-      assert {:error, {:code_review_inconclusive, {:review_incomplete, _files}}} = run("/tmp/workspace", settings: designed_settings())
+      assert {:error, {:code_review_inconclusive, {:review_incomplete, _files}}} =
+               run("/tmp/workspace", settings: designed_settings())
 
       refute_received {:moved, _issue_id, _state}
       assert [%{outcome: "inconclusive", details: %{cause: "review_incomplete", unread_files: ["lib/b.ex", "lib/c.ex"]}}] = verdicts()

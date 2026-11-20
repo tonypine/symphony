@@ -1159,7 +1159,8 @@ defmodule SymphonyElixir.ReviewAgentTest do
           review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
         )
 
-        assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+        assert {:ok, %{verdict: :approve}} =
+                 ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
 
         assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
         assert prompt =~ "Read the whole change, every changed file, before you decide the verdict."
@@ -1196,7 +1197,8 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
 
     test "a verdict that read everything goes on" do
-      assert ReviewAgent.whole_change_read(%{verdict: :approve, comments: []}) == {:ok, %{verdict: :approve, comments: []}}
+      result = %{verdict: :approve, comments: []}
+      assert ReviewAgent.whole_change_read(result) == {:ok, result}
     end
   end
 

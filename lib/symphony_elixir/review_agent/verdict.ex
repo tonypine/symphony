@@ -111,7 +111,13 @@ defmodule SymphonyElixir.ReviewAgent.Verdict do
          {:ok, findings} <- coerce_findings(Map.get(decoded, "findings")),
          {:ok, reason} <- coerce_reason(Map.get(decoded, "reason"), verdict),
          {:ok, unread_files} <- coerce_unread_files(Map.get(decoded, "unread_files")),
-         result = %{verdict: verdict, comments: comments, findings: findings, reason: reason, unread_files: unread_files},
+         result = %{
+           verdict: verdict,
+           comments: comments,
+           findings: findings,
+           reason: reason,
+           unread_files: unread_files
+         },
          {:ok, result} <- validate_result(result) do
       {:ok, compact_result(result)}
     end

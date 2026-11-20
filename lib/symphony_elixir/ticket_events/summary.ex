@@ -182,7 +182,8 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   # tells three rounds of one finding each from one round that found three (TP-1516).
   defp summary("verdict.recorded", payload, _event) do
     title = "#{kind_name(text(payload, :kind)) || "Review"} verdict" <> suffix(": ", words(text(payload, :outcome)))
-    {title, [round_counts(map_or_empty(field(payload, :details))), text(payload, :reason) | prefixed("on", short_sha(text(payload, :head)))]}
+    counts = round_counts(map_or_empty(field(payload, :details)))
+    {title, [counts, text(payload, :reason) | prefixed("on", short_sha(text(payload, :head)))]}
   end
 
   defp summary("decision.requested", payload, _event) do
