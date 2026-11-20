@@ -3668,9 +3668,12 @@ exactly as before.
 - **Merged is not Done.** A blocked-by link to a groomed ticket stops blocking once that ticket's
   record says its pull request merged, whatever state it is in.
 - **The close rule.** A groomed ticket in the waiting state closes when its own pull request merged
-  or it never had one, and no sub-ticket is left outside Done or Canceled: one in `Backlog` holds
-  it. A groomed ticket whose pull request merges waits there on every sub-ticket it has. A ticket
-  with no plan keeps the rule it had (a `Backlog` sub-ticket does not hold it).
+  or it never had one, no sub-ticket is left outside Done or Canceled (one in `Backlog` holds it),
+  and its final check passed (`final_check`, below). A groomed ticket whose pull request merges
+  waits there on every sub-ticket it has. A ticket with no plan keeps the rule it had (a `Backlog`
+  sub-ticket does not hold it). Either close moves Symphony's record with Linear, under the
+  ticket's repo key; a ticket read with no repo key is not moved and is tried again on the next
+  poll.
 - **`sub_ticket_ended`.** Each sub-ticket that ends while others are open owes the parent one turn.
   Its facts are the tree (the parent's plan and checks; each sub-ticket's state, plan summary,
   checks, tagged notes, asks and whether its pull request merged; the rounds), and its answer may
@@ -4187,9 +4190,9 @@ It guards the handoff of a ticket with a plan: it fails back to the step's `on_f
 while a check of the plan that a test or an attachment proves (`proof: test`, `proof: attached`) is
 open, and passes at once when none is, or when the ticket has no plan. The failure says how each
 check is proved, and that a check nothing can prove this way is the Conductor's to waive: its
-answer's `waive` (each a `check_id` and a `reason`) is read after coding, after rework, on a watch
-turn (a `plan_checks` step that fails again wakes one, `step_failed_twice`), on a message and on
-the turns of a ticket with sub-tickets, and recorded as `check.waived`. So that a check nobody
+answer's `waive` (each a `check_id` and a `reason`) is read at the junctions `conductor.junctions`
+names for it, above, and on a watch turn (a `plan_checks` step that fails again wakes one,
+`step_failed_twice`), and recorded as `check.waived`. So that a check nobody
 proves or waives never sends a ticket around for good, each refusal is noted on the ticket, and
 when two coding runs in a row were refused with no new plan version and no waiver in between,
 Symphony asks the person: send it back for the checks, waive them and pass the ticket on to Code

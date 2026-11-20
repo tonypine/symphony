@@ -2212,8 +2212,12 @@ The QA agent:
   `check.proved` with `by: test` is confirmed on the PR head by the QA pre-check, and QA records a
   `check.proved` (`by: qa` or `design`) for each check it saw pass. The ticket MUST NOT be handed
   off to Code Review while a check a test or an attachment proves is open. A plan whose layers
-  hold `screen` or `gallery` MUST NOT be scoped to "nothing on screen". A ticket with no plan
-  keeps the behaviour below.
+  hold `screen` or `gallery` MUST NOT be scoped to "nothing on screen". The Linear description of
+  such a ticket is a projection Symphony writes and no run reads: `## Ask` (every ask, word for
+  word, oldest first), `## Plan` (the plan's summary) and `## Checks` (one line per check with its
+  state), above Symphony's own blocks, written again when an ask, a plan version, a proof or a
+  waiver is recorded, in the same pass as the Decisions section; the walkthrough's `Proved by:`
+  block below is not written there. A ticket with no plan keeps the behaviour below.
 - **Walkthrough proofs.** The person writing a ticket describes the user's flow in plain steps and
   names no test and no check. The implementer, who writes the tests, ends each step a test of its PR
   covers with `Proved by: <test>` through `linear_record_walkthrough_proofs`, which records each
@@ -3978,7 +3982,8 @@ An issue is dispatch-eligible only if all are true:
     one and none of its sub-issues is outside `terminal_states` (one in `Backlog` holds it), after
     the Conductor's final check when that junction is on. A groomed issue whose pull request merges
     waits there on every sub-issue it has. The move that closes it updates Symphony's record of the
-    issue with Linear, for a groomed issue and any other.
+    issue with Linear, for a groomed issue and any other, under the issue's repo key; an issue read
+    with no repo key MUST NOT be moved, and its close is tried again on the next poll.
   - When a pull request of an issue that is not a plan parent merges while the issue has a
     sub-issue that is neither terminal nor in `Backlog`, the service moves the issue to the waiting
     state instead of `Done`, whoever merged it and even when Linear's GitHub integration or a
