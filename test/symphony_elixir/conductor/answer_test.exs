@@ -446,4 +446,101 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
       assert {:ok, %{done: false, tree: []}} = Answer.parse(Jason.encode!(%{"instructions" => "Go on.", "done" => true, "tree" => [%{"op" => "stop"}]}))
     end
   end
+
+  describe "a turn that answers a message" do
+    @plan %{
+      "shape" => "single",
+      "layers" => ["engine"],
+      "summary" => "It keeps the filter.",
+      "text" => "Approach: store it.",
+      "checks" => [%{"kind" => "outcome", "statement" => "The filter survives.", "proof" => "test"}],
+      "size" => %{"tokens" => 1, "runs" => 1}
+    }
+
+    defp said(attrs, opts \\ [message: true]), do: Answer.parse(Jason.encode!(attrs), opts)
+
+    test "the reply must be there, and nothing else has to be" do
+      assert {:ok, read} = said(%{"update" => "Done."})
+      assert %{update: "Done.", instructions: nil, ask: false, plan: nil, new_ticket: nil, waive: []} = read
+      assert said(%{"update" => " "}) == {:error, "`update` must hold the reply to the person's message"}
+      assert said(%{}) == {:error, "`update` must hold the reply to the person's message"}
+      assert said(%{"update" => 7}) == {:error, "`update` must be a string or null"}
+    end
+
+    test "a changed ask must bring its plan, with the reason it changed for" do
+      assert {:ok, %{ask: true, plan: %{reason: "More was asked.", checks: [%{id: "c1"}]}}} =
+               said(%{"update" => "Ok.", "ask" => true, "plan" => Map.put(@plan, "reason", "More was asked.")})
+
+      assert said(%{"update" => "Ok.", "ask" => true}) == {:error, "`ask` is true, so the answer must hold the new `plan`"}
+      assert said(%{"update" => "Ok.", "ask" => true, "plan" => "later"}) == {:error, "`ask` is true, so the answer must hold the new `plan`"}
+      assert {:error, "`plan.shape` must be one of single, split"} = said(%{"update" => "Ok.", "ask" => true, "plan" => %{}})
+      # No changed ask, or a finished ticket's answer: the plan is left unread.
+      assert {:ok, %{ask: false, plan: nil}} = said(%{"update" => "Ok.", "plan" => @plan})
+      assert {:ok, %{ask: false, plan: nil}} = said(%{"update" => "Ok.", "ask" => true, "plan" => @plan}, message: :reply)
+      assert said(%{"ask" => true}, message: :reply) == {:error, "`update` must hold the reply to the person's message"}
+    end
+
+    test "a question leaves the changed ask and its plan unread" do
+      question = %{
+        "title" => "Which list?",
+        "question" => "Which list is meant?",
+        "why" => "There are two.",
+        "if_unanswered" => "It waits.",
+        "recommendation_reason" => "The first is the usual one.",
+        "options" => [%{"label" => "The first", "effect" => "It goes on.", "recommended" => true, "action" => "continue"}, %{"label" => "Cancel", "effect" => "It ends.", "action" => "cancel"}]
+      }
+
+      assert {:ok, %{ask: false, plan: nil, ask_person: %{title: "Which list?"}}} = said(%{"update" => "I need to know.", "ask" => true, "ask_person" => question})
+    end
+
+    test "an optional plan is read when the answer holds one" do
+      assert {:ok, %{plan: nil, update: nil}} = said(%{"tree" => []}, plan: :optional, tree: true)
+      assert {:ok, %{plan: %{summary: "It keeps the filter."}}} = said(%{"plan" => @plan}, plan: :optional)
+      assert {:error, "`plan.shape` must be one of single, split"} = said(%{"plan" => %{}}, plan: :optional)
+      assert {:ok, %{plan: nil}} = said(%{"plan" => "later"}, plan: :optional)
+    end
+
+    test "a new ticket is read only where one may be created, and one that misses its shape is dropped" do
+      new = %{"title" => "Keep the search text", "ask" => "Also keep the search text.", "repo" => "default"}
+
+      assert {:ok, %{new_ticket: %{title: "Keep the search text", ask: "Also keep the search text.", repo: "default"}}} =
+               said(%{"update" => "Ok.", "new_ticket" => new}, message: :reply, new_ticket: true)
+
+      assert {:ok, %{new_ticket: nil}} = said(%{"update" => "Ok.", "new_ticket" => new})
+      assert {:ok, %{new_ticket: nil}} = said(%{"update" => "Ok."}, message: :reply, new_ticket: true)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{new_ticket: nil}} = said(%{"update" => "Ok.", "new_ticket" => %{"title" => "No ask"}}, message: :reply, new_ticket: true)
+          assert {:ok, %{new_ticket: nil}} = said(%{"update" => "Ok.", "new_ticket" => "one"}, message: :reply, new_ticket: true)
+        end)
+
+      assert log =~ "`new_ticket` was dropped"
+    end
+  end
+
+  describe "waivers" do
+    defp waiving(waive, opts \\ [waive: true]), do: Answer.parse(Jason.encode!(%{"instructions" => "Go on.", "waive" => waive}), opts)
+
+    test "are read where a turn may waive, one per check, and a malformed one is dropped" do
+      assert {:ok, %{waive: [%{check_id: "c2", reason: "No test can reach it."}]}} = waiving([%{"check_id" => " c2 ", "reason" => "No test can reach it."}])
+      assert {:ok, %{waive: []}} = waiving([%{"check_id" => "c2", "reason" => "No test can reach it."}], [])
+      assert {:ok, %{waive: []}} = waiving("c2")
+      assert {:ok, %{waive: []}} = waiving(nil)
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %{waive: [%{check_id: "c1", reason: "First."}]}} =
+                   waiving([%{"check_id" => "c1", "reason" => "First."}, %{"check_id" => "c1", "reason" => "Again."}, %{"check_id" => "c3"}, %{"reason" => "No check."}, "c4"])
+        end)
+
+      assert log =~ "`waive[3]` was dropped"
+      assert log =~ "`waive[4]` was dropped"
+      assert log =~ "`waive[5]` was dropped"
+
+      many = for n <- 1..25, do: %{"check_id" => "c#{n}", "reason" => "Why."}
+      assert {:ok, %{waive: kept}} = waiving(many)
+      assert length(kept) == 20
+    end
+  end
 end

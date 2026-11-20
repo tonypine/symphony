@@ -438,4 +438,62 @@ defmodule SymphonyElixir.Conductor.FactsTest do
       assert %{ticket: %{problem: _problem}} = Facts.build(ctx.record, "final_check", token_cap: nil)
     end
   end
+
+  describe "a groomed ticket at the other junctions" do
+    setup ctx do
+      checks = [
+        %{id: "c1", kind: "outcome", statement: "The button signs in.", proof: "test"},
+        %{id: "c2", kind: "qa", statement: "The login works.", proof: "qa", state: "Signed out", action: "Click Login", expect: "The home screen"},
+        %{id: "c3", kind: "outcome", statement: "The export matches.", proof: "attached"}
+      ]
+
+      plan = %{shape: "single", layers: ["screen"], summary: "s", text: "t", checks: checks, size: %{tokens: 1, runs: 1}}
+      plan = Map.merge(plan, %{reason: "Grooming", by: "grooming"})
+      {:ok, _ask} = TicketPlan.record_ask(ctx.repo, ctx.issue_id, "Make the login button work.")
+      {:ok, _plan} = TicketPlan.write(ctx.repo, ctx.issue_id, plan)
+      :ok
+    end
+
+    test "the ticket is read through its ask and its checks, never its description", ctx do
+      {:ok, proof} = SymphonyElixir.TicketChecks.prove(ctx.repo, ctx.issue_id, %{check_id: "c1", by: "test", test: "login_test › signs in"})
+      {:ok, _waived} = SymphonyElixir.TicketChecks.waive(ctx.repo, ctx.issue_id, "c3", "No export exists to attach.")
+      {:ok, note} = TicketEvents.record(ctx.repo, ctx.issue_id, "note", %{text: "c3 cannot be proved: there is no export."}, actor: {:agent, "run-1", "implementation"}, run_id: "run-1")
+      {:ok, _own} = TicketEvents.record(ctx.repo, ctx.issue_id, "note", %{text: "Symphony's own note.", status: true})
+
+      facts = Facts.build(ctx.record, "after_coding", token_cap: nil)
+
+      assert %{problem: "Make the login button work.", acceptance: "[c1] The button signs in.", walkthrough: walkthrough} = facts.ticket
+      assert walkthrough =~ "[c2] The login works.\nState: Signed out\nAction: Click Login\nExpect: The home screen"
+      assert facts.ticket.proved_steps == [%{step: 1, test: "login_test › signs in", event_id: proof.id}]
+      assert facts.ticket.decisions == [%{title: "Scope", answer: "Only the button."}]
+
+      assert facts.checks == [
+               %{id: "c1", kind: "outcome", statement: "The button signs in.", proof: "test", state: "proved"},
+               %{id: "c2", kind: "qa", statement: "The login works.", proof: "qa", state: "open"},
+               %{id: "c3", kind: "outcome", statement: "The export matches.", proof: "attached", state: "waived", waived: "No export exists to attach."}
+             ]
+
+      assert [%{event_id: id, run_id: "run-1", text: "c3 cannot be proved: there is no export."}] = facts.check_notes
+      assert id == note.id
+      assert facts.waive =~ "waive it"
+    end
+
+    test "a ticket with no plan holds none of it", ctx do
+      ungroomed = %{ctx.record | issue_id: ctx.issue_id <> "-plain"}
+      :ok = RunStore.put_ticket_state(ungroomed)
+      facts = Facts.build(ungroomed, "after_coding", token_cap: nil)
+      assert facts.ticket.problem == "The login button does nothing."
+      refute Map.has_key?(facts, :checks)
+      refute Map.has_key?(facts, :waive)
+    end
+
+    test "at message the document is the conversation's, and a ticket with no plan reads as at any other junction", ctx do
+      assert %{conversation: [%{kind: "ask", text: "Make the login button work."}], plan: %{summary: "s"}, ticket: ticket} = Facts.build(ctx.record, "message", token_cap: nil, records: [])
+      refute Map.has_key?(ticket, :parent)
+      assert %{ticket: %{parent: "FACT-1"}} = Facts.build(Map.put(ctx.record, :parent, %{identifier: "FACT-1"}), "child_message", token_cap: nil, records: [])
+
+      ungroomed = %{ctx.record | issue_id: ctx.issue_id <> "-plain"}
+      assert %{ticket: %{problem: _problem}} = Facts.build(ungroomed, "message", token_cap: nil)
+    end
+  end
 end

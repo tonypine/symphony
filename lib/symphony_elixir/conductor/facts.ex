@@ -57,6 +57,21 @@ defmodule SymphonyElixir.Conductor.Facts do
   `limit` and how many are `left`), the person's `decisions`, `notes` and `answers`, `conductor`
   and `budget`.
 
+  At `message` and `child_message`, on a groomed ticket, the document is the conversation's (same
+  `schema`, `junction` and `focus`): `ticket` (as the tree's, with its `parent`'s identifier),
+  `conversation` (every `ask.recorded` and every `message.sent`, oldest first: an ask with its
+  `source` and where it came `from`, a message with who wrote it and the `reply` the Conductor
+  gave it, null while it has none), the current `plan` and its `checks`, `standing`, `last_run`,
+  `sub_tickets` (as the tree's, when the ticket has any), the person's `decisions` and `answers`,
+  `conductor` and `budget`. `SymphonyElixir.Conductor` adds which message the turn answers.
+
+  On a groomed ticket the other junctions' `ticket` is read through `SymphonyElixir.TicketJourney`
+  (`problem` is what was asked, `acceptance` the plan's outcome checks, `walkthrough` its QA
+  checks, `proved_steps` the checks a test proved), and the document also holds `checks` (each
+  check of the plan with where it stands, and the reason of a waived one), `check_notes` (the
+  newest notes the runs wrote, which is where a run says a check cannot be proved) and `waive`
+  (the rule for waiving one).
+
   Each fact read from an event carries the event's id (`event_id`), so a claim built on it can be
   traced. Long texts are cut with a marker (`#{inspect(" [cut by Symphony]")}`), lists keep their
   newest entries, and no transcript is read, so a normal ticket's document stays well under 20,000
@@ -66,9 +81,9 @@ defmodule SymphonyElixir.Conductor.Facts do
   alias SymphonyElixir.Conductor.{Filing, Tree}
   alias SymphonyElixir.Config
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.{RunStore, SubIssueWait, TicketBrief, TicketChecks, TicketEvents}
+  alias SymphonyElixir.{Messages, RunStore, SubIssueWait, TicketBrief, TicketChecks, TicketEvents}
   alias SymphonyElixir.TicketEvents.{Event, StepWord}
-  alias SymphonyElixir.{TicketPlan, TicketState, Walkthrough, Workspace}
+  alias SymphonyElixir.{TicketJourney, TicketPlan, TicketState, Walkthrough, Workspace}
 
   @schema "symphony.conductor.facts/1"
   @cut_marker " [cut by Symphony]"
@@ -86,6 +101,14 @@ defmodule SymphonyElixir.Conductor.Facts do
   @qa_blocked "after_qa_blocked"
   @grooming "grooming"
   @tree_junctions ["sub_ticket_ended", "final_check"]
+  @message_junctions ["message", "child_message"]
+  @message_text_max 4_000
+  @max_check_notes 5
+  @waive "A check that is open and that nobody can prove the way the plan says (a `test` check for something no test can " <>
+           "reach, an `attached` check for a file that cannot exist) holds the handoff for good. When a run's notes or its " <>
+           "failed `plan_checks` step say so and you agree, waive it: " <>
+           ~s(`waive: [{"check_id": ..., "reason": ...}]`, ) <>
+           "with the reason in plain words. Never waive a check only because it is hard or still unproved."
   @plan_text_max 6_000
   @max_siblings 20
   # The layers a plan names (`SymphonyElixir.Conductor.Answer.layers/0`), each with what it means.
@@ -178,6 +201,7 @@ defmodule SymphonyElixir.Conductor.Facts do
     cond do
       junction == @grooming -> grooming(record, events, opts)
       junction in @tree_junctions and TicketPlan.groomed?(events) -> tree(record, junction, events, opts)
+      junction in @message_junctions and TicketPlan.groomed?(events) -> conversation(record, junction, events, opts)
       true -> junction_facts(record, junction, events, opts)
     end
   end
@@ -196,7 +220,7 @@ defmodule SymphonyElixir.Conductor.Facts do
       asks: asks(events),
       plan: plan_facts(TicketPlan.current(events)),
       checks: checks(events),
-      sub_tickets: for(%{identifier: identifier} = sub <- List.wrap(record.sub_issues), do: sub_ticket(sub, Enum.find(records, &(&1.issue_identifier == identifier)))),
+      sub_tickets: family(record, records),
       rounds: %{made: made, limit: limit, left: max(limit - made, 0)},
       decisions: Enum.map(record.decisions, &%{title: &1.title, answer: cut(&1.answer, @text_max)}),
       notes: person_notes(events),
@@ -205,6 +229,44 @@ defmodule SymphonyElixir.Conductor.Facts do
       budget: budget(record, events, opts)
     }
   end
+
+  defp family(record, records) do
+    for %{identifier: identifier} = sub <- List.wrap(record.sub_issues), do: sub_ticket(sub, Enum.find(records, &(&1.issue_identifier == identifier)))
+  end
+
+  # A groomed ticket's conversation with the person: what was asked, each message and its reply.
+  defp conversation(record, junction, events, opts) do
+    parent = get_in(record, [:parent, :identifier])
+
+    %{
+      schema: @schema,
+      junction: junction,
+      focus: Map.fetch!(@focus, junction),
+      ticket: record |> family_ticket() |> Map.merge(%{url: record.url, repo: record.repo_key, parent: parent}) |> drop_nil(),
+      conversation: Enum.flat_map(events, &said(&1, events)),
+      plan: plan_facts(TicketPlan.current(events)),
+      checks: checks(events),
+      standing: standing(record, events),
+      last_run: last_run_facts(last_run(events), events, record, opts),
+      sub_tickets: family(record, Keyword.get_lazy(opts, :records, &records/0)),
+      decisions: Enum.map(record.decisions, &%{title: &1.title, answer: cut(&1.answer, @text_max)}),
+      answers: answers(events),
+      conductor: conductor(events),
+      budget: budget(record, events, opts)
+    }
+  end
+
+  defp said(%Event{type: "ask.recorded"} = ask, _events) do
+    [drop_nil(%{event_id: ask.id, kind: "ask", at: iso8601(ask.at), source: payload(ask, :source), from: payload(ask, :from), text: cut(payload(ask, :text), @plan_text_max)})]
+  end
+
+  defp said(%Event{type: "message.sent", id: id} = message, events) do
+    reply = Enum.find(events, &match?(%Event{type: "conductor.update", parent: ^id}, &1))
+    reply = reply && %{event_id: reply.id, text: cut(payload(reply, :text), @text_max)}
+    [%{event_id: id, kind: "message", at: iso8601(message.at), by: Messages.writer(message.actor), text: cut(payload(message, :text), @message_text_max), reply: reply}]
+  end
+
+  defp said(_event, _events), do: []
 
   defp family_ticket(record) do
     pull_request = Atom.to_string(SubIssueWait.pull_request(record.issue_id))
@@ -225,7 +287,9 @@ defmodule SymphonyElixir.Conductor.Facts do
   defp asks(ticket), do: for(ask <- TicketPlan.ask(ticket), do: drop_nil(%{event_id: ask.event_id, source: ask.source, from: ask.from, text: cut(ask.text, @plan_text_max)}))
 
   defp checks(ticket) do
-    for check <- TicketChecks.list(ticket), do: %{id: check.id, kind: check.kind, statement: check.statement, proof: check.proof, state: Atom.to_string(check.state)}
+    for check <- TicketChecks.list(ticket) do
+      drop_nil(%{id: check.id, kind: check.kind, statement: check.statement, proof: check.proof, state: Atom.to_string(check.state), waived: check.waived && check.waived.reason})
+    end
   end
 
   defp junction_facts(record, junction, events, opts) do
@@ -245,6 +309,21 @@ defmodule SymphonyElixir.Conductor.Facts do
       filings: Filing.facts(events, Keyword.get_lazy(opts, :conductor, &Config.conductor_settings/0), Keyword.take(opts, [:repos]))
     }
     |> put_qa_passes(junction, events)
+    |> put_checks(events)
+  end
+
+  # A groomed ticket's checks, what the runs said in their newest notes, and the rule for waiving one.
+  defp put_checks(facts, events) do
+    if TicketPlan.groomed?(events),
+      do: Map.merge(facts, %{checks: checks(events), check_notes: run_notes(events), waive: @waive}),
+      else: facts
+  end
+
+  defp run_notes(events) do
+    events
+    |> Enum.filter(&match?(%Event{type: "note", actor: %{kind: :agent}}, &1))
+    |> Enum.take(-@max_check_notes)
+    |> Enum.map(&drop_nil(%{event_id: &1.id, run_id: &1.run_id, at: iso8601(&1.at), text: cut(payload(&1, :text), @text_max)}))
   end
 
   @doc "The events of the ticket `issue_id`, oldest first; none when the store can't read them."
@@ -331,16 +410,46 @@ defmodule SymphonyElixir.Conductor.Facts do
   # The ticket.
 
   defp ticket(record, events) do
-    sections = sections(record.description)
-
     %{
       identifier: record.issue_identifier,
       title: record.title,
-      url: record.url,
+      url: record.url
+    }
+    |> Map.merge(asked(record, events, TicketPlan.groomed?(events)))
+    |> Map.merge(ticket_history(record, events))
+  end
+
+  # What a groomed ticket asks for is its ask and its plan's checks (`SymphonyElixir.TicketJourney`),
+  # never its description, which Symphony writes itself.
+  defp asked(record, events, true = _groomed?) do
+    numbered = events |> TicketChecks.list() |> Enum.with_index(1)
+
+    %{
+      problem: events |> TicketPlan.ask() |> Enum.map_join("\n\n", &to_string(&1.text)) |> cut(@section_max),
+      acceptance: record.issue_id |> TicketJourney.acceptance() |> Enum.join("\n") |> cut(@section_max),
+      walkthrough: record.issue_id |> TicketJourney.steps() |> Enum.map_join("\n", & &1.text) |> cut(@section_max),
+      proved_steps: Enum.flat_map(numbered, &proved_step/1)
+    }
+  end
+
+  defp asked(record, events, false) do
+    sections = sections(record.description)
+
+    %{
       problem: sections |> section(@problem_heading) |> Kernel.||(untitled(sections)) |> cut(@section_max),
       acceptance: sections |> section(@acceptance_heading) |> cut(@section_max),
       walkthrough: record.description |> Walkthrough.section() |> cut(@section_max),
-      proved_steps: proved_steps(events),
+      proved_steps: proved_steps(events)
+    }
+  end
+
+  defp proved_step({%{proved_by: %{by: "test", test: test, event_id: id}}, step}) when is_binary(test),
+    do: [%{step: step, test: cut(test, @step_text_max), event_id: id}]
+
+  defp proved_step(_check), do: []
+
+  defp ticket_history(record, events) do
+    %{
       brief: brief(events),
       decisions: Enum.map(record.decisions, &%{title: &1.title, answer: cut(&1.answer, @text_max)}),
       notes: person_notes(events),

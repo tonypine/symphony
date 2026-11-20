@@ -6815,12 +6815,17 @@ Minimum endpoints:
     hold. One still active stays skipped until a person acts: `unblock` runs it again in place and
     `restart` starts it over, each clearing the reason and the hold.
 
-- `POST /api/v1/control/note` (OPTIONAL)
+- `POST /api/v1/control/message`, and its alias `POST /api/v1/control/note` (OPTIONAL)
   - Writes the Director's message to a ticket: `repo_key`, `issue_identifier` and `text`. The ticket
     resolves as the events feed resolves it. The message is a `message.sent` event (Section 4.1.11)
     whose actor is the person "the Director", since the control API authenticates one shared token.
     Each message is its own event; none replaces or hides another. Sending one never starts, stops or
-    reorders a run.
+    reorders a run, but on a groomed ticket whose Conductor answers messages (`conductor.enabled`
+    and the `message` junction): there no run is given the message, the Conductor's turn starts at
+    once, and its reply is a `conductor.update` (`junction: "message"`) whose `parent` is the
+    message. That turn may record a new plan version and the message as an ask, steer or stop the
+    working run, change the ticket's sub-tickets or waive a check; on a finished ticket it may only
+    reply or have a new, related ticket created. A turn that fails leaves Symphony's own reply.
   - Answers `200` `{"event": ...}` with the event as the feed shows it (`summary.title` "You wrote",
     and `read`, null until a run read it), and writes a `director_note` audit record (`event_id`, the
     text's first 500 characters). Text that is blank, or longer than the `message.sent` type's 4,000

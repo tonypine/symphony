@@ -464,8 +464,8 @@ every event new then.
 ## Messages
 
 Writing to a ticket works like a prompt sent to it (`SymphonyElixir.Messages`).
-`POST /api/v1/control/note` takes `repo_key`, `issue_identifier` and `text` (at most 4,000 characters),
-and needs the control token. It records a `message.sent` event on the ticket's ledger: the text, who wrote
+`POST /api/v1/control/message` takes `repo_key`, `issue_identifier` and `text` (at most 4,000 characters),
+and needs the control token; `POST /api/v1/control/note` is an alias of it, kept for older callers. It records a `message.sent` event on the ticket's ledger: the text, who wrote
 it (the person, the Director, whom the token names today) and when, and answers `200` with the event as the
 events feed shows it. Each message is its own event; none replaces or hides an earlier one. Blank or
 over-long text is `400` `invalid_note`, a ticket with no record `404` `ticket_not_found`, and a request
@@ -487,6 +487,35 @@ In the events feed (`GET /api/v1/repos/:repo_key/tickets/:issue_identifier/event
 Director), the text as `summary.detail`, and `read`: null while no run read it, else `run_id`, `run` (the
 run's title, "Implementation run 2") and `at`. A `message.read` sits in its run's group as "Message read by a
 run".
+
+### A groomed ticket: the Conductor answers
+
+On a ticket that has a plan (a `plan.written`), while `conductor.enabled` is on and
+`conductor.junctions` lists `message`, a message goes to the ticket's Conductor and to no run. The
+request answers as above, and the Conductor's turn starts at once, in the background:
+
+- Its reply is a `conductor.update` event with `junction: "message"` whose `parent` is the message's
+  event id. It says what the Conductor took the message to be and what it did.
+- A message that changes what is asked: Symphony records a new `plan.written` (`by: recalibration`,
+  with the Conductor's reason) and then the message as an `ask.recorded` (`source: "message"`, `from`
+  the message's event id).
+- Information a run needs is passed to the working run (`conductor.steer`, `trigger: "message"`) or,
+  when none works or steering is off, recorded as `conductor.instructions` for the next run. A run
+  whose work the message makes wrong is stopped (`conductor.intervention`, `action: "stopped"`).
+- On a ticket with sub-tickets the answer may change them (the tree operations), and it may waive a
+  check nobody can prove (`check.waived`).
+- A turn that fails, times out or answers something Symphony cannot read leaves Symphony's own reply
+  under the message: "The Conductor could not read this message (…), so nothing was done with it. It
+  stays in the ticket's history. Send it again to have it read."
+- On a ticket in Done or Canceled the Conductor may only reply, or have a new ticket created: in
+  Todo, Urgent, in the same team and project, linked to the finished one as related, with the
+  message as its ask (`ask.recorded`, `source: "message"`) and a `ticket.filed_from`.
+- A message on a sub-ticket is also shown to its parent's Conductor (`child_message`), which owes no
+  reply and records nothing unless it changes the parent's plan or its sub-tickets.
+
+No `message.read` is written for such a message, and `read` stays null in the feed. With the
+Conductor or the `message` junction off, a groomed ticket's messages are read by its next run, as
+on any other ticket.
 
 Symphony's own notes (`note`: "QA waits on the PR watcher…", the notes of a stop or a move) are not
 messages: they keep their type and are never given to a run as the person's words.
