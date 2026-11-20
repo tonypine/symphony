@@ -71,6 +71,17 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
 
   defp alive?(pid), do: match?({_out, 0}, System.cmd("/bin/sh", ["-c", "kill -0 #{pid}"], stderr_to_stdout: true))
 
+  # Whether `pid` is gone, waiting up to 5 seconds for it. A process the stop killed can stay a
+  # zombie for a moment: its new parent (launchd or init, once the group's leader is gone) reaps it
+  # in its own time, and `kill -0` answers for it until then.
+  defp gone?(pid, tries \\ 250) do
+    cond do
+      not alive?(pid) -> true
+      tries > 0 -> Process.sleep(20) && gone?(pid, tries - 1)
+      true -> false
+    end
+  end
+
   # Whether a member of the process group still answers `kill -0`: macOS skips a zombie there,
   # Linux finds it until its parent reaps it.
   defp group_alive?(pgid), do: match?({_out, 0}, System.cmd("/bin/sh", ["-c", "kill -0 -- -#{pgid}"], stderr_to_stdout: true))
@@ -156,8 +167,8 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
     assert alive?(server_pid(run_dir))
 
     assert DevServer.stop(config, server) == :stopped
-    refute alive?(server_pid(run_dir))
-    refute alive?(pid)
+    assert gone?(server_pid(run_dir))
+    assert gone?(pid)
     assert DevServer.stop(config, server) == :gone
   end
 
@@ -273,7 +284,7 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
     spec = spec(%{start_cmd: "echo $$ > pid; echo waiting; exec sleep 30", health_timeout_ms: 1_000})
 
     assert {:error, :health_timeout, "waiting"} = DevServer.start(config, spec)
-    refute alive?(server_pid(run_dir))
+    assert gone?(server_pid(run_dir))
   end
 
   describe "a QA host that cannot be asked" do
@@ -325,7 +336,7 @@ defmodule SymphonyElixir.QaDriver.DevServerTest do
 
       config = %{config | host: local_host(%{cmd: lost_host})}
       assert {:error, {:dev_server_unreachable, ":closed"}, ""} = DevServer.start(config, spec)
-      refute alive?(server_pid(run_dir))
+      assert gone?(server_pid(run_dir))
     end
 
     test "the health check answers with an unknown exit status or nothing it knows", %{config: config} do

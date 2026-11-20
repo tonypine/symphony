@@ -425,8 +425,8 @@ public struct PhaseSteps: Equatable {
 }
 
 /// The default step lists, as `Config.Schema.Phases.default_steps/1` gives them (decision 2 of TP-1085):
-/// `implementation` writes, builds, checks, tests and hands off; `rework` reads the open findings first; every
-/// other kind has none.
+/// `implementation` writes, builds, checks, tests, runs the window tests in the QA VM and hands off; `rework` reads the
+/// open findings first; every other kind has none.
 public enum PhaseDefaults {
     public static func steps(for kind: PhaseKind) -> [PhaseStep] {
         switch kind {
@@ -446,6 +446,10 @@ public enum PhaseDefaults {
             return []
         }
     }
+
+    /// The machine step command Symphony runs itself for the Window tests step: the window tests the change selects, in
+    /// the QA VM (`Config.Schema.Phases.window_tests_command/0`).
+    public static let windowTestsCommand = "symphony:window_tests"
 
     /// The machine step commands the QA pass runs itself, with the QA host it holds (`Config.Schema.Phases.qa_commands/0`).
     /// Only a QA playbook's list runs them.
@@ -529,6 +533,14 @@ public enum PhaseDefaults {
                     StepCommand(run: "cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"", when: .macosChanged),
                 ],
                 timeoutMs: 1_800_000,
+                onFail: "code"
+            ),
+            PhaseStep(
+                stepID: "window_tests",
+                title: "Window tests",
+                mode: .machine,
+                commands: [StepCommand(run: windowTestsCommand)],
+                timeoutMs: 7_200_000,
                 onFail: "code"
             ),
             PhaseStep(stepID: "handoff", title: "Hand off: push and open the pull request", mode: .delegated),

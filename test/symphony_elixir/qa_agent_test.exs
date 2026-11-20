@@ -2077,9 +2077,11 @@ defmodule SymphonyElixir.QaAgentTest do
       second = Task.async(fn -> run.(:second, second_issue, on_message: heartbeat, dev_server_lease_opts: [heartbeat_ms: 10]) end)
 
       # The second pass waits, never silently: its heartbeat keeps it from looking stalled, and the
-      # orchestrator can say whom it waits for.
+      # orchestrator can say whom it waits for. It waits for the QA VM itself, which the first pass
+      # holds for its whole pass (TP-1554), before it ever asks for the port.
       assert_receive {:second, :message, %{event: :tool_progress, timestamp: %DateTime{}}}, 5_000
-      assert DevServerLease.waiting(lease, "issue-qa-2") == %{worker_host: "qa-vm", port: 8090, held_by: "TP-900"}
+      assert DevServerLease.waiting(lease, "issue-qa-2") == %{worker_host: "qa-vm", port: :desktop, held_by: "TP-900", held_for: "QA pass"}
+      assert DevServerLease.reason(DevServerLease.waiting(lease, "issue-qa-2")) == "waiting for the QA VM: qa-vm is in use by TP-900's QA pass"
       refute_received {:second, :prepare, _at}
 
       send(health_check, :go)

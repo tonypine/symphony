@@ -185,6 +185,7 @@ defmodule SymphonyElixir.AgentRunnerTest do
              {"build", "passed", nil},
              {"checks", "passed", nil},
              {"tests", "passed", nil},
+             {"window_tests", "skipped", nil},
              {"handoff", "passed", nil}
            ]
   end
@@ -215,7 +216,7 @@ defmodule SymphonyElixir.AgentRunnerTest do
     refute_received {:session_started, 2}
 
     skipped = for %{type: "step.completed", payload: %{outcome: "skipped"} = payload} <- step_events(), do: payload.step_id
-    assert skipped == ["build", "checks", "tests"]
+    assert skipped == ["build", "checks", "tests", "window_tests"]
   end
 
   describe "work the agent committed" do
@@ -286,7 +287,7 @@ defmodule SymphonyElixir.AgentRunnerTest do
 
     completed = for %{type: "step.completed", payload: payload} <- step_events(), do: {payload.step_id, payload.outcome}
 
-    assert completed == [{"code", "passed"}, {"build", "passed"}, {"checks", "passed"}, {"tests", "passed"}, {"handoff", "passed"}]
+    assert completed == [{"code", "passed"}, {"build", "passed"}, {"checks", "passed"}, {"tests", "passed"}, {"window_tests", "skipped"}, {"handoff", "passed"}]
   end
 
   test "a test that hangs twice pauses the run on a Question with no session; going on past it resumes the run at once", ctx do

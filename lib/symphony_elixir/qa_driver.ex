@@ -572,6 +572,28 @@ defmodule SymphonyElixir.QaDriver do
   def host_ports(driver) when is_pid(driver), do: GenServer.call(driver, :host_ports, 30_000)
 
   @doc """
+  Takes the QA VM for this pass: the lease on the QA host's desktop (`DevServerLease`, key
+  `{worker_host, :desktop}`), held by the driver until it stops, so a run's Window tests step
+  (`SymphonyElixir.PhaseSteps.WindowTests`) never drives windows there during the pass, and the pass
+  waits while one does. `:ok` at once without a driver or when the QA host was refused. `opts`:
+  `:issue_id` and `:ticket` (the pass's ticket, which `DevServerLease.waiting/2` names), and
+  `acquire/4`'s `:heartbeat` and `:heartbeat_ms`.
+  """
+  @spec take_vm(pid() | nil, keyword()) :: :ok
+  def take_vm(nil, _opts), do: :ok
+
+  def take_vm(driver, opts) when is_pid(driver) do
+    case GenServer.call(driver, :config) do
+      %{host_dir: dir, worker_host: worker_host} = config when is_binary(dir) ->
+        holder = %{pid: driver, issue_id: Keyword.get(opts, :issue_id), ticket: Keyword.get(opts, :ticket), use: "QA pass"}
+        DevServerLease.acquire(config.dev_server_lease, {worker_host, :desktop}, holder, opts)
+
+      _refused ->
+        :ok
+    end
+  end
+
+  @doc """
   Starts the project's dev server on the QA host for this pass (see
   `SymphonyElixir.QaDriver.DevServer`) and returns its URL there. The driver stops it when it
   stops, before the run directory goes. `{:ok, nil}` without a `worker_host`, or when the QA host

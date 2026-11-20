@@ -11,7 +11,9 @@ An implementation run follows these steps (the default list, `phases.implementat
 4. `tests` Tests and coverage · machine · times out after 30 min · on failure returns to `code`
    - when Elixir files changed: `mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed`
    - when macos/ changed: `cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER"`
-5. `handoff` Hand off: push and open the pull request · delegated
+5. `window_tests` Window tests · machine · times out after 120 min · on failure returns to `code`
+   - `symphony:window_tests`
+6. `handoff` Hand off: push and open the pull request · delegated
 
 
 ---
@@ -738,6 +740,7 @@ In this repository, a QA pass of the Director has two environments: the committe
 5.  Leave the checks to the step list.
     - This run follows a step list: once you end the `code` step, Symphony runs the build, the checks and the tests itself, with your session closed. A step that fails brings the run back to `code` with its output: fix what it names and end the step again.
     - Do not run the build, the format, specs or lint checks, the tests, the coverage check or the Swift build and tests yourself, and never the full suite or Dialyzer: write the code, commit it, record what you changed, and end the turn. CI is the gate for the full suite, the 100% coverage report and Dialyzer.
+    - A run never pushes a test it has not seen pass: a test that drives an app's window runs in the QA VM in the `window_tests` step (declare a new one in `macos/Tests/window-tests.json`), and when no step can run a test you wrote, stop and say so with the question tool instead of pushing it.
     - Execute every ticket-provided `Validation`/`Test Plan`/`Testing` requirement that is not a check the step list runs (a preview to read, a fixture to render); treat unmet items as incomplete work.
     - You may make temporary local proof edits to validate assumptions; revert every one before you commit, and document them in the workpad `Notes`.
 6.  Re-check all acceptance criteria and close any gaps.

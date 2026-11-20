@@ -22,11 +22,13 @@ In this repository, a QA pass of the Director has two environments: the committe
 {% if run.step_runner %}5.  Leave the checks to the step list.
     - This run follows a step list: once you end the `code` step, Symphony runs the build, the checks and the tests itself, with your session closed. A step that fails brings the run back to `code` with its output: fix what it names and end the step again.
     - Do not run the build, the format, specs or lint checks, the tests, the coverage check or the Swift build and tests yourself, and never the full suite or Dialyzer: write the code, commit it, record what you changed, and end the turn. CI is the gate for the full suite, the 100% coverage report and Dialyzer.
+    - A run never pushes a test it has not seen pass: a test that drives an app's window runs in the QA VM in the `window_tests` step (declare a new one in `macos/Tests/window-tests.json`), and when no step can run a test you wrote, stop and say so with the question tool instead of pushing it.
     - Execute every ticket-provided `Validation`/`Test Plan`/`Testing` requirement that is not a check the step list runs (a preview to read, a fixture to render); treat unmet items as incomplete work.
     - You may make temporary local proof edits to validate assumptions; revert every one before you commit, and document them in the workpad `Notes`.
 {% else %}5.  Run validation/tests required for the scope.
     - Mandatory gate: execute all ticket-provided `Validation`/`Test Plan`/ `Testing` requirements when present; treat unmet items as incomplete work.
     - Prefer a targeted proof that directly demonstrates the behavior you changed.
+    - A run never pushes a test it has not seen pass: when you have no way to run a test you wrote, stop and say so with the question tool instead of pushing it.
     - Leave the full test suite, coverage and Dialyzer to CI (see `Command and output hygiene`).
     - For long-running validation, use long waits and sparse polling so progress-only terminal output does not create many tiny transcript events.
     - Keep terminal output fed back into the model small: preserve failing command, exit code, and the most relevant error lines; summarize successful or repetitive output instead of pasting complete logs.

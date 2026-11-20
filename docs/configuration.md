@@ -3911,7 +3911,7 @@ _Symphony posts a new update when this list changes · list `b1712c40`_
 ### `phases`
 
 The list of steps a run of each kind follows: for an implementation run, writing the code, building
-it, checking it, testing it and handing it off; for a rework run, reading the open findings first. Each kind under `phases` (a run kind:
+it, checking it, testing it, running its window tests in the QA VM and handing it off; for a rework run, reading the open findings first. Each kind under `phases` (a run kind:
 `implementation`, `rework`, `ci_fix`, `review_feedback`, `qa`, `code_review`, `landing`,
 `breakdown`, `epic_review`; not `conductor`, which takes no step list) holds one setting, its `steps` list. A kind the file doesn't set follows
 its default list; a `symphony.yml` with no `phases` key follows every default. `symphony workflow
@@ -3984,6 +3984,12 @@ phases:
           - {run: cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER", when: macos_changed}
         timeout_ms: 1800000
         on_fail: code
+      - id: window_tests
+        title: Window tests
+        mode: machine
+        command: symphony:window_tests
+        timeout_ms: 7200000
+        on_fail: code
       - id: handoff
         title: "Hand off: push and open the pull request"
         mode: delegated
@@ -4001,7 +4007,7 @@ phases:
         command: symphony:findings
         timeout_ms: 60000
         on_fail: code
-      # code, build, checks, tests and handoff, as in the implementation list
+      # code, build, checks, tests, window_tests and handoff, as in the implementation list
 ```
 
 A list may instead end on a machine step with the id `handoff`, whose command pushes the branch. Once
@@ -4018,6 +4024,37 @@ at the same viewport), the last of those findings is still open and no answer to
 since, the step ends `paused` on a Question before any code is written: it lists both findings and
 offers "Try another approach" or "Keep this approach". Every answer, an option or the person's own
 words, goes to the `code` step, in its prompt. A later QA failure of the same class asks again.
+
+`symphony:window_tests` is the Window tests step's command, which Symphony runs itself (TP-1554): it
+runs the tests that drive an app's window, which no run can launch on Symphony's host, in the QA VM
+(`auto_review.worker_host`, [Running QA in a QA VM](#running-qa-in-a-qa-vm)). Which tests exist and
+which paths each covers is declared in one place, `macos/Tests/window-tests.json` beside the scripts:
+each test's `script`, its `title` in plain words, the `run` line the Mac CI build runs from `macos/`,
+the `covers` globs (`**` spans folders) and, for a test that does not pass on main in the QA VM, why
+it is `off` there. The step runs every test that is on whose script or covered path the change
+touches (every one when the manifest itself changed), and is skipped, saying why, when no test covers
+the change. A change to the script or a covered path of a test that is `off` is never skipped: the
+step runs the tests that are on and then stops on a Question naming the test it could not run, so no
+run hands off with one unrun (a change to the manifest alone does not stop for the tests still `off`,
+so a change can turn one test on at a time). Every test ships `off` until a run's step sees it pass on
+main in the QA VM.
+It builds the workspace's commit with the QA build a QA pass uses (cached by tree, so the QA pass of
+the same commit reuses it), takes the QA VM, copies the commit to a run directory of its own there
+and runs each test from `macos/` with the Mac CI build's environment: the pinned Xcode as
+`DEVELOPER_DIR` (the VM's own Xcode, said in the output, when it lacks it) and the built app's path
+as `SYMPHONY_QA_APP`. Every test's output is the step's output. A test that fails is run again on
+the merge-base with the base branch: when it passes there, the change broke it, and the run goes
+back to `code` with the output; when every failing test fails there too, the fault is the VM's or
+main's. The step never passes by default: when it could not run (no QA VM, the VM unreachable or
+refused, the build could not run there, a tool missing, a test failing on main too, or a covering test
+that is `off`), it pauses on
+a Question in the Inbox naming its cause as it is (the QA VM, main failing or not building there
+too, or a test that is `off`, which recommends sending it to `code`, since running again stops
+again while the test stays `off`), so the run stops before Hand off and nothing is pushed; the
+answer runs it again, or sends the person's words to `code`. The QA VM is one machine:
+a `macos_app` QA pass holds it for its whole pass and the step while its tests run, so they never
+overlap; a step that waits says on the ticket's timeline which ticket holds it, and a QA pass that
+waits is listed as waiting for the QA VM.
 
 Agents run none of the commands in these lists: the prompts name no check command, and a run with no
 step list leaves them to CI, apart from the test it is fixing and the push check.
