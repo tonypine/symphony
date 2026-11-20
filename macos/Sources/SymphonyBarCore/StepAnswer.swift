@@ -10,13 +10,25 @@ public struct StepAnswer: Equatable {
         public var expected: String?
         public var actual: String?
 
-        /// The status when it says more than the step's own state does ("blocked"); nil for "passed" and "failed".
+        /// The status when it says more than the step's own state does ("plan_mismatch"); nil for "passed",
+        /// "failed" and "blocked", which the state says (`judgement`).
         public var extraWord: String? {
             guard let status = status?.lowercased(), !Self.plain.contains(status) else { return nil }
             return status
         }
 
-        static let plain: Set<String> = ["passed", "failed", "done", "ok", "pass", "fail"]
+        /// What the check judged, as the step's state: "pass" done, "fail" failed, "blocked" blocked; nil for a
+        /// status that is not a judgement.
+        public var judgement: RunStep.State? {
+            switch status?.lowercased() {
+            case "pass", "passed": .done
+            case "fail", "failed": .failed
+            case "blocked": .blocked
+            default: nil
+            }
+        }
+
+        static let plain: Set<String> = ["passed", "failed", "done", "ok", "pass", "fail", "blocked"]
     }
 
     /// The plan step's plan: a summary, what it will check and what it will not.

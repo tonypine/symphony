@@ -52,6 +52,14 @@ defmodule SymphonyElixir.Questions do
   `deciding/1` is the question a decision request asked that the ticket waits on (the newest open
   one asked with `request: true`): what the Director's Decide answers.
 
+  A ticket holds one open question about its stage (`stage_question?/1`): a question the Conductor
+  asked, or QA's own "could not finish its check", which offers to merge with QA skipped. Before
+  either asks, the asker reads `open_stage_question/2` and asks nothing while one is open in the
+  same phase. When a person answers a stage question, `answer/4` withdraws every other open stage
+  question asked in the same phase (cause `superseded`), with a reason naming the answer that
+  replaced it, so a record an older build left with two open never keeps the ticket paused on the
+  one nobody answered.
+
   A question may also be asked on Symphony itself (`:symphony`) or on a repository
   (`{:repository, repo_key}`), a decision with no ticket to carry it (TP-1341): a release build of
   `main` cancelled a third time with no ticket waiting on it (`SymphonyElixir.ReleaseBuild`). It is
@@ -68,6 +76,7 @@ defmodule SymphonyElixir.Questions do
   require Logger
 
   alias SymphonyElixir.{
+    Conductor,
     DecisionRequest,
     DispatchLoop,
     Pauses,
@@ -281,9 +290,45 @@ defmodule SymphonyElixir.Questions do
          {:ok, at} <- at(opts) do
       given = %{text: text, option: nil, by: by, at: at, scope: scope}
       picking = {Keyword.get(opts, :option), Keyword.get(opts, :then_pause)}
-      update(subject, at, &answered(subject, &1, &2, id, given, picking))
+
+      with {:ok, question} <- update(subject, at, &answered(subject, &1, &2, id, given, picking)) do
+        supersede_stage_questions(subject, question)
+        {:ok, question}
+      end
     end
   end
+
+  @doc """
+  Whether `question` is about the stage it was asked in: the Conductor asked it
+  (`SymphonyElixir.Conductor.asked?/1`), or one of its options records QA's `skip` verdict as it
+  moves the ticket on (QA's own "could not finish its check"). A ticket holds one open such question
+  per phase (`open_stage_question/2`).
+  """
+  @spec stage_question?(map()) :: boolean()
+  def stage_question?(question), do: Conductor.asked?(question) or Enum.any?(Map.get(question, :options) || [], &qa_skip?/1)
+
+  defp qa_skip?(%{move: %{verdict: %{kind: "qa", outcome: "skip"}}}), do: true
+  defp qa_skip?(_option), do: false
+
+  @doc "The open question about the stage `phase` on `ticket` (`stage_question?/1`), the oldest, or nil."
+  @spec open_stage_question(ticket(), String.t() | nil) :: question() | nil
+  def open_stage_question(ticket, phase), do: ticket |> open() |> Enum.find(&(stage_question?(&1) and &1.asked_in == phase))
+
+  # The other open questions about the same stage close once one is answered, naming the answer.
+  defp supersede_stage_questions({:ticket, _repo_key, _issue_id} = ticket, answered) do
+    if stage_question?(answered) do
+      reason = "Replaced by your answer to \"#{answered.title}\": #{option_label(answered) || answered.answer.text}"
+
+      for other <- open(ticket), other.id != answered.id, stage_question?(other), other.asked_in == answered.asked_in do
+        # Best effort: the answer stands either way, and a question that closed meanwhile needs nothing.
+        _closed = withdraw(ticket, other.id, reason, cause: "superseded")
+      end
+    end
+
+    :ok
+  end
+
+  defp supersede_stage_questions(_subject, _question), do: :ok
 
   @doc """
   Withdraws the open question `id` on `ticket`, which nobody answers now, for `reason`. Records

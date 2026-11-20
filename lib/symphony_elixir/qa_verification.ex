@@ -97,6 +97,7 @@ defmodule SymphonyElixir.QaVerification do
     PrWatch,
     QaPolicy,
     QaPreCheck,
+    Questions,
     RunStore,
     SelfHeal,
     TicketEvents,
@@ -887,7 +888,21 @@ defmodule SymphonyElixir.QaVerification do
   # way after it (`rerun_answered?/2`); from then on "Send it back to Rework" is. A pass with nothing
   # it could prove here (every open step `unprovable`) asks at once, with the same three options:
   # another run would end the same way, so merging without a QA result is the recommended one.
+  #
+  # A ticket holds one open question about its stage (`Questions.open_stage_question/2`): while one
+  # asked in QA is open (the Conductor's), QA asks none of its own and the ticket stays held on it.
   defp escalate(issue, opts, settings, head, attempts, reason, unprovable? \\ false) do
+    case Questions.open_stage_question({:ticket, repo_key(issue, opts), issue.id}, settings.tracker.qa_state) do
+      nil ->
+        ask_escalation(issue, opts, settings, head, {attempts, reason, unprovable?})
+
+      %{title: title} ->
+        Logger.info("QA for #{issue_label(issue)} could not reach a verdict after #{attempts} run(s); it already waits on #{inspect(title)}, so it asks nothing more")
+        :ok
+    end
+  end
+
+  defp ask_escalation(issue, opts, settings, head, {attempts, reason, unprovable?}) do
     Logger.warning("QA for #{issue_label(issue)} could not reach a verdict after #{attempts} run(s); asking a person: #{reason}")
     hold_opts = opts |> Keyword.take([:tracker, :store]) |> Keyword.put(:repo_key, repo_key(issue, opts))
     recommended = escalation_pick(unprovable?, rerun_answered?(issue, opts))
@@ -1398,7 +1413,14 @@ defmodule SymphonyElixir.QaVerification do
   defp error_reason(reason) when is_binary(reason), do: reason
   defp error_reason({:qa_dev_server_failed, _cause, _log} = reason), do: QaAgent.blocked_reason(reason)
   defp error_reason({:remote_worker_unsupported, host}), do: "QA cannot run on the remote worker #{inspect(host)}"
+  defp error_reason({:malformed_qa_response, detail}), do: malformed_answer(detail)
   defp error_reason(reason), do: inspect(reason)
+
+  # A QA agent that answered without a verdict, in words: the Inbox's "why" quotes it.
+  defp malformed_answer(detail) when detail in [:no_verdict_object, :empty_response],
+    do: "the QA agent ended its run without saying whether the change passed or failed"
+
+  defp malformed_answer(_detail), do: "the QA agent gave a pass or fail answer Symphony could not read"
 
   defp repo_key(issue, opts), do: Keyword.get(opts, :repo_key) || Map.get(issue, :repo_key)
 

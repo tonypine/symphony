@@ -349,7 +349,8 @@ final class StateSnapshotTests: XCTestCase {
                             resetsAt: Date(timeIntervalSince1970: 1_790_943_362),
                             resumeAt: Date(timeIntervalSince1970: 1_790_943_482),
                             utilization: 1,
-                            reason: "claude_usage_limit"
+                            reason: "claude_usage_limit",
+                            since: Date(timeIntervalSince1970: 1_790_942_400)
                         ),
                         .init(scope: "opus", window: "seven_day_opus", phase: .canary),
                         .init(provider: "openai", phase: .headroom, utilization: 0.91, reserve: 0.85),

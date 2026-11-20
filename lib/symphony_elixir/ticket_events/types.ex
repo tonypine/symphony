@@ -42,7 +42,9 @@ defmodule SymphonyElixir.TicketEvents.Types do
   and the head the pass judged (`SymphonyElixir.QaVerification`), keyed by the resolution.
 
   An agent records through `ticket_record` (`SymphonyElixir.AgentTools.TicketLedger`) only the types
-  `agent_types/1` lists for its run kind: `finding.recorded` in a QA run; `finding.resolved`,
+  `agent_types/1` lists for its run kind: `finding.recorded` in a QA run (Symphony also records one
+  as a Conductor turn's when a person picks its option to send the ticket to Rework,
+  `SymphonyElixir.DecisionMove`); `finding.resolved`,
   `step.started`, `step.completed`, `evidence`, `checklist.answered` and `note` in any run. Every other type is the
   machine's or a person's (a question is asked through the question tool), and a legacy type is
   never an agent's. An `evidence` may carry a `proof`: the walkthrough step it proves and the test.
@@ -469,7 +471,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
     },
     "finding.recorded" => %{
       writers: [:agent],
-      run_kinds: ["qa"],
+      run_kinds: ["qa", "conductor"],
       required: [class: {:string, 100}, severity: {:string, 50}, description: {:string, 2_000}],
       optional: [viewport: {:string, 100}, step: {:string, 200}, evidence: @evidence],
       idempotency: :writer

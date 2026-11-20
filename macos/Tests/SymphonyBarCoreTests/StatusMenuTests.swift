@@ -509,6 +509,17 @@ final class StatusMenuTests: XCTestCase {
         outage.phase = .canary
         XCTAssertEqual(StatusMenu.usageLimitLine(outage, now: sameDay, timeZone: utc), "Resuming: checking Claude API…")
 
+        var signIn = StateSnapshot.UsageLimit(
+            phase: .paused, resumeAt: pausedAt.addingTimeInterval(120), reason: "model_api_sign_in_failed", error: "Invalid API key"
+        )
+        XCTAssertTrue(signIn.isAPIUnreachable)
+        XCTAssertEqual(
+            StatusMenu.usageLimitLine(signIn, now: sameDay, timeZone: utc),
+            "Paused: Agents can't sign in to Claude (Invalid API key), retries ~12:18"
+        )
+        signIn.phase = .canary
+        XCTAssertEqual(StatusMenu.usageLimitLine(signIn, now: sameDay, timeZone: utc), "Resuming: checking the sign-in to Claude…")
+
         var usageLimit = claudeLimit
         usageLimit.reason = "claude_usage_limit"
         XCTAssertEqual(StatusMenu.usageLimitLine(usageLimit, now: sameDay, timeZone: utc), "Paused: Claude limit, resumes ~12:18")

@@ -10,8 +10,9 @@ public enum SymphonyActivity: Equatable {
     case busy
 
     /// `status` as the app's last poll saw it. `symphonyRunning` is whether the app's Symphony process runs, and
-    /// `busy` whether the app is starting, stopping or restarting it, or updating.
-    public init(status: SymphonyStatus, symphonyRunning: Bool, busy: Bool) {
+    /// `busy` whether the app is starting, stopping or restarting it, or updating. `drain` is Symphony's drain read
+    /// taken since its state last failed to load, if it gave one: its runs stand in for the state's (TP-1550).
+    public init(status: SymphonyStatus, symphonyRunning: Bool, busy: Bool, drain: DrainStatus? = nil) {
         guard !busy else {
             self = .busy
             return
@@ -24,8 +25,13 @@ public enum SymphonyActivity: Equatable {
         case .starting:
             self = .busy
         case .error:
-            // The app's Symphony runs but doesn't answer, so its runs are unknown; otherwise it exited.
-            self = symphonyRunning ? .busy : .notRunning
+            // The app's Symphony runs but its state doesn't load, so its runs are known only from a drain read;
+            // otherwise it exited.
+            guard symphonyRunning else {
+                self = .notRunning
+                return
+            }
+            self = drain.map { .running(activeRuns: $0.running) } ?? .busy
         }
     }
 

@@ -364,6 +364,12 @@ GitHub or Linear in QA:
   opens its text" and the unavailable line as "Build output unavailable". Walk it at 1440×900
   and 2560×1440, light and dark: nothing clipped. On the live server the seed gives QA-105 the
   same history, with its own test output to open and its build output gone.
+- **Conductor question options act (TP-1556):** on the live server the seed gives two tickets in
+  QA a Conductor question. QA-112's has "Accept without QA", "Send back to add a failing upload"
+  and "Run QA again": pick "Accept without QA" in the Inbox and QA-112 moves to Merging, its page
+  shows QA skipped by decision, and its Inbox row goes. QA-113 had a QA pass end blocked after its
+  question was asked: the Inbox lists one question for it, and "Go on as it is" takes the row away
+  and leaves it in QA with no pause. Look at both questions at 1440×900, light and dark.
 - **Ticket note (TP-1195):** with the same `ticket-ledger` fixture, SHOP-410's page has a
   one-line field pinned under the page, "Add a note for the next run"; it stays on screen
   however far the page scrolls. The fixture's feed already holds the Director's note, "Note by

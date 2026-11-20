@@ -158,6 +158,7 @@ defmodule SymphonyElixir.DirectorMoves do
     ReleaseBuild,
     Restart,
     RunStore,
+    SignInHold,
     StateMachine,
     SubIssueWait,
     TicketMoves,
@@ -332,11 +333,14 @@ defmodule SymphonyElixir.DirectorMoves do
   records `question.answered` on the subject's own stream and lifts its pause reason; then whoever
   asked acts on the answer at once: a release build's question (`step` `release_build:<sha>`) has
   `SymphonyElixir.ReleaseBuild.delivered/2` check that build again, which reruns it when the answer
-  says so. No ticket moves and nothing is posted to Linear.
+  says so, and a question about agents that can't sign in (`step` `sign_in:…`,
+  `SymphonyElixir.SignInHold`) answered "I signed in again" checks that hold at once, as Try Now
+  does. No ticket moves and nothing is posted to Linear.
 
   `opts`: `:release_build` (the module told of a release build's answer, default
   `SymphonyElixir.ReleaseBuild`), `:release_build_opts` (the options it is told with, default
-  none) and `:questions` (the Question service the answer is written with, default
+  none), `:try_usage_limit_now` (what checks a hold at once, default
+  `SymphonyElixir.Orchestrator.try_usage_limit_now/1`) and `:questions` (the Question service the answer is written with, default
   `SymphonyElixir.Questions`). `{:error, :question_not_found}` when no subject has the open Question.
   """
   @spec decide_subject(input(), keyword()) :: {:ok, map()} | {:error, error() | :question_not_found}
@@ -369,6 +373,13 @@ defmodule SymphonyElixir.DirectorMoves do
 
   defp act_on_answer(%{step: "release_build:" <> sha}, opts),
     do: Keyword.get(opts, :release_build, ReleaseBuild).delivered(sha, Keyword.get(opts, :release_build_opts, []))
+
+  # "I signed in again" on a question about agents that can't sign in checks the hold at once.
+  defp act_on_answer(%{step: "sign_in:" <> _hold} = question, opts) do
+    try_now = Keyword.get(opts, :try_usage_limit_now, &Orchestrator.try_usage_limit_now/1)
+    SignInHold.answered(question, try_now)
+    :ok
+  end
 
   defp act_on_answer(_question, _opts), do: :ok
 

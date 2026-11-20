@@ -1290,9 +1290,11 @@ struct OverviewContent: View {
 }
 
 extension SymphonyWindowModel {
-    /// Home's two lists, their ages on Symphony's clock.
+    /// Home's two lists, their ages on Symphony's clock, under the line of a provider that refuses the agents' sign-in.
     var homeLists: HomeLists? {
-        home.map { HomeLists(read: $0, reference: overviewState?.generatedAt ?? Date()) }
+        let reference = overviewState?.generatedAt ?? Date()
+        let notices = overviewState.map { HomeLists.notices($0.snapshot, reference: reference) } ?? []
+        return home.map { HomeLists(read: $0, reference: reference, notices: notices) }
     }
 
     /// What Home's rows do: open the ticket's page or the epic in Initiatives, and the row's move as the ticket page

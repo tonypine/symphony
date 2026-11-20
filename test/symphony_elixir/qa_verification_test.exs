@@ -974,6 +974,62 @@ defmodule SymphonyElixir.QaVerificationTest do
       refute_received {:fixer_create, _}
     end
 
+    test "an agent that could not sign in holds the run: no verdict, no question, no attempt" do
+      {workspace, _head} = git_workspace!()
+
+      info = %{
+        provider: "anthropic",
+        scope: :all,
+        source: :api_unreachable,
+        cause: :sign_in,
+        error: "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare",
+        window: nil,
+        resets_at: nil,
+        utilization: nil
+      }
+
+      Process.put(:qa_agent_result, {:error, {:qa_agent_failed, {:model_api_unreachable, info}}, %{}})
+
+      capture_log(fn ->
+        assert {:error, {:usage_limited, ^info}} = run(workspace, [])
+        assert {:error, {:usage_limited, ^info}} = run(workspace, [])
+        assert {:error, {:usage_limited, ^info}} = run(workspace, [])
+      end)
+
+      assert verdicts() == []
+      refute deciding()
+      refute blocked?(@issue_id)
+    end
+
+    test "a real answer without a verdict still asks, and says why in words" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:qa_agent_result, {:error, {:malformed_qa_response, :no_verdict_object}, %{}})
+
+      capture_log(fn ->
+        assert :ok = run(workspace, [])
+        assert :ok = run(workspace, [])
+      end)
+
+      assert %{title: "QA could not finish its check of TP-816", why: why} = deciding()
+      assert why =~ "the QA agent ended its run without saying whether the change passed or failed"
+      refute why =~ "malformed"
+      refute why =~ "{:"
+    end
+
+    test "an answer whose verdict cannot be read asks, and says why in words" do
+      {workspace, _head} = git_workspace!()
+      Process.put(:qa_agent_result, {:error, {:malformed_qa_response, :invalid_verdict}, %{}})
+
+      capture_log(fn ->
+        assert :ok = run(workspace, [])
+        assert :ok = run(workspace, [])
+      end)
+
+      assert %{why: why} = deciding()
+      assert why =~ "the QA agent gave a pass or fail answer Symphony could not read"
+      refute why =~ "{:"
+    end
+
     test "a block a QA answer says an open ticket already covers holds on that ticket and files nothing" do
       {workspace, _head} = git_workspace!()
 
@@ -1734,6 +1790,34 @@ defmodule SymphonyElixir.QaVerificationTest do
       assert log =~ "QA for TP-816 waits on the Conductor's question; Symphony asks none of its own"
       refute deciding()
       refute_received {:memory_tracker_state_update, _, _}
+    end
+
+    test "with the Conductor's question open in QA, a blocked pass asks none of its own: the ticket holds one question" do
+      {workspace, _head} = git_workspace!()
+      own_block()
+
+      request = %{
+        title: "QA cannot set up a failing state request",
+        question: "How should TP-816 get past this QA check?",
+        why: "QA stopped at the same step twice.",
+        if_unanswered: "TP-816 stays in QA.",
+        recommendation_reason: "The unit tests prove the step.",
+        options: [%{label: "Run QA again", effect: "QA runs once more.", recommended: true}, %{label: "Leave it", effect: "Nothing moves."}]
+      }
+
+      {:ok, conductor} =
+        SymphonyElixir.Questions.ask({:ticket, @repo_key, @issue_id}, request, request: true, asked_in: "QA", asked_by: %{kind: :run, name: "Conductor", run_id: "conductor-1"})
+
+      assert :ok = run(workspace, conductor: conductor(:none))
+      log = capture_log(fn -> assert :ok = run(workspace, conductor: conductor(:none)) end)
+
+      assert log =~ ~s{QA for TP-816 could not reach a verdict after 2 run(s); it already waits on "QA cannot set up a failing state request", so it asks nothing more}
+      assert [%{id: id}] = SymphonyElixir.Questions.open({:ticket, @repo_key, @issue_id})
+      assert id == conductor.id
+
+      # Answering the one question lets the ticket continue.
+      {:ok, _answered} = SymphonyElixir.Questions.answer({:ticket, @repo_key, @issue_id}, id, "Run QA again")
+      refute SymphonyElixir.Pauses.paused?({:ticket, @repo_key, @issue_id})
     end
 
     test "an inconclusive pass takes the Conductor's turn too" do

@@ -35,8 +35,8 @@ Write your answer as one JSON object and nothing else, with exactly these fields
     "if_unanswered": "<what happens if nobody answers>",
     "recommendation_reason": "<why the recommended option>",
     "options": [
-      {"label": "<short>", "effect": "<what picking it does>", "recommended": true},
-      {"label": "<short>", "effect": "<what picking it does>", "recommended": false}
+      {"label": "<short>", "effect": "<what picking it does>", "recommended": true, "action": "<see The options>"},
+      {"label": "<short>", "effect": "<what picking it does>", "recommended": false, "action": "rework", "finding": "<what must change, at most 600 characters>"}
     ]
   }
 }
@@ -55,6 +55,25 @@ Ask the person (`ask_person`) only as a last resort: a question pauses the ticke
 answers. Ask only what needs a person's judgement or something only a person has (a secret, an
 account, a real device, a product decision the ticket does not answer), never what you can decide
 from the facts.
+
+The options of a question: each one names the `action` Symphony takes when the person picks it,
+one of these, and its `effect` says that action in the person's words:
+- `continue`: nothing moves; the pause clears and the ticket goes on where it stopped.
+- `rerun`: nothing moves; the pause clears and the stage the ticket is in runs again.
+- `rework`: the ticket goes to Rework, with the option's `finding` (required: the concrete thing
+  to change, at most 600 characters) recorded for the rework run. Not when it is in Rework already.
+- `accept_without_qa`: QA is recorded as skipped by decision and the ticket moves to Merging, on
+  its review and CI alone. Only while the ticket is in QA.
+- `cancel`: the ticket is cancelled.
+An option with no action, or one Symphony can't take where the ticket stands, drops the whole
+question: Symphony records your message without it. A ticket waits on one question about its stage
+at a time: when one is already open (yours or Symphony's own), yours is not asked.
+
+What the facts say about the walkthrough:
+- `ticket.proved_steps` lists the walkthrough steps recorded as proved by a test (the step's
+  number and the test). QA's pre-check runs that test on the pull request; QA does not walk the
+  step. A rework that only recorded such a proof changed what QA checks: the step no longer needs
+  QA's setup, so never say the setup is still missing for it.
 
 The update is never null. It is for the person, only facts in the document, never restating the
 timeline.
@@ -79,7 +98,7 @@ body that shows facts Symphony already holds; you only pick it and point at the 
 fills in the data from the ticket's records and drops a block it cannot fill. Use one only when it
 tells the story better than a sentence, and never repeat in the text what a block already shows.
 Pick from:
-- `{"type": "steps", "run_id": "<optional>"}`: the steps of a run with how each ended (default: the run you watch).
+- `{"type": "steps", "run_id": "<optional>"}`: the steps of a run, each with one word (default: the run you watch).
 - `{"type": "evidence", "refs": ["<event_id>", ...]}`: 1 to 4 screenshots of evidence or finding
   events in the facts that carry one.
 - `{"type": "budget"}`: the tokens used against the cap, by kind of run.
@@ -91,6 +110,11 @@ Pick from:
 - `{"type": "findings"}`: the ticket's findings, open ones first.
 - `{"type": "epic"}`: the ticket's epic and its sub-tickets with their states.
 A question you ask (`ask_person`) is drawn by Symphony as a block of its own; do not pick one for it.
+
+A step's `outcome`, in the facts and in a `steps` block, is its one word: `passed`, `failed`,
+`blocked` or `skipped` (or `paused` on a question). A QA check step (a walk, a design check, the
+wide pass, a recheck) has the word of what it judged: `failed` when it judged the change failed,
+`blocked` when it could not check. That word is the step's state; there is nothing to reconcile.
 
 `live.failed_step`, when present, is the newest step that ended failed: its `step_id`, `title`, its
 `reason` when it has one and `output`, the last lines of what the step printed. Read why a step

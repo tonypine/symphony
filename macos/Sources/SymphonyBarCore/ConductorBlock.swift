@@ -20,7 +20,7 @@ public enum ConductorBlock: Equatable {
     /// A run's steps, as its group shows them (at most the newest eight).
     public struct Steps: Equatable {
         public struct Step: Equatable {
-            public enum Outcome: String, Equatable { case passed, failed, skipped }
+            public enum Outcome: String, Equatable { case passed, failed, blocked, skipped }
 
             public var stepID: String?
             public var title: String

@@ -101,6 +101,36 @@ final class AutoUpdateTests: XCTestCase {
             SymphonyActivity(status: .error("Symphony exited with status 1"), symphonyRunning: false, busy: false),
             .notRunning
         )
+        // TP-1550: Symphony answers, but its state fails to load; its drain read gives the runs.
+        XCTAssertEqual(
+            SymphonyActivity(
+                status: .error("Symphony answered with HTTP 500"),
+                symphonyRunning: true,
+                busy: false,
+                drain: DrainStatus(running: 2, betweenTurns: 1, paused: false)
+            ),
+            .running(activeRuns: 2),
+            "a drain read counts runs as the state does"
+        )
+        XCTAssertEqual(
+            SymphonyActivity(
+                status: .error("Symphony answered with HTTP 500"),
+                symphonyRunning: true,
+                busy: false,
+                drain: DrainStatus(running: 0, paused: false)
+            ).isIdle,
+            true,
+            "an update that installs when idle installs with no run left"
+        )
+        XCTAssertEqual(
+            SymphonyActivity(
+                status: .error("Symphony exited with status 1"),
+                symphonyRunning: false,
+                busy: false,
+                drain: DrainStatus(running: 1, paused: false)
+            ),
+            .notRunning
+        )
         XCTAssertEqual(
             SymphonyActivity(
                 status: .running(snapshot(running: 0, paused: false), external: false),

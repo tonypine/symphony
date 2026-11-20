@@ -57,12 +57,30 @@ final class OperationTimeoutsTests: XCTestCase {
         }
         XCTAssertEqual(
             OperationTimeoutsError.unreadable(key: "workspaces.git_network_timeout_ms", value: "soon").errorDescription,
-            "`workspaces.git_network_timeout_ms: soon` in symphony.yml is not a whole number of milliseconds. Change it by hand."
+            "`workspaces.git_network_timeout_ms: soon` in symphony.yml is not a whole number. Change it by hand."
         )
         XCTAssertEqual(
             OperationTimeoutsError.notABlock("timeouts").errorDescription,
             "`timeouts:` in symphony.yml is not an indented block. Change the timeouts by hand."
         )
+    }
+
+    func testReadsTheSignInQuestionDelayInSeconds() throws {
+        XCTAssertEqual(OperationTimeouts().signInAskAfterMs, 1_800_000)
+        XCTAssertEqual(
+            try OperationTimeouts.values(in: "execution:\n  usage_limit:\n    sign_in_ask_after_seconds: 600\n").signInAskAfterMs,
+            600_000
+        )
+    }
+
+    func testSavesTheSignInQuestionDelayInSeconds() throws {
+        let updated = try OperationTimeouts.updating(config, from: configTimeouts, to: {
+            var timeouts = configTimeouts
+            timeouts.signInAskAfterMs = 3_600_000
+            return timeouts
+        }())
+        XCTAssertTrue(updated.contains("  usage_limit:\n    sign_in_ask_after_seconds: 3600\n"), updated)
+        XCTAssertEqual(try OperationTimeouts.values(in: updated).signInAskAfterMs, 3_600_000)
     }
 
     // MARK: Writing
@@ -133,6 +151,11 @@ final class OperationTimeoutsTests: XCTestCase {
         XCTAssertEqual(
             loaded.settingMinutes(gitNetwork: 1, mcpTool: 10, pendingToolReport: 5),
             OperationTimeouts(gitNetworkMs: 200, mcpToolMs: 600_000, pendingToolReportMs: 300_000)
+        )
+        XCTAssertEqual(loaded.settingMinutes(gitNetwork: 1, mcpTool: 10, pendingToolReport: 1, signInAskAfter: 30), loaded)
+        XCTAssertEqual(
+            loaded.settingMinutes(gitNetwork: 1, mcpTool: 10, pendingToolReport: 1, signInAskAfter: 60).signInAskAfterMs,
+            3_600_000
         )
     }
 

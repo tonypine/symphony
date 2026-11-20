@@ -8,14 +8,18 @@ defmodule SymphonyElixir.Conductor.Blocks do
 
   The resolved shapes (all keys present unless marked optional):
 
-    * `steps`: `run_id`, `run_kind`, `steps` (`step_id`, `title`, `outcome` of `passed`, `failed` or
-      `skipped`, `duration_ms`, `returns_to`; the newest 8);
+    * `steps`: `run_id`, `run_kind`, `steps` (`step_id`, `title`, `outcome` of `passed`, `failed`,
+      `blocked` or `skipped`, the step's one word (`SymphonyElixir.TicketEvents.StepWord`: a QA check
+      is drawn with what it judged), `duration_ms`, `returns_to`; the newest 8);
     * `evidence`: `items` (`event_id`, `artifact_id`, `caption`; 1 to 4);
     * `budget`: `tokens_used`, `tokens_cap` (left out when no cap is set), `parts` (`kind`, `runs`,
       `tokens` by run kind, largest first, at most 5);
     * `path`: `stops` (`phase`, `state` of `done`, `failed`, `current` or `upcoming`, `times`,
-      `run_number`), `loops`, `elapsed_ms`;
-    * `attempts`: `run_id`, `step_id`, `title`, `tries` (`at`, `outcome`, `duration_ms`, `line`; the
+      `run_number`), `loops`, `elapsed_ms`. Each phase is one stop, in the order of its last visit,
+      and its `state` is how that visit ended: a review's or QA's newest verdict since it opened
+      (`failed` unless it approved, passed or skipped), else `failed` when it left into Rework;
+      `times` counts every entry, `loops` every entry into Rework;
+    * `attempts`: `run_id`, `step_id`, `title`, `tries` (`at`, `outcome` as the step's word, `duration_ms`, `line`; the
       newest 5), `same_line`;
     * `compare`: `expected` and `actual`, each `%{text}` or `%{event_id, artifact_id}`;
     * `findings`: `items` (`id`, `title`, `state` of `open` or `resolved`, `severity`; at most 8, open
@@ -29,7 +33,7 @@ defmodule SymphonyElixir.Conductor.Blocks do
 
   alias SymphonyElixir.{Artifacts, RunStore, TicketEvents, TicketState}
   alias SymphonyElixir.Conductor.Facts
-  alias SymphonyElixir.TicketEvents.Event
+  alias SymphonyElixir.TicketEvents.{Event, StepWord}
 
   @steps_max 8
   @tries_max 5
@@ -42,6 +46,8 @@ defmodule SymphonyElixir.Conductor.Blocks do
   @step_outcomes ["passed", "failed", "skipped"]
   @normal_path ["In Progress", "Code Review", "QA", "Merging", "Done"]
   @terminal ["Done", "Canceled", "Cancelled"]
+  @verdict_kinds %{"Code Review" => "code_review", "QA" => "qa"}
+  @passing_verdicts ["approve", "pass", "skip"]
   @error_line ~r/error|fail|exception|panic|undefined|cannot|not found|refused/i
 
   @typedoc "What `resolve/3` reads: the ticket's `record`, its `events` (oldest first), the facts' `budget` and the run a block without a `run_id` is about."
@@ -109,7 +115,7 @@ defmodule SymphonyElixir.Conductor.Blocks do
   defp steps(run_id, %{events: events}) do
     steps =
       for %Event{type: "step.completed", run_id: ^run_id} = step <- events, field(step, :outcome) in @step_outcomes do
-        %{step_id: field(step, :step_id), title: field(step, :title), outcome: field(step, :outcome)}
+        %{step_id: field(step, :step_id), title: field(step, :title), outcome: StepWord.word(step.payload)}
         |> put_present(:duration_ms, field(step, :duration_ms))
         |> put_present(:returns_to, field(step, :returns_to))
       end
@@ -203,38 +209,67 @@ defmodule SymphonyElixir.Conductor.Blocks do
         {:error, "the ticket entered no phase"}
 
       [{_phase, first} | _rest] ->
-        folded = fold(entered)
-        stops = stops(folded, events)
-        {:ok, %{type: "path", stops: stops, loops: loops(folded), elapsed_ms: elapsed(first, events, record, now)}}
+        visits = visits(entered)
+        stops = stops(visits, events)
+        {:ok, %{type: "path", stops: stops, loops: loops(entered), elapsed_ms: elapsed(first, events, record, now)}}
     end
   end
 
-  # Consecutive repeats of one phase, with how many times it was entered.
-  defp fold(entered) do
-    entered
-    |> Enum.chunk_by(fn {phase, _event} -> phase end)
-    |> Enum.map(fn [{phase, _event} | _rest] = chunk -> %{phase: phase, times: length(chunk)} end)
+  # Each phase the ticket entered, once, in the order of its last visit: how many times it was
+  # entered, the event that opened its last visit and the phase that visit left for (nil while the
+  # ticket is still in it).
+  defp visits(entered) do
+    chunks = Enum.chunk_by(entered, fn {phase, _event} -> phase end)
+    exits = chunks |> Enum.drop(1) |> Enum.map(fn [{phase, _event} | _rest] -> phase end) |> Kernel.++([nil])
+
+    chunks
+    |> Enum.zip(exits)
+    |> Enum.with_index()
+    |> Enum.map(fn {{[{phase, opened} | _rest], next}, order} -> %{phase: phase, opened: opened, next: next, order: order} end)
+    |> Enum.group_by(& &1.phase)
+    |> Enum.map(fn {phase, phase_visits} -> phase_visits |> List.last() |> Map.put(:times, Enum.count(entered, &(elem(&1, 0) == phase))) end)
+    |> Enum.sort_by(& &1.order)
   end
 
-  defp stops(folded, events) do
-    last = length(folded) - 1
+  defp stops(visits, events) do
+    current = List.last(visits).phase
 
     met =
-      folded
-      |> Enum.with_index()
-      |> Enum.map(fn {%{phase: phase, times: times}, index} ->
-        next = folded |> Enum.at(index + 1) |> then(&(&1 && &1.phase))
-        stop = %{phase: phase, state: stop_state(phase, next, index == last), times: times}
+      Enum.map(visits, fn %{phase: phase, times: times} = visit ->
+        stop = %{phase: phase, state: stop_state(visit, current, events), times: times}
         put_present(stop, :run_number, run_number(events, phase))
       end)
 
-    met ++ upcoming(folded, met)
+    met ++ upcoming(visits, met)
   end
 
-  defp stop_state(phase, _next, true = _last?) when phase in @terminal, do: "done"
-  defp stop_state(_phase, _next, true = _last?), do: "current"
-  defp stop_state(phase, "Rework", false = _last?) when phase != "Rework", do: "failed"
-  defp stop_state(_phase, _next, false = _last?), do: "done"
+  # A stage reads how its last visit ended: the newest verdict of its review since that visit
+  # opened, else how it left (into Rework, sent back). Earlier visits stay in `times` and `loops`.
+  defp stop_state(%{phase: phase}, phase, _events) when phase in @terminal, do: "done"
+  defp stop_state(%{phase: phase}, phase, _events), do: "current"
+
+  defp stop_state(%{phase: phase, opened: opened, next: next}, _current, events) do
+    case last_verdict(events, phase, opened) do
+      nil when next == "Rework" and phase != "Rework" -> "failed"
+      nil -> "done"
+      outcome when outcome in @passing_verdicts -> "done"
+      _outcome -> "failed"
+    end
+  end
+
+  defp last_verdict(events, phase, %Event{id: opened_id}) do
+    case Map.fetch(@verdict_kinds, phase) do
+      {:ok, kind} ->
+        events
+        |> Enum.drop_while(&(&1.id != opened_id))
+        |> Enum.filter(&(&1.type == "verdict.recorded" and field(&1, :kind) == kind and is_nil(field(&1, :signal))))
+        |> List.last()
+        |> then(&(&1 && field(&1, :outcome)))
+
+      :error ->
+        nil
+    end
+  end
 
   defp run_number(events, phase) do
     events
@@ -244,21 +279,23 @@ defmodule SymphonyElixir.Conductor.Blocks do
     |> Enum.max(fn -> nil end)
   end
 
-  # The phases still ahead on the normal path to merge, after the ticket's newest phase on it.
-  defp upcoming(folded, met) do
+  # The phases still ahead on the normal path to merge, after the ticket's newest phase on it, that
+  # the path does not show already.
+  defp upcoming(visits, met) do
     if Enum.any?(met, &(&1.phase in @terminal)) do
       []
     else
-      position = folded |> Enum.map(&path_position(&1.phase)) |> Enum.reject(&is_nil/1) |> List.last()
+      position = visits |> Enum.map(&path_position(&1.phase)) |> Enum.reject(&is_nil/1) |> List.last()
       ahead = if position, do: Enum.drop(@normal_path, position + 1), else: []
-      Enum.map(ahead, &%{phase: &1, state: "upcoming", times: 0})
+      shown = Enum.map(met, & &1.phase)
+      for phase <- ahead, phase not in shown, do: %{phase: phase, state: "upcoming", times: 0}
     end
   end
 
   defp path_position("Rework"), do: 0
   defp path_position(phase), do: Enum.find_index(@normal_path, &(&1 == phase))
 
-  defp loops(folded), do: folded |> Enum.filter(&(&1.phase == "Rework")) |> Enum.map(& &1.times) |> Enum.sum()
+  defp loops(entered), do: Enum.count(entered, &(elem(&1, 0) == "Rework"))
 
   defp elapsed(%Event{at: started}, events, record, now) do
     until = if record.phase in @terminal, do: events |> List.last() |> Map.get(:at) || now, else: now
@@ -286,7 +323,7 @@ defmodule SymphonyElixir.Conductor.Blocks do
   end
 
   defp try_of(step) do
-    %{at: iso8601(step.at), outcome: field(step, :outcome), title: field(step, :title)}
+    %{at: iso8601(step.at), outcome: StepWord.word(step.payload), title: field(step, :title)}
     |> put_present(:duration_ms, field(step, :duration_ms))
     |> put_present(:line, output_line(step))
   end

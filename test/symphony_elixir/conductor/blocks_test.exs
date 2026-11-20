@@ -67,6 +67,28 @@ defmodule SymphonyElixir.Conductor.BlocksTest do
     assert log =~ "Conductor dropped a steps block"
   end
 
+  test "steps: a QA check is drawn with what it judged, from events recorded before the word", ctx do
+    check = fn id, status ->
+      %{
+        step_id: id,
+        title: id,
+        mode: "orchestrated",
+        outcome: "passed",
+        result: %{status: status, expected: "x", actual: "y"}
+      }
+    end
+
+    record!(ctx, "step.completed", check.("walk_1", "fail"), run_id: "run-1")
+    record!(ctx, "step.completed", check.("design_check", "blocked"), run_id: "run-1")
+    record!(ctx, "step.completed", check.("wide_pass", "pass"), run_id: "run-1")
+    record!(ctx, "step.completed", %{step_id: "review", title: "Review", mode: "orchestrated", outcome: "passed"}, run_id: "run-1")
+
+    assert [%{steps: steps}] = resolve(ctx, [%{type: "steps"}])
+    assert Enum.map(steps, &{&1.step_id, &1.outcome}) == [{"walk_1", "failed"}, {"design_check", "blocked"}, {"wide_pass", "passed"}, {"review", "passed"}]
+
+    assert [%{tries: [%{outcome: "failed"}]}] = resolve(ctx, [%{type: "attempts", step_id: "walk_1"}])
+  end
+
   test "steps keeps the newest 8", ctx do
     for n <- 1..10, do: record!(ctx, "step.completed", %{step_id: "s#{n}", title: "S#{n}", mode: "machine", outcome: "passed"}, run_id: "run-1")
     assert [%{steps: steps}] = resolve(ctx, [%{type: "steps"}])
@@ -128,7 +150,7 @@ defmodule SymphonyElixir.Conductor.BlocksTest do
     capture_log(fn -> assert resolve(ctx, [%{type: "budget"}]) == [] end)
   end
 
-  test "path: the phases met in order with repeats folded, the loops and the phases ahead", ctx do
+  test "path: each phase once in the order of its last visit, the loops and the phases ahead", ctx do
     record!(ctx, "phase.entered", %{to: "In Progress"})
     record!(ctx, "phase.entered", %{to: "Code Review", from: "In Progress"})
     record!(ctx, "phase.entered", %{to: "QA", from: "Code Review"})
@@ -143,12 +165,86 @@ defmodule SymphonyElixir.Conductor.BlocksTest do
     assert stops == [
              %{phase: "In Progress", state: "done", times: 1},
              %{phase: "Code Review", state: "done", times: 1},
-             %{phase: "QA", state: "failed", times: 1, run_number: 2},
              %{phase: "Rework", state: "done", times: 1},
-             %{phase: "QA", state: "current", times: 1, run_number: 2},
+             %{phase: "QA", state: "current", times: 2, run_number: 2},
              %{phase: "Merging", state: "upcoming", times: 0},
              %{phase: "Done", state: "upcoming", times: 0}
            ]
+  end
+
+  test "path: QA that passed after seven blocked passes reads done at Merging and at Done", ctx do
+    record!(ctx, "phase.entered", %{to: "In Progress"})
+    record!(ctx, "phase.entered", %{to: "Code Review", from: "In Progress"})
+    record!(ctx, "verdict.recorded", %{kind: "code_review", outcome: "approve", head: "h0"})
+    record!(ctx, "phase.entered", %{to: "QA", from: "Code Review"})
+
+    for n <- 1..7 do
+      record!(ctx, "run.started", %{run_id: "q#{n}", run_kind: "qa", state: "QA", run_number: n}, run_id: "q#{n}")
+      record!(ctx, "verdict.recorded", %{kind: "qa", outcome: "blocked", head: "h#{n}"})
+
+      if n == 4 do
+        record!(ctx, "phase.entered", %{to: "Rework", from: "QA"})
+        record!(ctx, "phase.entered", %{to: "Code Review", from: "Rework"})
+        record!(ctx, "verdict.recorded", %{kind: "code_review", outcome: "approve", head: "h4b"})
+        record!(ctx, "phase.entered", %{to: "QA", from: "Code Review"})
+      end
+    end
+
+    record!(ctx, "run.started", %{run_id: "q8", run_kind: "qa", state: "QA", run_number: 8}, run_id: "q8")
+    record!(ctx, "verdict.recorded", %{kind: "qa", outcome: "pass", head: "h8"})
+    record!(ctx, "phase.entered", %{to: "Merging", from: "QA"})
+
+    merging = %{record: %{TicketState.normalize(ctx.record) | phase: "Merging"}}
+    assert [%{stops: stops, loops: 1}] = resolve(ctx, [%{type: "path"}], merging)
+    assert Enum.find(stops, &(&1.phase == "QA")) == %{phase: "QA", state: "done", times: 2, run_number: 8}
+    assert Enum.map(stops, &{&1.phase, &1.state}) == [{"In Progress", "done"}, {"Rework", "done"}, {"Code Review", "done"}, {"QA", "done"}, {"Merging", "current"}, {"Done", "upcoming"}]
+
+    record!(ctx, "phase.entered", %{to: "Done", from: "Merging"})
+    done = %{record: %{TicketState.normalize(ctx.record) | phase: "Done"}}
+    assert [%{stops: stops}] = resolve(ctx, [%{type: "path"}], done)
+    assert Enum.find(stops, &(&1.phase == "QA")) == %{phase: "QA", state: "done", times: 2, run_number: 8}
+    assert List.last(stops) == %{phase: "Done", state: "done", times: 1}
+  end
+
+  test "path: QA whose last verdict failed or blocked reads failed, and a skipped QA reads done", ctx do
+    record!(ctx, "phase.entered", %{to: "QA"})
+    record!(ctx, "verdict.recorded", %{kind: "qa", outcome: "pass", head: "h1"})
+    record!(ctx, "verdict.recorded", %{kind: "qa", outcome: "fail", head: "h2"})
+    record!(ctx, "phase.entered", %{to: "Rework", from: "QA"})
+    assert [%{stops: [%{phase: "QA", state: "failed"}, %{phase: "Rework", state: "current"} | _ahead]}] = resolve(ctx, [%{type: "path"}])
+
+    record!(ctx, "phase.entered", %{to: "QA", from: "Rework"})
+    record!(ctx, "verdict.recorded", %{kind: "qa", outcome: "blocked", head: "h3"})
+    record!(ctx, "phase.entered", %{to: "CI Fix", from: "QA"})
+    [%{stops: stops}] = resolve(ctx, [%{type: "path"}])
+    assert [%{phase: "Rework"}, %{phase: "QA", state: "failed", times: 2}, %{phase: "CI Fix", state: "current"} | _ahead] = stops
+
+    record!(ctx, "phase.entered", %{to: "QA", from: "CI Fix"})
+    record!(ctx, "verdict.recorded", %{kind: "qa", outcome: "skip", head: "h4"})
+    record!(ctx, "verdict.recorded", %{kind: "qa", outcome: "fail", head: "h4", signal: "qa verdict"})
+    record!(ctx, "phase.entered", %{to: "Merging", from: "QA"})
+    assert [%{stops: stops}] = resolve(ctx, [%{type: "path"}])
+    assert Enum.find(stops, &(&1.phase == "QA")) == %{phase: "QA", state: "done", times: 3}
+  end
+
+  test "path: Code Review reads failed when sent back, and done once a later visit approves", ctx do
+    record!(ctx, "phase.entered", %{to: "Code Review"})
+    record!(ctx, "phase.entered", %{to: "Rework", from: "Code Review"})
+    [%{stops: stops}] = resolve(ctx, [%{type: "path"}])
+    assert [%{phase: "Code Review", state: "failed"}, %{phase: "Rework", state: "current"} | _ahead] = stops
+
+    record!(ctx, "phase.entered", %{to: "Code Review", from: "Rework"})
+    record!(ctx, "verdict.recorded", %{kind: "code_review", outcome: "request_changes", head: "h1"})
+    record!(ctx, "phase.entered", %{to: "Rework", from: "Code Review"})
+    [%{stops: stops}] = resolve(ctx, [%{type: "path"}])
+    assert [%{phase: "Code Review", state: "failed", times: 2}, %{phase: "Rework", state: "current", times: 2} | _ahead] = stops
+
+    record!(ctx, "phase.entered", %{to: "Code Review", from: "Rework"})
+    record!(ctx, "verdict.recorded", %{kind: "code_review", outcome: "approve", head: "h2"})
+    record!(ctx, "phase.entered", %{to: "QA", from: "Code Review"})
+
+    assert [%{stops: stops, loops: 2}] = resolve(ctx, [%{type: "path"}])
+    assert [%{phase: "Rework", state: "done"}, %{phase: "Code Review", state: "done", times: 3}, %{phase: "QA", state: "current"} | _ahead] = stops
   end
 
   test "path: a repeated phase folds, a ticket in Rework goes on from coding, a finished one has nothing ahead", ctx do

@@ -571,7 +571,11 @@ entry titled Update (a watch turn's update also carries `watch`: the watched `ru
 prompt carries as its own section, marked as advice and wrapped as untrusted data, and which at
 `after_qa_blocked` carries the `route` Symphony took on the turn's answer (`rerun` or `rework`); a
 question the Conductor asks goes through the decision path, pauses the ticket and holds the run it
-came before),
+came before, and each of its options names the action a pick makes from a closed list (`continue`,
+`rerun`, `rework` with a finding, `accept_without_qa`, which records the `qa` verdict `skip` and moves
+to Merging, and `cancel`), which the decision path performs; a ticket waits on one open question
+about its stage at a time, the Conductor's or QA's own "could not finish its check", and answering
+one withdraws any other open in the same phase as `superseded`; `docs/configuration.md#conductor`),
 `conductor.steer` (machine only: guidance the Conductor's watch gave a running run, under that run's
 `run_id`, with its `text`, `when` it asked for it, `next_turn`, `now` or `stop`, the `trigger` that
 made it look and how and when it was `delivered`; `conductor.watch` in `docs/configuration.md`) and
@@ -594,7 +598,18 @@ it once the turn is over. While a run is live, the ticket read's `running` says 
 (`current_step`) and the run's newest lines from the session stream (`recent_lines`, at most 20):
 that step's while one is open, else the lines since the run's last step completed, or the whole
 stream's for a run that walks no steps (a QA or Code Review run). There is no `step.skipped`: a skip is `step.completed` with `outcome:
-skipped`. A `question.answered` naming the question a paused step waits on resumes that step. Each
+skipped`. A `question.answered` naming the question a paused step waits on resumes that step.
+
+A step is drawn with one word. A stepped QA pass's check step (a walk, a design check, the wide pass,
+a recheck) records `outcome: passed` once it ran to an answer Symphony takes, and what it judged in
+`result.status` (`pass`, `fail`, `blocked`); such a step is drawn, on the ticket page, in the
+Conductor's `steps` and `attempts` blocks and in the Conductor's facts, with what it judged: `passed`,
+`failed` or `blocked`. That it ran stays a fact of the event, not the word shown, and a judged
+failure does not stop the run. Every other step (a machine step, a step without a result, one that
+ended `failed`, `paused` or `skipped`) is drawn with its outcome. The word is read from the event as
+recorded, so events written before it existed draw the same way without a migration. When the
+review overrules a check's judgement, the check keeps what it judged and the verdict's summary says
+which step was overruled and why. Each
 outcome renders one line ("Build failed after 4 min: back to writing the code", "Tests passed in 2
 min", "Paused on your answer", "Checks skipped: no Elixir changed"), and while a run is under way
 its group's line names the step it is on.
@@ -1622,6 +1637,9 @@ Fields:
   - Default: `120`. Added to the reported reset time before runs resume.
 - `usage_limit.unknown_reset_retry_seconds` (integer `>= 60`)
   - Default: `900`. How long the hold lasts when no reset time is known.
+- `usage_limit.sign_in_ask_after_seconds` (integer `>= 60`)
+  - Default: `1800`. How long a hold on an agent that cannot sign in lasts before a person is asked
+    (Section 8.4.1).
 - `providers.<provider>.reserve` (number in `(0, 1]` or null)
   - Default: `null` (no reserve). Where new runs on the provider stop, as a share of any of its
     usage windows: a window at or above it puts the provider at its reserve, a headroom hold on its
@@ -2736,6 +2754,7 @@ not require recognizing or validating extension fields unless that extension is 
 - `execution.usage_limit.auto_pause`: boolean, default `true`
 - `execution.usage_limit.resume_margin_seconds`: integer `>= 0`, default `120`
 - `execution.usage_limit.unknown_reset_retry_seconds`: integer `>= 60`, default `900`
+- `execution.usage_limit.sign_in_ask_after_seconds`: integer `>= 60`, default `1800`
 - `execution.providers.<provider>.reserve`: number in `(0, 1]` or null, default `null`; only for a
   provider whose usage Symphony reads (`anthropic`). It replaces
   `execution.usage_limit.headroom_utilization`, which a start migrates to
@@ -4273,6 +4292,15 @@ not an outage and keeps its normal path.
   and `Model API still unreachable (…) … next_probe_at=…` per failed probe. Show the hold in the
   status surfaces as `Paused: Claude API unreachable (ENOTFOUND), retries ~14:05`, and in
   `/api/v1/state` `usage_limits` with its `reason` and `error`.
+- An agent that could not sign in to the model API (the Claude CLI's error result naming a refused
+  authentication: `Failed to authenticate`, a 401 or 403, an invalid key or an expired token, with
+  nothing used) is the same outage for a second cause: `reason: "model_api_sign_in_failed"`, its
+  `error` the provider's message. It is never read as the agent's answer: no QA verdict follow-up,
+  no counted attempt. The ticket's situation reads `Waiting: the agent can't sign in to Claude`
+  with the message and since when, and Home lists the hold once. Once the hold has lasted
+  `usage_limit.sign_in_ask_after_seconds`, Symphony asks once on Symphony itself (one Inbox row,
+  no ticket), recommending "I signed in again", which checks the hold at once as Try Now does; the
+  question is withdrawn when the hold lifts.
 
 ### 8.5 Active Run Reconciliation
 
@@ -6029,6 +6057,16 @@ Minimum endpoints:
   - Answers `200` `{"ok": true}` as soon as the endpoint serves, reading nothing else: the
     liveness route for a dev server's health check (`verification.dev_server.health_check_url`),
     which gives each request 250 ms. `/api/v1/state` stays the app's poll.
+
+- `GET /api/v1/drain`
+  - Answers `200` `{"running": 2, "between_turns": 1, "paused": true}`: the agent runs, how many
+    of them wait between turns (as `counts.between_turns`), and whether dispatch is paused. Read
+    from the orchestrator's snapshot alone, with no page presenter, so it answers when
+    `/api/v1/state` fails. `503` with `snapshot_timeout` or `snapshot_unavailable` when the
+    orchestrator doesn't answer.
+  - The macOS app reads it while a restart or an update drain waits and a state poll fails, and
+    to start an update while the state fails: a broken state can't keep the app from installing
+    the release that fixes it.
 
 - `GET /api/v1/repos`
   - Returns one entry per configured repository, in config order: its key, `default` and

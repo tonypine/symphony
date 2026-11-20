@@ -46,9 +46,12 @@ defmodule SymphonyElixir.ConfigSplitTest do
     SymphonyElixir.Workflow.set_symphony_file_path(symphony_path)
 
     counter = :counters.new(1, [])
+    test_pid = self()
 
+    # Only this process's reads count: a process another test left running may read the same
+    # settings while this one warms the cache, and its read says nothing about this cache.
     Application.put_env(:symphony_elixir, :config_cache_file_reader, fn path ->
-      if Path.expand(path) == Path.expand(symphony_path) do
+      if self() == test_pid and Path.expand(path) == Path.expand(symphony_path) do
         :counters.add(counter, 1, 1)
       end
 

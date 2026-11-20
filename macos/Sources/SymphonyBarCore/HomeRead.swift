@@ -329,15 +329,31 @@ public struct HomeLists: Equatable {
     public var progress: [TreeNode<String>]
     public var queue: [TreeNode<String>]
     public var rows: [String: Row]
+    /// What holds the whole factory, one line each above the lists (TP-1515): "Agents can't sign in to Claude since
+    /// Nov 13, 09:46 (Failed to authenticate. …): new runs wait until Nov 13, 10:01." Empty when nothing does.
+    public var notices: [String]
 
-    public init(progress: [TreeNode<String>] = [], queue: [TreeNode<String>] = [], rows: [String: Row] = [:]) {
+    public init(progress: [TreeNode<String>] = [], queue: [TreeNode<String>] = [], rows: [String: Row] = [:], notices: [String] = []) {
         self.progress = progress
         self.queue = queue
         self.rows = rows
+        self.notices = notices
     }
 
-    /// The lists of `read`; ages are measured against `reference`, Symphony's own clock.
-    public init(read: HomeRead, reference: Date) {
+    /// Home's lines for a provider that refuses the agents' sign-in, one per hold, from `snapshot`: the provider's
+    /// message and since when. A hold its probe is checking (canary) is lifting, so it has no line.
+    public static func notices(_ snapshot: StateSnapshot, reference: Date, timeZone: TimeZone = .current) -> [String] {
+        snapshot.usageLimits.filter { $0.isSignInFailure && $0.phase != .canary }.map { limit in
+            Overview.signInSentence(
+                limit, what: StatusMenu.apiUnreachableName(limit), when: Overview.untilPhrase(limit, reference: reference, timeZone: timeZone),
+                reference: reference, timeZone: timeZone
+            )
+        }
+    }
+
+    /// The lists of `read`, with `notices` above them; ages are measured against `reference`, Symphony's own clock.
+    public init(read: HomeRead, reference: Date, notices: [String] = []) {
+        self.notices = notices
         var rows: [String: Row] = [:]
         progress = read.inProgress.map { entry in
             switch entry {

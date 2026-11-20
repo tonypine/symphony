@@ -82,6 +82,7 @@ defmodule SymphonyElixirWeb.Router do
   scope "/", SymphonyElixirWeb do
     get("/api/v1/health", ObservabilityApiController, :health)
     get("/api/v1/state", ObservabilityApiController, :state)
+    get("/api/v1/drain", ObservabilityApiController, :drain)
     get("/api/v1/setup", SetupController, :show)
     get("/api/v1/runs", ObservabilityApiController, :runs)
     get("/api/v1/history", ObservabilityApiController, :history)
@@ -116,6 +117,7 @@ defmodule SymphonyElixirWeb.Router do
 
     match(:*, "/api/v1/health", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/state", ObservabilityApiController, :method_not_allowed)
+    match(:*, "/api/v1/drain", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/setup", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/setup/github_updates/:action", ObservabilityApiController, :method_not_allowed)
     match(:*, "/api/v1/setup/refresh", ObservabilityApiController, :method_not_allowed)

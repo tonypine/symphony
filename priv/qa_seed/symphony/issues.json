@@ -187,5 +187,39 @@
       "name": "Symphony QA seed",
       "slug_id": "symphony-qa-seed"
     }
+  },
+  {
+    "id": "qa-seed-112",
+    "identifier": "QA-112",
+    "state": "QA",
+    "title": "Retry a failed release upload once before asking",
+    "description": "Retry a failed release upload once before asking.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
+  },
+  {
+    "id": "qa-seed-113",
+    "identifier": "QA-113",
+    "state": "QA",
+    "title": "Show the queue's wait time on each Home row",
+    "description": "Show the queue's wait time on each Home row.\n\nSeeded for the QA server: no repository holds this work.",
+    "labels": [],
+    "team": {
+      "key": "QA",
+      "name": "QA"
+    },
+    "project": {
+      "id": "qa-seed-project",
+      "name": "Symphony QA seed",
+      "slug_id": "symphony-qa-seed"
+    }
   }
 ]

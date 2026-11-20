@@ -10,12 +10,17 @@ defmodule SymphonyElixir.Conductor.Facts do
 
     * `junction`: the junction it is shaped for, and `focus`, what the turn there is for;
     * `ticket`: identifier, title, URL, the description's `problem`, `acceptance` and `walkthrough`
-      sections, the newest brief, the person's decisions, notes and messages, and answers to questions;
+      sections, the walkthrough steps recorded as proved by a test (`proved_steps`: each step's
+      number and test, the newest proof of a step; QA's pre-check runs that test and QA does not
+      walk the step), the newest brief, the person's decisions, notes and messages, and answers to
+      questions;
     * `standing`: phase, coding attempt (the implementation and rework runs started), the pull
       request and its head;
     * `last_run`: the newest run that ended, other than the Conductor's own: its kind, model, exit,
-      tokens, steps and their results, the files it changed with a diff stat (only when the workspace
-      exists), and the findings it marked resolved;
+      tokens, steps and their results (each step's `outcome` is its one word,
+      `SymphonyElixir.TicketEvents.StepWord`: a QA check reads what it judged), the files it
+      changed with a diff stat (only when the workspace exists), and the findings it marked
+      resolved;
     * `findings`: every finding with its state (`open`, `resolved`, `reopened`, `confirmed`), class,
       severity, description, evidence, its resolution, and how many times its class was recorded on
       this ticket (`class_count`);
@@ -37,7 +42,7 @@ defmodule SymphonyElixir.Conductor.Facts do
 
   alias SymphonyElixir.{Config, RunStore, TicketBrief, TicketEvents, TicketState, Walkthrough, Workspace}
   alias SymphonyElixir.Config.Schema
-  alias SymphonyElixir.TicketEvents.Event
+  alias SymphonyElixir.TicketEvents.{Event, StepWord}
 
   @schema "symphony.conductor.facts/1"
   @cut_marker " [cut by Symphony]"
@@ -151,6 +156,7 @@ defmodule SymphonyElixir.Conductor.Facts do
       problem: sections |> section(@problem_heading) |> Kernel.||(untitled(sections)) |> cut(@section_max),
       acceptance: sections |> section(@acceptance_heading) |> cut(@section_max),
       walkthrough: record.description |> Walkthrough.section() |> cut(@section_max),
+      proved_steps: proved_steps(events),
       brief: brief(events),
       decisions: Enum.map(record.decisions, &%{title: &1.title, answer: cut(&1.answer, @text_max)}),
       notes: person_notes(events),
@@ -183,6 +189,16 @@ defmodule SymphonyElixir.Conductor.Facts do
 
   defp untitled([{nil, body} | _rest]) when body != "", do: body
   defp untitled(_sections), do: nil
+
+  # The newest recorded proof of each walkthrough step, by step number (`Walkthrough.proofs_of/1`).
+  defp proved_steps(events) do
+    events
+    |> Enum.flat_map(fn event -> for proof <- Walkthrough.proofs_of([event]), do: Map.put(proof, :event_id, event.id) end)
+    |> Enum.reduce(%{}, &Map.put(&2, &1.step, &1))
+    |> Map.values()
+    |> Enum.sort_by(& &1.step)
+    |> Enum.map(&%{&1 | test: cut(&1.test, @step_text_max)})
+  end
 
   defp brief(events) do
     case TicketBrief.current(events) do
@@ -275,7 +291,7 @@ defmodule SymphonyElixir.Conductor.Facts do
         step_id: payload(step, :step_id),
         title: payload(step, :title),
         mode: payload(step, :mode),
-        outcome: payload(step, :outcome),
+        outcome: StepWord.word(step.payload),
         returns_to: payload(step, :returns_to),
         reason: payload(step, :reason),
         result: result(payload(step, :result)),
