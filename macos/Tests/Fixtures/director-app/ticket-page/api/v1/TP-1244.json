@@ -17,16 +17,6 @@
     "path": "/Users/director/symphony-workspaces/symphony/TP-1244",
     "host": null
   },
-  "note": {
-    "id": "01M746NOTE",
-    "text": "Keep the paused line to one row on a laptop; the reasons fold under it.",
-    "at": "2026-10-08T09:35:00Z",
-    "by": "Tony",
-    "read_by": {
-      "run_id": "run-2",
-      "at": "2026-10-08T09:45:00Z"
-    }
-  },
   "brief": {
     "id": "01M746BRIEF",
     "text": "Adds the paused line under the ticket page's title: why the ticket is paused, since when, and Release where you may release it.",

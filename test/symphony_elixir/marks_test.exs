@@ -83,27 +83,26 @@ defmodule SymphonyElixir.MarksTest do
   end
 
   describe "read/2's messages" do
-    test "counts the messages no run read yet, and serves the newest as the older app's note", %{ticket: ticket} do
+    test "counts the messages no run read yet, and serves no note", %{ticket: ticket} do
       read = fn -> Marks.read(RunStore.get_ticket_state(ticket.issue_id), events(ticket)) end
-      assert %{unread_messages: 0, note: nil} = read.()
+      assert read.() |> Map.keys() |> Enum.sort() == [:looked_at, :new_since_looked, :unread_messages]
+      assert %{unread_messages: 0} = read.()
 
       # Symphony's notes and an agent's are not messages.
       record!(ticket, "note", %{text: "an agent's note"}, at: at(1), actor: {:agent, "run-0", "implementation"})
       record!(ticket, "note", %{text: "QA waits on the PR watcher"}, at: at(1))
-      assert %{unread_messages: 0, note: nil} = read.()
+      assert %{unread_messages: 0} = read.()
 
       first = record!(ticket, "message.sent", %{text: "Keep the button."}, at: at(2), actor: {:person, "the Director"})
       second = record!(ticket, "message.sent", %{text: "Use the new copy."}, at: at(3), actor: {:person, "the Director"})
 
-      assert %{unread_messages: 2, note: note} = read.()
-      assert note == %{id: second.id, text: "Use the new copy.", at: DateTime.to_iso8601(at(3)), by: "the Director", read_by: nil}
+      assert %{unread_messages: 2} = read.()
 
       record!(ticket, "message.read", %{message_id: second.id, run_id: "run-1"}, run_id: "run-1")
-      assert %{unread_messages: 1, note: %{id: id}} = read.()
-      assert id == first.id
+      assert %{unread_messages: 1} = read.()
 
       record!(ticket, "message.read", %{message_id: first.id, run_id: "run-1"}, run_id: "run-1")
-      assert %{unread_messages: 0, note: nil} = read.()
+      assert %{unread_messages: 0} = read.()
     end
   end
 

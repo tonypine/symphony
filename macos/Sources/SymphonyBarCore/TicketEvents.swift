@@ -82,6 +82,19 @@ public struct TicketEventsPayload: Equatable {
         public var detail: String?
     }
 
+    /// Which run read a message (`message.sent`'s `read`): the run, its title ("Implementation run 2") and when.
+    public struct MessageRead: Equatable {
+        public var runID: String?
+        public var run: String?
+        public var at: Date?
+
+        public init(runID: String? = nil, run: String? = nil, at: Date? = nil) {
+            self.runID = runID
+            self.run = run
+            self.at = at
+        }
+    }
+
     /// A file an event carries.
     public struct Artifact: Decodable, Equatable {
         public var id: String
@@ -257,11 +270,13 @@ public struct TicketEventsPayload: Equatable {
         /// It only records Symphony's bookkeeping (a review waiting on the PR watcher, a workspace already on the PR
         /// head): the timeline leaves it out; Diagnostics keeps it.
         public var bookkeeping: Bool = false
+        /// A message's read: the run that read it and when; nil while no run did, and on any other event.
+        public var read: MessageRead?
 
         public init(
             id: String, seq: Int?, at: String?, type: String, runID: String?, parent: String?, actor: Actor?,
             summary: Summary?, payload: Payload, artifacts: [Artifact], isNew: Bool = false, rule: String? = nil,
-            bookkeeping: Bool = false
+            bookkeeping: Bool = false, read: MessageRead? = nil
         ) {
             self.id = id
             self.seq = seq
@@ -277,6 +292,7 @@ public struct TicketEventsPayload: Equatable {
             self.isNew = isNew
             self.rule = rule
             self.bookkeeping = bookkeeping
+            self.read = read
         }
 
         /// The screenshots it carries.
@@ -656,7 +672,11 @@ public struct TicketEventsPayload: Equatable {
 /// reads as nothing; only `id` is required.
 extension TicketEventsPayload.Event: Decodable {
     enum CodingKeys: String, CodingKey {
-        case id, seq, at, type, runId, parent, actor, summary, payload, artifacts, new, rule, bookkeeping
+        case id, seq, at, type, runId, parent, actor, summary, payload, artifacts, new, rule, bookkeeping, read
+    }
+
+    private enum ReadKeys: String, CodingKey {
+        case runId, run, at
     }
 
     public init(from decoder: Decoder) throws {
@@ -674,7 +694,14 @@ extension TicketEventsPayload.Event: Decodable {
             artifacts: (try? container.decodeIfPresent([TicketEventsPayload.Artifact].self, forKey: .artifacts)) ?? [],
             isNew: (try? container.decodeIfPresent(Bool.self, forKey: .new)) == true,
             rule: try? container.decodeIfPresent(String.self, forKey: .rule),
-            bookkeeping: (try? container.decodeIfPresent(Bool.self, forKey: .bookkeeping)) == true
+            bookkeeping: (try? container.decodeIfPresent(Bool.self, forKey: .bookkeeping)) == true,
+            read: (try? container.nestedContainer(keyedBy: ReadKeys.self, forKey: .read)).map { read in
+                TicketEventsPayload.MessageRead(
+                    runID: try? read.decodeIfPresent(String.self, forKey: .runId),
+                    run: try? read.decodeIfPresent(String.self, forKey: .run),
+                    at: (try? read.decodeIfPresent(String.self, forKey: .at)).flatMap(TicketPage.date)
+                )
+            }
         )
     }
 }

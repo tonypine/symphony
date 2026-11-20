@@ -111,15 +111,16 @@ defmodule SymphonyElixirWeb.MarksReadTest do
     refute PromptBuilder.build_prompt(issue, ticket_state: RunStore.get_ticket_state(@id), run_id: "run-1") =~ "Messages from the person"
 
     # Never looked: everything is new.
-    assert %{looked_at: nil, new_since_looked: 2, unread_messages: 0, note: nil} = read()
+    assert %{looked_at: nil, new_since_looked: 2, unread_messages: 0} = read()
+    refute Map.has_key?(read(), :note)
 
     # The Director opens the ticket and writes to it twice while the run works.
     assert look(%{"issue_identifier" => @identifier}).status == 200
     assert %{"event" => %{"id" => first_id}} = "Keep the export button." |> write(tmp_dir) |> Map.fetch!(:resp_body) |> Jason.decode!()
     assert %{"event" => %{"id" => second_id}} = "And use the new copy." |> write(tmp_dir) |> Map.fetch!(:resp_body) |> Jason.decode!()
 
-    # Both are in the history as written by the person, each unread; the older app's note is the newest.
-    assert %{unread_messages: 2, note: %{id: ^second_id, text: "And use the new copy.", by: "the Director", read_by: nil}} = read()
+    # Both are in the history as written by the person, each unread.
+    assert %{unread_messages: 2} = read()
     messages = Enum.filter(feed(), &(&1["type"] == "message.sent"))
 
     assert Enum.map(messages, &{&1["id"], &1["summary"]["title"], &1["summary"]["detail"], &1["read"], &1["new"]}) == [
@@ -134,7 +135,7 @@ defmodule SymphonyElixirWeb.MarksReadTest do
     assert prompt =~ ~r/\A## Messages from the person\n.*Keep the export button\..*And use the new copy\./s
 
     # Both are marked read by that run.
-    assert %{unread_messages: 0, note: nil} = read()
+    assert %{unread_messages: 0} = read()
 
     for message <- Enum.filter(feed(), &(&1["type"] == "message.sent")) do
       assert %{"run_id" => "run-2", "run" => "Implementation run 2", "at" => at} = message["read"]
