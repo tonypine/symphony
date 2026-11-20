@@ -41,6 +41,10 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   # GitHub showing a stale check.
   @bookkeeping_signals ["qa_head_not_green", "code_review_head_not_green", "stale_check"]
 
+  # How a check was proved, and what the Conductor of a ticket did to this one, as a line says them.
+  @proved_by %{"test" => " by a test", "qa" => " by QA", "design" => " against the design", "attached" => " by an attachment"}
+  @intervened %{"stopped" => "Run stopped", "replanned" => "Plan changed", "canceled" => "Canceled", "replaced" => "Replaced", "added" => "Added"}
+
   @doc """
   The summary of `event` (an `Event` or a stored record `Event.normalize/1` reads): its title and its
   detail, or nil when the payload has nothing to add.
@@ -333,7 +337,29 @@ defmodule SymphonyElixir.TicketEvents.Summary do
   defp summary("conductor.instructions", payload, _event), do: {"Conductor instructions", [text(payload, :text)]}
   defp summary("conductor.steer", payload, _event), do: {"Conductor steered", [text(payload, :text)]}
   defp summary("report.published", payload, _event), do: {"Report published", [text(payload, :text)]}
+  defp summary("ask.recorded", payload, _event), do: {ask_title(text(payload, :source), text(payload, :from)), [text(payload, :text)]}
+
+  defp summary("plan.written", payload, _event) do
+    if (count(payload, :version) || 1) > 1,
+      do: {"Plan changed", [text(payload, :reason)]},
+      else: {"Plan written", [text(payload, :summary)]}
+  end
+
+  defp summary("check.proved", payload, _event) do
+    {"Check proved" <> Map.get(@proved_by, text(payload, :by), ""), [text(payload, :check_id), text(payload, :test), text(payload, :details)]}
+  end
+
+  defp summary("check.waived", payload, _event), do: {"Check waived", [text(payload, :check_id), text(payload, :reason)]}
+
+  defp summary("conductor.intervention", payload, _event) do
+    {Map.get(@intervened, text(payload, :action), "Changed") <> " by the Conductor" <> suffix(" of ", text(payload, :by)), [text(payload, :reason)]}
+  end
+
   defp summary(_type, _payload, _event), do: :unknown
+
+  defp ask_title("message", _from), do: "Ask changed by a message"
+  defp ask_title("parent", from), do: "Ask given by #{from || "the parent ticket"}"
+  defp ask_title(_source, _from), do: "Ask recorded"
 
   defp message_writer(%{name: name}) when is_binary(name) and name not in ["", "the Director"], do: "#{name} wrote"
   defp message_writer(_actor), do: "You wrote"

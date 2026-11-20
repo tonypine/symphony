@@ -585,8 +585,22 @@ about its stage at a time, the Conductor's or QA's own "could not finish its che
 one withdraws any other open in the same phase as `superseded`; `docs/configuration.md#conductor`),
 `conductor.steer` (machine only: guidance the Conductor's watch gave a running run, under that run's
 `run_id`, with its `text`, `when` it asked for it, `next_turn`, `now` or `stop`, the `trigger` that
-made it look and how and when it was `delivered`; `conductor.watch` in `docs/configuration.md`) and
-`note`. `GET /api/v1/events` reads every ticket's events, and
+made it look and how and when it was `delivered`; `conductor.watch` in `docs/configuration.md`),
+`ask.recorded` (the machine's or a person's: what a person asked for, word for word and never
+rewritten, with its `source`, `linear`, `message` or `parent`, and the parent ticket or message it
+came `from`), `plan.written` (machine only: one version of a groomed ticket's plan, with its
+`version`, the `reason` it was written and `by` what, its `shape`, `single` or `split`, the `layers`
+it touches, a `summary` for a person, the plan's `text` for agents, its `checks`, each with an `id`
+that stays the same across versions, a `kind`, `outcome`, `qa` or `evidence`, a `statement` and its
+`proof`, `test`, `qa`, `design` or `attached`, its `size` and, for a split, its `sub_tickets`; the
+newest one is the ticket's plan, and a ticket is groomed exactly when it holds one), `check.proved`
+(any run's, or the machine's: a check of the current plan proved by a test, QA, the design or
+something attached, recorded once per check and head and refused for an id the plan does not hold),
+`check.waived` (machine only: a check nobody has to prove any more, and why),
+`conductor.intervention` (machine only: what the Conductor of another ticket did to this one,
+`stopped`, `replanned`, `canceled`, `replaced` or `added`, and why) and
+`note` (which may carry a `tag` its writer gives it: `discovery`, something a run found that is not its
+own to solve, or `base_fault`, a fault of the base branch). `GET /api/v1/events` reads every ticket's events, and
 Symphony's own stream, newest first, with the notable rule set (`docs/control-api.md`).
 
 A run's steps are `step.started` and `step.completed`, each naming the step (`step_id`, `title`)

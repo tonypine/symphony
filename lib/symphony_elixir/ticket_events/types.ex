@@ -45,7 +45,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `agent_types/1` lists for its run kind: `finding.recorded` in a QA run (Symphony also records one
   as a Conductor turn's when a person picks its option to send the ticket to Rework,
   `SymphonyElixir.DecisionMove`); `finding.resolved`,
-  `step.started`, `step.completed`, `evidence`, `checklist.answered` and `note` in any run. Every other type is the
+  `step.started`, `step.completed`, `evidence`, `checklist.answered`, `check.proved` and `note` in any run. Every other type is the
   machine's or a person's (a question is asked through the question tool), and a legacy type is
   never an agent's. An `evidence` may carry a `proof`: the walkthrough step it proves and the test.
   A QA pass's step evidence also names the step (`step`), its result (`status`), what QA saw
@@ -171,6 +171,35 @@ defmodule SymphonyElixir.TicketEvents.Types do
   does and why, in a person's words (`text`, at most 1,200 characters), and its walkthrough as the
   steps a person takes (`walkthrough`, at most 4,000), both prose with no backtick. The newest one is
   the ticket's brief (`SymphonyElixir.TicketBrief`).
+
+  A groomed ticket's four shapes are the ask, the plan, its checks and its notes. `ask.recorded` is
+  the machine's or a person's: what a person asked for, word for word (`text`, at most 20,000
+  characters), where it came from (`source`: `linear`, the description at entry; `message`, a
+  message that changed what is asked; `parent`, the parent ticket's plan) and the parent ticket or
+  the message event it came `from`. `plan.written` is machine-only: one version of the ticket's plan
+  (`SymphonyElixir.TicketPlan`), with its `version` (1 for Grooming's), why it was written
+  (`reason`, at most 1,000) and `by` what (`grooming`, `recalibration`, `parent`, `run`), its
+  `shape` (`single` or `split`), the `layers` it touches (`screen`, `gallery`, `api`, `engine`,
+  `config`, `tooling`, `docs`), a `summary` for a person (at most 600), the plan's `text` for agents
+  (at most 12,000), its `checks`, its `size` (`tokens` and `runs`) and, for a split, its
+  `sub_tickets`. A check has an `id` that stays the same across versions (`c1`, `c2`), a `kind`
+  (`outcome`, `qa`, `evidence`), a `statement` (at most 600) and how it is proved (`proof`: `test`,
+  `qa`, `design`, `attached`); a `qa` check also says the app `state` it needs, the `action` and
+  what to `expect` (at most 400 each), the `size` it is walked at (`normal`, `wide`) and the Gallery
+  `story` a design proof compares. A sub-ticket entry has a `key` (`s1`), a `title` (at most 120),
+  an `ask` (at most 4,000), the sibling keys whose merge it waits on (`after`), a `repo` when it is
+  not the parent's and the `identifier` Symphony fills once the ticket exists.
+
+  `check.proved` is an agent's, in any run, or the machine's: a check of the current plan
+  (`check_id`) proved `by` a `test`, `qa`, the `design` or something `attached`, with the `test`
+  that proves it (at most 500), the event that is its `evidence` and `details` (at most 2,000). It
+  is recorded once per check and head (`SymphonyElixir.TicketChecks`). `check.waived` is
+  machine-only: a check (`check_id`) nobody has to prove any more, and why (`reason`, at most
+  1,000). `conductor.intervention` is machine-only: what the Conductor of the ticket `by` did to
+  this one (`action`: `stopped`, `replanned`, `canceled`, `replaced`, `added`), why (`reason`, at
+  most 1,000) and the ticket it names (`target`). A `note` may carry a `tag` an agent writes:
+  `discovery` (something a run found that is not its own to solve) or `base_fault` (a fault of the
+  base branch).
   """
 
   alias SymphonyElixir.RunKind
@@ -249,6 +278,30 @@ defmodule SymphonyElixir.TicketEvents.Types do
   @conductor_junctions ~w(after_coding after_qa_fail after_qa_blocked after_rework before_merge during_run)
   # What made the Conductor's watch look at a running run (`SymphonyElixir.Conductor.Watch`).
   @watch_triggers ~w(step_failed step_failed_twice qa_step_answer run_minutes run_tokens)
+
+  # How a check of a plan is proved (`SymphonyElixir.TicketChecks`).
+  @check_proofs ~w(test qa design attached)
+  @plan_check {:map,
+               [
+                 id: {:string, 20},
+                 kind: {:enum, ~w(outcome qa evidence)},
+                 statement: {:string, 600},
+                 proof: {:enum, @check_proofs},
+                 state: {:optional, {:string, 400}},
+                 action: {:optional, {:string, 400}},
+                 expect: {:optional, {:string, 400}},
+                 size: {:optional, {:enum, ~w(normal wide)}},
+                 story: {:optional, {:string, 200}}
+               ]}
+  @plan_sub_ticket {:map,
+                    [
+                      key: {:string, 20},
+                      title: {:string, 120},
+                      ask: {:string, 4_000},
+                      after: {:optional, {:list, {:string, 20}}},
+                      repo: {:optional, {:string, 200}},
+                      identifier: {:optional, {:string, 50}}
+                    ]}
 
   @legacy_types ["hold.set", "hold.cleared", "decision.requested", "decision.recorded", "decision.withdrawn"]
 
@@ -680,7 +733,56 @@ defmodule SymphonyElixir.TicketEvents.Types do
       writers: [:machine, :agent, :person],
       run_kinds: :any,
       required: [text: {:string, 4_000}],
-      optional: @status ++ @signal,
+      optional: [tag: {:enum, ~w(discovery base_fault)}] ++ @status ++ @signal,
+      idempotency: :writer
+    },
+    # What a person asked for, never rewritten (`SymphonyElixir.TicketPlan.ask/1`).
+    "ask.recorded" => %{
+      writers: [:machine, :person],
+      run_kinds: [],
+      required: [text: {:string, 20_000}, source: {:enum, ~w(linear message parent)}],
+      optional: [from: {:string, 200}] ++ @signal,
+      idempotency: :writer
+    },
+    # One version of the ticket's plan (`SymphonyElixir.TicketPlan`), which assigns `version`.
+    "plan.written" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [
+        version: :non_neg_integer,
+        reason: {:string, 1_000},
+        by: {:enum, ~w(grooming recalibration parent run)},
+        shape: {:enum, ~w(single split)},
+        layers: {:list, {:enum, ~w(screen gallery api engine config tooling docs)}},
+        summary: {:string, 600},
+        text: {:string, 12_000},
+        checks: {:list, @plan_check},
+        size: {:map, [tokens: :non_neg_integer, runs: :non_neg_integer]}
+      ],
+      optional: [sub_tickets: {:list, @plan_sub_ticket}] ++ @signal,
+      idempotency: :writer
+    },
+    # A check of the current plan, proved (`SymphonyElixir.TicketChecks`): once per check and head,
+    # on the key its writer passes.
+    "check.proved" => %{
+      writers: [:machine, :agent],
+      run_kinds: :any,
+      required: [check_id: {:string, 20}, by: {:enum, @check_proofs}],
+      optional: [test: {:string, 500}, evidence: {:string, 200}, details: {:string, 2_000}] ++ @signal,
+      idempotency: :writer
+    },
+    "check.waived" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [check_id: {:string, 20}, reason: {:string, 1_000}],
+      optional: @signal,
+      idempotency: :writer
+    },
+    "conductor.intervention" => %{
+      writers: [:machine],
+      run_kinds: [],
+      required: [action: {:enum, ~w(stopped replanned canceled replaced added)}, reason: {:string, 1_000}, by: {:string, 200}],
+      optional: [target: {:string, 200}] ++ @signal,
       idempotency: :writer
     }
   }
