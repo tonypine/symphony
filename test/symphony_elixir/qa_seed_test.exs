@@ -74,7 +74,7 @@ defmodule SymphonyElixir.QaSeedTest do
     assert %{id: ^question_id} = Questions.deciding({:ticket, repo_key, "qa-seed-108"})
 
     runs = RunStore.list_runs(repo_key, :all)
-    assert Enum.map(runs, & &1.issue_identifier) |> Enum.sort() == ["QA-103", "QA-105", "QA-107"]
+    assert Enum.map(runs, & &1.issue_identifier) |> Enum.sort() == ["QA-103", "QA-105", "QA-107", "QA-112", "QA-113"]
     run = Enum.find(runs, &(&1.issue_identifier == "QA-107"))
     assert %{status: "success", runtime_seconds: 980, ended_at: ended_at, pull_request_url: "https://github.com/symphony-qa/seed/pull/452"} = run
     assert DateTime.compare(ended_at, DateTime.add(@now, -20 * 60, :second)) == :eq
@@ -209,7 +209,7 @@ defmodule SymphonyElixir.QaSeedTest do
     picks = [%{"question" => question.title, "answer" => "Accept without QA"}]
     assert %{"move" => "decide"} = move.(:decide, %{"issue_identifier" => "QA-112", "question_id" => question_id, "picks" => picks})
     assert {:ok, %{state: "Merging"}} = Tracker.fetch_issue_by_identifier("QA-112")
-    assert [%{payload: %{outcome: "skip", reason: "skipped by decision"}}] = TicketEvents.query("qa-seed-112", types: ["verdict.recorded"])
+    assert [%{payload: %{outcome: "skip", details: %{reason: "skipped by decision"}}}] = TicketEvents.query("qa-seed-112", types: ["verdict.recorded"])
     refute Enum.any?(rows(inbox), &(elem(&1, 0) == "QA-112"))
 
     # QA-113: a QA pass ended blocked with the Conductor's question open, and asked none of its own.
