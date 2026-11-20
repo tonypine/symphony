@@ -467,7 +467,16 @@ defmodule SymphonyElixir.SubIssueWaitTest do
         %{id: "child-3", identifier: "MT-1704", state: "Duplicate"}
       ]
 
-      waiting = %Issue{id: "waiting", identifier: "MT-1701", title: "Work", state: @waiting, labels: ["improvement"], sub_issues: sub_issues, repo_key: "default"}
+      waiting = %Issue{
+        id: "waiting",
+        identifier: "MT-1701",
+        title: "Work",
+        state: @waiting,
+        labels: ["improvement"],
+        sub_issues: sub_issues,
+        repo_key: "default"
+      }
+
       running = %{waiting | id: "waiting-running", identifier: "MT-1705"}
       claimed = %{waiting | id: "waiting-claimed", identifier: "MT-1706"}
       breakdown = %{waiting | id: "waiting-breakdown", identifier: "MT-1707", labels: ["breakdown"]}
@@ -551,7 +560,10 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       :ok = TicketSignals.record_phase(repo_key, "by-id", @waiting)
       :ok = RunStore.put_merged_wait("by-id")
 
-      log = capture_log([level: :info], fn -> Orchestrator.close_finished_parents_for_test([candidate], orchestrator_state()) end)
+      log =
+        capture_log([level: :info], fn ->
+          Orchestrator.close_finished_parents_for_test([candidate], orchestrator_state())
+        end)
 
       assert_received {:memory_tracker_state_update, "by-id", "Done"}
       refute log =~ "Moving a ticket with no record key"
@@ -613,7 +625,9 @@ defmodule SymphonyElixir.SubIssueWaitTest do
       # The read by id alone has no repo key, so no record to look the pull request up in.
       refute SubIssueWait.close?(read_by_id, terminal, settings)
 
-      capture_log([level: :info], fn -> Orchestrator.close_finished_parents_for_test([candidate], orchestrator_state()) end)
+      capture_log([level: :info], fn ->
+        Orchestrator.close_finished_parents_for_test([candidate], orchestrator_state())
+      end)
 
       assert_received {:memory_tracker_state_update, "stranded", "Done"}
       assert %{phase: "Done"} = RunStore.get_ticket_state("stranded")
