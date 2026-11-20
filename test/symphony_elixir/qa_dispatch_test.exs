@@ -264,11 +264,12 @@ defmodule SymphonyElixir.QaDispatchTest do
   end
 
   describe "the QA build hold" do
-    @head "e44298c8123456789abcdef0123456789abcdef0"
     @tree "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
     # The QA pre-build for a repository whose `macos_app` playbook builds an app on a QA host, with
-    # its boundaries faked: a build tells the test it started and waits for the test to end it.
+    # its boundaries faked: a build tells the test it started and waits for the test to end it. The
+    # ticket's workspace holds a repository whose head changes a Swift file, so its QA pass selects
+    # the app. Returns the head.
     defp start_builder! do
       test = self()
       auto_review = %{worker_host: "qa-vm", playbooks: %{macos_app: %{build: "make app", app: "build/Demo.app"}}}
@@ -276,35 +277,63 @@ defmodule SymphonyElixir.QaDispatchTest do
       :ok = RunStore.clear()
       on_exit(fn -> RunStore.clear() end)
 
+      {workspace, head} = swift_head_workspace!()
+
       build = fn job, [] ->
         send(test, {:building, job, self()})
         receive(do: ({:outcome, outcome} -> outcome))
       end
 
-      workspace = fn _repo_key, identifier -> {:ok, "/workspaces/#{identifier}"} end
-      tree = fn _workspace, @head -> {:ok, @tree} end
-      start_supervised!({SymphonyElixir.QaBuild, workspace: workspace, tree: tree, build: build})
+      tree = @tree
+      workspace_of = fn _repo_key, _identifier -> {:ok, workspace} end
+      tree_of = fn _workspace, ^head -> {:ok, tree} end
+      start_supervised!({SymphonyElixir.QaBuild, workspace: workspace_of, tree: tree_of, build: build})
 
-      :ok
+      {workspace, head}
+    end
+
+    # The ticket's workspace: a repository whose head adds a Swift file over `origin/main`.
+    defp swift_head_workspace! do
+      {:ok, workspace} = SymphonyElixir.Workspace.local_path_for_issue("TP-816", @designed_repo)
+      File.rm_rf!(workspace)
+      File.mkdir_p!(workspace)
+      on_exit(fn -> File.rm_rf!(workspace) end)
+
+      git = fn args ->
+        {output, 0} = System.cmd("git", ["-C", workspace, "-c", "user.name=Test", "-c", "user.email=test@example.com" | args], stderr_to_stdout: true)
+        String.trim(output)
+      end
+
+      git.(["init", "--quiet", "--initial-branch=main"])
+      File.write!(Path.join(workspace, "a.txt"), "one\n")
+      git.(["add", "--all"])
+      git.(["commit", "--quiet", "-m", "one"])
+      git.(["update-ref", "refs/remotes/origin/main", "HEAD"])
+      File.mkdir_p!(Path.join(workspace, "macos"))
+      File.write!(Path.join(workspace, "macos/App.swift"), "import SwiftUI\n")
+      git.(["add", "--all"])
+      git.(["commit", "--quiet", "-m", "swift"])
+      {workspace, git.(["rev-parse", "HEAD"])}
     end
 
     defp held, do: SymphonyElixir.QaBuildHold.reasons(@designed_repo, @issue_id)
 
     test "a QA ticket on a green head waits for its app's build, and dispatches when the build is ready" do
-      start_builder!()
-      record_ci!(@designed_repo, @head, "green")
+      {workspace, head} = start_builder!()
+      record_ci!(@designed_repo, head, "green")
       qa_ticket = issue(@designed_repo, "QA")
       :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
+      waiting = "Waiting for the QA build of #{String.slice(head, 0, 7)}"
 
       # The pass asks for the build and holds the ticket: nothing runs.
       next = Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state())
       refute Map.has_key?(next.running, @issue_id)
-      assert %{reason: "Waiting for the QA build of e44298c"} = next.dispatch_skipped[@issue_id]
-      assert_receive {:building, %{sha: @head, tree: @tree, workspace: "/workspaces/TP-816"}, builder}
+      assert %{reason: ^waiting} = next.dispatch_skipped[@issue_id]
+      assert_receive {:building, %{sha: ^head, tree: @tree, workspace: ^workspace}, builder}
       assert_receive {:ticket_record, @designed_repo, @issue_id, :changed, [:pause]}
-      assert [%{waits_on: %{commit: @head}}] = held()
+      assert [%{waits_on: %{commit: ^head}}] = held()
       refute Orchestrator.should_dispatch_issue_for_test(qa_ticket, state())
-      assert Orchestrator.dispatch_refusal_for_test(qa_ticket) == "flow_gated?: Waiting for the QA build of e44298c"
+      assert Orchestrator.dispatch_refusal_for_test(qa_ticket) == "flow_gated?: " <> waiting
 
       # A pass while it builds starts no second build.
       next = Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state())
@@ -319,8 +348,8 @@ defmodule SymphonyElixir.QaDispatchTest do
     end
 
     test "a build that could not run keeps QA held, with its reason, until something asks again" do
-      start_builder!()
-      record_ci!(@designed_repo, @head, "green")
+      {_workspace, head} = start_builder!()
+      record_ci!(@designed_repo, head, "green")
       qa_ticket = issue(@designed_repo, "QA")
       :ok = SymphonyElixirWeb.ObservabilityPubSub.subscribe_ticket_records()
 
@@ -343,8 +372,8 @@ defmodule SymphonyElixir.QaDispatchTest do
     end
 
     test "the hold counts in QA only, and a ticket already claimed is left alone" do
-      start_builder!()
-      record_ci!(@designed_repo, @head, "green")
+      {_workspace, head} = start_builder!()
+      record_ci!(@designed_repo, head, "green")
       qa_ticket = issue(@designed_repo, "QA")
 
       claimed = %Orchestrator.State{claimed: MapSet.new([@issue_id])}

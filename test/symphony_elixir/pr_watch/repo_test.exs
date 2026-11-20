@@ -560,6 +560,21 @@ defmodule SymphonyElixir.PrWatch.RepoTest do
     assert_received {:gh, ["api", "--include", "repos/tonypine/symphony/releases/latest"]}
   end
 
+  test "a newest-release read that finds the release unchanged is a clean tick", %{repo_key: repo_key} do
+    issues!([])
+    test_pid = self()
+
+    gh_runner = fn args, _opts ->
+      send(test_pid, {:gh, args})
+      {"HTTP/2.0 304 Not Modified\r\n\r\n", 0}
+    end
+
+    pid = start_repo!(repo_key, app_release: true, gh_runner: gh_runner)
+
+    assert {:ok, %{errors: 0}} = Repo.poll(pid)
+    assert_received {:gh, ["api", "--include" | _rest]}
+  end
+
   test "a rate-limited read backs off until the reset and marks the tickets it didn't read", %{repo_key: repo_key} do
     reset_at = DateTime.add(@now, 600, :second)
     issues!([repo_key |> with_pr(issue("1", "Code Review"), 1), repo_key |> with_pr(issue("2", "QA"), 2)])
