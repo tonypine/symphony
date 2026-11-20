@@ -1,6 +1,10 @@
 defmodule SymphonyElixir.Linear.Issue do
   @moduledoc """
   Normalized Linear issue representation used by the orchestrator.
+
+  `last_comment_at` is when the ticket's newest comment was made as Symphony's record of it knows
+  (`SymphonyElixir.TicketState`): an issue rebuilt from the record carries it, one read from Linear
+  carries its `comments` instead and leaves it nil.
   """
 
   # A human puts the `plan` label on a parent ticket to have it groomed into sub-tickets; it stays on
@@ -38,7 +42,8 @@ defmodule SymphonyElixir.Linear.Issue do
     labels: [],
     assigned_to_worker: true,
     created_at: nil,
-    updated_at: nil
+    updated_at: nil,
+    last_comment_at: nil
   ]
 
   # `:unknown` marks a field the source did not carry (a webhook delivery has no children or
@@ -79,7 +84,8 @@ defmodule SymphonyElixir.Linear.Issue do
           labels: [String.t()],
           assigned_to_worker: boolean(),
           created_at: DateTime.t() | nil,
-          updated_at: DateTime.t() | nil
+          updated_at: DateTime.t() | nil,
+          last_comment_at: DateTime.t() | nil
         }
 
   @spec label_names(t()) :: [String.t()]
