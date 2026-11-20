@@ -459,6 +459,43 @@ public enum StatusMenu {
         }
     }
 
+    /// Heading of the providers in use (TP-1536), shown only while there are some.
+    public static let providersTitle = "Providers"
+
+    /// One provider in use, as the catalog's "Menu bar menu, providers" draws it: a status dot, "Pause Anthropic" or
+    /// "Resume Anthropic", and its state on the right as the Providers page's list words it.
+    public struct ProviderLine: Equatable {
+        public let id: String
+        public let title: String
+        public let status: DesignTokens.Status
+        public let state: String
+        /// What the line reads to VoiceOver, its state's sentence.
+        public let spoken: String
+        /// What a click sends to the control API.
+        public let action: ControlAction
+    }
+
+    /// A line per provider a kind of run uses, in Symphony's order; none while Symphony doesn't answer, lists no
+    /// provider or uses none.
+    public static func providerLines(_ status: SymphonyStatus, now: Date = Date(), timeZone: TimeZone = .current) -> [ProviderLine] {
+        let snapshot: StateSnapshot
+        switch status {
+        case let .running(answer, _), let .paused(answer, _):
+            snapshot = answer
+        case .stopped, .starting, .error:
+            return []
+        }
+        let page = ProvidersPage(providers: snapshot.providers, now: now, timeZone: timeZone)
+        return (snapshot.providers ?? []).filter(\.inUse).map { provider in
+            let state = page.state(provider)
+            let move: ProvidersPage.Move = provider.paused ? .resume : .pause
+            return ProviderLine(
+                id: provider.id, title: "\(move.title) \(provider.name)", status: state.status, state: state.short,
+                spoken: state.spoken, action: ProvidersPage.action(move, provider: provider.id, name: provider.name)
+            )
+        }
+    }
+
     /// Title of the menu item that resumes dispatch.
     public static let resumeTitle = "Resume Dispatch"
     public static let resumingTitle = "Resuming Dispatch…"
