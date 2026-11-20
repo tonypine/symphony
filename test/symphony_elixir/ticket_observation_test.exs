@@ -639,7 +639,8 @@ defmodule SymphonyElixir.TicketObservationTest do
       comment = %{id: "c1", author: "Tony", body: "Split it", created_at: commented_at}
       later = DateTime.add(@now, 60)
 
-      assert TicketObservation.observe_delivery({:comment, :create, "issue-observed", comment}, now: later, orchestrator: self()) == :updated
+      delivery = {:comment, :create, "issue-observed", comment}
+      assert TicketObservation.observe_delivery(delivery, now: later, orchestrator: self()) == :updated
       assert_receive {:ticket_record, ^repo_key, "issue-observed", :changed, [:last_comment_at]}
       # Under the poll source nothing else happens: no poll is asked for.
       refute_received {:"$gen_cast", _request}
@@ -662,7 +663,8 @@ defmodule SymphonyElixir.TicketObservationTest do
       assert RunStore.get_ticket_state("issue-never-seen") == nil
 
       poll!(repo_key)
-      assert TicketObservation.observe_delivery({:comment, :create, "issue-observed", comment}, now: @now, repos: [%{name: "elsewhere"}]) == :no_record
+      delivery = {:comment, :create, "issue-observed", comment}
+      assert TicketObservation.observe_delivery(delivery, now: @now, repos: [%{name: "elsewhere"}]) == :no_record
       assert RunStore.get_ticket_state("issue-observed").last_comment_at == nil
 
       log =
