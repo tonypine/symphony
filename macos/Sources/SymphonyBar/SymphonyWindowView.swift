@@ -519,13 +519,13 @@ final class SymphonyWindowModel: ObservableObject {
     /// Opens the live channel while Symphony answers and closes it otherwise, so a channel an older Symphony lacked
     /// is tried again each time the window connects.
     private func followConnection() {
-        if state == .connected { eventStream.start() } else { eventStream.stop() }
+        if state.servesPages { eventStream.start() } else { eventStream.stop() }
     }
 
     /// Symphony restarted onto another build between two polls: the channel opens again on the new one.
     private func symphonyBuildChanged(_ build: DiagnosticsPayload.Build?) {
         defer { symphonyBuild = build ?? symphonyBuild }
-        guard let build, let symphonyBuild, build != symphonyBuild, state == .connected else { return }
+        guard let build, let symphonyBuild, build != symphonyBuild, state.servesPages else { return }
         eventStream.stop()
         eventStream.start()
     }
@@ -1031,10 +1031,11 @@ final class SymphonyWindowModel: ObservableObject {
     var destination: Destination { selection.destination }
 
     /// C1's badge on `destination` (TP-1455): Home's what waits on you, Work's epics waiting on a person (TP-1458),
-    /// Factory's setup problems; unknown counts hide it.
+    /// Factory's setup problems; unknown counts hide it, and a late Symphony's are marked as not current (TP-1562).
     func badge(_ destination: Destination) -> DestinationBadge? {
         let epicsWaiting = state.countsKnown ? InitiativesList.waitingOnPerson(initiatives?.initiatives ?? []) : 0
-        return destination.badge(waitingOnYou: inboxBadge, setup: setupSummary, epicsWaiting: epicsWaiting)
+        let badge = destination.badge(waitingOnYou: inboxBadge, setup: setupSummary, epicsWaiting: epicsWaiting)
+        return state.countsCurrent ? badge : badge?.notCurrent
     }
 
     /// ⌘F: the keyboard in the window bar's Find a ticket, from any page.

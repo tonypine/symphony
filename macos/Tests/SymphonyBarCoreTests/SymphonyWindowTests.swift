@@ -47,6 +47,71 @@ final class SymphonyWindowTests: XCTestCase {
         XCTAssertEqual(state.connectionStatus, .problem)
     }
 
+    func testALateSymphonyKeepsThePagesAndSaysSoInTheStatusLine() {
+        // TP-1562: no page is replaced; the status line says why and offers what the placeholder offered.
+        let state = WindowState(
+            status: .running(snapshot, external: false), hasConfig: true, lag: "Symphony isn't answering · 20 s"
+        )
+        XCTAssertEqual(state, .lagging("Symphony isn't answering · 20 s"))
+        XCTAssertNil(state.placeholder)
+        XCTAssertTrue(state.servesPages)
+        XCTAssertTrue(state.countsKnown)
+        XCTAssertFalse(state.countsCurrent)
+        XCTAssertEqual(state.connectionLabel, "Symphony isn't answering · 20 s")
+        XCTAssertEqual(state.connectionStatus, .problem)
+        XCTAssertEqual(state.lineActions.map(\.title), ["Open Logs", "Restart Symphony"])
+        XCTAssertEqual(state.stateWord(paused: false), "Symphony isn't answering · 20 s")
+        XCTAssertEqual(WindowState.connected.lineActions, [])
+        XCTAssertTrue(WindowState.connected.countsCurrent)
+        let badge = DestinationBadge(count: 2, status: .you, accessibilityValue: "2 waiting")
+        XCTAssertEqual(
+            badge.notCurrent, DestinationBadge(count: 2, status: .idle, accessibilityValue: "2 waiting, as of Symphony's last answer")
+        )
+        // A lag means nothing without a state to keep showing.
+        XCTAssertEqual(WindowState(status: .stopped, hasConfig: true, lag: "late"), .stopped)
+    }
+
+    func testTheWindowFollowsTheStatusMachineThroughSlownessAndExit() {
+        let start = Date(timeIntervalSince1970: 1_000)
+        func window(_ machine: StatusMachine, at seconds: TimeInterval) -> WindowState {
+            WindowState(status: machine.status, hasConfig: true, lag: machine.lag(now: start.addingTimeInterval(seconds)))
+        }
+        var machine = StatusMachine()
+        machine.handle(.started, at: start)
+        XCTAssertEqual(window(machine, at: 0), .starting, "a Symphony that never answered shows the placeholder")
+        machine.handle(.polled(.unreachable), at: start)
+        XCTAssertEqual(window(machine, at: 0), .starting)
+
+        machine.handle(.polled(.state(snapshot)), at: start)
+        XCTAssertEqual(window(machine, at: 0), .connected)
+
+        // The state read takes 20 s while the health read answers.
+        for tick in 1...4 {
+            machine.handle(.health(answering: true), at: start.addingTimeInterval(5 * Double(tick)))
+            machine.handle(.polled(.unreachable), at: start.addingTimeInterval(5 * Double(tick)))
+        }
+        XCTAssertEqual(window(machine, at: 20), .lagging("Symphony isn't answering · 20 s"))
+
+        // The first answer brings the status line back, with no restart.
+        machine.handle(.polled(.state(snapshot)), at: start.addingTimeInterval(21))
+        XCTAssertEqual(window(machine, at: 21), .connected)
+
+        // The health read stops answering too, the process alive: still the pages.
+        for tick in 1...3 {
+            machine.handle(.health(answering: false), at: start.addingTimeInterval(21 + 5 * Double(tick)))
+            machine.handle(.polled(.unreachable), at: start.addingTimeInterval(21 + 5 * Double(tick)))
+        }
+        XCTAssertEqual(window(machine, at: 36), .lagging("Symphony isn't answering · 15 s"))
+
+        // The process exits: nothing to show.
+        machine.handle(.exited(.exited(1), requested: false), at: start.addingTimeInterval(40))
+        XCTAssertEqual(window(machine, at: 40), .notAnswering)
+        machine.handle(.started, at: start.addingTimeInterval(41))
+        machine.handle(.exited(.signaled(15), requested: true), at: start.addingTimeInterval(42))
+        XCTAssertEqual(window(machine, at: 42), .stopped)
+        XCTAssertEqual(WindowState(status: machine.status, hasConfig: false, lag: machine.lag()), .firstLaunch)
+    }
+
     func testWithoutConfigItAsksForSettings() {
         for status in [SymphonyStatus.stopped, .error("Symphony exited with code 1")] {
             let state = WindowState(status: status, hasConfig: false)
@@ -60,6 +125,8 @@ final class SymphonyWindowTests: XCTestCase {
     func testCountsAreUnknownUnlessConnected() {
         for state in [WindowState.stopped, .starting, .notAnswering, .firstLaunch] {
             XCTAssertFalse(state.countsKnown, "\(state)")
+            XCTAssertFalse(state.servesPages, "\(state)")
+            XCTAssertEqual(state.lineActions, [], "\(state)")
             XCTAssertNotNil(state.placeholder, "\(state)")
             XCTAssertFalse(state.placeholder!.title.localizedCaseInsensitiveContains("unavailable"))
         }

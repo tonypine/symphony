@@ -508,6 +508,22 @@ GitHub or Linear in QA:
   is proved by `test/symphony_elixir/director_moves_test.exs`' "cancels a running ticket: the run
   stops, its pull request closes with the note, nothing waits on it". Relaunch the app on a fresh
   QA root to see the before state again.
+- **Symphony late to answer its state (TP-1562):** pass
+  `macos/Tests/Fixtures/director-app/symphony-late` as `api_fixtures` at 1440×900. It is the
+  `ticket-page` fixtures with `api/v1/state.late.json` (`{"after": 60, "for": 60}`): from 60 s
+  after the app's first read until 120 s, every state read waits until 120 s, while the health
+  read and every other read answer at once. Before 60 s, open Work › Tickets (TP-1244, TP-1245,
+  TP-1246) with the status line reading the connection as answering. About 10 s into the late
+  window the Tickets page stays, with the same tickets, and the status line says "Symphony isn't
+  answering · N s" with Open Logs and Restart Symphony; its counts and the sidebar's badges keep
+  their last values in grey. Open TP-1244 from the list: its page opens from the data the
+  Director has. After 120 s the status line clears and the page updates with no click and no
+  restart. The health read answers throughout, so the menu bar shows no problem and no
+  notification is sent. The look is also drawn by the gallery's `status-line-symphony-late`,
+  `status-line-symphony-late-paused`, `sidebar-expanded-symphony-late`,
+  `sidebar-collapsed-symphony-late`, `window-bar-ticket-page-symphony-late`,
+  `window-bar-work-tickets-symphony-late` and `count-badge-not-current` stories. Relaunch on a fresh
+  QA root to walk it again.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before

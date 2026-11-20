@@ -288,6 +288,22 @@ final class StatusMenuTests: XCTestCase {
         XCTAssertEqual(StatusMenu.statusTitle(.running(snapshot, external: false)), "Symphony is running")
     }
 
+    func testDetailLinesSayWhySymphonysLastAnswerIsNotCurrent() {
+        // TP-1562: the menu keeps the last answer and says Symphony isn't answering under it.
+        XCTAssertEqual(
+            StatusMenu.detailLines(.running(snapshot, external: false), lag: "Symphony isn't answering · 25 s"),
+            ["2 running · 1 retrying", "Symphony isn't answering · 25 s"]
+        )
+        XCTAssertEqual(StatusMenu.notAnsweringSymbol, "exclamationmark.triangle")
+        XCTAssertEqual(StatusMenu.notAnsweringIconLabel, "Symphony: not answering")
+        let notice = StatusMenu.notAnsweringNotice(silence: "1 min")
+        XCTAssertEqual(notice.title, "Symphony isn't answering")
+        XCTAssertEqual(
+            notice.body,
+            "It hasn't answered for 1 min. The Director shows its last answer. Open Logs or Restart Symphony from the menu."
+        )
+    }
+
     func testDetailLinesShowTheKeychainWaitBeforeTheRestart() {
         XCTAssertEqual(StatusMenu.detailLines(.stopped, waitingForKeychain: true), ["Waiting for Keychain access…"])
         XCTAssertEqual(

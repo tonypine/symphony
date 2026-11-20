@@ -14,11 +14,13 @@ extension SymphonyWindowModel {
         WindowBreadcrumb(place: history.current, shownFrom: selection, epic: shownTicket == nil ? nil : ticketEpic)
     }
 
-    /// What the bar shows, with the sidebar `sidebarShown`.
+    /// What the bar shows, with the sidebar `sidebarShown`; the Inbox's count marked not current while Symphony is
+    /// late (TP-1562).
     func windowBarControls(sidebarShown: Bool) -> WindowBarControls {
         WindowBarControls(
             sidebarShown: sidebarShown, canGoBack: canGoBack, canGoForward: history.canGoForward, breadcrumb: breadcrumb,
-            inboxCount: inboxBadge, inboxShown: presentsInboxDrawer && inboxDrawerShown, findShortcut: commandF.findTicketShortcut
+            inboxCount: inboxBadge, inboxCountCurrent: state.countsCurrent, inboxShown: presentsInboxDrawer && inboxDrawerShown,
+            findShortcut: commandF.findTicketShortcut
         )
     }
 
