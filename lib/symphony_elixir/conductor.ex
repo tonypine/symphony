@@ -567,7 +567,7 @@ defmodule SymphonyElixir.Conductor do
 
   # The question goes through the one validated decision path: once asked, the ticket pauses on it,
   # even when its Linear comment could not be posted. Each option carries the move its action makes
-  # (`options_with_moves/4`), so the person's pick acts through the same path as the Inbox's Decide;
+  # (`actioned_options/5`), so the person's pick acts through the same path as the Inbox's Decide;
   # a question with an option Symphony can't act on in this phase is not asked. A ticket already
   # waiting on a question about its stage is asked no second one (`Questions.open_stage_question/2`):
   # it stays held on the one it has.
@@ -596,17 +596,24 @@ defmodule SymphonyElixir.Conductor do
     end
   end
 
-  # Each option with the move its action makes once picked (`SymphonyElixir.DecisionMove`):
-  # `continue` and `rerun` move nothing (the answer clears the pause, and the phase's run starts
-  # again), `rework` moves to Rework with the option's finding recorded as this turn's,
-  # `accept_without_qa` records QA's `skip` verdict on the head and moves to where a QA pass goes
-  # (Merging), `cancel` moves to Canceled. An action this phase can't take refuses the question:
-  # accepting without QA outside QA, Rework from Rework.
   defp options_with_moves(options, plan, issue, run_id) do
-    settings = Config.settings_for_repo!(plan.repo_key)
+    actioned_options(options, Config.settings_for_repo!(plan.repo_key), issue.state, head(plan), run_id)
+  end
 
+  @doc """
+  `options` (each with its `action`, and a `rework` one with its `finding`) with the move each
+  action makes once picked (`SymphonyElixir.DecisionMove`), for a question asked in `state` on
+  `head` by the run `run_id`: `continue` and `rerun` move nothing (the answer clears the pause, and
+  the phase's run starts again), `rework` moves to Rework with the option's finding recorded as that
+  run's, `accept_without_qa` records QA's `skip` verdict on the head and moves to where a QA pass
+  goes (Merging), `cancel` moves to Canceled. An action this phase can't take refuses the question
+  (`{:error, why}`): accepting without QA outside QA, Rework from Rework. The QA seed builds its
+  Conductor questions with it (`SymphonyElixir.QaSeed`).
+  """
+  @spec actioned_options([map()], map(), String.t(), String.t() | nil, String.t()) :: {:ok, [map()]} | {:error, String.t()}
+  def actioned_options(options, settings, state, head, run_id) do
     Enum.reduce_while(options, {:ok, []}, fn option, {:ok, acc} ->
-      case option_move(option, settings, plan, issue, run_id) do
+      case option_move(option, settings, state, head, run_id) do
         {:ok, move} -> {:cont, {:ok, acc ++ [option |> Map.drop([:action, :finding]) |> with_move(move)]}}
         {:error, why} -> {:halt, {:error, "option #{inspect(option.label)} #{why}"}}
       end
@@ -616,19 +623,19 @@ defmodule SymphonyElixir.Conductor do
   defp with_move(option, nil), do: option
   defp with_move(option, move), do: DecisionMove.option(option, move)
 
-  defp option_move(%{action: action}, _settings, _plan, _issue, _run_id) when action in ["continue", "rerun"], do: {:ok, nil}
-  defp option_move(%{action: "cancel"}, _settings, _plan, _issue, _run_id), do: {:ok, %{to: @canceled}}
+  defp option_move(%{action: action}, _settings, _state, _head, _run_id) when action in ["continue", "rerun"], do: {:ok, nil}
+  defp option_move(%{action: "cancel"}, _settings, _state, _head, _run_id), do: {:ok, %{to: @canceled}}
 
-  defp option_move(%{action: "rework", finding: finding}, _settings, _plan, issue, run_id) do
-    if issue.state == @rework,
+  defp option_move(%{action: "rework", finding: finding}, _settings, state, _head, run_id) do
+    if state == @rework,
       do: {:error, "sends the ticket to Rework, where it already is"},
       else: {:ok, %{to: @rework, finding: %{description: finding, run_id: run_id, run_kind: "conductor"}}}
   end
 
-  defp option_move(%{action: "accept_without_qa"}, settings, plan, issue, _run_id) do
-    if issue.state == settings.tracker.qa_state,
-      do: {:ok, %{to: TransitionGuard.target(:qa_pass, %{settings: settings}), verdict: %{kind: "qa", outcome: "skip", head_sha: head(plan), reason: "skipped by decision"}}},
-      else: {:error, "accepts the change without QA, but the ticket is in #{issue.state}, not #{settings.tracker.qa_state}"}
+  defp option_move(%{action: "accept_without_qa"}, settings, state, head, _run_id) do
+    if state == settings.tracker.qa_state,
+      do: {:ok, %{to: TransitionGuard.target(:qa_pass, %{settings: settings}), verdict: %{kind: "qa", outcome: "skip", head_sha: head, reason: "skipped by decision"}}},
+      else: {:error, "accepts the change without QA, but the ticket is in #{state}, not #{settings.tracker.qa_state}"}
   end
 
   @doc "Whether `question` was asked by the Conductor (`SymphonyElixir.Questions` reads it as about the stage it was asked in)."

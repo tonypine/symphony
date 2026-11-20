@@ -18,7 +18,11 @@ defmodule SymphonyElixir.QaSeed do
     (`SymphonyElixir.SelfHeal.environment_reason/1`);
   - `questions`: a decision request on a ticket, which opens its Question and sets its Needs Decision
     hold (`SymphonyElixir.DecisionRequest.ask/4`, in its words: `title`, `question`, `why`,
-    `if_unanswered`, `recommendation_reason`, `options`);
+    `if_unanswered`, `recommendation_reason`, `options`). With `asked_by: "Conductor"` it is the
+    Conductor's, asked by the run `qa-seed-conductor-<issue>` in the ticket's phase on its seeded
+    PR's head: each option names its `action` (and a `rework` one its `finding`), and carries the
+    move that action makes once picked, as the Conductor builds it
+    (`SymphonyElixir.Conductor.actioned_options/5`), so Decide acts on it;
   - `runs`: finished runs (`issue`, `status`, `minutes_ago`, `runtime_seconds`, `total_tokens`), each
     with its transcript, a JSONL file of agent events (`transcript`, relative to the seed);
   - `pull_requests`: a ticket's open PR (`number`) and what the PR watcher read of its checks (`ci`:
@@ -40,7 +44,7 @@ defmodule SymphonyElixir.QaSeed do
 
   require Logger
 
-  alias SymphonyElixir.{Artifacts, DecisionRequest, Pauses, RunStore, SelfHeal, TicketEvents, TicketObservation}
+  alias SymphonyElixir.{Artifacts, Conductor, Config, DecisionRequest, Pauses, RunStore, SelfHeal, TicketEvents, TicketObservation}
   alias SymphonyElixir.Artifacts.Store
   alias SymphonyElixir.PrDecision.Facts
   alias SymphonyElixir.{TicketPullRequest, TicketSignals, Tracker}
@@ -49,7 +53,7 @@ defmodule SymphonyElixir.QaSeed do
   @ci %{"green" => :green, "red" => :red, "pending" => :pending}
   @phases %{"In Progress" => :in_progress, "Code Review" => :code_review, "QA" => :qa, "Rework" => :rework, "CI Fix" => :ci_fix, "Merging" => :merging}
   @request_keys ~w(title question why if_unanswered recommendation_reason options)
-  @option_keys ~w(label effect recommended tradeoffs unlocks)
+  @option_keys ~w(label effect recommended tradeoffs unlocks action finding)
   @tradeoff_keys ~w(kind text)
 
   @doc "The seed directory the service was started with (`--qa-seed`), or nil."
@@ -163,15 +167,27 @@ defmodule SymphonyElixir.QaSeed do
 
   defp question(repo_key, tracker, %{"issue" => identifier} = entry) do
     with {:ok, issue} <- issue(tracker, identifier),
-         request = request(entry),
-         result when result == :ok or elem(result, 0) == :ok <- DecisionRequest.ask(Map.put(issue, :repo_key, repo_key), request, repo_key: repo_key) do
+         {:ok, request, opts} <- request(repo_key, issue, identifier, entry),
+         result when result == :ok or elem(result, 0) == :ok <- DecisionRequest.ask(Map.put(issue, :repo_key, repo_key), request, [repo_key: repo_key] ++ opts) do
       :ok
     else
       {:error, reason} -> {:error, {:question, identifier, reason}}
     end
   end
 
-  defp request(entry) do
+  defp request(repo_key, issue, identifier, %{"asked_by" => "Conductor"} = entry) do
+    run_id = "qa-seed-conductor-#{identifier}"
+    request = plain_request(entry)
+
+    case Conductor.actioned_options(request.options, Config.settings_for_repo!(repo_key), issue.state, head_sha(identifier), run_id) do
+      {:ok, options} -> {:ok, %{request | options: options}, asked_by: %{kind: :run, name: "Conductor", run_id: run_id}}
+      {:error, why} -> {:error, {:conductor_options, why}}
+    end
+  end
+
+  defp request(_repo_key, _issue, _identifier, entry), do: {:ok, plain_request(entry), []}
+
+  defp plain_request(entry) do
     request = atomize(entry, @request_keys)
     options = Enum.map(Map.get(request, :options, []), &option/1)
     Map.put(request, :options, options)

@@ -2179,7 +2179,10 @@ webhooks off and the control API on, and loads the seed in `priv/qa_seed/symphon
 Needs Decision hold with an open question, one on an access hold, a paused repository, a
 Symphony-wide pause, finished runs with transcripts, PRs whose checks are green, red and
 pending, and a step history on QA-105: a run whose tests failed back to writing the code with
-their output kept, whose build output is gone, and whose next attempt paused on a question. The seed is data, versioned with the fixtures. Nothing in that server reaches Linear or
+their output kept, whose build output is gone, and whose next attempt paused on a question. Two
+tickets in QA hold a Conductor question whose options act when picked: QA-112's "Accept without
+QA" records QA as skipped by decision and moves it to Merging, and QA-113's question stayed the
+ticket's only one when a QA pass after it ended blocked; "Go on as it is" lets it continue. The seed is data, versioned with the fixtures. Nothing in that server reaches Linear or
 GitHub: the tracker is the seed's file, no Linear or GitHub token reaches it, and the `gh` on its
 PATH (`scripts/qa-server-gh.sh`) answers only for the seed's own pull requests. The tracker keeps
 the moves, requests and replies Symphony writes in its copy of the seed's issues, and the Inbox

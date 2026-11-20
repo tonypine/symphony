@@ -47,6 +47,94 @@
           ]
         }
       ]
+    },
+    {
+      "issue": "QA-112",
+      "asked_by": "Conductor",
+      "title": "How QA-112 gets past a QA check it cannot set up",
+      "question": "QA-112 (Retry a failed release upload once before asking) cannot be checked by QA: the QA machine has no way to make an upload fail. Should QA-112 go on to merge on its automated tests, or go back to add a way to make the upload fail?",
+      "why": "QA stopped twice on the same step. Its automated tests cover the retry and both pass.",
+      "if_unanswered": "QA-112 waits in QA and no new QA pass starts.",
+      "recommendation_reason": "The automated tests already prove the retry, and another pass would stop the same way.",
+      "options": [
+        {
+          "label": "Accept without QA",
+          "effect": "QA-112 moves to Merging with QA recorded as skipped by decision; QA is not asked again.",
+          "recommended": true,
+          "action": "accept_without_qa",
+          "tradeoffs": [
+            {
+              "kind": "good",
+              "text": "QA-112 can merge today."
+            },
+            {
+              "kind": "risk",
+              "text": "Nobody sees the retry run in the app before it ships."
+            }
+          ]
+        },
+        {
+          "label": "Send back to add a failing upload",
+          "effect": "QA-112 moves to Rework with a finding asking for a way to make the upload fail on the QA machine.",
+          "recommended": false,
+          "action": "rework",
+          "finding": "QA cannot make a release upload fail on its machine: add a way to make it fail so QA can watch the retry.",
+          "tradeoffs": [
+            {
+              "kind": "cost",
+              "text": "One more rework and QA pass."
+            }
+          ]
+        },
+        {
+          "label": "Run QA again",
+          "effect": "QA-112 stays in QA and a new QA pass starts.",
+          "recommended": false,
+          "action": "rerun",
+          "tradeoffs": [
+            {
+              "kind": "risk",
+              "text": "The pass will likely stop the same way."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "issue": "QA-113",
+      "asked_by": "Conductor",
+      "title": "Whether QA-113 waits for the new Home layout",
+      "question": "QA-113 (Show the queue's wait time on each Home row) changes Home rows that another ticket is redrawing. Should QA-113 go on as it is, or go back to wait for the new layout?",
+      "why": "Another ticket redraws the Home rows this week. QA-113 adds its wait time to the old rows.",
+      "if_unanswered": "QA-113 waits in QA and no new QA pass starts.",
+      "recommendation_reason": "The wait time fits the old and the new rows alike.",
+      "options": [
+        {
+          "label": "Go on as it is",
+          "effect": "QA-113 stays in QA and its check continues.",
+          "recommended": true,
+          "action": "continue",
+          "tradeoffs": [
+            {
+              "kind": "good",
+              "text": "Nothing waits on the redraw."
+            }
+          ]
+        },
+        {
+          "label": "Send back to wait for the new layout",
+          "effect": "QA-113 moves to Rework with a finding asking it to follow the new Home layout.",
+          "recommended": false,
+          "action": "rework",
+          "finding": "Follow the new Home layout once it lands.",
+          "tradeoffs": [
+            {
+              "kind": "cost",
+              "text": "QA-113 waits for the other ticket."
+            }
+          ]
+        }
+      ]
     }
   ],
   "runs": [
@@ -79,6 +167,24 @@
       "turn_count": 2,
       "transcript": "transcripts/QA-107.jsonl",
       "pull_request": 452
+    },
+    {
+      "issue": "QA-112",
+      "status": "success",
+      "minutes_ago": 75,
+      "runtime_seconds": 1430,
+      "total_tokens": 201000,
+      "turn_count": 3,
+      "pull_request": 453
+    },
+    {
+      "issue": "QA-113",
+      "status": "success",
+      "minutes_ago": 64,
+      "runtime_seconds": 1120,
+      "total_tokens": 156000,
+      "turn_count": 2,
+      "pull_request": 454
     }
   ],
   "pull_requests": [
@@ -107,6 +213,16 @@
     {
       "issue": "QA-107",
       "number": 452,
+      "ci": "green"
+    },
+    {
+      "issue": "QA-112",
+      "number": 453,
+      "ci": "green"
+    },
+    {
+      "issue": "QA-113",
+      "number": 454,
       "ci": "green"
     }
   ],
@@ -245,6 +361,41 @@
         "run_number": 2,
         "exit": "paused",
         "duration_ms": 1260000
+      }
+    },
+    {
+      "issue": "QA-113",
+      "run_id": "qa-seed-qa-QA-113",
+      "minutes_ago": 30,
+      "type": "run.started",
+      "payload": {
+        "run_id": "qa-seed-qa-QA-113",
+        "run_kind": "qa",
+        "run_number": 1
+      }
+    },
+    {
+      "issue": "QA-113",
+      "run_id": "qa-seed-qa-QA-113",
+      "minutes_ago": 22,
+      "type": "verdict.recorded",
+      "payload": {
+        "kind": "qa",
+        "outcome": "blocked",
+        "reason": "QA could not reach the Home rows: the QA machine shows no queue."
+      }
+    },
+    {
+      "issue": "QA-113",
+      "run_id": "qa-seed-qa-QA-113",
+      "minutes_ago": 22,
+      "type": "run.ended",
+      "payload": {
+        "run_id": "qa-seed-qa-QA-113",
+        "run_kind": "qa",
+        "run_number": 1,
+        "exit": "success",
+        "duration_ms": 480000
       }
     }
   ]
