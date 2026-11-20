@@ -515,6 +515,25 @@ over its bounds or holding a backtick, and from any other run kind, the machine 
 description is left as it is. The summary of the ticket's history that every run's prompt carries opens
 with the brief, in full, under `Brief`.
 
+## `plan`, `checks` and `asks`
+
+What a groomed ticket works from (`SymphonyElixir.TicketPlan`, `SymphonyElixir.TicketChecks`). A ticket is
+groomed when its history holds a `plan.written`; a ticket that holds none reads `plan: null`, `checks: []`
+and the asks it has, if any.
+
+| Field | What it holds |
+| --- | --- |
+| `plan` | The newest `plan.written`, without its checks: `version`, `reason`, `by` (`grooming`, `recalibration`, `parent`, `run`), `shape` (`single`, `split`), `layers`, `summary` (for a person), `text` (for agents), `size` (`tokens`, `runs`), `sub_tickets` for a split (each `key`, `title`, `ask`, `after`, `repo`, `identifier`), the event's id as `event_id` and when it was written as `at`. Null for a ticket with no plan. |
+| `checks` | The plan's checks, in its order: `id` (the same across plan versions), `kind` (`outcome`, `qa`, `evidence`), `statement`, `proof` (`test`, `qa`, `design`, `attached`), and for a `qa` check `needs` (the app state it needs), `action`, `expect`, `size` and `story`. |
+| `checks[].state` | `open`, `proved` (a `check.proved` names it, on any head) or `waived` (no proof names it and a `check.waived` does). |
+| `checks[].proved_by` | The newest proof: `by`, `test`, `evidence`, `details`, the proof's `event_id`, `at`, `head` and `run_id`. Null until the check is proved. |
+| `checks[].waived` | The waiver: `reason`, `event_id` and `at`. Null when the check was not waived. |
+| `asks` | Every `ask.recorded`, oldest first: `text` (what a person asked for, word for word), `source` (`linear`, `message`, `parent`), `from` (the parent ticket or the message event), `at` and `event_id`. |
+
+A check the newest plan dropped is no longer listed; one it kept keeps its state. The summary of the
+ticket's history that every run's prompt carries opens, for a groomed ticket, with `Ask`, `Plan` and
+`Checks` in the brief's place.
+
 ## `running`
 
 The live run, null when none is. Beside the run's session, workspace and tokens, it says what the run is

@@ -121,6 +121,81 @@ defmodule SymphonyElixir.TicketEvents.BriefTest do
       assert text =~ "Other events, newest first (0):\n- none"
     end
 
+    test "a groomed ticket opens with its asks, its plan and its checks in the brief's place" do
+      checks = [
+        %{id: "c1", kind: "outcome", statement: "The page shows the plan.", proof: "test"},
+        %{id: "c2", kind: "qa", statement: "The panel folds.\nTo one line.", proof: "qa", action: "Fold it", expect: "One line"},
+        %{id: "c3", kind: "evidence", statement: "The design was compared.", proof: "attached"},
+        %{id: "c4", kind: "qa", statement: "It matches the story.", proof: "design", action: "Open it", expect: "The story"}
+      ]
+
+      plan = %{
+        reason: "Grooming",
+        by: "grooming",
+        shape: "single",
+        layers: ["screen", "api"],
+        summary: "The ticket page shows the plan.\nAnd its checks.",
+        text: "Read the plan from the ledger and draw it.",
+        checks: checks,
+        size: %{tokens: 200_000, runs: 2}
+      }
+
+      events = [
+        event(0, "ask.recorded", %{text: "Show the plan.\nOn the ticket page.", source: "linear"}),
+        event(1, "ask.recorded", %{text: "Only the model.", source: "parent", from: "TP-1"}),
+        event(2, "ask.recorded", %{text: "And its checks.", source: "message", from: "evt-9"}, actor: {:person, "the Director"}),
+        event(3, "plan.written", Map.merge(plan, %{version: 1, checks: Enum.take(checks, 1)})),
+        event(4, "brief.written", %{text: "A run's brief.", walkthrough: "Its steps."}, actor: {:agent, "run-1", "implementation"}, run_id: "run-1"),
+        event(5, "plan.written", Map.merge(plan, %{version: 2, reason: "The ask changed."})),
+        event(6, "check.proved", %{check_id: "c1", by: "test"}),
+        event(7, "check.waived", %{check_id: "c3", reason: "Nothing can be attached."}),
+        event(8, "check.proved", %{check_id: "c4", by: "design"})
+      ]
+
+      text = Brief.build(nil, events).text
+
+      assert text =~ """
+             Ask (3):
+             - 2026-10-22T10:00:00Z, from the ticket's description: Show the plan.
+               On the ticket page.
+             - 2026-10-22T10:01:00Z, from the parent ticket TP-1: Only the model.
+             - 2026-10-22T10:02:00Z, from a message: And its checks.
+
+             Plan (version 2, written 2026-10-22T10:05:00Z: The ask changed.):
+             - Shape: single
+             - Layers: screen, api
+             - Summary: The ticket page shows the plan.
+               And its checks.
+
+             Checks (4):
+             - c1, outcome, proved by a test: The page shows the plan.
+             - c2, qa, open, to be proved by QA: The panel folds.
+               To one line.
+             - c3, evidence, waived (Nothing can be attached.): The design was compared.
+             - c4, qa, proved by the design: It matches the story.
+
+             Decisions (0):
+             """
+
+      refute text =~ "Brief (written"
+      refute text =~ "Brief:"
+
+      # The plan's versions stay in the history; the asks, proofs and waivers are not repeated.
+      assert text =~ """
+             Other events, newest first (2):
+             - 2026-10-22T10:05:00Z Plan changed: The ask changed.
+             - 2026-10-22T10:03:00Z Plan written: The ticket page shows the plan. And its checks.\
+             """
+    end
+
+    test "an ask on a ticket with no plan stays among the other events, and the brief keeps its place" do
+      text = Brief.build(nil, [event(0, "ask.recorded", %{text: "Show the plan.", source: "linear"})]).text
+
+      assert text =~ "Brief:\n- none"
+      assert text =~ "Other events, newest first (1):\n- 2026-10-22T10:00:00Z Ask recorded: Show the plan."
+      refute text =~ "Checks"
+    end
+
     test "phase and pauses come from the record" do
       symphony = %{kind: :symphony, name: "Symphony"}
 
