@@ -176,15 +176,15 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       end
     end
 
-    test "a machine handoff step on a Rework head that never moved emits nothing and moves nothing" do
+    test "a machine handoff step on a Rework head that never moved hands that head off (TP-1186)" do
       Application.put_env(:symphony_elixir, :progress_pr_head_result, pr_status("sha-old"))
 
       assert :ok = run_machine_handoff!(step_runner(), heads: ["sha-old"])
 
       assert_received :machine_push
-      refute_received {:memory_tracker_state_update, "issue-progress", _state}
-      refute Handoff.emitted?("default", "issue-progress", "sha-old")
-      assert RunStore.get_rework_base("default", "issue-progress") == "sha-old"
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert_handoff_recorded("sha-old", "machine_handoff")
+      assert RunStore.get_rework_base("default", "issue-progress") == nil
     end
 
     test "a machine handoff step with review comments pending emits nothing and moves nothing, in Rework or In Progress" do
@@ -459,6 +459,68 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert turns() == 2
     refute_received {:memory_tracker_state_update, _issue_id, _state}
     assert RunStore.get_rework_base("default", "issue-progress") == nil
+  end
+
+  describe "a Rework whose fix needs no commit (TP-1186)" do
+    # The agent's push or PR tool call on the unchanged head, as the tool hook records it: in the
+    # run's registry, and as the ledger's signal, which the ticket's first handoff already holds.
+    defp push_unchanged_head(head) do
+      Application.put_env(:symphony_elixir, :progress_turn_hook, fn opts ->
+        :ok = CommentRegistry.record_handoff(Keyword.fetch!(opts, :linear_comment_registry), head)
+        :ok = Handoff.emit("default", "issue-progress", %{head: head, branch: "auto/TP-337"})
+      end)
+    end
+
+    test "a Rework run that pushes its unchanged PR head moves to Code Review in that run" do
+      push_unchanged_head("sha-rework")
+
+      assert :ok = run_issue!("Rework", heads: ["sha-rework"], handoff: "sha-rework")
+
+      assert turns() == 1
+      assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+      assert_signal("handoff", %{to: "Code Review", reason: "after rework", head: "sha-rework", move: true})
+      assert RunStore.get_rework_base("default", "issue-progress") == nil
+    end
+
+    test "a handoff signal recorded before the run started does not hand off the unchanged head" do
+      run_issue!("Rework", heads: ["sha-rework"], handoff: "sha-rework", states: ["Rework", "Todo"])
+
+      assert turns() == 2
+      refute_received {:memory_tracker_state_update, _issue_id, _state}
+    end
+
+    test "a pushed unchanged head with a review comment, a CI failure or a conflict pending stays in Rework" do
+      pending = [
+        &put_pending_review_comment/0,
+        fn -> :ok = put_pending_ci_failure(approved: false, commit_sha: "sha-rework") end,
+        fn -> :ok = put_pending_conflict(head_sha: "sha-rework") end
+      ]
+
+      for put_pending <- pending do
+        next_run()
+        put_pending.()
+        push_unchanged_head("sha-rework")
+
+        run_issue!("Rework", heads: ["sha-rework"], states: ["Rework", "Done"])
+
+        refute_received {:memory_tracker_state_update, _issue_id, "Code Review"}
+      end
+    end
+
+    defp put_pending_review_comment do
+      :ok =
+        RunStore.put_pr_review(%{
+          repo_key: "default",
+          issue_id: "issue-progress",
+          issue_identifier: "TP-337",
+          pr_url: @pr_url,
+          workspace_path: "/tmp",
+          status: "rework_requested",
+          pending_last_addressed_comment_id: "comment-337",
+          pending_reviewer_comments: [%{id: "comment-337", kind: "inline_comment", author: "Reviewer", body: "Rename this."}],
+          updated_at: ~U[2026-10-03 12:00:00Z]
+        })
+    end
   end
 
   test "a Rework run with unresolved review comments on the current head keeps going" do
