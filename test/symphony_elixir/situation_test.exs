@@ -414,11 +414,41 @@ defmodule SymphonyElixir.SituationTest do
       assert compute(record(%{phase: "Waiting on sub-tickets", sub_issues: @subs, pause: pause(reasons)})).kind == "blocked_by_ticket"
     end
 
-    test "a parent whose sub-tickets all ended has its epic review next" do
-      ended = %{phase: "Waiting on sub-tickets", sub_issues: [%{id: "a", identifier: "TP-2", state: "Done"}]}
+    test "a plan whose sub-tickets all ended has its epic review next" do
+      ended = %{phase: "Waiting on sub-tickets", labels: ["plan"], sub_issues: [%{id: "a", identifier: "TP-2", state: "Done"}]}
 
       assert %{kind: "waiting_for_slot", word: "Starting", cause: "The epic review is next and a slot is free."} = compute(record(ended))
       assert %{word: "Starting", cause: "The epic review is next and a slot is free."} = compute(record(%{phase: "Epic Review"}))
+    end
+
+    test "MOT-93: a merged ticket that is no plan, whose sub-tickets all ended, is closing, never has its epic review next" do
+      ended = %{phase: "Waiting on sub-tickets", labels: ["improvement"], sub_issues: [%{id: "a", identifier: "TP-2", state: "Canceled"}]}
+      :ok = RunStore.put_merged_wait(@id)
+      held = live(%{skipped: %{@id => %{since: @later, reason: "waiting on its sub-tickets", rule: nil, gate: :sub_tickets}}})
+
+      closing = %{
+        kind: "waiting_for_ci",
+        word: "Closing",
+        cause: "Every sub-ticket has ended, so Symphony moves it to Done; no run is needed.",
+        next: "It moves to Done on the next poll.",
+        since: @at
+      }
+
+      for live <- [live(), held] do
+        situation = compute(record(ended), [], live)
+        assert Map.take(situation, Map.keys(closing)) == closing
+        refute situation.cause =~ "epic review"
+      end
+
+      # One still open keeps it waiting on it.
+      open = %{ended | sub_issues: [%{id: "a", identifier: "TP-2", state: "In Progress"}]}
+      assert %{kind: "waiting_on_sub_tickets", waits_on: %{sub_tickets: ["TP-2"]}} = compute(record(open))
+    end
+
+    test "a ticket that is no plan a person moved to Waiting on sub-tickets has no run next and is not closing" do
+      ended = %{phase: "Waiting on sub-tickets", labels: [], sub_issues: [%{id: "a", identifier: "TP-2", state: "Done"}]}
+
+      assert %{kind: "unknown", word: "Not known"} = compute(record(ended))
     end
   end
 

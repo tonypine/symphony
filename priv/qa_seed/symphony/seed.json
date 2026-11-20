@@ -187,6 +187,9 @@
       "pull_request": 454
     }
   ],
+  "merged_waits": [
+    "QA-114"
+  ],
   "pull_requests": [
     {
       "issue": "QA-103",
