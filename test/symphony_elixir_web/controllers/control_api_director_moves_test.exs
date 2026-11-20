@@ -66,7 +66,11 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert %{"to_state" => "Backlog", "moved" => true} = Jason.decode!(post(:move, %{"issue_identifier" => "MOT-70", "to" => "Backlog"}, moves).resp_body)
     assert %{phase: "Backlog", phase_owner: :symphony} = RunStore.get_ticket_state("owned")
 
+    # A ticket read from Linear carries no repo key: its record's repo routes it (TP-1566), so the one
+    # Symphony doesn't track has no record either.
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{owned | repo_key: nil}])
+    assert %{"to_state" => "Todo", "moved" => true} = Jason.decode!(post(:move, %{"issue_identifier" => "MOT-70", "to" => "Todo"}, moves).resp_body)
+    RunStore.delete_ticket_state("owned")
 
     assert error(post(:move, %{"issue_identifier" => "MOT-70", "to" => "Todo"}, moves)) ==
              {409, "move_not_allowed", "MOT-70 is in no repository Symphony is configured for, so Symphony doesn't track it"}
