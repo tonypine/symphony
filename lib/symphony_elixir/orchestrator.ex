@@ -3963,15 +3963,21 @@ defmodule SymphonyElixir.Orchestrator do
 
       closeable ->
         issue_ids = Enum.map(closeable, & &1.id)
-        close = fn -> close_finished_parents_fresh(issue_ids, terminal_states, settings) end
+        repo_keys = Map.new(closeable, &{&1.id, issue_repo_key(&1)})
+        close = fn -> close_finished_parents_fresh(issue_ids, repo_keys, terminal_states, settings) end
         start_tracker_task(state, %{kind: :close_parents, issue_ids: issue_ids}, close)
     end
   end
 
-  defp close_finished_parents_fresh(issue_ids, terminal_states, settings) do
+  # A read by id carries no repo key, so each fresh issue takes its candidate's: without it the close
+  # would move Linear and not the record, and the drift check would move Linear back (MOT-93, TP-1565).
+  defp close_finished_parents_fresh(issue_ids, repo_keys, terminal_states, settings) do
     case Tracker.fetch_issue_states_by_ids(issue_ids) do
       {:ok, fresh_issues} ->
-        for %Issue{} = issue <- fresh_issues, SubIssueWait.close?(issue, terminal_states, settings), do: close_finished_parent(issue)
+        for %Issue{} = fresh <- fresh_issues,
+            issue = freeze_issue_repo_key(fresh, issue_repo_key(fresh) || Map.get(repo_keys, fresh.id)),
+            SubIssueWait.close?(issue, terminal_states, settings),
+            do: close_finished_parent(issue)
 
       {:error, reason} ->
         Logger.warning("Failed to refresh issues waiting on sub-issues before closing them; retrying next poll reason=#{inspect(reason)}")
