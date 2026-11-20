@@ -318,7 +318,7 @@ public enum ControlAction: Equatable {
         case let .undo(identifier):
             return "Couldn't undo the move on \(identifier)"
         case let .note(_, identifier, _):
-            return "Couldn't add the note to \(identifier)"
+            return "Couldn't send the message to \(identifier)"
         case let .blocker(identifier, blocker, add):
             return add ? "Couldn't add \(blocker) as a blocker of \(identifier)" : "Couldn't remove \(blocker) as a blocker of \(identifier)"
         case let .priority(identifier, priority):

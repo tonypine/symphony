@@ -30,10 +30,6 @@ final class EquatableGatesTests: XCTestCase {
         XCTAssertEqual(DetailsPanel(model: details, open: { _ in }), DetailsPanel(model: details, open: { _ in XCTFail() }, copy: { _ in }))
         XCTAssertNotEqual(DetailsPanel(model: details, open: { _ in }), DetailsPanel(model: linked, open: { _ in }))
 
-        let note = NotePanelModel.build(note: nil, move: nil, runs: [:], reference: reference)
-        let composer = TicketNoteComposer()
-        XCTAssertEqual(NotePanel(model: note, composer: composer, save: {}), NotePanel(model: note, composer: composer, save: { XCTFail() }))
-        XCTAssertNotEqual(NotePanel(model: note, composer: composer, save: {}), NotePanel(model: note, composer: TicketNoteComposer(), save: {}))
     }
 
     func testTheLifecycleCardComparesItsModel() {

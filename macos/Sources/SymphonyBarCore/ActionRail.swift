@@ -129,7 +129,7 @@ public struct TicketActionRail: Equatable {
         case force
         /// Restart's reason.
         case restart
-        /// The note for the next run.
+        /// The box above the timeline, to write to the ticket.
         case note
     }
 

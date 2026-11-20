@@ -1415,12 +1415,11 @@ func factsRail(_ name: String, width: CGFloat) -> some View {
     .background(DesignTokens.Surface.window.color)
 }
 
-// MARK: - The facts rail's Note, Decisions and Details panels (TP-1447)
+// MARK: - The facts rail's Decisions and Details panels (TP-1447)
 
-/// Three tickets (`Tests/Fixtures/facts-rail/details*.json`, the runs' models from `details-events.json`): a note
-/// implementation run 3 read, two decisions (the older unfolded) and every detail, the run models unfolded; a note no run
-/// read yet with a new one typed in the field, no decisions and no brief; and a ticket Symphony holds nothing of, Save
-/// Note off with its reason.
+/// Three tickets (`Tests/Fixtures/facts-rail/details*.json`, the runs' models from `details-events.json`): two decisions
+/// (the older unfolded) and every detail, the run models unfolded; no decisions and no brief; and a ticket Symphony holds
+/// nothing of.
 let factsDetailTickets = ["details", "details-unread", "details-empty"]
 
 @MainActor
@@ -1444,18 +1443,13 @@ func factsDetails(_ name: String, width: CGFloat) -> some View {
         ),
         TicketDecision(id: "D2", date: "2026-11-10", answer: "Fold the agent description by default."),
     ] : []
-    let composer = TicketNoteComposer(
-        identifier: name, text: name == "details-unread" ? "Check the dark snapshots at 440 pt." : ""
-    )
-    let note = NotePanelModel.build(note: read.note, move: read.noteMove, runs: runs, reference: factsReference, calendar: timelineCalendar)
     let details = DetailsPanelModel.build(
         read, runs: runs, linearURL: full ? URL(string: "https://linear.app/acme/issue/TP-1447") : nil,
         pullRequest: full ? TicketPullRequest(number: 870, url: URL(string: "https://github.com/acme/symphony/pull/870")) : nil,
-        description: full ? "## Goal\n\nThree more FactsRail panels: Note for the next run, Decisions and Details." : nil,
+        description: full ? "## Goal\n\nTwo more FactsRail panels: Decisions and Details." : nil,
         reference: factsReference, calendar: timelineCalendar
     )
     return VStack(alignment: .leading, spacing: DesignTokens.Space.s5) {
-        NotePanel(model: note, composer: composer, save: {})
         DecisionsPanel(model: DecisionsPanelModel.build(decisions), unfolded: ["D1"])
         DetailsPanel(model: details, open: { _ in }, copy: { _ in }, modelsUnfolded: full)
     }
@@ -1576,12 +1570,57 @@ func ticketPageLaptop(_ identifier: String, width: CGFloat = TicketPageLayout.la
     let page = ticketPageRead(identifier)
     return TicketPageBody(
         page: page, questions: TicketPage.questions(of: identifier, in: ticketPageInbox.items), width: width,
-        transcripts: StepTranscripts { _ in .unreachable }, note: TicketNoteComposer(identifier: identifier),
+        transcripts: StepTranscripts { _ in .unreachable }, message: TicketMessageComposer(identifier: identifier),
         decisions: ticketPageDecisions(identifier), calendar: timelineCalendar
     )
     .environment(\.artifactImages, ticketPageImages())
     .frame(width: width, alignment: .topLeading)
     .frame(minHeight: TicketPageLayout.laptopWindowHeight, alignment: .top)
+    .background(DesignTokens.Surface.content.color)
+}
+
+// MARK: - Writing to the ticket (TP-1503)
+
+/// The box above the timeline and what it sends, on TP-1244's page with a run working, in the laptop's 780 pt column:
+/// the box empty, with a two-line draft (its ⌘↩ hint and Send), a message sent and waiting for the next run (on top,
+/// above the run now), and a message a run read.
+enum TicketWriting: String, CaseIterable {
+    case composeEmpty = "compose-empty", composeDraft = "compose-draft", messageUnread = "message-unread", messageRead = "message-read"
+}
+
+/// A message the Director wrote to TP-1244, as its events feed serves it; `read` names the run that read it.
+func ticketPageMessage(read: Bool) -> TicketEventsPayload {
+    let readBy = read ? #"{"run_id": "run-gallery", "run": "Implementation run 2", "at": "2026-10-08T09:51:00Z"}"# : "null"
+    let json = """
+        {"timeline": [{"kind": "event", "id": "gallery-message", "seq": 9999, "at": "\(read ? "2026-10-08T09:50:00Z" : "2026-10-08T10:25:00Z")",
+         "type": "message.sent", "actor": {"kind": "person", "name": "Tony"},
+         "summary": {"title": "You wrote", "detail": "Keep the button word Release."},
+         "payload": {"text": "Keep the button word Release, not Unblock. The old word reads as if the ticket were stuck, and it never is."},
+         "read": \(readBy)}]}
+        """
+    guard let payload = TicketEventsPayload.decode(Data(json.utf8)) else { fatalError("The gallery's message doesn't read") }
+    return payload
+}
+
+@MainActor
+func ticketPageWriting(_ moment: TicketWriting) -> some View {
+    var page = ticketPageRead("TP-1244")
+    if moment == .messageUnread || moment == .messageRead { page.history?.merge(ticketPageMessage(read: moment == .messageRead)) }
+    let draft = moment == .composeDraft ? "Use the catalog’s chip in the header, not a new one.\nKeep the times at 11 pt." : ""
+    return VStack(alignment: .leading, spacing: DesignTokens.Space.s2) {
+        TimelineTitle(marks: nil)
+        TimelineComposer(
+            composer: TicketMessageComposer(identifier: page.identifier, text: draft), drawnAs: moment == .composeDraft ? .focused : .rest,
+            send: {}
+        )
+        TimelineSection(
+            model: page.timelineModel(calendar: timelineCalendar), idle: TimelineIdleLine(page.situation, reference: page.reference),
+            transcripts: StepTranscripts { _ in .unreachable }, calendar: timelineCalendar
+        )
+        .environment(\.readSession, ReadSessionAction(page.identifier) { _ in })
+    }
+    .padding(DesignTokens.Space.s5)
+    .frame(width: 780, alignment: .leading)
     .background(DesignTokens.Surface.content.color)
 }
 
@@ -1602,7 +1641,7 @@ func ticketPageAnswering(picks: DecisionPicks = DecisionPicks(), sending: Bool =
     let answers = TicketPageAnswers(picks: picks, sending: sending)
     return TicketPageBody(
         page: page, questions: questions, width: width, transcripts: StepTranscripts { _ in .unreachable },
-        note: TicketNoteComposer(identifier: identifier), decisions: ticketPageDecisions(identifier), sheetOpen: true,
+        message: TicketMessageComposer(identifier: identifier), decisions: ticketPageDecisions(identifier), sheetOpen: true,
         calendar: timelineCalendar
     )
     .environment(\.artifactImages, ticketPageImages())
@@ -1627,7 +1666,7 @@ func ticketPageWide(_ identifier: String, width: CGFloat = TicketPageLayout.desk
     let height = TicketPageLayout.desktopPageHeight
     return TicketPageBody(
         page: page, questions: TicketPage.questions(of: identifier, in: ticketPageInbox.items), answers: TicketPageAnswers(picks: picks), width: width,
-        transcripts: StepTranscripts { _ in .unreachable }, note: TicketNoteComposer(identifier: identifier),
+        transcripts: StepTranscripts { _ in .unreachable }, message: TicketMessageComposer(identifier: identifier),
         decisions: ticketPageDecisions(identifier), scroll: TicketPageScroll(viewport: height), calendar: timelineCalendar
     )
     .environment(\.artifactImages, ticketPageImages())
@@ -2008,8 +2047,7 @@ MainActor.assumeIsolated {
             render(factsRail(name, width: FactsRail.laptopWidth), scheme, to: "facts-rail-\(name)-laptop-\(suffix).png")
             render(factsRail(name, width: FactsRail.desktopWidth), scheme, to: "facts-rail-\(name)-desktop-\(suffix).png")
         }
-        // The Note for the next run, Decisions and Details panels (TP-1447): with every fact, with a note not read yet,
-        // and with nothing, at both rail widths.
+        // The Decisions and Details panels (TP-1447): with every fact, with less, and with nothing, at both rail widths.
         for name in factsDetailTickets {
             render(factsDetails(name, width: FactsRail.laptopWidth), scheme, to: "facts-rail-\(name)-laptop-\(suffix).png")
             render(factsDetails(name, width: FactsRail.desktopWidth), scheme, to: "facts-rail-\(name)-desktop-\(suffix).png")
@@ -2019,6 +2057,10 @@ MainActor.assumeIsolated {
         // one column beside the rail; from the 1600 pt breakpoint on, the desktop's arrangement.
         for (identifier, moment) in ticketPageMoments {
             renderScreen(scheme, to: "ticket-page-\(moment)") { ticketPage(identifier, window: $0) }
+        }
+        // Writing to the ticket (TP-1503): the box empty, with a draft, a message waiting for the next run, one a run read.
+        for moment in TicketWriting.allCases {
+            render(ticketPageWriting(moment), scheme, to: "ticket-page-\(moment.rawValue)-\(suffix).png")
         }
         // Answering from the page (TP-1450): another option picked, and the Director's own words. In a laptop's window
         // they are in Answer's sheet; in a desktop's, in the column on the far right.
