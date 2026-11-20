@@ -57,7 +57,7 @@ final class StatusNoteTests: XCTestCase {
         )
         XCTAssertEqual(page.situation?.kind, .ci)
         XCTAssertEqual(page.situation?.word, "Waiting for CI")
-        XCTAssertTrue(page.acceptsNotes)
+        XCTAssertTrue(page.acceptsMessages)
 
         let model = page.timelineModel(calendar: utc)
         let folded = model.showing(allEvents: false).items.map(\.id)
