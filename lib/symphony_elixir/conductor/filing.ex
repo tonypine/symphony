@@ -284,14 +284,8 @@ defmodule SymphonyElixir.Conductor.Filing do
     with {:error, reason} <- result, do: Logger.warning("Conductor could not record #{type} issue_id=#{issue_id}: #{inspect(reason)}")
   end
 
-  defp repo_keys(opts) do
-    Keyword.get_lazy(opts, :repos, fn ->
-      case Config.repos() do
-        {:ok, repos} -> Enum.map(repos, & &1.name)
-        _unreadable -> []
-      end
-    end)
-  end
+  # An unreadable config lists no repos.
+  defp repo_keys(opts), do: Keyword.get_lazy(opts, :repos, fn -> for {:ok, repos} <- [Config.repos()], repo <- repos, do: repo.name end)
 
   defp terminal?(state, opts) do
     terminal = Keyword.get_lazy(opts, :terminal_states, fn -> Config.settings!().tracker.terminal_states end)

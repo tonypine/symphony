@@ -309,6 +309,12 @@ defmodule SymphonyElixir.SelfHeal.FixerTest do
       Process.put(:label_lookup_result, {:error, :rate_limited})
       log = capture_log(fn -> assert {:ok, %{identifier: "TP-900"}} = Fixer.create(attrs, repo("TP", ["Fix Project"])) end)
       assert log =~ ~s(Could not label TP-900 "tech debt": :rate_limited)
+
+      # A ticket that could not be created gets no label.
+      Process.delete(:graphql_calls)
+      Process.put(:create_result, {:error, :rate_limited})
+      assert {:error, _reason} = Fixer.create(attrs, repo("TP", ["Fix Project"]))
+      refute Enum.any?(Process.get(:graphql_calls), &(elem(&1, 0) =~ "SymphonyAddIssueLabel"))
     end
 
     test "for another repo goes to that repo's team, not the affected ticket's" do

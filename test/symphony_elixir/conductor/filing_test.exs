@@ -211,4 +211,16 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     assert %{open: true, closed: nil, filed: [], left: 2, repos: repos} = Filing.facts([], @settings)
     assert "default" in repos
   end
+
+  test "a ticket filed without a title is never taken for the same problem", ctx do
+    {:ok, _event} = TicketEvents.record("default", ctx.issue_id, "ticket.filed", %{identifier: "TP-1999", kind: "follow_up", repo: "default", existing: false, by: "conductor"})
+    Process.put({:ticket, "TP-1999"}, {:ok, %Issue{id: "tp-1999", identifier: "TP-1999", state: "Todo"}})
+
+    assert {:ok, %{identifier: "TP-2000", existing: false}} = file(ctx, route(%{relation: "follow_up"}))
+  end
+
+  test "with no options, the filing reads Symphony's own config and tracker", ctx do
+    context = %{issue: ctx.issue, repo_key: "default", run_id: "conductor-defaults", events: Facts.events(ctx.issue_id)}
+    assert {:error, _why} = Filing.file(route(%{repo: "no-such-repo"}), context, @settings)
+  end
 end
