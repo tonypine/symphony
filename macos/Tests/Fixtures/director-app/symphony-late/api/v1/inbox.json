@@ -1,0 +1,90 @@
+{
+  "counts": {
+    "action": 1,
+    "blocked": 0,
+    "clarify": 0,
+    "plan": 0,
+    "pr": 0,
+    "total": 1
+  },
+  "generated_at": "2026-10-08T10:27:00Z",
+  "items": [
+    {
+      "ask": "How should the times on the paused line read in dark mode?",
+      "context": {
+        "blocked_by": [],
+        "blocks": [],
+        "earlier_decisions": [],
+        "parent": null,
+        "pull_request": {
+          "checks": "failed",
+          "number": 741,
+          "sent_back": 1,
+          "url": "https://github.com/acme/symphony/pull/741"
+        },
+        "related": []
+      },
+      "identifier": "TP-1245",
+      "issue_id": "i-1245",
+      "kind": "action",
+      "references": {},
+      "repo_key": "symphony",
+      "review": {
+        "comment_id": "c-1245-request",
+        "confirm": null,
+        "if_unanswered": "TP-1245 stays in Rework, and its next run waits for the answer.",
+        "options": [
+          {
+            "effect": "The times read at 7 to 1 in dark and 5.7 to 1 in light. The line looks a little busier.",
+            "label": "Use the secondary text colour",
+            "recommended": true,
+            "tradeoffs": [
+              {
+                "kind": "good",
+                "text": "Meets the contrast rule in light and dark"
+              },
+              {
+                "kind": "cost",
+                "text": "The times compete a little with the reasons"
+              }
+            ]
+          },
+          {
+            "effect": "The times grow from 11 to 12 pt; their contrast stays at 2.9 to 1.",
+            "label": "Keep the light colour, one size up",
+            "recommended": false,
+            "tradeoffs": [
+              {
+                "kind": "risk",
+                "text": "Still under the contrast rule: QA would fail it again"
+              }
+            ]
+          },
+          {
+            "effect": "Each reason keeps only its words; since-when moves to the timeline.",
+            "label": "Drop the times from the line",
+            "recommended": false,
+            "tradeoffs": [
+              {
+                "kind": "cost",
+                "text": "You lose since-when at a glance"
+              }
+            ]
+          }
+        ],
+        "question": "How should the times on the paused line read in dark mode?",
+        "recommendation_reason": "It meets the contrast rule in both appearances with one colour change.",
+        "requested_at": "2026-10-08T10:04:31Z",
+        "steps": [],
+        "title": "How should the times on the paused line read in dark mode?",
+        "unblocks": "TP-1245's next run",
+        "why": "QA found the times on the paused line too faint in dark mode at laptop size: 2.9 to 1 against the page.\n\nThe design system asks for 4.5 to 1. Two of the fixes below meet it; they differ in how busy the line looks."
+      },
+      "state": "Rework",
+      "title": "The paused line on the ticket page",
+      "url": "https://linear.app/acme/issue/TP-1245",
+      "waiting_seconds": 1349,
+      "waiting_since": "2026-10-08T10:04:31Z"
+    }
+  ]
+}

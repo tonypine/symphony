@@ -7,13 +7,18 @@ import SymphonyBarCore
 /// The window's status line: 30 pt of glass under the page with a hairline over it. The dispatch control it is given,
 /// then, when Home's read is there, a hairline and what is in progress, in the queue and needs the Director; at the
 /// right the build that answers and the connection with its dot. VoiceOver reads the line as one group, labelled with
-/// all of it, and the control inside it.
+/// all of it, and the control inside it. While Symphony is late (TP-1562) the counts are its last answer's, in the
+/// tertiary colour, and the line offers Open Logs and Restart Symphony after the connection.
 public struct StatusLine<Dispatch: View>: View {
     let line: HealthLine
     let dispatch: Dispatch
+    let onAction: (WindowState.Action) -> Void
 
-    public init(_ line: HealthLine, @ViewBuilder dispatch: () -> Dispatch) {
+    public init(
+        _ line: HealthLine, onAction: @escaping (WindowState.Action) -> Void = { _ in }, @ViewBuilder dispatch: () -> Dispatch
+    ) {
         self.line = line
+        self.onAction = onAction
         self.dispatch = dispatch()
     }
 
@@ -21,12 +26,17 @@ public struct StatusLine<Dispatch: View>: View {
         let tokens = DesignTokens.StatusLine.self
         HStack(spacing: tokens.gap) {
             dispatch
+                .fixedSize()
             if let counts = line.counts {
-                HairlineDivider(.vertical, length: tokens.separatorHeight)
-                    .padding(.horizontal, tokens.separatorInset)
-                ForEach(counts.texts, id: \.self) { text in
-                    Text(text).monospacedDigit()
+                // The counts yield first when the line runs out of room (TP-1562: the late line adds Open Logs and
+                // Restart Symphony): the last ones drop whole, so the dispatch control and the build stay readable.
+                ViewThatFits(in: .horizontal) {
+                    ForEach(Array(stride(from: counts.texts.count, to: 0, by: -1)), id: \.self) { shown in
+                        countsView(Array(counts.texts.prefix(shown)))
+                    }
+                    Color.clear.frame(width: 0, height: 0)
                 }
+                .layoutPriority(1)
             }
             Spacer(minLength: 0)
             if let build = line.build {
@@ -35,6 +45,7 @@ public struct StatusLine<Dispatch: View>: View {
                     .truncationMode(.middle)
                     .foregroundStyle(tokens.build.color)
                     .help(build.help ?? build.text)
+                    .layoutPriority(2)
             }
             HStack(spacing: tokens.dotGap) {
                 if let status = line.connection.status { StatusDot(status) }
@@ -42,6 +53,11 @@ public struct StatusLine<Dispatch: View>: View {
             }
             .fixedSize()
             .help(line.connection.help ?? line.connection.text)
+            ForEach(line.actions, id: \.title) { action in
+                Button(action.title) { onAction(action) }
+                    .directorButton(.quiet, size: .small)
+                    .fixedSize()
+            }
         }
         .textStyle(.secondary)
         .foregroundStyle(DesignTokens.TextColor.secondary.color)
@@ -54,6 +70,20 @@ public struct StatusLine<Dispatch: View>: View {
         .overlay(alignment: .top) { HairlineDivider() }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(line.accessibilityLabel)
+    }
+
+    /// The hairline and `texts`, Home's counts, in the tertiary colour while they are Symphony's last answer.
+    private func countsView(_ texts: [String]) -> some View {
+        let tokens = DesignTokens.StatusLine.self
+        return HStack(spacing: tokens.gap) {
+            HairlineDivider(.vertical, length: tokens.separatorHeight)
+                .padding(.horizontal, tokens.separatorInset)
+            ForEach(texts, id: \.self) { text in
+                Text(text).monospacedDigit()
+                    .foregroundStyle((line.countsCurrent ? DesignTokens.TextColor.secondary : DesignTokens.TextColor.tertiary).color)
+            }
+        }
+        .fixedSize()
     }
 }
 

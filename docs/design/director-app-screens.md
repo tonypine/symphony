@@ -458,7 +458,9 @@ later journeys point back to it. The mock draws every screen under its ID.
 
 - **Stopped:** one placeholder per view with **Start Symphony**; badges hidden because counts are unknown.
 - **Starting:** "Symphony is starting…" with a spinner. **Not answering:** "Symphony isn't answering." with Open Logs
-  and Restart Symphony. **Older Symphony:** "Update Symphony to see this view." on views its API can't serve. **First
+  and Restart Symphony, only for a Symphony that exited or answered nothing readable since it started. **Late:** a
+  Symphony that answered and is only slow keeps every page from its last answer; the status line's connection says
+  "Symphony isn't answering · 25 s" with Open Logs and Restart Symphony after it, and the counts show dimmed. **Older Symphony:** "Update Symphony to see this view." on views its API can't serve. **First
   launch:** "Symphony doesn't know where its config is." with Open Settings….
 
 #### D11 · Diagnostics

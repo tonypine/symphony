@@ -931,6 +931,11 @@ public enum SymphonyState {
         base.appendingPathComponent("api/v1/state")
     }
 
+    /// Symphony's light liveness read, which answers at once from a Symphony that is alive (TP-1562).
+    public static func healthURL(base: URL) -> URL {
+        base.appendingPathComponent("api/v1/health")
+    }
+
     /// Turns a state response into a poll result.
     public static func poll(data: Data, statusCode: Int) -> StatusPoll {
         guard statusCode == 200 else { return .failed("Symphony answered with HTTP \(statusCode)") }

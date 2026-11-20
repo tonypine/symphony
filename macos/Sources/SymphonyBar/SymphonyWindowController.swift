@@ -241,9 +241,10 @@ final class SymphonyWindowController: NSObject, NSWindowDelegate, NSMenuItemVali
         client.isVisible = true
     }
 
-    /// Called after each status poll and child process event.
-    func update(status: SymphonyStatus, configPath: String) {
-        let next = WindowState(status: status, hasConfig: WindowState.hasConfig(path: configPath))
+    /// Called after each status poll and child process event. `lag` says why the status's state isn't current: the
+    /// pages stay, and the status line says so (TP-1562).
+    func update(status: SymphonyStatus, configPath: String, lag: String? = nil) {
+        let next = WindowState(status: status, hasConfig: WindowState.hasConfig(path: configPath), lag: lag)
         if case .paused = status { paused = true } else { paused = false }
         // Fresh values as soon as Symphony answers, rather than at the next poll.
         if next == .connected, state != .connected { client.refresh() }

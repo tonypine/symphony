@@ -15,10 +15,13 @@ import Foundation
 /// `<path>.after-<move>.<n>.json` after the `n`th such POST, when the same move changes it more than once (a view saved,
 /// then renamed). A DELETE is a move like a POST: logged with its method, answered 200, and its last path component is
 /// the move (`DELETE .../control/view/view-a1` reads `<path>.after-view-a1.json`). `<dir>/github_webhook_secret` stands for the
-/// webhook secret Symphony hands off (`WebhookSecret`), a made-up value. No request leaves the app, so QA walks every
-/// view with fixed data and no Linear or model calls. Each GET is logged too, to the read log beside the request log
-/// (`api-reads.jsonl`) with its time, path, query and status, so QA can judge which reads the app made; the moves'
-/// log stays the one the after-fixtures read.
+/// webhook secret Symphony hands off (`WebhookSecret`), a made-up value. `<dir>/api/v1/state.late.json`
+/// (`{"after": 30, "for": 60}`) makes Symphony slow to give its state (TP-1562): a state read that arrives between
+/// `after` and `after + for` seconds from the fixtures' first answer is held until that window ends, while every other
+/// read answers at once, so QA sees the Director keep its pages and then answer again. No request leaves the app, so
+/// QA walks every view with fixed data and no Linear or model calls. Each GET is logged too, to the read log beside
+/// the request log (`api-reads.jsonl`) with its time, path, query and status, so QA can judge which reads the app
+/// made; the moves' log stays the one the after-fixtures read.
 public struct APIFixtures: Equatable {
     /// The base URL requests are built on while fixtures answer. Never contacted: the transport answers by path.
     public static let baseURL = URL(string: "http://symphony-fixtures.invalid")!
@@ -28,6 +31,16 @@ public struct APIFixtures: Equatable {
     public static let requestLogFileName = "api-requests.jsonl"
     /// The read log's file name, beside the request log: the GETs, which change no fixture's answer.
     public static let readLogFileName = "api-reads.jsonl"
+    /// When the fixtures first answered in this process: a late state's window counts from it.
+    static let clockStart = Date()
+
+    /// The window in which the state read is late, from `state.late.json` (TP-1562).
+    public struct LateState: Decodable, Equatable {
+        /// Seconds from the fixtures' first answer until the state read is late.
+        public var after: TimeInterval
+        /// Seconds the state read stays late.
+        public var `for`: TimeInterval
+    }
 
     public let directory: URL
     public let requestLog: URL
@@ -146,12 +159,34 @@ public struct APIFixtures: Equatable {
         try? Data(contentsOf: file.deletingPathExtension().appendingPathExtension("409").appendingPathExtension("json"))
     }
 
-    /// A transport for `ControlAPI`, `ReposAPI` and the window's client that answers from the fixtures.
+    /// A transport for `ControlAPI`, `ReposAPI` and the window's client that answers from the fixtures, holding a
+    /// late state read until its window ends.
     public var transport: ControlAPI.Transport {
-        { request in
+        let start = Self.clockStart
+        return { request in
+            let wait = hold(request, now: Date(), since: start)
+            if wait > 0 { try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000)) }
             let (data, response) = answer(request)
             return (data, response)
         }
+    }
+
+    /// The late state the fixtures give, nil without `api/v1/state.late.json`.
+    public var lateState: LateState? {
+        guard let file = file(forPath: SymphonyState.stateURL(base: Self.baseURL).path) else { return nil }
+        let late = file.deletingPathExtension().appendingPathExtension("late").appendingPathExtension("json")
+        return (try? Data(contentsOf: late)).flatMap { try? JSONDecoder().decode(LateState.self, from: $0) }
+    }
+
+    /// Seconds to hold `request` before it is answered: until the late state's window ends for a state read that
+    /// arrives inside it, `start` seconds being the fixtures' first answer; 0 for every other read.
+    public func hold(_ request: URLRequest, now: Date, since start: Date) -> TimeInterval {
+        guard let late = lateState, (request.httpMethod?.uppercased() ?? "GET") == "GET",
+            request.url?.path == SymphonyState.stateURL(base: Self.baseURL).path
+        else { return 0 }
+        let elapsed = now.timeIntervalSince(start)
+        guard elapsed >= late.after, elapsed < late.after + late.for else { return 0 }
+        return late.after + late.for - elapsed
     }
 
     /// `<path>.<number>.json` next to `file` (`<path>.json`), or the highest-numbered one there is below it; nil when

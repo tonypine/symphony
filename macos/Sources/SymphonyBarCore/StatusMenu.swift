@@ -39,11 +39,26 @@ public enum StatusMenu {
     /// Shown under the last answer while Symphony missed the latest poll but not yet enough to count as a problem.
     public static let slowToAnswerLine = "Symphony is slow to answer"
 
-    /// Lines shown under the status title, then whether Symphony is slow to answer, the Keychain wait, the restart's
-    /// progress or error and the last Pause or Resume error when there are any.
+    /// The menu bar's icon while Symphony, alive, hasn't answered even its health read for the set time (TP-1562).
+    public static let notAnsweringSymbol = "exclamationmark.triangle"
+    /// The status item's tooltip and accessibility description then.
+    public static let notAnsweringIconLabel = "\(accessibilityLabel): not answering"
+
+    /// The one notification Symphony's silence sends, `silence` long: "1 min".
+    public static func notAnsweringNotice(silence: String) -> (title: String, body: String) {
+        (
+            StatusMachine.notAnsweringTitle,
+            "It hasn't answered for \(silence). The Director shows its last answer. Open Logs or Restart Symphony from the menu."
+        )
+    }
+
+    /// Lines shown under the status title, then whether Symphony is slow to answer or why its state isn't current
+    /// (`lag`, TP-1562), the Keychain wait, the restart's progress or error and the last Pause or Resume error when
+    /// there are any.
     public static func detailLines(
         _ status: SymphonyStatus,
         slowToAnswer: Bool = false,
+        lag: String? = nil,
         waitingForKeychain: Bool = false,
         restartLine: String? = nil,
         controlError: String? = nil,
@@ -69,7 +84,7 @@ public enum StatusMenu {
             lines = [message]
         }
         return lines + [
-            slowToAnswer ? slowToAnswerLine : nil, waitingForKeychain ? keychainWaitingLine : nil, restartLine,
+            slowToAnswer ? slowToAnswerLine : nil, lag, waitingForKeychain ? keychainWaitingLine : nil, restartLine,
             controlError,
         ].compactMap { $0 }
     }
