@@ -69,11 +69,12 @@ defmodule SymphonyElixir.PhaseSteps do
 
   require Logger
 
-  alias SymphonyElixir.{Artifacts, PromptSafety, Questions, RunStore, TicketEvents, TicketJourney, Workspace}
+  alias SymphonyElixir.{Artifacts, ChecksHold, Config, PromptSafety, Questions, RunStore, TicketEvents, TicketJourney}
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.HumanActions.PlainWords
   alias SymphonyElixir.PhaseSteps.{FailedCheck, Findings, StepAnswer, Transcript, WindowTests}
+  alias SymphonyElixir.{TransitionGuard, Workspace}
   alias SymphonyElixir.Workpad.Projection
 
   @output_max_bytes 512 * 1024
@@ -421,12 +422,23 @@ defmodule SymphonyElixir.PhaseSteps do
     end
   end
 
+  # A refusal is recorded, and the second run in a row that meets one asks the person
+  # (`SymphonyElixir.ChecksHold`): a check nobody can prove must not send the ticket around for good.
   defp read_checks(context) do
     case TicketJourney.unproved(context.issue_id) do
       [] -> {:ok, {"No check of the plan waits on a test or an attachment.\n", 0}}
-      checks -> {:ok, {TicketJourney.unproved_message(checks) <> "\n", 1}}
+      checks -> refused_checks(checks, context, TicketJourney.unproved_message(checks) <> "\n")
     end
   end
+
+  defp refused_checks(checks, context, output) do
+    case ChecksHold.refused(context.repo_key, context.issue_id, checks, %{run_id: Map.get(context, :run_id)}) do
+      :retry -> {:ok, {output, 1}}
+      :ask -> {:ask, output, ChecksHold.question(ticket_name(context), checks, handoff_state(context.repo_key))}
+    end
+  end
+
+  defp handoff_state(repo_key), do: TransitionGuard.target(:handoff, %{settings: Config.settings_for_repo!(repo_key)})
 
   defp read_findings(context) do
     with events when is_list(events) <- RunStore.list_ticket_events(context.issue_id, []) do

@@ -165,6 +165,18 @@ wide pass, a recheck) has the word of what it judged: `failed` when it judged th
 `reason` when it has one and `output`, the last lines of what the step printed. Read why a step
 failed from it.
 
+The plan's checks (only when the facts hold `checks`). The ticket has a plan, and each of its checks
+is `open`, `proved` or `waived`. An open check that a test or an attachment proves (`proof`:
+`test` or `attached`) keeps the ticket from being handed off: the run's step `plan_checks` fails
+while one is open. `check_notes` holds the newest notes the runs wrote, which is where a run says
+that a check cannot be proved that way. When
+`live.failed_step` is `plan_checks`, the run is going around on such a check: read which checks are
+open and what the run said about them. When you agree that nobody can prove a check the way the
+plan says, waive it: add `"waive": [{"check_id": "<the check's id>", "reason": "<why nobody can
+prove it this way, in plain words>"}]` to your answer. Symphony records it with your reason, and the
+step passes the next time the run reaches it. Do not waive a check because it is hard or still to
+do: then steer the run to prove it and record the proof.
+
 The facts (JSON; each fact from an event carries that event's id):
 
 {{facts}}

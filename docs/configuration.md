@@ -4175,7 +4175,14 @@ words, goes to the `code` step, in its prompt. A later QA failure of the same cl
 It guards the handoff of a ticket with a plan: it fails back to the step's `on_fail`, naming them,
 while a check of the plan that a test or an attachment proves (`proof: test`, `proof: attached`) is
 open, and passes at once when none is, or when the ticket has no plan. The failure says how each
-check is proved, and that a check nothing can prove this way is the Conductor's to waive. The
+check is proved, and that a check nothing can prove this way is the Conductor's to waive: its
+answer's `waive` (each a `check_id` and a `reason`) is read after coding, after rework, on a watch
+turn (a `plan_checks` step that fails again wakes one, `step_failed_twice`), on a message and on
+the turns of a ticket with sub-tickets, and recorded as `check.waived`. So that a check nobody
+proves or waives never sends a ticket around for good, each refusal is noted on the ticket, and
+when two coding runs in a row were refused with no new plan version and no waiver in between,
+Symphony asks the person: send it back for the checks, waive them and pass the ticket on to Code
+Review (the pick records each `check.waived`, then moves it), or cancel it. The
 default `implementation` and `rework` lists run it as `plan_checks`, directly before `handoff`. A
 `symphony.yml` that lists its own steps is not changed: add the step to it, before `handoff`:
 

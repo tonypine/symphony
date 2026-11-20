@@ -80,6 +80,10 @@ Write your answer as one JSON object and nothing else:
                 {"label": "<short>", "effect": "<what picking it does>", "recommended": false, "action": "cancel"}]}
 }
 
+You may also waive a check of this ticket's own plan that nobody can prove the way the plan says:
+add `"waive": [{"check_id": "<the check's id>", "reason": "<why, in plain words>"}]` to your answer.
+Symphony records it with your reason. Never waive an outcome only to close the ticket.
+
 The facts (JSON; each fact from an event carries that event's id):
 
 {{facts}}
