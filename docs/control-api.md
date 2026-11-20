@@ -996,7 +996,9 @@ deterministic JSON document built only from what Symphony already holds on the t
 its events, plus the workspace's git diff stat when the workspace exists. Like the other reads of
 `/api/v1`, it needs no token. The identifier resolves through the ticket's record, by identifier in any
 case or by id: a ticket with none is `404` `ticket_not_found`. `junction` is optional; one that is not
-`after_coding`, `after_qa_fail`, `after_qa_blocked`, `after_rework`, `before_merge` or `during_run` is `400` `invalid_query`.
+`grooming`, `after_coding`, `after_qa_fail`, `after_qa_blocked`, `after_rework`, `before_merge`, `message`, `sub_ticket_ended`, `final_check`, `child_message` or `during_run` is `400` `invalid_query`.
+
+At `grooming` the document is another one, since no run has worked on the ticket yet: `schema`, `junction` and `focus` as below, `ticket` (`identifier`, `title`, `url`, `repo`, `labels`), `asks` (every `ask.recorded`, oldest first: `event_id`, `source`, `from`, `text`), the person's `decisions`, `notes` and `answers`, `parent` (null, or the parent ticket's `identifier`, `title`, current `plan` (`event_id`, `version`, `shape`, `layers`, `summary`, `text`, `sub_tickets`) and tagged `notes`), `siblings` (the parent's other sub-tickets that hold a tagged note: `identifier`, `title`, `phase`, `notes`), `layers` (each layer a plan may name: `name`, `means`), `conductor` and `budget`. The Grooming turn itself also reads `code`: whether the repository is checked out in its working directory.
 
 | Key | What it holds |
 | --- | --- |

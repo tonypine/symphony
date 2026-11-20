@@ -582,7 +582,12 @@ came before, and each of its options names the action a pick makes from a closed
 `rerun`, `rework` with a finding, `accept_without_qa`, which records the `qa` verdict `skip` and moves
 to Merging, and `cancel`), which the decision path performs; a ticket waits on one open question
 about its stage at a time, the Conductor's or QA's own "could not finish its check", and answering
-one withdraws any other open in the same phase as `superseded`; `docs/configuration.md#conductor`),
+one withdraws any other open in the same phase as `superseded`; `docs/configuration.md#conductor`;
+at `grooming`, before the first run of a ticket with no plan and no run of its own, the turn runs
+in the ticket's workspace with read-only tools and its answer holds the ticket's plan, which
+Symphony records as `plan.written` after recording the ask as `ask.recorded`: a try that writes
+neither a plan nor a question is counted in a status note, the ticket is groomed again at its next
+dispatch, and after 2 such tries it starts without a plan),
 `conductor.steer` (machine only: guidance the Conductor's watch gave a running run, under that run's
 `run_id`, with its `text`, `when` it asked for it, `next_turn`, `now` or `stop`, the `trigger` that
 made it look and how and when it was `delivered`; `conductor.watch` in `docs/configuration.md`),

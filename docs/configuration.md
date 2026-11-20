@@ -3539,8 +3539,10 @@ setting has a control in the Mac app's Settings, under Conductor.
 ```yaml
 conductor:
   enabled: false
-  junctions: [after_coding, after_qa_fail, after_qa_blocked, after_rework, before_merge]
+  junctions: [grooming, after_coding, after_qa_fail, after_qa_blocked, after_rework, before_merge, message, sub_ticket_ended, final_check, child_message]
   timeout_ms: 180000
+  grooming_timeout_ms: 600000
+  final_check_rounds: 3
   file_tickets: true
   max_filed_tickets: 2
   watch:
@@ -3554,7 +3556,8 @@ conductor:
 
 - `enabled` (default `false`): whether the Conductor runs at all. Off, nothing reads or writes
   anything, and prompts are unchanged.
-- `junctions` (default all five): `after_coding` (an implementation run handed off, before Code
+- `junctions` (default every one): `grooming` (before the first run of a ticket with no plan;
+  below), `after_coding` (an implementation run handed off, before Code
   Review or QA), `after_qa_fail` (QA failed, before rework), `after_qa_blocked` (a QA pass could
   not judge the change, before Symphony retries it or asks the person; below), `after_rework` (a
   rework run handed off, before Code Review or QA again) and `before_merge` (QA passed or was
@@ -3562,24 +3565,72 @@ conductor:
   run's own task before its agent starts, and that run's start is recorded once the turn is done, so
   the turn sits between the two runs on the timeline; `after_qa_blocked` runs inside the QA run, once
   its verdict is recorded and its report published; `before_merge` runs as the QA or Code Review run
-  that carried the ticket into Merging ends, on its own. A `symphony.yml` that lists its junctions
-  gets `after_qa_blocked` only when it adds it.
+  that carried the ticket into Merging ends, on its own. `message` (a person sent a message on the
+  ticket), `sub_ticket_ended` (a sub-ticket reached Done or Canceled), `final_check` (the last
+  sub-ticket ended) and `child_message` (a message on a sub-ticket) are named here and plan no turn
+  yet. A `symphony.yml` that lists its junctions gets `after_qa_blocked`, `grooming` and the other
+  new ones only when it adds them: a file that names no `junctions` runs every one.
 - `timeout_ms` (default `180000`): how long one turn may take. A turn that runs over, fails, answers
   outside its schema or whose provider is held with no free fallback is logged, records nothing for
   the person, and the next run starts as if the Conductor were off.
+- `grooming_timeout_ms` (default `600000`): how long the Grooming turn may take. It is longer than
+  `timeout_ms` because that turn may read the code.
+- `final_check_rounds` (default `3`): how many rounds of sub-tickets a parent's final check may add
+  before it must ask the person. No turn reads it yet.
 - `file_tickets` (default `true`): whether the Conductor's answer may file a linked ticket for a
   problem that is not the current ticket's to solve (below).
 - `max_filed_tickets` (default `2`): how many tickets one ticket may file over its whole life; `0`
   files none.
 
-The turn runs in an empty folder under the workspace root with read-only tools and no ticket, so it
-can neither change nor read the repository. It never changes the ticket's plan, and it moves the
+But for Grooming, the turn runs in an empty folder under the workspace root with read-only tools and
+no ticket, so it can neither change nor read the repository. Past Grooming it never changes the ticket's plan, and it moves the
 ticket only at `after_qa_blocked`, through Symphony (below); a ticket it files that blocks this one
 holds it, as a question does. Its own
 run is recorded on the ticket (`run.started`, `run.ended` with its model and tokens, `counted: false`
 so the dispatch-loop guard ignores it), and its tokens count toward the ticket under the phase it ran
 in. A dispatch pause stops it as it stops any run. Read on each dispatch, so a change applies without
-a restart. The prompt lives in `priv/conductor/prompt.md`.
+a restart. The prompt lives in `priv/conductor/prompt.md` (Grooming's in
+`priv/conductor/grooming_prompt.md`).
+
+**Grooming** (`grooming`). The Conductor's first turn on a ticket, before any run works on it: it
+reads what was asked and writes the ticket's plan. It is due when a ticket's first run is about to
+start (an implementation run, or the plan run of a ticket labelled `plan` or `breakdown`), the
+ticket has no plan, and no run other than the Conductor's ever started on it. A ticket that already
+has a run or a plan is never groomed, so a ticket in flight when the junction is turned on goes on
+exactly as before.
+
+- Before the turn, Symphony records the ask: the ticket's description, word for word, without
+  Symphony's own blocks (the Decisions section, the summary), as an `ask.recorded` event
+  (`source: linear`), once. A ticket with no description asks its title.
+- The turn differs from the others. It runs in the ticket's workspace, which Symphony creates as the
+  run would and the run then reuses, with read-only tools: it can read and search the code and
+  cannot change it. It is not held to one model turn, and it may take `grooming_timeout_ms`. When
+  the workspace cannot be made, or the run is on another host (`worker.ssh_hosts`), it runs in an
+  empty folder and plans from the facts alone. Its prompt is `priv/conductor/grooming_prompt.md`.
+- Its facts (`GET /api/v1/tickets/<identifier>/facts?junction=grooming`) are every ask, the
+  ticket's title, identifier, repo and labels, the person's decisions, notes and answers, the layer
+  names a plan may use, and, for a sub-ticket, the parent's current plan and tagged notes and the
+  tagged notes of its sibling tickets.
+- Its answer holds a `plan`: `shape` (`single` or `split`), `layers`, `summary`, `text`, `checks`,
+  `size` (`tokens`, `runs`) and, for a split, `sub_tickets`. Symphony names the checks `c1`, `c2`
+  and so on, cuts a text that is too long, and records the plan as `plan.written` (version 1,
+  `by: grooming`) with the turn's update as a `conductor.update` (`junction: grooming`). The run
+  then starts, in the same task.
+- A `split` is not carried out yet: the plan is recorded as a `single` one, with a warning in the
+  log, and the run starts.
+- A ticket labelled `plan` or `breakdown` is groomed like any other and gets no plan run. Once its
+  plan is written Symphony takes the label off, in the tracker and on the ticket's record, says so
+  in a status note, and the next dispatch starts its first coding run.
+- A question (`ask_person`) holds the ticket as any other question does, and no plan is written;
+  once it is answered, the ticket is groomed again with the answer in its facts. Its options take
+  the actions `continue` and `cancel`.
+- A try that wrote neither a plan nor a question is counted, in a status note that says why: the
+  turn ran past its time limit, failed, answered outside the schema, wrote a plan Symphony refuses
+  (two checks with one id, a QA check with no action), or no provider of `runs.conductor` could
+  take a run (a paused provider, a usage limit). After the first such try the run does not start
+  and the ticket is groomed again at its next dispatch, about a second later. After the second the
+  run starts without a plan, as it did before plans, and the note says so. A ticket never waits on
+  Grooming.
 
 **After a blocked QA** (`after_qa_blocked`). A QA pass that ended `blocked` or `inconclusive` on the
 QA agent's own account (not a head CI rejects, not a block the self-heal lane takes, not one whose
