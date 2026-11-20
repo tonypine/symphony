@@ -46,23 +46,26 @@ defmodule SymphonyElixir.QaAgent.SelectionTest do
 
     groom!(issue.id, [outcome])
     refute Selection.user_walkthrough?(issue)
-    assert {false, "the ticket has no `## User walkthrough`"} = Selection.live(issue, @live_server, @server_change, "make-all")
+    assert {false, "the ticket's plan has no QA check"} = Selection.live(issue, @live_server, @server_change, "make-all")
 
     groom!(issue.id, [outcome, plain])
     assert Selection.user_walkthrough?(%{issue | description: nil})
-    assert {false, "no `## User walkthrough` step names `Director`"} = Selection.live(issue, @live_server, @server_change, "make-all")
+    assert {false, "no QA check of the plan names `Director`"} = Selection.live(issue, @live_server, @server_change, "make-all")
+    assert {true, "the PR changes the server and the plan has a QA check"} = Selection.live(issue, %{@live_server | walkthrough_mentions: []}, @server_change)
 
     groom!(issue.id, [outcome, walk, plain])
-    assert {true, _why} = Selection.live(issue, @live_server, @server_change, "make-all")
+
+    assert {true, "the PR changes the server and a QA check of the plan names `Director`"} =
+             Selection.live(issue, @live_server, @server_change, "make-all")
 
     proof = %{check_id: "c2", by: "test", test: "test/director_test.exs"}
     {:ok, _event} = SymphonyElixir.TicketChecks.prove("repo-a", issue.id, proof, actor: {:agent, "run-1", "implementation"})
-    assert {false, "no `## User walkthrough` step names `Director`"} = Selection.live(issue, @live_server, @server_change, "make-all")
+    assert {false, "no QA check of the plan names `Director`"} = Selection.live(issue, @live_server, @server_change, "make-all")
 
     proof = %{check_id: "c3", by: "test", test: "test/status_test.exs"}
     {:ok, _event} = SymphonyElixir.TicketChecks.prove("repo-a", issue.id, proof, actor: {:agent, "run-1", "implementation"})
 
-    assert {false, "a test recorded on the ticket proves every `## User walkthrough` step"} =
+    assert {false, "a test recorded on the ticket proves every QA check of the plan"} =
              Selection.live(issue, @live_server, @server_change, "make-all")
   end
 
