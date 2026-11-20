@@ -326,8 +326,14 @@ defmodule SymphonyElixir.QaDispatchTest do
 
       capture_log(fn -> Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state()) end)
       assert_receive {:building, _job, builder}
+      # The pass's own hold, while it builds.
+      assert_receive {:ticket_record, @designed_repo, @issue_id, :changed, [:pause]}
+
+      # The builder writes the build's record before it lets go of that hold, so the release's change
+      # says the next pass reads the build that could not run.
       capture_log(fn -> send(builder, {:outcome, {:unavailable, "qa_worker_unreachable: ssh: timeout"}}) end)
       assert_receive {:ticket_record, @designed_repo, @issue_id, :changed, [:pause]}
+      assert held() == []
 
       next = Orchestrator.dispatch_chosen_issues_for_test([qa_ticket], state())
       refute Map.has_key?(next.running, @issue_id)

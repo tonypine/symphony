@@ -73,6 +73,11 @@ defmodule SymphonyElixir.OrchestratorSetupBlockTest do
       Orchestrator.dispatch_chosen_issues_for_test([issue], state)
     end)
 
+    # `/api/v1/state` reads the snapshot the orchestrator last published, on a 500 ms timer: once the
+    # test has run that long, it is one taken before the list was seeded. Publishing one now, and
+    # waiting for it, makes the payload read the seeded list.
+    send(pid, :publish_snapshot)
+    :sys.get_state(pid)
     payload = Presenter.state_payload(name, 1_000)
 
     assert [%{issue_identifier: "MT-SETUP-BUILD", kind: "hold", reason: ^reason, blocked_by: [%{issue_identifier: "MT-901", state: "fix ticket"}]}] =
