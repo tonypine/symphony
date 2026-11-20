@@ -401,6 +401,8 @@ final class SymphonyWindowModel: ObservableObject {
     /// Opens the session reader on a run of a ticket; `follow` reads the run again as the page has it now, nil once the
     /// page shows another ticket.
     var onReadSession: (_ identifier: String, _ run: RunGroupModel, _ follow: @escaping () -> RunGroupModel?) -> Void = { _, _, _ in }
+    /// Opens the image viewer on a screenshot of a set, in its window.
+    var onOpenImageViewer: (_ set: [TicketScreenshot], _ current: TicketScreenshot, _ images: ArtifactImages) -> Void = { _, _, _ in }
 
     /// The repos are read again at most this often: Symphony reads each checkout's remote to answer.
     static let reposInterval: TimeInterval = 30
