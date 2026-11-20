@@ -3688,11 +3688,14 @@ exactly as before.
   `add` operations are a round: the plan's new version has a `reason` that starts with
   `Final check`, and those versions are the count. After `final_check_rounds` rounds Symphony
   refuses one more and asks the person: "Allow one more round" lets one through, "Close it as it
-  is" moves the ticket to `Done`. A check that changed nothing (the turn failed, or answered
-  neither `done`, nor a sub-ticket it could create, nor a question) is counted in a status note;
-  after 2 of them, or with the Conductor or the junction off, the ticket closes on its sub-tickets
-  alone, so it never waits on a turn. While no provider of `runs.conductor` can take a run, the
-  next poll asks again.
+  is" moves the ticket to `Done`. With the Conductor or the junction off the check cannot run at
+  all, and only then does the ticket close on its sub-tickets alone. A check that ran and did not
+  conclude never closes the ticket: Symphony asks the person, naming the checks still open ("Check
+  again" or "Close it as it is"), and the ticket stays in the waiting state until they answer. That
+  is so when the check answered `done: false` and added nothing, when none of the sub-tickets it
+  wanted could be created, when the move to `Done` failed, and when the turn failed or could not be
+  read 2 times in a row (each counted in a status note). While no provider of `runs.conductor` can
+  take a run, the next poll asks again.
 - Both turns run on `priv/conductor/tree_prompt.md`. A question either one asks holds the ticket,
   and its operations are not carried out: the person decides first.
 

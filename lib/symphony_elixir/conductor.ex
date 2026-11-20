@@ -400,8 +400,9 @@ defmodule SymphonyElixir.Conductor do
   `sub_ticket_ended` when one of them ended and others are open, `final_check` once the last one
   ended. Nothing runs while the Conductor or the junction is
   off, or no provider of `runs.conductor` can take a run now: the next poll asks again. The turn's
-  answer is carried out as it is recorded (`Tree.apply/3`), and a final check that changed nothing
-  is counted (`Tree.checked/3`). Always `:ok`. `opts`: `plan/4`'s and `run/3`'s.
+  answer is carried out as it is recorded (`Tree.apply/3`). A final check that did not conclude
+  never closes the ticket: one that did not finish is counted and tried once more, then the person
+  is asked (`Tree.checked/3`). Always `:ok`. `opts`: `plan/4`'s and `run/3`'s.
   """
   @spec tend(Issue.t(), String.t(), String.t() | nil, keyword()) :: :ok
   def tend(%Issue{id: issue_id} = issue, junction, repo_key, opts \\ []) when junction in @tree_junctions do
@@ -420,8 +421,16 @@ defmodule SymphonyElixir.Conductor do
     if junction != @final_check, do: Tree.seen(plan.repo_key, issue, Config.settings_for_repo!(plan.repo_key).tracker.terminal_states)
     {exit, held, _route} = turn(plan, issue, opts)
     left = %{held: held, rounds: made, exit: exit}
-    if junction == @final_check, do: Tree.checked(plan.repo_key, issue, left), else: :ok
+    if junction == @final_check, do: ask_about(Tree.checked(plan.repo_key, issue, left), plan, issue)
+    :ok
   end
+
+  # A question Symphony itself asks about a ticket's tree, outside any turn's answer.
+  defp ask_about({:ask, kind, request}, plan, issue) do
+    with :held <- ask_person(request, plan, issue, "conductor-tree-" <> Event.ulid(DateTime.utc_now())), do: Tree.asked(plan.repo_key, plan.issue_id, kind)
+  end
+
+  defp ask_about(:ok, _plan, _issue), do: :ok
 
   @doc """
   The turn a person's `message` (a `message.sent`) on the groomed ticket `issue` is answered by,
@@ -758,9 +767,9 @@ defmodule SymphonyElixir.Conductor do
     settings = Keyword.get_lazy(opts, :settings, &Config.conductor_settings/0)
     ctx = %{issue: issue, repo_key: plan.repo_key, run_id: run_id, junction: junction, conductor: settings}
 
-    with {:ask, request} <- Tree.apply(answer, ctx, Keyword.take(opts, [:tracker, :repo, :routed_teams, :observe, :cancel, :stop, :recalibrate])),
+    with {:ask, kind, request} <- Tree.apply(answer, ctx, Keyword.take(opts, [:tracker, :repo, :routed_teams, :observe, :cancel, :stop, :recalibrate])),
          :held <- ask_person(request, plan, issue, run_id) do
-      Tree.asked(plan.repo_key, plan.issue_id)
+      Tree.asked(plan.repo_key, plan.issue_id, kind)
       :held
     end
   end

@@ -465,22 +465,49 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert Tree.rounds(Facts.events(ctx.issue_id)) == 4
     end
 
-    test "a check that changes nothing is counted twice, then the ticket closes on its sub-tickets alone", ctx do
+    test "a check that did not finish is tried once more, then the person is asked and the ticket never closes", ctx do
       assert Tree.due(ctx.parent, @terminal, conductor: @on) == :final_check
 
       log = capture_log(fn -> assert final(ctx, {:error, :boom, 3}) == :ok end)
       assert log =~ "Conductor turn wrote nothing"
       assert ["The final check did not finish (failed). Symphony tries once more."] = status_notes(ctx.issue_id)
-      assert Tree.due(ctx.parent, @terminal, conductor: @on) == :final_check
+      assert Questions.open({:ticket, "default", ctx.issue_id}) == []
 
-      # Neither done nor anything to add, and a sub-ticket that can't be created, change nothing either.
+      capture_log(fn -> assert final(ctx, {:ok, ["not json"], 3}) == :ok end)
+      assert [_first, second, asked] = status_notes(ctx.issue_id)
+      assert second =~ "The final check did not finish, 2 times in a row (unreadable answer"
+      assert asked == "The final check could not close this ticket, so Symphony asked the person."
+
+      assert [%{title: "The final check could not close this ticket", question: question, options: options}] = Questions.open({:ticket, "default", ctx.issue_id})
+      assert question =~ "the turn failed or its answer could not be read, 2 times in a row"
+      assert question =~ "Still open: c1 The list is filtered."
+      assert [%{label: "Check again"}, %{label: "Close it as it is", move: %{to: "Done"}}] = options
+
+      # It never closes on its sub-tickets alone while the check can run, and its tries count from zero again.
+      assert Tree.due(ctx.parent, @terminal, conductor: @on) == :final_check
+      refute_received {:memory_tracker_state_update, _parent, "Done"}
+      capture_log(fn -> assert final(ctx, {:error, :boom, 3}) == :ok end)
+      assert List.last(status_notes(ctx.issue_id)) == "The final check did not finish (failed). Symphony tries once more."
+    end
+
+    test "not done with nothing to add asks the person at once", ctx do
+      assert final(ctx, answered(%{"done" => false, "tree" => []})) == :ok
+
+      assert [%{question: question}] = Questions.open({:ticket, "default", ctx.issue_id})
+      assert question =~ "it answered that the ticket is not done, and added no sub-ticket"
+      assert ["The final check could not close this ticket, so Symphony asked the person."] = status_notes(ctx.issue_id)
+      refute_received {:memory_tracker_state_update, _parent, "Done"}
+      assert %{phase: @waiting} = RunStore.get_ticket_state(ctx.issue_id)
+    end
+
+    test "sub-tickets it wanted that could not be created ask the person at once", ctx do
       Application.put_env(:symphony_elixir, :memory_tracker_create_issue_result, {:error, :linear_down})
       log = capture_log(fn -> assert final(ctx, answered(%{"done" => false, "tree" => [add("The docs")]})) == :ok end)
       assert log =~ "The Conductor's add was not carried out"
-      assert [_first, last] = status_notes(ctx.issue_id)
-      assert last == "The final check did not finish, 2 times (answered). This ticket closes on its sub-tickets alone."
-      assert Tree.due(ctx.parent, @terminal, conductor: @on) == :close
-      assert final(ctx, answered(%{"done" => false, "tree" => []})) == :ok
+
+      assert [%{question: question}] = Questions.open({:ticket, "default", ctx.issue_id})
+      assert question =~ "none of the sub-tickets it wanted to add could be created (The docs)"
+      assert Tree.rounds(Facts.events(ctx.issue_id)) == 0
     end
 
     test "a question holds the ticket and carries nothing out, and a turn Symphony can't plan runs nothing", ctx do
@@ -511,12 +538,14 @@ defmodule SymphonyElixir.Conductor.TreeTest do
       assert log =~ "junction=final_check"
     end
 
-    test "a pass Linear refuses still moves Symphony's record, and one for a state the team lacks is counted", ctx do
+    test "a pass that could not move the ticket asks the person", ctx do
       Application.put_env(:symphony_elixir, :memory_tracker_update_issue_state_result, [{:error, :state_not_found}])
       log = capture_log(fn -> assert final(ctx, answered(%{"done" => true})) == :ok end)
       assert log =~ "The final check passed, but the ticket could not be moved to Done"
       assert %{phase: @waiting} = RunStore.get_ticket_state(ctx.issue_id)
-      assert [_try] = status_notes(ctx.issue_id)
+      assert [%{question: question}] = Questions.open({:ticket, "default", ctx.issue_id})
+      assert question =~ "it passed, but the ticket could not be moved to Done"
+      assert [_asked] = status_notes(ctx.issue_id)
     end
 
     test "what can't be recorded or read back is logged, and the sub-ticket stays added", ctx do

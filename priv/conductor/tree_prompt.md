@@ -37,7 +37,9 @@ whether it now holds. A sub-ticket that was Canceled built nothing. Then answer 
   say what is missing.
 - A question (`ask_person`) when you cannot tell whether an outcome holds and nothing in the facts
   settles it.
-Never answer `"done": true` to close a ticket you could not check.
+Never answer `"done": true` to close a ticket you could not check. `"done": false` with nothing
+to add and no question closes nothing: Symphony then asks the person what to do, so say in your
+`update` what is still open.
 
 The operations (`tree`), each with a `reason`: one or two sentences that say why, in plain words.
 An operation without a reason is dropped. Each one is recorded on the sub-ticket it touches, with

@@ -3980,7 +3980,9 @@ An issue is dispatch-eligible only if all are true:
   - A groomed issue (one that holds a `plan.written`) follows its own rule there, whatever its
     labels: it is never dispatched, and it closes once its own pull request merged or it never had
     one and none of its sub-issues is outside `terminal_states` (one in `Backlog` holds it), after
-    the Conductor's final check when that junction is on. A groomed issue whose pull request merges
+    the Conductor's final check when that junction is on. A final check that ran and did not
+    conclude MUST NOT close the issue: the service asks the person and the issue stays in the
+    waiting state until they answer. A groomed issue whose pull request merges
     waits there on every sub-issue it has. The move that closes it updates Symphony's record of the
     issue with Linear, for a groomed issue and any other, under the issue's repo key; an issue read
     with no repo key MUST NOT be moved, and its close is tried again on the next poll.

@@ -52,11 +52,16 @@ defmodule SymphonyElixir.Conductor.Tree do
   `replanned`, `stopped`) with its reason, and together they give the parent's plan a new version
   (`by: recalibration`, its reason opening with `Recalibration`), whose `sub_tickets` follow them.
 
-  A final check that changed nothing (the turn failed, or answered neither `done` nor a sub-ticket
-  it could create, nor a question) is counted (`checked/3`, a status note under
-  `final_check.try:<round>:<n>`). After 2 of them, or with the Conductor or its `final_check`
-  junction off, the ticket closes on its sub-tickets alone, as a ticket did before plans
-  (`SymphonyElixir.SubIssueWait.close?/3`), so it is never left waiting on a turn.
+  With the Conductor or its `final_check` junction off the turn cannot run at all, and the ticket
+  closes on its sub-tickets alone, as a ticket did before plans
+  (`SymphonyElixir.SubIssueWait.close?/3`). That is the only close without a final check. A final
+  check that ran and did not conclude never closes the ticket: Symphony asks the person instead
+  (`apply/3` and `checked/3` answer `{:ask, :stuck, question}`), naming what is open, and the ticket
+  stays in the waiting state until they answer "Check again" or "Close it as it is". That is so when
+  the check answered that the ticket is not done and added nothing, when none of the sub-tickets it
+  wanted could be created, when its `done` could not move the ticket, and when the turn itself
+  failed or could not be read 2 times in a row (each counted by `checked/3`, a status note under
+  `final_check.try:<n>`).
   """
 
   require Logger
@@ -64,7 +69,7 @@ defmodule SymphonyElixir.Conductor.Tree do
   alias SymphonyElixir.Conductor.{Facts, Message}
   alias SymphonyElixir.{Config, DirectorMoves, Orchestrator, RepoTeams, RunStore, SubIssueWait}
   alias SymphonyElixir.Linear.Issue
-  alias SymphonyElixir.{TicketEvents, TicketObservation, TicketPlan, Tracker, TransitionGuard}
+  alias SymphonyElixir.{TicketChecks, TicketEvents, TicketObservation, TicketPlan, Tracker, TransitionGuard}
 
   @urgent 1
   @todo "Todo"
@@ -74,6 +79,7 @@ defmodule SymphonyElixir.Conductor.Tree do
   @final_tries 2
   @final_try_key "final_check.try:"
   @asked_key "final_check.asked:"
+  @stuck_key "final_check.stuck:"
   @round "Final check"
   @recalibration "Recalibration"
   @ended_key "tree.ended:"
@@ -375,7 +381,7 @@ defmodule SymphonyElixir.Conductor.Tree do
     events = Keyword.get_lazy(opts, :events, fn -> Facts.events(issue_id) end)
 
     if Issue.open_sub_issues(issue, terminal_states) == [],
-      do: due_ended(issue, settings, events),
+      do: due_ended(issue, settings),
       else: due_open(issue, terminal_states, settings, events)
   end
 
@@ -386,11 +392,12 @@ defmodule SymphonyElixir.Conductor.Tree do
   def due(issue, terminal_states), do: due(issue, terminal_states, [])
 
   # Every sub-ticket ended (or none is left): the ticket closes, after its final check when one is owed.
-  defp due_ended(%Issue{id: issue_id, sub_issues: sub_issues}, settings, events) do
+  # Only a final check that cannot run at all (the Conductor or its junction is off) is skipped.
+  defp due_ended(%Issue{id: issue_id, sub_issues: sub_issues}, settings) do
     cond do
       RunStore.merged_wait?(issue_id) != true and SubIssueWait.pull_request(issue_id) == :unmerged -> nil
       sub_issues == [] -> :close
-      turn?(settings, "final_check") and tries(events) < @final_tries -> :final_check
+      turn?(settings, "final_check") -> :final_check
       true -> :close
     end
   end
@@ -435,11 +442,14 @@ defmodule SymphonyElixir.Conductor.Tree do
   @spec round_limit([TicketEvents.Event.t()], map()) :: non_neg_integer()
   def round_limit(events, settings) when is_list(events), do: settings.final_check_rounds + keyed(events, @asked_key)
 
-  defp tries(events), do: keyed(events, "#{@final_try_key}#{rounds(events)}:")
-
-  defp keyed(events, prefix) do
-    Enum.count(events, &(&1.type == "note" and is_binary(&1.idempotency) and String.starts_with?(&1.idempotency, prefix)))
+  # The final checks in a row that did not finish, since the person was last asked about one.
+  defp tries(events) do
+    events |> Enum.reverse() |> Enum.take_while(&(not keyed?(&1, @stuck_key))) |> Enum.count(&keyed?(&1, @final_try_key))
   end
+
+  defp keyed(events, prefix), do: Enum.count(events, &keyed?(&1, prefix))
+
+  defp keyed?(event, prefix), do: event.type == "note" and is_binary(event.idempotency) and String.starts_with?(event.idempotency, prefix)
 
   @doc """
   Carries out what a turn on the ticket answered about its tree (`answer`'s `done` and `tree`).
@@ -447,8 +457,10 @@ defmodule SymphonyElixir.Conductor.Tree do
   settings.
 
   At `final_check`: `done` with nothing to add moves the ticket to `Done`; sub-tickets to add are a
-  round, made while one is left (`round_limit/2`), else `{:ask, question}` is answered and nothing
-  is added: the person decides. Only `add` is read there.
+  round, made while one is left (`round_limit/2`), else `{:ask, :rounds, question}` is answered and
+  nothing is added: the person decides. Only `add` is read there. A check that concluded nothing
+  (not done with nothing to add, no sub-ticket it wanted could be created, or the move to `Done`
+  failed) answers `{:ask, :stuck, question}`: the ticket never closes on such a check.
 
   At `sub_ticket_ended` every operation is carried out, in order (see the module doc). One that
   can't be (the ticket it names is not a sub-ticket of this one, or it ended, or the step failed) is
@@ -459,21 +471,26 @@ defmodule SymphonyElixir.Conductor.Tree do
   default `SymphonyElixir.Orchestrator.stop_running/1`) and `recalibrate` (`(issue_id, ask event ->
   term)`, what a `rewrite` starts on the sub-ticket).
   """
-  @spec apply(map(), map(), keyword()) :: :ok | {:ask, map()}
+  @spec apply(map(), map(), keyword()) :: :ok | {:ask, :rounds | :stuck, map()}
   def apply(%{done: done, tree: operations}, %{junction: "final_check", issue: %Issue{id: issue_id} = issue} = ctx, opts) do
     adds = Enum.filter(operations, &(&1.op == "add"))
     events = Facts.events(issue_id)
     made = rounds(events)
+    titles = Enum.map_join(adds, "; ", & &1.title)
 
     cond do
       adds == [] and done -> pass(ctx.repo_key, issue, opts)
-      adds == [] -> :ok
-      made >= round_limit(events, ctx.conductor) -> {:ask, rounds_question(made, adds)}
-      true -> carry_out(adds, @round, ctx, opts)
+      adds == [] -> {:ask, :stuck, stuck_question(issue_id, "it answered that the ticket is not done, and added no sub-ticket")}
+      made >= round_limit(events, ctx.conductor) -> {:ask, :rounds, rounds_question(made, titles)}
+      carry_out(adds, @round, ctx, opts) == 0 -> {:ask, :stuck, stuck_question(issue_id, "none of the sub-tickets it wanted to add could be created (#{titles})")}
+      true -> :ok
     end
   end
 
-  def apply(%{tree: operations}, ctx, opts), do: carry_out(operations, @recalibration, ctx, opts)
+  def apply(%{tree: operations}, ctx, opts) do
+    _carried = carry_out(operations, @recalibration, ctx, opts)
+    :ok
+  end
 
   defp pass(repo_key, %Issue{id: issue_id} = issue, opts) do
     ctx = %{repo_key: repo_key, issue_identifier: issue.identifier}
@@ -486,12 +503,14 @@ defmodule SymphonyElixir.Conductor.Tree do
 
       {:error, reason} ->
         Logger.warning("The final check passed, but the ticket could not be moved to #{@done} #{context(issue, repo_key)}: #{inspect(reason)}")
+        {:ask, :stuck, stuck_question(issue_id, "it passed, but the ticket could not be moved to #{@done} ")}
     end
   end
 
   # Each operation in order, on the plan's sub-ticket entries. What was carried out is written as a
-  # new version of the plan, whose reason opens with `why` and holds each operation's own.
-  defp carry_out([], _why, _ctx, _opts), do: :ok
+  # new version of the plan, whose reason opens with `why` and holds each operation's own. Answers
+  # how many operations were carried out.
+  defp carry_out([], _why, _ctx, _opts), do: 0
 
   defp carry_out(operations, why, %{issue: %Issue{id: issue_id} = issue, repo_key: repo_key} = ctx, opts) do
     ctx = Map.merge(ctx, %{issue: with_record(issue), known: known_children(issue_id), terminal: terminal_states(repo_key)})
@@ -513,7 +532,7 @@ defmodule SymphonyElixir.Conductor.Tree do
       end)
 
     if done.reasons != [], do: record_version(plan, done, why, ctx, opts)
-    :ok
+    length(done.reasons)
   end
 
   defp record_version(plan, done, why, %{issue: %Issue{id: issue_id}, repo_key: repo_key}, opts) do
@@ -661,9 +680,7 @@ defmodule SymphonyElixir.Conductor.Tree do
     end
   end
 
-  defp rounds_question(made, adds) do
-    titles = Enum.map_join(adds, "; ", & &1.title)
-
+  defp rounds_question(made, titles) do
     %{
       title: "The final check still finds work after #{made} rounds",
       question: "The final check wants to add to this ticket once more: #{Facts.fit(titles, 600)}. It already added sub-tickets #{made} times. Allow one more round?",
@@ -677,20 +694,49 @@ defmodule SymphonyElixir.Conductor.Tree do
     }
   end
 
-  @doc "Records that the person was asked whether the final check may add one more round, which lets one through once they answer."
-  @spec asked(String.t(), String.t()) :: :ok
-  def asked(repo_key, issue_id) do
+  # What Symphony asks when a final check ran and did not conclude for `why`: it names the checks
+  # of the plan that are still open, and the ticket stays where it is until the person answers.
+  defp stuck_question(issue_id, why) do
+    open = Enum.map_join(TicketChecks.open(issue_id, []), "; ", &"#{&1.id} #{&1.statement}")
+    open = if open == "", do: "", else: " Still open: #{Facts.fit(open, 600)}."
+
+    %{
+      title: "The final check could not close this ticket",
+      question: "Every sub-ticket ended, but the final check did not close this ticket: #{Facts.fit(why, 600)}.#{open} Check again, or close it as it is?",
+      why: "Only the final check closes a ticket with sub-tickets, and this one did not conclude.",
+      if_unanswered: "The ticket stays in the waiting state and nothing more happens on it.",
+      recommendation_reason: "Nothing says yet that the ticket does what was asked.",
+      options: [
+        %{label: "Check again", effect: "The final check runs once more.", recommended: true, action: "continue"},
+        %{label: "Close it as it is", effect: "The ticket moves to #{@done} without a final check that passed.", recommended: false, action: "close"}
+      ]
+    }
+  end
+
+  @doc """
+  Records that the person was asked about the final check, once the question holds the ticket:
+  `:rounds`, whether it may add one more round, which lets one through once they answer; `:stuck`,
+  what to do with a check that did not conclude, after which its failed tries count from zero.
+  """
+  @spec asked(String.t(), String.t(), :rounds | :stuck) :: :ok
+  def asked(repo_key, issue_id, :rounds) do
     made = rounds(Facts.events(issue_id))
     note(repo_key, issue_id, "After #{made} rounds the final check still wanted to add sub-tickets, so Symphony asked the person.", "#{@asked_key}#{made}")
+  end
+
+  def asked(repo_key, issue_id, :stuck) do
+    asked = keyed(Facts.events(issue_id), @stuck_key) + 1
+    note(repo_key, issue_id, "The final check could not close this ticket, so Symphony asked the person.", "#{@stuck_key}#{asked}")
   end
 
   @doc """
   Looks at what a `final_check` turn left: `before` holds whether it paused the ticket (`held`),
   how many rounds were made when it started (`rounds`) and how the turn ended (`exit`). A turn that
-  closed the ticket, paused it or made a round changed something. Any other is counted, as a status
-  note (see the module doc), so the ticket closes without the check after 2 of them.
+  closed the ticket, paused it or made a round changed something. Any other did not finish and is
+  counted, as a status note (see the module doc): the next poll tries once more, and after 2 in a
+  row `{:ask, :stuck, question}` is answered, since the ticket never closes without its check.
   """
-  @spec checked(String.t(), Issue.t(), map()) :: :ok
+  @spec checked(String.t(), Issue.t(), map()) :: :ok | {:ask, :stuck, map()}
   def checked(repo_key, %Issue{id: issue_id}, %{held: held, rounds: before, exit: exit}) do
     events = Facts.events(issue_id)
 
@@ -698,13 +744,14 @@ defmodule SymphonyElixir.Conductor.Tree do
       :ok
     else
       try = tries(events) + 1
+      key = "#{@final_try_key}#{keyed(events, @final_try_key) + 1}"
 
-      text =
-        if try < @final_tries,
-          do: "The final check did not finish (#{exit}). Symphony tries once more.",
-          else: "The final check did not finish, #{@final_tries} times (#{exit}). This ticket closes on its sub-tickets alone."
-
-      note(repo_key, issue_id, text, "#{@final_try_key}#{before}:#{try}")
+      if try < @final_tries do
+        note(repo_key, issue_id, "The final check did not finish (#{exit}). Symphony tries once more.", key)
+      else
+        note(repo_key, issue_id, "The final check did not finish, #{try} times in a row (#{exit}). Symphony asks what to do.", key)
+        {:ask, :stuck, stuck_question(issue_id, "the turn failed or its answer could not be read, #{try} times in a row")}
+      end
     end
   end
 
