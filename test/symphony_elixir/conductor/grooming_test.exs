@@ -385,11 +385,11 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
     end
 
     test "a turn that runs over, a plan Symphony refuses and a question that can't be asked are tries that failed", ctx do
-      twice = written(%{"checks" => [%{"id" => "c1", "kind" => "outcome", "statement" => "A.", "proof" => "test"}, %{"id" => "c1", "kind" => "outcome", "statement" => "B.", "proof" => "test"}]})
+      refused = written(%{"shape" => "split", "sub_tickets" => [%{"title" => "The API", "ask" => "Add the filter.", "after" => ["s9"]}]})
 
       cases = [
         {fn _plan, _issue, _run_id, _prompt -> Process.sleep(1_000) end, %{timeout_ms: 20}, "the turn ran past its time limit"},
-        {turn({:ok, [answer(%{"plan" => twice, "update" => "Planned."})], 3}), %{}, "its plan was refused: check id c1 is used twice"},
+        {turn({:ok, [answer(%{"plan" => refused, "update" => "Planned."})], 3}), %{}, "its plan was refused: sub-ticket s1 waits after s9"},
         {turn({:ok, [answer(%{"ask_person" => question("accept_without_qa")})], 3}), %{}, "its question could not be asked"}
       ]
 

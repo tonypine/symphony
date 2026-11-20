@@ -46,7 +46,8 @@ defmodule SymphonyElixir.Conductor.Answer do
       cut to 400), the `size` it is walked at (`normal`, `wide`) and a Gallery `story`. A sub-ticket
       holds a `title` (cut to 120) and an `ask` (cut to 4,000), the sibling keys it waits `after`,
       a `repo`, and the `identifier` of a sub-ticket the ticket already has, which is adopted
-      instead of created. A check with no `id` gets `c<its place>` and a sub-ticket with no `key`
+      instead of created. A check keeps the `id` it gives and is left without one otherwise:
+      `SymphonyElixir.TicketPlan.write/4` names the checks. A sub-ticket with no `key` gets
       `s<its place>`. With a question (`ask_person`) the plan is left unread: the person answers
       first. A Grooming answer holds a plan or a question; one with neither is refused, and so is
       a plan that misses this shape. Its `instructions` may be null.
@@ -400,7 +401,8 @@ defmodule SymphonyElixir.Conductor.Answer do
          {:ok, statement} <- required_text(check, "statement", @check_statement_max, where),
          {:ok, proof} <- one_of(check, "proof", @check_proofs, where),
          :ok <- walkable(check, kind, where) do
-      %{id: id(check, "id", "c", place), kind: kind, statement: statement, proof: proof}
+      %{kind: kind, statement: statement, proof: proof}
+      |> put_text(:id, check, @id_max, where)
       |> put_text(:state, check, @check_walk_max, where)
       |> put_text(:action, check, @check_walk_max, where)
       |> put_text(:expect, check, @check_walk_max, where)
@@ -432,7 +434,7 @@ defmodule SymphonyElixir.Conductor.Answer do
          {:ok, ask} <- required_text(entry, "ask", @sub_ticket_ask_max, where) do
       waits = for key <- List.wrap(Map.get(entry, "after")), is_binary(key), String.trim(key) != "", uniq: true, do: String.trim(key)
 
-      %{key: id(entry, "key", "s", place), title: title, ask: ask, after: waits}
+      %{key: key(entry, place), title: title, ask: ask, after: waits}
       |> put_text(:repo, entry, 200, where)
       |> put_text(:identifier, entry, 50, where)
       |> then(&{:ok, &1})
@@ -455,11 +457,11 @@ defmodule SymphonyElixir.Conductor.Answer do
 
   defp entries(_entries, where, _read), do: {:error, "`#{where}` must list at least one entry"}
 
-  # The id the entry gives, else its place's (`c1`, `s2`).
-  defp id(entry, field, prefix, place) do
-    case Map.get(entry, field) do
-      id when is_binary(id) -> if String.trim(id) == "", do: "#{prefix}#{place}", else: id |> String.trim() |> String.slice(0, @id_max)
-      _missing -> "#{prefix}#{place}"
+  # The key the sub-ticket entry gives, else its place's (`s2`).
+  defp key(entry, place) do
+    case Map.get(entry, "key") do
+      key when is_binary(key) -> if String.trim(key) == "", do: "s#{place}", else: key |> String.trim() |> String.slice(0, @id_max)
+      _missing -> "s#{place}"
     end
   end
 

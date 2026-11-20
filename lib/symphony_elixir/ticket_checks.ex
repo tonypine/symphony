@@ -3,9 +3,13 @@ defmodule SymphonyElixir.TicketChecks do
   The checks of a groomed ticket's plan (`SymphonyElixir.TicketPlan`) and where each stands.
 
   The checks are the newest plan's: a check a newer version dropped is no longer listed, and one it
-  kept, by its `id`, keeps what was recorded for it. A check is `:proved` once a `check.proved`
-  names it, on any head: a proof recorded before the branch's last change still counts. It is
-  `:waived` when no proof names it and a `check.waived` does, and `:open` otherwise.
+  kept, by its `id` and with the same `statement`, keeps what was recorded for it. A check whose
+  statement a version changed, or that a version put (back) on the plan, starts unproved there:
+  only the proofs and waivers recorded after that version count for it. An id is never given to a
+  second check (`SymphonyElixir.TicketPlan.write/4`), so a new check never inherits an old one's
+  proof. A check is `:proved` once such a `check.proved` names it, on any head: a proof recorded
+  before the branch's last change still counts. It is `:waived` when no proof names it and a
+  `check.waived` does, and `:open` otherwise.
 
   `prove/4` and `waive/4` record those events, and refuse an id the plan does not hold
   (`{:unknown_check, id}`), so nothing is ever proved that the plan does not ask for. A proof is
@@ -43,14 +47,36 @@ defmodule SymphonyElixir.TicketChecks do
 
   @doc "The current plan's checks, in the plan's order, each with where it stands. None for a ticket that is not groomed."
   @spec list(TicketPlan.ticket()) :: [check()]
-  def list(ticket) do
-    events = events(ticket)
+  def list(ticket), do: for({check, _since, proof, waiver} <- standing(events(ticket)), do: check(check, proof, waiver))
+
+  # Each check of the current plan with the plan version that last changed it (its statement, or
+  # put it on the plan) and the newest proof and waiver recorded since that version.
+  defp standing(events) do
+    plans = events |> Enum.filter(&(&1.type == "plan.written")) |> Enum.reverse()
 
     case TicketPlan.current(events) do
-      nil -> []
-      plan -> Enum.map(plan.checks, &check(&1, newest(events, "check.proved", &1.id), newest(events, "check.waived", &1.id)))
+      nil ->
+        []
+
+      plan ->
+        for check <- plan.checks do
+          since = changed_in(plans, check)
+          later = events |> Enum.drop_while(&(&1.id != since.id)) |> Enum.drop(1)
+          {check, field(since.payload, :version), newest(later, "check.proved", check.id), newest(later, "check.waived", check.id)}
+        end
     end
   end
+
+  # The oldest of the newest versions in a row that hold the check as it reads now.
+  defp changed_in(plans, check) do
+    plans |> Enum.take_while(&holds?(&1, check)) |> List.last()
+  end
+
+  defp holds?(%Event{payload: payload}, check) do
+    Enum.any?(field(payload, :checks), &(field(&1, :id) == check.id and same?(field(&1, :statement), check.statement)))
+  end
+
+  defp same?(statement, other), do: String.trim(to_string(statement)) == String.trim(to_string(other))
 
   @doc "The checks that are still open. `opts[:proof]` keeps the ones proved in one of those ways (`test`, `qa`, `design`, `attached`)."
   @spec open(TicketPlan.ticket(), keyword()) :: [check()]
@@ -68,8 +94,8 @@ defmodule SymphonyElixir.TicketChecks do
   @spec prove(String.t() | nil, String.t(), map(), keyword()) ::
           {:ok, Event.t()} | {:error, {:unknown_check, String.t()} | term()}
   def prove(repo_key, issue_id, proof, opts \\ []) when is_binary(issue_id) and is_map(proof) do
-    with {:ok, check_id} <- known(issue_id, Map.get(proof, :check_id, Map.get(proof, "check_id"))),
-         opts = Keyword.put_new(opts, :idempotency, proof_key(check_id, Keyword.get(opts, :head_sha))),
+    with {:ok, check_id, since} <- known(issue_id, Map.get(proof, :check_id, Map.get(proof, "check_id"))),
+         opts = Keyword.put_new(opts, :idempotency, proof_key(check_id, since, Keyword.get(opts, :head_sha))),
          {:ok, event} <- TicketEvents.record(repo_key, issue_id, "check.proved", proof, opts) do
       TicketProjection.changed(repo_key, issue_id)
       {:ok, event}
@@ -79,19 +105,26 @@ defmodule SymphonyElixir.TicketChecks do
   @doc "Records that nobody has to prove the check `check_id` of `repo_key`'s ticket `issue_id` any more, and why. An id the plan does not hold is refused."
   @spec waive(String.t() | nil, String.t(), String.t(), String.t()) :: {:ok, Event.t()} | {:error, term()}
   def waive(repo_key, issue_id, check_id, reason) when is_binary(issue_id) do
-    with {:ok, check_id} <- known(issue_id, check_id),
+    with {:ok, check_id, _since} <- known(issue_id, check_id),
          {:ok, event} <- TicketEvents.record(repo_key, issue_id, "check.waived", %{check_id: check_id, reason: reason}) do
       TicketProjection.changed(repo_key, issue_id)
       {:ok, event}
     end
   end
 
+  # The check's id and the plan version that last changed it.
   defp known(issue_id, check_id) do
-    if Enum.any?(list(issue_id), &(&1.id == check_id)), do: {:ok, check_id}, else: {:error, {:unknown_check, check_id}}
+    case Enum.find(standing(events(issue_id)), fn {check, _since, _proof, _waiver} -> check.id == check_id end) do
+      {_check, since, _proof, _waiver} -> {:ok, check_id, since}
+      nil -> {:error, {:unknown_check, check_id}}
+    end
   end
 
-  defp proof_key(check_id, head) when is_binary(head) and head != "", do: "check.proved:#{check_id}:#{head}"
-  defp proof_key(_check_id, _head), do: nil
+  # One proof per check, head and wording of the check: a check whose statement a later version
+  # changed is proved again, on the same head too.
+  defp proof_key(check_id, 1, head) when is_binary(head) and head != "", do: "check.proved:#{check_id}:#{head}"
+  defp proof_key(check_id, since, head) when is_binary(head) and head != "", do: "check.proved:#{check_id}:v#{since}:#{head}"
+  defp proof_key(_check_id, _since, _head), do: nil
 
   defp check(check, proof, waiver) do
     check

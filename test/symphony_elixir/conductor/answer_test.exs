@@ -295,16 +295,16 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     defp grooming(attrs), do: Answer.parse(json(attrs), plan: true)
     defp plan(attrs), do: grooming(%{"plan" => Map.merge(@plan, attrs)})
 
-    test "is read as plan.written holds it, each check with an id, and the instructions may be null" do
+    test "is read as plan.written holds it, each check with the id it gave or none, and the instructions may be null" do
       assert {:ok, %{instructions: nil, plan: plan}} = grooming(%{"plan" => @plan, "update" => "I wrote the plan."})
       assert %{shape: "single", layers: ["screen", "api"], summary: "The ticket list keeps its filter.", size: %{tokens: 2_000_000, runs: 2}} = plan
       assert plan.text =~ "Out of scope: sorting."
       refute Map.has_key?(plan, :sub_tickets)
 
+      # A check that names no id has none here: `TicketPlan.write/4` names it.
       assert plan.checks == [
-               %{id: "c1", kind: "outcome", statement: "The filter is kept after a reload.", proof: "test"},
+               %{kind: "outcome", statement: "The filter is kept after a reload.", proof: "test"},
                %{
-                 id: "c2",
                  kind: "qa",
                  statement: "The list shows the filtered tickets.",
                  proof: "qa",
@@ -468,7 +468,7 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     end
 
     test "a changed ask must bring its plan, with the reason it changed for" do
-      assert {:ok, %{ask: true, plan: %{reason: "More was asked.", checks: [%{id: "c1"}]}}} =
+      assert {:ok, %{ask: true, plan: %{reason: "More was asked.", checks: [%{kind: "outcome"}]}}} =
                said(%{"update" => "Ok.", "ask" => true, "plan" => Map.put(@plan, "reason", "More was asked.")})
 
       assert said(%{"update" => "Ok.", "ask" => true}) == {:error, "`ask` is true, so the answer must hold the new `plan`"}

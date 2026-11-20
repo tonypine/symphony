@@ -65,6 +65,10 @@ defmodule SymphonyElixir.TicketPlan do
   `plan.written` whose `version` is one more than the newest (1 for the first), whatever version
   `plan` names. `opts` are `SymphonyElixir.TicketEvents.record/5`'s.
 
+  It names the checks: a check that comes with the id a check of an earlier version had keeps it,
+  and with it what was recorded for that check; any other (no id, or one no version used) gets a
+  new id that no version of the ticket ever used (`c1`, `c2`, and on from the highest ever used).
+
   Besides what the type's schema refuses (`{:invalid_payload, fields}`), a plan is refused, with
   what is wrong in plain words (`{:invalid_plan, reasons}`), when two checks share an id, a `qa`
   check names no `action` or nothing to `expect`, two sub-tickets share a key, or a sub-ticket
@@ -72,7 +76,8 @@ defmodule SymphonyElixir.TicketPlan do
   """
   @spec write(String.t() | nil, String.t(), map(), keyword()) :: {:ok, Event.t()} | {:error, term()}
   def write(repo_key, issue_id, plan, opts \\ []) when is_binary(issue_id) and is_map(plan) do
-    payload = plan |> Map.drop([:version, "version"]) |> Map.put(:version, length(events(issue_id, "plan.written")) + 1)
+    earlier = versions(issue_id)
+    payload = plan |> Map.drop([:version, "version"]) |> Map.put(:version, length(earlier) + 1) |> identified(earlier)
 
     with {:ok, valid} <- Types.validate("plan.written", payload, :machine, nil),
          :ok <- coherent(valid),
@@ -81,6 +86,42 @@ defmodule SymphonyElixir.TicketPlan do
       {:ok, event}
     end
   end
+
+  # Each check under an id of its own: the one it kept from an earlier version, else a new one no
+  # version of the ticket ever used, so a new check never meets what was recorded for an old one.
+  defp identified(plan, earlier) do
+    key = if is_map_key(plan, "checks"), do: "checks", else: :checks
+
+    case Map.get(plan, key) do
+      checks when is_list(checks) -> Map.put(plan, key, identify(checks, used_ids(earlier)))
+      _not_a_list -> plan
+    end
+  end
+
+  defp identify(checks, used) do
+    newest = used |> Enum.flat_map(&number/1) |> Enum.max(fn -> 0 end)
+
+    {checks, _newest} =
+      Enum.map_reduce(checks, newest, fn check, newest ->
+        if is_map(check) and check_id(check) not in used, do: {put_id(check, "c#{newest + 1}"), newest + 1}, else: {check, newest}
+      end)
+
+    checks
+  end
+
+  defp used_ids(versions), do: for(%{checks: checks} <- versions, check <- checks, uniq: true, do: check_id(check))
+
+  defp number("c" <> digits) do
+    case Integer.parse(digits) do
+      {number, ""} -> [number]
+      _other -> []
+    end
+  end
+
+  defp number(_id), do: []
+
+  defp check_id(check), do: field(check, :id)
+  defp put_id(check, id), do: check |> Map.drop([:id, "id"]) |> Map.put(if(Enum.any?(Map.keys(check), &is_binary/1), do: "id", else: :id), id)
 
   defp coherent(plan) do
     checks = plan.checks

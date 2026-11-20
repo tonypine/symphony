@@ -600,7 +600,8 @@ rewritten, with its `source`, `linear`, `message` or `parent`, and the parent ti
 came `from`), `plan.written` (machine only: one version of a groomed ticket's plan, with its
 `version`, the `reason` it was written and `by` what, its `shape`, `single` or `split`, the `layers`
 it touches, a `summary` for a person, the plan's `text` for agents, its `checks`, each with an `id`
-that stays the same across versions, a `kind`, `outcome`, `qa` or `evidence`, a `statement` and its
+that is its alone across versions (a new check gets an id no version used, and a check whose
+statement a version changed counts only the proofs and waivers recorded after that version), a `kind`, `outcome`, `qa` or `evidence`, a `statement` and its
 `proof`, `test`, `qa`, `design` or `attached`, its `size` and, for a split, its `sub_tickets`; the
 newest one is the ticket's plan, and a ticket is groomed exactly when it holds one), `check.proved`
 (any run's, or the machine's: a check of the current plan proved by a test, QA, the design or

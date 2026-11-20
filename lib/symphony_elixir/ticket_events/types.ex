@@ -183,7 +183,8 @@ defmodule SymphonyElixir.TicketEvents.Types do
   `shape` (`single` or `split`), the `layers` it touches (`screen`, `gallery`, `api`, `engine`,
   `config`, `tooling`, `docs`), a `summary` for a person (at most 600), the plan's `text` for agents
   (at most 12,000), its `checks`, its `size` (`tokens` and `runs`) and, for a split, its
-  `sub_tickets`. A check has an `id` that stays the same across versions (`c1`, `c2`), a `kind`
+  `sub_tickets`. A check has an `id` that is its alone across versions (`c1`, `c2`; a new check gets one no
+  version used, and a check whose `statement` changed starts unproved), a `kind`
   (`outcome`, `qa`, `evidence`), a `statement` (at most 600) and how it is proved (`proof`: `test`,
   `qa`, `design`, `attached`); a `qa` check also says the app `state` it needs, the `action` and
   what to `expect` (at most 400 each), the `size` it is walked at (`normal`, `wide`) and the Gallery

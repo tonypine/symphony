@@ -91,12 +91,11 @@ defmodule SymphonyElixir.TicketPlanTest do
         %{key: "s1", title: "The view", ask: "Draw it.", after: ["s9"]}
       ]
 
-      incoherent = @plan |> Map.put(:checks, [@check, @check, qa]) |> Map.put(:sub_tickets, sub_tickets)
+      incoherent = @plan |> Map.put(:checks, [@check, qa]) |> Map.put(:sub_tickets, sub_tickets)
 
       assert {:error, {:invalid_plan, reasons}} = TicketPlan.write(@repo_key, @issue_id, incoherent)
 
       assert reasons == [
-               "check id c1 is used twice",
                "QA check c2 has no action",
                "QA check c2 has no expect",
                "sub-ticket key s1 is used twice",
@@ -105,6 +104,34 @@ defmodule SymphonyElixir.TicketPlanTest do
              ]
 
       refute TicketPlan.groomed?(@issue_id)
+
+      # An id is one check's: a version that gives a standing check's id to two is refused.
+      {:ok, _first} = TicketPlan.write(@repo_key, @issue_id, @plan)
+      assert {:error, {:invalid_plan, ["check id c1 is used twice"]}} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: [@check, @check]})
+      assert [_one] = TicketPlan.versions(@issue_id)
+    end
+
+    test "a check keeps the id it had, and a new one gets an id no version of the ticket ever used" do
+      new = fn statement -> %{kind: "outcome", statement: statement, proof: "test"} end
+
+      # The first version's checks are named in order, whatever ids they came with.
+      first = [new.("A."), Map.put(new.("B."), :id, "c7"), Map.put(new.("C."), "id", "mine")]
+      {:ok, _v1} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: first}, at: at(0))
+      assert ["c1", "c2", "c3"] = Enum.map(TicketPlan.current(@issue_id).checks, & &1.id)
+
+      # c2 and c3 are dropped; a check with no id, or with an id nobody had, is not given theirs.
+      second = [Map.put(new.("A."), :id, "c1"), new.("D."), Map.put(new.("E."), :id, "c9")]
+      {:ok, _v2} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: second}, at: at(1))
+      current = TicketPlan.current(@issue_id)
+      assert [%{id: "c1", statement: "A."}, %{id: "c4", statement: "D."}, %{id: "c5", statement: "E."}] = current.checks
+
+      # Nor is a later version's: c2 was used once, so it is never a new check's id.
+      third = %{"checks" => [%{"kind" => "outcome", "statement" => "F.", "proof" => "test"}]}
+      {:ok, _v3} = TicketPlan.write(@repo_key, @issue_id, @plan |> Map.delete(:checks) |> Map.merge(third), at: at(2))
+      assert [%{id: "c6", statement: "F."}] = TicketPlan.current(@issue_id).checks
+
+      # Checks that are no list are the schema's to refuse.
+      assert {:error, {:invalid_payload, [:checks]}} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: "none"})
     end
 
     test "a signal the machinery recorded with a plan is not part of the plan" do
