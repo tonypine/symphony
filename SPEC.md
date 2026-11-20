@@ -1610,7 +1610,9 @@ Fields:
   or Symphony chose to stop: it refuses while dispatch is paused, while the ticket's repository
   is paused, while the ticket has an open question, or while a run is already working on it, and
   the answer names which; a ticket in the backlog is refused with "move it first". A ticket in
-  the todo state is claimed (in progress) first. The run a person starts this way records one
+  the todo state is claimed (in progress) first. The run works in the repository the ticket's
+  record holds, never a default one; a ticket with no repository on its record is refused. The
+  run a person starts this way records one
   `run.started_by_person` event on the ticket, by the person with their note.
 - Implementations MAY carry each operator move on the ticket read with whether it is allowed now and
   why not (this one has `moves`, `docs/control-api.md`). The read and the control call MUST judge the

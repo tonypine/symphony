@@ -5223,6 +5223,18 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
+  # A start reads the ticket by identifier, which carries no repo key, so it takes its record's: the
+  # run works in the repository the record holds, never the primary one (MOT-104, TP-1566). A ticket
+  # with no repository on its record is refused, starting nothing.
+  defp fetch_issue_to_start(identifier) do
+    with {:ok, %Issue{} = issue} <- fetch_issue_to_force(identifier) do
+      case issue_repo_key(issue) || RunStore.ticket_repo_key(issue.id) do
+        nil -> {:error, {:start_refused, StartNow.no_repository_reason()}}
+        repo_key -> {:ok, %{issue | repo_key: repo_key}}
+      end
+    end
+  end
+
   defp entity_not_found?(%{"message" => message}) when is_binary(message), do: message =~ ~r/not found/i
   defp entity_not_found?(_error), do: false
 
@@ -5247,8 +5259,9 @@ defmodule SymphonyElixir.Orchestrator do
     end
   end
 
-  # The force label is on: the Director's force is recorded on the ticket, best effort, in its repo,
-  # else the primary one. A clear records nothing.
+  # The force label is on: the Director's force is recorded on the ticket, best effort, in its repo
+  # (the record's, as the read by identifier carries none), else the primary one. A clear records
+  # nothing.
   defp record_force_action(_issue, true = _clear?), do: :ok
 
   defp record_force_action(%Issue{id: issue_id} = issue, false = _clear?) do
@@ -5259,7 +5272,7 @@ defmodule SymphonyElixir.Orchestrator do
   end
 
   defp force_repo_key(issue) do
-    case issue_repo_key(issue) do
+    case issue_repo_key(issue) || RunStore.ticket_repo_key(issue.id) do
       nil -> Config.repo_key()
       repo_key -> {:ok, repo_key}
     end
@@ -8048,7 +8061,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp pr_run_entry?(%{issue: %Issue{run_kind: "pr"}}), do: true
   defp pr_run_entry?(_running_entry), do: false
 
-  defp dispatch_repo_key(%State{} = state, %Issue{} = issue), do: issue_repo_key(issue) || state.repo_key
+  # A ticket's repository: the key it carries, else its record's (a read by id or identifier carries
+  # none), else the primary one, for a ticket Symphony has no record of yet (TP-1566).
+  defp dispatch_repo_key(%State{} = state, %Issue{} = issue), do: issue_repo_key(issue) || RunStore.ticket_repo_key(issue.id) || state.repo_key
 
   defp freeze_issue_repo_key(%Issue{} = issue, repo_key) when is_binary(repo_key) and repo_key != "" do
     %{issue | repo_key: repo_key}
@@ -8070,6 +8085,7 @@ defmodule SymphonyElixir.Orchestrator do
     state.retry_attempts
     |> Map.get(issue_id, %{})
     |> repo_key_from()
+    |> Kernel.||(RunStore.ticket_repo_key(issue_id))
     |> Kernel.||(state.repo_key)
   end
 
@@ -9400,9 +9416,9 @@ defmodule SymphonyElixir.Orchestrator do
   @spec start_issue(GenServer.server(), String.t(), String.t() | nil) :: {:ok, map()} | :unavailable | {:error, term()}
   def start_issue(server, identifier, note) when is_binary(identifier) and (is_binary(note) or is_nil(note)) do
     if server_available?(server) do
-      with {:ok, %Issue{} = issue} <- fetch_issue_to_force(identifier),
+      with {:ok, %Issue{} = issue} <- fetch_issue_to_start(identifier),
            :ok <- refute_start(issue),
-           {:ok, issue} <- StartNow.follow(issue, fetch: &fetch_issue_to_force/1),
+           {:ok, issue} <- StartNow.follow(issue, fetch: &fetch_issue_to_start/1),
            {:ok, issue} <- claim_for_start(issue) do
         GenServer.call(server, {:start_issue, issue, note})
       end
@@ -9736,7 +9752,9 @@ defmodule SymphonyElixir.Orchestrator do
   defp handle_call_message({:start_issue, %Issue{} = issue, note}, _from, state) do
     checked = StartNow.check(start_facts(issue, Map.has_key?(state.running, issue.id)))
 
-    case {checked, dispatch_repo_key(state, issue)} do
+    # The ticket's own repository, or its record's: never the primary one, which would run it in a
+    # checkout of another repository (MOT-104, TP-1566).
+    case {checked, issue_repo_key(issue) || RunStore.ticket_repo_key(issue.id)} do
       {{:error, reason}, _repo_key} ->
         {:reply, {:error, {:start_refused, reason}}, state}
 
@@ -9744,7 +9762,7 @@ defmodule SymphonyElixir.Orchestrator do
         {:reply, {:error, {:start_refused, StartNow.no_repository_reason()}}, state}
 
       {:ok, repo_key} ->
-        start_reply(state, issue, repo_key, note)
+        start_reply(state, freeze_issue_repo_key(issue, repo_key), repo_key, note)
     end
   end
 

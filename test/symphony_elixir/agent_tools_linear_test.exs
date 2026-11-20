@@ -2397,7 +2397,18 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
       assert Linear.CommentRegistry.human_action_requested?(registry)
     end
 
+    test "TP-1566: a run whose issue carries no repo key asks under its record's repository" do
+      :ok = SymphonyElixir.RunStore.clear()
+      :ok = SymphonyElixir.RunStore.put_ticket_state(%{repo_key: "cycle", issue_id: "issue-24", issue_identifier: "MOT-24", phase: "In Progress"})
+      {:ok, registry} = Linear.CommentRegistry.start_link()
+      context = %{issue: %Issue{id: "issue-24", identifier: "MOT-24", repo_key: nil}, comment_registry: registry}
+
+      assert {:ok, %{"requested" => true}} = request_human_action(context, human_action_scope())
+      assert %{title: "Add the release signing secrets"} = SymphonyElixir.Questions.deciding({:ticket, "cycle", "issue-24"})
+    end
+
     test "gives the slot back when Linear refuses any step, or the question can't be asked" do
+      :ok = SymphonyElixir.RunStore.clear()
       {:ok, registry} = Linear.CommentRegistry.start_link()
       context = %{issue: %Issue{id: "issue-24", repo_key: "repo-a"}, comment_registry: registry}
       scope = human_action_scope()
@@ -2407,8 +2418,9 @@ defmodule SymphonyElixir.AgentTools.LinearTest do
             {context, %{"SymphonyAgentHumanActionScope" => {:error, :linear_down}}, {:error, :linear_down}},
             {context, %{"SymphonyAgentHumanActionScope" => {:ok, %{"data" => %{"issue" => nil}}}}, {:error, :issue_not_found}},
             {context, %{"SymphonyAgentAddComment" => refused.("commentCreate")}, {:error, {:linear_mutation_failed, "commentCreate", :_}}},
-            # A question needs the repo it is recorded under.
-            {%{issue_id: "issue-24", comment_registry: registry}, %{}, {:error, :missing_repo_key}}
+            # A question needs the repo it is recorded under: the issue's, else its record's (the
+            # refused comment above left issue-24 one, so this is an issue with none).
+            {%{issue_id: "issue-25", comment_registry: registry}, %{}, {:error, :missing_repo_key}}
           ] do
         result = request_human_action(context, scope, overrides)
 

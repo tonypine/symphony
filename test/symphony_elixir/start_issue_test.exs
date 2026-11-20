@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.StartIssueTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Linear.Issue, Pauses}
+  alias SymphonyElixir.{Linear.Issue, Pauses, RunStore, Workspace}
 
   @active_states ["Todo", "In Progress", "Code Review", "Rework"]
   @repo "default"
@@ -27,7 +27,7 @@ defmodule SymphonyElixir.StartIssueTest do
       File.rm_rf(test_root)
     end)
 
-    write_workflow_file!(Workflow.workflow_file_path(),
+    workflow_opts = [
       tracker_active_states: @active_states,
       tracker_terminal_states: ["Done", "Canceled"],
       workspace_root: Path.join(test_root, "workspaces"),
@@ -35,9 +35,11 @@ defmodule SymphonyElixir.StartIssueTest do
       agent_command: fake_claude,
       max_turns: 1,
       quality_gate: %{enabled: false}
-    )
+    ]
 
-    %{test_root: test_root}
+    write_workflow_file!(Workflow.workflow_file_path(), workflow_opts)
+
+    %{test_root: test_root, workflow_opts: workflow_opts}
   end
 
   describe "the start handler" do
@@ -172,16 +174,39 @@ defmodule SymphonyElixir.StartIssueTest do
       assert Map.keys(next_state.running) == ["busy-1"]
     end
 
-    test "a ticket with no repository is refused" do
-      nowhere = issue("nowhere-1", "MT-N1", "In Progress")
+    test "a ticket with no repository is refused, even with a primary repository to fall back on" do
+      nowhere = bare_issue("nowhere-1", "MT-N1", "In Progress")
       tracked([nowhere])
 
-      state = %{orchestrator_state(1) | repo_key: nil}
+      for state <- [orchestrator_state(1), %{orchestrator_state(1) | repo_key: nil}] do
+        {:reply, reply, next_state} = Orchestrator.handle_call({:start_issue, nowhere, nil}, {self(), make_ref()}, state)
 
-      {:reply, reply, next_state} = Orchestrator.handle_call({:start_issue, nowhere, nil}, {self(), make_ref()}, state)
+        assert {:error, {:start_refused, "The ticket has no repository; it can't be started."}} = reply
+        assert next_state.running == %{}
+      end
+    end
 
-      assert {:error, {:start_refused, "The ticket has no repository; it can't be started."}} = reply
-      assert next_state.running == %{}
+    test "TP-1566: a ticket of a second repository, its repository only on its record, runs in that repository's workspace", %{
+      test_root: test_root,
+      workflow_opts: workflow_opts
+    } do
+      workflow = Workflow.workflow_file_path()
+      repos = [[key: @repo, workflow: workflow, team: "Test"], [key: "cycle", workflow: workflow, team: "Cycle"]]
+      write_workflow_file!(workflow, Keyword.put(workflow_opts, :repos, repos))
+
+      # A read by identifier carries no repo key; the record holds the ticket's repository.
+      started = bare_issue("cycle-1", "MOT-104", "In Progress")
+      :ok = RunStore.put_ticket_state(%{repo_key: "cycle", issue_id: "cycle-1", issue_identifier: "MOT-104", phase: "In Progress"})
+
+      {:reply, {:ok, reply}, next_state} =
+        Orchestrator.handle_call({:start_issue, started, nil}, {self(), make_ref()}, orchestrator_state(1))
+
+      assert %{started: true, repo_key: "cycle"} = reply
+      assert %{repo_key: "cycle", issue: %Issue{repo_key: "cycle"} = run_issue} = next_state.running["cycle-1"]
+      {:ok, cycle_workspace} = SymphonyElixir.PathSafety.canonicalize(Path.join([test_root, "workspaces", "cycle", "MOT-104"]))
+      assert {:ok, ^cycle_workspace} = Workspace.local_path_for_issue(run_issue)
+      assert [_started_by_person] = ticket_events("cycle", "cycle-1", "run.started_by_person")
+      assert [] = ticket_events(@repo, "cycle-1", "run.started_by_person")
     end
 
     test "a spawn that fails answers that a retry is scheduled and keeps that retry in the state" do
@@ -261,6 +286,21 @@ defmodule SymphonyElixir.StartIssueTest do
       refute_received {:start_issue_call, _issue, _note}
     end
 
+    test "TP-1566: a ticket read by identifier takes its record's repository to the orchestrator", %{server: server} do
+      tracked([bare_issue("cycle-1", "MOT-104", "In Progress")])
+      :ok = RunStore.put_ticket_state(%{repo_key: "cycle", issue_id: "cycle-1", issue_identifier: "MOT-104", phase: "In Progress"})
+
+      assert {:ok, %{started: true}} = Orchestrator.start_issue(server, "MOT-104", nil)
+      assert_received {:start_issue_call, %Issue{id: "cycle-1", repo_key: "cycle"}, nil}
+    end
+
+    test "TP-1566: a ticket with no repository on its record is refused in the caller, and nothing starts", %{server: server} do
+      tracked([bare_issue("nowhere-1", "MT-N1", "Todo")])
+
+      assert {:error, {:start_refused, "The ticket has no repository; it can't be started."}} = Orchestrator.start_issue(server, "MT-N1", nil)
+      refute_received {:start_issue_call, _issue, _note}
+    end
+
     test "an unknown ticket is not found and a non-string identifier is invalid", %{server: server} do
       tracked([issue("todo-1", "MT-T1", "Todo")])
 
@@ -287,7 +327,10 @@ defmodule SymphonyElixir.StartIssueTest do
 
   defp tracked(issues), do: Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)
 
-  defp issue(id, identifier, state) do
+  defp issue(id, identifier, state), do: %{bare_issue(id, identifier, state) | repo_key: @repo}
+
+  # As Linear reads it by identifier: no repo key.
+  defp bare_issue(id, identifier, state) do
     %Issue{id: id, identifier: identifier, title: "Ticket #{identifier}", state: state, team: %{key: "Test"}, url: "https://example.org/issues/#{identifier}"}
   end
 

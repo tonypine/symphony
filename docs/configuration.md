@@ -2901,7 +2901,10 @@ Fix, the rework run for Rework. It ignores queue order, the per-repo and global 
 It does not override what a person or Symphony chose to stop: it is refused while Symphony is
 paused, while the ticket's repository is paused, while the ticket has an open Question, or while
 a run is already working on it — the answer names which — and a ticket in Backlog is refused with
-"move it first". Each ticket of the state payload and each ticket payload carries
+"move it first". The run works in the repository Symphony's record holds for the ticket (a read of
+the ticket by identifier carries none), never the primary one: a ticket with no repository on its
+record is refused with "The ticket has no repository; it can't be started.", and no run starts.
+Each ticket of the state payload and each ticket payload carries
 `start: {allowed, reason}` computed from the same refusals, so the Director's Start now button is
 never clickable into a refusal; its tooltip shows the reason. The answer returns once the run has
 started (`run_id`; its session id arrives with the run) or with the refusal, and the ticket's
