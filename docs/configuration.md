@@ -3628,7 +3628,7 @@ exactly as before.
   turn ran past its time limit, failed, answered outside the schema, wrote a plan Symphony refuses
   (two checks with one id, a QA check with no action), or no provider of `runs.conductor` could
   take a run (a paused provider, a usage limit). After the first such try the run does not start
-  and the ticket is groomed again at its next dispatch, about a second later. After the second the
+  and the ticket is groomed again at its next dispatch, which Symphony starts at once. After the second the
   run starts without a plan, as it did before plans, and the note says so. A ticket never waits on
   Grooming.
 
