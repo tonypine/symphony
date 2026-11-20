@@ -1408,7 +1408,11 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
           heads: ["sha-red", "sha-fix"],
           max_turns: 6,
           symphony_steps: "",
-          runner_opts: [step_command_runner: failed_check_runner(test_result), failed_check_opts: [read: red_job_read()], run_id: "run-progress"]
+          runner_opts: [
+            step_command_runner: failed_check_runner(test_result),
+            failed_check_opts: [read: red_job_read()],
+            run_id: "run-progress"
+          ]
         )
       end)
     end
