@@ -2,7 +2,11 @@
 
 > **Changed on 2026-11-12.** The brief's place, the note, the Details and Decisions panels and the Connected
 > panel changed: see [The window, Home, Work and the ticket page's top](director-window-and-home.md), which
-> wins where the two differ.
+> wins where the two differ. Since TP-1504 the brief is on top of the main column, above the Lifecycle; there
+> is no Details panel (priority and labels are in the header, the workspace path and the Linear link in the
+> More menu, the pull request is Open Pull Request), and Decisions is a panel only once the Director has
+> answered something on the ticket. Since TP-1503 there is no note panel: writing to the ticket is one box
+> above the timeline.
 
 Design research for the ticket page, and the prototype built on it (TP-1383, second design ticket of
 Phase 3b, TP-1381). The page is designed again from scratch around one question: **where does this
@@ -20,7 +24,7 @@ The prototype is plain HTML, CSS and JavaScript built from the design catalog
 and no network: [`prototypes/ticket-page/index.html`](prototypes/ticket-page/index.html).
 
 It keeps the catalog's structure and markup zone by zone (the header across the page; on a laptop the
-decisions line, then the lifecycle on top of the timeline, with the facts rail beside them and the
+decisions line, then the brief and the lifecycle on top of the timeline, with the facts rail beside them and the
 decisions in a side sheet; on a desktop the decisions as a third column on the far right) and draws
 every part with the catalog's own components and tokens. Its own CSS adds only the frame around the
 page and the pieces the catalog's story leaves out: a run's transcript in its line, a finding with
@@ -67,20 +71,20 @@ first screen without scrolling at both widths, tier 2 is visible on the page, ti
 | 14 | Pauses now: each reason and since when, and whether the Director may release it | some visits | acts | 1 when paused (it is the situation) |
 | 15 | Blockers it waits on, open and resolved | some visits | decides | 2 when open, 3 when resolved |
 | 16 | Tickets it holds up | some visits | decides | 2 |
-| 17 | Earlier decisions (D1, D2…) with the question and the answer | some visits | explains | 2 |
+| 17 | Earlier decisions (D1, D2…): each decision, who answered and when | some visits | explains | 2 (a panel only when there is one) |
 | 18 | The note for the next run: what is set, whether a run read it, and the field to write one | some visits | acts | 2 |
 | 19 | Tokens: spent so far by stage, against the ticket's cap | some visits | decides near the cap | 2 |
 | 20 | Time: agent work, time in each phase | some visits | explains | 2 (in the phase path) |
 | 21 | The epic and its progress | some visits | explains | 2 |
-| 22 | Priority | rarely | decides | 2 |
-| 23 | Labels | rarely | records | 3 |
+| 22 | Priority | rarely | decides | 2 (in the header) |
+| 23 | Labels | rarely | records | 3 (in the header) |
 | 24 | Repo | rarely | records | 2 (one chip) |
-| 25 | The brief and its walkthrough | rarely | explains | 3 |
+| 25 | The brief and its walkthrough, and what was asked | most visits | explains | 1 (on top of the main column) |
 | 26 | Screenshots and other attachments | rarely, unless QA failed | explains | 2 when tied to an open finding, 3 otherwise |
-| 27 | Each run's model | rarely | records | 3 |
+| 27 | Each run's model | rarely | records | 3 (in its run's line) |
 | 28 | Each run's tokens and duration | rarely | records | 3 |
 | 29 | Retry count and when the next try starts | rarely; every visit while retrying | decides | 1 while retrying (it is the situation) |
-| 30 | The workspace path, with a copy button | rarely | records | 3 |
+| 30 | The workspace path, with a copy button | rarely | records | 4 (More › Copy Workspace Path) |
 | 31 | The forced flag (ahead of the queue) | rarely | explains | 2 (a chip) |
 | 32 | Who did each thing: Symphony, a rule (named), a person, an agent run | some visits | explains | 2 (in each timeline entry) |
 | 33 | Links out: the ticket in Linear, the PR on GitHub, a check's log | rarely | records | 4 |
@@ -122,7 +126,7 @@ How the page answers them, top to bottom, then left to right:
 | 3 Running now | the newest line of the timeline: the run now, unfolded, its current step open and live | the same |
 | 4 Since I looked | the line "Since you last looked, at 16:50" in the timeline, and a dot on everything newer; the count beside the Timeline title | the same |
 | 5 Run in detail | unfold any run, then any step; findings and screenshots sit in the run | the same |
-| 6 Moves | the header's moves (Stop Run… inside More); the note for the next run in the facts rail | the same, Stop Run… in the rail |
+| 6 Moves | the header's moves (Stop Run… inside More); the box above the timeline to write to the ticket | the same, Stop Run… in the rail |
 
 ## 3. The situation vocabulary
 
@@ -226,8 +230,8 @@ The timeline keeps its column of times and marks.
 | --- | --- | --- |
 | Header | the identifier with its repo chip, the epic's short name (cut at 160 pt, the whole title in its tooltip), and after a hairline the priority and labels; the title in the title style, at most 30 em and three lines; the situation; the moves on their own row under them | one row across the page; the moves on the identifier's line, so the title has the whole width (up to 56 em) |
 | Decisions | one line under the header; Answer opens the side sheet over a dimmed page | a column on the far right, always open, scrolling on its own; no line, no Answer |
-| Main column | the lifecycle on top of the timeline, fluid | the same, fluid next to the decisions, up to 1040 pt without them |
-| Facts rail | 340 pt: pull request and every check, connected tickets, the note for the next run, decisions, details | the same, 440 pt |
+| Main column | the brief (three lines, unfolding into the rest, its walkthrough and what was asked), then the lifecycle, then the timeline, fluid | the same, fluid next to the decisions, up to 1040 pt without them |
+| Facts rail | 340 pt: pull request and every check, connected tickets, then decisions when there are any | the same, 440 pt |
 
 **What collapses.** Ended runs fold into their line (a short bar per step and where it stopped); a
 run's steps fold into their name and state. The moves read, in order: the expected one (primary), Open

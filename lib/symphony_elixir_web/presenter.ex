@@ -479,9 +479,13 @@ defmodule SymphonyElixirWeb.Presenter do
   end
 
   # The ticket as its record holds it: the title, the phase, Linear's priority and the labels, the
-  # values the ticket list's columns of the same names serve. A ticket with no record has none.
-  defp ticket_payload(nil), do: %{title: nil, phase: nil, priority: nil, labels: []}
-  defp ticket_payload(record), do: Map.take(record, [:title, :phase, :priority, :labels])
+  # values the ticket list's columns of the same names serve, and the description as runs receive
+  # it (without Symphony's summary block). A ticket with no record has none.
+  defp ticket_payload(nil), do: %{title: nil, phase: nil, priority: nil, labels: [], description: nil}
+
+  defp ticket_payload(record) do
+    record |> Map.take([:title, :phase, :priority, :labels]) |> Map.put(:description, Map.get(record, :description))
+  end
 
   # Every event of the ticket, oldest first; none for a ticket with no id or a store that can't be read.
   defp ticket_events(issue_id), do: issue_id |> TicketEvents.query(limit: :all) |> List.wrap() |> Enum.filter(&is_struct(&1, Event))
