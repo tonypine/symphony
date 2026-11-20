@@ -98,8 +98,8 @@ defmodule SymphonyElixir.Conductor.Filing do
     with nil <- closed(events, settings),
          {:ok, relation} <- relation(route),
          :ok <- managed(route.repo, opts),
-         :ok <- sections(route),
-         existing = existing(route, issue, events, opts) do
+         :ok <- sections(route) do
+      existing = existing(route, issue, events, opts)
       route |> file_ticket(relation, existing, context, opts) |> filed(route, relation, context)
     else
       why when is_binary(why) -> {:error, why}
@@ -200,13 +200,14 @@ defmodule SymphonyElixir.Conductor.Filing do
     issue
     |> blockers(opts)
     |> Enum.reject(&(is_binary(&1[:state]) and terminal?(&1.state, opts)))
-    |> Enum.find_value(fn %{identifier: identifier} ->
-      case open_issue(identifier, issue, opts) do
-        %Issue{title: title, url: url} -> if same_title?(title, route.title), do: %{identifier: identifier, url: url}
-        nil -> nil
-      end
-    end)
+    |> Enum.find_value(fn %{identifier: id} -> covering(open_issue(id, issue, opts), id, route) end)
   end
+
+  defp covering(%Issue{title: title, url: url}, identifier, route) do
+    if same_title?(title, route.title), do: %{identifier: identifier, url: url}
+  end
+
+  defp covering(nil, _identifier, _route), do: nil
 
   # The tickets linked as blocking `issue`: the ones it carries, else the tracker's read of it.
   defp blockers(%Issue{blocked_by: [_ | _] = blockers}, _opts), do: Enum.filter(blockers, &is_binary(&1[:identifier]))

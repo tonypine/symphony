@@ -556,7 +556,8 @@ defmodule SymphonyElixir.SelfHeal do
   still records what it filed. `opts` takes `:repo_key` (`issue`'s repo), and the injectable `:fixer`
   and `:hold` (default `hold/3`).
   """
-  @spec file_ticket(Issue.t(), map(), keyword()) :: {:ok, map()} | {:error, term()} | {:error, {:hold_failed, term()}, map()}
+  @spec file_ticket(Issue.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, term()} | {:error, {:hold_failed, term()}, map()}
   def file_ticket(%Issue{} = issue, %{scope: scope, relation: relation} = ticket, opts) when relation in ["blocks", "follow_up"] do
     repo_key = repo_key(issue, opts)
 

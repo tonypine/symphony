@@ -251,7 +251,9 @@ defmodule SymphonyElixir.Conductor.FilingTest do
     assert {:ok, %{identifier: "TP-2000", existing: false}} = file(ctx, route(%{relation: "follow_up", title: "Another problem"}))
     Process.delete(:created)
     issue = %{ctx.issue | identifier: nil}
-    assert {:ok, %{identifier: "TP-2000", existing: false}} = file(%{ctx | issue: issue}, route(%{relation: "follow_up", title: "Yet another"}), %{@settings | max_filed_tickets: 5})
+    settings = %{@settings | max_filed_tickets: 5}
+    route = route(%{relation: "follow_up", title: "Yet another"})
+    assert {:ok, %{identifier: "TP-2000", existing: false}} = file(%{ctx | issue: issue}, route, settings)
     assert Process.get(:created) != nil
   end
 
