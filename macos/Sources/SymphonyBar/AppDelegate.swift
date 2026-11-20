@@ -1163,6 +1163,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 let notice = StatusMenu.notAnsweringNotice(silence: machine.silence() ?? "")
                 runner.notify(title: notice.title, body: notice.body)
             }
+        case .health:
+            // The poller hands health reads to the machine itself, with the poll they come with.
+            break
         }
         showStatus()
 
@@ -1188,6 +1191,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         case .started, .exited:
             // Check straight away instead of waiting out the interval.
             poller.pollNow()
+        case .health:
+            break
         }
     }
 
