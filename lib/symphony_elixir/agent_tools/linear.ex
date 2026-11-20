@@ -30,6 +30,7 @@ defmodule SymphonyElixir.AgentTools.Linear do
   alias SymphonyElixir.PromptSafety
   alias SymphonyElixir.Questions
   alias SymphonyElixir.RunKind
+  alias SymphonyElixir.RunStore
   alias SymphonyElixir.SensitivePath
   alias SymphonyElixir.TicketEvents
   alias SymphonyElixir.TicketSignals
@@ -1514,8 +1515,13 @@ defmodule SymphonyElixir.AgentTools.Linear do
       else: {:error, :human_actions_disabled}
   end
 
-  defp issue_repo_key(%{issue: %{repo_key: repo_key}}), do: repo_key
-  defp issue_repo_key(_context), do: nil
+  # The run's issue carries its repo key; one read by identifier (a Start from the Director, before
+  # TP-1566) may not, and the ticket's record holds it then, so its questions and events land where
+  # the readers look.
+  defp issue_repo_key(%{issue: %{repo_key: repo_key}}) when is_binary(repo_key) and repo_key != "", do: repo_key
+
+  # A context with no current issue reads `{:error, reason}`, whose atom has no record.
+  defp issue_repo_key(context), do: context |> current_issue_id() |> elem(1) |> RunStore.ticket_repo_key()
 
   defp issue_identifier(%{issue: %{identifier: identifier}}) when is_binary(identifier), do: identifier
   defp issue_identifier(_context), do: nil
