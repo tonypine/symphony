@@ -1229,11 +1229,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
         paragraph.tabStops = [NSTextTab(textAlignment: .right, location: stop)]
         let line = NSMutableAttributedString(
             string: title,
-            attributes: [.font: font, .foregroundColor: NSColor.labelColor, .paragraphStyle: paragraph]
+            attributes: [.font: font, .foregroundColor: DesignTokens.TextColor.primary.nsColor, .paragraphStyle: paragraph]
         )
         line.append(NSAttributedString(
             string: "\t" + trail,
-            attributes: [.font: font, .foregroundColor: NSColor.secondaryLabelColor, .paragraphStyle: paragraph]
+            attributes: [.font: font, .foregroundColor: DesignTokens.TextColor.secondary.nsColor, .paragraphStyle: paragraph]
         ))
         return line
     }
