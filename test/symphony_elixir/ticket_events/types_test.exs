@@ -328,17 +328,18 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
   end
 
   describe "agent_types/1" do
-    test "a QA run also records findings, the runs that write the code a brief; every other run kind the same agent types; nothing else is an agent's" do
+    test "a QA run and a Conductor turn also record findings, the runs that write the code a brief; every other run kind the same agent types; nothing else is an agent's" do
       every = ~w(checklist.answered evidence finding.resolved note step.completed step.started)
       briefing = ~w(implementation rework review_feedback)
 
       assert Types.agent_types("qa") == Enum.sort(["finding.recorded" | every])
       assert Types.agent_types(:qa) == Types.agent_types("qa")
+      assert Types.agent_types("conductor") == Types.agent_types("qa")
 
       with_brief = Enum.sort(["brief.written" | every])
       for run_kind <- briefing, do: assert(Types.agent_types(run_kind) == with_brief, run_kind)
 
-      for run_kind <- Types.agent_run_kinds() -- ["qa" | briefing],
+      for run_kind <- Types.agent_run_kinds() -- ["qa", "conductor" | briefing],
           do: assert(Types.agent_types(run_kind) == every, run_kind)
 
       assert Types.agent_types("supervisor") == []
