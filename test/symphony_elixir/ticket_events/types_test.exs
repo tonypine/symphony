@@ -424,7 +424,7 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
     test "an ask is the machine's or a person's, word for word, from Linear, a message or the parent" do
       assert {:ok, %{text: "Show the plan.", source: "linear"}} = Types.validate("ask.recorded", %{text: "Show the plan.", source: :linear}, :machine, nil)
       assert {:ok, %{source: "message", from: "evt-1"}} = Types.validate("ask.recorded", %{text: "Keep it.", source: "message", from: "evt-1"}, :person, nil)
-      longest = %{text: String.duplicate("a", 20_000), source: "parent", from: "TP-1"}
+      longest = %{text: String.duplicate("a", 100_000), source: "parent", from: "TP-1"}
       assert {:ok, _ask} = Types.validate("ask.recorded", longest, :machine, nil)
       assert {:error, {:invalid_payload, [:text]}} = Types.validate("ask.recorded", %{longest | text: longest.text <> "a"}, :machine, nil)
       assert {:error, {:invalid_payload, [:source]}} = Types.validate("ask.recorded", %{text: "x", source: "comment"}, :machine, nil)

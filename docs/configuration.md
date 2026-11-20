@@ -3610,7 +3610,9 @@ exactly as before.
 
 - Before the turn, Symphony records the ask: the ticket's description, word for word, without
   Symphony's own blocks (the Decisions section, the summary), as an `ask.recorded` event
-  (`source: linear`), once. A ticket with no description asks its title.
+  (`source: linear`), once. A ticket with no description asks its title. The words are never cut:
+  an ask longer than 100,000 characters is not recorded, and the ticket starts without a plan,
+  with one status note that says so. An ask the store refuses stops the turn: the try failed.
 - The turn differs from the others. It runs in the ticket's workspace, which Symphony creates as the
   run would and the run then reuses, with read-only tools: it can read and search the code and
   cannot change it. It is not held to one model turn, and it may take `grooming_timeout_ms`. When
@@ -3646,9 +3648,12 @@ exactly as before.
   (one line per check: `[open]`, `[proved]` or `[waived]`, its id and its statement), above
   Symphony's own blocks (the summary block and the Decisions section), which stay. It is written
   again each time an ask, a plan version, a proof or a waiver is recorded, by the same pass that
-  writes the Decisions section. Text a person types into the description is overwritten then: on
-  such a ticket the ask changes through a message. The walkthrough's `Proved by:` block is not
-  written there.
+  writes the Decisions section. Before the first such write Symphony reads the description once
+  more: words a person typed there since the ask was recorded are recorded as a further
+  `ask.recorded` (`source: linear`), and the description is written with them. After it, text a
+  person types into the description is overwritten at the next write: on such a ticket the ask
+  changes through a message. A ticket that holds no ask keeps its description as the person wrote
+  it. The walkthrough's `Proved by:` block is not written there.
 
 **The tree** (`sub_ticket_ended`, `final_check`). A groomed ticket and the sub-tickets under it.
 

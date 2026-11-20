@@ -218,9 +218,26 @@ defmodule SymphonyElixir.Conductor.GroomingTest do
       assert Grooming.record_ask("default", %Issue{id: other}, %{}, []) == :ok
       assert TicketPlan.ask(other) == []
 
-      long = %{bare | id: other, title: String.duplicate("x", 30_000)}
-      log = capture_log(fn -> assert Grooming.record_ask(nil, long, %{}, []) == :ok end)
+      # A store that refuses the ask stops the turn: its plan would overwrite words nobody holds.
+      unasked = %{bare | id: other}
+      log = capture_log(fn -> assert {:error, :invalid_repo_key} = Grooming.record_ask(nil, unasked, %{}, []) end)
       assert log =~ "Grooming could not record the ask issue_id=#{other}"
+    end
+
+    test "an ask too long to record is never cut: the ticket starts without a plan, with one note", ctx do
+      long = %{ctx.issue | description: String.duplicate("x", TicketPlan.ask_max() + 1)}
+      assert Grooming.record_ask("default", long, ctx.record, []) == {:error, :ask_too_long}
+      assert Grooming.record_ask("default", long, ctx.record, []) == {:error, :ask_too_long}
+      assert TicketPlan.ask(ctx.issue_id) == []
+      assert [note] = status_notes(ctx.issue_id)
+      assert note =~ "longer than 100000 characters"
+
+      refute Grooming.due?(:implementation, Facts.read_events(ctx.issue_id))
+      assert Grooming.failed("default", ctx.issue_id, "the turn failed") == :give_up
+      assert [_one] = status_notes(ctx.issue_id)
+
+      at_the_limit = %{ctx.issue | description: String.duplicate("x", TicketPlan.ask_max())}
+      assert Grooming.record_ask("default", at_the_limit, ctx.record, []) == :ok
     end
 
     test "where the waiting state is off, a split is recorded as a single ticket's plan", ctx do

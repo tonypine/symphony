@@ -33,8 +33,8 @@ defmodule SymphonyElixir.Conductor.Grooming do
   require Logger
 
   alias SymphonyElixir.Conductor.{Answer, Facts, Tree}
-  alias SymphonyElixir.{Decisions, IssueSummary, RunStore, TicketEvents, TicketPlan}
   alias SymphonyElixir.Linear.Issue
+  alias SymphonyElixir.{RunStore, TicketEvents, TicketPlan, TicketProjection}
   alias SymphonyElixir.TicketEvents.Event
   alias SymphonyElixir.{Tracker, Workspace, WorkspaceCleanup}
 
@@ -43,7 +43,7 @@ defmodule SymphonyElixir.Conductor.Grooming do
   @first_kinds ["implementation", "breakdown"]
   @try_key "grooming.try:"
   @ask_key "ask.recorded:linear"
-  @ask_max 20_000
+  @unplanned_key "grooming.unplanned"
   @reason "Grooming"
 
   @doc "How many tries may fail before the ticket starts without a plan."
@@ -53,7 +53,8 @@ defmodule SymphonyElixir.Conductor.Grooming do
   @doc """
   Whether Grooming comes before a run of `next_kind` on the ticket whose `events` (oldest first)
   these are: the run is a ticket's first, the ticket has no plan and no run but the Conductor's, and
-  fewer than `max_tries/0` tries failed. It also takes what `Facts.read_events/1` read: events that
+  fewer than `max_tries/0` tries failed, and its ask was not too long to record (`record_ask/4`).
+  It also takes what `Facts.read_events/1` read: events that
   could not be read say nothing about the ticket, which may be in flight, so Grooming is not due.
   """
   @spec due?(atom() | String.t(), [Event.t()] | {:ok, [Event.t()]} | {:error, term()}) :: boolean()
@@ -61,8 +62,11 @@ defmodule SymphonyElixir.Conductor.Grooming do
   def due?(next_kind, {:ok, events}), do: due?(next_kind, events)
 
   def due?(next_kind, events) when is_list(events) do
-    to_string(next_kind) in @first_kinds and not Enum.any?(events, &(plan?(&1) or worked?(&1))) and tries(events) < @max_tries
+    to_string(next_kind) in @first_kinds and not Enum.any?(events, &(plan?(&1) or worked?(&1) or unplanned?(&1))) and tries(events) < @max_tries
   end
+
+  # The note of a ticket whose ask was too long to record: it runs without a plan.
+  defp unplanned?(%Event{type: type, idempotency: key}), do: type == "note" and key == @unplanned_key
 
   defp plan?(%Event{type: type}), do: type == "plan.written"
 
@@ -95,7 +99,7 @@ defmodule SymphonyElixir.Conductor.Grooming do
   def failed(repo_key, issue_id, why) when is_binary(why) do
     case Facts.read_events(issue_id) do
       {:ok, events} ->
-        count_try(repo_key, issue_id, why, tries(events) + 1)
+        if Enum.any?(events, &unplanned?/1), do: :give_up, else: count_try(repo_key, issue_id, why, tries(events) + 1)
 
       {:error, reason} ->
         Logger.warning("Grooming could not read the ticket's events issue_id=#{issue_id} repo_key=#{repo_key}: #{inspect(reason)}; no try is counted, and the ticket starts without a plan")
@@ -127,23 +131,47 @@ defmodule SymphonyElixir.Conductor.Grooming do
   @doc """
   Records what was asked on `issue`, once: its description (the issue's, else the `record`'s) with
   Symphony's own blocks taken out, or its title when the description is blank, as an `ask.recorded`
-  from Linear. Nothing when `events` already hold an ask.
+  from Linear. Nothing when `events` already hold an ask. The words are never cut.
+
+  `:ok` when the ticket's ask is on its record. `{:error, reason}` when it is not, and the turn must
+  not run then, since its plan would stand in Linear in place of words Symphony does not hold:
+
+    * `{:error, :ask_too_long}`: the ask is longer than `SymphonyElixir.TicketPlan.ask_max/0`
+      characters. The ticket runs without a plan, and one status note says why; with that note on
+      its record Grooming is never due on it again (`due?/2`), so the run starts.
+    * any other reason: the store refused the ask. The try failed (`failed/3`).
   """
-  @spec record_ask(String.t(), Issue.t(), map(), [Event.t()]) :: :ok
+  @spec record_ask(String.t(), Issue.t(), map(), [Event.t()]) :: :ok | {:error, :ask_too_long | term()}
   def record_ask(repo_key, %Issue{id: issue_id} = issue, record, events) when is_list(events) do
     with [] <- TicketPlan.ask(events),
-         text when is_binary(text) <- ask_text(issue.description || Map.get(record, :description)) || ask_text(issue.title || Map.get(record, :title)),
-         {:error, reason} <- TicketPlan.record_ask(repo_key, issue_id, text, idempotency: @ask_key) do
-      Logger.warning("Grooming could not record the ask issue_id=#{issue_id} repo_key=#{repo_key}: #{inspect(reason)}")
+         text when is_binary(text) <- ask_text(issue.description || Map.get(record, :description)) || ask_text(issue.title || Map.get(record, :title)) do
+      record_ask_text(repo_key, issue_id, text)
     else
       _recorded_or_none -> :ok
     end
   end
 
+  defp record_ask_text(repo_key, issue_id, text) do
+    if String.length(text) > TicketPlan.ask_max() do
+      note = "What was asked is longer than #{TicketPlan.ask_max()} characters, so Symphony wrote no plan for it. This ticket starts without a plan."
+      _ = TicketEvents.record(repo_key, issue_id, "note", %{text: note, status: true}, idempotency: @unplanned_key)
+      {:error, :ask_too_long}
+    else
+      case TicketPlan.record_ask(repo_key, issue_id, text, idempotency: @ask_key) do
+        {:ok, _ask} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("Grooming could not record the ask issue_id=#{issue_id} repo_key=#{repo_key}: #{inspect(reason)}")
+          {:error, reason}
+      end
+    end
+  end
+
   defp ask_text(text) when is_binary(text) do
-    case text |> IssueSummary.strip() |> Decisions.strip() |> String.trim() do
+    case TicketProjection.person_text(text) do
       "" -> nil
-      ask -> String.slice(ask, 0, @ask_max)
+      ask -> ask
     end
   end
 

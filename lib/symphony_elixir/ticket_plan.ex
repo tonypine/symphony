@@ -24,6 +24,7 @@ defmodule SymphonyElixir.TicketPlan do
   alias SymphonyElixir.TicketEvents.{Event, Types}
 
   @machine_fields [:signal, :signal_details]
+  @ask_max 100_000
 
   @typedoc "A ticket: its issue id, or its events, oldest first."
   @type ticket :: String.t() | [Event.t()]
@@ -96,6 +97,10 @@ defmodule SymphonyElixir.TicketPlan do
   end
 
   defp repeated(what, values), do: for(value <- Enum.uniq(values -- Enum.uniq(values)), do: "#{what} #{value} is used twice")
+
+  @doc "The most characters one ask holds (`ask.recorded`'s `text`). A longer one is never cut: it is not recorded."
+  @spec ask_max() :: pos_integer()
+  def ask_max, do: @ask_max
 
   @doc "Every ask of the ticket, oldest first (`t:ask/0`)."
   @spec ask(ticket()) :: [ask()]

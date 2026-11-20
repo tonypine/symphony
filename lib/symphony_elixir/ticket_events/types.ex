@@ -174,7 +174,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   the ticket's brief (`SymphonyElixir.TicketBrief`).
 
   A groomed ticket's four shapes are the ask, the plan, its checks and its notes. `ask.recorded` is
-  the machine's or a person's: what a person asked for, word for word (`text`, at most 20,000
+  the machine's or a person's: what a person asked for, word for word (`text`, at most 100,000
   characters), where it came from (`source`: `linear`, the description at entry; `message`, a
   message that changed what is asked; `parent`, the parent ticket's plan) and the parent ticket or
   the message event it came `from`. `plan.written` is machine-only: one version of the ticket's plan
@@ -741,7 +741,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
     "ask.recorded" => %{
       writers: [:machine, :person],
       run_kinds: [],
-      required: [text: {:string, 20_000}, source: {:enum, ~w(linear message parent)}],
+      required: [text: {:string, 100_000}, source: {:enum, ~w(linear message parent)}],
       optional: [from: {:string, 200}] ++ @signal,
       idempotency: :writer
     },
