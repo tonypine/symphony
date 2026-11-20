@@ -202,11 +202,53 @@ extension DesignTokens.Control {
         return (font.ascender - font.descender + font.leading).rounded(.up)
     }
 
+    /// A control label's cap height: what the face centres between its top and bottom edges (TP-1517). Its line,
+    /// centred, leaves the capitals low, since the ascender over them is taller than the descender under the baseline.
+    public var labelCapHeight: CGFloat { labelNSFont.capHeight }
+
     /// A glyph's font at the size's glyph size: `glyphSize` in a button, `iconGlyphSize` in an icon button.
     public func glyphFont(icon: Bool = false) -> Font {
         let scale = DesignTokens.TypeStyle.textScale
         return Font(NSFont.systemFont(ofSize: CGFloat((icon ? iconGlyphSize : glyphSize) * scale), weight: NSFont.Weight(rawValue: CGFloat(DesignTokens.TypeStyle.label.systemWeight))) as CTFont)
     }
+}
+
+extension VerticalAlignment {
+    /// The middle of a control label's capitals (TP-1517): a label marks it with `capCentered`, a view that does not
+    /// (a glyph, a chevron, a dot) has it at its own middle, and a control's frame at its own middle too, so the
+    /// capitals sit halfway between the control's edges and what stands beside them is level with the capitals.
+    private enum CapCenter: AlignmentID {
+        static func defaultValue(in dimensions: ViewDimensions) -> CGFloat { dimensions.height / 2 }
+    }
+
+    public static let capCenter = VerticalAlignment(CapCenter.self)
+}
+
+extension Alignment {
+    /// Centred across, and on the label's capitals down.
+    public static let capCenter = Alignment(horizontal: .center, vertical: .capCenter)
+}
+
+extension View {
+    /// Marks this label's capitals, in `size`'s label font, as the middle a control centres (`VerticalAlignment.capCenter`).
+    public func capCentered(_ size: DesignTokens.Control) -> some View {
+        alignmentGuide(.capCenter) { $0[.firstTextBaseline] - size.labelCapHeight / 2 }
+    }
+
+    /// The pointing hand over an enabled control, as the catalog's `cursor: pointer`; over a disabled one the pointer
+    /// is left as it is (an arrow, or the not-allowed pointer a refused control pushes).
+    public func buttonPointer(enabled: Bool) -> some View {
+        pointerStyle(ButtonPointer.style(enabled: enabled))
+    }
+}
+
+/// The pointer over a shared button, icon button or menu control, set once in their styles (TP-1517).
+public enum ButtonPointer {
+    /// Whether the pointer turns into the pointing hand: only over a control that can be pressed.
+    public static func hand(enabled: Bool) -> Bool { enabled }
+
+    /// The pointing hand when `hand`, and the pointer as it is otherwise.
+    public static func style(enabled: Bool) -> PointerStyle? { hand(enabled: enabled) ? .link : nil }
 }
 
 /// A button's face of a kind, at one of the three control sizes, with an optional leading SF Symbol: one state of it,
@@ -234,16 +276,17 @@ public struct ButtonFace<Label: View>: View {
 
     public var body: some View {
         let shape = RoundedRectangle(cornerRadius: size.radius, style: .continuous)
-        HStack(spacing: DesignTokens.Control.glyphGap) {
+        // The glyph is centred on the label's capitals, and the capitals between the face's edges.
+        HStack(alignment: .capCenter, spacing: DesignTokens.Control.glyphGap) {
             if let glyph {
                 Image(systemName: glyph).font(size.glyphFont()).accessibilityHidden(true)
             }
-            label.font(size.labelFont).lineLimit(1)
+            label.font(size.labelFont).lineLimit(1).capCentered(size)
         }
         // A label's line is its own, whatever text style the view around it set.
         .lineHeight(.exact(points: size.labelLineHeight))
         .padding(.horizontal, size.padding)
-        .frame(height: size.height)
+        .frame(height: size.height, alignment: .capCenter)
         .foregroundStyle(Self.foreground(kind, state: state, onAccent: onAccent))
         .background { background(shape) }
         .overlay {
@@ -378,6 +421,7 @@ public struct DirectorButtonStyle: ButtonStyle {
             )
             .contentShape(RoundedRectangle(cornerRadius: size.radius, style: .continuous))
             .onHover { hovered = $0 }
+            .buttonPointer(enabled: isEnabled)
         }
     }
 }
@@ -550,6 +594,7 @@ private struct IconButtonStyle: ButtonStyle {
                 reduceMotion: reduceMotion
             )
             .onHover { hovered = $0 }
+            .buttonPointer(enabled: isEnabled)
         }
     }
 }
