@@ -6,6 +6,7 @@ extension ConductorJunction {
         switch self {
         case .afterCoding: "after coding"
         case .afterQAFail: "after QA failed"
+        case .afterQABlocked: "after QA was blocked"
         case .afterRework: "after rework"
         case .beforeMerge: "before merge"
         }

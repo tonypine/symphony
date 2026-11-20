@@ -12,6 +12,6 @@ defmodule SymphonyElixir.Config.SchemaTest do
   end
 
   test "the Conductor lists every junction in the order a ticket meets them" do
-    assert Schema.Conductor.junctions() == ~w(after_coding after_qa_fail after_rework before_merge)
+    assert Schema.Conductor.junctions() == ~w(after_coding after_qa_fail after_qa_blocked after_rework before_merge)
   end
 end

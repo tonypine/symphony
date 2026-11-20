@@ -49,6 +49,9 @@ defmodule SymphonyElixir.QaAgent.Steps do
   starts a new one), `fresh` starts one for the step alone, and no `session` is the pass's one
   session. A step with `repeat: walkthrough` runs once per walkthrough step this pass walks (the
   steps no named test proves), as `<id>_<n>`, each with that step's text and the plan's brief for it.
+  Every agent step reads the Conductor's newest instructions
+  (`SymphonyElixir.Conductor.prompt_section/2`), as the one session's prompt does, so a pass the
+  Conductor sent back to QA reads what it must do differently.
 
   Three steps are read by their id:
 
@@ -930,7 +933,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       target_text(target),
       if(brief, do: "Your brief, from the lead QA agent:\n" <> json(brief), else: "The plan gave no brief for this step: walk it from its text and the ticket."),
       if(command_line?(state, brief), do: command_line_rules(state), else: app_line(state)),
-      QaAgent.prompt_parts(state.job, nil, [:servers, :qa_mode])
+      QaAgent.prompt_parts(state.job, nil, [:servers, :qa_mode, :conductor])
     ]
     |> Enum.reject(&(&1 == ""))
     |> Enum.join("\n\n")
@@ -978,7 +981,7 @@ defmodule SymphonyElixir.QaAgent.Steps do
       app_line(state),
       "The gallery entries the plan names:\n" <> json(Map.get(plan, "gallery", [])),
       "The plan's briefs, for the screens and fixtures to use:\n" <> json(Map.get(plan, "walk", [])),
-      QaAgent.prompt_parts(state.job, parent(state), [:design, :servers, :qa_mode])
+      QaAgent.prompt_parts(state.job, parent(state), [:design, :servers, :qa_mode, :conductor])
     ]
     |> Enum.join("\n\n")
   end

@@ -167,6 +167,38 @@ defmodule SymphonyElixir.Conductor.AnswerTest do
     end
   end
 
+  test "a route is read only where Symphony takes one, and a malformed one is refused there" do
+    rework = %{"to" => "rework", "finding" => "  Add a flag QA can set to make the state request fail. "}
+
+    assert {:ok, %{route: %{to: "rework", finding: "Add a flag QA can set to make the state request fail."}}} =
+             Answer.parse(json(%{"instructions" => "Build the flag.", "route" => rework}), route: true)
+
+    assert {:ok, %{route: %{to: "rerun"}}} = Answer.parse(json(%{"instructions" => "Use the stand-in.", "route" => %{"to" => "rerun"}}), route: true)
+    assert {:ok, %{route: nil}} = Answer.parse(json(%{"instructions" => "Go on.", "route" => nil}), route: true)
+    assert {:ok, %{route: nil}} = Answer.parse(json(%{"instructions" => "Go on."}), route: true)
+
+    # At every other junction the field is ignored, whatever it holds.
+    assert {:ok, %{route: nil}} = Answer.parse(json(%{"instructions" => "Go on.", "route" => rework}))
+    assert {:ok, %{route: nil}} = Answer.parse(json(%{"instructions" => "Go on.", "route" => "merge"}))
+
+    long = String.duplicate("Add a seam. ", 80)
+    assert {:ok, %{route: %{finding: finding}}} = Answer.parse(json(%{"instructions" => "x", "route" => %{"to" => "rework", "finding" => long}}), route: true)
+    assert String.length(finding) <= 600 and String.ends_with?(finding, " [cut by Symphony]")
+
+    malformed = "`route` must be null, `{\"to\": \"rerun\"}` or `{\"to\": \"rework\", \"finding\": ...}`"
+
+    for {route, why} <- [
+          {%{"to" => "merge"}, malformed},
+          {%{"to" => "rework"}, malformed},
+          {%{"to" => "rerun", "finding" => "x"}, malformed},
+          {%{"to" => "rework", "finding" => 3}, malformed},
+          {"rerun", malformed},
+          {%{"to" => "rework", "finding" => " "}, "`route.finding` is blank"}
+        ] do
+      assert Answer.parse(json(%{"instructions" => "x", "route" => route}), route: true) == {:error, why}
+    end
+  end
+
   test "reads the first answer that meets the schema among the turn's texts, else the first refusal" do
     assert {:ok, %{instructions: "Second."}} =
              Answer.read(["Here it is: ```json\n{\"instructions\": \"\"}\n```", "{\"instructions\": \"Second.\"}"])
