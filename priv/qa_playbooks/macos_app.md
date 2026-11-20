@@ -482,8 +482,18 @@ GitHub or Linear in QA:
   `macos/Tests/Fixtures/director-app/ticket-cancel-refused`, open TP-1244 from Tickets the same
   way and cancel it: Symphony refuses it, and the sheet stays open with the note as typed and
   "Couldn't cancel TP-1244: TP-1244's team has no Canceled state, so it can't be cancelled (HTTP
-  409)" under it. What the timeline and the running list show after a cancel is the live
-  server's to prove. Walk it in light and dark.
+  409)" under it. Walk it in light and dark.
+- **After the cancel, walkthrough step 2 (TP-1317):** on `ticket-page`, once the cancel above
+  went through, the fixtures answer every read again with Symphony's state after a cancel
+  (`.after-cancel` files): the status-bar menu counts no running ticket, Home's
+  in progress has TP-1245 only, Work › Tickets reads TP-1244 Canceled, and TP-1244's page reads
+  Canceled, PR #741 closed, More without Cancel Ticket…, and its timeline ends "Cancelled from
+  Rework" with the note, after implementation run 2 stopped. The test
+  `testTheTicketPageFixture_AfterTheCancel_TP1244LeavesTheRunningListAndItsPullRequestIsClosed`
+  proves those reads, and the server's own cancel (the run stopped, the PR closed with the note)
+  is proved by `test/symphony_elixir/director_moves_test.exs`' "cancels a running ticket: the run
+  stops, its pull request closes with the note, nothing waits on it". Relaunch the app on a fresh
+  QA root to see the before state again.
 - **Setup (TP-910):** pass `macos/Tests/Fixtures/director-app/setup` as `api_fixtures`. Its
   state has one error, `Team TP has no "Needs Decision" label` (**Create Label…**), and one
   warning, `symphony.yml sets auto_review.enabled, which is deprecated` (**Remove…**). Before

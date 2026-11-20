@@ -158,6 +158,51 @@ final class CancelTicketTests: XCTestCase {
         }
     }
 
+    /// Walkthrough step 2: once the cancel went through, every read the window makes again (the state, the ticket page,
+    /// its feed, Tickets and Home) answers what Symphony serves after a cancel. TP-1244 leaves the running list and
+    /// Home's In progress, reads Canceled with PR #741 closed and offers no Cancel Ticket… again, and its timeline has
+    /// "Cancelled from Rework" with the note, after the run the cancel ended.
+    func testTheTicketPageFixture_AfterTheCancel_TP1244LeavesTheRunningListAndItsPullRequestIsClosed() throws {
+        let fixtures = fixtures("ticket-page")
+        let before = try page("TP-1244", from: fixtures)
+        XCTAssertTrue(before.isRunning)
+        XCTAssertEqual(before.factsRead?.pullRequest?.state, "open")
+        let runningBefore = try XCTUnwrap(JSONSerialization.jsonObject(with: try get("api/v1/state", from: fixtures)) as? [String: Any])
+        XCTAssertEqual((runningBefore["running"] as? [[String: Any]])?.compactMap { $0["issue_identifier"] as? String }, ["TP-1244"])
+
+        XCTAssertEqual(send(before.cancelSheet.action(note: "superseded by the secrets redesign"), to: fixtures),
+                       .moved(MoveOutcome(moved: true, toState: "Canceled")))
+
+        let state = try XCTUnwrap(JSONSerialization.jsonObject(with: try get("api/v1/state", from: fixtures)) as? [String: Any])
+        XCTAssertEqual((state["running"] as? [Any])?.count, 0)
+        XCTAssertEqual((state["counts"] as? [String: Any])?["running"] as? Int, 0)
+
+        let after = try page("TP-1244", from: fixtures)
+        XCTAssertFalse(after.isRunning)
+        XCTAssertEqual(after.phaseName, "Canceled")
+        XCTAssertEqual(after.factsRead?.pullRequest?.state, "closed")
+        XCTAssertEqual(after.factsRead?.pullRequest?.number, 741)
+        let rail = TicketActionRail(identifier: after.identifier, moves: try XCTUnwrap(after.moves))
+        XCTAssertFalse(rail.items.contains { $0.move == .cancel })
+
+        let feed = try XCTUnwrap(TicketEventsPayload.decode(try get(
+            "api/v1/repos/symphony/tickets/TP-1244/events", from: fixtures
+        )))
+        let cancelled = try XCTUnwrap(feed.events.first { $0.type == "ticket.cancelled" })
+        XCTAssertEqual(cancelled.summary?.title, "Cancelled from Rework")
+        XCTAssertEqual(cancelled.summary?.detail, "superseded by the secrets redesign")
+        XCTAssertEqual(feed.runs["run-2"]?.exit, "stopped")
+
+        let tickets = try XCTUnwrap(TicketsPayload.decode(try get(TicketsQuery().path(scope: .all, now: Date()), from: fixtures)))
+        XCTAssertEqual(tickets.rows.first { $0.identifier == "TP-1244" }?.phase, "Canceled")
+        let home = try XCTUnwrap(HomeRead.decode(try get(HomeRead.path, from: fixtures)))
+        let onHome: [String] = home.inProgress.compactMap { entry in
+            if case let .ticket(ticket) = entry { return ticket.identifier }
+            return nil
+        }
+        XCTAssertEqual(onHome, ["TP-1245"])
+    }
+
     func testTheRefusedFixtureAnswersTheCancelWithSymphonysReason() throws {
         let fixtures = fixtures("ticket-cancel-refused")
         let sheet = try page("TP-1244", from: fixtures).cancelSheet
