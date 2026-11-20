@@ -6694,8 +6694,8 @@ Minimum endpoints:
     it in the ticket's history summary. A run is given only the messages written before it started,
     however many prompts it builds (each step, a retry), so a message sent while it works waits for
     the next run; that run's own history summary leaves it out as well.
-  - The ticket read carries `unread_messages`, the count no run read yet, and, for the Mac app release
-    that reads one note, `note`: the newest unread message.
+  - The ticket read carries `unread_messages`, the count no run read yet. The Director's ticket page
+    shows each message as an entry of the timeline, from the events feed.
   - Each ticket's note from before messages (a person's `note`, read by a `note.read`) was turned into
     one `message.sent` at its time, with its `message.read` when a run had read it, once at startup.
 

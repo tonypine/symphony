@@ -2,8 +2,9 @@
   "timeline": [
     {"id": "a1", "seq": 1, "at": "2026-10-08T09:00:00Z", "type": "phase.entered", "actor": {"kind": "machine"},
      "payload": {"from": "Todo", "to": "In Progress"}, "summary": {"title": "Entered In Progress from Todo"}, "artifacts": [], "children": [], "new": false},
-    {"id": "n1", "seq": 2, "at": "2026-10-08T13:40:00Z", "type": "note", "actor": {"kind": "person", "name": "Tony"},
-     "payload": {"text": "Check the stopped run first."}, "summary": {"title": "Note added", "detail": "Check the stopped run first."}, "artifacts": [], "children": [], "new": true},
+    {"id": "n1", "seq": 2, "at": "2026-10-08T13:40:00Z", "type": "message.sent", "actor": {"kind": "person", "name": "Tony"},
+     "payload": {"text": "Check the stopped run first."}, "summary": {"title": "You wrote", "detail": "Check the stopped run first."},
+     "read": {"run_id": "run-3", "run": "Implementation run 3", "at": "2026-10-08T14:02:00Z"}, "artifacts": [], "children": [], "new": true},
     {
       "kind": "run", "run_id": "run-3", "run_kind": "implementation", "run_number": 3,
       "status": "ended", "exit": "normal", "started_at": "2026-10-08T14:00:00Z", "ended_at": "2026-10-08T14:30:00Z",

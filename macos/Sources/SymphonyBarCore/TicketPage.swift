@@ -259,7 +259,7 @@ public struct TicketPage: Equatable {
     public var lifecycleRead: TicketLifecycleRead?
     /// The facts rail's Pull request and Connected panels, from the ticket read.
     public var factsRead: TicketFactsRead?
-    /// The facts rail's Note and Details panels, from the ticket read.
+    /// The facts rail's Details panel, from the ticket read.
     public var detailsRead: TicketDetailsRead?
     /// When the person last looked and how much is new since, from the ticket read (TP-1451).
     public var marksRead: TicketMarksRead?
@@ -267,20 +267,30 @@ public struct TicketPage: Equatable {
     public var history: TicketEventsPayload?
     /// The moment the page measures against: the state's `generated_at`, else when it was built.
     public var reference: Date
-    /// Whether the note field takes a note: Symphony serves the ticket's events feed, which a note is written to, and
-    /// the ticket's repo is known. An older Symphony doesn't.
-    public var acceptsNotes: Bool
-    /// Why the note field is off, nil while it takes notes: an older Symphony, whose 404 isn't the feed's own; a ticket
-    /// the feed has no record of, before its first run; or the ticket's history not read yet (before the first read,
-    /// after a failed one, or while its repo isn't known).
-    public var notesOffReason: String? {
-        if acceptsNotes { return nil }
+    /// Whether the box above the timeline can send a message: Symphony serves the ticket's events feed, which a message
+    /// is written to, and the ticket's repo is known. An older Symphony doesn't.
+    public var acceptsMessages: Bool
+    /// Why the box can't send now, nil while it can: an older Symphony, whose 404 isn't the feed's own; a ticket the feed
+    /// has no record of, before its first run; or the ticket's history not read yet (before the first read, after a
+    /// failed one, or while its repo isn't known).
+    public var messagesOffReason: String? {
+        if acceptsMessages { return nil }
         switch feedAbsence {
-        case .unsupported: return TicketNoteComposer.unsupportedReason
-        case .unknownTicket: return TicketNoteComposer.unknownTicketReason
-        case .unread: return TicketNoteComposer.readingReason
+        case .unsupported: return TicketMessageComposer.unsupportedReason
+        case .unknownTicket: return TicketMessageComposer.unknownTicketReason
+        case .unread: return TicketMessageComposer.readingReason
         }
     }
+
+    /// Whether the page draws the box above the timeline: not on a ticket that is Done or Cancelled, which no run will
+    /// read a message on.
+    public var takesMessages: Bool {
+        if case .done = phase { return false }
+        return !Self.closedPhases.contains(phaseName ?? "")
+    }
+
+    /// The phases a ticket ends in.
+    static let closedPhases: Set<String> = ["Done", "Canceled", "Cancelled"]
 
     /// Why the page has no history from the events feed, as the feed's reader last said.
     public var feedAbsence: TicketFeedAbsence
@@ -399,7 +409,7 @@ public struct TicketPage: Equatable {
         // A ticket only waiting to be dispatched has no run, so no transcript yet.
         isTracked = running != nil || retry != nil || watching != nil
             || issue.map { !["slot_waiting", "dispatch_skipped"].contains($0.status ?? "") } ?? false
-        acceptsNotes = sources.events != nil && repoKey?.isEmpty == false
+        acceptsMessages = sources.events != nil && repoKey?.isEmpty == false
         feedAbsence = sources.feedAbsence
         repositoryPaused = issue?.repositoryPaused ?? false
         start = TicketStart.of(identifier, issue: sources.issue, state: sources.state)

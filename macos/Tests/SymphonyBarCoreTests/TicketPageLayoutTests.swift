@@ -61,7 +61,6 @@ final class TicketPageLayoutTests: XCTestCase {
         XCTAssertEqual(page.lifecycleRead?.phasePath?.current, "Rework")
         XCTAssertEqual(page.factsRead?.pullRequest?.number, 741)
         XCTAssertEqual(page.factsRead?.connected?.epic?.identifier, "TP-1381")
-        XCTAssertEqual(page.detailsRead?.note?.text, "Keep the paused line to one row on a laptop; the reasons fold under it.")
         XCTAssertEqual(page.detailsRead?.ticket?.title, "The paused line on the ticket page")
         // The timeline: the run now first, live.
         let history = try XCTUnwrap(page.history)
@@ -106,7 +105,6 @@ final class TicketPageLayoutTests: XCTestCase {
         XCTAssertEqual(page.situation?.kind, .done)
         XCTAssertEqual(page.situation?.word, "Shipped")
         XCTAssertEqual(page.factsRead?.pullRequest?.state, "merged")
-        XCTAssertNil(page.detailsRead?.note)
         XCTAssertEqual(page.lifecycleRead?.lifecycle?.stages.last?.id, "done")
         let rail = TicketActionRail(identifier: page.identifier, moves: try XCTUnwrap(page.moves))
         XCTAssertNil(rail.primary)
@@ -124,7 +122,6 @@ final class TicketPageLayoutTests: XCTestCase {
         XCTAssertNil(page.situation)
         XCTAssertNil(page.lifecycleRead?.lifecycle)
         XCTAssertNil(page.factsRead?.pullRequest)
-        XCTAssertNil(page.detailsRead?.note)
         XCTAssertNil(page.headerTitle)
         XCTAssertNil(page.epicChip)
         XCTAssertEqual(page.sheetSubtitle, "TP-1")

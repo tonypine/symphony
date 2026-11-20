@@ -179,7 +179,10 @@ let galleryEntries: [GalleryEntry] = [
     // Screens.
     GalleryEntry(
         id: "ticket-page", title: "Ticket page", kind: .screen, prefixes: ["ticket-page-"],
-        files: ["SymphonyBar/TicketPageView.swift", "SymphonyBarCore/TicketPage"]),
+        files: [
+            "SymphonyBar/TicketPageView.swift", "SymphonyBarCore/TicketPage", "SymphonyBarUI/TimelineComposer.swift",
+            "SymphonyBarCore/TicketMessage.swift",
+        ]),
     GalleryEntry(
         id: "home", title: "Home", kind: .screen, prefixes: ["home-lists", "home-unavailable"],
         files: ["SymphonyBar/HomeView.swift", "SymphonyBarCore/Home"]),
