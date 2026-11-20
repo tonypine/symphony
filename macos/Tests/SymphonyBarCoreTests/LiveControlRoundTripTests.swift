@@ -43,8 +43,13 @@ final class LiveControlRoundTripTests: XCTestCase {
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: request.body) as? [String: Any])
         XCTAssertEqual(body["issue_identifier"] as? String, "TP-7")
         XCTAssertEqual(body["request_comment_id"] as? String, "comment-1")
-        // Nothing went to the fixtures' request log.
-        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(APIFixtures.requestLogFileName).path))
+        // The live server answered, and the move is logged under the QA root as the fixtures log one.
+        let moves = try String(contentsOf: root.appendingPathComponent(APIFixtures.requestLogFileName), encoding: .utf8)
+            .split(separator: "\n")
+            .map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        XCTAssertEqual(moves.count, 1)
+        XCTAssertEqual(moves[0]["method"] as? String, "POST")
+        XCTAssertEqual(moves[0]["path"] as? String, "/api/v1/control/decide")
     }
 }
 

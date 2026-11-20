@@ -2565,7 +2565,8 @@ defmodule SymphonyElixir.AgentRunner do
   # note that fails leaves the ticket held.
   defp park_issue(%Issue{id: issue_id} = issue, {repo_key, left_head}, saved, opts) do
     label = "parking #{issue_context(issue)} where it is"
-    :ok = IdlePark.hold({:ticket, repo_key, issue_id}, issue.identifier || issue_id, issue.state, @max_empty_turns, PrWatch.watch(issue_id), left_head)
+    ticket = {:ticket, repo_key, issue_id}
+    :ok = IdlePark.hold(ticket, issue.identifier || issue_id, issue.state, @max_empty_turns, PrWatch.watch(issue_id), left_head, Keyword.get(opts, :run_id))
 
     :ok = RuleActions.record(repo_key, issue_id, "Idle park", "paused", "#{@max_empty_turns} turns in #{issue.state} changed nothing, so it was held where it is")
 

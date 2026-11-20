@@ -74,6 +74,48 @@ final class APIFixturesTests: XCTestCase {
         XCTAssertEqual(String(decoding: data, as: UTF8.self), #"{"counts":{"running":2}}"#)
     }
 
+    func testALateStateHoldsOnlyTheStateReadsInsideItsWindow() throws {
+        let start = Date(timeIntervalSince1970: 1_000)
+        let state = request("api/v1/state")
+        XCTAssertNil(fixtures.lateState)
+        XCTAssertEqual(fixtures.hold(state, now: start.addingTimeInterval(40), since: start), 0, "no late file, no hold")
+
+        try Data(#"{"after": 30, "for": 60}"#.utf8)
+            .write(to: root.appendingPathComponent("fixtures/api/v1/state.late.json"))
+        XCTAssertEqual(fixtures.lateState, APIFixtures.LateState(after: 30, for: 60))
+        XCTAssertEqual(fixtures.hold(state, now: start.addingTimeInterval(29), since: start), 0, "before the window")
+        XCTAssertEqual(fixtures.hold(state, now: start.addingTimeInterval(30), since: start), 60)
+        XCTAssertEqual(fixtures.hold(state, now: start.addingTimeInterval(75), since: start), 15, "held until the window ends")
+        XCTAssertEqual(fixtures.hold(state, now: start.addingTimeInterval(90), since: start), 0, "it answers again")
+        // The health read and every other read answer at once, and a move is never held.
+        let inside = start.addingTimeInterval(40)
+        XCTAssertEqual(fixtures.hold(request("api/v1/health"), now: inside, since: start), 0)
+        XCTAssertEqual(fixtures.hold(request("api/v1/tickets"), now: inside, since: start), 0)
+        XCTAssertEqual(fixtures.hold(request("api/v1/state", method: "POST"), now: inside, since: start), 0)
+        // Held or not, the answer is the state file's.
+        XCTAssertEqual(fixtures.answer(state).1.statusCode, 200)
+    }
+
+    func testTheTransportAnswersAReadOutsideALateWindowAtOnce() async throws {
+        let (data, _) = try await fixtures.transport(request("api/v1/state"))
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), #"{"counts":{"running":2}}"#)
+    }
+
+    func testTheSymphonyLateFixtureIsTheTicketPageWithALateState() throws {
+        let fixtures = Self.shippedRunning.deletingLastPathComponent()
+        let late = APIFixtures(
+            directory: fixtures.appendingPathComponent("symphony-late"), requestLog: root.appendingPathComponent("late.jsonl")
+        )
+        XCTAssertEqual(late.lateState, APIFixtures.LateState(after: 60, for: 60))
+        let page = APIFixtures(
+            directory: fixtures.appendingPathComponent("ticket-page"), requestLog: root.appendingPathComponent("page.jsonl")
+        )
+        XCTAssertNil(page.lateState)
+        for path in ["api/v1/state", "api/v1/tickets", "api/v1/TP-1244"] {
+            XCTAssertEqual(late.answer(request(path)).0, page.answer(request(path)).0, path)
+        }
+    }
+
     func testGetAnswers404WithoutAFile() {
         XCTAssertEqual(fixtures.answer(request("api/v1/inbox")).1.statusCode, 404)
     }
@@ -199,6 +241,64 @@ final class APIFixturesTests: XCTestCase {
         XCTAssertEqual(entry["path"] as? String, "/api/v1/control/pause")
         XCTAssertEqual(entry["body"] as? [String: String], ["reason": "test"])
         XCTAssertEqual(entry["at"] as? String, "2026-10-03T04:00:00Z")
+    }
+
+    func testGetsAreLoggedToTheReadLogWithTheirTimePathQueryAndStatus() throws {
+        let date = Date(timeIntervalSince1970: 1_791_000_000)
+        _ = fixtures.answer(request("api/v1/state"), now: date)
+        var health = request("api/v1/health")
+        health.url = URL(string: "\(APIFixtures.baseURL.absoluteString)/api/v1/health?verbose=1")
+        _ = fixtures.answer(health, now: date)
+        _ = fixtures.answer(request("api/v1/control/pause", method: "POST"), now: date)
+
+        XCTAssertEqual(fixtures.readLog, root.appendingPathComponent("qa/api-reads.jsonl"))
+        let reads = try String(contentsOf: fixtures.readLog, encoding: .utf8).split(separator: "\n")
+            .map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        XCTAssertEqual(reads.count, 2)
+        XCTAssertEqual(reads[0]["method"] as? String, "GET")
+        XCTAssertEqual(reads[0]["path"] as? String, "/api/v1/state")
+        XCTAssertEqual(reads[0]["status"] as? Int, 200)
+        XCTAssertEqual(reads[0]["at"] as? String, "2026-10-03T04:00:00Z")
+        XCTAssertNil(reads[0]["query"])
+        XCTAssertEqual(reads[1]["path"] as? String, "/api/v1/health")
+        XCTAssertEqual(reads[1]["query"] as? String, "verbose=1")
+        XCTAssertEqual(reads[1]["status"] as? Int, 404)
+        // The moves' log keeps only the move, so the after-fixtures and the sequences count moves alone.
+        let moves = try String(contentsOf: fixtures.requestLog, encoding: .utf8).split(separator: "\n")
+        XCTAssertEqual(moves.count, 1)
+        XCTAssertEqual(fixtures.postedMoves(), ["pause"])
+    }
+
+    func testTheLiveTransportLogsAsTheFixturesDo() async throws {
+        let date = Date(timeIntervalSince1970: 1_791_000_000)
+        let log = root.appendingPathComponent("live/api-requests.jsonl")
+        let network: ControlAPI.Transport = { request in
+            if request.url?.path == "/api/v1/health" { throw URLError(.timedOut) }
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            return (Data("{}".utf8), response)
+        }
+        let transport = APIFixtures.logging(network, requestLog: log, now: { date })
+
+        _ = try await transport(request("api/v1/state"))
+        do {
+            _ = try await transport(request("api/v1/health"))
+            XCTFail("the read should fail")
+        } catch {}
+        let (_, answer) = try await transport(request("api/v1/control/pause", method: "POST", body: ["reason": "test"]))
+        XCTAssertEqual((answer as? HTTPURLResponse)?.statusCode, 200)
+
+        let reads = try String(contentsOf: APIFixtures.readLog(beside: log), encoding: .utf8).split(separator: "\n")
+            .map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        XCTAssertEqual(reads.map { $0["path"] as? String }, ["/api/v1/state", "/api/v1/health"])
+        XCTAssertEqual(reads[0]["status"] as? Int, 200)
+        // A read that got no answer has no status.
+        XCTAssertNil(reads[1]["status"])
+        let moves = try String(contentsOf: log, encoding: .utf8).split(separator: "\n")
+            .map { try XCTUnwrap(JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any]) }
+        XCTAssertEqual(moves.count, 1)
+        XCTAssertEqual(moves[0]["path"] as? String, "/api/v1/control/pause")
+        XCTAssertEqual(moves[0]["body"] as? [String: String], ["reason": "test"])
+        XCTAssertEqual(moves[0]["at"] as? String, "2026-10-03T04:00:00Z")
     }
 
     func testControlActionsGoToTheFixtures() async throws {

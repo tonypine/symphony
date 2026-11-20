@@ -23,6 +23,39 @@ final class HealthLineTests: XCTestCase {
         XCTAssertEqual(line.accessibilityLabel, "Dispatch on, Symphony 0.0.1.412 · 9f54098, Symphony answering")
     }
 
+    func testALateSymphonyKeepsItsBuildAndCountsMarkedAndOffersLogsAndRestart() throws {
+        // TP-1562: the line says Symphony isn't answering, with how long; the counts are the last answer's.
+        let window = WindowState.lagging("Symphony isn't answering · 30 s")
+        let control = DispatchControl(window: window, paused: false, state: try state("home"), now: Date(), timeZone: utc)
+        let line = HealthLine(
+            window: window,
+            dispatch: control,
+            build: DiagnosticsPayload.Build(version: "0.0.1.412", sha: "9f54098"),
+            appVersion: "0.0.1.400",
+            lastUpdate: nil,
+            counts: HealthLine.Counts(inProgress: 2, queued: 3, needYou: 1)
+        )
+        XCTAssertEqual(line.dispatch, "Dispatch on", "moves still go out")
+        XCTAssertEqual(line.build?.text, "Symphony 0.0.1.412 · 9f54098")
+        XCTAssertEqual(line.connection.text, "Symphony isn't answering · 30 s")
+        XCTAssertEqual(line.connection.status, .problem)
+        XCTAssertFalse(line.countsCurrent)
+        XCTAssertEqual(line.actions, [.openLogs, .restartSymphony])
+        XCTAssertEqual(
+            line.accessibilityLabel,
+            "Dispatch on, 2 in progress, 3 in the queue, 1 needs you, as of Symphony's last answer, "
+                + "Symphony 0.0.1.412 · 9f54098, Symphony isn't answering · 30 s"
+        )
+
+        let current = HealthLine(
+            window: .connected, dispatch: control, build: nil, appVersion: "", lastUpdate: nil,
+            counts: HealthLine.Counts(inProgress: 2, queued: 3, needYou: 1)
+        )
+        XCTAssertTrue(current.countsCurrent)
+        XCTAssertEqual(current.actions, [])
+        XCTAssertEqual(current.accessibilityLabel, "Dispatch on, 2 in progress, 3 in the queue, 1 needs you, Symphony answering")
+    }
+
     func testABuildWithoutItsShaSaysItsVersion() {
         let line = HealthLine(
             window: .connected,

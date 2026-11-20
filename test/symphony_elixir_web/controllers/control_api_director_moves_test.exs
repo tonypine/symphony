@@ -66,7 +66,11 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
     assert %{"to_state" => "Backlog", "moved" => true} = Jason.decode!(post(:move, %{"issue_identifier" => "MOT-70", "to" => "Backlog"}, moves).resp_body)
     assert %{phase: "Backlog", phase_owner: :symphony} = RunStore.get_ticket_state("owned")
 
+    # A ticket read from Linear carries no repo key: its record's repo routes it (TP-1566), so the one
+    # Symphony doesn't track has no record either.
     Application.put_env(:symphony_elixir, :memory_tracker_issues, [%{owned | repo_key: nil}])
+    assert %{"to_state" => "Todo", "moved" => true} = Jason.decode!(post(:move, %{"issue_identifier" => "MOT-70", "to" => "Todo"}, moves).resp_body)
+    RunStore.delete_ticket_state("owned")
 
     assert error(post(:move, %{"issue_identifier" => "MOT-70", "to" => "Todo"}, moves)) ==
              {409, "move_not_allowed", "MOT-70 is in no repository Symphony is configured for, so Symphony doesn't track it"}
@@ -95,6 +99,19 @@ defmodule SymphonyElixirWeb.ControlApiDirectorMovesTest do
 
     assert error(post(:unblock, %{"issue_identifier" => "MOT-60"}, moves)) ==
              {409, "move_not_allowed", "MOT-60 has nothing a person can unblock"}
+  end
+
+  test "TP-1566: unblock on a ticket read with no repo key releases the pause under its record's repository", %{moves: moves} do
+    held = %Issue{id: "held", identifier: "MOT-60", title: "Blocked work", state: "In Progress"}
+    Application.put_env(:symphony_elixir, :memory_tracker_issues, [held])
+    :ok = RunStore.put_ticket_state(%{repo_key: "repo-api", issue_id: "held", issue_identifier: "MOT-60", phase: "In Progress"})
+    :ok = SymphonyElixir.Pauses.stop({:ticket, "repo-api", "held"}, DateTime.utc_now())
+
+    conn = post(:unblock, %{"issue_identifier" => "MOT-60"}, moves)
+
+    assert conn.status == 200
+    assert %{"move" => "unblock", "to_state" => "In Progress"} = Jason.decode!(conn.resp_body)
+    refute SymphonyElixir.Pauses.paused?({:ticket, "repo-api", "held"})
   end
 
   test "decide answers a held ticket in place, and a redirecting answer moves it through the guard", %{moves: moves} do

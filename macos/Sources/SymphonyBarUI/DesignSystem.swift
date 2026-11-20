@@ -605,7 +605,7 @@ public struct ConnectionState: View {
         }
         .help(help)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(state.connectionLabel.map { "Symphony \($0.lowercased())" } ?? "Symphony connected")
+        .accessibilityLabel(state.connectionLabel.map(HealthLine.spoken) ?? "Symphony connected")
     }
 
     private var help: String {

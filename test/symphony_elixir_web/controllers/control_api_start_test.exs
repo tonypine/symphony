@@ -24,7 +24,7 @@ defmodule SymphonyElixirWeb.ControlApiStartTest do
   setup do
     issues =
       for {id, state} <- [{"start-1", "In Progress"}, {"backlog-1", "Backlog"}] do
-        %Issue{id: id, identifier: String.upcase(id), title: id, state: state, url: "https://example.org"}
+        %Issue{id: id, identifier: String.upcase(id), title: id, state: state, url: "https://example.org", repo_key: "default"}
       end
 
     Application.put_env(:symphony_elixir, :memory_tracker_issues, issues)

@@ -92,7 +92,7 @@ public struct DispatchControl: Equatable {
         timeZone: TimeZone = .current
     ) {
         self.update = update
-        guard window == .connected else {
+        guard window.servesPages else {
             mode = .stopped
             word = Self.stoppedWord(window)
             status = .idle
@@ -166,7 +166,7 @@ public struct DispatchControl: Equatable {
         case .starting: "Symphony starting"
         case .notAnswering: "Symphony not answering"
         case .firstLaunch: "Symphony not set up"
-        case .stopped, .connected: "Symphony stopped"
+        case .stopped, .connected, .lagging: "Symphony stopped"
         }
     }
 

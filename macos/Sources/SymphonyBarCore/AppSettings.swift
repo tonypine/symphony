@@ -23,6 +23,13 @@ public struct AppSettings: Equatable {
     /// Release check interval used until the user picks one.
     public static let defaultReleaseCheckMinutes = 5
 
+    /// Bounds for how long Symphony may not answer before the menu bar shows it and a notification goes out, in
+    /// seconds (TP-1562): at least two polls, so a single slow one never alerts.
+    public static let notAnsweringAlertRange = 10...3600
+
+    /// Not-answering limit used until the user picks one.
+    public static let defaultNotAnsweringAlertSeconds = 60
+
     /// Update mode of every install that never saved one, fresh or not: there is no migration.
     public static let defaultUpdateMode = UpdateMode.onRelease
 
@@ -56,6 +63,10 @@ public struct AppSettings: Equatable {
     /// Minutes between release checks in Automatically when released, within `releaseCheckMinutesRange`.
     public var releaseCheckMinutes: Int
 
+    /// Seconds Symphony may not answer, while the app still runs it, before the menu bar shows the problem and one
+    /// notification goes out, within `notAnsweringAlertRange`.
+    public var notAnsweringAlertSeconds: Int
+
     public init(
         checkoutPath: String = "",
         configPath: String = "",
@@ -66,7 +77,8 @@ public struct AppSettings: Equatable {
         developmentMode: Bool = false,
         updateMode: UpdateMode = AppSettings.defaultUpdateMode,
         updateTime: TimeOfDay = .defaultUpdateTime,
-        releaseCheckMinutes: Int = AppSettings.defaultReleaseCheckMinutes
+        releaseCheckMinutes: Int = AppSettings.defaultReleaseCheckMinutes,
+        notAnsweringAlertSeconds: Int = AppSettings.defaultNotAnsweringAlertSeconds
     ) {
         self.checkoutPath = checkoutPath
         self.configPath = configPath
@@ -78,11 +90,17 @@ public struct AppSettings: Equatable {
         self.updateMode = updateMode
         self.updateTime = updateTime
         self.releaseCheckMinutes = releaseCheckMinutes
+        self.notAnsweringAlertSeconds = notAnsweringAlertSeconds
     }
 
     /// `minutes` moved into `releaseCheckMinutesRange`.
     public static func clampedReleaseCheckMinutes(_ minutes: Int) -> Int {
         min(max(minutes, releaseCheckMinutesRange.lowerBound), releaseCheckMinutesRange.upperBound)
+    }
+
+    /// `seconds` moved into `notAnsweringAlertRange`.
+    public static func clampedNotAnsweringAlertSeconds(_ seconds: Int) -> Int {
+        min(max(seconds, notAnsweringAlertRange.lowerBound), notAnsweringAlertRange.upperBound)
     }
 
     /// True while a path Start needs is still unset, so the app opens Settings at launch.
@@ -104,7 +122,8 @@ public struct AppSettings: Equatable {
             developmentMode: developmentMode,
             updateMode: updateMode,
             updateTime: updateTime,
-            releaseCheckMinutes: releaseCheckMinutes
+            releaseCheckMinutes: releaseCheckMinutes,
+            notAnsweringAlertSeconds: notAnsweringAlertSeconds
         )
     }
 }

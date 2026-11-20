@@ -1,0 +1,10 @@
+{
+  "commented": false,
+  "from_state": "Rework",
+  "issue_id": "i-1244",
+  "issue_identifier": "TP-1244",
+  "move": "cancel",
+  "moved": true,
+  "to_state": "Canceled",
+  "undo_window_ms": 10000
+}

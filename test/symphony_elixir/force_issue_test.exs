@@ -120,6 +120,13 @@ defmodule SymphonyElixir.ForceIssueTest do
       assert [%{actor: %{kind: :person, name: "the Director"}} | _rest] = RunStore.list_ticket_events("id-1", types: ["person.action"])
     end
 
+    test "TP-1566: a ticket whose repository is only on its record records the Director's force under that repository" do
+      :ok = RunStore.put_ticket_state(%{repo_key: "cycle", issue_id: "id-5", issue_identifier: "MT-5", phase: "Todo"})
+
+      assert {{:halt, 0}, "MT-5 forced" <> _slot} = force(["MT-5"])
+      assert [%{repo_key: "cycle"}] = RunStore.list_ticket_events("id-5", types: ["person.action"])
+    end
+
     test "says a Backlog ticket is not promoted and keeps it out of the queue", %{pid: pid} do
       assert {{:halt, 0}, "MT-3 forced (it is in Backlog; forcing doesn't promote it)\n"} = force(["MT-3"])
       assert labels("id-3") == ["expedite"]

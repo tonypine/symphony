@@ -56,6 +56,10 @@ public struct HealthLine: Equatable {
     public var build: Part?
     /// "Answering", or why Symphony doesn't.
     public var connection: Part
+    /// False while the counts are Symphony's last answer rather than a current one (TP-1562): they show marked so.
+    public var countsCurrent: Bool
+    /// What the line offers after the connection while Symphony is late: Open Logs and Restart Symphony.
+    public var actions: [WindowState.Action]
 
     public static let answeringTitle = "Answering"
 
@@ -71,6 +75,8 @@ public struct HealthLine: Equatable {
     ) {
         self.dispatch = dispatch.word
         self.counts = counts
+        countsCurrent = window.countsCurrent
+        actions = window.lineActions
         self.build = Self.buildPart(window: window, build: build, appVersion: appVersion)
         let help = lastUpdate.map { date in
             let formatter = DateFormatter()
@@ -83,7 +89,7 @@ public struct HealthLine: Equatable {
     }
 
     private static func buildPart(window: WindowState, build: DiagnosticsPayload.Build?, appVersion: String) -> Part? {
-        if window == .connected, let build, let version = build.version, !version.isEmpty {
+        if window.servesPages, let build, let version = build.version, !version.isEmpty {
             let sha = build.sha.map { String($0.prefix(7)) }.flatMap { $0.isEmpty ? nil : $0 }
             return Part(text: (["Symphony \(version)"] + [sha].compactMap { $0 }).joined(separator: " · "))
         }
@@ -94,9 +100,18 @@ public struct HealthLine: Equatable {
     public var parts: [Part] { [build].compactMap { $0 } + [connection] }
 
     /// What VoiceOver reads for the status line: "Dispatch on, 7 in progress, 18 in the queue, 2 need you, Symphony
-    /// 0.0.1.866 · a0be0aa, Symphony answering".
+    /// 0.0.1.866 · a0be0aa, Symphony answering". Counts from Symphony's last answer are read as such.
     public var accessibilityLabel: String {
-        ([dispatch] + (counts?.texts ?? []) + [build?.text].compactMap { $0 } + ["Symphony \(connection.text.lowercased())"])
+        let countWords = (self.counts?.texts ?? []) + (self.counts != nil && !countsCurrent ? [Self.notCurrentWords] : [])
+        return ([dispatch] + countWords + [build?.text].compactMap { $0 } + [Self.spoken(connection.text)])
             .joined(separator: ", ")
+    }
+
+    /// How VoiceOver reads counts that aren't current.
+    public static let notCurrentWords = "as of Symphony's last answer"
+
+    /// The connection's words as VoiceOver reads them: "Symphony answering", or a reason that already names Symphony.
+    public static func spoken(_ connection: String) -> String {
+        connection.hasPrefix("Symphony") ? connection : "Symphony \(connection.lowercased())"
     }
 }

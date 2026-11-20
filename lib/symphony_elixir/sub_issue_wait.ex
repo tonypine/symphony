@@ -39,6 +39,7 @@ defmodule SymphonyElixir.SubIssueWait do
   @parked_from_state "In Progress"
   @backlog_state "Backlog"
   @done_state "Done"
+  @merged_pr_state "merged"
 
   @doc "The configured waiting state name, or nil when it is turned off in config."
   @spec state(Schema.t() | term()) :: String.t() | nil
@@ -200,9 +201,10 @@ defmodule SymphonyElixir.SubIssueWait do
   @doc """
   True when Symphony closes `issue` itself: it sits in the waiting state, is not a `breakdown` parent
   (its epic review closes it), every one of its sub-issues is in `terminal_states` or `Backlog` (or
-  it has none left: each was re-parented away or deleted), and its pull request's merge put it there
-  (`wait_on_merge/3`) or its record says its pull request merged (`pr_merged?/1`), so a ticket whose
-  merge mark was lost still closes. One a person moved there, its pull request open, waits for them.
+  it has none left: each was re-parented away or deleted), and its pull request merged: its merge put
+  it there (`wait_on_merge/3`), or the ticket's pull request record says `merged`. The record covers a
+  ticket whose mark an earlier close deleted without moving the record, which the drift check then
+  moved back (MOT-93, TP-1565). One a person moved there with its pull request open waits for them.
   Sub-issues a read did not carry (`:unknown`) never close it.
 
   A groomed ticket (`groomed?/1`) follows its own rule (`SymphonyElixir.Conductor.Tree.due/3`):
@@ -221,8 +223,7 @@ defmodule SymphonyElixir.SubIssueWait do
     if groomed?(issue) do
       Tree.due(issue, terminal_states) == :close
     else
-      not Issue.breakdown?(issue) and started_sub_issues(issue, terminal_states) == [] and
-        (RunStore.merged_wait?(issue.id) == true or pr_merged?(issue.id))
+      not Issue.breakdown?(issue) and started_sub_issues(issue, terminal_states) == [] and merged?(issue)
     end
   end
 
@@ -289,15 +290,14 @@ defmodule SymphonyElixir.SubIssueWait do
   end
 
   @doc """
-  Moves `issue` to `Done` and comments how each of its sub-issues ended or waits. The move is made
-  under the ticket's repo key, the issue's or else its record's (an issue read by id carries none),
-  so Symphony's record takes `Done` with it and no later read sees Linear ahead of the record. The
-  merge mark `close?/3` reads is dropped only once the record holds `Done`: a ticket whose record
-  did not move can still be closed by a later poll.
+  Moves `issue` to `Done`, Symphony's record first and then Linear, and comments how each of its
+  sub-issues ended or waits. The merge's mark (`wait_on_merge/3`) is deleted only once the move went
+  through and the record holds `Done`. An issue with no repo key has no record to move, so it is not
+  moved at all and comes back `{:error, :no_repo_key}` with its mark kept: a move of Linear alone
+  would be drift, which the drift check moves back (MOT-93, TP-1565).
   """
   @spec close(Issue.t(), module()) :: :ok | {:error, term()}
-  def close(%Issue{id: issue_id} = issue, tracker) do
-    repo_key = issue.repo_key || recorded_repo_key(issue_id)
+  def close(%Issue{id: issue_id, repo_key: repo_key} = issue, tracker) when is_binary(repo_key) and repo_key != "" do
     ctx = %{repo_key: repo_key, issue_identifier: issue.identifier}
 
     with :ok <- TransitionGuard.perform(issue_id, :sub_issues_done, ctx, tracker: tracker) do
@@ -307,15 +307,10 @@ defmodule SymphonyElixir.SubIssueWait do
     end
   end
 
+  def close(%Issue{}, _tracker), do: {:error, :no_repo_key}
+
   defp forget_merge(repo_key, issue_id) do
     if TicketSignals.recorded_phase(repo_key, issue_id) == {:ok, @done_state}, do: RunStore.delete_merged_wait(issue_id)
-  end
-
-  defp recorded_repo_key(issue_id) do
-    case RunStore.get_ticket_state(issue_id) do
-      %{repo_key: repo_key} when is_binary(repo_key) -> repo_key
-      _none -> nil
-    end
   end
 
   @doc false
@@ -344,6 +339,13 @@ defmodule SymphonyElixir.SubIssueWait do
       true -> started_sub_issues(issue, terminal_states)
     end
   end
+
+  defp merged?(%Issue{id: issue_id} = issue), do: RunStore.merged_wait?(issue_id) == true or merged_pull_request?(issue)
+
+  defp merged_pull_request?(%Issue{id: issue_id, repo_key: repo_key}) when is_binary(issue_id) and is_binary(repo_key),
+    do: match?(%{state: @merged_pr_state}, TicketPullRequest.get(repo_key, issue_id))
+
+  defp merged_pull_request?(_issue), do: false
 
   # Open sub-issues a person or a plan's approval started: outside `terminal_states` and `Backlog`.
   defp started_sub_issues(issue, terminal_states), do: issue |> Issue.open_sub_issues(terminal_states) |> Enum.reject(&backlog_sub_issue?/1)

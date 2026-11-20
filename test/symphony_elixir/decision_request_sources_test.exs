@@ -105,7 +105,7 @@ defmodule SymphonyElixir.DecisionRequestSourcesTest do
     assert orchestrator =~ "DispatchLoop.question_attrs({:quiet_handoff,"
 
     idle_park = Map.new(lib_files())["lib/symphony_elixir/idle_park.ex"]
-    assert idle_park =~ "Questions.ask(ticket, hold_question_attrs(name, phase, turns))"
+    assert idle_park =~ "Questions.ask(ticket, hold_question_attrs(name, phase, turns, said(issue_id, run_id)))"
     assert idle_park =~ "Questions.ask(ticket, question_attrs(name, turns))"
 
     runner = Map.new(lib_files())["lib/symphony_elixir/agent_runner.ex"]

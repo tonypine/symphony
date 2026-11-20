@@ -13,6 +13,9 @@ public struct WindowBarControls: Equatable {
     public var breadcrumb: WindowBreadcrumb
     /// What needs the Director: the Inbox's count, none hidden.
     public var inboxCount: Int
+    /// False while the count is Symphony's last answer rather than a current one (TP-1562): it shows in idle grey,
+    /// as the sidebar's badges do.
+    public var inboxCountCurrent: Bool
     /// The Inbox's drawer is open where the window is: its button shows on.
     public var inboxShown: Bool
     /// The hint Find a ticket shows while it is empty: ⌘F, or ⌥⌘F on a page whose own search ⌘F reaches (TP-1497).
@@ -20,13 +23,15 @@ public struct WindowBarControls: Equatable {
 
     public init(
         sidebarShown: Bool = true, canGoBack: Bool = false, canGoForward: Bool = false, breadcrumb: WindowBreadcrumb,
-        inboxCount: Int = 0, inboxShown: Bool = false, findShortcut: String = WindowBarText.findShortcut
+        inboxCount: Int = 0, inboxCountCurrent: Bool = true, inboxShown: Bool = false,
+        findShortcut: String = WindowBarText.findShortcut
     ) {
         self.sidebarShown = sidebarShown
         self.canGoBack = canGoBack
         self.canGoForward = canGoForward
         self.breadcrumb = breadcrumb
         self.inboxCount = inboxCount
+        self.inboxCountCurrent = inboxCountCurrent
         self.inboxShown = inboxShown
         self.findShortcut = findShortcut
     }
@@ -141,7 +146,8 @@ public struct WindowBar<Switch: View, Results: View>: View {
         }
     }
 
-    /// The Inbox's icon button, on while its drawer is open, with its count over the corner.
+    /// The Inbox's icon button, on while its drawer is open, with its count over the corner: idle grey while it is
+    /// Symphony's last answer.
     private var inbox: some View {
         let bar = DesignTokens.WindowBar.self
         return IconButton(
@@ -149,7 +155,7 @@ public struct WindowBar<Switch: View, Results: View>: View {
             isOn: Binding(get: { controls.inboxShown }, set: { _ in actions.inbox() })
         )
         .overlay(alignment: .topTrailing) {
-            CountBadge(controls.inboxCount, role: .you)
+            CountBadge(controls.inboxCount, role: controls.inboxCountCurrent ? .you : .idle)
                 .offset(x: -bar.countTrailing, y: bar.countTop)
                 .allowsHitTesting(false)
                 .accessibilityHidden(true)

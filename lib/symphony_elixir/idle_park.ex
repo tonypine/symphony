@@ -27,7 +27,8 @@ defmodule SymphonyElixir.IdlePark do
 
   require Logger
 
-  alias SymphonyElixir.{DispatchLoop, Pauses, Questions, TicketState}
+  alias SymphonyElixir.{DispatchLoop, Pauses, Questions, TicketEvents, TicketState}
+  alias SymphonyElixir.HumanActions.PlainWords
 
   @signal_reason "idle_park"
   @park_state "Backlog"
@@ -36,6 +37,11 @@ defmodule SymphonyElixir.IdlePark do
   @idle_turns 2
   @silent_bound "no_progress"
   @setter %{kind: :rule, name: "No-progress pause"}
+  @said_max 300
+  @ended_outcomes ["skipped", "failed"]
+
+  @typedoc "What the idle run said on the ticket's history: its last note and its last skipped or failed step's reason."
+  @type said :: %{optional(:note) => String.t(), optional(:step) => String.t()}
 
   @typedoc "The watcher's record of a ticket's PR, as far as a hold reads it."
   @type watch :: %{optional(:head_sha) => String.t() | nil, optional(:facts) => map(), optional(atom()) => term()}
@@ -57,9 +63,11 @@ defmodule SymphonyElixir.IdlePark do
   turns: a `SymphonyElixir.Questions.ask/3` request whose options are Unblock
   ("#{DispatchLoop.option_label(:unblock)}", recommended), Restart
   ("#{DispatchLoop.option_label(:restart)}") and nothing ("#{DispatchLoop.option_label(:keep)}").
+  Its `why` quotes what the run said (`said/2`): its last note and the reason of its last skipped or
+  failed step, so the person reads the run's own reason (MOT-104, TP-1566).
   """
-  @spec hold_question_attrs(String.t(), String.t(), pos_integer()) :: map()
-  def hold_question_attrs(name, phase, turns) when is_binary(name) and is_binary(phase) and is_integer(turns) do
+  @spec hold_question_attrs(String.t(), String.t(), pos_integer(), said()) :: map()
+  def hold_question_attrs(name, phase, turns, said \\ %{}) when is_binary(name) and is_binary(phase) and is_integer(turns) and is_map(said) do
     title = "#{name} is paused in #{phase}: its last #{turns} turns changed nothing"
 
     %{
@@ -67,7 +75,8 @@ defmodule SymphonyElixir.IdlePark do
       question: "#{title}. Should Symphony run it again where it stopped, start it over from main, or keep it paused?",
       why:
         "The last #{turns} turns on #{name} made no new commit, changed no file and moved it nowhere, so another turn would repeat them. " <>
-          "Symphony keeps it in #{phase} with its work and goes on watching its pull request; the comment on the ticket says what it committed and pushed.",
+          "Symphony keeps it in #{phase} with its work and goes on watching its pull request; the comment on the ticket says what it committed and pushed." <>
+          said_why(said),
       if_unanswered: "#{name} stays paused in #{phase} until its pull request gets a new commit or its checks report.",
       recommendation_reason: "A new run continues from the work so far, with nothing lost.",
       options: [
@@ -88,23 +97,74 @@ defmodule SymphonyElixir.IdlePark do
   hold's question (`hold_question_attrs/3`), which the Inbox lists. A question the store refuses is
   logged: the reason, which the Director releases with Unblock, holds the ticket on its own.
 
+  `run_id` is the idle run's: its question quotes what that run said (`said/2`), nothing when nil.
+
   `left_head` is the head the park leaves on the branch, nil when it knows of none. A park can push,
   so the watcher's record may be older than the branch: the reason then keeps `left_head` as its
   `head`, the record's head as its `earlier_head` and no CI, so neither the park's own push nor a
   late read of the older head lifts the hold (`settle/3`).
   """
-  @spec hold(Questions.ticket(), String.t(), String.t(), pos_integer(), watch() | nil, String.t() | nil) :: :ok
-  def hold({:ticket, _repo_key, _issue_id} = ticket, name, phase, turns, watch, left_head \\ nil) when is_binary(name) and is_binary(phase) and is_integer(turns) do
+  @spec hold(Questions.ticket(), String.t(), String.t(), pos_integer(), watch() | nil, String.t() | nil, String.t() | nil) :: :ok
+  def hold({:ticket, _repo_key, issue_id} = ticket, name, phase, turns, watch, left_head \\ nil, run_id \\ nil)
+      when is_binary(name) and is_binary(phase) and is_integer(turns) do
     text = "No progress: the last #{turns} turns in #{phase} made no new commit and no state change"
     waits_on = watch |> read_at() |> left_on(left_head) |> Map.put(:condition, @signal_reason)
     _ = Pauses.set(ticket, %{kind: :environment, waits_on: waits_on, text: String.slice(text, 0, 300), releasable: true})
 
-    case Questions.ask(ticket, hold_question_attrs(name, phase, turns)) do
+    case Questions.ask(ticket, hold_question_attrs(name, phase, turns, said(issue_id, run_id))) do
       {:ok, _question} -> :ok
       {:error, reason} -> Logger.warning("Failed to ask the hold's question for #{name}: #{inspect(reason)}")
     end
 
     :ok
+  end
+
+  @doc """
+  What the run `run_id` said on the ticket `issue_id`'s history: the text of its newest note and
+  the reason of its newest step it ended `skipped` or `failed`, each in plain words and at most
+  #{@said_max} characters. Empty with no run, or when the run recorded neither.
+  """
+  @spec said(String.t(), String.t() | nil) :: said()
+  def said(issue_id, run_id) when is_binary(issue_id) and is_binary(run_id) do
+    # A store that can't be read answers `{:error, reason}`, which says nothing.
+    newest = issue_id |> TicketEvents.query(types: ["note", "step.completed"], run_id: run_id, limit: :all) |> List.wrap() |> Enum.reverse()
+
+    %{note: Enum.find_value(newest, &note_text/1), step: Enum.find_value(newest, &step_reason/1)}
+    |> Map.reject(fn {_key, text} -> is_nil(text) end)
+  end
+
+  def said(_issue_id, _run_id), do: %{}
+
+  defp note_text(%{type: "note", actor: %{kind: :agent}, payload: payload}), do: quoted(payload_text(payload, :text))
+  defp note_text(_event), do: nil
+
+  defp step_reason(%{type: "step.completed", payload: payload}) do
+    if payload_text(payload, :outcome) in @ended_outcomes, do: quoted(payload_text(payload, :reason))
+  end
+
+  defp step_reason(_event), do: nil
+
+  defp payload_text(payload, key) when is_map(payload), do: Map.get(payload, key) || Map.get(payload, Atom.to_string(key))
+
+  defp quoted(text) when is_binary(text) do
+    case text |> PlainWords.scrub() |> String.replace(~r/\s+/u, " ") |> String.trim() do
+      "" -> nil
+      plain -> if String.length(plain) > @said_max, do: String.slice(plain, 0, @said_max - 1) <> "…", else: plain
+    end
+  end
+
+  defp quoted(_text), do: nil
+
+  defp said_why(said) do
+    [
+      said[:note] && "The run's last note said: \"#{said[:note]}\"",
+      said[:step] && "It ended its step saying: \"#{said[:step]}\""
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> ""
+      lines -> "\n\n" <> Enum.join(lines, ". ") <> "."
+    end
   end
 
   # What the watcher's record reads, as the reason keeps it. No record reads as nothing, so only a
