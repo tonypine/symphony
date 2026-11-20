@@ -814,7 +814,7 @@ public struct TimelineModel: Equatable {
         case "note", "brief.written", "conductor.instructions": return .note
         case "message.sent": return .message
         case "conductor.update": return .update
-        case "ticket.filed": return .ticket
+        case "ticket.filed", "ticket.filed_from": return .ticket
         case "situation.changed": return .situation
         default: return .other
         }

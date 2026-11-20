@@ -517,19 +517,94 @@ defmodule SymphonyElixir.SelfHeal do
 
   defp attach(_previous, _issue, _signature, _outcome, _opts), do: :ok
 
-  # The ticket's pause waits on the fix ticket (`SymphonyElixir.Pauses`, the one writer), and
-  # `SymphonyElixir.Pauses.Dependencies` lifts it once the fix is terminal.
+  # The ticket's pause waits on the fix ticket (`hold/3`), and `SymphonyElixir.Pauses.Dependencies`
+  # lifts it once the fix is terminal.
   defp fix_ticket_hold(ctx, identifier) do
-    reason = Pauses.ticket_reason(:fix_ticket, identifier)
-
-    case Pauses.set({:ticket, ctx.repo_key, ctx.issue.id}, reason, set_by: Dependencies.setter(:fix_ticket)) do
-      {:ok, _pause} ->
-        Logger.warning("Self-heal holds #{label(ctx.issue)} on #{identifier} for its #{ctx.component} block: #{summary(ctx)}; the ticket is Blocked")
-        :ok
-
-      {:error, reason} ->
-        {:error, reason}
+    with :ok <- hold(ctx.repo_key, ctx.issue, identifier) do
+      Logger.warning("Self-heal holds #{label(ctx.issue)} on #{identifier} for its #{ctx.component} block: #{summary(ctx)}; the ticket is Blocked")
     end
+  end
+
+  @doc """
+  Holds `issue` (of `repo_key`) on the ticket named `identifier`: its pause waits on that ticket
+  (`SymphonyElixir.Pauses`, the one writer, with a `:fix_ticket` reason), and
+  `SymphonyElixir.Pauses.Dependencies` lifts it once that ticket is terminal, or, for a fix merged
+  into the repo the running Symphony was built from, once the running build includes it. The one
+  hold every ticket Symphony files sets on the ticket it unblocks: the self-heal lane's fix tickets
+  and the Conductor's blocking tickets (`file_ticket/3`).
+  """
+  @spec hold(String.t(), Issue.t(), String.t()) :: :ok | {:error, term()}
+  def hold(repo_key, %Issue{id: issue_id}, identifier) when is_binary(identifier) do
+    case Pauses.set({:ticket, repo_key, issue_id}, Pauses.ticket_reason(:fix_ticket, identifier), set_by: Dependencies.setter(:fix_ticket)) do
+      {:ok, _pause} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Files a ticket for `issue` through the same filer and hold as a fix ticket: the one way Symphony
+  creates a ticket. `ticket` names the `scope` (the repo key the ticket belongs to), the `title`,
+  the `description`, the `relation` (`blocks` or `follow_up`) and, optionally, the open ticket that
+  already covers it (`existing`, an identifier), and the `labels` to set.
+
+  With `existing`, nothing is created; otherwise the ticket is created in Todo, at `opts[:priority]`
+  (default as a fix ticket's), in the scope repo's team and project, assigned as a fix ticket is
+  (`SymphonyElixir.SelfHeal.Fixer`). Then `blocks` links `issue` as blocked by it and holds it on it
+  (`hold/3`), and `follow_up` links the two as related and leaves `issue` as it is. A link that
+  fails is logged and never undoes the filing. A hold that fails once the ticket exists is
+  `{:error, {:hold_failed, reason}, filed}`: the ticket is handed back with the error, so the caller
+  still records what it filed. `opts` takes `:repo_key` (`issue`'s repo), and the injectable `:fixer`
+  and `:hold` (default `hold/3`).
+  """
+  @spec file_ticket(Issue.t(), map(), keyword()) ::
+          {:ok, map()} | {:error, term()} | {:error, {:hold_failed, term()}, map()}
+  def file_ticket(%Issue{} = issue, %{scope: scope, relation: relation} = ticket, opts) when relation in ["blocks", "follow_up"] do
+    repo_key = repo_key(issue, opts)
+
+    with {:ok, filed} <- filed_or_existing(issue, repo_key, ticket, opts) do
+      case linked(relation, issue, repo_key, filed, opts) do
+        :ok ->
+          Logger.info("Filed #{filed.identifier} (#{relation}) in #{scope} for #{label(issue)}")
+          {:ok, filed}
+
+        {:error, reason} ->
+          Logger.warning("Filed #{filed.identifier} (#{relation}) in #{scope} for #{label(issue)}, but could not hold it: #{inspect(reason)}")
+          {:error, {:hold_failed, reason}, filed}
+      end
+    end
+  end
+
+  defp filed_or_existing(_issue, _repo_key, %{existing: identifier}, _opts) when is_binary(identifier), do: {:ok, %{identifier: identifier, existing: true}}
+
+  defp filed_or_existing(issue, repo_key, ticket, opts) do
+    attrs = %{
+      scope: ticket.scope,
+      issue: issue,
+      repo_key: repo_key,
+      title: ticket.title,
+      description: ticket.description,
+      labels: Map.get(ticket, :labels, []),
+      team: :scope
+    }
+
+    case fixer(opts).create(attrs, opts) do
+      {:ok, %{identifier: _identifier} = created} -> {:ok, Map.put(created, :existing, false)}
+      {:error, reason} -> {:error, {:file_ticket_failed, reason}}
+    end
+  end
+
+  defp linked("blocks", issue, repo_key, filed, opts) do
+    link(%{issue: issue, opts: opts}, filed)
+    Keyword.get(opts, :hold, &hold/3).(repo_key, issue, filed.identifier)
+  end
+
+  defp linked("follow_up", issue, _repo_key, filed, opts) do
+    case fixer(opts).relate(issue, filed, opts) do
+      :ok -> :ok
+      {:error, reason} -> Logger.warning("Could not link #{label(issue)} to #{filed.identifier} as related: #{inspect(reason)}")
+    end
+
+    :ok
   end
 
   # The block in words when the outcome gives them (`SymphonyElixir.SetupBlock`), else its signature.

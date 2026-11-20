@@ -561,6 +561,27 @@ defmodule SymphonyElixir.Linear.Adapter do
   def add_blocked_by(_blocker, _blocked_issue_id), do: {:error, :invalid_blocked_by}
 
   @doc """
+  Records that the issue named `related` (an identifier or an id) and `issue_id` are related, a link
+  that holds neither: a follow-up the Conductor filed from the ticket.
+  """
+  @spec add_related(String.t(), String.t()) :: :ok | {:error, term()}
+  def add_related(related, issue_id) when is_binary(related) and is_binary(issue_id) do
+    with {:ok, related_id} <- issue_id(related),
+         {:ok, response} <-
+           client_module().graphql(@create_issue_relation_mutation, %{
+             input: %{"issueId" => related_id, "relatedIssueId" => issue_id, "type" => "related"}
+           }),
+         true <- get_in(response, ["data", "issueRelationCreate", "success"]) == true do
+      :ok
+    else
+      {:error, reason} -> {:error, reason}
+      _failed -> {:error, :issue_relation_failed}
+    end
+  end
+
+  def add_related(_related, _issue_id), do: {:error, :invalid_related}
+
+  @doc """
   Removes the link `add_blocked_by/2` records: every `blocks` relation from the issue named
   `blocker` (an identifier or an id) to `blocked_issue_id`. A link already gone is `:ok`.
   """

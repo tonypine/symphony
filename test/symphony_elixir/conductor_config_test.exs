@@ -32,6 +32,16 @@ defmodule SymphonyElixir.ConductorConfigTest do
              SystemSchema.parse(Map.put(@base, "conductor", %{"timeout_ms" => 0}))
   end
 
+  test "files tickets, at most 2 per ticket, by default, and refuses a negative limit" do
+    assert {:ok, %{conductor: %{file_tickets: true, max_filed_tickets: 2}}} = SystemSchema.parse(@base)
+
+    assert {:ok, %{conductor: %{file_tickets: false, max_filed_tickets: 0}}} =
+             SystemSchema.parse(Map.put(@base, "conductor", %{"file_tickets" => false, "max_filed_tickets" => 0}))
+
+    assert {:error, {:invalid_symphony_config, "conductor.max_filed_tickets must be greater than or equal to 0"}} =
+             SystemSchema.parse(Map.put(@base, "conductor", %{"max_filed_tickets" => -1}))
+  end
+
   test "the watch is off by default, and refuses an unknown key or a limit of 0" do
     assert {:ok, %{conductor: %{watch: watch}}} = SystemSchema.parse(@base)
 
@@ -58,7 +68,7 @@ defmodule SymphonyElixir.ConductorConfigTest do
     keys = SystemSchema.operator_key_paths()
 
     watch = ~w(enabled run_minutes run_tokens min_interval_minutes max_turns_per_run allow_stop) |> Enum.map(&("conductor.watch." <> &1))
-    for key <- ~w(conductor.enabled conductor.junctions conductor.timeout_ms) ++ watch, do: assert(key in keys)
+    for key <- ~w(conductor.enabled conductor.junctions conductor.timeout_ms conductor.file_tickets conductor.max_filed_tickets) ++ watch, do: assert(key in keys)
     refute "phases.conductor.steps" in keys
   end
 

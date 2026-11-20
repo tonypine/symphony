@@ -1,7 +1,7 @@
 defmodule SymphonyElixir.ConductorTest do
   use SymphonyElixir.TestSupport
 
-  alias SymphonyElixir.{Conductor, TicketEvents}
+  alias SymphonyElixir.{Conductor, TicketEvents, TicketState}
   alias SymphonyElixir.Conductor.{Answer, Facts, Steer}
   alias SymphonyElixir.Config.Schema
 
@@ -23,6 +23,18 @@ defmodule SymphonyElixir.ConductorTest do
     end
 
     def stop_session(_session), do: :ok
+  end
+
+  # The filer a ticket route files through (`SelfHeal.file_ticket/3`): it files TP-2000.
+  defmodule FakeFixer do
+    @moduledoc false
+    def create(attrs, _opts) do
+      Process.put(:conductor_filed, attrs)
+      {:ok, %{id: "filed-#{System.unique_integer([:positive])}", identifier: "TP-2000", url: "https://linear.app/t/TP-2000"}}
+    end
+
+    def block(_issue, _ticket, _opts), do: :ok
+    def relate(_issue, _ticket, _opts), do: :ok
   end
 
   setup do
@@ -81,6 +93,24 @@ defmodule SymphonyElixir.ConductorTest do
   defp answer(attrs \\ %{}), do: Jason.encode!(Map.merge(%{"instructions" => "Check the empty list first."}, attrs))
 
   defp turn(reply), do: fn _plan, _issue, _run_id, _prompt -> reply end
+
+  defp routed(route, attrs \\ %{}), do: {:ok, [answer(Map.merge(%{"route" => route}, attrs))], 35_000}
+
+  defp ticket_route(attrs \\ %{}) do
+    Map.merge(
+      %{
+        "to" => "ticket",
+        "relation" => "blocks",
+        "repo" => "default",
+        "title" => "The QA build runs the Mac app build on a repo with none",
+        "problem" => "Cycle has no Mac app.",
+        "wanted" => "QA builds the Mac app only where there is one.",
+        "acceptance" => ["A Cycle QA pass starts its tests."],
+        "walkthrough" => ["In the Director, a Cycle ticket's QA pass runs its steps."]
+      },
+      attrs
+    )
+  end
 
   defp events(issue_id, type), do: issue_id |> Facts.events() |> Enum.filter(&(&1.type == type))
 
@@ -334,8 +364,6 @@ defmodule SymphonyElixir.ConductorTest do
   describe "route_blocked_qa/3" do
     defp blocked!(issue_id, head \\ "aaa"), do: record!(issue_id, "verdict.recorded", %{kind: "qa", outcome: "blocked", head: head, details: %{reason: "QA cannot fail the request"}})
 
-    defp routed(route, attrs \\ %{}), do: {:ok, [answer(Map.merge(%{"route" => route}, attrs))], 35_000}
-
     defp rework_route, do: %{"to" => "rework", "finding" => "Add a flag QA can set to make the state request fail."}
 
     test "nothing runs or is recorded while the Conductor is off or lacks the junction", ctx do
@@ -462,6 +490,76 @@ defmodule SymphonyElixir.ConductorTest do
       refute Map.has_key?(payload, :route)
     end
 
+    test "a ticket route that blocks files the ticket, holds the ticket on it and names it in the update", ctx do
+      blocked!(ctx.issue_id)
+      test = self()
+      update = "QA could not build the app.\n\nNext: QA runs again once the build is fixed."
+
+      turn = fn _plan, _issue, _run_id, prompt ->
+        send(test, {:prompt, prompt})
+        routed(ticket_route(), %{"update" => update})
+      end
+
+      assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn, settings: @on, filing: [fixer: FakeFixer]) == :held
+      assert_received {:prompt, prompt}
+      assert prompt =~ ~s("filings": {)
+      assert prompt =~ ~s("left": 2)
+
+      assert %{scope: "default", labels: ["tech debt"], title: "The QA build runs the Mac app build on a repo with none"} = Process.get(:conductor_filed)
+      assert [%{payload: %{identifier: "TP-2000", kind: "split_off", by: "conductor"}}] = events(ctx.issue_id, "ticket.filed")
+      assert [%{payload: %{route: "ticket"}}] = events(ctx.issue_id, "conductor.instructions")
+      assert [%{payload: %{text: text}}] = events(ctx.issue_id, "conductor.update")
+
+      assert text ==
+               "QA could not build the app.\n\nI filed `TP-2000` as blocking this ticket: The QA build runs the Mac app build on a repo with none. " <>
+                 "Cycle has no Mac app. This ticket waits for it to be Done, then continues where it stopped.\n\nNext: QA runs again once the build is fixed."
+
+      assert [%{text: "Waiting for TP-2000 to finish" <> _rest}] = ctx.issue_id |> RunStore.get_ticket_state() |> TicketState.pause_reasons()
+    end
+
+    test "a blocking ticket filed whose hold cannot be set is named in the update and kept as the route, and the pass goes on", ctx do
+      blocked!(ctx.issue_id)
+      hold = fn _repo_key, _issue, _identifier -> {:error, :store_down} end
+      answer = routed(ticket_route(), %{"update" => "QA could not build the app."})
+
+      log =
+        capture_log(fn ->
+          assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(answer), settings: @on, filing: [fixer: FakeFixer, hold: hold]) == :none
+        end)
+
+      assert log =~ "Conductor filed TP-2000 (blocks)"
+      assert log =~ "could not hold the ticket on it: :store_down"
+      assert [%{payload: %{identifier: "TP-2000", by: "conductor"}}] = events(ctx.issue_id, "ticket.filed")
+      assert [%{payload: %{route: "ticket"}}] = events(ctx.issue_id, "conductor.instructions")
+      assert [%{payload: %{text: text}}] = events(ctx.issue_id, "conductor.update")
+      assert text =~ "QA could not build the app.\n\nI filed `TP-2000` as blocking this ticket: "
+      assert text =~ "This ticket could not be held on it (:store_down), so it goes on for now."
+      assert ctx.issue_id |> RunStore.get_ticket_state() |> TicketState.pause_reasons() == []
+    end
+
+    test "a follow-up ticket route files it and leaves the pass going; a refused one is dropped and the message kept", ctx do
+      blocked!(ctx.issue_id)
+      follow_up = ticket_route(%{"relation" => "follow_up"})
+      answer = routed(follow_up, %{"update" => "A Mac app build is missing."})
+      assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(answer), settings: @on, filing: [fixer: FakeFixer]) == :none
+      assert [%{payload: %{text: "A Mac app build is missing.\n\nI filed `TP-2000` as a follow-up: " <> _rest}}] = events(ctx.issue_id, "conductor.update")
+      assert ctx.issue_id |> RunStore.get_ticket_state() |> TicketState.pause_reasons() == []
+
+      elsewhere = ticket_route(%{"repo" => "nowhere"})
+
+      log =
+        capture_log(fn ->
+          assert Conductor.route_blocked_qa(ctx.issue, "default", turn: turn(routed(elsewhere, %{"update" => "QA is stuck."})), settings: @on, filing: [fixer: FakeFixer]) ==
+                   :none
+        end)
+
+      assert log =~ "Conductor's ticket route refused"
+      assert log =~ ~s(names the repo "nowhere", which Symphony does not manage)
+      assert [_follow_up, %{payload: %{text: "QA is stuck."}}] = events(ctx.issue_id, "conductor.update")
+      assert [_follow_up, %{payload: refused}] = events(ctx.issue_id, "conductor.instructions")
+      refute Map.has_key?(refused, :route)
+    end
+
     test "the rework the route sends the ticket to meets no second turn before it starts", ctx do
       record!(ctx.issue_id, "run.started", %{run_id: "qa-1", run_kind: "qa"}, run_id: "qa-1")
       blocked!(ctx.issue_id)
@@ -477,6 +575,23 @@ defmodule SymphonyElixir.ConductorTest do
 
       ran!(ctx.issue_id, "rework")
       assert Conductor.dispatch_junction(:qa, Facts.events(ctx.issue_id)) == "after_rework"
+    end
+  end
+
+  describe "a ticket route at a dispatch junction" do
+    test "after rework, a blocking ticket holds the run the turn came before", ctx do
+      ran!(ctx.issue_id, "rework")
+      plan = plan(ctx, %{junction: "after_rework"})
+      assert Conductor.run(plan, ctx.issue, turn: turn(routed(ticket_route())), filing: [fixer: FakeFixer]) == :held
+      assert [%{payload: %{junction: "after_rework", route: "ticket"}}] = events(ctx.issue_id, "conductor.instructions")
+      # The answer had no update: the line naming the ticket is the update.
+      assert [%{payload: %{text: "I filed `TP-2000` as blocking this ticket: " <> _rest}}] = events(ctx.issue_id, "conductor.update")
+    end
+
+    test "after coding, a ticket route is never read", ctx do
+      ran!(ctx.issue_id, "implementation")
+      assert Conductor.run(plan(ctx), ctx.issue, turn: turn(routed(ticket_route())), filing: [fixer: FakeFixer]) == :ok
+      assert events(ctx.issue_id, "ticket.filed") == []
     end
   end
 
