@@ -3589,7 +3589,7 @@ conductor:
   files none.
 
 But for Grooming, the turn runs in an empty folder under the workspace root with read-only tools and
-no ticket, so it can neither change nor read the repository. Past Grooming it never changes the ticket's plan, and it moves the
+no ticket, so it can neither change nor read the repository. Past Grooming it changes the ticket's plan only when a person's message, or the ticket's parent, changes what is asked (a new plan version, with its reason), and it moves the
 ticket only at `after_qa_blocked`, through Symphony (below); a ticket it files that blocks this one
 holds it, as a question does. Its own
 run is recorded on the ticket (`run.started`, `run.ended` with its model and tokens, `counted: false`
@@ -3638,6 +3638,14 @@ exactly as before.
   and the ticket is groomed again at its next dispatch, which Symphony starts at once. After the second the
   run starts without a plan, as it did before plans, and the note says so. A ticket never waits on
   Grooming.
+- Once a ticket has a plan, its description in Linear is Symphony's to write, and no run reads it:
+  `## Ask` (every ask, word for word, oldest first), `## Plan` (the plan's summary) and `## Checks`
+  (one line per check: `[open]`, `[proved]` or `[waived]`, its id and its statement), above
+  Symphony's own blocks (the summary block and the Decisions section), which stay. It is written
+  again each time an ask, a plan version, a proof or a waiver is recorded, by the same pass that
+  writes the Decisions section. Text a person types into the description is overwritten then: on
+  such a ticket the ask changes through a message. The walkthrough's `Proved by:` block is not
+  written there.
 
 **The tree** (`sub_ticket_ended`, `final_check`). A groomed ticket and the sub-tickets under it.
 

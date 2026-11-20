@@ -12,12 +12,15 @@ defmodule SymphonyElixir.TicketPlan do
   tagged (`discovery`, `base_fault`) are `notes/1`, and `parent_id/1` finds the ticket whose plan
   and notes a sub-ticket reads next to its own.
 
+  Each plan version and each ask written is shown in Linear at once: the ticket's description is
+  projected again (`SymphonyElixir.TicketProjection`).
+
   Every read takes the ticket's issue id, or the events a caller already holds (oldest first, as
   `SymphonyElixir.RunStore.list_ticket_events/2` reads them), so a caller that read the events once
   reads the store no more.
   """
 
-  alias SymphonyElixir.{RunStore, TicketEvents}
+  alias SymphonyElixir.{RunStore, TicketEvents, TicketProjection}
   alias SymphonyElixir.TicketEvents.{Event, Types}
 
   @machine_fields [:signal, :signal_details]
@@ -71,8 +74,10 @@ defmodule SymphonyElixir.TicketPlan do
     payload = plan |> Map.drop([:version, "version"]) |> Map.put(:version, length(events(issue_id, "plan.written")) + 1)
 
     with {:ok, valid} <- Types.validate("plan.written", payload, :machine, nil),
-         :ok <- coherent(valid) do
-      TicketEvents.record(repo_key, issue_id, "plan.written", valid, opts)
+         :ok <- coherent(valid),
+         {:ok, event} <- TicketEvents.record(repo_key, issue_id, "plan.written", valid, opts) do
+      TicketProjection.changed(repo_key, issue_id)
+      {:ok, event}
     end
   end
 
@@ -110,7 +115,11 @@ defmodule SymphonyElixir.TicketPlan do
   def record_ask(repo_key, issue_id, text, opts \\ []) when is_binary(issue_id) do
     {ask, opts} = Keyword.split(opts, [:source, :from])
     payload = %{text: text, source: Keyword.get(ask, :source, "linear"), from: Keyword.get(ask, :from)}
-    TicketEvents.record(repo_key, issue_id, "ask.recorded", payload, opts)
+
+    with {:ok, event} <- TicketEvents.record(repo_key, issue_id, "ask.recorded", payload, opts) do
+      TicketProjection.changed(repo_key, issue_id)
+      {:ok, event}
+    end
   end
 
   @doc "The notes of the ticket that carry a tag (`discovery`, `base_fault`), oldest first (`t:note/0`)."
