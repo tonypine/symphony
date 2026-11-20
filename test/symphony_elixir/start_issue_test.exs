@@ -226,7 +226,13 @@ defmodule SymphonyElixir.StartIssueTest do
       assert %{repo_key: "cycle", issue: %Issue{repo_key: "cycle"}} = dispatched.running["cycle-1"]
 
       {:noreply, after_retry} =
-        Orchestrator.handle_retry_issue_for_test(orchestrator_state(2), "cycle-2", 1, %{identifier: "MOT-105"}, fn _ids -> {:ok, [retried]} end)
+        Orchestrator.handle_retry_issue_for_test(
+          orchestrator_state(2),
+          "cycle-2",
+          1,
+          %{identifier: "MOT-105"},
+          fn _ids -> {:ok, [retried]} end
+        )
 
       assert %{repo_key: "cycle", issue: %Issue{repo_key: "cycle"}} = after_retry.running["cycle-2"]
     end
