@@ -1909,6 +1909,15 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     [linear_retry_opts: [now_ms_fun: fn -> @now_ms end, sleep_fun: &send(parent, {:linear_wait_slept, &1})]]
   end
 
+  # These tests follow how a run ends, so a CI Fix run is one agent session unless a test gives a
+  # list: the default list's failed-check step (TP-1555) has its own tests.
+  @one_session_ci_fix """
+  phases:
+    ci_fix:
+      steps:
+        - {id: fix, title: Fix the failed check, mode: delegated}
+  """
+
   # `heads` is the workspace HEAD at run start and after each turn (the last one repeats);
   # `states` is the issue state after each turn (the last one repeats). `handoff` is a head the
   # push and PR tool hooks already emitted the handoff signal for, as a run that pushed it would.
@@ -1935,7 +1944,7 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
       review_agent: if(reviewer?, do: %{enabled: true, kind: "codex", command: "reviewer app-server"})
     )
 
-    if steps = Keyword.get(opts, :symphony_steps), do: append_symphony_steps!(steps)
+    append_symphony_steps!(Keyword.get(opts, :symphony_steps, @one_session_ci_fix))
 
     issue =
       Keyword.get(opts, :issue, %Issue{
