@@ -259,7 +259,8 @@ public struct TicketPage: Equatable {
     public var lifecycleRead: TicketLifecycleRead?
     /// The facts rail's Pull request and Connected panels, from the ticket read.
     public var factsRead: TicketFactsRead?
-    /// The facts rail's Details panel, from the ticket read.
+    /// The brief on top of the page, the ticket's record (title, priority, labels, description) and its workspace, from
+    /// the ticket read.
     public var detailsRead: TicketDetailsRead?
     /// When the person last looked and how much is new since, from the ticket read (TP-1451).
     public var marksRead: TicketMarksRead?
