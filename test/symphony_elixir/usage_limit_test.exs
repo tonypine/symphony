@@ -7,7 +7,12 @@ defmodule SymphonyElixir.UsageLimitTest do
   alias SymphonyElixir.{Pauses, Providers, UsageLimit}
 
   @now ~U[2026-10-03 03:46:00Z]
-  @config %UsageLimitConfig{auto_pause: true, resume_margin_seconds: 120, unknown_reset_retry_seconds: 900, sign_in_ask_after_seconds: 1800}
+  @config %UsageLimitConfig{
+    auto_pause: true,
+    resume_margin_seconds: 120,
+    unknown_reset_retry_seconds: 900,
+    sign_in_ask_after_seconds: 1800
+  }
 
   defmodule FailingStore do
     def get_usage_limits, do: {:error, :mnesia_down}
@@ -142,7 +147,16 @@ defmodule SymphonyElixir.UsageLimitTest do
     defp sign_in(attrs \\ %{}),
       do:
         Map.merge(
-          %{provider: "anthropic", window: nil, scope: :all, resets_at: nil, utilization: nil, source: :api_unreachable, cause: :sign_in, error: @message},
+          %{
+            provider: "anthropic",
+            window: nil,
+            scope: :all,
+            resets_at: nil,
+            utilization: nil,
+            source: :api_unreachable,
+            cause: :sign_in,
+            error: @message
+          },
           attrs
         )
 
@@ -444,17 +458,30 @@ defmodule SymphonyElixir.UsageLimitTest do
     test "defaults to auto pause with a 120s margin and a 900s unknown-reset retry" do
       write_workflow_file!(Workflow.workflow_file_path())
 
-      assert %UsageLimitConfig{auto_pause: true, resume_margin_seconds: 120, unknown_reset_retry_seconds: 900, sign_in_ask_after_seconds: 1800} =
-               Config.settings!().execution.usage_limit
+      assert %UsageLimitConfig{
+               auto_pause: true,
+               resume_margin_seconds: 120,
+               unknown_reset_retry_seconds: 900,
+               sign_in_ask_after_seconds: 1800
+             } = Config.settings!().execution.usage_limit
     end
 
     test "reads the three keys" do
       write_workflow_file!(Workflow.workflow_file_path(),
-        agent_usage_limit: %{auto_pause: false, resume_margin_seconds: 0, unknown_reset_retry_seconds: 60, sign_in_ask_after_seconds: 600}
+        agent_usage_limit: %{
+          auto_pause: false,
+          resume_margin_seconds: 0,
+          unknown_reset_retry_seconds: 60,
+          sign_in_ask_after_seconds: 600
+        }
       )
 
-      assert %UsageLimitConfig{auto_pause: false, resume_margin_seconds: 0, unknown_reset_retry_seconds: 60, sign_in_ask_after_seconds: 600} =
-               Config.settings!().execution.usage_limit
+      assert %UsageLimitConfig{
+               auto_pause: false,
+               resume_margin_seconds: 0,
+               unknown_reset_retry_seconds: 60,
+               sign_in_ask_after_seconds: 600
+             } = Config.settings!().execution.usage_limit
     end
 
     test "a provider's reserve is off by default and takes a share in (0, 1]" do

@@ -247,7 +247,16 @@ defmodule SymphonyElixir.SituationTest do
 
     test "a ticket held because no agent can sign in says so, with the provider's message and since when (TP-1515)" do
       message = "Failed to authenticate. API Error: 403 Attention Required! | Cloudflare"
-      skip = %{since: @later, reason: "The agent can't sign in to Claude", rule: :usage_limit, provider: "anthropic", cause: :sign_in, error: message, sign_in_since: @at}
+
+      skip = %{
+        since: @later,
+        reason: "The agent can't sign in to Claude",
+        rule: :usage_limit,
+        provider: "anthropic",
+        cause: :sign_in,
+        error: message,
+        sign_in_since: @at
+      }
 
       assert %{
                kind: "waiting_for_provider",

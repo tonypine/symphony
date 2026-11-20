@@ -14,8 +14,8 @@ defmodule SymphonyElixir.SignInHold do
   withdrawn when the hold lifts (`withdraw/2`).
   """
 
-  alias SymphonyElixir.{Questions, UsageLimit}
   alias SymphonyElixir.HumanActions.PlainWords
+  alias SymphonyElixir.{Questions, UsageLimit}
 
   @step_prefix "sign_in:"
   @asked_by %{kind: :symphony, name: "Symphony"}

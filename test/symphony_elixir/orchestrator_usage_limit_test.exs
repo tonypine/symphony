@@ -855,7 +855,8 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
 
         # 2. The ticket waits for the provider in words, with the message and since when.
         snapshot = Orchestrator.snapshot(name, 1_000)
-        assert [%{issue_id: "issue-sign-in", sign_in: %{provider: "anthropic", cause: :sign_in, error: ^message, sign_in_since: ^since}}] = snapshot.retrying
+        assert [%{issue_id: "issue-sign-in", sign_in: sign_in}] = snapshot.retrying
+        assert %{provider: "anthropic", cause: :sign_in, error: ^message, sign_in_since: ^since} = sign_in
 
         assert %{kind: "waiting_for_provider", word: "Waiting: the agent can't sign in to " <> _, cause: cause} =
                  Situation.read(%{repo_key: Config.repo_key!(), issue_id: issue.id, issue_identifier: issue.identifier, phase: "Todo"}, Situation.live_facts(snapshot, ctx.now), [])
@@ -872,7 +873,11 @@ defmodule SymphonyElixir.OrchestratorUsageLimitTest do
         set_clock(ctx, first_probe)
         send(pid, {:usage_limit_resume, @anthropic})
         wait_until(fn -> length(held_runs.()) == 2 end)
-        wait_until(fn -> match?(%{phase: :paused, retry_seconds: 120}, :sys.get_state(pid).usage_limits[@anthropic]) end)
+
+        wait_until(fn ->
+          match?(%{phase: :paused, retry_seconds: 120}, :sys.get_state(pid).usage_limits[@anthropic])
+        end)
+
         assert %{attempt: ^attempt} = :sys.get_state(pid).retry_attempts[issue.id]
         assert [%{title: "Agents can't sign in to Claude", why: why}] = wait_until(sign_in_questions)
         assert why =~ "Failed to authenticate"

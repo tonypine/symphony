@@ -395,7 +395,13 @@ defmodule SymphonyElixir.Situation do
 
   # A retry held on an agent that can't sign in waits for the provider, as a skip for it does.
   defp sign_in_retry(%{sign_in: %{provider: provider} = sign_in}) when is_binary(provider),
-    do: %{rule: :usage_limit, provider: provider, cause: :sign_in, error: sign_in[:error], sign_in_since: sign_in[:sign_in_since]}
+    do: %{
+      rule: :usage_limit,
+      provider: provider,
+      cause: :sign_in,
+      error: sign_in[:error],
+      sign_in_since: sign_in[:sign_in_since]
+    }
 
   defp sign_in_retry(_retry), do: nil
 
