@@ -1520,9 +1520,13 @@ defmodule SymphonyElixir.AgentRunner do
       workspace: workspace,
       worker_host: worker_host,
       base_branch: Config.base_branch(repo_key),
-      runner: Keyword.get(opts, :step_command_runner)
+      ci_failure: Keyword.get(opts, :ci_failure),
+      pr_conflict: Keyword.get(opts, :pr_conflict),
+      pr_url: Map.get(run_context, :dispatch_pr_url),
+      runner: Keyword.get(opts, :step_command_runner),
+      failed_check_opts: Keyword.get(opts, :failed_check_opts)
     }
-    |> Map.reject(fn {key, value} -> key == :runner and is_nil(value) end)
+    |> Map.reject(fn {key, value} -> key in [:runner, :failed_check_opts] and is_nil(value) end)
   end
 
   # A walk's turn records its step's start, and an orchestrated step's earlier answer is removed;

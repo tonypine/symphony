@@ -2182,7 +2182,8 @@ defmodule SymphonyElixir.Config.Schema do
     A kind the file doesn't set follows its default list (`default_steps/1`): the steps of
     decision 2 for `implementation` (`code`, `build`, `checks`, `tests`, then TP-1554's
     `window_tests`, and `handoff`), the same with
-    `findings` before them for `rework`, none for every other kind. A step list is refused at load, naming the step, when a step's `on_fail` names a step
+    `findings` before them for `rework`, TP-1555's list for `ci_fix` (`fix`, the same checks, then
+    `failed_check` before `window_tests`, and `handoff`), none for every other kind. A step list is refused at load, naming the step, when a step's `on_fail` names a step
     not in the list, when failures can loop with no delegated step in the loop (the same commands
     would run again with nothing changed), and when a machine step has no command.
     """
@@ -2200,6 +2201,18 @@ defmodule SymphonyElixir.Config.Schema do
     @kind_names Map.new(@kinds, &{Atom.to_string(&1), &1})
     @findings_command "symphony:findings"
     @window_tests_command "symphony:window_tests"
+    @failed_check_command "symphony:failed_check"
+    # The checks the CI Fix run's failed-check step can't run outside GitHub (TP-1555): a check, or
+    # one step of it, and why. Short on purpose; the Director's Settings › Phases lists them
+    # (`PhaseDefaults.ciOnlyChecks`).
+    @ci_only_checks [
+      %{check: "dialyzer", step: nil, why: "its full run of the whole code base takes longer than a run's step allows"},
+      %{check: "protected paths", step: nil, why: "it reads the pull request's author and reviews on GitHub"},
+      %{check: "validate-pr-description", step: nil, why: "it reads the pull request's description on GitHub"},
+      %{check: "macos", step: nil, why: "it only sums up the Mac checks, which the step runs itself"},
+      %{check: "mac checks", step: "Test the QA signing identity script", why: "it changes the keychain of the machine it runs on"},
+      %{check: "mac checks", step: "Test update, restart and rollback", why: "it signs, installs and launches the app on the machine it runs on"}
+    ]
     @qa_commands ~w(symphony:qa_pre_checks symphony:qa_build symphony:qa_launch symphony:qa_quit symphony:qa_attach)
 
     defmodule Step do
@@ -2653,6 +2666,22 @@ defmodule SymphonyElixir.Config.Schema do
     def window_tests_command, do: @window_tests_command
 
     @doc """
+    The machine step command Symphony runs itself for a CI Fix run's failed-check step: it runs
+    again, on the run's new commit, what failed on GitHub (`SymphonyElixir.PhaseSteps.FailedCheck`).
+    """
+    @spec failed_check_command() :: String.t()
+    def failed_check_command, do: @failed_check_command
+
+    @doc """
+    The checks that only CI can prove (TP-1555): the failed-check step does not run them, says so
+    with the check's name, and lets the push go ahead. Each is a check's name (`check`, as GitHub
+    names the job), the one step of it when only that step is CI's (`step`, nil for the whole
+    check) and why, in plain words. The list is declared here, not chosen by a run.
+    """
+    @spec ci_only_checks() :: [%{check: String.t(), step: String.t() | nil, why: String.t()}]
+    def ci_only_checks, do: @ci_only_checks
+
+    @doc """
     The machine step commands the QA pass runs itself, with the QA host it holds
     (`SymphonyElixir.QaAgent.Steps`): the pre-checks' results, the build, the launch with a health
     check, quitting every app the pass launched, and the evidence the steps recorded. Only a QA
@@ -2696,8 +2725,11 @@ defmodule SymphonyElixir.Config.Schema do
     selects in the QA VM (`window_tests`, Symphony's own `window_tests_command/0`; skipped when the
     change touches nothing a declared window test covers), each returning to `code` on failure, then
     hands off (delegated). `rework` reads the open findings first (`findings`, machine),
-    which pauses on a Question when a failure came back, then follows the same steps. Every other
-    kind has none: its run is one agent session.
+    which pauses on a Question when a failure came back, then follows the same steps. `ci_fix`
+    (TP-1555) fixes the failed check (`fix`, delegated), runs the same build, checks and tests,
+    then runs again what failed on GitHub (`failed_check`, Symphony's own `failed_check_command/0`),
+    then the window tests, each returning to `fix` on failure, and hands off (delegated). Every
+    other kind has none: its run is one agent session.
 
     The changed files come from the environment the step runner gives a machine step:
     `SYMPHONY_CHANGED_ELIXIR_FILES`, `SYMPHONY_CHANGED_TEST_FILES` and
@@ -2706,6 +2738,7 @@ defmodule SymphonyElixir.Config.Schema do
     @spec default_steps(RunKind.t()) :: [Step.t()]
     def default_steps(:implementation), do: default_list(default_implementation_steps())
     def default_steps(:rework), do: default_list([default_findings_step() | default_implementation_steps()])
+    def default_steps(:ci_fix), do: default_list(default_ci_fix_steps())
     def default_steps(kind) when kind in @kinds, do: []
 
     defp default_list(steps, owner \\ :run_kind) do
@@ -2776,8 +2809,32 @@ defmodule SymphonyElixir.Config.Schema do
     end
 
     defp default_implementation_steps do
+      [%{"id" => "code", "title" => "Write the code", "mode" => "delegated"}] ++
+        default_check_steps("code") ++
+        [default_window_tests_step("code"), %{"id" => "handoff", "title" => "Hand off: push and open the pull request", "mode" => "delegated"}]
+    end
+
+    # The failed check runs after the build, checks and tests, on what they passed, and before the
+    # window tests, which take the QA VM.
+    defp default_ci_fix_steps do
+      [%{"id" => "fix", "title" => "Fix the failed check", "mode" => "delegated"}] ++
+        default_check_steps("fix") ++
+        [
+          %{
+            "id" => "failed_check",
+            "title" => "The failed check",
+            "mode" => "machine",
+            "command" => @failed_check_command,
+            "timeout_ms" => 3_600_000,
+            "on_fail" => "fix"
+          },
+          default_window_tests_step("fix"),
+          %{"id" => "handoff", "title" => "Hand off: push the fix", "mode" => "delegated"}
+        ]
+    end
+
+    defp default_check_steps(agent_step) do
       [
-        %{"id" => "code", "title" => "Write the code", "mode" => "delegated"},
         %{
           "id" => "build",
           "title" => "Build",
@@ -2787,7 +2844,7 @@ defmodule SymphonyElixir.Config.Schema do
             %{"run" => "mix compile --warnings-as-errors", "when" => "elixir_changed"}
           ],
           "timeout_ms" => 900_000,
-          "on_fail" => "code"
+          "on_fail" => agent_step
         },
         %{
           "id" => "checks",
@@ -2796,7 +2853,7 @@ defmodule SymphonyElixir.Config.Schema do
           "when" => "elixir_changed",
           "command" => "mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES",
           "timeout_ms" => 600_000,
-          "on_fail" => "code"
+          "on_fail" => agent_step
         },
         %{
           "id" => "tests",
@@ -2807,19 +2864,21 @@ defmodule SymphonyElixir.Config.Schema do
             %{"run" => "cd macos && swift test --filter \"$SYMPHONY_CHANGED_SWIFT_TEST_FILTER\"", "when" => "macos_changed"}
           ],
           "timeout_ms" => 1_800_000,
-          "on_fail" => "code"
-        },
-        # The wait for the QA VM, while a QA pass holds it, is part of the step's time.
-        %{
-          "id" => "window_tests",
-          "title" => "Window tests",
-          "mode" => "machine",
-          "command" => @window_tests_command,
-          "timeout_ms" => 7_200_000,
-          "on_fail" => "code"
-        },
-        %{"id" => "handoff", "title" => "Hand off: push and open the pull request", "mode" => "delegated"}
+          "on_fail" => agent_step
+        }
       ]
+    end
+
+    # The wait for the QA VM, while a QA pass holds it, is part of the step's time.
+    defp default_window_tests_step(agent_step) do
+      %{
+        "id" => "window_tests",
+        "title" => "Window tests",
+        "mode" => "machine",
+        "command" => @window_tests_command,
+        "timeout_ms" => 7_200_000,
+        "on_fail" => agent_step
+      }
     end
   end
 

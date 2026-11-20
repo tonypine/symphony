@@ -526,7 +526,8 @@ defmodule SymphonyElixir.PromptBuilder do
   end
 
   defp records_line("ci_fix") do
-    "This CI-fix run records a `note` naming the red check's cause, #{@evidence_line}, and `finding.resolved` for an open finding the repair fixes."
+    "This CI-fix run records a `note` naming the red check's cause, `step.completed` for each delegated step as it ends it, #{@evidence_line}, " <>
+      "and `finding.resolved` for an open finding the repair fixes."
   end
 
   defp records_line("breakdown") do

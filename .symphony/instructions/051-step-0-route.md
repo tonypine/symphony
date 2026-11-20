@@ -10,7 +10,8 @@
    - `Code Review` -> the reviewer agent judges the PR on its head, whatever CI says; do not change the issue or PR, stop and wait for the verdict.
    - `QA` -> a QA agent walks the change's user journeys end to end; do not change the issue or PR, stop and wait for the verdict.
    - `CI Fix` -> run the mechanical lane in the `CI failure triage protocol`: fix the red check at its cause on the same branch (never a rerun), `Rework` when the repair is substantive, or a request for a person when no change can fix it.
-   - `Plan Review` -> a person reviews the plan; do nothing and stop.
+{% if run.kind == "ci_fix" %}     - A run never pushes a CI fix before the failed check passes for it. {% if run.step_runner %}This run follows a step list: once you end the `fix` step, Symphony builds, checks and tests the change, then Symphony runs again what failed on GitHub (`The failed check`), read from the check's own result, on your commit; only a pass reaches `Hand off`, and a failure comes back to `fix` with its output. A check Symphony lists as provable only by CI says so and the push goes ahead; that list is Symphony's, not yours.{% else %}Run again what failed on GitHub (its failed tests, the modules below full coverage, its failed step) on your commit, and when you have no way to run it, stop and say so with the question tool instead of pushing.{% endif %}
+{% endif %}   - `Plan Review` -> a person reviews the plan; do nothing and stop.
    - `Waiting on sub-tickets` -> a plan ticket waiting on its sub-tickets; do nothing and stop. Symphony moves it to `Epic Review` itself once every sub-ticket is terminal.
    - `Epic Review` -> Symphony's epic review checks the epic against what shipped; do nothing and stop.
    - `Merging` -> Symphony lands the PR with GitHub auto-merge and does not start an agent. If you are running in `Merging`, auto-merge could not be used: open and follow `.agents/skills/land/SKILL.md`; do not call `gh pr merge` directly.
