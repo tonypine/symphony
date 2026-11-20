@@ -1115,6 +1115,91 @@ defmodule SymphonyElixir.ReviewAgentTest do
     end
   end
 
+  describe "one review reports everything it finds (TP-1516)" do
+    test "a review with three blocking problems returns three findings in one verdict" do
+      test_root = unique_tmp("symphony-elixir-review-agent-three-findings")
+      original = numbered_lines(1..20)
+      modified = original |> changed_line(3) |> changed_line(9) |> changed_line(15)
+
+      try do
+        repo = git_repo_with_file_change!(test_root, original, modified)
+
+        findings =
+          for line <- [3, 9, 15] do
+            finding_json(%{"summary" => "Problem on line #{line}.", "line_range" => [line, line], "quoted_snippet" => "changed line #{line}"})
+          end
+
+        response = Jason.encode!(%{"verdict" => "request_changes", "findings" => findings, "reason" => "Problem on line 9."})
+        put_sequence_responses!([response, response])
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+        )
+
+        assert {:ok, %{verdict: :request_changes, reason: "Problem on line 9.", findings: kept, comments: comments}} =
+                 ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+        assert Enum.map(kept, & &1.line_range) == [{3, 3}, {9, 9}, {15, 15}]
+        assert [_line_3, _line_9, _line_15] = comments
+        assert Enum.at(comments, 1) =~ "Problem on line 9. (feature.txt:9-9)"
+      after
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "the prompt asks for the whole change read and every finding in one verdict" do
+      test_root = unique_tmp("symphony-elixir-review-agent-completeness-prompt")
+
+      try do
+        repo = git_repo_with_change!(test_root)
+        put_sequence_responses!([~s({"verdict":"approve","comments":[]})])
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+        )
+
+        assert {:ok, %{verdict: :approve}} = ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+        assert_receive {:review_agent_sequence_call, 1, prompt, _opts}
+        assert prompt =~ "Read the whole change, every changed file, before you decide the verdict."
+        assert prompt =~ "List every finding you would block on in `findings`, each with its own `file` and `line_range`, in this one verdict."
+        assert prompt =~ "Put the most important one in `reason`"
+        assert prompt =~ "record the verdict with `unread_files`"
+        assert prompt =~ ~s("unread_files")
+      after
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "a verdict that names files it did not read is inconclusive, not an approval" do
+      test_root = unique_tmp("symphony-elixir-review-agent-unread-files")
+
+      try do
+        repo = git_repo_with_change!(test_root)
+        put_sequence_responses!([~s({"verdict":"approve","comments":[],"unread_files":["lib/b.ex"," lib/c.ex "]})])
+
+        write_workflow_file!(Workflow.workflow_file_path(),
+          review_agent: %{enabled: true, kind: "codex", command: "codex app-server"}
+        )
+
+        assert {:error, {:review_agent_inconclusive, {:review_incomplete, ["lib/b.ex", "lib/c.ex"]} = cause}} =
+                 ReviewAgent.evaluate(issue(), repo, Config.settings!(), review_agent_module: SequenceReviewer)
+
+        assert ReviewAgent.inconclusive_cause(cause) == "review_incomplete"
+        refute_received {:review_agent_sequence_call, 2, _prompt, _opts}
+      after
+        clear_sequence_responses!()
+        File.rm_rf(test_root)
+      end
+    end
+
+    test "a verdict that read everything goes on" do
+      assert ReviewAgent.whole_change_read(%{verdict: :approve, comments: []}) == {:ok, %{verdict: :approve, comments: []}}
+    end
+  end
+
   test "evaluate does not re-quote a verdict that gave no findings" do
     test_root = unique_tmp("symphony-elixir-review-agent-requote-no-findings")
 

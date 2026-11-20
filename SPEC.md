@@ -2057,7 +2057,17 @@ the cited range before anywhere else), moving the finding's line range to where 
 When no finding of a `request_changes` can be grounded, Symphony SHOULD give the same reviewer session one re-quote turn
 that shows the text actually at the cited lines. The reviewer prompt SHOULD tell the reviewer to
 review the diff by reading it and not to run the test suite, coverage or static analysis, which CI
-runs.
+runs. It SHOULD tell the reviewer to read the whole change before giving a verdict and to list
+every finding it would block on, each with its file and line range, in one verdict, with the most
+important one as its `reason`. A reviewer that runs out of time or turns before reading every
+changed file SHOULD name them in the verdict's `unread_files`; Symphony SHOULD treat such a verdict
+as inconclusive (`review_incomplete`, with the unread files on the recorded verdict) rather than
+approve or request changes on a part of the change. A `request_changes` verdict SHOULD record its
+count of findings (`findings_count`) on the ticket's history. On a pull request reviewed before,
+Symphony SHOULD compare each finding's lines with the last reviewed head (the newest other head with
+an `approve`, `request_changes` or `block` verdict): a finding on lines that did not change since is
+marked "missed earlier" in the findings comment and counted on the verdict (`previous_head`,
+`missed_earlier`, `missed_findings`), and the verdict's summary shows both counts.
 
 Reviewer outcome handling MUST distinguish a `block` from an inconclusive review. Reviewer parse
 failures, turn-budget failures, self-check turns that retract every finding, and a change request

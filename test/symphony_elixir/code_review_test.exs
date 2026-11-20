@@ -627,6 +627,74 @@ defmodule SymphonyElixir.CodeReviewTest do
     end
   end
 
+  describe "review rounds (TP-1516)" do
+    defp commit_file!(dir, contents) do
+      File.write!(Path.join(dir, "lib.ex"), contents)
+      {_out, 0} = System.cmd("git", ["add", "lib.ex"], cd: dir)
+      {_out, 0} = System.cmd("git", ["-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "change"], cd: dir)
+      {head, 0} = System.cmd("git", ["rev-parse", "HEAD"], cd: dir)
+      String.trim(head)
+    end
+
+    defp lines(range), do: Enum.map_join(range, "", &"line #{&1}\n")
+
+    defp round_finding(summary, line_range) do
+      %{summary: summary, file: "lib.ex", line_range: line_range, quoted_snippet: "line", suggested_fix: "Fix it."}
+    end
+
+    test "a first change request counts its findings on its verdict" do
+      {workspace, _head} = git_workspace!()
+      findings = [round_finding("One.", {1, 1}), round_finding("Two.", {2, 2}), round_finding("Three.", {3, 3})]
+      comments = Enum.map(findings, &SymphonyElixir.ReviewAgent.finding_comment/1)
+      Process.put(:fake_review_result, {:ok, %{verdict: :request_changes, findings: findings, comments: comments, reason: "Two."}})
+
+      assert :ok = run(workspace, settings: designed_settings())
+
+      assert_received {:commented, @issue_id, body}
+      for comment <- comments, do: assert(body =~ "- " <> comment)
+      refute body =~ "earlier"
+      assert [%{outcome: "request_changes", details: %{findings_count: 3} = details}] = verdicts()
+      refute Map.has_key?(details, :missed_earlier)
+    end
+
+    test "a finding on unchanged lines in a second round is marked missed earlier" do
+      {workspace, _head} = git_workspace!()
+      previous = commit_file!(workspace, lines(1..10))
+      :ok = TicketSignals.record_verdict(@repo_key, @issue_id, "code_review", previous, "request_changes")
+      head = commit_file!(workspace, String.replace(lines(1..10), "line 8\n", "fixed line 8\n"))
+
+      missed = round_finding("Was there before.", {2, 3})
+      about_the_fix = round_finding("The fix is wrong.", {8, 8})
+      comments = Enum.map([missed, about_the_fix], &SymphonyElixir.ReviewAgent.finding_comment/1)
+      Process.put(:fake_review_result, {:ok, %{verdict: :request_changes, findings: [missed, about_the_fix], comments: comments, reason: "The fix is wrong."}})
+
+      assert :ok = run(workspace, settings: designed_settings())
+
+      short = String.slice(previous, 0, 7)
+      assert_received {:commented, @issue_id, body}
+      assert body =~ "- Was there before. (lib.ex:2-3) Suggested fix: Fix it. Missed earlier: these lines did not change since the review of `#{short}`."
+      assert body =~ "- The fix is wrong. (lib.ex:8-8) Suggested fix: Fix it. These lines changed since the review of `#{short}`."
+      assert_received {:moved, @issue_id, "Rework"}
+
+      assert [%{head_sha: ^head, details: details}, %{head_sha: ^previous}] = verdicts()
+
+      assert %{findings_count: 2, missed_earlier: 1, previous_head: ^previous, missed_findings: [%{summary: "Was there before.", file: "lib.ex", line_range: [2, 3]}]} =
+               details
+
+      assert [verdict | _older] = @issue_id |> SymphonyElixir.TicketEvents.query(types: ["verdict.recorded"]) |> Enum.reverse()
+      assert SymphonyElixir.TicketEvents.Summary.render(verdict).detail =~ "2 findings · 1 missed earlier"
+    end
+
+    test "a review that could not read the whole change names the files it did not read on its verdict" do
+      Process.put(:fake_review_result, {:error, {:review_agent_inconclusive, {:review_incomplete, ["lib/b.ex", "lib/c.ex"]}}})
+
+      assert {:error, {:code_review_inconclusive, {:review_incomplete, _files}}} = run("/tmp/workspace", settings: designed_settings())
+
+      refute_received {:moved, _issue_id, _state}
+      assert [%{outcome: "inconclusive", details: %{cause: "review_incomplete", unread_files: ["lib/b.ex", "lib/c.ex"]}}] = verdicts()
+    end
+  end
+
   describe "the reviewer's options" do
     test "passes the repo's configured base branch to the reviewer" do
       write_workflow_file!(Workflow.workflow_file_path(),
