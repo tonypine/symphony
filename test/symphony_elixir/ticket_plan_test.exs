@@ -130,6 +130,13 @@ defmodule SymphonyElixir.TicketPlanTest do
       {:ok, _v3} = TicketPlan.write(@repo_key, @issue_id, @plan |> Map.delete(:checks) |> Map.merge(third), at: at(2))
       assert [%{id: "c6", statement: "F."}] = TicketPlan.current(@issue_id).checks
 
+      # Ids an older record holds that are no `c<n>` count for nothing, and are never a new check's.
+      other = "plan-issue-old-ids"
+      old = [Map.put(new.("A."), :id, "proof"), Map.put(new.("B."), :id, "cx"), Map.put(new.("C."), :id, "c2")]
+      {:ok, _v1} = TicketEvents.record(@repo_key, other, "plan.written", @plan |> Map.merge(%{checks: old, version: 1}), at: at(0))
+      {:ok, _v2} = TicketPlan.write(@repo_key, other, %{@plan | checks: [Map.put(new.("A."), :id, "proof"), new.("D.")]}, at: at(1))
+      assert [%{id: "proof"}, %{id: "c3"}] = TicketPlan.current(other).checks
+
       # Checks that are no list are the schema's to refuse.
       assert {:error, {:invalid_payload, [:checks]}} = TicketPlan.write(@repo_key, @issue_id, %{@plan | checks: "none"})
     end

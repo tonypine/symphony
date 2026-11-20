@@ -350,6 +350,8 @@ defmodule SymphonyElixir.TicketEvents.TypesTest do
 
   describe "schema/1" do
     test "describes each field a tool's caller may send, leaving out the machinery's signal" do
+      assert %{type: "list", max_items: 30} = Enum.find(Types.schema("plan.written").required, &(&1.name == "checks"))
+      assert %{type: "list", max_items: 12} = Enum.find(Types.schema("plan.written").optional, &(&1.name == "sub_tickets"))
       modes = ~w(machine orchestrated delegated)
 
       assert %{required: [%{name: "step_id", max: 200}, %{name: "title", max: 200}, %{name: "mode", type: "enum", values: ^modes}]} = Types.schema("step.started")

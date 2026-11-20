@@ -165,15 +165,11 @@ defmodule SymphonyElixir.AgentTools.TicketLedger do
 
   # What a person wrote, and what a turn wrote from it, is data for the run that reads it: wrapped
   # as a prompt wraps a groomed ticket's ask and plan (`PromptSafety.ticket_plan_body/1`).
-  defp untrusted(map, key) do
-    case map do
-      %{^key => text} when is_binary(text) -> Map.put(map, key, PromptSafety.ticket_plan_body(text))
-      _no_text -> map
-    end
-  end
+  defp untrusted(map, key), do: Map.update!(map, key, &PromptSafety.ticket_plan_body/1)
 
-  defp untrusted_asks(%{sub_tickets: [_ | _] = entries} = plan), do: %{plan | sub_tickets: Enum.map(entries, &untrusted(&1, :ask))}
-  defp untrusted_asks(plan), do: plan
+  defp untrusted_asks(plan) do
+    if is_map_key(plan, :sub_tickets), do: Map.update!(plan, :sub_tickets, fn entries -> Enum.map(entries, &untrusted(&1, :ask)) end), else: plan
+  end
 
   defp parent_notes(nil), do: []
   defp parent_notes(parent_id), do: notes(parent_id, "parent")
