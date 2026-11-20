@@ -3104,8 +3104,15 @@ the run to `code`, and a step that could not run (the VM unreachable, a build th
 a test failing on the base branch too, a test that is off in the QA VM whose script or covered path changed; every test ships off until a run sees it pass on main in the QA VM) pauses on a Question, so it never passes by default and
 nothing is pushed. It and a `macos_app` QA pass never use the QA VM at the same time. The rework default puts `findings` (machine) before them: it
 keeps the open findings by class as its output and, when the same class failed QA in two QA runs,
-ends `paused` on a Question listing both findings before any code is written. Every other kind has
-none and its run is one agent session.
+ends `paused` on a Question listing both findings before any code is written. The `ci_fix` default
+(TP-1555) is `fix` (delegated), the same `build`, `checks` and `tests`, then `failed_check` (machine)
+and `window_tests`, each returning to `fix` on failure, and `handoff` (delegated): `failed_check`
+runs again, on the run's new commit, what failed on GitHub, read from the red check's own result
+(the failed test files, the modules below 100% coverage, the failed steps it knows how to run, a
+failed window test in the QA VM), so a CI fix is pushed only once that passes. A check on the
+declared list only CI can prove is not run, the step says so with its name, and the push goes ahead;
+any other check it cannot run pauses the step on a Question. Every other kind has none and its run
+is one agent session.
 The list is validated at load: an `on_fail` must name a step in the list, a loop of failures must
 pass through a delegated step, and a machine step must have a command. `symphony workflow preview`
 prints the list a run kind follows above its prompt.

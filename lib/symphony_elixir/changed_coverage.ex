@@ -29,7 +29,8 @@ defmodule SymphonyElixir.ChangedCoverage do
         }
 
   @doc """
-  Runs the check. `opts`: `:base` (default `origin/main`), `:ignore_modules` (modules or regexes),
+  Runs the check. `opts`: `:base` (default `origin/main`), `:files` (the `lib/` files to check in
+  place of the changed ones: a CI Fix run's failed-check step names the modules CI found below 100%), `:ignore_modules` (modules or regexes),
   `:extra_tests` (test files to run as well) and `:covering_tests` (a map from a `lib/` file to
   the test files that cover it without naming its modules, run whenever that file changes). Returns `:ok`, or `{:error, message}` naming
   what failed.
@@ -39,7 +40,7 @@ defmodule SymphonyElixir.ChangedCoverage do
     base = Keyword.get(opts, :base, "origin/main")
     ignores = Keyword.get(opts, :ignore_modules, [])
 
-    with {:ok, files} <- changed_files(base, deps.git),
+    with {:ok, files} <- files(Keyword.get(opts, :files, []), base, deps.git),
          {:ok, deleted} <- deleted_tests(base, deps.git) do
       app_modules = deps.modules.()
       changed = changed_modules(files, app_modules)
@@ -56,6 +57,9 @@ defmodule SymphonyElixir.ChangedCoverage do
       check(checked, files, extra_tests, deps)
     end
   end
+
+  defp files([], base, git), do: changed_files(base, git)
+  defp files(files, _base, _git), do: {:ok, files |> Enum.uniq() |> Enum.sort()}
 
   defp check([], _files, _extra_tests, deps) do
     deps.info.("no changed lib/ module to check")

@@ -118,6 +118,13 @@ defmodule SymphonyElixir.ChangedCoverageTest do
            ] = infos()
   end
 
+  test "checks the files it is given in place of the changed ones" do
+    assert :ok = ChangedCoverage.run([files: ["lib/symphony_elixir/other.ex", "lib/symphony_elixir/other.ex"]], deps())
+
+    assert_received {:run_tests, ["test/symphony_elixir/other_test.exs"]}
+    assert_received {:coverage, [SymphonyElixir.Other]}
+  end
+
   test "runs the covering tests of a changed file, and not those of an unchanged one" do
     covering = %{
       "lib/symphony_elixir/foo.ex" => ["test/symphony_elixir/foo_reach_test.exs"],

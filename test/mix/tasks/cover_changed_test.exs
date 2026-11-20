@@ -53,6 +53,16 @@ defmodule Mix.Tasks.Cover.ChangedTest do
     assert_received {:mix_shell, :info, ["cover.changed: every changed module is at 100.00%"]}
   end
 
+  test "checks the modules of the files --file names in place of the changed ones" do
+    fake_deps(%{})
+
+    assert :ok = Changed.run(["--file", "lib/symphony_elixir/run_kind.ex"])
+
+    assert_received {:run_tests, files}
+    assert "test/symphony_elixir/run_kind_test.exs" in files
+    refute "test/symphony_elixir/changed_coverage_test.exs" in files
+  end
+
   test "skips the modules mix.exs ignores" do
     fake_deps(%{
       git: fn

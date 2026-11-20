@@ -1467,8 +1467,9 @@ defmodule SymphonyElixir.PromptBuilderTest do
       assert tools_prompt(run_profile: %{kind: :implementation}) =~ "Body for TOOLS-1 (implementation, true)"
       assert tools_prompt(run_profile: %{kind: :implementation}) =~ "This run follows a step list: Symphony runs its build, checks and tests itself"
       assert tools_prompt(run_kind: :rework) =~ "Body for TOOLS-1 (rework, true)"
-      assert tools_prompt(run_kind: :ci_fix) =~ "Body for TOOLS-1 (ci_fix, false)"
-      refute tools_prompt(run_kind: :ci_fix) =~ "This run follows a step list"
+      assert tools_prompt(run_kind: :ci_fix) =~ "Body for TOOLS-1 (ci_fix, true)"
+      assert tools_prompt(run_kind: :landing) =~ "Body for TOOLS-1 (landing, false)"
+      refute tools_prompt(run_kind: :landing) =~ "This run follows a step list"
       assert tools_prompt(run_kind: "implementation", step_runner: false) =~ "(implementation, false)"
       assert tools_prompt([]) =~ "Body for TOOLS-1 (, false)"
       assert tools_prompt([]) =~ "- A run records `step.completed` for each delegated step"
@@ -1514,6 +1515,12 @@ defmodule SymphonyElixir.PromptBuilderTest do
       assert rework =~ "Record each finding you fix with `ticket_record` as `finding.resolved`"
       assert rework =~ "when the step list reaches its `handoff` step"
       refute rework =~ "do not push a third attempt"
+    end
+
+    test "a CI Fix run never pushes a fix before the failed check passes for it" do
+      assert repo_prompt("ci_fix") =~ "A run never pushes a CI fix before the failed check passes for it."
+      assert repo_prompt("ci_fix") =~ "Symphony runs again what failed on GitHub (`The failed check`)"
+      assert repo_prompt("ci_fix", step_runner: false) =~ "when you have no way to run it, stop and say so with the question tool instead of pushing"
     end
 
     test "a run with no step list still reads the open findings and leaves the slow checks to CI" do

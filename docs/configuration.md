@@ -3911,7 +3911,7 @@ _Symphony posts a new update when this list changes · list `b1712c40`_
 ### `phases`
 
 The list of steps a run of each kind follows: for an implementation run, writing the code, building
-it, checking it, testing it, running its window tests in the QA VM and handing it off; for a rework run, reading the open findings first. Each kind under `phases` (a run kind:
+it, checking it, testing it, running its window tests in the QA VM and handing it off; for a rework run, reading the open findings first; for a CI Fix run, fixing the failed check and running it again before the push. Each kind under `phases` (a run kind:
 `implementation`, `rework`, `ci_fix`, `review_feedback`, `qa`, `code_review`, `landing`,
 `breakdown`, `epic_review`; not `conductor`, which takes no step list) holds one setting, its `steps` list. A kind the file doesn't set follows
 its default list; a `symphony.yml` with no `phases` key follows every default. `symphony workflow
@@ -4008,6 +4008,22 @@ phases:
         timeout_ms: 60000
         on_fail: code
       # code, build, checks, tests, window_tests and handoff, as in the implementation list
+  ci_fix:
+    steps:
+      - id: fix
+        title: Fix the failed check
+        mode: delegated
+      # build, checks and tests as in the implementation list, each with on_fail: fix
+      - id: failed_check
+        title: The failed check
+        mode: machine
+        command: symphony:failed_check
+        timeout_ms: 3600000
+        on_fail: fix
+      # window_tests as in the implementation list, with on_fail: fix
+      - id: handoff
+        title: "Hand off: push the fix"
+        mode: delegated
 ```
 
 A list may instead end on a machine step with the id `handoff`, whose command pushes the branch. Once
@@ -4056,10 +4072,31 @@ a `macos_app` QA pass holds it for its whole pass and the step while its tests r
 overlap; a step that waits says on the ticket's timeline which ticket holds it, and a QA pass that
 waits is listed as waiting for the QA VM.
 
+`symphony:failed_check` is the CI Fix run's failed-check step, which Symphony runs itself (TP-1555):
+it runs again, on the run's new commit, what failed on GitHub, so no run pushes a CI fix it has not
+seen pass. What failed comes from each red check's own result, as the CI log tool reads it (its
+failed steps, annotations and log), for the checks the PR watcher found red on the head the run was
+sent for, never from the agent's reading of them. For a red test job it runs the test files the
+failure annotations name (else its log), those still in the workspace, in one `mix test`; for a red
+coverage report, `mix cover.changed --file <lib file>` for each module it names below 100%; for any
+other red job, each failed step it knows how to run outside GitHub (the format, lint, build and
+audit jobs' steps, and the Mac checks' build, tests, gallery and script tests), and a failed step that
+drives an app's window as the Window tests step runs it, in the QA VM, never on Symphony's host. A
+command that fails sends the run back to `fix` with the output; the run reaches Hand off only when
+the step passes. A check, or one step of one, that only CI can prove is not run: the step says "can
+only be proved by CI" with the check's name and why, and the push goes ahead. That list is declared
+in Symphony (`Phases.ci_only_checks/0`), short, and shown in the Director's Settings › Phases with the
+CI fix list: `dialyzer` (its full run), `protected paths` and `validate-pr-description` (they read the
+pull request on GitHub), the `macos` gate (it sums up the Mac checks), and the Mac checks' QA signing
+identity and update tests (they change the machine they run on). Any other check the step has no way
+to run, or can't read, stops the run on a Question before the push: the person lets CI prove it ("Go
+on past it"), runs it again, or sends their words to `fix`. A CI Fix run sent for a merge conflict has
+no failed check, and the step is skipped.
+
 Agents run none of the commands in these lists: the prompts name no check command, and a run with no
 step list leaves them to CI, apart from the test it is fixing and the push check.
 
-Every other kind has no default list: its run is one agent session. A kind set to `steps: []`
+Every kind but `implementation`, `rework` and `ci_fix` has no default list: its run is one agent session. A kind set to `steps: []`
 follows no list either.
 
 Each step has:

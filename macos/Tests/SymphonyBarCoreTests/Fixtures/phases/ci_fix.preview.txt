@@ -1,0 +1,25 @@
+## Steps
+
+A ci_fix run follows these steps (the default list, `phases.ci_fix.steps`):
+
+1. `fix` Fix the failed check · delegated
+2. `build` Build · machine · times out after 15 min · on failure returns to `fix`
+   - when macos/ changed: `cd macos && make build`
+   - when Elixir files changed: `mix compile --warnings-as-errors`
+3. `checks` Format, specs and credo · machine · when Elixir files changed · times out after 10 min · on failure returns to `fix`
+   - `mix format --check-formatted && mix specs.check && mix credo --strict $SYMPHONY_CHANGED_ELIXIR_FILES`
+4. `tests` Tests and coverage · machine · times out after 30 min · on failure returns to `fix`
+   - when Elixir files changed: `mix test $SYMPHONY_CHANGED_TEST_FILES && mix cover.changed`
+   - when macos/ changed: `cd macos && swift test --filter "$SYMPHONY_CHANGED_SWIFT_TEST_FILTER"`
+5. `failed_check` The failed check · machine · times out after 60 min · on failure returns to `fix`
+   - `symphony:failed_check`
+   - can only be proved by CI: dialyzer (its full run of the whole code base takes longer than a run's step allows)
+   - can only be proved by CI: protected paths (it reads the pull request's author and reviews on GitHub)
+   - can only be proved by CI: validate-pr-description (it reads the pull request's description on GitHub)
+   - can only be proved by CI: macos (it only sums up the Mac checks, which the step runs itself)
+   - can only be proved by CI: mac checks › Test the QA signing identity script (it changes the keychain of the machine it runs on)
+   - can only be proved by CI: mac checks › Test update, restart and rollback (it signs, installs and launches the app on the machine it runs on)
+6. `window_tests` Window tests · machine · times out after 120 min · on failure returns to `fix`
+   - `symphony:window_tests`
+7. `handoff` Hand off: push the fix · delegated
+

@@ -6,12 +6,14 @@ defmodule Mix.Tasks.Cover.Changed do
   @moduledoc """
   Checks that every `lib/` module the branch changes is at 100% line coverage, before a push.
 
-      mix cover.changed [--base origin/main] [TEST_FILES...]
+      mix cover.changed [--base origin/main] [--file lib/PATH.ex ...] [TEST_FILES...]
 
   Runs the changed test files, `test/<path>_test.exs` for each changed `lib/<path>.ex` and every
   test file that names a changed module, once with `--cover` (the test environment), then prints
   each changed module's coverage with its uncovered lines. Fails when one is below 100%. Modules in
-  `mix.exs`'s `test_coverage` `ignore_modules` are skipped, as in CI.
+  `mix.exs`'s `test_coverage` `ignore_modules` are skipped, as in CI. `--file` (repeatable) checks
+  the modules of the `lib/` files it names in place of the changed ones, as a CI Fix run's
+  failed-check step does for the modules CI's coverage report found below 100%.
 
   The changed files are those since the merge-base with `--base`, uncommitted and untracked ones
   included. Extra `TEST_FILES` run as well: pass them when the tests that cover a module don't name it.
@@ -20,7 +22,7 @@ defmodule Mix.Tasks.Cover.Changed do
   """
   @shortdoc "Fails when a lib/ module the branch changes is below 100% coverage"
 
-  @switches [base: :string]
+  @switches [base: :string, file: :keep]
 
   @impl Mix.Task
   def run(args) do
@@ -32,6 +34,7 @@ defmodule Mix.Tasks.Cover.Changed do
     opts =
       Keyword.merge(opts,
         extra_tests: extra_tests,
+        files: Keyword.get_values(opts, :file),
         ignore_modules: config[:test_coverage][:ignore_modules] || [],
         covering_tests: config[:cover_changed][:covering_tests] || %{}
       )

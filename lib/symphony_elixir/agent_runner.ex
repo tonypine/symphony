@@ -1520,6 +1520,8 @@ defmodule SymphonyElixir.AgentRunner do
       workspace: workspace,
       worker_host: worker_host,
       base_branch: Config.base_branch(repo_key),
+      ci_failure: Keyword.get(opts, :ci_failure),
+      pr_url: Map.get(run_context, :dispatch_pr_url),
       runner: Keyword.get(opts, :step_command_runner)
     }
     |> Map.reject(fn {key, value} -> key == :runner and is_nil(value) end)

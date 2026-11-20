@@ -42,6 +42,23 @@ final class PhaseSettingsTests: XCTestCase {
         XCTAssertEqual(PhasePreview.text(kind: .implementation, list: settings[.implementation]), try fixture("default.preview.txt"))
     }
 
+    // TP-1555: a CI Fix run fixes the failed check, runs the implementation list's checks, then what failed on GitHub,
+    // each failure returning to the fix; the preview lists the checks only CI can prove, as Symphony prints them.
+    func testTheCIFixDefaultRunsTheFailedCheckAgainAndPreviewsAsSymphonyDoes() throws {
+        let steps = PhaseDefaults.steps(for: .ciFix)
+        XCTAssertEqual(steps.map(\.stepID), ["fix", "build", "checks", "tests", "failed_check", "window_tests", "handoff"])
+        XCTAssertEqual(steps.filter { $0.mode == .machine }.map(\.onFail), Array(repeating: Optional("fix"), count: 5))
+        XCTAssertEqual(steps[4].title, "The failed check")
+        XCTAssertEqual(steps[4].commands.map(\.run), [PhaseDefaults.failedCheckCommand])
+        XCTAssertEqual(Array(steps[1...3].map(\.commands)), Array(defaults[1...3].map(\.commands)))
+        XCTAssertEqual(PhaseDefaults.ciOnlyChecks.first?.name, "dialyzer")
+        XCTAssertEqual(PhaseDefaults.ciOnlyChecks.last?.name, "mac checks › Test update, restart and rollback")
+
+        let settings = try PhaseSettings.values(in: "execution:\n  max_turns: 3\n")
+        XCTAssertEqual(settings[.ciFix], .defaults(for: .ciFix))
+        XCTAssertEqual(PhasePreview.text(kind: .ciFix, list: settings[.ciFix]), try fixture("ci_fix.preview.txt"))
+    }
+
     func testAKindWithNoListPreviewsAsOneAgentSession() {
         XCTAssertEqual(
             PhasePreview.text(kind: .qa, list: .defaults(for: .qa)),

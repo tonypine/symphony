@@ -66,7 +66,7 @@ defmodule SymphonyElixir.WorkflowPreviewStepsTest do
 
     Snapshot.assert_snapshot!(Path.join("workflow_preview", "ticket_tools.md"), sections)
     assert sections =~ "## implementation\n\n" <> "- `ticket_events`"
-    assert [_implementation, _rework] = Regex.scan(~r/This run follows a step list: Symphony runs its build, checks and tests itself/, sections)
+    assert [_implementation, _rework, _ci_fix] = Regex.scan(~r/This run follows a step list: Symphony runs its build, checks and tests itself/, sections)
   end
 
   test "removing a step from symphony.yml changes the next preview", %{workflow: workflow} do
@@ -139,6 +139,13 @@ defmodule SymphonyElixir.WorkflowPreviewStepsTest do
     assert steps == File.read!(Path.join(@phase_fixtures, "default.preview.txt"))
   end
 
+  test "the CI Fix default list previews with the checks only CI can prove, as the Director's Phases preview draws it", %{workflow: workflow} do
+    [steps, _prompt] = String.split(preview!(workflow, "ci_fix"), "\n---\n\n", parts: 2)
+    assert steps == File.read!(Path.join(@phase_fixtures, "ci_fix.preview.txt"))
+    assert steps =~ "5. `failed_check` The failed check · machine · times out after 60 min · on failure returns to `fix`\n"
+    assert steps =~ "   - can only be proved by CI: dialyzer ("
+  end
+
   test "a list the Director saved, tests moved above checks, previews in the new order as the Director draws it", %{workflow: workflow} do
     append_symphony_yml!(File.read!(Path.join(@phase_fixtures, "reordered.yml")))
 
@@ -151,8 +158,8 @@ defmodule SymphonyElixir.WorkflowPreviewStepsTest do
     output = preview_cli(["--file", workflow])
     assert output =~ "An implementation run follows these steps"
 
-    output = preview_cli(["--file", workflow, "--kind", "ci_fix"])
-    assert output =~ "A ci_fix run follows no step list"
+    output = preview_cli(["--file", workflow, "--kind", "landing"])
+    assert output =~ "A landing run follows no step list"
 
     output = preview_cli(["--file", workflow, "--kind", "rework"])
     assert output =~ "A rework run follows these steps (the default list, `phases.rework.steps`):"
