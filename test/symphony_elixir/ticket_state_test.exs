@@ -1001,18 +1001,15 @@ defmodule SymphonyElixir.TicketStateTest do
       first = ~U[2026-10-29 08:10:00Z]
       newest = ~U[2026-10-29 08:20:00Z]
 
-      comments = [
-        %{author: "Tony", body: "One", created_at: newest},
-        %{author: "Tony", body: "Two", created_at: first},
-        %{author: "Bot", body: "Three"}
-      ]
+      older = %{author: "Tony", body: "Two", created_at: first}
+      comments = [%{author: "Tony", body: "One", created_at: newest}, older, %{author: "Bot", body: "Three"}]
 
       {record, :changed} = TicketState.observe(TicketState.new("repo-a", "issue-1"), linear_issue(%{comments: comments}), @observed_at)
       assert record.last_comment_at == newest
 
       # A read whose last comments are older, none, or a delivery that carries none, keeps it.
       later = DateTime.add(@observed_at, 60)
-      assert {^record, :unchanged} = TicketState.observe(record, linear_issue(%{comments: [hd(tl(comments))]}), later)
+      assert {^record, :unchanged} = TicketState.observe(record, linear_issue(%{comments: [older]}), later)
       assert {^record, :unchanged} = TicketState.observe(record, linear_issue(%{comments: []}), later)
       assert {^record, :unchanged} = TicketState.observe(record, linear_issue(%{comments: :unknown}), later, :webhook)
     end

@@ -694,11 +694,15 @@ defmodule SymphonyElixir.TicketObservationTest do
           hang = fn _parsed, _opts -> Process.sleep(:infinity) end
           removal = {:issue_removed, "issue-observed", nil}
           assert TicketObservation.observe_delivery(removal, observe_fun: hang, timeout_ms: 10) == :error
+
+          comment = {:comment, :create, "issue-commented", %{id: "c1", created_at: @now}}
+          assert TicketObservation.observe_delivery(comment, observe_fun: crash) == :error
         end)
 
       assert log =~ "Linear webhook observation failed for issue_id=issue-observed: {:exit, {%RuntimeError{message: \"boom\"}"
       assert log =~ "Linear webhook observation failed for issue_id=issue-observed: :timeout"
-      assert counts().errors == 2
+      assert log =~ "Linear webhook observation failed for issue_id=issue-commented: {:exit, {%RuntimeError{message: \"boom\"}"
+      assert counts().errors == 3
     end
   end
 
