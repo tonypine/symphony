@@ -14,7 +14,7 @@ final class QAJudgedStepsTests: XCTestCase {
 
     private func history() throws -> TicketEventsPayload { try XCTUnwrap(TicketEventsPayload.decode(Data(contentsOf: Self.fixture))) }
 
-    private func run() throws -> RunGroupModel {
+    private func qaPass() throws -> RunGroupModel {
         try XCTUnwrap(RunGroupModel.groups(history(), reference: reference).first { $0.id == "qa-2" })
     }
 
@@ -31,7 +31,7 @@ final class QAJudgedStepsTests: XCTestCase {
     // MARK: - The pass's step list
 
     func testAPassDrawsEachCheckWithWhatItJudged() throws {
-        let run = try run()
+        let run = try qaPass()
         XCTAssertEqual(run.steps.map(\.stepID), ["plan", "walk_1", "design_check", "wide_pass", "review"])
         XCTAssertEqual(run.steps.map(\.state), [.done, .failed, .blocked, .done, .done])
         XCTAssertEqual(run.steps.map(\.state.word), ["Done", "Failed", "Blocked", "Done", "Done"])
@@ -40,7 +40,7 @@ final class QAJudgedStepsTests: XCTestCase {
     }
 
     func testACheckThatJudgedFailDoesNotStopTheRun() throws {
-        let run = try run()
+        let run = try qaPass()
         XCTAssertEqual(run.stoppedAt?.stepID, "review")
         XCTAssertEqual(run.whereText, "ended after Review")
         XCTAssertFalse(run.steps[1].stopsTheRun)
@@ -113,9 +113,9 @@ final class QAJudgedStepsTests: XCTestCase {
     }
 
     func testAPageThatArrivesLaterSettlesTheBlocksItBrings() throws {
-        let data = try Data(contentsOf: Self.fixture)
-        var held = try XCTUnwrap(TicketEventsPayload.decode(data))
-        held.events.removeAll { $0.type == "conductor.update" }
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: Self.fixture)) as? [String: Any])
+        json["timeline"] = try XCTUnwrap(json["timeline"] as? [[String: Any]]).filter { $0["type"] as? String != "conductor.update" }
+        var held = try XCTUnwrap(TicketEventsPayload.decode(JSONSerialization.data(withJSONObject: json)))
         let newer = #"{"timeline":[{"id":"u3","seq":200,"at":"2026-11-20T11:00:00Z","type":"conductor.update","payload":{"text":"Again.","blocks":[{"type":"steps","run_id":"qa-2","steps":[{"step_id":"walk_1","title":"Walk step 1","outcome":"passed"},{"step_id":"design_check","title":"Design check","outcome":"passed"},{"step_id":"wide_pass","title":"Wide pass","outcome":"passed"},{"step_id":"review","title":"Review","outcome":"passed"}]}]},"artifacts":[],"children":[]}]}"#
         held.merge(try XCTUnwrap(TicketEventsPayload.decode(Data(newer.utf8))))
         let steps = try stepsBlock("u3", in: held)
