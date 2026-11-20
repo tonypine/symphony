@@ -125,7 +125,7 @@ struct WindowStatusBar: View {
     }
 
     var body: some View {
-        StatusLine(model.healthLine) {
+        StatusLine(model.healthLine, onAction: { model.onAction($0) }) {
             DispatchControlButton(model: model, client: client)
         }
     }

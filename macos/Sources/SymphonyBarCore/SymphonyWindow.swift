@@ -182,6 +182,11 @@ public struct DestinationBadge: Equatable {
     public var count: Int
     public var status: DesignTokens.Status
     public var accessibilityValue: String
+
+    /// The same count from Symphony's last answer while it is late (TP-1562): idle grey, and read as such.
+    public var notCurrent: DestinationBadge {
+        DestinationBadge(count: count, status: .idle, accessibilityValue: "\(accessibilityValue), \(HealthLine.notCurrentWords)")
+    }
 }
 
 /// A row of the sidebar: a destination, or a page Factory lists under it.
@@ -262,6 +267,9 @@ public struct DestinationMemory: Equatable {
 /// What the window shows while Symphony can't serve its views (D0), or `.connected` once it answers.
 public enum WindowState: Equatable {
     case connected
+    /// Symphony is alive but its last state isn't current (TP-1562): it hasn't answered its state for a while, or
+    /// answered one the app couldn't read. The pages stay, drawn from the last answer, and the status line says why.
+    case lagging(String)
     case stopped
     case starting
     case notAnswering
@@ -298,11 +306,12 @@ public enum WindowState: Equatable {
     }
 
     /// `hasConfig` is false while no `symphony.yml` is set or the one set doesn't exist. A Symphony that answers
-    /// wins: its views show whatever the settings say.
-    public init(status: SymphonyStatus, hasConfig: Bool) {
+    /// wins: its views show whatever the settings say. `lag` is the status machine's: why the state shown isn't
+    /// current, nil while it is.
+    public init(status: SymphonyStatus, hasConfig: Bool, lag: String? = nil) {
         switch status {
         case .running, .paused:
-            self = .connected
+            self = lag.map(WindowState.lagging) ?? .connected
         case .starting:
             self = .starting
         case .stopped:
@@ -314,7 +323,7 @@ public enum WindowState: Equatable {
 
     public var placeholder: Placeholder? {
         switch self {
-        case .connected:
+        case .connected, .lagging:
             return nil
         case .stopped:
             return Placeholder(title: "Symphony is stopped.", symbol: "stop.circle", actions: [.startSymphony], showsSpinner: false)
@@ -337,13 +346,32 @@ public enum WindowState: Equatable {
         }
     }
 
-    /// Badges and counts show only while Symphony answers; otherwise they are unknown, not zero.
-    public var countsKnown: Bool { self == .connected }
+    /// True while the window shows Symphony's pages: it answers, or answered and is only late (TP-1562).
+    public var servesPages: Bool {
+        switch self {
+        case .connected, .lagging: true
+        case .stopped, .starting, .notAnswering, .firstLaunch: false
+        }
+    }
+
+    /// Badges and counts show while the pages do, with their last values while Symphony is late; otherwise they are
+    /// unknown, not zero.
+    public var countsKnown: Bool { servesPages }
+
+    /// False while the badges and counts show Symphony's last answer rather than a current one: they are marked so.
+    public var countsCurrent: Bool { self == .connected }
+
+    /// What the status line offers while Symphony is late: the placeholder's actions, there instead of over the pages.
+    public var lineActions: [Action] {
+        if case .lagging = self { return [.openLogs, .restartSymphony] }
+        return []
+    }
 
     /// The connection state (C4) in the status bar's health line; nil while connected.
     public var connectionLabel: String? {
         switch self {
         case .connected: nil
+        case let .lagging(reason): reason
         case .stopped: "Stopped"
         case .starting: "Starting…"
         case .notAnswering: "Not answering"
@@ -357,7 +385,7 @@ public enum WindowState: Equatable {
         case .connected: .done
         case .stopped, .firstLaunch: .idle
         case .starting: .working
-        case .notAnswering: .problem
+        case .lagging, .notAnswering: .problem
         }
     }
 

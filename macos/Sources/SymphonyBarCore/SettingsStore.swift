@@ -23,6 +23,7 @@ public final class SettingsStore {
         /// Minutes since midnight.
         public static let updateTime = "updateTime"
         public static let releaseCheckMinutes = "releaseCheckMinutes"
+        public static let notAnsweringAlertSeconds = "notAnsweringAlertSeconds"
     }
 
     private let defaults: KeyValueStore
@@ -49,7 +50,9 @@ public final class SettingsStore {
             updateTime: (defaults.object(forKey: Key.updateTime) as? Int).flatMap(TimeOfDay.init(minutesSinceMidnight:))
                 ?? .defaultUpdateTime,
             releaseCheckMinutes: (defaults.object(forKey: Key.releaseCheckMinutes) as? Int)
-                .map(AppSettings.clampedReleaseCheckMinutes) ?? AppSettings.defaultReleaseCheckMinutes
+                .map(AppSettings.clampedReleaseCheckMinutes) ?? AppSettings.defaultReleaseCheckMinutes,
+            notAnsweringAlertSeconds: (defaults.object(forKey: Key.notAnsweringAlertSeconds) as? Int)
+                .map(AppSettings.clampedNotAnsweringAlertSeconds) ?? AppSettings.defaultNotAnsweringAlertSeconds
         )
     }
 
@@ -73,6 +76,7 @@ public final class SettingsStore {
         defaults.set(settings.updateMode.rawValue, forKey: Key.updateMode)
         defaults.set(settings.updateTime.minutesSinceMidnight, forKey: Key.updateTime)
         defaults.set(settings.releaseCheckMinutes, forKey: Key.releaseCheckMinutes)
+        defaults.set(settings.notAnsweringAlertSeconds, forKey: Key.notAnsweringAlertSeconds)
     }
 
     /// Reads the Linear API key, the provider keys and which providers are enabled (`ProviderKeys`), the GitHub webhook
