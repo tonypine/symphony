@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import SymphonyBarCore
+import SymphonyBarUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
@@ -36,6 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
     private var detailItems: [NSMenuItem] = []
     /// The "Waiting on you" heading, a row per waiting ticket and "N more…", under the status lines.
     private var waitingItems: [NSMenuItem] = []
+    /// The Providers block under Try Now (TP-1536): a separator, its heading and a line per provider in use.
+    private var providerItems: [NSMenuItem] = []
     private var startWhenStopped = false
     /// The Pause or Resume request under way, if any.
     private var controlInFlight: ControlAction?
@@ -554,6 +557,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
                 menuItem.title = StatusMenu.forceTitle
             }
             return forceInFlight == nil && StatusMenu.canForce(machine.status)
+        case #selector(moveProvider(_:)):
+            return controlInFlight == nil
         case #selector(stopForcing(_:)):
             return forceInFlight == nil && StatusMenu.canForce(machine.status)
         case #selector(openTerminalDashboard(_:)):
@@ -716,6 +721,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             if case let .failed(message) = result { controlError = message }
             showStatus()
             poller.pollNow()
+            // The window's pages read the same state, so a provider's Pause or Resume shows there at once too.
+            apiClient.refresh()
         }
     }
 
@@ -1216,7 +1223,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenu
             menu.insertItem(item, at: menu.index(of: statusTitleItem) + 1 + offset)
         }
         showWaiting(in: menu)
+        showProviders(in: menu)
         showForced(in: menu)
+    }
+
+    /// The Providers block (TP-1536), as the catalog's "Menu bar menu, providers" draws it: a line per provider in
+    /// use with its status dot, "Pause Anthropic" or "Resume Anthropic", and its state on the right. Nothing shows
+    /// while none is in use.
+    private func showProviders(in menu: NSMenu) {
+        providerItems.forEach(menu.removeItem)
+        let lines = StatusMenu.providerLines(machine.status)
+        guard !lines.isEmpty else {
+            providerItems = []
+            return
+        }
+        let heading = NSMenuItem(title: StatusMenu.providersTitle, action: nil, keyEquivalent: "")
+        heading.isEnabled = false
+        let rows = lines.map { line in
+            let item = menuItem(line.title, action: #selector(moveProvider(_:)))
+            item.representedObject = line.action
+            item.view = MenuTrailLineView(
+                title: line.title,
+                trail: line.state,
+                image: Self.statusDot(line.status),
+                accessibilityLabel: "\(line.title), \(line.spoken)"
+            ) { [weak self] in self?.send(line.action) }
+            return item
+        }
+        providerItems = [.separator(), heading] + rows
+        let start = menu.index(of: tryNowItem) + 1
+        for (offset, item) in providerItems.enumerated() {
+            menu.insertItem(item, at: start + offset)
+        }
+    }
+
+    /// Pauses or resumes the provider of the line chosen, then reads the state again for the menu and the window.
+    @objc private func moveProvider(_ sender: NSMenuItem) {
+        guard let action = sender.representedObject as? ControlAction else { return }
+        send(action)
+    }
+
+    /// The Status dot (`.dot`, 8 pt) in a status's colour, for a menu line's image.
+    private static func statusDot(_ status: DesignTokens.Status) -> NSImage {
+        let diameter = DesignTokens.StatusDot.Size.regular.diameter
+        let image = NSImage(size: NSSize(width: diameter, height: diameter), flipped: false) { rect in
+            status.color.nsColor.setFill()
+            NSBezierPath(ovalIn: rect).fill()
+            return true
+        }
+        image.accessibilityDescription = status.word
+        return image
     }
 
     /// Lists the tickets waiting on the operator under the status lines (D13): each row, with its kind's symbol and
