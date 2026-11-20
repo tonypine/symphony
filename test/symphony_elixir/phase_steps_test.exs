@@ -425,6 +425,7 @@ defmodule SymphonyElixir.PhaseStepsTest do
 
       assert [%{payload: payload, summary: summary}] = events("step.completed")
       assert %{step_id: "build", outcome: "failed", returns_to: "code", returns_to_title: "Write the code"} = payload
+      assert payload.reason == "`make build` exited 2: error: undefined function foo/0"
       assert summary.title =~ "Build failed"
       assert summary.title =~ "back to Write the code"
 
@@ -442,7 +443,19 @@ defmodule SymphonyElixir.PhaseStepsTest do
                PhaseSteps.run_machine_steps(steps, step(steps, "lint"), context(ctx, %{"lint" => [{:error, :enoent}]}))
 
       assert output =~ "could not run: :enoent"
-      assert [%{payload: %{outcome: "failed", returns_to: "end", returns_to_title: "the end of the run"}}] = events("step.completed")
+      assert [%{payload: %{outcome: "failed", returns_to: "end", returns_to_title: "the end of the run"} = payload}] = events("step.completed")
+      assert payload.reason == "`lint` could not run: :enoent"
+    end
+
+    test "a failed step's reason names the command that ended it, how it ended and the last line it printed" do
+      assert PhaseSteps.failure_reason("$ make a\nok\n$ make test\n\e[31m4 failures\e[0m\n\n(exit status 2)\n") == "`make test` exited 2: 4 failures"
+      assert PhaseSteps.failure_reason("$ make test\nslow\n(stopped: no result before the step's timeout)\n") == "`make test` stopped: no result before the step's timeout: slow"
+      assert PhaseSteps.failure_reason("$ make test\n(exit status 1)\n") == "`make test` exited 1"
+      assert PhaseSteps.failure_reason("$ make test\nboom\n") == "`make test`: boom"
+      assert PhaseSteps.failure_reason("qa_build_failed: no app\n") == "qa_build_failed: no app"
+      assert PhaseSteps.failure_reason("(exit status 3)\n") == "exited 3"
+      assert PhaseSteps.failure_reason("") == "none"
+      assert String.length(PhaseSteps.failure_reason("$ " <> String.duplicate("x", 200) <> "\n" <> String.duplicate("y", 400))) == 300
     end
 
     test "the last step passing ends the list", ctx do
@@ -507,6 +520,7 @@ defmodule SymphonyElixir.PhaseStepsTest do
 
       assert [first, second] = events("step.completed")
       assert %{outcome: "failed", returns_to: "tests", returns_to_title: "Tests"} = first.payload
+      assert first.payload.reason == "`make test` stopped: no result before the step's timeout: still waiting on `Port.open`"
       assert %{outcome: "paused", question_id: ^question_id} = second.payload
       assert [_artifact] = second.artifacts
 

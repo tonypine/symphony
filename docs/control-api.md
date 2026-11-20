@@ -29,7 +29,7 @@ the open page on the next poll, as before. Opening a ticket's page reads both in
 
 The ticket itself, as its record holds it: the same values the ticket list's `title`, `phase`,
 `priority` and `labels` columns serve (`GET /api/v1/tickets`, below), so a client reads one ticket's
-title without listing every ticket.
+title without listing every ticket, and its description as runs receive it.
 
 ```json
 { "title": "Undo a Director move within ten seconds", "phase": "Rework", "priority": 1, "labels": ["qa:live"] }
@@ -41,6 +41,7 @@ title without listing every ticket.
 | `phase` | The phase (state) the record says it is in, also when its ledger holds no `phase.entered` and `phase_path.current` is null. |
 | `priority` | Linear's priority: 0 none, 1 urgent, 2 high, 3 medium, 4 low; null when unknown. |
 | `labels` | The ticket's labels; `[]` when it has none. |
+| `description` | The ticket's description as the last read of Linear gave it, without Symphony's summary block: the text a run receives. The ticket page shows its first section before a run writes a brief, and all of it under the brief's "What was asked". Null when Symphony holds none. |
 
 ## `situation`
 
@@ -439,7 +440,6 @@ read yet (facts 6 and 18 of `docs/design/director-ticket-page.md`; `SymphonyElix
 | `looked_at` | When the person last looked at the ticket, set by `POST /api/v1/control/looked`; null when they never did. |
 | `new_since_looked` | How many of the ticket's events are later than `looked_at`; every event when it is null. |
 | `unread_messages` | How many messages (see Messages below) no run was given yet. |
-| `note` | Served only for the Mac app release that reads one note: the newest unread message, as `id`, `text`, `at` (when it was written), `by` and `read_by` (always null); null when every message was read. It is removed once the app's ticket page reads the messages. |
 
 `POST /api/v1/control/looked` takes `issue_identifier` and an optional `repo_key`, and needs the control
 token. It writes the mark on the ticket's record, keyed by person (the Director, the one person the token

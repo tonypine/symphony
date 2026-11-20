@@ -1,15 +1,8 @@
 {
   "identifier": "TP-1447",
   "repo_key": "symphony",
-  "ticket": { "title": "The facts rail's Note, Decisions and Details panels", "phase": "In Progress", "priority": 1, "labels": ["skip-update-hold", "qa:fixture"] },
+  "ticket": { "title": "The facts rail's Note, Decisions and Details panels", "phase": "In Progress", "priority": 1, "labels": ["skip-update-hold", "qa:fixture"], "description": "## Problem\n\nThe brief is buried in the Details panel.\n\n## Acceptance\n\n- The brief is on top of the page." },
   "workspace": { "path": "/Users/tonypine/symphony-workspaces/symphony/TP-1447", "host": null },
-  "note": {
-    "id": "01M746NOTE",
-    "text": "Keep the agent description folded by default; the brief is what a person reads first.",
-    "at": "2026-11-10T13:40:00Z",
-    "by": "Tony",
-    "read_by": { "run_id": "run-3", "at": "2026-11-10T14:02:00Z" }
-  },
   "brief": {
     "id": "01M746BRIEF",
     "text": "Adds the last three panels of the ticket page's facts rail: the note for the next run with whether a run read it, the decisions taken on the ticket, and the details looked up rarely, with the brief folded open above the agent's description.",

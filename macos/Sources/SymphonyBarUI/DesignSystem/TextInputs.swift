@@ -575,6 +575,8 @@ public struct TextArea: View {
     var hint: String?
     var minLines: Int
     var maxLines: Int
+    /// The least the area is tall, its padding in: a control's height (the box above the timeline is the large one's).
+    var minHeight: Double?
     var accented: Bool
     var still: Bool
     var focus: FocusState<Bool>.Binding?
@@ -594,10 +596,12 @@ public struct TextArea: View {
     /// The system text view's own room on each side of a line.
     static let textInset: CGFloat = 5
 
-    /// `label` is what VoiceOver reads it as; `hint`, what it reads after.
+    /// `label` is what VoiceOver reads it as; `hint`, what it reads after. `minHeight` is the least it is tall, nil for
+    /// `minLines` alone.
     public init(
         _ label: String, text: Binding<String>, placeholder: String = "", hint: String? = nil,
-        minLines: Int = DesignTokens.Field.areaMinLines, maxLines: Int = DesignTokens.Field.areaMaxLines, accented: Bool = false,
+        minLines: Int = DesignTokens.Field.areaMinLines, maxLines: Int = DesignTokens.Field.areaMaxLines, minHeight: Double? = nil,
+        accented: Bool = false,
         still: Bool = false, focused: FocusState<Bool>.Binding? = nil, drawnAs: DesignTokens.Field.State? = nil,
         send: (() -> Void)? = nil
     ) {
@@ -608,6 +612,7 @@ public struct TextArea: View {
         let fewest = max(1, minLines)
         self.minLines = fewest
         self.maxLines = max(fewest, maxLines)
+        self.minHeight = minHeight
         self.accented = accented
         self.still = still
         focus = focused
@@ -627,7 +632,7 @@ public struct TextArea: View {
         Text(text.isEmpty || text.hasSuffix("\n") ? text + " " : text)
             .lineLimit(maxLines)
             .padding(.horizontal, Self.textInset)
-            .frame(maxWidth: .infinity, minHeight: Self.lineHeight * CGFloat(minLines), alignment: .topLeading)
+            .frame(maxWidth: .infinity, minHeight: Self.textHeight(minLines: minLines, minHeight: minHeight), alignment: .topLeading)
             .hidden()
             .background(alignment: .topLeading) {
                 // The whole text at the area's width: taller than `maxLines`, and the area scrolls.
@@ -677,6 +682,12 @@ public struct TextArea: View {
             .focused(focusBinding)
             .accessibilityLabel(label)
             .accessibilityHint(hint ?? "")
+    }
+
+    /// The least the text's room is tall: `minLines` lines, or what `minHeight` leaves inside the padding when that is
+    /// more.
+    static func textHeight(minLines: Int, minHeight: Double?) -> CGFloat {
+        max(lineHeight * CGFloat(minLines), CGFloat(minHeight ?? 0) - 2 * DesignTokens.Field.areaVerticalPadding)
     }
 
     /// Text this tall needs more than `maxLines` lines (half a line of slack for the two text systems' rounding).

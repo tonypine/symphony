@@ -9,13 +9,13 @@
     "priority": 1,
     "labels": [
       "skip-update-hold"
-    ]
+    ],
+    "description": "## Problem\n\nA paused ticket says nothing about why it is paused, so you can't tell whether to release it.\n\n## Acceptance\n\n- The line under the title says why, since when, and offers Release where you may."
   },
   "workspace": {
     "path": "/Users/director/symphony-workspaces/symphony/TP-1246",
     "host": null
   },
-  "note": null,
   "brief": {
     "id": "01M746BRIEF",
     "text": "Adds the paused line under the ticket page's title: why the ticket is paused, since when, and Release where you may release it.",

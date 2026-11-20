@@ -154,6 +154,9 @@ let galleryEntries: [GalleryEntry] = [
         id: "facts-rail", title: "Facts rail and its panels", kind: .component, prefixes: ["facts-rail-"],
         files: ["SymphonyBarUI/FactsRail", "SymphonyBarCore/FactsRail", "SymphonyBarCore/ContextCard", "SymphonyBarCore/PullRequestPanel"]),
     GalleryEntry(
+        id: "brief-panel", title: "Brief", kind: .component, prefixes: ["brief-panel-"],
+        files: ["SymphonyBarUI/BriefPanel.swift", "SymphonyBarCore/BriefPanel.swift", "SymphonyBarUI/DesignSystem/StoryRow.swift"]),
+    GalleryEntry(
         id: "action-rail", title: "Action rail, Move to… and Start now", kind: .component,
         prefixes: ["action-rail-", "move-sheet", "start-now-"],
         files: ["SymphonyBar/ActionRail.swift", "SymphonyBar/InboxMoveViews.swift", "SymphonyBarCore/TicketMoves", "SymphonyBarCore/TicketActionRail"]),
@@ -175,11 +178,20 @@ let galleryEntries: [GalleryEntry] = [
             "SymphonyBarUI/DesignSystem/ConductorBlocksView.swift", "SymphonyBarUI/DesignSystem/ConductorMessageViews.swift",
             "SymphonyBarCore/ConductorBlock.swift",
         ]),
+    GalleryEntry(
+        id: "image-viewer", title: "Image viewer", kind: .component, prefixes: ["image-viewer-"],
+        files: ["SymphonyBarUI/DesignSystem/ImageViewer.swift", "SymphonyBarUI/DesignSystem/TimelineParts.swift", "SymphonyBarCore/ImageViewerModel.swift"]),
+    GalleryEntry(
+        id: "thumbnail-row", title: "Thumbnail row", kind: .component, prefixes: ["thumbnail-row-"],
+        files: ["SymphonyBarUI/DesignSystem/TimelineParts.swift", "SymphonyBarCore/ThumbnailRowPlan.swift"]),
     GalleryEntry(id: "type-styles", title: "Type styles", kind: .component, prefixes: ["type-styles-"], files: []),
     // Screens.
     GalleryEntry(
         id: "ticket-page", title: "Ticket page", kind: .screen, prefixes: ["ticket-page-"],
-        files: ["SymphonyBar/TicketPageView.swift", "SymphonyBarCore/TicketPage"]),
+        files: [
+            "SymphonyBar/TicketPageView.swift", "SymphonyBarCore/TicketPage", "SymphonyBarUI/TimelineComposer.swift",
+            "SymphonyBarCore/TicketMessage.swift", "SymphonyBarUI/BriefPanel.swift", "SymphonyBarCore/BriefPanel.swift",
+        ]),
     GalleryEntry(
         id: "home", title: "Home", kind: .screen, prefixes: ["home-lists", "home-unavailable"],
         files: ["SymphonyBar/HomeView.swift", "SymphonyBarCore/Home"]),

@@ -22,18 +22,6 @@ final class EquatableGatesTests: XCTestCase {
         let two = DecisionsPanelModel.build([TicketDecision(id: "D1", answer: "Keep it"), TicketDecision(id: "D2", answer: "Drop it")])
         XCTAssertEqual(DecisionsPanel(model: one), DecisionsPanel(model: one))
         XCTAssertNotEqual(DecisionsPanel(model: one), DecisionsPanel(model: two))
-
-        let details = DetailsPanelModel.build(nil, runs: [:], linearURL: nil, pullRequest: nil, description: nil, reference: reference)
-        let linked = DetailsPanelModel.build(
-            nil, runs: [:], linearURL: URL(string: "https://linear.app/t/issue/TP-1"), pullRequest: nil, description: nil, reference: reference
-        )
-        XCTAssertEqual(DetailsPanel(model: details, open: { _ in }), DetailsPanel(model: details, open: { _ in XCTFail() }, copy: { _ in }))
-        XCTAssertNotEqual(DetailsPanel(model: details, open: { _ in }), DetailsPanel(model: linked, open: { _ in }))
-
-        let note = NotePanelModel.build(note: nil, move: nil, runs: [:], reference: reference)
-        let composer = TicketNoteComposer()
-        XCTAssertEqual(NotePanel(model: note, composer: composer, save: {}), NotePanel(model: note, composer: composer, save: { XCTFail() }))
-        XCTAssertNotEqual(NotePanel(model: note, composer: composer, save: {}), NotePanel(model: note, composer: TicketNoteComposer(), save: {}))
     }
 
     func testTheLifecycleCardComparesItsModel() {

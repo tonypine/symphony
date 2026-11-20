@@ -126,18 +126,20 @@ final class TicketMarksTests: XCTestCase {
         }
         XCTAssertTrue(looks().isEmpty)
 
-        // The note panel says which run read the note, from the same read and the feed's run.
+        // The message the Director wrote is an entry of the timeline that says which run read it, from the feed.
         let feed = TicketEventsReader(get: { TicketEventsResult(await client.answer($0)) })
         feed.follow(identifier: "SHOP-412", repoKey: "web-shop")
         await feed.settle()
         let history = try XCTUnwrap(feed.events)
         let page = try await read()
-        let note = NotePanelModel.build(
-            note: page.detailsRead?.note, move: nil, runs: history.runs, reference: date("2026-10-08T17:00:00Z"), calendar: utc
-        )
-        XCTAssertEqual(note.current?.readLine, "Read by implementation run 3 at 14:02")
-        // The timeline: the marker above the newest thing seen, the dots on the note and the run.
+        // The timeline: the marker above the newest thing seen, the dots on the message and the run.
         let timeline = TimelineModel.build(history, reference: date("2026-10-08T17:00:00Z"), calendar: utc, lookedAt: page.marksRead?.lookedAt)
+        let message = try XCTUnwrap(timeline.items.compactMap { item -> TimelineEntry? in
+            if case let .entry(entry) = item, entry.kind == .message { return entry }
+            return nil
+        }.first)
+        XCTAssertEqual(message.title, "You wrote: \u{201C}Check the stopped run first.\u{201D}")
+        XCTAssertEqual(message.detail, "Read by Implementation run 3 at 14:02")
         XCTAssertEqual(timeline.marker?.before, "entry-a1")
         XCTAssertEqual(timeline.items.filter(\.isNew).map(\.id), ["run-run-3", "entry-n1"])
 

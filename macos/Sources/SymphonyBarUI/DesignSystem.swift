@@ -281,6 +281,15 @@ extension DesignTokens.TypeStyle {
         return Font(font as CTFont)
     }
 
+    /// The mono face at a size outside the type scale and a CSS weight, under the system's text size: code inside
+    /// reading text, at 0.85 of the reading size.
+    public static func monoFont(size: Double, weight: Int) -> Font {
+        let font = NSFont.monospacedSystemFont(
+            ofSize: CGFloat(size * textScale), weight: NSFont.Weight(rawValue: CGFloat(systemWeight(css: weight)))
+        )
+        return Font(font as CTFont)
+    }
+
     /// The mono face at the mono style's size and a CSS weight: an identifier inside a control (a model on a pop-up).
     public static func monoFont(weight: Int) -> Font {
         let font = NSFont.monospacedSystemFont(

@@ -11,7 +11,7 @@ public struct TimelineEntry: Equatable, Identifiable {
     /// The entry's class: its glyph, and its tone, which says the outcome only where there is one.
     public enum Kind: String, CaseIterable, Equatable {
         case phase, sendBack, pause, pauseCleared, questionAsked, questionAnswered, questionClosed, runStarted, runPassed
-        case runFailed, runStopped, person, rule, finding, findingResolved, note, update, ticket, situation, other
+        case runFailed, runStopped, person, rule, finding, findingResolved, note, message, update, ticket, situation, other
 
         /// The glyph inside the entry's round mark (the catalog's `.tl-entry .mark`, which draws the circle itself).
         public var symbol: String {
@@ -32,6 +32,7 @@ public struct TimelineEntry: Equatable, Identifiable {
             case .finding: "ladybug"
             case .findingResolved: "ladybug"
             case .note: "note.text"
+            case .message: "note.text"
             case .update: "text.bubble"
             case .ticket: "doc.badge.plus"
             case .situation: "arrow.clockwise"
@@ -41,7 +42,7 @@ public struct TimelineEntry: Equatable, Identifiable {
 
         public var tone: Tone {
             switch self {
-            case .phase, .person: .accent
+            case .phase, .person, .message: .accent
             case .pause, .questionClosed, .runStopped, .rule, .findingResolved, .note, .update, .ticket, .other: .status(.idle)
             case .pauseCleared, .runStarted: .status(.working)
             case .questionAsked: .status(.you)
@@ -69,6 +70,7 @@ public struct TimelineEntry: Equatable, Identifiable {
             case .finding: "finding"
             case .findingResolved: "finding resolved"
             case .note: "note"
+            case .message: "message"
             case .update: "update"
             case .ticket: "ticket"
             case .situation: "situation"
@@ -109,6 +111,9 @@ public struct TimelineEntry: Equatable, Identifiable {
     /// The Conductor's words, for a `conductor.update`: the row draws them as the Conductor speaking, not as an entry
     /// with a title.
     public var conductor: ConductorMessage?
+    /// A message written to the ticket that no run read yet: it sits on top of the timeline, above the run now, until
+    /// the next run reads it.
+    public var waitsForRun = false
 
     public init(
         id: String, kind: Kind, at: Date, title: String, detail: String? = nil, actor: String, endedAt: Date? = nil,
@@ -161,6 +166,34 @@ public struct TimelineEntry: Equatable, Identifiable {
 
     /// The title of the Conductor's update for the person (`conductor.update`).
     public static let updateTitle = "Update"
+
+    /// A message's lead when the feed names no writer.
+    public static let messageLead = "You wrote"
+    /// A message's line while no run read it.
+    public static let messageWaits = "The next run reads it first"
+
+    /// A message's line: `messageWaits` until a run read it, then "Read by Implementation run 2 at 11:51" (the day too
+    /// when it isn't `reference`'s).
+    public static func messageReadLine(_ read: TicketEventsPayload.MessageRead?, reference: Date, calendar: Calendar) -> String {
+        guard let read else { return messageWaits }
+        let at = read.at.map { date -> String in
+            let moment = FactsMoment.say(date, reference: reference, calendar: calendar)
+            return moment.hasPrefix("today ") ? String(moment.dropFirst("today ".count)) : moment
+        }
+        return ["Read by " + (read.run?.trimmedNonEmpty ?? "a run"), at].compactMap { $0 }.joined(separator: " ")
+    }
+
+    /// The entry of a message written to the ticket (`message.sent`): "You wrote: “…”" with the whole text, then whether
+    /// a run read it; on top of the timeline while none did.
+    static func message(_ entry: TimelineEntry, event: TicketEventsPayload.Event, reference: Date, calendar: Calendar) -> TimelineEntry {
+        var entry = entry
+        let lead = event.summary?.title?.trimmedNonEmpty ?? messageLead
+        let text = event.payload.text?.trimmedNonEmpty ?? event.summary?.detail?.trimmedNonEmpty ?? ""
+        entry.title = "\(lead): \u{201C}\(text)\u{201D}"
+        entry.detail = messageReadLine(event.read, reference: reference, calendar: calendar)
+        entry.waitsForRun = event.read == nil
+        return entry
+    }
 
     /// What the new dot says to VoiceOver.
     public static let newWords = "new since you last looked"
@@ -246,6 +279,15 @@ public enum TimelineItem: Equatable, Identifiable {
     public var run: RunGroupModel? {
         if case let .run(run, _) = self { return run }
         return nil
+    }
+
+    /// Where it sits above the rest, whenever it happened: a message no run read yet on top, then the run now; 0 for
+    /// everything else, newest first.
+    var pin: Int {
+        switch self {
+        case let .entry(entry): entry.waitsForRun ? 2 : 0
+        case let .run(run, _): run.isLive ? 1 : 0
+        }
     }
 
     /// It folds behind "Show all events": an entry that restates what is around it, or the Conductor's run.
@@ -422,15 +464,15 @@ public struct TimelineModel: Equatable {
             guard let at = header?.startedDate ?? first else { return nil }
             return .run(run, at: at)
         }
-        let entries = self.entries(history, reference: reference).map { entry in
+        let entries = self.entries(history, reference: reference, calendar: calendar).map { entry in
             var entry = entry
             if lookedAt == nil { entry.isNew = false }
             return TimelineItem.entry(entry)
         }
-        // Newest first; the run now on top, whenever it started.
+        // Newest first; the messages no run read yet on top, then the run now, whenever they happened.
         let ordered = (entries + runItems).enumerated().sorted { lhs, rhs in
             let left = lhs.element, right = rhs.element
-            if (left.run?.isLive ?? false) != (right.run?.isLive ?? false) { return left.run?.isLive ?? false }
+            if left.pin != right.pin { return left.pin > right.pin }
             return left.at == right.at ? lhs.offset > rhs.offset : left.at > right.at
         }.map(\.element)
         return TimelineModel(
@@ -440,28 +482,30 @@ public struct TimelineModel: Equatable {
     }
 
     /// The marker above the newest item the person saw, newest first in `items`, when something new is above it. The
-    /// run now, on top whenever it started, doesn't say where the line goes.
+    /// run now and the messages waiting for a run, on top whenever they happened, don't say where the line goes.
     static func marker(_ items: [TimelineItem], lookedAt: Date) -> TimelineMarker? {
         var newAbove = false
         for item in items {
             if item.isNew {
                 newAbove = true
-            } else if item.run?.isLive != true {
+            } else if item.pin == 0 {
                 return newAbove ? TimelineMarker(lookedAt: lookedAt, before: item.id) : nil
             }
         }
         return nil
     }
 
-    /// The items cut into days by the day each happened, newest first. The run now sits in the newest day.
+    /// The items cut into days by the day each happened, newest first. The run now, and the messages waiting for a run,
+    /// sit in the newest day.
     static func days(_ items: [TimelineItem], reference: Date, calendar: Calendar) -> [TimelineDay] {
         var days: [TimelineDay] = []
         for item in items {
-            let day = item.run?.isLive == true ? days.first.map(\.id) ?? dayID(reference, calendar) : dayID(item.at, calendar)
+            let pinned = item.pin > 0
+            let day = pinned ? days.first.map(\.id) ?? dayID(reference, calendar) : dayID(item.at, calendar)
             if let index = days.firstIndex(where: { $0.id == day }) {
                 days[index].items.append(item)
             } else {
-                let date = item.run?.isLive == true && days.isEmpty ? reference : item.at
+                let date = pinned && days.isEmpty ? reference : item.at
                 days.append(TimelineDay(
                     id: day, relative: relative(date, reference: reference, calendar: calendar),
                     date: dayDate(date, calendar), span: nil, items: [item]
@@ -512,7 +556,7 @@ public struct TimelineModel: Equatable {
     ]
 
     /// Bookkeeping that changes nothing a person reads.
-    static let silentTypes: Set<String> = ["note.read"]
+    static let silentTypes: Set<String> = ["note.read", "message.read"]
 
     /// The situations worth an entry of their own; every other restates an entry beside it (a pause, a run, a question).
     static let situationsShown: Set<String> = ["retrying"]
@@ -536,7 +580,7 @@ public struct TimelineModel: Equatable {
 
     /// The entries of the events no run's group stands for, oldest first, with the writes that changed nothing
     /// folded into the entry they belong to.
-    static func entries(_ history: TicketEventsPayload, reference: Date) -> [TimelineEntry] {
+    static func entries(_ history: TicketEventsPayload, reference: Date, calendar: Calendar = .current) -> [TimelineEntry] {
         var drafts: [Draft] = []
         var openPause: [String: Int] = [:]
         var rules: [(event: TicketEventsPayload.Event, at: Date, order: Int)] = []
@@ -552,6 +596,9 @@ public struct TimelineModel: Equatable {
                 continue
             }
             var draft = Draft(event, at: at, order: order, kind: kind(event), actor: actor(event, history: history))
+            if event.type == "message.sent" {
+                draft.entry = TimelineEntry.message(draft.entry, event: event, reference: reference, calendar: calendar)
+            }
             // The answers of a run's steps, written as notes before Symphony recorded them on the steps: they fold.
             // So do Symphony's own wait and status messages between runs.
             if isMachineNote(event, history: history) { draft.mechanical = true }
@@ -626,7 +673,9 @@ public struct TimelineModel: Equatable {
                ended.timeIntervalSince(draft.entry.at) < shortPause {
                 draft.entry.isMechanical = true
             }
-            if let last = entries.indices.last, draft.slot == nil, entries[last].kind != .pause, entries[last].sameWrite(as: draft.entry) {
+            // Each message is its own entry, the same words written twice too.
+            if let last = entries.indices.last, draft.slot == nil, entries[last].kind != .pause, entries[last].kind != .message,
+               entries[last].sameWrite(as: draft.entry) {
                 entries[last].eventIDs += draft.entry.eventIDs
                 entries[last].isNew = entries[last].isNew || draft.entry.isNew
             } else {
@@ -763,6 +812,7 @@ public struct TimelineModel: Equatable {
         case "finding.recorded": return .finding
         case "finding.resolved", "finding.confirmed": return .findingResolved
         case "note", "brief.written", "conductor.instructions": return .note
+        case "message.sent": return .message
         case "conductor.update": return .update
         case "ticket.filed": return .ticket
         case "situation.changed": return .situation
