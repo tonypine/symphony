@@ -52,8 +52,12 @@ struct HomeBody: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            ForEach(lists.notices, id: \.self) { notice in
+                noticeLine(notice)
+            }
             if !lists.progress.isEmpty {
                 title(HomeLists.progressTitle)
+                    .padding(.top, lists.notices.isEmpty ? 0 : DesignTokens.Space.s6)
                 TreeList(
                     lists.progress, foldDepth: nil, opened: .constant([]), selection: $progressSelection, open: open,
                     leave: { offset in if offset > 0 { enterQueue(last: false) } }, focus: $progressFocused
@@ -64,7 +68,7 @@ struct HomeBody: View {
             }
             if !lists.queue.isEmpty {
                 title(HomeLists.queueTitle)
-                    .padding(.top, lists.progress.isEmpty ? 0 : DesignTokens.Space.s8)
+                    .padding(.top, lists.progress.isEmpty ? (lists.notices.isEmpty ? 0 : DesignTokens.Space.s6) : DesignTokens.Space.s8)
                 TreeList(
                     lists.queue, opened: $opened, selection: $queueSelection, open: open,
                     leave: { offset in if offset < 0 { enterProgress() } }, focus: $queueFocused
@@ -86,6 +90,21 @@ struct HomeBody: View {
         case let .spring(duration, bounce): .spring(duration: duration, bounce: bounce)
         case let .eased(duration): .easeInOut(duration: duration)
         }
+    }
+
+    /// A line of what holds the whole factory (TP-1515), in the Waiting for provider kind's glyph and tint, at the reading measure.
+    private func noticeLine(_ text: String) -> some View {
+        Label {
+            Text(text)
+                .textStyle(.body)
+                .foregroundStyle(DesignTokens.TextColor.primary.color)
+                .frame(maxWidth: DesignTokens.Measure.reading, alignment: .leading)
+        } icon: {
+            DesignTokens.SituationKind.provider.glyph
+        }
+        .padding(.leading, DesignTokens.Space.s3)
+        .padding(.bottom, DesignTokens.Space.s2)
+        .accessibilityElement(children: .combine)
     }
 
     private func title(_ text: String) -> some View {

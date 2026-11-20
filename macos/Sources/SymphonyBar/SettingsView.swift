@@ -297,7 +297,8 @@ struct SettingsView: View {
                 } footer: {
                     SectionFooter(
                         "workspaces.git_network_timeout_ms (default 5 minutes), execution.timeouts.mcp_tool_ms (default "
-                            + "10 minutes) and watchdog.pending_tool_report_after_ms (default 1 minute). Save checks "
+                            + "10 minutes), watchdog.pending_tool_report_after_ms (default 1 minute) and "
+                            + "execution.usage_limit.sign_in_ask_after_seconds (default 30 minutes). Save checks "
                             + "symphony.yml with symphony check first; Symphony reads them on the next call, no restart "
                             + "needed."
                     )

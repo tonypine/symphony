@@ -247,8 +247,7 @@ public enum Overview {
         }
 
         for limit in state.snapshot.usageLimits where limit.phase != .canary {
-            let resume = limit.resumeAt ?? limit.resetsAt
-            let when = resume.map { " until \(StatusMenu.clockTime($0, now: reference, timeZone: timeZone, dateFormat: "MMM d, HH:mm"))" } ?? ""
+            let when = untilPhrase(limit, reference: reference, timeZone: timeZone)
             let what = limit.isAPIUnreachable ? StatusMenu.apiUnreachableName(limit) : "The \(StatusMenu.limitName(limit))"
             findings.append(Finding(
                 subject: "usage-limit-\(limit.provider)-\(limit.scope)", kind: .usageLimit, severity: .warning,
@@ -365,6 +364,11 @@ public enum Overview {
     static func phaseName(_ runKind: String) -> String {
         let words = runKind.replacingOccurrences(of: "_", with: " ")
         return words.prefix(1).uppercased() + words.dropFirst()
+    }
+
+    /// " until Nov 13, 10:01": when a hold's runs resume, empty when Symphony doesn't say.
+    static func untilPhrase(_ limit: StateSnapshot.UsageLimit, reference: Date, timeZone: TimeZone) -> String {
+        (limit.resumeAt ?? limit.resetsAt).map { " until \(StatusMenu.clockTime($0, now: reference, timeZone: timeZone, dateFormat: "MMM d, HH:mm"))" } ?? ""
     }
 
     /// Home's line for agents that can't sign in (TP-1515): "Agents can't sign in to Claude since 09:46 (Failed to
