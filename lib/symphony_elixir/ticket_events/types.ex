@@ -56,7 +56,7 @@ defmodule SymphonyElixir.TicketEvents.Types do
   ones (`agent_values`). An agent step's `step.started` may say what its turn runs with: `model`,
   `effort` and `session`, and `model_ignored` (with `model_ignored_reason`) when a run on a fallback
   provider kept its own model (`SymphonyElixir.QaAgent.Steps`). `step.completed` says how the step ended (`outcome`): `passed`; `failed`,
-  with the step the run goes back to (`returns_to`, and its title in `returns_to_title`); `paused`,
+  with the step the run goes back to (`returns_to`, and its title in `returns_to_title`) and why (`reason`); `paused`,
   with the Question it waits on (`question_id`, from `SymphonyElixir.Questions`); or `skipped`, with
   why (`reason`); and how long it took (`duration_ms`). Those fields are `conditional`: each is
   required exactly when its outcome holds and refused otherwise, as `command` and `prompt_ref` are

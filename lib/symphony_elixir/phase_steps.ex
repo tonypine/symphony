@@ -25,7 +25,9 @@ defmodule SymphonyElixir.PhaseSteps do
     past the step, run it again, or the person's own words. The Question pauses the ticket, and its
     answer is what lets it run again;
   - a step whose `when`, or every command's, does not match the changed files is `skipped`, with
-    the reason.
+    the reason;
+  - a step that ends `failed` says why on its `step.completed` (`reason`, `failure_reason/1`): the
+    command that ended it, how it ended and the last line it printed.
 
   One command is Symphony's own and runs in this process, not in a shell: the findings command
   (`Phases.findings_command/0`, `SymphonyElixir.PhaseSteps.Findings`) keeps the open findings by class
@@ -67,11 +69,13 @@ defmodule SymphonyElixir.PhaseSteps do
   alias SymphonyElixir.Config.Schema.Phases
   alias SymphonyElixir.Config.Schema.Phases.Step
   alias SymphonyElixir.HumanActions.PlainWords
-  alias SymphonyElixir.PhaseSteps.{Findings, Transcript}
+  alias SymphonyElixir.PhaseSteps.{Findings, StepAnswer, Transcript}
   alias SymphonyElixir.Workpad.Projection
 
   @output_max_bytes 512 * 1024
   @prompt_output_bytes 12_000
+  @end_line ~r/^\((exit status \d+|stopped: .*|could not run: .*)\)$/
+  @reason_command 80
   @question_lines 6
   @question_chars 400
   @command_max 2_000
@@ -391,11 +395,12 @@ defmodule SymphonyElixir.PhaseSteps do
         :passed
 
       :failed ->
-        record(context, "step.completed", Map.merge(timed, failed_to(context, step)), artifacts)
+        record(context, "step.completed", timed |> Map.merge(failed_to(context, step)) |> Map.put(:reason, failure_reason(output)), artifacts)
         {:failed, output}
 
       :no_result when attempt < step.no_result_limit ->
-        record(context, "step.completed", Map.merge(timed, %{outcome: "failed", returns_to: step.id, returns_to_title: step.title}), artifacts)
+        again = %{outcome: "failed", returns_to: step.id, returns_to_title: step.title, reason: failure_reason(output)}
+        record(context, "step.completed", Map.merge(timed, again), artifacts)
         {:again, output}
 
       :no_result ->
@@ -405,6 +410,39 @@ defmodule SymphonyElixir.PhaseSteps do
         pause(request, step, context, output, timed, artifacts)
     end
   end
+
+  @doc """
+  Why a machine step failed, in the one line its `step.completed` carries (`reason`): the command
+  that ended it, how it ended (its exit status, or that it gave no result or could not run) and the
+  last line it printed. Read from `output` as `run_commands/5` writes it, never guessed from what a
+  tool prints: the whole output stays the step's artifact.
+  """
+  @spec failure_reason(String.t()) :: String.t()
+  def failure_reason(output) when is_binary(output) do
+    lines = output |> String.replace(~r/\e\[[0-9;]*[A-Za-z]/, "") |> String.split("\n") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))
+    {last_command, after_it} = last_command(lines)
+    {ends, printed} = Enum.split_with(after_it, &Regex.match?(@end_line, &1))
+
+    [command_part(last_command, List.last(ends)), List.last(printed)]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(": ")
+    |> StepAnswer.reason()
+  end
+
+  defp last_command(lines) do
+    case lines |> Enum.reverse() |> Enum.split_while(&(not String.starts_with?(&1, "$ "))) do
+      {after_it, ["$ " <> command | _earlier]} -> {command, Enum.reverse(after_it)}
+      {all, []} -> {nil, Enum.reverse(all)}
+    end
+  end
+
+  defp command_part(nil, nil), do: nil
+  defp command_part(nil, how), do: how_ended(how)
+  defp command_part(command, nil), do: "`#{String.slice(command, 0, @reason_command)}`"
+  defp command_part(command, how), do: "`#{String.slice(command, 0, @reason_command)}` #{how_ended(how)}"
+
+  defp how_ended("(exit status " <> status), do: "exited " <> String.trim_trailing(status, ")")
+  defp how_ended(how), do: how |> String.trim_leading("(") |> String.trim_trailing(")")
 
   defp failed_to(context, %Step{on_fail: on_fail}) do
     case Enum.find(Map.get(context, :steps, []), &(&1.id == on_fail)) do
@@ -430,7 +468,7 @@ defmodule SymphonyElixir.PhaseSteps do
 
       {:error, reason} ->
         Logger.warning("Step runner could not ask about step #{step.id} of #{ticket_name(context)}: #{inspect(reason)}")
-        record(context, "step.completed", Map.merge(timed, failed_to(context, step)), artifacts)
+        record(context, "step.completed", timed |> Map.merge(failed_to(context, step)) |> Map.put(:reason, failure_reason(output)), artifacts)
         {:failed, output}
     end
   end
