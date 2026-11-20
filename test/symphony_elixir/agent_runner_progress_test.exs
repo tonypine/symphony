@@ -103,15 +103,26 @@ defmodule SymphonyElixir.AgentRunnerProgressTest do
     assert_signal("handoff", %{to: "Code Review", reason: "after rework", head: "sha-rework", move: true})
   end
 
-  test "the head a ticket enters Code Review with is asked of the QA pre-build" do
-    # Stands in for the builder: the request is a cast to its name.
+  test "the head a ticket enters Code Review with is asked of the QA pre-build when its pass selects the app" do
+    # Stands in for the builder: the request is a cast to its name. The workspace holds no git
+    # repository, so the diff is unreadable and the pass selects every enabled playbook.
+    Process.register(self(), SymphonyElixir.QaBuild)
+    auto_review = %{enabled: true, worker_host: "qa-vm", playbooks: %{macos_app: %{build: "make app", app: "build/Demo.app"}}}
+
+    run_issue!("Rework", heads: ["sha-old", "sha-rework"], handoff: "sha-rework", auto_review: auto_review)
+
+    assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
+    assert_received {:"$gen_cast", {:request, "default", "sha-rework", %{identifier: identifier, issue_id: "issue-progress"}}}
+    assert is_binary(identifier)
+  end
+
+  test "a head whose QA pass selects no Mac app is not asked of the QA pre-build" do
     Process.register(self(), SymphonyElixir.QaBuild)
 
     run_issue!("Rework", heads: ["sha-old", "sha-rework"], handoff: "sha-rework")
 
     assert_received {:memory_tracker_state_update, "issue-progress", "Code Review"}
-    assert_received {:"$gen_cast", {:request, "default", "sha-rework", %{identifier: identifier, issue_id: "issue-progress"}}}
-    assert is_binary(identifier)
+    refute_received {:"$gen_cast", {:request, _repo_key, _sha, _ticket}}
   end
 
   describe "the designed handoff signal" do

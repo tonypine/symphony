@@ -2125,7 +2125,7 @@ defmodule SymphonyElixir.AgentRunner do
     ticket = %{identifier: identifier, issue_id: issue_id, new_head: true}
     repo_key = run_repo_key(issue, run_context.opts)
 
-    if is_binary(repo_key) and builds_app?(repo_key, issue, head, run_context) do
+    if is_binary(repo_key) and QaBuild.selects_app?(repo_key, issue, head, workspace: Map.get(run_context, :workspace)) do
       QaBuild.request(repo_key, head, ticket)
     else
       :ok
@@ -2133,9 +2133,6 @@ defmodule SymphonyElixir.AgentRunner do
   end
 
   defp request_qa_build(_issue, _run_context), do: :ok
-
-  defp builds_app?(repo_key, issue, head, run_context),
-    do: QaBuild.builds?(repo_key) and QaBuild.selects_app?(repo_key, issue, head, workspace: Map.get(run_context, :workspace))
 
   defp hand_off_to_state(%Issue{id: issue_id} = issue, post_pr_state, reason, run_context) do
     settings = Keyword.fetch!(run_context.opts, :settings)
