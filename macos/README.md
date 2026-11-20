@@ -1319,9 +1319,8 @@ certificate, `SHORT_VERSION=` / `BUILD_NUMBER=` to set the versions in `Info.pli
 `MINISIGN_PUBLIC_KEY=` to embed the update key. `make install` replaces `~/Applications/Symphony.app`, so it
 replaces an installed release too; reinstall the release with the install script afterwards.
 
-Every build still carries `Contents/Helpers/SymphonyQADriver.app`, a helper Symphony no longer opens: the QA
-state's `macos_app` playbook runs only in a QA VM, which takes its screenshots and reads the accessibility tree
-there (see [Running QA in a QA VM](../docs/configuration.md#running-qa-in-a-qa-vm)). Grant Screen Recording and
+The QA state's `macos_app` playbook runs only in a QA VM, which takes its screenshots and reads the
+accessibility tree there (see [Running QA in a QA VM](../docs/configuration.md#running-qa-in-a-qa-vm)). Grant Screen Recording and
 Accessibility to nothing on the Symphony Mac, Symphony.app least of all: macOS passes Symphony.app's grants to the
 agents it starts.
 
